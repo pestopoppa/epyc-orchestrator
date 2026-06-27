@@ -4128,8 +4128,16 @@ function renderTopologyActivity() {
         const nReq = stats ? (stats.n_recent || stats.n_completed || 0) : 0;
         const stillInsideWindow = age == null || age <= windowS;
         if (!stats || !nReq || !stillInsideWindow) {
-            el.innerHTML = '<span class="stat-stale">—</span>';
-            el.title = `no recent activity for ${base} in last ${Math.round(windowS)}s`;
+            if (stats && stats.running) {
+                const running = Number(stats.running_instance_count || 0);
+                const expected = Number(stats.expected_instance_count || 0);
+                const suffix = expected > 1 ? ` ${running}/${expected}` : '';
+                el.innerHTML = `<span class="stat-fresh">up${suffix}</span>`;
+                el.title = `${base} listener${running === 1 ? '' : 's'} running; no recent requests in last ${Math.round(windowS)}s`;
+            } else {
+                el.innerHTML = '<span class="stat-stale">—</span>';
+                el.title = `no recent activity for ${base} in last ${Math.round(windowS)}s`;
+            }
             return;
         }
         const parts = [];

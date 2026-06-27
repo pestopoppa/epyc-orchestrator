@@ -1952,18 +1952,29 @@ async def topology_activity(window_s: float = 600.0) -> JSONResponse:
     # Per-role aggregation from tap sections. timestamp format is
     # "YYYY-MM-DD HH:MM:SS" in local time (writer uses datetime.now()).
     per_role: dict[str, dict[str, Any]] = {}
+    live_ports = _discover_llama_ports()
     for svc in expected_stack_services():
         role = base_role(svc.get("role") or "")
         if not role:
             continue
-        per_role.setdefault(role, {
+        port = svc.get("port")
+        bucket = per_role.setdefault(role, {
             "n_recent": 0,
             "n_completed": 0,
             "last_activity_age_s": None,
             "_tps_samples": [],
             "_duration_samples": [],
             "expected": True,
+            "expected_ports": [],
+            "running_ports": [],
+            "running": False,
         })
+        if isinstance(port, int):
+            if port not in bucket["expected_ports"]:
+                bucket["expected_ports"].append(port)
+            if port in live_ports and port not in bucket["running_ports"]:
+                bucket["running_ports"].append(port)
+                bucket["running"] = True
     for s in sections:
         role = base_role(s.get("role") or "")
         if not role:
@@ -1974,6 +1985,9 @@ async def topology_activity(window_s: float = 600.0) -> JSONResponse:
             "last_activity_age_s": None,
             "_tps_samples": [],
             "_duration_samples": [],
+            "expected_ports": [],
+            "running_ports": [],
+            "running": False,
         })
         ts = s.get("timestamp")
         if ts:
@@ -2014,6 +2028,9 @@ async def topology_activity(window_s: float = 600.0) -> JSONResponse:
             "last_activity_age_s": None,
             "_tps_samples": [],
             "_duration_samples": [],
+            "expected_ports": [],
+            "running_ports": [],
+            "running": False,
         })
         bucket["n_completed"] += 1
         dur = t.get("duration_s")
@@ -2025,6 +2042,10 @@ async def topology_activity(window_s: float = 600.0) -> JSONResponse:
     for role, b in per_role.items():
         tps_samples = b.pop("_tps_samples")
         dur_samples = b.pop("_duration_samples")
+        b["expected_ports"] = sorted(b.get("expected_ports") or [])
+        b["running_ports"] = sorted(b.get("running_ports") or [])
+        b["expected_instance_count"] = len(b["expected_ports"])
+        b["running_instance_count"] = len(b["running_ports"])
         b["avg_tps_recent"] = (sum(tps_samples) / len(tps_samples)) if tps_samples else None
         b["avg_duration_s"] = (sum(dur_samples) / len(dur_samples)) if dur_samples else None
         out[role] = b

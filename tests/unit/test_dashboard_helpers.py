@@ -91,12 +91,29 @@ def test_topology_activity_initializes_expected_embedder_bucket(monkeypatch, tmp
     monkeypatch.setattr(dashboard, "_read_tail", lambda *a, **kw: "")
     monkeypatch.setattr(dashboard, "_parse_inference_sections", lambda *a, **kw: [])
     monkeypatch.setattr(dashboard, "_todays_progress_log", lambda: tmp_path / "missing.jsonl")
+    monkeypatch.setattr(
+        dashboard,
+        "_discover_llama_ports",
+        lambda: {
+            8090: "embedder",
+            8091: "embedder_1",
+            8092: "embedder_2",
+            8093: "embedder_3",
+            8094: "embedder_4",
+            8095: "embedder_5",
+        },
+    )
 
     response = asyncio.run(dashboard.topology_activity())
     data = json.loads(response.body)
 
     embedder = data["per_role"]["embedder"]
     assert embedder["expected"] is True
+    assert embedder["running"] is True
+    assert embedder["expected_ports"] == [8090, 8091, 8092, 8093, 8094, 8095]
+    assert embedder["running_ports"] == [8090, 8091, 8092, 8093, 8094, 8095]
+    assert embedder["expected_instance_count"] == 6
+    assert embedder["running_instance_count"] == 6
     assert embedder["n_recent"] == 0
     assert embedder["n_completed"] == 0
 
