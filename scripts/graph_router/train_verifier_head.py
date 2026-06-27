@@ -610,7 +610,7 @@ def train_and_eval(
         )
     print(
         f"\nRaw P6.2.5 overall: "
-        f"{'PASS — wire ORCHESTRATOR_VERIFIER_GATE (default OFF)' if all_pass else 'FAIL'}"
+        f"{'PASS — wire ORCHESTRATOR_FRONTDOOR_VERIFIER_GATE in shadow-first mode' if all_pass else 'FAIL'}"
     )
 
     verifier.save(output_path)
