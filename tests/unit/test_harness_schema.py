@@ -260,6 +260,42 @@ def test_working_state_scopes_isolated(db_path: Path) -> None:
     conn.close()
 
 
+def test_working_state_expired_rows_are_not_current(db_path: Path) -> None:
+    conn = ensure_schema(db_path)
+    set_working_state(conn, WorkingState(
+        scope=WorkingStateScope.REQUEST,
+        owner="req",
+        key="draft",
+        value_json={"stale": True},
+        expires_at="2000-01-01T00:00:00+00:00",
+    ))
+
+    assert get_working_state(conn, WorkingStateScope.REQUEST, "draft", owner="req") is None
+    superseded = conn.execute(
+        "SELECT superseded FROM working_state WHERE owner = ? AND key = ?",
+        ("req", "draft"),
+    ).fetchone()[0]
+    assert superseded == 1
+    conn.close()
+
+
+def test_working_state_future_expiry_remains_current(db_path: Path) -> None:
+    conn = ensure_schema(db_path)
+    set_working_state(conn, WorkingState(
+        scope=WorkingStateScope.TRIAL,
+        owner="trial-1",
+        key="hypothesis",
+        value_json={"active": True},
+        expires_at="2999-01-01T00:00:00+00:00",
+    ))
+
+    current = get_working_state(conn, WorkingStateScope.TRIAL, "hypothesis", owner="trial-1")
+
+    assert json.loads(current["value_json"]) == {"active": True}
+    assert current["superseded"] == 0
+    conn.close()
+
+
 def test_invalid_scope_rejected(db_path: Path) -> None:
     conn = ensure_schema(db_path)
     with pytest.raises(ValueError):

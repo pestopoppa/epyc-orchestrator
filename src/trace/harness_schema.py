@@ -439,6 +439,7 @@ def set_working_state(conn: sqlite3.Connection, w: WorkingState) -> int:
     """
     if w.scope not in WorkingStateScope.ALL:
         raise ValueError(f"invalid scope: {w.scope!r}")
+    _expire_working_state(conn)
     conn.execute(
         "UPDATE working_state SET superseded = 1 "
         "WHERE scope = ? AND owner IS ? AND key = ? AND superseded = 0",
@@ -559,6 +560,7 @@ def get_working_state(
     conn: sqlite3.Connection, scope: str, key: str, *, owner: str | None = None
 ) -> dict | None:
     """Return the current (non-superseded) working-state row for (scope, owner, key), or None."""
+    _expire_working_state(conn)
     row = conn.execute(
         "SELECT * FROM working_state "
         "WHERE scope = ? AND owner IS ? AND key = ? AND superseded = 0 "
@@ -569,6 +571,17 @@ def get_working_state(
         return None
     cols = [d[0] for d in conn.execute("SELECT * FROM working_state LIMIT 0").description]
     return dict(zip(cols, row))
+
+
+def _expire_working_state(conn: sqlite3.Connection, now_iso: str | None = None) -> int:
+    """Mark expired live working-state rows superseded while preserving history."""
+    cur = conn.execute(
+        "UPDATE working_state SET superseded = 1 "
+        "WHERE superseded = 0 AND expires_at IS NOT NULL AND expires_at <= ?",
+        (now_iso or _now_iso(),),
+    )
+    conn.commit()
+    return int(cur.rowcount)
 
 
 def latest_behavior_signature(
