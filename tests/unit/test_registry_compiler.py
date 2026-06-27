@@ -77,3 +77,42 @@ def test_compile_lean_keeps_alias_records_when_active_roles_include_aliases(
         "coder_escalation",
         "worker_summarize",
     }
+
+
+def test_compile_lean_keeps_server_mode_backing_process_for_model_role(
+    tmp_path: Path,
+) -> None:
+    master = {
+        "server_mode": {
+            "worker": {
+                "port": 8082,
+                "model_role": "worker_general",
+                "shared_with": ["worker_math", "toolrunner"],
+            },
+            "cold_candidate": {"port": 9000, "model_role": "cold_candidate"},
+        },
+        "roles": {
+            "worker_general": {"model": {"path": "worker.gguf"}},
+            "worker_math": {"model": {"path": "math.gguf"}},
+            "toolrunner": {"model": {"path": "toolrunner.gguf"}},
+            "cold_candidate": {"model": {"path": "cold.gguf"}},
+        },
+    }
+    master_path = tmp_path / "model_registry.yaml"
+    master_path.write_text(yaml.safe_dump(master), encoding="utf-8")
+
+    active = active_roles_from_launch_meta(
+        {
+            "worker_general": {
+                "shared_with_first_n": ["worker_math", "toolrunner"]
+            }
+        }
+    )
+    lean = compile_lean(master_path, active)
+
+    assert set(lean["server_mode"]) == {"worker"}
+    assert set(lean["roles"]) == {
+        "worker_general",
+        "worker_math",
+        "toolrunner",
+    }

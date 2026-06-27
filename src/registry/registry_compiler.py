@@ -52,6 +52,32 @@ _KEEP_SECTIONS_FULL = (
 _FILTER_ROLE_KEYED = ("server_mode", "roles")
 
 
+def _server_mode_entry_roles(entry_name: str, entry: Any) -> set[str]:
+    """Return all role names covered by a server_mode entry."""
+    roles = {entry_name}
+    if not isinstance(entry, dict):
+        return roles
+
+    model_role = entry.get("model_role")
+    if isinstance(model_role, str):
+        roles.add(model_role)
+
+    shared_with = entry.get("shared_with")
+    if isinstance(shared_with, list):
+        roles.update(str(role) for role in shared_with)
+
+    return roles
+
+
+def _filter_server_mode(server_mode: dict[str, Any], needed: set[str]) -> dict[str, Any]:
+    """Keep server records that directly or indirectly serve needed roles."""
+    return {
+        name: entry
+        for name, entry in server_mode.items()
+        if _server_mode_entry_roles(name, entry) & needed
+    }
+
+
 def cache_key(master_path: Path, active_roles: set[str]) -> str:
     """SHA-256 of master file bytes + sorted active role names.
 
@@ -147,12 +173,17 @@ def compile_lean(master_path: Path, active_roles: set[str]) -> dict:
         if section in master:
             out[section] = master[section]
 
-    # Role-keyed sections — filter to needed roles only.
+    # Role-keyed sections — filter to needed roles only. `server_mode` entries
+    # may be keyed by backing process name rather than route role name
+    # (`worker` -> `worker_general`), so inspect entry metadata too.
     for section in _FILTER_ROLE_KEYED:
         src = master.get(section)
         if not isinstance(src, dict):
             continue
-        out[section] = {k: v for k, v in src.items() if k in needed}
+        if section == "server_mode":
+            out[section] = _filter_server_mode(src, needed)
+        else:
+            out[section] = {k: v for k, v in src.items() if k in needed}
 
     return out
 
