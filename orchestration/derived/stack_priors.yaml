@@ -48,39 +48,39 @@ contract:
   - quality_overall
   - memory_cost
   fallback_policy: Consumers may use local fallback values only as explicit degraded mode when this generated contract is missing or invalid.
-compiled_at: '2026-06-27T12:32:42Z'
+compiled_at: '2026-06-27T13:42:28Z'
 status: compiled
 coverage_scope: descriptor_role_bindings
 precedence_spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
 source_artifacts:
   registry:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
-    sha256: c37442f0dfc52638b9a00b37ab2e3c5667f683357004b006e988f8c495a8c1c9
-    repo_commit: 5aebe641
+    sha256: 17a33527661c1fcec9e5b7ed96e10519d6a6c09cfc858314c91ace7b3d1a026d
+    repo_commit: 45e1ff7d
   descriptors:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_descriptors.yaml
-    sha256: b2c09ec595c69affa7984cc4b4757bb7e42796acd9094e59a127bbf055fab731
-    repo_commit: 5aebe641
+    sha256: 0bbfbdbc86c9e77e9e39a8fbc04b67f4b350a6a384dc733d70f570aaa0b62841
+    repo_commit: 45e1ff7d
   stack_manifest:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_manifest.py
     sha256: 33de60b1adc4e7304a62796dbfab5a76ce3b897be055b945aeed9219fb5e4495
-    repo_commit: 5aebe641
+    repo_commit: 45e1ff7d
   stack_numa:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_numa.py
     sha256: 0a1d59b19f5f983ebef02187802182a2b193ce51baab7101c316d3681b1172c3
-    repo_commit: 5aebe641
+    repo_commit: 45e1ff7d
   orchestrator_stack:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/orchestrator_stack.py
     sha256: 649e0ae6d178b6ea6b6f44df8764a95a30d9f50542a74561e253e77e3ab6fd42
-    repo_commit: 5aebe641
+    repo_commit: 45e1ff7d
   stack_paths:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_paths.py
     sha256: 7eee8576101dbb827ec8e94a228beedb401d7cad80841e1a18aab9c03db4206b
-    repo_commit: 5aebe641
+    repo_commit: 45e1ff7d
   stack_runtime:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_runtime.py
     sha256: f749047dde702b21759f67dcc81bf6cd64f1157e8a1fdf250b317301c1b6d32c
-    repo_commit: 5aebe641
+    repo_commit: 45e1ff7d
 roles:
   architect_general:
     role: architect_general

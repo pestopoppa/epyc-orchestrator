@@ -3,6 +3,9 @@
 # Keep this file sparse. Each exception must be temporary and specific enough to
 # preserve the guard signal for unrelated model-stack drift.
 #
+# production_blocker waivers fail closed unless the validator/pipeline is run
+# with --allow-production-blocker-waivers for an intentional emergency exception.
+#
 # Required fields per entry:
 # - rule_id: hardcoded-surface rule id, e.g. retired_role_in_active_code
 # - category: production_blocker, legacy_test, or historical_doc

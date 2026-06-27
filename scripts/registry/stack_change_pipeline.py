@@ -91,6 +91,7 @@ class StackChangePipelineConfig:
     surface_manifest: Path = DEFAULT_SURFACE_MANIFEST
     roles: set[str] | None = None
     allow_known_gaps: bool = False
+    allow_production_blocker_waivers: bool = False
     compile_incomplete: bool = True
     allow_descriptor_model_removal: bool = False
     run_promotion_gate: bool = False
@@ -650,6 +651,7 @@ def _guard_step(
         procedure_schema_path=config.schema,
         registry_path=config.lean_registry,
         descriptor_path=config.descriptors,
+        allow_production_blocker_waivers=config.allow_production_blocker_waivers,
     )
     errors = list(result.errors)
     warnings = list(result.warnings)
@@ -923,6 +925,14 @@ def main(argv: list[str] | None = None) -> int:
         help="Report strict known-gap failures as warnings while the current gap-closure work is active",
     )
     parser.add_argument(
+        "--allow-production-blocker-waivers",
+        action="store_true",
+        help=(
+            "Permit documented production-blocker hardcoded-surface waivers as "
+            "visible warnings; default rejects them fail-closed"
+        ),
+    )
+    parser.add_argument(
         "--allow-descriptor-model-removal",
         action="store_true",
         help="Permit update mode to remove model IDs from the descriptor artifact",
@@ -948,6 +958,7 @@ def main(argv: list[str] | None = None) -> int:
         surface_manifest=args.surface_manifest,
         roles=set(args.roles) if args.roles else None,
         allow_known_gaps=args.allow_known_gaps,
+        allow_production_blocker_waivers=args.allow_production_blocker_waivers,
         compile_incomplete=not args.strict_descriptor_compile,
         allow_descriptor_model_removal=args.allow_descriptor_model_removal,
         run_promotion_gate=args.run_promotion_gate,

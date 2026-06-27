@@ -1,15 +1,15 @@
 descriptor_version: 3
-compiled_at: '2026-06-27T12:32:42Z'
+compiled_at: '2026-06-27T13:42:27Z'
 status: compiled
 coverage_scope: active_roles_from_stack_manifest
 source_registries:
   lean:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
-    repo_commit: 5aebe641
-    sha256: c37442f0dfc52638b9a00b37ab2e3c5667f683357004b006e988f8c495a8c1c9
+    repo_commit: 45e1ff7d
+    sha256: 17a33527661c1fcec9e5b7ed96e10519d6a6c09cfc858314c91ace7b3d1a026d
   research:
     path: /mnt/raid0/llm/epyc-inference-research/orchestration/model_registry.yaml
-    repo_commit: a3cddba
+    repo_commit: 376c26d
     sha256: 8cb9573616683815dd20799fff751511d47cbfd24df7fc7d0051e2f9b864fe85
 model_id_policy:
   canonical_shape: family-params-active-quant

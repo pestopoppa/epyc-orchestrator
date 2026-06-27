@@ -399,6 +399,51 @@ def test_update_then_check_succeeds_with_known_gaps_allowed(tmp_path: Path) -> N
     ]
 
 
+def test_check_rejects_production_blocker_surface_waiver_by_default(
+    tmp_path: Path,
+) -> None:
+    update_config = _config(tmp_path, mode="update")
+    assert run_stack_change_pipeline(update_config).ok
+    surface_path = tmp_path / "scripts" / "benchmark" / "seeding_rewards.py"
+    surface_path.parent.mkdir(parents=True)
+    surface_path.write_text(
+        'DEFAULT_BASELINE_TPS = {"frontdoor": 10.3}\n',
+        encoding="utf-8",
+    )
+    exceptions = _write_yaml(
+        tmp_path / "exceptions.yaml",
+        {
+            "exceptions": [
+                {
+                    "rule_id": "seeding_baseline_tps_table",
+                    "category": "production_blocker",
+                    "path_glob": "scripts/benchmark/seeding_rewards.py",
+                    "classification": "degraded_fallback",
+                    "owner": "stack-change-governance",
+                    "rationale": "temporary fixture for fail-closed pipeline behavior",
+                    "expires": "2099-01-01",
+                }
+            ]
+        },
+    )
+    check_config = StackChangePipelineConfig(
+        **{
+            **update_config.__dict__,
+            "mode": "check",
+            "surface_exceptions": exceptions,
+        }
+    )
+
+    report = run_stack_change_pipeline(check_config)
+
+    assert not report.ok
+    assert any("--allow-production-blocker-waivers" in error for error in report.errors)
+    assert any(
+        "hardcoded_surface.waived.production_blocker" in warning
+        for warning in report.warnings
+    )
+
+
 def test_acceptance_lines_summarize_unique_hardcoded_surface_warnings() -> None:
     duplicate_warning = (
         "hardcoded_surface.production_blocker.retired_role_in_active_code: "

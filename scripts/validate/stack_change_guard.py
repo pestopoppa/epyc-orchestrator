@@ -1359,7 +1359,8 @@ def load_surface_exceptions(path: Path = DEFAULT_SURFACE_EXCEPTIONS) -> tuple[li
     """Load documented hardcoded-surface exceptions.
 
     Exceptions are not silent suppressions. Matching findings remain warnings,
-    but strict mode does not promote them to errors while the metadata is valid.
+    but production-blocker exceptions require an explicit emergency opt-in before
+    strict mode can keep them as visible warnings.
     """
     if not path.exists():
         return [], []
@@ -1381,6 +1382,19 @@ def load_surface_exceptions(path: Path = DEFAULT_SURFACE_EXCEPTIONS) -> tuple[li
         if exception is not None:
             exceptions.append(exception)
     return exceptions, errors
+
+
+def _production_blocker_waiver_errors(exceptions: list[SurfaceException]) -> list[str]:
+    errors: list[str] = []
+    for index, exception in enumerate(exceptions, start=1):
+        if exception.category != "production_blocker":
+            continue
+        errors.append(
+            f"surface exception #{index} waives production_blocker.{exception.rule_id}; "
+            "rerun with --allow-production-blocker-waivers only for an intentional, "
+            "owned emergency waiver"
+        )
+    return errors
 
 
 def _matching_surface_exception(
@@ -1561,6 +1575,7 @@ def validate_stack_priors(
     launch_manifest_targets: dict[str, dict[str, Any]] | None = None,
     registry_path: Path = DEFAULT_REGISTRY,
     descriptor_path: Path = DEFAULT_DESCRIPTORS,
+    allow_production_blocker_waivers: bool = False,
 ) -> GuardResult:
     errors: list[str] = []
     warnings: list[str] = []
@@ -1659,6 +1674,8 @@ def validate_stack_priors(
                     surface_exceptions_path
                 )
                 errors.extend(exception_errors)
+                if not allow_production_blocker_waivers:
+                    errors.extend(_production_blocker_waiver_errors(surface_exceptions))
         surface_findings = scan_hardcoded_surfaces(repo_root, categories=surface_categories)
         errors.extend(_unmatched_surface_exception_errors(surface_findings, surface_exceptions))
         for finding in surface_findings:
@@ -1711,6 +1728,14 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         default=DEFAULT_SURFACE_EXCEPTIONS,
         help="YAML file documenting hardcoded-surface exceptions",
+    )
+    parser.add_argument(
+        "--allow-production-blocker-waivers",
+        action="store_true",
+        help=(
+            "Permit documented production-blocker hardcoded-surface waivers as "
+            "visible warnings; default rejects them fail-closed"
+        ),
     )
     parser.add_argument(
         "--surface-manifest",
@@ -1770,6 +1795,7 @@ def main(argv: list[str] | None = None) -> int:
         surface_categories=surface_categories,
         surface_exceptions_path=args.surface_exceptions,
         surface_manifest_path=args.surface_manifest,
+        allow_production_blocker_waivers=args.allow_production_blocker_waivers,
     )
     if result.errors:
         print(f"FAIL: {len(result.errors)} stack-prior error(s)")
