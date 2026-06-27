@@ -5,15 +5,13 @@ Do not hand-edit this file; edit the source registries or constitution.
 
 ## Runtime State
 
-- paused: true
-- trial_counter: 993
-- pause_reason: operator requested AutoPilot pause while E5 v6+iqk Pareto/frontier era fence is applied
-- in_flight_trial: 993 (structural_prune)
-- last_invalid_reason: critic rejected: Rationale overclaims that every eligible OFF structural flag is enforced-blacklisted; visible context shows at least graph_router and staged_rewards as eligible...
+- paused: false
+- trial_counter: 998
+- in_flight_trial: 998 (seed_batch)
+- last_invalid_reason: critic rejected: Draft relies on weak attribution: no evidence ties src/tool_policy.py to the measured speed gap or shows tool-call overhead is the limiting factor.; Proposed co...
 - pareto_epoch_ts: 1782511631.0
 - pareto_exclude_before_ts: 1782511631.0
 - active_instrument_eras: autopilot_speed=E5-autopilot-speed, cpu_bench=E5-cpu-kernel
-- frontier_rerun_required: true (v6+iqk kernel era opened; rerun/rebuild a v6-only Pareto frontier before using speed maxima for planner exploitation.)
 
 ## Active Model-Serving Roles
 
