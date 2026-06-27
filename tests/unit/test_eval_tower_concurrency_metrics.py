@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import sys
 import time
 from pathlib import Path
@@ -432,3 +433,108 @@ def test_safety_gate_uses_effective_speed_not_raw_median_for_concurrent_eval() -
 
     assert verdict.passed
     assert "throughput" not in verdict.categories
+
+
+def test_deep_research_expected_contains_items_are_scoreable() -> None:
+    assert eval_tower._is_scoreable_question(
+        {
+            "id": "dr-1",
+            "suite": "deep_research_browsecomp",
+            "prompt": "Research alpha beta.",
+            "expected_contains": ["alpha beta", "gamma delta"],
+        }
+    )
+
+
+def test_eval_question_populates_deterministic_rubric_scores(monkeypatch) -> None:
+    tower = EvalTower()
+
+    def _fake_call(**_kwargs):  # noqa: ANN001
+        return {
+            "answer": (
+                "# Summary\n"
+                "- alpha beta evidence\n"
+                "- gamma delta caveat\n"
+                "Source: https://example.test/report\n"
+                "Therefore the comparison is grounded in the evidence."
+            ),
+            "tokens_generated": 20,
+            "model": "fake",
+            "tools_called": ["web_search", "read_file"],
+        }
+
+    monkeypatch.setattr(eval_tower, "call_orchestrator_forced", _fake_call)
+
+    with eval_tower.httpx.Client(timeout=1) as client:
+        result = tower._eval_question(
+            {
+                "id": "dr-1",
+                "suite": "deep_research_browsecomp",
+                "prompt": "Research alpha beta.",
+                "expected_contains": ["alpha beta", "gamma delta"],
+                "scoring_config": {"rubric_pass_threshold": 0.5},
+            },
+            client,
+        )
+
+    assert result.correct is True
+    assert result.scoring_method == "rubric"
+    assert result.confidence >= 0.5
+    assert result.rubric_scores["factual_accuracy"] == 1.0
+    assert result.rubric_scores["tool_calls"] > 0
+
+
+def test_aggregate_emits_rubric_process_means() -> None:
+    tower = EvalTower()
+
+    out = tower._aggregate(
+        [
+            QuestionResult(
+                question_id="q1",
+                suite="deep_research_browsecomp",
+                prompt="a",
+                expected="",
+                correct=True,
+                rubric_scores={
+                    "reasoning_trajectory": 0.6,
+                    "tool_calls": 0.3,
+                    "outline": 0.9,
+                    "content_stage": 0.5,
+                    "factual_accuracy": 0.8,
+                },
+            ),
+            QuestionResult(
+                question_id="q2",
+                suite="deep_research_browsecomp",
+                prompt="b",
+                expected="",
+                correct=False,
+                rubric_scores={
+                    "reasoning_trajectory": 1.0,
+                    "tool_calls": 0.9,
+                    "outline": 0.1,
+                    "content_stage": 0.7,
+                    "factual_accuracy": 0.2,
+                },
+            ),
+            QuestionResult(
+                question_id="q3",
+                suite="math",
+                prompt="c",
+                expected="c",
+                correct=True,
+            ),
+        ],
+        tier=1,
+    )
+
+    assert out.rubric_reasoning_trajectory == pytest.approx(0.8)
+    assert out.rubric_tool_calls == pytest.approx(0.6)
+    assert out.rubric_outline == pytest.approx(0.5)
+    assert out.rubric_content_stage == pytest.approx(0.6)
+    assert out.details["rubric_dimension_means"]["factual_accuracy"] == pytest.approx(0.5)
+    assert out.details["rubric_n_questions"] == 2
+    lines = out.to_grep_lines(trial_id=9, species="rubric")
+    assert "METRIC rubric_reasoning_trajectory: 0.8000" in lines
+    assert "METRIC rubric_tool_calls: 0.6000" in lines
+    assert not math.isnan(out.rubric_content_stage)

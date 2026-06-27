@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import random
 import time
@@ -81,9 +82,20 @@ def _has_code_execution_oracle(q: dict) -> bool:
     return bool(config.get("entry_point") and has_expected)
 
 
+def _is_rubric_scored_question(q: dict) -> bool:
+    scoring_method = str(q.get("scoring_method", ""))
+    if scoring_method == "rubric":
+        return True
+    suite = str(q.get("suite", ""))
+    expected_contains = q.get("expected_contains")
+    return suite.startswith("deep_research") and isinstance(expected_contains, list)
+
+
 def _is_scoreable_question(q: dict) -> bool:
     expected = q.get("expected", "")
     scoring_method = str(q.get("scoring_method", "exact_match"))
+    if _is_rubric_scored_question(q):
+        return True
     if scoring_method == "code_execution":
         return _has_code_execution_oracle(q)
     has_expected = expected is not None and str(expected) != ""
@@ -212,6 +224,13 @@ def _compact_question_result(r: "QuestionResult") -> dict[str, Any]:
         item["external_restart"] = True
     if r.retry_count:
         item["retry_count"] = int(r.retry_count)
+    rubric_scores = {
+        key: float(value)
+        for key, value in sorted((r.rubric_scores or {}).items())
+        if math.isfinite(float(value))
+    }
+    if rubric_scores:
+        item["rubric_scores"] = rubric_scores
     return item
 
 
@@ -374,6 +393,11 @@ sys.path.insert(0, str(_orch_root))
 
 from seeding_orchestrator import call_orchestrator_forced  # noqa: E402
 from seeding_scoring import score_answer_deterministic  # noqa: E402
+from rubric_scoring import (  # noqa: E402
+    MINDDR_PROCESS_DIMENSIONS,
+    aggregate_rubric_score,
+    deterministic_rubric_fallback,
+)
 
 DEFAULT_CORE_DIR = _orch_root / "benchmarks" / "prompts"
 
@@ -456,6 +480,7 @@ class QuestionResult:
     external_restart: bool = False
     retry_count: int = 0
     eval_partition: str = "core"
+    rubric_scores: dict[str, float] = field(default_factory=dict)
 
 
 # EV-6: Cross-family verification constraint.
@@ -764,13 +789,26 @@ class EvalTower:
             tokens = resp.get("tokens_generated", 0)
 
             correct = False
+            rubric_scores: dict[str, float] = {}
             if not error and _is_scoreable_question(q):
-                correct = score_answer_deterministic(
-                    answer=answer,
-                    expected=expected,
-                    scoring_method=scoring_method,
-                    scoring_config=scoring_config,
-                )
+                if _is_rubric_scored_question(q):
+                    rubric_scores = deterministic_rubric_fallback(
+                        answer,
+                        expected_contains=q.get("expected_contains") or (),
+                        tool_events=resp.get("tools_called") or (),
+                    )
+                    threshold = float(
+                        (scoring_config or {}).get("rubric_pass_threshold", 0.60)
+                    )
+                    correct = aggregate_rubric_score(rubric_scores).score >= threshold
+                    scoring_method = "rubric"
+                else:
+                    correct = score_answer_deterministic(
+                        answer=answer,
+                        expected=expected,
+                        scoring_method=scoring_method,
+                        scoring_config=scoring_config,
+                    )
 
             # EV-1: Confidence proxy. Binary for now (correct=1.0, incorrect=0.0).
             # When logprob passthrough lands, replace with model output confidence.
@@ -778,6 +816,8 @@ class EvalTower:
             confidence = float(correct)
             if scoring_method == "code_execution":
                 confidence = float(scoring_config.get("pass_rate", correct))
+            elif scoring_method == "rubric" and rubric_scores:
+                confidence = aggregate_rubric_score(rubric_scores).score
 
             # 2026-05-23 Phase 4 — exogenous-restart metadata propagation.
             # call_orchestrator_forced attaches the resilient_post meta dict
@@ -810,6 +850,7 @@ class EvalTower:
                 external_restart=bool(meta.get("external_restart", False)),
                 retry_count=int(meta.get("retry_count", 0)),
                 eval_partition=eval_partition,
+                rubric_scores=rubric_scores,
             )
         except Exception as e:
             elapsed = time.time() - start
@@ -1208,6 +1249,25 @@ class EvalTower:
         else:
             tool_helpfulness = float("nan")
 
+        rubric_dimension_values: dict[str, list[float]] = {}
+        for r in results:
+            for dim, value in (r.rubric_scores or {}).items():
+                try:
+                    numeric = float(value)
+                except (TypeError, ValueError):
+                    continue
+                if math.isfinite(numeric):
+                    rubric_dimension_values.setdefault(dim, []).append(numeric)
+        rubric_dimension_means = {
+            dim: sum(values) / len(values)
+            for dim, values in sorted(rubric_dimension_values.items())
+            if values
+        }
+        rubric_process_means = {
+            dim: rubric_dimension_means.get(dim, float("nan"))
+            for dim in MINDDR_PROCESS_DIMENSIONS
+        }
+
         return EvalResult(
             tier=tier,
             quality=quality,
@@ -1248,6 +1308,8 @@ class EvalTower:
                 "tool_helpfulness_n_with": len(with_tools),
                 "tool_helpfulness_n_without": len(without_tools),
                 "per_suite_tool_helpfulness": per_suite_tool_helpfulness,
+                "rubric_dimension_means": rubric_dimension_means,
+                "rubric_n_questions": sum(1 for r in results if r.rubric_scores),
             },
             mean_tools_used=mean_tools_used,
             tool_use_rate=tool_use_rate,
@@ -1269,6 +1331,12 @@ class EvalTower:
             auroc=auroc,
             calibration_violations=cal_violations,
             branching_density=avg_branching,
+            rubric_reasoning_trajectory=rubric_process_means[
+                "reasoning_trajectory"
+            ],
+            rubric_tool_calls=rubric_process_means["tool_calls"],
+            rubric_outline=rubric_process_means["outline"],
+            rubric_content_stage=rubric_process_means["content_stage"],
             # 2026-05-23 Phase 4 — roll up exogenous-restart counters.
             n_exogenous_recovered=sum(1 for r in results if r.exogenous_recovered),
             n_exogenous_unrecovered=sum(1 for r in results if r.exogenous_unrecovered),
