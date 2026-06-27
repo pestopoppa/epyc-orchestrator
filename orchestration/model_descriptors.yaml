@@ -1,16 +1,16 @@
 descriptor_version: 3
-compiled_at: '2026-06-27T11:17:22Z'
-status: compiled_with_gaps
+compiled_at: '2026-06-27T11:31:41Z'
+status: compiled
 coverage_scope: active_roles_from_stack_manifest
 source_registries:
   lean:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
-    repo_commit: 6f75ceab
-    sha256: 18dc9cbeace9cea388b4fceab27f0ba9cf2733fde303977235bac2322ae791e1
+    repo_commit: 341b3a99
+    sha256: c37442f0dfc52638b9a00b37ab2e3c5667f683357004b006e988f8c495a8c1c9
   research:
     path: /mnt/raid0/llm/epyc-inference-research/orchestration/model_registry.yaml
     repo_commit: 97c2b1c
-    sha256: c606a2bc80dfd55a39d48e75e57a434b113c0c24abd0d8772b419211da00894c
+    sha256: 8cb9573616683815dd20799fff751511d47cbfd24df7fc7d0051e2f9b864fe85
 model_id_policy:
   canonical_shape: family-params-active-quant
   invariant: model records are keyed by physical model identity, never by role name
@@ -254,7 +254,7 @@ models:
   active_b: 3.0
   quant: Q4_K_M
   mem_gb: 18.0
-  ctx_max: null
+  ctx_max: 262144
   modalities:
   - text
   - vision
@@ -296,7 +296,11 @@ models:
     spec_type: moe_expert_reduction
     draft_compat: []
     enable_thinking: null
-    thinking_control: null
+    thinking_control:
+      mode: native_no_thinking_toggle
+      effective_mode: native_no_think_tags
+      evidence_strength: model_variant_inferred
+      evidence: Qwen3-VL-30B-A3B-Instruct is the non-thinking VL variant; multimodal role follows native VL chat behavior rather than a text-model enable_thinking toggle.
     kv:
       k: null
       v: null
@@ -310,9 +314,7 @@ models:
     server_role: null
     requirements:
       mmproj_path: lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/mmproj-Qwen3-VL-30B-A3B-Instruct-F16.gguf
-  known_gaps:
-  - Missing enable_thinking compatibility evidence
-  - Missing structured ctx_max
+  known_gaps: []
 - model_id: qwen3.5-122b-a10b-q4_k_m
   display_name: Qwen3.5-122B-A10B
   family: qwen3.5

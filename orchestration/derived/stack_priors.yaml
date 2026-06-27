@@ -48,39 +48,39 @@ contract:
   - quality_overall
   - memory_cost
   fallback_policy: Consumers may use local fallback values only as explicit degraded mode when this generated contract is missing or invalid.
-compiled_at: '2026-06-27T11:17:22Z'
-status: compiled_with_gaps
+compiled_at: '2026-06-27T11:31:41Z'
+status: compiled
 coverage_scope: descriptor_role_bindings
 precedence_spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
 source_artifacts:
   registry:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
-    sha256: 18dc9cbeace9cea388b4fceab27f0ba9cf2733fde303977235bac2322ae791e1
-    repo_commit: 6f75ceab
+    sha256: c37442f0dfc52638b9a00b37ab2e3c5667f683357004b006e988f8c495a8c1c9
+    repo_commit: 341b3a99
   descriptors:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_descriptors.yaml
-    sha256: e71108967054cae888f0269e04ff461bf7e3ecaa2e2a7c3097850ed5ffca4ab2
-    repo_commit: 6f75ceab
+    sha256: 3667dfa08a75ac1f449424c33ea9c911f432abb8cda2c5b1c27d25baf8d0d802
+    repo_commit: 341b3a99
   stack_manifest:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_manifest.py
     sha256: 33de60b1adc4e7304a62796dbfab5a76ce3b897be055b945aeed9219fb5e4495
-    repo_commit: 6f75ceab
+    repo_commit: 341b3a99
   stack_numa:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_numa.py
     sha256: 52f6d919cf8c6a643c2e17958655fa88b80b726624eb4886554b57b7ef27fd06
-    repo_commit: 6f75ceab
+    repo_commit: 341b3a99
   orchestrator_stack:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/orchestrator_stack.py
     sha256: 649e0ae6d178b6ea6b6f44df8764a95a30d9f50542a74561e253e77e3ab6fd42
-    repo_commit: 6f75ceab
+    repo_commit: 341b3a99
   stack_paths:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_paths.py
     sha256: 7eee8576101dbb827ec8e94a228beedb401d7cad80841e1a18aab9c03db4206b
-    repo_commit: 6f75ceab
+    repo_commit: 341b3a99
   stack_runtime:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_runtime.py
     sha256: f749047dde702b21759f67dcc81bf6cd64f1157e8a1fdf250b317301c1b6d32c
-    repo_commit: 6f75ceab
+    repo_commit: 341b3a99
 roles:
   architect_general:
     role: architect_general
@@ -913,7 +913,7 @@ roles:
   vision_escalation:
     role: vision_escalation
     deployment_status: live_stack
-    status: compiled_with_gaps
+    status: compiled
     model_id: qwen3-vl-30b-a3b-q4_k_m
     display_name: Qwen3-VL-30B-A3B-Instruct
     serving:
@@ -1011,7 +1011,11 @@ roles:
       spec_type: moe_expert_reduction
       draft_compat: []
       enable_thinking: null
-      thinking_control: null
+      thinking_control:
+        mode: native_no_thinking_toggle
+        effective_mode: native_no_think_tags
+        evidence_strength: model_variant_inferred
+        evidence: Qwen3-VL-30B-A3B-Instruct is the non-thinking VL variant; multimodal role follows native VL chat behavior rather than a text-model enable_thinking toggle.
       kv:
         k: null
         v: null
@@ -1022,7 +1026,7 @@ roles:
       active_b: 3.0
       quant: Q4_K_M
       mem_gb: 18.0
-      ctx_max: null
+      ctx_max: 262144
       modalities:
       - text
       - vision
@@ -1049,9 +1053,7 @@ roles:
         protocol: registry performance block
         baseline_tps: 19.0
         optimized_tps: 27.6
-    known_gaps:
-    - Missing enable_thinking compatibility evidence
-    - Missing structured ctx_max
+    known_gaps: []
   worker_general:
     role: worker_general
     deployment_status: live_stack
@@ -1593,7 +1595,4 @@ roles:
         baseline_tps: 15.28
         optimized_tps: 20.0
     known_gaps: []
-known_global_gaps:
-  vision_escalation:
-  - Missing enable_thinking compatibility evidence
-  - Missing structured ctx_max
+known_global_gaps: {}
