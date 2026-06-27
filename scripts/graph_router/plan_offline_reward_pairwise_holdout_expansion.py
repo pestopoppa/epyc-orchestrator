@@ -56,7 +56,7 @@ DEFAULT_EXISTING_PAIRWISE = (
     DEFAULT_REPORT_DIR / "offline_reward_pairwise_preference_contract_score_ordered.jsonl"
 )
 DEFAULT_TARGET_SOURCE_FAMILIES = "seeding_eval"
-DEFAULT_TARGET_SUITES = "livecodebench"
+DEFAULT_TARGET_SUITES = "thinking"
 
 
 class PairwiseHoldoutExpansionError(ValueError):
