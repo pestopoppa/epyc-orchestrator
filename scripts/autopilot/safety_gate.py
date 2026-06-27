@@ -267,6 +267,12 @@ class EvalResult:
     diversity_self_bleu: float = math.nan
     diversity_ttr: float = math.nan
     diversity_semantic_embedding_agreement: float = math.nan
+    # EV-9 / MindDR rubric telemetry. NaN means unavailable; these are emitted
+    # only when a rubric scorer actually populates them.
+    rubric_reasoning_trajectory: float = math.nan
+    rubric_tool_calls: float = math.nan
+    rubric_outline: float = math.nan
+    rubric_content_stage: float = math.nan
     # EV-2: Calibration metrics (from eval-tower-verification.md)
     ece: float = 0.0  # Expected Calibration Error (10-bin). Lower = better calibrated.
     auroc: float = 0.0  # Area Under ROC Curve. Higher = better discrimination. 0 if degenerate.
@@ -360,6 +366,14 @@ class EvalResult:
         ):
             if not math.isnan(_div_val):
                 lines.append(f"METRIC {_div_key}: {_div_val:.4f}")
+        for _rubric_key, _rubric_val in (
+            ("rubric_reasoning_trajectory", self.rubric_reasoning_trajectory),
+            ("rubric_tool_calls", self.rubric_tool_calls),
+            ("rubric_outline", self.rubric_outline),
+            ("rubric_content_stage", self.rubric_content_stage),
+        ):
+            if not math.isnan(_rubric_val):
+                lines.append(f"METRIC {_rubric_key}: {_rubric_val:.4f}")
         return "\n".join(lines)
 
 
