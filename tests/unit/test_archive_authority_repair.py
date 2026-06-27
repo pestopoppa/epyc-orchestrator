@@ -36,6 +36,12 @@ def _row(trial_id: int, *, quality: float = 1.0) -> dict[str, Any]:
     }
 
 
+def _row_at(trial_id: int, timestamp: str, *, quality: float = 1.0) -> dict[str, Any]:
+    row = _row(trial_id, quality=quality)
+    row["timestamp"] = timestamp
+    return row
+
+
 def _archive(rows: list[dict[str, Any]]) -> dict[str, Any]:
     archive = reconstruct_archive_from_journal_rows(rows, None, current_run_only=False)
     assert archive is not None
@@ -77,6 +83,26 @@ def test_build_repaired_state_removes_only_archive_cache() -> None:
     assert result.after["ok"] is True
     assert repaired["trial_counter"] == 3
     assert repaired["paused"] is True
+    assert "pareto_archive" not in repaired
+
+
+def test_build_repaired_state_uses_epoch_exclusion() -> None:
+    rows = [
+        _row_at(1, "2026-06-14T00:00:01Z", quality=2.0),
+        _row_at(2, "2026-06-15T00:00:01Z", quality=1.2),
+    ]
+    state = {
+        "trial_counter": 3,
+        "pareto_archive": _archive([rows[0]]),
+        "pareto_exclude_before_ts": 1781481600.0,
+    }
+
+    repaired, result = build_repaired_state(state, rows)
+
+    assert result.status == "ready"
+    assert result.after is not None
+    assert result.after["ok"] is True
+    assert result.after["diagnostic"]["journal_entry_count"] == 1
     assert "pareto_archive" not in repaired
 
 

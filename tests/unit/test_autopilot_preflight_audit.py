@@ -16,10 +16,11 @@ def _journal_row(
     *,
     quality: float = 1.0,
     speed: float = 40.0,
+    timestamp: str | None = None,
 ) -> dict[str, Any]:
     return {
         "trial_id": trial_id,
-        "timestamp": f"2026-06-14T00:00:0{trial_id}Z",
+        "timestamp": timestamp or f"2026-06-14T00:00:0{trial_id}Z",
         "species": "unit",
         "action_type": "seed_batch",
         "tier": 1,
@@ -317,6 +318,24 @@ def test_archive_authority_diagnostic_accepts_missing_state_cache() -> None:
     assert diagnostic["journal_entry_count"] == 1
     assert diagnostic["state_frontier_count"] == 0
     assert diagnostic["journal_frontier_count"] == 1
+
+
+def test_archive_authority_diagnostic_honors_epoch_exclusion() -> None:
+    rows = [
+        _journal_row(1, quality=2.0, timestamp="2026-06-14T00:00:01Z"),
+        _journal_row(2, quality=1.2, timestamp="2026-06-15T00:00:01Z"),
+    ]
+    state = {
+        "trial_counter": 3,
+        "pareto_exclude_before_ts": 1781481600.0,
+    }
+
+    diagnostic = _MOD.archive_authority_diagnostic(state, rows)
+
+    assert diagnostic["status"] == "match"
+    assert diagnostic["journal_entry_count"] == 1
+    assert diagnostic["journal_frontier_count"] == 1
+    assert diagnostic["replay_kwargs"] == {"exclude_before_ts": 1781481600.0}
 
 
 def test_archive_authority_diagnostic_ignores_nonsemantic_entry_metadata() -> None:

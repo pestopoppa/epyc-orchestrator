@@ -36,6 +36,12 @@ def _row(trial_id: int, *, quality: float = 1.0) -> dict[str, Any]:
     }
 
 
+def _row_at(trial_id: int, timestamp: str, *, quality: float = 1.0) -> dict[str, Any]:
+    row = _row(trial_id, quality=quality)
+    row["timestamp"] = timestamp
+    return row
+
+
 def _archive(rows: list[dict[str, Any]]) -> dict[str, Any]:
     archive = reconstruct_archive_from_journal_rows(rows, None, current_run_only=False)
     assert archive is not None
@@ -69,6 +75,27 @@ def test_report_accepts_absent_state_cache_as_journal_authoritative() -> None:
     assert report["entry_id_delta"]["journal_only_count"] == 0
     rendered = render_markdown(report)
     assert "- State archive cache: absent (journal-authoritative)" in rendered
+
+
+def test_report_replays_with_state_epoch_exclusion() -> None:
+    rows = [
+        _row_at(1, "2026-06-14T00:00:01Z", quality=2.0),
+        _row_at(2, "2026-06-15T00:00:01Z", quality=1.2),
+    ]
+    report = build_archive_authority_report(
+        {
+            "trial_counter": 3,
+            "pareto_exclude_before_ts": 1781481600.0,
+        },
+        rows,
+    )
+
+    assert report["ok"] is True
+    assert report["diagnostic"]["journal_entry_count"] == 1
+    assert report["diagnostic"]["journal_frontier_count"] == 1
+    assert report["diagnostic"]["replay_kwargs"] == {
+        "exclude_before_ts": 1781481600.0
+    }
 
 
 def test_report_summarizes_id_and_value_drift() -> None:

@@ -19,6 +19,7 @@ sys.path.insert(0, str(ORCH_ROOT))
 
 from archive_authority_report import build_archive_authority_report  # noqa: E402
 from preflight_audit import JOURNAL_PATH, STATE_PATH, _load_jsonl  # noqa: E402
+from preflight_audit import archive_replay_kwargs_from_state  # noqa: E402
 from src.autopilot_core.journal_reconstruction import (  # noqa: E402
     reconstruct_archive_from_journal_rows,
 )
@@ -63,6 +64,7 @@ def build_repaired_state(
         journal_rows,
         None,
         current_run_only=False,
+        **archive_replay_kwargs_from_state(state),
     )
     if archive is None:
         return state, ArchiveRepairResult(

@@ -19,8 +19,16 @@ from archive_authority_report import build_archive_authority_report  # noqa: E40
 from audit_block_report import build_report as build_audit_block_report  # noqa: E402
 from baseline_authority_report import build_baseline_authority_report  # noqa: E402
 from baseline_authority_seed import build_baseline_seed_event  # noqa: E402
-from preflight_audit import JOURNAL_PATH, STATE_PATH, _load_jsonl  # noqa: E402
+from preflight_audit import (  # noqa: E402
+    JOURNAL_PATH,
+    STATE_PATH,
+    _load_jsonl,
+    archive_replay_kwargs_from_state,
+)
 from seq_readiness_report import build_seq_readiness_report  # noqa: E402
+from src.autopilot_core.journal_reconstruction import (  # noqa: E402
+    reconstruct_archive_from_journal_rows,
+)
 from src.autopilot_core.journal_snapshot_replay import (  # noqa: E402
     archive_payload_from_verified_snapshot,
     build_snapshot_replay_diagnostic,
@@ -41,23 +49,40 @@ def _diagnostic_dict(diagnostic: Any) -> dict[str, Any]:
     return dict(vars(diagnostic))
 
 
-def _snapshot_restart_report(journal_rows: list[dict[str, Any]]) -> dict[str, Any]:
+def _snapshot_restart_report(
+    state: dict[str, Any],
+    journal_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
     ledger_events = _ledger_events(journal_rows)
     diagnostic = build_snapshot_replay_diagnostic(journal_rows, ledger_events)
     payload = archive_payload_from_verified_snapshot(journal_rows, ledger_events)
+    replay_kwargs = archive_replay_kwargs_from_state(state)
+    full_replay_payload = reconstruct_archive_from_journal_rows(
+        journal_rows,
+        None,
+        current_run_only=False,
+        **replay_kwargs,
+    )
     if diagnostic.bounded_replay_readiness == "current":
         readiness = "current"
     elif payload is not None:
         readiness = "tail_fold_ready"
+    elif full_replay_payload is not None:
+        readiness = "full_replay_ready"
     else:
         readiness = diagnostic.bounded_replay_readiness
+    restart_payload = payload or full_replay_payload
     return {
-        "ok": payload is not None,
+        "ok": restart_payload is not None,
         "restart_readiness": readiness,
         "payload_available": payload is not None,
+        "full_replay_payload_available": full_replay_payload is not None,
         "payload_journal_max_trial_id": (
-            payload.get("journal_max_trial_id") if isinstance(payload, dict) else None
+            restart_payload.get("journal_max_trial_id")
+            if isinstance(restart_payload, dict)
+            else None
         ),
+        "replay_kwargs": replay_kwargs,
         "diagnostic": _diagnostic_dict(diagnostic),
     }
 
@@ -272,7 +297,7 @@ def build_restart_readiness_report(
 ) -> dict[str, Any]:
     """Build a no-write report for safe AutoPilot restart/cutover decisions."""
     archive_report = build_archive_authority_report(state, journal_rows)
-    snapshot_report = _snapshot_restart_report(journal_rows)
+    snapshot_report = _snapshot_restart_report(state, journal_rows)
     baseline_report = _baseline_restart_report(state, journal_rows)
     seq_report = build_seq_readiness_report(journal_rows)
     w6_report = _w6_audit_restart_report(
@@ -286,7 +311,7 @@ def build_restart_readiness_report(
         blockers.append(f"archive authority is not aligned: {status}")
     if not snapshot_report.get("ok"):
         readiness = snapshot_report.get("restart_readiness", "unknown")
-        blockers.append(f"journal snapshot is not current or foldable: {readiness}")
+        blockers.append(f"journal archive is not restart-replayable: {readiness}")
     if not baseline_report.get("startup_safe"):
         blockers.append("no safe baseline startup source")
     if require_seq_cutover and not seq_report.get("cutover_ready"):

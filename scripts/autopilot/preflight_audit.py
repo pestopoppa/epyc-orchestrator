@@ -258,6 +258,26 @@ def _archive_authority_view(payload: dict) -> dict:
     )
 
 
+def archive_replay_kwargs_from_state(state: dict) -> dict[str, float]:
+    """Return journal replay knobs carried by runtime state."""
+    kwargs: dict[str, float] = {}
+    for state_key, replay_key in (
+        ("pareto_epoch_ts", "deinflate_before_ts"),
+        ("pareto_pre_epoch_speed_factor", "deinflate_factor"),
+        ("pareto_exclude_before_ts", "exclude_before_ts"),
+    ):
+        try:
+            value = float(state.get(state_key) or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if state_key == "pareto_pre_epoch_speed_factor":
+            if value != 0.0 and value != 1.0:
+                kwargs[replay_key] = value
+        elif value:
+            kwargs[replay_key] = value
+    return kwargs
+
+
 def archive_authority_diagnostic(state: dict, journal_rows: list[dict]) -> dict:
     """Check journal archive authority and any legacy state cache."""
     trial_ids = [_trial_id(row) for row in journal_rows]
@@ -278,16 +298,19 @@ def archive_authority_diagnostic(state: dict, journal_rows: list[dict]) -> dict:
             f"state trial_counter {state_trial_counter}"
         )
 
+    replay_kwargs = archive_replay_kwargs_from_state(state)
     journal_archive = reconstruct_archive_from_journal_rows(
         journal_rows,
         None,
         current_run_only=False,
+        **replay_kwargs,
     )
     if journal_archive is None:
         return {
             "status": "journal_unreconstructable",
             "state_trial_counter": state_trial_counter,
             "journal_max_trial_id": journal_max_trial_id,
+            "replay_kwargs": replay_kwargs,
             "warnings": warnings + ["journal rows did not reconstruct an archive"],
         }
 
@@ -298,8 +321,9 @@ def archive_authority_diagnostic(state: dict, journal_rows: list[dict]) -> dict:
         if row.get("type") and "trial_id" not in row
     ]
     snapshot_diagnostic = build_snapshot_replay_diagnostic(journal_rows, ledger_events)
+    snapshot_warnings: list[str] = []
     if snapshot_diagnostic.bounded_replay_readiness == "prefix_invalidated":
-        warnings.append("latest journal snapshot prefix is invalidated")
+        snapshot_warnings.append("latest journal snapshot prefix is invalidated")
 
     journal_view = _archive_authority_view(journal_archive)
     if not state_archive_present:
@@ -315,6 +339,8 @@ def archive_authority_diagnostic(state: dict, journal_rows: list[dict]) -> dict:
             "journal_frontier_count": len(journal_view["frontier"]),
             "snapshot_readiness": snapshot_diagnostic.bounded_replay_readiness,
             "snapshot_replay_status": snapshot_diagnostic.status,
+            "snapshot_warnings": snapshot_warnings,
+            "replay_kwargs": replay_kwargs,
             "warnings": warnings,
         }
 
@@ -331,6 +357,8 @@ def archive_authority_diagnostic(state: dict, journal_rows: list[dict]) -> dict:
         "journal_frontier_count": len(journal_view["frontier"]),
         "snapshot_readiness": snapshot_diagnostic.bounded_replay_readiness,
         "snapshot_replay_status": snapshot_diagnostic.status,
+        "snapshot_warnings": snapshot_warnings,
+        "replay_kwargs": replay_kwargs,
         "warnings": warnings,
     }
 

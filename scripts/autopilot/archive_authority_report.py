@@ -20,6 +20,7 @@ from preflight_audit import (  # noqa: E402
     _archive_authority_view,
     _load_jsonl,
     archive_authority_diagnostic,
+    archive_replay_kwargs_from_state,
 )
 from src.autopilot_core.journal_reconstruction import (  # noqa: E402
     reconstruct_archive_from_journal_rows,
@@ -111,10 +112,12 @@ def build_archive_authority_report(
     state_archive_present = isinstance(state_archive, dict) and bool(state_archive)
     if not state_archive_present:
         state_archive = {}
+    replay_kwargs = archive_replay_kwargs_from_state(state)
     journal_archive = reconstruct_archive_from_journal_rows(
         journal_rows,
         None,
         current_run_only=False,
+        **replay_kwargs,
     ) or {}
 
     journal_view = _archive_authority_view(journal_archive)

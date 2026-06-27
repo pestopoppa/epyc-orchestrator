@@ -22,6 +22,21 @@ def _state() -> dict[str, Any]:
     }
 
 
+def _journal_row(trial_id: int, timestamp: str = "2026-06-15T00:00:01Z") -> dict[str, Any]:
+    return {
+        "trial_id": trial_id,
+        "timestamp": timestamp,
+        "species": "unit",
+        "action_type": "seed_batch",
+        "tier": 1,
+        "quality": 1.2,
+        "speed": 40.0,
+        "cost": 0.2,
+        "reliability": 0.9,
+        "pareto_status": "frontier",
+    }
+
+
 def _seq_ready(*, ready: bool = False) -> dict[str, Any]:
     return {
         "cutover_ready": ready,
@@ -197,6 +212,56 @@ def test_restart_ready_accepts_tail_fold_snapshot_and_state_baseline(monkeypatch
         "w6_audited_trials": 30,
         "w6_alarm_clearance": 0,
     }
+
+
+def test_restart_ready_accepts_full_replay_when_snapshot_invalidated(monkeypatch) -> None:
+    monkeypatch.setattr(
+        report_mod,
+        "build_baseline_authority_report",
+        lambda state, rows: {"ok": False, "status": "no_events"},
+    )
+    monkeypatch.setattr(
+        report_mod,
+        "build_seq_readiness_report",
+        lambda rows: _seq_ready(ready=False),
+    )
+    monkeypatch.setattr(
+        report_mod,
+        "build_snapshot_replay_diagnostic",
+        lambda rows, events: SimpleNamespace(
+            bounded_replay_readiness="prefix_invalidated",
+            event_count=1,
+            status="archive_prefix_drift",
+            hash_status="mismatch",
+            latest_event=None,
+            through_trial_id=10,
+            policy_version="journal-archive-snapshot-v1",
+            snapshot_hash="abc",
+            parent_snapshot_hash="",
+            tail_trial_count=0,
+            tail_max_trial_id=None,
+            journal_max_trial_id=1,
+            post_snapshot_prefix_event_count=0,
+            warnings=["latest journal snapshot prefix is invalidated"],
+        ),
+    )
+    monkeypatch.setattr(
+        report_mod,
+        "archive_payload_from_verified_snapshot",
+        lambda rows, events: None,
+    )
+
+    report = report_mod.build_restart_readiness_report(
+        _state(),
+        [_journal_row(1)],
+    )
+
+    assert report["restart_ready"] is True
+    assert report["blockers"] == []
+    assert report["summary"]["archive_status"] == "match"
+    assert report["summary"]["snapshot_restart_readiness"] == "full_replay_ready"
+    assert report["summary"]["snapshot_payload_available"] is False
+    assert report["snapshot_replay"]["full_replay_payload_available"] is True
 
 
 def test_baseline_seed_preflight_skips_when_ledger_fold_ready(monkeypatch) -> None:
