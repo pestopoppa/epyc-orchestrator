@@ -1,0 +1,27 @@
+{
+  "n_train": 432,
+  "n_val": 108,
+  "n_actions": 6,
+  "hard_role_success_acc": 0.6019,
+  "soft_role_success_acc": 0.5741,
+  "delta_role_success_acc": -0.0278,
+  "hard_argmax_match_acc": 0.8889,
+  "soft_argmax_match_acc": 0.8889,
+  "decision_gate": ">=+1pp role-success accuracy (soft over hard)",
+  "adopt_soft_labels": false,
+  "label_map": {
+    "0": "frontdoor",
+    "1": "coder_escalation",
+    "2": "worker_general",
+    "3": "architect_general",
+    "4": "ingest_long_context",
+    "5": "worker_vision"
+  },
+  "seed": 44,
+  "role_dropout": {
+    "applied_to": "soft",
+    "rate": 0.2,
+    "min_roles": 1,
+    "max_roles": 2
+  }
+}
