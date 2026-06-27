@@ -396,6 +396,7 @@ from seeding_scoring import score_answer_deterministic  # noqa: E402
 from rubric_scoring import (  # noqa: E402
     MINDDR_PROCESS_DIMENSIONS,
     aggregate_rubric_score,
+    build_rubric_judge_prompt,
     deterministic_rubric_fallback,
 )
 
@@ -511,6 +512,66 @@ def check_cross_family(generator_model: str, verifier_model: str) -> bool:
     gen_family = _get_family(generator_model)
     ver_family = _get_family(verifier_model)
     return gen_family != ver_family or gen_family == "unknown"
+
+
+def _configured_rubric_judge_roles() -> list[str]:
+    raw = os.environ.get("AUTOPILOT_RUBRIC_JUDGE_ROLES", "").strip()
+    if not raw:
+        return []
+    return [role.strip() for role in raw.split(",") if role.strip()]
+
+
+def _rubric_judge_timeout_s(default_timeout: int) -> int:
+    raw = os.environ.get("AUTOPILOT_RUBRIC_JUDGE_TIMEOUT_S", "").strip()
+    if not raw:
+        return default_timeout
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        log.warning("Invalid AUTOPILOT_RUBRIC_JUDGE_TIMEOUT_S=%r; using default", raw)
+        return default_timeout
+
+
+def _extract_json_object(text: str) -> dict[str, Any] | None:
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        lines = cleaned.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        cleaned = "\n".join(lines).strip()
+    candidates = [cleaned]
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if 0 <= start < end:
+        candidates.append(cleaned[start : end + 1])
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
+def _parse_rubric_judge_scores(text: str) -> dict[str, float]:
+    parsed = _extract_json_object(text)
+    if not parsed:
+        return {}
+    raw_scores = parsed.get("scores")
+    if not isinstance(raw_scores, dict):
+        return {}
+    scores: dict[str, float] = {}
+    for key, value in raw_scores.items():
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(numeric):
+            scores[str(key)] = min(max(numeric, 0.0), 1.0)
+    return scores
 
 
 class EvalTower:
@@ -747,6 +808,66 @@ class EvalTower:
 
     # ── single question evaluation ───────────────────────────────
 
+    def _rubric_scores_for_answer(
+        self,
+        *,
+        q: dict,
+        answer: str,
+        generator_model: str,
+        tool_events: list[str],
+        client: httpx.Client,
+    ) -> dict[str, float]:
+        fallback = deterministic_rubric_fallback(
+            answer,
+            expected_contains=q.get("expected_contains") or (),
+            tool_events=tool_events,
+        )
+        judge_roles = _configured_rubric_judge_roles()
+        if not judge_roles:
+            return fallback
+
+        prompt = build_rubric_judge_prompt(
+            task_prompt=str(q.get("prompt", "")),
+            answer=answer,
+            expected_contains=q.get("expected_contains") or (),
+        )
+        judge_scores: list[dict[str, float]] = []
+        for role in judge_roles:
+            if not check_cross_family(generator_model, role):
+                log.warning(
+                    "Skipping rubric judge role %s; not cross-family with %s",
+                    role,
+                    generator_model,
+                )
+                continue
+            resp = call_orchestrator_forced(
+                prompt=prompt.prompt,
+                force_role=role,
+                force_mode="direct",
+                url=self.url,
+                timeout=_rubric_judge_timeout_s(self.timeout),
+                client=client,
+                allow_delegation=False,
+                scoring_method="rubric_judge",
+                watcher=getattr(self, "watcher", None),
+            )
+            if resp.get("error"):
+                log.warning("rubric judge %s failed: %s", role, resp.get("error"))
+                continue
+            parsed = _parse_rubric_judge_scores(str(resp.get("answer", "")))
+            if parsed:
+                judge_scores.append(parsed)
+
+        if not judge_scores:
+            return fallback
+        combined = dict(fallback)
+        dimensions = sorted({dim for scores in judge_scores for dim in scores})
+        for dim in dimensions:
+            values = [scores[dim] for scores in judge_scores if dim in scores]
+            if values:
+                combined[dim] = sum(values) / len(values)
+        return combined
+
     def _eval_question(
         self, q: dict, client: httpx.Client
     ) -> QuestionResult:
@@ -792,10 +913,12 @@ class EvalTower:
             rubric_scores: dict[str, float] = {}
             if not error and _is_scoreable_question(q):
                 if _is_rubric_scored_question(q):
-                    rubric_scores = deterministic_rubric_fallback(
-                        answer,
-                        expected_contains=q.get("expected_contains") or (),
-                        tool_events=resp.get("tools_called") or (),
+                    rubric_scores = self._rubric_scores_for_answer(
+                        q=q,
+                        answer=answer,
+                        generator_model=str(resp.get("model") or resp.get("routed_to") or ""),
+                        tool_events=list(resp.get("tools_called") or []),
+                        client=client,
                     )
                     threshold = float(
                         (scoring_config or {}).get("rubric_pass_threshold", 0.60)

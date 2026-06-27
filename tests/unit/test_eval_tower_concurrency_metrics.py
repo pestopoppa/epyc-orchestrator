@@ -447,6 +447,7 @@ def test_deep_research_expected_contains_items_are_scoreable() -> None:
 
 
 def test_eval_question_populates_deterministic_rubric_scores(monkeypatch) -> None:
+    monkeypatch.delenv("AUTOPILOT_RUBRIC_JUDGE_ROLES", raising=False)
     tower = EvalTower()
 
     def _fake_call(**_kwargs):  # noqa: ANN001
@@ -482,6 +483,68 @@ def test_eval_question_populates_deterministic_rubric_scores(monkeypatch) -> Non
     assert result.confidence >= 0.5
     assert result.rubric_scores["factual_accuracy"] == 1.0
     assert result.rubric_scores["tool_calls"] > 0
+
+
+def test_parse_rubric_judge_scores_accepts_fenced_json() -> None:
+    parsed = eval_tower._parse_rubric_judge_scores(
+        """```json
+        {"scores": {"reasoning_trajectory": 0.25, "tool_calls": 1.7, "bad": "x"}}
+        ```"""
+    )
+
+    assert parsed == {"reasoning_trajectory": 0.25, "tool_calls": 1.0}
+
+
+def test_eval_question_uses_configured_local_rubric_judge(monkeypatch) -> None:
+    monkeypatch.setenv("AUTOPILOT_RUBRIC_JUDGE_ROLES", "architect_general")
+    monkeypatch.setenv("AUTOPILOT_RUBRIC_JUDGE_TIMEOUT_S", "1")
+    tower = EvalTower()
+    calls: list[dict] = []
+
+    def _fake_call(**kwargs):  # noqa: ANN001
+        calls.append(kwargs)
+        if kwargs.get("scoring_method") == "rubric_judge":
+            return {
+                "answer": (
+                    '{"scores":{"reasoning_trajectory":0.2,'
+                    '"tool_calls":0.4,"outline":0.6,"content_stage":0.8,'
+                    '"factual_accuracy":0.9}}'
+                ),
+                "model": "judge",
+            }
+        return {
+            "answer": (
+                "# Summary\n"
+                "- alpha beta evidence\n"
+                "- gamma delta caveat\n"
+                "Source: https://example.test/report\n"
+            ),
+            "tokens_generated": 20,
+            "model": "Llama-Generator",
+            "tools_called": ["web_search"],
+        }
+
+    monkeypatch.setattr(eval_tower, "call_orchestrator_forced", _fake_call)
+
+    with eval_tower.httpx.Client(timeout=1) as client:
+        result = tower._eval_question(
+            {
+                "id": "dr-judge",
+                "suite": "deep_research_mixed",
+                "prompt": "Research alpha beta.",
+                "expected_contains": ["alpha beta", "gamma delta"],
+                "scoring_config": {"rubric_pass_threshold": 0.5},
+            },
+            client,
+        )
+
+    assert len(calls) == 2
+    assert calls[1]["force_role"] == "architect_general"
+    assert calls[1]["allow_delegation"] is False
+    assert calls[1]["scoring_method"] == "rubric_judge"
+    assert result.rubric_scores["reasoning_trajectory"] == 0.2
+    assert result.rubric_scores["content_stage"] == 0.8
+    assert result.rubric_scores["factual_accuracy"] == 0.9
 
 
 def test_aggregate_emits_rubric_process_means() -> None:
