@@ -226,6 +226,34 @@ def split_group_keys(
     return train_groups, test_groups
 
 
+def split_group_kfolds(
+    rows: list[dict[str, Any]],
+    *,
+    seed: int,
+    folds: int,
+) -> list[tuple[set[str], set[str]]]:
+    if folds < 2:
+        raise PairwiseRankerError("cv_folds must be at least 2")
+    groups = sorted({str(row["group_key"]) for row in rows})
+    if len(groups) < folds:
+        raise PairwiseRankerError(
+            f"cv_folds={folds} requires at least {folds} source-record groups"
+        )
+    rng = np.random.default_rng(seed)
+    indexes = np.arange(len(groups))
+    rng.shuffle(indexes)
+    fold_indexes = np.array_split(indexes, folds)
+    out: list[tuple[set[str], set[str]]] = []
+    all_groups = set(groups)
+    for fold in fold_indexes:
+        test_groups = {groups[idx] for idx in fold.tolist()}
+        train_groups = all_groups - test_groups
+        if not test_groups or not train_groups:
+            raise PairwiseRankerError("cross-validation produced empty train/test split")
+        out.append((train_groups, test_groups))
+    return out
+
+
 def _rows_for_groups(rows: list[dict[str, Any]], groups: set[str]) -> list[dict[str, Any]]:
     return [row for row in rows if str(row["group_key"]) in groups]
 
@@ -545,6 +573,69 @@ def _holdout_decision(holdout: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _evaluate_cross_validation(
+    rows: list[dict[str, Any]],
+    encoders: Encoders,
+    args: argparse.Namespace,
+) -> dict[str, Any] | None:
+    if args.cv_folds <= 0:
+        return None
+    runs: list[dict[str, Any]] = []
+    fold_summaries: list[dict[str, Any]] = []
+    for seed in args.seeds:
+        for fold_index, (train_groups, test_groups) in enumerate(
+            split_group_kfolds(rows, seed=seed, folds=args.cv_folds),
+            start=1,
+        ):
+            train_rows = _rows_for_groups(rows, train_groups)
+            test_rows = _rows_for_groups(rows, test_groups)
+            fold_runs = _evaluate_model_runs(
+                train_rows=train_rows,
+                test_rows=test_rows,
+                encoders=encoders,
+                seed=seed,
+                families=args.families,
+                min_stratum_rows=args.min_stratum_rows,
+            )
+            for run in fold_runs:
+                run["cv_seed"] = seed
+                run["cv_fold"] = fold_index
+                run["cv_folds"] = args.cv_folds
+            runs.extend(fold_runs)
+            fold_summaries.append(
+                {
+                    "seed": seed,
+                    "fold": fold_index,
+                    "train_pair_rows": len(train_rows),
+                    "test_pair_rows": len(test_rows),
+                    "train_groups": len(train_groups),
+                    "test_groups": len(test_groups),
+                }
+            )
+    aggregate = aggregate_runs(
+        runs,
+        min_mean_accuracy=args.min_mean_accuracy,
+        min_mean_auc=args.min_mean_auc,
+    )
+    return {
+        "folds": args.cv_folds,
+        "group_disjoint": True,
+        "seeds": args.seeds,
+        "runs": runs,
+        "fold_summaries": fold_summaries,
+        "aggregate": aggregate,
+        "decision": {
+            **aggregate["decision"],
+            "runtime_gate_change_allowed": False,
+            "recommended_next": (
+                "resolve_independent_holdout_blockers_before_runtime_use"
+                if aggregate["decision"]["status"] == "pairwise_ranker_signal"
+                else "collect_more_cross_action_pairwise_preferences"
+            ),
+        },
+    }
+
+
 def run_pairwise_ranker_eval(args: argparse.Namespace) -> dict[str, Any]:
     rows = load_jsonl(Path(args.pairwise_jsonl))
     encoders = build_encoders(rows)
@@ -574,6 +665,7 @@ def run_pairwise_ranker_eval(args: argparse.Namespace) -> dict[str, Any]:
         count for pair, count in action_pair_counts.items() if pair.split(">", 1)[0] != pair.split(">", 1)[1]
     )
     holdout = _evaluate_holdout_splits(rows, encoders, args)
+    cross_validation = _evaluate_cross_validation(rows, encoders, args)
     return {
         "schema_version": SUMMARY_SCHEMA_VERSION,
         "pairwise_jsonl": str(args.pairwise_jsonl),
@@ -606,6 +698,7 @@ def run_pairwise_ranker_eval(args: argparse.Namespace) -> dict[str, Any]:
             min_mean_accuracy=args.min_mean_accuracy,
             min_mean_auc=args.min_mean_auc,
         ),
+        "cross_validation": cross_validation,
         "independent_holdout": holdout,
         "holdout_decision": _holdout_decision(holdout),
     }
@@ -641,6 +734,30 @@ def render_markdown(summary: dict[str, Any]) -> str:
             f"ECE mean `{stats['ece']['mean']:.4f}`, "
             f"acc delta vs random `{stats['acc_delta_vs_random']['mean']:.4f}`"
         )
+    cross_validation = summary.get("cross_validation")
+    if cross_validation:
+        cv_decision = cross_validation["decision"]
+        lines.extend(
+            [
+                "",
+                "## Cross-Validation Summary",
+                "",
+                f"- Folds: `{cross_validation['folds']}`",
+                f"- Group-disjoint: `{cross_validation['group_disjoint']}`",
+                f"- Decision: `{cv_decision['status']}`",
+                f"- Best family: `{cv_decision['best_family']}`",
+                f"- Runtime gate change allowed: `{cv_decision['runtime_gate_change_allowed']}`",
+                f"- Recommended next: `{cv_decision['recommended_next']}`",
+                "",
+            ]
+        )
+        for family, stats in cross_validation["aggregate"]["families"].items():
+            lines.append(
+                f"- `{family}`: acc mean `{stats['accuracy']['mean']:.4f}`, "
+                f"AUC mean `{stats['auc']['mean']:.4f}`, "
+                f"Brier mean `{stats['brier']['mean']:.4f}`, "
+                f"ECE mean `{stats['ece']['mean']:.4f}`"
+            )
     holdout = summary.get("independent_holdout") or {}
     if holdout:
         lines.extend(["", "## Independent Holdout Summary", ""])
@@ -725,6 +842,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-mean-accuracy", type=float, default=0.60)
     parser.add_argument("--min-mean-auc", type=float, default=0.60)
     parser.add_argument("--min-stratum-rows", type=int, default=10)
+    parser.add_argument(
+        "--cv-folds",
+        type=int,
+        default=0,
+        help="Run optional group-disjoint K-fold cross-validation when >0.",
+    )
     parser.add_argument(
         "--holdout-fields",
         type=lambda value: _parse_csv(value, allowed=HOLDOUT_FIELDS),

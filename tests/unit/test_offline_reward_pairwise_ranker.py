@@ -204,3 +204,77 @@ def test_cli_reports_independent_source_family_holdout(tmp_path: Path) -> None:
     assert summary["holdout_decision"]["eligible_holdouts"] == 2
     assert summary["holdout_decision"]["runtime_gate_change_allowed"] is False
     assert "Independent Holdout Summary" in summary_md.read_text(encoding="utf-8")
+
+
+def test_split_group_kfolds_are_group_disjoint() -> None:
+    rows = [
+        _pair_row(
+            pair_id=f"pair-{idx}",
+            group_key=f"g{idx}",
+            preferred_action="frontdoor",
+            rejected_action="coder_escalation",
+        )
+        for idx in range(6)
+    ]
+
+    folds = mod.split_group_kfolds(rows, seed=42, folds=3)
+
+    assert len(folds) == 3
+    seen_test_groups = set()
+    for train_groups, test_groups in folds:
+        assert train_groups
+        assert test_groups
+        assert train_groups.isdisjoint(test_groups)
+        seen_test_groups.update(test_groups)
+    assert seen_test_groups == {f"g{idx}" for idx in range(6)}
+
+
+def test_cli_can_emit_group_disjoint_cross_validation(tmp_path: Path) -> None:
+    pairwise_path = tmp_path / "pairs.jsonl"
+    rows = [
+        _pair_row(
+            pair_id=f"pair-{idx}",
+            group_key=f"g{idx}",
+            preferred_action="frontdoor",
+            rejected_action="coder_escalation",
+            source_family="seeding_eval" if idx % 2 else "three_way_eval",
+            suite="math" if idx % 2 else "debugbench",
+            answer_delta=1.0 + idx / 10.0,
+        )
+        for idx in range(9)
+    ]
+    pairwise_path.write_text(
+        "\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n",
+        encoding="utf-8",
+    )
+    summary_json = tmp_path / "summary.json"
+    summary_md = tmp_path / "summary.md"
+
+    assert mod.main(
+        [
+            "--pairwise-jsonl",
+            str(pairwise_path),
+            "--summary-json",
+            str(summary_json),
+            "--summary-md",
+            str(summary_md),
+            "--families",
+            "logistic_l2",
+            "--seeds",
+            "42",
+            "--test-split",
+            "0.25",
+            "--cv-folds",
+            "3",
+        ]
+    ) == 0
+
+    summary = json.loads(summary_json.read_text(encoding="utf-8"))
+    cv = summary["cross_validation"]
+    assert cv["folds"] == 3
+    assert cv["group_disjoint"] is True
+    assert cv["decision"]["runtime_gate_change_allowed"] is False
+    assert len(cv["fold_summaries"]) == 3
+    assert len(cv["runs"]) == 3
+    assert {run["cv_fold"] for run in cv["runs"]} == {1, 2, 3}
+    assert "Cross-Validation Summary" in summary_md.read_text(encoding="utf-8")
