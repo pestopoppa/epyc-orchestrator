@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -66,6 +67,38 @@ def test_eval_batch_progress_callback_reports_logged_milestones(monkeypatch) -> 
             "concurrency": 1,
         }
     ]
+
+
+def test_eval_batch_fails_remaining_questions_after_no_progress_timeout(monkeypatch) -> None:
+    monkeypatch.setenv("AUTOPILOT_EVAL_CONCURRENCY", "2")
+    monkeypatch.setenv("AUTOPILOT_EVAL_NO_PROGRESS_TIMEOUT_S", "0.05")
+    tower = EvalTower(timeout=1)
+
+    def fake_eval_question(q: dict, client: object) -> QuestionResult:
+        if q["id"] != "fast":
+            time.sleep(0.2)
+        return QuestionResult(
+            question_id=str(q["id"]),
+            suite="unit",
+            prompt=str(q["id"]),
+            expected="ok",
+            correct=True,
+        )
+
+    monkeypatch.setattr(tower, "_eval_question", fake_eval_question)
+
+    results = tower._eval_batch(
+        [{"id": "fast"}, {"id": "stuck"}, {"id": "queued"}],
+        client=object(),  # type: ignore[arg-type]
+        label="T1",
+    )
+
+    assert [r.question_id for r in results] == ["fast", "stuck", "queued"]
+    assert results[0].error is None
+    assert results[1].error
+    assert results[1].error.startswith("eval_no_progress_timeout:")
+    assert results[2].error
+    assert results[2].error.startswith("eval_no_progress_timeout:")
 
 
 def test_eval_concurrency_uses_topology_cap_when_matrix_allows(monkeypatch) -> None:

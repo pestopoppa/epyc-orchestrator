@@ -11,7 +11,7 @@ import logging
 import os
 import random
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 import hashlib
 from pathlib import Path
@@ -35,6 +35,22 @@ EVAL_T2_SPEC_N = 500
 EVAL_SPEC_SEED = 42
 _EXPECTED_FREE_SCORERS = {"programmatic"}
 _CORE_METADATA_KEY = "__core_metadata__"
+
+
+def _eval_no_progress_timeout_s(request_timeout_s: int) -> float:
+    """Max wall-clock gap between completed eval futures before failing closed."""
+    raw = os.environ.get("AUTOPILOT_EVAL_NO_PROGRESS_TIMEOUT_S", "").strip()
+    if raw:
+        try:
+            value = float(raw)
+        except ValueError:
+            log.warning(
+                "Invalid AUTOPILOT_EVAL_NO_PROGRESS_TIMEOUT_S=%r; using default",
+                raw,
+            )
+        else:
+            return max(0.0, value)
+    return max(180.0, float(request_timeout_s) + 60.0)
 
 
 def _has_executable_assertion(test_code: str) -> bool:
@@ -808,6 +824,29 @@ class EvalTower:
                 eval_partition=eval_partition,
             )
 
+    def _failed_question_result(
+        self,
+        q: dict,
+        *,
+        elapsed_s: float,
+        error: str,
+    ) -> QuestionResult:
+        prompt = q.get("prompt", "")
+        suite = q.get("suite", "unknown")
+        stable_qid = str(q.get("qid") or q.get("stable_qid") or "").strip()
+        if not stable_qid:
+            stable_qid = _stable_question_qid(str(suite), str(prompt))
+        return QuestionResult(
+            question_id=q.get("id", q.get("question_id", "unknown")),
+            suite=suite,
+            prompt=prompt,
+            expected=q.get("expected", ""),
+            qid=stable_qid,
+            error=error,
+            elapsed_s=elapsed_s,
+            eval_partition=str(q.get("eval_partition") or "core"),
+        )
+
     def _eval_batch(
         self,
         questions: list[dict],
@@ -853,29 +892,94 @@ class EvalTower:
                 r.eval_wall_s = batch_wall_s
             return out
 
-        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix=f"eval-{label}") as ex:
+        ex = ThreadPoolExecutor(max_workers=workers, thread_name_prefix=f"eval-{label}")
+        done = 0
+        try:
             future_to_idx = {
                 ex.submit(self._eval_question, q, client): i
                 for i, q in enumerate(questions)
             }
-            done = 0
-            for fut in as_completed(future_to_idx):
-                idx = future_to_idx[fut]
-                results[idx] = fut.result()
-                done += 1
-                if log_every and done % log_every == 0:
-                    correct_so_far = sum(1 for r in results if r and r.correct)
-                    log.info(
-                        "%s progress: %d/%d (%.0f%% correct, concurrency=%d)",
-                        label, done, n, 100 * correct_so_far / done, workers,
+            pending = set(future_to_idx)
+            no_progress_timeout_s = _eval_no_progress_timeout_s(self.timeout)
+            while pending:
+                completed, pending = wait(
+                    pending,
+                    timeout=no_progress_timeout_s or None,
+                    return_when=FIRST_COMPLETED,
+                )
+                if not completed:
+                    elapsed = time.time() - batch_start
+                    log.error(
+                        "%s no eval future completed for %.1fs; failing %d "
+                        "remaining question(s) closed",
+                        label,
+                        no_progress_timeout_s,
+                        len(pending),
                     )
-                    self._emit_progress(
-                        label=label,
-                        completed_questions=done,
-                        total_questions=n,
-                        correct_questions=correct_so_far,
-                        concurrency=workers,
-                    )
+                    for fut in pending:
+                        idx = future_to_idx[fut]
+                        fut.cancel()
+                        results[idx] = self._failed_question_result(
+                            questions[idx],
+                            elapsed_s=elapsed,
+                            error=(
+                                "eval_no_progress_timeout: no completed future "
+                                f"for {no_progress_timeout_s:.1f}s"
+                            ),
+                        )
+                    break
+
+                for fut in completed:
+                    idx = future_to_idx[fut]
+                    try:
+                        results[idx] = fut.result()
+                    except Exception as exc:  # noqa: BLE001
+                        results[idx] = self._failed_question_result(
+                            questions[idx],
+                            elapsed_s=time.time() - batch_start,
+                            error=str(exc),
+                        )
+                    done += 1
+                    if log_every and done % log_every == 0:
+                        correct_so_far = sum(1 for r in results if r and r.correct)
+                        log.info(
+                            "%s progress: %d/%d (%.0f%% correct, concurrency=%d)",
+                            label, done, n, 100 * correct_so_far / done, workers,
+                        )
+                        self._emit_progress(
+                            label=label,
+                            completed_questions=done,
+                            total_questions=n,
+                            correct_questions=correct_so_far,
+                            concurrency=workers,
+                        )
+        finally:
+            ex.shutdown(wait=False, cancel_futures=True)
+
+        for i, q in enumerate(questions):
+            if results[i] is None:
+                results[i] = self._failed_question_result(
+                    q,
+                    elapsed_s=time.time() - batch_start,
+                    error="eval_cancelled_after_no_progress_timeout",
+                )
+        if log_every and done % log_every:
+            correct_so_far = sum(1 for r in results if r and r.correct)
+            log.info(
+                "%s progress: %d/%d (%.0f%% correct, concurrency=%d)",
+                label,
+                n,
+                n,
+                100 * correct_so_far / n,
+                workers,
+            )
+            self._emit_progress(
+                label=label,
+                completed_questions=n,
+                total_questions=n,
+                correct_questions=correct_so_far,
+                concurrency=workers,
+            )
         batch_wall_s = time.time() - batch_start
         out = [r for r in results if r is not None]
         for r in out:
