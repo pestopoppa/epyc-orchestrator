@@ -296,17 +296,16 @@ def stack_prior_q_scorer_priors_by_role(
     memory_sources = dict(fallback_priors.memory_cost_source_by_role)
 
     try:
-        data = _load_valid_stack_priors(stack_priors_path)
+        live_role_records = _load_valid_stack_prior_role_records(stack_priors_path)
     except Exception as exc:
         logger.warning("Using fallback q_scorer priors; stack-priors load failed: %s", exc)
         return _fallback_q_scorer_priors(
             degraded_reason=f"stack-priors load failed: {exc}"
         )
 
-    live_role_records = _live_stack_q_scorer_role_records(data)
-    if live_role_records is None:
+    if not live_role_records:
         return _fallback_q_scorer_priors(
-            degraded_reason="stack-priors roles section is not a mapping"
+            degraded_reason="stack-priors artifact has no live q_scorer roles"
         )
 
     for role, record in live_role_records.items():
@@ -357,26 +356,19 @@ def _load_valid_stack_priors(stack_priors_path: Path) -> dict[str, Any]:
     return data
 
 
-def _live_stack_q_scorer_role_records(
-    stack_priors: dict[str, Any],
-) -> dict[str, dict[str, Any]] | None:
-    roles = stack_priors.get("roles", {})
-    if not isinstance(roles, dict):
-        return None
-    live_roles: dict[str, dict[str, Any]] = {}
-    for role, record in roles.items():
-        if not isinstance(role, str) or not isinstance(record, dict):
-            continue
-        if record.get("deployment_status") != "live_stack":
-            continue
-        live_roles[role] = record
-    return live_roles
+def _load_valid_stack_prior_role_records(
+    stack_priors_path: Path,
+) -> dict[str, dict[str, Any]]:
+    """Return generated live-role records after validating the stack-prior contract."""
+    _load_valid_stack_priors(stack_priors_path)
+
+    from src.registry.stack_priors import live_stack_role_records
+
+    return live_stack_role_records(stack_priors_path)
 
 
-def _live_stack_q_scorer_roles(stack_priors: dict[str, Any]) -> set[str]:
-    live_role_records = _live_stack_q_scorer_role_records(stack_priors)
-    if live_role_records is None:
-        return set()
+def _live_stack_q_scorer_roles(stack_priors_path: Path) -> set[str]:
+    live_role_records = _load_valid_stack_prior_role_records(stack_priors_path)
     live_roles: set[str] = set()
     for role in live_role_records:
         live_roles.add(role)
@@ -394,7 +386,7 @@ def validate_live_q_scorer_prior_sources(
     artifact is present and structurally valid.
     """
     try:
-        stack_priors = _load_valid_stack_priors(stack_priors_path)
+        _load_valid_stack_priors(stack_priors_path)
     except Exception as exc:
         return [f"q_scorer stack-priors validation failed: {exc}"]
 
@@ -408,7 +400,7 @@ def validate_live_q_scorer_prior_sources(
         ("quality", priors.baseline_quality_source_by_role),
         ("memory_cost", priors.memory_cost_source_by_role),
     )
-    for role in sorted(_live_stack_q_scorer_roles(stack_priors)):
+    for role in sorted(_live_stack_q_scorer_roles(stack_priors_path)):
         for prior_name, source_by_role in source_maps:
             source = source_by_role.get(role, "<missing>")
             if source != PRIOR_SOURCE_STACK_PRIORS:
