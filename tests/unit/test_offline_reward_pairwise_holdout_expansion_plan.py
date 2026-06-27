@@ -215,3 +215,149 @@ def test_pairwise_holdout_any_mode_empty_suite_does_not_match_everything(
 
     assert candidates == []
     assert summary["stats"]["skipped_non_target_suite_record"] == 1
+
+
+def test_pairwise_holdout_plan_filters_to_audit_collection_targets(tmp_path: Path) -> None:
+    source = tmp_path / "seeding_20260621_eval.jsonl"
+    _write_jsonl(source, [_result_record()])
+    expected_hash = mod._hash_text("42")
+    prompt_hash = mod._hash_text("Solve task")
+    manifest = tmp_path / "manifest.jsonl"
+    _write_jsonl(
+        manifest,
+        [
+            _manifest_row(
+                source_path=str(source),
+                role_key="frontdoor:direct",
+                expected_sha256=expected_hash,
+                prompt_sha256=prompt_hash,
+            )
+        ],
+    )
+    pairwise = tmp_path / "pairs.jsonl"
+    _write_jsonl(pairwise, [])
+    audit = tmp_path / "audit.json"
+    audit.write_text(
+        json.dumps(
+            {
+                "collection_targets": [
+                    {
+                        "stratum_field": "source_family",
+                        "stratum_value": "seeding_eval",
+                        "action_pair": "coder_escalation>frontdoor",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    args = mod.build_parser().parse_args(
+        [
+            "--input",
+            str(source),
+            "--existing-manifest",
+            str(manifest),
+            "--existing-pairwise-jsonl",
+            str(pairwise),
+            "--candidates-jsonl",
+            str(tmp_path / "candidates.jsonl"),
+            "--summary-json",
+            str(tmp_path / "summary.json"),
+            "--collection-targets-json",
+            str(audit),
+            "--target-source-families",
+            "",
+            "--target-suites",
+            "",
+            "--min-cross-action-candidate-groups",
+            "1",
+        ]
+    )
+
+    candidates, summary = mod.build_plan(args)
+
+    assert len(candidates) == 1
+    assert summary["decision"]["status"] == "expansion_plan_ready"
+    assert summary["collection_target_count"] == 1
+    assert summary["matched_collection_target_counts"] == {
+        "source_family:seeding_eval:coder_escalation>frontdoor": 1
+    }
+    assert summary["unmatched_collection_targets"] == []
+    assert summary["selected_groups"][0]["matched_collection_targets"] == [
+        {
+            "stratum_field": "source_family",
+            "stratum_value": "seeding_eval",
+            "action_pair": "coder_escalation>frontdoor",
+        }
+    ]
+
+
+def test_pairwise_holdout_plan_rejects_non_matching_audit_collection_targets(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "seeding_20260621_eval.jsonl"
+    _write_jsonl(source, [_result_record()])
+    expected_hash = mod._hash_text("42")
+    prompt_hash = mod._hash_text("Solve task")
+    manifest = tmp_path / "manifest.jsonl"
+    _write_jsonl(
+        manifest,
+        [
+            _manifest_row(
+                source_path=str(source),
+                role_key="frontdoor:direct",
+                expected_sha256=expected_hash,
+                prompt_sha256=prompt_hash,
+            )
+        ],
+    )
+    pairwise = tmp_path / "pairs.jsonl"
+    _write_jsonl(pairwise, [])
+    audit = tmp_path / "audit.json"
+    audit.write_text(
+        json.dumps(
+            {
+                "collection_targets": [
+                    {
+                        "stratum_field": "source_family",
+                        "stratum_value": "seeding_eval",
+                        "action_pair": "architect_general>frontdoor",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    args = mod.build_parser().parse_args(
+        [
+            "--input",
+            str(source),
+            "--existing-manifest",
+            str(manifest),
+            "--existing-pairwise-jsonl",
+            str(pairwise),
+            "--candidates-jsonl",
+            str(tmp_path / "candidates.jsonl"),
+            "--summary-json",
+            str(tmp_path / "summary.json"),
+            "--collection-targets-json",
+            str(audit),
+            "--target-source-families",
+            "",
+            "--target-suites",
+            "",
+            "--min-cross-action-candidate-groups",
+            "1",
+        ]
+    )
+
+    candidates, summary = mod.build_plan(args)
+
+    assert candidates == []
+    assert summary["decision"]["status"] == "insufficient_non_overlapping_cross_action_candidates"
+    assert summary["skipped_no_collection_target_pair_groups"] == 1
+    assert summary["unmatched_collection_targets"] == [
+        "source_family:seeding_eval:architect_general>frontdoor"
+    ]

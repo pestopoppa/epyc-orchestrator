@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 from collections import Counter, defaultdict
 import hashlib
+from itertools import combinations
 import json
 from pathlib import Path
 import sys
@@ -137,6 +138,56 @@ def _existing_pairwise_groups(path: Path | None) -> set[str]:
         if group_key:
             groups.add(group_key)
     return groups
+
+
+def _canonical_action_pair(actions: Iterable[str]) -> str:
+    values = sorted(str(action) for action in actions)
+    if len(values) != 2:
+        raise PairwiseHoldoutExpansionError("action pair must contain exactly two actions")
+    return f"{values[0]}>{values[1]}"
+
+
+def _load_collection_targets(path: Path | None) -> list[dict[str, Any]]:
+    if path is None:
+        return []
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    targets = payload.get("collection_targets")
+    if not isinstance(targets, list):
+        raise PairwiseHoldoutExpansionError(f"{path}: missing collection_targets list")
+    out: list[dict[str, Any]] = []
+    for index, target in enumerate(targets):
+        if not isinstance(target, dict):
+            raise PairwiseHoldoutExpansionError(f"{path}: collection_targets[{index}] must be object")
+        field = str(target.get("stratum_field") or "")
+        value = str(target.get("stratum_value") or "")
+        action_pair = str(target.get("action_pair") or "")
+        if field not in {"source_family", "suite"}:
+            raise PairwiseHoldoutExpansionError(
+                f"{path}: collection_targets[{index}] has unsupported stratum_field {field!r}"
+            )
+        if not value:
+            raise PairwiseHoldoutExpansionError(
+                f"{path}: collection_targets[{index}] missing stratum_value"
+            )
+        parts = [part for part in action_pair.split(">") if part]
+        if len(parts) != 2:
+            raise PairwiseHoldoutExpansionError(
+                f"{path}: collection_targets[{index}] invalid action_pair {action_pair!r}"
+            )
+        out.append(
+            {
+                "stratum_field": field,
+                "stratum_value": value,
+                "action_pair": _canonical_action_pair(parts),
+                "needs_direction": target.get("needs_direction") or [],
+                "suggested_min_rows": target.get("suggested_min_rows"),
+            }
+        )
+    return out
+
+
+def _pair_keys(actions: set[str]) -> set[str]:
+    return {_canonical_action_pair(pair) for pair in combinations(sorted(actions), 2)}
 
 
 def _candidate_from_role(
@@ -309,6 +360,15 @@ def build_plan(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str
         )
     target_source_families = set(_parse_csv(args.target_source_families))
     target_suites = set(_parse_csv(args.target_suites))
+    collection_targets = _load_collection_targets(args.collection_targets_json)
+    collection_target_pairs: dict[tuple[str, str], set[str]] = defaultdict(set)
+    for target in collection_targets:
+        key = (str(target["stratum_field"]), str(target["stratum_value"]))
+        collection_target_pairs[key].add(str(target["action_pair"]))
+        if target["stratum_field"] == "source_family":
+            target_source_families.add(str(target["stratum_value"]))
+        elif target["stratum_field"] == "suite":
+            target_suites.add(str(target["stratum_value"]))
     if args.target_match_mode not in {"any", "all"}:
         raise PairwiseHoldoutExpansionError("target_match_mode must be 'any' or 'all'")
     input_paths = args.input or [DEFAULT_RESULTS_ROOT]
@@ -331,6 +391,7 @@ def build_plan(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str
     selected_candidates: list[dict[str, Any]] = []
     skipped_pairwise_overlap = 0
     skipped_no_cross_action = 0
+    skipped_no_collection_target_pair = 0
     for group_key in sorted(candidate_groups):
         candidates = sorted(
             candidate_groups[group_key],
@@ -345,6 +406,24 @@ def build_plan(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str
         if len(potential_actions) < 2:
             skipped_no_cross_action += 1
             continue
+        group_pair_keys = _pair_keys(potential_actions)
+        source_family = str(candidates[0]["source_family"])
+        suite = str(candidates[0]["suite"])
+        matched_collection_targets: list[dict[str, Any]] = []
+        if collection_targets:
+            for field, value in (("source_family", source_family), ("suite", suite)):
+                matched_pairs = sorted(group_pair_keys & collection_target_pairs.get((field, value), set()))
+                for pair in matched_pairs:
+                    matched_collection_targets.append(
+                        {
+                            "stratum_field": field,
+                            "stratum_value": value,
+                            "action_pair": pair,
+                        }
+                    )
+            if not matched_collection_targets:
+                skipped_no_collection_target_pair += 1
+                continue
         selected_groups.append(
             {
                 "group_key": group_key,
@@ -352,8 +431,10 @@ def build_plan(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str
                 "candidate_actions": sorted(candidate_actions),
                 "existing_manifest_actions": sorted(existing_actions),
                 "potential_actions": sorted(potential_actions),
-                "source_family": str(candidates[0]["source_family"]),
-                "suite": str(candidates[0]["suite"]),
+                "potential_action_pairs": sorted(group_pair_keys),
+                "matched_collection_targets": matched_collection_targets,
+                "source_family": source_family,
+                "suite": suite,
                 "source_path": str(candidates[0]["source_path"]),
                 "source_record_offset": int(candidates[0]["source_record_offset"]),
             }
@@ -371,6 +452,18 @@ def build_plan(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str
     action_counts = Counter(str(row["canonical_action"]) for row in selected_candidates)
     group_source_family_counts = Counter(str(row["source_family"]) for row in selected_groups)
     group_suite_counts = Counter(str(row["suite"]) for row in selected_groups)
+    matched_collection_target_counts = Counter(
+        f"{target['stratum_field']}:{target['stratum_value']}:{target['action_pair']}"
+        for group in selected_groups
+        for target in group["matched_collection_targets"]
+    )
+    expected_collection_target_keys = sorted(
+        f"{target['stratum_field']}:{target['stratum_value']}:{target['action_pair']}"
+        for target in collection_targets
+    )
+    unmatched_collection_targets = [
+        key for key in expected_collection_target_keys if key not in matched_collection_target_counts
+    ]
 
     status = (
         "expansion_plan_ready"
@@ -389,6 +482,12 @@ def build_plan(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str
         "target_suites": sorted(target_suites),
         "target_match_mode": args.target_match_mode,
         "target_actions": sorted(target_actions),
+        "collection_targets_json": (
+            str(args.collection_targets_json) if args.collection_targets_json else None
+        ),
+        "collection_target_count": len(collection_targets),
+        "matched_collection_target_counts": dict(sorted(matched_collection_target_counts.items())),
+        "unmatched_collection_targets": unmatched_collection_targets,
         "candidate_rows": len(selected_candidates),
         "candidate_groups": len(selected_groups),
         "candidate_action_counts": dict(sorted(action_counts.items())),
@@ -401,6 +500,7 @@ def build_plan(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str
         "existing_pairwise_group_count": len(pairwise_groups),
         "skipped_pairwise_overlap_groups": skipped_pairwise_overlap,
         "skipped_no_cross_action_groups": skipped_no_cross_action,
+        "skipped_no_collection_target_pair_groups": skipped_no_collection_target_pair,
         "min_cross_action_candidate_groups": args.min_cross_action_candidate_groups,
         "decision": {
             "status": status,
@@ -445,12 +545,16 @@ def write_markdown(path: Path, summary: dict[str, Any]) -> None:
         f"- Target suites: `{summary['target_suites']}`",
         f"- Target match mode: `{summary['target_match_mode']}`",
         f"- Target actions: `{summary['target_actions']}`",
+        f"- Collection targets: `{summary['collection_target_count']}`",
+        f"- Matched collection targets: `{summary['matched_collection_target_counts']}`",
+        f"- Unmatched collection targets: `{summary['unmatched_collection_targets']}`",
         f"- Candidate action counts: `{summary['candidate_action_counts']}`",
         f"- Candidate source-family counts: `{summary['candidate_source_family_counts']}`",
         f"- Candidate suite counts: `{summary['candidate_suite_counts']}`",
         f"- Existing pairwise groups: `{summary['existing_pairwise_group_count']}`",
         f"- Skipped pairwise-overlap groups: `{summary['skipped_pairwise_overlap_groups']}`",
         f"- Skipped no-cross-action groups: `{summary['skipped_no_cross_action_groups']}`",
+        f"- Skipped no-collection-target-pair groups: `{summary['skipped_no_collection_target_pair_groups']}`",
         f"- Runtime gate change allowed: `{summary['decision']['runtime_gate_change_allowed']}`",
         f"- Recommended next: `{summary['decision']['recommended_next']}`",
         "",
@@ -462,7 +566,8 @@ def write_markdown(path: Path, summary: dict[str, Any]) -> None:
             f"- `{group['source_family']}/{group['suite']}` "
             f"`{group['source_path']}#{group['source_record_offset']}` "
             f"candidates `{group['candidate_actions']}` existing "
-            f"`{group['existing_manifest_actions']}`"
+            f"`{group['existing_manifest_actions']}` targets "
+            f"`{group['matched_collection_targets']}`"
         )
     if not summary["selected_groups"]:
         lines.append("- none")
@@ -490,6 +595,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--summary-md", type=Path)
     parser.add_argument("--target-source-families", default=DEFAULT_TARGET_SOURCE_FAMILIES)
     parser.add_argument("--target-suites", default=DEFAULT_TARGET_SUITES)
+    parser.add_argument(
+        "--collection-targets-json",
+        type=Path,
+        help="Optional preference-direction audit JSON; restrict selected groups to its collection_targets.",
+    )
     parser.add_argument(
         "--target-match-mode",
         choices=("any", "all"),
