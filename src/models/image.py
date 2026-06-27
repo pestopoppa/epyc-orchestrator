@@ -7,6 +7,7 @@ explicit error fields and serialization helpers.
 from __future__ import annotations
 
 import base64
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -23,14 +24,63 @@ RECOMMENDED_SIZES = [
 
 EnhancePolicy = Literal["auto", True, False]
 
+TEXT_SURFACE_TERMS = (
+    "poster",
+    "infographic",
+    "flyer",
+    "brochure",
+    "sign",
+    "signage",
+    "banner",
+    "label",
+    "logo",
+    "typography",
+    "headline",
+    "title text",
+    "caption",
+    "menu",
+    "certificate",
+    "presentation slide",
+    "slide",
+    "sticker",
+    "packaging",
+)
+
+COMPOSITIONAL_SUPPRESSORS = (
+    "left of",
+    "right of",
+    "beside",
+    "next to",
+    "between",
+    "behind",
+    "in front of",
+    "above",
+    "below",
+    "under",
+    "on top of",
+    "holding",
+    "wearing",
+    "sitting on",
+    "standing on",
+    "spatial relationship",
+    "object count",
+    "geneval",
+    "compositional",
+)
+
+
+def _contains_term(prompt: str, term: str) -> bool:
+    return re.search(rf"(?<![a-z0-9]){re.escape(term)}(?![a-z0-9])", prompt) is not None
+
 
 @dataclass(frozen=True)
 class ImageGenerateRequest:
     """A single image-generation request.
 
-    `enhance` controls the prompt-enhancer LLM (Ministral3, ~3B params,
+    `enhance` controls the prompt-enhancer LLM policy (Ministral3, ~3B params,
     purpose-built for T2I prompt expansion):
-      - "auto" (default): on for short prompts (<50 words), off otherwise.
+      - "auto" (default): on for text-heavy surfaces and simple short prompts;
+        off for compositional/spatial prompts and already-rich prompts.
       - True: always run the enhancer.
       - False: never run it; pass the user prompt through verbatim.
     """
@@ -46,10 +96,26 @@ class ImageGenerateRequest:
     enhance: EnhancePolicy = "auto"
     batch_size: int = 1
 
+    def enhance_auto_reason(self) -> str:
+        """Return the deterministic reason used by the auto enhancer policy."""
+        if self.enhance is True:
+            return "forced_true"
+        if self.enhance is False:
+            return "forced_false"
+
+        prompt = " ".join(self.prompt.casefold().split())
+        if any(_contains_term(prompt, term) for term in TEXT_SURFACE_TERMS):
+            return "text_surface"
+        if any(_contains_term(prompt, term) for term in COMPOSITIONAL_SUPPRESSORS):
+            return "compositional_scene"
+        if len(prompt.split()) < 50:
+            return "short_prompt"
+        return "rich_prompt"
+
     def resolve_enhance(self) -> bool:
         """Resolve the enhance policy to a concrete bool."""
         if self.enhance == "auto":
-            return len(self.prompt.split()) < 50
+            return self.enhance_auto_reason() in {"text_surface", "short_prompt"}
         return bool(self.enhance)
 
 

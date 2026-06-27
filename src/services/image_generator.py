@@ -57,11 +57,18 @@ class ImageGenerator:
         # NOTE: sd-server's prompt-enhancer integration is not yet exposed;
         # `enhance` is recorded but does not modify the request.
         use_enhancer = request.resolve_enhance()
+        enhance_reason = request.enhance_auto_reason()
         if use_enhancer:
             LOG.info(
-                "ImageGenerator: enhance=auto resolved True but sd-server backend "
+                "ImageGenerator: enhance policy resolved True but sd-server backend "
                 "does not run the Ministral3 enhancer in-graph; passing prompt verbatim"
             )
+        enhance_metadata = {
+            "enhance_policy": request.enhance,
+            "enhance_resolved": use_enhancer,
+            "enhance_auto_reason": enhance_reason,
+            "enhancer_available": False,
+        }
 
         started = time.monotonic()
 
@@ -88,6 +95,7 @@ class ImageGenerator:
                 steps=request.steps,
                 elapsed_sec=time.monotonic() - started,
                 enhancer_used=False,
+                metadata=enhance_metadata,
                 error=str(exc),
             )
 
@@ -103,6 +111,7 @@ class ImageGenerator:
                 steps=request.steps,
                 elapsed_sec=time.monotonic() - started,
                 enhancer_used=False,
+                metadata=enhance_metadata,
                 error="No images in sd-server response",
             )
 
@@ -135,6 +144,7 @@ class ImageGenerator:
                 "backend": "sd_server",
                 "sd_server_info": resp.get("info", "")[:500] if isinstance(resp.get("info"), str) else None,
                 "image_count": len(images_b64),
+                **enhance_metadata,
             },
         )
 
