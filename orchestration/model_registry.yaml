@@ -4390,13 +4390,11 @@ routing_hints:
 - if: '''prove'' in objective or ''verify'' in objective'
   preprocess: formalizer
   use:
-  - worker_math
-  - architect_general  # thinking_reasoning role removed 2026-05-04 (GGUF deleted); fall through to architect
+  - worker_math  # thinking_reasoning (deprecated) dropped 2026-05-27; add an active thinking role here if prove/verify needs one
 - if: '''algorithm'' in objective and ''design'' in objective'
   preprocess: formalizer
   use:
-  - architect_qwen2_5_72b
-  - coder_escalation
+  - coder_escalation  # architect_qwen2_5_72b dropped 2026-05-27 (model off-disk; role still a catalogue candidate pending deprecate/keep)
 - if: ambiguity_score > 0.7
   preprocess: formalizer
   notes: Frontdoor detects vague requirements needing formalization
@@ -4405,8 +4403,7 @@ routing_hints:
   - architect_general
 - if: escalation.max_level == 'B3' and task_type == 'code'
   use:
-  - coder_escalation  # was architect_coding (REAP-246B); removed 2026-05-06 — frontdoor model dominates coder
-  - architect_general  # secondary fallback for design questions on B3 code escalation
+  - architect_general  # was architect_coding (role removed 2026-05-27); B3 code escalates to surviving architect
 command_templates:
   speculative_decoding: "numactl --interleave=all \\\n  /mnt/raid0/llm/llama.cpp/build/bin/llama-speculative\
     \ \\\n  -m {model_path} \\\n  -md {draft_path} \\\n  --draft-max {k} \\\n  -t\
