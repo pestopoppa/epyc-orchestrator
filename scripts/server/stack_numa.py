@@ -144,7 +144,8 @@ NUMA_CONFIG: dict[str, dict] = {
             # NUMA_NODE0's "0-47,96-143" (one-socket-with-SMT) crashed the MTP draft
             # path with "tensor buffer not set" assertion. Quarter instances retain
             # their per-quarter pinning since the full canonical recipe is incompatible
-            # with the 4×concurrent design — they may need separate debugging.
+            # with the 4×concurrent design. Keep interleave scoped to idx0 so
+            # --no-mmap quarters can first-touch local private pages.
             ("0-95", 8072, 96),                    # full canonical (replaces NUMA_NODE0)
             (NUMA_Q0A[0], 8082, NUMA_Q0A[1]),      # quarter 0
             (NUMA_Q0B[0], 8182, NUMA_Q0B[1]),      # quarter 1
@@ -163,7 +164,7 @@ NUMA_CONFIG: dict[str, dict] = {
         "placement_policy": "burst_prefer_quarters",
         "mlock": True,
         "spec_overrides": {"draft_max": 2, "p_split": 0},  # gemma4 MTP recipe (was dm=8 for Qwen3-Coder)
-        "numactl_policy": "interleave=all",  # 2026-05-08: required for gemma4 MTP buffer allocation
+        "numactl_policy_instances": {0: "interleave=all"},  # required for gemma4 MTP idx0
     },
     # Qwen2.5-VL-7B Q4_K_M (~4 GB) — single instance on Q0B at 24t.
     # Phase 0.5 bench (2026-05-24) showed 24t = 11.39 t/s, 48t = 11.30 t/s
@@ -211,7 +212,10 @@ def _numa_prefix(role: str, instance_idx: int = 0) -> list[str]:
     A/B plus live numa_maps proof justifies changing memory policy.
 
     If the role's NUMA_CONFIG entry has a "numactl_policy" key (e.g. "interleave=all"),
-    wraps the launch with `numactl --<policy> --` ahead of taskset. Used for
+    wraps the launch with `numactl --<policy> --` ahead of taskset. Roles can
+    instead provide "numactl_policy_instances" for instance-specific policy,
+    such as worker_general idx0 requiring interleave while its --no-mmap
+    quarter instances should rely on taskset + first-touch locality. Used for
     canonical-recipe roles like architect_general (Probe B 2026-05-04: numactl
     --interleave=all + taskset -c 0-95 = 12.19 t/s single-instance vs 4.3 t/s under
     legacy 2× cross-NUMA + first-touch).
@@ -220,7 +224,14 @@ def _numa_prefix(role: str, instance_idx: int = 0) -> list[str]:
     if cfg and instance_idx < len(cfg["instances"]):
         cpu_list = cfg["instances"][instance_idx][0]
         prefix: list[str] = []
-        policy = cfg.get("numactl_policy")
+        policy = None
+        instance_policies = cfg.get("numactl_policy_instances")
+        if isinstance(instance_policies, dict):
+            policy = instance_policies.get(instance_idx)
+            if policy is None:
+                policy = instance_policies.get(str(instance_idx))
+        if policy is None:
+            policy = cfg.get("numactl_policy")
         if policy:
             prefix.extend(["numactl", f"--{policy}", "--"])
         prefix.extend(["taskset", "-c", cpu_list])

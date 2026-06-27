@@ -838,6 +838,22 @@ def test_start_server_worker_pool_forwards_numa_instance_to_prefix(tmp_path, mon
     _assert_detached_popen(popen)
 
 
+def test_worker_general_numa_policy_is_full_instance_only() -> None:
+    full_prefix = oss._numa_prefix("worker_general", 0)
+    quarter_prefix = oss._numa_prefix("worker_general", 1)
+
+    assert full_prefix[:3] == ["numactl", "--interleave=all", "--"]
+    assert quarter_prefix[:2] == ["taskset", "-c"]
+    assert "numactl" not in quarter_prefix
+    assert "--interleave=all" not in quarter_prefix
+
+
+def test_role_level_numa_policy_still_applies_to_all_instances() -> None:
+    prefix = oss._numa_prefix("architect_general", 0)
+
+    assert prefix[:3] == ["numactl", "--interleave=all", "--"]
+
+
 def test_start_server_embedding_candidate_reports_recipe_model_path(
     tmp_path, monkeypatch
 ) -> None:
