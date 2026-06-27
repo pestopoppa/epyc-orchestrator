@@ -133,10 +133,10 @@ def test_gate_blocks_foreground_when_pair_below_floor(real_matrix_path) -> None:
 
 
 def test_gate_allows_known_good_pair(real_matrix_path) -> None:
-    """frontdoor+worker_general = 1.28 → ALLOW even for background."""
+    """frontdoor+vision_escalation is ALLOW even for background."""
     m = contention.load_contention_matrix(real_matrix_path)
     gate = gate_mod.ContentionGate(
-        matrix=m, active_holders_fn=_fake_active_factory({"worker_general": [0]})
+        matrix=m, active_holders_fn=_fake_active_factory({"vision_escalation": [0]})
     )
     d = gate.evaluate("frontdoor", contention.TrafficClass.BACKGROUND)
     assert d.admitted
@@ -178,31 +178,32 @@ def test_gate_allows_vision_escalation_self_pair_on_certified_matrix(real_matrix
 def test_gate_picks_worst_pair_in_multi_active(real_matrix_path) -> None:
     """When multiple roles are active, gate picks the most-restrictive decision."""
     m = contention.load_contention_matrix(real_matrix_path)
-    # worker_general is fine; architect is catastrophic
+    # vision_escalation is fine; architect is catastrophic
     gate = gate_mod.ContentionGate(
         matrix=m,
         active_holders_fn=_fake_active_factory({
-            "worker_general": [0],
+            "vision_escalation": [0],
             "architect_general": [0],
         }),
     )
     d = gate.evaluate("frontdoor", contention.TrafficClass.BACKGROUND)
     assert not d.admitted
     assert "architect_general" in d.blocking_roles
-    # worker_general is allow-pair so shouldn't appear as blocker
-    assert "worker_general" not in d.blocking_roles
+    # vision_escalation is allow-pair so shouldn't appear as blocker
+    assert "vision_escalation" not in d.blocking_roles
 
 
 def test_gate_unknown_pair_blocks_background_allows_foreground(real_matrix_path) -> None:
     """Per handoff: unknown pair → background QUEUE, foreground ALLOW."""
     m = contention.load_contention_matrix(real_matrix_path)
-    # worker_vision + ingest_long_context is in unknown_pairs
+    # Use a deliberately unmeasured synthetic active role; the committed matrix
+    # currently has no unknown_pairs after the v6 full-primary refresh.
     gate = gate_mod.ContentionGate(
-        matrix=m, active_holders_fn=_fake_active_factory({"worker_vision": [0]})
+        matrix=m, active_holders_fn=_fake_active_factory({"synthetic_unmeasured": [0]})
     )
-    bg = gate.evaluate("ingest_long_context", contention.TrafficClass.BACKGROUND)
+    bg = gate.evaluate("frontdoor", contention.TrafficClass.BACKGROUND)
     assert not bg.admitted
-    fg = gate.evaluate("ingest_long_context", contention.TrafficClass.FOREGROUND_INTERACTIVE)
+    fg = gate.evaluate("frontdoor", contention.TrafficClass.FOREGROUND_INTERACTIVE)
     assert fg.admitted
 
 

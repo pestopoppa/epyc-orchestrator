@@ -1,7 +1,8 @@
 # Cross-role decode contention matrix.
 #
-# Generated 2026-05-24 from the v1+v2-partial+v3 benches captured during the
-# frontdoor throughput investigation. Raw artifacts:
+# Pair layer refreshed 2026-06-27 after the v6 kernel cutover using
+# scripts/server/contention_matrix.py against live full/primary ports. Older
+# v1+v2-partial+v3 raw artifacts:
 #   /workspace/tmp/contention_matrix_results.txt    (v1)
 #   /workspace/tmp/contention_matrix_v2_results.txt (v2 partial)
 #   /workspace/tmp/contention_matrix_v3_results.txt (v3)
@@ -19,137 +20,160 @@
 # measured; refresh via `scripts/server/contention_matrix.py` (Phase F).
 
 version: 1
-measured_at: "2026-05-24T12:48:38Z"
+measured_at: "2026-06-27T08:41:29.747148+00:00"
 host: "Beelzebub"
 binary:
   llama_server_path: "/mnt/raid0/llm/llama.cpp/build/bin/llama-server"
-  git_commit: "2ffbdbbba"  # build string from llama-bench output
+  git_commit: "91745611f"  # llama-server --version: version 9774
 topology_hash: "df373c79cc4af06f"  # 2026-05-24 post-revert NUMA_CONFIG; runtime compares against topology_fingerprint(NUMA_CONFIG)
 default_floor: 0.85
 
-# Cross-role primary-instance pairs. 13 measured + 2 acknowledged unknown.
+# Cross-role primary-instance pairs. Full/primary-shape layer, 15 measured.
 pairs:
   # === Catastrophic / loss (block) ===
   - roles: ["frontdoor", "ingest_long_context"]
     instance_a: {port: 8070, cpu_list: "0-47,96-143", threads: 96}
     instance_b: {port: 8085, cpu_list: "0-47,96-143", threads: 96}
-    seq_aggregate_tps: 19.52
-    parallel_aggregate_tps: 7.30
-    ratio: 0.37
+    seq_aggregate_tps: 30.00
+    parallel_aggregate_tps: 12.34
+    ratio: 0.41
     samples: 1
     verdict: "block"
-    note: "both NUMA_NODE0; full overlap"
-
-  - roles: ["frontdoor", "architect_general"]
-    instance_a: {port: 8070, cpu_list: "0-47,96-143", threads: 96}
-    instance_b: {port: 8083, cpu_list: "0-95", threads: 96}
-    seq_aggregate_tps: 16.96
-    parallel_aggregate_tps: 8.52
-    ratio: 0.50
-    samples: 1
-    verdict: "block"
-    note: "NUMA_NODE0 fully contained in NUMA_FULL"
+    note: "both NUMA_NODE0; full/primary overlap; refreshed 2026-06-27 on v6"
 
   - roles: ["architect_general", "vision_escalation"]
     instance_a: {port: 8083, cpu_list: "0-95", threads: 96}
     instance_b: {port: 8087, cpu_list: "48-95,144-191", threads: 96}
-    seq_aggregate_tps: 18.04
-    parallel_aggregate_tps: 10.65
-    ratio: 0.59
+    seq_aggregate_tps: 21.90
+    parallel_aggregate_tps: 12.43
+    ratio: 0.57
     samples: 1
     verdict: "block"
+    note: "architect full overlaps vision half1"
+
+  - roles: ["vision_escalation", "worker_general"]
+    instance_a: {port: 8087, cpu_list: "48-95,144-191", threads: 96}
+    instance_b: {port: 8072, cpu_list: "0-95", threads: 96}
+    seq_aggregate_tps: 51.70
+    parallel_aggregate_tps: 30.04
+    ratio: 0.58
+    samples: 1
+    verdict: "block"
+    note: "full/primary layer only; quarter-level n_way policy below is separate"
 
   - roles: ["architect_general", "ingest_long_context"]
     instance_a: {port: 8083, cpu_list: "0-95", threads: 96}
     instance_b: {port: 8085, cpu_list: "0-47,96-143", threads: 96}
-    seq_aggregate_tps: 14.08
-    parallel_aggregate_tps: 8.38
-    ratio: 0.60
+    seq_aggregate_tps: 16.99
+    parallel_aggregate_tps: 10.08
+    ratio: 0.59
     samples: 1
     verdict: "block"
-
-  - roles: ["frontdoor", "worker_vision"]
-    instance_a: {port: 8070, cpu_list: "0-47,96-143", threads: 96}
-    instance_b: {port: 8086, cpu_list: "24-47,120-143", threads: 24}
-    seq_aggregate_tps: 13.85
-    parallel_aggregate_tps: 8.81
-    ratio: 0.64
-    samples: 1
-    verdict: "block"
-    note: "NUMA_NODE0 fully contains worker_vision's Q0B"
-
-  - roles: ["frontdoor", "vision_escalation"]
-    instance_a: {port: 8070, cpu_list: "0-47,96-143", threads: 96}
-    instance_b: {port: 8087, cpu_list: "48-95,144-191", threads: 96}
-    seq_aggregate_tps: 26.60
-    parallel_aggregate_tps: 22.29
-    ratio: 0.84
-    samples: 1
-    verdict: "borderline"
-    note: "disjoint half-sockets; just below floor"
-
-  # === Allow (parallel-positive or marginal) ===
-  - roles: ["worker_general", "worker_vision"]
-    instance_a: {port: 8072, cpu_list: "0-95", threads: 96}
-    instance_b: {port: 8086, cpu_list: "24-47,120-143", threads: 24}
-    seq_aggregate_tps: 16.56
-    parallel_aggregate_tps: 17.74
-    ratio: 1.07
-    samples: 1
-    verdict: "allow"
-
-  - roles: ["architect_general", "worker_general"]
-    instance_a: {port: 8083, cpu_list: "0-95", threads: 96}
-    instance_b: {port: 8072, cpu_list: "0-95", threads: 96}
-    seq_aggregate_tps: 21.27
-    parallel_aggregate_tps: 23.56
-    ratio: 1.11
-    samples: 1
-    verdict: "allow"
-    note: "gemma4 MTP is BW-light; plays nice even with architect"
+    note: "architect full overlaps ingest half0"
 
   - roles: ["ingest_long_context", "worker_general"]
     instance_a: {port: 8085, cpu_list: "0-47,96-143", threads: 96}
     instance_b: {port: 8072, cpu_list: "0-95", threads: 96}
-    seq_aggregate_tps: 25.43
-    parallel_aggregate_tps: 29.98
-    ratio: 1.18
+    seq_aggregate_tps: 34.56
+    parallel_aggregate_tps: 22.31
+    ratio: 0.65
     samples: 1
-    verdict: "allow"
+    verdict: "block"
+    note: "full/primary layer only; quarter-level n_way policy below is separate"
+
+  - roles: ["frontdoor", "worker_vision"]
+    instance_a: {port: 8070, cpu_list: "0-47,96-143", threads: 96}
+    instance_b: {port: 8086, cpu_list: "24-47,120-143", threads: 24}
+    seq_aggregate_tps: 31.56
+    parallel_aggregate_tps: 20.83
+    ratio: 0.66
+    samples: 1
+    verdict: "block"
+    note: "NUMA_NODE0 fully contains worker_vision's Q0B"
 
   - roles: ["frontdoor", "worker_general"]
     instance_a: {port: 8070, cpu_list: "0-47,96-143", threads: 96}
     instance_b: {port: 8072, cpu_list: "0-95", threads: 96}
-    seq_aggregate_tps: 34.64
-    parallel_aggregate_tps: 44.44
-    ratio: 1.28
+    seq_aggregate_tps: 38.72
+    parallel_aggregate_tps: 26.70
+    ratio: 0.69
+    samples: 1
+    verdict: "block"
+    note: "full/primary layer only; quarter-level n_way policy below is separate"
+
+  - roles: ["frontdoor", "architect_general"]
+    instance_a: {port: 8070, cpu_list: "0-47,96-143", threads: 96}
+    instance_b: {port: 8083, cpu_list: "0-95", threads: 96}
+    seq_aggregate_tps: 18.43
+    parallel_aggregate_tps: 14.10
+    ratio: 0.76
+    samples: 1
+    verdict: "block"
+    note: "NUMA_NODE0 fully contained in NUMA_FULL"
+
+  - roles: ["architect_general", "worker_general"]
+    instance_a: {port: 8083, cpu_list: "0-95", threads: 96}
+    instance_b: {port: 8072, cpu_list: "0-95", threads: 96}
+    seq_aggregate_tps: 20.65
+    parallel_aggregate_tps: 16.12
+    ratio: 0.78
+    samples: 1
+    verdict: "block"
+    note: "v6 full/primary refresh supersedes the earlier allow verdict"
+
+  - roles: ["ingest_long_context", "worker_vision"]
+    instance_a: {port: 8085, cpu_list: "0-47,96-143", threads: 96}
+    instance_b: {port: 8086, cpu_list: "24-47,120-143", threads: 24}
+    seq_aggregate_tps: 22.90
+    parallel_aggregate_tps: 19.97
+    ratio: 0.87
+    samples: 1
+    verdict: "borderline"
+
+  # === Allow (parallel-positive or marginal) ===
+  - roles: ["ingest_long_context", "vision_escalation"]
+    instance_a: {port: 8085, cpu_list: "0-47,96-143", threads: 96}
+    instance_b: {port: 8087, cpu_list: "48-95,144-191", threads: 96}
+    seq_aggregate_tps: 38.18
+    parallel_aggregate_tps: 38.95
+    ratio: 1.02
     samples: 1
     verdict: "allow"
 
   - roles: ["vision_escalation", "worker_vision"]
     instance_a: {port: 8087, cpu_list: "48-95,144-191", threads: 96}
     instance_b: {port: 8086, cpu_list: "24-47,120-143", threads: 24}
-    seq_aggregate_tps: 14.44
-    parallel_aggregate_tps: 19.15
-    ratio: 1.33
+    seq_aggregate_tps: 39.86
+    parallel_aggregate_tps: 47.53
+    ratio: 1.19
     samples: 1
     verdict: "allow"
 
-  - roles: ["ingest_long_context", "vision_escalation"]
-    instance_a: {port: 8085, cpu_list: "0-47,96-143", threads: 96}
+  - roles: ["worker_general", "worker_vision"]
+    instance_a: {port: 8072, cpu_list: "0-95", threads: 96}
+    instance_b: {port: 8086, cpu_list: "24-47,120-143", threads: 24}
+    seq_aggregate_tps: 35.99
+    parallel_aggregate_tps: 44.37
+    ratio: 1.23
+    samples: 1
+    verdict: "allow"
+
+  - roles: ["frontdoor", "vision_escalation"]
+    instance_a: {port: 8070, cpu_list: "0-47,96-143", threads: 96}
     instance_b: {port: 8087, cpu_list: "48-95,144-191", threads: 96}
-    seq_aggregate_tps: 17.60
-    parallel_aggregate_tps: 25.21
-    ratio: 1.43
+    seq_aggregate_tps: 42.92
+    parallel_aggregate_tps: 55.41
+    ratio: 1.29
     samples: 1
     verdict: "allow"
+    note: "disjoint half-sockets"
 
-  - roles: ["vision_escalation", "worker_general"]
-    instance_a: {port: 8087, cpu_list: "48-95,144-191", threads: 96}
-    instance_b: {port: 8072, cpu_list: "0-95", threads: 96}
-    seq_aggregate_tps: 37.47
-    parallel_aggregate_tps: 55.44
-    ratio: 1.48
+  - roles: ["architect_general", "worker_vision"]
+    instance_a: {port: 8083, cpu_list: "0-95", threads: 96}
+    instance_b: {port: 8086, cpu_list: "24-47,120-143", threads: 24}
+    seq_aggregate_tps: 17.45
+    parallel_aggregate_tps: 23.06
+    ratio: 1.32
     samples: 1
     verdict: "allow"
 
@@ -249,13 +273,6 @@ same_role:
   - role: "worker_vision"
     verdict: "n/a"
     note: "single-instance; too small to benefit from quartering (Phase 0.5 bench)"
-
-# Pairs explicitly measured incomplete in this matrix-era. Gate treats as unknown.
-unknown_pairs:
-  - roles: ["ingest_long_context", "worker_vision"]
-    reason: "not_measured_in_v1_v2_v3"
-  - roles: ["architect_general", "worker_vision"]
-    reason: "not_measured_in_v1_v2_v3"
 
 # Triples actually measured (informational; gate uses pairwise filtering).
 triples:

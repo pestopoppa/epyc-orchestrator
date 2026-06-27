@@ -80,10 +80,11 @@ def test_load_real_matrix(real_matrix_path: Path) -> None:
     assert m.version == 1
     assert m.host == "Beelzebub"
     assert m.default_floor == 0.85
-    # All 13 measured pairs should be present
-    assert len(m.pairs) == 13
-    # Both unknown pairs acknowledged
-    assert len(m.unknown_pairs) == 2
+    # v6 full/primary refresh measured every cross-role pair in this layer.
+    assert len(m.pairs) == 15
+    assert len(m.unknown_pairs) == 0
+    assert m.get_pair("architect_general", "worker_vision") is not None
+    assert m.get_pair("ingest_long_context", "worker_vision") is not None
 
 
 def test_real_matrix_declares_current_nway_role_classes(real_matrix_path: Path) -> None:
@@ -279,10 +280,9 @@ def test_policy_fail_open_on_missing_matrix(monkeypatch, tmp_path: Path) -> None
 
 def test_traffic_class_string_coerces() -> None:
     """Passing a string for traffic_class should be coerced to TrafficClass."""
-    # Use a non-existent matrix path so we hit the fail-open branch deterministically
-    import tempfile
-    with tempfile.TemporaryDirectory() as d:
-        m = contention.load_contention_matrix(Path(__file__).resolve().parents[2] / "orchestration" / "contention_matrix.yaml")
+    m = contention.load_contention_matrix(
+        Path(__file__).resolve().parents[2] / "orchestration" / "contention_matrix.yaml"
+    )
     # "background" string should work
     decision = contention.pair_policy("frontdoor", "architect_general", "background", matrix=m)
     assert decision == contention.PairDecision.QUEUE
