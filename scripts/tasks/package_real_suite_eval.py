@@ -105,6 +105,45 @@ def sanitize_question_results(results: list[dict[str, Any]]) -> list[dict[str, A
     return safe_rows
 
 
+def build_question_ledger(
+    *,
+    row: dict[str, Any],
+    safe_question_rows: list[dict[str, Any]],
+    generated_at: str,
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "schema_version": "real_suite_v1_eval_question_ledger_row.v1",
+            "captured_at": generated_at,
+            "calibration_id": row.get("calibration_id", ""),
+            "core_id": row.get("core_id", ""),
+            "trial_id": row.get("trial_id"),
+            "event_type": row.get("event_type", ""),
+            "started_at": row.get("started_at", ""),
+            "finished_at": row.get("finished_at", ""),
+            "requested_n": row.get("requested_n"),
+            "repeat_index": row.get("repeat_index"),
+            "repeats": row.get("repeats"),
+            "tier": row.get("tier"),
+            "eval_rank": question_row.get("eval_rank"),
+            "qid": question_row.get("qid"),
+            "suite": question_row.get("suite"),
+            "partition": question_row.get("partition"),
+            "correct": question_row.get("correct"),
+            "error": question_row.get("error", False),
+            "error_detail": question_row.get("error_detail"),
+            "partial": question_row.get("partial"),
+            "degraded": question_row.get("degraded"),
+            "latency_ms": question_row.get("latency_ms"),
+            "route": question_row.get("route"),
+            "tools_used": question_row.get("tools_used"),
+            "tools_called": question_row.get("tools_called"),
+            "scoring_method": question_row.get("scoring_method"),
+        }
+        for question_row in safe_question_rows
+    ]
+
+
 def build_summary(
     *,
     input_path: Path,
@@ -172,6 +211,7 @@ def build_summary(
         },
         "privacy": {
             "committed_question_results": "compact prompt-free EvalTower result rows",
+            "question_ledger_rows": "compact prompt-free per-question ledger rows",
             "private_key_matches": find_private_keys(safe_question_rows),
         },
     }
@@ -232,6 +272,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
     input_path = args.input.expanduser()
+    output_dir = args.output_dir
     rows = load_jsonl(input_path)
     if len(rows) != 1:
         raise SystemExit(f"expected exactly one eval row, found {len(rows)} in {input_path}")
@@ -241,6 +282,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         raise SystemExit(f"prompt/private keys in sanitized rows: {private_matches[:5]}")
 
     generated_at = utc_now()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    question_ledger_path = output_dir / "question_ledger.jsonl"
+    question_ledger_rows = build_question_ledger(
+        row=rows[0],
+        safe_question_rows=safe_question_rows,
+        generated_at=generated_at,
+    )
+    write_jsonl(question_ledger_path, question_ledger_rows)
     summary = build_summary(
         input_path=input_path,
         generated_at=generated_at,
@@ -248,8 +297,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         safe_question_rows=safe_question_rows,
         caveat=args.caveat,
     )
-    output_dir = args.output_dir
-    output_dir.mkdir(parents=True, exist_ok=True)
+    summary["question_ledger_path"] = str(question_ledger_path)
     write_jsonl(output_dir / "question_results.jsonl", safe_question_rows)
     write_json(output_dir / "summary.json", summary)
     (output_dir / "summary.md").write_text(render_markdown(summary), encoding="utf-8")

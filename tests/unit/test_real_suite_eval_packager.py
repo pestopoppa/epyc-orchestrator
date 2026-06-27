@@ -56,9 +56,20 @@ def test_packager_writes_prompt_free_eval_report(tmp_path: Path) -> None:
     assert summary["metrics"]["accuracy"] == 0.5
     assert summary["error_breakdown"] == {"connection refused": 1}
     assert summary["privacy"]["private_key_matches"] == []
+    assert summary["question_ledger_path"] == str(out_dir / "question_ledger.jsonl")
     assert "prompt" not in question_rows[0]
     assert "answer" not in question_rows[0]
     assert (out_dir / "summary.md").exists()
+    ledger_rows = [
+        json.loads(line)
+        for line in (out_dir / "question_ledger.jsonl").read_text().splitlines()
+    ]
+    assert len(ledger_rows) == 2
+    assert ledger_rows[0]["schema_version"] == "real_suite_v1_eval_question_ledger_row.v1"
+    assert ledger_rows[0]["qid"] == "a"
+    assert ledger_rows[0]["calibration_id"] == "real-suite"
+    assert "prompt" not in ledger_rows[0]
+    assert "answer" not in ledger_rows[0]
 
 
 def test_sanitize_question_results_drops_private_fields() -> None:
