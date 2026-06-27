@@ -211,6 +211,134 @@ class TestHandleChat:
                                 assert result.answer == "Vision result"
 
     @pytest.mark.asyncio
+    async def test_generated_vision_role_triggers_multimodal_handler(
+        self, mock_app_state
+    ):
+        """Generated vision roles use the multimodal handler, not a local legacy set."""
+        request = ChatRequest(
+            prompt="Inspect this image",
+            real_mode=True,
+            image_base64="aW1hZ2U=",
+        )
+
+        with patch("src.api.routes.chat._route_request") as mock_route:
+            mock_routing = MagicMock()
+            mock_routing.use_mock = False
+            mock_routing.routing_decision = ["document_vision"]
+            mock_routing.document_result = None
+            mock_route.return_value = mock_routing
+
+            with patch("src.api.routes.chat._preprocess"):
+                with patch("src.api.routes.chat._init_primitives"):
+                    with patch("src.api.routes.chat._plan_review_gate"):
+                        with patch("src.api.routes.chat._execute_vision") as mock_vision:
+                            mock_vision.return_value = None
+
+                            with patch("src.api.routes.chat._execute_proactive") as mock_proactive:
+                                mock_proactive.return_value = None
+
+                                with patch("src.api.routes.chat._vision_roles") as mock_roles:
+                                    mock_roles.return_value = frozenset({"document_vision"})
+
+                                    with patch("src.api.routes.chat._select_mode") as mock_mode:
+                                        mock_mode.return_value = "direct"
+
+                                        with patch(
+                                            "src.api.routes.chat._execute_vision_multimodal",
+                                            new_callable=AsyncMock,
+                                        ) as mock_multimodal:
+                                            mock_response = ChatResponse(
+                                                answer="Generated vision role answer",
+                                                turns=1,
+                                                tokens_used=100,
+                                                elapsed_seconds=1.0,
+                                                mock_mode=False,
+                                                real_mode=True,
+                                            )
+                                            mock_multimodal.return_value = mock_response
+
+                                            with patch(
+                                                "src.api.routes.chat._annotate_error"
+                                            ) as mock_annotate:
+                                                mock_annotate.return_value = mock_response
+                                                result = await _handle_chat(
+                                                    request, mock_app_state
+                                                )
+
+        assert result.answer == "Generated vision role answer"
+        mock_multimodal.assert_awaited_once()
+        call_args = mock_multimodal.await_args.args
+        assert call_args[5] == "document_vision"
+        assert call_args[6] == "direct"
+
+    @pytest.mark.asyncio
+    async def test_forced_non_vision_role_with_image_skips_multimodal_handler(
+        self, mock_app_state
+    ):
+        """Image data alone does not force VL handling for non-vision roles."""
+        request = ChatRequest(
+            prompt="Inspect this image",
+            real_mode=True,
+            image_base64="aW1hZ2U=",
+            force_role="frontdoor",
+            force_mode="direct",
+        )
+
+        with patch("src.api.routes.chat._route_request") as mock_route:
+            mock_routing = MagicMock()
+            mock_routing.use_mock = False
+            mock_routing.routing_decision = ["frontdoor"]
+            mock_routing.document_result = None
+            mock_route.return_value = mock_routing
+
+            with patch("src.api.routes.chat._preprocess"):
+                with patch("src.api.routes.chat._init_primitives"):
+                    with patch("src.api.routes.chat._plan_review_gate"):
+                        with patch("src.api.routes.chat._execute_vision") as mock_vision:
+                            mock_vision.return_value = None
+
+                            with patch("src.api.routes.chat._execute_proactive") as mock_proactive:
+                                mock_proactive.return_value = None
+
+                                with patch("src.api.routes.chat._vision_roles") as mock_roles:
+                                    mock_roles.return_value = frozenset({"document_vision"})
+
+                                    with patch(
+                                        "src.api.routes.chat._execute_vision_multimodal",
+                                        new_callable=AsyncMock,
+                                    ) as mock_multimodal:
+                                        with patch("src.api.routes.chat._try_cheap_first") as mock_cheap:
+                                            mock_cheap.return_value = None
+
+                                            with patch("src.api.routes.chat.features") as mock_features:
+                                                mock_features.return_value.architect_delegation = False
+
+                                                with patch(
+                                                    "src.api.routes.chat._execute_direct"
+                                                ) as mock_direct:
+                                                    mock_response = ChatResponse(
+                                                        answer="Frontdoor answer",
+                                                        turns=1,
+                                                        tokens_used=100,
+                                                        elapsed_seconds=0.5,
+                                                        mock_mode=False,
+                                                        real_mode=True,
+                                                        mode="direct",
+                                                    )
+                                                    mock_direct.return_value = mock_response
+
+                                                    with patch(
+                                                        "src.api.routes.chat._annotate_error"
+                                                    ) as mock_annotate:
+                                                        mock_annotate.return_value = mock_response
+                                                        result = await _handle_chat(
+                                                            request, mock_app_state
+                                                        )
+
+        assert result.mode == "direct"
+        mock_multimodal.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_proactive_delegation_path(self, mock_app_state):
         """Proactive delegation returns early when successful."""
         request = ChatRequest(prompt="Complex task", real_mode=True)

@@ -104,6 +104,7 @@ from src.api.routes.chat_pipeline import (
     _annotate_error,
     _attach_budget_diagnostics,
 )
+from src.api.routes.chat_pipeline.vision_stage import _vision_roles
 from src.api.routes.chat_pipeline.script_interceptor import try_intercept
 from src.api.routes.chat_pipeline.telemetry import llm_completion_meta
 
@@ -646,7 +647,7 @@ async def _handle_chat(
         # Stage 7: Mode selection
         initial_role = routing.routing_decision[0] if routing.routing_decision else Role.FRONTDOOR
 
-        vision_roles = {"worker_vision", "vision_escalation"}
+        vision_roles = _vision_roles()
         forced_mode = request.force_mode if request.force_mode in ("direct", "react", "repl", "delegated", "edit") else None
 
         # Vision-preprocessed requests need REPL document context unless an explicit
