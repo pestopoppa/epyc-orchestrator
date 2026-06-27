@@ -32,6 +32,8 @@ DEFAULT_ORCHESTRATOR_STACK = REPO_ROOT / "scripts" / "server" / "orchestrator_st
 DEFAULT_STACK_PATHS = REPO_ROOT / "scripts" / "server" / "stack_paths.py"
 DEFAULT_STACK_RUNTIME = REPO_ROOT / "scripts" / "server" / "stack_runtime.py"
 PRECEDENCE_SPEC = REPO_ROOT / "docs" / "reference" / "stack-truth-precedence.md"
+DEFAULT_MODELS_DIR = Path("/mnt/raid0/llm/models")
+DEFAULT_MODEL_BASE_DIR = Path("/mnt/raid0/llm/lmstudio/models")
 
 STACK_PRIORS_VERSION = 4
 REQUIRED_TOP_LEVEL_FIELDS = (
@@ -923,6 +925,87 @@ def _role_no_mmap_prior(
     return default
 
 
+def _positive_int_prior(
+    *containers: dict[str, Any] | None,
+    key: str,
+    fallback: int,
+) -> int:
+    for container in containers:
+        if not isinstance(container, dict):
+            continue
+        value = container.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            return value
+    return fallback
+
+
+def _number_prior(
+    *containers: dict[str, Any] | None,
+    key: str,
+    fallback: int | float,
+) -> int | float:
+    for container in containers:
+        if not isinstance(container, dict):
+            continue
+        value = container.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return value
+    return fallback
+
+
+def _nested_mapping(container: dict[str, Any] | None, *path: str) -> dict[str, Any] | None:
+    current: Any = container
+    for key in path:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current if isinstance(current, dict) else None
+
+
+def _kv_types_prior(
+    server_cfg: dict[str, Any] | None,
+    role_cfg: dict[str, Any] | None,
+    descriptor: dict[str, Any],
+) -> tuple[str, str] | None:
+    """Resolve runtime KV cache types from registry/descriptor facts.
+
+    Registry-derived facts take precedence over launcher fallback tables. The
+    accepted shapes mirror the current master registry (`server_mode.*.kv_quant`
+    and `roles.*.model.kv_cache`) plus descriptor acceleration metadata for
+    future generated surfaces.
+    """
+    candidate_maps = (
+        _nested_mapping(server_cfg, "kv_quant"),
+        _nested_mapping(server_cfg, "kv_cache"),
+        _nested_mapping(role_cfg, "model", "kv_cache"),
+        _nested_mapping(role_cfg, "kv_cache"),
+        _nested_mapping(descriptor, "acceleration", "kv"),
+    )
+    for candidate in candidate_maps:
+        if not isinstance(candidate, dict):
+            continue
+        key_type = candidate.get("k") or candidate.get("type_k") or candidate.get("kv_type_k")
+        value_type = candidate.get("v") or candidate.get("type_v") or candidate.get("kv_type_v")
+        if isinstance(key_type, str) and isinstance(value_type, str):
+            return key_type, value_type
+    return None
+
+
+def _worker_context_prior(
+    role_cfg: dict[str, Any] | None,
+    *,
+    fallback: int,
+) -> int:
+    model_cfg = _nested_mapping(role_cfg, "model")
+    if not isinstance(model_cfg, dict):
+        return fallback
+    return _positive_int_prior(
+        model_cfg,
+        key="max_context",
+        fallback=fallback,
+    )
+
+
 def _resolve_nextn_draft_path(
     requirements: dict[str, Any],
     acceleration: dict[str, Any],
@@ -989,11 +1072,6 @@ def _launch_runtime_record(
             LAUNCH_KV_QUANT_CONFIGS,
             NO_SPEC_DECODE_ROLES,
             SERIAL_ROLES,
-            WORKER_MTP_DRAFT_MAX,
-            WORKER_MTP_DRAFT_P_MIN,
-            WORKER_MTP_SPEC_TYPE,
-            WORKER_MTP_THREADS_DRAFT,
-            WORKER_MTP_UBATCH_TOKENS,
         )
         from scripts.server.stack_numa import MLOCK_ROLES
         from scripts.server.stack_paths import (
@@ -1038,7 +1116,7 @@ def _launch_runtime_record(
 
     canonical_primary_role = str(Role.from_string(primary_role, default=None) or primary_role)
     canonical_role = str(Role.from_string(role, default=None) or role)
-    kv_types = (
+    kv_types = _kv_types_prior(server_cfg, role_cfg, descriptor) or (
         LAUNCH_KV_QUANT_CONFIGS.get(canonical_primary_role)
         or LAUNCH_KV_QUANT_CONFIGS.get(canonical_role)
     )
@@ -1064,18 +1142,33 @@ def _launch_runtime_record(
         else None
     )
     if mode == "worker_pool" and worker_type == "explore":
+        worker_draft_max = _positive_int_prior(
+            acceleration,
+            key="draft_max",
+            fallback=2,
+        )
+        worker_threads_draft = _positive_int_prior(
+            acceleration,
+            key="threads_draft",
+            fallback=16,
+        )
+        worker_draft_p_min = _number_prior(
+            acceleration,
+            key="draft_p_min",
+            fallback=0.0,
+        )
         spec.update(
             {
                 "enabled": True,
                 # 2026-06-26 v6 cutover: prefer the registry spec_type (draft-mtp);
-                # WORKER_MTP_SPEC_TYPE is the manifest fallback (also 'draft-mtp').
-                "type": spec_type_prior or WORKER_MTP_SPEC_TYPE,
+                # the literal fallback is degraded mode for incomplete registries.
+                "type": spec_type_prior or "draft-mtp",
                 "draft_model_path": str(requirements.get("draft_model_path"))
                 if requirements.get("draft_model_path")
                 else None,
-                "draft_max": WORKER_MTP_DRAFT_MAX,
-                "draft_p_min": WORKER_MTP_DRAFT_P_MIN,
-                "threads_draft": WORKER_MTP_THREADS_DRAFT,
+                "draft_max": worker_draft_max,
+                "draft_p_min": worker_draft_p_min,
+                "threads_draft": worker_threads_draft,
             }
         )
     elif spec_type_prior == "draft-mtp" and role == primary_role:
@@ -1120,6 +1213,13 @@ def _launch_runtime_record(
     context_tokens = launch_cfg.get("effective_context_tokens")
     if not isinstance(context_tokens, int):
         context_tokens = DEFAULT_EFFECTIVE_CONTEXT_TOKENS
+    if mode == "worker_pool" and worker_type == "explore":
+        context_tokens = _worker_context_prior(role_cfg, fallback=context_tokens)
+    worker_ubatch = _positive_int_prior(
+        acceleration,
+        key="ubatch",
+        fallback=512,
+    )
 
     return {
         "binary_family": binary_family,
@@ -1131,7 +1231,7 @@ def _launch_runtime_record(
         "cache": {
             "context_tokens": context_tokens,
             "slots": slots,
-            "ubatch": WORKER_MTP_UBATCH_TOKENS
+            "ubatch": worker_ubatch
             if mode == "worker_pool" and worker_type == "explore"
             else DEFAULT_UBATCH_TOKENS
             if mode == "default"
@@ -1173,15 +1273,71 @@ def _launch_runtime_record(
     }
 
 
-def _server_mode_launch_requirement_overrides(server_cfg: dict[str, Any] | None) -> dict[str, str]:
+def _models_dir() -> Path:
+    try:
+        from scripts.server.stack_paths import _PATHS
+
+        models_dir = _PATHS.get("models_dir")
+        if models_dir:
+            return Path(models_dir)
+    except Exception:
+        pass
+    return DEFAULT_MODELS_DIR
+
+
+def _model_base_dir() -> Path:
+    try:
+        from src.registry.registry_loader import RegistryLoader
+
+        return RegistryLoader(validate_paths=False).model_base_path
+    except Exception:
+        return DEFAULT_MODEL_BASE_DIR
+
+
+def _resolved_model_path(value: Any, *, base_dir: Path | None = None) -> str | None:
+    if not isinstance(value, str) or not value:
+        return None
+    path = Path(value)
+    if path.is_absolute():
+        return str(path)
+    return str((base_dir or _models_dir()) / path)
+
+
+def _role_model_path(role_cfg: dict[str, Any] | None) -> str | None:
+    model_cfg = _nested_mapping(role_cfg, "model")
+    if not isinstance(model_cfg, dict):
+        return None
+    return _resolved_model_path(model_cfg.get("path"), base_dir=_model_base_dir())
+
+
+def _server_mode_launch_requirement_overrides(
+    role: str,
+    server_cfg: dict[str, Any] | None,
+    role_cfg: dict[str, Any] | None,
+) -> dict[str, str]:
     if not isinstance(server_cfg, dict):
         return {}
 
     overrides: dict[str, str] = {}
-    for key in ("model_path", "draft_model_path", "mmproj_path"):
-        value = server_cfg.get(key)
-        if isinstance(value, str) and value:
-            overrides[key] = value
+    explicit_model = _resolved_model_path(server_cfg.get("model_path"))
+    server_model_role = server_cfg.get("model_role")
+    role_model = (
+        _role_model_path(role_cfg)
+        if not isinstance(server_model_role, str) or server_model_role == role
+        else None
+    )
+    server_model = _resolved_model_path(server_cfg.get("model"))
+    if explicit_model or role_model or server_model:
+        overrides["model_path"] = str(explicit_model or role_model or server_model)
+
+    explicit_draft = _resolved_model_path(server_cfg.get("draft_model_path"))
+    server_draft = _resolved_model_path(server_cfg.get("draft_model"))
+    if explicit_draft or server_draft:
+        overrides["draft_model_path"] = str(explicit_draft or server_draft)
+
+    mmproj_path = _resolved_model_path(server_cfg.get("mmproj_path"))
+    if mmproj_path:
+        overrides["mmproj_path"] = mmproj_path
     return overrides
 
 
@@ -1248,7 +1404,7 @@ def _serving_record(
         else _launch_record([])
     )
     requirement_overrides = (
-        _server_mode_launch_requirement_overrides(server_cfg)
+        _server_mode_launch_requirement_overrides(role, server_cfg, role_cfg)
         if isinstance(launch_cfg, dict)
         else {}
     )

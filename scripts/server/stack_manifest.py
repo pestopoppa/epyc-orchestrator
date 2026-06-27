@@ -305,13 +305,6 @@ LAUNCH_CONTEXT_TOKENS = {
 }
 
 DEFAULT_UBATCH_TOKENS = 8192
-WORKER_MTP_UBATCH_TOKENS = 512
-WORKER_MTP_SPEC_TYPE = "draft-mtp"  # 2026-06-26 v6 cutover: bare 'mtp' invalid in v6; valid MTP token is 'draft-mtp'
-# 2026-06-26 v6 cutover: value 2 unchanged; launcher now emits this as --spec-draft-n-max (v6 removed --draft-max).
-WORKER_MTP_DRAFT_MAX = 2
-WORKER_MTP_DRAFT_P_MIN = 0.0
-WORKER_MTP_THREADS_DRAFT = 16
-WORKER_MTP_KV_TYPES = ("q8_0", "q8_0")
 
 # Effective launcher KV settings. Descriptors may preserve broader model
 # capability metadata; this table witnesses the actual llama-server CLI path.
@@ -319,9 +312,9 @@ LAUNCH_KV_QUANT_CONFIGS = {
     "frontdoor": ("q8_0", "q8_0"),
     "coder_escalation": ("q8_0", "q8_0"),
     "worker_summarize": ("q8_0", "q8_0"),
-    "worker_general": WORKER_MTP_KV_TYPES,
-    "worker_math": WORKER_MTP_KV_TYPES,
-    "toolrunner": WORKER_MTP_KV_TYPES,
+    "worker_general": ("q8_0", "q8_0"),
+    "worker_math": ("q8_0", "q8_0"),
+    "toolrunner": ("q8_0", "q8_0"),
     "architect_general": ("q4_0", "f16"),
     "ingest_long_context": ("q4_0", "q4_0"),
 }

@@ -31,6 +31,7 @@ from src.registry.stack_priors import (
     stack_prior_serving_url_value,
     stack_prior_serving_ports,
     stack_prior_uses_shared_worker_launch,
+    _server_mode_launch_requirement_overrides,
     validate_stack_priors_contract,
 )
 
@@ -591,6 +592,32 @@ def test_launch_runtime_record_canonicalizes_worker_explore_kv_types() -> None:
     assert runtime["cache"]["kv_type_k"] == "q8_0"
     assert runtime["cache"]["kv_type_v"] == "q8_0"
     assert runtime["cache"]["slots"] == 1
+
+
+def test_server_mode_requirement_overrides_keep_shared_alias_on_served_model() -> None:
+    requirements = _server_mode_launch_requirement_overrides(
+        "worker_math",
+        {
+            "model_role": "worker_general",
+            "model": "gemma-4-26B-A4B-it-ORIG-Q4_K_M.gguf",
+            "draft_model": "gemma-4-26B-A4B-it-assistant-v6-Q8_0.gguf",
+        },
+        {
+            "model": {
+                "path": (
+                    "lmstudio-community/Qwen2.5-Math-7B-Instruct-GGUF/"
+                    "Qwen2.5-Math-7B-Instruct-Q4_K_M.gguf"
+                )
+            }
+        },
+    )
+
+    assert requirements["model_path"] == (
+        "/mnt/raid0/llm/models/gemma-4-26B-A4B-it-ORIG-Q4_K_M.gguf"
+    )
+    assert requirements["draft_model_path"] == (
+        "/mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-v6-Q8_0.gguf"
+    )
 
 
 def test_compile_preserves_conflicts_as_gaps_when_allowed(tmp_path: Path) -> None:

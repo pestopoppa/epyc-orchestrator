@@ -856,7 +856,7 @@ def _launch_manifest_targets(
         role_cfg = registry_roles.get(role) if isinstance(registry_roles.get(role), dict) else None
         server_cfg = _server_cfg_for_role(role, server_mode)
         target["launch_requirements"].update(
-            _server_mode_launch_requirement_overrides(server_cfg)
+            _server_mode_launch_requirement_overrides(role, server_cfg, role_cfg)
         )
         target["launch_runtime"] = _launch_runtime_record(
             role,

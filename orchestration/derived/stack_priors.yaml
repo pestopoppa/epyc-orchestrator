@@ -48,7 +48,7 @@ contract:
   - quality_overall
   - memory_cost
   fallback_policy: Consumers may use local fallback values only as explicit degraded mode when this generated contract is missing or invalid.
-compiled_at: '2026-06-27T11:00:06Z'
+compiled_at: '2026-06-27T11:17:22Z'
 status: compiled_with_gaps
 coverage_scope: descriptor_role_bindings
 precedence_spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
@@ -56,31 +56,31 @@ source_artifacts:
   registry:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
     sha256: 18dc9cbeace9cea388b4fceab27f0ba9cf2733fde303977235bac2322ae791e1
-    repo_commit: 331a157b
+    repo_commit: 6f75ceab
   descriptors:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_descriptors.yaml
-    sha256: 117194bc2c8f181dbcdad0b4e4b460a9d4d09061e4a145be67b20e0024d429e3
-    repo_commit: 331a157b
+    sha256: e71108967054cae888f0269e04ff461bf7e3ecaa2e2a7c3097850ed5ffca4ab2
+    repo_commit: 6f75ceab
   stack_manifest:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_manifest.py
-    sha256: 4face3c19f274265cedcb2be7a5b1c89642d3ba993b774bdd5cc1971eb80a101
-    repo_commit: 331a157b
+    sha256: 33de60b1adc4e7304a62796dbfab5a76ce3b897be055b945aeed9219fb5e4495
+    repo_commit: 6f75ceab
   stack_numa:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_numa.py
     sha256: 52f6d919cf8c6a643c2e17958655fa88b80b726624eb4886554b57b7ef27fd06
-    repo_commit: 331a157b
+    repo_commit: 6f75ceab
   orchestrator_stack:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/orchestrator_stack.py
-    sha256: 51faf5187daf4aafcc3ea04fa0ebbd53a07d9c2ad3b7b8cbca4d7c0ba8b91f0a
-    repo_commit: 331a157b
+    sha256: 649e0ae6d178b6ea6b6f44df8764a95a30d9f50542a74561e253e77e3ab6fd42
+    repo_commit: 6f75ceab
   stack_paths:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_paths.py
     sha256: 7eee8576101dbb827ec8e94a228beedb401d7cad80841e1a18aab9c03db4206b
-    repo_commit: 331a157b
+    repo_commit: 6f75ceab
   stack_runtime:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_runtime.py
     sha256: f749047dde702b21759f67dcc81bf6cd64f1157e8a1fdf250b317301c1b6d32c
-    repo_commit: 331a157b
+    repo_commit: 6f75ceab
 roles:
   architect_general:
     role: architect_general
@@ -111,7 +111,9 @@ roles:
         - architect_general
         modes:
         - default
-        requirements: {}
+        requirements:
+          model_path: /mnt/raid0/llm/models/Qwen3.5-122B-A10B-MTP-GGUF/UD-Q4_K_M/Qwen3.5-122B-A10B-UD-Q4_K_M-00001-of-00003.gguf
+          draft_model_path: /mnt/raid0/llm/models/Qwen3.5-122B-A10B-MTP-GGUF/UD-Q4_K_M/Qwen3.5-122B-A10B-UD-Q4_K_M-00001-of-00003.gguf
         runtime:
           binary_family: llama.cpp
           binary_path: /mnt/raid0/llm/llama.cpp/build/bin/llama-server
@@ -382,6 +384,7 @@ roles:
         - default
         requirements:
           model_path: /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf
+          draft_model_path: /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf
         runtime:
           binary_family: llama.cpp
           binary_path: /mnt/raid0/llm/llama.cpp/build/bin/llama-server
@@ -525,7 +528,8 @@ roles:
         - ingest_long_context
         modes:
         - default
-        requirements: {}
+        requirements:
+          model_path: /mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-Next-80B-A3B-Instruct-GGUF/Qwen3-Next-80B-A3B-Instruct-Q4_K_M.gguf
         runtime:
           binary_family: llama.cpp
           binary_path: /mnt/raid0/llm/llama.cpp/build/bin/llama-server
@@ -1387,6 +1391,7 @@ roles:
         - default
         requirements:
           model_path: /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf
+          draft_model_path: /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf
         runtime:
           binary_family: llama.cpp
           binary_path: /mnt/raid0/llm/llama.cpp/build/bin/llama-server

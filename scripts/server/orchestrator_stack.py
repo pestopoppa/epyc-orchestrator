@@ -118,12 +118,6 @@ from scripts.server.stack_manifest import (
     VISION_WORKER_MMPROJ,
     VISION_WORKER_MODEL,
     WARM_SERVERS,
-    WORKER_MTP_DRAFT_MAX,
-    WORKER_MTP_DRAFT_P_MIN,
-    WORKER_MTP_KV_TYPES,
-    WORKER_MTP_SPEC_TYPE,
-    WORKER_MTP_THREADS_DRAFT,
-    WORKER_MTP_UBATCH_TOKENS,
     WORKER_POOL_MODELS,
     _build_servers_from_classification,
     _filter_by_numa_mode,
@@ -168,6 +162,16 @@ from src.registry_loader import RegistryLoader
 # =============================================================================
 
 STACK_PRIORS_PATH = _PATHS["project_root"] / "orchestration/derived/stack_priors.yaml"
+_WORKER_GENERAL_DEGRADED_FALLBACK = {
+    "spec_type": "draft-mtp",
+    "draft_max": 2,
+    "draft_p_min": 0.0,
+    "threads_draft": 16,
+    "ubatch": 512,
+    "kv_type_k": "q8_0",
+    "kv_type_v": "q8_0",
+    "context_tokens": 16384,
+}
 
 
 def _repo_short_sha(path: Path | None = None) -> str | None:
@@ -598,18 +602,18 @@ def _build_worker_general_command(
         "-md",
         draft_model_path,  # MTP draft (gemma4 assistant Q8)
         "--spec-type",
-        _runtime_string(spec, "type", WORKER_MTP_SPEC_TYPE),  # CRITICAL: engages ik_llama.cpp PR #1744 MTP code path.
+        _runtime_string(spec, "type", str(_WORKER_GENERAL_DEGRADED_FALLBACK["spec_type"])),
         # Without this, -md is treated as standard spec decode and
         # MTP-arch draft tensors are loaded but never assigned to a
         # backend buffer → "tensor buffer not set" assertion.
         "--spec-draft-n-max",  # 2026-06-26 v6 cutover: renamed from --draft-max (same value)
-        _runtime_positive_int(spec, "draft_max", WORKER_MTP_DRAFT_MAX),  # MTP recipe: 58% acceptance at k=2 (research-registry tuning)
+        _runtime_positive_int(spec, "draft_max", _WORKER_GENERAL_DEGRADED_FALLBACK["draft_max"]),
         "--draft-p-min",
-        _runtime_number_string(spec, "draft_p_min", WORKER_MTP_DRAFT_P_MIN),  # greedy: accept top-1 drafts, verifier rejects mismatches
+        _runtime_number_string(spec, "draft_p_min", _WORKER_GENERAL_DEGRADED_FALLBACK["draft_p_min"]),
         "--threads-draft",
-        _runtime_positive_int(spec, "threads_draft", WORKER_MTP_THREADS_DRAFT),  # dedicate 16 threads to small 4-layer drafter
+        _runtime_positive_int(spec, "threads_draft", _WORKER_GENERAL_DEGRADED_FALLBACK["threads_draft"]),
         "-ub",
-        _runtime_positive_int(cache, "ubatch", WORKER_MTP_UBATCH_TOKENS),  # MTP override of canonical -ub 8192 (per gemma4 deep-dive)
+        _runtime_positive_int(cache, "ubatch", _WORKER_GENERAL_DEGRADED_FALLBACK["ubatch"]),
         *(["--no-mmap"] if cache.get("no_mmap", True) is True else []),  # canonical recipe: bulk-read on EPYC NUMA cold-cache decode
         "--reasoning",
         str(flags.get("reasoning") or "off"),  # disable gemma4 thinking-channel (output otherwise lands in
@@ -630,7 +634,7 @@ def _build_worker_general_command(
         "-np",
         _runtime_positive_int(cache, "slots", 1),
         "-c",
-        _runtime_positive_int(cache, "context_tokens", LAUNCH_CONTEXT_TOKENS["worker_general"]),  # match research-registry max_context; 8192 causes MTP buffer mismatches
+        _runtime_positive_int(cache, "context_tokens", _WORKER_GENERAL_DEGRADED_FALLBACK["context_tokens"]),
         # Per-instance thread count (full=96, quarters=48). Pre-2026-05-08 was
         # hardcoded -t 24 (Qwen3-Coder tolerated it); gemma4 + MTP under
         # ik_llama.cpp PR #1744 must match the bench recipe to avoid the
@@ -640,9 +644,9 @@ def _build_worker_general_command(
         # KV cache q8_0/q8_0 — registry-declared and required for stable MTP buffer
         # allocation. f16 default left some MTP tensor buffers uninitialized.
         "-ctk",
-        _runtime_string(cache, "kv_type_k", WORKER_MTP_KV_TYPES[0]),
+        _runtime_string(cache, "kv_type_k", str(_WORKER_GENERAL_DEGRADED_FALLBACK["kv_type_k"])),
         "-ctv",
-        _runtime_string(cache, "kv_type_v", WORKER_MTP_KV_TYPES[1]),
+        _runtime_string(cache, "kv_type_v", str(_WORKER_GENERAL_DEGRADED_FALLBACK["kv_type_v"])),
         *(["--flash-attn", "on"] if flags.get("flash_attn", True) is True else []),
     ]
 

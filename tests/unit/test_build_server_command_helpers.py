@@ -442,13 +442,14 @@ def test_build_worker_general_command_rejects_boolean_runtime_numbers(
     )
 
     assert _flag_value(cmd, "-np") == "1"
-    assert _flag_value(cmd, "-c") == str(oss.LAUNCH_CONTEXT_TOKENS["worker_general"])
-    assert _flag_value(cmd, "-ub") == str(oss.WORKER_MTP_UBATCH_TOKENS)
+    fallback = oss._WORKER_GENERAL_DEGRADED_FALLBACK
+    assert _flag_value(cmd, "-c") == str(fallback["context_tokens"])
+    assert _flag_value(cmd, "-ub") == str(fallback["ubatch"])
     # 2026-06-26 v6 cutover: n-max emitted via --spec-draft-n-max (was --draft-max);
-    # value still sourced from WORKER_MTP_DRAFT_MAX constant.
-    assert _flag_value(cmd, "--spec-draft-n-max") == str(oss.WORKER_MTP_DRAFT_MAX)
-    assert _flag_value(cmd, "--draft-p-min") == str(oss.WORKER_MTP_DRAFT_P_MIN)
-    assert _flag_value(cmd, "--threads-draft") == str(oss.WORKER_MTP_THREADS_DRAFT)
+    # value now comes from the launcher's explicit degraded fallback.
+    assert _flag_value(cmd, "--spec-draft-n-max") == str(fallback["draft_max"])
+    assert _flag_value(cmd, "--draft-p-min") == str(fallback["draft_p_min"])
+    assert _flag_value(cmd, "--threads-draft") == str(fallback["threads_draft"])
 
 
 def test_build_worker_general_command_uses_binary_override_when_set() -> None:
