@@ -88,7 +88,7 @@ def test_stack_production_feature_env_is_complete_and_wave_gated() -> None:
     assert env["ORCHESTRATOR_FEATURE_PARALLEL_EXECUTION"] == "0"
     assert env["ORCHESTRATOR_FEATURE_UNIFIED_STREAMING"] == "0"
     assert env["ORCHESTRATOR_FEATURE_ROUTING_CLASSIFIER"] == "0"
-    assert env["ORCHESTRATOR_FEATURE_LANGGRAPH_ARCHITECT_CODING"] == "0"
+    assert "ORCHESTRATOR_FEATURE_LANGGRAPH_ARCHITECT_CODING" not in env
     assert "ORCHESTRATOR_REPL" not in env
     assert "ORCHESTRATOR_LANGGRAPH_ARCHITECT_CODING" not in env
     for spec in feature_module._FEATURE_REGISTRY:
@@ -102,6 +102,38 @@ def test_stack_live_langgraph_env_excludes_retired_architect_coding() -> None:
     assert "ORCHESTRATOR_LANGGRAPH_ARCHITECT_CODING" not in (
         orchestrator_stack.LANGGRAPH_PHASE3_LIVE_ENV_VARS
     )
+
+
+def test_retired_architect_coding_feature_env_is_ignored(monkeypatch) -> None:
+    monkeypatch.setenv("ORCHESTRATOR_FEATURE_LANGGRAPH_ARCHITECT_CODING", "1")
+    reset_features()
+
+    current = get_features()
+
+    assert "langgraph_architect_coding" not in current.summary()
+    assert "langgraph_architect_coding" not in feature_sources()
+
+
+def test_retired_architect_coding_runtime_flag_is_ignored(monkeypatch, tmp_path) -> None:
+    runtime_path = tmp_path / "runtime_flags.json"
+    runtime_path.write_text(
+        json.dumps(
+            {
+                "flags": {
+                    "model_fallback": {"value": True, "set_by": "unit-test"},
+                    "langgraph_architect_coding": {"value": True, "set_by": "old-state"},
+                }
+            }
+        )
+    )
+    monkeypatch.setenv("ORCHESTRATOR_RUNTIME_FLAGS_PATH", str(runtime_path))
+    reset_features()
+
+    current = get_features()
+
+    assert current.model_fallback is True
+    assert "langgraph_architect_coding" not in current.summary()
+    assert "langgraph_architect_coding" not in feature_sources()
 
 
 def test_structural_lab_uses_attest_for_current_flags(monkeypatch) -> None:

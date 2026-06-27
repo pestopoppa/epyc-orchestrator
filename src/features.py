@@ -173,7 +173,6 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     FeatureSpec("langgraph_bridge", False, False, "LANGGRAPH_BRIDGE", "LangGraph Phase 1: hybrid bridge"),
     FeatureSpec("langgraph_ingest", False, False, "LANGGRAPH_INGEST", "LangGraph Phase 3: IngestNode"),
     FeatureSpec("langgraph_architect", False, False, "LANGGRAPH_ARCHITECT", "LangGraph Phase 3: ArchitectNode"),
-    FeatureSpec("langgraph_architect_coding", False, False, "LANGGRAPH_ARCHITECT_CODING", "LangGraph Phase 3: ArchitectCodingNode"),
     FeatureSpec("langgraph_worker", False, False, "LANGGRAPH_WORKER", "LangGraph Phase 3: WorkerNode"),
     FeatureSpec("langgraph_frontdoor", False, False, "LANGGRAPH_FRONTDOOR", "LangGraph Phase 3: FrontdoorNode"),
     FeatureSpec("langgraph_coder", False, False, "LANGGRAPH_CODER", "LangGraph Phase 3: CoderNode"),
@@ -457,7 +456,6 @@ class Features:
     # LangGraph migration Phase 3: per-node migration flags
     langgraph_ingest: bool = False             # Migrate IngestNode to LangGraph backend
     langgraph_architect: bool = False          # Migrate ArchitectNode to LangGraph backend
-    langgraph_architect_coding: bool = False   # Migrate ArchitectCodingNode to LangGraph backend
     langgraph_worker: bool = False             # Migrate WorkerNode to LangGraph backend
     langgraph_frontdoor: bool = False          # Migrate FrontdoorNode to LangGraph backend
     langgraph_coder: bool = False              # Migrate CoderNode to LangGraph backend
@@ -659,13 +657,18 @@ def _compute_feature_flags(
         flags[spec.name] = value
         sources[spec.name] = source
 
+    known_names = set(defaults)
     runtime_path = runtime_flags_path()
     for name, value in runtime_flag_overrides(runtime_path).items():
+        if name not in known_names:
+            continue
         flags[name] = value
         sources[name] = f"runtime_file:{runtime_path}"
 
     if override:
         for name, value in override.items():
+            if name not in known_names:
+                continue
             flags[name] = bool(value)
             sources[name] = "override"
 
