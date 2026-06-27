@@ -186,6 +186,10 @@ class PromptForge:
     def _resolve_prompt_path(self, filename: str) -> Path:
         """Resolve prompt file, searching multiple locations."""
         root = self.prompts_dir.resolve()
+        requested = Path(filename)
+        path = self.prompts_dir / filename
+        if requested.is_absolute() or ".." in requested.parts:
+            raise FileNotFoundError(f"Prompt not found: {path}")
 
         def safe_existing(candidate: Path) -> Path | None:
             if not candidate.exists():
@@ -196,7 +200,6 @@ class PromptForge:
             return candidate
 
         # Try exact path first (handles roles/worker_explore.md from controller)
-        path = self.prompts_dir / filename
         resolved_path = safe_existing(path)
         if resolved_path is not None:
             return resolved_path
@@ -206,7 +209,7 @@ class PromptForge:
         if resolved_roles_path is not None:
             return resolved_roles_path
         # Try stripping roles/ prefix if controller included it redundantly
-        basename = Path(filename).name
+        basename = requested.name
         if basename != filename:
             for candidate in [self.prompts_dir / basename, self.prompts_dir / "roles" / basename]:
                 resolved_candidate = safe_existing(candidate)

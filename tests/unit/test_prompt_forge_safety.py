@@ -92,6 +92,7 @@ def test_resolve_prompt_missing_file_reports_original_joined_path(tmp_path: Path
 def test_resolve_prompt_rejects_parent_directory_escape(tmp_path: Path) -> None:
     prompts_dir = tmp_path / "prompts"
     prompts_dir.mkdir()
+    (prompts_dir / "outside.md").write_text("inside same basename\n")
     (tmp_path / "outside.md").write_text("outside\n")
     forge = PromptForge(prompts_dir=prompts_dir, auto_commit=False)
 
@@ -101,6 +102,21 @@ def test_resolve_prompt_rejects_parent_directory_escape(tmp_path: Path) -> None:
         pass
     else:
         raise AssertionError("expected parent traversal to be rejected")
+
+
+def test_resolve_prompt_rejects_absolute_path_escape(tmp_path: Path) -> None:
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    outside = tmp_path / "outside.md"
+    outside.write_text("outside\n")
+    forge = PromptForge(prompts_dir=prompts_dir, auto_commit=False)
+
+    try:
+        forge.read_prompt(str(outside))
+    except FileNotFoundError:
+        pass
+    else:
+        raise AssertionError("expected absolute path to be rejected")
 
 
 def test_resolve_prompt_rejects_symlink_escape(tmp_path: Path) -> None:
