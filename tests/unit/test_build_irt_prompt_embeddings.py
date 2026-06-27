@@ -4,10 +4,12 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from scripts.calibration.build_irt_prompt_embeddings import (
     build_artifacts,
     embed_records,
+    load_prompt_embedding_artifact,
     write_keyed_irt_scores,
 )
 from scripts.calibration.irt_cold_start_ab import load_baseline_records
@@ -126,3 +128,93 @@ def test_build_artifacts_can_write_embeddings_and_keyed_scores(tmp_path: Path) -
 
     assert report["embeddings"]["records"] == 2
     assert report["irt_scores"]["records"] == 2
+
+
+def test_load_prompt_embedding_artifact_reads_saved_npz(tmp_path: Path) -> None:
+    cache = tmp_path / "cached_embeddings.npz"
+    np.savez_compressed(
+        cache,
+        embeddings=np.arange(12, dtype=np.float32).reshape(3, 4),
+        prompt_hashes=np.array(["h0", "h1", "h2"], dtype=object),
+        question_ids=np.array(["q0", "q1", "q2"], dtype=object),
+        suites=np.array(["general", "general", "general"], dtype=object),
+        question_keys=np.array(["k0", "k1", "k2"], dtype=object),
+    )
+
+    loaded = load_prompt_embedding_artifact(cache)
+    assert loaded["embeddings"].shape == (3, 4)
+    assert loaded["question_ids"].tolist() == ["q0", "q1", "q2"]
+
+
+def test_build_artifacts_reuses_cached_prompt_embeddings(tmp_path: Path) -> None:
+    baseline = _write_baseline(tmp_path / "baseline.json", n=2)
+    _, records = load_baseline_records(baseline)
+    embedded = embed_records(records, _fake_embed)
+
+    cache = tmp_path / "cached_embeddings.npz"
+    np.savez_compressed(
+        cache,
+        embeddings=embedded["embeddings"],
+        prompt_hashes=embedded["prompt_hashes"],
+        question_ids=embedded["question_ids"],
+        suites=embedded["suites"],
+        question_keys=embedded["question_keys"],
+    )
+
+    loaded = load_prompt_embedding_artifact(cache)
+    assert loaded["embeddings"].shape == embedded["embeddings"].shape
+    assert loaded["prompt_hashes"].tolist() == embedded["prompt_hashes"].tolist()
+
+    report = build_artifacts(
+        baseline,
+        tmp_path / "reused_embeddings.npz",
+        prompt_embedding_artifact=loaded,
+    )
+    reused = np.load(tmp_path / "reused_embeddings.npz", allow_pickle=True)
+
+    assert report["embeddings"]["records"] == 2
+    assert np.array_equal(reused["embeddings"], embedded["embeddings"])
+
+
+def test_build_artifacts_rekeys_cached_prompt_embeddings_to_baseline_order(tmp_path: Path) -> None:
+    baseline = _write_baseline(tmp_path / "baseline.json", n=3)
+    _, records = load_baseline_records(baseline)
+    embedded = embed_records(records, _fake_embed)
+    order = np.array([2, 0, 1])
+    cache = tmp_path / "shuffled_embeddings.npz"
+    np.savez_compressed(
+        cache,
+        embeddings=embedded["embeddings"][order],
+        prompt_hashes=embedded["prompt_hashes"][order],
+        question_ids=embedded["question_ids"][order],
+    )
+
+    report = build_artifacts(
+        baseline,
+        tmp_path / "rekeyed_embeddings.npz",
+        prompt_embedding_artifact=load_prompt_embedding_artifact(cache),
+    )
+    rekeyed = np.load(tmp_path / "rekeyed_embeddings.npz", allow_pickle=True)
+
+    assert report["embeddings"]["records"] == 3
+    assert np.array_equal(rekeyed["embeddings"], embedded["embeddings"])
+    assert rekeyed["prompt_hashes"].tolist() == embedded["prompt_hashes"].tolist()
+
+
+def test_build_artifacts_rejects_cached_prompt_embedding_miss(tmp_path: Path) -> None:
+    baseline = _write_baseline(tmp_path / "baseline.json", n=2)
+    _, records = load_baseline_records(baseline)
+    embedded = embed_records(records[:1], _fake_embed)
+    cache = tmp_path / "partial_embeddings.npz"
+    np.savez_compressed(
+        cache,
+        embeddings=embedded["embeddings"],
+        prompt_hashes=embedded["prompt_hashes"],
+    )
+
+    with pytest.raises(ValueError, match="cached embeddings missing 1 baseline prompt"):
+        build_artifacts(
+            baseline,
+            tmp_path / "reused_embeddings.npz",
+            prompt_embedding_artifact=load_prompt_embedding_artifact(cache),
+        )

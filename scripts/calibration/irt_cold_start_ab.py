@@ -39,6 +39,9 @@ class ScoredRecord:
     latent_discrimination: float
 
 
+ACCEPTANCE_METRICS = ("avg_algorithmic_score", "avg_tokens_per_second", "pass_rate")
+
+
 def prompt_hash(prompt: str) -> str:
     return hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16]
 
@@ -210,14 +213,18 @@ def select_irt_stratified(
 def summarize(records: list[BaselineRecord]) -> dict[str, Any]:
     scores = [record.algorithmic_score for record in records if record.algorithmic_score is not None]
     speeds = [record.tokens_per_second for record in records if record.tokens_per_second is not None]
+    total_times = [record.total_time_ms for record in records if record.total_time_ms is not None]
     passed = sum(1 for score in scores if score is not None and score >= 2.5)
     return {
         "questions_tested": len(records),
         "score_count": len(scores),
         "speed_count": len(speeds),
+        "total_time_ms_count": len(total_times),
         "avg_algorithmic_score": float(np.mean(scores)) if scores else None,
         "avg_tokens_per_second": float(np.mean(speeds)) if speeds else None,
+        "avg_total_time_ms": float(np.mean(total_times)) if total_times else None,
         "questions_passed": passed,
+        "sum_total_time_ms": float(np.sum(total_times)) if total_times else None,
         "pass_rate": passed / len(scores) if scores else None,
     }
 
@@ -241,6 +248,79 @@ def compare_summary(full: dict[str, Any], subset: dict[str, Any]) -> dict[str, A
     return metrics
 
 
+def _parse_acceptance_metrics(raw: str) -> tuple[str, ...]:
+    metrics = tuple(item.strip() for item in raw.split(",") if item.strip())
+    return metrics or ACCEPTANCE_METRICS
+
+
+def evaluate_acceptance(
+    full: dict[str, Any],
+    subset: dict[str, Any],
+    *,
+    metrics: tuple[str, ...] = ACCEPTANCE_METRICS,
+    max_relative_error: float = 0.05,
+    min_speedup_ratio: float = 5.0,
+) -> dict[str, Any]:
+    metric_checks: dict[str, Any] = {}
+    for key in metrics:
+        full_value = full.get(key)
+        subset_value = subset.get(key)
+        if full_value is None or subset_value is None:
+            metric_checks[key] = {
+                "full": full_value,
+                "subset": subset_value,
+                "abs_error": None,
+                "rel_error": None,
+                "within_threshold": False,
+            }
+            continue
+        full_value_float = float(full_value)
+        subset_value_float = float(subset_value)
+        abs_error = abs(subset_value_float - full_value_float)
+        rel_error = abs_error / abs(full_value_float) if full_value_float else (0.0 if abs_error == 0.0 else None)
+        metric_checks[key] = {
+            "full": full_value_float,
+            "subset": subset_value_float,
+            "abs_error": abs_error,
+            "rel_error": rel_error,
+            "within_threshold": rel_error is not None and rel_error <= max_relative_error,
+        }
+
+    full_total_ms = full.get("sum_total_time_ms")
+    subset_total_ms = subset.get("sum_total_time_ms")
+    speedup: float | None
+    if full_total_ms is None or subset_total_ms is None:
+        speedup = None
+    elif full_total_ms <= 0 or subset_total_ms <= 0:
+        speedup = None
+    else:
+        speedup = float(full_total_ms) / float(subset_total_ms)
+
+    all_metrics_within = all(
+        details["within_threshold"] for details in metric_checks.values()
+    )
+    meets_speedup = speedup is not None and speedup >= min_speedup_ratio
+
+    if not metric_checks:
+        status = "blocked_missing_acceptance_metrics"
+    elif speedup is None:
+        status = "blocked_missing_wall_clock"
+    elif all_metrics_within and meets_speedup:
+        status = "accepted"
+    else:
+        status = "rejected"
+
+    return {
+        "status": status,
+        "max_relative_error": max_relative_error,
+        "min_speedup_ratio": min_speedup_ratio,
+        "metric_checks": metric_checks,
+        "speedup_ratio": speedup,
+        "meets_speedup_threshold": meets_speedup,
+        "meets_metric_thresholds": all_metrics_within,
+    }
+
+
 def run_audit(
     baseline_path: Path,
     irt_scores_path: Path,
@@ -248,6 +328,10 @@ def run_audit(
     prompt_embeddings_path: Path | None = None,
     sample_size: int = 50,
     difficulty_bins: int = 5,
+    enable_acceptance_gate: bool = False,
+    acceptance_metrics: tuple[str, ...] | str = ACCEPTANCE_METRICS,
+    max_relative_error: float = 0.05,
+    min_speedup_ratio: float = 5.0,
 ) -> dict[str, Any]:
     baseline, records = load_baseline_records(baseline_path)
     scored = score_records(
@@ -269,7 +353,8 @@ def run_audit(
     selected = select_irt_stratified(scored, sample_size=sample_size, difficulty_bins=difficulty_bins)
     full_summary = summarize(records)
     subset_summary = summarize([item.record for item in selected])
-    return {
+    comparison = compare_summary(full_summary, subset_summary)
+    report: dict[str, Any] = {
         "status": "ok",
         "model_role": baseline.get("model_role"),
         "baseline_path": str(baseline_path),
@@ -281,7 +366,7 @@ def run_audit(
         "difficulty_bins": difficulty_bins,
         "full_summary": full_summary,
         "subset_summary": subset_summary,
-        "comparison": compare_summary(full_summary, subset_summary),
+        "comparison": comparison,
         "selected": [
             {
                 **asdict(item.record),
@@ -291,6 +376,22 @@ def run_audit(
             for item in selected
         ],
     }
+    if enable_acceptance_gate:
+        parsed_metrics = (
+            _parse_acceptance_metrics(acceptance_metrics)
+            if isinstance(acceptance_metrics, str)
+            else tuple(acceptance_metrics)
+        )
+        acceptance = evaluate_acceptance(
+            full_summary,
+            subset_summary,
+            metrics=parsed_metrics,
+            max_relative_error=max_relative_error,
+            min_speedup_ratio=min_speedup_ratio,
+        )
+        report["acceptance"] = acceptance
+        report["status"] = acceptance["status"]
+    return report
 
 
 def main() -> None:
@@ -300,6 +401,25 @@ def main() -> None:
     parser.add_argument("--prompt-embeddings", type=Path, default=None, help="Optional keyed prompt embeddings NPZ")
     parser.add_argument("--sample-size", type=int, default=50, help="IRT-stratified subset size")
     parser.add_argument("--difficulty-bins", type=int, default=5, help="Difficulty strata count")
+    parser.add_argument("--acceptance-gate", action="store_true", help="Enable production gate status for full-vs-subset A/B")
+    parser.add_argument(
+        "--acceptance-metrics",
+        type=str,
+        default=",".join(ACCEPTANCE_METRICS),
+        help="Comma-separated metrics to gate against during acceptance mode",
+    )
+    parser.add_argument(
+        "--max-relative-error",
+        type=float,
+        default=0.05,
+        help="Maximum tolerated relative error for gated metrics",
+    )
+    parser.add_argument(
+        "--min-speedup-ratio",
+        type=float,
+        default=5.0,
+        help="Minimum full-vs-subset wall-clock speedup ratio for gated acceptance",
+    )
     parser.add_argument("--output", type=Path, default=None, help="Optional JSON report path")
     args = parser.parse_args()
 
@@ -309,6 +429,10 @@ def main() -> None:
         prompt_embeddings_path=args.prompt_embeddings,
         sample_size=args.sample_size,
         difficulty_bins=args.difficulty_bins,
+        enable_acceptance_gate=args.acceptance_gate,
+        acceptance_metrics=_parse_acceptance_metrics(args.acceptance_metrics),
+        max_relative_error=args.max_relative_error,
+        min_speedup_ratio=args.min_speedup_ratio,
     )
     payload = json.dumps(report, indent=2, sort_keys=True)
     if args.output:

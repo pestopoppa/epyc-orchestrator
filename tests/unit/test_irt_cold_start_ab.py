@@ -129,6 +129,100 @@ def test_run_audit_reports_missing_scores_without_fake_selection(tmp_path: Path)
     assert report["scored_records"] == 0
 
 
+def test_run_audit_acceptance_gate_accepts_when_thresholds_met(tmp_path: Path) -> None:
+    baseline_path = tmp_path / "baseline.json"
+    baseline_path.write_text(
+        json.dumps(
+            {
+                "model_role": "unit_model",
+                "results": {
+                    "general": {
+                        f"q{i}": {
+                            "question_id": f"q{i}",
+                            "prompt": f"Prompt {i}",
+                            "algorithmic_score": 4.0,
+                            "tokens_per_second": 20.0,
+                            "total_time_ms": 100.0,
+                        }
+                        for i in range(4)
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    _, records = load_baseline_records(baseline_path)
+    irt_path = tmp_path / "irt.npz"
+    np.savez(
+        irt_path,
+        prompt_hashes=np.array([record.prompt_hash for record in records], dtype=object),
+        latent_difficulty=np.linspace(-1, 1, len(records)).astype(np.float32),
+        latent_discrimination=np.linspace(1, 4, len(records)).astype(np.float32),
+    )
+
+    report = run_audit(
+        baseline_path,
+        irt_path,
+        sample_size=2,
+        difficulty_bins=2,
+        enable_acceptance_gate=True,
+        max_relative_error=0.0,
+        min_speedup_ratio=2.0,
+    )
+
+    assert report["status"] == "accepted"
+    assert report["acceptance"]["status"] == "accepted"
+    assert report["acceptance"]["meets_metric_thresholds"] is True
+    assert report["acceptance"]["speedup_ratio"] == 2.0
+    assert report["acceptance"]["meets_speedup_threshold"] is True
+
+
+def test_run_audit_acceptance_gate_rejects_when_speedup_is_too_slow(tmp_path: Path) -> None:
+    baseline_path = tmp_path / "baseline.json"
+    baseline_path.write_text(
+        json.dumps(
+            {
+                "model_role": "unit_model",
+                "results": {
+                    "general": {
+                        f"q{i}": {
+                            "question_id": f"q{i}",
+                            "prompt": f"Prompt {i}",
+                            "algorithmic_score": 4.0,
+                            "tokens_per_second": 20.0,
+                            "total_time_ms": 100.0,
+                        }
+                        for i in range(4)
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    _, records = load_baseline_records(baseline_path)
+    irt_path = tmp_path / "irt.npz"
+    np.savez(
+        irt_path,
+        prompt_hashes=np.array([record.prompt_hash for record in records], dtype=object),
+        latent_difficulty=np.linspace(-1, 1, len(records)).astype(np.float32),
+        latent_discrimination=np.linspace(1, 4, len(records)).astype(np.float32),
+    )
+
+    report = run_audit(
+        baseline_path,
+        irt_path,
+        sample_size=3,
+        difficulty_bins=2,
+        enable_acceptance_gate=True,
+        max_relative_error=0.0,
+        min_speedup_ratio=10.0,
+    )
+
+    assert report["status"] == "rejected"
+    assert report["acceptance"]["status"] == "rejected"
+    assert report["acceptance"]["meets_speedup_threshold"] is False
+
+
 def test_select_irt_stratified_spreads_across_difficulty_bins(tmp_path: Path) -> None:
     baseline_path = _write_baseline(tmp_path / "baseline.json", n=6)
     _, records = load_baseline_records(baseline_path)
