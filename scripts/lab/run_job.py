@@ -24,6 +24,15 @@ from typing import Any
 import yaml
 from jsonschema import Draft7Validator
 
+from src.context_assembly import (
+    Candidate,
+    InclusionMode,
+    SourceKind,
+    conservative_char_estimator,
+    pack_to_budget,
+)
+from src.context_discovery import build_python_codemap
+
 
 DEFAULT_API_URL = "http://127.0.0.1:8000"
 DEFAULT_QUEUE = Path("orchestration/lab_review_queue")
@@ -38,6 +47,8 @@ IGNORE_DIRS = {
 }
 MAX_SOURCE_FILES = 80
 MAX_EXCERPT_CHARS = 2200
+DCP_CONTEXT_MODE = "dcp_pack"
+SOURCE_CONTEXT_MODE = "source_excerpt"
 
 
 class LabRunnerError(RuntimeError):
@@ -209,7 +220,18 @@ def _iter_source_files(path: Path) -> list[Path]:
     return files
 
 
-def collect_context(
+def _context_modes(input_spec: dict[str, Any]) -> list[str]:
+    raw = input_spec.get("context_modes") or input_spec.get("context_mode") or [SOURCE_CONTEXT_MODE]
+    if isinstance(raw, str):
+        modes = [raw]
+    elif isinstance(raw, list):
+        modes = [str(item) for item in raw if str(item)]
+    else:
+        modes = [SOURCE_CONTEXT_MODE]
+    return modes or [SOURCE_CONTEXT_MODE]
+
+
+def _collect_source_excerpts(
     input_spec: dict[str, Any],
     roots: dict[str, Path],
     *,
@@ -245,7 +267,7 @@ def collect_context(
                     repo=repo,
                     path=rel_file,
                     abs_path=str(file_path),
-                    kind=excerpt.kind,
+                    kind=SOURCE_CONTEXT_MODE,
                     bytes=excerpt.bytes,
                     sha256=excerpt.sha256,
                     excerpt=excerpt.excerpt,
@@ -253,6 +275,122 @@ def collect_context(
                 )
             )
             remaining = max(0, remaining - len(excerpt.excerpt))
+    return excerpts, missing
+
+
+def _candidate_for_file(repo: str, root: Path, file_path: Path) -> tuple[str, Candidate] | None:
+    if not _is_probably_text(file_path):
+        return None
+    try:
+        body = file_path.read_text(errors="replace")
+    except OSError:
+        return None
+    rel = str(file_path.relative_to(root))
+    bundle_path = f"{repo}:{rel}"
+    codemap = build_python_codemap(body) if rel.endswith(".py") else None
+    full_cost = conservative_char_estimator(body)
+    codemap_cost = conservative_char_estimator(codemap) if codemap else full_cost
+    return (
+        rel,
+        Candidate(
+            path=bundle_path,
+            priority=1.0,
+            cost_full=full_cost,
+            cost_slices=full_cost,
+            cost_codemap=codemap_cost,
+            desired_mode=InclusionMode.FULL,
+            content_sha256=hashlib.sha256(body.encode("utf-8")).hexdigest(),
+            source=SourceKind.MANUAL_SEED,
+        ),
+    )
+
+
+def _collect_dcp_excerpts(
+    input_spec: dict[str, Any],
+    roots: dict[str, Path],
+    *,
+    max_context_chars: int,
+) -> tuple[list[SourceExcerpt], list[dict[str, Any]]]:
+    excerpts: list[SourceExcerpt] = []
+    missing: list[dict[str, Any]] = []
+    token_budget = max(1, max_context_chars // 4)
+    max_files = int(input_spec.get("max_bundle_files") or MAX_SOURCE_FILES)
+    candidates: list[tuple[str, Path, str, Candidate]] = []
+    for source in input_spec.get("sources", []) or []:
+        repo = str(source.get("repo", ""))
+        rel = str(source.get("path", ""))
+        root = roots.get(repo)
+        if root is None:
+            missing.append({"repo": repo, "path": rel, "reason": "unknown_repo"})
+            continue
+        abs_path = _safe_join(root, rel)
+        if not abs_path.exists():
+            missing.append({"repo": repo, "path": rel, "reason": "missing"})
+            continue
+        for file_path in _iter_source_files(abs_path)[:max_files]:
+            candidate_pair = _candidate_for_file(repo, root, file_path)
+            if candidate_pair is not None:
+                rel_path, candidate = candidate_pair
+                candidates.append((repo, root, rel_path, candidate))
+    if not candidates:
+        missing.append({"repo": "", "path": "", "reason": "dcp_no_candidates"})
+        return excerpts, missing
+    bundle = pack_to_budget([candidate for _, _, _, candidate in candidates], token_budget)
+    by_path = {
+        candidate.path: (repo, root, rel_path, candidate)
+        for repo, root, rel_path, candidate in candidates
+    }
+    for entry in bundle.included():
+        repo, root, rel_path, candidate = by_path[entry.path]
+        file_path = root / rel_path
+        try:
+            body = file_path.read_text(errors="replace")
+            stat = file_path.stat()
+        except OSError as exc:
+            missing.append({"repo": repo, "path": rel_path, "reason": f"read_error:{exc}"})
+            continue
+        if entry.mode == InclusionMode.CODEMAP_ONLY:
+            text = (build_python_codemap(body) if rel_path.endswith(".py") else None) or ""
+        else:
+            text = body
+        excerpts.append(
+            SourceExcerpt(
+                repo=repo,
+                path=rel_path,
+                abs_path=str(file_path),
+                kind=f"{DCP_CONTEXT_MODE}:{entry.mode}",
+                bytes=stat.st_size,
+                sha256=candidate.content_sha256,
+                excerpt=text[:MAX_EXCERPT_CHARS],
+                truncated=len(text) > MAX_EXCERPT_CHARS,
+            )
+        )
+    return excerpts, missing
+
+
+def collect_context(
+    input_spec: dict[str, Any],
+    roots: dict[str, Path],
+    *,
+    max_context_chars: int,
+) -> tuple[list[SourceExcerpt], list[dict[str, Any]]]:
+    modes = _context_modes(input_spec)
+    missing: list[dict[str, Any]] = []
+    excerpts: list[SourceExcerpt] = []
+    if DCP_CONTEXT_MODE in modes:
+        excerpts, missing = _collect_dcp_excerpts(
+            input_spec,
+            roots,
+            max_context_chars=max_context_chars,
+        )
+    if not excerpts and SOURCE_CONTEXT_MODE in modes:
+        source_excerpts, source_missing = _collect_source_excerpts(
+            input_spec,
+            roots,
+            max_context_chars=max_context_chars,
+        )
+        excerpts.extend(source_excerpts)
+        missing.extend(source_missing)
     return excerpts, missing
 
 
@@ -413,6 +551,33 @@ def build_prompt(
     )
 
 
+def context_summary(
+    *,
+    excerpts: list[SourceExcerpt],
+    missing_sources: list[dict[str, Any]],
+    max_context_chars: int,
+) -> dict[str, Any]:
+    excerpt_chars = sum(len(item.excerpt) for item in excerpts)
+    source_bytes = sum(item.bytes for item in excerpts)
+    truncated_count = sum(1 for item in excerpts if item.truncated)
+    repos = sorted({item.repo for item in excerpts if item.repo})
+    kinds: dict[str, int] = {}
+    for item in excerpts:
+        kinds[item.kind] = kinds.get(item.kind, 0) + 1
+    return {
+        "schema_version": "lab_context_summary.v1",
+        "max_context_chars": max_context_chars,
+        "excerpt_chars": excerpt_chars,
+        "source_bytes": source_bytes,
+        "source_count": len(excerpts),
+        "missing_source_count": len(missing_sources),
+        "truncated_source_count": truncated_count,
+        "repos": repos,
+        "kinds": kinds,
+        "budget_exhausted": excerpt_chars >= max_context_chars if max_context_chars > 0 else False,
+    }
+
+
 def call_chat_api(
     *,
     api_url: str,
@@ -494,10 +659,16 @@ def write_review_artifacts(
     prompt: str,
     excerpts: list[SourceExcerpt],
     missing_sources: list[dict[str, Any]],
+    max_context_chars: int,
     chat_meta: dict[str, Any],
 ) -> RunnerResult:
     job_id = str(job["job_id"])
     run_dir = queue_dir / job_id / run_id
+    context_stats = context_summary(
+        excerpts=excerpts,
+        missing_sources=missing_sources,
+        max_context_chars=max_context_chars,
+    )
     context_manifest = {
         "schema_version": "lab_context_manifest.v1",
         "run_id": run_id,
@@ -506,6 +677,7 @@ def write_review_artifacts(
         "jobs_file": str(jobs_file),
         "source_count": len(excerpts),
         "missing_sources": missing_sources,
+        "summary": context_stats,
         "sources": [item.__dict__ for item in excerpts],
     }
     task_record = {
@@ -519,6 +691,7 @@ def write_review_artifacts(
         "model_role": job.get("model_role"),
         "invocation_mode": invocation_mode,
         "validation": {"output_contract": "passed"},
+        "context": context_stats,
         "repo": {
             "path": str(repo_root),
             "branch": _git_rev(repo_root, ["branch", "--show-current"]),
@@ -625,6 +798,7 @@ def run_from_args(args: argparse.Namespace) -> RunnerResult:
         prompt=prompt,
         excerpts=excerpts,
         missing_sources=missing_sources,
+        max_context_chars=max_context_chars,
         chat_meta=chat_meta,
     )
     if args.print_output:

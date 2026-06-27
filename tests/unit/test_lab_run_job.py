@@ -54,6 +54,14 @@ def _write_jobs_file(path: Path, *, enabled: bool = False, gated: bool = False) 
     path.write_text(yaml.safe_dump(doc, sort_keys=False))
 
 
+def _write_dcp_jobs_file(path: Path) -> None:
+    _write_jobs_file(path, enabled=True)
+    doc = yaml.safe_load(path.read_text())
+    doc["jobs"][0]["input_spec"]["context_modes"] = ["dcp_pack", "source_excerpt"]
+    doc["jobs"][0]["input_spec"]["max_bundle_files"] = 4
+    path.write_text(yaml.safe_dump(doc, sort_keys=False))
+
+
 def _args(tmp_path: Path, jobs_file: Path, **overrides) -> Namespace:
     values = {
         "job_id": "sample_shadow",
@@ -91,6 +99,13 @@ def test_dry_run_stub_writes_review_artifacts(tmp_path: Path) -> None:
     assert task_record["record_type"] == "task_record"
     assert task_record["invocation_mode"] == "dry_run_contract_stub"
     assert task_record["validation"]["output_contract"] == "passed"
+    assert task_record["context"]["schema_version"] == "lab_context_summary.v1"
+    assert task_record["context"]["source_count"] == 1
+    assert task_record["context"]["missing_source_count"] == 0
+    assert task_record["context"]["repos"] == ["epyc-orchestrator"]
+    assert task_record["context"]["kinds"] == {"source_excerpt": 1}
+    context_manifest = json.loads((result.output_path.parent / "context_manifest.json").read_text())
+    assert context_manifest["summary"] == task_record["context"]
     assert "source.md" in (result.output_path.parent / "prompt.txt").read_text()
     rows = [json.loads(line) for line in result.task_record_log.read_text().splitlines()]
     assert rows[-1]["run_id"] == "sample-run"
@@ -134,3 +149,30 @@ def test_response_fixture_must_satisfy_contract(tmp_path: Path) -> None:
 
     with pytest.raises(run_job.LabRunnerError, match="output contract failed"):
         run_job.run_from_args(args)
+
+
+def test_dcp_context_mode_packs_declared_sources_with_fallback_available(tmp_path: Path) -> None:
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "source.md").write_text("# source\nEvidence.\n")
+    (tmp_path / "docs" / "helper.py").write_text(
+        "def useful_helper(value: str) -> str:\n"
+        "    \"\"\"Small helper.\"\"\"\n"
+        "    return value.upper()\n"
+    )
+    jobs_file = tmp_path / "lab_jobs.yaml"
+    _write_dcp_jobs_file(jobs_file)
+
+    result = run_job.run_from_args(
+        _args(
+            tmp_path,
+            jobs_file,
+            allow_disabled=False,
+            max_context_chars=200,
+        )
+    )
+
+    task_record = json.loads(result.task_record_path.read_text())
+    assert task_record["context"]["source_count"] >= 1
+    assert any(kind.startswith("dcp_pack:") for kind in task_record["context"]["kinds"])
+    manifest = json.loads((result.output_path.parent / "context_manifest.json").read_text())
+    assert manifest["summary"] == task_record["context"]

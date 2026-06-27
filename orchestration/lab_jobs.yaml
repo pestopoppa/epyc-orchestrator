@@ -41,6 +41,10 @@ jobs:
         - repo: epyc-root
           path: progress/
       context_budget_tokens: 16000
+      context_modes:
+        - dcp_pack
+        - source_excerpt
+      max_bundle_files: 40
       required_checks:
         - stale_active_handoff_over_14d_without_gate
         - unchecked_completed_task
@@ -321,6 +325,10 @@ jobs:
         - repo: epyc-root
           path: progress/
       context_budget_tokens: 16000
+      context_modes:
+        - dcp_pack
+        - source_excerpt
+      max_bundle_files: 40
       required_checks:
         - numeric_claim_without_protocol
         - missing_policy_version
