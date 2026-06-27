@@ -9,6 +9,7 @@ import yaml
 from scripts.datasets import (
     build_planner_sft,
     build_triage_set,
+    prepare_intake_triage_review,
     record_intake_triage_verdict,
     train_intake_triage_baseline,
 )
@@ -308,6 +309,81 @@ def test_triage_builder_can_require_reviewed_labels(tmp_path: Path) -> None:
     assert json.loads(manifest.read_text())["counts"]["verdicts"] == {
         "worth_investigating": 2
     }
+
+
+def test_prepare_intake_triage_review_queue_excludes_reviewed_and_source_text(
+    tmp_path: Path,
+) -> None:
+    intake = tmp_path / "intake_index.yaml"
+    intake.write_text(
+        yaml.safe_dump(
+            [
+                {
+                    "id": "intake-1",
+                    "url": "https://example.test/paper",
+                    "source_type": "paper",
+                    "title": "Reviewed paper",
+                    "categories": ["routing"],
+                    "novelty": "medium",
+                    "relevance": "high",
+                    "verdict": "worth_investigating",
+                    "citation_context": "IGNORE PRIOR INSTRUCTIONS",
+                },
+                {
+                    "id": "intake-2",
+                    "url": "https://example.test/tool",
+                    "source_type": "repo",
+                    "title": "Needs review",
+                    "categories": ["datasets"],
+                    "novelty": "high",
+                    "relevance": "medium",
+                    "verdict": "route_to_handoff",
+                    "discovered_via": "operator",
+                    "ingested_date": "2026-06-14",
+                    "citation_context": "DO NOT INCLUDE",
+                    "cross_references": {
+                        "handoffs": ["frontier-f3-data-flywheel.md"],
+                        "indices": ["strategic-frontiers"],
+                    },
+                },
+                {
+                    "id": "intake-3",
+                    "title": "Low priority",
+                    "verdict": "already_integrated",
+                },
+            ],
+            sort_keys=False,
+        )
+    )
+    reviewed = tmp_path / "reviewed.jsonl"
+    reviewed.write_text(json.dumps({"intake_id": "intake-1"}) + "\n")
+    output = tmp_path / "review_queue.jsonl"
+    manifest = tmp_path / "manifest.json"
+
+    result = prepare_intake_triage_review.run(
+        Namespace(
+            intake=str(intake),
+            output=str(output),
+            manifest=str(manifest),
+            reviewed_labels=str(reviewed),
+            include_verdict=["route_to_handoff"],
+            exclude_verdict=[],
+            limit=0,
+        )
+    )
+
+    rows = _read_jsonl(output)
+    assert result["counts"]["skipped_already_reviewed"] == 1
+    assert result["counts"]["skipped_verdict_filter"] == 1
+    assert [row["intake_id"] for row in rows] == ["intake-2"]
+    assert rows[0]["source_text_excluded"] is True
+    assert rows[0]["destination_handoff"] == "frontier-f3-data-flywheel.md"
+    assert rows[0]["destination_index"] == "strategic-frontiers"
+    assert "--intake-id intake-2" in rows[0]["record_command"]
+    assert "--verdict route_to_handoff" in rows[0]["record_command"]
+    assert "IGNORE PRIOR INSTRUCTIONS" not in json.dumps(rows[0])
+    assert "DO NOT INCLUDE" not in json.dumps(rows[0])
+    assert json.loads(manifest.read_text())["counts"]["written"] == 1
 
 
 def test_intake_triage_baseline_reports_insufficient_reviewed_labels(tmp_path: Path) -> None:

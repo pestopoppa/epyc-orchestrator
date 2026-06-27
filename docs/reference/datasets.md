@@ -48,7 +48,7 @@ create train or validation sets.
 | Benchmark result ledger | `/mnt/raid0/llm/epyc-inference-research/benchmarks/results/*.jsonl` and `data/**/*.csv` | inference-research benchmark scripts | live benchmark archive | Model descriptors, throughput baselines, calibration covariates | result timestamp, script/config name, model registry ref, host/runtime metadata |
 | Root workload packs | `/mnt/raid0/llm/epyc-inference-research/benchmarks/root_workload/*.json` | F1 real-task corpus | seed packs exist; passive task capture still pending | Real-task eval distribution and promotion cohorts | pack name/version, prompt/task ID, source commit, reviewed outcome when available |
 | Lab job outputs | planned `orchestration/lab_review_queue/` plus future `task_record` events | F2 self-running lab | branch-ready on `feat/lab-reliability-ladder`, not deployed | Reviewed job dataset, local-lab reliability ladder, task tuples for F3 | job ID, contract version, risk class, model role, review verdict, reviewer, timestamp |
-| Intake-triage labels | `orchestration/datasets/intake_triage_reviewed.jsonl` | F3 recorder, F2/F5 review workflow | branch-ready on `feat/intake-triage-label-capture` | Triage classifier (`relevant`, `duplicate`, `park`, destination index) | source intake ID, quarantine policy version, output contract version, human review verdict |
+| Intake-triage labels | `orchestration/datasets/intake_triage_reviewed.jsonl` | F3 recorder, F2/F5 review workflow | recorder/builder live; 120-row review queue generated | Triage classifier (`relevant`, `duplicate`, `park`, destination index) | source intake ID, quarantine policy version, output contract version, human review verdict |
 
 ## Required Fields by Builder
 
@@ -66,6 +66,10 @@ Implemented builder scaffolds live in `scripts/datasets/` on
   `reviewed_intake_triage_verdict.v1` JSONL row for an intake ID, including
   source-index hash, extracted classification features, reviewer, destination,
   quarantine policy version, and output contract version.
+- `prepare_intake_triage_review.py`: intake index ->
+  `intake_triage_review_queue.v1` JSONL plus `dataset_builder_manifest.v1`;
+  excludes already reviewed intake IDs, supports verdict filters, and emits
+  prompt-free review rows with ready-to-run recorder commands.
 
 ### Planner SFT Builder
 
@@ -135,8 +139,10 @@ Initial keep rule:
 - F2 lab jobs, review queue, verdict recorder, and shadow-batch wrapper are
   branch-ready on `feat/lab-reliability-ladder` but not deployed; real reviewed
   `lab_gold_tuple.v1` rows do not exist yet.
-- Intake-triage label capture is branch-ready, but no reviewed production label
-  corpus exists until operators or F2/F5 review jobs append rows to
+- Intake-triage label capture is live, and
+  `orchestration/datasets/intake_triage_review_queue.jsonl` contains the first
+  120 actionable intake rows for operator/F2/F5 review. No reviewed production
+  label corpus exists until those reviews append rows to
   `orchestration/datasets/intake_triage_reviewed.jsonl`.
 - No builder should train on strategy-memory text from scrubbed or gate-lock-era
   rows until it joins each strategy to trustworthy journal evidence.
