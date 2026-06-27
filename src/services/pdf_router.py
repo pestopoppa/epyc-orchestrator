@@ -34,6 +34,10 @@ from typing import TYPE_CHECKING, Optional
 logger = logging.getLogger(__name__)
 
 ODL_TABLE_BACKEND_ENV = "ORCHESTRATOR_ODL_TABLE_BACKEND"
+ODL_HYBRID_BACKEND_ENV = "ORCHESTRATOR_ODL_HYBRID_BACKEND"
+ODL_HYBRID_URL_ENV = "ORCHESTRATOR_ODL_HYBRID_URL"
+ODL_HYBRID_TIMEOUT_MS_ENV = "ORCHESTRATOR_ODL_HYBRID_TIMEOUT_MS"
+ODL_HYBRID_FALLBACK_ENV = "ORCHESTRATOR_ODL_HYBRID_FALLBACK"
 
 if TYPE_CHECKING:
     from src.models.odl_structured import ODLStructuredDocument
@@ -276,8 +280,6 @@ class PDFRouter:
         Returns:
             (markdown_text, structured_doc_or_None, latency_ms)
         """
-        from src.models.odl_structured import ODLStructuredDocument
-        import json
         import tempfile
 
         start = time.perf_counter()
@@ -299,26 +301,7 @@ class PDFRouter:
                     quiet=True,
                 )
 
-                md_path = Path(tmp) / f"{pdf_path.stem}.md"
-                json_path = Path(tmp) / f"{pdf_path.stem}.json"
-
-                text = md_path.read_text(encoding="utf-8") if md_path.exists() else ""
-                if not text.strip():
-                    logger.warning(
-                        "OpenDataLoader returned empty markdown for %s", pdf_path.name
-                    )
-
-                structured: ODLStructuredDocument | None = None
-                if json_path.exists():
-                    try:
-                        payload = json.loads(json_path.read_text(encoding="utf-8"))
-                        structured = ODLStructuredDocument.from_json(payload)
-                    except (json.JSONDecodeError, ValueError) as e:
-                        logger.warning("ODL JSON parse failed for %s: %s", pdf_path.name, e)
-                        structured = None
-                else:
-                    logger.debug("ODL did not emit JSON for %s", pdf_path.name)
-
+                text, structured = self._read_odl_structured_outputs(Path(tmp), pdf_path)
                 latency_ms = (time.perf_counter() - start) * 1000
                 return text, structured, latency_ms
 
@@ -329,24 +312,95 @@ class PDFRouter:
             )
             return "", None, latency_ms
 
+    def _read_odl_structured_outputs(
+        self,
+        output_dir: Path,
+        pdf_path: Path,
+    ) -> tuple[str, "ODLStructuredDocument | None"]:
+        """Read ODL markdown + JSON artifacts from a conversion output dir."""
+        from src.models.odl_structured import ODLStructuredDocument
+        import json
+
+        md_path = output_dir / f"{pdf_path.stem}.md"
+        json_path = output_dir / f"{pdf_path.stem}.json"
+
+        text = md_path.read_text(encoding="utf-8") if md_path.exists() else ""
+        if not text.strip():
+            logger.warning("OpenDataLoader returned empty markdown for %s", pdf_path.name)
+
+        structured: ODLStructuredDocument | None = None
+        if json_path.exists():
+            try:
+                payload = json.loads(json_path.read_text(encoding="utf-8"))
+                structured = ODLStructuredDocument.from_json(payload)
+            except (json.JSONDecodeError, ValueError) as e:
+                logger.warning("ODL JSON parse failed for %s: %s", pdf_path.name, e)
+                structured = None
+        else:
+            logger.debug("ODL did not emit JSON for %s", pdf_path.name)
+
+        return text, structured
+
+    def _extract_with_opendataloader_hybrid(
+        self,
+        pdf_path: Path,
+    ) -> tuple[str, "ODLStructuredDocument | None", float]:
+        """Extract via OpenDataLoader hybrid mode using the official Python client."""
+        import tempfile
+
+        start = time.perf_counter()
+
+        try:
+            from opendataloader_pdf.wrapper import convert as odl_convert
+        except ImportError:
+            logger.warning("opendataloader-pdf[hybrid] not installed; hybrid path unavailable")
+            return "", None, 0.0
+
+        hybrid_backend = os.environ.get(ODL_HYBRID_BACKEND_ENV, "docling-fast").strip()
+        hybrid_url = os.environ.get(ODL_HYBRID_URL_ENV, "http://localhost:5002").strip()
+        hybrid_timeout_ms = os.environ.get(ODL_HYBRID_TIMEOUT_MS_ENV, "60000").strip()
+        hybrid_fallback = (
+            os.environ.get(ODL_HYBRID_FALLBACK_ENV, "1").strip().lower()
+            not in {"0", "false", "no", "off"}
+        )
+
+        try:
+            with tempfile.TemporaryDirectory(prefix="odl_hybrid_") as tmp:
+                output_dir = Path(tmp)
+                odl_convert(
+                    str(pdf_path),
+                    output_dir=str(output_dir),
+                    format=["markdown", "json"],
+                    quiet=True,
+                    hybrid=hybrid_backend,
+                    hybrid_url=hybrid_url,
+                    hybrid_timeout=hybrid_timeout_ms,
+                    hybrid_fallback=hybrid_fallback,
+                )
+                text, structured = self._read_odl_structured_outputs(output_dir, pdf_path)
+                latency_ms = (time.perf_counter() - start) * 1000
+                return text, structured, latency_ms
+        except Exception as e:
+            latency_ms = (time.perf_counter() - start) * 1000
+            logger.warning(
+                "OpenDataLoader hybrid extraction failed for %s: %s",
+                pdf_path.name,
+                e,
+            )
+            return "", None, latency_ms
+
     def _select_odl_table_backend(self, pdf_path: Path) -> str:
         """Select the ODL table backend.
 
-        The hybrid backend is intentionally a routing seam only for now. Until a
-        sidecar/client exists, explicit hybrid requests fall back to the local
-        structured ODL path so current extraction semantics stay unchanged.
+        Hybrid mode is explicit and still default-inert: callers only get it
+        by setting ORCHESTRATOR_ODL_TABLE_BACKEND=hybrid.
         """
         requested = os.environ.get(ODL_TABLE_BACKEND_ENV, "local").strip().lower()
         if requested in {"", "local"}:
             return "local"
 
         if requested == "hybrid":
-            logger.info(
-                "ODL hybrid table backend requested for %s but is not configured; "
-                "using local structured OpenDataLoader",
-                pdf_path.name,
-            )
-            return "local"
+            return "hybrid"
 
         logger.warning(
             "Unsupported %s=%r for %s; using local structured OpenDataLoader",
@@ -362,6 +416,16 @@ class PDFRouter:
     ) -> tuple[str, "ODLStructuredDocument | None", float]:
         backend = self._select_odl_table_backend(pdf_path)
         if backend == "local":
+            return self._extract_with_opendataloader_structured(pdf_path)
+        if backend == "hybrid":
+            text, structured, latency_ms = self._extract_with_opendataloader_hybrid(pdf_path)
+            if text or structured is not None:
+                return text, structured, latency_ms
+            logger.info(
+                "ODL hybrid backend produced no structured output for %s; "
+                "using local structured OpenDataLoader",
+                pdf_path.name,
+            )
             return self._extract_with_opendataloader_structured(pdf_path)
 
         # Defensive fallback for future backend names added to the selector.

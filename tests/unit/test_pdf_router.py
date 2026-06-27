@@ -12,6 +12,10 @@ from src.services.pdf_router import (
     BoundingBox,
     ExtractedFigure,
     ODL_TABLE_BACKEND_ENV,
+    ODL_HYBRID_BACKEND_ENV,
+    ODL_HYBRID_FALLBACK_ENV,
+    ODL_HYBRID_TIMEOUT_MS_ENV,
+    ODL_HYBRID_URL_ENV,
     extract_pdf,
 )
 
@@ -265,7 +269,7 @@ class TestPDFRouterExtraction:
         assert result.structured_data is structured
         assert result.method == "opendataloader_structured"
 
-    def test_odl_hybrid_table_backend_request_is_inert_for_now(self, tmp_path, monkeypatch):
+    def test_odl_hybrid_table_backend_uses_official_client(self, tmp_path, monkeypatch):
         from src.models.odl_structured import HeadingNode, ODLStructuredDocument
 
         pdf_path = tmp_path / "structured.pdf"
@@ -273,6 +277,128 @@ class TestPDFRouterExtraction:
         structured = ODLStructuredDocument(headings=[HeadingNode(level=1, text="Intro")])
 
         monkeypatch.setenv(ODL_TABLE_BACKEND_ENV, "hybrid")
+        monkeypatch.setenv(ODL_HYBRID_BACKEND_ENV, "docling-fast")
+        monkeypatch.setenv(ODL_HYBRID_URL_ENV, "http://127.0.0.1:5002")
+        monkeypatch.setenv(ODL_HYBRID_TIMEOUT_MS_ENV, "12345")
+        monkeypatch.setenv(ODL_HYBRID_FALLBACK_ENV, "0")
+
+        router = PDFRouter()
+        with patch.object(
+            router,
+            "_extract_with_opendataloader_hybrid",
+            return_value=("Intro\nBody", structured, 12.0),
+        ) as mock_hybrid_odl:
+            with patch.object(router, "_extract_with_opendataloader_structured") as mock_local_odl:
+                with patch.object(router, "_extract_figures_from_odl_structured") as mock_figures:
+                    result = router.extract_opendataloader_structured(
+                        pdf_path,
+                        extract_figures=False,
+                    )
+
+        mock_hybrid_odl.assert_called_once_with(pdf_path)
+        mock_local_odl.assert_not_called()
+        mock_figures.assert_not_called()
+        assert result.text == "Intro\nBody"
+        assert result.structured_data is structured
+        assert result.method == "opendataloader_structured"
+
+    def test_odl_hybrid_table_backend_falls_back_to_local_when_empty(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        from src.models.odl_structured import HeadingNode, ODLStructuredDocument
+
+        pdf_path = tmp_path / "structured.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\n%EOF\n")
+        structured = ODLStructuredDocument(headings=[HeadingNode(level=1, text="Intro")])
+
+        monkeypatch.setenv(ODL_TABLE_BACKEND_ENV, "hybrid")
+
+        router = PDFRouter()
+        with patch.object(
+            router,
+            "_extract_with_opendataloader_hybrid",
+            return_value=("", None, 12.0),
+        ) as mock_hybrid_odl:
+            with patch.object(
+                router,
+                "_extract_with_opendataloader_structured",
+                return_value=("Intro\nBody", structured, 4.0),
+            ) as mock_local_odl:
+                result = router.extract_opendataloader_structured(
+                    pdf_path,
+                    extract_figures=False,
+                )
+
+        mock_hybrid_odl.assert_called_once_with(pdf_path)
+        mock_local_odl.assert_called_once_with(pdf_path)
+        assert result.text == "Intro\nBody"
+        assert result.structured_data is structured
+
+    def test_extract_with_opendataloader_hybrid_passes_client_options(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        pdf_path = tmp_path / "structured.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\n%EOF\n")
+
+        monkeypatch.setenv(ODL_HYBRID_BACKEND_ENV, "docling-fast")
+        monkeypatch.setenv(ODL_HYBRID_URL_ENV, "http://127.0.0.1:5002")
+        monkeypatch.setenv(ODL_HYBRID_TIMEOUT_MS_ENV, "12345")
+        monkeypatch.setenv(ODL_HYBRID_FALLBACK_ENV, "false")
+
+        router = PDFRouter()
+        with patch.dict("sys.modules", {"opendataloader_pdf.wrapper": MagicMock()}):
+            from opendataloader_pdf.wrapper import convert as mock_convert
+
+            with patch.object(
+                router,
+                "_read_odl_structured_outputs",
+                return_value=("Intro\nBody", None),
+            ) as mock_read:
+                text, structured, latency = router._extract_with_opendataloader_hybrid(
+                    pdf_path
+                )
+
+        assert text == "Intro\nBody"
+        assert structured is None
+        assert latency >= 0
+        mock_convert.assert_called_once()
+        _, kwargs = mock_convert.call_args
+        assert kwargs["format"] == ["markdown", "json"]
+        assert kwargs["hybrid"] == "docling-fast"
+        assert kwargs["hybrid_url"] == "http://127.0.0.1:5002"
+        assert kwargs["hybrid_timeout"] == "12345"
+        assert kwargs["hybrid_fallback"] is False
+        mock_read.assert_called_once()
+
+    def test_extract_with_opendataloader_hybrid_failure_returns_empty(self, tmp_path):
+        pdf_path = tmp_path / "structured.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\n%EOF\n")
+
+        router = PDFRouter()
+        with patch.dict("sys.modules", {"opendataloader_pdf.wrapper": MagicMock()}):
+            from opendataloader_pdf.wrapper import convert as mock_convert
+
+            mock_convert.side_effect = RuntimeError("sidecar unavailable")
+            text, structured, latency = router._extract_with_opendataloader_hybrid(
+                pdf_path
+            )
+
+        assert text == ""
+        assert structured is None
+        assert latency >= 0
+
+    def test_odl_local_table_backend_stays_local(self, tmp_path, monkeypatch):
+        from src.models.odl_structured import HeadingNode, ODLStructuredDocument
+
+        pdf_path = tmp_path / "structured.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\n%EOF\n")
+        structured = ODLStructuredDocument(headings=[HeadingNode(level=1, text="Intro")])
+
+        monkeypatch.setenv(ODL_TABLE_BACKEND_ENV, "local")
 
         router = PDFRouter()
         with patch.object(
