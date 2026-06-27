@@ -1,7 +1,8 @@
 """Constants, dataclasses, and shared state for the seeding evaluation suite.
 
 This module has NO project imports — it sits at the bottom of the dependency graph.
-Timeouts are read directly from the model registry YAML (single source of truth).
+Generated stack priors are the primary source for live role metadata, with the
+model registry kept as the degraded/offline fallback.
 """
 
 from __future__ import annotations
@@ -116,14 +117,18 @@ def _read_stack_prior_default_roles(
 
 def _cost_tier_from_stack_priors(role_name: str, record: dict[str, Any]) -> int:
     role_name = _canonical_role_name(role_name)
+    model = record.get("model")
+    mem_gb = model.get("mem_gb") if isinstance(model, dict) else None
+    model_mem_tier = _cost_tier_from_model_mem(mem_gb)
+    if model_mem_tier is not None:
+        return model_mem_tier
+
     priors = record.get("priors")
     memory_cost = priors.get("memory_cost") if isinstance(priors, dict) else None
     try:
         cost = float(memory_cost)
     except (TypeError, ValueError):
-        model = record.get("model")
-        mem_gb = model.get("mem_gb") if isinstance(model, dict) else None
-        return _cost_tier_from_model_mem(mem_gb) or ROLE_COST_TIER.get(role_name, 3)
+        return ROLE_COST_TIER.get(role_name, 3)
     if cost <= 1.0:
         return ROLE_COST_TIER.get(role_name, 2)
     if cost <= 2.0:

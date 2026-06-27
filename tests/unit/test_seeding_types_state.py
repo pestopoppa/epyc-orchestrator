@@ -113,6 +113,70 @@ roles:
     assert "reap_25b_frontdoor" not in by_name
 
 
+def test_stack_prior_cost_tier_prefers_model_memory_over_stale_static_tiers(
+    tmp_path: Path,
+) -> None:
+    stack_priors = tmp_path / "stack_priors.yaml"
+    stack_priors.write_text(
+        """
+roles:
+  coder_escalation:
+    deployment_status: live_stack
+    serving:
+      endpoint: http://localhost:8084
+      ports: [8084]
+      server_role: coder_escalation
+    priors:
+      memory_cost: 1.0
+    model:
+      mem_gb: 37.0
+  vision_escalation:
+    deployment_status: live_stack
+    serving:
+      endpoint: http://localhost:8087
+      ports: [8087]
+      server_role: vision_escalation
+    priors:
+      memory_cost: 1.0
+    model:
+      mem_gb: 18.0
+  architect_general:
+    deployment_status: live_stack
+    serving:
+      endpoint: http://localhost:8083
+      ports: [8083]
+      server_role: architect_general
+    priors:
+      memory_cost: 1.0
+    model:
+      mem_gb: 69.0
+""",
+        encoding="utf-8",
+    )
+
+    roles = _MOD._read_stack_prior_active_roles(stack_priors)
+
+    by_name = {role["name"]: role for role in roles}
+    assert by_name["vision_escalation"]["cost_tier"] == 1
+    assert by_name["coder_escalation"]["cost_tier"] == 2
+    assert by_name["architect_general"]["cost_tier"] == 4
+
+
+def test_stack_prior_cost_tier_keeps_memory_cost_fallback_without_model_mem() -> None:
+    assert _MOD._cost_tier_from_stack_priors(
+        "vision_escalation",
+        {"priors": {"memory_cost": 1.0}},
+    ) == 3
+    assert _MOD._cost_tier_from_stack_priors(
+        "worker_general",
+        {"priors": {"memory_cost": 2.0}},
+    ) == 3
+    assert _MOD._cost_tier_from_stack_priors(
+        "unknown_role",
+        {"priors": {"memory_cost": "not-a-number"}},
+    ) == 3
+
+
 def test_read_stack_prior_active_roles_canonicalizes_worker_explore(
     tmp_path: Path,
 ) -> None:
