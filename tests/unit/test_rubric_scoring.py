@@ -13,6 +13,8 @@ from rubric_scoring import (  # noqa: E402
     MINDDR_PROCESS_DIMENSIONS,
     RubricCriterion,
     aggregate_rubric_score,
+    build_rubric_judge_prompt,
+    deterministic_rubric_fallback,
     judge_ranking_stability,
     saturated_items,
 )
@@ -58,6 +60,50 @@ def test_default_rubric_dimensions_include_minddr_and_draco_axes() -> None:
 
     assert result.score == 0.5
     assert result.missing_criteria == ()
+
+
+def test_build_rubric_judge_prompt_includes_contract_and_expected_hints() -> None:
+    prompt = build_rubric_judge_prompt(
+        task_prompt="Compare retrieval systems.",
+        answer="ColBERT trades latency for quality.",
+        expected_contains=("latency tradeoff", "benchmark names"),
+        criteria=(RubricCriterion("factual_accuracy"),),
+    )
+
+    assert "`scores` object" in prompt.prompt
+    assert "factual_accuracy" in prompt.prompt
+    assert "latency tradeoff" in prompt.prompt
+    assert "Compare retrieval systems." in prompt.prompt
+    assert prompt.criteria == (RubricCriterion("factual_accuracy"),)
+
+
+def test_deterministic_rubric_fallback_scores_structure_and_expected_coverage() -> None:
+    answer = """# Summary
+
+- ColBERT improves BEIR recall but adds latency.
+- Dense bi-encoders are cheaper.
+
+Because the evidence differs by benchmark, the tradeoff is deployment-specific.
+Source: https://example.test/paper and arxiv:2601.00001.
+"""
+
+    scores = deterministic_rubric_fallback(
+        answer,
+        expected_contains=("ColBERT BEIR latency", "dense cheaper"),
+    )
+
+    assert scores["factual_accuracy"] == 1.0
+    assert scores["outline"] > 0.0
+    assert scores["citation"] > 0.0
+    assert scores["reasoning_trajectory"] > 0.0
+    assert scores["content_stage"] > 0.8
+
+
+def test_deterministic_rubric_fallback_uses_tool_events_for_tool_dimension() -> None:
+    with_tools = deterministic_rubric_fallback("short answer", tool_events=("search", "fetch"))
+    without_tools = deterministic_rubric_fallback("short answer")
+
+    assert with_tools["tool_calls"] > without_tools["tool_calls"]
 
 
 def test_saturated_items_flags_any_candidate_above_threshold() -> None:

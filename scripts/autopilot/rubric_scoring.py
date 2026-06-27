@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from math import isfinite
+import re
 from typing import Literal, Mapping, Sequence
 
 from src.bradley_terry import BTResult, bradley_terry_from_scores
@@ -59,6 +60,14 @@ class JudgeStability:
     top_choice_agreement: bool = True
 
 
+@dataclass(frozen=True)
+class RubricPrompt:
+    """Structured judge prompt payload for EV-9 rubric scoring."""
+
+    prompt: str
+    criteria: tuple[RubricCriterion, ...]
+
+
 DEFAULT_RUBRIC_CRITERIA: tuple[RubricCriterion, ...] = (
     *(RubricCriterion(name) for name in MINDDR_PROCESS_DIMENSIONS),
     *(RubricCriterion(name) for name in DRACO_CONTENT_DIMENSIONS),
@@ -106,6 +115,67 @@ def aggregate_rubric_score(
         negative_penalty=negative_penalty,
         missing_criteria=tuple(missing),
     )
+
+
+def build_rubric_judge_prompt(
+    *,
+    task_prompt: str,
+    answer: str,
+    expected_contains: Sequence[str] = (),
+    criteria: Sequence[RubricCriterion] = DEFAULT_RUBRIC_CRITERIA,
+) -> RubricPrompt:
+    """Build the model-judge prompt without invoking a model."""
+
+    criteria_tuple = tuple(criteria)
+    criteria_lines = "\n".join(
+        f"- {criterion.name} ({criterion.polarity}, weight={criterion.weight:g})"
+        for criterion in criteria_tuple
+    )
+    expected_lines = "\n".join(f"- {item}" for item in expected_contains) or "- none"
+    prompt = (
+        "Score the research answer against the rubric. Return only JSON with a "
+        "`scores` object mapping each criterion name to a number in [0, 1], "
+        "plus `rationale` with one short sentence per criterion.\n\n"
+        "Criteria:\n"
+        f"{criteria_lines}\n\n"
+        "Expected structural hints:\n"
+        f"{expected_lines}\n\n"
+        "Task prompt:\n"
+        f"{task_prompt.strip()}\n\n"
+        "Answer:\n"
+        f"{answer.strip()}\n"
+    )
+    return RubricPrompt(prompt=prompt, criteria=criteria_tuple)
+
+
+def deterministic_rubric_fallback(
+    answer: str,
+    *,
+    expected_contains: Sequence[str] = (),
+    tool_events: Sequence[object] = (),
+) -> dict[str, float]:
+    """Cheap T1 fallback scores from structure and expected-hint coverage."""
+
+    text = answer or ""
+    normalized = text.lower()
+    expected_coverage = _expected_hint_coverage(normalized, expected_contains)
+    outline_score = _outline_score(text)
+    citation_score = _citation_score(text)
+    tool_score = _tool_score(text, tool_events)
+    reasoning_score = _reasoning_score(normalized)
+    breadth_score = min(1.0, (expected_coverage * 0.7) + (outline_score * 0.3))
+    presentation_score = min(1.0, (outline_score * 0.7) + (_length_score(text) * 0.3))
+    content_stage = min(1.0, (expected_coverage * 0.8) + (citation_score * 0.2))
+    return {
+        "reasoning_trajectory": reasoning_score,
+        "tool_calls": tool_score,
+        "outline": outline_score,
+        "content_stage": content_stage,
+        "factual_accuracy": expected_coverage,
+        "breadth_depth": breadth_score,
+        "presentation": presentation_score,
+        "citation": citation_score,
+    }
 
 
 def saturated_items(
@@ -193,6 +263,66 @@ def _pairwise_scores_from_scalar_scores(
     return pairwise
 
 
+def _expected_hint_coverage(text: str, expected_contains: Sequence[str]) -> float:
+    if not expected_contains:
+        return 0.0
+    covered = 0
+    for hint in expected_contains:
+        tokens = _content_tokens(hint)
+        if not tokens:
+            continue
+        token_hits = sum(1 for token in tokens if token in text)
+        if token_hits / len(tokens) >= 0.5:
+            covered += 1
+    return covered / len(expected_contains)
+
+
+def _content_tokens(text: str) -> list[str]:
+    stop = {
+        "and", "are", "for", "from", "must", "per", "the", "with",
+        "what", "which", "that", "this", "into", "each", "etc",
+    }
+    return [
+        token
+        for token in re.findall(r"[a-z0-9][a-z0-9.+-]{2,}", text.lower())
+        if token not in stop
+    ]
+
+
+def _outline_score(text: str) -> float:
+    heading_count = len(re.findall(r"(?m)^\s{0,3}#{1,4}\s+\S", text))
+    bullet_count = len(re.findall(r"(?m)^\s*(?:[-*]|\d+[.)])\s+\S", text))
+    table_count = len(re.findall(r"(?m)^\s*\|.+\|\s*$", text))
+    return min(1.0, (heading_count * 0.25) + (bullet_count * 0.12) + (table_count * 0.2))
+
+
+def _citation_score(text: str) -> float:
+    urls = len(re.findall(r"https?://", text))
+    citations = len(re.findall(r"\[[^\]]+\]\([^)]+\)|\b(?:arxiv|doi)\s*[:/]", text, re.I))
+    named_years = len(re.findall(r"\b[A-Z][A-Za-z0-9.-]+\s+\(?20\d{2}\)?", text))
+    return min(1.0, (urls * 0.25) + (citations * 0.25) + (named_years * 0.12))
+
+
+def _tool_score(text: str, tool_events: Sequence[object]) -> float:
+    if tool_events:
+        return min(1.0, len(tool_events) / 3.0)
+    tool_markers = len(re.findall(r"\b(?:searched|queried|retrieved|source|citation)\b", text, re.I))
+    return min(1.0, tool_markers / 4.0)
+
+
+def _reasoning_score(text: str) -> float:
+    markers = len(re.findall(
+        r"\b(?:because|therefore|however|compare|evidence|limitation|caveat|tradeoff|first|second|finally)\b",
+        text,
+    ))
+    return min(1.0, markers / 8.0)
+
+
+def _length_score(text: str) -> float:
+    words = len(re.findall(r"\S+", text))
+    return min(1.0, words / 250.0)
+
+
 def _mean_pairwise_spearman(rankings: Sequence[Sequence[str]]) -> float:
     if len(rankings) < 2:
         return 1.0
@@ -204,7 +334,8 @@ def _mean_pairwise_spearman(rankings: Sequence[Sequence[str]]) -> float:
 
 
 def _spearman(left: Sequence[str], right: Sequence[str]) -> float:
-    shared = [item for item in left if item in set(right)]
+    right_set = set(right)
+    shared = [item for item in left if item in right_set]
     n = len(shared)
     if n < 2:
         return 1.0
