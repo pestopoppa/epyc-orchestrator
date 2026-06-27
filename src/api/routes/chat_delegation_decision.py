@@ -11,10 +11,13 @@ from __future__ import annotations
 import json
 import logging
 import re
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from src.llm_primitives import LLMPrimitives
+
+from src.registry.stack_priors import DEFAULT_OUTPUT as DEFAULT_STACK_PRIORS
 
 from .chat_delegation_config import (
     _delegation_config,
@@ -261,37 +264,107 @@ def _parse_architect_decision(response: str) -> dict:
     }
 
 
-# Full budget for computation turns (code execution in mini-REPL)
-_ARCHITECT_TOKEN_BUDGET: dict[str, int] = {
-    "architect_general": 768,
-}
-
-# Tight budget for the routing decision (D|answer or I|brief:...|to:role).
-# architect_general (Qwen3-235B) reasons in plain text, exhausting 500 tokens
-# before emitting D|.  Give it 1500 so ~1000 goes to reasoning + 500 to answer.
-_ARCHITECT_DECISION_BUDGET: dict[str, int] = {
-    "architect_general": 512,
-}
+_DEFAULT_ARCHITECT_COMPUTE_N_TOKENS = 768
+_DEFAULT_ARCHITECT_DECISION_N_TOKENS = 512
+_DEFAULT_NON_ARCHITECT_COMPUTE_N_TOKENS = 512
+_DEFAULT_NON_ARCHITECT_DECISION_N_TOKENS = 256
+_DEGRADED_ARCHITECT_BUDGET_ROLES = frozenset({"architect_general"})
+_STACK_PRIOR_ARCHITECT_BUDGET_ROLES_CACHE: frozenset[str] | None = None
 
 
+def _architect_budget_roles_from_stack_priors(
+    stack_priors_path: Path = DEFAULT_STACK_PRIORS,
+) -> frozenset[str] | None:
+    """Return live architect roles from generated stack priors."""
+    try:
+        from src.registry.stack_priors import load_stack_priors_artifact, live_stack_role_records
+    except Exception:
+        return None
 
-def _architect_decision_token_budget(role: str) -> int:
+    if load_stack_priors_artifact(stack_priors_path) is None:
+        return None
+    return frozenset(
+        role for role in live_stack_role_records(stack_priors_path) if role.startswith("architect_")
+    )
+
+
+def _architect_budget_roles(
+    stack_priors_path: Path = DEFAULT_STACK_PRIORS,
+) -> frozenset[str]:
+    """Return roles that receive architect delegation budgets."""
+    global _STACK_PRIOR_ARCHITECT_BUDGET_ROLES_CACHE
+    if stack_priors_path == DEFAULT_STACK_PRIORS:
+        if _STACK_PRIOR_ARCHITECT_BUDGET_ROLES_CACHE is None:
+            _STACK_PRIOR_ARCHITECT_BUDGET_ROLES_CACHE = _architect_budget_roles_from_stack_priors(
+                stack_priors_path
+            )
+        derived = _STACK_PRIOR_ARCHITECT_BUDGET_ROLES_CACHE
+    else:
+        derived = _architect_budget_roles_from_stack_priors(stack_priors_path)
+    return derived if derived is not None else _DEGRADED_ARCHITECT_BUDGET_ROLES
+
+
+def _architect_compute_budget_map(
+    stack_priors_path: Path = DEFAULT_STACK_PRIORS,
+) -> dict[str, int]:
+    """Return live architect compute budgets keyed by generated role."""
+    return {
+        role: _DEFAULT_ARCHITECT_COMPUTE_N_TOKENS
+        for role in sorted(_architect_budget_roles(stack_priors_path))
+    }
+
+
+def _architect_decision_budget_map(
+    stack_priors_path: Path = DEFAULT_STACK_PRIORS,
+) -> dict[str, int]:
+    """Return live architect decision budgets keyed by generated role."""
+    return {
+        role: _DEFAULT_ARCHITECT_DECISION_N_TOKENS
+        for role in sorted(_architect_budget_roles(stack_priors_path))
+    }
+
+
+
+def _architect_decision_token_budget(
+    role: str,
+    *,
+    stack_priors_path: Path = DEFAULT_STACK_PRIORS,
+) -> int:
     """Token budget for architect routing decision (turn 0)."""
     cfg = _delegation_config()
-    default = _ARCHITECT_DECISION_BUDGET.get(role, 256)
+    default = _architect_decision_budget_map(stack_priors_path).get(
+        role,
+        _DEFAULT_NON_ARCHITECT_DECISION_N_TOKENS,
+    )
     if cfg.architect_decision_n_tokens_override > 0:
         return max(64, cfg.architect_decision_n_tokens_override)
     return max(64, default)
 
 
 
-def _architect_compute_token_budget(role: str) -> int:
+def _architect_compute_token_budget(
+    role: str,
+    *,
+    stack_priors_path: Path = DEFAULT_STACK_PRIORS,
+) -> int:
     """Token budget for architect computation follow-up turns."""
     cfg = _delegation_config()
-    default = _ARCHITECT_TOKEN_BUDGET.get(role, 512)
+    default = _architect_compute_budget_map(stack_priors_path).get(
+        role,
+        _DEFAULT_NON_ARCHITECT_COMPUTE_N_TOKENS,
+    )
     if cfg.architect_compute_n_tokens_override > 0:
         return max(128, cfg.architect_compute_n_tokens_override)
     return max(128, default)
+
+
+def __getattr__(name: str) -> object:
+    """Preserve legacy budget-map imports without freezing live role tables."""
+    if name == "_ARCHITECT_TOKEN_BUDGET":
+        return _architect_compute_budget_map()
+    if name == "_ARCHITECT_DECISION_BUDGET":
+        return _architect_decision_budget_map()
+    raise AttributeError(name)
 
 
 

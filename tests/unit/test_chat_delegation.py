@@ -8,6 +8,8 @@ _ARCHITECT_DECISION_BUDGET.
 
 import hashlib
 
+import yaml
+
 from src.api.routes.chat_delegation import (
     _strip_think,
     _extract_toon_decision,
@@ -18,6 +20,9 @@ from src.api.routes.chat_delegation import (
 from src.api.routes.chat_delegation_decision import (
     _ARCHITECT_TOKEN_BUDGET,
     _ARCHITECT_DECISION_BUDGET,
+    _architect_budget_roles,
+    _architect_compute_token_budget,
+    _architect_decision_token_budget,
 )
 from src.api.routes.chat_delegation_config import _valid_delegate_roles
 from src.api.routes.chat_delegation_reports import _build_compact_specialist_prompt
@@ -233,6 +238,67 @@ class TestConstants:
     def test_budgets_have_expected_keys(self):
         assert set(_ARCHITECT_TOKEN_BUDGET.keys()) == {"architect_general"}
         assert set(_ARCHITECT_DECISION_BUDGET.keys()) == {"architect_general"}
+
+    def test_architect_budgets_derive_from_live_stack_priors(self, tmp_path):
+        priors = tmp_path / "stack_priors.yaml"
+        priors.write_text(
+            yaml.safe_dump(
+                {
+                    "roles": {
+                        "architect_general": {"deployment_status": "live_stack"},
+                        "architect_research": {"deployment_status": "live_stack"},
+                        "candidate_architect": {
+                            "deployment_status": "benchmark_or_candidate"
+                        },
+                        "coder_escalation": {"deployment_status": "live_stack"},
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        assert _architect_budget_roles(priors) == frozenset(
+            {"architect_general", "architect_research"}
+        )
+        assert _architect_decision_token_budget(
+            "architect_research",
+            stack_priors_path=priors,
+        ) == 512
+        assert _architect_compute_token_budget(
+            "architect_research",
+            stack_priors_path=priors,
+        ) == 768
+        assert _architect_decision_token_budget(
+            "coder_escalation",
+            stack_priors_path=priors,
+        ) == 256
+        assert _architect_compute_token_budget(
+            "coder_escalation",
+            stack_priors_path=priors,
+        ) == 512
+
+    def test_empty_live_architect_budget_roles_do_not_use_degraded_fallback(self, tmp_path):
+        priors = tmp_path / "stack_priors.yaml"
+        priors.write_text(
+            yaml.safe_dump(
+                {
+                    "roles": {
+                        "coder_escalation": {"deployment_status": "live_stack"},
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        assert _architect_budget_roles(priors) == frozenset()
+        assert _architect_decision_token_budget(
+            "architect_general",
+            stack_priors_path=priors,
+        ) == 256
+        assert _architect_compute_token_budget(
+            "architect_general",
+            stack_priors_path=priors,
+        ) == 512
 
 
 # ── Specialist Prompt Preambles ─────────────────────────────────────────
