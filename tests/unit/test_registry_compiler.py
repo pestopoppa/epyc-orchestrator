@@ -116,3 +116,31 @@ def test_compile_lean_keeps_server_mode_backing_process_for_model_role(
         "worker_math",
         "toolrunner",
     }
+
+
+def test_compile_lean_drops_retired_runtime_timeout_aliases(tmp_path: Path) -> None:
+    master = {
+        "runtime_defaults": {
+            "timeouts": {
+                "default": 600,
+                "roles": {
+                    "worker_coder": 30,
+                    "worker_code": 60,
+                    "worker_general": 60,
+                },
+            }
+        },
+        "roles": {
+            "worker_general": {"model": {"path": "worker.gguf"}},
+        },
+    }
+    master_path = tmp_path / "model_registry.yaml"
+    master_path.write_text(yaml.safe_dump(master), encoding="utf-8")
+
+    lean = compile_lean(master_path, {"worker_general"})
+
+    role_timeouts = lean["runtime_defaults"]["timeouts"]["roles"]
+    assert role_timeouts == {
+        "worker_coder": 30,
+        "worker_general": 60,
+    }

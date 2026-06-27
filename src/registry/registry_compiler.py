@@ -50,6 +50,7 @@ _KEEP_SECTIONS_FULL = (
 )
 # Sections that are role-keyed dicts and need filtering.
 _FILTER_ROLE_KEYED = ("server_mode", "roles")
+_RETIRED_TIMEOUT_ROLE_ALIASES = frozenset({"worker_code"})
 
 
 def _server_mode_entry_roles(entry_name: str, entry: Any) -> set[str]:
@@ -76,6 +77,26 @@ def _filter_server_mode(server_mode: dict[str, Any], needed: set[str]) -> dict[s
         for name, entry in server_mode.items()
         if _server_mode_entry_roles(name, entry) & needed
     }
+
+
+def _normalize_runtime_defaults(runtime_defaults: Any) -> Any:
+    """Return runtime defaults after dropping retired compatibility aliases."""
+    if not isinstance(runtime_defaults, dict):
+        return runtime_defaults
+
+    normalized = dict(runtime_defaults)
+    timeouts = normalized.get("timeouts")
+    if isinstance(timeouts, dict):
+        normalized_timeouts = dict(timeouts)
+        role_timeouts = normalized_timeouts.get("roles")
+        if isinstance(role_timeouts, dict):
+            normalized_timeouts["roles"] = {
+                role: timeout
+                for role, timeout in role_timeouts.items()
+                if role not in _RETIRED_TIMEOUT_ROLE_ALIASES
+            }
+        normalized["timeouts"] = normalized_timeouts
+    return normalized
 
 
 def cache_key(master_path: Path, active_roles: set[str]) -> str:
@@ -171,7 +192,10 @@ def compile_lean(master_path: Path, active_roles: set[str]) -> dict:
     # Full-keep sections — small, no filtering needed.
     for section in _KEEP_SECTIONS_FULL:
         if section in master:
-            out[section] = master[section]
+            value = master[section]
+            if section == "runtime_defaults":
+                value = _normalize_runtime_defaults(value)
+            out[section] = value
 
     # Role-keyed sections — filter to needed roles only. `server_mode` entries
     # may be keyed by backing process name rather than route role name
@@ -310,9 +334,10 @@ def _main() -> int:
     if args.roles:
         active = set(args.roles)
     else:
-        # Import the launcher's manifest.
-        sys.path.insert(0, "/mnt/raid0/llm/epyc-orchestrator/scripts/server")
-        from orchestrator_stack import ROLE_LAUNCH_META  # type: ignore[import]
+        # Import the declarative manifest, not orchestrator_stack.py: the stack
+        # CLI owns argparse side effects at module import time.
+        sys.path.insert(0, "/mnt/raid0/llm/epyc-orchestrator")
+        from scripts.server.stack_manifest import ROLE_LAUNCH_META  # type: ignore[import]
         active = active_roles_from_launch_meta(ROLE_LAUNCH_META)
 
     if args.dry_run:
