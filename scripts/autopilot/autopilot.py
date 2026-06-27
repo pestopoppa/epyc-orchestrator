@@ -967,6 +967,67 @@ def _enforce_experiment_quota(
     return action, rationale
 
 
+def _maybe_force_frontier_rerun_action(
+    action: dict[str, Any],
+    state: dict[str, Any],
+    *,
+    blacklist: list[dict[str, Any]] | None = None,
+    rationale: dict[str, Any] | None = None,
+    trial_counter: int = 0,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Turn an active frontier-rerun marker into a concrete numeric trial."""
+    marker = state.get("frontier_rerun_required")
+    if not (isinstance(marker, dict) and marker.get("required")):
+        return action, rationale
+    if action.get("type") == "numeric_trial":
+        state["frontier_rerun_forced"] = None
+        return action, {
+            **(rationale or {}),
+            "frontier_rerun_satisfied_by_selected_action": True,
+        }
+
+    forced, blocked_reason = _first_unblacklisted_numeric_trial_action(
+        blacklist or [],
+        trial_counter=trial_counter,
+    )
+    if forced is None:
+        log.warning(
+            "Frontier rerun required, but all numeric_trial surfaces are "
+            "blacklisted: %s",
+            blocked_reason,
+        )
+        state["frontier_rerun_blocked"] = {
+            "trial_id": trial_counter,
+            "reason": blocked_reason,
+            "action": action,
+        }
+        return action, rationale
+
+    reason = str(marker.get("reason") or "frontier rerun required")
+    log.warning(
+        "Frontier rerun required (%s); forcing numeric_trial(surface=%s) "
+        "instead of '%s'.",
+        reason,
+        forced["surface"],
+        action.get("type", "unknown"),
+    )
+    state["frontier_rerun_forced"] = {
+        "trial_id": trial_counter,
+        "reason": reason,
+        "original_action": action,
+        "forced_action": forced,
+    }
+    state.pop("frontier_rerun_blocked", None)
+    return (
+        forced,
+        {
+            **(rationale or {}),
+            "frontier_rerun_forced": True,
+            "frontier_rerun_reason": reason,
+        },
+    )
+
+
 def _build_feature_flags_block(lab: Any) -> str:
     """Render live feature-flag state + dependency rules for the planner prompt.
 
@@ -3227,6 +3288,14 @@ def _run_loop_inner(
                 trial_counter=trial_counter,
                 enabled=gate.use_sequential,
             )
+
+        action, rationale = _maybe_force_frontier_rerun_action(
+            action,
+            state,
+            blacklist=blacklist,
+            rationale=rationale,
+            trial_counter=trial_counter,
+        )
 
         # ── 3. Act ───────────────────────────────────────────────
         # B2: Check failure blacklist before dispatch

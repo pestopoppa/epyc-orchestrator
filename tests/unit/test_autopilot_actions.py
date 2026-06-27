@@ -1205,6 +1205,77 @@ def test_quota_resets_counter_on_nonpassive_action() -> None:
     assert state["consecutive_passive_actions"] == 0
 
 
+def test_frontier_rerun_forces_numeric_trial() -> None:
+    state = {
+        "frontier_rerun_required": {
+            "required": True,
+            "reason": "v6 kernel era opened",
+        }
+    }
+    action, rationale = autopilot._maybe_force_frontier_rerun_action(
+        {"type": "structural_prune", "file": "rules.md"},
+        state,
+        rationale={"falsifier": "x"},
+        trial_counter=0,
+    )
+
+    assert action == {"type": "numeric_trial", "surface": "think_harder", "params": {}}
+    assert rationale["frontier_rerun_forced"] is True
+    assert rationale["frontier_rerun_reason"] == "v6 kernel era opened"
+    assert state["frontier_rerun_forced"]["original_action"]["type"] == "structural_prune"
+
+
+def test_frontier_rerun_accepts_selected_numeric_trial() -> None:
+    state = {
+        "frontier_rerun_required": {
+            "required": True,
+            "reason": "v6 kernel era opened",
+        }
+    }
+    selected = {"type": "numeric_trial", "surface": "monitor", "params": {}}
+    action, rationale = autopilot._maybe_force_frontier_rerun_action(
+        selected,
+        state,
+        rationale={},
+        trial_counter=1,
+    )
+
+    assert action == selected
+    assert rationale["frontier_rerun_satisfied_by_selected_action"] is True
+    assert state["frontier_rerun_forced"] is None
+
+
+def test_frontier_rerun_records_block_when_all_numeric_surfaces_blacklisted() -> None:
+    state = {
+        "frontier_rerun_required": {
+            "required": True,
+            "reason": "v6 kernel era opened",
+        }
+    }
+    requested = {"type": "structural_prune", "file": "rules.md"}
+    action, rationale = autopilot._maybe_force_frontier_rerun_action(
+        requested,
+        state,
+        blacklist=[
+            {
+                "pattern": {
+                    "type": "numeric_trial",
+                    "surface": surface,
+                    "params": {},
+                },
+                "reason": f"blocked {surface}",
+            }
+            for surface in autopilot._QUOTA_NUMERIC_SURFACES
+        ],
+        rationale={"falsifier": "x"},
+        trial_counter=3,
+    )
+
+    assert action == requested
+    assert rationale == {"falsifier": "x"}
+    assert state["frontier_rerun_blocked"]["trial_id"] == 3
+
+
 # ----- non-executing-action residue feedback -----
 
 
