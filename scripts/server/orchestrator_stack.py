@@ -1815,13 +1815,13 @@ def main() -> int:
     )
     start_parser.add_argument(
         "--compile-registry",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=True,
         help="Recompile orchestration/model_registry.yaml from the master "
-        "registry at epyc-inference-research before starting. Cache-aware "
-        "(no-op if neither master nor active role set has changed). "
-        "See src/registry/registry_compiler.py for details. Set "
-        "ORCHESTRATOR_REGISTRY_NO_COMPILE=1 to disable when this flag "
-        "is on.",
+        "registry at epyc-inference-research before starting (default: on). "
+        "Cache-aware: no-op if neither master nor active role set has changed. "
+        "Use --no-compile-registry or set ORCHESTRATOR_REGISTRY_NO_COMPILE=1 "
+        "to disable.",
     )
     start_parser.add_argument(
         "--compile-descriptors",

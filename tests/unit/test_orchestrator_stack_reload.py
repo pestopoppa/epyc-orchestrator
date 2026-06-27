@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from argparse import Namespace
 from pathlib import Path
 
@@ -72,6 +73,62 @@ def test_repo_short_sha_returns_none_on_git_failure(monkeypatch, tmp_path: Path)
     monkeypatch.setattr(stack.subprocess, "run", fake_run)
 
     assert stack._repo_short_sha(tmp_path) is None
+
+
+def test_start_parser_compiles_registry_by_default(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_cmd_start(args: Namespace) -> int:
+        captured["compile_registry"] = args.compile_registry
+        return 0
+
+    monkeypatch.setattr(stack_commands, "cmd_start", fake_cmd_start)
+    monkeypatch.setattr(sys, "argv", ["orchestrator_stack.py", "start"])
+
+    assert stack.main() == 0
+    assert captured["compile_registry"] is True
+
+
+def test_start_parser_accepts_no_compile_registry(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_cmd_start(args: Namespace) -> int:
+        captured["compile_registry"] = args.compile_registry
+        return 0
+
+    monkeypatch.setattr(stack_commands, "cmd_start", fake_cmd_start)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["orchestrator_stack.py", "start", "--no-compile-registry"],
+    )
+
+    assert stack.main() == 0
+    assert captured["compile_registry"] is False
+
+
+def test_cmd_start_compiles_registry_by_default_arg_absence(monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_load_or_compile(**kwargs):
+        calls.append(kwargs)
+        return {"roles": {}}
+
+    import src.registry.registry_compiler as compiler
+
+    monkeypatch.setattr(compiler, "load_or_compile", fake_load_or_compile)
+
+    args = _stack_gate_args(
+        stack_profile="default",
+        validate_only=True,
+        compile_descriptors=False,
+        allow_incomplete_descriptors=False,
+    )
+
+    assert stack_commands.cmd_start(args) == 0
+    assert len(calls) == 1
+    assert calls[0]["output_path"].name == "model_registry.yaml"
+    assert calls[0]["cache_key_path"].name == ".lean_cache_key"
 
 
 def test_stack_change_launch_gate_failure_blocks_launch(monkeypatch, capsys) -> None:

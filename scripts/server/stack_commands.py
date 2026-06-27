@@ -648,21 +648,16 @@ def cmd_start(args: argparse.Namespace) -> int:
     )
     _cache_key_path = _registry_yaml.parent / ".lean_cache_key"
 
-    # 2026-05-09: lean-registry compile (opt-in via --compile-registry).
-    # When enabled, regenerates orchestration/model_registry.yaml from
+    # 2026-06-27: lean-registry compile is default-on for normal starts.
+    # Regenerates orchestration/model_registry.yaml from
     # the master at epyc-inference-research/orchestration/model_registry.yaml,
     # filtered to active roles per ROLE_LAUNCH_META + their transitive
     # draft/alias deps. Cache-keyed by SHA-256 of (master content + active
     # role names) — re-runs without changes are no-ops.
     #
-    # Default OFF until the master + orchestrator are reconciled (today the
-    # master itself has an internal acceleration disagreement on
-    # architect_general — `roles.X.acceleration.type=speculative_decoding`
-    # vs `server_mode.X.acceleration.type=moe_expert_reduction`). Fix the
-    # master first, then enable this flag in the start command.
-    #
-    # Escape hatch (when ON): set ORCHESTRATOR_REGISTRY_NO_COMPILE=1 to bypass.
-    if getattr(args, "compile_registry", False):
+    # Escape hatches: pass --no-compile-registry or set
+    # ORCHESTRATOR_REGISTRY_NO_COMPILE=1 to bypass.
+    if getattr(args, "compile_registry", True):
         try:
             from src.registry.registry_compiler import (
                 active_roles_from_launch_meta,

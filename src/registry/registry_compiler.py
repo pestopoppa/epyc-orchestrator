@@ -281,8 +281,18 @@ def load_or_compile(
             return cached
         # Cached file unparseable — fall through to recompile.
 
-    # Compile and persist.
+    # Compile, then avoid rewriting an already-current generated file when only
+    # the external cache-key file is missing or stale. This keeps default-on
+    # startup from dirtying the tracked registry via timestamp-only banner churn.
     compiled = compile_lean(master_path, active_roles)
+    if output_path.exists():
+        with output_path.open("r", encoding="utf-8") as f:
+            existing = yaml.safe_load(f)
+        if existing == compiled:
+            cache_key_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_key_path.write_text(current_key)
+            return compiled
+
     banner = _format_header_banner(master_path, active_roles, current_key)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8") as f:

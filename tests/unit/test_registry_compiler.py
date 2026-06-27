@@ -6,7 +6,9 @@ import yaml
 
 from src.registry.registry_compiler import (
     active_roles_from_launch_meta,
+    cache_key,
     compile_lean,
+    load_or_compile,
 )
 
 
@@ -174,3 +176,46 @@ def test_compile_lean_preserves_small_registry_metadata_sections(tmp_path: Path)
     assert lean["kernel_audits"] == master["kernel_audits"]
     assert "cold_candidate" not in lean["roles"]
     assert "cold_candidate" not in lean["server_mode"]
+
+
+def test_load_or_compile_does_not_rewrite_equivalent_output_without_cache_key(
+    tmp_path: Path,
+) -> None:
+    master = {
+        "runtime_defaults": {"temperature": 0.2},
+        "roles": {
+            "worker_general": {"model": {"path": "worker.gguf"}},
+            "cold_candidate": {"model": {"path": "cold.gguf"}},
+        },
+        "server_mode": {
+            "worker": {"model_role": "worker_general"},
+            "cold_candidate": {"model_role": "cold_candidate"},
+        },
+    }
+    master_path = tmp_path / "master.yaml"
+    output_path = tmp_path / "model_registry.yaml"
+    cache_key_path = tmp_path / ".lean_cache_key"
+    active_roles = {"worker_general"}
+
+    master_path.write_text(yaml.safe_dump(master), encoding="utf-8")
+    compiled = compile_lean(master_path, active_roles)
+    output_text = "# old generated banner\n" + yaml.safe_dump(
+        compiled,
+        sort_keys=False,
+        default_flow_style=False,
+    )
+    output_path.write_text(output_text, encoding="utf-8")
+
+    result = load_or_compile(
+        master_path=master_path,
+        active_roles=active_roles,
+        output_path=output_path,
+        cache_key_path=cache_key_path,
+    )
+
+    assert result == compiled
+    assert output_path.read_text(encoding="utf-8") == output_text
+    assert cache_key_path.read_text(encoding="utf-8") == cache_key(
+        master_path,
+        active_roles,
+    )
