@@ -382,9 +382,46 @@ def test_pairwise_holdout_plan_filters_to_audit_collection_targets(tmp_path: Pat
         summary["collection_guidance"]["seeding_eval_command_template"]
         == "uv run python scripts/benchmark/seed_specialist_routing.py "
         "--suites <suite> --roles <actions_to_evaluate_on_same_source_record> "
-        "--modes direct repl --sample-size <n> --dry-run "
-        "--output <benchmarks/results/eval/seeding_*.jsonl>"
+        "--modes direct --sample-size <n> --dry-run "
+        "--output <benchmarks/results/eval/seeding_a9_*.json>"
     )
+    assert summary["collection_batches"] == [
+        {
+            "target": "source_family:seeding_eval:coder_escalation>frontdoor",
+            "expected_source_family": "seeding_eval",
+            "suite_argument": "all",
+            "roles_argument": ["coder_escalation", "frontdoor"],
+            "modes_argument": ["direct"],
+            "sample_size": 19,
+            "durable_source_path": (
+                "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/"
+                "eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_"
+                "<YYYYMMDDTHHMMSSZ>.json"
+            ),
+            "checkpoint_note": (
+                "seed_specialist_routing.py also writes a seeding_*.jsonl "
+                "checkpoint under benchmarks/results/eval; use the JSON path "
+                "above when the target explicitly requires orchestrator_live_seed"
+            ),
+            "dry_run_semantics": (
+                "--dry-run still performs scoring/evaluation; it only prevents "
+                "reward injection into runtime memory."
+            ),
+            "command": (
+                "uv run python scripts/benchmark/seed_specialist_routing.py "
+                "--suites all --roles coder_escalation frontdoor "
+                "--modes direct --sample-size 19 --dry-run --output "
+                "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/"
+                "eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_"
+                "<YYYYMMDDTHHMMSSZ>.json"
+            ),
+            "can_run_during_active_autopilot": False,
+            "reason": (
+                "Consumes live model slots and should be run in a coordinated "
+                "measurement window so A9 evidence is not mixed with W6/T2 accrual."
+            ),
+        }
+    ]
     assert summary["selected_groups"][0]["matched_collection_targets"] == [
         {
             "stratum_field": "source_family",

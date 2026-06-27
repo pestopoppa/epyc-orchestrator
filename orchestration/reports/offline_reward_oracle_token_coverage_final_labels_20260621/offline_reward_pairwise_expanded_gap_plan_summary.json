@@ -7,18 +7,192 @@
   "candidate_schema_version": "offline_reward_verifier_expansion_candidate.v1",
   "candidate_source_family_counts": {},
   "candidate_suite_counts": {},
+  "collection_batches": [
+    {
+      "can_run_during_active_autopilot": false,
+      "checkpoint_note": "seed_specialist_routing.py also writes a seeding_*.jsonl checkpoint under benchmarks/results/eval; use the JSON path above when the target explicitly requires orchestrator_live_seed",
+      "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites all --roles architect_general frontdoor --modes direct --sample-size 20 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/orchestrator/seeding_live_a9_source_family_orchestrator_live_seed_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
+      "dry_run_semantics": "--dry-run still performs scoring/evaluation; it only prevents reward injection into runtime memory.",
+      "durable_source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/orchestrator/seeding_live_a9_source_family_orchestrator_live_seed_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
+      "expected_source_family": "orchestrator_live_seed",
+      "modes_argument": [
+        "direct"
+      ],
+      "reason": "Consumes live model slots and should be run in a coordinated measurement window so A9 evidence is not mixed with W6/T2 accrual.",
+      "roles_argument": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "sample_size": 20,
+      "suite_argument": "all",
+      "target": "source_family:orchestrator_live_seed:architect_general>frontdoor"
+    },
+    {
+      "can_run_during_active_autopilot": false,
+      "checkpoint_note": "seed_specialist_routing.py also writes a seeding_*.jsonl checkpoint under benchmarks/results/eval; use the JSON path above when the target explicitly requires orchestrator_live_seed",
+      "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites all --roles architect_general coder_escalation --modes direct --sample-size 20 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
+      "dry_run_semantics": "--dry-run still performs scoring/evaluation; it only prevents reward injection into runtime memory.",
+      "durable_source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
+      "expected_source_family": "seeding_eval",
+      "modes_argument": [
+        "direct"
+      ],
+      "reason": "Consumes live model slots and should be run in a coordinated measurement window so A9 evidence is not mixed with W6/T2 accrual.",
+      "roles_argument": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "sample_size": 20,
+      "suite_argument": "all",
+      "target": "source_family:seeding_eval:architect_general>coder_escalation"
+    },
+    {
+      "can_run_during_active_autopilot": false,
+      "checkpoint_note": "seed_specialist_routing.py also writes a seeding_*.jsonl checkpoint under benchmarks/results/eval; use the JSON path above when the target explicitly requires orchestrator_live_seed",
+      "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites all --roles architect_general frontdoor --modes direct --sample-size 20 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
+      "dry_run_semantics": "--dry-run still performs scoring/evaluation; it only prevents reward injection into runtime memory.",
+      "durable_source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
+      "expected_source_family": "seeding_eval",
+      "modes_argument": [
+        "direct"
+      ],
+      "reason": "Consumes live model slots and should be run in a coordinated measurement window so A9 evidence is not mixed with W6/T2 accrual.",
+      "roles_argument": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "sample_size": 20,
+      "suite_argument": "all",
+      "target": "source_family:seeding_eval:architect_general>frontdoor"
+    },
+    {
+      "can_run_during_active_autopilot": false,
+      "checkpoint_note": "seed_specialist_routing.py also writes a seeding_*.jsonl checkpoint under benchmarks/results/eval; use the JSON path above when the target explicitly requires orchestrator_live_seed",
+      "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites general --roles architect_general coder_escalation --modes direct --sample-size 20 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
+      "dry_run_semantics": "--dry-run still performs scoring/evaluation; it only prevents reward injection into runtime memory.",
+      "durable_source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
+      "expected_source_family": "seeding_eval",
+      "modes_argument": [
+        "direct"
+      ],
+      "reason": "Consumes live model slots and should be run in a coordinated measurement window so A9 evidence is not mixed with W6/T2 accrual.",
+      "roles_argument": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "sample_size": 20,
+      "suite_argument": "general",
+      "target": "suite:general:architect_general>coder_escalation"
+    },
+    {
+      "can_run_during_active_autopilot": false,
+      "checkpoint_note": "seed_specialist_routing.py also writes a seeding_*.jsonl checkpoint under benchmarks/results/eval; use the JSON path above when the target explicitly requires orchestrator_live_seed",
+      "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites hotpotqa --roles architect_general frontdoor --modes direct --sample-size 20 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
+      "dry_run_semantics": "--dry-run still performs scoring/evaluation; it only prevents reward injection into runtime memory.",
+      "durable_source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
+      "expected_source_family": "seeding_eval",
+      "modes_argument": [
+        "direct"
+      ],
+      "reason": "Consumes live model slots and should be run in a coordinated measurement window so A9 evidence is not mixed with W6/T2 accrual.",
+      "roles_argument": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "sample_size": 20,
+      "suite_argument": "hotpotqa",
+      "target": "suite:hotpotqa:architect_general>frontdoor"
+    },
+    {
+      "can_run_during_active_autopilot": false,
+      "checkpoint_note": "seed_specialist_routing.py also writes a seeding_*.jsonl checkpoint under benchmarks/results/eval; use the JSON path above when the target explicitly requires orchestrator_live_seed",
+      "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites instruction_precision --roles architect_general coder_escalation --modes direct --sample-size 20 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_instruction_precision_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
+      "dry_run_semantics": "--dry-run still performs scoring/evaluation; it only prevents reward injection into runtime memory.",
+      "durable_source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_instruction_precision_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
+      "expected_source_family": "seeding_eval",
+      "modes_argument": [
+        "direct"
+      ],
+      "reason": "Consumes live model slots and should be run in a coordinated measurement window so A9 evidence is not mixed with W6/T2 accrual.",
+      "roles_argument": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "sample_size": 20,
+      "suite_argument": "instruction_precision",
+      "target": "suite:instruction_precision:architect_general>coder_escalation"
+    },
+    {
+      "can_run_during_active_autopilot": false,
+      "checkpoint_note": "seed_specialist_routing.py also writes a seeding_*.jsonl checkpoint under benchmarks/results/eval; use the JSON path above when the target explicitly requires orchestrator_live_seed",
+      "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites instruction_precision --roles architect_general frontdoor --modes direct --sample-size 20 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_instruction_precision_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
+      "dry_run_semantics": "--dry-run still performs scoring/evaluation; it only prevents reward injection into runtime memory.",
+      "durable_source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_instruction_precision_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
+      "expected_source_family": "seeding_eval",
+      "modes_argument": [
+        "direct"
+      ],
+      "reason": "Consumes live model slots and should be run in a coordinated measurement window so A9 evidence is not mixed with W6/T2 accrual.",
+      "roles_argument": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "sample_size": 20,
+      "suite_argument": "instruction_precision",
+      "target": "suite:instruction_precision:architect_general>frontdoor"
+    },
+    {
+      "can_run_during_active_autopilot": false,
+      "checkpoint_note": "seed_specialist_routing.py also writes a seeding_*.jsonl checkpoint under benchmarks/results/eval; use the JSON path above when the target explicitly requires orchestrator_live_seed",
+      "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites simpleqa --roles architect_general coder_escalation --modes direct --sample-size 20 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
+      "dry_run_semantics": "--dry-run still performs scoring/evaluation; it only prevents reward injection into runtime memory.",
+      "durable_source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
+      "expected_source_family": "seeding_eval",
+      "modes_argument": [
+        "direct"
+      ],
+      "reason": "Consumes live model slots and should be run in a coordinated measurement window so A9 evidence is not mixed with W6/T2 accrual.",
+      "roles_argument": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "sample_size": 20,
+      "suite_argument": "simpleqa",
+      "target": "suite:simpleqa:architect_general>coder_escalation"
+    },
+    {
+      "can_run_during_active_autopilot": false,
+      "checkpoint_note": "seed_specialist_routing.py also writes a seeding_*.jsonl checkpoint under benchmarks/results/eval; use the JSON path above when the target explicitly requires orchestrator_live_seed",
+      "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites thinking --roles architect_general coder_escalation --modes direct --sample-size 20 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_thinking_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
+      "dry_run_semantics": "--dry-run still performs scoring/evaluation; it only prevents reward injection into runtime memory.",
+      "durable_source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_thinking_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
+      "expected_source_family": "seeding_eval",
+      "modes_argument": [
+        "direct"
+      ],
+      "reason": "Consumes live model slots and should be run in a coordinated measurement window so A9 evidence is not mixed with W6/T2 accrual.",
+      "roles_argument": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "sample_size": 20,
+      "suite_argument": "thinking",
+      "target": "suite:thinking:architect_general>coder_escalation"
+    }
+  ],
   "collection_guidance": {
     "orchestrator_live_seed_note": "add records under benchmarks/results/orchestrator/seeding_live*.json or an equivalent orchestrator source path so source_family resolves to orchestrator_live_seed",
     "post_collection_pipeline": [
-      "plan_offline_reward_pairwise_holdout_expansion.py",
-      "build_offline_reward_oracle_rows.py --candidate-manifest-jsonl",
-      "score_offline_reward_oracle_token_coverage",
-      "export_offline_reward_expansion_labels.py",
-      "build_offline_reward_feature_manifest.py",
-      "build_offline_reward_pairwise_contract.py",
-      "evaluate_offline_reward_pairwise_ranker.py"
+      "uv run python scripts/graph_router/plan_offline_reward_pairwise_holdout_expansion.py --input /mnt/raid0/llm/epyc-inference-research/benchmarks/results --existing-manifest /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_feature_manifest_with_pairwise_audit_target_expansions.jsonl --existing-pairwise-jsonl /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_preference_contract_score_ordered_audit_target_expanded.jsonl --collection-targets-json /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_direction_audit.json --candidates-jsonl /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_candidates.jsonl --summary-json /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_plan_summary.json --summary-md /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_plan_summary.md --target-source-families '' --target-suites ''",
+      "uv run python scripts/graph_router/build_offline_reward_oracle_rows.py --input <new_collection_json_or_jsonl> --candidate-manifest-jsonl /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_candidates.jsonl --output-jsonl /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_oracle_rows.jsonl --summary-json /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_rows_summary.json",
+      "uv run python scripts/graph_router/score_offline_reward_oracle_token_coverage.py --input-jsonl /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_oracle_rows.jsonl --output-jsonl /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_scored_rows.jsonl --summary-json /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_score_summary.json",
+      "uv run python scripts/graph_router/export_offline_reward_expansion_labels.py --manifest-json /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/adoption_manifest.json --scored-rows-jsonl /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_scored_rows.jsonl --candidates-jsonl /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_candidates.jsonl --labels-jsonl /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_labels.jsonl --summary-json /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_labels_summary.json --summary-md /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_labels_summary.md",
+      "uv run python scripts/graph_router/build_offline_reward_feature_manifest.py --labels-jsonl /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_labels.jsonl --manifest-jsonl /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_feature_manifest_pairwise_expanded_gap.jsonl --summary-json /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_feature_manifest_pairwise_expanded_gap_summary.json --summary-md /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_feature_manifest_pairwise_expanded_gap_summary.md",
+      "uv run python scripts/graph_router/build_offline_reward_pairwise_contract.py --manifest-jsonl /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_feature_manifest_pairwise_expanded_gap.jsonl --output-jsonl /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_preference_contract_expanded_gap.jsonl --summary-json /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_preference_contract_expanded_gap_summary.json --summary-md /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_preference_contract_expanded_gap_summary.md",
+      "uv run python scripts/graph_router/evaluate_offline_reward_pairwise_ranker.py --pairwise-jsonl /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_preference_contract_expanded_gap.jsonl --summary-json /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_ranker_expanded_gap_summary.json --summary-md /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_ranker_expanded_gap_summary.md"
     ],
-    "seeding_eval_command_template": "uv run python scripts/benchmark/seed_specialist_routing.py --suites <suite> --roles <actions_to_evaluate_on_same_source_record> --modes direct repl --sample-size <n> --dry-run --output <benchmarks/results/eval/seeding_*.jsonl>"
+    "seeding_eval_command_template": "uv run python scripts/benchmark/seed_specialist_routing.py --suites <suite> --roles <actions_to_evaluate_on_same_source_record> --modes direct --sample-size <n> --dry-run --output <benchmarks/results/eval/seeding_a9_*.json>",
+    "workspace": "/mnt/raid0/llm/epyc-orchestrator"
   },
   "collection_target_count": 9,
   "collection_targets_json": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_direction_audit.json",

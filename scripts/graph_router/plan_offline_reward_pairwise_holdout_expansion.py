@@ -258,6 +258,135 @@ def _collection_requirements(
     return requirements
 
 
+def _slug(value: str) -> str:
+    out = []
+    for char in value.lower():
+        if char.isalnum():
+            out.append(char)
+        else:
+            out.append("_")
+    compact = "_".join(part for part in "".join(out).split("_") if part)
+    return compact or "target"
+
+
+def _collection_batches(requirements: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    batches: list[dict[str, Any]] = []
+    for requirement in requirements:
+        if int(requirement.get("suggested_min_new_source_records") or 0) <= 0:
+            continue
+        actions = list(requirement["actions_to_evaluate_on_same_source_record"])
+        roles = " ".join(actions)
+        sample_size = int(requirement.get("suggested_min_new_source_records") or 20)
+        target = str(requirement["target"])
+        target_slug = _slug(target)
+        stratum_field = str(requirement["stratum_field"])
+        stratum_value = str(requirement["stratum_value"])
+        suite = stratum_value if stratum_field == "suite" else "all"
+        if stratum_field == "source_family" and stratum_value == "orchestrator_live_seed":
+            output = (
+                "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/"
+                f"orchestrator/seeding_live_a9_{target_slug}_<YYYYMMDDTHHMMSSZ>.json"
+            )
+            expected_source_family = "orchestrator_live_seed"
+        else:
+            output = (
+                "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/"
+                f"eval/seeding_a9_{target_slug}_<YYYYMMDDTHHMMSSZ>.json"
+            )
+            expected_source_family = "seeding_eval"
+        command = (
+            "uv run python scripts/benchmark/seed_specialist_routing.py "
+            f"--suites {suite} --roles {roles} --modes direct "
+            f"--sample-size {sample_size} --dry-run --output {output}"
+        )
+        batches.append(
+            {
+                "target": target,
+                "expected_source_family": expected_source_family,
+                "suite_argument": suite,
+                "roles_argument": actions,
+                "modes_argument": ["direct"],
+                "sample_size": sample_size,
+                "durable_source_path": output,
+                "checkpoint_note": (
+                    "seed_specialist_routing.py also writes a seeding_*.jsonl "
+                    "checkpoint under benchmarks/results/eval; use the JSON path "
+                    "above when the target explicitly requires orchestrator_live_seed"
+                ),
+                "dry_run_semantics": (
+                    "--dry-run still performs scoring/evaluation; it only prevents "
+                    "reward injection into runtime memory."
+                ),
+                "command": command,
+                "can_run_during_active_autopilot": False,
+                "reason": (
+                    "Consumes live model slots and should be run in a coordinated "
+                    "measurement window so A9 evidence is not mixed with W6/T2 accrual."
+                ),
+            }
+        )
+    return batches
+
+
+def _post_collection_commands() -> list[str]:
+    report_dir = str(DEFAULT_REPORT_DIR)
+    return [
+        (
+            "uv run python scripts/graph_router/plan_offline_reward_pairwise_holdout_expansion.py "
+            f"--input /mnt/raid0/llm/epyc-inference-research/benchmarks/results "
+            f"--existing-manifest {report_dir}/offline_reward_feature_manifest_with_pairwise_audit_target_expansions.jsonl "
+            f"--existing-pairwise-jsonl {report_dir}/offline_reward_pairwise_preference_contract_score_ordered_audit_target_expanded.jsonl "
+            f"--collection-targets-json {report_dir}/offline_reward_pairwise_expanded_gap_direction_audit.json "
+            f"--candidates-jsonl {report_dir}/offline_reward_pairwise_expanded_gap_candidates.jsonl "
+            f"--summary-json {report_dir}/offline_reward_pairwise_expanded_gap_plan_summary.json "
+            f"--summary-md {report_dir}/offline_reward_pairwise_expanded_gap_plan_summary.md "
+            "--target-source-families '' --target-suites ''"
+        ),
+        (
+            "uv run python scripts/graph_router/build_offline_reward_oracle_rows.py "
+            "--input <new_collection_json_or_jsonl> "
+            f"--candidate-manifest-jsonl {report_dir}/offline_reward_pairwise_expanded_gap_candidates.jsonl "
+            f"--output-jsonl {report_dir}/offline_reward_pairwise_expanded_gap_oracle_rows.jsonl "
+            f"--summary-json {report_dir}/offline_reward_pairwise_expanded_gap_rows_summary.json"
+        ),
+        (
+            "uv run python scripts/graph_router/score_offline_reward_oracle_token_coverage.py "
+            f"--input-jsonl {report_dir}/offline_reward_pairwise_expanded_gap_oracle_rows.jsonl "
+            f"--output-jsonl {report_dir}/offline_reward_pairwise_expanded_gap_scored_rows.jsonl "
+            f"--summary-json {report_dir}/offline_reward_pairwise_expanded_gap_score_summary.json"
+        ),
+        (
+            "uv run python scripts/graph_router/export_offline_reward_expansion_labels.py "
+            f"--manifest-json {report_dir}/adoption_manifest.json "
+            f"--scored-rows-jsonl {report_dir}/offline_reward_pairwise_expanded_gap_scored_rows.jsonl "
+            f"--candidates-jsonl {report_dir}/offline_reward_pairwise_expanded_gap_candidates.jsonl "
+            f"--labels-jsonl {report_dir}/offline_reward_pairwise_expanded_gap_labels.jsonl "
+            f"--summary-json {report_dir}/offline_reward_pairwise_expanded_gap_labels_summary.json "
+            f"--summary-md {report_dir}/offline_reward_pairwise_expanded_gap_labels_summary.md"
+        ),
+        (
+            "uv run python scripts/graph_router/build_offline_reward_feature_manifest.py "
+            f"--labels-jsonl {report_dir}/offline_reward_pairwise_expanded_gap_labels.jsonl "
+            f"--manifest-jsonl {report_dir}/offline_reward_feature_manifest_pairwise_expanded_gap.jsonl "
+            f"--summary-json {report_dir}/offline_reward_feature_manifest_pairwise_expanded_gap_summary.json "
+            f"--summary-md {report_dir}/offline_reward_feature_manifest_pairwise_expanded_gap_summary.md"
+        ),
+        (
+            "uv run python scripts/graph_router/build_offline_reward_pairwise_contract.py "
+            f"--manifest-jsonl {report_dir}/offline_reward_feature_manifest_pairwise_expanded_gap.jsonl "
+            f"--output-jsonl {report_dir}/offline_reward_pairwise_preference_contract_expanded_gap.jsonl "
+            f"--summary-json {report_dir}/offline_reward_pairwise_preference_contract_expanded_gap_summary.json "
+            f"--summary-md {report_dir}/offline_reward_pairwise_preference_contract_expanded_gap_summary.md"
+        ),
+        (
+            "uv run python scripts/graph_router/evaluate_offline_reward_pairwise_ranker.py "
+            f"--pairwise-jsonl {report_dir}/offline_reward_pairwise_preference_contract_expanded_gap.jsonl "
+            f"--summary-json {report_dir}/offline_reward_pairwise_ranker_expanded_gap_summary.json "
+            f"--summary-md {report_dir}/offline_reward_pairwise_ranker_expanded_gap_summary.md"
+        ),
+    ]
+
+
 def _pair_keys(actions: set[str]) -> set[str]:
     return {_canonical_action_pair(pair) for pair in combinations(sorted(actions), 2)}
 
@@ -540,6 +669,7 @@ def build_plan(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str
         collection_targets,
         matched_collection_target_counts,
     )
+    collection_batches = _collection_batches(source_record_requirements)
 
     status = (
         "expansion_plan_ready"
@@ -565,6 +695,7 @@ def build_plan(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str
         "matched_collection_target_counts": dict(sorted(matched_collection_target_counts.items())),
         "unmatched_collection_targets": unmatched_collection_targets,
         "source_record_requirements": source_record_requirements,
+        "collection_batches": collection_batches,
         "candidate_rows": len(selected_candidates),
         "candidate_groups": len(selected_groups),
         "candidate_action_counts": dict(sorted(action_counts.items())),
@@ -594,26 +725,19 @@ def build_plan(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str
             "commits_prompt_reference_response_text": False,
         },
         "collection_guidance": {
+            "workspace": "/mnt/raid0/llm/epyc-orchestrator",
             "seeding_eval_command_template": (
                 "uv run python scripts/benchmark/seed_specialist_routing.py "
                 "--suites <suite> --roles <actions_to_evaluate_on_same_source_record> "
-                "--modes direct repl --sample-size <n> --dry-run "
-                "--output <benchmarks/results/eval/seeding_*.jsonl>"
+                "--modes direct --sample-size <n> --dry-run "
+                "--output <benchmarks/results/eval/seeding_a9_*.json>"
             ),
             "orchestrator_live_seed_note": (
                 "add records under benchmarks/results/orchestrator/seeding_live*.json "
                 "or an equivalent orchestrator source path so source_family resolves "
                 "to orchestrator_live_seed"
             ),
-            "post_collection_pipeline": [
-                "plan_offline_reward_pairwise_holdout_expansion.py",
-                "build_offline_reward_oracle_rows.py --candidate-manifest-jsonl",
-                "score_offline_reward_oracle_token_coverage",
-                "export_offline_reward_expansion_labels.py",
-                "build_offline_reward_feature_manifest.py",
-                "build_offline_reward_pairwise_contract.py",
-                "evaluate_offline_reward_pairwise_ranker.py",
-            ],
+            "post_collection_pipeline": _post_collection_commands(),
         },
         "stats": {key: int(value) for key, value in sorted(stats.items())},
         "selected_groups": selected_groups[:100],
