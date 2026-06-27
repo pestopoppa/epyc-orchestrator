@@ -70,7 +70,16 @@ class RoutingContract(Protocol):
 
     def _my_role(self) -> str: ...
     def _route_advice(self, query: str) -> str: ...
-    def _delegate(self, prompt: str, to_role: str) -> str: ...
+    def _delegate(
+        self,
+        prompt: str,
+        to_role: str = "worker_general",
+        parallel: bool = False,
+        reason: str = "",
+        persona: str = "",
+        schema: dict[str, Any] | None = None,
+        max_retries: int = 1,
+    ) -> str | list[str]: ...
     def _escalate(self, reason: str) -> str: ...
 
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Unit tests for the REPL routing tools (_RoutingMixin)."""
 
+import json
 from unittest.mock import Mock
 
 from src.repl_environment import REPLEnvironment
@@ -368,6 +369,99 @@ class TestDelegate:
         assert result.error is None
         assert "DELEGATION FAILED" in result.output
         assert "LLM error" in result.output
+
+    def test_delegate_schema_validates_response(self):
+        """Schema mode parses a valid single delegate response."""
+        mock_llm = Mock()
+        mock_llm.llm_call = Mock(return_value='{"answer": 42}')
+        schema = {
+            "type": "object",
+            "properties": {"answer": {"type": "integer"}},
+            "required": ["answer"],
+        }
+
+        repl = REPLEnvironment(context="test", llm_primitives=mock_llm, role="frontdoor")
+        result = repl._delegate("return the answer", to="worker_general", schema=schema)
+        parsed = json.loads(result)
+
+        assert parsed["schema_validation"] is True
+        assert parsed["valid"] is True
+        assert parsed["response"] == {"answer": 42}
+        assert parsed["raw_response"] == '{"answer": 42}'
+        assert parsed["attempts"] == 1
+        prompt = mock_llm.llm_call.call_args.args[0]
+        assert "Return only a JSON value" in prompt
+        assert "return the answer" in prompt
+        assert repl.artifacts["_delegations"][0]["schema_valid"] is True
+
+    def test_delegate_schema_retries_invalid_response(self):
+        """Schema mode retries failed single delegate responses."""
+        mock_llm = Mock()
+        mock_llm.llm_call = Mock(side_effect=["not json", '{"answer": 7}'])
+        schema = {
+            "type": "object",
+            "properties": {"answer": {"type": "integer"}},
+            "required": ["answer"],
+        }
+
+        repl = REPLEnvironment(context="test", llm_primitives=mock_llm, role="frontdoor")
+        result = repl._delegate("return the answer", to="worker_general", schema=schema)
+        parsed = json.loads(result)
+
+        assert parsed["valid"] is True
+        assert parsed["response"] == {"answer": 7}
+        assert parsed["attempts"] == 2
+        assert mock_llm.llm_call.call_count == 2
+        retry_prompt = mock_llm.llm_call.call_args_list[1].args[0]
+        assert "previous response failed schema validation" in retry_prompt
+        assert "not json" in retry_prompt
+        assert repl.artifacts["_delegations"][0]["schema_retry_count"] == 1
+
+    def test_delegate_schema_reports_exhausted_retry(self):
+        """Schema mode reports invalid output instead of silently accepting it."""
+        mock_llm = Mock()
+        mock_llm.llm_call = Mock(side_effect=["not json", '{"answer": "wrong"}'])
+        schema = {
+            "type": "object",
+            "properties": {"answer": {"type": "integer"}},
+            "required": ["answer"],
+        }
+
+        repl = REPLEnvironment(context="test", llm_primitives=mock_llm, role="frontdoor")
+        result = repl._delegate("return the answer", to="worker_general", schema=schema)
+        parsed = json.loads(result)
+
+        assert parsed["valid"] is False
+        assert parsed["response"] == '{"answer": "wrong"}'
+        assert parsed["raw_response"] == '{"answer": "wrong"}'
+        assert "not of type" in parsed["error"]
+        assert parsed["attempts"] == 2
+        assert repl.artifacts["_delegations"][0]["schema_valid"] is False
+
+    def test_delegate_schema_rejects_non_dict_schema(self):
+        """Schema argument must be a JSON Schema dict."""
+        mock_llm = Mock()
+        repl = REPLEnvironment(context="test", llm_primitives=mock_llm, role="frontdoor")
+
+        result = repl._delegate("task", to="worker_general", schema="not a dict")
+
+        assert "schema must be a JSON Schema dict" in result
+        mock_llm.llm_call.assert_not_called()
+
+    def test_delegate_schema_rejects_parallel_mode(self):
+        """Schema validation is intentionally single-delegate only."""
+        mock_llm = Mock()
+        repl = REPLEnvironment(context="test", llm_primitives=mock_llm, role="frontdoor")
+
+        result = repl._delegate(
+            "items: [a, b]",
+            to="worker_general",
+            parallel=True,
+            schema={"type": "object"},
+        )
+
+        assert "only supported for single delegation" in result
+        mock_llm.llm_call.assert_not_called()
 
 
 class TestFetchReport:

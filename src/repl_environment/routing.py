@@ -9,8 +9,39 @@ import json
 
 from src.constants import TASK_IR_OBJECTIVE_LEN
 from src.delegation_reports import load_report
+from src.graph.helpers import _validate_final_answer
 from src.task_ir import canonicalize_task_ir
 from src.roles import Role
+
+_MAX_SCHEMA_RETRIES = 2
+
+
+def _render_delegate_schema_preamble(schema: dict) -> str:
+    """Prompt prefix for schema-constrained delegate calls."""
+    return (
+        "Return only a JSON value matching this JSON Schema. Do not wrap it in markdown "
+        "or add prose.\n```json\n"
+        + json.dumps(schema, indent=2)
+        + "\n```"
+    )
+
+
+def _render_delegate_schema_retry_prompt(
+    original_prompt: str,
+    schema: dict,
+    err: str,
+    rejected: str,
+) -> str:
+    rejected_trunc = rejected[:500]
+    if len(rejected) > 500:
+        rejected_trunc += f"...[truncated {len(rejected) - 500} chars]"
+    return (
+        f"{_render_delegate_schema_preamble(schema)}\n\n"
+        "Your previous response failed schema validation.\n"
+        f"Validation error: {err}\n"
+        f"Rejected response: {rejected_trunc}\n\n"
+        f"Original task:\n{original_prompt}"
+    )
 
 
 class _RoutingMixin:
@@ -413,6 +444,8 @@ class _RoutingMixin:
         parallel: bool = False,
         reason: str = "",
         persona: str = "",
+        schema: dict | None = None,
+        max_retries: int = 1,
     ) -> str | list[str]:
         """Delegate a subtask to another role.
 
@@ -425,6 +458,8 @@ class _RoutingMixin:
             parallel: If True, spawn multiple workers for list items in brief.
             reason: Why this role was chosen (helps MemRL learn).
             persona: Optional persona overlay.
+            schema: Optional JSON Schema dict for validating a single delegate response.
+            max_retries: Schema retry count, capped to 2.
 
         Returns:
             Worker's response (or list of responses if parallel).
@@ -452,11 +487,23 @@ class _RoutingMixin:
         if self.llm_primitives is None:
             return "[ERROR: No LLM primitives available for delegation]"
 
+        if schema is not None and not isinstance(schema, dict):
+            return "[ERROR: schema must be a JSON Schema dict]"
+
         # Handle parallel delegation
         if parallel:
+            if schema is not None:
+                return "[ERROR: schema validation is only supported for single delegation]"
             return self._delegate_parallel(brief, target_role, reason, persona)
 
-        return self._delegate_single(brief, target_role, reason, persona)
+        return self._delegate_single(
+            brief,
+            target_role,
+            reason,
+            persona,
+            schema=schema,
+            max_retries=max_retries,
+        )
 
     def _delegate_single(
         self,
@@ -464,6 +511,8 @@ class _RoutingMixin:
         target_role: str,
         reason: str = "",
         persona: str = "",
+        schema: dict | None = None,
+        max_retries: int = 1,
     ) -> str:
         """Execute a single delegation to one worker."""
         import time
@@ -499,24 +548,84 @@ class _RoutingMixin:
                 f"## Task\n{brief}"
             )
 
+        query_prompt = (
+            f"{_render_delegate_schema_preamble(schema)}\n\n{delegate_prompt}"
+            if schema is not None
+            else delegate_prompt
+        )
+        retry_budget = max(0, min(max_retries, _MAX_SCHEMA_RETRIES))
+        attempts = 1
+        retry_count = 0
+
         try:
             result = self.llm_primitives.llm_call(
-                delegate_prompt,
+                query_prompt,
                 role=target_role,
                 persona=persona or None,
             )
+
+            parsed = None
+            ok = True
+            err = None
+            if schema is not None:
+                ok, err, parsed = _validate_final_answer(result, schema)
+                while not ok and attempts <= retry_budget:
+                    retry_count += 1
+                    attempts += 1
+                    retry_prompt = _render_delegate_schema_retry_prompt(
+                        delegate_prompt,
+                        schema,
+                        err or "unknown validation error",
+                        result,
+                    )
+                    result = self.llm_primitives.llm_call(
+                        retry_prompt,
+                        role=target_role,
+                        persona=persona or None,
+                    )
+                    ok, err, parsed = _validate_final_answer(result, schema)
+
             elapsed = time.perf_counter() - start
 
             delegation_record["success"] = True
             delegation_record["elapsed_sec"] = round(elapsed, 3)
             delegation_record["result_len"] = len(result)
+            if schema is not None:
+                delegation_record["schema_validation"] = True
+                delegation_record["schema_valid"] = ok
+                delegation_record["schema_attempts"] = attempts
+                delegation_record["schema_retry_count"] = retry_count
             self.artifacts["_delegations"].append(delegation_record)
 
             self._exploration_log.add_event(
                 "delegate",
-                {"target_role": target_role, "reason": reason},
-                f"[{len(result)} chars in {elapsed:.1f}s]",
+                {
+                    "target_role": target_role,
+                    "reason": reason,
+                    "schema": schema is not None,
+                },
+                {
+                    "summary": f"[{len(result)} chars in {elapsed:.1f}s]",
+                    "schema_valid": ok if schema is not None else None,
+                    "retry_count": retry_count,
+                },
             )
+
+            if schema is not None:
+                return json.dumps(
+                    {
+                        "operation": "delegate",
+                        "target_role": target_role,
+                        "schema_validation": True,
+                        "valid": ok,
+                        "response": parsed if ok else result,
+                        "raw_response": result,
+                        "error": None if ok else err,
+                        "attempts": attempts,
+                    },
+                    indent=2,
+                    default=str,
+                )
 
             return result
 
