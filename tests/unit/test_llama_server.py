@@ -14,6 +14,7 @@ from src.backends.llama_server import (
 from src.model_server import InferenceRequest
 from src.registry_loader import (
     AccelerationConfig,
+    GenerationDefaults,
     MemoryConfig,
     ModelConfig,
     PerformanceMetrics,
@@ -179,6 +180,36 @@ class TestLlamaServerBackend:
         payload = backend._build_payload(role_config, request)
 
         assert payload["temperature"] == 0.7  # Role wins
+
+    def test_build_payload_temperature_from_generation_defaults(self, role_config):
+        """Role generation defaults should win before request temperature."""
+        role_config.acceleration.temperature = None
+        role_config.generation_defaults = GenerationDefaults(temperature=0.3)
+        backend = LlamaServerBackend(base_url="http://test:8080")
+        request = InferenceRequest(role="test", prompt="Hello", temperature=0.2)
+
+        payload = backend._build_payload(role_config, request)
+
+        assert payload["temperature"] == 0.3
+
+    def test_build_payload_pins_sampling_seed_and_allows_request_override(self, role_config):
+        """Sampling params should be reproducible, with per-request seed override."""
+        backend = LlamaServerBackend(base_url="http://test:8080")
+
+        default_payload = backend._build_payload(
+            role_config,
+            InferenceRequest(role="test", prompt="Hello"),
+        )
+        override_payload = backend._build_payload(
+            role_config,
+            InferenceRequest(role="test", prompt="Hello", seed=1234),
+        )
+
+        assert default_payload["top_k"] == 40
+        assert default_payload["top_p"] == 0.95
+        assert default_payload["repeat_penalty"] == 1.1
+        assert default_payload["seed"] == 42
+        assert override_payload["seed"] == 1234
 
     def test_infer_success(self, role_config):
         """Test successful inference with mocked HTTP response."""
