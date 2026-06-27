@@ -205,6 +205,49 @@ def test_find_failure_cases_prefers_exact_match_before_higher_governed_fuzzy_mat
     conn.close()
 
 
+def test_find_failure_cases_warns_on_raw_when_governed_alternative_exists(
+    db_path: Path,
+) -> None:
+    conn = ensure_schema(db_path)
+    insert_failure_case(conn, FailureCase(
+        task_signature="route selection failed",
+        governance_level=GovernanceLevel.RAW,
+        avoidance_advice="raw note",
+    ))
+    insert_failure_case(conn, FailureCase(
+        task_signature="route selection failed",
+        governance_level=GovernanceLevel.HUMAN_REVIEWED,
+        avoidance_advice="reviewed note",
+    ))
+
+    hits = find_failure_cases(conn, "route selection failed")
+
+    assert hits[0]["avoidance_advice"] == "reviewed note"
+    assert hits[0]["_governance_rank"] == GovernanceLevel.ORDER[GovernanceLevel.HUMAN_REVIEWED]
+    assert hits[0]["_governance_warning"] is None
+    assert hits[1]["avoidance_advice"] == "raw note"
+    assert hits[1]["_governance_warning"] == "raw_advice_has_governed_alternative"
+    conn.close()
+
+
+def test_find_failure_cases_warns_when_deprecated_cases_are_requested(
+    db_path: Path,
+) -> None:
+    conn = ensure_schema(db_path)
+    insert_failure_case(conn, FailureCase(
+        task_signature="old failure",
+        governance_level=GovernanceLevel.DEPRECATED,
+        avoidance_advice="obsolete note",
+    ))
+
+    hits = find_failure_cases(conn, "old failure", exclude_deprecated=False)
+
+    assert len(hits) == 1
+    assert hits[0]["_governance_rank"] == GovernanceLevel.ORDER[GovernanceLevel.DEPRECATED]
+    assert hits[0]["_governance_warning"] == "deprecated_advice"
+    conn.close()
+
+
 def test_ensure_harness_schema_rebuilds_failure_case_fts(db_path: Path) -> None:
     conn = ensure_schema(db_path)
     insert_failure_case(conn, FailureCase(

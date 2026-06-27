@@ -498,10 +498,11 @@ def find_failure_cases(
         (*params, limit),
     ).fetchall()
     cols = [d[0] for d in conn.execute("SELECT * FROM failure_case LIMIT 0").description]
-    return [
+    annotated_rows = [
         _annotate_failure_case_match(dict(zip(cols, row)), task_signature)
         for row in rows
     ]
+    return _annotate_failure_case_governance(annotated_rows)
 
 
 def _index_failure_case_fts(conn: sqlite3.Connection, row_id: int, f: FailureCase) -> None:
@@ -550,6 +551,32 @@ def _annotate_failure_case_match(row: dict, task_signature: str) -> dict:
     row["_match_type"] = "exact" if row.get("task_signature") == task_signature else "lexical"
     row["_matched_terms"] = matched_terms
     return row
+
+
+def _annotate_failure_case_governance(rows: list[dict]) -> list[dict]:
+    governed_signatures = {
+        row.get("task_signature")
+        for row in rows
+        if row.get("governance_level")
+        in {
+            GovernanceLevel.AUTO_VERIFIED,
+            GovernanceLevel.HUMAN_REVIEWED,
+            GovernanceLevel.APPROVED_BASELINE,
+        }
+    }
+    for row in rows:
+        governance_level = str(row.get("governance_level") or GovernanceLevel.RAW)
+        row["_governance_rank"] = GovernanceLevel.ORDER.get(governance_level, -1)
+        if governance_level == GovernanceLevel.DEPRECATED:
+            row["_governance_warning"] = "deprecated_advice"
+        elif (
+            governance_level == GovernanceLevel.RAW
+            and row.get("task_signature") in governed_signatures
+        ):
+            row["_governance_warning"] = "raw_advice_has_governed_alternative"
+        else:
+            row["_governance_warning"] = None
+    return rows
 
 
 def _failure_case_match_tokens(text: str | None) -> list[str]:
