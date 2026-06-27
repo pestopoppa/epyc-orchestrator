@@ -10,7 +10,8 @@ Key findings (2026-03-18 benchmarks, refined through 2026-05-08):
 - Models ≤65 GB: 4×48t NUMA-quarter instances give 6-7× aggregate throughput
 - Models 130-250 GB: 1×96t NUMA-node pinning gives 1.2-1.5×
 - Using all 192t is ANTI-OPTIMAL (46-60% cross-NUMA penalty)
-- taskset alone is sufficient — numactl --membind adds no benefit (S4 result)
+- taskset alone is sufficient for the S4 no-mmap/single-owner regime; shared
+  mmap multi-instance roles need explicit evidence before changing memory policy
 - mlock gives 30× latency improvement under memory pressure (S2)
 - Total mlock budget: ~701 GB of 1.13 TB (62%), leaving ~429 GB for KV + OS
 """
@@ -203,8 +204,11 @@ MLOCK_ROLES = {role for role, cfg in NUMA_CONFIG.items() if cfg.get("mlock")}
 def _numa_prefix(role: str, instance_idx: int = 0) -> list[str]:
     """Return CPU-pinning + memory-policy prefix for a role instance.
 
-    Default: taskset -c <cpu_list> (S4 benchmark: numactl --membind adds no benefit
-    over taskset + first-touch memory policy for per-NUMA-node-bound roles).
+    Default: taskset -c <cpu_list>. The S4 benchmark found no benefit from
+    adding numactl --membind for no-mmap/single-owner runs where first-touch owns
+    the private copy. That finding does not generalize to shared-mmap quarter
+    fleets: those roles rely on interleaved shared pages unless a role-specific
+    A/B plus live numa_maps proof justifies changing memory policy.
 
     If the role's NUMA_CONFIG entry has a "numactl_policy" key (e.g. "interleave=all"),
     wraps the launch with `numactl --<policy> --` ahead of taskset. Used for
