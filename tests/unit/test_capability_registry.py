@@ -23,6 +23,10 @@ from src.registry.capability_registry import (
     capability_index_rows,
     load_capability_registry,
 )
+from scripts.registry.compile_capability_registry import (
+    _replace_marked_block,
+    main as compile_capability_registry_main,
+)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -201,6 +205,86 @@ def test_index_a_by_table_uses_same_registry_rows(tmp_path: Path) -> None:
         }
     ]
     assert "| `edit_transaction_auto_routing` | operator | placeholder |" in table
+
+
+def test_replace_marked_block_updates_only_generated_region() -> None:
+    text = "\n".join(
+        [
+            "prefix",
+            "<!-- capability-registry:index-a-by:start -->",
+            "old",
+            "<!-- capability-registry:index-a-by:end -->",
+            "suffix",
+        ]
+    )
+
+    updated = _replace_marked_block(
+        text, target="index-a-by", rendered="new\ncontent"
+    )
+
+    assert updated == "\n".join(
+        [
+            "prefix",
+            "<!-- capability-registry:index-a-by:start -->",
+            "new",
+            "content",
+            "<!-- capability-registry:index-a-by:end -->",
+            "suffix",
+        ]
+    )
+
+
+def test_replace_marked_block_requires_exactly_one_marker_pair() -> None:
+    with pytest.raises(ValueError, match="expected exactly one"):
+        _replace_marked_block("no markers", target="index-a-by", rendered="table")
+
+
+def test_compile_capability_registry_check_block_fails_on_drift(tmp_path: Path) -> None:
+    doc = tmp_path / "index.md"
+    doc.write_text(
+        "\n".join(
+            [
+                "<!-- capability-registry:index-a-by:start -->",
+                "stale",
+                "<!-- capability-registry:index-a-by:end -->",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    rc = compile_capability_registry_main(
+        ["--target", "index-a-by", "--check-block", str(doc)]
+    )
+
+    assert rc == 1
+
+
+def test_compile_capability_registry_replace_then_check_block(tmp_path: Path) -> None:
+    doc = tmp_path / "index.md"
+    doc.write_text(
+        "\n".join(
+            [
+                "prefix",
+                "<!-- capability-registry:index-a-by:start -->",
+                "stale",
+                "<!-- capability-registry:index-a-by:end -->",
+                "suffix",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    replace_rc = compile_capability_registry_main(
+        ["--target", "index-a-by", "--replace-block", str(doc)]
+    )
+    check_rc = compile_capability_registry_main(
+        ["--target", "index-a-by", "--check-block", str(doc)]
+    )
+
+    assert replace_rc == 0
+    assert check_rc == 0
 
 
 # ──────────────────────────────────────────────────────────────────────────────
