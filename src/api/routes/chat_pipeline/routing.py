@@ -16,6 +16,7 @@ from src.llm_primitives import LLMPrimitives
 from src.task_ir import canonicalize_task_ir
 
 from src.api.routes.chat_pipeline.routing_decision import (
+    _TIER_COST_WEIGHTS,
     apply_failure_veto,
     apply_ingest_triviality_guard,
     assess_difficulty,
