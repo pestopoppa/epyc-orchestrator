@@ -1,0 +1,2874 @@
+{
+  "candidate_action_counts": {
+    "architect_general": 4504,
+    "frontdoor": 4321
+  },
+  "candidate_group_source_family_counts": {
+    "three_way_eval": 2413
+  },
+  "candidate_group_suite_counts": {
+    "coder": 326,
+    "debugbench": 182,
+    "general": 377,
+    "gpqa": 443,
+    "hotpotqa": 336,
+    "long_context": 152,
+    "mode_advantage": 59,
+    "mode_advantage_hard": 213,
+    "simpleqa": 325
+  },
+  "candidate_groups": 2413,
+  "candidate_rows": 8825,
+  "candidate_schema_version": "offline_reward_verifier_expansion_candidate.v1",
+  "candidate_source_family_counts": {
+    "three_way_eval": 8825
+  },
+  "candidate_suite_counts": {
+    "coder": 1201,
+    "debugbench": 666,
+    "general": 1396,
+    "gpqa": 1618,
+    "hotpotqa": 1227,
+    "long_context": 555,
+    "mode_advantage": 205,
+    "mode_advantage_hard": 794,
+    "simpleqa": 1163
+  },
+  "collection_target_count": 17,
+  "collection_targets_json": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_preference_direction_audit.json",
+  "decision": {
+    "recommended_next": "score_selected_candidates_and_rebuild_pairwise_contract",
+    "runtime_gate_change_allowed": false,
+    "status": "expansion_plan_ready"
+  },
+  "existing_manifest": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_feature_manifest_with_pairwise_hard_holdout_expansions.jsonl",
+  "existing_manifest_source_family_counts": {
+    "orchestrator_live_seed": 141,
+    "seeding_eval": 297,
+    "three_way_eval": 2419
+  },
+  "existing_manifest_suite_counts": {
+    "agentic": 15,
+    "coder": 22,
+    "debugbench": 162,
+    "general": 54,
+    "gpqa": 38,
+    "hotpotqa": 27,
+    "instruction_precision": 42,
+    "livecodebench": 922,
+    "long_context": 14,
+    "math": 59,
+    "mode_advantage": 3,
+    "mode_advantage_hard": 18,
+    "simpleqa": 64,
+    "thinking": 1417
+  },
+  "existing_pairwise_group_count": 429,
+  "existing_pairwise_jsonl": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_preference_contract_score_ordered_hard_holdouts_expanded.jsonl",
+  "inputs": [
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results"
+  ],
+  "matched_collection_target_counts": {
+    "suite:coder:architect_general>frontdoor": 326,
+    "suite:debugbench:architect_general>frontdoor": 182,
+    "suite:general:architect_general>frontdoor": 377,
+    "suite:gpqa:architect_general>frontdoor": 443,
+    "suite:hotpotqa:architect_general>frontdoor": 336,
+    "suite:long_context:architect_general>frontdoor": 152,
+    "suite:mode_advantage:architect_general>frontdoor": 59,
+    "suite:mode_advantage_hard:architect_general>frontdoor": 213,
+    "suite:simpleqa:architect_general>frontdoor": 325
+  },
+  "min_cross_action_candidate_groups": 20,
+  "privacy": {
+    "commits_prompt_reference_response_text": false,
+    "private_fields_excluded": [
+      "answer",
+      "expected",
+      "prompt",
+      "reference",
+      "response"
+    ],
+    "text_represented_by_sha256_and_lengths": true
+  },
+  "schema_version": "offline_reward_pairwise_holdout_expansion_plan.v1",
+  "selected_groups": [
+    {
+      "candidate_actions": [
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [
+        "architect_general"
+      ],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_013442.jsonl|0|gpqa_Chemistry (general)_0396|19406c51a54c98e862ac1555aaa954e9f19d9c132fa3633449e8ca00fbe68059|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "gpqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_013442.jsonl",
+      "source_record_offset": 0,
+      "suite": "gpqa"
+    },
+    {
+      "candidate_actions": [
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [
+        "architect_general"
+      ],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_015745.jsonl|0|gpqa_Molecular Biology_0385|796f41000eebc30a73c631898140153054217163b5e7e245b81777312989b74f|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "gpqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_015745.jsonl",
+      "source_record_offset": 0,
+      "suite": "gpqa"
+    },
+    {
+      "candidate_actions": [
+        "frontdoor"
+      ],
+      "candidate_rows": 1,
+      "existing_manifest_actions": [
+        "architect_general"
+      ],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260304_184110.jsonl|0|debugbench_the-number-of-beautiful-subsets_cpp|1a14f0e3c42fc90699be88267da827da2ebd816ab6b52469d4ed6b8c347350de|63fbb93217b2b0b6d9152213cdc1239b78979115ffa4f49ac53fd92825289125",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "debugbench"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260304_184110.jsonl",
+      "source_record_offset": 0,
+      "suite": "debugbench"
+    },
+    {
+      "candidate_actions": [
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [
+        "architect_general"
+      ],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260304_184110.jsonl|1|debugbench_count-negative-numbers-in-a-sorted-matrix_java|c3e60c0c2a11fa63c23c1f5c65ff0c43c950dc5c1d24f9415f56bd655c73c66e|c2451bd5b4768ec4ae6718d9b49d8cc2953b6b2949e79790bbf2c5ea2e04dd7f",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "debugbench"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260304_184110.jsonl",
+      "source_record_offset": 1,
+      "suite": "debugbench"
+    },
+    {
+      "candidate_actions": [
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [
+        "architect_general"
+      ],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260304_191211.jsonl|2|debugbench_plus-one_cpp|30a1f2286890efd71bd3c3cddcdda2bccdd6bf92ce280ae76a07fff73e94a333|a6aea1332fe24344bd07b5478d72f699a436d21dd2c7243cd7c1a4b7dab581f0",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "debugbench"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260304_191211.jsonl",
+      "source_record_offset": 2,
+      "suite": "debugbench"
+    },
+    {
+      "candidate_actions": [
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [
+        "architect_general"
+      ],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260309_213147.jsonl|0|simpleqa_general_03294|4886bc96fe39eec4b44628216b42ab127e1847c6a27e5a8ec20ab265db09f67c|3ad5ab4f2a32c9294cb649b4465b0089cb3af78eed3f5a1975eb7d993592dc96",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "simpleqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260309_213147.jsonl",
+      "source_record_offset": 0,
+      "suite": "simpleqa"
+    },
+    {
+      "candidate_actions": [
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [
+        "architect_general"
+      ],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260309_213147.jsonl|1|simpleqa_general_00657|02c537022a03c0912351efee1a11f413ed52bef3f298b63471178ec157b6c150|ec54e99514663edb97adef400fbf34a77daae108303d3da8008a7dfb4cdf0f52",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "simpleqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260309_213147.jsonl",
+      "source_record_offset": 1,
+      "suite": "simpleqa"
+    },
+    {
+      "candidate_actions": [
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [
+        "architect_general"
+      ],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260309_213147.jsonl|3|simpleqa_general_00458|dbbf76e92e21815363b0661804a8048de7afb8415013e672f8e6bf6cc2db51a3|5c6b34b87721a12e1d0c7e9d2d0a21f9f1ae76ebc26e2f40b00c8f9200f5afb9",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "simpleqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260309_213147.jsonl",
+      "source_record_offset": 3,
+      "suite": "simpleqa"
+    },
+    {
+      "candidate_actions": [
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [
+        "architect_general"
+      ],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260309_213147.jsonl|4|simpleqa_general_03359|063499bb180e6fa0b2397ee104ac06374baa0b21c73a4066269344dc716dab80|68017eb4cb4d532b27e7ad393fb4a50a078b4906b78b902df98fd15f88d9d1f7",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "simpleqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260309_213147.jsonl",
+      "source_record_offset": 4,
+      "suite": "simpleqa"
+    },
+    {
+      "candidate_actions": [
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [
+        "architect_general"
+      ],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_181746.jsonl|0|gpqa_High-energy particle physics_0441|5d1dfe0e953f93465912c36f3149839058dd85214e5438a5e97e57ebce23fb1b|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "gpqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_181746.jsonl",
+      "source_record_offset": 0,
+      "suite": "gpqa"
+    },
+    {
+      "candidate_actions": [
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [
+        "architect_general"
+      ],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|0|simpleqa_general_03434|95b59886c17ea39732f6c4d6944eb4f5c5de34e07ae64788654a05a64b7b3417|212b59aad8573ab6589a586147cc7b666e1c9ee7632fe56e74501c39e1e58a6a",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "simpleqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 0,
+      "suite": "simpleqa"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|100|hotpot_bridge_5a83bfc8554299123d8c21a1|c6af0c5d31c9d8364e34846bbc7a697fdc1860321c155eb564485179d3ca776e|ed3ad2e1d9ab6537fab6d0e9aa79a8816c576bd87fa17057e66f5c2a11a82856",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "hotpotqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 100,
+      "suite": "hotpotqa"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|101|mbpp_0280|d6b84e9eabcafe2381f52e6bbc964569db925c4832a767c14fb84107e74d87ba|20b3688837c5014aebb571c5da5807164d8e5191079ccf558a5256777cd1dcbe",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "coder"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 101,
+      "suite": "coder"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|104|mmlu_moral_scenarios_09396|24efb16ce302079abf21945502579a6c27a96c14909c112912f196ed5ce6207d|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "general"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 104,
+      "suite": "general"
+    },
+    {
+      "candidate_actions": [
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [
+        "architect_general"
+      ],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|10|mbpp_0014|05097df15405f28cca1181f0ce8995da356dd5849189eb9d3c743c9d8b4a01c0|881b10bf3b5188d485d20e4bfdfc7e73f232375bc237b49f3c4f235a90007435",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "coder"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 10,
+      "suite": "coder"
+    },
+    {
+      "candidate_actions": [
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [
+        "architect_general"
+      ],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|13|mmlu_world_religions_13872|ea76d4db2e46ebeb8a3d8b9eeeb4bf5fb68aea654e41232ab84a4760ce32d640|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "general"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 13,
+      "suite": "general"
+    },
+    {
+      "candidate_actions": [
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [
+        "architect_general"
+      ],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|14|simpleqa_general_04320|53b4ae0ae803311999809815dcf6eb66ac691ac09a7781934da01998d85d5dcd|4b9a7f50c0bb198c6f5414c5a8459f5d216d34ab521ea94c060ea35cac66f900",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "simpleqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 14,
+      "suite": "simpleqa"
+    },
+    {
+      "candidate_actions": [
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [
+        "architect_general"
+      ],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|15|gpqa_Analytical Chemistry_0431|fbaa6c02d09b783e02449f4d1e6c1a7118c3c7ad1ec846932034fa67b985e5ff|559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "gpqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 15,
+      "suite": "gpqa"
+    },
+    {
+      "candidate_actions": [
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [
+        "architect_general"
+      ],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|17|humaneval_HumanEval_103|0f6bea49e7b21b6788c192787d4032d86ee265b6073bb4dcf94f94e069055683|4ddb2b7067b3ac4d27a29c3c75259c47559e2a81867b95dd63f103c87333b6d7",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "coder"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 17,
+      "suite": "coder"
+    },
+    {
+      "candidate_actions": [
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [
+        "architect_general"
+      ],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|1|gpqa_Physics (general)_0090|efa78f3527466760e5faa5a69e3732815d83dc284c46dfd0c10d58be11ab1add|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "gpqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 1,
+      "suite": "gpqa"
+    },
+    {
+      "candidate_actions": [
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [
+        "architect_general"
+      ],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|21|simpleqa_general_02170|a69f5a1296dbcf925e4b42661c4a32b1b3b390912a1700a9c45c7a9632d50065|52058db684cd2ea52c744694ae7e8a454d7d01affa25463a3e3b907885ab5953",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "simpleqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 21,
+      "suite": "simpleqa"
+    },
+    {
+      "candidate_actions": [
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [
+        "architect_general"
+      ],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|22|gpqa_Organic Chemistry_0200|5f68352bb3a4dc7652f464e5e9aa6f45768ae4c82ecca7249c9d596ffe5bec07|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "gpqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 22,
+      "suite": "gpqa"
+    },
+    {
+      "candidate_actions": [
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [
+        "architect_general"
+      ],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|24|mbpp_0181|10d3526cc4484172dfb5bfca426a4e60f2ff7d69a516e35a7cf2152f5d527c77|bd7142e68a250ac9d789646441ec34cbcc7dcd14920c20b497998e02a3f13aca",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "coder"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 24,
+      "suite": "coder"
+    },
+    {
+      "candidate_actions": [
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [
+        "architect_general"
+      ],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|27|mmlu_moral_scenarios_09123|07ff4249fc065786e9981920a4f838df7aa94ede895a7a64a63d4d1528813787|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "general"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 27,
+      "suite": "general"
+    },
+    {
+      "candidate_actions": [
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [
+        "architect_general"
+      ],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|28|simpleqa_general_00935|645e6f1a1c2ff1ecc083a73c316c2e8ce856092e7a9a259fddaaf816c4a43cf2|484696df4670bd793f0d97a72268454683de24e745a09c577e6dab3600b5018f",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "simpleqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 28,
+      "suite": "simpleqa"
+    },
+    {
+      "candidate_actions": [
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [
+        "architect_general"
+      ],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|29|gpqa_Physics (general)_0179|396921dfe820c4a28f78933c42cfc188a4e2dd2aa16f86a720e6a0e73b85bd7f|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "gpqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 29,
+      "suite": "gpqa"
+    },
+    {
+      "candidate_actions": [
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [
+        "architect_general"
+      ],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|2|hotpot_comparison_5a78b209554299148911f93e|c62edffda56e8dae95faf805d9c8e3cc4364af0c2c77d0dc0f2d2f0a46585806|e382bd860297d2427fd2b8de6822cc58670d235b66dbdcf6e0f3c7f284b47a45",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "hotpotqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 2,
+      "suite": "hotpotqa"
+    },
+    {
+      "candidate_actions": [
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [
+        "architect_general"
+      ],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|30|hotpot_comparison_5ab29624554299545a2cf9b5|b374ab84cd2f507f496efe75453ee4c3dbfec8b914ed67ced9cb7512e115ad76|0b48543e48e47089c1d52bf7f53c75696ed01a1a2fb1550d054d4626e731dbfb",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "hotpotqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 30,
+      "suite": "hotpotqa"
+    },
+    {
+      "candidate_actions": [
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [
+        "architect_general"
+      ],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|34|mmlu_nutrition_09617|a1b98f3f18194b238335fda3692ae71aa6021d989e1e14452c6ddf087c280e9b|559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "general"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 34,
+      "suite": "general"
+    },
+    {
+      "candidate_actions": [
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [
+        "architect_general"
+      ],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|35|simpleqa_general_02154|c1c9021055bb71d36b8e7d91f48c7a626e2038ae1d0fd45fa5e3248684623541|f5066b6bac623305ed7135de7e78e8b7f5dd11f51e52c6c84db0ffe2376a7caa",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "simpleqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 35,
+      "suite": "simpleqa"
+    },
+    {
+      "candidate_actions": [
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [
+        "architect_general"
+      ],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|36|gpqa_Molecular Biology_0278|f0ffbf4bcde749fc5eaffc38cb7940f38e604e235ffad8db331349bd90002350|3f39d5c348e5b79d06e842c114e6cc571583bbf44e4b0ebfda1a01ec05745d43",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "gpqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 36,
+      "suite": "gpqa"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|37|hotpot_comparison_5ab392ec55429969a97a817d|4709aabaafecb259625fa76d57cce7c0766aec8aefa847ae16a6cc04b6a83bd4|4e128bdaf17f9398353ee1c474142893c03b55b970df5e4d125016e6f3dacda7",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "hotpotqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 37,
+      "suite": "hotpotqa"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|38|mbpp_0218|faf2e380d2f44d22f0f01906e8d620376a1633fc12b2d10e2cfecf8912960c14|f7eeeafdb365187b8d5734fd291e670febe027ff055660450fcef52d7750777f",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "coder"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 38,
+      "suite": "coder"
+    },
+    {
+      "candidate_actions": [
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [
+        "architect_general"
+      ],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|3|mbpp_0122|9f8cb94367ac73effd42dca4ff53aaefed9c553db0cefc88772c333b8c829232|7b271105dab38d103dd2e23566dbcad3df9177dd3ed1db4d8de9931302a196cf",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "coder"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 3,
+      "suite": "coder"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|41|mmlu_moral_scenarios_08683|fff582bb49eaf7f03df2961ff56cdec489354e93583296e731906288ebb44451|559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "general"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 41,
+      "suite": "general"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|42|simpleqa_general_03454|ad5dac587b74ae30e481765ac86858214eb635c2f7f38679083b86276bc6a6f0|227e0a1565401bebcee4381d0dce636b390a2a554271d17da15c2891199d3240",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "simpleqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 42,
+      "suite": "simpleqa"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|43|gpqa_Molecular Biology_0243|a0b0fc8cb5005f0f0fb627c0f427daaf07e8b71ddfa5cc2cb95ee63f06d59301|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "gpqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 43,
+      "suite": "gpqa"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|44|hotpot_bridge_5a73626b55429901807db01e|6c8fee377175432e072b80658ac7ddaa1f9d9a015f61ba3735fb57a545efd0ce|7c48e9c149430584b41619e73741a3b1f42159b3ca99e01d742e64455ee4ad1d",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "hotpotqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 44,
+      "suite": "hotpotqa"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|45|mbpp_0293|a2cd054569af80cbf2312cc4e3f5ab0482974cdbeddef47855dc1713f61b5cd3|c20348f4293f71dc9975cd5276d8fdd273831f9fbf9442b0857757c0aaa3e323",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "coder"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 45,
+      "suite": "coder"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|48|mmlu_management_06974|8be8585d6f589e8f5fddf1b0a48043fb128397c3bc6994af930c65dad9c40e66|559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "general"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 48,
+      "suite": "general"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|49|simpleqa_general_01124|a4614aba776ef7ed885ed332b8db1b1d191a762276e86c3323e9c58acc7eb221|2e2992510f761c466cb97f73fc5b70af23763a96d134393ee2ede4262f8b22dd",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "simpleqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 49,
+      "suite": "simpleqa"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|50|gpqa_Physics (general)_0111|e36cceb05d79b6c1d0fb52bf0f68478389d8cd05b62dccc68078a34f46ea52ed|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "gpqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 50,
+      "suite": "gpqa"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|51|hotpot_comparison_5a8393665542990548d0b1ea|7f8b68cbde894f7f903332a89b82c2aee92f832330228571d0a7cee0669860aa|9390298f3fb0c5b160498935d79cb139aef28e1c47358b4bbba61862b9c26e59",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "hotpotqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 51,
+      "suite": "hotpotqa"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|52|mbpp_0464|7cd0bd5495e3d86690553767ccb65cda7552236f72b30332f0dc504e8cd3f293|1aff245d50f65d0474c04a79c5c5fc45564e3b05be08a9475e926c0c29d5e89c",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "coder"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 52,
+      "suite": "coder"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 3,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|55|mmlu_anatomy_00124|add0d0691e70e411b619095633db82964f54412fb9a152fd67bfdc49211333c1|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "general"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 55,
+      "suite": "general"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|56|simpleqa_general_02774|41d26ddc10b418c854e67d170b4fc69796ebb28c88a07456a9b9509bd38e6280|ec54e99514663edb97adef400fbf34a77daae108303d3da8008a7dfb4cdf0f52",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "simpleqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 56,
+      "suite": "simpleqa"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|57|gpqa_Chemistry (general)_0244|a5f8bb489c16f690b6323121983c0e0ecb6a3f3511c84eeede6bca1a9a2d756e|559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "gpqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 57,
+      "suite": "gpqa"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|58|hotpot_bridge_5a7f5f655542994857a7670b|3e6438a434cf631ac8b292f7900830cfb5cffe0376b899cb71ac2c41b2f551fe|9e419fe0dc5fd741dd0a543f926406099fcd1d1b3b41437f7012c935f390c200",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "hotpotqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 58,
+      "suite": "hotpotqa"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|59|mbpp_0093|0041ab8d7e791abce97cc0bd0c33fcd56c8df34e1a7f3a6726b40dd11437f3ea|07d715edb696fb5f628f7298e5d7217ed4d2bdfc5347a1c55fee30832267f21d",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "coder"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 59,
+      "suite": "coder"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|62|mmlu_high_school_psychology_04904|a6ebc8709ac0baca93c3251f6059275c5d575fd14b9e7d5afdee7f6305958421|559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "general"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 62,
+      "suite": "general"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|63|simpleqa_general_02739|e74e8d01e971d664f081a6ab936d35bcda10d6259d5b940d8aba588a140acf2c|fd3a6e38ade4174fae007128222f22d770d3b99ad4435f185b96eaafe3d3649d",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "simpleqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 63,
+      "suite": "simpleqa"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 3,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|64|gpqa_Organic Chemistry_0304|f1a8fd5e639468d8a2539308f5a639327394a3cba8bf9d5d8bfd29b98af4567d|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "gpqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 64,
+      "suite": "gpqa"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|65|hotpot_bridge_5abe7c515542993f32c2a128|d37880bbe524b454af161b5264e3da69510673f987f2f615a4ac29a177833ee6|1ae644853f9346ed5f794a4d9ae86406eb4c40d74323e0907d53450be7c78281",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "hotpotqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 65,
+      "suite": "hotpotqa"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|66|mbpp_0268|25f4213554e71281d36c67179fedd7596b290fa8637c89b443b9b973a38be138|3156e2502b11f4639bfb347d9b83f4727726d9f01fe03fe2ec286c9f2a8c51dc",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "coder"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 66,
+      "suite": "coder"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|69|mmlu_moral_scenarios_08571|4eddfc3d961dcd01a7b0f4885c1262781626334d6f742aaf3d0be59d3fe3d4ff|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "general"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 69,
+      "suite": "general"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|70|simpleqa_general_00364|422d6d05651c8f477fa2a8fe954b666b778accd7a758848eb0b66001d7ceec8d|b508deef7719cf6219956ef778b34060df6f7c3e52c7332672b3edcb8b225621",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "simpleqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 70,
+      "suite": "simpleqa"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|71|gpqa_Quantum Mechanics_0120|2908af85343e068616795d967e338f8afdf5c7021745207cce90b7e3ae5ffb53|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "gpqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 71,
+      "suite": "gpqa"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|73|mbpp_0062|498d37173e77d34937644839abba22c03cb3d7253d1e9b99f8a2a7d906c9c46d|ec10391cfb451f138698b1d0664d67ae766f83f4a1add439e765752030eb3a49",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "coder"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 73,
+      "suite": "coder"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|76|mmlu_professional_law_12038|0055729327848d9c008842dc1997cda3e8d22e4a670f17f376a260a64146964d|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "general"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 76,
+      "suite": "general"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|77|simpleqa_general_03402|777a3b752719a058b3b56afecb12d69ecd576834c59f7d7f17b128b13e8cc999|afc7fd5e197ac5371b06892f1fcd7519c23a2d0c8866c3d0cd7c6cc498ff5635",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "simpleqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 77,
+      "suite": "simpleqa"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|78|gpqa_Physics (general)_0279|ebacfd8b922cb8c6b0c8b6983ab3b355eb356999da735d554292ab3e5565d478|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "gpqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 78,
+      "suite": "gpqa"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|79|hotpot_bridge_5ab26b60554299449642c898|5c30346bc871776bf8053a8fc5dafe9184fbc9bc6ca8255e133392f6b2ec38a5|39bb15e6b7c71ad6ee632ac1cd9641ed3063791b71b4b2228ed5731a2883b561",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "hotpotqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 79,
+      "suite": "hotpotqa"
+    },
+    {
+      "candidate_actions": [
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [
+        "architect_general"
+      ],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|7|simpleqa_general_02378|fcfff8836de78141cd1ee42be63c3a5abda25ff1560293a5d6e97c37ebdff422|dcac1bb163b535d2ff8a64ac6ef18c7486da97ae2e8291220090c72f66cd1a40",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "simpleqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 7,
+      "suite": "simpleqa"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|80|mbpp_0497|b7402572a9cc29339eac65473cffcfd039f664322118db34a17c48d49096f450|bc148965cf8811964bfb83077509005422a231a1946c12d6a45f60e4140e6862",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "coder"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 80,
+      "suite": "coder"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|83|mmlu_high_school_psychology_05289|674c6fa8bd0d5da991c33e356244291f7053d0457a7d6e7dc62a1ba77f2918c8|559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "general"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 83,
+      "suite": "general"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|84|simpleqa_general_02042|fb7d5abb0a277e0335a9accd5d3bd79387856ecaf9fbf0be1381ad61eda81a0e|f46c8577851fe486fe8b30d68b7fc659b86603478cd63cfc2d080ae696d6dba5",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "simpleqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 84,
+      "suite": "simpleqa"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|85|gpqa_Electromagnetism and Photonics_0097|7eadbd732ac58861cf3bc7ed3d118f70e4b65c25fb3a08d5f566a673cf102b94|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "gpqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 85,
+      "suite": "gpqa"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|86|hotpot_bridge_5abc219655429959677d6a1d|19416ec1a5631c2b6a07317b989b0db756b7ee158c5d07609694f392eaffe05e|7f850305da3b804796befd43e1d7d92675e15f3359f47df12f2b3182652d06f3",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "hotpotqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 86,
+      "suite": "hotpotqa"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|87|mbpp_0346|b67ab05820d0b092d1779b86fb15c0a607f5b7c51fe62bf065fe8505672465c6|c629f93e48d3094d892315170c66b91c6098be8cfe98845a806d416c7e604a3e",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "coder"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 87,
+      "suite": "coder"
+    },
+    {
+      "candidate_actions": [
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [
+        "architect_general"
+      ],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|8|gpqa_Astrophysics_0348|e0a8a5c7fcd6d0d3ff6ef00fc945c6939bedfbe6abd784399500ac849c437ae0|3f39d5c348e5b79d06e842c114e6cc571583bbf44e4b0ebfda1a01ec05745d43",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "gpqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 8,
+      "suite": "gpqa"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|90|mmlu_medical_genetics_07380|77f33da3ef1e2cd9f9a4a40bd2b5df1c234c1fb3eb5ff411ea48ee2c05f54a76|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "general"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 90,
+      "suite": "general"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|91|simpleqa_general_02033|c1ec270db03556154b6e7f58b512c5931ece3b1b9d99cf6aea9affc8b1d83ac9|47fa8cffc2e076d2dc15a3c9f551f02f9e1fca0ac0a2d7ef5faddaef48256412",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "simpleqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 91,
+      "suite": "simpleqa"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|92|gpqa_Organic Chemistry_0058|3a2ade3469c344336b01b64ca5df80279de129d2db6565954fdf7cea435d0526|3f39d5c348e5b79d06e842c114e6cc571583bbf44e4b0ebfda1a01ec05745d43",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "gpqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 92,
+      "suite": "gpqa"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|94|humaneval_HumanEval_101|3aea8745c4ec2f809e9052e4c0260d08600a85aa6171bf211a2eb23200efebc1|7570da2305d1cfe03eef8a72ea7eacc84167dcb247e0f8c12c44522d7ac7363b",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "coder"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 94,
+      "suite": "coder"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 3,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|97|mmlu_security_studies_13294|8d1fc9e78128d1ada2cb3a99e0f2c6e0b20717a956955ecd2c9b3265e0ef2c14|3f39d5c348e5b79d06e842c114e6cc571583bbf44e4b0ebfda1a01ec05745d43",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "general"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 97,
+      "suite": "general"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 3,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|98|simpleqa_general_04029|f7ca5b968e79405aea6c6a79893d4bf4b852725ffd31b2ad2b912859ba08e235|281cb787d085665a30559a1671fd4a836771197eceb38ac77a7a3b75dc242f1f",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "simpleqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 98,
+      "suite": "simpleqa"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 3,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|99|gpqa_High-energy particle physics_0387|d4eb9d583edcd9b00112fd38c88ca1c92a8805fbf5cca3db2229a424226cdeac|559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "gpqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 99,
+      "suite": "gpqa"
+    },
+    {
+      "candidate_actions": [
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [
+        "architect_general"
+      ],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|9|hotpot_bridge_5ae0d9c555429924de1b719a|81b81d3ed6c2f18fb7d12daefc1556dafd8bd27ad547a71f42b57271e32d0157|ea0c9a2a8dbb2f64c2b759b642a264965ee74a140b274dac3b96c424e44cc2d6",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "hotpotqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 9,
+      "suite": "hotpotqa"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl|0|simpleqa_general_02012|028b6a1d182075727305fec4cceb4621c879ecda9581cd7429aef36d02cdef4d|1b71a987416cf429ada092cb78a715daef5d1fb17cf1134ea699e93f6fbf29ef",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "simpleqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl",
+      "source_record_offset": 0,
+      "suite": "simpleqa"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl|10|humaneval_HumanEval_70|a6bfafbcfb6278c1a84f998df8edc658f0874ba783582511d7dca30c63057332|8c4e7726d68b843cd74982445fdfdf474914279e4676223ad3c713daedd1baeb",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "coder"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl",
+      "source_record_offset": 10,
+      "suite": "coder"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl|13|mmlu_sociology_13482|8222a0b1ab4876623a71c10a9be0b9ccddc99df09ae8615e82f01b6878b5dde0|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "general"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl",
+      "source_record_offset": 13,
+      "suite": "general"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl|14|simpleqa_general_04006|d860e1045cecb91ebb6d7265dd222d741f5f1508f1bdb9e02d031be49c891540|e0c79437d8ac7cede1983194725c99794cf703a6bf2dc21dc8c6d2f4a1226759",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "simpleqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl",
+      "source_record_offset": 14,
+      "suite": "simpleqa"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 3,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl|15|gpqa_Chemistry (general)_0362|50020e6462d0bc4b13f7a95eb704460b5e801e0d7b5b6fcdc1c76e1d0555b886|559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "gpqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl",
+      "source_record_offset": 15,
+      "suite": "gpqa"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl|16|hotpot_bridge_5add65355542995b365fab27|aa22a62e9d6d26eb87f186b552e43bb4bbbe97ec7206d98602558e2a620abcf8|a4f99ad8417c33a81d10cd9e01d2382ad3b0c9f2ffcc10466c9c8b49fdf505cc",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "hotpotqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl",
+      "source_record_offset": 16,
+      "suite": "hotpotqa"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl|17|mbpp_0142|0c687c400e8fb6b2a20e06a1aa4e2f3b24dc75b0fcab797520e08d0ff706cc9d|9f1c2e48434981e8ab4cabf002ed718034276637d198aa721a2e5adbca4ebdc1",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "coder"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl",
+      "source_record_offset": 17,
+      "suite": "coder"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl|1|gpqa_Chemistry (general)_0027|bdb9e245a29498ebfdac23d07693849eea0062f53d4a3b74d85416ca32cb3a66|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "gpqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl",
+      "source_record_offset": 1,
+      "suite": "gpqa"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl|20|mmlu_public_relations_13102|345922d1908811345dca7eae55e863ab5077c9c84f0e658f4ae5235b91a14f26|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "general"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl",
+      "source_record_offset": 20,
+      "suite": "general"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 3,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl|21|simpleqa_general_00231|0961c85145f113c47f4933d9d9cfcba6fb791ac0d3806752b5a0d352b0f10623|6dedc1ceb2036916077465d3dbcaa677153a447f01eeb2dd1ef477bc0f35dc36",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "simpleqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl",
+      "source_record_offset": 21,
+      "suite": "simpleqa"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl|22|gpqa_Astrophysics_0402|570bed2303483fdd17c2e20be45c834b6ead2fa9b8c6b6b762d67bded534ea28|3f39d5c348e5b79d06e842c114e6cc571583bbf44e4b0ebfda1a01ec05745d43",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "gpqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl",
+      "source_record_offset": 22,
+      "suite": "gpqa"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl|23|hotpot_bridge_5a775e095542994aec3b72b4|65821ce6c75590d90ae3da313b3810aefc161aae9b6886893518a9e94f9c7b11|121b1d896f8fe07e13747b607c0cc4855bf85a7a05c74800494f7cad6a28ba10",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "hotpotqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl",
+      "source_record_offset": 23,
+      "suite": "hotpotqa"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl|24|mbpp_0084|7dc816a4bf1420ae98027c69b75e67ad9112999befcaed3a1a86e845e1f26d86|bf37c7c208717d6de100ce851b48273f8d5d945c8dc64fc64372087ffcf88ba9",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "coder"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl",
+      "source_record_offset": 24,
+      "suite": "coder"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl|27|mmlu_professional_psychology_12929|4621e37d3499462568755cb21adeecb35bf8211e8e13b14edab87da4749d8c69|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "general"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl",
+      "source_record_offset": 27,
+      "suite": "general"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 3,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl|28|simpleqa_general_01359|bfbd980214aaa906e355a7d3e6e17da9f8e08422300144518879f751eaaba63a|0455046807afbc3bdd6be26933f1d638a9d7272f78c35aa31c9eda17a7912422",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "simpleqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl",
+      "source_record_offset": 28,
+      "suite": "simpleqa"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl|29|gpqa_Molecular Biology_0430|28b22f7062a938ba71ffc31329f328b9d151690e95d42c412b0fa9c93c965aa8|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "gpqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl",
+      "source_record_offset": 29,
+      "suite": "gpqa"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl|2|hotpot_bridge_5ae22f4e5542996483e6492f|490d0d0fd35cc677aaab94c43dfa5f579826676c799163dd630b018963008664|0d075fb29763800d6c9cf62365eff32ecc78d0e8e1a9653e6e76d86bed244687",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "hotpotqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl",
+      "source_record_offset": 2,
+      "suite": "hotpotqa"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl|30|hotpot_bridge_5a7af08655429931da12c989|59e67a4da94587ad6269fab53d92376d318d020d9e9ca7ad9bfd7fec839e6be1|68754b0f08a8982acfd7da4b365663b2e715f29c389fb777c032de066245d78c",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "hotpotqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl",
+      "source_record_offset": 30,
+      "suite": "hotpotqa"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl|31|mbpp_0139|dca37b23103088c55b9b463b6249d0073e702c4328c8c4edce6f7b3b295b95cf|f273d8e391643ad84647ea9a1c1711145f452de0ad066d8255b67d83a4b0f375",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "coder"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl",
+      "source_record_offset": 31,
+      "suite": "coder"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl|34|mmlu_astronomy_00310|338cc12f983ceb8f5b5a9f26014267895c70b4f95596f8a26b64648f7f092c45|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "general"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl",
+      "source_record_offset": 34,
+      "suite": "general"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 3,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl|35|simpleqa_general_01675|0ca38640f1991e2bf3da971a15819bffba6bacfb5992bf1eeff5012ad88a2d08|81ed68d6543ba33ff76f4ae1568a705bac47d8e5035918a9487c87a016ad1742",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "simpleqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl",
+      "source_record_offset": 35,
+      "suite": "simpleqa"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl|36|gpqa_Organic Chemistry_0162|0929ca12dcf8af0ffe0796d59347eed4402381abd6f5b78bcdf32d501757aaa6|3f39d5c348e5b79d06e842c114e6cc571583bbf44e4b0ebfda1a01ec05745d43",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "gpqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl",
+      "source_record_offset": 36,
+      "suite": "gpqa"
+    }
+  ],
+  "skipped_no_collection_target_pair_groups": 0,
+  "skipped_no_cross_action_groups": 411,
+  "skipped_pairwise_overlap_groups": 8,
+  "stats": {
+    "candidate_rows": 9307,
+    "files_scanned": 2555,
+    "skipped_existing_row": 1876,
+    "skipped_missing_prompt": 3894,
+    "skipped_missing_reference": 338,
+    "skipped_missing_response": 1349,
+    "skipped_non_target_suite_record": 31938
+  },
+  "target_actions": [
+    "architect_general",
+    "coder_escalation",
+    "frontdoor"
+  ],
+  "target_match_mode": "any",
+  "target_source_families": [
+    "orchestrator_live_seed",
+    "seeding_eval"
+  ],
+  "target_suites": [
+    "coder",
+    "debugbench",
+    "general",
+    "gpqa",
+    "hotpotqa",
+    "instruction_precision",
+    "long_context",
+    "mode_advantage",
+    "mode_advantage_hard",
+    "simpleqa",
+    "thinking"
+  ],
+  "unmatched_collection_targets": [
+    "source_family:orchestrator_live_seed:architect_general>frontdoor",
+    "source_family:seeding_eval:architect_general>coder_escalation",
+    "source_family:seeding_eval:architect_general>frontdoor",
+    "suite:general:architect_general>coder_escalation",
+    "suite:instruction_precision:architect_general>coder_escalation",
+    "suite:instruction_precision:architect_general>frontdoor",
+    "suite:simpleqa:architect_general>coder_escalation",
+    "suite:thinking:architect_general>coder_escalation"
+  ]
+}
