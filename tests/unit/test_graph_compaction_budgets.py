@@ -6,10 +6,7 @@ concurrency_aware.py migration state machine.
 
 from __future__ import annotations
 
-import os
-import tempfile
-from pathlib import Path
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -188,6 +185,20 @@ class TestCheckBudgetExceeded:
             mock_feat.return_value.task_token_budget = True
             result = _check_budget_exceeded(ctx)
         assert "Task token budget exhausted" in result
+
+    def test_prefers_call_budget_message_when_both_exceeded(self):
+        from src.graph.budgets import _check_budget_exceeded
+
+        ctx = MagicMock()
+        ctx.state.repl_executions = 30
+        ctx.state.aggregate_tokens = 200000
+
+        with patch("src.features.features") as mock_feat:
+            mock_feat.return_value.worker_call_budget = True
+            mock_feat.return_value.task_token_budget = True
+            result = _check_budget_exceeded(ctx)
+
+        assert result == "Worker call budget exhausted (30/30 REPL executions)"
 
 
 class TestBudgetPressureWarnings:
