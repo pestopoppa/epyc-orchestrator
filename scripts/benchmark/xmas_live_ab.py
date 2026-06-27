@@ -32,7 +32,7 @@ DEFAULT_MIN_SCORE_DELTA = 0.05
 DEFAULT_MAX_DOMAIN_REGRESSION = 0.0
 DEFAULT_MAX_LATENCY_RATIO = 1.10
 XMAS_EVIDENCE_POLICY_ID = "incumbent_constrained_cheapfirst_v2"
-XMAS_EVIDENCE_POLICY_MIN_COMMIT = "f517902d"
+XMAS_EVIDENCE_POLICY_MIN_COMMIT = "b108f865"
 QUIET_WINDOW_PROCESS_PATTERNS: tuple[tuple[str, str], ...] = (
     ("AutoPilot", "scripts/autopilot/autopilot.py start"),
     ("AutoPilot", "autopilot.py start"),

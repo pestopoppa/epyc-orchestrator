@@ -218,9 +218,11 @@ def test_dry_run_can_use_builtin_smoke_set_without_inference(
     meta = json.loads((output / "meta.json").read_text())
     assert meta["prompt_manifest"] == "builtin_smoke"
     assert meta["xmas_policy"] == xmas_live_ab.XMAS_EVIDENCE_POLICY_ID
+    assert meta["xmas_policy_min_commit"] == "b108f865"
     summary = json.loads((output / "summary.json").read_text())
     assert summary["dry_run"] is True
     assert summary["xmas_policy"] == xmas_live_ab.XMAS_EVIDENCE_POLICY_ID
+    assert summary["xmas_policy_min_commit"] == "b108f865"
 
 
 def test_real_run_records_xmas_meta_without_inference(monkeypatch, tmp_path: Path) -> None:
@@ -386,6 +388,7 @@ def test_summarize_results_mode_does_not_reload_or_chat(
     assert "source_results" in summary
     assert summary["xmas_policy"] == xmas_live_ab.XMAS_EVIDENCE_POLICY_ID
     assert summary["required_xmas_policy"] == xmas_live_ab.XMAS_EVIDENCE_POLICY_ID
+    assert summary["required_xmas_policy_min_commit"] == "b108f865"
     report = (output / "report.md").read_text(encoding="utf-8")
     assert "X-MAS held-out replay report" in report
     assert "prompt manifest: `/tmp/held-out/prompts.jsonl`" in report
