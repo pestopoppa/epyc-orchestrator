@@ -1196,6 +1196,7 @@ roles:
     - ingest
     acceleration:
       type: moe_expert_reduction
+      baseline_experts: 8
       experts: 8
       override_key: qwen35moe.expert_used_count
     constraints:
@@ -1226,6 +1227,74 @@ roles:
     notes: >
       75% Delta Net (gated linear attention) layers + 25% attention. 40 total layers (30 recurrent, 10 attention).
       Frontdoor target: beat 47.11 t/s (Qwen3-Coder-30B-A3B MoE6+spec+lookup).
+  qwen36_q8_0:
+    tier: B
+    description: Qwen3.6-35B-A3B Q8_0 — MoE successor to Qwen3.5, thinking model
+    agent_file_compression_operating_point: medium
+    model:
+      name: Qwen3.6-35B-A3B
+      path: /mnt/raid0/llm/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf
+      quant: Q8_0
+      size_gb: 37
+      architecture: qwen35moe
+      use_chat_api: true
+      disable_thinking: true
+      reasoning: auto
+      reasoning_budget: 4096
+      max_tokens_multiplier: 4
+      env_vars:
+        OMP_PROC_BIND: spread
+        OMP_PLACES: cores
+        OMP_WAIT_POLICY: active
+        OMP_DYNAMIC: "false"
+      kv_cache:
+        type_k: q8_0
+        type_v: q8_0
+      sampling:
+        thinking:
+          temperature: 1.0
+          top_p: 0.95
+          top_k: 20
+          presence_penalty: 0.0
+        non_thinking:
+          temperature: 0.7
+          top_p: 0.8
+          top_k: 20
+          presence_penalty: 1.5
+      max_context: 262144
+      max_output_tokens: 32768
+    candidate_roles:
+    - frontdoor
+    - coder
+    - general
+    acceleration:
+      type: ngram_lookup
+      spec_type: ngram-simple
+      draft_max: 64
+    performance:
+      baseline_tps: 25.6
+      optimized_tps: 27.4
+      quad_aggregate_tps: 57.4
+      eight_aggregate_tps: 76.8
+      prompt_processing_tps: 219.2
+      long_context_gen_tps: 21.3
+      quality_score: 73.8
+      quality_pass_rate: 77.1
+      quality_non_degenerate: 95.7
+      quality_by_suite:
+        agentic: 100.0
+        thinking: 90.0
+        general: 90.0
+        tool_compliance: 78.0
+        instruction_precision: 64.0
+        coder: 60.0
+        math: 60.0
+    benchmark_date: 2026-04-20
+    notes: >
+      Best model tested at 95.7% quality when not in think-loop. 73.8% overall due to 23% degenerate responses (</think> tag loops — llama.cpp Qwen3.6 template bug, not model issue).
+      Fork fix applied 2026-04-20: cherry-picked 56666fa60 (reasoning budget sampler skip) — CLI test confirmed no more think-loops. Quality benchmark pending. Q8 faster than Q4 (25.6 vs 24.4).
+      Ngram +10%. 4×48t=57, 8×24t=77 tps aggregate. HuggingFace sampling: thinking temp=1.0/top_p=0.95, non-thinking temp=0.7/top_p=0.80/presence=1.5.
+      No /think /nothink soft switch (unlike Qwen3). Min recommended context: 128K for thinking.
   qwen35_q4ks:
     tier: B
     description: Qwen3.5-35B-A3B abliterated Q4_K_S — frontdoor candidate
@@ -1920,6 +1989,7 @@ roles:
     - general
     acceleration:
       type: moe_expert_reduction
+      baseline_experts: 8
       experts: 8
       override_key: qwen35moe.expert_used_count
     constraints:
@@ -2199,14 +2269,30 @@ roles:
       temperature: 0.3
   worker_general:
     tier: C
-    description: General worker — gemma4-26B-A4B Q4_K_M (MTP) — swapped 2026-05-08 from Qwen3-Coder-30B-A3B Q4. +6pp on master suite (90% vs 84%), +18pp on tool_compliance (96% vs 78%), +36% tps on tool_compliance (60.7 vs 44.7), 3× more concise output. Draft via Google's official gemma-4-26B-A4B-it-assistant 4-layer MTP head (Apache-2.0), GGUF-quantized in-house to Q8.
+    description: General worker — gemma4-26B-A4B Q4_K_M (MTP) — swapped 2026-05-08 from Meta-Llama-3-8B / Qwen3-Coder-30B-A3B lineage. Mirrors the live orchestrator worker_general target for benchmark correctness.
     model:
-      name: gemma-4-26B-A4B-it-ORIG-Q4_K_M  # 2026-06-26 v6 cutover: ORIG base (old gemma-4-26B-A4B-it-Q4_K_M.gguf garbles on v6); matches the worker server_mode block
+      name: gemma-4-26B-A4B-it-Q4_K_M
       path: /mnt/raid0/llm/models/gemma-4-26B-A4B-it-ORIG-Q4_K_M.gguf
       quant: Q4_K_M
       size_gb: 16
       architecture: gemma4
-      previous_model: Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf  # swapped 2026-05-08 (tool_compliance 96% vs 78%; full suite 90% vs 84%)
+      use_chat_api: true
+      reasoning: "off"
+      previous_model: Meta-Llama-3-8B-Instruct-Q4_K_M
+      env_vars:
+        OMP_PROC_BIND: spread
+        OMP_PLACES: cores
+        OMP_WAIT_POLICY: active
+        OMP_DYNAMIC: "false"
+      kv_cache:
+        type_k: q8_0
+        type_v: q8_0
+      sampling:
+        temperature: 1.0
+        top_p: 0.95
+        top_k: 64
+        repeat_penalty: 1.05
+      max_context: 16384
     candidate_roles:
     - worker
     - general
@@ -2221,8 +2307,8 @@ roles:
       ubatch: 512                                    # MTP recipe override (canonical 8192 interacts poorly with batched-verify)
     constraints:
       forbid:
-      - prompt_lookup       # MTP-only model; --spec-type ngram-simple conflicts with -md MTP draft
-      reason: MTP and ngram-simple lookup both consume the spec-decode slot; ik_llama.cpp cannot hold both.
+      - prompt_lookup
+      reason: "draft-mtp and ngram-simple lookup both consume the spec-decode slot."
     performance:
       baseline_tps: 44.7    # measured 2026-05-08 tool_compliance baseline (was 41.49 dense, 44.12 with MTP draft per research registry)
       optimized_tps: 60.7   # measured 2026-05-08 tool_compliance MTP (median of 9 questions)
@@ -2323,23 +2409,20 @@ roles:
       quant: Q4_K_M
       size_gb: 18.0
       architecture: qwen3vlmoe
-      ctx_max: 262144  # GGUF metadata: qwen3vlmoe.context_length
-    thinking_control:
-      mode: native_no_thinking_toggle
-      effective_mode: native_no_think_tags
-      evidence_strength: model_family_inferred
-      evidence: "Qwen3-VL-30B-A3B-Instruct is tracked separately from Qwen3-VL thinking models; no role toggle is declared."
     candidate_roles:
     - vision
     acceleration:
       type: moe_expert_reduction
+      baseline_experts: 8
       experts: 4
       override_key: qwen3vlmoe.expert_used_count
     performance:
       baseline_tps: 19.0
       optimized_tps: 27.6
       speedup: 1.45x
-      vl_score: "11/12 (92%)"  # rescored 2026-03-04 (was 27/36=75%)
+      vl_score:
+        pct: 92.0
+        raw: "11/12"
       benchmark_date: 2026-03-04
     memory:
       residency: hot
@@ -2420,7 +2503,7 @@ roles:
       For document QA, cite specific sections.
   toolrunner:
     tier: C
-    description: Tool output summarization & triage — Qwen3-Coder-30B-A3B Q4 (consolidated, May-4)
+    description: Summarize tool outputs, triage logs, propose next commands
     model:
       name: Qwen3-Coder-30B-A3B-Instruct-Q4_K_M
       huggingface_id: unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF
@@ -2432,7 +2515,6 @@ roles:
     candidate_roles:
     - worker
     - general
-    - agentic
     acceleration:
       type: speculative_decoding
       draft_role: draft_qwen3_coder_0_75b
@@ -3655,6 +3737,24 @@ roles:
     - qwen3-4b
     # REMOVED: qwen3-30b-a3b-thinking - missing BOS token in GGUF
     notes: Generic Qwen3 draft. NOT compatible with Qwen3-Coder or Qwen3-Thinking (BOS mismatch).
+  draft_gemma4_26b_a4b_assistant_q8:
+    tier: D
+    description: Gemma 4 MTP assistant drafter for 26B-A4B target (Gemma4Assistant arch, 4 layers, 1024 hidden, 16/8 heads — half the heads of 31B drafter)
+    model:
+      name: gemma-4-26B-A4B-it-assistant
+      huggingface_id: google/gemma-4-26B-A4B-it-assistant
+      path: /mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-v6-Q8_0.gguf
+      quant: Q8_0
+      size_gb: 0.44
+      architecture: gemma4-assistant
+      converted_by: in-house
+    candidate_roles:
+    - draft
+    memory:
+      residency: cold
+    notes: >
+      # 2026-06-26 v6 cutover: native draft-mtp on production-consolidated-v6, ik_llama deprecated.
+      MTP drafter for gemma4_26b_a4b_q4km_mtp target (gemma4-assistant arch, v6 native). Acceptance is materially LOWER than the 31B Dense drafter (58.7% vs 84.3%) because the smaller 16/8-head drafter struggles to predict MoE expert routing on the 26B-A4B target.
   draft_qwen3_coder_0_75b:
     tier: D
     description: Draft model for Qwen3-Coder family (jukofyork) - vocab transplant for 480B BOS fix
@@ -3667,11 +3767,8 @@ roles:
     candidate_roles:
     - draft
     memory:
-      # Loaded inside target server's llama-server process via --draft-model;
-      # never runs standalone. Active targets: worker (8082), coder_escalation
-      # (8081), architect_coding (8084+8184).
-      residency: co_resident_with_target
-      pinned: true  # mlock'd as part of target server's pinned memory
+      residency: cold
+      pinned: false
     compatible_targets:
     - qwen3-coder-30b-a3b
     - qwen3-coder-480b-a35b
