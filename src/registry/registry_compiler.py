@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import hashlib
 import os
-import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -108,6 +107,25 @@ def _resolve_role_dependencies(master: dict, active_roles: set[str]) -> set[str]
                             resolved.add(s)
                             changed = True
     return resolved
+
+
+def active_roles_from_launch_meta(launch_meta: dict[str, Any]) -> set[str]:
+    """Return compile input roles from launcher metadata, including aliases.
+
+    `ROLE_LAUNCH_META` keys are the primary launch targets. Some production
+    roles are aliases attached to the first N instances of a primary target
+    (`shared_with_first_n`), so they do not appear as top-level launch keys.
+    The lean registry still needs their `roles.X` / `server_mode.X` records for
+    routing, timeout, descriptor, and attestation consumers.
+    """
+    active = set(launch_meta.keys())
+    for meta in launch_meta.values():
+        if not isinstance(meta, dict):
+            continue
+        aliases = meta.get("shared_with_first_n")
+        if isinstance(aliases, list):
+            active.update(str(alias) for alias in aliases)
+    return active
 
 
 def compile_lean(master_path: Path, active_roles: set[str]) -> dict:
@@ -264,7 +282,7 @@ def _main() -> int:
         # Import the launcher's manifest.
         sys.path.insert(0, "/mnt/raid0/llm/epyc-orchestrator/scripts/server")
         from orchestrator_stack import ROLE_LAUNCH_META  # type: ignore[import]
-        active = set(ROLE_LAUNCH_META.keys())
+        active = active_roles_from_launch_meta(ROLE_LAUNCH_META)
 
     if args.dry_run:
         compiled = compile_lean(args.master, active)

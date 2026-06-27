@@ -664,9 +664,12 @@ def cmd_start(args: argparse.Namespace) -> int:
     # Escape hatch (when ON): set ORCHESTRATOR_REGISTRY_NO_COMPILE=1 to bypass.
     if getattr(args, "compile_registry", False):
         try:
-            from src.registry.registry_compiler import load_or_compile
+            from src.registry.registry_compiler import (
+                active_roles_from_launch_meta,
+                load_or_compile,
+            )
 
-            active_roles = set(ROLE_LAUNCH_META.keys())
+            active_roles = active_roles_from_launch_meta(ROLE_LAUNCH_META)
             print(f"[registry-compile] master={_master_registry}")
             print(f"[registry-compile] active_roles={sorted(active_roles)}")
             load_or_compile(
