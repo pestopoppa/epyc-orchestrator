@@ -2,22 +2,21 @@
   "builder": "scripts/tasks/materialize_real_suite_v1.py",
   "counts": {
     "selected_by_class": {
-      "benchmark_eval_measurement": 11,
+      "benchmark_eval_measurement": 8,
       "code_change_implementation": 7,
-      "debug_root_cause": 4,
+      "debug_root_cause": 7,
       "governance_docs_handoff": 7,
       "ops_deploy_process": 7,
       "planning_architecture_review": 7,
       "research_intake_deep_dive": 7
     },
     "selected_by_outcome": {
-      "failure": 21,
-      "success": 29
+      "failure": 22,
+      "success": 28
     },
     "selected_rows": 50,
     "source_suites": {
-      "agentic": 1,
-      "bigcodebench": 3,
+      "bigcodebench": 1,
       "coder": 1,
       "cruxeval": 5,
       "debugbench": 1,
@@ -26,15 +25,15 @@
       "hotpotqa": 2,
       "instruction_precision": 5,
       "livecodebench": 3,
-      "long_context": 7,
-      "math": 1,
+      "long_context": 6,
+      "mode_advantage": 6,
       "mode_advantage_hard": 2,
       "simpleqa": 1,
       "skill_transfer": 6,
-      "thinking": 5
+      "thinking": 4
     }
   },
-  "generated_at": "2026-06-21T01:31:05+00:00",
+  "generated_at": "2026-06-27T15:36:42+00:00",
   "privacy": {
     "committed_manifest_omits_raw_prompt_and_expected_text": true,
     "yaml_prompts_source": "existing question_pool rows"
@@ -62,9 +61,7 @@
       "research_intake_deep_dive": 7
     },
     "policy": "scoreable expected-backed rows only; fill class quotas where possible, then redistribute shortage to surplus scoreable rows",
-    "quota_shortages": {
-      "debug_root_cause": 3
-    }
+    "quota_shortages": {}
   },
   "validation_target": "Build a temporary question pool and load real_suite_v1 through EvalTower core references.",
   "yaml_output": "/mnt/raid0/llm/epyc-inference-research/benchmarks/prompts/debug/real_suite_v1.yaml"

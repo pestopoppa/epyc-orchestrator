@@ -86,7 +86,12 @@ def _has_scoreable_expected(source: dict[str, Any] | None) -> bool:
         return False
     expected = source.get("expected")
     scoring_method = str(source.get("scoring_method") or "exact_match")
-    return (expected is not None and str(expected) != "") or scoring_method == "programmatic"
+    scoring_config = source.get("scoring_config") if isinstance(source.get("scoring_config"), dict) else {}
+    return (
+        (expected is not None and str(expected) != "")
+        or scoring_method == "programmatic"
+        or (scoring_method == "code_execution" and bool(scoring_config.get("test_code")))
+    )
 
 
 def select_expected_backed_rows(
@@ -144,7 +149,7 @@ def build_yaml_questions(
         expected = str(source.get("expected") or "")
         scoring_method = str(source.get("scoring_method") or "exact_match")
         scoring_config = source.get("scoring_config") or {}
-        if not expected and scoring_method != "programmatic":
+        if not _has_scoreable_expected(source):
             raise RuntimeError(f"selected row lacks scoreable expected text: {source_key}")
         qid = f"real_suite_v1_{idx:04d}"
         questions.append(

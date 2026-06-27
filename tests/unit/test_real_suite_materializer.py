@@ -61,6 +61,27 @@ def test_select_expected_backed_rows_filters_unscoreable_pool_matches() -> None:
     assert all(not row["question_pool_id"].endswith("-0") for row in selected)
 
 
+def test_select_expected_backed_rows_accepts_code_execution_test_code() -> None:
+    rows = []
+    pool = {}
+    for class_id in materializer.CLASS_ORDER:
+        for idx in range(9):
+            qid = f"{class_id}-{idx}"
+            rows.append(_recon_row(f"{class_id}-{idx}", class_id, qid))
+            pool[("math", qid)] = {
+                "expected": "",
+                "scoring_method": "code_execution",
+                "scoring_config": {"test_code": "assert candidate() == 42"},
+            }
+
+    selected, _, shortages = materializer.select_expected_backed_rows(
+        rows, question_pool=pool, total=50
+    )
+
+    assert len(selected) == 50
+    assert shortages == {}
+
+
 def test_select_expected_backed_rows_redistributes_scoreable_shortage() -> None:
     rows = []
     for class_id in materializer.CLASS_ORDER:
@@ -92,9 +113,13 @@ def test_materializer_writes_scoreable_yaml_and_prompt_free_manifest(tmp_path: P
                     "id": qid,
                     "suite": "math",
                     "prompt": f"Prompt {qid}",
-                    "expected": f"Expected {qid}",
-                    "scoring_method": "exact_match",
-                    "scoring_config": {},
+                    "expected": "" if class_id == "debug_root_cause" else f"Expected {qid}",
+                    "scoring_method": "code_execution"
+                    if class_id == "debug_root_cause"
+                    else "exact_match",
+                    "scoring_config": {"test_code": "assert candidate() == 42"}
+                    if class_id == "debug_root_cause"
+                    else {},
                     "tier": 1,
                 }
             )
@@ -121,6 +146,6 @@ def test_materializer_writes_scoreable_yaml_and_prompt_free_manifest(tmp_path: P
     assert result["selected_rows"] == 50
     assert suite["suite"] == "real_suite_v1"
     assert len(suite["questions"]) == 50
-    assert suite["questions"][0]["expected"]
+    assert any(question["scoring_method"] == "code_execution" for question in suite["questions"])
     assert "prompt" not in manifest[0]
     assert "expected" not in manifest[0]
