@@ -308,6 +308,12 @@ def test_pairwise_holdout_plan_filters_to_audit_collection_targets(tmp_path: Pat
                         "stratum_field": "source_family",
                         "stratum_value": "seeding_eval",
                         "action_pair": "coder_escalation>frontdoor",
+                        "current_rows": 2,
+                        "current_direction_balance": 0.0,
+                        "needs_direction": ["prefer other-side of coder_escalation>frontdoor"],
+                        "prefer_hi": 0,
+                        "prefer_lo": 2,
+                        "suggested_min_rows": 20,
                     }
                 ]
             }
@@ -347,6 +353,38 @@ def test_pairwise_holdout_plan_filters_to_audit_collection_targets(tmp_path: Pat
         "source_family:seeding_eval:coder_escalation>frontdoor": 1
     }
     assert summary["unmatched_collection_targets"] == []
+    assert summary["source_record_requirements"] == [
+        {
+            "target": "source_family:seeding_eval:coder_escalation>frontdoor",
+            "status": "matched_existing_candidates",
+            "stratum_field": "source_family",
+            "stratum_value": "seeding_eval",
+            "action_pair": "coder_escalation>frontdoor",
+            "actions_to_evaluate_on_same_source_record": [
+                "coder_escalation",
+                "frontdoor",
+            ],
+            "target_preferred_actions": ["coder_escalation"],
+            "needs_direction": ["prefer other-side of coder_escalation>frontdoor"],
+            "current_rows": 2,
+            "current_direction_balance": 0.0,
+            "matched_candidate_groups": 1,
+            "suggested_min_rows": 20,
+            "suggested_min_new_source_records": 19,
+            "source_record_shape": (
+                "one prompt/reference evaluated by every action in action_pair "
+                "with role_results, rewards, suite, prompt, and expected fields"
+            ),
+            "runtime_gate_change_allowed": False,
+        }
+    ]
+    assert (
+        summary["collection_guidance"]["seeding_eval_command_template"]
+        == "uv run python scripts/benchmark/seed_specialist_routing.py "
+        "--suites <suite> --roles <actions_to_evaluate_on_same_source_record> "
+        "--modes direct repl --sample-size <n> --dry-run "
+        "--output <benchmarks/results/eval/seeding_*.jsonl>"
+    )
     assert summary["selected_groups"][0]["matched_collection_targets"] == [
         {
             "stratum_field": "source_family",
@@ -386,6 +424,12 @@ def test_pairwise_holdout_plan_rejects_non_matching_audit_collection_targets(
                         "stratum_field": "source_family",
                         "stratum_value": "seeding_eval",
                         "action_pair": "architect_general>frontdoor",
+                        "current_rows": 3,
+                        "current_direction_balance": 0.0,
+                        "needs_direction": ["prefer architect_general"],
+                        "prefer_hi": 0,
+                        "prefer_lo": 3,
+                        "suggested_min_rows": 20,
                     }
                 ]
             }
@@ -424,3 +468,83 @@ def test_pairwise_holdout_plan_rejects_non_matching_audit_collection_targets(
     assert summary["unmatched_collection_targets"] == [
         "source_family:seeding_eval:architect_general>frontdoor"
     ]
+    assert summary["source_record_requirements"][0]["status"] == "needs_new_source_records"
+    assert summary["source_record_requirements"][0]["target_preferred_actions"] == [
+        "architect_general"
+    ]
+    assert summary["source_record_requirements"][0]["suggested_min_new_source_records"] == 20
+
+
+def test_pairwise_holdout_negative_markdown_lists_source_record_requirements(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "seeding_20260621_eval.jsonl"
+    _write_jsonl(source, [_result_record()])
+    expected_hash = mod._hash_text("42")
+    prompt_hash = mod._hash_text("Solve task")
+    manifest = tmp_path / "manifest.jsonl"
+    _write_jsonl(
+        manifest,
+        [
+            _manifest_row(
+                source_path=str(source),
+                role_key="frontdoor:direct",
+                expected_sha256=expected_hash,
+                prompt_sha256=prompt_hash,
+            )
+        ],
+    )
+    pairwise = tmp_path / "pairs.jsonl"
+    _write_jsonl(pairwise, [])
+    audit = tmp_path / "audit.json"
+    audit.write_text(
+        json.dumps(
+            {
+                "collection_targets": [
+                    {
+                        "stratum_field": "source_family",
+                        "stratum_value": "seeding_eval",
+                        "action_pair": "architect_general>frontdoor",
+                        "needs_direction": ["balance both directions"],
+                        "current_rows": 2,
+                        "suggested_min_rows": 20,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    summary_md = tmp_path / "summary.md"
+
+    assert (
+        mod.main(
+            [
+                "--input",
+                str(source),
+                "--existing-manifest",
+                str(manifest),
+                "--existing-pairwise-jsonl",
+                str(pairwise),
+                "--candidates-jsonl",
+                str(tmp_path / "candidates.jsonl"),
+                "--summary-json",
+                str(tmp_path / "summary.json"),
+                "--summary-md",
+                str(summary_md),
+                "--collection-targets-json",
+                str(audit),
+                "--target-source-families",
+                "",
+                "--target-suites",
+                "",
+                "--min-cross-action-candidate-groups",
+                "1",
+            ]
+        )
+        == 0
+    )
+
+    text = summary_md.read_text(encoding="utf-8")
+    assert "## Source Record Requirements" in text
+    assert "`source_family:seeding_eval:architect_general>frontdoor`" in text
+    assert "preferred winners `['architect_general', 'frontdoor']`" in text

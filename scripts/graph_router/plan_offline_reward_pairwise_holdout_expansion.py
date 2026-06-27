@@ -180,10 +180,82 @@ def _load_collection_targets(path: Path | None) -> list[dict[str, Any]]:
                 "stratum_value": value,
                 "action_pair": _canonical_action_pair(parts),
                 "needs_direction": target.get("needs_direction") or [],
+                "prefer_hi": target.get("prefer_hi"),
+                "prefer_lo": target.get("prefer_lo"),
+                "current_rows": target.get("current_rows"),
+                "current_direction_balance": target.get("current_direction_balance"),
                 "suggested_min_rows": target.get("suggested_min_rows"),
             }
         )
     return out
+
+
+def _preferred_actions_for_target(target: dict[str, Any]) -> list[str]:
+    action_a, action_b = str(target["action_pair"]).split(">")
+    needs = [str(value) for value in target.get("needs_direction") or []]
+    explicit: set[str] = set()
+    for action in (action_a, action_b):
+        if any(f"prefer {action}" in need for need in needs):
+            explicit.add(action)
+    if explicit:
+        return sorted(explicit)
+    if any("balance both directions" in need for need in needs):
+        return [action_a, action_b]
+    if any("prefer other-side" in need for need in needs):
+        try:
+            prefer_hi = int(target.get("prefer_hi") or 0)
+            prefer_lo = int(target.get("prefer_lo") or 0)
+        except (TypeError, ValueError):
+            return [action_a, action_b]
+        return [action_a if prefer_hi <= prefer_lo else action_b]
+    return []
+
+
+def _target_requirement_key(target: dict[str, Any]) -> str:
+    return (
+        f"{target['stratum_field']}:{target['stratum_value']}:"
+        f"{target['action_pair']}"
+    )
+
+
+def _collection_requirements(
+    collection_targets: list[dict[str, Any]],
+    matched_collection_target_counts: Counter,
+) -> list[dict[str, Any]]:
+    requirements: list[dict[str, Any]] = []
+    for target in collection_targets:
+        key = _target_requirement_key(target)
+        suggested_min = target.get("suggested_min_rows")
+        current_rows = target.get("current_rows")
+        try:
+            suggested_min_int = int(suggested_min)
+        except (TypeError, ValueError):
+            suggested_min_int = 20
+        matched = int(matched_collection_target_counts.get(key, 0))
+        remaining = max(0, suggested_min_int - matched)
+        requirements.append(
+            {
+                "target": key,
+                "status": "matched_existing_candidates" if matched else "needs_new_source_records",
+                "stratum_field": target["stratum_field"],
+                "stratum_value": target["stratum_value"],
+                "action_pair": target["action_pair"],
+                "actions_to_evaluate_on_same_source_record": str(target["action_pair"]).split(">"),
+                "target_preferred_actions": _preferred_actions_for_target(target),
+                "needs_direction": target.get("needs_direction") or [],
+                "current_rows": current_rows,
+                "current_direction_balance": target.get("current_direction_balance"),
+                "matched_candidate_groups": matched,
+                "suggested_min_rows": suggested_min,
+                "suggested_min_new_source_records": remaining,
+                "source_record_shape": (
+                    "one prompt/reference evaluated by every action in action_pair "
+                    "with role_results, rewards, suite, prompt, and expected fields"
+                ),
+                "runtime_gate_change_allowed": False,
+            }
+        )
+    return requirements
 
 
 def _pair_keys(actions: set[str]) -> set[str]:
@@ -464,6 +536,10 @@ def build_plan(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str
     unmatched_collection_targets = [
         key for key in expected_collection_target_keys if key not in matched_collection_target_counts
     ]
+    source_record_requirements = _collection_requirements(
+        collection_targets,
+        matched_collection_target_counts,
+    )
 
     status = (
         "expansion_plan_ready"
@@ -488,6 +564,7 @@ def build_plan(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str
         "collection_target_count": len(collection_targets),
         "matched_collection_target_counts": dict(sorted(matched_collection_target_counts.items())),
         "unmatched_collection_targets": unmatched_collection_targets,
+        "source_record_requirements": source_record_requirements,
         "candidate_rows": len(selected_candidates),
         "candidate_groups": len(selected_groups),
         "candidate_action_counts": dict(sorted(action_counts.items())),
@@ -515,6 +592,28 @@ def build_plan(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str
             "private_fields_excluded": sorted(PRIVATE_FIELDS),
             "text_represented_by_sha256_and_lengths": True,
             "commits_prompt_reference_response_text": False,
+        },
+        "collection_guidance": {
+            "seeding_eval_command_template": (
+                "uv run python scripts/benchmark/seed_specialist_routing.py "
+                "--suites <suite> --roles <actions_to_evaluate_on_same_source_record> "
+                "--modes direct repl --sample-size <n> --dry-run "
+                "--output <benchmarks/results/eval/seeding_*.jsonl>"
+            ),
+            "orchestrator_live_seed_note": (
+                "add records under benchmarks/results/orchestrator/seeding_live*.json "
+                "or an equivalent orchestrator source path so source_family resolves "
+                "to orchestrator_live_seed"
+            ),
+            "post_collection_pipeline": [
+                "plan_offline_reward_pairwise_holdout_expansion.py",
+                "build_offline_reward_oracle_rows.py --candidate-manifest-jsonl",
+                "score_offline_reward_oracle_token_coverage",
+                "export_offline_reward_expansion_labels.py",
+                "build_offline_reward_feature_manifest.py",
+                "build_offline_reward_pairwise_contract.py",
+                "evaluate_offline_reward_pairwise_ranker.py",
+            ],
         },
         "stats": {key: int(value) for key, value in sorted(stats.items())},
         "selected_groups": selected_groups[:100],
@@ -558,9 +657,26 @@ def write_markdown(path: Path, summary: dict[str, Any]) -> None:
         f"- Runtime gate change allowed: `{summary['decision']['runtime_gate_change_allowed']}`",
         f"- Recommended next: `{summary['decision']['recommended_next']}`",
         "",
-        "## Selected Groups",
+        "## Source Record Requirements",
         "",
     ]
+    for requirement in summary["source_record_requirements"][:20]:
+        lines.append(
+            f"- `{requirement['target']}`: `{requirement['status']}`, "
+            f"evaluate `{requirement['actions_to_evaluate_on_same_source_record']}` "
+            f"on the same source records; preferred winners "
+            f"`{requirement['target_preferred_actions']}`; suggest "
+            f"`{requirement['suggested_min_new_source_records']}` new records"
+        )
+    if not summary["source_record_requirements"]:
+        lines.append("- none")
+    lines.extend(
+        [
+            "",
+            "## Selected Groups",
+            "",
+        ]
+    )
     for group in summary["selected_groups"][:20]:
         lines.append(
             f"- `{group['source_family']}/{group['suite']}` "

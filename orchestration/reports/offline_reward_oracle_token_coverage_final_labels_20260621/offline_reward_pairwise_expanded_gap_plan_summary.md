@@ -20,6 +20,18 @@
 - Runtime gate change allowed: `False`
 - Recommended next: `add_more_source_records_for_failed_pairwise_holdout_strata`
 
+## Source Record Requirements
+
+- `source_family:orchestrator_live_seed:architect_general>frontdoor`: `needs_new_source_records`, evaluate `['architect_general', 'frontdoor']` on the same source records; preferred winners `['architect_general']`; suggest `20` new records
+- `source_family:seeding_eval:architect_general>coder_escalation`: `needs_new_source_records`, evaluate `['architect_general', 'coder_escalation']` on the same source records; preferred winners `['architect_general']`; suggest `20` new records
+- `source_family:seeding_eval:architect_general>frontdoor`: `needs_new_source_records`, evaluate `['architect_general', 'frontdoor']` on the same source records; preferred winners `['architect_general']`; suggest `20` new records
+- `suite:general:architect_general>coder_escalation`: `needs_new_source_records`, evaluate `['architect_general', 'coder_escalation']` on the same source records; preferred winners `['architect_general']`; suggest `20` new records
+- `suite:hotpotqa:architect_general>frontdoor`: `needs_new_source_records`, evaluate `['architect_general', 'frontdoor']` on the same source records; preferred winners `['architect_general', 'frontdoor']`; suggest `20` new records
+- `suite:instruction_precision:architect_general>coder_escalation`: `needs_new_source_records`, evaluate `['architect_general', 'coder_escalation']` on the same source records; preferred winners `['architect_general', 'coder_escalation']`; suggest `20` new records
+- `suite:instruction_precision:architect_general>frontdoor`: `needs_new_source_records`, evaluate `['architect_general', 'frontdoor']` on the same source records; preferred winners `['architect_general']`; suggest `20` new records
+- `suite:simpleqa:architect_general>coder_escalation`: `needs_new_source_records`, evaluate `['architect_general', 'coder_escalation']` on the same source records; preferred winners `['architect_general']`; suggest `20` new records
+- `suite:thinking:architect_general>coder_escalation`: `needs_new_source_records`, evaluate `['architect_general', 'coder_escalation']` on the same source records; preferred winners `['architect_general', 'coder_escalation']`; suggest `20` new records
+
 ## Selected Groups
 
 - none
