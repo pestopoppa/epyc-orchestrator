@@ -33,10 +33,10 @@ class ODLBoundingBox:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "ODLBoundingBox":
-        # ODL JSON fields vary slightly across versions: tolerate both
-        # `bbox: [x0,y0,x1,y1]` and `{x0,y0,x1,y1}` shapes.
-        bbox = d.get("bbox")
-        page = int(d.get("page", d.get("page_number", 1)))
+        # ODL JSON fields vary slightly across versions: tolerate `bbox`,
+        # `bounding box`, and `{x0,y0,x1,y1}` shapes.
+        bbox = d.get("bbox", d.get("bounding box"))
+        page = int(d.get("page", d.get("page_number", d.get("page number", 1))))
         if isinstance(bbox, (list, tuple)) and len(bbox) == 4:
             x0, y0, x1, y1 = (float(v) for v in bbox)
         else:
@@ -117,7 +117,7 @@ class TableContext:
             table_index=table_index,
             bbox=ODLBoundingBox.from_dict(d),
             rows=list(d.get("rows") or []),
-            markdown_form=str(d.get("markdown") or d.get("md") or ""),
+            markdown_form=str(d.get("markdown") or d.get("md") or d.get("content") or ""),
             caption=str(d.get("caption") or ""),
         )
 
@@ -156,7 +156,9 @@ class ODLStructuredDocument:
             HeadingNode(
                 level=int(h.get("level", 1)),
                 text=str(h.get("text") or h.get("title") or ""),
-                bbox=ODLBoundingBox.from_dict(h) if h.get("bbox") or h.get("x0") is not None else None,
+                bbox=ODLBoundingBox.from_dict(h)
+                if h.get("bbox") or h.get("bounding box") or h.get("x0") is not None
+                else None,
             )
             for h in raw_headings
             if isinstance(h, dict)

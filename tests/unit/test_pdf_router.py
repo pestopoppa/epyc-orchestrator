@@ -19,6 +19,8 @@ from src.services.pdf_router import (
     extract_pdf,
 )
 
+FIXTURE_DIR = Path(__file__).parent / "fixtures"
+
 
 class TestBoundingBox:
     """Tests for BoundingBox dataclass."""
@@ -390,6 +392,25 @@ class TestPDFRouterExtraction:
         assert text == ""
         assert structured is None
         assert latency >= 0
+
+    def test_read_odl_structured_outputs_replays_hybrid_fixture(self, tmp_path):
+        pdf_path = tmp_path / "odl_hybrid_sample.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\n%EOF\n")
+        (tmp_path / "odl_hybrid_sample.md").write_text(
+            (FIXTURE_DIR / "odl_hybrid_sample.md").read_text(),
+            encoding="utf-8",
+        )
+        (tmp_path / "odl_hybrid_sample.json").write_text(
+            (FIXTURE_DIR / "odl_hybrid_sample.json").read_text(),
+            encoding="utf-8",
+        )
+
+        text, structured = PDFRouter()._read_odl_structured_outputs(tmp_path, pdf_path)
+
+        assert "OpenDataLoader hybrid mode" in text
+        assert structured is not None
+        assert structured.tables[0].rows[1] == ["frontdoor", "42 ms"]
+        assert structured.tables[0].bbox.page == 1
 
     def test_odl_local_table_backend_stays_local(self, tmp_path, monkeypatch):
         from src.models.odl_structured import HeadingNode, ODLStructuredDocument

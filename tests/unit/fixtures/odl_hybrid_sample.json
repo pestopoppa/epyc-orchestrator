@@ -1,0 +1,32 @@
+{
+  "page_count": 2,
+  "headings": [
+    {
+      "level": 1,
+      "text": "Results",
+      "page number": 1,
+      "bounding box": [72, 90, 540, 120]
+    }
+  ],
+  "figures": [
+    {
+      "type": "chart",
+      "caption": "Figure 1: throughput chart",
+      "context": "The chart summarizes throughput under the hybrid parser.",
+      "page number": 2,
+      "bounding box": [100, 200, 500, 420]
+    }
+  ],
+  "tables": [
+    {
+      "caption": "Table 1: latency",
+      "content": "| Model | Latency |\\n|---|---:|\\n| frontdoor | 42 ms |",
+      "rows": [
+        ["Model", "Latency"],
+        ["frontdoor", "42 ms"]
+      ],
+      "page number": 1,
+      "bounding box": [72, 150, 540, 260]
+    }
+  ]
+}

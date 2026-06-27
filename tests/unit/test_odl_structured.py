@@ -9,6 +9,7 @@ Per handoffs/active/opendataloader-pipeline-integration.md Phase 2.
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -36,6 +37,8 @@ from src.services.figure_analyzer import (
 from src.services.document_chunker import DocumentChunker, chunk_by_odl_headings, _split_long_body
 from src.models.document import BoundingBox, FigureRef, OCRResult, PageOCRResult
 from src.services.pdf_router import PDFExtractionResult
+
+FIXTURE_DIR = Path(__file__).parent / "fixtures"
 
 
 # ─── ODLStructuredDocument parsing ────────────────────────────────────────────
@@ -152,6 +155,30 @@ def test_bbox_from_list_or_kwargs() -> None:
     a = ODLBoundingBox.from_dict({"bbox": [10, 20, 30, 40], "page": 5})
     b = ODLBoundingBox.from_dict({"x0": 10, "y0": 20, "x1": 30, "y1": 40, "page": 5})
     assert a == b
+
+
+def test_bbox_from_official_odl_alias_keys() -> None:
+    bbox = ODLBoundingBox.from_dict(
+        {"bounding box": [10, 20, 30, 40], "page number": 5}
+    )
+    assert bbox == ODLBoundingBox(page=5, x0=10, y0=20, x1=30, y1=40)
+
+
+def test_odl_hybrid_fixture_replay_parses_aliases() -> None:
+    payload = json.loads((FIXTURE_DIR / "odl_hybrid_sample.json").read_text())
+
+    doc = ODLStructuredDocument.from_json(payload)
+
+    assert doc.page_count == 2
+    assert doc.headings[0].text == "Results"
+    assert doc.headings[0].bbox is not None
+    assert doc.headings[0].bbox.page == 1
+    assert doc.figures[0].bbox.page == 2
+    assert doc.figures[0].semantic_type == "chart"
+    assert "throughput" in doc.figures[0].surrounding_text
+    assert doc.tables[0].bbox.page == 1
+    assert doc.tables[0].rows[1] == ["frontdoor", "42 ms"]
+    assert "frontdoor" in doc.tables[0].markdown_form
 
 
 # ─── heading tree ─────────────────────────────────────────────────────────────
