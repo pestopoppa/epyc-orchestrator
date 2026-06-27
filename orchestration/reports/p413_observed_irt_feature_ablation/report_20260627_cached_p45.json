@@ -1,0 +1,109 @@
+{
+  "actions": {
+    "0": "frontdoor",
+    "1": "coder_escalation",
+    "2": "worker_general",
+    "3": "architect_general",
+    "4": "ingest_long_context",
+    "5": "worker_vision"
+  },
+  "baseline": {
+    "argmax_match_acc": 0.787037,
+    "epochs_run": 300,
+    "history_tail": [
+      {
+        "epoch": 295,
+        "train_loss": 0.6783099046775273,
+        "val_loss": 0.7336753606796265
+      },
+      {
+        "epoch": 296,
+        "train_loss": 0.6672487386635372,
+        "val_loss": 0.7336750626564026
+      },
+      {
+        "epoch": 297,
+        "train_loss": 0.6785018699509757,
+        "val_loss": 0.733674943447113
+      },
+      {
+        "epoch": 298,
+        "train_loss": 0.6739126358713422,
+        "val_loss": 0.733674943447113
+      },
+      {
+        "epoch": 299,
+        "train_loss": 0.6771390438079834,
+        "val_loss": 0.7336748838424683
+      }
+    ],
+    "input_dim": 1031,
+    "role_success_acc": 0.537037,
+    "val_loss": 0.733675
+  },
+  "decision_gate": {
+    "decision": "do_not_escalate_observed_irt_features",
+    "metric": "role_success_acc",
+    "note": "cached observed-outcome diagnostic only; no production weights written",
+    "promotion_grade": false,
+    "threshold_pp": 1.0
+  },
+  "delta_role_success_acc_pp": 0.0,
+  "irt_metadata": {
+    "embedding_dim": 1024,
+    "observed_response_cells_train": 567,
+    "platt_intercept": 0.7989435188402989,
+    "platt_slope": 0.9418634499559116,
+    "train_feature_mean": [
+      -3.8263885974884033,
+      0.1083991527557373
+    ],
+    "train_feature_scale": [
+      7.947589874267578,
+      0.46650299429893494
+    ]
+  },
+  "labels_source": "/mnt/raid0/llm/epyc-orchestrator/orchestration/reports/p45_soft_labels/soft_labels.jsonl",
+  "observed_cells": 710,
+  "observed_irt_augmented": {
+    "argmax_match_acc": 0.777778,
+    "epochs_run": 300,
+    "history_tail": [
+      {
+        "epoch": 295,
+        "train_loss": 0.5860641087804522,
+        "val_loss": 0.789868175983429
+      },
+      {
+        "epoch": 296,
+        "train_loss": 0.5763466315610069,
+        "val_loss": 0.7898681163787842
+      },
+      {
+        "epoch": 297,
+        "train_loss": 0.5876631651605878,
+        "val_loss": 0.7898679375648499
+      },
+      {
+        "epoch": 298,
+        "train_loss": 0.5810488930770329,
+        "val_loss": 0.7898678779602051
+      },
+      {
+        "epoch": 299,
+        "train_loss": 0.5870948902198246,
+        "val_loss": 0.7898678779602051
+      }
+    ],
+    "input_dim": 1033,
+    "role_success_acc": 0.537037,
+    "val_loss": 0.789868
+  },
+  "response_source": "journal_observed_per_role_correctness_cached_embeddings",
+  "schema": "epyc.graph_router.observed_irt_feature_ablation.v1",
+  "seconds": 9.283,
+  "source": "/mnt/raid0/llm/epyc-orchestrator/orchestration/reports/p45_soft_labels/soft_labels_embedded.npz",
+  "source_rows": 540,
+  "train_rows": 432,
+  "val_rows": 108
+}
