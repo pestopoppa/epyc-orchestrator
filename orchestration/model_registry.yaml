@@ -1,14 +1,14 @@
 # =============================================================================
-# AUTO-GENERATED — DO NOT HAND-EDIT.
+# AUTO-GENERATED — MASTER-COMPILED RUNTIME VIEW.
 #
 # This file is compiled at every `orchestrator_stack.py start` from the master
 # registry at /mnt/raid0/llm/epyc-inference-research/orchestration/model_registry.yaml
-# by src/registry/registry_compiler.py. Hand edits will be silently overwritten
-# at the next stack launch.
+# by src/registry/registry_compiler.py.
 #
-# To make a real change: edit the MASTER registry. The next start will detect the
-# change (cache key mismatch) and regenerate this file. To temporarily skip the
-# compile (e.g. during a master schema change), set ORCHESTRATOR_REGISTRY_NO_COMPILE=1.
+# Runtime stack truth lives in the MASTER registry. The next start detects master
+# changes by cache-key mismatch and regenerates this lean runtime view. To
+# temporarily skip the compile (e.g. during a master schema change), set
+# ORCHESTRATOR_REGISTRY_NO_COMPILE=1.
 #
 # Compiled at: 2026-06-27T10:45:36+00:00
 # Cache key:   29a9b5482af0adc9...

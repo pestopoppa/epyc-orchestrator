@@ -1,10 +1,10 @@
 """Compile a lean orchestrator registry from the master research registry.
 
 Background (2026-05-09): Today's recovery hit a bug because the orchestrator's
-hand-edited `model_registry.yaml` had drifted from the master at
+checked-in `model_registry.yaml` had drifted from the master at
 `epyc-inference-research/orchestration/model_registry.yaml`. The validator
 catches in-file inconsistencies but the master/orchestrator coupling itself
-was hand-maintained — silent drift was inevitable.
+was manually synchronized — silent drift was inevitable.
 
 This module compiles a lean view from `(master + active_role_set)` at every
 stack launch. The lean view contains exactly the roles the orchestrator will
@@ -22,7 +22,7 @@ file.
 
 Escape hatch: setting `ORCHESTRATOR_REGISTRY_NO_COMPILE=1` skips the compile
 step and falls back to the on-disk file (useful during a master-registry
-schema change when you need to hand-edit before re-syncing).
+schema change when you need to inspect or re-sync generated output).
 """
 
 from __future__ import annotations
@@ -225,16 +225,16 @@ def _format_header_banner(
     role_list = ", ".join(sorted(active_roles))
     return (
         "# =============================================================================\n"
-        "# AUTO-GENERATED — DO NOT HAND-EDIT.\n"
+        "# AUTO-GENERATED — MASTER-COMPILED RUNTIME VIEW.\n"
         "#\n"
         "# This file is compiled at every `orchestrator_stack.py start` from the master\n"
         f"# registry at {master_path}\n"
-        "# by src/registry/registry_compiler.py. Hand edits will be silently overwritten\n"
-        "# at the next stack launch.\n"
+        "# by src/registry/registry_compiler.py.\n"
         "#\n"
-        "# To make a real change: edit the MASTER registry. The next start will detect the\n"
-        "# change (cache key mismatch) and regenerate this file. To temporarily skip the\n"
-        "# compile (e.g. during a master schema change), set ORCHESTRATOR_REGISTRY_NO_COMPILE=1.\n"
+        "# Runtime stack truth lives in the MASTER registry. The next start detects master\n"
+        "# changes by cache-key mismatch and regenerates this lean runtime view. To\n"
+        "# temporarily skip the compile (e.g. during a master schema change), set\n"
+        "# ORCHESTRATOR_REGISTRY_NO_COMPILE=1.\n"
         "#\n"
         f"# Compiled at: {now}\n"
         f"# Cache key:   {cache_key_value[:16]}...\n"
