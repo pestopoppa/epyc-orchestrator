@@ -2019,6 +2019,7 @@ def _journal_archive_payload_for_authority(
     *,
     deinflate_before_ts: float | None = None,
     deinflate_factor: float = 1.0,
+    exclude_before_ts: float | None = None,
 ) -> dict[str, Any] | None:
     rows = _journal_rows_for_archive(journal)
     if hasattr(journal, "ledger_events"):
@@ -2034,13 +2035,14 @@ def _journal_archive_payload_for_authority(
         current_run_only=False,
         deinflate_before_ts=deinflate_before_ts,
         deinflate_factor=deinflate_factor,
+        exclude_before_ts=exclude_before_ts,
     )
 
 
-def _deinflate_params_from_state(
+def _archive_epoch_params_from_state(
     state: dict[str, Any],
-) -> tuple[float | None, float]:
-    """Extract pareto speed-deinflation correction params from autopilot state."""
+) -> tuple[float | None, float, float | None]:
+    """Extract Pareto replay epoch params from autopilot state."""
     deinflate_before_ts: float | None = None
     try:
         deinflate_before_ts = float(state.get("pareto_epoch_ts") or 0.0) or None
@@ -2051,7 +2053,12 @@ def _deinflate_params_from_state(
         deinflate_factor = float(state.get("pareto_pre_epoch_speed_factor", 1.0))
     except (TypeError, ValueError):
         pass
-    return deinflate_before_ts, deinflate_factor
+    exclude_before_ts: float | None = None
+    try:
+        exclude_before_ts = float(state.get("pareto_exclude_before_ts") or 0.0) or None
+    except (TypeError, ValueError):
+        pass
+    return deinflate_before_ts, deinflate_factor, exclude_before_ts
 
 
 def _apply_journal_archive_authority(
@@ -2064,11 +2071,14 @@ def _apply_journal_archive_authority(
     Returns True when cached state changed, False when it already matched, and
     None when the journal has no archive-bearing rows.
     """
-    deinflate_before_ts, deinflate_factor = _deinflate_params_from_state(state)
+    deinflate_before_ts, deinflate_factor, exclude_before_ts = (
+        _archive_epoch_params_from_state(state)
+    )
     archive_payload = _journal_archive_payload_for_authority(
         journal,
         deinflate_before_ts=deinflate_before_ts,
         deinflate_factor=deinflate_factor,
+        exclude_before_ts=exclude_before_ts,
     )
     if archive_payload is None:
         return None
@@ -2093,12 +2103,15 @@ def _sync_startup_archive_from_journal_authority(
     if state.get("_allow_empty_frontier_rebase"):
         return False
     before_count = _archive_entry_count(state.get("pareto_archive"))
-    deinflate_before_ts, deinflate_factor = _deinflate_params_from_state(state)
+    deinflate_before_ts, deinflate_factor, exclude_before_ts = (
+        _archive_epoch_params_from_state(state)
+    )
     journal_count = _archive_entry_count(
         _journal_archive_payload_for_authority(
             journal,
             deinflate_before_ts=deinflate_before_ts,
             deinflate_factor=deinflate_factor,
+            exclude_before_ts=exclude_before_ts,
         )
     )
     changed = _apply_journal_archive_authority(state, journal, archive)
@@ -2435,11 +2448,12 @@ def _run_loop_inner(
     """Inner loop (separated to ensure TUI cleanup via run_loop's finally)."""
     state = load_state()
     journal = ExperimentJournal()
-    _deinfl_ts, _deinfl_factor = _deinflate_params_from_state(state)
+    _deinfl_ts, _deinfl_factor, _exclude_ts = _archive_epoch_params_from_state(state)
     archive_payload = _journal_archive_payload_for_authority(
         journal,
         deinflate_before_ts=_deinfl_ts,
         deinflate_factor=_deinfl_factor,
+        exclude_before_ts=_exclude_ts,
     )
     if archive_payload is not None and not state.get("_allow_empty_frontier_rebase"):
         archive = ParetoArchive.from_archive_payload(archive_payload, read_only=False)
@@ -4271,10 +4285,17 @@ def _archive_for_read_command(
     if source not in ARCHIVE_SOURCE_CHOICES:
         raise ValueError(f"unknown archive source: {source}")
 
+    state = load_state()
+    deinflate_before_ts, deinflate_factor, exclude_before_ts = (
+        _archive_epoch_params_from_state(state)
+    )
     archive = pareto_archive_from_journal_rows(
         _journal_rows_for_archive(journal),
         None,
         current_run_only=(source == ARCHIVE_SOURCE_JOURNAL_CURRENT_RUN),
+        deinflate_before_ts=deinflate_before_ts,
+        deinflate_factor=deinflate_factor,
+        exclude_before_ts=exclude_before_ts,
     )
     if archive is None:
         return ParetoArchive(), f"{source}->state-empty-fallback"

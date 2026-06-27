@@ -38,6 +38,32 @@ eras:
     scope: routing_memory
     note: "Episodic memory reset. All 287K+ current rows post-date this; ALL are demote-to-prior wholesale (trained under flawed-instrument eras; no reward decomposition stored — see MEASUREMENT.md §5 corpus 4)."
 
+  - id: E5-cpu-kernel
+    from: "2026-06-26T22:07:11Z"
+    scope: cpu_bench
+    note: >
+      v6+iqk production cutover. Single kernel: production-consolidated-v6
+      (upstream llama.cpp framework + native MTP/NEXTN + surviving
+      forward-ported CPU kernels + ik_llama's iqk AVX-512 GEMM kernels,
+      runtime-gated by env GGML_IQK=1). ik_llama.cpp is fully deprecated.
+      iqk Q8 MoE GEMM is non-bit-exact vs the generic/v5 kernels.
+      RECONCILIATION: pre-boundary CPU throughput and quality/eval rows
+      measured on v5 or the separate ik_llama binary are demote-to-prior for
+      decisions about the v6+iqk stack. Do not rescale across this boundary;
+      re-measure within era under P-BENCH/P-QUAL protocols with host
+      attestation.
+
+  - id: E5-autopilot-speed
+    from: "2026-06-26T22:07:11Z"
+    scope: autopilot_speed
+    note: >
+      AutoPilot Pareto/frontier speed boundary for the v6+iqk production
+      kernel cutover. orchestration/autopilot_state.json:pareto_epoch_ts is
+      advanced to this timestamp so pre-v6 speed rows cannot silently define
+      the current consolidated-stack frontier. Treat pre-boundary AutoPilot
+      speed/frontier rows as historical priors until a controlled v6-only
+      frontier rerun/rebuild clears the frontier_rerun_required state marker.
+
   # E4 opens when the instrument repair lands (dead items fixed/excised, core_v2, task_rate axis,
   # sequential verdicts, per-question ledger). Append it then with: core_id, policy_version,
   # and the rule that E<=3 T1 frontiers/baselines are retired views (no cross-era dominance).

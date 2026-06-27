@@ -162,12 +162,17 @@ def _archive(
         deinflate_factor = float(state.get("pareto_pre_epoch_speed_factor", 0.5))
     except (TypeError, ValueError):
         deinflate_factor = 0.5
+    try:
+        exclude_before_ts = float(state.get("pareto_exclude_before_ts") or 0.0) or None
+    except (TypeError, ValueError):
+        exclude_before_ts = None
     archive = reconstruct_archive_from_journal_rows(
         rows,
         None,
         current_run_only=current_run_only,
         deinflate_before_ts=pareto_epoch_ts,
         deinflate_factor=deinflate_factor,
+        exclude_before_ts=exclude_before_ts,
         objective_policy=objective_policy,
     )
     if archive is None:

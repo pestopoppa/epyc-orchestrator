@@ -198,6 +198,36 @@ def test_task_rate_reconstruction_does_not_deinflate_rate_axis() -> None:
     assert task_rate["frontier"][0]["speed_deinflated"] is False
 
 
+def test_journal_reconstruction_excludes_rows_before_epoch_boundary() -> None:
+    rows = [
+        _row(
+            1,
+            1.90,
+            120.0,
+            timestamp="2026-06-26T21:59:00+00:00",
+        ),
+        _row(
+            2,
+            1.80,
+            50.0,
+            timestamp="2026-06-26T22:08:00+00:00",
+        ),
+    ]
+
+    archive = reconstruct_archive_from_journal_rows(
+        rows,
+        None,
+        current_run_only=False,
+        exclude_before_ts=1782511631.0,
+    )
+
+    assert archive is not None
+    assert [entry["trial_id"] for entry in archive["all_entries"]] == [2]
+    assert [entry["trial_id"] for entry in archive["frontier"]] == [2]
+    assert archive["exclusions"]["before_ts"] == {"count": 1, "max_trial_id": 1}
+    assert archive["exclusions"]["exclude_before_ts"] == 1782511631.0
+
+
 def test_journal_reconstruction_matches_representative_archive(tmp_path: Path) -> None:
     rows = [
         _row(1, 1.90, 45.0, reliability=0.97),

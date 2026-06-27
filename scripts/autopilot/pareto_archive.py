@@ -919,6 +919,7 @@ def pareto_archive_from_journal_rows(
     max_trial_id: int | None = None,
     deinflate_before_ts: float | None = None,
     deinflate_factor: float = 1.0,
+    exclude_before_ts: float | None = None,
     objective_policy: str = LEGACY_OBJECTIVE_POLICY,
     state_path: Path | None = None,
 ) -> ParetoArchive | None:
@@ -932,6 +933,7 @@ def pareto_archive_from_journal_rows(
         max_trial_id=max_trial_id,
         deinflate_before_ts=deinflate_before_ts,
         deinflate_factor=deinflate_factor,
+        exclude_before_ts=exclude_before_ts,
         objective_policy=objective_policy,
     )
     if archive_payload is None:

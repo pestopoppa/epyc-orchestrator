@@ -177,6 +177,23 @@ def _runtime_state_lines(state: dict[str, Any]) -> list[str]:
     last_invalid = state.get("last_invalid_reason")
     if last_invalid:
         lines.append(f"- last_invalid_reason: {_clean(last_invalid, 180)}")
+    pareto_epoch_ts = state.get("pareto_epoch_ts")
+    if pareto_epoch_ts:
+        lines.append(f"- pareto_epoch_ts: {pareto_epoch_ts}")
+    pareto_exclude_before_ts = state.get("pareto_exclude_before_ts")
+    if pareto_exclude_before_ts:
+        lines.append(f"- pareto_exclude_before_ts: {pareto_exclude_before_ts}")
+    active_eras = state.get("active_instrument_eras")
+    if isinstance(active_eras, dict) and active_eras:
+        eras = ", ".join(
+            f"{_clean(str(scope), 80)}={_clean(str(era), 80)}"
+            for scope, era in sorted(active_eras.items())
+        )
+        lines.append(f"- active_instrument_eras: {eras}")
+    frontier_rerun = state.get("frontier_rerun_required")
+    if isinstance(frontier_rerun, dict) and frontier_rerun.get("required"):
+        reason = _clean(str(frontier_rerun.get("reason", "required")), 180)
+        lines.append(f"- frontier_rerun_required: true ({reason})")
     return lines
 
 

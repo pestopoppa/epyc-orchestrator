@@ -349,6 +349,40 @@ def test_system_card_hides_stale_pause_reason_when_unpaused(tmp_path: Path) -> N
     assert "old contested-window reason" not in card
 
 
+def test_system_card_surfaces_instrument_era_and_frontier_rerun(
+    tmp_path: Path,
+) -> None:
+    _write_minimal_root(tmp_path)
+    card = gen_system_card.generate_system_card(
+        tmp_path,
+        state_override={
+            "paused": True,
+            "trial_counter": 1001,
+            "pareto_epoch_ts": 1782511631.0,
+            "pareto_exclude_before_ts": 1782511631.0,
+            "active_instrument_eras": {
+                "autopilot_speed": "E5-autopilot-speed",
+                "cpu_bench": "E5-cpu-kernel",
+            },
+            "frontier_rerun_required": {
+                "required": True,
+                "reason": "v6 kernel era opened; rebuild current-stack frontier",
+            },
+        },
+    )
+
+    assert "- pareto_epoch_ts: 1782511631.0" in card
+    assert "- pareto_exclude_before_ts: 1782511631.0" in card
+    assert (
+        "- active_instrument_eras: "
+        "autopilot_speed=E5-autopilot-speed, cpu_bench=E5-cpu-kernel"
+    ) in card
+    assert (
+        "- frontier_rerun_required: true "
+        "(v6 kernel era opened; rebuild current-stack frontier)"
+    ) in card
+
+
 def test_controller_template_uses_constitution_and_system_card() -> None:
     assert "{program}" not in autopilot.CONTROLLER_PROMPT_TEMPLATE
     assert "{constitution}" in autopilot.CONTROLLER_PROMPT_TEMPLATE

@@ -1370,6 +1370,7 @@ def _pareto_from_journal(
     max_trial_id: int | None = None,
     deinflate_before_ts: float | None = None,
     deinflate_factor: float = 1.0,
+    exclude_before_ts: float | None = None,
     rows: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     """Reconstruct Pareto data from the append-only journal."""
@@ -1385,6 +1386,7 @@ def _pareto_from_journal(
         max_trial_id=max_trial_id,
         deinflate_before_ts=deinflate_before_ts,
         deinflate_factor=deinflate_factor,
+        exclude_before_ts=exclude_before_ts,
     )
 
 
@@ -1698,6 +1700,10 @@ async def pareto(max_dominated: int = 600) -> JSONResponse:
         deinflate_factor = float(data.get("pareto_pre_epoch_speed_factor", 0.5))
     except (TypeError, ValueError):
         deinflate_factor = 0.5
+    try:
+        pareto_exclude_before_ts = float(data.get("pareto_exclude_before_ts") or 0.0) or None
+    except (TypeError, ValueError):
+        pareto_exclude_before_ts = None
     # Do NOT cap reconstruction at state_trial_counter. The append-only journal —
     # not the periodically-saved state counter — is the source of truth for
     # progress (that is the whole reason this endpoint reconstructs from the
@@ -1722,6 +1728,7 @@ async def pareto(max_dominated: int = 600) -> JSONResponse:
         max_trial_id=None,
         deinflate_before_ts=pareto_epoch_ts,
         deinflate_factor=deinflate_factor,
+        exclude_before_ts=pareto_exclude_before_ts,
         rows=journal_rows,
     )
     source = "journal_current_run"

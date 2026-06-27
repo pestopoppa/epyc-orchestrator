@@ -166,6 +166,7 @@ def reconstruct_archive_from_journal_rows(
     max_trial_id: int | None = None,
     deinflate_before_ts: float | None = None,
     deinflate_factor: float = 1.0,
+    exclude_before_ts: float | None = None,
     objective_policy: str = LEGACY_OBJECTIVE_POLICY,
 ) -> dict[str, Any] | None:
     """Replay journal rows into the dashboard/offline Pareto archive shape."""
@@ -193,6 +194,7 @@ def reconstruct_archive_from_journal_rows(
     # state counter that lags the journal.
     excluded_bug = {"count": 0, "max_trial_id": None}
     truncated_cap = {"count": 0, "max_trial_id": None}
+    excluded_before_ts = {"count": 0, "max_trial_id": None}
     journal_max_trial_id: int | None = None
 
     def _bump(slot: dict[str, Any], tid: int) -> None:
@@ -230,6 +232,9 @@ def reconstruct_archive_from_journal_rows(
         try:
             trial_id = int(row.get("trial_id"))
         except (TypeError, ValueError):
+            continue
+        if exclude_before_ts is not None and (ts is None or ts < exclude_before_ts):
+            _bump(excluded_before_ts, trial_id)
             continue
         if max_trial_id is not None and trial_id > max_trial_id:
             _bump(truncated_cap, trial_id)
@@ -336,6 +341,8 @@ def reconstruct_archive_from_journal_rows(
         "journal_max_trial_id": journal_max_trial_id,
         "exclusions": {
             "bug_corrupted": excluded_bug,
+            "before_ts": excluded_before_ts,
+            "exclude_before_ts": exclude_before_ts,
             "truncated_above_cap": truncated_cap,
             "max_trial_id_cap": max_trial_id,
         },
