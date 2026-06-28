@@ -281,6 +281,11 @@ def test_validate_slot_compact_rejects_bad_ranges() -> None:
     )
     assert err and "n_future must be >=" in err
 
+    err = controller_io.validate_single_variable(
+        {"type": "slot_compact", "port": 0}
+    )
+    assert err and "port must be >=" in err
+
 
 def test_validate_deep_eval_rejects_ignored_schema_fields() -> None:
     err = controller_io.validate_single_variable(

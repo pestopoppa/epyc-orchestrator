@@ -1255,9 +1255,22 @@ def _action_distill_knowledge(action: dict[str, Any], ctx: _ActionContext):
 def _action_slot_compact(action: dict[str, Any], ctx: _ActionContext):
     # Expected Attention KV Compression: score and evict KV cache entries
     # Uses the kv_compress module for telemetry, gap guardrails, and structured results.
+    port = action.get("port")
+    if port is not None and (
+        isinstance(port, bool) or not isinstance(port, int) or port <= 0
+    ):
+        return (
+            SkipOutcome(
+                "invalid",
+                "slot_compact port must be an explicit TCP port >= 1 or omitted "
+                "to compact all generated production slots",
+                "slot_compact",
+            ),
+            "slot_management",
+        )
+
     from kv_compress import compress_slot, auto_compress_all
 
-    port = action.get("port")
     slot_id = action.get("slot_id", 0)
     keep_ratio = action.get("keep_ratio", 0.5)
     keep_first = action.get("keep_first", 4)

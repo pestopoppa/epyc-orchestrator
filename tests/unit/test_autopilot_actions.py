@@ -90,6 +90,19 @@ def test_blacklisted_action_becomes_invalid_skip() -> None:
     assert result.action_type == "seed_batch"
 
 
+def test_slot_compact_handler_rejects_placeholder_port_zero() -> None:
+    result, species = actions._action_slot_compact(
+        {"type": "slot_compact", "port": 0},
+        _ctx(),
+    )
+
+    assert isinstance(result, actions.SkipOutcome)
+    assert result.status == "invalid"
+    assert "port must be" in result.reason
+    assert result.action_type == "slot_compact"
+    assert species == "slot_management"
+
+
 def test_blacklist_prompt_includes_older_enforced_patterns(monkeypatch) -> None:
     monkeypatch.setattr(autopilot, "BLACKLIST_RENDER_CAP", 2)
 
