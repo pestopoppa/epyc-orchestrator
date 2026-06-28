@@ -138,6 +138,10 @@ def test_dashboard_topology_activity_stats_refresh_with_live_age_tick() -> None:
     assert "active.instanceIdxs && active.instanceIdxs.has(Number(idx))" in body
     assert "function repaintRegionLocksFromStructuredTapFrame()" in body
     assert "repaintRegionLocksFromStructuredTapFrame();" in body
+    assert "function structuredTapLogicalAliasesForIdentity(role, idx)" in body
+    assert "formatPhysicalRoleWithLogicalAliases(holder.role, holder.shape, holder.idx)" in body
+    assert "logical route(s): ${aliases.join(', ')}" in body
+    assert "logical ${escapeHTML(req.role)}" in body
 
 
 def test_dashboard_live_panel_refreshes_ignore_stale_responses_where_possible() -> None:

@@ -2621,6 +2621,9 @@ function paintStructuredTap(container) {
         const color = (typeof roleColor === 'function' ? roleColor(role) : null) || 'var(--muted)';
         const activity = structuredTapActivity(req);
         const status = activity.label;
+        const logicalChip = req.role && req.role !== role
+            ? `<span class="tag" style="margin-left:6px;background:rgba(96,165,250,0.12);color:#93c5fd">logical ${escapeHTML(req.role)}</span>`
+            : '';
         const statusHint = activity.reason || req.status_reason
             ? `<div class="meta" style="color:${activity.color}">${escapeHTML(activity.reason || req.status_reason || '')}</div>`
             : '';
@@ -2632,7 +2635,7 @@ function paintStructuredTap(container) {
         const updated = req.updated_at || req.started_at || '';
         return `<div class="task-card tap-derived live-tap-row" data-structured-idx="${i}" onclick="openStructuredTapDetail(${i})" title="open live prompt and response popup">
             <div class="role" style="color:${color}">
-                ${escapeHTML(role)}
+                ${escapeHTML(role)}${logicalChip}
                 <span class="live-tap-state" style="color:${activity.color}">${escapeHTML(status)}</span>
             </div>
             <div class="meta">
@@ -5361,7 +5364,7 @@ async function updateRegionLocks(refreshSeq = _regionLocksRefreshSeq, regionLock
                     const regions = ((req.instance_regions || (inst && inst.regions) || [])).map(String);
                     if (!regions.length) continue;
                     const shape = req.instance_shape || (inst && inst.shape) || `idx${nIdx}`;
-                    tapInferredMissing.push(`${role}.${shape}`);
+                    tapInferredMissing.push(formatPhysicalRoleWithLogicalAliases(role, shape, nIdx));
                     for (const region of regions) {
                         (globalHeldBy[region] ||= []).push({ role, shape, inferred: true });
                     }
@@ -5441,12 +5444,16 @@ async function updateRegionLocks(refreshSeq = _regionLocksRefreshSeq, regionLock
                         continue;
                     }
                     if (activeSet.has(inst.idx)) {
-                        const t = `${role}.${col.label} ACTIVE — instance idx=${inst.idx} holding {${(inst.regions || []).join(',')}}`;
+                        const aliases = structuredTapLogicalAliasesForIdentity(role, inst.idx);
+                        const logical = aliases.length ? `; logical route(s): ${aliases.join(', ')}` : '';
+                        const t = `${role}.${col.label} ACTIVE — instance idx=${inst.idx} holding {${(inst.regions || []).join(',')}}${logical}`;
                         rows.push(`<div class="rl-cell rl-active" title="${t}">⚡</div>`);
                         continue;
                     }
                     if (inferredActiveSet.has(Number(inst.idx))) {
-                        const t = `${role}.${col.label} TAP ACTIVE — structured tap is streaming on idx=${inst.idx}; /proc lock poll has not observed the holder in this frame`;
+                        const aliases = structuredTapLogicalAliasesForIdentity(role, inst.idx);
+                        const logical = aliases.length ? `; logical route(s): ${aliases.join(', ')}` : '';
+                        const t = `${role}.${col.label} TAP ACTIVE — structured tap is streaming on idx=${inst.idx}${logical}; /proc lock poll has not observed the holder in this frame`;
                         rows.push(`<div class="rl-cell rl-active rl-inferred" title="${t}">⚡</div>`);
                         continue;
                     }
