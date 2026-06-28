@@ -673,6 +673,10 @@ def test_save_state_with_journal_authority_removes_baseline_cache(
     }
     saved: list[dict] = []
 
+    # Baseline authority is now fail-closed behind operator consent; grant it here.
+    monkeypatch.setattr(
+        "src.autopilot_core.baseline_ledger.authority_consent", lambda *a, **k: True
+    )
     monkeypatch.setattr(autopilot, "save_state", lambda updated: saved.append(dict(updated)))
     assert not hasattr(archive, "save")
 

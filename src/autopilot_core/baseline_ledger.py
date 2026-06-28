@@ -12,6 +12,8 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
+from src.autopilot_core.authority_consent import authority_consent
+
 
 BASELINE_PROMOTION_EVENT_TYPE = "baseline_promotion"
 BASELINE_LEDGER_AUTHORITY_STATE_FLAG = "baseline_ledger_authority_enabled"
@@ -157,8 +159,17 @@ def reconcile_baseline_ledger(
 
 
 def baseline_ledger_authority_enabled(state: dict[str, Any]) -> bool:
-    """Return whether persisted state permits baseline cache removal."""
-    return state.get(BASELINE_LEDGER_AUTHORITY_STATE_FLAG) is True
+    """Return whether persisted state AND operator consent permit baseline cache removal.
+
+    The mutable state flag is necessary but NOT sufficient: ratification is
+    fail-closed behind the operator-owned consent file (see
+    ``authority_consent``), which agents running as the autopilot uid cannot
+    write. This prevents any agent from self-granting baseline authority by
+    flipping the state flag alone.
+    """
+    if state.get(BASELINE_LEDGER_AUTHORITY_STATE_FLAG) is not True:
+        return False
+    return authority_consent("baseline_ledger")
 
 
 def apply_baseline_ledger_authority(
