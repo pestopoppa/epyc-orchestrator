@@ -110,16 +110,16 @@ def _safe_non_stream_roles_from_stack_priors(
 
 
 def _degraded_safe_non_stream_roles_from_stack_manifest() -> frozenset[str] | None:
-    """Derive a compatibility safe-mode policy from the live stack manifest."""
-    try:
-        from scripts.server.stack_manifest import NO_SPEC_DECODE_ROLES
-    except Exception:
-        return None
-    return frozenset(NO_SPEC_DECODE_ROLES)
+    """Return no degraded safe-mode policy when generated priors are unavailable."""
+    return None
+
+
+def _all_known_roles() -> frozenset[str]:
+    return frozenset(str(role) for role in Role)
 
 
 def safe_non_stream_roles(
-    stack_priors_path: Path = DEFAULT_STACK_PRIORS,
+    stack_priors_path: Path | None = None,
 ) -> frozenset[str]:
     """Return the current safe-mode non-stream role set.
 
@@ -130,10 +130,12 @@ def safe_non_stream_roles(
     override = globals().get("SAFE_NON_STREAM_ROLES")
     if isinstance(override, frozenset):
         return override
+    if stack_priors_path is None:
+        stack_priors_path = DEFAULT_STACK_PRIORS
     derived = _safe_non_stream_roles_from_stack_priors(stack_priors_path)
     if derived is not None:
         return derived
-    return _degraded_safe_non_stream_roles_from_stack_manifest() or frozenset()
+    return _degraded_safe_non_stream_roles_from_stack_manifest() or _all_known_roles()
 
 
 def __getattr__(name: str) -> Any:
@@ -202,8 +204,13 @@ def should_stream_role(role: str) -> bool:
         return False
     if mode == "force":
         return True
-    normalized = str(Role.from_string(role) or role)
-    return normalized not in safe_non_stream_roles()
+    policy = safe_non_stream_roles()
+    normalized_role = Role.from_string(role)
+    if normalized_role is None:
+        role_name = str(role)
+        return role_name not in policy and policy != _all_known_roles()
+    normalized = str(normalized_role)
+    return normalized not in policy
 
 
 def _topology_hash() -> str:

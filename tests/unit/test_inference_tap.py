@@ -97,12 +97,24 @@ class TestStreamPolicy:
 
         assert tap._safe_non_stream_roles_from_stack_priors(tmp_path / "missing.yaml") is None
 
-    def test_degraded_safe_non_stream_roles_derive_from_stack_manifest(self):
+    def test_degraded_safe_non_stream_roles_do_not_reconstruct_manifest_policy(self):
         import src.runtime.inference_tap as tap
 
-        assert tap._degraded_safe_non_stream_roles_from_stack_manifest() == frozenset(
-            {"architect_general"}
-        )
+        assert tap._degraded_safe_non_stream_roles_from_stack_manifest() is None
+
+    def test_safe_non_stream_roles_without_stack_priors_fails_closed_for_tap(self, tmp_path):
+        import src.runtime.inference_tap as tap
+
+        assert tap.safe_non_stream_roles(tmp_path / "missing.yaml") == tap._all_known_roles()
+
+    def test_should_stream_role_without_stack_priors_fails_closed(self, tmp_path, monkeypatch):
+        import src.runtime.inference_tap as tap
+
+        monkeypatch.setenv("INFERENCE_TAP_STREAM_MODE", "safe")
+        monkeypatch.setattr(tap, "DEFAULT_STACK_PRIORS", tmp_path / "missing.yaml")
+
+        assert tap.should_stream_role("frontdoor") is False
+        assert tap.should_stream_role("unknown_role") is False
 
     def test_safe_non_stream_roles_recomputes_env_threshold(self, tmp_path, monkeypatch):
         import src.runtime.inference_tap as tap
