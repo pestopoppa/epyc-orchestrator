@@ -65,7 +65,16 @@ check_prerequisites() {
 
   echo "Required:"
   check_command python3 "python3" || ((missing++))
-  check_command pip3 "python3-pip" || ((missing++))
+  if command -v uv &>/dev/null; then
+    echo -e "  ${GREEN}✓${NC} uv"
+  elif command -v pip3 &>/dev/null; then
+    echo -e "  ${GREEN}✓${NC} pip3"
+  elif command -v pip &>/dev/null; then
+    echo -e "  ${GREEN}✓${NC} pip"
+  else
+    echo -e "  ${RED}✗${NC} uv or pip (install: uv or python3-pip)"
+    ((missing++))
+  fi
   check_command git "git" || ((missing++))
   check_command cmake "cmake" || ((missing++))
 
