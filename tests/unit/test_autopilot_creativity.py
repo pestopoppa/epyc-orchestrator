@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -410,6 +411,69 @@ def test_feature_flags_block_surfaces_convention_denylist() -> None:
 
     assert "Convention-denylisted flags: graph_router" in block
     assert "never propose structural_experiment for convention-denylisted flags" in block
+
+
+def test_planner_convention_install_does_not_touch_w6_audit_env(monkeypatch) -> None:
+    monkeypatch.setattr(autopilot, "_PLANNER_HINTS_ENABLED", True)
+    w6_env = {
+        "AUTOPILOT_W6_AUDIT_BLOCK": "1",
+        "AUTOPILOT_W6_AUDIT_N": "30",
+        "AUTOPILOT_W6_AUDIT_EVERY_N_TRIALS": "2",
+        "AUTOPILOT_W6_AUDIT_SHADOW_ONLY": "1",
+    }
+    for key, value in w6_env.items():
+        monkeypatch.setenv(key, value)
+
+    class FakeStore:
+        def retrieve_conventions(self, *, species, journal):
+            assert journal == "journal"
+            if species == "structural_lab":
+                return [
+                    type(
+                        "Entry",
+                        (),
+                        {
+                            "metadata": {
+                                "bind_status": "live",
+                                "bind_identifiers": ["graph_router"],
+                            }
+                        },
+                    )()
+                ]
+            if species == "numeric_swarm":
+                return [
+                    type(
+                        "Entry",
+                        (),
+                        {
+                            "metadata": {
+                                "bind_status": "live",
+                                "bind_identifiers": ["kv_compaction"],
+                            }
+                        },
+                    )()
+                ]
+            raise AssertionError(f"unexpected species: {species}")
+
+    suppressed_calls: list[set[str]] = []
+    monkeypatch.setattr(
+        autopilot.controller_io,
+        "set_suppressed_numeric_surfaces",
+        lambda surfaces: suppressed_calls.append(set(surfaces)),
+    )
+
+    try:
+        autopilot._PLANNER_DENYLISTED_FEATURE_FLAGS.clear()
+        autopilot._PLANNER_SUPPRESSED_NUMERIC_SURFACES.clear()
+        autopilot._install_planner_convention_bindings(FakeStore(), "journal")
+
+        assert autopilot._PLANNER_DENYLISTED_FEATURE_FLAGS == {"graph_router"}
+        assert autopilot._PLANNER_SUPPRESSED_NUMERIC_SURFACES == {"kv_compaction"}
+        assert suppressed_calls == [{"kv_compaction"}]
+        assert {key: os.environ[key] for key in w6_env} == w6_env
+    finally:
+        autopilot._PLANNER_DENYLISTED_FEATURE_FLAGS.clear()
+        autopilot._PLANNER_SUPPRESSED_NUMERIC_SURFACES.clear()
 
 
 def test_slot_query_ports_from_stack_priors_uses_live_primary_llama_entries(tmp_path: Path) -> None:
