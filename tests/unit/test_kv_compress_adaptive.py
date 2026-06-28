@@ -143,11 +143,11 @@ roles:
         assert LEGACY_ARCHITECT_ROLE not in PRODUCTION_PORTS
         assert "coder_escalation" not in PRODUCTION_PORTS
         assert PRODUCTION_PORTS["frontdoor"] == 8070
-        assert PRODUCTION_PORTS["worker_general"] == 8072
         assert PRODUCTION_PORTS["architect_general"] == 8083
         assert PRODUCTION_PORTS["ingest_long_context"] == 8085
-        assert PRODUCTION_PORTS["worker_vision"] == 8086
-        assert PRODUCTION_PORTS["vision_escalation"] == 8087
+        assert "worker_general" not in PRODUCTION_PORTS
+        assert "worker_vision" not in PRODUCTION_PORTS
+        assert "vision_escalation" not in PRODUCTION_PORTS
 
     def test_production_ports_from_stack_priors_use_primary_physical_ports(self, tmp_path):
         priors = tmp_path / "stack_priors.yaml"
@@ -160,6 +160,9 @@ roles:
       endpoint: http://localhost:8070
       binary: llama.cpp
       launch:
+        runtime:
+          cache:
+            slot_save_path: /tmp/frontdoor-slots
         entries:
           - {port: 8070, alias: false}
           - {port: 8080, alias: false}
@@ -169,6 +172,9 @@ roles:
       endpoint: http://localhost:8070
       binary: llama.cpp
       launch:
+        runtime:
+          cache:
+            slot_save_path: /tmp/frontdoor-slots
         entries:
           - {port: 8070, alias: true}
   worker_general:
@@ -179,6 +185,8 @@ roles:
       launch:
         runtime:
           binary_path: /mnt/raid0/llm/ik_llama.cpp/build/bin/llama-server
+          cache:
+            slot_save_path: null
         entries:
           - {port: 8072, alias: false}
   candidate:
@@ -203,7 +211,6 @@ roles:
 
         assert production_ports_from_stack_priors(priors) == {
             "frontdoor": 8070,
-            "worker_general": 8072,
         }
 
     def test_production_ports_from_stack_priors_can_include_aliases(self, tmp_path):
@@ -216,13 +223,23 @@ roles:
     serving:
       endpoint: http://localhost:8070
       binary: llama.cpp
-      launch: {entries: [{port: 8070, alias: false}]}
+      launch:
+        runtime:
+          cache:
+            slot_save_path: /tmp/frontdoor-slots
+        entries:
+          - {port: 8070, alias: false}
   coder_escalation:
     deployment_status: live_stack
     serving:
       endpoint: http://localhost:8070
       binary: llama.cpp
-      launch: {entries: [{port: 8070, alias: true}]}
+      launch:
+        runtime:
+          cache:
+            slot_save_path: /tmp/frontdoor-slots
+        entries:
+          - {port: 8070, alias: true}
   worker_math:
     deployment_status: live_stack
     serving:
@@ -231,6 +248,8 @@ roles:
       launch:
         runtime:
           binary_path: /mnt/raid0/llm/ik_llama.cpp/build/bin/llama-server
+          cache:
+            slot_save_path: null
         entries:
           - {port: 8072, alias: true}
 """.lstrip(),
@@ -240,7 +259,6 @@ roles:
         assert production_ports_from_stack_priors(priors, include_aliases=True) == {
             "coder_escalation": 8070,
             "frontdoor": 8070,
-            "worker_math": 8072,
         }
 
     def test_fallback_production_ports_derive_from_stack_manifest(self, monkeypatch):
@@ -272,4 +290,4 @@ roles:
             lambda include_aliases=False: {},
         )
 
-        assert production_ports() == PRODUCTION_PORTS
+        assert production_ports() == kv_compress.degraded_production_ports()

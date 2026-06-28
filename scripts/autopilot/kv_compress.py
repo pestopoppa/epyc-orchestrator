@@ -445,7 +445,7 @@ def degraded_production_ports() -> dict[str, int]:
 def __getattr__(name: str) -> Any:
     """Preserve legacy ``PRODUCTION_PORTS`` imports without a stale snapshot."""
     if name == "PRODUCTION_PORTS":
-        return degraded_production_ports()
+        return production_ports()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -457,6 +457,20 @@ def _is_slot_server(serving: dict[str, Any]) -> bool:
     runtime = launch.get("runtime") if isinstance(launch, dict) else None
     binary_path = runtime.get("binary_path") if isinstance(runtime, dict) else None
     return isinstance(binary_path, str) and Path(binary_path).name == "llama-server"
+
+
+def _supports_slot_compaction(serving: dict[str, Any]) -> bool:
+    """Return whether the launch contract enables llama-server slot actions.
+
+    ``/slots`` can exist without ``action=compact`` support. llama-server
+    requires ``--slot-save-path`` for slot actions, so KV-compaction experiments
+    must only target generated launch records that advertise that path.
+    """
+    launch = serving.get("launch")
+    runtime = launch.get("runtime") if isinstance(launch, dict) else None
+    cache = runtime.get("cache") if isinstance(runtime, dict) else None
+    slot_save_path = cache.get("slot_save_path") if isinstance(cache, dict) else None
+    return isinstance(slot_save_path, str) and bool(slot_save_path.strip())
 
 
 def _entry_ports(serving: dict[str, Any], *, include_aliases: bool) -> list[int]:
@@ -490,7 +504,7 @@ def production_ports_from_stack_priors(
     ports: dict[str, int] = {}
     for role, record in live_stack_role_records(stack_priors_path).items():
         serving = stack_prior_serving(record)
-        if not _is_slot_server(serving):
+        if not _is_slot_server(serving) or not _supports_slot_compaction(serving):
             continue
 
         if include_aliases:
