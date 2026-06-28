@@ -468,6 +468,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--source-trial-id", type=int)
     parser.add_argument("--apply", action="store_true", help="Write rows to StrategyStore.")
     parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Explicit no-write mode; this is the default when --apply is absent.",
+    )
+    parser.add_argument(
         "--audit-identifiers",
         action="store_true",
         help=(
@@ -486,7 +491,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Allow purge while AutoPilot process is still running.",
     )
     parser.add_argument("--json", action="store_true")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.apply and args.dry_run:
+        parser.error("--dry-run cannot be combined with --apply")
+    return args
 
 
 def main(argv: list[str] | None = None) -> int:

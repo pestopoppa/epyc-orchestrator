@@ -3,6 +3,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from scripts.autopilot import seed_operator_strategies as seeds
@@ -86,3 +88,16 @@ def test_audit_identifiers_blocks_implicit_missing_live_binding(monkeypatch):
         finding["status"]
         for finding in report["findings"]
     } == {"missing_live_hot_swap_feature", "missing_live_numeric_surface"}
+
+
+def test_parse_args_accepts_explicit_dry_run():
+    args = seeds._parse_args(["--dry-run", "--json"])
+
+    assert args.dry_run is True
+    assert args.apply is False
+    assert args.json is True
+
+
+def test_parse_args_rejects_apply_with_dry_run():
+    with pytest.raises(SystemExit):
+        seeds._parse_args(["--apply", "--dry-run"])
