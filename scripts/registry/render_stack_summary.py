@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import sys
 from pathlib import Path
 from typing import Any
@@ -58,6 +59,13 @@ def load_yaml(path: Path) -> dict[str, Any]:
     except OSError:
         return {}
     return loaded if isinstance(loaded, dict) else {}
+
+
+def file_sha256(path: Path) -> str:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return "missing"
 
 
 def load_stack_priors(path: Path = DEFAULT_STACK_PRIORS) -> dict[str, Any]:
@@ -270,6 +278,20 @@ def render_role_table(rows: list[str]) -> list[str]:
     ]
 
 
+def render_source_fingerprints(
+    *,
+    stack_priors_path: Path = DEFAULT_STACK_PRIORS,
+    registry_path: Path = DEFAULT_REGISTRY,
+    descriptor_path: Path = DEFAULT_DESCRIPTORS,
+) -> list[str]:
+    return [
+        "Source fingerprints:",
+        f"- {STACK_PRIORS_SOURCE}: `{file_sha256(stack_priors_path)}`",
+        f"- orchestration/model_registry.yaml: `{file_sha256(registry_path)}`",
+        f"- orchestration/model_descriptors.yaml: `{file_sha256(descriptor_path)}`",
+    ]
+
+
 def render_current_stack_summary(
     *,
     stack_priors_path: Path = DEFAULT_STACK_PRIORS,
@@ -300,6 +322,12 @@ def render_current_stack_summary(
         "```",
         "",
         f"Source: `{source}`",
+        "",
+        *render_source_fingerprints(
+            stack_priors_path=stack_priors_path,
+            registry_path=registry_path,
+            descriptor_path=descriptor_path,
+        ),
         "",
         *render_role_table(rows),
     ]

@@ -267,6 +267,39 @@ def test_renderer_compiles_fallback_rows_when_stack_priors_missing(tmp_path: Pat
     assert "worker.gguf" not in summary
 
 
+def test_renderer_embeds_source_fingerprints_for_freshness(tmp_path: Path) -> None:
+    _write_minimal_root(tmp_path)
+    stack_priors_path = tmp_path / "orchestration" / "derived" / "stack_priors.yaml"
+    registry_path = tmp_path / "orchestration" / "model_registry.yaml"
+    descriptor_path = tmp_path / "orchestration" / "model_descriptors.yaml"
+    descriptor_path.write_text("models: []\n", encoding="utf-8")
+
+    summary = render_stack_summary.render_current_stack_summary(
+        stack_priors_path=stack_priors_path,
+        registry_path=registry_path,
+        descriptor_path=descriptor_path,
+    )
+    stack_hash = render_stack_summary.file_sha256(stack_priors_path)
+    registry_hash = render_stack_summary.file_sha256(registry_path)
+    descriptor_hash = render_stack_summary.file_sha256(descriptor_path)
+
+    assert "Source fingerprints:" in summary
+    assert f"- orchestration/derived/stack_priors.yaml: `{stack_hash}`" in summary
+    assert f"- orchestration/model_registry.yaml: `{registry_hash}`" in summary
+    assert f"- orchestration/model_descriptors.yaml: `{descriptor_hash}`" in summary
+
+    descriptor_path.write_text("models: []\n# whitespace-only table no-op\n", encoding="utf-8")
+    refreshed = render_stack_summary.render_current_stack_summary(
+        stack_priors_path=stack_priors_path,
+        registry_path=registry_path,
+        descriptor_path=descriptor_path,
+    )
+
+    assert refreshed != summary
+    assert render_stack_summary.file_sha256(descriptor_path) in refreshed
+    assert descriptor_hash not in refreshed
+
+
 def test_renderer_uses_endpoint_port_when_stack_prior_ports_missing(
     tmp_path: Path,
 ) -> None:

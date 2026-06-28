@@ -8,6 +8,11 @@ uv run python scripts/registry/stack_change_pipeline.py update
 
 Source: `orchestration/derived/stack_priors.yaml`
 
+Source fingerprints:
+- orchestration/derived/stack_priors.yaml: `9e271f0769a14cae3b1b90191be57c5d96169a0b0cdebfff6d481d0730bcffd9`
+- orchestration/model_registry.yaml: `17a33527661c1fcec9e5b7ed96e10519d6a6c09cfc858314c91ace7b3d1a026d`
+- orchestration/model_descriptors.yaml: `a31ff48bce71aca990c673da8447033c5f52998ce7f3a34d2eb2a63d02edc359`
+
 | Role | Port | Model | Tier | Acceleration | Requirements | Throughput | Description |
 |---|---:|---|---|---|---|---:|---|
 | architect_general | 8083 | Qwen3.5-122B-A10B | hot | draft-mtp (lookup=false, draft_max=4) | draft=Qwen3.5-122B-A10B-UD-Q4_K_M-00001-of-00... | 12.19 | live_stack; binding=server_mode.direct; status=compiled |
