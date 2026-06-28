@@ -458,15 +458,15 @@ def test_require_w6_audit_uses_trailing_alarm_window(monkeypatch) -> None:
 
     rows = []
     for trial_id, core_correct, audit_correct in [
-        (1, 1, 1),
-        (2, 2, 1),
+        (1, 1, 3),
+        (2, 3, 1),
         (3, 1, 1),
         (4, 1, 1),
         (5, 1, 1),
     ]:
         question_results = [
             {"qid": f"core-{trial_id}-{idx}", "partition": "core", "correct": idx < core_correct}
-            for idx in range(2)
+            for idx in range(4)
         ]
         question_results.extend(
             {
@@ -474,7 +474,7 @@ def test_require_w6_audit_uses_trailing_alarm_window(monkeypatch) -> None:
                 "partition": "audit",
                 "correct": idx < audit_correct,
             }
-            for idx in range(2)
+            for idx in range(4)
         )
         rows.append({"trial_id": trial_id, "eval_details": {"question_results": question_results}})
 
@@ -500,9 +500,9 @@ def test_w6_cutover_horizon_counts_alarm_clearance_before_window_full(monkeypatc
 
     rows = []
     for trial_id, core_correct, audit_correct in [
-        (1, 1, 1),
-        (2, 2, 1),
-        (3, 2, 2),
+        (1, 1, 3),
+        (2, 3, 1),
+        (3, 3, 3),
     ]:
         question_results = [
             {
@@ -510,7 +510,7 @@ def test_w6_cutover_horizon_counts_alarm_clearance_before_window_full(monkeypatc
                 "partition": "core",
                 "correct": idx < core_correct,
             }
-            for idx in range(2)
+            for idx in range(4)
         ]
         question_results.extend(
             {
@@ -518,7 +518,7 @@ def test_w6_cutover_horizon_counts_alarm_clearance_before_window_full(monkeypatc
                 "partition": "audit",
                 "correct": idx < audit_correct,
             }
-            for idx in range(2)
+            for idx in range(4)
         )
         rows.append({"trial_id": trial_id, "eval_details": {"question_results": question_results}})
 

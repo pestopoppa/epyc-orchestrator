@@ -154,9 +154,9 @@ def test_transfer_diagnostic_counts_divergences(tmp_path: Path) -> None:
     _write_journal(
         journal,
         [
-            _trial(1, core_correct=1, core_total=2, audit_correct=1, audit_total=2),
-            _trial(2, core_correct=2, core_total=2, audit_correct=1, audit_total=2),
-            _trial(3, core_correct=2, core_total=2, audit_correct=0, audit_total=2),
+            _trial(1, core_correct=1, core_total=4, audit_correct=3, audit_total=4),
+            _trial(2, core_correct=3, core_total=4, audit_correct=1, audit_total=4),
+            _trial(3, core_correct=3, core_total=4, audit_correct=3, audit_total=4),
         ],
     )
 
@@ -170,7 +170,7 @@ def test_transfer_diagnostic_counts_divergences(tmp_path: Path) -> None:
             "trial_id": 2,
             "previous_trial_id": 1,
             "core_delta": 1.5,
-            "audit_delta": 0.0,
+            "audit_delta": -1.5,
         }
     ]
 
@@ -309,14 +309,35 @@ def test_no_gaming_alarm_with_insufficient_audited_history(tmp_path: Path) -> No
     assert report["transfer_diagnostic"]["potential_overfit_divergences"] == 0
 
 
-def test_gaming_alarm_detects_core_improving_audit_flat_or_worsening(tmp_path: Path) -> None:
+def test_gaming_alarm_ignores_flat_audit_and_one_question_wobble(tmp_path: Path) -> None:
     journal = tmp_path / "autopilot_journal.jsonl"
     _write_journal(
         journal,
         [
-            _trial(1, core_correct=1, core_total=2, audit_correct=1, audit_total=2),
-            _trial(2, core_correct=2, core_total=2, audit_correct=1, audit_total=2),
-            _trial(3, core_correct=2, core_total=2, audit_correct=2, audit_total=2),
+            _trial(1, core_correct=33, core_total=50, audit_correct=7, audit_total=10),
+            _trial(2, core_correct=34, core_total=50, audit_correct=7, audit_total=10),
+            _trial(3, core_correct=36, core_total=50, audit_correct=6, audit_total=10),
+        ],
+    )
+
+    report = audit_block_report.build_report(audit_block_report.load_journal_rows([journal]))
+
+    assert report["gaming_alarm"] is False
+    assert report["gaming_events"] == []
+    assert report["cumulative_gaming_alarm"] is False
+    assert report["cumulative_gaming_events"] == []
+    assert report["gaming_alarm_clearance_clean_trials_required"] == 0
+    assert report["transfer_diagnostic"]["clearance_clean_trials_required"] == 0
+
+
+def test_gaming_alarm_detects_beyond_resolution_divergence(tmp_path: Path) -> None:
+    journal = tmp_path / "autopilot_journal.jsonl"
+    _write_journal(
+        journal,
+        [
+            _trial(1, core_correct=1, core_total=4, audit_correct=3, audit_total=4),
+            _trial(2, core_correct=3, core_total=4, audit_correct=1, audit_total=4),
+            _trial(3, core_correct=3, core_total=4, audit_correct=3, audit_total=4),
         ],
     )
 
@@ -328,7 +349,7 @@ def test_gaming_alarm_detects_core_improving_audit_flat_or_worsening(tmp_path: P
             "trial_id": 2,
             "previous_trial_id": 1,
             "core_delta": 1.5,
-            "audit_delta": 0.0,
+            "audit_delta": -1.5,
         }
     ]
     assert report["cumulative_gaming_alarm"] is True
@@ -342,11 +363,11 @@ def test_alarm_window_can_clear_after_historical_divergence(tmp_path: Path) -> N
     _write_journal(
         journal,
         [
-            _trial(1, core_correct=1, core_total=2, audit_correct=1, audit_total=2),
-            _trial(2, core_correct=2, core_total=2, audit_correct=1, audit_total=2),
-            _trial(3, core_correct=1, core_total=2, audit_correct=1, audit_total=2),
-            _trial(4, core_correct=1, core_total=2, audit_correct=1, audit_total=2),
-            _trial(5, core_correct=1, core_total=2, audit_correct=1, audit_total=2),
+            _trial(1, core_correct=1, core_total=4, audit_correct=3, audit_total=4),
+            _trial(2, core_correct=3, core_total=4, audit_correct=1, audit_total=4),
+            _trial(3, core_correct=1, core_total=4, audit_correct=1, audit_total=4),
+            _trial(4, core_correct=1, core_total=4, audit_correct=1, audit_total=4),
+            _trial(5, core_correct=1, core_total=4, audit_correct=1, audit_total=4),
         ],
     )
 
@@ -372,11 +393,11 @@ def test_alarm_window_reports_clean_rows_needed_to_clear_active_event(
     _write_journal(
         journal,
         [
-            _trial(1, core_correct=1, core_total=2, audit_correct=1, audit_total=2),
-            _trial(2, core_correct=1, core_total=2, audit_correct=1, audit_total=2),
-            _trial(3, core_correct=1, core_total=2, audit_correct=1, audit_total=2),
-            _trial(4, core_correct=2, core_total=2, audit_correct=1, audit_total=2),
-            _trial(5, core_correct=2, core_total=2, audit_correct=2, audit_total=2),
+            _trial(1, core_correct=1, core_total=4, audit_correct=1, audit_total=4),
+            _trial(2, core_correct=1, core_total=4, audit_correct=1, audit_total=4),
+            _trial(3, core_correct=1, core_total=4, audit_correct=3, audit_total=4),
+            _trial(4, core_correct=3, core_total=4, audit_correct=1, audit_total=4),
+            _trial(5, core_correct=3, core_total=4, audit_correct=3, audit_total=4),
         ],
     )
 
@@ -391,7 +412,7 @@ def test_alarm_window_reports_clean_rows_needed_to_clear_active_event(
             "trial_id": 4,
             "previous_trial_id": 3,
             "core_delta": 1.5,
-            "audit_delta": 0.0,
+            "audit_delta": -1.5,
         }
     ]
     assert report["gaming_alarm_clearance_clean_trials_required"] == 1
@@ -403,9 +424,9 @@ def test_alarm_window_reports_clearance_before_window_is_full(tmp_path: Path) ->
     _write_journal(
         journal,
         [
-            _trial(1, core_correct=1, core_total=2, audit_correct=1, audit_total=2),
-            _trial(2, core_correct=2, core_total=2, audit_correct=1, audit_total=2),
-            _trial(3, core_correct=2, core_total=2, audit_correct=2, audit_total=2),
+            _trial(1, core_correct=1, core_total=4, audit_correct=3, audit_total=4),
+            _trial(2, core_correct=3, core_total=4, audit_correct=1, audit_total=4),
+            _trial(3, core_correct=3, core_total=4, audit_correct=3, audit_total=4),
         ],
     )
 
@@ -426,11 +447,11 @@ def test_markdown_distinguishes_current_window_from_cumulative_history(tmp_path:
     _write_journal(
         journal,
         [
-            _trial(1, core_correct=1, core_total=2, audit_correct=1, audit_total=2),
-            _trial(2, core_correct=2, core_total=2, audit_correct=1, audit_total=2),
-            _trial(3, core_correct=1, core_total=2, audit_correct=1, audit_total=2),
-            _trial(4, core_correct=1, core_total=2, audit_correct=1, audit_total=2),
-            _trial(5, core_correct=1, core_total=2, audit_correct=1, audit_total=2),
+            _trial(1, core_correct=1, core_total=4, audit_correct=3, audit_total=4),
+            _trial(2, core_correct=3, core_total=4, audit_correct=1, audit_total=4),
+            _trial(3, core_correct=1, core_total=4, audit_correct=1, audit_total=4),
+            _trial(4, core_correct=1, core_total=4, audit_correct=1, audit_total=4),
+            _trial(5, core_correct=1, core_total=4, audit_correct=1, audit_total=4),
         ],
     )
 
@@ -451,9 +472,9 @@ def test_markdown_includes_gaming_alarm(tmp_path: Path) -> None:
     _write_journal(
         journal,
         [
-            _trial(1, core_correct=1, core_total=2, audit_correct=1, audit_total=2),
-            _trial(2, core_correct=2, core_total=2, audit_correct=1, audit_total=2),
-            _trial(3, core_correct=2, core_total=2, audit_correct=2, audit_total=2),
+            _trial(1, core_correct=1, core_total=4, audit_correct=3, audit_total=4),
+            _trial(2, core_correct=3, core_total=4, audit_correct=1, audit_total=4),
+            _trial(3, core_correct=3, core_total=4, audit_correct=3, audit_total=4),
         ],
     )
 
