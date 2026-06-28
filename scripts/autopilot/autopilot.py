@@ -68,6 +68,7 @@ from pareto_archive import (
 )
 from safety_gate import Baseline, DEFAULT_BASELINE_PATH, EvalResult, SafetyGate
 from eval_tower import EvalTower
+from config_applicator import apply_params  # re-exported for actions.py monkeypatch compatibility  # noqa: F401
 from config_applicator import health_check
 from meta_optimizer import MetaOptimizer, SpeciesBudget
 from progress_plots import PLOTS_DIR, generate_all_plots

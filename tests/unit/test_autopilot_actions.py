@@ -160,6 +160,90 @@ def test_structural_experiment_error_status_is_skipped_not_invalid() -> None:
     assert species == "structural_lab"
 
 
+def test_planner_convention_bindings_are_default_off(monkeypatch) -> None:
+    monkeypatch.setattr(actions, "_PLANNER_HINTS_ENABLED", False)
+
+    class FakeStore:
+        def retrieve_conventions(self, **_kwargs):
+            raise AssertionError("default-off path must not read StrategyStore")
+
+    assert actions._planner_convention_bindings(
+        _ctx(strategy_store=FakeStore()), species="numeric_swarm"
+    ) == set()
+
+
+def test_structural_experiment_convention_denylist_blocks_live_bound_flag(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(actions, "_PLANNER_HINTS_ENABLED", True)
+
+    class FakeStore:
+        def retrieve_conventions(self, *, species, journal):
+            assert species == "structural_lab"
+            assert journal == "journal"
+            return [
+                SimpleNamespace(
+                    metadata={
+                        "bind_status": "live",
+                        "bind_identifiers": ["graph_router"],
+                    }
+                ),
+                SimpleNamespace(
+                    metadata={
+                        "bind_status": "future",
+                        "bind_identifiers": ["specialist_routing"],
+                    }
+                ),
+            ]
+
+    class FakeLab:
+        def propose_flag_experiment(self, _flags):  # pragma: no cover
+            raise AssertionError("denylisted flag must not reach StructuralLab")
+
+    result, species = actions._action_structural_experiment(
+        {"type": "structural_experiment", "flags": {"graph_router": True}},
+        _ctx(lab=FakeLab(), strategy_store=FakeStore(), journal="journal"),
+    )
+
+    assert isinstance(result, actions.SkipOutcome)
+    assert result.status == "invalid"
+    assert "graph_router" in result.reason
+    assert species == "structural_lab"
+
+
+def test_numeric_trial_convention_suppresses_live_bound_surface(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(actions, "_PLANNER_HINTS_ENABLED", True)
+
+    class FakeStore:
+        def retrieve_conventions(self, *, species, journal):
+            assert species == "numeric_swarm"
+            assert journal is None
+            return [
+                SimpleNamespace(
+                    metadata={
+                        "bind_status": "live",
+                        "bind_identifiers": ["kv_compaction"],
+                    }
+                )
+            ]
+
+    class FakeSwarm:
+        def suggest_trial(self, _surface):  # pragma: no cover
+            raise AssertionError("suppressed surface must not reach NumericSwarm")
+
+    result, species = actions._action_numeric_trial(
+        {"type": "numeric_trial", "surface": "kv_compaction"},
+        _ctx(swarm=FakeSwarm(), strategy_store=FakeStore()),
+    )
+
+    assert isinstance(result, actions.SkipOutcome)
+    assert result.status == "invalid"
+    assert "kv_compaction" in result.reason
+    assert species == "numeric_swarm"
+
+
 def test_dispatcher_routes_to_correct_handler(monkeypatch) -> None:
     """Smoke test that each registered handler is callable from dispatch_action."""
     captured = {}

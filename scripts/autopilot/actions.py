@@ -188,6 +188,57 @@ def _seed_batch_strategy_hints(
     )
 
 
+def _planner_convention_bindings(
+    ctx: _ActionContext,
+    *,
+    species: str,
+) -> set[str]:
+    """Return live audited convention bindings for a planner species.
+
+    Operator-seeded convention rows carry explicit ``bind_identifiers`` after
+    the identifier audit. Hard guards should use those identifiers only, not
+    free-text descriptions, so future/context notes cannot disable live levers.
+    """
+    if not _PLANNER_HINTS_ENABLED or ctx.strategy_store is None:
+        return set()
+    if not hasattr(ctx.strategy_store, "retrieve_conventions"):
+        log.warning(
+            "Skipping %s convention bindings: StrategyStore lacks "
+            "retrieve_conventions()",
+            species,
+        )
+        return set()
+    try:
+        conventions = ctx.strategy_store.retrieve_conventions(
+            species=species,
+            journal=ctx.journal,
+        )
+    except TypeError:
+        log.warning(
+            "Skipping %s convention bindings: StrategyStore "
+            "retrieve_conventions() has an incompatible signature",
+            species,
+        )
+        return set()
+
+    bindings: set[str] = set()
+    for entry in conventions:
+        metadata = getattr(entry, "metadata", {}) or {}
+        if not isinstance(metadata, dict):
+            continue
+        if str(metadata.get("bind_status", "")).strip().lower() != "live":
+            continue
+        raw_identifiers = metadata.get("bind_identifiers", [])
+        if not isinstance(raw_identifiers, list):
+            continue
+        bindings.update(
+            str(identifier).strip()
+            for identifier in raw_identifiers
+            if str(identifier).strip()
+        )
+    return bindings
+
+
 def _action_seed_batch(action: dict[str, Any], ctx: _ActionContext):
     requested_n = int(action.get("n_questions", 10))
     suites = action.get("suites")
@@ -275,6 +326,16 @@ def _action_seed_batch(action: dict[str, Any], ctx: _ActionContext):
 def _action_numeric_trial(action: dict[str, Any], ctx: _ActionContext):
     surface = action.get("surface", "memrl_retrieval")
     explicit_params = action.get("params", {})
+    suppressed_surfaces = _planner_convention_bindings(ctx, species="numeric_swarm")
+    if surface in suppressed_surfaces:
+        return (
+            SkipOutcome(
+                "invalid",
+                f"planner convention suppresses numeric surface: {surface}",
+                "numeric_trial",
+            ),
+            "numeric_swarm",
+        )
 
     if explicit_params:
         # Apply explicit params
@@ -383,7 +444,7 @@ def _autopilot_attr(name: str) -> Any | None:
     """Resolve helpers from the already-loaded autopilot module without import cycles."""
     import sys
 
-    for module_name in ("scripts.autopilot.autopilot", "autopilot", "__main__"):
+    for module_name in ("autopilot", "scripts.autopilot.autopilot", "__main__"):
         mod = sys.modules.get(module_name)
         if mod is not None and hasattr(mod, name):
             return getattr(mod, name)
@@ -933,6 +994,19 @@ def _action_code_mutation(action: dict[str, Any], ctx: _ActionContext):
 
 def _action_structural_experiment(action: dict[str, Any], ctx: _ActionContext):
     flags = action.get("flags", {})
+    denylisted_flags = _planner_convention_bindings(ctx, species="structural_lab")
+    denied = sorted(set(flags) & denylisted_flags)
+    if denied:
+        return (
+            SkipOutcome(
+                "invalid",
+                "planner convention denies feature flag(s): "
+                + ", ".join(denied),
+                "structural_experiment",
+            ),
+            "structural_lab",
+        )
+
     validation = ctx.lab.propose_flag_experiment(flags)
     status = validation.get("status")
     if status != "valid":
