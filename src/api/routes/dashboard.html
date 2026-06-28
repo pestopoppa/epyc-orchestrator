@@ -1963,18 +1963,26 @@ function structuredTapHasActiveCpuLock(req) {
     ].filter(Boolean).map(String);
     const idx = req.instance_idx;
     const pid = req.pid != null ? String(req.pid) : '';
+    const requestedRegions = new Set(structuredTapRequestedRegions(req));
     for (const role of roleKeys) {
         const active = _latestRegionLocksByRole[role];
         if (!active) continue;
+        // Tap PIDs identify backend llama-server processes, while CPU-region
+        // lock PIDs identify orchestrator workers holding flock() handles.
+        // Prefer the stable physical role + instance/region identity, then use
+        // PID only as extra evidence for older payloads.
+        if (idx != null && active.instanceIdxs && active.instanceIdxs.has(Number(idx))) return true;
+        if (requestedRegions.size && active.regions) {
+            const allRegionsHeld = [...requestedRegions].every(q => active.regions.has(q));
+            if (allRegionsHeld) return true;
+        }
         if (pid) {
             if (idx != null) {
                 const pidsForIdx = active.pidsByInstanceIdx && active.pidsByInstanceIdx.get(Number(idx));
                 if (pidsForIdx && pidsForIdx.has(pid)) return true;
             }
             if (active.holderPids && active.holderPids.has(pid)) return true;
-            continue;
         }
-        if (idx != null && active.instanceIdxs && active.instanceIdxs.has(Number(idx))) return true;
     }
     return false;
 }
@@ -2014,11 +2022,15 @@ function structuredTapCpuBlockers(req) {
         req.role,
         req.role ? clientBaseRole(req.role) : '',
     ].filter(Boolean).map(String));
+    const idx = req.instance_idx != null ? Number(req.instance_idx) : null;
     const blockers = [];
     for (const [role, active] of Object.entries(_latestRegionLocksByRole || {})) {
         if (!active || !active.regions) continue;
-        if (ownPid && ownRoles.has(role) && active.holderPids && active.holderPids.has(ownPid)) {
-            continue;
+        if (ownRoles.has(role)) {
+            if (idx != null && active.instanceIdxs && active.instanceIdxs.has(idx)) continue;
+            if (ownPid && active.holderPids && active.holderPids.has(ownPid)) continue;
+            const sameRegionSet = needed.size && [...needed].every(q => active.regions.has(q));
+            if (sameRegionSet) continue;
         }
         const overlap = [...needed].filter(q => active.regions.has(q));
         if (overlap.length) blockers.push({ role, regions: overlap });
@@ -2398,6 +2410,11 @@ function scheduleRegionLocksRefresh(force = false) {
     updateRegionLocks(refreshSeq);
     updateContentionGate(refreshSeq);
     updateTopologyActivity();
+}
+
+function repaintRegionLocksFromStructuredTapFrame() {
+    if (!_lastRegionLocksPayload) return;
+    updateRegionLocks(_regionLocksRefreshSeq, _lastRegionLocksPayload);
 }
 
 function renderRegionLocksBasicGrid(grid, d, note = '') {
@@ -3164,6 +3181,7 @@ function startStructuredTapStream() {
             if (_rawTapRenderMode === 'structured') paintRawTap();
             renderAutopilotRunStrip();
             refreshLiveDotsFromStructuredTap();
+            repaintRegionLocksFromStructuredTapFrame();
             scheduleRegionLocksRefresh();
             refreshOpenStructuredTapDetail();
         } catch {}

@@ -134,6 +134,10 @@ def test_dashboard_topology_activity_stats_refresh_with_live_age_tick() -> None:
     assert "buildSlotInferredRegionLocks(byRole)" in body
     assert "SLOT ACTIVE" in body
     assert "slot-inferred active instance(s)" in body
+    assert "Tap PIDs identify backend llama-server processes" in body
+    assert "active.instanceIdxs && active.instanceIdxs.has(Number(idx))" in body
+    assert "function repaintRegionLocksFromStructuredTapFrame()" in body
+    assert "repaintRegionLocksFromStructuredTapFrame();" in body
 
 
 def test_dashboard_live_panel_refreshes_ignore_stale_responses_where_possible() -> None:
