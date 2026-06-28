@@ -75,14 +75,6 @@ for s in results["sources"]:
 FINAL(results["sources"][0].get("synthesis", "Unknown"))
 ```
 
-## Example 4c: Quick URL lookup (when you only need links, not content)
-Question: "Find the documentation URL for Python asyncio"
-```python
-import json
-results = json.loads(CALL("web_search", query="Python asyncio documentation"))
-FINAL(results[0]["url"])
-```
-
 ## Example 5: Competitive programming (USACO/Codeforces)
 Question: "Given n integers, find the maximum subarray sum."
 ```python
