@@ -699,7 +699,7 @@ details.section-accordion > *:not(summary) { margin-top: 14px; }
 }
 .insight-graph-toolbar {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-columns: minmax(0, 1fr) auto auto auto;
     gap: 8px;
     align-items: center;
 }
@@ -741,6 +741,30 @@ details.section-accordion > *:not(summary) { margin-top: 14px; }
     width: 100%;
     height: 100%;
     display: block;
+}
+/* Full-window ("Enlarge") view: the panel fills the viewport and the
+   stage flex-grows so the viewBox-scaled SVG renders large and readable.
+   Toggled by #insight-graph-enlarge-btn (Esc also closes). */
+body.insight-fullscreen-open { overflow: hidden; }
+.insight-graph-panel.insight-fullscreen {
+    position: fixed;
+    inset: 0;
+    z-index: 1200;
+    margin: 0;
+    border-radius: 0;
+    overflow: auto;
+    background: var(--bg-1);
+    display: flex;
+    flex-direction: column;
+}
+.insight-graph-panel.insight-fullscreen .insight-graph-shell {
+    flex: 1 1 auto;
+    min-height: 0;
+}
+.insight-graph-panel.insight-fullscreen .insight-graph-stage {
+    flex: 1 1 auto;
+    height: auto;
+    min-height: 0;
 }
 .insight-graph-link {
     stroke-width: 1.1;
@@ -917,6 +941,33 @@ details.section-accordion > *:not(summary) { margin-top: 14px; }
         </div>
       </details>
     </div>
+
+    <div class="panel" id="insight-graph-panel">
+      <h2>
+        planner insight graph
+        <span class="count-suffix" id="insight-graph-status">read-only</span>
+      </h2>
+      <div class="insight-graph-shell">
+        <div class="insight-graph-toolbar">
+          <input
+            id="insight-graph-query"
+            class="insight-graph-input"
+            type="text"
+            spellcheck="false"
+            autocomplete="off"
+            placeholder="focus by trial, strategy, hint, campaign, species, or handoff"
+          />
+          <button class="insight-graph-button" id="insight-graph-focus-btn" type="button">Focus</button>
+          <button class="insight-graph-button" id="insight-graph-reset-btn" type="button">Reset</button>
+          <button class="insight-graph-button" id="insight-graph-enlarge-btn" type="button" aria-expanded="false" title="Open the graph in a full-window view (Esc to close)">Enlarge</button>
+        </div>
+        <div class="insight-graph-stage">
+          <svg id="insight-graph-svg" class="insight-graph-svg" viewBox="0 0 520 320" preserveAspectRatio="xMidYMid meet"></svg>
+        </div>
+        <div id="insight-graph-detail" class="insight-graph-detail"></div>
+      </div>
+    </div>
+
   </div>
 
   <!-- RIGHT column: state cards (compact, lots of them) -->
@@ -957,30 +1008,6 @@ details.section-accordion > *:not(summary) { margin-top: 14px; }
       <div id="repo-readiness-meta" class="readiness-meta"></div>
     </div>
 
-    <div class="panel" id="insight-graph-panel">
-      <h2>
-        planner insight graph
-        <span class="count-suffix" id="insight-graph-status">read-only</span>
-      </h2>
-      <div class="insight-graph-shell">
-        <div class="insight-graph-toolbar">
-          <input
-            id="insight-graph-query"
-            class="insight-graph-input"
-            type="text"
-            spellcheck="false"
-            autocomplete="off"
-            placeholder="focus by trial, strategy, hint, campaign, species, or handoff"
-          />
-          <button class="insight-graph-button" id="insight-graph-focus-btn" type="button">Focus</button>
-          <button class="insight-graph-button" id="insight-graph-reset-btn" type="button">Reset</button>
-        </div>
-        <div class="insight-graph-stage">
-          <svg id="insight-graph-svg" class="insight-graph-svg" viewBox="0 0 520 320" preserveAspectRatio="xMidYMid meet"></svg>
-        </div>
-        <div id="insight-graph-detail" class="insight-graph-detail"></div>
-      </div>
-    </div>
   </div>
 </div>
 
@@ -2355,6 +2382,28 @@ function lockHolderLabel(holder) {
     return `${holder.role || '?'}${holder.shape ? `.${holder.shape}` : ''}`;
 }
 
+function structuredTapLogicalAliasesForIdentity(role, idx) {
+    const aliases = new Set();
+    const nIdx = idx != null ? Number(idx) : null;
+    for (const req of openStructuredTapRequests()) {
+        const identity = inferStructuredTapLockIdentity(
+            req,
+            _lastRegionLocksPayload && _lastRegionLocksPayload.by_role ? _lastRegionLocksPayload.by_role : null
+        );
+        if (!identity || identity.role !== role) continue;
+        if (nIdx != null && Number(identity.idx) !== nIdx) continue;
+        const logical = req.role ? String(req.role) : '';
+        if (logical && logical !== role) aliases.add(logical);
+    }
+    return [...aliases].sort();
+}
+
+function formatPhysicalRoleWithLogicalAliases(role, shape, idx = null) {
+    const base = `${role || '?'}${shape ? `.${shape}` : ''}`;
+    const aliases = structuredTapLogicalAliasesForIdentity(role, idx);
+    return aliases.length ? `${base} (${aliases.join(', ')})` : base;
+}
+
 function lockHolderConcurrentSummary(holder) {
     const others = procRegionLockHolders()
         .filter(h => !(h.role === holder.role && Number(h.idx) === Number(holder.idx)))
@@ -2378,7 +2427,7 @@ function formatRegionLockHolderSummary() {
     return procRegionLockHolders().map(holder => {
         const tapped = openStructuredTapRequests().some(req => structuredTapMatchesLockHolder(req, holder));
         const source = (!tapped && actionSource) ? ` (${actionSource})` : '';
-        return `${lockHolderLabel(holder)}${source}`;
+        return `${formatPhysicalRoleWithLogicalAliases(holder.role, holder.shape, holder.idx)}${source}`;
     }).join(', ');
 }
 
@@ -5532,6 +5581,29 @@ async function updateRegionLocks(refreshSeq = _regionLocksRefreshSeq, regionLock
                 updateInsightGraph('');
             });
         }
+        const insightEnlargeBtn = document.getElementById('insight-graph-enlarge-btn');
+        const insightPanel = document.getElementById('insight-graph-panel');
+        function setInsightFullscreen(on) {
+            if (!insightPanel) return;
+            insightPanel.classList.toggle('insight-fullscreen', on);
+            document.body.classList.toggle('insight-fullscreen-open', on);
+            if (insightEnlargeBtn) {
+                insightEnlargeBtn.textContent = on ? 'Close' : 'Enlarge';
+                insightEnlargeBtn.setAttribute('aria-expanded', on ? 'true' : 'false');
+            }
+            // Repaint into the resized stage so the viewBox-scaled graph is crisp.
+            if (_insightGraphData) renderInsightGraph(_insightGraphData);
+        }
+        if (insightEnlargeBtn) {
+            insightEnlargeBtn.addEventListener('click', () => {
+                setInsightFullscreen(!(insightPanel && insightPanel.classList.contains('insight-fullscreen')));
+            });
+        }
+        document.addEventListener('keydown', (ev) => {
+            if (ev.key === 'Escape' && insightPanel && insightPanel.classList.contains('insight-fullscreen')) {
+                setInsightFullscreen(false);
+            }
+        });
         setInterval(updateGepa, 5000);
         setInterval(updateProcessStatus, 3000);
         setInterval(updateBuildRev, 30000);  // build-drift poll
