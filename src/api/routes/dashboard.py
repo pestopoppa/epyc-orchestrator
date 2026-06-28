@@ -136,6 +136,122 @@ def _autopilot_phase_health() -> dict[str, Any]:
         }
 
 
+def _port_role_shape(role_label: Any) -> tuple[str, str]:
+    """Return canonical topology role + shape suffix for a port role label."""
+    label = str(role_label or "")
+    if not label:
+        return "", ""
+    raw = label.split(":", 1)[0]
+    match = re.match(r"^(.+?)\.(q\d+|half\d+|full)$", raw)
+    if match:
+        return base_role(match.group(1)), match.group(2)
+    match = re.match(r"^(.+?)_(\d+)$", raw)
+    if match and match.group(1) == "embedder":
+        return base_role(match.group(1)), f"_{match.group(2)}"
+    return base_role(raw), ""
+
+
+def _alias_to_topology_roles(port_roles: dict[int, str]) -> dict[str, str]:
+    aliases: dict[str, str] = {}
+    for role_label in set(port_roles.values()):
+        role, _shape = _port_role_shape(role_label)
+        if not role:
+            continue
+        try:
+            for alias in role_aliases(role):
+                alias_base = base_role(str(alias))
+                if alias_base:
+                    aliases[alias_base] = role
+        except Exception:
+            continue
+    return aliases
+
+
+def _instance_for_tap_request(
+    role_info: dict[str, Any] | None,
+    *,
+    instance_idx: Any = None,
+    instance_shape: Any = None,
+) -> dict[str, Any] | None:
+    instances = role_info.get("instances") if isinstance(role_info, dict) else None
+    if not isinstance(instances, list) or not instances:
+        return None
+    try:
+        idx = int(instance_idx) if instance_idx not in (None, "") else None
+    except (TypeError, ValueError):
+        idx = None
+    if idx is not None:
+        for inst in instances:
+            try:
+                if int(inst.get("idx")) == idx:
+                    return inst
+            except (AttributeError, TypeError, ValueError):
+                continue
+    shape = str(instance_shape or "")
+    if shape:
+        for inst in instances:
+            if str(inst.get("shape") or "") == shape:
+                return inst
+    return instances[0] if isinstance(instances[0], dict) else None
+
+
+def _enrich_structured_tap_requests(
+    requests: list[dict[str, Any]],
+    *,
+    port_roles: dict[int, str] | None = None,
+    region_locks: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Fill missing topology/lock metadata for dashboard display.
+
+    Older tap events can carry only the logical role and backend port. The live
+    tap panel can still show them, but the CPU-region grid needs the physical
+    lock role, instance shape, and regions to reconcile with /proc locks.
+    """
+    if not requests:
+        return requests
+    port_roles = port_roles if port_roles is not None else _discover_llama_ports()
+    region_locks = region_locks if region_locks is not None else _region_locks_payload()
+    by_role = region_locks.get("by_role") if isinstance(region_locks, dict) else {}
+    by_role = by_role if isinstance(by_role, dict) else {}
+    alias_to_topology = _alias_to_topology_roles(port_roles)
+    enriched: list[dict[str, Any]] = []
+    for req in requests:
+        out = dict(req)
+        try:
+            port = int(out.get("port")) if out.get("port") not in (None, "") else None
+        except (TypeError, ValueError):
+            port = None
+        port_role, port_shape = _port_role_shape(port_roles.get(port, "")) if port is not None else ("", "")
+        logical_role = base_role(str(out.get("role") or ""))
+        topology_role = (
+            str(out.get("topology_role") or "")
+            or alias_to_topology.get(logical_role, "")
+            or port_role
+            or logical_role
+        )
+        lock_role = str(out.get("lock_role") or "") or topology_role
+        if topology_role and not out.get("topology_role"):
+            out["topology_role"] = topology_role
+        if lock_role and not out.get("lock_role"):
+            out["lock_role"] = lock_role
+
+        role_info = by_role.get(lock_role) or by_role.get(topology_role)
+        inst = _instance_for_tap_request(
+            role_info,
+            instance_idx=out.get("instance_idx"),
+            instance_shape=out.get("instance_shape") or port_shape,
+        )
+        if inst is not None:
+            if out.get("instance_idx") in (None, "") and inst.get("idx") is not None:
+                out["instance_idx"] = inst.get("idx")
+            if not out.get("instance_shape") and inst.get("shape"):
+                out["instance_shape"] = inst.get("shape")
+            if not out.get("instance_regions") and inst.get("regions"):
+                out["instance_regions"] = list(inst.get("regions") or [])
+        enriched.append(out)
+    return enriched
+
+
 def _latest_matching_file(root: Path, pattern: str) -> Path | None:
     try:
         candidates = [path for path in root.glob(pattern) if path.is_file()]
@@ -233,6 +349,7 @@ async def inference_tap_snapshot(max_sections: int = 20) -> JSONResponse:
         max_requests=max_sections,
         now_epoch=now_epoch,
     )
+    structured_requests = _enrich_structured_tap_requests(structured_requests)
     current_prompt = ""
     if _PROMPT_TAP_PATH.exists():
         try:
@@ -757,13 +874,14 @@ async def structured_tap_stream(request: Request) -> StreamingResponse:
                 last_mtime = mtime
                 last_emit = now_epoch
                 tail = _read_tail(_INFERENCE_TAP_EVENTS_PATH, max_bytes=1024 * 1024)
+                structured_requests = _parse_structured_tap_requests(
+                    tail,
+                    max_requests=40,
+                    now_epoch=now_epoch,
+                )
                 payload = json.dumps({
                     "tap_active": _TAP_SENTINEL_PATH.exists(),
-                    "structured_requests": _parse_structured_tap_requests(
-                        tail,
-                        max_requests=40,
-                        now_epoch=now_epoch,
-                    ),
+                    "structured_requests": _enrich_structured_tap_requests(structured_requests),
                     "structured_tap_mtime": mtime or None,
                     "now": now_epoch,
                 })
@@ -956,15 +1074,16 @@ async def inference_tap_stream(request: Request) -> StreamingResponse:
                         current_prompt = _PROMPT_TAP_PATH.read_text(errors="ignore")[-4000:]
                     except Exception:
                         pass
+                structured_requests = _parse_structured_tap_requests(
+                    structured_tail,
+                    max_requests=10,
+                    now_epoch=now_epoch,
+                )
                 payload = json.dumps({
                     "tap_active": _TAP_SENTINEL_PATH.exists(),
                     "current_prompt": current_prompt,
                     "inference_sections": sections,
-                    "structured_requests": _parse_structured_tap_requests(
-                        structured_tail,
-                        max_requests=10,
-                        now_epoch=now_epoch,
-                    ),
+                    "structured_requests": _enrich_structured_tap_requests(structured_requests),
                     "inference_tap_mtime": inf_m,
                     "structured_tap_mtime": structured_m,
                     "prompt_tap_mtime": prm_m,

@@ -363,6 +363,76 @@ def test_parse_structured_tap_requests_marks_quiet_open_request() -> None:
     assert "no tap output" in req["status_reason"]
 
 
+def test_enrich_structured_tap_requests_recovers_alias_port_lock_metadata(monkeypatch) -> None:
+    monkeypatch.setattr(
+        dashboard,
+        "role_aliases",
+        lambda role: ["coder_escalation", "worker_summarize"] if role == "frontdoor" else [],
+    )
+    region_locks = {
+        "by_role": {
+            "frontdoor": {
+                "instances": [
+                    {"idx": 0, "shape": "half0", "regions": ["q0", "q1"]},
+                    {"idx": 3, "shape": "q2", "regions": ["q2"]},
+                ],
+            },
+            "worker_general": {
+                "instances": [
+                    {"idx": 0, "shape": "full", "regions": ["q0", "q1", "q2", "q3"]},
+                    {"idx": 3, "shape": "q2", "regions": ["q2"]},
+                ],
+            },
+        },
+    }
+
+    enriched = dashboard._enrich_structured_tap_requests(
+        [
+            {"request_id": "coder", "role": "coder_escalation", "port": 8070},
+            {"request_id": "worker", "role": "worker_general", "port": 8072},
+        ],
+        port_roles={8070: "frontdoor", 8072: "worker_general"},
+        region_locks=region_locks,
+    )
+
+    coder, worker = enriched
+    assert coder["role"] == "coder_escalation"
+    assert coder["topology_role"] == "frontdoor"
+    assert coder["lock_role"] == "frontdoor"
+    assert coder["instance_idx"] == 0
+    assert coder["instance_shape"] == "half0"
+    assert coder["instance_regions"] == ["q0", "q1"]
+    assert worker["topology_role"] == "worker_general"
+    assert worker["lock_role"] == "worker_general"
+    assert worker["instance_shape"] == "full"
+    assert worker["instance_regions"] == ["q0", "q1", "q2", "q3"]
+
+
+def test_enrich_structured_tap_requests_uses_quarter_port_shape(monkeypatch) -> None:
+    monkeypatch.setattr(dashboard, "role_aliases", lambda role: [])
+    region_locks = {
+        "by_role": {
+            "worker_general": {
+                "instances": [
+                    {"idx": 0, "shape": "full", "regions": ["q0", "q1", "q2", "q3"]},
+                    {"idx": 3, "shape": "q2", "regions": ["q2"]},
+                ],
+            },
+        },
+    }
+
+    [req] = dashboard._enrich_structured_tap_requests(
+        [{"request_id": "quarter", "role": "worker_general", "port": 8282}],
+        port_roles={8282: "worker_general.q2"},
+        region_locks=region_locks,
+    )
+
+    assert req["topology_role"] == "worker_general"
+    assert req["instance_idx"] == 3
+    assert req["instance_shape"] == "q2"
+    assert req["instance_regions"] == ["q2"]
+
+
 def test_parse_trial_state_parses_baseline_then_score() -> None:
     tail = (
         "2026-05-22 10:00 GEPA: evaluating baseline for some_file.md (12 sentinels)\n"
