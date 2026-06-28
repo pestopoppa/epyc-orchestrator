@@ -56,6 +56,64 @@ def test_apply_rollback_undoes_partial_transaction(tmp_path):
     assert not (tmp_path / "b.py").exists()              # creation undone
 
 
+def test_apply_runs_functional_verifier_after_self_check(tmp_path):
+    (tmp_path / "calc.py").write_text("def square(x):\n    return 0\n")
+
+    def verifier(root):
+        ns = {}
+        exec((root / "calc.py").read_text(), ns)
+        return ns["square"](5) == 25
+
+    res = apply_edit_transaction(
+        tmp_path,
+        {"calc.py": "def square(x):\n    return x * x\n"},
+        [],
+        verify_fn=verifier,
+    )
+    assert res.ok
+    assert "return x * x" in (tmp_path / "calc.py").read_text()
+
+
+def test_apply_rolls_back_on_functional_verifier_failure(tmp_path):
+    (tmp_path / "calc.py").write_text("def square(x):\n    return 0\n")
+
+    def verifier(root):
+        ns = {}
+        exec((root / "calc.py").read_text(), ns)
+        return False, f"square(5)={ns['square'](5)}"
+
+    res = apply_edit_transaction(
+        tmp_path,
+        {"calc.py": "def square(x):\n    return x + x\n"},
+        [],
+        verify_fn=verifier,
+    )
+    assert not res.ok
+    assert "functional verifier failed" in res.error
+    assert "square(5)=10" in res.error
+    assert (tmp_path / "calc.py").read_text() == "def square(x):\n    return 0\n"
+
+
+def test_apply_rolls_back_on_functional_verifier_exception(tmp_path):
+    (tmp_path / "a.py").write_text("A = 1\n")
+    (tmp_path / "gone.py").write_text("GONE = 1\n")
+
+    def verifier(_root):
+        raise AssertionError("task verifier rejected output")
+
+    res = apply_edit_transaction(
+        tmp_path,
+        {"a.py": "A = 2\n", "new.py": "NEW = 1\n"},
+        ["gone.py"],
+        verify_fn=verifier,
+    )
+    assert not res.ok
+    assert "task verifier rejected output" in res.error
+    assert (tmp_path / "a.py").read_text() == "A = 1\n"
+    assert (tmp_path / "gone.py").read_text() == "GONE = 1\n"
+    assert not (tmp_path / "new.py").exists()
+
+
 def test_apply_delete(tmp_path):
     (tmp_path / "helpers.py").write_text("def greet():\n    return 'hi'\n")
     res = apply_edit_transaction(tmp_path, {"utils.py": "def greet():\n    return 'hi'\n"}, ["helpers.py"])
@@ -152,6 +210,29 @@ def test_run_edit_transaction_uses_only_explicit_targets(tmp_path):
     assert (tmp_path / "a.py").read_text() == "A = 10"
     assert (tmp_path / "b.py").read_text() == "B = 20"
     assert (tmp_path / "c.py").read_text() == "C = 3\n"
+
+
+def test_run_edit_transaction_passes_functional_verifier(tmp_path):
+    (tmp_path / "calc.py").write_text("def square(x):\n    return 0\n")
+
+    def stub(_prompt):
+        return "<<<FILE: calc.py>>>\ndef square(x):\n    return x * x\n<<<END>>>"
+
+    def verifier(root):
+        ns = {}
+        exec((root / "calc.py").read_text(), ns)
+        return ns["square"](6) == 36
+
+    res, raw = run_edit_transaction(
+        stub,
+        "Fix square",
+        tmp_path,
+        ["calc.py"],
+        verify_fn=verifier,
+    )
+    assert raw
+    assert res.ok
+    assert "return x * x" in (tmp_path / "calc.py").read_text()
 
 
 def test_flag_default_off(monkeypatch):

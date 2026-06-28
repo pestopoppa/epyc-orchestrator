@@ -154,11 +154,33 @@ class EditResult:
     summary: str = ""
 
 
-def apply_edit_transaction(root: Path | str, files: dict[str, str], deletes: list[str],
-                           self_check: bool = True) -> EditResult:
+Verifier = Callable[[Path], bool | tuple[bool, str] | None]
+
+
+def _run_verifier(verify_fn: Verifier | None, root: Path) -> None:
+    if verify_fn is None:
+        return
+    verdict = verify_fn(root)
+    if verdict is None or verdict is True:
+        return
+    if verdict is False:
+        raise RuntimeError("functional verifier failed")
+    ok, detail = verdict
+    if not ok:
+        suffix = f": {detail}" if detail else ""
+        raise RuntimeError(f"functional verifier failed{suffix}")
+
+
+def apply_edit_transaction(
+    root: Path | str,
+    files: dict[str, str],
+    deletes: list[str],
+    self_check: bool = True,
+    verify_fn: Verifier | None = None,
+) -> EditResult:
     """Transactional apply: snapshot affected paths -> write/delete -> syntax self-check
-    (compile(), no __pycache__ side effects) -> promote (keep) or ROLLBACK (restore snapshot)
-    on any failure. All-or-nothing."""
+    (compile(), no __pycache__ side effects) -> optional functional verifier -> promote
+    (keep) or ROLLBACK (restore snapshot) on any failure. All-or-nothing for planned paths."""
     root = Path(root)
     rejected: list[str] = []
     plan_write: dict[Path, str] = {}
@@ -202,6 +224,7 @@ def apply_edit_transaction(root: Path | str, files: dict[str, str], deletes: lis
                     # syntax-only check WITHOUT __pycache__/*.pyc side effects (snapshot/rollback
                     # only tracks planned paths). compile() raises SyntaxError on bad input.
                     compile(plan_write[p], str(p), "exec")
+        _run_verifier(verify_fn, root.resolve())
     except Exception as e:  # syntax error, IO error, etc. -> atomic rollback
         rollback()
         return EditResult(ok=False, rejected=rejected, error=f"{type(e).__name__}: {e}")
@@ -215,9 +238,14 @@ def apply_edit_transaction(root: Path | str, files: dict[str, str], deletes: lis
     )
 
 
-def run_edit_transaction(llm_call: Callable[[str], str], task_prompt: str, root: Path | str,
-                         target_files: list[str] | None = None, self_check: bool = True
-                         ) -> tuple[EditResult, str]:
+def run_edit_transaction(
+    llm_call: Callable[[str], str],
+    task_prompt: str,
+    root: Path | str,
+    target_files: list[str] | None = None,
+    self_check: bool = True,
+    verify_fn: Verifier | None = None,
+) -> tuple[EditResult, str]:
     """End-to-end: assemble -> one-shot prompt -> single model call -> parse -> transactional apply.
     `llm_call` is any prompt->text callable (orchestrator primitives, or a direct chat client).
     Returns (EditResult, raw_model_output). The caller auto-finalizes (FINAL) on result.ok."""
@@ -227,4 +255,10 @@ def run_edit_transaction(llm_call: Callable[[str], str], task_prompt: str, root:
         return EditResult(ok=False, error=str(e)), ""  # fail-closed: no model call, no writes
     raw = llm_call(build_edit_prompt(task_prompt, files_ctx)) or ""
     new_files, deletes = parse_edit_response(raw)
-    return apply_edit_transaction(root, new_files, deletes, self_check=self_check), raw
+    return apply_edit_transaction(
+        root,
+        new_files,
+        deletes,
+        self_check=self_check,
+        verify_fn=verify_fn,
+    ), raw

@@ -124,6 +124,8 @@ def _classify_failure(result: EditResult | None, *, raw: str, verifier_ok: bool,
             return "scope-cap reject"
         if "no valid file blocks parsed" in err or not raw.strip():
             return "parse/no blocks"
+        if "functional verifier failed" in err:
+            return "verifier fail"
         return "rollback/self-check"
     if not verifier_ok:
         if "scope too large" in err or "scope too large" in raw.lower():
@@ -143,7 +145,9 @@ def _run_module_task(task: dict[str, Any], solution: dict[str, Any], scratch: Pa
 
     try:
         return (*run_edit_transaction(_stub_llm, task["prompt"], scratch,
-                                      target_files=list((task.get("files") or {}).keys()) or None), None)
+                                      target_files=list((task.get("files") or {}).keys()) or None,
+                                      verify_fn=lambda root: _run_verifier(root, task["verifier_cmd"])),
+                None)
     except Exception as exc:  # pragma: no cover - defensive, exercised via live-path tests if needed
         return EditResult(ok=False, error=f"{type(exc).__name__}: {exc}"), "", exc
 
@@ -155,7 +159,9 @@ def _run_live_task(task: dict[str, Any], scratch: Path, api_url: str, session_id
 
     try:
         return (*run_edit_transaction(_llm, task["prompt"], scratch,
-                                      target_files=list((task.get("files") or {}).keys()) or None), None)
+                                      target_files=list((task.get("files") or {}).keys()) or None,
+                                      verify_fn=lambda root: _run_verifier(root, task["verifier_cmd"])),
+                None)
     except Exception as exc:
         return EditResult(ok=False, error=f"{type(exc).__name__}: {exc}"), "", exc
 

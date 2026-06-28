@@ -127,6 +127,8 @@ def _classify_failure(*, result: EditResult | None, response_mode: str | None, r
             return "scope-cap reject"
         if "no valid file blocks" in text or not response_text.strip():
             return "parse/no blocks"
+        if "functional verifier failed" in text:
+            return "verifier fail"
         return "rollback/self-check"
     if response_mode != "edit":
         text = response_text.lower()
@@ -156,7 +158,10 @@ def _run_stub_task(task: dict[str, Any], solution: dict[str, Any], root: Path
 
     try:
         result, _raw = run_edit_transaction(_stub_llm, task["prompt"], root,
-                                            target_files=list((task.get("files") or {}).keys()) or None)
+                                            target_files=list((task.get("files") or {}).keys()) or None,
+                                            verify_fn=lambda tx_root: _run_verifier(
+                                                tx_root, task["verifier_cmd"]
+                                            ))
         return result, {"mode": "edit", "answer": "[STUB]"}, None
     except Exception as exc:
         return EditResult(ok=False, error=f"{type(exc).__name__}: {exc}"), {"mode": None, "answer": ""}, exc
