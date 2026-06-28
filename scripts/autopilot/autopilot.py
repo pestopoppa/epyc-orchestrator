@@ -1869,7 +1869,7 @@ Stagnation signal: {stagnation_signal}
 5. If quality regression after changes: rollback to last good checkpoint
 6. Consider the species budget allocation when choosing actions
 7. If any slot shows >4000 tokens cached, consider slot_compact to free KV memory
-   (use keep_ratio=0.3, target the port with the highest token count)
+   (use keep_ratio=0.3, target a live port from Slot Memory or the generated system card)
 
 ## Available Actions
 
@@ -1886,8 +1886,8 @@ Respond with EXACTLY ONE action in a ```json:autopilot_actions block:
 - Structural: {{"type": "structural_experiment", "flags": {{"feature_name": true/false}}}}
 - Prune: {{"type": "structural_prune", "file": "frontdoor.md", "block": "## Section Name", "description": "..."}}
   (Delete an instruction block from a .md prompt file — accepted only if quality >= baseline AND instruction_token_ratio decreases)
-- Compact: {{"type": "slot_compact", "port": 8070, "slot_id": 0, "keep_ratio": 0.3, "scorer": "expected_attention", "keep_first": 5, "n_future": 128}}
-  (AM KV compaction — compress KV cache on a server slot. Use after long-context queries to free memory. Evaluates quality post-compact.)
+- Compact: {{"type": "slot_compact", "port": 0, "slot_id": 0, "keep_ratio": 0.3, "scorer": "expected_attention", "keep_first": 5, "n_future": 128}}
+  (AM KV compaction — replace port=0 with a live port from Slot Memory or the generated system card before emitting the action. Use after long-context queries to free memory. Evaluates quality post-compact.)
 - Train: {{"type": "train_routing_models", "min_memories": 500}}
   (min_memories: integer 1-100000; default 500. Do NOT set it to the current
   memory_count — the validator REJECTS any value above 100000.)

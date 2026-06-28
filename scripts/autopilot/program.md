@@ -50,7 +50,7 @@ Before each experiment session:
 - TOON encoding parameters
 - Escalation AND consultation context format and content
 - Prompt compression strategies for all model tiers
-- Architect consultation → TOON plan → frontdoor/cheap-first fast execution pathway (explore this — architects can provide compressed high-info plans that get redelegated back for fast execution, not just terminal escalation)
+- Architect consultation → compact plan → live fast execution pathway from the generated system card (explore this — architects can provide compressed high-info plans that get redelegated to current execution roles, not just terminal escalation)
 
 ### Specialist Pipelines
 - Vision/OCR pipeline configuration
@@ -63,7 +63,7 @@ Before each experiment session:
 
 Rules for touching model registry or stack config:
 1. **Never change model selection, quantization, or NUMA assignments** without explicit human approval
-2. **Never change acceleration flags** — these are already optimized per-model from benchmark data (tree speculation NOT viable on hybrids, lookup disabled on Qwen3.5 due to segfault, REAP expert counts tuned per-model)
+2. **Never change acceleration flags** — these are already optimized per-model from benchmark data. Treat the generated system card and current benchmark handoffs as the source of truth for which accelerators are allowed on the live stack.
 3. **Timeouts and token caps** in model_registry.yaml ARE safe to tune — these are routing parameters, not infrastructure
 4. **If swapping a model for a role**: restart ONLY that role's server process, NOT the entire stack. Use `config_applicator.restart_role(role_name)` to minimize downtime.
 5. **Instance counts and mlock tiers** are already optimized for the current host. Read live hot/warm status from `orchestration/derived/stack_priors.yaml` and the generated system card; do not explore tier demotions unless a current evidence handoff or human operator explicitly opens that surface.
@@ -191,7 +191,7 @@ Start with highest-expected-impact, lowest-risk experiments. Suggested order (ag
 - General model prompt efficiency — minimize tokens generated, maximize information-per-token
 - TOON compression for escalation AND consultation context — push compression ratios further
 - Tool-use instruction formatting — structured vs natural language
-- Architect consultation pathway: architect returns TOON plan → redelegated to frontdoor/cheap-first for fast execution (this is consultation, not terminal escalation — explore it)
+- Architect consultation pathway: architect returns compact execution guidance → redelegated to a live execution role from the generated system card (this is consultation, not terminal escalation — explore it)
 
 ### Tier 2: Feature Flag Combinations (hot-swap, zero-restart, direct logic changes)
 - Skillbank on/off
@@ -208,8 +208,7 @@ Start with highest-expected-impact, lowest-risk experiments. Suggested order (ag
 - Q-scorer `baseline_tps_by_role` alignment with actual measured throughput
 
 ### Tier 4: Model Selection (requires per-role restart, high impact, use sparingly)
-- Frontdoor model candidates (35B-A3B, 30B-A3B)
-- Coder escalation model variants (Q4KM vs Q8 vs f16 — different speed/quality tradeoffs)
+- Per-role model or quantization candidates, only when a current evidence handoff or operator explicitly opens that live role for measurement
 - Cascade depth (2-tier vs 3-tier with fast filter)
 - **CONSTRAINT**: Only restart the specific role's server, not the full stack. Model selection and quantization have been extensively benchmarked — only explore alternatives with clear hypothesis from quality data.
 
@@ -234,15 +233,11 @@ Expected Attention KV compression scores each KV cache entry by predicted future
 
 **Example requests**:
 ```bash
-# Standard 50% compression
-curl -X POST "http://localhost:8070/slots/0?action=compact" \
-  -H "Content-Type: application/json" \
-  -d '{"keep_ratio": 0.5, "scorer": "expected_attention", "keep_first": 4}'
-
-# Aggressive with deep-layer emphasis (for coder role)
+# Set PORT from the generated controller system card or Slot Memory panel.
+PORT="<live port from generated controller system card or Slot Memory>"
 curl -X POST "http://localhost:${PORT}/slots/0?action=compact" \
   -H "Content-Type: application/json" \
-  -d '{"keep_ratio": 0.3, "keep_first": 8, "layer_weights": [0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,1.0,1.0,1.0,1.0,1.0,1.0,1.5,1.5,1.5,2.0,2.0,2.0,2.5,3.0]}'
+  -d '{"keep_ratio": 0.5, "scorer": "expected_attention", "keep_first": 4}'
 ```
 
 **Quality data** (from a legacy frontdoor multi-ratio sweep):
@@ -375,13 +370,16 @@ This is an OPTIONAL forecast of the trial's four objectives in the same units th
 
 ## Production Flow (optimize this end-to-end)
 
-The full production request path is:
+The full production request path is generated from the live stack and routing
+contracts. Do not treat the diagram below as a source of literal role or port
+truth; use the generated controller system card for current role names,
+endpoints, tiers, and routing availability.
 
 ```
-try-cheap-first (live worker/fast path from the generated system card)
-  → frontdoor (live quality gate from stack priors)
-    → escalation to specialist (coder_escalation, math, etc.)
-    → OR architect consultation → TOON plan → redelegate to frontdoor/specialist
+cheap/fast path from generated stack truth
+  → quality gate from stack priors and routing policy
+    → specialist route when policy requires it
+    → OR architect consultation → compact plan → redelegate to a live execution role
 ```
 
 Key insight: **optimize the FULL flow, not individual components.**
