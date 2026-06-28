@@ -27,6 +27,7 @@ def test_parse_progress_logs_reads_top_level_outcomes_and_cheap_first(tmp_path):
                     "selection_score_topk": [0.9, 0.6],
                     "decision_source": "rules",
                     "difficulty_band": "hard",
+                    "task_class": "coding_change",
                 },
             },
             {
@@ -34,7 +35,7 @@ def test_parse_progress_logs_reads_top_level_outcomes_and_cheap_first(tmp_path):
                 "task_id": "task-1",
                 "outcome": "success",
                 "reward": 1.0,
-                "data": {},
+                "data": {"task_record_v1": {"class": "coding_change"}},
             },
             {
                 "event_type": "routing_fallback",
@@ -55,6 +56,7 @@ def test_parse_progress_logs_reads_top_level_outcomes_and_cheap_first(tmp_path):
                     "selection_score_topk": [0.5, 0.5],
                     "decision_source": "learned",
                     "difficulty_band": "easy",
+                    "real_task_class": "governance_docs_handoff",
                 },
             },
             {
@@ -82,3 +84,15 @@ def test_parse_progress_logs_reads_top_level_outcomes_and_cheap_first(tmp_path):
     assert report.cheap_first_attempted == 1
     assert report.cheap_first_passed == 0
     assert report.cheap_first_reasons == {"quality_issue": 1}
+    assert report.task_class_counts == {
+        "coding_change": 1,
+        "governance_docs_handoff": 1,
+    }
+    assert report.task_class_regret == {
+        "coding_change": pytest.approx(0.0),
+        "governance_docs_handoff": pytest.approx(0.0),
+    }
+    assert report.task_class_success_rate == {
+        "coding_change": pytest.approx(100.0),
+        "governance_docs_handoff": pytest.approx(0.0),
+    }

@@ -91,6 +91,7 @@ def sanitize_question_results(results: list[dict[str, Any]]) -> list[dict[str, A
         "tools_used",
         "tools_called",
         "scoring_method",
+        "real_task_class",
         "route",
         "error",
         "error_detail",
@@ -128,6 +129,7 @@ def build_question_ledger(
             "eval_rank": question_row.get("eval_rank"),
             "qid": question_row.get("qid"),
             "suite": question_row.get("suite"),
+            "real_task_class": question_row.get("real_task_class"),
             "partition": question_row.get("partition"),
             "correct": question_row.get("correct"),
             "error": question_row.get("error", False),
@@ -162,6 +164,19 @@ def build_summary(
         str(item.get("suite") or "unknown")
         for item in safe_question_rows
         if item.get("correct") is True
+    )
+    by_task_class = Counter(
+        str(item.get("real_task_class") or "unknown") for item in safe_question_rows
+    )
+    correct_by_task_class: Counter[str] = Counter(
+        str(item.get("real_task_class") or "unknown")
+        for item in safe_question_rows
+        if item.get("correct") is True
+    )
+    error_by_task_class: Counter[str] = Counter(
+        str(item.get("real_task_class") or "unknown")
+        for item in safe_question_rows
+        if item.get("error") is True
     )
     error_breakdown = Counter(
         str(item.get("error_detail") or "error")
@@ -209,6 +224,18 @@ def build_summary(
             }
             for suite, count in sorted(by_suite.items())
         },
+        "by_task_class": {
+            task_class: {
+                "count": count,
+                "correct": correct_by_task_class.get(task_class, 0),
+                "errors": error_by_task_class.get(task_class, 0),
+                "accuracy": correct_by_task_class.get(task_class, 0) / max(1, count),
+                "reliability": (
+                    (count - error_by_task_class.get(task_class, 0)) / max(1, count)
+                ),
+            }
+            for task_class, count in sorted(by_task_class.items())
+        },
         "privacy": {
             "committed_question_results": "compact prompt-free EvalTower result rows",
             "question_ledger_rows": "compact prompt-free per-question ledger rows",
@@ -247,6 +274,20 @@ def render_markdown(summary: dict[str, Any]) -> str:
     for suite, item in summary["by_suite"].items():
         lines.append(
             f"| `{suite}` | {item['count']} | {item['correct']} | {item['accuracy']:.4f} |"
+        )
+    lines.extend(
+        [
+            "",
+            "## Task-Class Breakdown",
+            "",
+            "| Task Class | Count | Correct | Errors | Accuracy | Reliability |",
+            "|---|---:|---:|---:|---:|---:|",
+        ]
+    )
+    for task_class, item in summary["by_task_class"].items():
+        lines.append(
+            f"| `{task_class}` | {item['count']} | {item['correct']} | "
+            f"{item['errors']} | {item['accuracy']:.4f} | {item['reliability']:.4f} |"
         )
     if summary["error_breakdown"]:
         lines.extend(["", "## Error Breakdown", ""])

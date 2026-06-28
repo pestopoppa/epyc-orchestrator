@@ -30,6 +30,7 @@ def test_packager_writes_prompt_free_eval_report(tmp_path: Path) -> None:
                 {
                     "qid": "b",
                     "suite": "real_suite_v1",
+                    "real_task_class": "coding_change",
                     "correct": False,
                     "latency_ms": 200,
                     "route": "worker_general",
@@ -55,6 +56,22 @@ def test_packager_writes_prompt_free_eval_report(tmp_path: Path) -> None:
     assert summary["metrics"]["correct"] == 1
     assert summary["metrics"]["accuracy"] == 0.5
     assert summary["error_breakdown"] == {"connection refused": 1}
+    assert summary["by_task_class"] == {
+        "coding_change": {
+            "count": 1,
+            "correct": 0,
+            "errors": 1,
+            "accuracy": 0.0,
+            "reliability": 0.0,
+        },
+        "unknown": {
+            "count": 1,
+            "correct": 1,
+            "errors": 0,
+            "accuracy": 1.0,
+            "reliability": 1.0,
+        },
+    }
     assert summary["privacy"]["private_key_matches"] == []
     assert summary["question_ledger_path"] == str(out_dir / "question_ledger.jsonl")
     assert "prompt" not in question_rows[0]
@@ -68,6 +85,7 @@ def test_packager_writes_prompt_free_eval_report(tmp_path: Path) -> None:
     assert ledger_rows[0]["schema_version"] == "real_suite_v1_eval_question_ledger_row.v1"
     assert ledger_rows[0]["qid"] == "a"
     assert ledger_rows[0]["calibration_id"] == "real-suite"
+    assert ledger_rows[1]["real_task_class"] == "coding_change"
     assert "prompt" not in ledger_rows[0]
     assert "answer" not in ledger_rows[0]
 
@@ -78,6 +96,7 @@ def test_sanitize_question_results_drops_private_fields() -> None:
             {
                 "qid": "a",
                 "suite": "real_suite_v1",
+                "real_task_class": "ops_dashboard",
                 "correct": True,
                 "prompt": "private",
                 "expected": "private",
@@ -91,6 +110,7 @@ def test_sanitize_question_results_drops_private_fields() -> None:
         {
             "qid": "a",
             "suite": "real_suite_v1",
+            "real_task_class": "ops_dashboard",
             "correct": True,
             "error_detail": "safe",
             "eval_rank": 1,

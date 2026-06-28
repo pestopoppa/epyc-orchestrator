@@ -40,6 +40,7 @@ class RoutingDecision:
     factual_risk_score: float
     factual_risk_band: str
     q_robust_confidence: float
+    task_class: str = "unknown"
 
 
 @dataclass
@@ -47,6 +48,7 @@ class TaskOutcome:
     task_id: str
     outcome: str  # "success", "failure", "partial"
     reward: float
+    task_class: str = "unknown"
 
 
 @dataclass
@@ -81,6 +83,11 @@ class RegretReport:
     band_counts: dict[str, int] = field(default_factory=dict)
     band_regret: dict[str, float] = field(default_factory=dict)
 
+    # Real-task class breakdown
+    task_class_counts: dict[str, int] = field(default_factory=dict)
+    task_class_regret: dict[str, float] = field(default_factory=dict)
+    task_class_success_rate: dict[str, float] = field(default_factory=dict)
+
     # Try-cheap-first denominator and acceptance telemetry.
     cheap_first_total: int = 0
     cheap_first_attempted: int = 0
@@ -90,6 +97,23 @@ class RegretReport:
     # Caveats are first-class so downstream handoffs do not treat proxy metrics
     # as observed oracle regret.
     measurement_notes: list[str] = field(default_factory=list)
+
+
+def _task_class_from(entry: dict[str, Any], data: dict[str, Any]) -> str:
+    """Extract stable workload class metadata without requiring private prompt text."""
+    for value in (
+        data.get("task_class"),
+        data.get("real_task_class"),
+        entry.get("task_class"),
+        entry.get("real_task_class"),
+    ):
+        if value:
+            return str(value)
+
+    task_record = data.get("task_record_v1")
+    if isinstance(task_record, dict) and task_record.get("class"):
+        return str(task_record["class"])
+    return "unknown"
 
 
 def parse_progress_logs(log_dir: Path, from_date: str, to_date: str) -> tuple[
@@ -145,6 +169,7 @@ def parse_progress_logs(log_dir: Path, from_date: str, to_date: str) -> tuple[
                             factual_risk_score=data.get("factual_risk_score", 0.0),
                             factual_risk_band=data.get("factual_risk_band", ""),
                             q_robust_confidence=data.get("q_robust_confidence", 0.0),
+                            task_class=_task_class_from(entry, data),
                         )
 
                 elif event_type in ("task_completed", "task_failed") and task_id:
@@ -156,6 +181,7 @@ def parse_progress_logs(log_dir: Path, from_date: str, to_date: str) -> tuple[
                         task_id=task_id,
                         outcome=outcome,
                         reward=reward,
+                        task_class=_task_class_from(entry, data),
                     )
 
                 elif (
@@ -188,6 +214,9 @@ def compute_regret(
     non_top_outcomes: list[bool] = []  # success when non-top was selected
     band_regrets: dict[str, list[float]] = defaultdict(list)
     band_counter: Counter = Counter()
+    task_class_regrets: dict[str, list[float]] = defaultdict(list)
+    task_class_success: dict[str, list[bool]] = defaultdict(list)
+    task_class_counter: Counter = Counter()
 
     for task_id, d in decisions.items():
         # Strategy breakdown
@@ -222,19 +251,22 @@ def compute_regret(
 
         # Difficulty band
         band_counter[d.difficulty_band] += 1
+        task_class_counter[d.task_class] += 1
 
         # Outcome correlation
         outcome = outcomes.get(task_id)
         if outcome:
             report.outcome_matched += 1
             success = outcome.outcome == "success"
+            task_class = outcome.task_class if outcome.task_class != "unknown" else d.task_class
             if d.strategy in ("learned", "memrl"):
                 top_selected_outcomes.append(success)
             else:
                 non_top_outcomes.append(success)
-            band_regrets[d.difficulty_band].append(
-                0.0 if success else max(d.selection_score_topk) - min(d.selection_score_topk)
-            )
+            outcome_regret = 0.0 if success else max(d.selection_score_topk) - min(d.selection_score_topk)
+            band_regrets[d.difficulty_band].append(outcome_regret)
+            task_class_regrets[task_class].append(outcome_regret)
+            task_class_success[task_class].append(success)
 
     # Aggregate
     if score_spreads:
@@ -268,6 +300,16 @@ def compute_regret(
     report.band_regret = {
         band: sum(regrets) / len(regrets) if regrets else 0.0
         for band, regrets in band_regrets.items()
+    }
+    report.task_class_counts = dict(task_class_counter)
+    report.task_class_regret = {
+        task_class: sum(regrets) / len(regrets) if regrets else 0.0
+        for task_class, regrets in task_class_regrets.items()
+    }
+    report.task_class_success_rate = {
+        task_class: sum(successes) / len(successes) * 100
+        for task_class, successes in task_class_success.items()
+        if successes
     }
     report.cheap_first_total = len(cheap_first)
     if cheap_first:
@@ -307,32 +349,41 @@ def print_report(report: RegretReport) -> None:
     print(f"{'  Rules/classifier:':<40} {report.rules_decisions}")
     print(f"{'  Matched with outcomes:':<40} {report.outcome_matched}")
 
-    print(f"\n--- Score Spread Analysis ---")
+    print("\n--- Score Spread Analysis ---")
     print(f"{'Mean selection score spread:':<40} {report.mean_score_spread:.4f}")
     print(f"{'Median selection score spread:':<40} {report.median_score_spread:.4f}")
     print(f"{'Trivial spread (<0.01):':<40} {report.pct_trivial_spread:.1f}%")
     print(f"{'Mean Q-value spread:':<40} {report.mean_q_spread:.4f}")
     print(f"{'Uniform Q-values (<0.001 spread):':<40} {report.pct_uniform_q:.1f}%")
 
-    print(f"\n--- Decision Alignment ---")
+    print("\n--- Decision Alignment ---")
     print(f"{'Regret-identifiable decisions:':<40} {report.identifiable_regret_decisions} ({report.regret_identifiable_pct:.1f}%)")
     print(f"{'Top candidate selected:':<40} {report.top_candidate_selected_pct:.1f}%")
     print(f"{'Mean decision regret:':<40} {report.mean_decision_regret:.4f}")
     print(f"{'DAR-1 gate regret pct:':<40} {report.regret_gate_pct:.2f}%")
     print(f"{'Max decision regret:':<40} {report.max_decision_regret:.4f}")
 
-    print(f"\n--- Outcome Correlation ---")
+    print("\n--- Outcome Correlation ---")
     print(f"{'Success rate (top selected):':<40} {report.top_selected_success_rate:.1f}%")
     print(f"{'Success rate (non-top selected):':<40} {report.non_top_selected_success_rate:.1f}%")
 
-    print(f"\n--- Difficulty Band Breakdown ---")
+    print("\n--- Difficulty Band Breakdown ---")
     for band in ["easy", "medium", "hard", "unknown"]:
         count = report.band_counts.get(band, 0)
         regret = report.band_regret.get(band, 0.0)
         if count > 0:
             print(f"  {band:<12} n={count:<6} avg_regret={regret:.4f}")
 
-    print(f"\n--- Try-Cheap-First Counters ---")
+    print("\n--- Task-Class Breakdown ---")
+    for task_class, count in sorted(report.task_class_counts.items()):
+        regret = report.task_class_regret.get(task_class, 0.0)
+        success_rate = report.task_class_success_rate.get(task_class, 0.0)
+        print(
+            f"  {task_class:<32} n={count:<6} "
+            f"avg_regret={regret:.4f} success={success_rate:.1f}%"
+        )
+
+    print("\n--- Try-Cheap-First Counters ---")
     print(f"{'Counter rows:':<40} {report.cheap_first_total}")
     print(f"{'Attempts:':<40} {report.cheap_first_attempted}")
     print(f"{'Accepted:':<40} {report.cheap_first_passed}")
@@ -341,7 +392,7 @@ def print_report(report: RegretReport) -> None:
             print(f"  {reason:<34} {count}")
 
     # Interpretation
-    print(f"\n--- Interpretation ---")
+    print("\n--- Interpretation ---")
     if report.pct_uniform_q > 80:
         print("⚠ >80% of decisions have uniform Q-values — Q-scorer has not learned meaningful preferences.")
         print("  DAR-2 contrastive training will have limited data to work with.")
@@ -363,7 +414,7 @@ def print_report(report: RegretReport) -> None:
             print(f"⚠ Top-candidate selection is WORSE ({delta:+.1f}pp) — Q-scorer is miscalibrated. DAR-2 is HIGH value.")
 
     if report.measurement_notes:
-        print(f"\n--- Measurement Notes ---")
+        print("\n--- Measurement Notes ---")
         for note in report.measurement_notes:
             print(f"- {note}")
 
