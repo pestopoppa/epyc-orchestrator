@@ -1499,6 +1499,47 @@ def test_numeric_swarm_epoch_label_absent_without_speed_era() -> None:
     ) is None
 
 
+def test_numeric_swarm_epoch_label_required_for_active_frontier_rerun() -> None:
+    with pytest.raises(
+        ValueError,
+        match="frontier rerun requires active_instrument_eras.autopilot_speed",
+    ):
+        autopilot._numeric_swarm_epoch_label_from_state(
+            {"frontier_rerun_required": {"required": True}}
+        )
+
+
+def test_archive_epoch_params_require_timestamps_for_active_speed_era() -> None:
+    with pytest.raises(
+        ValueError,
+        match="active speed era requires pareto_epoch_ts and pareto_exclude_before_ts",
+    ):
+        autopilot._archive_epoch_params_from_state(
+            {"active_instrument_eras": {"autopilot_speed": "E5-autopilot-speed"}}
+        )
+
+
+def test_archive_epoch_params_reject_malformed_epoch_for_active_speed_era() -> None:
+    state = {
+        "active_instrument_eras": {"autopilot_speed": "E5-autopilot-speed"},
+        "pareto_epoch_ts": "not-a-timestamp",
+        "pareto_exclude_before_ts": 1782511631.0,
+    }
+
+    with pytest.raises(ValueError, match="invalid pareto_epoch_ts"):
+        autopilot._archive_epoch_params_from_state(state)
+
+
+def test_archive_epoch_params_keep_legacy_tolerance_without_speed_era() -> None:
+    assert autopilot._archive_epoch_params_from_state(
+        {
+            "pareto_epoch_ts": "not-a-timestamp",
+            "pareto_pre_epoch_speed_factor": "bad-factor",
+            "pareto_exclude_before_ts": "bad-exclude",
+        }
+    ) == (None, 1.0, None)
+
+
 # ----- non-executing-action residue feedback -----
 
 

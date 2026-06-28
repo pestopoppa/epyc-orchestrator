@@ -2280,21 +2280,29 @@ def _archive_epoch_params_from_state(
     state: dict[str, Any],
 ) -> tuple[float | None, float, float | None]:
     """Extract Pareto replay epoch params from autopilot state."""
+    strict_epoch = _numeric_swarm_epoch_label_from_state(state) is not None
     deinflate_before_ts: float | None = None
     try:
         deinflate_before_ts = float(state.get("pareto_epoch_ts") or 0.0) or None
-    except (TypeError, ValueError):
-        pass
+    except (TypeError, ValueError) as exc:
+        if strict_epoch:
+            raise ValueError("invalid pareto_epoch_ts for active speed era") from exc
     deinflate_factor: float = 1.0
     try:
         deinflate_factor = float(state.get("pareto_pre_epoch_speed_factor", 1.0))
-    except (TypeError, ValueError):
-        pass
+    except (TypeError, ValueError) as exc:
+        if strict_epoch:
+            raise ValueError("invalid pareto_pre_epoch_speed_factor for active speed era") from exc
     exclude_before_ts: float | None = None
     try:
         exclude_before_ts = float(state.get("pareto_exclude_before_ts") or 0.0) or None
-    except (TypeError, ValueError):
-        pass
+    except (TypeError, ValueError) as exc:
+        if strict_epoch:
+            raise ValueError("invalid pareto_exclude_before_ts for active speed era") from exc
+    if strict_epoch and (deinflate_before_ts is None or exclude_before_ts is None):
+        raise ValueError(
+            "active speed era requires pareto_epoch_ts and pareto_exclude_before_ts"
+        )
     return deinflate_before_ts, deinflate_factor, exclude_before_ts
 
 
@@ -2305,6 +2313,9 @@ def _numeric_swarm_epoch_label_from_state(state: dict[str, Any]) -> str | None:
         value = eras.get("autopilot_speed")
         if isinstance(value, str) and value.strip():
             return value.strip()
+    marker = state.get("frontier_rerun_required")
+    if isinstance(marker, dict) and marker.get("required"):
+        raise ValueError("frontier rerun requires active_instrument_eras.autopilot_speed")
     return None
 
 
