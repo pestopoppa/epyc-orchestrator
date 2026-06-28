@@ -178,6 +178,20 @@ def test_dashboard_insight_graph_panel_is_wired_read_only() -> None:
     assert "setInterval(() => updateInsightGraph(_insightGraphFocus), 20000)" in body
 
 
+def test_dashboard_operational_panels_stay_directly_under_topology() -> None:
+    """The insight graph must not displace completed/routing from the topology scan path."""
+    html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    body = html_path.read_text()
+
+    topology_idx = body.index('id="topology-strip"')
+    completed_idx = body.index('id="completed-tasks"')
+    routing_idx = body.index('id="decision-feed"')
+    readiness_idx = body.index('id="repo-readiness-panel"')
+    insight_idx = body.index('id="insight-graph-panel"')
+
+    assert topology_idx < completed_idx < routing_idx < readiness_idx < insight_idx
+
+
 # ----- dashboard_tasks: timezone-aware UTC (Tranche-8 polish) -----
 
 
