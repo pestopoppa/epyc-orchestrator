@@ -65,6 +65,9 @@ _SKILL_EFFICACY_GATE_ENV = "AUTOPILOT_SKILL_EFFICACY_GATE"
 _BSV2_ACCEPT_GATE_ENV = "AUTOPILOT_BSV2_ACCEPT_GATE"
 _BSV2_MIN_SHARED_QIDS_ENV = "AUTOPILOT_BSV2_MIN_SHARED_QIDS"
 _BSV2_MAX_ACCURACY_REGRESSION_ENV = "AUTOPILOT_BSV2_MAX_ACCURACY_REGRESSION"
+_PLANNER_HINTS_ENABLED = os.environ.get(
+    "AUTOPILOT_PLANNER_HINTS", ""
+).strip().lower() in {"1", "true", "yes", "on"}
 
 
 @dataclass
@@ -121,6 +124,70 @@ class _ActionContext:
 # -----------------------------------------------------------------------------
 
 
+def _format_strategy_hint(entry: Any) -> str:
+    title = str(getattr(entry, "title", "") or "").strip()
+    description = str(getattr(entry, "description", "") or "").strip()
+    insight = (
+        str(getattr(entry, "generalized_content", "") or "").strip()
+        or str(getattr(entry, "insight", "") or "").strip()
+    )
+    source = getattr(entry, "source_trial_id", "")
+    species = str(getattr(entry, "species", "") or "").strip() or "unknown"
+    prefix = f"Trial #{source} ({species})"
+    if title:
+        prefix = f"{prefix} {title}:"
+    elif description:
+        prefix = f"{prefix} {description}:"
+    else:
+        prefix = f"{prefix}:"
+    return f"- {prefix} {insight}".strip()
+
+
+def _seed_batch_strategy_hints(
+    action: dict[str, Any],
+    ctx: _ActionContext,
+    *,
+    k: int = 5,
+) -> str | None:
+    if not _PLANNER_HINTS_ENABLED or ctx.strategy_store is None:
+        return None
+    if not hasattr(ctx.strategy_store, "retrieve_for_journal"):
+        log.warning(
+            "Skipping seed_batch strategy hints: StrategyStore lacks "
+            "journal-aware retrieve_for_journal()"
+        )
+        return None
+
+    suites = action.get("suites") or []
+    if isinstance(suites, list):
+        suite_text = " ".join(str(suite) for suite in suites)
+    else:
+        suite_text = str(suites)
+    query = f"seed_batch seeder {suite_text} n_questions={action.get('n_questions', '')}"
+    try:
+        strategies = ctx.strategy_store.retrieve_for_journal(
+            query,
+            journal=ctx.journal,
+            k=k,
+            species="seeder",
+        )
+    except TypeError:
+        log.warning(
+            "Skipping seed_batch strategy hints: StrategyStore "
+            "retrieve_for_journal() does not support species filtering"
+        )
+        return None
+    if not strategies:
+        return None
+    lines = "\n".join(_format_strategy_hint(strategy) for strategy in strategies)
+    return (
+        "AutoPilot planner hints for this seed batch:\n"
+        f"{lines}\n\n"
+        "Use these hints as operator guidance about what to sample, avoid, or "
+        "watch for. Do not treat them as answer keys."
+    )
+
+
 def _action_seed_batch(action: dict[str, Any], ctx: _ActionContext):
     requested_n = int(action.get("n_questions", 10))
     suites = action.get("suites")
@@ -157,11 +224,15 @@ def _action_seed_batch(action: dict[str, Any], ctx: _ActionContext):
     # seeder's per-role calls can detect exogenous service reloads. Phase 5
     # wires the watcher into ctx; for now ctx.watcher may be None (backward
     # compatible — Seeder.run_batch's watcher kwarg defaults to None).
-    seeder_result = ctx.seeder.run_batch(
-        n_questions=n,
-        suites=suites,
-        watcher=getattr(ctx, "watcher", None),
-    )
+    run_kwargs = {
+        "n_questions": n,
+        "suites": suites,
+        "watcher": getattr(ctx, "watcher", None),
+    }
+    strategy_hints = _seed_batch_strategy_hints(action, ctx)
+    if strategy_hints:
+        run_kwargs["strategy_hints"] = strategy_hints
+    seeder_result = ctx.seeder.run_batch(**run_kwargs)
     _batch_elapsed = _time.perf_counter() - _batch_start
 
     # Record duration so the next batch can adapt

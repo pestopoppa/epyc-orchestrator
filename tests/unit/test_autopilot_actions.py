@@ -266,6 +266,54 @@ def test_seed_batch_handler_runs_eval_after_seed() -> None:
     assert calls == [("seed", 12, ["math"]), ("eval",)]
 
 
+def test_seed_batch_handler_passes_strategy_hints_when_enabled(monkeypatch) -> None:
+    monkeypatch.setattr(actions, "_PLANNER_HINTS_ENABLED", True)
+    calls = []
+
+    class FakeSeeder:
+        def run_batch(self, *, n_questions, suites, watcher=None, strategy_hints=None):
+            calls.append(("seed", n_questions, suites, strategy_hints))
+            return None
+
+    class FakeTower:
+        def hybrid_eval(self):
+            calls.append(("eval",))
+            return "EVAL_RESULT"
+
+    class FakeStore:
+        def retrieve_for_journal(self, query, *, journal, k, species=None):
+            calls.append(("retrieve", query, journal, k, species))
+            return [
+                SimpleNamespace(
+                    source_trial_id=22,
+                    species="seeder",
+                    title="Seed guidance",
+                    description="seed_batch guidance",
+                    insight="Prefer balanced suites",
+                    generalized_content="Prefer balanced suites",
+                )
+            ]
+
+    journal = object()
+    ctx = _ctx(
+        seeder=FakeSeeder(),
+        tower=FakeTower(),
+        journal=journal,
+        strategy_store=FakeStore(),
+    )
+    result, species = actions._action_seed_batch(
+        {"type": "seed_batch", "n_questions": 12, "suites": ["math"]},
+        ctx,
+    )
+
+    assert result == "EVAL_RESULT"
+    assert species == "seeder"
+    assert calls[0] == ("retrieve", "seed_batch seeder math n_questions=12", journal, 5, "seeder")
+    assert calls[1][0:3] == ("seed", 12, ["math"])
+    assert "Prefer balanced suites" in calls[1][3]
+    assert calls[2] == ("eval",)
+
+
 def test_deep_eval_handler_calls_tower_evaluate_with_tier() -> None:
     class FakeTower:
         def __init__(self):

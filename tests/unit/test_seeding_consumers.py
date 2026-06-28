@@ -85,6 +85,61 @@ def test_seeder_run_batch_accumulates_acknowledged_rewards():
     assert result.results[0]["rewards"] == {"frontdoor": 1.0}
 
 
+def test_seeder_run_batch_appends_strategy_hints_without_mutating_question():
+    mod = _load_module("species_seeder_hints_test", _AUTO / "seeder.py")
+    question = {"id": "q1", "suite": "general", "prompt": "2+2?", "expected": "4"}
+    role_results = {"frontdoor": SimpleNamespace(passed=True)}
+    fake_roles = [
+        {
+            "name": "frontdoor",
+            "registry_key": "frontdoor",
+            "model_role": "frontdoor",
+            "port": 8080,
+            "is_heavy": True,
+            "cost_tier": 2,
+        }
+    ]
+    client_cm = MagicMock()
+    client_cm.__enter__.return_value = Mock()
+    client_cm.__exit__.return_value = False
+    seen_prompts = []
+
+    def _evaluate_question_per_role(*, prompt_info, **_kwargs):
+        seen_prompts.append(prompt_info["prompt"])
+        return (
+            role_results,
+            {"frontdoor": 1.0},
+            {"avg_td_error": 0.2, "roles_tested": ["frontdoor"]},
+        )
+
+    with (
+        patch.object(mod, "sample_unseen_questions", return_value=[question]),
+        patch.object(mod, "discover_active_roles", return_value=fake_roles),
+        patch.object(mod, "evaluate_question_per_role", side_effect=_evaluate_question_per_role),
+        patch.object(mod, "_inject_per_role_rewards_http", return_value={"acknowledged": 1}),
+        patch.object(mod.Seeder, "_get_memory_count", return_value=0),
+        patch("httpx.Client", return_value=client_cm),
+    ):
+        seeder = mod.Seeder(
+            url="http://localhost:8000",
+            timeout=30,
+            batch_size=1,
+            dry_run=False,
+        )
+        result = seeder.run_batch(
+            n_questions=1,
+            suites=["general"],
+            seed=1,
+            strategy_hints="Prefer balanced suites.",
+        )
+
+    assert question["prompt"] == "2+2?"
+    assert "2+2?" in seen_prompts[0]
+    assert "### Planner Context" in seen_prompts[0]
+    assert "Prefer balanced suites." in seen_prompts[0]
+    assert result.results[0]["planner_hints_applied"] is True
+
+
 def test_seeder_memory_count_reads_sqlite_without_episodic_store_import(tmp_path):
     mod = _load_module("species_seeder_count_test", _AUTO / "seeder.py")
     db_path = tmp_path / "episodic.db"

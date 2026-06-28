@@ -86,6 +86,26 @@ def _tail_below_threshold(values: list[float], threshold: float) -> int:
     return count
 
 
+def _question_with_strategy_hints(
+    question: dict[str, Any],
+    strategy_hints: str | None,
+) -> dict[str, Any]:
+    """Return a prompt-info copy with planner hints appended to the prompt."""
+    if not strategy_hints:
+        return question
+    prompt = str(question.get("prompt", ""))
+    if not prompt:
+        return question
+    enriched = dict(question)
+    enriched["prompt"] = (
+        f"{prompt}\n\n"
+        "### Planner Context\n"
+        f"{strategy_hints}"
+    )
+    enriched["planner_hints_applied"] = True
+    return enriched
+
+
 class Seeder:
     """Species 0: per-role seeding with Q-value convergence monitoring."""
 
@@ -188,6 +208,7 @@ class Seeder:
         suites: list[str] | None = None,
         seed: int | None = None,
         watcher: "Any | None" = None,
+        strategy_hints: str | None = None,
     ) -> SeederBatchResult:
         """Run a batch of per-role evaluations and inject rewards."""
         import httpx
@@ -218,6 +239,11 @@ class Seeder:
             return SeederBatchResult()
 
         questions = questions[:n]
+        if strategy_hints:
+            questions = [
+                _question_with_strategy_hints(q, strategy_hints)
+                for q in questions
+            ]
         log.info(
             "Seeding batch %d: %d questions × %d roles across %s",
             self._batch_count, len(questions), len(self._active_roles), suites,
@@ -320,6 +346,9 @@ class Seeder:
                         "question_id": qid,
                         "rewards": rewards,
                         "roles_tested": metadata.get("roles_tested", []),
+                        "planner_hints_applied": bool(
+                            q.get("planner_hints_applied")
+                        ),
                     }
                     batch_result.results.append(result_row)
                     self._question_results.append(result_row)
