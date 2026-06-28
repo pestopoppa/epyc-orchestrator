@@ -133,6 +133,11 @@ def test_dashboard_live_panel_refreshes_ignore_stale_responses_where_possible() 
     assert "updateRegionLocks(refreshSeq);" in body
     assert "updateContentionGate(refreshSeq);" in body
     assert "updateTopologyActivity(refreshSeq);" in body
+    assert "function applyDashboardSnapshot(snap, source)" in body
+    assert "updatePanelSafely('completed', () => updateTasks(snap));" in body
+    assert "updatePanelSafely('decisions', () => updateDecisions(snap));" in body
+    assert "fetch(`/dashboard/api/snapshot?t=${Date.now()}`, { cache: 'no-store' })" in body
+    assert "setInterval(updateSnapshotPoll, 2500)" in body
     assert "window_s=${TOPOLOGY_ACTIVITY_WINDOW_S}&t=${Date.now()}" in body
     assert "fetch(`/dashboard/api/contention?t=${Date.now()}`, { cache: 'no-store' })" in body
     assert "if (refreshSeq !== _regionLocksRefreshSeq) return;" in body

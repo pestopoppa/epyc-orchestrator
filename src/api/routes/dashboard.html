@@ -1001,6 +1001,8 @@ let detailStream = null;
 let _roleAliasToBase = {};
 let _insightGraphFocus = '';
 let _insightGraphData = null;
+let _latestSnapshotFrameTs = 0;
+let _snapshotPollInFlight = false;
 
 async function loadTopology() {
     const r = await fetch('/dashboard/api/topology');
@@ -4280,6 +4282,61 @@ function closeDetail() {
     if (detailStream) { detailStream.close(); detailStream = null; }
 }
 
+function dashboardSnapshotFrameTs(snap) {
+    const ts = Number(snap && snap.generated_at);
+    return Number.isFinite(ts) ? ts : Date.now() / 1000;
+}
+
+function updatePanelSafely(name, fn) {
+    try {
+        fn();
+    } catch (err) {
+        window.__dashboardLastPanelError = {
+            name,
+            message: err && err.message ? err.message : String(err),
+            at: new Date().toISOString(),
+        };
+        console.error(`[dashboard:${name}]`, err);
+    }
+}
+
+function applyDashboardSnapshot(snap, source) {
+    if (!snap || snap.error) {
+        if (snap && snap.error) document.getElementById('status').textContent = `error: ${snap.error}`;
+        return;
+    }
+    const frameTs = dashboardSnapshotFrameTs(snap);
+    if (frameTs + 0.001 < _latestSnapshotFrameTs) return;
+    _latestSnapshotFrameTs = frameTs;
+    _latestSnapshot = snap || {};
+    updatePanelSafely('region_locks', () => {
+        if (snap.region_locks) {
+            updateRegionLocks(_regionLocksRefreshSeq, snap.region_locks);
+        }
+    });
+    updatePanelSafely('topology', () => updateTopology(snap.activity || {}, snap.in_flight_tasks || []));
+    updatePanelSafely('counters', () => updateCounters(snap));
+    updatePanelSafely('completed', () => updateTasks(snap));
+    updatePanelSafely('decisions', () => updateDecisions(snap));
+    if (source === 'poll' && activeStream) return;
+    const status = document.getElementById('status');
+    if (status) status.textContent = source === 'poll' ? 'live (poll)' : 'live';
+}
+
+async function updateSnapshotPoll() {
+    if (_snapshotPollInFlight) return;
+    _snapshotPollInFlight = true;
+    try {
+        const r = await fetch(`/dashboard/api/snapshot?t=${Date.now()}`, { cache: 'no-store' });
+        const snap = await r.json();
+        applyDashboardSnapshot(snap, 'poll');
+    } catch (err) {
+        console.error('[dashboard:snapshot_poll]', err);
+    } finally {
+        _snapshotPollInFlight = false;
+    }
+}
+
 function startStream() {
     if (activeStream) activeStream.close();
     activeStream = new EventSource('/dashboard/events/stream');
@@ -4288,15 +4345,7 @@ function startStream() {
     activeStream.onmessage = (e) => {
         try {
             const snap = JSON.parse(e.data);
-            if (snap.error) { document.getElementById('status').textContent = `error: ${snap.error}`; return; }
-            _latestSnapshot = snap || {};
-            if (snap.region_locks) {
-                updateRegionLocks(_regionLocksRefreshSeq, snap.region_locks);
-            }
-            updateTopology(snap.activity || {}, snap.in_flight_tasks || []);
-            updateCounters(snap);
-            updateTasks(snap);
-            updateDecisions(snap);
+            applyDashboardSnapshot(snap, 'stream');
         } catch (err) {
             console.error(err);
         }
@@ -5310,6 +5359,8 @@ async function updateRegionLocks(refreshSeq = _regionLocksRefreshSeq, regionLock
         setInterval(updateGepa, 5000);
         setInterval(updateProcessStatus, 3000);
         setInterval(updateBuildRev, 30000);  // build-drift poll
+        updateSnapshotPoll();
+        setInterval(updateSnapshotPoll, 2500);  // fallback for stream stalls + per-panel render isolation
         scheduleRegionLocksRefresh(true);
         setInterval(() => scheduleRegionLocksRefresh(true), 1500);  // shared live-inference refresh for locks + topology activity
         setInterval(updateAutopilotProgress, 3000);  // 3s poll — trial progress bar (state.json mtime polling)
