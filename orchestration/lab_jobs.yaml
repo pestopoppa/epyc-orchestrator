@@ -23,7 +23,7 @@ jobs:
   - job_id: handoff_freshness_lint
     title: Handoff freshness and index hygiene lint
     stage: shadow
-    enabled: false
+    enabled: true
     risk: read_only
     model_role: worker_explore
     schedule:
@@ -107,7 +107,7 @@ jobs:
   - job_id: attestation_watch
     title: Attestation drift watch
     stage: shadow
-    enabled: false
+    enabled: true
     risk: read_only
     model_role: verifier
     schedule:
