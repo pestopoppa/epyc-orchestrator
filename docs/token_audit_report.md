@@ -1,12 +1,14 @@
-# Tool Definition Token Audit — 2026-04-09
+# Tool Definition Token Audit — 2026-06-28
 
 ## Summary
 - DEFAULT_ROOT_LM_TOOLS: **377** est. tokens (290 words)
 - COMPACT_ROOT_LM_TOOLS: **209** est. tokens (161 words)
 - Compression ratio (compact/default): **55.4%**
 - DEFAULT_ROOT_LM_RULES: **1278** est. tokens (983 words)
-- Role overlays: 9 files, **700** est. tokens (538 words)
-- Total system prompt budget (tools+rules+roles): **2355** est. tokens
+- Role overlays: 10 files, **852** est. tokens (655 words)
+- Total system prompt budget (tools+rules+roles): **2507** est. tokens
+- Prompt-library size proxy: **10686** char-proxy tokens (not per-request AP-16 overhead)
+- Runtime AP-16 scaffold, frontdoor+worker: **3021** char-proxy tokens
 
 ## Per-Tool Token Cost (DEFAULT_ROOT_LM_TOOLS)
 
@@ -65,15 +67,16 @@ No duplicate tool entries found.
 
 | File | Est. Tokens | Words |
 |------|-------------|-------|
-| frontdoor.md | 161 | 124 |
-| coder_escalation.md | 144 | 111 |
-| architect_coding.md | 86 | 66 <!-- stack-change-guard: allow historical retired-role note --> |
+| frontdoor.md | 300 | 231 |
+| worker_explore.md | 121 | 93 |
+| architect_coding.md <!-- stack-change-guard: allow historical retired-role note --> | 86 | 66 |
 | architect_general.md | 83 | 64 |
+| coder_escalation.md | 78 | 60 |
 | worker_general.md | 77 | 59 |
-| worker_math.md | 68 | 52 |
 | coder_primary.md | 43 | 33 |
+| worker_math.md | 36 | 28 |
 | ingest_long_context.md | 21 | 16 |
-| worker_vision.md | 17 | 13 |
+| worker_vision.md | 7 | 5 |
 
 ## Compression Candidates (High Cost, Low/Zero Usage)
 
@@ -94,7 +97,33 @@ No duplicate tool entries found.
 
 ## Instruction Token Ratio
 
-- Tool definitions / total system prompt: **16.0%**
-- Rules / total system prompt: **54.3%**
-- Role overlays / total system prompt: **29.7%**
+- Tool definitions / total system prompt: **15.0%**
+- Rules / total system prompt: **51.0%**
+- Role overlays / total system prompt: **34.0%**
+
+## Runtime AP-16 Prompt Scaffold
+
+AP-16 runtime accounting now follows the active PromptBuilder path instead of charging every prompt-library markdown file to each request.
+
+| Component | Char-Proxy Tokens |
+|-----------|-------------------|
+| root_lm_system | 143 |
+| tools | 612 |
+| rules | 1739 |
+| role:frontdoor | 402 |
+| role:worker_general | 125 |
+| **frontdoor+worker total** | **3021** |
+| **frontdoor+worker+architect total** | **3128** |
+
+Recent nonzero AP-16 journal rows:
+
+| Trial | Species | Instruction Tokens | Observed Scaffold | Instruction Ratio | Quality | Speed t/s | Reliability | Observed Routes |
+|-------|---------|--------------------|-------------------|-------------------|---------|-----------|-------------|-----------------|
+| #1007 | numeric_swarm | 10748 | 3322 | 97.4% | 2.100 | 55.0 | 0.98 | architect_general, coder_escalation, frontdoor, ingest_long_context, worker_general, worker_vision |
+| #1008 | numeric_swarm | 10748 | 3185 | 97.4% | 2.100 | 49.5 | 0.98 | coder_escalation, frontdoor, worker_general, worker_vision |
+| #1010 | numeric_swarm | 3188 | 3322 | 91.8% | 2.100 | 59.4 | 0.98 | architect_general, coder_escalation, frontdoor, ingest_long_context, worker_general, worker_vision |
+| #1011 | numeric_swarm | 3295 | 3292 | 92.1% | 2.040 | 49.5 | 0.96 | architect_general, coder_escalation, frontdoor, worker_general, worker_vision |
+| #1012 | numeric_swarm | 3188 | 3185 | 91.8% | 2.100 | 56.0 | 0.98 | coder_escalation, frontdoor, worker_general, worker_vision |
+
+Interpretation: the static P3b definition compression remains real, but AP-16 frontier rows should use the active scaffold. Short EvalTower prompts still show a high instruction ratio, so P3d remains the quality gate before further prompt definition changes.
 
