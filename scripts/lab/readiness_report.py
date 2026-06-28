@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -19,6 +21,8 @@ DEFAULT_JOBS_FILE = "orchestration/lab_jobs.yaml"
 DEFAULT_QUEUE = Path("orchestration/lab_review_queue")
 DEFAULT_RECORDS = "task_records.jsonl"
 DEFAULT_VERDICTS = "review_verdicts.jsonl"
+AUTOPILOT_CMD_MARKER = "scripts/autopilot/autopilot.py start"
+LLAMA_CMD_MARKER = "llama-server"
 
 
 class ReadinessError(RuntimeError):
@@ -74,6 +78,62 @@ def _stage_counts(rows: list[dict[str, Any]]) -> dict[str, int]:
 
 def _gold_tuple_count(rows: list[dict[str, Any]]) -> int:
     return sum(1 for row in rows if row.get("tuple_path") or row.get("gold_tuple_path"))
+
+
+def _active_processes(marker: str) -> list[dict[str, Any]]:
+    try:
+        proc = subprocess.run(
+            ["ps", "-eo", "pid=,args="],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    if proc.returncode != 0:
+        return []
+    rows: list[dict[str, Any]] = []
+    self_pid = os.getpid()
+    for line in proc.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        pid_raw, _, cmd = line.partition(" ")
+        try:
+            pid = int(pid_raw)
+        except ValueError:
+            continue
+        if pid == self_pid or marker not in cmd:
+            continue
+        if marker == LLAMA_CMD_MARKER and not (
+            cmd.startswith(f"{LLAMA_CMD_MARKER} ") or f"/{LLAMA_CMD_MARKER} " in cmd
+        ):
+            continue
+        rows.append({"pid": pid, "cmd": cmd})
+    return rows
+
+
+def _quiet_window_status() -> dict[str, Any]:
+    autopilot = _active_processes(AUTOPILOT_CMD_MARKER)
+    llama = _active_processes(LLAMA_CMD_MARKER)
+    blockers: list[str] = []
+    if os.environ.get("NIGHTSHIFT_INFERENCE_ACTIVE") == "1":
+        blockers.append(
+            "NIGHTSHIFT_INFERENCE_ACTIVE=1"
+            f" ({os.environ.get('NIGHTSHIFT_INFERENCE_RSS_GB', 'unknown')}GB RSS)"
+        )
+    if autopilot:
+        blockers.append(f"active AutoPilot process count: {len(autopilot)}")
+    if llama:
+        blockers.append(f"active llama-server process count: {len(llama)}")
+    return {
+        "ready": not blockers,
+        "blockers": blockers,
+        "active_autopilot_processes": autopilot,
+        "active_llama_process_count": len(llama),
+        "active_llama_process_examples": llama[:5],
+    }
 
 
 def _promotion_decision(
@@ -170,6 +230,7 @@ def build_report(
     min_shadow_runs: int,
     min_reviewed_runs: int,
     autonomous_accept_rate: float,
+    quiet_window: dict[str, Any] | None = None,
     generated_at: str | None = None,
 ) -> dict[str, Any]:
     jobs = [job for job in jobs_doc.get("jobs", []) or [] if isinstance(job, dict)]
@@ -207,6 +268,14 @@ def build_report(
         if row["promotion"].get("reviewed", {}).get("eligible")
         or row["promotion"].get("autonomous", {}).get("eligible")
     ]
+    quiet = quiet_window or {
+        "ready": None,
+        "blockers": [],
+        "active_autopilot_processes": [],
+        "active_llama_process_count": None,
+        "active_llama_process_examples": [],
+    }
+    quiet_ready = quiet.get("ready") is True
     return {
         "schema_version": "lab_readiness_report.v1",
         "generated_at": generated_at or utc_now(),
@@ -219,6 +288,7 @@ def build_report(
             "enabled_jobs": sum(1 for job in jobs if job.get("enabled") is not False),
             "shadow_jobs": sum(1 for job in jobs if job.get("stage") == "shadow"),
             "nightly_runnable": len(runnable_nightly),
+            "nightly_ready_now": len(runnable_nightly) if quiet_ready else 0,
             "manual_runnable": len(runnable_manual),
             "task_records": len(task_records),
             "verdicts": len(verdicts),
@@ -226,6 +296,7 @@ def build_report(
             "promotion_ready": len(promotion_ready),
             "promotion_ready_job_ids": promotion_ready,
         },
+        "quiet_window": quiet,
         "jobs": rows,
     }
 
@@ -253,6 +324,9 @@ def run_from_args(args: argparse.Namespace) -> dict[str, Any]:
         min_shadow_runs=args.min_shadow_runs,
         min_reviewed_runs=args.min_reviewed_runs,
         autonomous_accept_rate=args.autonomous_accept_rate,
+        quiet_window=(
+            None if getattr(args, "skip_process_check", False) else _quiet_window_status()
+        ),
     )
 
 
@@ -266,6 +340,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-shadow-runs", type=int, default=10)
     parser.add_argument("--min-reviewed-runs", type=int, default=20)
     parser.add_argument("--autonomous-accept-rate", type=float, default=0.90)
+    parser.add_argument("--skip-process-check", action="store_true")
+    parser.add_argument("--json", action="store_true", help="Accepted for consistency; output is always JSON.")
     return parser
 
 
