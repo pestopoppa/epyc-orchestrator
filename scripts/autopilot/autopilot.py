@@ -254,7 +254,25 @@ MAX_CONSECUTIVE_PASSIVE = int(
 )
 # numeric_trial with empty params is the safest self-configuring frontier action
 # (Optuna suggests the values; no file/flag dependency to get wrong).
-_QUOTA_NUMERIC_SURFACES = ("think_harder", "escalation", "monitor", "memrl_retrieval")
+_FALLBACK_NUMERIC_SURFACES = ("think_harder", "escalation", "monitor", "memrl_retrieval")
+
+
+def _configured_numeric_surfaces() -> tuple[str, ...]:
+    """Return the NumericSwarm surfaces available to planner/forced trials."""
+    try:
+        from species.numeric_swarm import SURFACES as _NS_SURFACES
+    except Exception:
+        return _FALLBACK_NUMERIC_SURFACES
+
+    surfaces = tuple(
+        surface
+        for surface in _NS_SURFACES
+        if isinstance(surface, str) and surface.strip()
+    )
+    return surfaces or _FALLBACK_NUMERIC_SURFACES
+
+
+_QUOTA_NUMERIC_SURFACES = _configured_numeric_surfaces()
 
 
 def _blacklisted_action_skip(action: dict[str, Any], blocked_reason: str) -> SkipOutcome:
@@ -1638,7 +1656,7 @@ Stagnation signal: {stagnation_signal}
 Respond with EXACTLY ONE action in a ```json:autopilot_actions block:
 
 - Seed: {{"type": "seed_batch", "n_questions": 10-50, "suites": ["coder","math",...]}}
-- Numeric: {{"type": "numeric_trial", "surface": "memrl_retrieval|think_harder|monitor|escalation", "params": {{}}}}
+- Numeric: {{"type": "numeric_trial", "surface": "{numeric_surface_options}", "params": {{}}}}
   (Leave params empty to let Optuna suggest; provide params to test specific values)
 - Prompt: {{"type": "prompt_mutation", "file": "frontdoor.md", "mutation": "targeted_fix|compress|few_shot_evolution", "description": "..."}}
 - GEPA: {{"type": "gepa_optimize", "file": "frontdoor.md", "max_evals": 50, "description": "..."}}
@@ -3225,6 +3243,7 @@ def _run_loop_inner(
                 blacklist_text=blacklist_text,
                 feature_flags_block=_build_feature_flags_block(lab),
                 last_invalid_feedback=_build_last_invalid_feedback(state),
+                numeric_surface_options="|".join(_configured_numeric_surfaces()),
                 code_targets=", ".join(CODE_MUTATION_ALLOWLIST),
                 plot_paths="\n".join(f"  - {p}" for p in plot_paths) or "  (none yet)",
             ) + peaf.peaf_prompt_addendum()

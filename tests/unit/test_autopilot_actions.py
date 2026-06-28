@@ -1164,27 +1164,38 @@ def test_quota_forces_experiment_after_consecutive_passive_when_memory_large() -
     assert state["consecutive_passive_actions"] == 0
 
 
+def test_quota_numeric_surfaces_follow_numeric_swarm_registry() -> None:
+    from species.numeric_swarm import SURFACES
+
+    assert tuple(SURFACES) == autopilot._QUOTA_NUMERIC_SURFACES
+    assert "chat_pipeline" in autopilot._QUOTA_NUMERIC_SURFACES
+    assert "repl_budget" in autopilot._QUOTA_NUMERIC_SURFACES
+    assert "kv_compaction" in autopilot._QUOTA_NUMERIC_SURFACES
+
+
 def test_quota_skips_blacklisted_numeric_surface() -> None:
     state = {"consecutive_passive_actions": autopilot.MAX_CONSECUTIVE_PASSIVE}
+    blocked_surface = autopilot._QUOTA_NUMERIC_SURFACES[0]
+    expected_surface = autopilot._QUOTA_NUMERIC_SURFACES[1]
     action, rationale = autopilot._enforce_experiment_quota(
         {"type": "seed_batch", "n_questions": 10},
         state,
         memory_count=autopilot.QUOTA_MEMORY_THRESHOLD + 1,
         rationale={"falsifier": "x"},
-        trial_counter=2,
+        trial_counter=0,
         blacklist=[
             {
                 "pattern": {
                     "type": "numeric_trial",
-                    "surface": "monitor",
+                    "surface": blocked_surface,
                     "params": {},
                 },
-                "reason": "blocked monitor",
+                "reason": f"blocked {blocked_surface}",
             }
         ],
     )
 
-    assert action == {"type": "numeric_trial", "surface": "memrl_retrieval", "params": {}}
+    assert action == {"type": "numeric_trial", "surface": expected_surface, "params": {}}
     assert rationale["experiment_quota_forced"] is True
     assert state["consecutive_passive_actions"] == 0
 
@@ -1241,7 +1252,11 @@ def test_frontier_rerun_forces_numeric_trial() -> None:
         trial_counter=0,
     )
 
-    assert action == {"type": "numeric_trial", "surface": "think_harder", "params": {}}
+    assert action == {
+        "type": "numeric_trial",
+        "surface": autopilot._QUOTA_NUMERIC_SURFACES[0],
+        "params": {},
+    }
     assert rationale["frontier_rerun_forced"] is True
     assert rationale["frontier_rerun_reason"] == "v6 kernel era opened"
     assert state["frontier_rerun_forced"]["original_action"]["type"] == "structural_prune"
