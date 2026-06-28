@@ -4244,6 +4244,7 @@ function startStream() {
         try {
             const snap = JSON.parse(e.data);
             if (snap.error) { document.getElementById('status').textContent = `error: ${snap.error}`; return; }
+            _latestSnapshot = snap || {};
             if (snap.region_locks) {
                 updateRegionLocks(_regionLocksRefreshSeq, snap.region_locks);
             }
@@ -4523,7 +4524,23 @@ function renderTopologyActivity() {
         const stats = perRole[base];
         const age = topologyActivityAgeS(stats);
         const nReq = stats ? (stats.n_recent || stats.n_completed || 0) : 0;
+        const lockInfo = (typeof _latestRegionLocksByRole === 'object' && _latestRegionLocksByRole)
+            ? _latestRegionLocksByRole[base] : null;
+        const lockActiveCount = (lockInfo && lockInfo.instanceIdxs) ? lockInfo.instanceIdxs.size : 0;
+        const tapActiveCount = (lockInfo && lockInfo.tapInferredInstanceIdxs) ? lockInfo.tapInferredInstanceIdxs.size : 0;
+        const liveActiveCount = Math.max(lockActiveCount, tapActiveCount);
         const stillInsideWindow = age == null || age <= windowS;
+        if (liveActiveCount > 0) {
+            const parts = [`<span class="stat-fresh">${liveActiveCount}</span> active`];
+            if (nReq) parts.push(`<span class="stat-fresh">${nReq}</span> req`);
+            if (stats && stats.avg_tps_recent != null && stats.avg_tps_recent > 0) {
+                parts.push(`<span class="stat-fresh">${stats.avg_tps_recent.toFixed(1)}</span> t/s`);
+            }
+            if (age != null) parts.push(`<span class="stat-fresh">${formatTopologyActivityAge(age)} ago</span>`);
+            el.innerHTML = parts.join('<span class="stat-sep">·</span>');
+            el.title = `${base} has ${liveActiveCount} active CPU-region/tap holder(s); shared live cache with the CPU region-lock panel`;
+            return;
+        }
         if (!stats || !nReq || !stillInsideWindow) {
             if (stats && stats.running) {
                 const running = Number(stats.running_instance_count || 0);

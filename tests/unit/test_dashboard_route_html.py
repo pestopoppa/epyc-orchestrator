@@ -112,6 +112,9 @@ def test_dashboard_topology_activity_stats_refresh_with_live_age_tick() -> None:
     assert "setInterval(() => scheduleRegionLocksRefresh(true), 1500)" in body
     assert "setInterval(renderTopologyActivity, TOPOLOGY_ACTIVITY_AGE_TICK_MS)" in body
     assert "lockActivitySignature" in body
+    assert "const liveActiveCount = Math.max(lockActiveCount, tapActiveCount);" in body
+    assert "active CPU-region/tap holder(s)" in body
+    assert "_latestSnapshot = snap || {};" in body
 
 
 def test_dashboard_live_panel_refreshes_ignore_stale_responses_where_possible() -> None:
