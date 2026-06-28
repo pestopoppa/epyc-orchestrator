@@ -613,6 +613,96 @@ class StrategyStore:
             logger.info("FTS5 backfill: inserted %d rows", inserted)
         return inserted
 
+    def rebuild_search_indexes(self) -> dict[str, int]:
+        """Rebuild FTS5 and FAISS mirrors from authoritative SQLite rows.
+
+        Strategy rows live in SQLite. FTS5 and FAISS are retrieval mirrors, so
+        any destructive row purge must rebuild both mirrors rather than leaving
+        orphan vectors or keyword rows behind.
+        """
+        rows = self._conn.execute(
+            "SELECT id, description, insight, species, metadata_json FROM strategies "
+            "ORDER BY created_at ASC"
+        ).fetchall()
+
+        if getattr(self, "_fts_enabled", False):
+            self._conn.execute("DELETE FROM strategies_fts")
+            for row in rows:
+                self._conn.execute(
+                    "INSERT INTO strategies_fts(id, description, insight, species) "
+                    "VALUES (?, ?, ?, ?)",
+                    (row["id"], row["description"], row["insight"], row["species"]),
+                )
+
+        self._faiss.index = self._faiss._faiss.IndexFlatIP(self.embedding_dim)
+        self._faiss.id_map = []
+        self._faiss.id_to_idx = {}
+        for row in rows:
+            try:
+                metadata = json.loads(row["metadata_json"] or "{}")
+            except (TypeError, json.JSONDecodeError):
+                metadata = {}
+            format_meta = (
+                metadata.get("insight_format")
+                if isinstance(metadata, dict)
+                else {}
+            )
+            if not isinstance(format_meta, dict):
+                format_meta = {}
+            title = _compact_text(format_meta.get("title")) or _derive_title(row["description"])
+            embed_text = f"{title} {row['description']} {row['insight']}"
+            self._faiss.add(row["id"], self._embed(embed_text))
+        self._faiss.save()
+        self._conn.commit()
+        return {
+            "sqlite_count": len(rows),
+            "fts_count": (
+                self._conn.execute("SELECT COUNT(*) FROM strategies_fts").fetchone()[0]
+                if getattr(self, "_fts_enabled", False)
+                else 0
+            ),
+            "faiss_count": self._faiss.count,
+        }
+
+    def purge_strategy_campaign(self, campaign: str) -> dict[str, Any]:
+        """Delete operator-seeded strategy rows for one campaign.
+
+        Campaign rows are identified by ``metadata_json.seed_campaign``. The
+        method deletes dependent validity/FTS rows and then rebuilds retrieval
+        mirrors from the remaining SQLite strategies.
+        """
+        if not campaign:
+            raise ValueError("campaign must be non-empty")
+        rows = self._conn.execute("SELECT id, metadata_json FROM strategies").fetchall()
+        purge_ids: list[str] = []
+        for row in rows:
+            try:
+                metadata = json.loads(row["metadata_json"] or "{}")
+            except (TypeError, json.JSONDecodeError):
+                metadata = {}
+            if isinstance(metadata, dict) and metadata.get("seed_campaign") == campaign:
+                purge_ids.append(row["id"])
+
+        for strategy_id in purge_ids:
+            self._conn.execute(
+                "DELETE FROM strategy_validity WHERE strategy_id = ?",
+                (strategy_id,),
+            )
+            if getattr(self, "_fts_enabled", False):
+                self._conn.execute(
+                    "DELETE FROM strategies_fts WHERE id = ?",
+                    (strategy_id,),
+                )
+            self._conn.execute("DELETE FROM strategies WHERE id = ?", (strategy_id,))
+        self._conn.commit()
+        indexes = self.rebuild_search_indexes()
+        return {
+            "campaign": campaign,
+            "deleted_count": len(purge_ids),
+            "deleted_ids": sorted(purge_ids),
+            "indexes": indexes,
+        }
+
     def _embed(self, text: str) -> np.ndarray:
         """Generate embedding for text."""
         if self._embedder is not None and hasattr(self._embedder, "embed_text"):

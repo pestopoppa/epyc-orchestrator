@@ -755,6 +755,36 @@ class TestAP28HybridRetrieval:
         results = store.retrieve("Old entry", k=1)
         assert results[0].staleness == 0.5
 
+    def test_purge_strategy_campaign_removes_retrieval_mirrors(self, store):
+        store.store("kept", "kept insight", source_trial_id=1, species="alpha")
+        deleted_id = store.store(
+            "expert_parallelism guardrail",
+            "Do not toggle expert_parallelism",
+            source_trial_id=2,
+            species="structural_lab",
+            metadata={"seed_campaign": "operator-handoff-distillation"},
+            entry_type="convention",
+            entry_id="opseed-guardrail-ep-needs-canonical",
+        )
+
+        report = store.purge_strategy_campaign("operator-handoff-distillation")
+
+        assert report["deleted_count"] == 1
+        assert report["deleted_ids"] == [deleted_id]
+        assert report["indexes"]["sqlite_count"] == 1
+        assert report["indexes"]["faiss_count"] == 1
+        assert store.count() == 1
+        fts_rows = store._conn.execute(
+            "SELECT id FROM strategies_fts WHERE id = ?", (deleted_id,)
+        ).fetchall()
+        assert fts_rows == []
+        results = store.retrieve(
+            "expert_parallelism guardrail",
+            k=5,
+            include_quarantined=True,
+        )
+        assert all(result.id != deleted_id for result in results)
+
     def test_backfill_fts_idempotent(self, store):
         # Insert directly into ``strategies`` bypassing the store() FTS path,
         # then call backfill_fts to populate the index.
