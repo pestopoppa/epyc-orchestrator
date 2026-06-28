@@ -43,6 +43,11 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     return loaded
 
 
+def load_yaml_mapping(path: Path) -> dict[str, Any]:
+    """Load a YAML file that must parse to a mapping."""
+    return _load_yaml(path)
+
+
 def _sha256(path: Path) -> str | None:
     if not path.exists():
         return None

@@ -225,9 +225,9 @@ def _coerce_tps(value: Any) -> float | None:
 
 def _load_model_descriptors(descriptor_path: Path) -> list[dict[str, Any]]:
     try:
-        import yaml
+        from src.registry.model_descriptors import load_yaml_mapping
 
-        data = yaml.safe_load(descriptor_path.read_text()) or {}
+        data = load_yaml_mapping(descriptor_path)
     except Exception as exc:
         logger.warning("Using registry q_scorer priors; descriptor load failed: %s", exc)
         return []
@@ -531,9 +531,9 @@ def registry_baseline_tps_by_role(
     """
     baselines = dict(FALLBACK_BASELINE_TPS_BY_ROLE)
     try:
-        import yaml
+        from src.registry.model_descriptors import load_yaml_mapping
 
-        data = yaml.safe_load(registry_path.read_text()) or {}
+        data = load_yaml_mapping(registry_path)
     except Exception as exc:
         logger.warning("Using fallback q_scorer TPS baselines; registry load failed: %s", exc)
         return _materialize_q_scorer_role_aliases(baselines)
@@ -574,9 +574,9 @@ def registry_memory_cost_by_role(
     """
     costs = dict(FALLBACK_MEMORY_COST_BY_ROLE)
     try:
-        import yaml
+        from src.registry.model_descriptors import load_yaml_mapping
 
-        data = yaml.safe_load(registry_path.read_text()) or {}
+        data = load_yaml_mapping(registry_path)
     except Exception as exc:
         logger.warning("Using fallback q_scorer memory costs; registry load failed: %s", exc)
         return _materialize_q_scorer_role_aliases(costs)
