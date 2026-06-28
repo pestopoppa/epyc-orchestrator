@@ -547,6 +547,77 @@ def test_eval_question_uses_configured_local_rubric_judge(monkeypatch) -> None:
     assert result.rubric_scores["factual_accuracy"] == 0.9
 
 
+def test_eval_question_forwards_native_tool_schema_when_present(monkeypatch) -> None:
+    tower = EvalTower()
+    calls: list[dict] = []
+
+    def _fake_call(**kwargs):  # noqa: ANN001
+        calls.append(kwargs)
+        return {
+            "answer": "<answer>ok</answer>",
+            "tokens_generated": 7,
+            "tools_used": 1,
+            "tools_called": ["get_eval_secret"],
+        }
+
+    monkeypatch.setattr(eval_tower, "call_orchestrator_forced", _fake_call)
+    tool_schema = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_eval_secret",
+                "parameters": {"type": "object", "properties": {"name": {"type": "string"}}},
+            },
+        }
+    ]
+    tool_choice = {"type": "function", "function": {"name": "get_eval_secret"}}
+
+    with eval_tower.httpx.Client(timeout=1) as client:
+        result = tower._eval_question(
+            {
+                "id": "native-tool",
+                "suite": "tool_use_native",
+                "prompt": "Use the provided tool.",
+                "expected": "ok",
+                "scoring_method": "substring",
+                "force_mode": "repl",
+                "tools": tool_schema,
+                "tool_choice": tool_choice,
+            },
+            client,
+        )
+
+    assert result.correct is True
+    assert result.tools_called == ["get_eval_secret"]
+    assert calls[0]["tools"] == tool_schema
+    assert calls[0]["tool_choice"] == tool_choice
+
+
+def test_eval_question_omits_native_tool_schema_by_default(monkeypatch) -> None:
+    tower = EvalTower()
+    calls: list[dict] = []
+
+    def _fake_call(**kwargs):  # noqa: ANN001
+        calls.append(kwargs)
+        return {"answer": "ok", "tokens_generated": 1}
+
+    monkeypatch.setattr(eval_tower, "call_orchestrator_forced", _fake_call)
+
+    with eval_tower.httpx.Client(timeout=1) as client:
+        tower._eval_question(
+            {
+                "id": "legacy",
+                "suite": "general",
+                "prompt": "Say ok.",
+                "expected": "ok",
+            },
+            client,
+        )
+
+    assert "tools" not in calls[0]
+    assert "tool_choice" not in calls[0]
+
+
 def test_aggregate_emits_rubric_process_means() -> None:
     tower = EvalTower()
 

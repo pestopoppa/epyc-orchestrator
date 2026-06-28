@@ -889,21 +889,26 @@ class EvalTower:
 
         start = time.time()
         try:
-            resp = call_orchestrator_forced(
-                prompt=prompt,
+            call_kwargs = {
+                "prompt": prompt,
                 # Let routing decide unless the question pins a mode/role. The
                 # tool_use suite pins force_mode="repl" so the REPL CALL(...)
                 # path (what production actually uses) is exercised
                 # deterministically instead of being left to the router.
                 # Defaults are "" → existing questions are unchanged.
-                force_role=q.get("force_role", ""),
-                force_mode=q.get("force_mode", ""),
-                url=self.url,
-                timeout=self.timeout,
-                image_path=image_path,
-                client=client,
-                watcher=getattr(self, "watcher", None),
-            )
+                "force_role": q.get("force_role", ""),
+                "force_mode": q.get("force_mode", ""),
+                "url": self.url,
+                "timeout": self.timeout,
+                "image_path": image_path,
+                "client": client,
+                "watcher": getattr(self, "watcher", None),
+            }
+            if "tools" in q:
+                call_kwargs["tools"] = q.get("tools")
+            if "tool_choice" in q:
+                call_kwargs["tool_choice"] = q.get("tool_choice")
+            resp = call_orchestrator_forced(**call_kwargs)
             elapsed = time.time() - start
             answer = resp.get("answer", "")
             error = resp.get("error")
