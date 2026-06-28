@@ -5415,20 +5415,33 @@ async function updateRegionLocks(refreshSeq = _regionLocksRefreshSeq, regionLock
         }
     }
 
+    function startPanelSafely(name, fn) {
+        try {
+            const result = fn();
+            if (result && typeof result.catch === 'function') {
+                result.catch((err) => {
+                    console.warn(`dashboard ${name} startup failed`, err);
+                });
+            }
+        } catch (err) {
+            console.warn(`dashboard ${name} startup failed`, err);
+        }
+    }
+
     (async function () {
-        ensureRegionLocksPanelPainted();
-        scheduleRegionLocksRefresh(true);
-        await loadTopology();
-        startStream();
-        startTapStream();
-        _installTapCardClickDelegate();
-        updateGepa();
-        updateProcessStatus();
-        updateBuildRev();
-        updateAutopilotProgress();
-        updateRepoReadiness();
-        updateInsightGraph();
-        updatePareto();  // initial paint of Pareto plots even when accordion closed (so summary text is fresh)
+        startPanelSafely('region-locks-primer', ensureRegionLocksPanelPainted);
+        startPanelSafely('region-locks-refresh', () => scheduleRegionLocksRefresh(true));
+        startPanelSafely('topology', loadTopology);
+        startPanelSafely('snapshot-stream', startStream);
+        startPanelSafely('tap-stream', startTapStream);
+        startPanelSafely('tap-click-delegate', _installTapCardClickDelegate);
+        startPanelSafely('gepa', updateGepa);
+        startPanelSafely('process-status', updateProcessStatus);
+        startPanelSafely('build-rev', updateBuildRev);
+        startPanelSafely('autopilot-progress', updateAutopilotProgress);
+        startPanelSafely('repo-readiness', updateRepoReadiness);
+        startPanelSafely('insight-graph', updateInsightGraph);
+        startPanelSafely('pareto', updatePareto);  // initial paint of Pareto plots even when accordion closed (so summary text is fresh)
         const insightQuery = document.getElementById('insight-graph-query');
         const insightFocusBtn = document.getElementById('insight-graph-focus-btn');
         const insightResetBtn = document.getElementById('insight-graph-reset-btn');
@@ -5454,7 +5467,7 @@ async function updateRegionLocks(refreshSeq = _regionLocksRefreshSeq, regionLock
         setInterval(updateGepa, 5000);
         setInterval(updateProcessStatus, 3000);
         setInterval(updateBuildRev, 30000);  // build-drift poll
-        updateSnapshotPoll();
+        startPanelSafely('snapshot-poll', updateSnapshotPoll);
         setInterval(updateSnapshotPoll, 2500);  // fallback for stream stalls + per-panel render isolation
         setTimeout(ensureRegionLocksPanelPainted, 750);
         setInterval(() => scheduleRegionLocksRefresh(true), 1500);  // shared live-inference refresh for locks + topology activity

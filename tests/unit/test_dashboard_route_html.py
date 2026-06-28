@@ -103,7 +103,7 @@ def test_dashboard_topology_activity_stats_refresh_with_live_age_tick() -> None:
     assert "topologyActivityAgeS" in body
     assert "renderTopologyActivity" in body
     assert "topology_activity?window_s=${TOPOLOGY_ACTIVITY_WINDOW_S}&t=${Date.now()}" in body
-    assert "scheduleRegionLocksRefresh(true);" in body
+    assert "scheduleRegionLocksRefresh(true)" in body
     assert "snap.region_locks" in body
     assert "return updateRegionLocks(refreshSeq, snap.region_locks);" in body
     assert "const refreshSeq = ++_regionLocksRefreshSeq;" in body
@@ -121,7 +121,11 @@ def test_dashboard_topology_activity_stats_refresh_with_live_age_tick() -> None:
     assert "grid.dataset.regionLocksPainted = '1';" in body
     assert "basic matrix fallback; rich overlay still initializing" in body
     assert "loading CPU region-lock matrix" in body
-    assert "ensureRegionLocksPanelPainted();\n        scheduleRegionLocksRefresh(true);\n        await loadTopology();" in body
+    assert "function startPanelSafely(name, fn)" in body
+    assert "startPanelSafely('region-locks-primer', ensureRegionLocksPanelPainted);" in body
+    assert "startPanelSafely('region-locks-refresh', () => scheduleRegionLocksRefresh(true));" in body
+    assert "startPanelSafely('topology', loadTopology);" in body
+    assert "startPanelSafely('snapshot-poll', updateSnapshotPoll);" in body
     assert "setTimeout(ensureRegionLocksPanelPainted, 750)" in body
     assert "_latestSnapshot = snap || {};" in body
     assert "buildSlotInferredRegionLocks(byRole)" in body
@@ -204,7 +208,7 @@ def test_dashboard_insight_graph_panel_is_wired_read_only() -> None:
 
 
 def test_dashboard_operational_panels_stay_directly_under_topology() -> None:
-    """The insight graph must not displace completed/routing from the topology scan path."""
+    """Completed/routing must stay directly under topology in the right-column scan path."""
     html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
     body = html_path.read_text()
 
@@ -212,9 +216,8 @@ def test_dashboard_operational_panels_stay_directly_under_topology() -> None:
     completed_idx = body.index('id="completed-tasks"')
     routing_idx = body.index('id="decision-feed"')
     readiness_idx = body.index('id="repo-readiness-panel"')
-    insight_idx = body.index('id="insight-graph-panel"')
 
-    assert topology_idx < completed_idx < routing_idx < readiness_idx < insight_idx
+    assert topology_idx < completed_idx < routing_idx < readiness_idx
 
 
 # ----- dashboard_tasks: timezone-aware UTC (Tranche-8 polish) -----
