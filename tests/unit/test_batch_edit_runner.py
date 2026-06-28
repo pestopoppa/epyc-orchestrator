@@ -6,6 +6,7 @@ from pathlib import Path
 
 from src.batch_edit import PatchSet, FilePatch, Hunk, sha256_text
 from src.batch_edit_runner import (
+    ApplyResult,
     FailureType,
     compute_current_shas,
     stage_sandbox,
@@ -214,3 +215,84 @@ def test_promote_rename_moves_in_live(tmp_path):
     assert promote_sandbox(res, root) is True
     assert (root / "new.py").read_text() == "content\n"  # rename-to promoted with content
     assert not (root / "old.py").exists()                # rename-from removed
+
+
+def test_promote_missing_sandbox_source_refuses_without_mutation(tmp_path):
+    root = _repo(tmp_path, {"a.py": "old\n"})
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+    res = ApplyResult(
+        applied=["a.py"],
+        verify_passed=True,
+        sandbox_path=str(sandbox),
+        diff_paths=["a.py"],
+    )
+    assert promote_sandbox(res, root) is False
+    assert (root / "a.py").read_text() == "old\n"
+
+
+def test_promote_copy_failure_rolls_back_all_live_paths(monkeypatch, tmp_path):
+    root = _repo(tmp_path, {"a.py": "old-a\n", "b.py": "old-b\n"})
+    ps = PatchSet(files=[
+        _modify("a.py", "old-a\n", [Hunk(start_line=1, end_line=1, replacement="new-a\n")]),
+        _modify("b.py", "old-b\n", [Hunk(start_line=1, end_line=1, replacement="new-b\n")]),
+    ])
+    res = apply_patchset_sandboxed(
+        ps,
+        repo_root=root,
+        current_shas=compute_current_shas(ps, root),
+        verify_fn=lambda _sb: True,
+    )
+    assert res.promotable
+
+    import shutil
+
+    real_copy2 = shutil.copy2
+    sandbox_root = Path(res.sandbox_path or "")
+    copy_from_sandbox_count = 0
+
+    def flaky_copy2(src, dst, *args, **kwargs):
+        nonlocal copy_from_sandbox_count
+        if sandbox_root in Path(src).parents:
+            copy_from_sandbox_count += 1
+            if copy_from_sandbox_count == 2:
+                raise OSError("simulated second-copy failure")
+        return real_copy2(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(shutil, "copy2", flaky_copy2)
+    assert promote_sandbox(res, root) is False
+    assert (root / "a.py").read_text() == "old-a\n"
+    assert (root / "b.py").read_text() == "old-b\n"
+    cleanup_sandbox(res)
+
+
+def test_promote_delete_failure_after_copy_rolls_back_all_live_paths(monkeypatch, tmp_path):
+    root = _repo(tmp_path, {"a.py": "old-a\n", "gone.py": "old-gone\n"})
+    ps = PatchSet(files=[
+        _modify("a.py", "old-a\n", [Hunk(start_line=1, end_line=1, replacement="new-a\n")]),
+        FilePatch(
+            path="gone.py",
+            operation="delete",
+            base_content_sha256=sha256_text("old-gone\n"),
+        ),
+    ])
+    res = apply_patchset_sandboxed(
+        ps,
+        repo_root=root,
+        current_shas=compute_current_shas(ps, root),
+        verify_fn=lambda _sb: True,
+    )
+    assert res.promotable
+
+    real_unlink = Path.unlink
+
+    def flaky_unlink(self, *args, **kwargs):
+        if self == root / "gone.py":
+            raise OSError("simulated delete failure")
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", flaky_unlink)
+    assert promote_sandbox(res, root) is False
+    assert (root / "a.py").read_text() == "old-a\n"
+    assert (root / "gone.py").read_text() == "old-gone\n"
+    cleanup_sandbox(res)

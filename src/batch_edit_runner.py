@@ -214,19 +214,54 @@ def promote_sandbox(result: ApplyResult, repo_root: Path | str) -> bool:
         return False
     sandbox = Path(result.sandbox_path)
     root = Path(repo_root)
-    for rel in result.diff_paths:  # created/modified files + rename-to targets
+    if not sandbox.exists():
+        return False
+    for rel in result.diff_paths:
         src = sandbox / rel
-        if src.exists():
-            dst = root / rel
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dst)
-    # BEP-1b: deletions + rename sources must be removed from the LIVE tree (copying diff_paths
-    # alone leaves deleted/old-renamed files behind). Done after copies so a rename to an existing
-    # path still lands the new content first.
-    for rel in result.deleted_paths:
-        (root / rel).unlink(missing_ok=True)
-    for frm, _to in result.renamed_paths:
-        (root / frm).unlink(missing_ok=True)
+        if not src.is_file():
+            return False
+
+    affected_paths = sorted({
+        *result.diff_paths,
+        *result.deleted_paths,
+        *(frm for frm, _to in result.renamed_paths),
+    })
+    with tempfile.TemporaryDirectory(prefix="bep4-promote-backup-") as tmp:
+        backup_root = Path(tmp)
+        existed: dict[str, bool] = {}
+        for rel in affected_paths:
+            live = root / rel
+            if live.exists() and not live.is_file():
+                return False
+            existed[rel] = live.exists()
+            if live.exists():
+                backup = backup_root / rel
+                backup.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(live, backup)
+
+        try:
+            for rel in result.diff_paths:  # created/modified files + rename-to targets
+                src = sandbox / rel
+                dst = root / rel
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dst)
+            # BEP-1b: deletions + rename sources must be removed from the LIVE tree (copying
+            # diff_paths alone leaves deleted/old-renamed files behind). Done after copies so a
+            # rename to an existing path still lands the new content first.
+            for rel in result.deleted_paths:
+                (root / rel).unlink(missing_ok=True)
+            for frm, _to in result.renamed_paths:
+                (root / frm).unlink(missing_ok=True)
+        except Exception:
+            for rel in affected_paths:
+                live = root / rel
+                if existed.get(rel):
+                    backup = backup_root / rel
+                    live.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(backup, live)
+                else:
+                    live.unlink(missing_ok=True)
+            return False
     return True
 
 
