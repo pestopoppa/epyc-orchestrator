@@ -19,6 +19,7 @@ DEFAULT_QUEUE = Path("orchestration/datasets/intake_triage_review_queue.jsonl")
 DEFAULT_REVIEWED_LABELS = Path("orchestration/datasets/intake_triage_reviewed.jsonl")
 DEFAULT_REPORT = Path("orchestration/reports/intake_triage_review_status.json")
 REPORT_VERSION = "intake_triage_review_status.v1"
+DEFAULT_TRUSTED_LABEL_SOURCES = ("operator",)
 
 
 def _load_jsonl_if_present(path: Path) -> list[dict[str, Any]]:
@@ -31,16 +32,39 @@ def _intake_ids(rows: list[dict[str, Any]]) -> set[str]:
     return {str(row.get("intake_id") or "") for row in rows if row.get("intake_id")}
 
 
+def _effective_label_sources(raw_sources: list[str] | tuple[str, ...] | None) -> set[str]:
+    sources = {source for source in (raw_sources or DEFAULT_TRUSTED_LABEL_SOURCES) if source}
+    return sources or set(DEFAULT_TRUSTED_LABEL_SOURCES)
+
+
+def _label_source(row: dict[str, Any]) -> str:
+    return str(row.get("label_source") or "operator")
+
+
+def _source_counts(rows: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        source = _label_source(row)
+        counts[source] = counts.get(source, 0) + 1
+    return counts
+
+
 def summarize(
     *,
     queue_path: Path,
     reviewed_labels_path: Path,
     min_reviewed_labels: int,
+    trusted_label_sources: set[str] | None = None,
 ) -> dict[str, Any]:
     queue_rows = _load_jsonl_if_present(queue_path)
     reviewed_rows = _load_jsonl_if_present(reviewed_labels_path)
+    trusted_sources = trusted_label_sources or set(DEFAULT_TRUSTED_LABEL_SOURCES)
+    trusted_reviewed_rows = [
+        row for row in reviewed_rows if _label_source(row) in trusted_sources
+    ]
     queue_ids = _intake_ids(queue_rows)
-    reviewed_ids = _intake_ids(reviewed_rows)
+    reviewed_ids = _intake_ids(trusted_reviewed_rows)
+    all_reviewed_ids = _intake_ids(reviewed_rows)
     reviewed_queue_ids = queue_ids & reviewed_ids
     remaining_queue_ids = queue_ids - reviewed_ids
     labels_needed = max(0, min_reviewed_labels - len(reviewed_ids))
@@ -60,11 +84,15 @@ def summarize(
         "queue_path": str(queue_path),
         "reviewed_labels_path": str(reviewed_labels_path),
         "min_reviewed_labels": min_reviewed_labels,
+        "trusted_label_sources": sorted(trusted_sources),
         "status": status,
         "queue_rows": len(queue_rows),
         "queue_unique_intake_ids": len(queue_ids),
         "reviewed_rows": len(reviewed_rows),
-        "reviewed_unique_intake_ids": len(reviewed_ids),
+        "reviewed_unique_intake_ids": len(all_reviewed_ids),
+        "trusted_reviewed_rows": len(trusted_reviewed_rows),
+        "trusted_reviewed_unique_intake_ids": len(reviewed_ids),
+        "reviewed_label_sources": _source_counts(reviewed_rows),
         "reviewed_queue_items": len(reviewed_queue_ids),
         "remaining_queue_items": len(remaining_queue_ids),
         "labels_needed": labels_needed,
@@ -83,6 +111,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         queue_path=queue_path,
         reviewed_labels_path=reviewed_labels_path,
         min_reviewed_labels=args.min_reviewed_labels,
+        trusted_label_sources=_effective_label_sources(
+            getattr(args, "trusted_label_source", [])
+        ),
     )
     if args.report:
         report_path = Path(args.report).expanduser()
@@ -97,6 +128,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--queue", default=str(DEFAULT_QUEUE))
     parser.add_argument("--reviewed-labels", default=str(DEFAULT_REVIEWED_LABELS))
     parser.add_argument("--min-reviewed-labels", type=int, default=100)
+    parser.add_argument(
+        "--trusted-label-source",
+        action="append",
+        default=[],
+        help="Reviewed label source to count toward baseline readiness; defaults to operator.",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Accepted for CLI consistency; output is always JSON.",
+    )
     parser.add_argument(
         "--report",
         nargs="?",

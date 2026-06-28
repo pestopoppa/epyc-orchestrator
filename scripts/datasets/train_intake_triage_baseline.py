@@ -22,16 +22,26 @@ DEFAULT_DATA = Path("orchestration/datasets/intake_triage.jsonl")
 DEFAULT_REPORT = Path("orchestration/reports/intake_triage_baseline_report.json")
 BASELINE_VERSION = "intake_triage_nb_baseline.v1"
 TOKEN_RE = re.compile(r"[a-z0-9][a-z0-9_+.-]*")
+DEFAULT_TRUSTED_LABEL_SOURCES = ("operator",)
 
 
 def tokenize(text: str) -> list[str]:
     return TOKEN_RE.findall(text.lower())
 
 
-def _is_reviewed(row: dict[str, Any]) -> bool:
-    return bool(row.get("reviewed_at") or row.get("output_contract_version")) or str(
-        row.get("label_source") or ""
-    ) not in {"", "research-intake"}
+def _effective_label_sources(raw_sources: list[str] | tuple[str, ...] | None) -> set[str]:
+    sources = {source for source in (raw_sources or DEFAULT_TRUSTED_LABEL_SOURCES) if source}
+    return sources or set(DEFAULT_TRUSTED_LABEL_SOURCES)
+
+
+def _label_source(row: dict[str, Any]) -> str:
+    return str(row.get("label_source") or "operator")
+
+
+def _is_reviewed(row: dict[str, Any], *, trusted_label_sources: set[str]) -> bool:
+    if _label_source(row) not in trusted_label_sources:
+        return False
+    return bool(row.get("reviewed_at") or row.get("output_contract_version"))
 
 
 def _eligible_rows(
@@ -40,12 +50,16 @@ def _eligible_rows(
     target_field: str,
     text_field: str,
     require_reviewed: bool,
+    trusted_label_sources: set[str],
 ) -> list[dict[str, Any]]:
     eligible = []
     for row in rows:
         if row.get("exclude_reason"):
             continue
-        if require_reviewed and not _is_reviewed(row):
+        if require_reviewed and not _is_reviewed(
+            row,
+            trusted_label_sources=trusted_label_sources,
+        ):
             continue
         if not row.get(target_field) or not row.get(text_field):
             continue
@@ -153,17 +167,20 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     data_path = Path(args.data).expanduser()
     report_path = Path(args.report).expanduser()
     rows = load_jsonl(data_path)
+    trusted_label_sources = _effective_label_sources(getattr(args, "trusted_label_source", []))
     reviewed_rows = _eligible_rows(
         rows,
         target_field=args.target_field,
         text_field=args.text_field,
         require_reviewed=True,
+        trusted_label_sources=trusted_label_sources,
     )
     eligible_rows = _eligible_rows(
         rows,
         target_field=args.target_field,
         text_field=args.text_field,
         require_reviewed=args.require_reviewed,
+        trusted_label_sources=trusted_label_sources,
     )
     result = evaluate(
         eligible_rows,
@@ -186,6 +203,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "text_field": args.text_field,
         "status": status,
         "min_reviewed_labels": args.min_reviewed_labels,
+        "trusted_label_sources": sorted(trusted_label_sources),
         "reviewed_rows": len(reviewed_rows),
         "eligible_rows": len(eligible_rows),
         "source_rows": len(rows),
@@ -200,7 +218,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     }
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
-    return {"report": str(report_path), "status": status, "reviewed_rows": len(reviewed_rows)}
+    return {
+        "report": str(report_path),
+        "status": status,
+        "reviewed_rows": len(reviewed_rows),
+        "trusted_label_sources": sorted(trusted_label_sources),
+    }
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -213,6 +236,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-accuracy", type=float, default=0.85)
     parser.add_argument("--heldout-frac", type=float, default=0.2)
     parser.add_argument("--smoothing", type=float, default=1.0)
+    parser.add_argument(
+        "--trusted-label-source",
+        action="append",
+        default=[],
+        help="Reviewed label source to count toward baseline authority; defaults to operator.",
+    )
     parser.add_argument(
         "--include-unreviewed",
         dest="require_reviewed",

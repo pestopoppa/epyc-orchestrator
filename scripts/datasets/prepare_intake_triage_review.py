@@ -27,6 +27,7 @@ from scripts.datasets.record_intake_triage_verdict import (
 DEFAULT_OUTPUT = Path("orchestration/datasets/intake_triage_review_queue.jsonl")
 DEFAULT_MANIFEST = Path("orchestration/datasets/intake_triage_review_queue.manifest.json")
 BUILDER_VERSION = "intake_triage_review_queue_builder.v1"
+DEFAULT_TRUSTED_REVIEWED_LABEL_SOURCES = ("operator",)
 
 
 def _load_intake(path: Path) -> list[dict[str, Any]]:
@@ -36,11 +37,27 @@ def _load_intake(path: Path) -> list[dict[str, Any]]:
     return [row for row in data if isinstance(row, dict)]
 
 
-def _latest_reviewed_ids(path: Path | None) -> set[str]:
+def _effective_label_sources(raw_sources: list[str] | tuple[str, ...] | None) -> set[str]:
+    sources = {source for source in (raw_sources or DEFAULT_TRUSTED_REVIEWED_LABEL_SOURCES) if source}
+    return sources or set(DEFAULT_TRUSTED_REVIEWED_LABEL_SOURCES)
+
+
+def _label_source(row: dict[str, Any]) -> str:
+    return str(row.get("label_source") or "operator")
+
+
+def _latest_reviewed_ids(
+    path: Path | None,
+    *,
+    trusted_label_sources: set[str] | None = None,
+) -> set[str]:
     if path is None or not path.exists():
         return set()
+    trusted_sources = trusted_label_sources or set(DEFAULT_TRUSTED_REVIEWED_LABEL_SOURCES)
     reviewed: set[str] = set()
     for row in load_jsonl(path):
+        if _label_source(row) not in trusted_sources:
+            continue
         intake_id = str(row.get("intake_id") or "")
         if intake_id:
             reviewed.add(intake_id)
@@ -138,10 +155,15 @@ def build_queue(
     include_verdicts: set[str] | None = None,
     exclude_verdicts: set[str] | None = None,
     label_source: str = "operator",
+    trusted_reviewed_label_sources: set[str] | None = None,
     limit: int | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     rows = _load_intake(intake_path)
-    reviewed_ids = _latest_reviewed_ids(reviewed_labels_path)
+    trusted_sources = trusted_reviewed_label_sources or set(DEFAULT_TRUSTED_REVIEWED_LABEL_SOURCES)
+    reviewed_ids = _latest_reviewed_ids(
+        reviewed_labels_path,
+        trusted_label_sources=trusted_sources,
+    )
     output_reviewed_path = reviewed_labels_path or DEFAULT_REVIEWED_LABELS
     queue: list[dict[str, Any]] = []
     skipped_reviewed = 0
@@ -171,6 +193,7 @@ def build_queue(
     counts = {
         "source_rows": len(rows),
         "reviewed_labels_loaded": len(reviewed_ids),
+        "trusted_reviewed_label_sources": sorted(trusted_sources),
         "skipped_already_reviewed": skipped_reviewed,
         "skipped_verdict_filter": skipped_verdict_filter,
         "emitted": len(queue),
@@ -188,12 +211,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     limit = args.limit if args.limit and args.limit > 0 else None
     include_verdicts = set(args.include_verdict) if args.include_verdict else None
     exclude_verdicts = set(args.exclude_verdict) if args.exclude_verdict else None
+    trusted_reviewed_label_sources = _effective_label_sources(
+        getattr(args, "trusted_reviewed_label_source", [])
+    )
     rows, counts = build_queue(
         intake_path=intake_path,
         reviewed_labels_path=reviewed_labels_path,
         include_verdicts=include_verdicts,
         exclude_verdicts=exclude_verdicts,
         label_source=args.label_source,
+        trusted_reviewed_label_sources=trusted_reviewed_label_sources,
         limit=limit,
     )
     written = write_jsonl(output_path, rows)
@@ -210,6 +237,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "include_verdict": sorted(include_verdicts) if include_verdicts is not None else [],
             "exclude_verdict": sorted(exclude_verdicts) if exclude_verdicts is not None else [],
             "label_source": args.label_source,
+            "trusted_reviewed_label_sources": sorted(trusted_reviewed_label_sources),
             "limit": limit,
         },
     )
@@ -225,6 +253,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--include-verdict", action="append", default=[])
     parser.add_argument("--exclude-verdict", action="append", default=[])
     parser.add_argument("--label-source", choices=LABEL_SOURCES, default="operator")
+    parser.add_argument(
+        "--trusted-reviewed-label-source",
+        action="append",
+        default=[],
+        help="Reviewed label source that suppresses queue items; defaults to operator.",
+    )
     parser.add_argument("--limit", type=int, default=0)
     return parser
 

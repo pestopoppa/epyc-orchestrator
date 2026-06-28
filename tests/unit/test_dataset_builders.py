@@ -188,7 +188,7 @@ def test_record_intake_triage_verdict_excludes_source_text(tmp_path: Path) -> No
     assert "IGNORE PRIOR INSTRUCTIONS" not in json.dumps(records[0])
 
 
-def test_triage_builder_prefers_latest_reviewed_label(tmp_path: Path) -> None:
+def test_triage_builder_prefers_latest_trusted_reviewed_label(tmp_path: Path) -> None:
     intake = tmp_path / "intake_index.yaml"
     intake.write_text(
         yaml.safe_dump(
@@ -257,14 +257,58 @@ def test_triage_builder_prefers_latest_reviewed_label(tmp_path: Path) -> None:
     )
 
     examples = _read_jsonl(output)
-    assert examples[0]["verdict"] == "route_to_handoff"
-    assert examples[0]["destination_handoff"] == "frontier-f3-data-flywheel.md"
-    assert examples[0]["destination_index"] == "strategic-frontiers"
-    assert examples[0]["label_source"] == "shadow_job"
-    assert examples[0]["reviewed_at"] == "2026-06-14T00:00:00+00:00"
+    assert examples[0]["verdict"] == "worth_investigating"
+    assert examples[0]["destination_handoff"] == "older.md"
+    assert examples[0]["destination_index"] == "routing"
+    assert examples[0]["label_source"] == "operator"
+    assert examples[0]["reviewed_at"] == "2026-06-13T00:00:00+00:00"
     counts = json.loads(manifest.read_text())["counts"]
     assert counts["reviewed_labels_loaded"] == 1
     assert counts["reviewed_labels_used"] == 1
+
+
+def test_triage_builder_can_opt_into_shadow_reviewed_labels(tmp_path: Path) -> None:
+    intake = tmp_path / "intake_index.yaml"
+    intake.write_text(
+        yaml.safe_dump(
+            [{"id": "intake-1", "title": "Useful paper", "verdict": "park"}],
+            sort_keys=False,
+        )
+    )
+    labels = tmp_path / "reviewed.jsonl"
+    labels.write_text(
+        json.dumps(
+            {
+                "schema_version": "reviewed_intake_triage_verdict.v1",
+                "intake_id": "intake-1",
+                "verdict": "route_to_handoff",
+                "destination_handoff": "frontier-f3-data-flywheel.md",
+                "label_source": "shadow_job",
+                "reviewed_at": "2026-06-14T00:00:00+00:00",
+            }
+        )
+        + "\n"
+    )
+    output = tmp_path / "triage.jsonl"
+    manifest = tmp_path / "manifest.json"
+
+    build_triage_set.run(
+        Namespace(
+            intake=str(intake),
+            output=str(output),
+            manifest=str(manifest),
+            reviewed_labels=str(labels),
+            require_reviewed_labels=True,
+            include_excluded=False,
+            trusted_label_source=["shadow_job"],
+        )
+    )
+
+    examples = _read_jsonl(output)
+    assert examples[0]["verdict"] == "route_to_handoff"
+    assert examples[0]["label_source"] == "shadow_job"
+    options = json.loads(manifest.read_text())["options"]
+    assert options["trusted_label_sources"] == ["shadow_job"]
 
 
 def test_triage_builder_can_require_reviewed_labels(tmp_path: Path) -> None:
@@ -428,6 +472,43 @@ def test_prepare_intake_triage_review_queue_accepts_shadow_job_label_source(
     assert json.loads(manifest.read_text())["options"]["label_source"] == "shadow_job"
 
 
+def test_prepare_intake_triage_review_queue_ignores_shadow_labels_by_default(
+    tmp_path: Path,
+) -> None:
+    intake = tmp_path / "intake_index.yaml"
+    intake.write_text(
+        yaml.safe_dump(
+            [{"id": "intake-1", "title": "Needs operator review", "verdict": "route_to_handoff"}],
+            sort_keys=False,
+        )
+    )
+    reviewed = tmp_path / "reviewed.jsonl"
+    reviewed.write_text(
+        json.dumps({"intake_id": "intake-1", "label_source": "shadow_job"})
+        + "\n"
+    )
+    output = tmp_path / "review_queue.jsonl"
+    manifest = tmp_path / "manifest.json"
+
+    result = prepare_intake_triage_review.run(
+        Namespace(
+            intake=str(intake),
+            output=str(output),
+            manifest=str(manifest),
+            reviewed_labels=str(reviewed),
+            include_verdict=[],
+            exclude_verdict=[],
+            label_source="operator",
+            limit=0,
+        )
+    )
+
+    rows = _read_jsonl(output)
+    assert [row["intake_id"] for row in rows] == ["intake-1"]
+    assert result["counts"]["reviewed_labels_loaded"] == 0
+    assert result["counts"]["skipped_already_reviewed"] == 0
+
+
 def test_intake_triage_baseline_reports_insufficient_reviewed_labels(tmp_path: Path) -> None:
     data = tmp_path / "triage.jsonl"
     report = tmp_path / "report.json"
@@ -466,6 +547,43 @@ def test_intake_triage_baseline_reports_insufficient_reviewed_labels(tmp_path: P
     assert payload["reviewed_rows"] == 3
     assert payload["privacy"]["raw_text_in_report"] is False
     assert "routing paper" not in report.read_text()
+
+
+def test_intake_triage_baseline_ignores_shadow_labels_by_default(tmp_path: Path) -> None:
+    data = tmp_path / "triage.jsonl"
+    report = tmp_path / "report.json"
+    rows = [
+        {
+            "schema_version": "intake_triage_example.v1",
+            "example_id": "shadow-1",
+            "intake_id": "intake-1",
+            "verdict": "route_to_handoff",
+            "label_source": "shadow_job",
+            "reviewed_at": "2026-06-14T00:00:00+00:00",
+            "exclude_reason": "",
+            "features_text": json.dumps({"title": "shadow proposal"}),
+        }
+    ]
+    data.write_text("".join(json.dumps(row) + "\n" for row in rows))
+
+    result = train_intake_triage_baseline.run(
+        Namespace(
+            data=str(data),
+            report=str(report),
+            target_field="verdict",
+            text_field="features_text",
+            min_reviewed_labels=1,
+            min_accuracy=0.85,
+            heldout_frac=0.34,
+            smoothing=1.0,
+            require_reviewed=True,
+        )
+    )
+
+    payload = json.loads(report.read_text())
+    assert result["status"] == "insufficient_reviewed_labels"
+    assert payload["reviewed_rows"] == 0
+    assert payload["trusted_label_sources"] == ["operator"]
 
 
 def test_intake_triage_baseline_accepts_synthetic_reviewed_set(tmp_path: Path) -> None:
@@ -540,11 +658,36 @@ def test_intake_triage_review_status_reports_label_gap(tmp_path: Path) -> None:
     assert report["status"] == "needs_reviewed_labels"
     assert report["queue_rows"] == 3
     assert report["reviewed_rows"] == 1
+    assert report["trusted_reviewed_rows"] == 1
     assert report["reviewed_queue_items"] == 1
     assert report["remaining_queue_items"] == 2
     assert report["labels_needed"] == 1
     assert report["ready_for_baseline"] is False
     assert report["privacy"]["raw_text_in_report"] is False
+
+
+def test_intake_triage_review_status_ignores_shadow_labels_by_default(
+    tmp_path: Path,
+) -> None:
+    queue = tmp_path / "review_queue.jsonl"
+    reviewed = tmp_path / "reviewed.jsonl"
+    queue.write_text(json.dumps({"intake_id": "intake-1"}) + "\n")
+    reviewed.write_text(
+        json.dumps({"intake_id": "intake-1", "label_source": "shadow_job"}) + "\n"
+    )
+
+    report = intake_triage_review_status.summarize(
+        queue_path=queue,
+        reviewed_labels_path=reviewed,
+        min_reviewed_labels=1,
+    )
+
+    assert report["status"] == "needs_reviewed_labels"
+    assert report["reviewed_rows"] == 1
+    assert report["trusted_reviewed_rows"] == 0
+    assert report["trusted_reviewed_unique_intake_ids"] == 0
+    assert report["labels_needed"] == 1
+    assert report["ready_for_baseline"] is False
 
 
 def test_intake_triage_review_status_reports_ready(tmp_path: Path) -> None:

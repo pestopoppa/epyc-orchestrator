@@ -23,6 +23,7 @@ DEFAULT_MANIFEST = Path("orchestration/datasets/intake_triage.manifest.json")
 DEFAULT_REVIEWED_LABELS = Path("orchestration/datasets/intake_triage_reviewed.jsonl")
 BUILDER_VERSION = "intake_triage_builder.v1"
 QUARANTINE_POLICY_VERSION = "f5-quarantine-v1"
+DEFAULT_TRUSTED_LABEL_SOURCES = ("operator",)
 
 
 def _load_intake(path: Path) -> list[dict[str, Any]]:
@@ -42,11 +43,27 @@ def _destination(row: dict[str, Any]) -> str:
     return ""
 
 
-def _reviewed_label_by_intake_id(path: Path | None) -> dict[str, dict[str, Any]]:
+def _effective_label_sources(raw_sources: list[str] | tuple[str, ...] | None) -> set[str]:
+    sources = {source for source in (raw_sources or DEFAULT_TRUSTED_LABEL_SOURCES) if source}
+    return sources or set(DEFAULT_TRUSTED_LABEL_SOURCES)
+
+
+def _label_source(label: dict[str, Any]) -> str:
+    return str(label.get("label_source") or "operator")
+
+
+def _reviewed_label_by_intake_id(
+    path: Path | None,
+    *,
+    trusted_label_sources: set[str] | None = None,
+) -> dict[str, dict[str, Any]]:
     if path is None or not path.exists():
         return {}
+    trusted_sources = trusted_label_sources or set(DEFAULT_TRUSTED_LABEL_SOURCES)
     labels: dict[str, dict[str, Any]] = {}
     for label in load_jsonl(path):
+        if _label_source(label) not in trusted_sources:
+            continue
         intake_id = str(label.get("intake_id") or "")
         if not intake_id:
             continue
@@ -121,9 +138,14 @@ def build_dataset(
     reviewed_labels_path: Path | None = None,
     require_reviewed_labels: bool = False,
     include_excluded: bool = False,
+    trusted_label_sources: set[str] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     rows = _load_intake(intake_path)
-    reviewed_labels = _reviewed_label_by_intake_id(reviewed_labels_path)
+    trusted_sources = trusted_label_sources or set(DEFAULT_TRUSTED_LABEL_SOURCES)
+    reviewed_labels = _reviewed_label_by_intake_id(
+        reviewed_labels_path,
+        trusted_label_sources=trusted_sources,
+    )
     examples = [
         build_example(
             row,
@@ -161,11 +183,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     reviewed_labels_arg = getattr(args, "reviewed_labels", str(DEFAULT_REVIEWED_LABELS))
     reviewed_labels_path = Path(reviewed_labels_arg).expanduser() if reviewed_labels_arg else None
     require_reviewed_labels = bool(getattr(args, "require_reviewed_labels", False))
+    trusted_label_sources = _effective_label_sources(getattr(args, "trusted_label_source", []))
     examples, counts = build_dataset(
         intake_path=intake_path,
         reviewed_labels_path=reviewed_labels_path,
         require_reviewed_labels=require_reviewed_labels,
         include_excluded=args.include_excluded,
+        trusted_label_sources=trusted_label_sources,
     )
     written = write_jsonl(output_path, examples)
     generated_at = utc_now()
@@ -180,6 +204,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "include_excluded": args.include_excluded,
             "reviewed_labels": reviewed_labels_arg,
             "require_reviewed_labels": require_reviewed_labels,
+            "trusted_label_sources": sorted(trusted_label_sources),
         },
     )
     return {"output": str(output_path), "manifest": str(manifest_path), "counts": counts}
@@ -193,6 +218,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--reviewed-labels", default=str(DEFAULT_REVIEWED_LABELS))
     parser.add_argument("--require-reviewed-labels", action="store_true")
     parser.add_argument("--include-excluded", action="store_true")
+    parser.add_argument(
+        "--trusted-label-source",
+        action="append",
+        default=[],
+        help="Reviewed label source to accept as baseline authority; defaults to operator.",
+    )
     return parser
 
 
