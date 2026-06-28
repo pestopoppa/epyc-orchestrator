@@ -78,6 +78,28 @@ def test_resolve_prompt_path_component_strips_to_roles_basename(tmp_path: Path) 
     assert forge.read_prompt("missing/frontdoor.md") == "roles\n"
 
 
+def test_resolve_prompt_returns_canonical_in_tree_symlink_target(tmp_path: Path) -> None:
+    target = tmp_path / "frontdoor.md"
+    target.write_text("flat\n")
+    (tmp_path / "alias.md").symlink_to(target)
+    forge = PromptForge(prompts_dir=tmp_path, auto_commit=False)
+
+    assert forge._resolve_prompt_path("alias.md") == target.resolve()
+    forge.write_prompt("alias.md", "updated\n")
+    assert target.read_text() == "updated\n"
+
+
+def test_resolve_prompt_basename_fallback_returns_canonical_target(tmp_path: Path) -> None:
+    roles_dir = tmp_path / "roles"
+    roles_dir.mkdir()
+    target = roles_dir / "frontdoor.md"
+    target.write_text("roles\n")
+    (tmp_path / "frontdoor.md").symlink_to(target)
+    forge = PromptForge(prompts_dir=tmp_path, auto_commit=False)
+
+    assert forge._resolve_prompt_path("missing/frontdoor.md") == target.resolve()
+
+
 def test_resolve_prompt_missing_file_reports_original_joined_path(tmp_path: Path) -> None:
     forge = PromptForge(prompts_dir=tmp_path, auto_commit=False)
 

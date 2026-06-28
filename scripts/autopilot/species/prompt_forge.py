@@ -197,7 +197,7 @@ class PromptForge:
             resolved = candidate.resolve()
             if not resolved.is_relative_to(root):
                 return None
-            return candidate
+            return resolved
 
         # Try exact path first (handles roles/worker_explore.md from controller)
         resolved_path = safe_existing(path)
@@ -214,7 +214,7 @@ class PromptForge:
             for candidate in [self.prompts_dir / basename, self.prompts_dir / "roles" / basename]:
                 resolved_candidate = safe_existing(candidate)
                 if resolved_candidate is not None:
-                    return candidate
+                    return resolved_candidate
         raise FileNotFoundError(f"Prompt not found: {path}")
 
     def read_prompt(self, filename: str) -> str:
