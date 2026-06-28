@@ -11,6 +11,8 @@ from typing import Any
 from src.autopilot_core.journal_reconstruction import reconstruct_archive_from_journal_rows
 from src.autopilot_core.journal_snapshot_replay import (
     JOURNAL_SNAPSHOT_EVENT_TYPE,
+    _fold_representative_tail_into_snapshot,
+    _fold_tail_archive_into_snapshot,
     archive_payload_from_current_snapshot,
     archive_payload_from_verified_snapshot,
     build_snapshot_replay_diagnostic,
@@ -69,6 +71,18 @@ def _snapshot_event(
 def _archive(rows: list[dict[str, Any]]) -> dict[str, Any]:
     archive = reconstruct_archive_from_journal_rows(rows, None)
     assert archive is not None
+    return archive
+
+
+def _archive_with_exclusions(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    archive = _archive(rows)
+    archive["exclusions"] = {
+        "bug_corrupted": {"count": 1, "max_trial_id": 7},
+        "before_ts": {"count": 2, "max_trial_id": 8},
+        "exclude_before_ts": 1782511631.0,
+        "truncated_above_cap": {"count": 3, "max_trial_id": 9},
+        "max_trial_id_cap": 100,
+    }
     return archive
 
 
@@ -203,6 +217,23 @@ def test_verified_snapshot_payload_folds_safe_tail() -> None:
     assert payload == _archive(rows)
 
 
+def test_verified_snapshot_payload_preserves_exclusion_shape_when_folding_tail() -> None:
+    snapshot_archive = _archive_with_exclusions([_row(1, quality=1.2)])
+    tail_archive = _archive([_row(2, quality=1.4, speed=45.0)])
+
+    payload = _fold_tail_archive_into_snapshot(snapshot_archive, tail_archive)
+
+    assert payload is not None
+    assert payload["exclusions"]["bug_corrupted"] == {"count": 1, "max_trial_id": 7}
+    assert payload["exclusions"]["before_ts"] == {"count": 2, "max_trial_id": 8}
+    assert payload["exclusions"]["exclude_before_ts"] == 1782511631.0
+    assert payload["exclusions"]["truncated_above_cap"] == {
+        "count": 3,
+        "max_trial_id": 9,
+    }
+    assert payload["exclusions"]["max_trial_id_cap"] == 100
+
+
 def test_verified_snapshot_payload_rejects_within_noise_tail() -> None:
     rows = [_row(1, quality=1.2), _row(2, quality=1.4, speed=45.0)]
     rows[1]["eval_details"] = {
@@ -247,6 +278,46 @@ def test_verified_snapshot_payload_folds_within_noise_tail_with_replay_state() -
     payload = archive_payload_from_verified_snapshot(rows + [event], [event])
 
     assert payload == _archive(rows)
+
+
+def test_verified_snapshot_payload_preserves_exclusions_in_representative_tail() -> None:
+    rows = [
+        _row(1, quality=1.2),
+        _row(2, quality=1.4, speed=45.0),
+        _row(3, quality=1.5, speed=46.0),
+    ]
+    rows[0]["eval_details"] = {
+        "learning_exclusion": {
+            "by": "seq_accumulating",
+            "reason": "unit-test sequential accumulation",
+        }
+    }
+    rows[1]["eval_details"] = {
+        "learning_exclusion": {
+            "by": "seq_accumulating",
+            "reason": "unit-test sequential accumulation",
+        }
+    }
+    rows[2]["bug_corrupted_by"] = "resource_contention"
+    prefix_rows = [rows[0]]
+    snapshot_archive = _archive_with_exclusions(prefix_rows)
+    payload = _fold_representative_tail_into_snapshot(
+        snapshot_archive,
+        representative_replay_state_from_rows(prefix_rows),
+        rows[1:],
+        [],
+        snapshot_archive["objective_policy"],
+    )
+
+    assert payload is not None
+    assert payload["exclusions"]["bug_corrupted"] == {"count": 2, "max_trial_id": 7}
+    assert payload["exclusions"]["before_ts"] == {"count": 2, "max_trial_id": 8}
+    assert payload["exclusions"]["exclude_before_ts"] == 1782511631.0
+    assert payload["exclusions"]["truncated_above_cap"] == {
+        "count": 3,
+        "max_trial_id": 9,
+    }
+    assert payload["exclusions"]["max_trial_id_cap"] == 100
 
 
 def test_snapshot_replay_requires_matching_hash_for_ready_status() -> None:

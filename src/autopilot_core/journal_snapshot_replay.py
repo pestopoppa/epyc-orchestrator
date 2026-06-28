@@ -381,7 +381,7 @@ def _fold_representative_tail_into_snapshot(
     normal_tail_entries: list[dict[str, Any]] = []
     tail_t0_audit: list[dict[str, Any]] = []
     changed_clusters: set[tuple[int, str]] = set()
-    excluded_bug = {"count": 0, "max_trial_id": None}
+    excluded_bug = _empty_exclusion_slot()
 
     for row in folded_tail_rows:
         if _trial_id_from_row(row) is None:
@@ -445,20 +445,10 @@ def _fold_representative_tail_into_snapshot(
         snapshot_archive.get("journal_max_trial_id"),
         *(row.get("trial_id") for row in folded_tail_rows if isinstance(row, dict)),
     )
-    prefix_exclusions = snapshot_archive.get("exclusions") or {}
-    merged["exclusions"] = {
-        "bug_corrupted": _merge_exclusion_slot(
-            prefix_exclusions.get("bug_corrupted") or {},
-            excluded_bug,
-        ),
-        "truncated_above_cap": copy.deepcopy(
-            prefix_exclusions.get("truncated_above_cap") or {
-                "count": 0,
-                "max_trial_id": None,
-            }
-        ),
-        "max_trial_id_cap": prefix_exclusions.get("max_trial_id_cap"),
-    }
+    merged["exclusions"] = _merge_archive_exclusions(
+        snapshot_archive.get("exclusions") or {},
+        tail_bug_corrupted=excluded_bug,
+    )
     merged["supersessions"] = _merge_supersession_meta(
         snapshot_archive.get("supersessions") or {},
         tail_supersessions,
@@ -494,6 +484,10 @@ def _bump_exclusion(slot: dict[str, Any], trial_id: int) -> None:
     slot["max_trial_id"] = max_trial_id
 
 
+def _empty_exclusion_slot() -> dict[str, Any]:
+    return {"count": 0, "max_trial_id": None}
+
+
 def _reference_point_for_archive_policy(policy: str) -> tuple[float, ...]:
     if policy == TASK_RATE_OBJECTIVE_POLICY:
         return TASK_RATE_REFERENCE_POINT
@@ -520,6 +514,38 @@ def _merge_exclusion_slot(
             prefix.get("max_trial_id"),
             tail.get("max_trial_id"),
         ),
+    }
+
+
+def _merge_archive_exclusions(
+    prefix: dict[str, Any],
+    tail: dict[str, Any] | None = None,
+    *,
+    tail_bug_corrupted: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Merge snapshot/tail exclusion telemetry in the current archive shape."""
+    tail = tail or {}
+    exclude_before_ts = tail.get("exclude_before_ts")
+    if exclude_before_ts is None:
+        exclude_before_ts = prefix.get("exclude_before_ts")
+    max_trial_id_cap = tail.get("max_trial_id_cap")
+    if max_trial_id_cap is None:
+        max_trial_id_cap = prefix.get("max_trial_id_cap")
+    return {
+        "bug_corrupted": _merge_exclusion_slot(
+            prefix.get("bug_corrupted") or {},
+            tail_bug_corrupted or tail.get("bug_corrupted") or {},
+        ),
+        "before_ts": _merge_exclusion_slot(
+            prefix.get("before_ts") or {},
+            tail.get("before_ts") or {},
+        ),
+        "exclude_before_ts": exclude_before_ts,
+        "truncated_above_cap": _merge_exclusion_slot(
+            prefix.get("truncated_above_cap") or {},
+            tail.get("truncated_above_cap") or {},
+        ),
+        "max_trial_id_cap": max_trial_id_cap,
     }
 
 
@@ -672,22 +698,10 @@ def _fold_tail_archive_into_snapshot(
         tail_archive.get("journal_max_trial_id"),
     )
 
-    prefix_exclusions = merged.get("exclusions") or {}
-    tail_exclusions = tail_archive.get("exclusions") or {}
-    merged["exclusions"] = {
-        "bug_corrupted": _merge_exclusion_slot(
-            prefix_exclusions.get("bug_corrupted") or {},
-            tail_exclusions.get("bug_corrupted") or {},
-        ),
-        "truncated_above_cap": _merge_exclusion_slot(
-            prefix_exclusions.get("truncated_above_cap") or {},
-            tail_exclusions.get("truncated_above_cap") or {},
-        ),
-        "max_trial_id_cap": tail_exclusions.get(
-            "max_trial_id_cap",
-            prefix_exclusions.get("max_trial_id_cap"),
-        ),
-    }
+    merged["exclusions"] = _merge_archive_exclusions(
+        merged.get("exclusions") or {},
+        tail_archive.get("exclusions") or {},
+    )
     merged["supersessions"] = _merge_supersession_meta(
         merged.get("supersessions") or {},
         tail_archive.get("supersessions") or {},
