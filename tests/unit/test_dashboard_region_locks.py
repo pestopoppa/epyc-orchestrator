@@ -266,6 +266,46 @@ class TestPanelShapesFromMatrix:
 
 class TestRegionLocksSnapshot:
     @pytest.mark.asyncio
+    async def test_empty_region_embedder_is_not_a_cpu_lock_panel_role(
+        self,
+        tmp_path,
+        monkeypatch,
+    ) -> None:
+        """Embedding servers have no physical CPU-region lock footprint.
+
+        They are monitored by topology/activity, but the CPU-region lock panel
+        should remain limited to roles that can actually acquire q0..q3 locks.
+        """
+        (tmp_path / "cpu_region.embedder.q0.lock").write_text("")
+
+        monkeypatch.setattr("src.runtime.cpu_region_lock._tmp_dir", lambda: tmp_path)
+        monkeypatch.setattr("src.runtime.cpu_region_lock._current_lock_owner_pids", lambda _path: ["embed-pid"])
+        monkeypatch.setattr(
+            "src.runtime.instance_topology.get_instance_regions",
+            lambda: {
+                ("embedder", 0): frozenset(),
+                ("frontdoor", 0): {"q0", "q1"},
+                ("frontdoor", 1): {"q0"},
+            },
+        )
+        monkeypatch.setattr(
+            "src.scheduling.contention.load_contention_matrix",
+            lambda: type("Matrix", (), {
+                "same_role": {
+                    "embedder": SameRole(role="embedder", verdict="n/a"),
+                    "frontdoor": SameRole(role="frontdoor", verdict="allow"),
+                },
+            })(),
+        )
+
+        response = await region_locks_snapshot()
+        payload = json.loads(response.body)
+
+        assert "embedder" not in payload["by_role"]
+        assert "embedder" not in payload["topology_quartered_roles"]
+        assert "frontdoor" in payload["by_role"]
+
+    @pytest.mark.asyncio
     async def test_runtime_holder_outside_matrix_visible_shapes_resolves(self, tmp_path, monkeypatch) -> None:
         """Runtime locks resolve against full topology, not just panel-visible shapes."""
         lock = tmp_path / "cpu_region.ingest_long_context.q2.lock"
