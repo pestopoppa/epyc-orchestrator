@@ -98,15 +98,8 @@ def test_lock_roles_missing_or_invalid_stack_priors_fails_closed(tmp_path):
     assert lock_mod._lock_roles_from_stack_priors(invalid) is None
 
 
-def test_degraded_lock_roles_derive_from_stack_manifest():
-    roles = lock_mod._degraded_lock_roles_from_stack_manifest()
-
-    assert roles is not None
-    heavy, light = roles
-    assert {"worker_general", "worker_math", "toolrunner", "worker_vision"} <= light
-    assert {"frontdoor", "coder_escalation", "architect_general"} <= heavy
-    assert {"ingest_long_context", "vision_escalation", "worker_summarize"} <= heavy
-    assert "embedder" not in heavy
+def test_degraded_lock_roles_do_not_reconstruct_manifest_policy():
+    assert lock_mod._degraded_lock_roles_from_stack_manifest() is None
 
 
 def test_lock_role_sets_recompute_stack_priors_without_import_snapshot(tmp_path):
@@ -148,11 +141,18 @@ def test_lock_role_sets_recompute_stack_priors_without_import_snapshot(tmp_path)
     assert "frontdoor" in light
 
 
-def test_manifest_shared_lock_roles_derive_from_launch_metadata():
-    roles = lock_mod._manifest_shared_lock_roles()
+def test_lock_role_sets_without_stack_priors_fails_closed_to_unknown_heavy(tmp_path):
+    heavy, light = lock_mod.lock_role_sets(tmp_path / "missing.yaml")
 
-    assert {"worker_general", "worker_math", "toolrunner", "worker_vision"} <= roles
-    assert "embedder" not in roles
+    assert heavy == frozenset()
+    assert light == frozenset()
+    original_lock_role_sets = lock_mod.lock_role_sets
+    lock_mod.lock_role_sets = lambda _path=None: (frozenset(), frozenset())
+    try:
+        assert lock_mod._is_heavy_role("frontdoor") is True
+        assert lock_mod._is_heavy_role("worker_general") is True
+    finally:
+        lock_mod.lock_role_sets = original_lock_role_sets
 
 
 def test_is_heavy_role_uses_derived_sets_and_unknowns_fail_closed(monkeypatch):
