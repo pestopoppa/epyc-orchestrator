@@ -1,0 +1,4 @@
+name: security-review
+display_name: Security Review
+short_description: Exploit-path-gated security review for orchestrator APIs, agents, tools, deps, and runtime state.
+default_prompt: Use $security-review to audit the current orchestrator diff for exploitable security issues.
