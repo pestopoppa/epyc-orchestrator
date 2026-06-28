@@ -1275,6 +1275,91 @@ def test_frontier_rerun_pending_clear_does_not_force_again() -> None:
     assert rationale["frontier_rerun_pending_trial_id"] == 7
 
 
+def test_frontier_rerun_pending_clear_keeps_forcing_until_min_trials() -> None:
+    state = {
+        "frontier_rerun_required": {
+            "required": True,
+            "reason": "v6 kernel era opened",
+            "opened_at": "2026-06-28T01:40:00Z",
+            "min_numeric_trials": 4,
+        },
+        "frontier_rerun_pending_clear": {
+            "trial_id": 7,
+            "action": {"type": "numeric_trial", "surface": "monitor", "params": {}},
+            "reason": "v6 kernel era opened",
+        },
+    }
+    journal = SimpleNamespace(
+        entries_with_supersessions=lambda: [
+            SimpleNamespace(
+                bug_corrupted_by="",
+                action_type="numeric_trial",
+                tier=1,
+                timestamp="2026-06-28T01:41:00Z",
+            )
+        ]
+    )
+
+    action, rationale = autopilot._maybe_force_frontier_rerun_action(
+        {"type": "structural_prune", "file": "rules.md"},
+        state,
+        journal=journal,
+        rationale={},
+        trial_counter=8,
+    )
+
+    assert action["type"] == "numeric_trial"
+    assert rationale["frontier_rerun_forced"] is True
+    assert rationale["frontier_rerun_completed_numeric_trials"] == 1
+    assert rationale["frontier_rerun_min_numeric_trials"] == 4
+
+
+def test_frontier_rerun_pending_clear_stops_after_min_trials() -> None:
+    state = {
+        "frontier_rerun_required": {
+            "required": True,
+            "reason": "v6 kernel era opened",
+            "opened_at": "2026-06-28T01:40:00Z",
+            "min_numeric_trials": 2,
+        },
+        "frontier_rerun_pending_clear": {
+            "trial_id": 7,
+            "action": {"type": "numeric_trial", "surface": "monitor", "params": {}},
+            "reason": "v6 kernel era opened",
+        },
+    }
+    journal = SimpleNamespace(
+        entries_with_supersessions=lambda: [
+            SimpleNamespace(
+                bug_corrupted_by="",
+                action_type="numeric_trial",
+                tier=1,
+                timestamp="2026-06-28T01:41:00Z",
+            ),
+            SimpleNamespace(
+                bug_corrupted_by="",
+                action_type="numeric_trial",
+                tier=1,
+                timestamp="2026-06-28T01:42:00Z",
+            ),
+        ]
+    )
+    requested = {"type": "structural_prune", "file": "rules.md"}
+
+    action, rationale = autopilot._maybe_force_frontier_rerun_action(
+        requested,
+        state,
+        journal=journal,
+        rationale={},
+        trial_counter=9,
+    )
+
+    assert action == requested
+    assert rationale["frontier_rerun_pending_clear"] is True
+    assert rationale["frontier_rerun_completed_numeric_trials"] == 2
+    assert rationale["frontier_rerun_min_numeric_trials"] == 2
+
+
 def test_frontier_rerun_records_block_when_all_numeric_surfaces_blacklisted() -> None:
     state = {
         "frontier_rerun_required": {
@@ -1304,6 +1389,24 @@ def test_frontier_rerun_records_block_when_all_numeric_surfaces_blacklisted() ->
     assert action == requested
     assert rationale == {"falsifier": "x"}
     assert state["frontier_rerun_blocked"]["trial_id"] == 3
+
+
+def test_numeric_swarm_epoch_label_prefers_autopilot_speed_era() -> None:
+    state = {
+        "active_instrument_eras": {
+            "cpu_bench": "E5-cpu-kernel",
+            "autopilot_speed": "E5-autopilot-speed",
+        }
+    }
+
+    assert autopilot._numeric_swarm_epoch_label_from_state(state) == "E5-autopilot-speed"
+
+
+def test_numeric_swarm_epoch_label_absent_without_speed_era() -> None:
+    assert autopilot._numeric_swarm_epoch_label_from_state({}) is None
+    assert autopilot._numeric_swarm_epoch_label_from_state(
+        {"active_instrument_eras": {"cpu_bench": "E5-cpu-kernel"}}
+    ) is None
 
 
 # ----- non-executing-action residue feedback -----

@@ -54,7 +54,10 @@ from src.registry.capability_registry import (
     build_action_availability_section,
     load_capability_registry,
 )
-from src.autopilot_core.journal_reconstruction import reconstruct_archive_from_journal_rows
+from src.autopilot_core.journal_reconstruction import (
+    parse_journal_ts,
+    reconstruct_archive_from_journal_rows,
+)
 from src.autopilot_core.journal_snapshot_replay import archive_payload_from_verified_snapshot
 from experiment_journal import ExperimentJournal, JournalEntry, scrub_legacy_scale_text
 from pareto_archive import (
@@ -976,6 +979,7 @@ def _maybe_force_frontier_rerun_action(
     action: dict[str, Any],
     state: dict[str, Any],
     *,
+    journal: ExperimentJournal | None = None,
     blacklist: list[dict[str, Any]] | None = None,
     rationale: dict[str, Any] | None = None,
     trial_counter: int = 0,
@@ -984,12 +988,28 @@ def _maybe_force_frontier_rerun_action(
     marker = state.get("frontier_rerun_required")
     if not (isinstance(marker, dict) and marker.get("required")):
         return action, rationale
+    min_trials = _frontier_rerun_min_trials(marker)
+    completed_trials = _frontier_rerun_completed_numeric_trials(marker, journal)
     pending = state.get("frontier_rerun_pending_clear")
     if isinstance(pending, dict) and pending.get("trial_id") is not None:
+        if journal is not None and completed_trials < min_trials:
+            action, forced_rationale = _force_frontier_rerun_numeric_action(
+                action,
+                state,
+                marker=marker,
+                blacklist=blacklist or [],
+                rationale=rationale,
+                trial_counter=trial_counter,
+                completed_trials=completed_trials,
+                min_trials=min_trials,
+            )
+            return action, forced_rationale
         return action, {
             **(rationale or {}),
             "frontier_rerun_pending_clear": True,
             "frontier_rerun_pending_trial_id": pending.get("trial_id"),
+            "frontier_rerun_completed_numeric_trials": completed_trials,
+            "frontier_rerun_min_numeric_trials": min_trials,
         }
     if action.get("type") == "numeric_trial":
         state["frontier_rerun_forced"] = None
@@ -1003,8 +1023,73 @@ def _maybe_force_frontier_rerun_action(
             "frontier_rerun_satisfied_by_selected_action": True,
         }
 
+    return _force_frontier_rerun_numeric_action(
+        action,
+        state,
+        marker=marker,
+        blacklist=blacklist or [],
+        rationale=rationale,
+        trial_counter=trial_counter,
+        completed_trials=completed_trials,
+        min_trials=min_trials,
+    )
+
+
+def _frontier_rerun_min_trials(marker: dict[str, Any]) -> int:
+    try:
+        return max(1, int(marker.get("min_numeric_trials") or 1))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _frontier_rerun_opened_ts(marker: dict[str, Any]) -> float | None:
+    for key in ("rerun_started_at", "opened_at"):
+        ts = parse_journal_ts(marker.get(key))
+        if ts is not None:
+            return ts
+    return None
+
+
+def _frontier_rerun_completed_numeric_trials(
+    marker: dict[str, Any],
+    journal: ExperimentJournal | None,
+) -> int:
+    if journal is None:
+        return 0
+    opened_ts = _frontier_rerun_opened_ts(marker)
+    entries = (
+        journal.entries_with_supersessions()
+        if hasattr(journal, "entries_with_supersessions")
+        else journal.all_entries()
+    )
+    completed = 0
+    for entry in entries:
+        if entry.bug_corrupted_by:
+            continue
+        if entry.action_type != "numeric_trial":
+            continue
+        if entry.tier < MIN_FRONTIER_EVAL_TIER:
+            continue
+        ts = parse_journal_ts(entry.timestamp)
+        if opened_ts is not None and (ts is None or ts < opened_ts):
+            continue
+        completed += 1
+    return completed
+
+
+def _force_frontier_rerun_numeric_action(
+    action: dict[str, Any],
+    state: dict[str, Any],
+    *,
+    marker: dict[str, Any],
+    blacklist: list[dict[str, Any]],
+    rationale: dict[str, Any] | None,
+    trial_counter: int,
+    completed_trials: int,
+    min_trials: int,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
     forced, blocked_reason = _first_unblacklisted_numeric_trial_action(
-        blacklist or [],
+        blacklist,
         trial_counter=trial_counter,
     )
     if forced is None:
@@ -1017,27 +1102,35 @@ def _maybe_force_frontier_rerun_action(
             "trial_id": trial_counter,
             "reason": blocked_reason,
             "action": action,
+            "completed_numeric_trials": completed_trials,
+            "min_numeric_trials": min_trials,
         }
         return action, rationale
 
     reason = str(marker.get("reason") or "frontier rerun required")
     log.warning(
         "Frontier rerun required (%s); forcing numeric_trial(surface=%s) "
-        "instead of '%s'.",
+        "instead of '%s' (%d/%d completed numeric trials).",
         reason,
         forced["surface"],
         action.get("type", "unknown"),
+        completed_trials,
+        min_trials,
     )
     state["frontier_rerun_forced"] = {
         "trial_id": trial_counter,
         "reason": reason,
         "original_action": action,
         "forced_action": forced,
+        "completed_numeric_trials": completed_trials,
+        "min_numeric_trials": min_trials,
     }
     state["frontier_rerun_pending_clear"] = {
         "trial_id": trial_counter,
         "action": forced,
         "reason": reason,
+        "completed_numeric_trials": completed_trials,
+        "min_numeric_trials": min_trials,
     }
     state.pop("frontier_rerun_blocked", None)
     return (
@@ -1046,6 +1139,8 @@ def _maybe_force_frontier_rerun_action(
             **(rationale or {}),
             "frontier_rerun_forced": True,
             "frontier_rerun_reason": reason,
+            "frontier_rerun_completed_numeric_trials": completed_trials,
+            "frontier_rerun_min_numeric_trials": min_trials,
         },
     )
 
@@ -2144,6 +2239,16 @@ def _archive_epoch_params_from_state(
     return deinflate_before_ts, deinflate_factor, exclude_before_ts
 
 
+def _numeric_swarm_epoch_label_from_state(state: dict[str, Any]) -> str | None:
+    """Return the persistent NumericSwarm study era for the live speed instrument."""
+    eras = state.get("active_instrument_eras")
+    if isinstance(eras, dict):
+        value = eras.get("autopilot_speed")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
 def _apply_journal_archive_authority(
     state: dict[str, Any],
     journal: ExperimentJournal,
@@ -2585,7 +2690,7 @@ def _run_loop_inner(
         url=ORCHESTRATOR_URL,
         dry_run=dry_run,
     )
-    swarm = NumericSwarm()
+    swarm = NumericSwarm(epoch_label=_numeric_swarm_epoch_label_from_state(state))
     forge = PromptForge(auto_commit=not dry_run)
     lab = StructuralLab(orchestrator_url=ORCHESTRATOR_URL)
     evo = EvolutionManager(use_local_model=not use_controller)
@@ -3314,6 +3419,7 @@ def _run_loop_inner(
         action, rationale = _maybe_force_frontier_rerun_action(
             action,
             state,
+            journal=journal,
             blacklist=blacklist,
             rationale=rationale,
             trial_counter=trial_counter,
@@ -4567,7 +4673,7 @@ def cmd_digest(args: argparse.Namespace) -> None:
         journal,
         source=getattr(args, "archive_source", ARCHIVE_SOURCE_JOURNAL_ALL),
     )
-    swarm = NumericSwarm()
+    swarm = NumericSwarm(epoch_label=_numeric_swarm_epoch_label_from_state(state))
     lab = StructuralLab()
     path = generate_digest(
         swarm=swarm,

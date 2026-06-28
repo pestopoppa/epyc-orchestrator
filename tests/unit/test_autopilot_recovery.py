@@ -352,7 +352,9 @@ def test_cmd_digest_accepts_explicit_archive_source(
         pass
 
     class FakeSwarm:
-        pass
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
 
     class FakeLab:
         pass
@@ -388,6 +390,7 @@ def test_cmd_digest_accepts_explicit_archive_source(
     assert captured["archive_source"] == autopilot.ARCHIVE_SOURCE_STATE
     assert captured["output_root"] == Path("/tmp/autopilot-digest-smoke")
     assert isinstance(captured["swarm"], FakeSwarm)
+    assert captured["swarm"].kwargs == {"epoch_label": None}
     assert isinstance(captured["lab"], FakeLab)
     assert saved_states == []
 

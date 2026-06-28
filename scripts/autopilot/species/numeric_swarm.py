@@ -7,8 +7,9 @@ multi-objective search, and cluster-based robust selection.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
+import re
 from typing import Any
 
 log = logging.getLogger("autopilot.numeric_swarm")
@@ -101,9 +102,11 @@ class NumericSwarm:
         self,
         db_path: Path | None = None,
         seed: int = 42,
+        epoch_label: str | None = None,
     ):
         self.db_path = db_path or OPTUNA_DB
         self.seed = seed
+        self.epoch_label = _study_name_token(epoch_label)
         self._studies: dict[str, Any] = {}
         self._import_optuna()
 
@@ -340,6 +343,8 @@ class NumericSwarm:
     def _study_name(self, surface: str) -> str:
         """Get study name with optional epoch suffix."""
         base = f"autopilot_{surface}"
+        if self.epoch_label:
+            base = f"{base}_era_{self.epoch_label}"
         epoch = getattr(self, "_epoch", 0)
         if epoch > 0:
             return f"{base}_epoch{epoch}"
@@ -359,3 +364,11 @@ class NumericSwarm:
             except Exception:
                 result[surface] = {"n_trials": 0}
         return result
+
+
+def _study_name_token(value: str | None) -> str:
+    """Return a stable Optuna study-name-safe token for an instrument era."""
+    if not value:
+        return ""
+    token = re.sub(r"[^A-Za-z0-9]+", "_", str(value)).strip("_")
+    return token[:80]
