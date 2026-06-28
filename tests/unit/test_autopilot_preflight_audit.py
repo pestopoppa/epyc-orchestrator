@@ -418,3 +418,32 @@ def test_audit_archive_authority_uses_state_and_journal_paths(
     )
 
     assert _MOD.audit_archive_authority() is False
+
+
+def test_audit_archive_authority_accepts_invalidated_snapshot_with_full_replay(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    rows = [_journal_row(1)]
+    state_path = tmp_path / "autopilot_state.json"
+    journal_path = tmp_path / "autopilot_journal.jsonl"
+    state_path.write_text(
+        json.dumps({"trial_counter": 2, "pareto_archive": _archive(rows)}),
+        encoding="utf-8",
+    )
+    journal_path.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(_MOD, "STATE_PATH", state_path)
+    monkeypatch.setattr(_MOD, "JOURNAL_PATH", journal_path)
+    monkeypatch.setattr(
+        _MOD,
+        "build_snapshot_replay_diagnostic",
+        lambda rows, events: SimpleNamespace(
+            bounded_replay_readiness="prefix_invalidated",
+            status="archive_prefix_drift",
+        ),
+    )
+
+    assert _MOD.audit_archive_authority() is True

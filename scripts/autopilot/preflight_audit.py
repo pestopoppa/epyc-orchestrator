@@ -612,13 +612,18 @@ def audit_archive_authority() -> bool:
             f"journal_frontier={diagnostic.get('journal_frontier_count', 'n/a')}"
         ),
     )
-    snapshot_ok = diagnostic.get("snapshot_readiness") != "prefix_invalidated"
+    full_replay_available = diagnostic["status"] == "match"
+    snapshot_ok = (
+        diagnostic.get("snapshot_readiness") != "prefix_invalidated"
+        or full_replay_available
+    )
     all_ok &= _check(
-        "Snapshot prefix is not invalidated",
+        "Snapshot replay is restart-safe",
         snapshot_ok,
         (
             f"readiness={diagnostic.get('snapshot_readiness', 'n/a')} "
-            f"replay={diagnostic.get('snapshot_replay_status', 'n/a')}"
+            f"replay={diagnostic.get('snapshot_replay_status', 'n/a')} "
+            f"full_replay_available={full_replay_available}"
         ),
     )
     for warning in diagnostic.get("warnings", []):

@@ -674,7 +674,7 @@ def _assert_worker_pool_stack_prior_consumer(
     from src.registry import stack_priors
     from src.services.worker_pool import WorkerPoolManager, WorkerTier
 
-    monkeypatch.setattr(stack_priors, "live_stack_role_records", lambda: records)
+    monkeypatch.setattr(stack_priors, "live_stack_role_records", lambda _path=None: records)
     config = WorkerPoolManager().config
 
     assert list(config.workers) == ["worker_general"]
