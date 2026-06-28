@@ -13,6 +13,7 @@ import yaml
 
 from src.api.routes.chat_summarization import (
     _is_summarization_task,
+    _is_transient_model_unavailable,
     _run_two_stage_summarization,
     _should_use_two_stage,
     _summarization_worker_role,
@@ -200,6 +201,21 @@ class TestSummarizationWorkerRole:
 # ── Two-Stage Pipeline Execution ─────────────────────────────────────────
 
 
+class TestTransientUnavailableDetection:
+    """Test transient model-unavailable detection for summarization fallback."""
+
+    def test_status_code_503_is_transient(self):
+        error = Exception("backend down")
+        error.status_code = 503
+        assert _is_transient_model_unavailable(error) is True
+
+    def test_timeout_text_is_transient(self):
+        assert _is_transient_model_unavailable(TimeoutError("request timed out")) is True
+
+    def test_malformed_output_is_not_transient(self):
+        assert _is_transient_model_unavailable(Exception("malformed digest")) is False
+
+
 class TestTwoStagePipelineExecution:
     """Test two-stage summarization pipeline execution."""
 
@@ -374,6 +390,39 @@ class TestTwoStagePipelineExecution:
             assert stats["worker_role"] == "worker_summarize"
             assert stats["producer_role"] == "frontdoor"
             assert stats["role_history"] == ["worker_summarize", "frontdoor"]
+            assert stats["worker_fallback_count"] == 0
+            assert stats["worker_failure_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_run_two_stage_worker_unavailable_falls_back_to_main_role_once(self):
+        """Transient worker outages retry a chunk once through the synthesis role."""
+        mock_primitives = MagicMock()
+        mock_primitives.llm_batch.side_effect = Exception("Batch failed")
+        mock_primitives.llm_call.side_effect = [
+            Exception("HTTP 503 Service Unavailable"),
+            "Digest via frontdoor fallback",
+            "Digest 2",
+            "Final synthesis",
+        ]
+
+        mock_state = MagicMock()
+        mock_state.progress_logger = None
+
+        answer, stats = await _run_two_stage_summarization(
+            prompt="Test",
+            context="E" * 16000,
+            primitives=mock_primitives,
+            state=mock_state,
+            task_id="test-transient-worker",
+        )
+
+        roles = [call.kwargs["role"] for call in mock_primitives.llm_call.call_args_list]
+        assert roles == ["worker_summarize", "frontdoor", "worker_summarize", "frontdoor"]
+        assert answer == "Final synthesis"
+        assert stats["worker_fallback_role"] == "frontdoor"
+        assert stats["worker_fallback_count"] == 1
+        assert stats["worker_failure_count"] == 0
+        assert stats["producer_role"] == "frontdoor"
 
     @pytest.mark.asyncio
     async def test_run_two_stage_sequential_worker_failure(self):
@@ -383,7 +432,7 @@ class TestTwoStagePipelineExecution:
         mock_primitives.llm_batch.side_effect = Exception("Batch failed")
         mock_primitives.llm_call.side_effect = [
             "Digest 1",
-            Exception("Worker timeout"),  # Second worker fails
+            Exception("Worker returned malformed digest"),  # Second worker fails
             "Final synthesis",
         ]
 
@@ -408,6 +457,8 @@ class TestTwoStagePipelineExecution:
 
             # Should still complete with partial digests
             assert "Digest 1" in answer or "synthesis" in answer.lower()
+            assert stats["worker_fallback_count"] == 0
+            assert stats["worker_failure_count"] == 1
 
     @pytest.mark.asyncio
     async def test_run_two_stage_summarization_prompt_format(self):

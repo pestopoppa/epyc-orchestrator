@@ -103,6 +103,51 @@ def _summarization_worker_role(
     return _DEGRADED_SUMMARIZATION_WORKER_ROLE
 
 
+def _is_transient_model_unavailable(exc: Exception) -> bool:
+    """Return true for model-unavailable failures worth one role fallback."""
+    status_code = getattr(exc, "status_code", None)
+    if status_code in {404, 503}:
+        return True
+
+    message = str(exc).lower()
+    return (
+        "timeout" in message
+        or "timed out" in message
+        or "http 404" in message
+        or "status=404" in message
+        or "404" in message and "not found" in message
+        or "http 503" in message
+        or "status=503" in message
+        or "503" in message and "unavailable" in message
+    )
+
+
+def _worker_digest_with_fallback(
+    primitives: "LLMPrimitives",
+    prompt: str,
+    *,
+    worker_role: str,
+    fallback_role: str,
+    stats: dict,
+) -> str:
+    """Run one worker digest, retrying once on main role for transient outages."""
+    try:
+        return primitives.llm_call(prompt, role=worker_role, n_tokens=500)
+    except Exception as exc:
+        if not _is_transient_model_unavailable(exc):
+            raise
+
+        stats["worker_fallback_count"] += 1
+        stats["worker_fallback_role"] = fallback_role
+        log.info(
+            "worker digest role=%s unavailable; retrying once via %s: %s",
+            worker_role,
+            fallback_role,
+            exc,
+        )
+        return primitives.llm_call(prompt, role=fallback_role, n_tokens=500)
+
+
 async def _run_two_stage_summarization(
     prompt: str,
     context: str,
@@ -143,6 +188,9 @@ async def _run_two_stage_summarization(
         "synthesis_role": str(TWO_STAGE_CONFIG["stage1_role"]),
         "producer_role": None,
         "role_history": [],
+        "worker_fallback_role": None,
+        "worker_fallback_count": 0,
+        "worker_failure_count": 0,
     }
 
     # Determine chunking — sized for 1.5B fast workers (4K context window)
@@ -178,6 +226,8 @@ async def _run_two_stage_summarization(
     # Dispatch chunk digests to the live stack's summarization worker.
     worker_role = _summarization_worker_role(stack_priors_path)
     stats["worker_role"] = worker_role
+    synthesis_role = str(TWO_STAGE_CONFIG["stage1_role"])
+    stats["synthesis_role"] = synthesis_role
 
     try:
         digests = primitives.llm_batch(worker_prompts, role=worker_role, n_tokens=500)
@@ -190,10 +240,17 @@ async def _run_two_stage_summarization(
         digests = []
         for wp in worker_prompts:
             try:
-                d = primitives.llm_call(wp, role=worker_role, n_tokens=500)
+                d = _worker_digest_with_fallback(
+                    primitives,
+                    wp,
+                    worker_role=worker_role,
+                    fallback_role=synthesis_role,
+                    stats=stats,
+                )
                 digests.append(d)
             except Exception as inner_exc:
                 log.debug("Worker sequential call failed: %s", inner_exc)
+                stats["worker_failure_count"] += 1
                 digests.append("[Worker failed to process this section]")
 
     stage1_time = time.perf_counter() - stage1_start
@@ -228,7 +285,6 @@ async def _run_two_stage_summarization(
     )
 
     # Use frontdoor for synthesis (18 t/s) — much faster than architect
-    synthesis_role = str(TWO_STAGE_CONFIG["stage1_role"])
     try:
         answer = primitives.llm_call(
             synthesis_prompt,
