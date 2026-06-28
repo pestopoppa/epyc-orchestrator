@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from src import batch_edit_runner as R
 from src.batch_edit import PatchSet, FilePatch, Hunk, sha256_text
 from src.batch_edit_runner import (
     ApplyResult,
@@ -132,6 +133,53 @@ def test_dependency_order_respected(tmp_path: Path) -> None:
     ])
     res = apply_patchset_to_dir(ps, stage_sandbox(ps, root), compute_current_shas(ps, root))
     assert res.ok and set(res.applied) == {"a.py", "b.py"}
+
+
+def test_independent_stage_applies_files_concurrently(monkeypatch, tmp_path: Path) -> None:
+    root = _repo(tmp_path, {"a.py": "old-a\n", "b.py": "old-b\n"})
+    ps = PatchSet(files=[
+        _modify("a.py", "old-a\n", [Hunk(start_line=1, end_line=1, replacement="new-a\n")]),
+        _modify("b.py", "old-b\n", [Hunk(start_line=1, end_line=1, replacement="new-b\n")]),
+    ])
+    sb = stage_sandbox(ps, root)
+
+    import threading
+
+    barrier = threading.Barrier(2)
+    real_apply = R.apply_file_patch_to_text
+
+    def blocking_apply(original, fp):
+        barrier.wait(timeout=1)
+        return real_apply(original, fp)
+
+    monkeypatch.setattr(R, "apply_file_patch_to_text", blocking_apply)
+    res = apply_patchset_to_dir(ps, sb, compute_current_shas(ps, root))
+    assert res.ok, res.failed
+    assert (sb / "a.py").read_text() == "new-a\n"
+    assert (sb / "b.py").read_text() == "new-b\n"
+    cleanup_sandbox_dir(sb)
+
+
+def test_dependency_stage_waits_for_prior_stage(monkeypatch, tmp_path: Path) -> None:
+    root = _repo(tmp_path, {})
+    ps = PatchSet(files=[
+        FilePatch(path="a.py", operation="create", new_content="a\n"),
+        FilePatch(path="b.py", operation="create", new_content="b\n", depends_on=["a.py"]),
+    ])
+    sb = stage_sandbox(ps, root)
+    real_apply_one = R._apply_one_file_patch
+
+    def checked_apply_one(target_root, fp):
+        if fp.path == "b.py":
+            assert (target_root / "a.py").exists()
+        return real_apply_one(target_root, fp)
+
+    monkeypatch.setattr(R, "_apply_one_file_patch", checked_apply_one)
+    res = apply_patchset_to_dir(ps, sb, compute_current_shas(ps, root))
+    assert res.ok, res.failed
+    assert (sb / "a.py").read_text() == "a\n"
+    assert (sb / "b.py").read_text() == "b\n"
+    cleanup_sandbox_dir(sb)
 
 
 # ─── sandboxed end-to-end + verify + promote ─────────────────────────────────────

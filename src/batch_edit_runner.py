@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import shutil
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -130,6 +131,47 @@ def _preflight(ps: PatchSet, current_shas: dict[str, str]) -> list[dict]:
     return failures
 
 
+def _apply_one_file_patch(root: Path, fp) -> ApplyResult:
+    result = ApplyResult(sandbox_path=str(root))
+    try:
+        p = root / fp.path
+        if fp.operation in (EditOperation.MODIFY, EditOperation.CREATE):
+            original = p.read_text(encoding="utf-8") if p.exists() else ""
+            if fp.operation == EditOperation.MODIFY and not p.exists():
+                result.add_failure(fp.path, FailureType.MISSING_FILE, "modify target absent in sandbox")
+                return result
+            new_text = apply_file_patch_to_text(original, fp)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(new_text, encoding="utf-8")
+            result.applied.append(fp.path)
+            result.diff_paths.append(fp.path)
+        elif fp.operation == EditOperation.DELETE:
+            if p.exists():
+                p.unlink()
+            result.applied.append(fp.path)
+            result.deleted_paths.append(fp.path)
+        elif fp.operation == EditOperation.RENAME:
+            dst = root / (fp.rename_to or "")
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            if p.exists():
+                shutil.move(str(p), str(dst))
+            result.applied.append(f"{fp.path} -> {fp.rename_to}")
+            if fp.rename_to:
+                result.diff_paths.append(fp.rename_to)
+                result.renamed_paths.append((fp.path, fp.rename_to))
+    except Exception as e:
+        result.add_failure(fp.path, FailureType.APPLY_ERROR, str(e))
+    return result
+
+
+def _merge_apply_result(dst: ApplyResult, src: ApplyResult) -> None:
+    dst.applied.extend(src.applied)
+    dst.failed.extend(src.failed)
+    dst.diff_paths.extend(src.diff_paths)
+    dst.deleted_paths.extend(src.deleted_paths)
+    dst.renamed_paths.extend(src.renamed_paths)
+
+
 def apply_patchset_to_dir(ps: PatchSet, target_dir: Path | str, current_shas: dict[str, str]) -> ApplyResult:
     """Apply a patch set to files under target_dir. All-or-nothing pre-flight; pure (no git/LM).
 
@@ -143,38 +185,21 @@ def apply_patchset_to_dir(ps: PatchSet, target_dir: Path | str, current_shas: di
         return result  # transactional: apply nothing on any pre-flight failure
 
     root = Path(target_dir)
-    try:
-        for stage in dependency_stages(ps):
-            for path in stage:
-                fp = next(f for f in ps.files if f.path == path)
-                p = root / fp.path
-                if fp.operation in (EditOperation.MODIFY, EditOperation.CREATE):
-                    original = p.read_text(encoding="utf-8") if p.exists() else ""
-                    if fp.operation == EditOperation.MODIFY and not p.exists():
-                        result.add_failure(fp.path, FailureType.MISSING_FILE, "modify target absent in sandbox")
-                        return result
-                    new_text = apply_file_patch_to_text(original, fp)
-                    p.parent.mkdir(parents=True, exist_ok=True)
-                    p.write_text(new_text, encoding="utf-8")
-                    result.applied.append(fp.path)
-                    result.diff_paths.append(fp.path)
-                elif fp.operation == EditOperation.DELETE:
-                    if p.exists():
-                        p.unlink()
-                    result.applied.append(fp.path)
-                    result.deleted_paths.append(fp.path)  # BEP-1b: promote must unlink from live
-                elif fp.operation == EditOperation.RENAME:
-                    dst = root / (fp.rename_to or "")
-                    dst.parent.mkdir(parents=True, exist_ok=True)
-                    if p.exists():
-                        shutil.move(str(p), str(dst))
-                    result.applied.append(f"{fp.path} -> {fp.rename_to}")
-                    # BEP-1b: copy the rename-to file on promote (diff_paths) + unlink the old path.
-                    if fp.rename_to:
-                        result.diff_paths.append(fp.rename_to)
-                        result.renamed_paths.append((fp.path, fp.rename_to))
-    except Exception as e:  # apply error mid-set → sandbox is discarded by caller (not promoted)
-        result.add_failure("*", FailureType.APPLY_ERROR, str(e))
+    patches_by_path = {fp.path: fp for fp in ps.files}
+    for stage in dependency_stages(ps):
+        if len(stage) == 1:
+            stage_results = [_apply_one_file_patch(root, patches_by_path[stage[0]])]
+        else:
+            with ThreadPoolExecutor(max_workers=len(stage)) as executor:
+                futures = {
+                    path: executor.submit(_apply_one_file_patch, root, patches_by_path[path])
+                    for path in stage
+                }
+                stage_results = [futures[path].result() for path in stage]
+        for stage_result in stage_results:
+            _merge_apply_result(result, stage_result)
+        if result.failed:
+            return result
     return result
 
 
