@@ -998,6 +998,7 @@ def _maybe_force_frontier_rerun_action(
     state: dict[str, Any],
     *,
     journal: ExperimentJournal | None = None,
+    archive: ParetoArchive | None = None,
     blacklist: list[dict[str, Any]] | None = None,
     rationale: dict[str, Any] | None = None,
     trial_counter: int = 0,
@@ -1029,12 +1030,16 @@ def _maybe_force_frontier_rerun_action(
                 pending=pending,
                 completed_trials=completed_trials,
                 min_trials=min_trials,
+                archive=archive,
             )
             return action, {
                 **(rationale or {}),
                 "frontier_rerun_cleared": True,
                 "frontier_rerun_completed_numeric_trials": completed_trials,
                 "frontier_rerun_min_numeric_trials": min_trials,
+                "frontier_rerun_archive_snapshot": state["frontier_rerun_required"].get(
+                    "archive_snapshot"
+                ),
             }
         return action, {
             **(rationale or {}),
@@ -1074,9 +1079,11 @@ def _clear_frontier_rerun_marker(
     pending: dict[str, Any],
     completed_trials: int,
     min_trials: int,
+    archive: ParetoArchive | None = None,
 ) -> None:
     """Persist that the era-scoped frontier rerun has satisfied its gate."""
     reason = str(marker.get("reason") or "frontier rerun required")
+    archive_snapshot = _frontier_rerun_archive_snapshot(archive)
     state["frontier_rerun_required"] = {
         **marker,
         "required": False,
@@ -1084,6 +1091,7 @@ def _clear_frontier_rerun_marker(
         "cleared_after_trial_id": pending.get("trial_id"),
         "completed_numeric_trials": completed_trials,
         "min_numeric_trials": min_trials,
+        "archive_snapshot": archive_snapshot,
         "reason": (
             f"frontier rerun satisfied: {completed_trials}/{min_trials} "
             f"current-era numeric trials complete; {reason}"
@@ -1092,6 +1100,29 @@ def _clear_frontier_rerun_marker(
     state["frontier_rerun_forced"] = None
     state.pop("frontier_rerun_pending_clear", None)
     state.pop("frontier_rerun_blocked", None)
+
+
+def _frontier_rerun_archive_snapshot(archive: ParetoArchive | None) -> dict[str, Any]:
+    """Compact evidence that the current-era archive was rebuilt at rerun clear."""
+    if archive is None:
+        return {"status": "unavailable", "reason": "archive not supplied"}
+    try:
+        summary = dict(archive.summary(tier=DEFAULT_FRONTIER_TIER))
+        frontier = archive.frontier(tier=DEFAULT_FRONTIER_TIER)
+    except Exception as exc:  # pragma: no cover - defensive operator evidence only
+        return {"status": "error", "reason": str(exc)}
+
+    return {
+        "status": "ok",
+        "captured_at": datetime.now(timezone.utc).isoformat(),
+        "tier": DEFAULT_FRONTIER_TIER,
+        "frontier_size": int(summary.get("frontier_size") or 0),
+        "total_entries": int(summary.get("total_entries") or 0),
+        "hypervolume": summary.get("hypervolume"),
+        "best_quality": summary.get("best_quality"),
+        "best_speed": summary.get("best_speed"),
+        "trial_ids": [entry.trial_id for entry in frontier],
+    }
 
 
 def _frontier_rerun_min_trials(marker: dict[str, Any]) -> int:
@@ -3491,6 +3522,7 @@ def _run_loop_inner(
             action,
             state,
             journal=journal,
+            archive=archive,
             blacklist=blacklist,
             rationale=rationale,
             trial_counter=trial_counter,

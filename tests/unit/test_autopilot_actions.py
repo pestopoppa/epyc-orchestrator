@@ -1381,12 +1381,24 @@ def test_frontier_rerun_pending_clear_stops_after_min_trials() -> None:
             ),
         ]
     )
+    archive = SimpleNamespace(
+        summary=lambda tier: {
+            "tier": tier,
+            "frontier_size": 1,
+            "total_entries": 2,
+            "hypervolume": 12.5,
+            "best_quality": 2.16,
+            "best_speed": 70.0,
+        },
+        frontier=lambda tier: [SimpleNamespace(trial_id=1005)],
+    )
     requested = {"type": "structural_prune", "file": "rules.md"}
 
     action, rationale = autopilot._maybe_force_frontier_rerun_action(
         requested,
         state,
         journal=journal,
+        archive=archive,
         rationale={},
         trial_counter=9,
     )
@@ -1400,6 +1412,15 @@ def test_frontier_rerun_pending_clear_stops_after_min_trials() -> None:
     assert state["frontier_rerun_required"]["completed_numeric_trials"] == 2
     assert state["frontier_rerun_required"]["min_numeric_trials"] == 2
     assert "frontier rerun satisfied" in state["frontier_rerun_required"]["reason"]
+    snapshot = state["frontier_rerun_required"]["archive_snapshot"]
+    assert snapshot["status"] == "ok"
+    assert snapshot["tier"] == autopilot.DEFAULT_FRONTIER_TIER
+    assert snapshot["frontier_size"] == 1
+    assert snapshot["total_entries"] == 2
+    assert snapshot["best_quality"] == 2.16
+    assert snapshot["best_speed"] == 70.0
+    assert snapshot["trial_ids"] == [1005]
+    assert rationale["frontier_rerun_archive_snapshot"] == snapshot
     assert state["frontier_rerun_forced"] is None
     assert "frontier_rerun_pending_clear" not in state
 
