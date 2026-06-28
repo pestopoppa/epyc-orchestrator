@@ -42,6 +42,7 @@ EVAL_PROGRESS_FIELDS = (
     "eval_concurrency",
 )
 AUTOPILOT_ENV_FLAGS = (
+    "AUTOPILOT_PLANNER_HINTS",
     "AUTOPILOT_SEQ_VERDICT",
     "AUTOPILOT_W6_AUDIT_BLOCK",
     "AUTOPILOT_W6_AUDIT_N",
@@ -343,6 +344,9 @@ def build_phase_health_report(
         "updated_at": payload.get("updated_at"),
         "updated_at_iso": payload.get("updated_at_iso"),
         "autopilot_env_flags": env_flags,
+        "planner_hints_enabled": _env_enabled(
+            None if env_flags is None else env_flags.get("AUTOPILOT_PLANNER_HINTS")
+        ),
         "seq_verdict_enabled": _env_enabled(
             None if env_flags is None else env_flags.get("AUTOPILOT_SEQ_VERDICT")
         ),
@@ -405,6 +409,7 @@ def format_phase_health_report(report: dict[str, Any]) -> list[str]:
         f"- Action: {report.get('action_type')}",
         f"- Idle reason: {report.get('idle_reason')}",
         f"- PID: {report.get('pid')} (alive={report.get('pid_alive')})",
+        f"- Planner hints env: {report.get('planner_hints_enabled')}",
         f"- Seq verdict env: {report.get('seq_verdict_enabled')}",
         (
             "- W6 audit env: "

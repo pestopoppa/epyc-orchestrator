@@ -262,6 +262,7 @@ def test_phase_section_surfaces_eval_progress() -> None:
             "eval_correct_questions": 144,
             "eval_correct_pct": 72.0,
             "eval_concurrency": 1,
+            "planner_hints_enabled": True,
             "seq_verdict_enabled": True,
             "w6_audit_accrual_enabled": True,
             "w6_audit_shadow_only": True,
@@ -275,6 +276,7 @@ def test_phase_section_surfaces_eval_progress() -> None:
     assert "T2 200/500" in section.summary
     assert section.details["eval_completed_questions"] == 200
     assert section.details["eval_correct_pct"] == 72.0
+    assert section.details["planner_hints_enabled"] is True
     assert section.details["seq_verdict_enabled"] is True
     assert section.details["w6_audit_accrual_enabled"] is True
     assert section.details["w6_audit_n"] == "10"
