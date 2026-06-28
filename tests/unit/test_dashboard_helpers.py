@@ -1256,6 +1256,15 @@ def test_dashboard_html_surfaces_autopilot_phase_health() -> None:
     assert "phase health" in html
 
 
+def test_dashboard_html_repaints_topology_after_region_lock_refresh() -> None:
+    """Live inference/topology/CPU-lock panels should share one lock-cache frame."""
+    from src.api.routes import dashboard
+
+    html = dashboard._DASHBOARD_HTML
+    assert "updateTopologyInflight((_latestSnapshot && _latestSnapshot.in_flight_tasks) || [])" in html
+    assert "same lock cache" in html
+
+
 def test_dashboard_effective_journal_rows_fold_supersession_events() -> None:
     rows = [
         {

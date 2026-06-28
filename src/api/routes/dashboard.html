@@ -5141,6 +5141,13 @@ async function updateRegionLocks(refreshSeq = _regionLocksRefreshSeq, regionLock
                 footer.innerHTML = footMsg;
                 grid.appendChild(footer);
             }
+            // Keep the topology active badges in the same visual frame as the
+            // CPU-region grid. Structured tap SSE updates can arrive between
+            // main snapshot frames; repainting here makes the live inference,
+            // topology, and region-lock panels consume the same lock cache.
+            if (typeof updateTopologyInflight === 'function') {
+                updateTopologyInflight((_latestSnapshot && _latestSnapshot.in_flight_tasks) || []);
+            }
         } catch (err) {
             const status = document.getElementById('region-locks-status');
             const grid = document.getElementById('region-locks-grid');
