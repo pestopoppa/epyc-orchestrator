@@ -34,6 +34,7 @@ from src.batch_edit import (
     check_stale_base,
     detect_conflicts,
     dependency_stages,
+    under_evidenced,
 )
 
 
@@ -44,6 +45,7 @@ class FailureType:
     APPLY_ERROR = "apply_error"
     VERIFY_FAILED = "verify_failed"
     MISSING_FILE = "missing_file"
+    UNDER_EVIDENCED = "under_evidenced"
 
 
 @dataclass
@@ -119,6 +121,12 @@ def _preflight(ps: PatchSet, current_shas: dict[str, str]) -> list[dict]:
                          "detail": "recorded base_content_sha256 != current file sha"})
     for c in detect_conflicts(ps):
         failures.append({"path": "*", "failure_type": FailureType.CONFLICT, "detail": c})
+    for path in under_evidenced(ps):
+        failures.append({
+            "path": path,
+            "failure_type": FailureType.UNDER_EVIDENCED,
+            "detail": "patch touches a file omitted from the source context bundle",
+        })
     return failures
 
 

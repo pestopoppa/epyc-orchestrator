@@ -103,6 +103,25 @@ def test_conflict_blocks_set(tmp_path: Path) -> None:
     cleanup_sandbox_dir(sb)
 
 
+def test_under_evidenced_patch_blocks_set(tmp_path: Path) -> None:
+    root = _repo(tmp_path, {"a.py": "old\n"})
+    ps = PatchSet(
+        files=[
+            _modify("a.py", "old\n", [Hunk(start_line=1, end_line=1, replacement="new\n")]),
+            FilePatch(path="b.py", operation="create", new_content="created\n"),
+        ],
+        bundle_id="dcp-bundle-1",
+        omitted_context_paths=["a.py"],
+    )
+    sb = stage_sandbox(ps, root)
+    res = apply_patchset_to_dir(ps, sb, compute_current_shas(ps, root))
+    assert not res.ok
+    assert any(f["failure_type"] == FailureType.UNDER_EVIDENCED for f in res.failed)
+    assert (sb / "a.py").read_text() == "old\n"
+    assert not (sb / "b.py").exists()
+    cleanup_sandbox_dir(sb)
+
+
 def test_dependency_order_respected(tmp_path: Path) -> None:
     # b depends on a; both creates → a applies in stage 0, b in stage 1 (order shouldn't error)
     root = _repo(tmp_path, {})
