@@ -766,6 +766,36 @@ body.insight-fullscreen-open { overflow: hidden; }
     height: auto;
     min-height: 0;
 }
+/* Operator optimization brief — the synthesized "what works" layer that sits
+   above the (drill-down) provenance graph. */
+.opt-brief { font-size: 11px; color: var(--text); line-height: 1.5; }
+.opt-brief-graph-label { margin: 16px 0 6px; font-size: 11px; font-weight: 600;
+    color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.opt-brief .ob-banner { padding: 7px 9px; border-radius: var(--radius-sm);
+    font-size: 10px; font-family: var(--font-mono); margin-bottom: 10px;
+    border: 1px solid var(--border); }
+.opt-brief .ob-banner.ob-obs { background: rgba(251,191,36,0.10);
+    border-color: rgba(251,191,36,0.35); color: var(--warn); }
+.opt-brief .ob-banner.ob-grade { background: rgba(52,211,153,0.10);
+    border-color: rgba(52,211,153,0.35); color: var(--good); }
+.opt-brief .ob-narrative { margin-bottom: 10px; color: var(--muted); }
+.opt-brief .ob-section-title { font-size: 10px; text-transform: uppercase;
+    letter-spacing: 0.05em; color: var(--dim); margin: 12px 0 4px; }
+.opt-brief .ob-best { font-family: var(--font-mono); font-size: 10px; color: var(--muted); }
+.opt-brief .ob-best b { color: var(--text-strong); }
+.opt-brief .ob-lever { display: grid; grid-template-columns: minmax(0,1fr) 64px auto;
+    gap: 8px; align-items: center; padding: 3px 0; font-family: var(--font-mono); font-size: 10px; }
+.opt-brief .ob-lever .ob-name { color: var(--text); overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+.opt-brief .ob-lever .ob-bar { height: 6px; background: rgba(255,255,255,0.06);
+    border-radius: 3px; position: relative; }
+.opt-brief .ob-lever .ob-bar > span { position: absolute; left:0; top:0; height:100%;
+    background: var(--accent); border-radius: 3px; }
+.opt-brief .ob-lever .ob-rec { color: var(--good); text-align: right; }
+.opt-brief .ob-pill { display:inline-block; margin: 2px 4px 2px 0; padding: 1px 6px;
+    border-radius: 999px; border: 1px solid var(--border); font-size: 9px; color: var(--muted); }
+.opt-brief details { margin-top: 6px; }
+.opt-brief summary { cursor: pointer; color: var(--dim); font-size: 10px; }
 .insight-graph-link {
     stroke-width: 1.1;
     opacity: 0.35;
@@ -944,9 +974,13 @@ body.insight-fullscreen-open { overflow: hidden; }
 
     <div class="panel" id="insight-graph-panel">
       <h2>
-        planner insight graph
-        <span class="count-suffix" id="insight-graph-status">read-only</span>
+        what optimizes the orchestrator
+        <span class="count-suffix" id="optimization-brief-status">read-only synthesis</span>
       </h2>
+      <div id="optimization-brief" class="opt-brief">loading…</div>
+      <div class="opt-brief-graph-label">provenance graph <span style="color:var(--dim);font-weight:400;text-transform:none">— hint → trial → strategy</span>
+        <span class="count-suffix" id="insight-graph-status">read-only</span>
+      </div>
       <div class="insight-graph-shell">
         <div class="insight-graph-toolbar">
           <input
@@ -4088,6 +4122,61 @@ function layoutInsightGraph(nodes, edges, width, height) {
     }
 }
 
+function renderOptimizationBrief(b) {
+    const el = document.getElementById('optimization-brief');
+    const statusEl = document.getElementById('optimization-brief-status');
+    if (!el) return;
+    if (!b || b.error) {
+        el.innerHTML = `<div style="color:var(--bad)">brief unavailable: ${escapeHTML(b && b.error ? b.error : 'no data')}</div>`;
+        return;
+    }
+    const auth = b.authority || {};
+    const grade = !!auth.decision_grade_possible;
+    if (statusEl) statusEl.textContent = grade ? 'decision-grade' : 'observations only';
+    const fmt = (v, d = 2) => (v == null ? '—' : (typeof v === 'number' ? v.toFixed(d) : v));
+    const parts = [];
+    parts.push(`<div class="ob-banner ${grade ? 'ob-grade' : 'ob-obs'}">${escapeHTML(auth.trust_note || '')}</div>`);
+    if (b.narrative) parts.push(`<div class="ob-narrative">${escapeHTML(b.narrative)}</div>`);
+    const bc = b.best_config || {};
+    if (bc.available) {
+        const o = bc.objective || {};
+        parts.push(`<div class="ob-section-title">best config (${escapeHTML(bc.status || '')})</div>`);
+        parts.push(`<div class="ob-best">trial <b>${escapeHTML(String(bc.trial_id))}</b> · q <b>${fmt(o.quality)}</b> · ${fmt(o.speed, 1)} t/s · rel ${fmt(o.reliability)}</div>`);
+    }
+    const levers = Array.isArray(b.levers) ? b.levers : [];
+    if (levers.length) {
+        parts.push('<div class="ob-section-title">levers that move the needle</div>');
+        const maxImp = Math.max(...levers.map(l => l.importance || 0), 0.001);
+        levers.slice(0, 6).forEach(l => {
+            const pct = Math.round(100 * (l.importance || 0) / maxImp);
+            const rec = l.recommended != null ? '→ ' + escapeHTML(String(l.recommended)) : '';
+            parts.push(
+                `<div class="ob-lever"><span class="ob-name" title="${escapeHTML(l.lever || '')}">${escapeHTML(l.lever || '')}</span>` +
+                `<span class="ob-bar"><span style="width:${pct}%"></span></span>` +
+                `<span class="ob-rec">${(l.importance || 0).toFixed(2)} ${rec}</span></div>`
+            );
+        });
+    }
+    const ruled = Array.isArray(b.ruled_out) ? b.ruled_out : [];
+    const expl = Array.isArray(b.exploring) ? b.exploring : [];
+    parts.push('<div class="ob-section-title">explored boundary</div>');
+    parts.push(`<div><span class="ob-pill">✗ ruled out ${ruled.length}</span><span class="ob-pill">◴ exploring ${expl.length}</span></div>`);
+    const listOf = (arr) => arr.slice(0, 12).map(r => `<li>${escapeHTML((r.statement || '').slice(0, 140))}</li>`).join('');
+    if (ruled.length) parts.push(`<details><summary>ruled-out guardrails</summary><ul style="margin:4px 0 0 16px;padding:0;color:var(--dim);font-size:10px">${listOf(ruled)}</ul></details>`);
+    if (expl.length) parts.push(`<details><summary>queued hypotheses</summary><ul style="margin:4px 0 0 16px;padding:0;color:var(--dim);font-size:10px">${listOf(expl)}</ul></details>`);
+    el.innerHTML = parts.join('');
+}
+
+async function updateOptimizationBrief() {
+    try {
+        const r = await fetch('/dashboard/api/optimization_brief?t=' + Date.now(), { cache: 'no-store' });
+        renderOptimizationBrief(await r.json());
+    } catch (err) {
+        const el = document.getElementById('optimization-brief');
+        if (el) el.innerHTML = `<div style="color:var(--bad)">brief fetch failed: ${escapeHTML(err && err.message ? err.message : String(err))}</div>`;
+    }
+}
+
 function renderInsightGraph(graph) {
     const svg = document.getElementById('insight-graph-svg');
     const status = document.getElementById('insight-graph-status');
@@ -5564,6 +5653,7 @@ async function updateRegionLocks(refreshSeq = _regionLocksRefreshSeq, regionLock
         startPanelSafely('build-rev', updateBuildRev);
         startPanelSafely('autopilot-progress', updateAutopilotProgress);
         startPanelSafely('repo-readiness', updateRepoReadiness);
+        startPanelSafely('optimization-brief', updateOptimizationBrief);
         startPanelSafely('insight-graph', updateInsightGraph);
         startPanelSafely('pareto', updatePareto);  // initial paint of Pareto plots even when accordion closed (so summary text is fresh)
         const insightQuery = document.getElementById('insight-graph-query');
@@ -5620,6 +5710,7 @@ async function updateRegionLocks(refreshSeq = _regionLocksRefreshSeq, regionLock
         setInterval(() => scheduleRegionLocksRefresh(true), 1500);  // shared live-inference refresh for locks + topology activity
         setInterval(updateAutopilotProgress, 3000);  // 3s poll — trial progress bar (state.json mtime polling)
         setInterval(updateRepoReadiness, 60000);  // advisory artifacts change only on scorer/checkpoint runs
+        setInterval(updateOptimizationBrief, 60000);
         setInterval(() => updateInsightGraph(_insightGraphFocus), 20000);
         setInterval(renderTopologyActivity, TOPOLOGY_ACTIVITY_AGE_TICK_MS);  // local "Ns ago" tick between polls
         // Pareto poll: only fetch when the GEPA accordion is open. Cheap when

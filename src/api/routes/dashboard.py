@@ -1185,6 +1185,25 @@ async def insight_graph(
     return JSONResponse(payload, headers=_NO_STORE_HEADERS)
 
 
+@router.get("/dashboard/api/optimization_brief")
+async def optimization_brief() -> JSONResponse:
+    """Read-only operator synthesis: what optimizes orchestrator performance.
+
+    Aggregates the planner's assessments into a templated narrative, the
+    incumbent best config, a lever ledger ranked by fANOVA importance +
+    cluster-best value, and the explored boundary (ruled-out guardrails /
+    queued hypotheses) — with a decision-grade vs observation trust banner.
+    Never promotes or mutates; fails soft so the dashboard cannot 500 on it.
+    """
+    try:
+        from scripts.autopilot.optimization_brief import build_optimization_brief
+
+        payload = build_optimization_brief()
+    except Exception as exc:  # noqa: BLE001 — synthesis must not break the page
+        payload = {"read_only": True, "error": str(exc)}
+    return JSONResponse(payload, headers=_NO_STORE_HEADERS)
+
+
 # ---------------------------------------------------------------------------
 # Per-node detail (for topology click)
 # ---------------------------------------------------------------------------
