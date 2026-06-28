@@ -266,6 +266,7 @@ def test_archive_for_read_command_falls_back_when_journal_empty(
     assert archive.read_only is True
     assert archive.frontier() == []
     assert source == "journal-current-run->empty-fallback"
+    assert source != "journal-current-run->state-empty-fallback"
 
 
 def test_cmd_plot_uses_journal_archive_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:

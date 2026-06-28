@@ -37,12 +37,12 @@ REQUIREMENTS: tuple[SurfaceRequirement, ...] = (
             "ARCHIVE_SOURCE_JOURNAL_ALL",
             "ARCHIVE_SOURCE_STATE",
             "state is a legacy fallback",
-            "f\"{source}->state-empty-fallback\"",
+            "f\"{source}->empty-fallback\"",
             "_archive_for_read_command",
         ),
         reason=(
-            "status/report/plot/digest must default to journal reconstruction and "
-            "make the state cache an explicit legacy fallback."
+            "status/report/plot/digest must default to journal reconstruction, "
+            "keep state cache reads explicit, and use a read-only empty fallback."
         ),
     ),
     SurfaceRequirement(
