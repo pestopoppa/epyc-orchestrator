@@ -240,6 +240,76 @@ class TestArchitectDelegatedAnswer:
         assert stats["loops"] == 1
         assert len(stats["phases"]) >= 2
 
+    def test_delegation_diagnostics_are_byte_equal_for_identical_inputs(self):
+        """P1 lifecycle refactor gate: identical inputs produce stable diagnostics."""
+        from src.api.routes.chat_delegation import _architect_delegated_answer
+        from src.api.routes.chat_pipeline.delegation_stage import _delegation_diagnostics
+
+        def run_once() -> str:
+            primitives = MagicMock()
+            primitives._backends = {"test": True}
+            primitives.total_tokens_generated = 0
+            primitives.get_request_priority.return_value = "interactive"
+            primitives.get_max_queue_wait_ms.return_value = None
+            primitives.get_migration_budget_ms.return_value = None
+            primitives.get_request_cancel_check.return_value = None
+            primitives.get_request_task_id.return_value = "task-123"
+            state = self._mock_state()
+            cache = MagicMock()
+            cache.make_key.return_value = "stable-cache-key"
+            cache.get.return_value = None
+
+            with patch(
+                "src.api.routes.chat_delegation._run_architect_decision",
+                return_value=(
+                    "I|brief:inspect deterministic path|to:coder_escalation|mode:repl",
+                    1,
+                    0,
+                ),
+            ), patch(
+                "src.api.routes.chat_delegation._run_specialist_loop",
+                return_value=(
+                    "stable specialist report",
+                    0,
+                    [],
+                    [],
+                    False,
+                    True,
+                    {
+                        "transport": "chat",
+                        "completion_reason": "stop",
+                        "prompt_ms": 10.0,
+                        "gen_ms": 20.0,
+                        "first_token_ms": 3.0,
+                        "stream_chunks": 4,
+                        "tokens": 12,
+                        "llm_elapsed_ms": 33.0,
+                    },
+                    [],
+                ),
+            ), patch(
+                "src.delegation_cache.get_delegation_cache",
+                return_value=cache,
+            ):
+                _answer, stats = _architect_delegated_answer(
+                    question="q",
+                    context="ctx",
+                    primitives=primitives,
+                    state=state,
+                    max_loops=3,
+                    force_response_on_cap=True,
+                )
+
+            diagnostics = _delegation_diagnostics(
+                "architect_general",
+                ["architect_general", "coder_escalation"],
+                stats["delegation_events"],
+                stats,
+            )
+            return json.dumps(diagnostics, sort_keys=True, separators=(",", ":"))
+
+        assert run_once() == run_once()
+
     def test_multi_loop_investigation(self):
         """Architect requests two investigations before answering."""
         from src.api.routes.chat_delegation import _architect_delegated_answer
