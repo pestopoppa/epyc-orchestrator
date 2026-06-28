@@ -16,15 +16,7 @@ from typing import Any
 
 from src.constants import TASK_IR_OBJECTIVE_LEN
 from src.registry.stack_priors import live_stack_role_records
-from src.roles import Role
 from src.task_ir import canonicalize_task_ir
-
-try:
-    from scripts.server.stack_manifest import HOT_SERVERS, ROLE_LAUNCH_META, WARM_SERVERS
-except Exception:  # pragma: no cover - catastrophic import fallback
-    HOT_SERVERS = ()
-    WARM_SERVERS = ()
-    ROLE_LAUNCH_META = {}
 
 log = logging.getLogger(__name__)
 
@@ -285,45 +277,9 @@ def _heuristic_prior_role_sort_key(item: tuple[str, dict[str, Any]]) -> tuple[in
     )
 
 
-def _manifest_launch_meta_for_role(role: str) -> dict[str, Any]:
-    meta = ROLE_LAUNCH_META.get(role)
-    if isinstance(meta, dict):
-        return meta
-
-    canonical = Role.from_string(role)
-    if canonical is not None:
-        meta = ROLE_LAUNCH_META.get(str(canonical))
-        if isinstance(meta, dict):
-            return meta
-
-    for primary_meta in ROLE_LAUNCH_META.values():
-        if not isinstance(primary_meta, dict):
-            continue
-        shared = primary_meta.get("shared_with_first_n")
-        if isinstance(shared, list) and role in shared:
-            return primary_meta
-    return {}
-
-
 def _degraded_heuristic_prior_roles() -> tuple[str, ...]:
-    roles: list[str] = []
-    seen: set[str] = set()
-    for server in tuple(HOT_SERVERS) + tuple(WARM_SERVERS):
-        if not isinstance(server, dict):
-            continue
-        for role in server.get("roles") or ():
-            if not isinstance(role, str):
-                continue
-            meta = _manifest_launch_meta_for_role(role)
-            if meta.get("mode") == "embedding":
-                continue
-            canonical = Role.from_string(role)
-            role_id = str(canonical) if canonical is not None else role
-            if role_id in seen:
-                continue
-            seen.add(role_id)
-            roles.append(role_id)
-    return tuple(roles) or _EMERGENCY_HEURISTIC_PRIOR_ROLES
+    """Return the emergency heuristic-prior fallback without live topology facts."""
+    return _EMERGENCY_HEURISTIC_PRIOR_ROLES
 
 
 def _live_heuristic_prior_roles() -> tuple[str, ...]:
