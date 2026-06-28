@@ -436,21 +436,8 @@ def _region_lock_blocked_by_roles(
     return sorted(blocked)
 
 
-@router.get("/dashboard/api/region_locks")
-async def region_locks_snapshot() -> JSONResponse:
-    """Per-CPU-region lock state — which (role, region) lock files are
-    currently held, and by which PIDs.
-
-    Built from /proc/locks scan of the orchestrator's lock files, plus
-    the static topology from `instance_topology.get_instance_regions()`
-    so the panel surfaces ALL roles that *have* quartered instances —
-    not just the ones whose dispatch path created a lock file. Roles
-    with quarter instances but no lock files are tagged
-    ``wired=False`` so the dashboard can render them greyed out with
-    an explanatory badge (they were quartered at launch but their
-    backend never acquires `cpu_region_lock`, so cross-process
-    concurrency isn't actually enforced for them yet).
-    """
+def _region_locks_payload() -> dict[str, Any]:
+    """Return the current per-region lock snapshot as plain JSON data."""
     import os
     from pathlib import Path
 
@@ -574,7 +561,7 @@ async def region_locks_snapshot() -> JSONResponse:
                 for pid in holders:
                     role_pid_regions[role].setdefault(pid, set()).add(region)
     except Exception as exc:
-        return JSONResponse({"error": str(exc), "entries": []}, status_code=200)
+        return {"error": str(exc), "entries": []}
 
     # Pass 1b: resolve held-region SET per PID to a NUMA_CONFIG instance idx.
     pid_to_instance = _resolve_pid_to_instance_idx(role_pid_regions, role_instances_by_regions)
@@ -655,7 +642,7 @@ async def region_locks_snapshot() -> JSONResponse:
         )
 
     feature_flag = os.environ.get("ORCHESTRATOR_PER_REGION_LOCKS", "0").strip()
-    return JSONResponse({
+    return {
         "per_region_locks_enabled": feature_flag in {"1", "true", "yes", "on"},
         "matrix_loaded": matrix is not None,
         "tmp_dir": str(tmp_dir),
@@ -663,7 +650,25 @@ async def region_locks_snapshot() -> JSONResponse:
         "by_role": by_role,
         "topology_quartered_roles": sorted(panel_roles),  # back-compat field
         "now": time.time(),
-    })
+    }
+
+
+@router.get("/dashboard/api/region_locks")
+async def region_locks_snapshot() -> JSONResponse:
+    """Per-CPU-region lock state — which (role, region) lock files are
+    currently held, and by which PIDs.
+
+    Built from /proc/locks scan of the orchestrator's lock files, plus
+    the static topology from `instance_topology.get_instance_regions()`
+    so the panel surfaces ALL roles that *have* quartered instances —
+    not just the ones whose dispatch path created a lock file. Roles
+    with quarter instances but no lock files are tagged
+    ``wired=False`` so the dashboard can render them greyed out with
+    an explanatory badge (they were quartered at launch but their
+    backend never acquires `cpu_region_lock`, so cross-process
+    concurrency isn't actually enforced for them yet).
+    """
+    return JSONResponse(_region_locks_payload())
 
 
 @router.get("/dashboard/events/raw_tap")
@@ -2997,6 +3002,7 @@ async def snapshot() -> JSONResponse:
         "in_flight_tasks": in_flight_tasks,
         "recent_completed_tasks": recent_completed_tasks,
         "live_busy_by_role": role_busy,
+        "region_locks": _region_locks_payload(),
         "recent_decisions": recent,
         "source_counts_rolling": rolling,
         "source_counts_cumulative": cumulative,

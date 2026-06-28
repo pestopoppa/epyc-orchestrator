@@ -3492,7 +3492,7 @@ function paretoMarker(tier, cx, cy, r, attrs, title) {
 }
 function paretoTierLegend(tierKeys, x, y) {
     return (tierKeys || []).map((t, i) => {
-        const cy = y + i * 14;
+        const cy = y - i * 14;
         const audit = paretoIsAuditTier(t);
         const glyph = paretoMarker(t, x + 4, cy - 2, 4, `fill="${paretoTierFill(t)}"${audit ? ' opacity="0.6"' : ''}`, '');
         const label = audit ? `T${Number(t)} audit` : `T${t}`;
@@ -3661,7 +3661,7 @@ function renderParetoScatter(d) {
     // Per-tier legend (lower-right): audit tiers (T0) appended after the frontier tiers.
     const legendKeys = series.map(s => String(s[0]));
     if ((d.t0_audit || []).length && !legendKeys.includes('0')) legendKeys.push('0');
-    const legendY = Math.max(PAD.t + 6, VB.h - PAD.b - (legendKeys.length * 14) - 4);
+    const legendY = VB.h - PAD.b - 4;
     parts.push(paretoTierLegend(legendKeys, VB.w - 44, legendY));
 
     svg.innerHTML = parts.join('');
@@ -3727,7 +3727,7 @@ function renderHypervolumeTimeline(d) {
         const last = hist[hist.length - 1];
         parts.push(`<circle cx="${sx(last[0]).toFixed(1)}" cy="${sy(last[1]).toFixed(1)}" r="4" fill="${color}"><title>T${tier} trial ${last[0]} · hv=${last[1].toFixed(3)}</title></circle>`);
     });
-    const legendY = Math.max(PAD.t + 6, VB.h - PAD.b - (series.length * 14) - 4);
+    const legendY = VB.h - PAD.b - 4;
     parts.push(paretoTierLegend(series.map(s => s[0]), VB.w - 38, legendY));
 
     svg.innerHTML = parts.join('');
@@ -4240,6 +4240,9 @@ function startStream() {
         try {
             const snap = JSON.parse(e.data);
             if (snap.error) { document.getElementById('status').textContent = `error: ${snap.error}`; return; }
+            if (snap.region_locks) {
+                updateRegionLocks(_regionLocksRefreshSeq, snap.region_locks);
+            }
             updateTopology(snap.activity || {}, snap.in_flight_tasks || []);
             updateCounters(snap);
             updateTasks(snap);
@@ -4898,11 +4901,13 @@ async function updateContentionGate(refreshSeq = _regionLocksRefreshSeq) {
             el.innerHTML = '<span style="color:var(--dim)">— contention fetch failed</span>';
         }
     }
-async function updateRegionLocks(refreshSeq = _regionLocksRefreshSeq) {
+async function updateRegionLocks(refreshSeq = _regionLocksRefreshSeq, regionLocks = null) {
         try {
-            const r = await fetch(`/dashboard/api/region_locks?t=${Date.now()}`, { cache: 'no-store' });
-            const d = await r.json();
-            if (refreshSeq !== _regionLocksRefreshSeq) return;
+            const d = regionLocks || await (async () => {
+                const r = await fetch(`/dashboard/api/region_locks?t=${Date.now()}`, { cache: 'no-store' });
+                return r.json();
+            })();
+            if (!regionLocks && refreshSeq !== _regionLocksRefreshSeq) return;
             const status = document.getElementById('region-locks-status');
             const grid = document.getElementById('region-locks-grid');
             if (!grid) return;
