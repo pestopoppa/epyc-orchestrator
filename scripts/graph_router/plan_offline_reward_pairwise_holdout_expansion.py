@@ -45,6 +45,9 @@ from scripts.graph_router.plan_offline_reward_verifier_expansion import (  # noq
 
 
 SUMMARY_SCHEMA_VERSION = "offline_reward_pairwise_holdout_expansion_plan.v1"
+COLLECTION_MANIFEST_SCHEMA_VERSION = "offline_reward_pairwise_collection_window.v1"
+COLLECTION_TIMESTAMP_PLACEHOLDER = "<YYYYMMDDTHHMMSSZ>"
+DEFAULT_COLLECTION_WORKDIR = Path("/mnt/raid0/llm/epyc-inference-research")
 DEFAULT_RESULTS_ROOT = Path("/mnt/raid0/llm/epyc-inference-research/benchmarks/results")
 DEFAULT_REPORT_DIR = (
     PROJECT_ROOT
@@ -304,13 +307,14 @@ def _collection_batches(requirements: list[dict[str, Any]]) -> list[dict[str, An
         if stratum_field == "source_family" and stratum_value == "orchestrator_live_seed":
             output = (
                 "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/"
-                f"orchestrator/seeding_live_a9_{target_slug}_<YYYYMMDDTHHMMSSZ>.json"
+                f"orchestrator/seeding_live_a9_{target_slug}_"
+                f"{COLLECTION_TIMESTAMP_PLACEHOLDER}.json"
             )
             expected_source_family = "orchestrator_live_seed"
         else:
             output = (
                 "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/"
-                f"eval/seeding_a9_{target_slug}_<YYYYMMDDTHHMMSSZ>.json"
+                f"eval/seeding_a9_{target_slug}_{COLLECTION_TIMESTAMP_PLACEHOLDER}.json"
             )
             expected_source_family = "seeding_eval"
         command = (
@@ -349,6 +353,116 @@ def _collection_batches(requirements: list[dict[str, Any]]) -> list[dict[str, An
             }
         )
     return batches
+
+
+def _validate_collection_timestamp(timestamp: str) -> None:
+    if timestamp == COLLECTION_TIMESTAMP_PLACEHOLDER:
+        return
+    if (
+        len(timestamp) == 16
+        and timestamp[8] == "T"
+        and timestamp.endswith("Z")
+        and timestamp[:8].isdigit()
+        and timestamp[9:15].isdigit()
+    ):
+        return
+    raise PairwiseHoldoutExpansionError(
+        "collection timestamp must be <YYYYMMDDTHHMMSSZ> or UTC form YYYYMMDDTHHMMSSZ"
+    )
+
+
+def _materialize_batch(batch: dict[str, Any], *, timestamp: str) -> dict[str, Any]:
+    _validate_collection_timestamp(timestamp)
+    durable_source_path = str(batch["durable_source_path"])
+    command = str(batch["command"])
+    materialized_path = durable_source_path.replace(COLLECTION_TIMESTAMP_PLACEHOLDER, timestamp)
+    materialized_command = command.replace(COLLECTION_TIMESTAMP_PLACEHOLDER, timestamp)
+    out = dict(batch)
+    out["collection_timestamp"] = timestamp
+    out["command_workdir"] = str(DEFAULT_COLLECTION_WORKDIR)
+    out["durable_source_path_template"] = durable_source_path
+    out["command_template"] = command
+    out["durable_source_path"] = materialized_path
+    out["command"] = materialized_command
+    return out
+
+
+def build_collection_manifest(
+    summary: dict[str, Any],
+    *,
+    timestamp: str = COLLECTION_TIMESTAMP_PLACEHOLDER,
+) -> dict[str, Any]:
+    _validate_collection_timestamp(timestamp)
+    batches = [
+        _materialize_batch(batch, timestamp=timestamp)
+        for batch in summary.get("collection_batches", [])
+    ]
+    return {
+        "schema_version": COLLECTION_MANIFEST_SCHEMA_VERSION,
+        "source_plan_schema_version": summary.get("schema_version"),
+        "source_plan_decision": summary.get("decision"),
+        "collection_timestamp": timestamp,
+        "command_workdir": str(DEFAULT_COLLECTION_WORKDIR),
+        "requires_active_autopilot_absent": True,
+        "autopilot_guard": {
+            "process_pattern": "scripts/autopilot/autopilot.py start",
+            "refusal_exit_code": 75,
+            "reason": (
+                "A9 source acquisition consumes live model slots and must not mix "
+                "with active W6/T2 AutoPilot accrual."
+            ),
+        },
+        "batch_count": len(batches),
+        "batches": batches,
+        "post_collection_pipeline": (
+            summary.get("collection_guidance", {}).get("post_collection_pipeline", [])
+        ),
+    }
+
+
+def write_collection_script(path: Path, manifest: dict[str, Any]) -> None:
+    timestamp = str(manifest["collection_timestamp"])
+    if timestamp == COLLECTION_TIMESTAMP_PLACEHOLDER:
+        timestamp_line = 'RUN_TS="${A9_COLLECTION_TIMESTAMP:-$(date -u +%Y%m%dT%H%M%SZ)}"'
+    else:
+        timestamp_line = f'RUN_TS="{timestamp}"'
+    lines = [
+        "#!/bin/bash",
+        "set -euo pipefail",
+        "",
+        timestamp_line,
+        'if [[ ! "$RUN_TS" =~ ^[0-9]{8}T[0-9]{6}Z$ ]]; then',
+        '  echo "invalid A9 collection timestamp: $RUN_TS" >&2',
+        "  exit 64",
+        "fi",
+        "if pgrep -af 'scripts/autopilot/autopilot.py start' >/dev/null; then",
+        "  echo 'refusing A9 collection while AutoPilot is active' >&2",
+        "  exit 75",
+        "fi",
+        f"cd {DEFAULT_COLLECTION_WORKDIR}",
+        "",
+    ]
+    for index, batch in enumerate(manifest["batches"], start=1):
+        target = str(batch["target"])
+        output_path = str(batch["durable_source_path_template"]).replace(
+            COLLECTION_TIMESTAMP_PLACEHOLDER,
+            "${RUN_TS}",
+        )
+        command = str(batch["command_template"]).replace(
+            COLLECTION_TIMESTAMP_PLACEHOLDER,
+            "${RUN_TS}",
+        )
+        lines.extend(
+            [
+                f"echo 'A9 collection batch {index}/{manifest['batch_count']}: {target}'",
+                f'mkdir -p "$(dirname "{output_path}")"',
+                command,
+                "",
+            ]
+        )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines), encoding="utf-8")
+    path.chmod(0o755)
 
 
 def _post_collection_commands() -> list[str]:
@@ -858,6 +972,24 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--candidates-jsonl", type=Path, required=True)
     parser.add_argument("--summary-json", type=Path, required=True)
     parser.add_argument("--summary-md", type=Path)
+    parser.add_argument(
+        "--collection-manifest-json",
+        type=Path,
+        help="Optional guarded acquisition manifest for missing source-record batches.",
+    )
+    parser.add_argument(
+        "--collection-script",
+        type=Path,
+        help="Optional executable shell script for the guarded acquisition manifest.",
+    )
+    parser.add_argument(
+        "--collection-timestamp",
+        default=COLLECTION_TIMESTAMP_PLACEHOLDER,
+        help=(
+            "UTC timestamp to materialize collection outputs, or the default "
+            f"{COLLECTION_TIMESTAMP_PLACEHOLDER} placeholder for runtime date stamping."
+        ),
+    )
     parser.add_argument("--target-source-families", default=DEFAULT_TARGET_SOURCE_FAMILIES)
     parser.add_argument("--target-suites", default=DEFAULT_TARGET_SUITES)
     parser.add_argument(
@@ -899,6 +1031,19 @@ def main(argv: list[str] | None = None) -> int:
     write_json(args.summary_json, summary)
     if args.summary_md:
         write_markdown(args.summary_md, summary)
+    if args.collection_manifest_json or args.collection_script:
+        try:
+            manifest = build_collection_manifest(
+                summary,
+                timestamp=str(args.collection_timestamp),
+            )
+        except PairwiseHoldoutExpansionError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        if args.collection_manifest_json:
+            write_json(args.collection_manifest_json, manifest)
+        if args.collection_script:
+            write_collection_script(args.collection_script, manifest)
     return 0
 
 

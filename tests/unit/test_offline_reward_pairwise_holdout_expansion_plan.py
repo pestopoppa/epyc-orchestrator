@@ -625,3 +625,130 @@ def test_pairwise_holdout_negative_markdown_lists_source_record_requirements(
     assert "## Source Record Requirements" in text
     assert "`source_family:seeding_eval:architect_general>frontdoor`" in text
     assert "preferred winners `['architect_general', 'frontdoor']`" in text
+
+
+def test_pairwise_holdout_writes_guarded_collection_manifest_and_script(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "seeding_20260621_eval.jsonl"
+    _write_jsonl(source, [_result_record()])
+    expected_hash = mod._hash_text("42")
+    prompt_hash = mod._hash_text("Solve task")
+    manifest = tmp_path / "manifest.jsonl"
+    _write_jsonl(
+        manifest,
+        [
+            _manifest_row(
+                source_path=str(source),
+                role_key="frontdoor:direct",
+                expected_sha256=expected_hash,
+                prompt_sha256=prompt_hash,
+            )
+        ],
+    )
+    pairwise = tmp_path / "pairs.jsonl"
+    _write_jsonl(pairwise, [])
+    audit = tmp_path / "audit.json"
+    audit.write_text(
+        json.dumps(
+            {
+                "collection_targets": [
+                    {
+                        "stratum_field": "source_family",
+                        "stratum_value": "orchestrator_live_seed",
+                        "action_pair": "architect_general>frontdoor",
+                        "needs_direction": ["prefer architect_general"],
+                        "current_rows": 0,
+                        "suggested_min_rows": 20,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    collection_manifest = tmp_path / "collection_manifest.json"
+    collection_script = tmp_path / "collect.sh"
+
+    assert (
+        mod.main(
+            [
+                "--input",
+                str(source),
+                "--existing-manifest",
+                str(manifest),
+                "--existing-pairwise-jsonl",
+                str(pairwise),
+                "--candidates-jsonl",
+                str(tmp_path / "candidates.jsonl"),
+                "--summary-json",
+                str(tmp_path / "summary.json"),
+                "--collection-targets-json",
+                str(audit),
+                "--collection-manifest-json",
+                str(collection_manifest),
+                "--collection-script",
+                str(collection_script),
+                "--collection-timestamp",
+                "20260628T120000Z",
+                "--target-source-families",
+                "",
+                "--target-suites",
+                "",
+                "--min-cross-action-candidate-groups",
+                "1",
+            ]
+        )
+        == 0
+    )
+
+    payload = json.loads(collection_manifest.read_text(encoding="utf-8"))
+    assert payload["schema_version"] == mod.COLLECTION_MANIFEST_SCHEMA_VERSION
+    assert payload["requires_active_autopilot_absent"] is True
+    assert payload["autopilot_guard"]["refusal_exit_code"] == 75
+    assert payload["batch_count"] == 1
+    batch = payload["batches"][0]
+    assert batch["target"] == "source_family:orchestrator_live_seed:architect_general>frontdoor"
+    assert batch["command_workdir"] == "/mnt/raid0/llm/epyc-inference-research"
+    assert batch["collection_timestamp"] == "20260628T120000Z"
+    assert "<YYYYMMDDTHHMMSSZ>" in batch["command_template"]
+    assert "<YYYYMMDDTHHMMSSZ>" not in batch["command"]
+    assert batch["durable_source_path"].endswith("20260628T120000Z.json")
+
+    script_text = collection_script.read_text(encoding="utf-8")
+    assert "pgrep -af 'scripts/autopilot/autopilot.py start'" in script_text
+    assert "exit 75" in script_text
+    assert "cd /mnt/raid0/llm/epyc-inference-research" in script_text
+    assert "seeding_live_a9_source_family_orchestrator_live_seed" in script_text
+    assert "20260628T120000Z" in script_text
+    assert collection_script.stat().st_mode & 0o111
+
+
+def test_pairwise_holdout_rejects_bad_collection_timestamp(tmp_path: Path) -> None:
+    source = tmp_path / "seeding_20260621_eval.jsonl"
+    _write_jsonl(source, [_result_record()])
+    manifest = tmp_path / "manifest.jsonl"
+    _write_jsonl(manifest, [])
+    pairwise = tmp_path / "pairs.jsonl"
+    _write_jsonl(pairwise, [])
+
+    assert (
+        mod.main(
+            [
+                "--input",
+                str(source),
+                "--existing-manifest",
+                str(manifest),
+                "--existing-pairwise-jsonl",
+                str(pairwise),
+                "--candidates-jsonl",
+                str(tmp_path / "candidates.jsonl"),
+                "--summary-json",
+                str(tmp_path / "summary.json"),
+                "--collection-manifest-json",
+                str(tmp_path / "collection_manifest.json"),
+                "--collection-timestamp",
+                "not-a-timestamp",
+            ]
+        )
+        == 2
+    )

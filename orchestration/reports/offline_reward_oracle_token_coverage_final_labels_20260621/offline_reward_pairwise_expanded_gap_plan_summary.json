@@ -505,12 +505,12 @@
   ],
   "stats": {
     "candidate_rows": 359,
-    "files_scanned": 2555,
+    "files_scanned": 2559,
     "skipped_existing_row": 5545,
     "skipped_missing_prompt": 2004,
     "skipped_missing_reference": 245,
     "skipped_missing_response": 704,
-    "skipped_non_target_suite_record": 35402
+    "skipped_non_target_suite_record": 35406
   },
   "target_actions": [
     "architect_general",
