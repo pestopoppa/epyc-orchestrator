@@ -70,6 +70,9 @@ Implemented builder scaffolds live in `scripts/datasets/` on
   `intake_triage_review_queue.v1` JSONL plus `dataset_builder_manifest.v1`;
   excludes already reviewed intake IDs, supports verdict filters, and emits
   prompt-free review rows with ready-to-run recorder commands.
+- `intake_triage_review_status.py`: read-only readiness report for the review
+  queue and reviewed-label corpus; reports aggregate counts only and identifies
+  whether the 100-reviewed-label baseline gate can run.
 
 ### Planner SFT Builder
 
@@ -143,6 +146,9 @@ Initial keep rule:
   `orchestration/datasets/intake_triage_review_queue.jsonl` contains the first
   120 actionable intake rows for operator/F2/F5 review. No reviewed production
   label corpus exists until those reviews append rows to
-  `orchestration/datasets/intake_triage_reviewed.jsonl`.
+  `orchestration/datasets/intake_triage_reviewed.jsonl`. Use
+  `scripts/datasets/intake_triage_review_status.py` to report the live queue,
+  reviewed-label count, and remaining labels needed before running the baseline
+  acceptance gate.
 - No builder should train on strategy-memory text from scrubbed or gate-lock-era
   rows until it joins each strategy to trustworthy journal evidence.

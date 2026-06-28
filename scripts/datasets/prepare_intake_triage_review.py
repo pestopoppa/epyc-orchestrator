@@ -19,6 +19,7 @@ from scripts.datasets._common import load_jsonl, stable_hash, utc_now, write_jso
 from scripts.datasets.record_intake_triage_verdict import (
     DEFAULT_INTAKE,
     DEFAULT_OUTPUT as DEFAULT_REVIEWED_LABELS,
+    LABEL_SOURCES,
     source_features,
 )
 
@@ -94,7 +95,10 @@ def build_review_item(
     *,
     intake_path: Path,
     reviewed_labels_path: Path,
+    label_source: str = "operator",
 ) -> dict[str, Any]:
+    if label_source not in LABEL_SOURCES:
+        raise ValueError(f"label_source must be one of {LABEL_SOURCES}: {label_source}")
     features = source_features(row)
     intake_id = str(row.get("id") or stable_hash(features))
     verdict = str(row.get("verdict") or "")
@@ -112,7 +116,7 @@ def build_review_item(
         "current_verdict": verdict,
         "destination_handoff": destination_handoff,
         "destination_index": destination_index,
-        "label_source": "operator",
+        "label_source": label_source,
         "features_text": json.dumps(features, sort_keys=True),
         "record_command": _record_command(
             intake_path=intake_path,
@@ -121,7 +125,7 @@ def build_review_item(
             verdict=verdict or "<verdict>",
             destination_handoff=destination_handoff,
             destination_index=destination_index,
-            label_source="operator",
+            label_source=label_source,
         ),
         "source_text_excluded": True,
     }
@@ -133,6 +137,7 @@ def build_queue(
     reviewed_labels_path: Path | None,
     include_verdicts: set[str] | None = None,
     exclude_verdicts: set[str] | None = None,
+    label_source: str = "operator",
     limit: int | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     rows = _load_intake(intake_path)
@@ -158,6 +163,7 @@ def build_queue(
                 row,
                 intake_path=intake_path,
                 reviewed_labels_path=output_reviewed_path,
+                label_source=label_source,
             )
         )
         if limit is not None and len(queue) >= limit:
@@ -187,6 +193,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         reviewed_labels_path=reviewed_labels_path,
         include_verdicts=include_verdicts,
         exclude_verdicts=exclude_verdicts,
+        label_source=args.label_source,
         limit=limit,
     )
     written = write_jsonl(output_path, rows)
@@ -202,6 +209,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "reviewed_labels": str(reviewed_labels_path),
             "include_verdict": sorted(include_verdicts) if include_verdicts is not None else [],
             "exclude_verdict": sorted(exclude_verdicts) if exclude_verdicts is not None else [],
+            "label_source": args.label_source,
             "limit": limit,
         },
     )
@@ -216,6 +224,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--reviewed-labels", default=str(DEFAULT_REVIEWED_LABELS))
     parser.add_argument("--include-verdict", action="append", default=[])
     parser.add_argument("--exclude-verdict", action="append", default=[])
+    parser.add_argument("--label-source", choices=LABEL_SOURCES, default="operator")
     parser.add_argument("--limit", type=int, default=0)
     return parser
 

@@ -9,6 +9,7 @@ import yaml
 from scripts.datasets import (
     build_planner_sft,
     build_triage_set,
+    intake_triage_review_status,
     prepare_intake_triage_review,
     record_intake_triage_verdict,
     train_intake_triage_baseline,
@@ -368,6 +369,7 @@ def test_prepare_intake_triage_review_queue_excludes_reviewed_and_source_text(
             reviewed_labels=str(reviewed),
             include_verdict=["route_to_handoff"],
             exclude_verdict=[],
+            label_source="operator",
             limit=0,
         )
     )
@@ -386,6 +388,44 @@ def test_prepare_intake_triage_review_queue_excludes_reviewed_and_source_text(
     assert "IGNORE PRIOR INSTRUCTIONS" not in json.dumps(rows[0])
     assert "DO NOT INCLUDE" not in json.dumps(rows[0])
     assert json.loads(manifest.read_text())["counts"]["written"] == 1
+
+
+def test_prepare_intake_triage_review_queue_accepts_shadow_job_label_source(
+    tmp_path: Path,
+) -> None:
+    intake = tmp_path / "intake_index.yaml"
+    intake.write_text(
+        yaml.safe_dump(
+            [
+                {
+                    "id": "intake-1",
+                    "title": "Shadow-reviewable paper",
+                    "verdict": "worth_investigating",
+                },
+            ],
+            sort_keys=False,
+        )
+    )
+    output = tmp_path / "review_queue.jsonl"
+    manifest = tmp_path / "manifest.json"
+
+    prepare_intake_triage_review.run(
+        Namespace(
+            intake=str(intake),
+            output=str(output),
+            manifest=str(manifest),
+            reviewed_labels="",
+            include_verdict=[],
+            exclude_verdict=[],
+            label_source="shadow_job",
+            limit=0,
+        )
+    )
+
+    rows = _read_jsonl(output)
+    assert rows[0]["label_source"] == "shadow_job"
+    assert "--label-source shadow_job" in rows[0]["record_command"]
+    assert json.loads(manifest.read_text())["options"]["label_source"] == "shadow_job"
 
 
 def test_intake_triage_baseline_reports_insufficient_reviewed_labels(tmp_path: Path) -> None:
@@ -477,3 +517,71 @@ def test_intake_triage_baseline_accepts_synthetic_reviewed_set(tmp_path: Path) -
     assert result["status"] == "acceptance_pass"
     assert payload["evaluation"]["accuracy"] == 1.0
     assert payload["evaluation"]["heldout_rows"] >= 1
+
+
+def test_intake_triage_review_status_reports_label_gap(tmp_path: Path) -> None:
+    queue = tmp_path / "review_queue.jsonl"
+    reviewed = tmp_path / "reviewed.jsonl"
+    queue.write_text(
+        "\n".join(
+            json.dumps({"intake_id": f"intake-{idx}"})
+            for idx in range(3)
+        )
+        + "\n"
+    )
+    reviewed.write_text(json.dumps({"intake_id": "intake-0"}) + "\n")
+
+    report = intake_triage_review_status.summarize(
+        queue_path=queue,
+        reviewed_labels_path=reviewed,
+        min_reviewed_labels=2,
+    )
+
+    assert report["status"] == "needs_reviewed_labels"
+    assert report["queue_rows"] == 3
+    assert report["reviewed_rows"] == 1
+    assert report["reviewed_queue_items"] == 1
+    assert report["remaining_queue_items"] == 2
+    assert report["labels_needed"] == 1
+    assert report["ready_for_baseline"] is False
+    assert report["privacy"]["raw_text_in_report"] is False
+
+
+def test_intake_triage_review_status_reports_ready(tmp_path: Path) -> None:
+    queue = tmp_path / "review_queue.jsonl"
+    reviewed = tmp_path / "reviewed.jsonl"
+    queue.write_text(json.dumps({"intake_id": "intake-1"}) + "\n")
+    reviewed.write_text(
+        "\n".join(
+            json.dumps({"intake_id": f"intake-{idx}"})
+            for idx in range(3)
+        )
+        + "\n"
+    )
+
+    report = intake_triage_review_status.summarize(
+        queue_path=queue,
+        reviewed_labels_path=reviewed,
+        min_reviewed_labels=3,
+    )
+
+    assert report["status"] == "ready_for_baseline"
+    assert report["ready_for_baseline"] is True
+    assert report["labels_needed"] == 0
+
+
+def test_intake_triage_review_status_reports_exhausted_queue(tmp_path: Path) -> None:
+    queue = tmp_path / "review_queue.jsonl"
+    reviewed = tmp_path / "reviewed.jsonl"
+    queue.write_text(json.dumps({"intake_id": "intake-1"}) + "\n")
+    reviewed.write_text("")
+
+    report = intake_triage_review_status.summarize(
+        queue_path=queue,
+        reviewed_labels_path=reviewed,
+        min_reviewed_labels=3,
+    )
+
+    assert report["status"] == "queue_exhausted_below_gate"
+    assert report["labels_needed"] == 3
+    assert report["remaining_queue_items"] == 1
