@@ -40,10 +40,13 @@ def test_summarize_reports_top_up_rate_and_gate() -> None:
                 "top_up_candidate": True,
                 "followup_reason": "file_view_after_listing",
             },
-        ]
+        ],
+        min_compressed_calls=2,
     )
 
     assert summary["compressed_calls"] == 2
+    assert summary["min_compressed_calls"] == 2
+    assert summary["has_enough_observations"] is True
     assert summary["followups"] == 1
     assert summary["top_up_rate"] == 0.5
     assert summary["passes_threshold"] is False
@@ -57,6 +60,26 @@ def test_summarize_distinguishes_empty_observation_window() -> None:
     summary = mod.summarize([])
 
     assert summary["compressed_calls"] == 0
+    assert summary["has_enough_observations"] is False
     assert summary["passes_threshold"] is None
     assert summary["ready_for_rollout_decision"] is False
     assert summary["rollout_decision"] == "awaiting_compressed_calls"
+
+
+def test_summarize_requires_minimum_observations_before_rollout_decision() -> None:
+    summary = mod.summarize(
+        [
+            {
+                "tool": "run_bash_compressed",
+                "command": "git status",
+                "compressor_strategy": "git_status",
+            }
+        ],
+        min_compressed_calls=2,
+    )
+
+    assert summary["compressed_calls"] == 1
+    assert summary["has_enough_observations"] is False
+    assert summary["passes_threshold"] is True
+    assert summary["ready_for_rollout_decision"] is False
+    assert summary["rollout_decision"] == "awaiting_minimum_observations"
