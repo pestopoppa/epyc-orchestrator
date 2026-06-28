@@ -691,6 +691,112 @@ details.section-accordion > *:not(summary) { margin-top: 14px; }
 .pareto-plot .point-production { fill: var(--good); stroke: var(--text-strong); stroke-width: 1.5; }
 .pareto-plot .frontier-line { stroke: var(--accent); stroke-width: 1.5; fill: none; opacity: 0.5; stroke-dasharray: 3,3; }
 
+/* Insight graph */
+.insight-graph-shell {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.insight-graph-toolbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 8px;
+    align-items: center;
+}
+.insight-graph-input {
+    width: 100%;
+    min-width: 0;
+    background: rgba(0,0,0,0.22);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 7px 9px;
+    outline: none;
+}
+.insight-graph-input::placeholder { color: var(--dim); }
+.insight-graph-button {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: rgba(255,255,255,0.04);
+    color: var(--text-strong);
+    font-size: 11px;
+    font-weight: 600;
+    padding: 6px 10px;
+    cursor: pointer;
+    line-height: 1;
+}
+.insight-graph-button:hover { border-color: var(--border-strong); }
+.insight-graph-stage {
+    position: relative;
+    width: 100%;
+    height: 320px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: rgba(0,0,0,0.22);
+    overflow: hidden;
+}
+.insight-graph-svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+.insight-graph-link {
+    stroke-width: 1.1;
+    opacity: 0.35;
+}
+.insight-graph-node {
+    cursor: pointer;
+}
+.insight-graph-node circle {
+    stroke: rgba(255,255,255,0.2);
+    stroke-width: 1;
+}
+.insight-graph-node text {
+    pointer-events: none;
+    fill: var(--text-strong);
+    font-family: var(--font-mono);
+    font-size: 9px;
+}
+.insight-graph-node .subtitle {
+    fill: var(--dim);
+    font-size: 8px;
+}
+.insight-graph-node.selected circle {
+    stroke: var(--text-strong);
+    stroke-width: 1.8;
+}
+.insight-graph-detail {
+    border-top: 1px solid var(--border);
+    padding-top: 8px;
+    color: var(--muted);
+    font-size: 11px;
+    font-family: var(--font-mono);
+    line-height: 1.45;
+}
+.insight-graph-detail .title {
+    color: var(--text-strong);
+    font-weight: 600;
+    font-family: var(--font-ui);
+    margin-bottom: 2px;
+}
+.insight-graph-detail .meta {
+    color: var(--dim);
+    margin-bottom: 4px;
+}
+.insight-graph-chip {
+    display: inline-block;
+    margin: 0 4px 4px 0;
+    padding: 2px 6px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,0.04);
+    font-size: 9px;
+    color: var(--muted);
+    white-space: nowrap;
+}
+
 /* Responsive */
 @media (max-width: 1100px) {
     .layout { grid-template-columns: 1fr; }
@@ -839,6 +945,31 @@ details.section-accordion > *:not(summary) { margin-top: 14px; }
       <div id="repo-readiness-meta" class="readiness-meta"></div>
     </div>
 
+    <div class="panel" id="insight-graph-panel">
+      <h2>
+        insight graph
+        <span class="count-suffix" id="insight-graph-status">read-only</span>
+      </h2>
+      <div class="insight-graph-shell">
+        <div class="insight-graph-toolbar">
+          <input
+            id="insight-graph-query"
+            class="insight-graph-input"
+            type="text"
+            spellcheck="false"
+            autocomplete="off"
+            placeholder="focus by trial, strategy, campaign, species, or handoff"
+          />
+          <button class="insight-graph-button" id="insight-graph-focus-btn" type="button">Focus</button>
+          <button class="insight-graph-button" id="insight-graph-reset-btn" type="button">Reset</button>
+        </div>
+        <div class="insight-graph-stage">
+          <svg id="insight-graph-svg" class="insight-graph-svg" viewBox="0 0 520 320" preserveAspectRatio="xMidYMid meet"></svg>
+        </div>
+        <div id="insight-graph-detail" class="insight-graph-detail"></div>
+      </div>
+    </div>
+
     <div class="panel">
       <h2>completed <span class="count-suffix" id="completed-count"></span></h2>
       <div id="completed-tasks"></div>
@@ -868,6 +999,8 @@ let topology = null;
 let activeStream = null;
 let detailStream = null;
 let _roleAliasToBase = {};
+let _insightGraphFocus = '';
+let _insightGraphData = null;
 
 async function loadTopology() {
     const r = await fetch('/dashboard/api/topology');
@@ -3602,6 +3735,254 @@ function escapeHTML(s) {
     return (s || '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 }
 
+function insightGraphNodeRadius(node) {
+    const kind = node && node.kind ? String(node.kind) : 'strategy';
+    const state = node && node.state_group ? String(node.state_group) : '';
+    let base = 10;
+    if (kind === 'journal') base = 9;
+    else if (kind === 'campaign' || kind === 'handoff') base = 11;
+    if (state === 'frontier') base += 2;
+    if (state === 'applied' || state === 'live') base += 1;
+    if (state === 'pending') base += 1;
+    base += Math.min(5, Math.max(0, Number(node && node.degree) || 0) * 0.35);
+    if (node && node.id && node.id === (_insightGraphData && _insightGraphData.focus ? _insightGraphData.focus.focus_node_id : null)) {
+        base += 4;
+    }
+    return Math.max(7, Math.min(19, base));
+}
+
+function insightGraphNodeText(node) {
+    if (!node) return '';
+    if (node.kind === 'journal') return String(node.label || '').slice(0, 14);
+    return String(node.title || node.label || node.id || '').slice(0, 26);
+}
+
+function insightGraphDetailHTML(node, graph) {
+    if (!node) {
+        return '<div style="color:var(--dim)">no insight node selected</div>';
+    }
+    const chips = [];
+    if (node.kind) chips.push(`<span class="insight-graph-chip">${escapeHTML(node.kind)}</span>`);
+    if (node.state) chips.push(`<span class="insight-graph-chip">${escapeHTML(node.state)}</span>`);
+    if (node.entry_type) chips.push(`<span class="insight-graph-chip">${escapeHTML(node.entry_type)}</span>`);
+    if (node.species) chips.push(`<span class="insight-graph-chip">${escapeHTML(node.species)}</span>`);
+    if (node.bind_status) chips.push(`<span class="insight-graph-chip">bind ${escapeHTML(node.bind_status)}</span>`);
+    if (node.seed_campaign) chips.push(`<span class="insight-graph-chip">${escapeHTML(node.seed_campaign)}</span>`);
+    if (node.source_handoff) chips.push(`<span class="insight-graph-chip">${escapeHTML(node.source_handoff)}</span>`);
+    if (node.trial_id != null) chips.push(`<span class="insight-graph-chip">trial ${escapeHTML(String(node.trial_id))}</span>`);
+    if (node.source_trial_id != null) chips.push(`<span class="insight-graph-chip">source ${escapeHTML(String(node.source_trial_id))}</span>`);
+    if (Array.isArray(node.bind_identifiers) && node.bind_identifiers.length) {
+        chips.push(`<span class="insight-graph-chip">bind ${escapeHTML(node.bind_identifiers.join(', '))}</span>`);
+    }
+    if (Array.isArray(node.evidence_trial_ids) && node.evidence_trial_ids.length) {
+        chips.push(`<span class="insight-graph-chip">evidence ${escapeHTML(node.evidence_trial_ids.join(', '))}</span>`);
+    }
+    const meta = [];
+    if (node.created_at) meta.push(`created ${escapeHTML(String(node.created_at))}`);
+    if (graph && graph.focus && graph.focus.reason) meta.push(escapeHTML(graph.focus.reason));
+    return `
+      <div class="title">${escapeHTML(node.title || node.label || node.id || 'insight')}</div>
+      <div class="meta">${meta.join(' · ')}</div>
+      <div style="margin-bottom:4px;color:var(--text)">${escapeHTML(node.summary || node.subtitle || '')}</div>
+      <div>${chips.join('')}</div>
+    `;
+}
+
+function insightGraphColor(node) {
+    return node && node.color ? String(node.color) : 'var(--muted)';
+}
+
+function layoutInsightGraph(nodes, edges, width, height) {
+    if (!nodes.length) return;
+    const centerX = width / 2;
+    const centerY = height / 2;
+    const nodeById = new Map(nodes.map(node => [node.id, node]));
+    nodes.forEach((node, index) => {
+        const kind = String(node.kind || 'strategy');
+        const ring = kind === 'journal' ? 0 : (kind === 'strategy' ? 1 : 2);
+        const angle = (index / Math.max(1, nodes.length)) * Math.PI * 2;
+        const radius = ring === 0 ? 56 : ring === 1 ? 120 : 160;
+        if (!Number.isFinite(node.x) || !Number.isFinite(node.y)) {
+            node.x = centerX + Math.cos(angle) * radius;
+            node.y = centerY + Math.sin(angle) * radius;
+        }
+        node.vx = Number.isFinite(node.vx) ? node.vx : 0;
+        node.vy = Number.isFinite(node.vy) ? node.vy : 0;
+    });
+
+    const selectedId = _insightGraphData && _insightGraphData.focus ? _insightGraphData.focus.focus_node_id : null;
+    const edgeLength = (edge) => {
+        if (edge.kind === 'projection') return 78;
+        if (edge.kind === 'evidence') return 66;
+        if (edge.kind === 'campaign' || edge.kind === 'handoff') return 92;
+        if (edge.kind === 'supersedes') return 74;
+        return 86;
+    };
+    for (let iter = 0; iter < 90; iter += 1) {
+        for (let i = 0; i < nodes.length; i += 1) {
+            for (let j = i + 1; j < nodes.length; j += 1) {
+                const a = nodes[i];
+                const b = nodes[j];
+                let dx = b.x - a.x;
+                let dy = b.y - a.y;
+                let dist2 = dx * dx + dy * dy;
+                if (dist2 < 0.01) dist2 = 0.01;
+                const force = 1200 / dist2;
+                const dist = Math.sqrt(dist2);
+                dx /= dist;
+                dy /= dist;
+                a.vx -= dx * force;
+                a.vy -= dy * force;
+                b.vx += dx * force;
+                b.vy += dy * force;
+            }
+        }
+        for (const edge of edges) {
+            const a = nodeById.get(edge.source);
+            const b = nodeById.get(edge.target);
+            if (!a || !b) continue;
+            const dx = b.x - a.x;
+            const dy = b.y - a.y;
+            const dist = Math.max(0.01, Math.sqrt(dx * dx + dy * dy));
+            const target = edgeLength(edge);
+            const force = (dist - target) * 0.012 * (edge.weight || 1);
+            const nx = dx / dist;
+            const ny = dy / dist;
+            a.vx += nx * force;
+            a.vy += ny * force;
+            b.vx -= nx * force;
+            b.vy -= ny * force;
+        }
+        for (const node of nodes) {
+            const pull = node.id === selectedId ? 0.04 : 0.018;
+            node.vx += (centerX - node.x) * pull * 0.02;
+            node.vy += (centerY - node.y) * pull * 0.02;
+            node.vx *= 0.86;
+            node.vy *= 0.86;
+            node.x += node.vx;
+            node.y += node.vy;
+            node.x = Math.max(18, Math.min(width - 18, node.x));
+            node.y = Math.max(18, Math.min(height - 18, node.y));
+        }
+    }
+}
+
+function renderInsightGraph(graph) {
+    const svg = document.getElementById('insight-graph-svg');
+    const status = document.getElementById('insight-graph-status');
+    const detail = document.getElementById('insight-graph-detail');
+    if (!svg || !detail) return;
+
+    _insightGraphData = graph || null;
+    const nodes = (graph && Array.isArray(graph.nodes) ? graph.nodes : []).map(node => ({ ...node }));
+    const edges = (graph && Array.isArray(graph.edges) ? graph.edges : []).map(edge => ({ ...edge }));
+
+    if (status) {
+        const summary = graph && graph.summary ? graph.summary : {};
+        const stateCounts = summary.state_counts || {};
+        const kindCounts = summary.kind_counts || {};
+        const bits = [];
+        if (graph && graph.read_only) bits.push('read-only');
+        if (summary.node_count != null) bits.push(`${summary.node_count} nodes`);
+        if (summary.edge_count != null) bits.push(`${summary.edge_count} edges`);
+        if (stateCounts.applied != null) bits.push(`applied ${stateCounts.applied}`);
+        if (stateCounts.pending != null) bits.push(`pending ${stateCounts.pending}`);
+        if (kindCounts.journal != null) bits.push(`journal ${kindCounts.journal}`);
+        status.textContent = bits.join(' · ') || 'read-only';
+    }
+
+    if (!nodes.length) {
+        svg.innerHTML = '<text x="260" y="160" text-anchor="middle" fill="#64748b" font-size="11">no insight graph data</text>';
+        detail.innerHTML = '<div style="color:var(--dim)">no graph rows available yet</div>';
+        return;
+    }
+
+    const width = 520;
+    const height = 320;
+    layoutInsightGraph(nodes, edges, width, height);
+    const focusId = graph && graph.focus ? graph.focus.focus_node_id : null;
+    const selected = nodes.find(node => node.id === focusId) || nodes[0];
+    const nodeById = new Map(nodes.map(node => [node.id, node]));
+
+    const parts = [
+        '<defs>',
+        '<marker id="insight-graph-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">',
+        '<path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"></path>',
+        '</marker>',
+        '</defs>',
+    ];
+
+    for (const edge of edges) {
+        const source = nodeById.get(edge.source);
+        const target = nodeById.get(edge.target);
+        if (!source || !target) continue;
+        const selectedEdge = selected && (edge.source === selected.id || edge.target === selected.id);
+        parts.push(
+            `<line class="insight-graph-link" x1="${source.x.toFixed(1)}" y1="${source.y.toFixed(1)}" x2="${target.x.toFixed(1)}" y2="${target.y.toFixed(1)}" style="stroke:${escapeHTML(edge.color || 'var(--border)')}"${selectedEdge ? ' stroke-width="1.8" opacity="0.8"' : ''}>` +
+            `<title>${escapeHTML(edge.kind || 'link')} ${escapeHTML(source.label || source.id)} → ${escapeHTML(target.label || target.id)}${edge.label ? ` · ${edge.label}` : ''}</title>` +
+            '</line>'
+        );
+    }
+
+    for (const node of nodes) {
+        const radius = insightGraphNodeRadius(node);
+        const isSelected = selected && node.id === selected.id;
+        const state = node.state_group || node.state || '';
+        const className = `insight-graph-node${isSelected ? ' selected' : ''}`;
+        const label = insightGraphNodeText(node);
+        const subtitle = String(node.subtitle || '').slice(0, 34);
+        parts.push(
+            `<g class="${className}" data-node-id="${escapeHTML(node.id)}" transform="translate(${node.x.toFixed(1)},${node.y.toFixed(1)})">` +
+            `<circle r="${radius.toFixed(1)}" style="fill:${escapeHTML(insightGraphColor(node))}" opacity="${isSelected ? '1' : (state === 'raw' ? '0.45' : '0.78')}"></circle>` +
+            `<text text-anchor="middle" y="${(radius + 10).toFixed(1)}">${escapeHTML(label)}</text>` +
+            (subtitle ? `<text class="subtitle" text-anchor="middle" y="${(radius + 20).toFixed(1)}">${escapeHTML(subtitle)}</text>` : '') +
+            `<title>${escapeHTML(node.title || node.label || node.id || '')}${node.summary ? ` · ${node.summary}` : ''}</title>` +
+            '</g>'
+        );
+    }
+
+    svg.innerHTML = parts.join('');
+    svg.querySelectorAll('[data-node-id]').forEach((el) => {
+        el.addEventListener('click', () => {
+            const nodeId = el.getAttribute('data-node-id') || '';
+            const input = document.getElementById('insight-graph-query');
+            if (input) input.value = nodeId;
+            _insightGraphFocus = nodeId;
+            updateInsightGraph(nodeId);
+        });
+    });
+
+    detail.innerHTML = insightGraphDetailHTML(selected, graph);
+}
+
+async function updateInsightGraph(focusOverride) {
+    const focusInput = document.getElementById('insight-graph-query');
+    if (focusOverride !== undefined) {
+        _insightGraphFocus = String(focusOverride || '').trim();
+        if (focusInput) focusInput.value = _insightGraphFocus;
+    } else if (focusInput && !_insightGraphFocus) {
+        focusInput.value = _insightGraphFocus;
+    }
+    try {
+        const params = new URLSearchParams();
+        if (_insightGraphFocus) params.set('focus', _insightGraphFocus);
+        params.set('depth', '1');
+        params.set('limit', '120');
+        params.set('t', String(Date.now()));
+        const r = await fetch(`/dashboard/api/insight_graph?${params.toString()}`, { cache: 'no-store' });
+        const data = await r.json();
+        renderInsightGraph(data);
+    } catch (err) {
+        const status = document.getElementById('insight-graph-status');
+        const detail = document.getElementById('insight-graph-detail');
+        if (status) status.textContent = 'error';
+        if (detail) {
+            const msg = err && err.message ? err.message : String(err);
+            detail.innerHTML = `<div style="color:var(--bad)">insight graph fetch failed: ${escapeHTML(msg)}</div>`;
+        }
+    }
+}
+
 // Configure marked to use highlight.js for code blocks (once on first call).
 let _markedConfigured = false;
 function configureMarked() {
@@ -4767,7 +5148,30 @@ function startDashboard() {
         updateBuildRev();
         updateAutopilotProgress();
         updateRepoReadiness();
+        updateInsightGraph();
         updatePareto();  // initial paint of Pareto plots even when accordion closed (so summary text is fresh)
+        const insightQuery = document.getElementById('insight-graph-query');
+        const insightFocusBtn = document.getElementById('insight-graph-focus-btn');
+        const insightResetBtn = document.getElementById('insight-graph-reset-btn');
+        if (insightQuery) {
+            insightQuery.addEventListener('keydown', (ev) => {
+                if (ev.key === 'Enter') {
+                    ev.preventDefault();
+                    updateInsightGraph(insightQuery.value);
+                }
+            });
+        }
+        if (insightFocusBtn) {
+            insightFocusBtn.addEventListener('click', () => {
+                updateInsightGraph(insightQuery ? insightQuery.value : '');
+            });
+        }
+        if (insightResetBtn) {
+            insightResetBtn.addEventListener('click', () => {
+                if (insightQuery) insightQuery.value = '';
+                updateInsightGraph('');
+            });
+        }
         setInterval(updateGepa, 5000);
         setInterval(updateProcessStatus, 3000);
         setInterval(updateBuildRev, 30000);  // build-drift poll
@@ -4775,6 +5179,7 @@ function startDashboard() {
         setInterval(() => scheduleRegionLocksRefresh(true), 1500);  // shared live-inference refresh for locks + topology activity
         setInterval(updateAutopilotProgress, 3000);  // 3s poll — trial progress bar (state.json mtime polling)
         setInterval(updateRepoReadiness, 60000);  // advisory artifacts change only on scorer/checkpoint runs
+        setInterval(() => updateInsightGraph(_insightGraphFocus), 20000);
         setInterval(renderTopologyActivity, TOPOLOGY_ACTIVITY_AGE_TICK_MS);  // local "Ns ago" tick between polls
         // Pareto poll: only fetch when the GEPA accordion is open. Cheap when
         // closed (no fetch, just summary text from the last successful call).

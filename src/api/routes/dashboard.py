@@ -22,6 +22,8 @@ import json
 import logging
 import re
 import time
+import sqlite3
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -1043,6 +1045,22 @@ async def repo_readiness() -> JSONResponse:
     return JSONResponse(_repo_readiness_summary(), headers=_NO_STORE_HEADERS)
 
 
+_INSIGHT_GRAPH_DEFAULT_LIMIT = 120
+_INSIGHT_GRAPH_MAX_LIMIT = 240
+_INSIGHT_GRAPH_DEFAULT_DEPTH = 1
+
+
+@router.get("/dashboard/api/insight_graph")
+async def insight_graph(
+    focus: str | None = None,
+    depth: int = _INSIGHT_GRAPH_DEFAULT_DEPTH,
+    limit: int = _INSIGHT_GRAPH_DEFAULT_LIMIT,
+) -> JSONResponse:
+    """Return a bounded, read-only graph of StrategyStore and journal insights."""
+    payload = _insight_graph_payload(focus=focus, depth=depth, limit=limit)
+    return JSONResponse(payload, headers=_NO_STORE_HEADERS)
+
+
 # ---------------------------------------------------------------------------
 # Per-node detail (for topology click)
 # ---------------------------------------------------------------------------
@@ -1231,6 +1249,7 @@ def _read_git_short_sha() -> str | None:
 
 _AUTOPILOT_STATE_PATH = Path(__file__).resolve().parents[3] / "orchestration" / "autopilot_state.json"
 _AUTOPILOT_JOURNAL_PATH = Path(__file__).resolve().parents[3] / "orchestration" / "autopilot_journal.jsonl"
+_STRATEGY_STORE_PATH = Path(__file__).resolve().parents[3] / "orchestration" / "repl_memory" / "strategies"
 _AUTOPILOT_LOG_DIR = Path(__file__).resolve().parents[3] / "logs"
 _EPHEMERAL_ACTION_KEYS = EPHEMERAL_ACTION_KEYS
 _WITHIN_NOISE_EXCL = WITHIN_NOISE_EXCLUSIONS
@@ -1307,6 +1326,615 @@ def _read_autopilot_journal_rows(path: Path | None = None) -> list[dict[str, Any
     except Exception:
         return None
     return rows
+
+
+def _read_strategy_store_rows(path: Path | None = None) -> list[dict[str, Any]] | None:
+    """Read StrategyStore rows from the on-disk SQLite mirror in read-only mode."""
+    store_dir = path or _STRATEGY_STORE_PATH
+    db_path = store_dir / "strategies.db"
+    if not db_path.exists():
+        return None
+
+    conn: sqlite3.Connection | None = None
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=1.5)
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.execute("PRAGMA query_only = 1")
+        except Exception:
+            pass
+        rows: list[dict[str, Any]] = []
+        for row in conn.execute(
+            "SELECT id, description, insight, source_trial_id, species, created_at, "
+            "metadata_json, entry_type, evidence_trial_ids "
+            "FROM strategies ORDER BY created_at ASC"
+        ):
+            try:
+                metadata = json.loads(row["metadata_json"] or "{}")
+            except Exception:
+                metadata = {}
+            if not isinstance(metadata, dict):
+                metadata = {}
+            try:
+                evidence_trial_ids_raw = json.loads(row["evidence_trial_ids"] or "[]")
+            except Exception:
+                evidence_trial_ids_raw = []
+            evidence_trial_ids: list[int] = []
+            if isinstance(evidence_trial_ids_raw, list):
+                for item in evidence_trial_ids_raw:
+                    try:
+                        evidence_trial_ids.append(int(item))
+                    except (TypeError, ValueError):
+                        continue
+            rows.append(
+                {
+                    "id": row["id"],
+                    "description": row["description"],
+                    "insight": row["insight"],
+                    "source_trial_id": row["source_trial_id"],
+                    "species": row["species"],
+                    "created_at": row["created_at"],
+                    "metadata": metadata,
+                    "entry_type": row["entry_type"] or "raw",
+                    "evidence_trial_ids": evidence_trial_ids,
+                }
+            )
+        return rows
+    except Exception:
+        return None
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def _insight_graph_payload(
+    *,
+    focus: str | None = None,
+    depth: int = _INSIGHT_GRAPH_DEFAULT_DEPTH,
+    limit: int = _INSIGHT_GRAPH_DEFAULT_LIMIT,
+) -> dict[str, Any]:
+    """Build a bounded, read-only graph over journal rows and StrategyStore data."""
+    try:
+        depth = max(0, min(int(depth), 2))
+    except (TypeError, ValueError):
+        depth = _INSIGHT_GRAPH_DEFAULT_DEPTH
+    try:
+        limit = max(24, min(int(limit), _INSIGHT_GRAPH_MAX_LIMIT))
+    except (TypeError, ValueError):
+        limit = _INSIGHT_GRAPH_DEFAULT_LIMIT
+
+    journal_rows = _read_autopilot_journal_rows()
+    journal_rows = journal_rows or []
+    journal_rows, journal_meta = _latest_journal_run_rows(_effective_journal_trial_rows(journal_rows))
+    strategy_rows = _read_strategy_store_rows() or []
+
+    def _compact(value: Any, *, max_chars: int = 140) -> str:
+        text = " ".join(str(value or "").split())
+        if len(text) <= max_chars:
+            return text
+        return text[: max_chars - 1].rstrip() + "…"
+
+    def _strategy_status(metadata: dict[str, Any], entry_type: str) -> tuple[str, str]:
+        bind_status = str(metadata.get("bind_status") or "").strip().lower()
+        generated_from = str(metadata.get("generated_from") or "").strip().lower()
+        if generated_from == "journal_frontier":
+            return "applied", "applied"
+        if bind_status == "live":
+            return "live", "applied"
+        if bind_status in {"context", "future"}:
+            return bind_status, "pending"
+        if entry_type == "convention":
+            return "convention", "applied"
+        if entry_type == "pattern":
+            return "pattern", "applied"
+        return entry_type or "raw", "raw"
+
+    def _journal_status(row: dict[str, Any]) -> tuple[str, str]:
+        status = str(row.get("pareto_status") or "journal").strip().lower()
+        if row.get("bug_corrupted_by"):
+            return "corrupted", "corrupted"
+        if status == "frontier":
+            return "frontier", "frontier"
+        try:
+            tier = int(row.get("tier", DEFAULT_FRONTIER_TIER))
+        except (TypeError, ValueError):
+            tier = DEFAULT_FRONTIER_TIER
+        if tier < 1:
+            return "audit", "audit"
+        return status or "journal", status or "journal"
+
+    def _state_color(kind: str, state_group: str) -> str:
+        if kind == "journal":
+            return {
+                "frontier": "var(--good, #34d399)",
+                "audit": "var(--warn, #fbbf24)",
+                "corrupted": "var(--bad, #f87171)",
+                "dominated": "var(--dim, #64748b)",
+            }.get(state_group, "var(--muted, #94a3b8)")
+        if kind == "strategy":
+            return {
+                "applied": "var(--accent, #38bdf8)",
+                "pending": "var(--warn, #fbbf24)",
+                "live": "var(--good, #34d399)",
+                "context": "var(--muted, #94a3b8)",
+                "future": "var(--dim, #64748b)",
+                "pattern": "var(--good, #34d399)",
+                "convention": "var(--accent, #38bdf8)",
+                "raw": "var(--dim, #64748b)",
+            }.get(state_group, "var(--accent, #38bdf8)")
+        if kind == "campaign":
+            return "var(--accent, #8b5cf6)"
+        if kind == "handoff":
+            return "var(--bad, #fb7185)"
+        return "var(--muted, #94a3b8)"
+
+    def _node_label_text(node: dict[str, Any]) -> str:
+        if node["kind"] == "journal":
+            return f"T{node.get('trial_id')}"
+        if node["kind"] == "strategy":
+            return node.get("title") or node.get("description") or node["id"]
+        if node["kind"] == "campaign":
+            return node.get("campaign") or node["id"]
+        if node["kind"] == "handoff":
+            return node.get("handoff") or node["id"]
+        return node["id"]
+
+    def _node_sort_key(node: dict[str, Any]) -> tuple[Any, ...]:
+        kind_rank = {"journal": 0, "strategy": 1, "campaign": 2, "handoff": 3}.get(node["kind"], 4)
+        if node["kind"] == "journal":
+            try:
+                recency = -int(node.get("trial_id") or 0)
+            except (TypeError, ValueError):
+                recency = 0
+        else:
+            recency = str(node.get("created_at") or "")
+        return (kind_rank, node.get("distance", 99), -node.get("degree", 0), recency, node.get("label", ""))
+
+    def _node_matches_focus(node: dict[str, Any], focus_text: str) -> bool:
+        haystack: list[str] = [
+            node.get("id", ""),
+            node.get("label", ""),
+            node.get("title", ""),
+            node.get("summary", ""),
+            node.get("state", ""),
+            node.get("state_group", ""),
+            node.get("kind", ""),
+            node.get("species", ""),
+            node.get("entry_type", ""),
+            node.get("campaign", ""),
+            node.get("handoff", ""),
+            node.get("bind_status", ""),
+            node.get("source_handoff", ""),
+            node.get("seed_campaign", ""),
+        ]
+        trial_id = node.get("trial_id")
+        if trial_id is not None:
+            haystack.append(str(trial_id))
+        source_trial_id = node.get("source_trial_id")
+        if source_trial_id is not None:
+            haystack.append(str(source_trial_id))
+        return any(
+            focus_text == text.lower() or focus_text in text.lower()
+            for text in haystack
+            if text
+        )
+
+    def _focus_match_key(node_id: str, node: dict[str, Any], focus_text: str) -> tuple[int, tuple[Any, ...]]:
+        exact_fields = [
+            node_id,
+            node.get("label", ""),
+            node.get("title", ""),
+            node.get("seed_campaign", ""),
+            node.get("source_handoff", ""),
+        ]
+        exact = any(focus_text == str(field).lower() for field in exact_fields if field)
+        kind_rank = {"campaign": 0, "handoff": 1, "strategy": 2, "journal": 3}.get(node.get("kind"), 4)
+        return (0 if exact else 1, (kind_rank, *_node_sort_key(node)))
+
+    nodes: dict[str, dict[str, Any]] = {}
+    edges: dict[tuple[str, str, str], dict[str, Any]] = {}
+    adjacency: dict[str, set[str]] = {}
+    journal_by_trial: dict[int, dict[str, Any]] = {}
+    strategy_by_id: dict[str, dict[str, Any]] = {}
+    strategy_ids_by_trial: dict[int, list[str]] = {}
+    strategy_ids_by_campaign: dict[str, list[str]] = {}
+    strategy_ids_by_handoff: dict[str, list[str]] = {}
+
+    def _add_node(node: dict[str, Any]) -> None:
+        node_id = node["id"]
+        existing = nodes.get(node_id)
+        if existing is None:
+            nodes[node_id] = node
+        else:
+            existing.update({k: v for k, v in node.items() if v not in (None, "", [], {}, ())})
+
+    def _add_edge(source: str, target: str, kind: str, label: str = "", weight: float = 1.0) -> None:
+        if not source or not target or source == target:
+            return
+        key = (source, target, kind)
+        if key in edges:
+            return
+        edge = {
+            "id": f"{source}->{target}:{kind}",
+            "source": source,
+            "target": target,
+            "kind": kind,
+            "label": label,
+            "weight": weight,
+            "color": {
+                "projection": "var(--good, #34d399)",
+                "evidence": "var(--accent, #38bdf8)",
+                "campaign": "var(--accent, #a78bfa)",
+                "handoff": "var(--bad, #fb7185)",
+                "supersedes": "var(--warn, #fbbf24)",
+                "parent": "var(--muted, #94a3b8)",
+            }.get(kind, "var(--muted, #94a3b8)"),
+        }
+        edges[key] = edge
+        adjacency.setdefault(source, set()).add(target)
+        adjacency.setdefault(target, set()).add(source)
+
+    # Journal nodes first so the strategy edges can hook into them.
+    for row in journal_rows:
+        trial_id = row.get("trial_id")
+        try:
+            trial_id_int = int(trial_id)
+        except (TypeError, ValueError):
+            continue
+        journal_by_trial[trial_id_int] = row
+        status, state_group = _journal_status(row)
+        summary_parts = [
+            _compact(row.get("hypothesis") or row.get("reasoning") or row.get("expected_mechanism") or ""),
+            _compact(row.get("failure_analysis") or row.get("self_criticism") or ""),
+        ]
+        summary = " · ".join(part for part in summary_parts if part)
+        node = {
+            "id": f"journal:{trial_id_int}",
+            "kind": "journal",
+            "label": f"T{trial_id_int}",
+            "title": f"trial {trial_id_int}",
+            "subtitle": f"{_compact(row.get('species') or 'unknown')} · {_compact(row.get('action_type') or 'trial')} · {status}",
+            "summary": summary,
+            "trial_id": trial_id_int,
+            "species": row.get("species") or "",
+            "action_type": row.get("action_type") or "",
+            "state": status,
+            "state_group": state_group,
+            "created_at": row.get("timestamp") or "",
+            "color": _state_color("journal", state_group),
+            "depth": 99,
+            "degree": 0,
+            "score": float(row.get("trial_id") or 0),
+            "detail": {
+                "quality": row.get("quality"),
+                "speed": row.get("speed"),
+                "pareto_status": row.get("pareto_status"),
+                "tier": row.get("tier"),
+            },
+            "raw": row,
+        }
+        _add_node(node)
+
+    # Strategy nodes and the campaign/handoff buckets they belong to.
+    for row in strategy_rows:
+        metadata = row.get("metadata") or {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+        status, state_group = _strategy_status(metadata, row.get("entry_type") or "raw")
+        source_trial_id = row.get("source_trial_id")
+        try:
+            source_trial_id_int = int(source_trial_id) if source_trial_id is not None else None
+        except (TypeError, ValueError):
+            source_trial_id_int = None
+        campaign = str(metadata.get("seed_campaign") or "").strip()
+        source_handoff = str(metadata.get("source_handoff") or "").strip()
+        bind_status = str(metadata.get("bind_status") or "").strip().lower()
+        bind_identifiers = metadata.get("bind_identifiers") if isinstance(metadata.get("bind_identifiers"), list) else []
+        title = _compact((metadata.get("insight_format") or {}).get("title"))
+        if not title:
+            title = _compact(row.get("description") or row["id"], max_chars=72)
+        summary = _compact(
+            (metadata.get("insight_format") or {}).get("generalized_content")
+            or row.get("insight")
+            or row.get("description")
+        )
+        evidence_ids = list(row.get("evidence_trial_ids") or [])
+        node = {
+            "id": f"strategy:{row['id']}",
+            "kind": "strategy",
+            "label": title,
+            "title": title,
+            "subtitle": " · ".join(
+                part
+                for part in (
+                    _compact(row.get("entry_type") or "raw"),
+                    _compact(row.get("species") or "unknown"),
+                    status,
+                )
+                if part
+            ),
+            "summary": summary,
+            "state": status,
+            "state_group": state_group,
+            "entry_type": row.get("entry_type") or "raw",
+            "species": row.get("species") or "",
+            "source_trial_id": source_trial_id_int,
+            "created_at": row.get("created_at") or "",
+            "seed_campaign": campaign,
+            "source_handoff": source_handoff,
+            "bind_status": bind_status,
+            "bind_identifiers": list(bind_identifiers),
+            "confidence": metadata.get("confidence"),
+            "tranche": metadata.get("tranche"),
+            "color": _state_color("strategy", state_group),
+            "depth": 99,
+            "degree": 0,
+            "score": float(source_trial_id_int or 0),
+            "evidence_trial_ids": evidence_ids,
+            "detail": {
+                "bind_status": bind_status,
+                "seeded_by": metadata.get("seeded_by"),
+                "seeded_date": metadata.get("seeded_date"),
+                "seeded_reason": metadata.get("seeded_reason"),
+            },
+            "raw": row,
+        }
+        _add_node(node)
+        strategy_by_id[row["id"]] = node
+        if source_trial_id_int is not None:
+            strategy_ids_by_trial.setdefault(source_trial_id_int, []).append(row["id"])
+        if campaign:
+            strategy_ids_by_campaign.setdefault(campaign, []).append(row["id"])
+        if source_handoff:
+            strategy_ids_by_handoff.setdefault(source_handoff, []).append(row["id"])
+
+    # Campaign and handoff nodes are the clickable buckets that make the staged
+    # operator seeds explorable without needing to visualize every seed row as a
+    # separate cluster head.
+    for campaign, ids in strategy_ids_by_campaign.items():
+        members = [strategy_by_id.get(strategy_id) for strategy_id in ids if strategy_by_id.get(strategy_id)]
+        node_id = f"campaign:{campaign}"
+        _add_node(
+            {
+                "id": node_id,
+                "kind": "campaign",
+                "label": campaign,
+                "title": campaign,
+                "subtitle": f"{len(members)} strategy rows",
+                "summary": _compact(
+                    next(
+                        (
+                            (member.get("detail") or {}).get("seeded_reason")
+                            for member in members
+                            if (member.get("detail") or {}).get("seeded_reason")
+                        ),
+                        "",
+                    )
+                ),
+                "state": "campaign",
+                "state_group": "campaign",
+                "color": _state_color("campaign", "campaign"),
+                "degree": 0,
+                "depth": 99,
+                "score": float(len(members)),
+                "detail": {"member_count": len(members)},
+            }
+        )
+        for strategy_id in ids:
+            _add_edge(node_id, f"strategy:{strategy_id}", "campaign", label="seed campaign", weight=1.4)
+            source_trial_id = strategy_by_id.get(strategy_id, {}).get("source_trial_id")
+            if source_trial_id is not None and source_trial_id in journal_by_trial:
+                _add_edge(
+                    node_id,
+                    f"journal:{source_trial_id}",
+                    "projection",
+                    label="source trial",
+                    weight=0.9,
+                )
+
+    for handoff, ids in strategy_ids_by_handoff.items():
+        members = [strategy_by_id.get(strategy_id) for strategy_id in ids if strategy_by_id.get(strategy_id)]
+        node_id = f"handoff:{handoff}"
+        _add_node(
+            {
+                "id": node_id,
+                "kind": "handoff",
+                "label": handoff,
+                "title": handoff,
+                "subtitle": f"{len(members)} strategy rows",
+                "summary": _compact(
+                    next(
+                        (
+                            (member.get("detail") or {}).get("seeded_reason")
+                            for member in members
+                            if (member.get("detail") or {}).get("seeded_reason")
+                        ),
+                        "",
+                    )
+                ),
+                "state": "handoff",
+                "state_group": "handoff",
+                "color": _state_color("handoff", "handoff"),
+                "degree": 0,
+                "depth": 99,
+                "score": float(len(members)),
+                "detail": {"member_count": len(members)},
+            }
+        )
+        for strategy_id in ids:
+            _add_edge(node_id, f"strategy:{strategy_id}", "handoff", label="source handoff", weight=1.2)
+            source_trial_id = strategy_by_id.get(strategy_id, {}).get("source_trial_id")
+            if source_trial_id is not None and source_trial_id in journal_by_trial:
+                _add_edge(
+                    node_id,
+                    f"journal:{source_trial_id}",
+                    "projection",
+                    label="source trial",
+                    weight=0.9,
+                )
+
+    # Link strategy rows to their journal evidence and source trial when present.
+    for strategy_id, node in strategy_by_id.items():
+        source_trial_id = node.get("source_trial_id")
+        if source_trial_id is not None and source_trial_id in journal_by_trial:
+            _add_edge(f"journal:{source_trial_id}", strategy_id, "projection", label="source trial", weight=1.6)
+        for evidence_trial_id in node.get("evidence_trial_ids") or []:
+            if evidence_trial_id in journal_by_trial:
+                _add_edge(f"journal:{evidence_trial_id}", strategy_id, "evidence", label="evidence", weight=1.0)
+        if node.get("bind_identifiers"):
+            node["summary"] = node.get("summary") or _compact(", ".join(str(x) for x in node["bind_identifiers"]))
+
+    # Journal lineage edges from append-only supersessions and parent links.
+    supersession_targets = {}
+    for row in journal_rows:
+        if row.get("type") == "supersession":
+            targets = row.get("target_trial_ids") if isinstance(row.get("target_trial_ids"), list) else []
+            for target in targets:
+                try:
+                    supersession_targets[int(target)] = int(row.get("trial_id")) if row.get("trial_id") is not None else None
+                except (TypeError, ValueError):
+                    continue
+    for trial_id, row in journal_by_trial.items():
+        parent_trial = row.get("parent_trial")
+        try:
+            parent_trial_id = int(parent_trial) if parent_trial is not None else None
+        except (TypeError, ValueError):
+            parent_trial_id = None
+        if parent_trial_id is not None and parent_trial_id in journal_by_trial:
+            _add_edge(f"journal:{parent_trial_id}", f"journal:{trial_id}", "parent", label="parent", weight=0.8)
+        superseded_by = supersession_targets.get(trial_id)
+        if superseded_by is not None and superseded_by in journal_by_trial:
+            _add_edge(f"journal:{trial_id}", f"journal:{superseded_by}", "supersedes", label="supersession", weight=0.8)
+
+    # Pick root nodes. If the caller asked for a focus, prefer those matches;
+    # otherwise center the graph on the active understanding: live/pending
+    # strategy rows and current-run frontier journal rows.
+    focus_norm = " ".join(str(focus or "").split()).lower()
+    focus_matches = [
+        node_id
+        for node_id, node in sorted(
+            nodes.items(),
+            key=lambda item: _focus_match_key(item[0], item[1], focus_norm),
+        )
+        if focus_norm and _node_matches_focus(node, focus_norm)
+    ]
+    if focus_matches:
+        roots = focus_matches[:8]
+        focus_reason = "matched focus query"
+    else:
+        roots = [
+            node_id
+            for node_id, node in sorted(
+                nodes.items(),
+                key=lambda item: _node_sort_key(item[1]),
+            )
+            if (
+                (node["kind"] == "strategy" and node.get("state_group") in {"applied", "pending", "context"})
+                or (node["kind"] == "journal" and node.get("state_group") in {"frontier", "audit"})
+            )
+        ][:16]
+        if not roots:
+            roots = [
+                node_id
+                for node_id, node in sorted(
+                    nodes.items(),
+                    key=lambda item: _node_sort_key(item[1]),
+                )
+            ][:8]
+        focus_reason = "default active understanding"
+
+    # Breadth-first expansion around the roots. This gives a subgraph that is
+    # explorable without flooding the browser with the whole store.
+    distances: dict[str, int] = {root_id: 0 for root_id in roots}
+    queue: deque[str] = deque(roots)
+    while queue:
+        node_id = queue.popleft()
+        current_depth = distances.get(node_id, 0)
+        if current_depth >= depth:
+            continue
+        for neighbor_id in adjacency.get(node_id, set()):
+            if neighbor_id not in nodes:
+                continue
+            if neighbor_id in distances:
+                continue
+            distances[neighbor_id] = current_depth + 1
+            queue.append(neighbor_id)
+
+    if not distances:
+        distances = {node_id: 0 for node_id in list(nodes)[: min(limit, 8)]}
+
+    for node_id, node in nodes.items():
+        node["degree"] = len(adjacency.get(node_id, set()))
+        node["distance"] = distances.get(node_id, 99)
+
+    selected_ids = {node_id for node_id, node in nodes.items() if node.get("distance", 99) <= depth}
+    for root_id in roots:
+        selected_ids.add(root_id)
+    if len(selected_ids) > limit:
+        root_nodes = [nodes[root_id] for root_id in roots if root_id in selected_ids]
+        remaining_nodes = sorted(
+            (
+                nodes[node_id]
+                for node_id in selected_ids
+                if node_id not in {node["id"] for node in root_nodes}
+            ),
+            key=_node_sort_key,
+        )
+        selected_nodes = root_nodes + remaining_nodes[: max(0, limit - len(root_nodes))]
+        selected_ids = {node["id"] for node in selected_nodes}
+
+    selected_nodes = [dict(nodes[node_id]) for node_id in selected_ids if node_id in nodes]
+    selected_nodes.sort(key=_node_sort_key)
+    selected_edges = [
+        dict(edge)
+        for edge in edges.values()
+        if edge["source"] in selected_ids and edge["target"] in selected_ids
+    ]
+    selected_edges.sort(key=lambda edge: (edge["kind"], edge["source"], edge["target"]))
+
+    state_counts: dict[str, int] = {}
+    kind_counts: dict[str, int] = {}
+    for node in selected_nodes:
+        state_counts[node["state_group"]] = state_counts.get(node["state_group"], 0) + 1
+        kind_counts[node["kind"]] = kind_counts.get(node["kind"], 0) + 1
+
+    focus_node_id = None
+    if roots:
+        focus_node_id = roots[0]
+    focus_node = nodes.get(focus_node_id) if focus_node_id else None
+    focus_summary = {
+        "query": focus,
+        "reason": focus_reason,
+        "matches": focus_matches,
+        "focus_node_id": focus_node_id,
+        "focus_label": focus_node.get("label") if focus_node else None,
+        "focus_kind": focus_node.get("kind") if focus_node else None,
+    }
+
+    return {
+        "available": bool(nodes),
+        "read_only": True,
+        "focus": focus_summary,
+        "source": {
+            "journal_path": str(_AUTOPILOT_JOURNAL_PATH),
+            "journal_run_start_index": journal_meta.get("journal_run_start_index"),
+            "journal_run_start_trial_id": journal_meta.get("journal_run_start_trial_id"),
+            "strategy_store_path": str(_STRATEGY_STORE_PATH / "strategies.db"),
+        },
+        "summary": {
+            "journal_rows": len(journal_rows),
+            "strategy_rows": len(strategy_rows),
+            "node_count": len(selected_nodes),
+            "edge_count": len(selected_edges),
+            "state_counts": state_counts,
+            "kind_counts": kind_counts,
+        },
+        "nodes": selected_nodes,
+        "edges": selected_edges,
+    }
 
 
 def _shape_baseline_promotion_event(event: dict[str, Any]) -> dict[str, Any]:

@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sqlite3
 import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -1010,6 +1011,155 @@ def test_count_log_events_counts_pattern_matches(tmp_path) -> None:
 def test_count_log_events_missing_file_returns_zeros(tmp_path) -> None:
     counts = dashboard_snapshot.count_log_events(tmp_path / "no.log", {"foo": "bar"})
     assert counts == {"foo": 0}
+
+
+def test_read_strategy_store_rows_reads_read_only_sqlite(tmp_path, monkeypatch) -> None:
+    store_dir = tmp_path / "strategies"
+    store_dir.mkdir()
+    db_path = store_dir / "strategies.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE strategies (
+            id TEXT PRIMARY KEY,
+            description TEXT NOT NULL,
+            insight TEXT NOT NULL,
+            source_trial_id INTEGER,
+            species TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            metadata_json TEXT DEFAULT '{}',
+            entry_type TEXT DEFAULT 'raw',
+            evidence_trial_ids TEXT DEFAULT '[]'
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO strategies (
+            id, description, insight, source_trial_id, species, created_at,
+            metadata_json, entry_type, evidence_trial_ids
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "row-1",
+            "operator handoff row",
+            "keep prompt graphs compact",
+            12,
+            "prompt_forge",
+            "2026-06-28T00:00:00+00:00",
+            json.dumps({"bind_status": "future", "seed_campaign": "graph-panel"}),
+            "pattern",
+            json.dumps([12]),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr(dashboard, "_STRATEGY_STORE_PATH", store_dir)
+
+    rows = dashboard._read_strategy_store_rows()
+
+    assert rows is not None
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["id"] == "row-1"
+    assert row["entry_type"] == "pattern"
+    assert row["metadata"]["bind_status"] == "future"
+    assert row["evidence_trial_ids"] == [12]
+
+
+def test_insight_graph_endpoint_merges_strategy_and_journal_rows(monkeypatch) -> None:
+    journal_rows = [
+        {
+            "trial_id": 12,
+            "timestamp": "2026-06-28T00:01:00+00:00",
+            "species": "prompt_forge",
+            "action_type": "prompt_mutation",
+            "pareto_status": "frontier",
+            "quality": 1.5,
+            "speed": 42.0,
+            "hypothesis": "Keep prompt graphs compact",
+            "reasoning": "The operator hint panel should stay small.",
+        },
+        {
+            "trial_id": 13,
+            "timestamp": "2026-06-28T00:02:00+00:00",
+            "species": "prompt_forge",
+            "action_type": "prompt_mutation",
+            "pareto_status": "dominated",
+            "quality": 1.2,
+            "speed": 39.0,
+            "parent_trial": 12,
+            "reasoning": "A longer prompt was slower.",
+        },
+    ]
+    strategy_rows = [
+        {
+            "id": "journal-frontier-trial-12",
+            "description": "prompt mutation",
+            "insight": "q=1.5 s=42.0 mechanism=compact graph",
+            "source_trial_id": 12,
+            "species": "prompt_forge",
+            "created_at": "2026-06-28T00:01:05+00:00",
+            "metadata": {
+                "generated_from": "journal_frontier",
+                "journal_trial_id": 12,
+            },
+            "entry_type": "raw",
+            "evidence_trial_ids": [12],
+        },
+        {
+            "id": "opseed-graph-panel",
+            "description": "Graph panel seed",
+            "insight": "Show compact insight graphs in the dashboard",
+            "source_trial_id": 12,
+            "species": "prompt_forge",
+            "created_at": "2026-06-28T00:03:00+00:00",
+            "metadata": {
+                "seed_campaign": "graph-panel",
+                "source_handoff": "dashboard-graph-panel",
+                "bind_status": "future",
+                "seeded_by": "operator",
+                "seeded_reason": "Keep the dashboard panel compact",
+            },
+            "entry_type": "pattern",
+            "evidence_trial_ids": [12],
+        },
+        {
+            "id": "opseed-graph-panel-live",
+            "description": "Graph panel seed live",
+            "insight": "Applied insight path",
+            "source_trial_id": 13,
+            "species": "prompt_forge",
+            "created_at": "2026-06-28T00:04:00+00:00",
+            "metadata": {
+                "seed_campaign": "graph-panel",
+                "source_handoff": "dashboard-graph-panel",
+                "bind_status": "live",
+                "seeded_by": "operator",
+            },
+            "entry_type": "convention",
+            "evidence_trial_ids": [13],
+        },
+    ]
+    monkeypatch.setattr(dashboard, "_read_autopilot_journal_rows", lambda path=None: journal_rows)
+    monkeypatch.setattr(dashboard, "_read_strategy_store_rows", lambda path=None: strategy_rows)
+
+    response = asyncio.run(dashboard.insight_graph(focus="campaign:graph-panel", depth=2))
+    data = json.loads(response.body)
+
+    assert data["available"] is True
+    assert data["read_only"] is True
+    assert data["focus"]["focus_kind"] == "campaign"
+    assert data["focus"]["reason"] == "matched focus query"
+    assert data["summary"]["state_counts"]["applied"] >= 1
+    assert data["summary"]["state_counts"]["pending"] >= 1
+
+    kinds = {node["kind"] for node in data["nodes"]}
+    assert {"journal", "strategy", "campaign", "handoff"} <= kinds
+
+    edge_kinds = {edge["kind"] for edge in data["edges"]}
+    assert {"projection", "campaign", "handoff", "parent"} <= edge_kinds
 
 
 # ----- dashboard.py route module smoke test -----

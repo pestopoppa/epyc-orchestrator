@@ -143,6 +143,19 @@ def test_dashboard_repo_readiness_panel_is_advisory_only() -> None:
     assert "data.autopilot_gate ? 'true' : 'false'" in body
 
 
+def test_dashboard_insight_graph_panel_is_wired_read_only() -> None:
+    html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    body = html_path.read_text()
+
+    assert 'id="insight-graph-panel"' in body
+    assert 'id="insight-graph-svg"' in body
+    assert 'id="insight-graph-query"' in body
+    assert "/dashboard/api/insight_graph" in body
+    assert "function renderInsightGraph(graph)" in body
+    assert "function updateInsightGraph(focusOverride)" in body
+    assert "setInterval(() => updateInsightGraph(_insightGraphFocus), 20000)" in body
+
+
 # ----- dashboard_tasks: timezone-aware UTC (Tranche-8 polish) -----
 
 
