@@ -81,6 +81,7 @@ from self_criticism import SelfCriticism, generate_self_criticism
 from phase_status import AsyncTaskRunner, PhaseTracker
 
 # 2026-05-22 Tranche-5 refactor — extracted modules. Public names re-imported below.
+import controller_io
 from controller_io import PLANNER_ARCHIVE_PATH, invoke_controller as _invoke_controller_impl
 from planner_coordinator import plan_with_providers, uncritiqued_dispatch_block_reason
 from state_store import (
@@ -256,6 +257,11 @@ MAX_CONSECUTIVE_PASSIVE = int(
 # numeric_trial with empty params is the safest self-configuring frontier action
 # (Optuna suggests the values; no file/flag dependency to get wrong).
 _FALLBACK_NUMERIC_SURFACES = ("think_harder", "escalation", "monitor", "memrl_retrieval")
+_PLANNER_HINTS_ENABLED = os.environ.get(
+    "AUTOPILOT_PLANNER_HINTS", ""
+).strip().lower() in {"1", "true", "yes", "on"}
+_PLANNER_SUPPRESSED_NUMERIC_SURFACES: set[str] = set()
+_PLANNER_DENYLISTED_FEATURE_FLAGS: set[str] = set()
 
 
 def _configured_numeric_surfaces() -> tuple[str, ...]:
@@ -263,14 +269,103 @@ def _configured_numeric_surfaces() -> tuple[str, ...]:
     try:
         from species.numeric_swarm import SURFACES as _NS_SURFACES
     except Exception:
-        return _FALLBACK_NUMERIC_SURFACES
+        surfaces = _FALLBACK_NUMERIC_SURFACES
+    else:
+        surfaces = tuple(
+            surface
+            for surface in _NS_SURFACES
+            if isinstance(surface, str) and surface.strip()
+        ) or _FALLBACK_NUMERIC_SURFACES
 
-    surfaces = tuple(
-        surface
-        for surface in _NS_SURFACES
-        if isinstance(surface, str) and surface.strip()
+    suppressed = _PLANNER_SUPPRESSED_NUMERIC_SURFACES
+    if not suppressed:
+        return surfaces
+    return tuple(surface for surface in surfaces if surface not in suppressed)
+
+
+def _planner_convention_bindings(
+    strategy_store: StrategyStore | None,
+    journal: ExperimentJournal | None,
+    *,
+    species: str,
+) -> set[str]:
+    """Return startup-scoped live convention bindings for planner visibility."""
+    if not _PLANNER_HINTS_ENABLED or strategy_store is None:
+        return set()
+    if not hasattr(strategy_store, "retrieve_conventions"):
+        log.warning(
+            "Skipping %s planner convention bindings: StrategyStore lacks "
+            "retrieve_conventions()",
+            species,
+        )
+        return set()
+    try:
+        conventions = strategy_store.retrieve_conventions(
+            species=species,
+            journal=journal,
+        )
+    except TypeError:
+        log.warning(
+            "Skipping %s planner convention bindings: incompatible "
+            "retrieve_conventions() signature",
+            species,
+        )
+        return set()
+    except Exception as exc:
+        log.warning("Skipping %s planner convention bindings: %s", species, exc)
+        return set()
+
+    bindings: set[str] = set()
+    for entry in conventions:
+        metadata = getattr(entry, "metadata", {}) or {}
+        if not isinstance(metadata, dict):
+            continue
+        if str(metadata.get("bind_status", "")).strip().lower() != "live":
+            continue
+        identifiers = metadata.get("bind_identifiers", [])
+        if not isinstance(identifiers, list):
+            continue
+        bindings.update(
+            str(identifier).strip()
+            for identifier in identifiers
+            if str(identifier).strip()
+        )
+    return bindings
+
+
+def _install_planner_convention_bindings(
+    strategy_store: StrategyStore | None,
+    journal: ExperimentJournal | None,
+) -> None:
+    """Load default-off convention bindings once for prompts and validation."""
+    _PLANNER_DENYLISTED_FEATURE_FLAGS.clear()
+    _PLANNER_SUPPRESSED_NUMERIC_SURFACES.clear()
+    if not _PLANNER_HINTS_ENABLED:
+        controller_io.set_suppressed_numeric_surfaces(set())
+        return
+
+    _PLANNER_DENYLISTED_FEATURE_FLAGS.update(
+        _planner_convention_bindings(
+            strategy_store,
+            journal,
+            species="structural_lab",
+        )
     )
-    return surfaces or _FALLBACK_NUMERIC_SURFACES
+    _PLANNER_SUPPRESSED_NUMERIC_SURFACES.update(
+        _planner_convention_bindings(
+            strategy_store,
+            journal,
+            species="numeric_swarm",
+        )
+    )
+    controller_io.set_suppressed_numeric_surfaces(_PLANNER_SUPPRESSED_NUMERIC_SURFACES)
+    if _PLANNER_DENYLISTED_FEATURE_FLAGS or _PLANNER_SUPPRESSED_NUMERIC_SURFACES:
+        log.info(
+            "Planner convention bindings active: denylisted_flags=%s "
+            "suppressed_numeric_surfaces=%s",
+            sorted(_PLANNER_DENYLISTED_FEATURE_FLAGS),
+            sorted(_PLANNER_SUPPRESSED_NUMERIC_SURFACES),
+        )
 
 
 _QUOTA_NUMERIC_SURFACES = _configured_numeric_surfaces()
@@ -480,10 +575,14 @@ def _first_unblacklisted_numeric_trial_action(
     trial_counter: int = 0,
 ) -> tuple[dict[str, Any] | None, str]:
     last_blocked = ""
-    for offset in range(len(_QUOTA_NUMERIC_SURFACES)):
-        surface = _QUOTA_NUMERIC_SURFACES[
-            (trial_counter + offset) % len(_QUOTA_NUMERIC_SURFACES)
-        ]
+    surfaces = _configured_numeric_surfaces()
+    if not surfaces:
+        return None, (
+            "all quota numeric_trial surfaces are suppressed by planner "
+            "conventions"
+        )
+    for offset in range(len(surfaces)):
+        surface = surfaces[(trial_counter + offset) % len(surfaces)]
         candidate = {"type": "numeric_trial", "surface": surface, "params": {}}
         blocked = check_blacklist(candidate, blacklist)
         if not blocked:
@@ -1236,7 +1335,11 @@ def _force_frontier_rerun_numeric_action(
     )
 
 
-def _build_feature_flags_block(lab: Any) -> str:
+def _build_feature_flags_block(
+    lab: Any,
+    *,
+    denylisted_flags: set[str] | None = None,
+) -> str:
     """Render live feature-flag state + dependency rules for the planner prompt.
 
     The planner previously had no view of which flags exist, what they depend on,
@@ -1267,6 +1370,13 @@ def _build_feature_flags_block(lab: Any) -> str:
         lines.append(f"Currently ON ({len(on)}): " + (", ".join(on) or "(none)"))
     else:
         lines.append("Currently ON: (unknown — orchestrator /config not reachable)")
+    denylisted_flags = set(denylisted_flags or set())
+    if denylisted_flags:
+        lines.append(
+            "Convention-denylisted flags: "
+            + ", ".join(sorted(denylisted_flags))
+            + " (do not propose structural_experiment for these flags)"
+        )
     lines.append("")
     lines.append(
         "Flags WITH dependencies (single-variable rule, AP-9: enable a missing "
@@ -1293,6 +1403,11 @@ def _build_feature_flags_block(lab: Any) -> str:
         "are not all currently ON. Setting a flag that is already ON is a no-op "
         "and burns a trial."
     )
+    if denylisted_flags:
+        lines.append(
+            "RULE: never propose structural_experiment for convention-denylisted "
+            "flags; the dispatcher will reject them before evaluation."
+        )
     return "\n".join(lines)
 
 
@@ -1913,6 +2028,7 @@ def _build_action_availability(
     converged: bool,
     slot_memory_text: str,
     blacklist: list[dict[str, Any]],
+    suppressed_numeric_surfaces: set[str] | None = None,
 ) -> tuple[str, list[str]]:
     """Return prompt text + viable tail-seed action types for the planner."""
     blocked: dict[str, str] = {}
@@ -1955,6 +2071,21 @@ def _build_action_availability(
             "all configured measured seed fallback candidates are blacklisted; "
             f"last reason: {seed_exhaustion}"
         )
+
+    suppressed_numeric_surfaces = set(suppressed_numeric_surfaces or set())
+    if suppressed_numeric_surfaces:
+        available_numeric_surfaces = _configured_numeric_surfaces()
+        if available_numeric_surfaces:
+            cautions["numeric_trial"] = (
+                "convention-suppressed numeric surfaces are unavailable: "
+                + ", ".join(sorted(suppressed_numeric_surfaces))
+                + "; use only the numeric surfaces shown in the action schema"
+            )
+        else:
+            blocked["numeric_trial"] = (
+                "all numeric surfaces are suppressed by planner conventions: "
+                + ", ".join(sorted(suppressed_numeric_surfaces))
+            )
 
     cautions["reset_memories"] = (
         "destructive recovery action; do not use for ordinary stagnation"
@@ -2882,6 +3013,7 @@ def _run_loop_inner(
         log.info("Strategy store loaded (%d entries)", strategy_store.count())
     except Exception as e:
         log.warning("Strategy store unavailable: %s", e)
+    _install_planner_convention_bindings(strategy_store, journal)
 
     # B2: Failure blacklist
     blacklist = load_blacklist()
@@ -3313,6 +3445,7 @@ def _run_loop_inner(
                     converged=converged,
                     slot_memory_text=slot_memory_text,
                     blacklist=blacklist,
+                    suppressed_numeric_surfaces=_PLANNER_SUPPRESSED_NUMERIC_SURFACES,
                 )
                 exploration_block, stagnation_signal = _build_exploration_block(
                     journal=journal,
@@ -3358,7 +3491,10 @@ def _run_loop_inner(
                 last_criticism=last_criticism_text,  # AP-23
                 model_signatures=model_signatures_text,
                 blacklist_text=blacklist_text,
-                feature_flags_block=_build_feature_flags_block(lab),
+                feature_flags_block=_build_feature_flags_block(
+                    lab,
+                    denylisted_flags=_PLANNER_DENYLISTED_FEATURE_FLAGS,
+                ),
                 last_invalid_feedback=_build_last_invalid_feedback(state),
                 numeric_surface_options="|".join(_configured_numeric_surfaces()),
                 code_targets=", ".join(CODE_MUTATION_ALLOWLIST),

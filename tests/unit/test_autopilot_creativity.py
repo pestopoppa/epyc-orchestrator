@@ -356,6 +356,62 @@ def test_action_availability_blocks_seed_batch_when_fallbacks_exhausted(
     assert "seed_batch" not in viable
 
 
+def test_action_availability_surfaces_suppressed_numeric_surfaces(
+    tmp_path: Path,
+) -> None:
+    j = _fresh_journal(tmp_path)
+    try:
+        autopilot._PLANNER_SUPPRESSED_NUMERIC_SURFACES.clear()
+        autopilot._PLANNER_SUPPRESSED_NUMERIC_SURFACES.add("kv_compaction")
+        availability, viable = autopilot._build_action_availability(
+            journal=j,
+            known_actions=KNOWN_ACTIONS,
+            memory_count=10_000,
+            converged=True,
+            slot_memory_text="  healthy queried ports with empty KV cache: frontdoor:8070",
+            blacklist=[],
+            suppressed_numeric_surfaces={"kv_compaction"},
+        )
+    finally:
+        autopilot._PLANNER_SUPPRESSED_NUMERIC_SURFACES.clear()
+
+    assert "convention-suppressed numeric surfaces are unavailable" in availability
+    assert "kv_compaction" in availability
+    assert "numeric_trial" in viable
+
+
+def test_configured_numeric_surfaces_hide_planner_suppressed_surface() -> None:
+    try:
+        autopilot._PLANNER_SUPPRESSED_NUMERIC_SURFACES.clear()
+        autopilot._PLANNER_SUPPRESSED_NUMERIC_SURFACES.add("kv_compaction")
+        surfaces = autopilot._configured_numeric_surfaces()
+    finally:
+        autopilot._PLANNER_SUPPRESSED_NUMERIC_SURFACES.clear()
+
+    assert "kv_compaction" not in surfaces
+    assert "think_harder" in surfaces
+
+
+def test_feature_flags_block_surfaces_convention_denylist() -> None:
+    class FakeLab:
+        def current_flags(self):
+            return {"graph_router": False, "specialist_routing": True}
+
+        def flag_schema(self):
+            return [
+                {"name": "graph_router", "dependencies": ["specialist_routing"]},
+                {"name": "specialist_routing", "dependencies": []},
+            ]
+
+    block = autopilot._build_feature_flags_block(
+        FakeLab(),
+        denylisted_flags={"graph_router"},
+    )
+
+    assert "Convention-denylisted flags: graph_router" in block
+    assert "never propose structural_experiment for convention-denylisted flags" in block
+
+
 def test_slot_query_ports_from_stack_priors_uses_live_primary_llama_entries(tmp_path: Path) -> None:
     priors = tmp_path / "stack_priors.yaml"
     priors.write_text(

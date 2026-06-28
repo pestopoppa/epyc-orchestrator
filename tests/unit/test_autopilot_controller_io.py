@@ -195,6 +195,18 @@ def test_validate_numeric_trial_rejects_unknown_surface() -> None:
     assert err and "surface must be one of" in err
 
 
+def test_validate_numeric_trial_rejects_suppressed_surface() -> None:
+    try:
+        controller_io.set_suppressed_numeric_surfaces({"kv_compaction"})
+        err = controller_io.validate_single_variable(
+            {"type": "numeric_trial", "surface": "kv_compaction", "params": {}}
+        )
+        assert err and "surface must be one of" in err
+        assert "kv_compaction" not in controller_io._NUMERIC_SURFACES
+    finally:
+        controller_io.set_suppressed_numeric_surfaces(set())
+
+
 def test_validate_mutation_rejects_unknown_keys_and_bad_enums() -> None:
     err = controller_io.validate_single_variable(
         {

@@ -70,10 +70,25 @@ def _configured_numeric_surfaces() -> set[str]:
     return surfaces or set(_FALLBACK_NUMERIC_SURFACES)
 
 
-_NUMERIC_SURFACES = _configured_numeric_surfaces()
+_RAW_NUMERIC_SURFACES = _configured_numeric_surfaces()
+_SUPPRESSED_NUMERIC_SURFACES: set[str] = set()
+_NUMERIC_SURFACES = set(_RAW_NUMERIC_SURFACES)
 _PROMPT_MUTATIONS = {"targeted_fix", "compress", "few_shot_evolution"}
 _CODE_MUTATIONS = {"targeted_fix"}
 _SLOT_SCORERS = {"expected_attention", "knorm"}
+
+
+def set_suppressed_numeric_surfaces(surfaces: set[str] | list[str] | tuple[str, ...]) -> None:
+    """Update startup-scoped numeric surfaces hidden from planner validation."""
+    global _NUMERIC_SURFACES
+    _SUPPRESSED_NUMERIC_SURFACES.clear()
+    _SUPPRESSED_NUMERIC_SURFACES.update(
+        str(surface).strip()
+        for surface in surfaces
+        if str(surface).strip() in _RAW_NUMERIC_SURFACES
+    )
+    _NUMERIC_SURFACES = set(_RAW_NUMERIC_SURFACES) - _SUPPRESSED_NUMERIC_SURFACES
+    _ACTION_SCHEMAS["numeric_trial"]["enums"]["surface"] = _NUMERIC_SURFACES
 
 
 def _write_planner_subprocess_status(
