@@ -154,7 +154,8 @@ def build_launch_env(role: str, base_env: dict[str, str] | None = None) -> dict[
         1. base_env (parent process env, typically os.environ.copy())
         2. LLVM-20 libomp prepended to LD_LIBRARY_PATH (canonical recipe)
         3. canonical OMP env stack (always applied)
-        4. per-role GGML_* env block (from v5 deployment draft)
+        4. explicit base GGML_IQK override, if present, for v6 iqk A/B gates
+        5. per-role GGML_* env block (from v5 deployment draft)
 
     The per-role block is allowed to override OMP if it must, though no current
     role does so.
@@ -169,6 +170,9 @@ def build_launch_env(role: str, base_env: dict[str, str] | None = None) -> dict[
         env["LD_LIBRARY_PATH"] = (
             f"{_LLVM20_LIBDIR}:{existing_ld}" if existing_ld else _LLVM20_LIBDIR
         )
+    explicit_iqk = env.get("GGML_IQK")
     env.update(_CANONICAL_OMP_ENV)
+    if explicit_iqk is not None:
+        env["GGML_IQK"] = explicit_iqk
     env.update(_role_env_overrides(role))
     return env

@@ -33,17 +33,25 @@ def test_llvm20_libdir_idempotent_when_already_present() -> None:
     assert env["LD_LIBRARY_PATH"] == initial
 
 
-def test_worker_role_gets_ccd_stack() -> None:
+def test_worker_role_gets_v6_iqk_without_vestigial_ccd_stack() -> None:
     env = build_launch_env("worker", base_env={})
-    assert env["GGML_CCD_POOLS"] == "1"
-    assert env["GGML_CCD_WORK_DIST"] == "1"
-    assert env["GGML_BARRIER_LOCAL_BETWEEN_OPS"] == "1"
+    assert env["GGML_IQK"] == "1"
+    assert "GGML_CCD_POOLS" not in env
+    assert "GGML_CCD_WORK_DIST" not in env
+    assert "GGML_BARRIER_LOCAL_BETWEEN_OPS" not in env
 
 
 def test_frontdoor_role_gets_no_ggml_env() -> None:
     env = build_launch_env("frontdoor", base_env={})
     for key in env:
+        if key == "GGML_IQK":
+            continue
         assert not key.startswith("GGML_"), f"frontdoor must not set {key}"
+
+
+def test_explicit_iqk_override_survives_canonical_default() -> None:
+    env = build_launch_env("worker_general", base_env={"GGML_IQK": "0"})
+    assert env["GGML_IQK"] == "0"
 
 
 def test_arch_alias_fallthrough_worker_summarize_inherits_frontdoor() -> None:
@@ -64,11 +72,12 @@ def test_worker_explore_alias_inherits_worker() -> None:
     assert aliased == expected
 
 
-def test_worker_general_role_gets_ccd_stack_directly() -> None:
+def test_worker_general_role_gets_v6_iqk_directly() -> None:
     env = build_launch_env("worker_general", base_env={})
-    assert env["GGML_CCD_POOLS"] == "1"
-    assert env["GGML_CCD_WORK_DIST"] == "1"
-    assert env["GGML_BARRIER_LOCAL_BETWEEN_OPS"] == "1"
+    assert env["GGML_IQK"] == "1"
+    assert "GGML_CCD_POOLS" not in env
+    assert "GGML_CCD_WORK_DIST" not in env
+    assert "GGML_BARRIER_LOCAL_BETWEEN_OPS" not in env
 
 
 def test_unknown_role_returns_empty_overrides() -> None:
@@ -90,9 +99,9 @@ def test_base_env_preserved() -> None:
 
 def test_role_overrides_returns_independent_dict_copies() -> None:
     first = _role_env_overrides("worker")
-    first["GGML_CCD_POOLS"] = "MUTATED"
+    first["MUTATED_KEY"] = "MUTATED"
     second = _role_env_overrides("worker")
-    assert second["GGML_CCD_POOLS"] == "1"
+    assert "MUTATED_KEY" not in second
 
 
 def test_architect_general_overrides_repack_interleave() -> None:
