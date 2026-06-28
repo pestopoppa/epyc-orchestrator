@@ -1777,6 +1777,7 @@ let _rawTapBuffer = "";
 let _structuredTapRequests = [];
 let _latestRegionLocksByRole = {};
 let _latestTapInferredRegionLocksByRole = {};
+let _latestSlotInferredRegionLocksByRole = {};
 let _lastRegionLockPollStarted = 0;
 let _structuredTapOpenRequestIds = new Set();
 let _rawRenderedTapOpenKeys = new Set();
@@ -2066,6 +2067,50 @@ function buildTapInferredRegionLocks() {
         }
         bucket.sources.push(req);
         inferred[role] = bucket;
+    }
+    return inferred;
+}
+
+function buildSlotInferredRegionLocks(byRole) {
+    const inferred = {};
+    const snap = _latestSnapshot || {};
+    const activity = snap.activity || {};
+    if (!topology || !activity) return inferred;
+    for (const n of topology.nodes || []) {
+        if (!n || n.kind !== 'llama-server' || !n.port) continue;
+        const slotActivity = activity[n.port] || {};
+        if (!slotActivity.n_active) continue;
+        let base = n.label || n.role || '';
+        let shape = '';
+        const m = String(base).match(/^(.+?)\.(q\d+|[a-z]+_\d+)$/);
+        if (m) {
+            base = m[1];
+            shape = m[2];
+        } else {
+            const m2 = String(base).match(/^([a-z_]+?)_(\d+)$/);
+            if (m2 && m2[1] === 'embedder') {
+                base = m2[1];
+                shape = `_${m2[2]}`;
+            }
+        }
+        base = clientBaseRole(base);
+        const roleInfo = byRole && byRole[base];
+        if (!roleInfo || !Array.isArray(roleInfo.instances) || !roleInfo.instances.length) continue;
+        const inst = shape
+            ? roleInfo.instances.find(i => String(i.shape) === shape)
+            : roleInfo.instances[0];
+        if (!inst || inst.idx == null) continue;
+        const idx = Number(inst.idx);
+        if (!Number.isFinite(idx)) continue;
+        const bucket = inferred[base] || {
+            instanceIdxs: new Set(),
+            regions: new Set(),
+            sources: [],
+        };
+        bucket.instanceIdxs.add(idx);
+        for (const region of (inst.regions || [])) bucket.regions.add(String(region));
+        bucket.sources.push({ port: n.port, label: n.label || base, n_active: slotActivity.n_active || 0, instance_idx: idx });
+        inferred[base] = bucket;
     }
     return inferred;
 }
@@ -4988,6 +5033,7 @@ async function updateRegionLocks(refreshSeq = _regionLocksRefreshSeq, regionLock
                 };
             }
             _latestTapInferredRegionLocksByRole = buildTapInferredRegionLocks();
+            _latestSlotInferredRegionLocksByRole = buildSlotInferredRegionLocks(byRole);
             for (const [role, inferred] of Object.entries(_latestTapInferredRegionLocksByRole || {})) {
                 const base = _latestRegionLocksByRole[role] || {
                     instanceIdxs: new Set(),
@@ -5013,6 +5059,27 @@ async function updateRegionLocks(refreshSeq = _regionLocksRefreshSeq, regionLock
                     for (const pid of pids) bucket.add(String(pid));
                     base.pidsByInstanceIdx.set(Number(idx), bucket);
                 }
+                _latestRegionLocksByRole[role] = base;
+            }
+            for (const [role, inferred] of Object.entries(_latestSlotInferredRegionLocksByRole || {})) {
+                const base = _latestRegionLocksByRole[role] || {
+                    instanceIdxs: new Set(),
+                    procInstanceIdxs: new Set(),
+                    regions: new Set(),
+                    holderPids: new Set(),
+                    pidsByInstanceIdx: new Map(),
+                    instances: (byRole[role] && byRole[role].instances) || [],
+                };
+                base.slotInferredInstanceIdxs = new Set([
+                    ...((base.slotInferredInstanceIdxs && [...base.slotInferredInstanceIdxs]) || []),
+                    ...((inferred.instanceIdxs && [...inferred.instanceIdxs]) || []),
+                ]);
+                base.slotInferredRegions = new Set([
+                    ...((base.slotInferredRegions && [...base.slotInferredRegions]) || []),
+                    ...((inferred.regions && [...inferred.regions]) || []),
+                ]);
+                for (const idx of (inferred.instanceIdxs || [])) base.instanceIdxs.add(Number(idx));
+                for (const region of (inferred.regions || [])) base.regions.add(String(region));
                 _latestRegionLocksByRole[role] = base;
             }
             if (_rawTapRenderMode === 'structured') {
@@ -5051,6 +5118,7 @@ async function updateRegionLocks(refreshSeq = _regionLocksRefreshSeq, regionLock
             }
             const actualHeldBySummary = formatRegionLockHolderSummary();
             const tapInferredMissing = [];
+            const slotInferredMissing = [];
             for (const [role, inferred] of Object.entries(_latestTapInferredRegionLocksByRole || {})) {
                 const actualActive = new Set(((byRole[role] || {}).active_instance_idxs || []).map(Number));
                 const instByIdx = new Map((((byRole[role] || {}).instances) || []).map(i => [Number(i.idx), i]));
@@ -5068,16 +5136,33 @@ async function updateRegionLocks(refreshSeq = _regionLocksRefreshSeq, regionLock
                     }
                 }
             }
+            for (const [role, inferred] of Object.entries(_latestSlotInferredRegionLocksByRole || {})) {
+                const actualActive = new Set(((byRole[role] || {}).active_instance_idxs || []).map(Number));
+                const tapActive = new Set(((_latestTapInferredRegionLocksByRole[role] || {}).instanceIdxs || []));
+                const instByIdx = new Map((((byRole[role] || {}).instances) || []).map(i => [Number(i.idx), i]));
+                for (const idx of (inferred.instanceIdxs || [])) {
+                    const nIdx = Number(idx);
+                    if (actualActive.has(nIdx) || tapActive.has(nIdx)) continue;
+                    const inst = instByIdx.get(nIdx);
+                    const regions = ((inst && inst.regions) || []).map(String);
+                    if (!regions.length) continue;
+                    const shape = (inst && inst.shape) || `idx${nIdx}`;
+                    slotInferredMissing.push(`${role}.${shape}`);
+                    for (const region of regions) {
+                        (globalHeldBy[region] ||= []).push({ role, shape, inferred: true, slotInferred: true });
+                    }
+                }
+            }
             const globalHeldRegions = new Set(Object.keys(globalHeldBy));
             const actualActiveLockCount = Object.values(byRole).reduce(
                 (acc, info) => acc + ((info.active_instance_idxs || []).length),
                 0
             );
-            const activeLockCount = actualActiveLockCount + tapInferredMissing.length;
+            const activeLockCount = actualActiveLockCount + tapInferredMissing.length + slotInferredMissing.length;
             const heldBySummary = [...new Set(
                 Object.values(globalHeldBy)
                     .flat()
-                    .map(b => `${b.inferred ? '~' : ''}${b.role}.${b.shape}`)
+                    .map(b => `${b.inferred ? (b.slotInferred ? '≈' : '~') : ''}${b.role}.${b.shape}`)
             )].join(', ');
             _latestRegionLockSummary = {
                 activeLockCount,
@@ -5101,8 +5186,11 @@ async function updateRegionLocks(refreshSeq = _regionLocksRefreshSeq, regionLock
                 const inferredSuffix = tapInferredMissing.length
                     ? `; +${tapInferredMissing.length} tap-inferred active stream(s): ${tapInferredMissing.join(', ')}`
                     : '';
+                const slotInferredSuffix = slotInferredMissing.length
+                    ? `; +${slotInferredMissing.length} slot-inferred active instance(s): ${slotInferredMissing.join(', ')}`
+                    : '';
                 status.textContent = activeLockCount > 0
-                    ? `— ${actualActiveLockCount} /proc holder instance(s): ${actualHeldBySummary || 'none'}${inferredSuffix}; × cells are same-role or matrix-blocked waits; per-region locks ENABLED`
+                    ? `— ${actualActiveLockCount} /proc holder instance(s): ${actualHeldBySummary || 'none'}${inferredSuffix}${slotInferredSuffix}; × cells are same-role or matrix-blocked waits; per-region locks ENABLED`
                     : '— no locks held; per-region locks ENABLED';
                 status.style.color = activeLockCount > 0 ? '#fbbf24' : 'var(--muted)';
             }
@@ -5113,6 +5201,7 @@ async function updateRegionLocks(refreshSeq = _regionLocksRefreshSeq, regionLock
                 const insts = info.instances || [];
                 const activeSet = new Set(info.active_instance_idxs || []);
                 const inferredActiveSet = (_latestTapInferredRegionLocksByRole[role] && _latestTapInferredRegionLocksByRole[role].instanceIdxs) || new Set();
+                const slotInferredActiveSet = (_latestSlotInferredRegionLocksByRole[role] && _latestSlotInferredRegionLocksByRole[role].instanceIdxs) || new Set();
                 rows.push(`<div style="overflow:hidden;color:var(--fg);font-size:11px;line-height:1.3">${role}</div>`);
                 for (const col of COLS) {
                     const inst = pickInstForCol(insts, col.key);
@@ -5127,6 +5216,11 @@ async function updateRegionLocks(refreshSeq = _regionLocksRefreshSeq, regionLock
                     }
                     if (inferredActiveSet.has(Number(inst.idx))) {
                         const t = `${role}.${col.label} TAP ACTIVE — structured tap is streaming on idx=${inst.idx}; /proc lock poll has not observed the holder in this frame`;
+                        rows.push(`<div class="rl-cell rl-active rl-inferred" title="${t}">⚡</div>`);
+                        continue;
+                    }
+                    if (slotInferredActiveSet.has(Number(inst.idx))) {
+                        const t = `${role}.${col.label} SLOT ACTIVE — llama /slots reports active decode on idx=${inst.idx}; /proc lock and structured tap metadata did not identify the holder in this frame`;
                         rows.push(`<div class="rl-cell rl-active rl-inferred" title="${t}">⚡</div>`);
                         continue;
                     }
