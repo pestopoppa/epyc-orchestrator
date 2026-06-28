@@ -1,0 +1,176 @@
+{
+  "blockers": [
+    "ds_e1_dynamic_stack: kv_size_measurements: No direct DS-E1 production KV-size measurement series was found.",
+    "xmas_production_path: xmas_routing.mode is off; enforce remains default-off",
+    "xmas_production_path: latest X-MAS held-out A/B policy is incumbent_constrained_v1; required incumbent_constrained_cheapfirst_v2",
+    "xmas_production_path: latest X-MAS held-out A/B decision is hold"
+  ],
+  "next_actions": [
+    {
+      "blocked_by": [
+        "active AutoPilot process(es): 2143322 /mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/autopilot/autopilot.py start --max-trials 2000",
+        "live llama-server process(es): 1373518 /mnt/raid0/llm/llama.cpp/build/bin/llama-server -m /mnt/raid0/llm/models/gemma-4-26B-A4B-it-ORIG-Q4_K_M.gguf -md /mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-v6-Q8_0.gguf --spec-type draft-mtp --spec-draft-n-max 2 --draft-p-min 0.0 --threads-draft 16 -ub 512 --no-mmap --reasoning off --jinja --host 127.0.0.1 --port 8072 -np 1 -c 16384 -t 96 -ctk q8_0 -ctv q8_0 --flash-attn on; 3750433 /mnt/raid0/llm/llama.cpp/build/bin/llama-server -m /mnt/raid0/llm/models/gemma-4-26B-A4B-it-ORIG-Q4_K_M.gguf -md /mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-v6-Q8_0.gguf --spec-type draft-mtp --spec-draft-n-max 2 --draft-p-min 0.0 --threads-draft 16 -ub 512 --no-mmap --reasoning off --jinja --host 127.0.0.1 --port 8082 -np 1 -c 16384 -t 48 -ctk q8_0 -ctv q8_0 --flash-attn on; 3750708 /mnt/raid0/llm/llama.cpp/build/bin/llama-server -m /mnt/raid0/llm/models/gemma-4-26B-A4B-it-ORIG-Q4_K_M.gguf -md /mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-v6-Q8_0.gguf --spec-type draft-mtp --spec-draft-n-max 2 --draft-p-min 0.0 --threads-draft 16 -ub 512 --no-mmap --reasoning off --jinja --host 127.0.0.1 --port 8182 -np 1 -c 16384 -t 48 -ctk q8_0 -ctv q8_0 --flash-attn on; 3750987 /mnt/raid0/llm/llama.cpp/build/bin/llama-server -m /mnt/raid0/llm/models/gemma-4-26B-A4B-it-ORIG-Q4_K_M.gguf -md /mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-v6-Q8_0.gguf --spec-type draft-mtp --spec-draft-n-max 2 --draft-p-min 0.0 --threads-draft 16 -ub 512 --no-mmap --reasoning off --jinja --host 127.0.0.1 --port 8282 -np 1 -c 16384 -t 48 -ctk q8_0 -ctv q8_0 --flash-attn on; ... +24 more"
+      ],
+      "command": "cd /mnt/raid0/llm/epyc-inference-research && scripts/benchmark/ds_e1_kv_measurements.sh --execute",
+      "follow_up": "cd /mnt/raid0/llm/epyc-orchestrator && python3 scripts/server/dynamic_stack_evidence_packet.py --output orchestration/reports/ds_e1_evidence_packet_20260620.md --strict",
+      "key": "run_ds_e1_kv_measurements",
+      "priority": "P0",
+      "reason": "DS-E1 cannot decide DS-7/DS-6 profiles until direct production KV-size rows exist.",
+      "requires": "attested clean window with AutoPilot and live llama-server processes stopped/coordinated",
+      "status": "blocked"
+    },
+    {
+      "blocked_by": [
+        "active AutoPilot process(es): 2143322 /mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/autopilot/autopilot.py start --max-trials 2000"
+      ],
+      "command": "cd /mnt/raid0/llm/epyc-orchestrator && uv run python scripts/benchmark/xmas_live_ab.py --prompts benchmarks/results/runs/xmas_live_ab/20260618-heldout-resilient/prompts.jsonl --reps 2 --host-quiet-confirmed --output benchmarks/results/runs/xmas_live_ab/$(date -u +%Y%m%dT%H%M%SZ)-constrained-policy",
+      "evidence_blockers": [
+        "xmas_routing.mode is off; enforce remains default-off",
+        "latest X-MAS held-out A/B policy is incumbent_constrained_v1; required incumbent_constrained_cheapfirst_v2",
+        "latest X-MAS held-out A/B decision is hold"
+      ],
+      "key": "run_xmas_constrained_policy_ab",
+      "priority": "P0",
+      "prompt_manifest": "benchmarks/results/runs/xmas_live_ab/20260618-heldout-resilient/prompts.jsonl",
+      "reason": "X-MAS enforce needs a fresh held-out A/B carrying incumbent_constrained_cheapfirst_v2 and a promote_candidate verdict.",
+      "required_policy": "incumbent_constrained_cheapfirst_v2",
+      "requires": "attested quiet window; runner preflight refuses AutoPilot and competing benchmark coordinators",
+      "status": "blocked"
+    }
+  ],
+  "ready": false,
+  "sections": [
+    {
+      "blockers": [],
+      "details": {
+        "action_type": "numeric_trial",
+        "autopilot_planner_timeout": "600",
+        "eval_completed_questions": 10,
+        "eval_concurrency": null,
+        "eval_correct_pct": null,
+        "eval_correct_questions": null,
+        "eval_label": "T1",
+        "eval_total_questions": 60,
+        "heartbeat_age_s": 2.2234926223754883,
+        "ok": true,
+        "phase": "dispatch_action",
+        "pid": 2143322,
+        "pid_alive": true,
+        "planner_hints_enabled": true,
+        "seq_verdict_enabled": true,
+        "status": "active",
+        "trial_id": 1050,
+        "w6_audit_accrual_enabled": true,
+        "w6_audit_every_n_trials": "1",
+        "w6_audit_n": "10",
+        "w6_audit_shadow_only": true
+      },
+      "key": "phase_health",
+      "status": "ready",
+      "summary": "AutoPilot phase heartbeat is active at trial 1050 / dispatch_action (T1 10/60)."
+    },
+    {
+      "blockers": [],
+      "details": {
+        "baseline_seed_append_expect_journal_max_trial_id": null,
+        "baseline_seed_append_expect_trial_counter": null,
+        "baseline_seed_append_ready": false,
+        "baseline_seed_append_required": false,
+        "cutover_horizon_blocker": "w6_audited_trials",
+        "cutover_horizon_clean_trials_remaining": 0,
+        "cutover_horizon_components": {
+          "seq_shadow_rows": 0,
+          "seq_trusted_vectors": 0,
+          "w6_alarm_clearance": 0,
+          "w6_audited_trials": 0
+        },
+        "durable_journal_max_trial_id": 1049,
+        "restart_ready": true,
+        "seq_cutover_ready": true,
+        "seq_min_shadow_rows": 30,
+        "seq_min_trusted_vector_trials": 120,
+        "seq_shadow_rows": 115,
+        "seq_shadow_rows_remaining": 0,
+        "seq_trusted_vector_trials": 192,
+        "seq_trusted_vector_trials_remaining": 0,
+        "snapshot_payload_journal_max_trial_id": 1049,
+        "snapshot_restart_readiness": "tail_fold_ready",
+        "state_trial_counter": 1050,
+        "w6_alarm_clearance_clean_trials_required": 0,
+        "w6_audit_cutover_ready": true,
+        "w6_audited_trial_count": 31,
+        "w6_audited_trial_count_remaining": 0,
+        "w6_gaming_alarm": false,
+        "w6_min_audited_trials": 30,
+        "w6_potential_overfit_divergences": 0,
+        "w6_raw_audited_trial_count": 31,
+        "w6_trusted_audited_trial_count": 31,
+        "w6_untrusted_audited_trial_count": 0,
+        "w6_untrusted_audited_trial_ids": []
+      },
+      "key": "w4_w6_restart_cutover",
+      "status": "ready",
+      "summary": "W4/W6 strict restart cutover is ready."
+    },
+    {
+      "blockers": [
+        "kv_size_measurements: No direct DS-E1 production KV-size measurement series was found."
+      ],
+      "details": {
+        "clean_window_blockers": [
+          "active AutoPilot process(es): 2143322 /mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/autopilot/autopilot.py start --max-trials 2000",
+          "live llama-server process(es): 1373518 /mnt/raid0/llm/llama.cpp/build/bin/llama-server -m /mnt/raid0/llm/models/gemma-4-26B-A4B-it-ORIG-Q4_K_M.gguf -md /mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-v6-Q8_0.gguf --spec-type draft-mtp --spec-draft-n-max 2 --draft-p-min 0.0 --threads-draft 16 -ub 512 --no-mmap --reasoning off --jinja --host 127.0.0.1 --port 8072 -np 1 -c 16384 -t 96 -ctk q8_0 -ctv q8_0 --flash-attn on; 3750433 /mnt/raid0/llm/llama.cpp/build/bin/llama-server -m /mnt/raid0/llm/models/gemma-4-26B-A4B-it-ORIG-Q4_K_M.gguf -md /mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-v6-Q8_0.gguf --spec-type draft-mtp --spec-draft-n-max 2 --draft-p-min 0.0 --threads-draft 16 -ub 512 --no-mmap --reasoning off --jinja --host 127.0.0.1 --port 8082 -np 1 -c 16384 -t 48 -ctk q8_0 -ctv q8_0 --flash-attn on; 3750708 /mnt/raid0/llm/llama.cpp/build/bin/llama-server -m /mnt/raid0/llm/models/gemma-4-26B-A4B-it-ORIG-Q4_K_M.gguf -md /mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-v6-Q8_0.gguf --spec-type draft-mtp --spec-draft-n-max 2 --draft-p-min 0.0 --threads-draft 16 -ub 512 --no-mmap --reasoning off --jinja --host 127.0.0.1 --port 8182 -np 1 -c 16384 -t 48 -ctk q8_0 -ctv q8_0 --flash-attn on; 3750987 /mnt/raid0/llm/llama.cpp/build/bin/llama-server -m /mnt/raid0/llm/models/gemma-4-26B-A4B-it-ORIG-Q4_K_M.gguf -md /mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-v6-Q8_0.gguf --spec-type draft-mtp --spec-draft-n-max 2 --draft-p-min 0.0 --threads-draft 16 -ub 512 --no-mmap --reasoning off --jinja --host 127.0.0.1 --port 8282 -np 1 -c 16384 -t 48 -ctk q8_0 -ctv q8_0 --flash-attn on; ... +24 more"
+        ],
+        "clean_window_ready": false,
+        "generated_at": "2026-06-28T21:22:00Z",
+        "ready_for_profile_decision": false,
+        "section_statuses": {
+          "contention_matrix": "ready",
+          "ds5_roster_manifest": "ready",
+          "kv_size_measurements": "missing",
+          "ri10_canary": "ready",
+          "stack_roster": "ready"
+        }
+      },
+      "key": "ds_e1_dynamic_stack",
+      "status": "blocked",
+      "summary": "DS-E1 dynamic-stack packet is not decision-ready."
+    },
+    {
+      "blockers": [
+        "xmas_routing.mode is off; enforce remains default-off",
+        "latest X-MAS held-out A/B policy is incumbent_constrained_v1; required incumbent_constrained_cheapfirst_v2",
+        "latest X-MAS held-out A/B decision is hold"
+      ],
+      "details": {
+        "candidate_table_errors": [],
+        "candidate_table_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/xmas_winner_table.yaml",
+        "candidate_table_ready": true,
+        "config_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/classifier_config.yaml",
+        "config_validation_errors": [],
+        "latest_ab_blockers": [
+          "overall score delta -0.250 < required 0.050",
+          "no domain improved by >= 0.050",
+          "domain regressions: code, math, reasoning"
+        ],
+        "latest_ab_decision_status": "hold",
+        "latest_ab_latency_ratio": 0.7142973457091678,
+        "latest_ab_policy": "incumbent_constrained_v1",
+        "latest_ab_results_path": "/mnt/raid0/llm/epyc-orchestrator/benchmarks/results/runs/xmas_live_ab/20260621T112005Z-constrained-policy/results.jsonl",
+        "latest_ab_score_delta": -0.25,
+        "latest_ab_summary_path": "/mnt/raid0/llm/epyc-orchestrator/benchmarks/results/runs/xmas_live_ab/20260621T112005Z-constrained-policy/summary.json",
+        "mode": "off",
+        "quiet_window_blockers": [
+          "active AutoPilot process(es): 2143322 /mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/autopilot/autopilot.py start --max-trials 2000"
+        ],
+        "quiet_window_ready": false,
+        "require_complete_table": true,
+        "required_ab_policy": "incumbent_constrained_cheapfirst_v2",
+        "winner_table_path": "orchestration/xmas_winner_table.yaml"
+      },
+      "key": "xmas_production_path",
+      "status": "blocked",
+      "summary": "X-MAS production routing remains gated."
+    }
+  ]
+}
