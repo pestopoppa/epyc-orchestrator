@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -1631,6 +1632,74 @@ def test_prior_planner_decision_digest_handles_missing_archive(tmp_path) -> None
     )
 
     assert "none yet" in text
+
+
+def test_repo_readiness_advisory_disabled_without_env(monkeypatch) -> None:
+    monkeypatch.delenv(autopilot.REPO_READINESS_PICKUP_ENV, raising=False)
+
+    text = autopilot._build_repo_readiness_advisory()
+
+    assert "disabled" in text
+    assert autopilot.REPO_READINESS_PICKUP_ENV in text
+
+
+def test_repo_readiness_advisory_renders_passive_candidates(tmp_path) -> None:
+    pickup = tmp_path / "pickup.json"
+    pickup.write_text(
+        json.dumps(
+            {
+                "mode": "advisory_only",
+                "authority_gate": False,
+                "generated_at": "2026-06-21T09:53:20Z",
+                "source_item_count": 49,
+                "item_count": 2,
+                "pickup_rules": ["review handoff", "run GitNexus impact"],
+                "items": [
+                    {
+                        "id": "readiness:epyc-orchestrator:L3.security_automation",
+                        "priority": "P0",
+                        "repo": "epyc-orchestrator",
+                        "criterion_id": "L3.security_automation",
+                        "objective": "Automates secret/PII/security checks.",
+                    },
+                    {
+                        "id": "readiness:epyc-llama:L3.machine_task_index",
+                        "priority": "P0",
+                        "repo": "epyc-llama",
+                        "criterion_id": "L3.machine_task_index",
+                        "objective": "Has structured or indexed task coordination.",
+                    },
+                ],
+            }
+        )
+    )
+
+    text = autopilot._build_repo_readiness_advisory(pickup, limit=1)
+
+    assert "Planner context only" in text
+    assert "NOT an acceptance gate" in text
+    assert "readiness:epyc-orchestrator:L3.security_automation" in text
+    assert "readiness:epyc-llama:L3.machine_task_index" not in text
+    assert "review handoff; run GitNexus impact" in text
+
+
+def test_repo_readiness_advisory_ignores_authority_gate(tmp_path) -> None:
+    pickup = tmp_path / "pickup.json"
+    pickup.write_text(
+        json.dumps(
+            {
+                "mode": "advisory_only",
+                "authority_gate": True,
+                "items": [{"id": "readiness:x"}],
+            }
+        )
+    )
+
+    text = autopilot._build_repo_readiness_advisory(pickup)
+
+    assert "ignored" in text
+    assert "authority_gate=false" in text
+    assert "readiness:x" not in text
 
 
 # ----- draft_critique: rejected-draft feedback (req #3) -----

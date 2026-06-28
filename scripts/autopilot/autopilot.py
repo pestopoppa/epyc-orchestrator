@@ -1410,6 +1410,75 @@ def _build_prior_planner_decision_digest(
     return "\n".join(rows)
 
 
+def _build_repo_readiness_advisory(
+    pickup_path: Path | None = None,
+    *,
+    limit: int = 5,
+) -> str:
+    """Render a passive repo-readiness pickup artifact for planner context."""
+    raw_path = str(pickup_path or os.environ.get(REPO_READINESS_PICKUP_ENV, "")).strip()
+    if not raw_path:
+        return f"  (disabled; set {REPO_READINESS_PICKUP_ENV}=<advisory pickup json> to include)"
+
+    path = Path(raw_path).expanduser()
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return f"  (repo-readiness pickup unavailable: {exc})"
+
+    mode = str(payload.get("mode") or "")
+    if mode != "advisory_only" or bool(payload.get("authority_gate")):
+        return (
+            "  (repo-readiness pickup ignored: expected mode=advisory_only "
+            "and authority_gate=false)"
+        )
+
+    items = payload.get("items")
+    if not isinstance(items, list) or not items:
+        return "  (repo-readiness pickup has no candidate items)"
+
+    lines = [
+        "  Planner context only. This is NOT an acceptance gate and MUST NOT "
+        "override owning handoffs, GitNexus impact, or measurement gates.",
+    ]
+    source_count = payload.get("source_item_count")
+    item_count = payload.get("item_count")
+    generated_at = payload.get("generated_at")
+    meta: list[str] = []
+    if generated_at:
+        meta.append(f"generated_at={generated_at}")
+    if source_count is not None:
+        meta.append(f"source_items={source_count}")
+    if item_count is not None:
+        meta.append(f"shown_items={item_count}")
+    if meta:
+        lines.append("  " + ", ".join(meta))
+
+    for item in items[: max(0, limit)]:
+        if not isinstance(item, dict):
+            continue
+        priority = str(item.get("priority") or "?")
+        repo = str(item.get("repo") or "?")
+        criterion = str(item.get("criterion_id") or "?")
+        objective = str(item.get("objective") or item.get("acceptance") or "").strip()
+        item_id = str(item.get("id") or f"{repo}:{criterion}")
+        objective_text = objective[:140] if objective else "(no objective)"
+        lines.append(
+            f"  - {priority} {item_id}: repo={repo} criterion={criterion}; "
+            f"{objective_text}"
+        )
+
+    rules = payload.get("pickup_rules")
+    if isinstance(rules, list) and rules:
+        lines.append("  Required before acting: " + "; ".join(str(r) for r in rules[:4]))
+    else:
+        lines.append(
+            "  Required before acting: review owning handoff; run GitNexus impact; "
+            "rerun the scorer after any patch."
+        )
+    return "\n".join(lines)
+
+
 def _record_skip_trial(
     journal: Any,
     trial_id: int,
@@ -1575,6 +1644,7 @@ def _autopilot_logging_handlers(
 CONSTITUTION_PATH = SCRIPT_DIR / "constitution.md"
 SYSTEM_CARD_PATH = SCRIPT_DIR / "system_card.md"
 STACK_PRIORS_PATH = ORCH_ROOT / "orchestration" / "derived" / "stack_priors.yaml"
+REPO_READINESS_PICKUP_ENV = "AUTOPILOT_REPO_READINESS_PICKUP"
 
 CONTROLLER_PROMPT_TEMPLATE = """\
 You are the AutoPilot meta-reasoning controller for an LLM orchestration stack.
@@ -1627,6 +1697,9 @@ Your job: analyze current system state and propose the SINGLE best next action.
 
 ### Action Availability
 {action_availability}
+
+### Repo-Readiness Advisory Pickup (default-off, non-authority)
+{repo_readiness_advisory}
 
 ### Species Budget
 {budget}
@@ -3273,6 +3346,7 @@ def _run_loop_inner(
                 converged=converged,
                 slot_memory=slot_memory_text,
                 action_availability=action_availability_text,
+                repo_readiness_advisory=_build_repo_readiness_advisory(),
                 budget=json.dumps(meta.budget.as_dict(), indent=2),
                 suite_quality_trends=_format_suite_trends(journal.suite_quality_trend(10)),
                 insights_structured=insights_structured_text,
