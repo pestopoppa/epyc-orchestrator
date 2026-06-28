@@ -86,13 +86,17 @@ def _make_entry(
     )
 
 
-def test_archive_for_read_command_defaults_to_journal_snapshot() -> None:
+def test_archive_for_read_command_defaults_to_journal_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class FakeJournal:
         def all_entries(self):
             return [_make_entry(1, quality=1.4, speed=40.0)]
 
         def supersession_events(self):
             return []
+
+    monkeypatch.setattr(autopilot, "load_state", lambda: {})
 
     archive, source = autopilot._archive_for_read_command(journal=FakeJournal())
 
@@ -116,7 +120,9 @@ def test_archive_for_read_command_explicit_state_fallback(
     assert source == autopilot.ARCHIVE_SOURCE_STATE
 
 
-def test_archive_for_read_command_can_use_journal_snapshot() -> None:
+def test_archive_for_read_command_can_use_journal_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class FakeJournal:
         def all_entries(self):
             return [
@@ -126,6 +132,8 @@ def test_archive_for_read_command_can_use_journal_snapshot() -> None:
 
         def supersession_events(self):
             return []
+
+    monkeypatch.setattr(autopilot, "load_state", lambda: {})
 
     archive, source = autopilot._archive_for_read_command(
         journal=FakeJournal(),
@@ -248,16 +256,16 @@ def test_archive_for_read_command_falls_back_when_journal_empty(
         def supersession_events(self):
             return []
 
-    sentinel = object()
-    monkeypatch.setattr(autopilot, "ParetoArchive", lambda: sentinel)
+    monkeypatch.setattr(autopilot, "load_state", lambda: {})
 
     archive, source = autopilot._archive_for_read_command(
         journal=EmptyJournal(),
         source=autopilot.ARCHIVE_SOURCE_JOURNAL_CURRENT_RUN,
     )
 
-    assert archive is sentinel
-    assert source == "journal-current-run->state-empty-fallback"
+    assert archive.read_only is True
+    assert archive.frontier() == []
+    assert source == "journal-current-run->empty-fallback"
 
 
 def test_cmd_plot_uses_journal_archive_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:

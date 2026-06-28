@@ -5,10 +5,8 @@ Do not hand-edit this file; edit the source registries or constitution.
 
 ## Runtime State
 
-- paused: false
-- trial_counter: 998
-- in_flight_trial: 998 (seed_batch)
-- last_invalid_reason: critic rejected: Draft relies on weak attribution: no evidence ties src/tool_policy.py to the measured speed gap or shows tool-call overhead is the limiting factor.; Proposed co...
+- paused: true
+- trial_counter: 1000
 - pareto_epoch_ts: 1782511631.0
 - pareto_exclude_before_ts: 1782511631.0
 - active_instrument_eras: autopilot_speed=E5-autopilot-speed, cpu_bench=E5-cpu-kernel

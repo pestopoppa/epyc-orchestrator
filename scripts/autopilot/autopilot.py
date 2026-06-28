@@ -57,7 +57,12 @@ from src.registry.capability_registry import (
 from src.autopilot_core.journal_reconstruction import reconstruct_archive_from_journal_rows
 from src.autopilot_core.journal_snapshot_replay import archive_payload_from_verified_snapshot
 from experiment_journal import ExperimentJournal, JournalEntry, scrub_legacy_scale_text
-from pareto_archive import ParetoArchive, ParetoEntry, pareto_archive_from_journal_rows
+from pareto_archive import (
+    ParetoArchive,
+    ParetoArchive as _ConcreteParetoArchive,
+    ParetoEntry,
+    pareto_archive_from_journal_rows,
+)
 from safety_gate import Baseline, DEFAULT_BASELINE_PATH, EvalResult, SafetyGate
 from eval_tower import EvalTower
 from config_applicator import health_check
@@ -4384,7 +4389,10 @@ def _archive_for_read_command(
         exclude_before_ts=exclude_before_ts,
     )
     if archive is None:
-        return ParetoArchive(), f"{source}->state-empty-fallback"
+        return (
+            _ConcreteParetoArchive.from_archive_payload({}, read_only=True),
+            f"{source}->empty-fallback",
+        )
     return archive, source
 
 
