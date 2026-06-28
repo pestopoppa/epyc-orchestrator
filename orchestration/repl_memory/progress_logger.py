@@ -19,6 +19,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from src.workload_model import capture_workload_class
+from src.orchestration.interaction import (
+    INTERACTION_POLICY_VERSION as _INTERACTION_POLICY_VERSION,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -375,8 +378,9 @@ class ProgressLogger:
 
     # Current policy version — bump when delegation logic changes materially
     DELEGATION_POLICY_VERSION = "1.0"
+    INTERACTION_POLICY_VERSION = _INTERACTION_POLICY_VERSION
 
-    def log_delegation(
+    def log_interaction(
         self,
         task_id: str,
         complexity: str,
@@ -384,8 +388,9 @@ class ProgressLogger:
         confidence: float,
         difficulty_score: float = 0.0,
         difficulty_band: str = "",
+        interaction_type: str = "delegate",
     ) -> None:
-        """Log proactive delegation decision for MemRL Q-learning.
+        """Log proactive interaction decision for MemRL Q-learning.
 
         Called by ProactiveDelegator.log_delegation_decision() after routing
         a task by complexity.
@@ -397,6 +402,7 @@ class ProgressLogger:
             confidence: Routing confidence from MemRL (1.0 if heuristic-only).
             difficulty_score: Prompt difficulty [0, 1] from difficulty_signal classifier.
             difficulty_band: "easy" | "medium" | "hard" from difficulty_signal classifier.
+            interaction_type: delegate | consult | verify | route.
         """
         self.log(
             ProgressEntry(
@@ -406,11 +412,33 @@ class ProgressLogger:
                     "complexity": complexity,
                     "action": action,
                     "confidence": confidence,
+                    "interaction_type": interaction_type,
+                    "interaction_policy_version": self.INTERACTION_POLICY_VERSION,
                     "delegation_policy_version": self.DELEGATION_POLICY_VERSION,
                     "difficulty_score": round(difficulty_score, 4),
                     "difficulty_band": difficulty_band,
                 },
             )
+        )
+
+    def log_delegation(
+        self,
+        task_id: str,
+        complexity: str,
+        action: str,
+        confidence: float,
+        difficulty_score: float = 0.0,
+        difficulty_band: str = "",
+    ) -> None:
+        """Log proactive delegation decision for MemRL Q-learning."""
+        self.log_interaction(
+            task_id=task_id,
+            complexity=complexity,
+            action=action,
+            confidence=confidence,
+            difficulty_score=difficulty_score,
+            difficulty_band=difficulty_band,
+            interaction_type="delegate",
         )
 
     def log_task_completed(

@@ -690,8 +690,26 @@ def _architect_delegated_answer(
     Returns:
         Tuple of (answer_text, stats_dict).
     """
+    from src.orchestration.interaction import (
+        Interaction,
+        InteractionTelemetry,
+        SchedulerPolicy,
+    )
+
     total_tools = 0
     all_tools_called: list[str] = []
+    interaction = Interaction(
+        kind="delegate",
+        owner_role=architect_role,
+        callee_role=architect_role,
+        skill="architect_delegation",
+        scheduler_policy=SchedulerPolicy.from_primitives(primitives),
+        telemetry=InteractionTelemetry(
+            interaction_type="delegate",
+            skill="architect_delegation",
+        ),
+    )
+    interaction.start()
     stats: dict = {
         "loops": 0,
         "phases": [],
@@ -738,12 +756,17 @@ def _architect_delegated_answer(
 
     _delegation_local.depth = depth + 1
     try:
-        return _architect_delegated_answer_inner(
+        answer, result_stats = _architect_delegated_answer_inner(
             question, context, primitives, state, architect_role,
             effective_max_loops, force_response_on_cap, toon_context,
             tool_registry, reports, previous_brief_keys, delegate_history,
-            total_tools, all_tools_called, stats,
+            total_tools, all_tools_called, stats, interaction,
         )
+        interaction.complete()
+        return answer, result_stats
+    except Exception:
+        interaction.fail()
+        raise
     finally:
         _delegation_local.depth = depth
 
@@ -764,6 +787,7 @@ def _architect_delegated_answer_inner(
     total_tools: int,
     all_tools_called: list[str],
     stats: dict,
+    interaction: "Any",
 ) -> tuple[str, dict]:
     """Inner loop extracted to keep try/finally clean in the outer function."""
     from src.prompt_builders import (
@@ -1031,14 +1055,14 @@ def _architect_delegated_answer_inner(
         )
         success = bool(report_text) and not report_text.startswith(failed_prefixes)
         stats["delegation_events"].append(
-            {
-                "from_role": architect_role,
-                "to_role": delegate_to,
-                "task_summary": brief[:DELEGATION_BRIEF_KEY_LEN],
-                "success": success,
-                "elapsed_ms": round(phase_b_ms),
-                "tokens_generated": delegate_tokens,
-                "inference_meta": {
+            interaction.emit_event(
+                to_role=delegate_to,
+                task_summary=brief[:DELEGATION_BRIEF_KEY_LEN],
+                success=success,
+                elapsed_ms=round(phase_b_ms),
+                tokens_generated=delegate_tokens,
+                metadata={
+                    "inference_meta": {
                     "transport": specialist_infer_meta.get("transport"),
                     "completion_reason": specialist_infer_meta.get("completion_reason"),
                     "prompt_ms": specialist_infer_meta.get("prompt_ms"),
@@ -1047,9 +1071,10 @@ def _architect_delegated_answer_inner(
                     "chunks": specialist_infer_meta.get("stream_chunks"),
                     "tokens": specialist_infer_meta.get("tokens"),
                     "llm_elapsed_ms": specialist_infer_meta.get("llm_elapsed_ms"),
+                    },
+                    "repl_turn_errors": specialist_repl_errors,
                 },
-                "repl_turn_errors": specialist_repl_errors,
-            }
+            ).to_delegation_event_payload()
         )
 
         log.info(f"Specialist {delegate_to} done ({phase_b_ms:.0f}ms, {len(final_report)} chars)")

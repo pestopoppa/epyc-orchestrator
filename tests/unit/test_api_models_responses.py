@@ -61,6 +61,7 @@ class TestDelegationEvent:
 
     def test_defaults(self):
         de = DelegationEvent(from_role="a", to_role="b")
+        assert de.interaction_type == "delegate"
         assert de.task_summary == ""
         assert de.success is None
         assert de.elapsed_ms == 0.0
@@ -70,11 +71,13 @@ class TestDelegationEvent:
         de = DelegationEvent(
             from_role="architect",
             to_role="coder",
+            interaction_type="consult",
             task_summary="implement auth",
             success=True,
             elapsed_ms=3200.0,
             tokens_generated=500,
         )
+        assert de.interaction_type == "consult"
         assert de.task_summary == "implement auth"
         assert de.tokens_generated == 500
 

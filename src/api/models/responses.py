@@ -46,6 +46,10 @@ class DelegationEvent(BaseModel):
 
     from_role: str = Field(..., description="Role that delegated")
     to_role: str = Field(..., description="Role that received delegation")
+    interaction_type: str = Field(
+        default="delegate",
+        description="Interaction type: delegate, consult, verify, or route",
+    )
     task_summary: str = Field(default="", description="What was delegated")
     success: bool | None = Field(
         default=None, description="Whether delegated work succeeded"
@@ -119,7 +123,10 @@ class ChatResponse(BaseModel):
     )
     delegation_events: list[DelegationEvent] = Field(
         default_factory=list,
-        description="Structured delegation events during this request",
+        description=(
+            "Structured delegation events during this request, with "
+            "interaction_type for the generalized interaction lifecycle"
+        ),
     )
     delegation_diagnostics: dict[str, Any] = Field(
         default_factory=dict,
