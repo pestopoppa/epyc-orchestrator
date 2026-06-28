@@ -141,7 +141,7 @@ def stack_prior_role_rows(stack_priors: dict[str, Any]) -> list[str]:
             except ValueError:
                 endpoint_port = None
             if endpoint_port:
-                port_values.append(endpoint_port)
+                port_values.append(str(endpoint_port))
         if not port_values:
             continue
         launch = serving.get("launch") if isinstance(serving.get("launch"), dict) else {}

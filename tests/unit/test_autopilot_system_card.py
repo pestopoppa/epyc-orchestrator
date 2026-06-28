@@ -267,6 +267,33 @@ def test_renderer_compiles_fallback_rows_when_stack_priors_missing(tmp_path: Pat
     assert "worker.gguf" not in summary
 
 
+def test_renderer_uses_endpoint_port_when_stack_prior_ports_missing(
+    tmp_path: Path,
+) -> None:
+    stack_priors = {
+        "roles": {
+            "frontdoor": {
+                "deployment_status": "live_stack",
+                "status": "compiled",
+                "display_name": "frontdoor-prior.gguf",
+                "serving": {
+                    "endpoint": "http://localhost:8070",
+                    "tier": "hot",
+                    "binding": "server_mode.direct",
+                },
+                "priors": {"throughput_tps": 24.3},
+                "acceleration": {"spec_type": "none"},
+            }
+        }
+    }
+    rows = render_stack_summary.stack_prior_role_rows(stack_priors)
+
+    assert rows == [
+        "| frontdoor | 8070 | frontdoor-prior.gguf | hot | none | none | "
+        "24.3 | live_stack; binding=server_mode.direct; status=compiled |"
+    ]
+
+
 def test_renderer_degraded_registry_fallback_canonicalizes_live_aliases(
     tmp_path: Path,
 ) -> None:
