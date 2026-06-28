@@ -146,6 +146,8 @@ def test_sandboxed_no_verify_is_ok_but_promote_gated_on_ok(tmp_path: Path) -> No
     ps = PatchSet(files=[_modify("a.py", "old\n", [Hunk(start_line=1, end_line=1, replacement="new\n")])])
     res = apply_patchset_sandboxed(ps, repo_root=root)  # no verify_fn
     assert res.verify_passed is None and res.ok  # not-requested → ok
+    assert promote_sandbox(res, root) is False
+    assert (root / "a.py").read_text() == "old\n"
     cleanup_sandbox(res)
 
 
@@ -165,7 +167,12 @@ def test_promote_delete_removes_from_live(tmp_path):
     root = _repo(tmp_path, {"keep.py": "x\n", "gone.py": "y\n"})
     ps = PatchSet(files=[FilePatch(path="gone.py", operation="delete",
                                    base_content_sha256=sha256_text("y\n"))])
-    res = apply_patchset_sandboxed(ps, repo_root=root, current_shas=compute_current_shas(ps, root))
+    res = apply_patchset_sandboxed(
+        ps,
+        repo_root=root,
+        current_shas=compute_current_shas(ps, root),
+        verify_fn=lambda _sb: True,
+    )
     assert res.ok, res.failed
     assert "gone.py" in res.deleted_paths
     assert promote_sandbox(res, root) is True
@@ -177,7 +184,12 @@ def test_promote_rename_moves_in_live(tmp_path):
     root = _repo(tmp_path, {"old.py": "content\n"})
     ps = PatchSet(files=[FilePatch(path="old.py", operation="rename", rename_to="new.py",
                                    base_content_sha256=sha256_text("content\n"))])
-    res = apply_patchset_sandboxed(ps, repo_root=root, current_shas=compute_current_shas(ps, root))
+    res = apply_patchset_sandboxed(
+        ps,
+        repo_root=root,
+        current_shas=compute_current_shas(ps, root),
+        verify_fn=lambda _sb: True,
+    )
     assert res.ok, res.failed
     assert ("old.py", "new.py") in res.renamed_paths
     assert promote_sandbox(res, root) is True

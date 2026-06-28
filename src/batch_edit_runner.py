@@ -64,6 +64,11 @@ class ApplyResult:
             and self.verify_passed is not False  # True or None(not-requested)
         )
 
+    @property
+    def promotable(self) -> bool:
+        """Live-tree promotion requires an explicit verification pass."""
+        return not self.failed and bool(self.applied) and self.verify_passed is True
+
     def add_failure(self, path: str, ftype: str, detail: str = "") -> None:
         self.failed.append({"path": path, "failure_type": ftype, "detail": detail})
 
@@ -193,11 +198,11 @@ def apply_patchset_sandboxed(
 
 
 def promote_sandbox(result: ApplyResult, repo_root: Path | str) -> bool:
-    """Copy applied files from the sandbox into the live tree — ONLY if result.ok. Transactional.
+    """Copy applied files from the sandbox into the live tree only after verification. Transactional.
 
     Returns True if promoted. Caller cleans up the sandbox afterward.
     """
-    if not result.ok or not result.sandbox_path:
+    if not result.promotable or not result.sandbox_path:
         return False
     sandbox = Path(result.sandbox_path)
     root = Path(repo_root)
