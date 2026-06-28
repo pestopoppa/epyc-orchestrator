@@ -28,8 +28,8 @@ class CoderAdapter(BaseAdapter):
             return
         try:
             import datasets as hf
-            self._humaneval = hf.load_dataset("openai_humaneval", split="test")
-            self._mbpp = hf.load_dataset("mbpp", split="test")
+            self._humaneval = hf.load_dataset("openai/openai_humaneval", split="test")
+            self._mbpp = hf.load_dataset("google-research-datasets/mbpp", split="test")
             self._dataset = list(range(len(self._humaneval) + len(self._mbpp)))
         except Exception as e:
             print(f"  [adapter] Coder datasets load failed: {e}")

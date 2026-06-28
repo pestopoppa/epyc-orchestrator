@@ -29,7 +29,7 @@ class MathAdapter(BaseAdapter):
             return
         try:
             import datasets as hf
-            self._gsm8k = hf.load_dataset("gsm8k", "main", split="test")
+            self._gsm8k = hf.load_dataset("openai/gsm8k", "main", split="test")
             try:
                 self._math500 = hf.load_dataset("HuggingFaceH4/MATH-500", split="test")
             except Exception as e:
@@ -140,5 +140,4 @@ class MathAdapter(BaseAdapter):
 
 
 # ── HumanEval + MBPP (Coder) ─────────────────────────────────────────────
-
 
