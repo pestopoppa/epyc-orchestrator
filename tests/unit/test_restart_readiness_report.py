@@ -495,6 +495,51 @@ def test_require_w6_audit_uses_trailing_alarm_window(monkeypatch) -> None:
     assert report["summary"]["w6_cumulative_potential_overfit_divergences"] == 1
 
 
+def test_w6_cutover_horizon_counts_alarm_clearance_before_window_full(monkeypatch) -> None:
+    _patch_ready_dependencies(monkeypatch)
+
+    rows = []
+    for trial_id, core_correct, audit_correct in [
+        (1, 1, 1),
+        (2, 2, 1),
+        (3, 2, 2),
+    ]:
+        question_results = [
+            {
+                "qid": f"core-{trial_id}-{idx}",
+                "partition": "core",
+                "correct": idx < core_correct,
+            }
+            for idx in range(2)
+        ]
+        question_results.extend(
+            {
+                "qid": f"audit-{trial_id}-{idx}",
+                "partition": "audit",
+                "correct": idx < audit_correct,
+            }
+            for idx in range(2)
+        )
+        rows.append({"trial_id": trial_id, "eval_details": {"question_results": question_results}})
+
+    report = report_mod.build_restart_readiness_report(
+        _state(),
+        rows,
+        require_w6_audit=True,
+        min_w6_audited_trials=5,
+    )
+
+    assert report["restart_ready"] is False
+    assert report["summary"]["w6_audited_trial_count_remaining"] == 2
+    assert report["summary"]["w6_alarm_clearance_clean_trials_required"] == 3
+    assert report["summary"]["cutover_horizon_clean_trials_remaining"] == 3
+    assert report["summary"]["cutover_horizon_blocker"] == "w6_alarm_clearance"
+    assert report["summary"]["cutover_horizon_components"] == {
+        "w6_audited_trials": 2,
+        "w6_alarm_clearance": 3,
+    }
+
+
 def test_require_w6_audit_defaults_to_state_era_fence(monkeypatch) -> None:
     _patch_ready_dependencies(monkeypatch)
     state = _state()

@@ -348,7 +348,7 @@ def _gaming_alarm_clearance_clean_trials_required(
     """Rows needed to age out active events, assuming no new gaming events occur."""
     if not active_events:
         return 0
-    if alarm_window is None or alarm_window <= 0 or alarm_window >= len(trials):
+    if alarm_window is None or alarm_window <= 0:
         return None
 
     index_by_trial_id = {

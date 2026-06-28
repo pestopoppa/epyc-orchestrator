@@ -398,6 +398,29 @@ def test_alarm_window_reports_clean_rows_needed_to_clear_active_event(
     assert report["transfer_diagnostic"]["clearance_clean_trials_required"] == 1
 
 
+def test_alarm_window_reports_clearance_before_window_is_full(tmp_path: Path) -> None:
+    journal = tmp_path / "autopilot_journal.jsonl"
+    _write_journal(
+        journal,
+        [
+            _trial(1, core_correct=1, core_total=2, audit_correct=1, audit_total=2),
+            _trial(2, core_correct=2, core_total=2, audit_correct=1, audit_total=2),
+            _trial(3, core_correct=2, core_total=2, audit_correct=2, audit_total=2),
+        ],
+    )
+
+    report = audit_block_report.build_report(
+        audit_block_report.load_journal_rows([journal]),
+        alarm_window=5,
+    )
+
+    assert report["gaming_alarm"] is True
+    assert report["gaming_alarm_window"] == 5
+    assert report["gaming_alarm_window_trial_count"] == 3
+    assert report["gaming_alarm_clearance_clean_trials_required"] == 3
+    assert report["transfer_diagnostic"]["clearance_clean_trials_required"] == 3
+
+
 def test_markdown_distinguishes_current_window_from_cumulative_history(tmp_path: Path) -> None:
     journal = tmp_path / "autopilot_journal.jsonl"
     _write_journal(
