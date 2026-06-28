@@ -539,7 +539,7 @@ def _bsv2_eval_payload(
         "n_questions": getattr(result, "n_questions", 0),
         "question_results": list(getattr(result, "question_results", []) or []),
         "core_id": getattr(result, "core_id", ""),
-        "avg_prompt_tokens": getattr(result, "instruction_token_count", 0),
+        "avg_prompt_tokens": getattr(result, "avg_prompt_tokens", 0),
         "eval_details": details,
         "archive_member_id": details["archive_member_id"],
     }

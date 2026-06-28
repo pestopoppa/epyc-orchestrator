@@ -222,6 +222,45 @@ def test_eval_question_records_chat_response_routed_to(monkeypatch) -> None:
     assert result.route_used == "worker_vision"
 
 
+def test_instruction_route_labels_map_to_runtime_roles() -> None:
+    from src.roles import Role
+
+    assert EvalTower._instruction_role_from_route("frontdoor", Role) == Role.FRONTDOOR
+    assert EvalTower._instruction_role_from_route("worker", Role) == Role.WORKER_GENERAL
+    assert EvalTower._instruction_role_from_route("architect", Role) == Role.ARCHITECT_GENERAL
+    assert EvalTower._instruction_role_from_route("unknown_model_id", Role) is None
+
+
+def test_instruction_token_accounting_uses_active_prompts_not_prompt_library() -> None:
+    prompt_library_tokens = sum(
+        md.stat().st_size
+        for md in (REPO_ROOT / "orchestration" / "prompts").rglob("*.md")
+    )
+    prompt_library_tokens //= 4
+    tower = EvalTower()
+    active_tokens = tower._count_instruction_tokens(
+        [
+            QuestionResult(
+                question_id="frontdoor-q",
+                suite="general",
+                prompt="2+2?",
+                expected="4",
+                route_used="frontdoor",
+            ),
+            QuestionResult(
+                question_id="worker-q",
+                suite="general",
+                prompt="Name the color of snow.",
+                expected="white",
+                route_used="worker",
+            ),
+        ]
+    )
+
+    assert active_tokens > 0
+    assert active_tokens < prompt_library_tokens
+
+
 def test_t0_sentinel_suites_are_namespaced_without_mutating_source(monkeypatch) -> None:
     sentinels = [
         {

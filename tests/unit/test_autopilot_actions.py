@@ -217,6 +217,28 @@ def test_action_handlers_registered_for_all_known_types() -> None:
     assert expected == set(actions._ACTION_HANDLERS.keys())
 
 
+def test_bsv2_payload_uses_avg_prompt_tokens_not_instruction_tokens() -> None:
+    result = actions.EvalResult(
+        tier=1,
+        quality=2.1,
+        speed=50.0,
+        cost=0.5,
+        reliability=1.0,
+        avg_prompt_tokens=321,
+        instruction_token_count=9999,
+    )
+
+    payload = actions._bsv2_eval_payload(
+        result,
+        label="candidate",
+        artifact_kind="prompt",
+        target="frontdoor.md",
+        mutation_type="compress",
+    )
+
+    assert payload["avg_prompt_tokens"] == 321
+
+
 # ----- individual action handler unit (seed_batch is the simplest) -----
 
 

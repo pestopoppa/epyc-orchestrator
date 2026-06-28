@@ -1307,8 +1307,9 @@ class EvalTower:
                 1 for c, cr in zip(confidences, correctness_vals) if abs(c - cr) > 0.5
             )
 
-        # AP-16: Instruction token budget
-        instruction_tokens = self._count_instruction_tokens()
+        # AP-16: Instruction token budget. This is an active-request estimate,
+        # not a prompt-library size proxy.
+        instruction_tokens = self._count_instruction_tokens(results)
         avg_prompt_tokens = sum(len(r.prompt) // 4 for r in results) / len(results)
         total_per_request = instruction_tokens + avg_prompt_tokens
         instruction_ratio = (
@@ -1470,19 +1471,68 @@ class EvalTower:
             ],
         )
 
-    def _count_instruction_tokens(self) -> int:
-        """AP-16: Count approximate instruction tokens from .md prompt templates.
+    def _count_instruction_tokens(
+        self,
+        results: list[QuestionResult] | None = None,
+    ) -> int:
+        """AP-16: Estimate per-request instruction tokens from active prompts.
 
-        Scans orchestration/prompts/*.md for system prompt templates loaded on
-        each request. Uses ~4 chars/token heuristic (typical for English text
-        with Qwen/Llama tokenizers).
+        Earlier AP-16 accounting summed every ``orchestration/prompts/**/*.md``
+        file and treated that as request overhead. That inflated frontier rows:
+        dormant templates such as debugger and compaction prompts are not loaded
+        for every EvalTower request. Follow the default runtime PromptBuilder
+        path instead: root scaffold plus the role prompts actually observed in
+        the batch.
         """
-        prompts_dir = _orch_root / "orchestration" / "prompts"
-        total_chars = 0
-        if prompts_dir.exists():
-            for md in prompts_dir.rglob("*.md"):
-                total_chars += md.stat().st_size
+        try:
+            from src.prompt_builders.builder import PromptBuilder
+            from src.roles import Role
+        except Exception as exc:  # noqa: BLE001
+            log.warning("AP-16 prompt accounting unavailable: %s", exc)
+            return 0
+
+        builder = PromptBuilder()
+        try:
+            scaffold = builder.build_root_lm_prompt(
+                state="",
+                original_prompt="",
+                as_structured=True,
+            )
+            total_chars = len(scaffold.system) + len(scaffold.tools) + len(scaffold.rules)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("AP-16 root scaffold accounting failed: %s", exc)
+            total_chars = 0
+
+        roles: set[Role] = set()
+        for result in results or []:
+            role = self._instruction_role_from_route(result.route_used, Role)
+            if role is not None:
+                roles.add(role)
+
+        for role in roles:
+            try:
+                total_chars += len(builder.get_system_prompt(role))
+            except Exception as exc:  # noqa: BLE001
+                log.warning("AP-16 role prompt accounting failed for %s: %s", role, exc)
+
         return total_chars // 4
+
+    @staticmethod
+    def _instruction_role_from_route(route_used: str, role_cls: Any) -> Any | None:
+        """Map EvalTower route telemetry to a concrete prompt role."""
+        route = str(route_used or "").strip()
+        if not route:
+            return None
+        direct = role_cls.from_string(route)
+        if direct is not None:
+            return direct
+        if route == "worker":
+            return role_cls.WORKER_GENERAL
+        if route == "architect":
+            return role_cls.ARCHITECT_GENERAL
+        if route == "coder":
+            return role_cls.CODER_ESCALATION
+        return None
 
     # ── tiered evaluation ────────────────────────────────────────
 
