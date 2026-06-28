@@ -154,8 +154,13 @@ def _w6_audit_restart_report(
     journal_rows: list[dict[str, Any]],
     *,
     min_audited_trials: int,
+    exclude_before_ts: float | None = None,
 ) -> dict[str, Any]:
-    report = build_audit_block_report(journal_rows, alarm_window=min_audited_trials)
+    report = build_audit_block_report(
+        journal_rows,
+        alarm_window=min_audited_trials,
+        exclude_before_ts=exclude_before_ts,
+    )
     audited_trial_count = int(report.get("audited_trial_count") or 0)
     gaming_alarm = bool(report.get("gaming_alarm"))
     blockers: list[str] = []
@@ -170,6 +175,12 @@ def _w6_audit_restart_report(
         "min_audited_trials": min_audited_trials,
         "audited_trial_count": audited_trial_count,
         "raw_audited_trial_count": report.get("raw_audited_trial_count"),
+        "all_raw_audited_trial_count": report.get("all_raw_audited_trial_count"),
+        "era_exclude_before_ts": report.get("era_exclude_before_ts"),
+        "era_excluded_audited_trial_count": report.get(
+            "era_excluded_audited_trial_count"
+        ),
+        "era_excluded_audited_trial_ids": report.get("era_excluded_audited_trial_ids"),
         "trusted_audited_trial_count": report.get("trusted_audited_trial_count"),
         "untrusted_audited_trial_count": report.get("untrusted_audited_trial_count"),
         "untrusted_audited_trial_ids": report.get("untrusted_audited_trial_ids"),
@@ -245,6 +256,12 @@ def _summary_report(report: dict[str, Any]) -> dict[str, Any]:
         "w6_audit_cutover_ready": w6.get("cutover_ready"),
         "w6_audited_trial_count": w6_audited_count,
         "w6_raw_audited_trial_count": w6.get("raw_audited_trial_count"),
+        "w6_all_raw_audited_trial_count": w6.get("all_raw_audited_trial_count"),
+        "w6_era_exclude_before_ts": w6.get("era_exclude_before_ts"),
+        "w6_era_excluded_audited_trial_count": w6.get(
+            "era_excluded_audited_trial_count"
+        ),
+        "w6_era_excluded_audited_trial_ids": w6.get("era_excluded_audited_trial_ids"),
         "w6_trusted_audited_trial_count": w6.get("trusted_audited_trial_count"),
         "w6_untrusted_audited_trial_count": w6.get("untrusted_audited_trial_count"),
         "w6_untrusted_audited_trial_ids": w6.get("untrusted_audited_trial_ids"),
@@ -287,6 +304,17 @@ def _cutover_horizon(components: dict[str, Any]) -> dict[str, Any]:
     return {"remaining": count, "blocker": blocker, "components": remaining}
 
 
+def _state_float(state: dict[str, Any], key: str) -> float | None:
+    raw = state.get(key)
+    if isinstance(raw, bool) or raw is None:
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return value or None
+
+
 def build_restart_readiness_report(
     state: dict[str, Any],
     journal_rows: list[dict[str, Any]],
@@ -294,15 +322,19 @@ def build_restart_readiness_report(
     require_seq_cutover: bool = False,
     require_w6_audit: bool = False,
     min_w6_audited_trials: int = 30,
+    w6_exclude_before_ts: float | None = None,
 ) -> dict[str, Any]:
     """Build a no-write report for safe AutoPilot restart/cutover decisions."""
     archive_report = build_archive_authority_report(state, journal_rows)
     snapshot_report = _snapshot_restart_report(state, journal_rows)
     baseline_report = _baseline_restart_report(state, journal_rows)
     seq_report = build_seq_readiness_report(journal_rows)
+    if w6_exclude_before_ts is None:
+        w6_exclude_before_ts = _state_float(state, "pareto_exclude_before_ts")
     w6_report = _w6_audit_restart_report(
         journal_rows,
         min_audited_trials=min_w6_audited_trials,
+        exclude_before_ts=w6_exclude_before_ts,
     )
 
     blockers: list[str] = []
@@ -426,6 +458,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=30,
         help="Minimum audited trial rows required when checking W6 audit cutover readiness.",
     )
+    parser.add_argument(
+        "--w6-exclude-before-ts",
+        type=float,
+        help=(
+            "Override the W6 audit era fence. Defaults to "
+            "autopilot_state.json:pareto_exclude_before_ts when present."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -459,6 +499,7 @@ def main(argv: list[str] | None = None) -> int:
         require_seq_cutover=args.require_seq_cutover,
         require_w6_audit=args.require_w6_audit,
         min_w6_audited_trials=args.min_w6_audited_trials,
+        w6_exclude_before_ts=args.w6_exclude_before_ts,
     )
     if args.json:
         print(json.dumps(report, sort_keys=True, default=str))

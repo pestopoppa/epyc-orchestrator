@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import datetime as dt
 
 from scripts.autopilot import audit_block_report
 
@@ -17,6 +18,7 @@ def _trial(
     corrupt: str = "",
     outcome_status: str = "ok",
     tier: int = 1,
+    timestamp: str | None = None,
 ) -> dict:
     question_results = []
     for idx in range(core_total):
@@ -41,6 +43,8 @@ def _trial(
         "outcome_status": outcome_status,
         "eval_details": {"question_results": question_results},
     }
+    if timestamp is not None:
+        row["timestamp"] = timestamp
     if corrupt:
         row["bug_corrupted_by"] = corrupt
     return row
@@ -226,6 +230,66 @@ def test_report_excludes_untrusted_rows_from_w6_audit_counts_and_alarm(
     assert [trial["trial_id"] for trial in report["trials"]] == [1, 2]
     assert report["gaming_alarm"] is False
     assert report["transfer_diagnostic"]["potential_overfit_divergences"] == 0
+
+
+def test_report_excludes_pre_era_audited_rows_from_counts_and_alarm(
+    tmp_path: Path,
+) -> None:
+    journal = tmp_path / "autopilot_journal.jsonl"
+    cutoff = dt.datetime(2026, 6, 26, 22, 7, 11, tzinfo=dt.timezone.utc).timestamp()
+    _write_journal(
+        journal,
+        [
+            _trial(
+                1,
+                core_correct=1,
+                core_total=2,
+                audit_correct=1,
+                audit_total=2,
+                timestamp="2026-06-26T22:07:10+00:00",
+            ),
+            _trial(
+                2,
+                core_correct=2,
+                core_total=2,
+                audit_correct=1,
+                audit_total=2,
+                timestamp="2026-06-26T22:07:10.500000+00:00",
+            ),
+            _trial(
+                3,
+                core_correct=1,
+                core_total=2,
+                audit_correct=1,
+                audit_total=2,
+                timestamp="2026-06-26T22:07:11+00:00",
+            ),
+            _trial(
+                4,
+                core_correct=1,
+                core_total=2,
+                audit_correct=1,
+                audit_total=2,
+                timestamp="2026-06-27T00:00:00+00:00",
+            ),
+        ],
+    )
+
+    report = audit_block_report.build_report(
+        audit_block_report.load_journal_rows([journal]),
+        alarm_window=2,
+        exclude_before_ts=cutoff,
+    )
+
+    assert report["all_raw_audited_trial_count"] == 4
+    assert report["raw_audited_trial_count"] == 2
+    assert report["era_exclude_before_ts"] == cutoff
+    assert report["era_excluded_audited_trial_count"] == 2
+    assert report["era_excluded_audited_trial_ids"] == [1, 2]
+    assert report["trusted_audited_trial_count"] == 2
+    assert [trial["trial_id"] for trial in report["trials"]] == [3, 4]
+    assert report["gaming_alarm"] is False
+    assert report["cumulative_gaming_alarm"] is False
 
 
 def test_no_gaming_alarm_with_insufficient_audited_history(tmp_path: Path) -> None:

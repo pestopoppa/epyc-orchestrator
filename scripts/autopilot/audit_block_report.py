@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
 from collections.abc import Iterable, Mapping
 from pathlib import Path
@@ -129,6 +130,7 @@ def build_report(
     rows: Iterable[Mapping[str, Any]],
     *,
     alarm_window: int | None = None,
+    exclude_before_ts: float | None = None,
 ) -> dict[str, Any]:
     trial_rows = [row for row in rows if _is_trial_row(row)]
     audit_rows = [
@@ -136,11 +138,23 @@ def build_report(
         for row in trial_rows
         if (summary := _trial_summary(row)) is not None
     ]
+    era_excluded_audit_rows = [
+        (row, summary)
+        for row, summary in audit_rows
+        if _excluded_by_timestamp(row, exclude_before_ts)
+    ]
+    eligible_audit_rows = [
+        (row, summary)
+        for row, summary in audit_rows
+        if not _excluded_by_timestamp(row, exclude_before_ts)
+    ]
     trusted_audit_rows = [
-        (row, summary) for row, summary in audit_rows if _is_trusted_trial_row(row)
+        (row, summary) for row, summary in eligible_audit_rows if _is_trusted_trial_row(row)
     ]
     untrusted_audit_rows = [
-        (row, summary) for row, summary in audit_rows if not _is_trusted_trial_row(row)
+        (row, summary)
+        for row, summary in eligible_audit_rows
+        if not _is_trusted_trial_row(row)
     ]
     trial_summaries = [summary for _row, summary in trusted_audit_rows]
     totals = {
@@ -157,7 +171,13 @@ def build_report(
     gaming_diagnostic = _gaming_diagnostic(trial_summaries, alarm_window=alarm_window)
     return {
         "trial_count": len(trial_rows),
-        "raw_audited_trial_count": len(audit_rows),
+        "raw_audited_trial_count": len(eligible_audit_rows),
+        "all_raw_audited_trial_count": len(audit_rows),
+        "era_exclude_before_ts": exclude_before_ts,
+        "era_excluded_audited_trial_count": len(era_excluded_audit_rows),
+        "era_excluded_audited_trial_ids": _trial_ids(
+            row for row, _summary in era_excluded_audit_rows
+        ),
         "trusted_audited_trial_count": len(trusted_audit_rows),
         "untrusted_audited_trial_count": len(untrusted_audit_rows),
         "untrusted_audited_trial_ids": _trial_ids(row for row, _summary in untrusted_audit_rows),
@@ -206,6 +226,39 @@ def _is_trusted_trial_row(row: Mapping[str, Any]) -> bool:
     if status in UNTRUSTED_OUTCOME_STATUSES:
         return False
     return True
+
+
+def _excluded_by_timestamp(row: Mapping[str, Any], exclude_before_ts: float | None) -> bool:
+    if exclude_before_ts is None:
+        return False
+    row_ts = _row_timestamp(row)
+    if row_ts is None:
+        return True
+    return row_ts < exclude_before_ts
+
+
+def _row_timestamp(row: Mapping[str, Any]) -> float | None:
+    raw = row.get("timestamp")
+    if isinstance(raw, bool) or raw is None:
+        return None
+    if isinstance(raw, int | float):
+        return float(raw)
+    text = str(raw).strip()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        pass
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = dt.datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    return parsed.timestamp()
 
 
 def _trial_ids(rows: Iterable[Mapping[str, Any]]) -> list[int]:
@@ -437,6 +490,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             f"Defaults to {DEFAULT_ALARM_WINDOW}; use 0 for all audited history."
         ),
     )
+    parser.add_argument(
+        "--exclude-before-ts",
+        type=float,
+        help=(
+            "Exclude audited rows whose journal timestamp is before this Unix timestamp. "
+            "Rows without parseable timestamps are excluded when this fence is set."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -444,7 +505,11 @@ def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     journal_paths = [path for group in args.journal for path in group]
     rows = load_journal_rows(journal_paths)
-    report = build_report(rows, alarm_window=args.alarm_window)
+    report = build_report(
+        rows,
+        alarm_window=args.alarm_window,
+        exclude_before_ts=args.exclude_before_ts,
+    )
     if args.out_json is None and args.out_md is None:
         print(json.dumps(report, indent=2, sort_keys=True, allow_nan=False))
     else:

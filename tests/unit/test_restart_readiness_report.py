@@ -495,6 +495,60 @@ def test_require_w6_audit_uses_trailing_alarm_window(monkeypatch) -> None:
     assert report["summary"]["w6_cumulative_potential_overfit_divergences"] == 1
 
 
+def test_require_w6_audit_defaults_to_state_era_fence(monkeypatch) -> None:
+    _patch_ready_dependencies(monkeypatch)
+    state = _state()
+    state["pareto_exclude_before_ts"] = 1782511631.0
+
+    rows = []
+    for trial_id, core_correct, audit_correct, timestamp in [
+        (1, 1, 1, "2026-06-26T22:07:10+00:00"),
+        (2, 2, 1, "2026-06-26T22:07:10.500000+00:00"),
+        (3, 1, 1, "2026-06-26T22:07:11+00:00"),
+        (4, 1, 1, "2026-06-27T00:00:00+00:00"),
+        (5, 1, 1, "2026-06-27T01:00:00+00:00"),
+    ]:
+        question_results = [
+            {
+                "qid": f"core-{trial_id}-{idx}",
+                "partition": "core",
+                "correct": idx < core_correct,
+            }
+            for idx in range(2)
+        ]
+        question_results.extend(
+            {
+                "qid": f"audit-{trial_id}-{idx}",
+                "partition": "audit",
+                "correct": idx < audit_correct,
+            }
+            for idx in range(2)
+        )
+        rows.append(
+            {
+                "trial_id": trial_id,
+                "timestamp": timestamp,
+                "eval_details": {"question_results": question_results},
+            }
+        )
+
+    report = report_mod.build_restart_readiness_report(
+        state,
+        rows,
+        require_w6_audit=True,
+        min_w6_audited_trials=3,
+    )
+
+    assert report["restart_ready"] is True
+    assert report["summary"]["w6_era_exclude_before_ts"] == 1782511631.0
+    assert report["summary"]["w6_all_raw_audited_trial_count"] == 5
+    assert report["summary"]["w6_raw_audited_trial_count"] == 3
+    assert report["summary"]["w6_era_excluded_audited_trial_count"] == 2
+    assert report["summary"]["w6_era_excluded_audited_trial_ids"] == [1, 2]
+    assert report["summary"]["w6_gaming_alarm"] is False
+    assert report["summary"]["w6_cumulative_gaming_alarm"] is False
+
+
 def test_restart_report_blocks_without_baseline_source(monkeypatch) -> None:
     monkeypatch.setattr(
         report_mod,
