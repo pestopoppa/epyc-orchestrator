@@ -62,6 +62,7 @@ def test_restart_role_success_uses_stack_reload(monkeypatch: pytest.MonkeyPatch)
         })
 
     monkeypatch.setattr(applicator.subprocess, "run", fake_run)
+    monkeypatch.setattr(applicator, "resolve_restart_affected_roles", lambda role: [role])
 
     result = applicator.restart_role(
         "frontdoor",
@@ -117,6 +118,45 @@ def test_restart_role_success_journals_restart_boundary(
     ]
 
 
+def test_restart_role_resolves_stack_affinity_from_priors(
+    tmp_path: Path,
+) -> None:
+    priors = tmp_path / "stack_priors.yaml"
+    priors.write_text(
+        """
+stack_priors_version: 4
+roles:
+  frontdoor:
+    deployment_status: live_stack
+    serving:
+      launch:
+        entries:
+          - port: 8070
+            primary_role: frontdoor
+  coder_escalation:
+    deployment_status: live_stack
+    serving:
+      launch:
+        entries:
+          - port: 8070
+            primary_role: frontdoor
+  worker_general:
+    deployment_status: live_stack
+    serving:
+      launch:
+        entries:
+          - port: 8072
+            primary_role: worker_general
+""",
+        encoding="utf-8",
+    )
+
+    assert applicator.resolve_restart_affected_roles(
+        "coder_escalation",
+        stack_priors_path=priors,
+    ) == ["coder_escalation", "frontdoor"]
+
+
 def test_restart_role_rolls_back_to_prior_env_on_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -135,6 +175,7 @@ def test_restart_role_rolls_back_to_prior_env_on_failure(
             raise subprocess.CalledProcessError(1, cmd)
 
     monkeypatch.setattr(applicator.subprocess, "run", fake_run)
+    monkeypatch.setattr(applicator, "resolve_restart_affected_roles", lambda role: [role])
 
     result = applicator.restart_role(
         "worker_general",
@@ -172,6 +213,7 @@ def test_restart_role_rollback_journals_restart_boundary(
             raise subprocess.CalledProcessError(1, cmd)
 
     monkeypatch.setattr(applicator.subprocess, "run", fake_run)
+    monkeypatch.setattr(applicator, "resolve_restart_affected_roles", lambda role: [role])
 
     result = applicator.restart_role(
         "worker_general",
@@ -216,6 +258,7 @@ def test_restart_role_rolls_back_by_unsetting_new_env(
             raise subprocess.CalledProcessError(1, cmd)
 
     monkeypatch.setattr(applicator.subprocess, "run", fake_run)
+    monkeypatch.setattr(applicator, "resolve_restart_affected_roles", lambda role: [role])
 
     result = applicator.restart_role(
         "ingest_long_context",
@@ -226,6 +269,67 @@ def test_restart_role_rolls_back_by_unsetting_new_env(
     assert result["rollback"]["status"] == "ok"
     assert calls[0]["env"]["ORCHESTRATOR_MEMRL_RETRIEVAL_SEMANTIC_K"] == "12"
     assert "ORCHESTRATOR_MEMRL_RETRIEVAL_SEMANTIC_K" not in calls[1]["env"]
+
+
+def test_restart_role_smoke_failure_rolls_back_without_success_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[dict[str, object]] = []
+    calls: list[dict[str, object]] = []
+
+    class FakeJournal:
+        def append_role_restart_boundary_event(self, **kwargs):
+            events.append(kwargs)
+            return {"type": "role_restart_boundary", **kwargs}
+
+    def fake_run(cmd, *, cwd, env, timeout, check):
+        calls.append({
+            "cmd": cmd,
+            "cwd": cwd,
+            "env": env,
+            "timeout": timeout,
+            "check": check,
+        })
+
+    monkeypatch.setattr(applicator.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        applicator,
+        "resolve_restart_affected_roles",
+        lambda _role: ["frontdoor", "coder_escalation"],
+    )
+
+    result = applicator.restart_role(
+        "frontdoor",
+        env_overrides={"ORCHESTRATOR_FRONTDOOR_REPL_NON_TOOL_N_TOKENS": "768"},
+        journal=FakeJournal(),
+        smoke_check=lambda _role, _affected_roles: {
+            "status": "error",
+            "error": "role probe failed",
+        },
+    )
+
+    assert result["status"] == "error"
+    assert result["error"] == "role probe failed"
+    assert result["rollback"] == {
+        "attempted": True,
+        "status": "ok",
+        "env_keys": ["ORCHESTRATOR_FRONTDOOR_REPL_NON_TOOL_N_TOKENS"],
+    }
+    assert len(calls) == 2
+    assert events == [
+        {
+            "role": "frontdoor",
+            "affected_roles": ["frontdoor", "coder_escalation"],
+            "env_keys": ["ORCHESTRATOR_FRONTDOOR_REPL_NON_TOOL_N_TOKENS"],
+            "registry_override_keys": [],
+            "status": "error",
+            "rollback_status": "ok",
+            "reason": "intentional role restart",
+            "actor": "config_applicator.restart_role",
+            "boundary_trial_id": None,
+            "command": "orchestrator_stack.py reload frontdoor",
+        }
+    ]
 
 
 def test_restart_role_rejects_registry_overrides_until_rollback_record_exists() -> None:

@@ -11,6 +11,7 @@ import logging
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,7 @@ log = logging.getLogger("autopilot.config")
 
 ORCHESTRATOR_URL = "http://localhost:8000"
 ORCH_ROOT = Path(__file__).resolve().parents[1].parent
+DEFAULT_STACK_PRIORS_PATH = ORCH_ROOT / "orchestration" / "derived" / "stack_priors.yaml"
 
 # Parameters that can be hot-swapped via POST /config (feature flags)
 HOT_SWAP_FEATURES = {
@@ -120,6 +122,11 @@ class ApplyResult:
             ):
                 errors.append(f"{role}: {role_result.get('error') or 'not applied'}")
         return cls(status=status, payload=payload, errors=errors)
+
+
+RoleSmokeCheck = Callable[
+    [str, list[str]], ApplyResult | dict[str, Any] | bool | None
+]
 
 
 class HotSwapApplicator:
@@ -284,6 +291,121 @@ def apply_env_params(
     return EnvRestartApplicator(url=url, restart=restart).apply(params).to_dict()
 
 
+def resolve_restart_affected_roles(
+    role: str,
+    *,
+    stack_priors_path: Path = DEFAULT_STACK_PRIORS_PATH,
+) -> list[str]:
+    """Return live roles that share launch ownership with a restart target."""
+    role = role.strip()
+    if not role:
+        return []
+
+    try:
+        from src.registry.stack_priors import (
+            live_stack_role_records,
+            stack_prior_launch_entries,
+        )
+    except Exception as exc:
+        log.warning("Could not load stack-priors helpers: %s", exc)
+        return [role]
+
+    records = live_stack_role_records(stack_priors_path)
+    target_record = records.get(role)
+    if target_record is None:
+        return [role]
+
+    target_keys = _launch_affinity_keys(
+        target_record,
+        launch_entries=stack_prior_launch_entries,
+    )
+    if not target_keys:
+        return [role]
+
+    affected = [
+        candidate_role
+        for candidate_role, record in records.items()
+        if target_keys
+        & _launch_affinity_keys(record, launch_entries=stack_prior_launch_entries)
+    ]
+    return _ordered_roles(role, affected)
+
+
+def _launch_affinity_keys(
+    record: dict[str, Any],
+    *,
+    launch_entries: Callable[[dict[str, Any]], list[dict[str, Any]]],
+) -> set[tuple[str, str]]:
+    keys: set[tuple[str, str]] = set()
+    for entry in launch_entries(record):
+        port = entry.get("port")
+        if isinstance(port, int):
+            keys.add(("port", str(port)))
+        elif isinstance(port, str) and port.isdigit():
+            keys.add(("port", port))
+
+        primary_role = entry.get("primary_role")
+        if isinstance(primary_role, str) and primary_role:
+            keys.add(("primary_role", primary_role))
+    return keys
+
+
+def _ordered_roles(primary_role: str, roles: list[str]) -> list[str]:
+    unique = sorted({role for role in roles if role})
+    if primary_role in unique:
+        return [primary_role, *(role for role in unique if role != primary_role)]
+    return [primary_role, *unique]
+
+
+def _run_role_smoke_check(
+    *,
+    role: str,
+    affected_roles: list[str],
+    smoke_check: RoleSmokeCheck | None,
+) -> ApplyResult:
+    """Normalize an optional role smoke check into an ApplyResult."""
+    payload_base = {"role": role, "affected_roles": list(affected_roles)}
+    if smoke_check is None:
+        return ApplyResult(
+            status="skipped",
+            payload={**payload_base, "status": "skipped", "reason": "no_smoke_check"},
+        )
+
+    try:
+        raw = smoke_check(role, list(affected_roles))
+    except Exception as exc:
+        return ApplyResult(
+            status="error",
+            payload={**payload_base, "status": "error", "error": str(exc)},
+            errors=[str(exc)],
+        )
+
+    if isinstance(raw, ApplyResult):
+        return raw
+    if raw is None or raw is True:
+        return ApplyResult(status="ok", payload={**payload_base, "status": "ok"})
+    if raw is False:
+        return ApplyResult(
+            status="error",
+            payload={**payload_base, "status": "error", "error": "smoke check failed"},
+            errors=["smoke check failed"],
+        )
+    if isinstance(raw, dict):
+        payload = {**payload_base, **raw}
+        if payload.get("success") is False or payload.get("error"):
+            payload["status"] = "error"
+        return ApplyResult.from_payload(payload)
+    return ApplyResult(
+        status="error",
+        payload={
+            **payload_base,
+            "status": "error",
+            "error": f"unsupported smoke check result: {type(raw).__name__}",
+        },
+        errors=[f"unsupported smoke check result: {type(raw).__name__}"],
+    )
+
+
 def restart_api(
     env_overrides: dict[str, str] | None = None,
     url: str = ORCHESTRATOR_URL,
@@ -332,6 +454,7 @@ def restart_role(
     trial_id: int | None = None,
     boundary_reason: str = "intentional role restart",
     actor: str = "config_applicator.restart_role",
+    smoke_check: RoleSmokeCheck | None = None,
 ) -> dict[str, Any]:
     """Reload one stack role with rollback to the prior environment on failure.
 
@@ -353,6 +476,7 @@ def restart_role(
         }
 
     env_overrides = dict(env_overrides or {})
+    resolved_affected_roles = affected_roles or resolve_restart_affected_roles(role)
     prior_env = {key: os.environ.get(key) for key in env_overrides}
     first = _reload_role_via_stack(
         role=role,
@@ -360,15 +484,55 @@ def restart_role(
         env_unset=[],
     )
     first["role"] = role
+    first["affected_roles"] = list(resolved_affected_roles)
     if first.get("status") == "ok":
         if role == "orchestrator":
             health = health_check(url)
             if health:
+                smoke = _run_role_smoke_check(
+                    role=role,
+                    affected_roles=resolved_affected_roles,
+                    smoke_check=smoke_check,
+                )
+                first["smoke_check"] = smoke.to_dict()
+                if smoke.failed:
+                    first.update(smoke.to_dict())
+                else:
+                    _attach_restart_boundary_event(
+                        first,
+                        journal=journal,
+                        role=role,
+                        affected_roles=resolved_affected_roles,
+                        env_keys=sorted(env_overrides),
+                        registry_override_keys=[],
+                        trial_id=trial_id,
+                        reason=boundary_reason,
+                        actor=actor,
+                    )
+                    return first
+            if first.get("status") == "ok":
+                first.update(
+                    {
+                        "status": "error",
+                        "error": health.failure_reason,
+                        "detail": health.failure_detail,
+                    }
+                )
+        else:
+            smoke = _run_role_smoke_check(
+                role=role,
+                affected_roles=resolved_affected_roles,
+                smoke_check=smoke_check,
+            )
+            first["smoke_check"] = smoke.to_dict()
+            if smoke.failed:
+                first.update(smoke.to_dict())
+            else:
                 _attach_restart_boundary_event(
                     first,
                     journal=journal,
                     role=role,
-                    affected_roles=affected_roles,
+                    affected_roles=resolved_affected_roles,
                     env_keys=sorted(env_overrides),
                     registry_override_keys=[],
                     trial_id=trial_id,
@@ -376,26 +540,6 @@ def restart_role(
                     actor=actor,
                 )
                 return first
-            first.update(
-                {
-                    "status": "error",
-                    "error": health.failure_reason,
-                    "detail": health.failure_detail,
-                }
-            )
-        else:
-            _attach_restart_boundary_event(
-                first,
-                journal=journal,
-                role=role,
-                affected_roles=affected_roles,
-                env_keys=sorted(env_overrides),
-                registry_override_keys=[],
-                trial_id=trial_id,
-                reason=boundary_reason,
-                actor=actor,
-            )
-            return first
 
     rollback_overrides = {
         key: value for key, value in prior_env.items() if value is not None
@@ -415,7 +559,7 @@ def restart_role(
         first,
         journal=journal,
         role=role,
-        affected_roles=affected_roles,
+        affected_roles=resolved_affected_roles,
         env_keys=sorted(env_overrides),
         registry_override_keys=[],
         trial_id=trial_id,
