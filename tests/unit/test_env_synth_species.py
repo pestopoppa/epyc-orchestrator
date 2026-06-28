@@ -14,7 +14,6 @@ sys.path.insert(0, "/mnt/raid0/llm/epyc-orchestrator")
 from scripts.autopilot.species.env_synth import (
     DifficultyBand,
     EnvSynth,
-    EnvSynthAction,
     ETDAgent,
     MCPToolEntry,
     MCPToolRegistry,
@@ -262,6 +261,16 @@ def _minimal_stack(tmp_path, reference_ok: bool = True):
     )
 
 
+def _task_for_gate() -> SynthesizedTask:
+    return SynthesizedTask(
+        environment_id="env_x",
+        tool_set=["t_calc"],
+        prompt="compute 6 * 7",
+        difficulty_band=DifficultyBand.MEDIUM,
+        verifier=VerifierSpec(type=VerifierType.EXACT_MATCH, reference="42"),
+    )
+
+
 def test_env_synth_full_pipeline_persists_accepted_tasks(tmp_path):
     es = _minimal_stack(tmp_path, reference_ok=True)
     tasks = asyncio.run(es.discover_and_synthesize(
@@ -284,6 +293,86 @@ def test_env_synth_rejects_when_reference_fails(tmp_path):
         "math", band=DifficultyBand.MEDIUM, tasks_per_env=2,
     ))
     assert tasks == []
+
+
+def test_solvability_gate_accepts_weak_solver_signal_when_nonbinding():
+    async def strong_solver(prompt, tool_set):
+        return True, 0.9, "strong_ok"
+
+    async def weak_solver(prompt, tool_set):
+        return True, 0.9, "too_easy"
+
+    gate = SolvabilityGate(
+        reference_solver=strong_solver,
+        weak_reference_solver=weak_solver,
+        require_weak_failure=False,
+    )
+
+    ok, confidence, reason = asyncio.run(gate.evaluate(_task_for_gate()))
+
+    assert ok is True
+    assert confidence == 0.9
+    assert reason == "ok_weak_reference_solved_nonbinding: too_easy"
+
+
+def test_solvability_gate_rejects_when_required_weak_model_solves():
+    async def strong_solver(prompt, tool_set):
+        return True, 0.9, "strong_ok"
+
+    async def weak_solver(prompt, tool_set):
+        return True, 0.9, "too_easy"
+
+    gate = SolvabilityGate(
+        reference_solver=strong_solver,
+        weak_reference_solver=weak_solver,
+        require_weak_failure=True,
+    )
+
+    ok, confidence, reason = asyncio.run(gate.evaluate(_task_for_gate()))
+
+    assert ok is False
+    assert confidence == 0.9
+    assert reason == "weak_reference_solved: too_easy"
+
+
+def test_solvability_gate_accepts_when_required_weak_model_fails():
+    async def strong_solver(prompt, tool_set):
+        return True, 0.9, "strong_ok"
+
+    async def weak_solver(prompt, tool_set):
+        return False, 0.8, "weak_failed"
+
+    gate = SolvabilityGate(
+        reference_solver=strong_solver,
+        weak_reference_solver=weak_solver,
+        require_weak_failure=True,
+    )
+
+    ok, confidence, reason = asyncio.run(gate.evaluate(_task_for_gate()))
+
+    assert ok is True
+    assert confidence == 0.9
+    assert reason == "ok"
+
+
+def test_solvability_gate_fails_closed_on_required_weak_solver_error():
+    async def strong_solver(prompt, tool_set):
+        return True, 0.9, "strong_ok"
+
+    async def weak_solver(prompt, tool_set):
+        raise RuntimeError("weak unavailable")
+
+    gate = SolvabilityGate(
+        reference_solver=strong_solver,
+        weak_reference_solver=weak_solver,
+        require_weak_failure=True,
+    )
+
+    ok, confidence, reason = asyncio.run(gate.evaluate(_task_for_gate()))
+
+    assert ok is False
+    assert confidence == 0.9
+    assert reason == "weak_solver_error: weak unavailable"
 
 
 def test_env_synth_propose_actions_shape():

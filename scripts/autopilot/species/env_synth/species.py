@@ -26,12 +26,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
-from scripts.autopilot.species.env_synth.etd_agent import (
-    ETDAgent,
-    EnvironmentDiscovery,
-)
+from scripts.autopilot.species.env_synth.etd_agent import ETDAgent
 from scripts.autopilot.species.env_synth.mcp_tool_registry import (
-    MCPToolEntry,
     MCPToolRegistry,
 )
 from scripts.autopilot.species.env_synth.task_synthesizer import (
@@ -39,7 +35,6 @@ from scripts.autopilot.species.env_synth.task_synthesizer import (
     SynthesizedTask,
     TaskSynthesizer,
 )
-from scripts.autopilot.species.env_synth.verifier_builder import VerifierBuilder
 
 log = logging.getLogger("autopilot.env_synth.species")
 
@@ -80,11 +75,19 @@ class SolvabilityGate:
     Rejection rate should stay below ``max_rejection_rate`` at steady
     state; higher rates indicate difficulty-band miscalibration and
     feed back into autopilot gap diagnosis (AW-3).
+
+    Optional weak-reference checking calibrates the lower bound of synthetic
+    task difficulty. It remains non-binding unless ``require_weak_failure`` is
+    set, because synthesized tasks must not enter decision-gating evals without
+    human promotion.
     """
 
     reference_solver: ReferenceSolver
     min_confidence: float = 0.6
     max_rejection_rate: float = 0.20
+    weak_reference_solver: Optional[ReferenceSolver] = None
+    require_weak_failure: bool = False
+    weak_pass_confidence: float = 0.6
 
     async def evaluate(
         self,
@@ -101,6 +104,21 @@ class SolvabilityGate:
             return False, confidence, reason or "reference_model_failed"
         if confidence < self.min_confidence:
             return False, confidence, "low_confidence_below_threshold"
+        if self.weak_reference_solver is not None:
+            try:
+                weak_solved, weak_confidence, weak_reason = await self.weak_reference_solver(
+                    task.prompt, task.tool_set,
+                )
+            except Exception as e:
+                log.warning("weak solvability check raised: %s", e)
+                if self.require_weak_failure:
+                    return False, confidence, f"weak_solver_error: {e}"
+                return True, confidence, "ok_weak_solver_error_nonbinding"
+            if weak_solved and weak_confidence >= self.weak_pass_confidence:
+                weak_reason = weak_reason or "weak_reference_model_solved"
+                if self.require_weak_failure:
+                    return False, confidence, f"weak_reference_solved: {weak_reason}"
+                return True, confidence, f"ok_weak_reference_solved_nonbinding: {weak_reason}"
         return True, confidence, "ok"
 
 
