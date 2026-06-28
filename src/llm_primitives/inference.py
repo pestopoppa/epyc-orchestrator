@@ -525,6 +525,7 @@ class InferenceMixin:
         # Dynamic attrs consumed by ConcurrencyAwareBackend's dispatch-time
         # placement-aware contention gate. The local dataclass has no slots.
         request.request_priority = self.get_request_priority()
+        request.workload_class = self.get_request_workload_class()
         request.max_queue_wait_ms = self.get_max_queue_wait_ms()
         req_started = time.perf_counter()
 

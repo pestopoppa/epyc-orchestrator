@@ -21,6 +21,7 @@ from .stats import StatsMixin
 from .tokens import TokensMixin
 from .types import CallLogEntry, LLMResult
 from src.roles import Role
+from src.workload_model import infer_workload_class
 
 
 class LLMPrimitives(
@@ -148,6 +149,7 @@ class LLMPrimitives(
         self._request_deadline_s = None
         self._request_task_id = None
         self._request_priority = "interactive"
+        self._request_workload_class = "interactive"
         # Request-local context to avoid cross-request overwrite on shared primitives.
         self._request_cancel_check_ctx: contextvars.ContextVar[Any] = contextvars.ContextVar(
             "llm_primitives_request_cancel_check",
@@ -179,6 +181,10 @@ class LLMPrimitives(
         )
         self._request_priority_ctx: contextvars.ContextVar[str | None] = contextvars.ContextVar(
             "llm_primitives_request_priority",
+            default=None,
+        )
+        self._request_workload_class_ctx: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+            "llm_primitives_request_workload_class",
             default=None,
         )
         self._budget_diagnostics: dict[str, Any] = {
@@ -265,6 +271,13 @@ class LLMPrimitives(
             return str(value)
         return str(self._request_priority or "interactive")
 
+    def get_request_workload_class(self) -> str:
+        """Get request-local workload class used for attribution."""
+        value = self._request_workload_class_ctx.get()
+        if value:
+            return str(value)
+        return str(self._request_workload_class or "interactive")
+
     def get_max_queue_wait_ms(self) -> int | None:
         """Get request-local cross-role contention gate budget, if set.
 
@@ -287,6 +300,7 @@ class LLMPrimitives(
         trial_id=None,
         batch_id=None,
         priority: str = "interactive",
+        workload_class: str | None = None,
         max_queue_wait_ms: int | None = None,
     ):
         """Bind cancellation/deadline metadata to the current request context.
@@ -300,6 +314,11 @@ class LLMPrimitives(
             "background"
             if str(priority or "interactive").strip().lower() == "background"
             else "interactive"
+        )
+        normalized_workload_class = infer_workload_class(
+            explicit=workload_class,
+            priority=normalized_priority,
+            batch_id=str(batch_id) if batch_id is not None else None,
         )
         start_remaining_ms = None
         if deadline_s is not None:
@@ -321,6 +340,7 @@ class LLMPrimitives(
             "request_id": request_id,
             "trial_id": trial_id,
             "batch_id": batch_id,
+            "workload_class": normalized_workload_class,
         }
         token_cancel = self._request_cancel_check_ctx.set(cancel_check)
         token_deadline = self._request_deadline_s_ctx.set(deadline_s)
@@ -329,6 +349,7 @@ class LLMPrimitives(
         token_trial = self._request_trial_id_ctx.set(trial_id)
         token_batch = self._request_batch_id_ctx.set(batch_id)
         token_priority = self._request_priority_ctx.set(normalized_priority)
+        token_workload_class = self._request_workload_class_ctx.set(normalized_workload_class)
         token_queue_wait = self._max_queue_wait_ms_ctx.set(max_queue_wait_ms)
         try:
             yield
@@ -346,6 +367,7 @@ class LLMPrimitives(
             self._request_trial_id_ctx.reset(token_trial)
             self._request_batch_id_ctx.reset(token_batch)
             self._request_priority_ctx.reset(token_priority)
+            self._request_workload_class_ctx.reset(token_workload_class)
             self._max_queue_wait_ms_ctx.reset(token_queue_wait)
 
     def _remaining_deadline_s(self) -> float | None:

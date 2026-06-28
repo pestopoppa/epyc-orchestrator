@@ -13,6 +13,9 @@ class _Primitives:
     def get_request_priority(self) -> str:
         return "background"
 
+    def get_request_workload_class(self) -> str:
+        return "eval_batch"
+
     def get_max_queue_wait_ms(self) -> int:
         return 1234
 
@@ -24,11 +27,13 @@ def test_scheduler_policy_wraps_existing_request_context_fields() -> None:
     policy = SchedulerPolicy.from_primitives(_Primitives(), cancellable=True)
 
     assert policy.priority == "background"
+    assert policy.workload_class == "eval_batch"
     assert policy.max_queue_wait_ms == 1234
     assert policy.migration_budget_ms == 55
     assert policy.cancellable is True
     assert policy.request_context_kwargs() == {
         "priority": "background",
+        "workload_class": "eval_batch",
         "max_queue_wait_ms": 1234,
         "migration_budget_ms": 55,
     }

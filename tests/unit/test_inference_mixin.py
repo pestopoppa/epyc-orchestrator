@@ -453,6 +453,7 @@ class TestCallCachingBackend:
 
             def infer(self, _role_config, request):
                 assert getattr(request, "request_priority") == "background"
+                assert getattr(request, "workload_class") == "campaign"
                 assert getattr(request, "max_queue_wait_ms") == 123
                 return InferenceResult(
                     role="frontdoor",
@@ -465,7 +466,11 @@ class TestCallCachingBackend:
 
         prims = LLMPrimitives(mock_mode=False)
         prims._backends["frontdoor"] = FakeConcurrencyAwareBackend()
-        with prims.request_context(priority="background", max_queue_wait_ms=123):
+        with prims.request_context(
+            priority="background",
+            workload_class="campaign",
+            max_queue_wait_ms=123,
+        ):
             assert prims._real_call("hi", "frontdoor") == "ok"
 
 

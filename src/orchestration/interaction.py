@@ -38,6 +38,7 @@ class SchedulerPolicy:
     """Thin wrapper over existing request admission fields."""
 
     priority: str = "interactive"
+    workload_class: str = "interactive"
     max_queue_wait_ms: int | None = None
     migration_budget_ms: int | None = None
     cancellable: bool = False
@@ -51,9 +52,13 @@ class SchedulerPolicy:
         cancellable: bool = False,
     ) -> "SchedulerPolicy":
         get_priority = getattr(primitives, "get_request_priority", None)
+        get_workload_class = getattr(primitives, "get_request_workload_class", None)
         get_max_queue_wait_ms = getattr(primitives, "get_max_queue_wait_ms", None)
         get_migration_budget_ms = getattr(primitives, "get_migration_budget_ms", None)
         priority = get_priority() if callable(get_priority) else default_priority
+        workload_class = (
+            get_workload_class() if callable(get_workload_class) else "interactive"
+        )
         max_queue_wait_ms = (
             get_max_queue_wait_ms() if callable(get_max_queue_wait_ms) else None
         )
@@ -62,6 +67,7 @@ class SchedulerPolicy:
         )
         return cls(
             priority=str(priority or default_priority),
+            workload_class=str(workload_class or "interactive"),
             max_queue_wait_ms=max_queue_wait_ms,
             migration_budget_ms=migration_budget_ms,
             cancellable=cancellable,
@@ -69,7 +75,10 @@ class SchedulerPolicy:
 
     def request_context_kwargs(self) -> dict[str, Any]:
         """Return kwargs compatible with ``LLMPrimitives.request_context``."""
-        kwargs: dict[str, Any] = {"priority": self.priority}
+        kwargs: dict[str, Any] = {
+            "priority": self.priority,
+            "workload_class": self.workload_class,
+        }
         if self.max_queue_wait_ms is not None:
             kwargs["max_queue_wait_ms"] = self.max_queue_wait_ms
         if self.migration_budget_ms is not None:

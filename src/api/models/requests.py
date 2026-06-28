@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -103,6 +105,12 @@ class ChatRequest(BaseModel):
         default="interactive",
         description="Admission priority: 'interactive' (default) or 'background'. "
         "Interactive requests are prioritized at backend admission gates.",
+    )
+    workload_class: Literal["interactive", "eval_batch", "campaign"] | None = Field(
+        default=None,
+        description="Optional workload traffic class for attribution: "
+        "'interactive', 'eval_batch', or 'campaign'. When unset, the server "
+        "infers it from existing request metadata without changing admission priority.",
     )
     max_queue_wait_ms: int | None = Field(
         default=None,

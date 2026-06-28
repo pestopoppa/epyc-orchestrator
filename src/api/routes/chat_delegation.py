@@ -992,12 +992,15 @@ def _architect_delegated_answer_inner(
             from src.config import get_config as _get_config
             _role_timeout_s = float(_get_config().timeouts.for_role(delegate_to))
             _specialist_deadline_s = time.perf_counter() + max(_role_timeout_s, specialist_budget_s)
+            _get_workload_class = getattr(primitives, "get_request_workload_class", None)
+            _workload_class = _get_workload_class() if callable(_get_workload_class) else None
 
             with primitives.request_context(
                 cancel_check=primitives.get_request_cancel_check(),
                 deadline_s=_specialist_deadline_s,
                 task_id=primitives.get_request_task_id(),
                 priority=primitives.get_request_priority(),
+                workload_class=_workload_class,
             ):
                 report, deleg_tools, deleg_tools_called, phase_tool_timings, specialist_timed_out, report_rescued, specialist_infer_meta, specialist_repl_errors = _run_specialist_loop(
                     question,
