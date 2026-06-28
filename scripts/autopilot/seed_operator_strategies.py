@@ -7,6 +7,7 @@ import argparse
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import importlib.util
 import json
 from pathlib import Path
 import re
@@ -42,6 +43,7 @@ VALID_SPECIES = {
 VALID_ENTRY_TYPES = {"pattern", "convention"}
 VALID_TRANCHES = {"green", "guardrail", "frozen"}
 VALID_CONFIDENCE = {"low", "medium", "high"}
+VALID_BIND_STATUS = {"live", "future", "context"}
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*[a-z0-9]$")
 
 
@@ -58,10 +60,18 @@ class SeedRow:
     source_handoff: str
     seeded_reason: str
     confidence: str
+    bind_status: str
+    bind_identifiers: list[str]
 
     @property
     def entry_id(self) -> str:
         return f"opseed-{self.tranche}-{self.slug}"
+
+    def searchable_text(self) -> str:
+        return (
+            f"{self.title} {self.description} {self.insight} "
+            f"{' '.join(self.bind_identifiers)}"
+        ).lower()
 
 
 def _load_trial_counter(path: Path) -> int:
@@ -115,6 +125,21 @@ def _coerce_row(raw: Any, idx: int) -> SeedRow:
         raise ValueError(f"row {idx}: invalid entry_type {entry_type!r}")
     if confidence not in VALID_CONFIDENCE:
         raise ValueError(f"row {idx}: invalid confidence {confidence!r}")
+    bind_status = str(raw.get("bind_status", "")).strip()
+    if not bind_status:
+        bind_status = "live" if species in {"numeric_swarm", "structural_lab"} else "context"
+    if bind_status not in VALID_BIND_STATUS:
+        raise ValueError(f"row {idx}: invalid bind_status {bind_status!r}")
+    bind_raw = raw.get("bind_identifiers", [])
+    if bind_raw is None:
+        bind_raw = []
+    if not isinstance(bind_raw, list):
+        raise ValueError(f"row {idx}: bind_identifiers must be a list")
+    bind_identifiers = sorted({str(item).strip() for item in bind_raw if str(item).strip()})
+    if species in {"numeric_swarm", "structural_lab"} and not bind_identifiers:
+        raise ValueError(
+            f"row {idx}: {species} rows must list bind_identifiers"
+        )
     evidence_raw = raw["evidence_trial_ids"]
     if evidence_raw is None:
         evidence_raw = []
@@ -153,6 +178,8 @@ def _coerce_row(raw: Any, idx: int) -> SeedRow:
         source_handoff=text_fields["source_handoff"],
         seeded_reason=text_fields["seeded_reason"],
         confidence=confidence,
+        bind_status=bind_status,
+        bind_identifiers=bind_identifiers,
     )
 
 
@@ -173,6 +200,95 @@ def load_seed_rows(path: Path) -> list[SeedRow]:
     return rows
 
 
+def _load_module(path: Path, name: str) -> Any:
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load module from {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _known_hot_swap_features() -> set[str]:
+    module = _load_module(SCRIPT_DIR / "config_applicator.py", "_operator_seed_config")
+    return {str(item) for item in module.HOT_SWAP_FEATURES}
+
+
+def _known_numeric_surfaces() -> set[str]:
+    module = _load_module(
+        SCRIPT_DIR / "species" / "numeric_swarm.py",
+        "_operator_seed_numeric_swarm",
+    )
+    return {str(item) for item in module.SURFACES}
+
+
+def audit_identifiers(rows: list[SeedRow]) -> dict[str, Any]:
+    """Check seed rows against live StructuralLab flags and NumericSwarm surfaces."""
+    hot_swap_features = _known_hot_swap_features()
+    numeric_surfaces = _known_numeric_surfaces()
+    findings: list[dict[str, Any]] = []
+    for row in rows:
+        if row.species == "structural_lab":
+            matched = sorted(set(row.bind_identifiers) & hot_swap_features)
+            if row.bind_status == "live" and not matched:
+                findings.append(
+                    {
+                        "slug": row.slug,
+                        "species": row.species,
+                        "status": "missing_live_hot_swap_feature",
+                        "bind_identifiers": row.bind_identifiers,
+                    }
+                )
+            elif row.bind_status != "live":
+                findings.append(
+                    {
+                        "slug": row.slug,
+                        "species": row.species,
+                        "status": f"documented_{row.bind_status}_binding",
+                        "bind_identifiers": row.bind_identifiers,
+                    }
+                )
+        if row.species == "numeric_swarm":
+            matched = sorted(set(row.bind_identifiers) & numeric_surfaces)
+            if row.bind_status == "live" and not matched:
+                findings.append(
+                    {
+                        "slug": row.slug,
+                        "species": row.species,
+                        "status": "missing_live_numeric_surface",
+                        "bind_identifiers": row.bind_identifiers,
+                        "known_numeric_surfaces": sorted(numeric_surfaces),
+                    }
+                )
+            elif row.bind_status != "live":
+                findings.append(
+                    {
+                        "slug": row.slug,
+                        "species": row.species,
+                        "status": f"documented_{row.bind_status}_binding",
+                        "bind_identifiers": row.bind_identifiers,
+                    }
+                )
+    blocking = [
+        finding
+        for finding in findings
+        if finding["status"] in {
+            "missing_live_hot_swap_feature",
+            "missing_live_numeric_surface",
+        }
+    ]
+    return {
+        "ok": not blocking,
+        "row_count": len(rows),
+        "hot_swap_features": sorted(hot_swap_features),
+        "numeric_surfaces": sorted(numeric_surfaces),
+        "finding_count": len(findings),
+        "blocking_count": len(blocking),
+        "findings": findings,
+    }
+
+
 def _metadata(row: SeedRow, *, campaign: str, seeded_date: str) -> dict[str, Any]:
     return {
         "seeded_by": "operator",
@@ -182,6 +298,8 @@ def _metadata(row: SeedRow, *, campaign: str, seeded_date: str) -> dict[str, Any
         "source_handoff": row.source_handoff,
         "confidence": row.confidence,
         "tranche": row.tranche,
+        "bind_status": row.bind_status,
+        "bind_identifiers": row.bind_identifiers,
     }
 
 
@@ -350,6 +468,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--source-trial-id", type=int)
     parser.add_argument("--apply", action="store_true", help="Write rows to StrategyStore.")
     parser.add_argument(
+        "--audit-identifiers",
+        action="store_true",
+        help=(
+            "Check StructuralLab rows against HOT_SWAP_FEATURES and NumericSwarm "
+            "rows against SURFACES without writing."
+        ),
+    )
+    parser.add_argument(
         "--purge-campaign",
         metavar="NAME",
         help="Delete rows for a campaign and rebuild FTS5/FAISS mirrors.",
@@ -374,22 +500,27 @@ def main(argv: list[str] | None = None) -> int:
         )
     else:
         rows = load_seed_rows(args.seed_file.expanduser().resolve())
-        source_trial_id = (
-            args.source_trial_id
-            if args.source_trial_id is not None
-            else _load_trial_counter(args.state_path.expanduser().resolve())
-        )
-        report = seed_rows(
-            rows=rows,
-            strategy_path=strategy_path,
-            source_trial_id=source_trial_id,
-            campaign=args.campaign,
-            apply=bool(args.apply),
-        )
+        if args.audit_identifiers:
+            report = audit_identifiers(rows)
+        else:
+            source_trial_id = (
+                args.source_trial_id
+                if args.source_trial_id is not None
+                else _load_trial_counter(args.state_path.expanduser().resolve())
+            )
+            report = seed_rows(
+                rows=rows,
+                strategy_path=strategy_path,
+                source_trial_id=source_trial_id,
+                campaign=args.campaign,
+                apply=bool(args.apply),
+            )
     if args.json:
         print(json.dumps(report, sort_keys=True))
     else:
         print(json.dumps(report, indent=2, sort_keys=True))
+    if args.audit_identifiers and not report.get("ok", False):
+        return 1
     return 0
 
 

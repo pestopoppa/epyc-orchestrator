@@ -2,483 +2,576 @@
   tranche: green
   species: prompt_forge
   entry_type: pattern
-  title: "Serve compressed agent-file variants"
-  description: "agent-file compression in prompt_forge role prompts"
-  insight: "Serve compressed agent-file variants (mild to medium) per role; score obedience and quality against the uncompressed baseline."
+  title: Serve compressed agent-file variants
+  description: agent-file compression in prompt_forge role prompts
+  insight: Serve compressed agent-file variants (mild to medium) per role; score obedience and quality against the uncompressed baseline.
   evidence_trial_ids: []
   source_handoff: agent-file-prose-compression
-  seeded_reason: "Capture the compressed agent-file hypothesis for PromptForge"
+  seeded_reason: Capture the compressed agent-file hypothesis for PromptForge
   confidence: medium
 - slug: reasoning-brevity-trimr
   tranche: green
   species: prompt_forge
   entry_type: pattern
-  title: "Add conciseness and TrimR brevity to worker prompts"
-  description: "reasoning brevity trimr in prompt_forge worker prompts"
-  insight: "Add conciseness and TrimR brevity to worker prompts; the handoff reports about a 37 percent token cut at comparable accuracy on easy problems, gated on accuracy delta."
+  title: Add conciseness and TrimR brevity to worker prompts
+  description: reasoning brevity trimr in prompt_forge worker prompts
+  insight: Add conciseness and TrimR brevity to worker prompts; the handoff reports about a 37 percent token cut at comparable accuracy on easy problems, gated on accuracy delta.
   evidence_trial_ids: []
   source_handoff: reasoning-compression
-  seeded_reason: "Bias PromptForge toward brevity when accuracy stays flat"
+  seeded_reason: Bias PromptForge toward brevity when accuracy stays flat
   confidence: medium
 - slug: meta-harness-contrastive
   tranche: green
   species: prompt_forge
   entry_type: pattern
-  title: "Use contrastive traces in the PromptForge proposer"
-  description: "meta-harness contrastive traces in prompt_forge proposer"
-  insight: "Feed contrastive k_success=2 and k_failure=2 traces to the PromptForge proposer; HLE fidelity remains diagnostic-only."
+  title: Use contrastive traces in the PromptForge proposer
+  description: meta-harness contrastive traces in prompt_forge proposer
+  insight: Feed contrastive k_success=2 and k_failure=2 traces to the PromptForge proposer; HLE fidelity remains diagnostic-only.
   evidence_trial_ids: []
   source_handoff: meta-harness-optimization
-  seeded_reason: "Keep contrastive traces in the proposer search space"
+  seeded_reason: Keep contrastive traces in the proposer search space
   confidence: medium
 - slug: repl-verbosity-prompts
   tranche: green
   species: prompt_forge
   entry_type: pattern
-  title: "A/B REPL verbosity and suggestion prompts"
-  description: "repl verbosity prompts for prompt_forge turn efficiency"
-  insight: "A/B REPL verbosity and suggestion prompts to cut turns and tokens at zero accuracy loss, gated on S4 Omega A/B."
+  title: A/B REPL verbosity and suggestion prompts
+  description: repl verbosity prompts for prompt_forge turn efficiency
+  insight: A/B REPL verbosity and suggestion prompts to cut turns and tokens at zero accuracy loss, gated on S4 Omega A/B.
   evidence_trial_ids: []
   source_handoff: repl-turn-efficiency
-  seeded_reason: "Preserve the REPL verbosity hypothesis as a planner hint"
+  seeded_reason: Preserve the REPL verbosity hypothesis as a planner hint
   confidence: medium
 - slug: context-folding-alpha
   tranche: green
   species: numeric_swarm
   entry_type: pattern
-  title: "Tune compaction alpha toward retrieval weighting"
-  description: "context folding alpha in numeric_swarm compaction"
-  insight: "Tune compaction dual-objective alpha toward 0.0 so retrieval is weighted more heavily; the handoff reports about a 5 point precision lift offline and asks for live validation."
+  title: Tune compaction alpha toward retrieval weighting
+  description: context folding alpha in numeric_swarm compaction
+  insight: Tune compaction dual-objective alpha toward 0.0 so retrieval is weighted more heavily; the handoff reports about a 5 point precision lift offline and asks for live validation.
   evidence_trial_ids: []
   source_handoff: context-folding-progressive
-  seeded_reason: "Keep the compaction alpha sweep available to NumericSwarm"
+  seeded_reason: Keep the compaction alpha sweep available to NumericSwarm
   confidence: medium
+  bind_status: future
+  bind_identifiers:
+  - context_folding_alpha
 - slug: kbrag-retrieval-weights
   tranche: green
   species: numeric_swarm
   entry_type: pattern
-  title: "Sweep kb-rag retrieval weights"
-  description: "kb rag retrieval weights in numeric_swarm"
-  insight: "Tune kb-rag recency_w in [0.1, 0.3], rerank_w, and the FTS5 lexical weight to optimize recall@10; recency_w=0.3_s90 remains the zero-miss baseline."
+  title: Sweep kb-rag retrieval weights
+  description: kb rag retrieval weights in numeric_swarm
+  insight: Tune kb-rag recency_w in [0.1, 0.3], rerank_w, and the FTS5 lexical weight to optimize recall@10; recency_w=0.3_s90 remains the zero-miss baseline.
   evidence_trial_ids: []
   source_handoff: internal-kb-rag
-  seeded_reason: "Preserve the retrieval-weight sweep for NumericSwarm"
+  seeded_reason: Preserve the retrieval-weight sweep for NumericSwarm
   confidence: medium
+  bind_status: future
+  bind_identifiers:
+  - kb_rag_retrieval
 - slug: per-role-reasoning-budget
   tranche: green
   species: numeric_swarm
   entry_type: pattern
-  title: "Tune per-role reasoning budget tokens"
-  description: "per role reasoning budget tokens in numeric_swarm"
-  insight: "Tune per-role reasoning budget_tokens; budget=0 fails on the Qwen3.5 hybrid SSM, so this is for pure-MoE roles only."
+  title: Tune per-role reasoning budget tokens
+  description: per role reasoning budget tokens in numeric_swarm
+  insight: Tune per-role reasoning budget_tokens; budget=0 fails on the Qwen3.5 hybrid SSM, so this is for pure-MoE roles only.
   evidence_trial_ids: []
   source_handoff: per-request-reasoning-budget
-  seeded_reason: "Keep per-role reasoning budgets exposed to NumericSwarm"
+  seeded_reason: Keep per-role reasoning budgets exposed to NumericSwarm
   confidence: medium
+  bind_status: future
+  bind_identifiers:
+  - per_role_reasoning_budget
+  - reasoning_budget_tokens
 - slug: per-role-sampling-temp
   tranche: green
   species: numeric_swarm
   entry_type: pattern
-  title: "Sweep per-role sampling temperature"
-  description: "per role sampling temp in numeric_swarm"
-  insight: "Sweep per-role generation temperature from 0.1 to 0.3 with a fixed seed; architect_general needs chat-completions when enable_thinking=false."
+  title: Sweep per-role sampling temperature
+  description: per role sampling temp in numeric_swarm
+  insight: Sweep per-role generation temperature from 0.1 to 0.3 with a fixed seed; architect_general needs chat-completions when enable_thinking=false.
   evidence_trial_ids: []
   source_handoff: prompt-construction-determinism
-  seeded_reason: "Retain the per-role temperature sweep as a numeric hint"
+  seeded_reason: Retain the per-role temperature sweep as a numeric hint
   confidence: medium
+  bind_status: future
+  bind_identifiers:
+  - per_role_sampling_temperature
+  - generation_temperature
 - slug: tool-output-compression
   tranche: green
   species: numeric_swarm
   entry_type: pattern
-  title: "Tune tool-output compression aggressiveness"
-  description: "tool output compression in numeric_swarm"
-  insight: "Tune tool-output compression aggressiveness per role and A/B on REPL turns and token cost; the handoff shows about a 4 point lift."
+  title: Tune tool-output compression aggressiveness
+  description: tool output compression in numeric_swarm
+  insight: Tune tool-output compression aggressiveness per role and A/B on REPL turns and token cost; the handoff shows about a 4 point lift.
   evidence_trial_ids: []
   source_handoff: tool-output-compression
-  seeded_reason: "Keep tool-output compression as a numeric optimization candidate"
+  seeded_reason: Keep tool-output compression as a numeric optimization candidate
   confidence: medium
+  bind_status: future
+  bind_identifiers:
+  - tool_output_compression
 - slug: triattention-keepratio
   tranche: green
   species: numeric_swarm
   entry_type: pattern
-  title: "Sweep Expected-Attention keep_ratio and layer_weights"
-  description: "triattention keepratio in numeric_swarm"
-  insight: "Sweep Expected-Attention keep_ratio and layer_weights per role, then persist Pareto profiles."
+  title: Sweep Expected-Attention keep_ratio and layer_weights
+  description: triattention keepratio in numeric_swarm
+  insight: Sweep Expected-Attention keep_ratio and layer_weights per role, then persist Pareto profiles.
   evidence_trial_ids: []
   source_handoff: triattention-kv-selection
-  seeded_reason: "Expose the triattention keep_ratio sweep to NumericSwarm"
+  seeded_reason: Expose the triattention keep_ratio sweep to NumericSwarm
   confidence: medium
+  bind_status: live
+  bind_identifiers:
+  - kv_compaction
 - slug: deep-research-mode
   tranche: green
   species: structural_lab
   entry_type: pattern
-  title: "Toggle deep_research_mode for research-like queries"
-  description: "deep_research_mode toggle in structural_lab"
-  insight: "Toggle deep_research_mode on for research-like queries and promote only if rubric uplift is at least 5 points, there is no sentinel regression, and tool calls stay within 2x."
+  title: Toggle deep_research_mode for research-like queries
+  description: deep_research_mode toggle in structural_lab
+  insight: Toggle deep_research_mode on for research-like queries and promote only if rubric uplift is at least 5 points, there is no sentinel regression, and tool calls stay within 2x.
   evidence_trial_ids: []
   source_handoff: minddr-deep-research-mode
-  seeded_reason: "Retain deep_research_mode as a StructuralLab hypothesis"
+  seeded_reason: Retain deep_research_mode as a StructuralLab hypothesis
   confidence: medium
+  bind_status: future
+  bind_identifiers:
+  - deep_research_mode
 - slug: force-mode-edit
   tranche: green
   species: structural_lab
   entry_type: pattern
-  title: "A/B force_mode=edit for one-shot edit transactions"
-  description: "force_mode edit in structural_lab"
-  insight: "A/B force_mode=edit one-shot edit-transaction for read-first coding edits; the gap is protocol, not model."
+  title: A/B force_mode=edit for one-shot edit transactions
+  description: force_mode edit in structural_lab
+  insight: A/B force_mode=edit one-shot edit-transaction for read-first coding edits; the gap is protocol, not model.
   evidence_trial_ids: []
   source_handoff: multi-file-coding-completion-capability / batched-edit-parallel-apply
-  seeded_reason: "Keep force_mode=edit available as a structural editing lever"
+  seeded_reason: Keep force_mode=edit available as a structural editing lever
   confidence: medium
+  bind_status: future
+  bind_identifiers:
+  - force_mode=edit
 - slug: dcp-pre-assembly
   tranche: green
   species: structural_lab
   entry_type: pattern
-  title: "Gate dcp_pre_assembly on quality-scored wins"
-  description: "dcp_pre_assembly toggle in structural_lab"
-  insight: "dcp_pre_assembly cut tokens but worsened p50 latency in the first A/B, so flip it only on a quality-scored clean-window win."
+  title: Gate dcp_pre_assembly on quality-scored wins
+  description: dcp_pre_assembly toggle in structural_lab
+  insight: dcp_pre_assembly cut tokens but worsened p50 latency in the first A/B, so flip it only on a quality-scored clean-window win.
   evidence_trial_ids: []
   source_handoff: delegation-context-preassembly
-  seeded_reason: "Preserve the dcp_pre_assembly experiment with its quality gate"
+  seeded_reason: Preserve the dcp_pre_assembly experiment with its quality gate
   confidence: medium
+  bind_status: future
+  bind_identifiers:
+  - dcp_pre_assembly
 - slug: tool-use-sentinel-lane
   tranche: green
   species: structural_lab
   entry_type: pattern
-  title: "Enable the tool-use sentinel lane"
-  description: "tool-use sentinel lane in structural_lab"
-  insight: "Enable the tool-use sentinel lane so trials exercise tools; gate the native OpenAI-tools seam ON and OFF."
+  title: Enable the tool-use sentinel lane
+  description: tool-use sentinel lane in structural_lab
+  insight: Enable the tool-use sentinel lane so trials exercise tools; gate the native OpenAI-tools seam ON and OFF.
   evidence_trial_ids: []
   source_handoff: tool-use-eval-contract
-  seeded_reason: "Keep the sentinel-lane experiment visible to StructuralLab"
+  seeded_reason: Keep the sentinel-lane experiment visible to StructuralLab
   confidence: medium
+  bind_status: future
+  bind_identifiers:
+  - tool_use_sentinel_lane
 - slug: xmas-winner-table
   tranche: green
   species: structural_lab
   entry_type: pattern
-  title: "Enable xmas_winner_table routing"
-  description: "xmas_winner_table routing in structural_lab"
-  insight: "Enable X-MAS function-axis routing via xmas_winner_table under incumbent-constrained cheap-first, and gate on a held-out decision."
+  title: Enable xmas_winner_table routing
+  description: xmas_winner_table routing in structural_lab
+  insight: Enable X-MAS function-axis routing via xmas_winner_table under incumbent-constrained cheap-first, and gate on a held-out decision.
   evidence_trial_ids: []
   source_handoff: x-mas-text-routing
-  seeded_reason: "Keep xmas_winner_table as a routed structural option"
+  seeded_reason: Keep xmas_winner_table as a routed structural option
   confidence: medium
+  bind_status: future
+  bind_identifiers:
+  - xmas_winner_table
 - slug: retrieval-risk-routing
   tranche: green
   species: structural_lab
   entry_type: pattern
-  title: "Stage retrieval-risk routing control"
-  description: "MEMRL_RETRIEVAL_RISK_CONTROL_ENABLED in structural_lab"
-  insight: "Stage retrieval-risk routing control via MEMRL_RETRIEVAL_RISK_CONTROL_ENABLED as an enforce-versus-shadow canary; keep the threshold tunable."
+  title: Stage retrieval-risk routing control
+  description: MEMRL_RETRIEVAL_RISK_CONTROL_ENABLED in structural_lab
+  insight: Stage retrieval-risk routing control via MEMRL_RETRIEVAL_RISK_CONTROL_ENABLED as an enforce-versus-shadow canary; keep the threshold tunable.
   evidence_trial_ids: []
   source_handoff: routing-intelligence
-  seeded_reason: "Retain retrieval-risk routing as a StructuralLab candidate"
+  seeded_reason: Retain retrieval-risk routing as a StructuralLab candidate
   confidence: medium
+  bind_status: future
+  bind_identifiers:
+  - MEMRL_RETRIEVAL_RISK_CONTROL_ENABLED
 - slug: no-mmap-refuted
   tranche: guardrail
   species: structural_lab
   entry_type: convention
-  title: "Keep shared mmap; no_mmap was refuted"
-  description: "no_mmap flag for structural_lab private node-local weights"
-  insight: "no_mmap private node-local weights were refuted on v6+iqk for frontdoor, ingest, and vision_escalation, so keep shared-mmap."
+  title: Keep shared mmap; no_mmap was refuted
+  description: no_mmap flag for structural_lab private node-local weights
+  insight: no_mmap private node-local weights were refuted on v6+iqk for frontdoor, ingest, and vision_escalation, so keep shared-mmap.
   evidence_trial_ids: []
   source_handoff: numa-private-weights-quarter-roles
-  seeded_reason: "Block the no_mmap refutation from being re-explored"
+  seeded_reason: Block the no_mmap refutation from being re-explored
   confidence: high
+  bind_status: future
+  bind_identifiers:
+  - no_mmap
 - slug: ccd-vestigial
   tranche: guardrail
   species: structural_lab
   entry_type: convention
-  title: "Treat GGML_CCD_* as vestigial no-ops"
-  description: "GGML_CCD_* env vars in structural_lab"
-  insight: "GGML_CCD_* environment variables are vestigial no-ops under the production OpenMP build, so never propose enabling them."
+  title: Treat GGML_CCD_* as vestigial no-ops
+  description: GGML_CCD_* env vars in structural_lab
+  insight: GGML_CCD_* environment variables are vestigial no-ops under the production OpenMP build, so never propose enabling them.
   evidence_trial_ids: []
   source_handoff: intra-process-tensor-parallel-decode / cpu-kernel-env-flags-inventory
-  seeded_reason: "Prevent dead GGML_CCD_* environment proposals"
+  seeded_reason: Prevent dead GGML_CCD_* environment proposals
   confidence: high
+  bind_status: context
+  bind_identifiers:
+  - GGML_CCD_*
 - slug: decode-bw-saturated
   tranche: guardrail
   species: all
   entry_type: convention
-  title: "Treat CPU batch-1 decode as bandwidth saturated"
-  description: "batch=1 decode leverage in all species"
-  insight: "CPU decode is bandwidth saturated, so no kernel or numeric lever wins on batch=1 quantized decode and decode-kernel levers should not be proposed."
+  title: Treat CPU batch-1 decode as bandwidth saturated
+  description: batch=1 decode leverage in all species
+  insight: CPU decode is bandwidth saturated, so no kernel or numeric lever wins on batch=1 quantized decode and decode-kernel levers should not be proposed.
   evidence_trial_ids: []
   source_handoff: cpu-shape-specialized-gemv-decode / tidar
-  seeded_reason: "Avoid re-proposing exhausted decode-kernel levers"
+  seeded_reason: Avoid re-proposing exhausted decode-kernel levers
   confidence: high
 - slug: cross-family-drafter
   tranche: guardrail
   species: structural_lab
   entry_type: convention
-  title: "Keep drafters within the same tokenizer family"
-  description: "cross-family drafter selection in structural_lab"
-  insight: "Cross-family drafters are tokenizer-incompatible, so Qwen3-1.7B is invalid for qwen35 and only same-family drafts are valid."
+  title: Keep drafters within the same tokenizer family
+  description: cross-family drafter selection in structural_lab
+  insight: Cross-family drafters are tokenizer-incompatible, so Qwen3-1.7B is invalid for qwen35 and only same-family drafts are valid.
   evidence_trial_ids: []
   source_handoff: gpu-drafter-mi200-investigation
-  seeded_reason: "Prevent cross-family drafter proposals"
+  seeded_reason: Prevent cross-family drafter proposals
   confidence: high
+  bind_status: context
+  bind_identifiers:
+  - cross_family_drafter
 - slug: gdn-forecloses-specdec
   tranche: guardrail
   species: structural_lab
   entry_type: convention
-  title: "Treat GDN and Delta-Net as foreclosing CPU spec-dec"
-  description: "GDN Delta-Net hybrid in structural_lab"
-  insight: "The GDN and Delta-Net hybrid on Qwen3.6-27B and Qwen3.5 forecloses CPU spec-dec because recurrent layers block draft-verify."
+  title: Treat GDN and Delta-Net as foreclosing CPU spec-dec
+  description: GDN Delta-Net hybrid in structural_lab
+  insight: The GDN and Delta-Net hybrid on Qwen3.6-27B and Qwen3.5 forecloses CPU spec-dec because recurrent layers block draft-verify.
   evidence_trial_ids: []
   source_handoff: qwen36-27b-cpu-feasibility / qwen35-architecture
-  seeded_reason: "Keep the CPU spec-dec foreclosure explicit"
+  seeded_reason: Keep the CPU spec-dec foreclosure explicit
   confidence: high
+  bind_status: context
+  bind_identifiers:
+  - gdn_delta_net_specdec
 - slug: moe-spec-budget-noconsumer
   tranche: guardrail
   species: numeric_swarm
   entry_type: convention
-  title: "Do not tune moe_spec_budget yet"
-  description: "moe_spec_budget surface in numeric_swarm"
-  insight: "moe_spec_budget has no live consumer because frontdoor zero spec-dec is active, so do not tune it until frontdoor spec-dec is live and alpha is measured."
+  title: Do not tune moe_spec_budget yet
+  description: moe_spec_budget surface in numeric_swarm
+  insight: moe_spec_budget has no live consumer because frontdoor zero spec-dec is active, so do not tune it until frontdoor spec-dec is live and alpha is measured.
   evidence_trial_ids: []
   source_handoff: moe-spec-cpu-spec-dec-integration
-  seeded_reason: "Prevent NumericSwarm from tuning a dead surface"
+  seeded_reason: Prevent NumericSwarm from tuning a dead surface
   confidence: high
+  bind_status: future
+  bind_identifiers:
+  - moe_spec_budget
 - slug: dual-half-negative
   tranche: guardrail
   species: structural_lab
   entry_type: convention
-  title: "Keep Half0 and Half1 concurrent use off"
-  description: "Dual-half Half0 and Half1 concurrency in structural_lab"
-  insight: "Dual-half Half0 and Half1 concurrency is negative at about 0.5x because shared-weight bandwidth contention dominates, so quarters remain the granularity."
+  title: Keep Half0 and Half1 concurrent use off
+  description: Dual-half Half0 and Half1 concurrency in structural_lab
+  insight: Dual-half Half0 and Half1 concurrency is negative at about 0.5x because shared-weight bandwidth contention dominates, so quarters remain the granularity.
   evidence_trial_ids: []
   source_handoff: dynamic-stack-concurrency / project memory
-  seeded_reason: "Stop re-exploring dual-half concurrency"
+  seeded_reason: Stop re-exploring dual-half concurrency
   confidence: high
+  bind_status: context
+  bind_identifiers:
+  - dual_half_concurrency
 - slug: slot-promotion-negative
   tranche: guardrail
   species: structural_lab
   entry_type: convention
-  title: "Keep slot-promotion dispatcher off by default"
-  description: "spec-numa quarters slot-promotion dispatcher in structural_lab"
-  insight: "The slot-promotion dispatcher with --spec-numa-quarters is net negative on Qwen3.6 with a small drafter, so it stays default-off with documented reopen criteria."
+  title: Keep slot-promotion dispatcher off by default
+  description: spec-numa quarters slot-promotion dispatcher in structural_lab
+  insight: The slot-promotion dispatcher with --spec-numa-quarters is net negative on Qwen3.6 with a small drafter, so it stays default-off with documented reopen criteria.
   evidence_trial_ids: []
   source_handoff: project_slot_promotion_shelved
-  seeded_reason: "Prevent another slot-promotion retry"
+  seeded_reason: Prevent another slot-promotion retry
   confidence: high
+  bind_status: future
+  bind_identifiers:
+  - spec-numa-quarters
 - slug: ep-needs-canonical
   tranche: guardrail
   species: structural_lab
   entry_type: convention
-  title: "Require a fresh canonical matrix before expert parallelism"
-  description: "expert_parallelism flag in structural_lab"
-  insight: "The expert_parallelism flag is bit-correct but its production win was a baseline artifact, so do not toggle it without a fresh canonical matrix."
+  title: Require a fresh canonical matrix before expert parallelism
+  description: expert_parallelism flag in structural_lab
+  insight: The expert_parallelism flag is bit-correct but its production win was a baseline artifact, so do not toggle it without a fresh canonical matrix.
   evidence_trial_ids: []
   source_handoff: large-moe-expert-parallelism
-  seeded_reason: "Block expert_parallelism until canonical baselines are refreshed"
+  seeded_reason: Block expert_parallelism until canonical baselines are refreshed
   confidence: high
+  bind_status: future
+  bind_identifiers:
+  - expert_parallelism
 - slug: batch1-decode-exhausted
   tranche: guardrail
   species: all
   entry_type: convention
-  title: "Treat batch-1 decode as exhausted"
-  description: "batch=1 decode in all species"
-  insight: "Batch=1 decode is exhausted because it is both compute-idle and per-thread bandwidth saturated, so there is no FLOPS lever left."
+  title: Treat batch-1 decode as exhausted
+  description: batch=1 decode in all species
+  insight: Batch=1 decode is exhausted because it is both compute-idle and per-thread bandwidth saturated, so there is no FLOPS lever left.
   evidence_trial_ids: []
   source_handoff: fable5-findings-06-kernel-and-concurrency
-  seeded_reason: "Avoid batch-1 decode retries"
+  seeded_reason: Avoid batch-1 decode retries
   confidence: high
 - slug: coalesced-barriers-neutral
   tranche: guardrail
   species: numeric_swarm
   entry_type: convention
-  title: "Keep op-coalesced barriers neutral"
-  description: "op-coalesced barriers in numeric_swarm"
-  insight: "Op-coalesced barriers measured neutral at plus 0.19 percent under canonical OMP, and the MUL_MAT wdata race precludes aggressive coalescing."
+  title: Keep op-coalesced barriers neutral
+  description: op-coalesced barriers in numeric_swarm
+  insight: Op-coalesced barriers measured neutral at plus 0.19 percent under canonical OMP, and the MUL_MAT wdata race precludes aggressive coalescing.
   evidence_trial_ids: []
   source_handoff: cpu4-deferred-avenues-design-note
-  seeded_reason: "Prevent NumericSwarm from overvaluing coalesced barriers"
+  seeded_reason: Prevent NumericSwarm from overvaluing coalesced barriers
   confidence: high
+  bind_status: context
+  bind_identifiers:
+  - op_coalesced_barriers
 - slug: work-stealing-negative
   tranche: guardrail
   species: structural_lab
   entry_type: convention
-  title: "Do not retry global work-stealing for expert balancing"
-  description: "global work-stealing for expert balancing in structural_lab"
-  insight: "Global work-stealing for expert balancing is minus 2.3 percent because single-atomic contention at 96 threads dominates, so do not re-attempt it for single-user runs."
+  title: Do not retry global work-stealing for expert balancing
+  description: global work-stealing for expert balancing in structural_lab
+  insight: Global work-stealing for expert balancing is minus 2.3 percent because single-atomic contention at 96 threads dominates, so do not re-attempt it for single-user runs.
   evidence_trial_ids: []
   source_handoff: cpu-dynamic-moe-load-balancing
-  seeded_reason: "Block the global work-stealing retry"
+  seeded_reason: Block the global work-stealing retry
   confidence: high
+  bind_status: context
+  bind_identifiers:
+  - global_work_stealing
 - slug: tree-spec-hybrid-negative
   tranche: guardrail
   species: structural_lab
   entry_type: convention
-  title: "Keep tree-spec and per-path replay off for Delta-Net"
-  description: "tree-spec per-path-replay checkpoint-clone in structural_lab"
-  insight: "Tree-spec, per-path replay, and checkpoint-clone are all net negative on Delta-Net, so keep the !has_recurrent guard."
+  title: Keep tree-spec and per-path replay off for Delta-Net
+  description: tree-spec per-path-replay checkpoint-clone in structural_lab
+  insight: Tree-spec, per-path replay, and checkpoint-clone are all net negative on Delta-Net, so keep the !has_recurrent guard.
   evidence_trial_ids: []
   source_handoff: ssm-hybrid-acceleration / tree-speculation-numa-drafting
-  seeded_reason: "Prevent another tree-spec hybrid retry"
+  seeded_reason: Prevent another tree-spec hybrid retry
   confidence: high
+  bind_status: context
+  bind_identifiers:
+  - tree_spec
+  - has_recurrent
 - slug: dflash-cpu-not-viable
   tranche: guardrail
   species: structural_lab
   entry_type: convention
-  title: "Treat CPU DFlash block-diffusion as not viable"
-  description: "DFlash block-diffusion on CPU in structural_lab"
-  insight: "DFlash block-diffusion on CPU Q4_K_M loses decisively to AR, so it is not viable on CPU."
+  title: Treat CPU DFlash block-diffusion as not viable
+  description: DFlash block-diffusion on CPU in structural_lab
+  insight: DFlash block-diffusion on CPU Q4_K_M loses decisively to AR, so it is not viable on CPU.
   evidence_trial_ids: []
   source_handoff: dflash-block-diffusion-speculation
-  seeded_reason: "Avoid CPU DFlash block-diffusion proposals"
+  seeded_reason: Avoid CPU DFlash block-diffusion proposals
   confidence: high
+  bind_status: context
+  bind_identifiers:
+  - dflash_block_diffusion
 - slug: paper-tree-shapes-no-transfer
   tranche: guardrail
   species: numeric_swarm
   entry_type: convention
-  title: "Do not transfer paper EAGLE-3 tree shapes to CPU"
-  description: "paper EAGLE-3 tree shapes in numeric_swarm"
-  insight: "Paper EAGLE-3 tree shapes are GPU-bound, so do not assume they transfer to CPU heap-spec at 96 threads."
+  title: Do not transfer paper EAGLE-3 tree shapes to CPU
+  description: paper EAGLE-3 tree shapes in numeric_swarm
+  insight: Paper EAGLE-3 tree shapes are GPU-bound, so do not assume they transfer to CPU heap-spec at 96 threads.
   evidence_trial_ids: []
   source_handoff: mab-tree-shape-selector
-  seeded_reason: "Prevent false transfer of paper tree shapes to CPU"
+  seeded_reason: Prevent false transfer of paper tree shapes to CPU
   confidence: high
+  bind_status: context
+  bind_identifiers:
+  - eagle3_tree_shapes
 - slug: nway-not-pairwise
   tranche: guardrail
   species: seeder
   entry_type: convention
-  title: "Defend N-way concurrency with admission gating"
-  description: "N-way cross-role concurrency in seeder"
-  insight: "N-way cross-role concurrency safety is not pairwise, so defend it with admission gating until per-workload remeasurement."
+  title: Defend N-way concurrency with admission gating
+  description: N-way cross-role concurrency in seeder
+  insight: N-way cross-role concurrency safety is not pairwise, so defend it with admission gating until per-workload remeasurement.
   evidence_trial_ids: []
   source_handoff: cross-role-nway-contention-matrix
-  seeded_reason: "Keep N-way concurrency gated until remeasured"
+  seeded_reason: Keep N-way concurrency gated until remeasured
   confidence: high
 - slug: intra-process-tp-negative
   tranche: guardrail
   species: seeder
   entry_type: convention
-  title: "Keep intra-process tensor parallelism off"
-  description: "intra-process tensor parallelism in seeder"
-  insight: "Intra-process tensor parallelism regresses by 26 percent on the 4x48t frontdoor setup, so single-instance routing remains the baseline."
+  title: Keep intra-process tensor parallelism off
+  description: intra-process tensor parallelism in seeder
+  insight: Intra-process tensor parallelism regresses by 26 percent on the 4x48t frontdoor setup, so single-instance routing remains the baseline.
   evidence_trial_ids: []
   source_handoff: intra-process-tensor-parallel-decode (completed)
-  seeded_reason: "Prevent intra-process tensor parallel retries"
+  seeded_reason: Prevent intra-process tensor parallel retries
   confidence: high
 - slug: canonical-baseline-only
   tranche: guardrail
   species: all
   entry_type: convention
-  title: "Use only canonical baselines"
-  description: "canonical baseline selection in all species"
-  insight: "Never compare against mmap=1 warmed or --numa distribute baselines because they are artifacts; the canonical baseline is taskset 96t plus mmap0 plus interleave=all."
+  title: Use only canonical baselines
+  description: canonical baseline selection in all species
+  insight: Never compare against mmap=1 warmed or --numa distribute baselines because they are artifacts; the canonical baseline is taskset 96t plus mmap0 plus interleave=all.
   evidence_trial_ids: []
   source_handoff: cpu-optimization-thesis-pause
-  seeded_reason: "Prevent artifact baselines from being reused"
+  seeded_reason: Prevent artifact baselines from being reused
   confidence: high
 - slug: numa-prewarm-mandatory
   tranche: guardrail
   species: all
   entry_type: convention
-  title: "Require NUMA interleave prewarm"
-  description: "NUMA interleave prewarm in all species"
-  insight: "NUMA interleave prewarm is mandatory on cold cache because cold-start collapses to 24 to 35 t/s versus 55 to 70 after prewarm."
+  title: Require NUMA interleave prewarm
+  description: NUMA interleave prewarm in all species
+  insight: NUMA interleave prewarm is mandatory on cold cache because cold-start collapses to 24 to 35 t/s versus 55 to 70 after prewarm.
   evidence_trial_ids: []
   source_handoff: numa-page-cache-prewarm
-  seeded_reason: "Keep cold-cache prewarm mandatory"
+  seeded_reason: Keep cold-cache prewarm mandatory
   confidence: high
 - slug: five-rep-for-small-delta
   tranche: guardrail
   species: all
   entry_type: convention
-  title: "Require five reps for small deltas"
-  description: "five-rep canonical gate in all species"
-  insight: "Require at least five canonical reps with the PPL gate for any delta under 5 percent because three reps treat noise as signal."
+  title: Require five reps for small deltas
+  description: five-rep canonical gate in all species
+  insight: Require at least five canonical reps with the PPL gate for any delta under 5 percent because three reps treat noise as signal.
   evidence_trial_ids: []
   source_handoff: fable5-findings-01-measurement-and-integrity
-  seeded_reason: "Block underpowered small-delta claims"
+  seeded_reason: Block underpowered small-delta claims
   confidence: high
 - slug: gemv-kernel-bw-limited
   tranche: guardrail
   species: numeric_swarm
   entry_type: convention
-  title: "Treat the CPU2 8x8 AVX-512BW GEMV kernel as narrow"
-  description: "CPU2 8x8 AVX-512BW GEMV kernel in numeric_swarm"
-  insight: "The CPU2 8x8 AVX-512BW GEMV kernel is plus 31.8 percent at 1 thread but only plus 1 to 3 percent at 12 to 96 threads because it is bandwidth saturated, so it is operationally narrow."
+  title: Treat the CPU2 8x8 AVX-512BW GEMV kernel as narrow
+  description: CPU2 8x8 AVX-512BW GEMV kernel in numeric_swarm
+  insight: The CPU2 8x8 AVX-512BW GEMV kernel is plus 31.8 percent at 1 thread but only plus 1 to 3 percent at 12 to 96 threads because it is bandwidth saturated, so it is operationally narrow.
   evidence_trial_ids: []
   source_handoff: cpu-shape-specialized-gemv-decode (completed)
-  seeded_reason: "Prevent overgeneralizing the GEMV kernel result"
+  seeded_reason: Prevent overgeneralizing the GEMV kernel result
   confidence: high
+  bind_status: context
+  bind_identifiers:
+  - cpu2_8x8_gemv
 - slug: reap-pruning-arch-specific
   tranche: guardrail
   species: seeder
   entry_type: convention
-  title: "Keep REAP pruning architecture-specific"
-  description: "REAP MoE pruning in seeder"
-  insight: "REAP MoE pruning is architecture-specific and requires router saliency, so it does not generalize to dense, SSM, or other MoE systems."
+  title: Keep REAP pruning architecture-specific
+  description: REAP MoE pruning in seeder
+  insight: REAP MoE pruning is architecture-specific and requires router saliency, so it does not generalize to dense, SSM, or other MoE systems.
   evidence_trial_ids: []
   source_handoff: reap-moe-expert-pruning
-  seeded_reason: "Avoid cross-architecture REAP pruning claims"
+  seeded_reason: Avoid cross-architecture REAP pruning claims
   confidence: high
 - slug: heavy-model-lock
   tranche: guardrail
   species: seeder
   entry_type: convention
-  title: "Serialize heavy-model inference with a global lock"
-  description: "heavy model inference lock in seeder"
-  insight: "Heavy-model inference requires a global cross-process serialization lock because concurrent heavy models cause 600 second timeouts."
+  title: Serialize heavy-model inference with a global lock
+  description: heavy model inference lock in seeder
+  insight: Heavy-model inference requires a global cross-process serialization lock because concurrent heavy models cause 600 second timeouts.
   evidence_trial_ids: []
   source_handoff: infra-seeding-regression
-  seeded_reason: "Keep heavy-model inference serialized"
+  seeded_reason: Keep heavy-model inference serialized
   confidence: high
 - slug: rope-base-position-tradeoff
   tranche: guardrail
   species: numeric_swarm
   entry_type: convention
-  title: "Treat higher RoPE base as a tradeoff"
-  description: "RoPE base in numeric_swarm"
-  insight: "Raising the RoPE base helps token length but provably hurts position distinguishing above 32K, so extend only when the workload tolerates that loss."
+  title: Treat higher RoPE base as a tradeoff
+  description: RoPE base in numeric_swarm
+  insight: Raising the RoPE base helps token length but provably hurts position distinguishing above 32K, so extend only when the workload tolerates that loss.
   evidence_trial_ids: []
   source_handoff: yarn-context-extension-research
-  seeded_reason: "Prevent unconstrained RoPE base increases"
+  seeded_reason: Prevent unconstrained RoPE base increases
   confidence: high
+  bind_status: future
+  bind_identifiers:
+  - rope_base
 - slug: ernie-q4-text-corrupt
   tranche: guardrail
   species: structural_lab
   entry_type: convention
-  title: "Keep ERNIE-Image-Turbo at Q8 for text"
-  description: "ERNIE-Image-Turbo Q4_K_M text handling in structural_lab"
-  insight: "ERNIE-Image-Turbo Q4_K_M corrupts in-image text, so keep Q8 for any text-to-image role."
+  title: Keep ERNIE-Image-Turbo at Q8 for text
+  description: ERNIE-Image-Turbo Q4_K_M text handling in structural_lab
+  insight: ERNIE-Image-Turbo Q4_K_M corrupts in-image text, so keep Q8 for any text-to-image role.
   evidence_trial_ids: []
   source_handoff: ernie-image-turbo-evaluation
-  seeded_reason: "Avoid Q4 text corruption in ERNIE-Image-Turbo"
+  seeded_reason: Avoid Q4 text corruption in ERNIE-Image-Turbo
   confidence: high
+  bind_status: context
+  bind_identifiers:
+  - ernie_image_turbo_q4_k_m
 - slug: disagg-wrong-regime
   tranche: guardrail
   species: structural_lab
   entry_type: convention
-  title: "Treat prefill-decode disaggregation as the wrong regime"
-  description: "MEMRL prefill decode disaggregation in structural_lab"
-  insight: "Prefill and decode disaggregation only wins in multi-tenant long-context regimes, which is the opposite of our single-user regime, and the xGMI tax worsens it."
+  title: Treat prefill-decode disaggregation as the wrong regime
+  description: MEMRL prefill decode disaggregation in structural_lab
+  insight: Prefill and decode disaggregation only wins in multi-tenant long-context regimes, which is the opposite of our single-user regime, and the xGMI tax worsens it.
   evidence_trial_ids: []
   source_handoff: numa-prefill-decode-disaggregation
-  seeded_reason: "Keep disaggregation out of the single-user planner set"
+  seeded_reason: Keep disaggregation out of the single-user planner set
   confidence: high
+  bind_status: context
+  bind_identifiers:
+  - prefill_decode_disaggregation
 - slug: routing-expansion-frozen
   tranche: frozen
   species: seeder
   entry_type: convention
-  title: "Freeze routing expansion until regret rises"
-  description: "learned-routing retrain-routing tri-role decision-aware routing expansion in seeder"
-  insight: "Learned-routing, retrain-routing, tri-role, and decision-aware routing expansion are frozen until a replay shows at least 5 percent routing regret; the last replay was 0.00 percent, so keep DAR-2 on."
+  title: Freeze routing expansion until regret rises
+  description: learned-routing retrain-routing tri-role decision-aware routing expansion in seeder
+  insight: Learned-routing, retrain-routing, tri-role, and decision-aware routing expansion are frozen until a replay shows at least 5 percent routing regret; the last replay was 0.00 percent, so keep DAR-2 on.
   evidence_trial_ids: []
   source_handoff: learned-routing-controller / retrain-routing-models / tri-role-coordinator-architecture / decision-aware-routing
-  seeded_reason: "Keep routing expansion frozen until regret is demonstrated"
+  seeded_reason: Keep routing expansion frozen until regret is demonstrated
   confidence: high
 - slug: web-research-rerank-nogo
   tranche: frozen
   species: structural_lab
   entry_type: convention
-  title: "Keep web_research_rerank disabled"
-  description: "web_research_rerank in structural_lab"
-  insight: "web_research_rerank is a no-go because the representative sample showed 0 percent irrelevant pages against a 20 percent threshold, so do not enable it."
+  title: Keep web_research_rerank disabled
+  description: web_research_rerank in structural_lab
+  insight: web_research_rerank is a no-go because the representative sample showed 0 percent irrelevant pages against a 20 percent threshold, so do not enable it.
   evidence_trial_ids: []
   source_handoff: colbert-reranker-web-research
-  seeded_reason: "Preserve the no-go ruling for web_research_rerank"
+  seeded_reason: Preserve the no-go ruling for web_research_rerank
   confidence: high
+  bind_status: future
+  bind_identifiers:
+  - web_research_rerank
