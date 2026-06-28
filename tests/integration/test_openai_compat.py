@@ -277,7 +277,15 @@ class TestChatCompletionsNonStreaming:
         assert response.status_code == 200
         data = response.json()
         assert data["choices"][0]["message"]["role"] == "assistant"
+        assert data["choices"][0]["message"]["tool_calls"] is None
         assert data["x_orchestrator_metadata"]["role"]
+        assert (
+            data["x_orchestrator_metadata"]["native_tool_contract"]
+            == "internal_repl_execution"
+        )
+        assert data["x_orchestrator_metadata"]["response_tool_calls"] == "not_emitted"
+        assert data["x_orchestrator_metadata"]["tools_used"] == 0
+        assert data["x_orchestrator_metadata"]["tools_called"] == []
 
 
 class TestChatCompletionsStreaming:

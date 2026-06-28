@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from src.api.routes import openai_compat
 from src.api.models import OpenAIMessage
 
@@ -256,3 +258,25 @@ def test_context_parts_render_tool_history_and_native_repl_bridge():
     assert 'result = CALL("tool_name", arg=value)' in rendered
     assert "Tool choice policy: web_search." in rendered
     assert "- web_search - Search the web" in rendered
+
+
+def test_openai_metadata_reports_internal_repl_tool_contract():
+    repl = SimpleNamespace(
+        _tool_invocations=2,
+        _invoked_tools=[
+            SimpleNamespace(tool_name="web_search"),
+            SimpleNamespace(tool_name="read_file"),
+        ],
+    )
+    meta = {"role": "frontdoor"}
+
+    result = openai_compat._apply_openai_tool_contract_metadata(
+        meta,
+        request_tools=[{"type": "function", "function": {"name": "web_search"}}],
+        repl=repl,
+    )
+
+    assert result["native_tool_contract"] == "internal_repl_execution"
+    assert result["response_tool_calls"] == "not_emitted"
+    assert result["tools_used"] == 2
+    assert result["tools_called"] == ["web_search", "read_file"]

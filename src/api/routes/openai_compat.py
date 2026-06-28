@@ -182,6 +182,44 @@ def _context_parts_from_history(
         context_parts.append(native_tools)
     return context_parts
 
+
+def _executed_tool_metadata(repl: Any | None) -> dict[str, Any]:
+    """Return request-local internal REPL tool telemetry for OpenAI metadata."""
+    if repl is None:
+        return {"tools_used": 0, "tools_called": []}
+
+    invocations = list(getattr(repl, "_invoked_tools", None) or [])
+    tools_called: list[str] = []
+    for invocation in invocations:
+        name = getattr(invocation, "tool_name", None) or getattr(invocation, "name", None)
+        if isinstance(name, str) and name:
+            tools_called.append(name)
+
+    try:
+        repl_count = int(getattr(repl, "_tool_invocations", 0) or 0)
+    except (TypeError, ValueError):
+        repl_count = 0
+    return {
+        "tools_used": max(repl_count, len(tools_called)),
+        "tools_called": tools_called,
+    }
+
+
+def _apply_openai_tool_contract_metadata(
+    meta: dict[str, Any],
+    *,
+    request_tools: list[dict[str, Any]] | None,
+    repl: Any | None,
+) -> dict[str, Any]:
+    tool_meta = _executed_tool_metadata(repl)
+    if request_tools is not None:
+        meta["native_tool_contract"] = "internal_repl_execution"
+        meta["response_tool_calls"] = "not_emitted"
+    if request_tools is not None or tool_meta["tools_used"]:
+        meta.update(tool_meta)
+    return meta
+
+
 COMPATIBILITY_MODEL_ALIASES = ("orchestrator", "architect", "worker")
 
 
@@ -385,6 +423,7 @@ async def openai_chat_completions(
                 response_text = mock_response
             else:
                 # Real orchestration with streaming
+                repl_for_metadata: REPLEnvironment | None = None
                 if primitives is None:
                     error_msg = "LLM primitives not initialized — check server_urls config"
                     chunk = {
@@ -428,6 +467,7 @@ async def openai_chat_completions(
                             script_registry=state.script_registry,
                             role=role,
                         )
+                        repl_for_metadata = repl
 
                         # Run orchestration loop (simplified for streaming)
                         max_turns = request.max_tokens // 500 if request.max_tokens else 3
@@ -511,6 +551,11 @@ async def openai_chat_completions(
                     meta["max_escalation"] = max_escalation
                 if disable_repl:
                     meta["repl_disabled"] = True
+                _apply_openai_tool_contract_metadata(
+                    meta,
+                    request_tools=request.tools,
+                    repl=locals().get("repl_for_metadata"),
+                )
                 final_chunk["x_orchestrator_metadata"] = meta
             yield f"data: {json.dumps(final_chunk)}\n\n"
             yield "data: [DONE]\n\n"
@@ -531,8 +576,10 @@ async def openai_chat_completions(
         if not use_real_mode:
             # Mock mode fallback
             response_text = f"[MOCK] Processed via {role}: {prompt[:100]}..."
+            repl_for_metadata = None
         else:
             # Real orchestration
+            repl_for_metadata = None
             try:
                 if primitives is None:
                     raise HTTPException(
@@ -558,6 +605,7 @@ async def openai_chat_completions(
                         script_registry=state.script_registry,
                         role=role,
                     )
+                    repl_for_metadata = repl
 
                     max_turns = request.max_tokens // 500 if request.max_tokens else 3
                     max_turns = min(max(max_turns, 1), 5)
@@ -608,12 +656,16 @@ async def openai_chat_completions(
                 completion_tokens=total_tokens or len(response_text) // 4,
                 total_tokens=(len(prompt) // 4) + (total_tokens or len(response_text) // 4),
             ),
-            x_orchestrator_metadata={
-                "role": role,
-                "elapsed_seconds": elapsed,
-                **({"max_escalation": max_escalation} if max_escalation else {}),
-                **({"repl_disabled": True} if disable_repl else {}),
-            }
+            x_orchestrator_metadata=_apply_openai_tool_contract_metadata(
+                {
+                    "role": role,
+                    "elapsed_seconds": elapsed,
+                    **({"max_escalation": max_escalation} if max_escalation else {}),
+                    **({"repl_disabled": True} if disable_repl else {}),
+                },
+                request_tools=request.tools,
+                repl=repl_for_metadata,
+            )
             if request.x_show_routing
             else None,
         )
