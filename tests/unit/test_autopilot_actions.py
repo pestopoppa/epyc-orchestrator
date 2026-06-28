@@ -1059,6 +1059,90 @@ def test_mutation_context_filters_strategy_trials_superseded_by_journal() -> Non
     assert "src/example.py" in store.query
 
 
+def test_mutation_context_promptforge_conventions_are_default_off(monkeypatch) -> None:
+    monkeypatch.setattr(actions, "_PLANNER_HINTS_ENABLED", False)
+
+    class FakeJournal:
+        def recent_failures(self, species, n):
+            return []
+
+        def insights_text(self, n):
+            return "(no insights yet)"
+
+        def recent(self, n):
+            return []
+
+    class FakeStrategyStore:
+        def retrieve_for_journal(self, query, *, journal, k):
+            return []
+
+        def retrieve_conventions(self, **_kwargs):
+            raise AssertionError("default-off path must not read convention rows")
+
+    failure_context, _ = actions._build_mutation_context(
+        {
+            "file": "src/example.py",
+            "mutation": "targeted_fix",
+            "description": "example",
+        },
+        _ctx(journal=FakeJournal(), strategy_store=FakeStrategyStore(), state={}),
+    )
+
+    assert "PromptForge Convention Guardrails" not in failure_context
+
+
+def test_mutation_context_injects_promptforge_conventions_when_enabled(monkeypatch) -> None:
+    monkeypatch.setattr(actions, "_PLANNER_HINTS_ENABLED", True)
+    calls = []
+
+    class FakeJournal:
+        def recent_failures(self, species, n):
+            return []
+
+        def insights_text(self, n):
+            return "(no insights yet)"
+
+        def recent(self, n):
+            return []
+
+    class FakeStrategyStore:
+        def retrieve_for_journal(self, query, *, journal, k):
+            calls.append(("retrieve_for_journal", query, journal, k))
+            return []
+
+        def retrieve_conventions(self, *, species, journal, limit):
+            calls.append(("retrieve_conventions", species, journal, limit))
+            return [
+                SimpleNamespace(
+                    source_trial_id=44,
+                    species="all",
+                    title="Batch-1 decode exhausted",
+                    description="batch=1 decode guardrail",
+                    insight="Do not propose decode-kernel mutations for batch=1.",
+                    generalized_content=(
+                        "Do not propose decode-kernel mutations for batch=1."
+                    ),
+                )
+            ]
+
+    journal = FakeJournal()
+    failure_context, _ = actions._build_mutation_context(
+        {
+            "file": "orchestration/prompts/roles/worker_general.md",
+            "mutation": "targeted_fix",
+            "description": "shorten answer format",
+        },
+        _ctx(journal=journal, strategy_store=FakeStrategyStore(), state={}),
+    )
+
+    assert calls[0][0] == "retrieve_for_journal"
+    assert calls[1] == ("retrieve_conventions", "prompt_forge", journal, 8)
+    assert "## PromptForge Convention Guardrails" in failure_context
+    assert "Batch-1 decode exhausted" in failure_context
+    assert "Do not propose decode-kernel mutations for batch=1." in failure_context
+    assert "Past Strategy Insights" not in failure_context
+
+
 def test_mutation_context_skips_legacy_strategy_store_without_journal_view(caplog) -> None:
     class LegacyStrategyStore:
         def retrieve(self, *args, **kwargs):

@@ -143,6 +143,51 @@ def _format_strategy_hint(entry: Any) -> str:
     return f"- {prefix} {insight}".strip()
 
 
+def _prompt_forge_convention_guardrails(
+    ctx: _ActionContext,
+    *,
+    limit: int = 8,
+) -> str | None:
+    """Return PromptForge convention rows that should not depend on RRF rank.
+
+    RRF retrieval is query-specific and can miss broad operator guardrails.
+    Convention rows are already journal/quarantine aware through
+    ``StrategyStore.retrieve_conventions()``, so use that store-owned selector
+    and keep the whole path behind the same startup gate as other planner hints.
+    """
+    if not _PLANNER_HINTS_ENABLED or ctx.strategy_store is None:
+        return None
+    if not hasattr(ctx.strategy_store, "retrieve_conventions"):
+        log.warning(
+            "Skipping PromptForge convention guardrails: StrategyStore lacks "
+            "retrieve_conventions()"
+        )
+        return None
+    try:
+        conventions = ctx.strategy_store.retrieve_conventions(
+            species="prompt_forge",
+            journal=ctx.journal,
+            limit=limit,
+        )
+    except TypeError:
+        log.warning(
+            "Skipping PromptForge convention guardrails: StrategyStore "
+            "retrieve_conventions() has an incompatible signature"
+        )
+        return None
+    if not conventions:
+        return None
+
+    lines = "\n".join(_format_strategy_hint(convention) for convention in conventions)
+    return (
+        "## PromptForge Convention Guardrails\n"
+        f"{lines}\n\n"
+        "These are operator-audited constraints from the strategy store. Treat "
+        "them as hard guidance for proposal generation; do not reinterpret them "
+        "as positive evidence for unrelated mutations."
+    )
+
+
 def _seed_batch_strategy_hints(
     action: dict[str, Any],
     ctx: _ActionContext,
@@ -421,6 +466,10 @@ def _build_mutation_context(
                 f"## Past Strategy Insights\n{strategy_lines}\n\n"
                 + failure_context
             )
+
+        convention_guardrails = _prompt_forge_convention_guardrails(ctx)
+        if convention_guardrails:
+            failure_context = f"{convention_guardrails}\n\n{failure_context}"
 
     # B3: Execution trace feedback — add recent inference traces
     last_traces = ctx.state.get("last_traces", "")
