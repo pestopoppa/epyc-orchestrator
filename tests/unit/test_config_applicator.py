@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
-import json
 from pathlib import Path
 
 import pytest
+import yaml
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -429,19 +430,174 @@ def test_restart_role_smoke_failure_rolls_back_without_success_boundary(
     ]
 
 
-def test_restart_role_rejects_registry_overrides_until_rollback_record_exists() -> None:
-    result = applicator.restart_role(
-        "frontdoor",
-        registry_overrides={"model_id": "candidate"},
+def test_restart_role_applies_registry_overrides_and_journals_keys(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    events: list[dict[str, object]] = []
+    registry_path = tmp_path / "model_registry.yaml"
+    registry_path.write_text(
+        yaml.safe_dump(
+            {
+                "server_mode": {
+                    "frontdoor": {
+                        "draft_max": 16,
+                        "p_split": 0.0,
+                    }
+                }
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
     )
 
-    assert result == {
-        "status": "error",
-        "method": "stack_reload",
-        "role": "frontdoor",
-        "error": "registry_overrides are not yet supported",
-        "registry_override_keys": ["model_id"],
+    class FakeJournal:
+        def append_role_restart_boundary_event(self, **kwargs):
+            events.append(kwargs)
+            return {"type": "role_restart_boundary", **kwargs}
+
+    monkeypatch.setattr(applicator.subprocess, "run", lambda *a, **kw: None)
+    monkeypatch.setattr(applicator, "resolve_restart_affected_roles", lambda role: [role])
+
+    result = applicator.restart_role(
+        "frontdoor",
+        registry_overrides={
+            "server_mode.frontdoor.draft_max": 24,
+            "server_mode.frontdoor.p_split": 0.1,
+        },
+        registry_path=registry_path,
+        journal=FakeJournal(),
+    )
+
+    assert result["status"] == "ok"
+    assert result["registry_overrides"] == {
+        "status": "ok",
+        "registry_path": str(registry_path),
+        "override_keys": [
+            "server_mode.frontdoor.draft_max",
+            "server_mode.frontdoor.p_split",
+        ],
     }
+    reloaded = yaml.safe_load(registry_path.read_text(encoding="utf-8"))
+    assert reloaded["server_mode"]["frontdoor"]["draft_max"] == 24
+    assert reloaded["server_mode"]["frontdoor"]["p_split"] == 0.1
+    assert events[0]["registry_override_keys"] == [
+        "server_mode.frontdoor.draft_max",
+        "server_mode.frontdoor.p_split",
+    ]
+
+
+def test_restart_role_restores_registry_overrides_on_reload_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls = 0
+    registry_path = tmp_path / "model_registry.yaml"
+    original_registry = {
+        "server_mode": {
+            "worker_general": {
+                "compaction_profile": "default",
+            }
+        }
+    }
+    registry_path.write_text(
+        yaml.safe_dump(original_registry, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    def fake_run(cmd, *, cwd, env, timeout, check):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise subprocess.CalledProcessError(1, cmd)
+
+    monkeypatch.setattr(applicator.subprocess, "run", fake_run)
+    monkeypatch.setattr(applicator, "resolve_restart_affected_roles", lambda role: [role])
+
+    result = applicator.restart_role(
+        "worker_general",
+        registry_overrides={
+            "server_mode.worker_general.compaction_profile": "S8",
+        },
+        registry_path=registry_path,
+    )
+
+    assert result["status"] == "error"
+    assert result["rollback"]["status"] == "ok"
+    assert result["rollback"]["registry"] == {
+        "status": "ok",
+        "registry_path": str(registry_path),
+        "restored_keys": ["server_mode.worker_general.compaction_profile"],
+    }
+    assert calls == 2
+    assert yaml.safe_load(registry_path.read_text(encoding="utf-8")) == original_registry
+
+
+def test_restart_role_restores_registry_overrides_on_smoke_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls = 0
+    registry_path = tmp_path / "model_registry.yaml"
+    original_registry = {
+        "server_mode": {
+            "frontdoor": {
+                "draft_max": 16,
+            }
+        }
+    }
+    registry_path.write_text(
+        yaml.safe_dump(original_registry, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    def fake_run(cmd, *, cwd, env, timeout, check):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            restored = yaml.safe_load(registry_path.read_text(encoding="utf-8"))
+            assert restored == original_registry
+
+    monkeypatch.setattr(applicator.subprocess, "run", fake_run)
+    monkeypatch.setattr(applicator, "resolve_restart_affected_roles", lambda role: [role])
+
+    result = applicator.restart_role(
+        "frontdoor",
+        registry_overrides={"server_mode.frontdoor.draft_max": 24},
+        registry_path=registry_path,
+        smoke_check=lambda _role, _affected_roles: False,
+    )
+
+    assert result["status"] == "error"
+    assert result["rollback"]["status"] == "ok"
+    assert result["rollback"]["registry"]["status"] == "ok"
+    assert calls == 2
+    assert yaml.safe_load(registry_path.read_text(encoding="utf-8")) == original_registry
+
+
+def test_restart_role_rejects_registry_override_missing_parent_before_reload(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls: list[object] = []
+    registry_path = tmp_path / "model_registry.yaml"
+    registry_path.write_text(yaml.safe_dump({"server_mode": {}}), encoding="utf-8")
+    monkeypatch.setattr(
+        applicator.subprocess,
+        "run",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+
+    result = applicator.restart_role(
+        "frontdoor",
+        registry_overrides={"server_mode.frontdoor.draft_max": 24},
+        registry_path=registry_path,
+    )
+
+    assert result["status"] == "error"
+    assert result["error"].startswith("failed to apply registry_overrides:")
+    assert result["registry_override_keys"] == ["server_mode.frontdoor.draft_max"]
+    assert calls == []
 
 
 def test_apply_params_marks_env_restart_failure() -> None:

@@ -24,6 +24,7 @@ ORCHESTRATOR_URL = "http://localhost:8000"
 ORCH_ROOT = Path(__file__).resolve().parents[1].parent
 DEFAULT_STACK_PRIORS_PATH = ORCH_ROOT / "orchestration" / "derived" / "stack_priors.yaml"
 DEFAULT_AUTOPILOT_STATE_PATH = ORCH_ROOT / "orchestration" / "autopilot_state.json"
+DEFAULT_MODEL_REGISTRY_PATH = ORCH_ROOT / "orchestration" / "model_registry.yaml"
 
 # Parameters that can be hot-swapped via POST /config (feature flags)
 HOT_SWAP_FEATURES = {
@@ -488,6 +489,119 @@ def _restore_autopilot_dispatch_pause(pause_result: dict[str, Any]) -> dict[str,
     return result
 
 
+def _load_yaml_mapping(path: Path) -> dict[str, Any]:
+    import yaml
+
+    loaded = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if not isinstance(loaded, dict):
+        raise ValueError(f"{path} must contain a YAML mapping")
+    return loaded
+
+
+def _write_yaml_mapping_atomic(path: Path, data: dict[str, Any]) -> None:
+    import os
+
+    import yaml
+
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(
+        yaml.safe_dump(data, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    os.replace(tmp, path)
+
+
+def _resolve_dotted_parent(
+    data: dict[str, Any],
+    dotted_path: str,
+) -> tuple[dict[str, Any], str]:
+    parts = [part for part in dotted_path.split(".") if part]
+    if not parts:
+        raise ValueError("registry override path is empty")
+
+    cursor: Any = data
+    for part in parts[:-1]:
+        if not isinstance(cursor, dict):
+            raise ValueError(f"registry override parent is not a mapping: {dotted_path}")
+        next_value = cursor.get(part)
+        if not isinstance(next_value, dict):
+            raise ValueError(f"registry override parent missing: {dotted_path}")
+        cursor = next_value
+    if not isinstance(cursor, dict):
+        raise ValueError(f"registry override parent is not a mapping: {dotted_path}")
+    return cursor, parts[-1]
+
+
+def _apply_registry_overrides(
+    *,
+    registry_path: Path,
+    overrides: dict[str, Any],
+) -> dict[str, Any]:
+    """Apply dotted YAML overrides and return the exact rollback record."""
+    import copy
+
+    if not overrides:
+        return {
+            "status": "skipped",
+            "registry_path": str(registry_path),
+            "override_keys": [],
+            "rollback_record": [],
+        }
+
+    data = _load_yaml_mapping(registry_path)
+    rollback_record: list[dict[str, Any]] = []
+    for dotted_path, value in overrides.items():
+        parent, leaf = _resolve_dotted_parent(data, dotted_path)
+        rollback_record.append(
+            {
+                "path": dotted_path,
+                "existed": leaf in parent,
+                "value": copy.deepcopy(parent.get(leaf)),
+            }
+        )
+        parent[leaf] = value
+
+    _write_yaml_mapping_atomic(registry_path, data)
+    return {
+        "status": "ok",
+        "registry_path": str(registry_path),
+        "override_keys": sorted(overrides),
+        "rollback_record": rollback_record,
+    }
+
+
+def _restore_registry_overrides(
+    *,
+    registry_path: Path,
+    rollback_record: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Restore a registry file from an override rollback record."""
+    if not rollback_record:
+        return {
+            "status": "skipped",
+            "registry_path": str(registry_path),
+            "restored_keys": [],
+        }
+
+    data = _load_yaml_mapping(registry_path)
+    restored_keys: list[str] = []
+    for record in rollback_record:
+        dotted_path = str(record.get("path") or "")
+        parent, leaf = _resolve_dotted_parent(data, dotted_path)
+        if record.get("existed"):
+            parent[leaf] = record.get("value")
+        else:
+            parent.pop(leaf, None)
+        restored_keys.append(dotted_path)
+
+    _write_yaml_mapping_atomic(registry_path, data)
+    return {
+        "status": "ok",
+        "registry_path": str(registry_path),
+        "restored_keys": sorted(restored_keys),
+    }
+
+
 def restart_api(
     env_overrides: dict[str, str] | None = None,
     url: str = ORCHESTRATOR_URL,
@@ -540,6 +654,7 @@ def restart_role(
     pause_dispatch: bool = False,
     autopilot_state_path: Path | None = None,
     dispatch_pause_grace_s: float = 11.0,
+    registry_path: Path = DEFAULT_MODEL_REGISTRY_PATH,
 ) -> dict[str, Any]:
     """Reload one stack role with rollback to the prior environment on failure.
 
@@ -549,18 +664,12 @@ def restart_role(
     import os
 
     dispatch_pause: dict[str, Any] | None = None
+    registry_apply: dict[str, Any] | None = None
+    registry_rollback_record: list[dict[str, Any]] = []
     try:
         role = role.strip()
         if not role:
             return {"status": "error", "error": "role is required", "method": "stack_reload"}
-        if registry_overrides:
-            return {
-                "status": "error",
-                "method": "stack_reload",
-                "role": role,
-                "error": "registry_overrides are not yet supported",
-                "registry_override_keys": sorted(registry_overrides.keys()),
-            }
 
         if pause_dispatch:
             dispatch_pause = _pause_autopilot_dispatch(
@@ -577,8 +686,27 @@ def restart_role(
                 }
 
         env_overrides = dict(env_overrides or {})
+        registry_overrides = dict(registry_overrides or {})
         resolved_affected_roles = affected_roles or resolve_restart_affected_roles(role)
         prior_env = {key: os.environ.get(key) for key in env_overrides}
+
+        if registry_overrides:
+            try:
+                registry_apply = _apply_registry_overrides(
+                    registry_path=registry_path,
+                    overrides=registry_overrides,
+                )
+                registry_rollback_record = list(registry_apply["rollback_record"])
+            except Exception as exc:
+                return {
+                    "status": "error",
+                    "method": "stack_reload",
+                    "role": role,
+                    "error": f"failed to apply registry_overrides: {exc}",
+                    "registry_override_keys": sorted(registry_overrides),
+                    "registry_path": str(registry_path),
+                }
+
         first = _reload_role_via_stack(
             role=role,
             env_overrides=env_overrides,
@@ -586,6 +714,12 @@ def restart_role(
         )
         first["role"] = role
         first["affected_roles"] = list(resolved_affected_roles)
+        if registry_apply is not None:
+            first["registry_overrides"] = {
+                "status": registry_apply["status"],
+                "registry_path": registry_apply["registry_path"],
+                "override_keys": registry_apply["override_keys"],
+            }
         if dispatch_pause is not None:
             first["dispatch_pause"] = dispatch_pause
         if first.get("status") == "ok":
@@ -607,7 +741,7 @@ def restart_role(
                             role=role,
                             affected_roles=resolved_affected_roles,
                             env_keys=sorted(env_overrides),
-                            registry_override_keys=[],
+                            registry_override_keys=sorted(registry_overrides),
                             trial_id=trial_id,
                             reason=boundary_reason,
                             actor=actor,
@@ -637,7 +771,7 @@ def restart_role(
                         role=role,
                         affected_roles=resolved_affected_roles,
                         env_keys=sorted(env_overrides),
-                        registry_override_keys=[],
+                        registry_override_keys=sorted(registry_overrides),
                         trial_id=trial_id,
                         reason=boundary_reason,
                         actor=actor,
@@ -648,6 +782,19 @@ def restart_role(
             key: value for key, value in prior_env.items() if value is not None
         }
         rollback_unset = [key for key, value in prior_env.items() if value is None]
+        registry_rollback = None
+        if registry_rollback_record:
+            try:
+                registry_rollback = _restore_registry_overrides(
+                    registry_path=registry_path,
+                    rollback_record=registry_rollback_record,
+                )
+            except Exception as exc:
+                registry_rollback = {
+                    "status": "error",
+                    "registry_path": str(registry_path),
+                    "error": str(exc),
+                }
         rollback = _reload_role_via_stack(
             role=role,
             env_overrides=rollback_overrides,
@@ -658,13 +805,15 @@ def restart_role(
             "status": rollback.get("status", "error"),
             "env_keys": sorted(prior_env),
         }
+        if registry_rollback is not None:
+            first["rollback"]["registry"] = registry_rollback
         _attach_restart_boundary_event(
             first,
             journal=journal,
             role=role,
             affected_roles=resolved_affected_roles,
             env_keys=sorted(env_overrides),
-            registry_override_keys=[],
+            registry_override_keys=sorted(registry_overrides),
             trial_id=trial_id,
             reason=boundary_reason,
             actor=actor,
