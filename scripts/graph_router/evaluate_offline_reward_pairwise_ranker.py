@@ -35,6 +35,8 @@ from scripts.graph_router.train_verifier_head import _metrics
 
 SUMMARY_SCHEMA_VERSION = "offline_reward_pairwise_ranker_eval.v1"
 FEATURE_CONTRACT = "pairwise_action_response_delta_v1"
+INTERACTION_FEATURE_CONTRACT = "pairwise_action_response_delta_interactions_v1"
+FEATURE_CONTRACTS = (FEATURE_CONTRACT, INTERACTION_FEATURE_CONTRACT)
 DEFAULT_SEEDS = [42, 7, 13, 101, 2026]
 MODEL_FAMILIES = ("logistic_l2", "hist_gradient_boosting", "random_forest")
 HOLDOUT_FIELDS = ("source_family", "suite")
@@ -50,16 +52,52 @@ class Encoders:
     actions: tuple[str, ...]
     source_families: tuple[str, ...]
     suites: tuple[str, ...]
+    action_pairs: tuple[str, ...] = ()
+    source_suite_pairs: tuple[str, ...] = ()
+    feature_contract: str = FEATURE_CONTRACT
 
     @property
     def feature_names(self) -> list[str]:
-        return (
+        names = (
             [f"action_delta[{action}]" for action in self.actions]
             + ["cross_action", "same_action"]
             + [f"source_family[{family}]" for family in self.source_families]
             + [f"suite[{suite}]" for suite in self.suites]
             + ["answer_chars_log_delta", "elapsed_log_delta", "error_present_delta"]
         )
+        if self.feature_contract == INTERACTION_FEATURE_CONTRACT:
+            names.extend(f"action_pair[{pair}]" for pair in self.action_pairs)
+            names.extend(f"action_pair_direction[{pair}]" for pair in self.action_pairs)
+            names.extend(f"source_suite[{pair}]" for pair in self.source_suite_pairs)
+            names.extend(
+                f"source_action_delta[{family}|{action}]"
+                for family in self.source_families
+                for action in self.actions
+            )
+            names.extend(
+                f"suite_action_delta[{suite}|{action}]"
+                for suite in self.suites
+                for action in self.actions
+            )
+        return names
+
+    @property
+    def signed_feature_indexes(self) -> list[int]:
+        indexes = list(range(len(self.actions)))
+        tail_start = len(self.actions) + 2 + len(self.source_families) + len(self.suites)
+        indexes.extend([tail_start, tail_start + 1, tail_start + 2])
+        if self.feature_contract == INTERACTION_FEATURE_CONTRACT:
+            offset = tail_start + 3
+            offset += len(self.action_pairs)  # action_pair one-hot block
+            indexes.extend(range(offset, offset + len(self.action_pairs)))
+            offset += len(self.action_pairs)
+            offset += len(self.source_suite_pairs)
+            source_action_width = len(self.source_families) * len(self.actions)
+            indexes.extend(range(offset, offset + source_action_width))
+            offset += source_action_width
+            suite_action_width = len(self.suites) * len(self.actions)
+            indexes.extend(range(offset, offset + suite_action_width))
+        return indexes
 
 
 def load_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -108,8 +146,19 @@ def _bool_delta(preferred: Any, rejected: Any) -> float:
     return float(bool(preferred)) - float(bool(rejected))
 
 
-def build_encoders(rows: Iterable[dict[str, Any]]) -> Encoders:
+def _canonical_action_pair(a: str, b: str) -> str:
+    lo, hi = sorted((a, b))
+    return f"{lo}>{hi}"
+
+
+def build_encoders(
+    rows: Iterable[dict[str, Any]],
+    *,
+    feature_contract: str = FEATURE_CONTRACT,
+) -> Encoders:
     row_list = list(rows)
+    if feature_contract not in FEATURE_CONTRACTS:
+        raise PairwiseRankerError(f"unsupported feature contract: {feature_contract}")
     actions = sorted(
         {
             str(row["preferred_canonical_action"])
@@ -122,7 +171,36 @@ def build_encoders(rows: Iterable[dict[str, Any]]) -> Encoders:
     )
     source_families = sorted({str(row.get("source_family") or "unknown") for row in row_list})
     suites = sorted({str(row.get("suite") or "unknown") for row in row_list})
-    return Encoders(tuple(actions), tuple(source_families), tuple(suites))
+    action_pairs: tuple[str, ...] = ()
+    source_suite_pairs: tuple[str, ...] = ()
+    if feature_contract == INTERACTION_FEATURE_CONTRACT:
+        action_pairs = tuple(
+            sorted(
+                {
+                    _canonical_action_pair(
+                        str(row["preferred_canonical_action"]),
+                        str(row["rejected_canonical_action"]),
+                    )
+                    for row in row_list
+                }
+            )
+        )
+        source_suite_pairs = tuple(
+            sorted(
+                {
+                    f"{str(row.get('source_family') or 'unknown')}|{str(row.get('suite') or 'unknown')}"
+                    for row in row_list
+                }
+            )
+        )
+    return Encoders(
+        tuple(actions),
+        tuple(source_families),
+        tuple(suites),
+        action_pairs,
+        source_suite_pairs,
+        feature_contract,
+    )
 
 
 def _base_features(row: dict[str, Any], encoders: Encoders) -> np.ndarray:
@@ -144,6 +222,38 @@ def _base_features(row: dict[str, Any], encoders: Encoders) -> np.ndarray:
             _bool_delta(row.get("preferred_error_present"), row.get("rejected_error_present")),
         ]
     )
+    if encoders.feature_contract == INTERACTION_FEATURE_CONTRACT:
+        pair_key = _canonical_action_pair(preferred_action, rejected_action)
+        pair_lo = pair_key.split(">", 1)[0]
+        source_family = str(row.get("source_family") or "unknown")
+        suite = str(row.get("suite") or "unknown")
+        source_suite_key = f"{source_family}|{suite}"
+        action_delta = {
+            action: float(preferred_action == action) - float(rejected_action == action)
+            for action in encoders.actions
+        }
+        values.extend(1.0 if pair_key == pair else 0.0 for pair in encoders.action_pairs)
+        values.extend(
+            (
+                1.0
+                if pair_key == pair and preferred_action == pair_lo and preferred_action != rejected_action
+                else -1.0
+                if pair_key == pair and rejected_action == pair_lo and preferred_action != rejected_action
+                else 0.0
+            )
+            for pair in encoders.action_pairs
+        )
+        values.extend(1.0 if source_suite_key == pair else 0.0 for pair in encoders.source_suite_pairs)
+        values.extend(
+            action_delta[action] if source_family == family else 0.0
+            for family in encoders.source_families
+            for action in encoders.actions
+        )
+        values.extend(
+            action_delta[action] if suite == item else 0.0
+            for item in encoders.suites
+            for action in encoders.actions
+        )
     return np.asarray(values, dtype=np.float32)
 
 
@@ -168,15 +278,7 @@ def build_symmetric_examples(
 
 def _flip_feature_vector(features: np.ndarray, encoders: Encoders) -> np.ndarray:
     flipped = features.copy()
-    signed_indexes = list(range(len(encoders.actions)))
-    signed_indexes.extend(
-        [
-            len(features) - 3,
-            len(features) - 2,
-            len(features) - 1,
-        ]
-    )
-    flipped[signed_indexes] *= -1.0
+    flipped[encoders.signed_feature_indexes] *= -1.0
     return flipped
 
 
@@ -638,7 +740,7 @@ def _evaluate_cross_validation(
 
 def run_pairwise_ranker_eval(args: argparse.Namespace) -> dict[str, Any]:
     rows = load_jsonl(Path(args.pairwise_jsonl))
-    encoders = build_encoders(rows)
+    encoders = build_encoders(rows, feature_contract=args.feature_contract)
     runs: list[dict[str, Any]] = []
     for seed in args.seeds:
         train_groups, test_groups = split_group_keys(rows, seed=seed, test_split=args.test_split)
@@ -670,7 +772,7 @@ def run_pairwise_ranker_eval(args: argparse.Namespace) -> dict[str, Any]:
         "schema_version": SUMMARY_SCHEMA_VERSION,
         "pairwise_jsonl": str(args.pairwise_jsonl),
         "feature_contract": {
-            "name": FEATURE_CONTRACT,
+            "name": args.feature_contract,
             "feature_names": encoders.feature_names,
             "feature_dim": len(encoders.feature_names),
             "symmetric_augmentation": True,
@@ -842,6 +944,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-mean-accuracy", type=float, default=0.60)
     parser.add_argument("--min-mean-auc", type=float, default=0.60)
     parser.add_argument("--min-stratum-rows", type=int, default=10)
+    parser.add_argument(
+        "--feature-contract",
+        choices=FEATURE_CONTRACTS,
+        default=FEATURE_CONTRACT,
+        help=(
+            "Feature contract to evaluate. The default preserves existing A9 artifacts; "
+            f"{INTERACTION_FEATURE_CONTRACT} adds compact action-pair and source/suite interaction features."
+        ),
+    )
     parser.add_argument(
         "--cv-folds",
         type=int,

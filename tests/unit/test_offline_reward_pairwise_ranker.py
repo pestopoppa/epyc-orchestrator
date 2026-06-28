@@ -77,6 +77,42 @@ def test_build_symmetric_examples_flips_signed_features_only() -> None:
     assert metadata[1]["flipped"] is True
 
 
+def test_interaction_feature_contract_flips_only_signed_features() -> None:
+    rows = [
+        _pair_row(
+            pair_id="p1",
+            group_key="g1",
+            preferred_action="frontdoor",
+            rejected_action="coder_escalation",
+            source_family="three_way_eval",
+            suite="debugbench",
+        ),
+        _pair_row(
+            pair_id="p2",
+            group_key="g2",
+            preferred_action="architect_general",
+            rejected_action="frontdoor",
+            source_family="seeding_eval",
+            suite="math",
+        ),
+    ]
+    encoders = mod.build_encoders(rows, feature_contract=mod.INTERACTION_FEATURE_CONTRACT)
+
+    x, y, metadata = mod.build_symmetric_examples(rows[:1], encoders)
+
+    assert encoders.feature_contract == mod.INTERACTION_FEATURE_CONTRACT
+    assert any(name.startswith("action_pair_direction[") for name in encoders.feature_names)
+    assert any(name.startswith("source_action_delta[") for name in encoders.feature_names)
+    assert y.tolist() == [1.0, 0.0]
+    signed = set(encoders.signed_feature_indexes)
+    for idx in range(x.shape[1]):
+        if idx in signed:
+            assert x[1, idx] == -x[0, idx]
+        else:
+            assert x[1, idx] == x[0, idx]
+    assert metadata[1]["preferred_canonical_action"] == "coder_escalation"
+
+
 def test_load_jsonl_rejects_private_text_fields(tmp_path: Path) -> None:
     path = tmp_path / "pairs.jsonl"
     row = {
@@ -147,6 +183,54 @@ def test_cli_writes_pairwise_ranker_summary(tmp_path: Path) -> None:
     assert summary["feature_contract"]["symmetric_augmentation"] is True
     assert summary["runs"][0]["train_groups"] >= 1
     assert "# Offline Reward Pairwise Ranker Eval" in summary_md.read_text(encoding="utf-8")
+
+
+def test_cli_accepts_interaction_feature_contract(tmp_path: Path) -> None:
+    pairwise_path = tmp_path / "pairs.jsonl"
+    rows = [
+        _pair_row(
+            pair_id=f"pair-{idx}",
+            group_key=f"g{idx}",
+            preferred_action="frontdoor" if idx % 2 else "architect_general",
+            rejected_action="coder_escalation",
+            source_family="seeding_eval" if idx % 2 else "three_way_eval",
+            suite="math" if idx % 2 else "debugbench",
+            answer_delta=1.0 + idx / 10.0,
+        )
+        for idx in range(8)
+    ]
+    pairwise_path.write_text(
+        "\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n",
+        encoding="utf-8",
+    )
+    summary_json = tmp_path / "summary.json"
+    summary_md = tmp_path / "summary.md"
+
+    assert mod.main(
+        [
+            "--pairwise-jsonl",
+            str(pairwise_path),
+            "--summary-json",
+            str(summary_json),
+            "--summary-md",
+            str(summary_md),
+            "--families",
+            "logistic_l2",
+            "--seeds",
+            "42",
+            "--test-split",
+            "0.25",
+            "--feature-contract",
+            mod.INTERACTION_FEATURE_CONTRACT,
+        ]
+    ) == 0
+
+    summary = json.loads(summary_json.read_text(encoding="utf-8"))
+    assert summary["feature_contract"]["name"] == mod.INTERACTION_FEATURE_CONTRACT
+    names = summary["feature_contract"]["feature_names"]
+    assert any(name.startswith("action_pair_direction[") for name in names)
+    assert any(name.startswith("source_suite[") for name in names)
+    assert summary["leakage_policy"]["runtime_gate_change_allowed"] is False
 
 
 def test_cli_reports_independent_source_family_holdout(tmp_path: Path) -> None:
