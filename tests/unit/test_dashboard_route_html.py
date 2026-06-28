@@ -105,15 +105,18 @@ def test_dashboard_topology_activity_stats_refresh_with_live_age_tick() -> None:
     assert "topology_activity?window_s=${TOPOLOGY_ACTIVITY_WINDOW_S}&t=${Date.now()}" in body
     assert "scheduleRegionLocksRefresh(true);" in body
     assert "snap.region_locks" in body
-    assert "updateRegionLocks(_regionLocksRefreshSeq, snap.region_locks);" in body
+    assert "return updateRegionLocks(refreshSeq, snap.region_locks);" in body
     assert "const refreshSeq = ++_regionLocksRefreshSeq;" in body
     assert "updateContentionGate(refreshSeq);" in body
-    assert "updateTopologyActivity(refreshSeq);" in body
+    assert "let _topologyActivityRefreshSeq = 0;" in body
+    assert "async function updateTopologyActivity(refreshSeq = ++_topologyActivityRefreshSeq)" in body
+    assert "updateTopologyActivity();" in body
     assert "setInterval(() => scheduleRegionLocksRefresh(true), 1500)" in body
     assert "setInterval(renderTopologyActivity, TOPOLOGY_ACTIVITY_AGE_TICK_MS)" in body
     assert "lockActivitySignature" in body
     assert "const liveActiveCount = Math.max(lockActiveCount, tapActiveCount);" in body
     assert "active CPU-region/tap holder(s)" in body
+    assert "summary ${stats.avg_tps_recent.toFixed(2)} t/s" in body
     assert "_latestSnapshot = snap || {};" in body
     assert "buildSlotInferredRegionLocks(byRole)" in body
     assert "SLOT ACTIVE" in body
@@ -132,10 +135,13 @@ def test_dashboard_live_panel_refreshes_ignore_stale_responses_where_possible() 
     assert "const refreshSeq = ++_regionLocksRefreshSeq;" in body
     assert "updateRegionLocks(refreshSeq);" in body
     assert "updateContentionGate(refreshSeq);" in body
-    assert "updateTopologyActivity(refreshSeq);" in body
+    assert "updateTopologyActivity();" in body
     assert "function applyDashboardSnapshot(snap, source)" in body
     assert "updatePanelSafely('completed', () => updateTasks(snap));" in body
     assert "updatePanelSafely('decisions', () => updateDecisions(snap));" in body
+    assert "const result = fn();" in body
+    assert "result.catch((err) =>" in body
+    assert "return updateRegionLocks(refreshSeq, snap.region_locks);" in body
     assert "fetch(`/dashboard/api/snapshot?t=${Date.now()}`, { cache: 'no-store' })" in body
     assert "setInterval(updateSnapshotPoll, 2500)" in body
     assert "window_s=${TOPOLOGY_ACTIVITY_WINDOW_S}&t=${Date.now()}" in body

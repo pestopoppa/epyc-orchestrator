@@ -2335,7 +2335,7 @@ function scheduleRegionLocksRefresh(force = false) {
     const refreshSeq = ++_regionLocksRefreshSeq;
     updateRegionLocks(refreshSeq);
     updateContentionGate(refreshSeq);
-    updateTopologyActivity(refreshSeq);
+    updateTopologyActivity();
 }
 
 function rememberStructuredTapAccordion(detailsEl) {
@@ -4289,7 +4289,17 @@ function dashboardSnapshotFrameTs(snap) {
 
 function updatePanelSafely(name, fn) {
     try {
-        fn();
+        const result = fn();
+        if (result && typeof result.catch === 'function') {
+            result.catch((err) => {
+                window.__dashboardLastPanelError = {
+                    name,
+                    message: err && err.message ? err.message : String(err),
+                    at: new Date().toISOString(),
+                };
+                console.error(`[dashboard:${name}]`, err);
+            });
+        }
     } catch (err) {
         window.__dashboardLastPanelError = {
             name,
@@ -4309,9 +4319,10 @@ function applyDashboardSnapshot(snap, source) {
     if (frameTs + 0.001 < _latestSnapshotFrameTs) return;
     _latestSnapshotFrameTs = frameTs;
     _latestSnapshot = snap || {};
+    const refreshSeq = ++_regionLocksRefreshSeq;
     updatePanelSafely('region_locks', () => {
         if (snap.region_locks) {
-            updateRegionLocks(_regionLocksRefreshSeq, snap.region_locks);
+            return updateRegionLocks(refreshSeq, snap.region_locks);
         }
     });
     updatePanelSafely('topology', () => updateTopology(snap.activity || {}, snap.in_flight_tasks || []));
@@ -4589,6 +4600,7 @@ const TOPOLOGY_ACTIVITY_AGE_TICK_MS = 1000;
 let _latestTopologyActivity = null;  // {perRole, window_s, now, fetchedAtMs}
 let _topologyActivityFetchInFlight = false;
 let _topologyActivityRefreshQueued = false;
+let _topologyActivityRefreshSeq = 0;
 let _regionLocksRefreshSeq = 0;
 
 function topologyActivityAgeS(stats) {
@@ -4640,8 +4652,17 @@ function renderTopologyActivity() {
                 const running = Number(stats.running_instance_count || 0);
                 const expected = Number(stats.expected_instance_count || 0);
                 const suffix = expected > 1 ? ` ${running}/${expected}` : '';
-                el.innerHTML = `<span class="stat-fresh">up${suffix}</span>`;
-                el.title = `${base} listener${running === 1 ? '' : 's'} running; no recent requests in last ${Math.round(windowS)}s`;
+                const parts = [`<span class="stat-fresh">up${suffix}</span>`];
+                if (stats.avg_tps_recent != null && stats.avg_tps_recent > 0) {
+                    parts.push(`<span class="stat-fresh">${stats.avg_tps_recent.toFixed(1)}</span> t/s`);
+                }
+                el.innerHTML = parts.join('<span class="stat-sep">·</span>');
+                const titleBits = [
+                    `${base} listener${running === 1 ? '' : 's'} running`,
+                    `no recent requests in last ${Math.round(windowS)}s`,
+                    stats.avg_tps_recent != null ? `summary ${stats.avg_tps_recent.toFixed(2)} t/s` : null,
+                ].filter(Boolean);
+                el.title = titleBits.join(' · ');
             } else {
                 el.innerHTML = '<span class="stat-stale">—</span>';
                 el.title = `no recent activity for ${base} in last ${Math.round(windowS)}s`;
@@ -4670,7 +4691,7 @@ function renderTopologyActivity() {
     });
 }
 
-async function updateTopologyActivity(refreshSeq = _regionLocksRefreshSeq) {
+async function updateTopologyActivity(refreshSeq = ++_topologyActivityRefreshSeq) {
     // Per-role recent activity stats from /dashboard/api/topology_activity.
     // Populates each topology row's .activity-stats element with:
     //   "12 req · 31 t/s · 3s ago"
@@ -4684,7 +4705,7 @@ async function updateTopologyActivity(refreshSeq = _regionLocksRefreshSeq) {
     try {
         const r = await fetch(`/dashboard/api/topology_activity?window_s=${TOPOLOGY_ACTIVITY_WINDOW_S}&t=${Date.now()}`, { cache: 'no-store' });
         const d = await r.json();
-        if (refreshSeq !== _regionLocksRefreshSeq) return;
+        if (refreshSeq !== _topologyActivityRefreshSeq) return;
         _latestTopologyActivity = {
             perRole: d.per_role || {},
             window_s: Number(d.window_s || TOPOLOGY_ACTIVITY_WINDOW_S),
@@ -4697,7 +4718,7 @@ async function updateTopologyActivity(refreshSeq = _regionLocksRefreshSeq) {
         _topologyActivityFetchInFlight = false;
         if (_topologyActivityRefreshQueued) {
             _topologyActivityRefreshQueued = false;
-            setTimeout(updateTopologyActivity, 0);
+            setTimeout(() => updateTopologyActivity(), 0);
         }
     }
 }
