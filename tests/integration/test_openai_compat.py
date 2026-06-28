@@ -236,6 +236,49 @@ class TestChatCompletionsNonStreaming:
         assert "role" in data["x_orchestrator_metadata"]
         assert "elapsed_seconds" in data["x_orchestrator_metadata"]
 
+    def test_chat_completions_accepts_native_tool_messages(self, client):
+        """Native OpenAI tools and tool history should validate and route."""
+        request = {
+            "model": "orchestrator",
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {
+                                "name": "web_search",
+                                "arguments": '{"query":"x"}',
+                            },
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "call_1", "content": "result text"},
+                {"role": "user", "content": "Use the tool result."},
+            ],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "web_search",
+                        "description": "Search the web",
+                        "parameters": {"type": "object"},
+                    },
+                }
+            ],
+            "tool_choice": "auto",
+            "x_show_routing": True,
+        }
+
+        response = client.post("/v1/chat/completions", json=request)
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["choices"][0]["message"]["role"] == "assistant"
+        assert data["x_orchestrator_metadata"]["role"]
+
 
 class TestChatCompletionsStreaming:
     """Test streaming chat completions."""

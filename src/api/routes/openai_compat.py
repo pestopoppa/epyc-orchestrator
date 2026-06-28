@@ -10,7 +10,7 @@ import json
 import logging
 import time
 import uuid
-from typing import AsyncGenerator
+from typing import Any, AsyncGenerator
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -48,6 +48,8 @@ router = APIRouter()
 
 def _extract_text(content: str | list) -> str:
     """Extract text from OpenAI content field (string or multipart array)."""
+    if content is None:
+        return ""
     if isinstance(content, str):
         return content
     if isinstance(content, list):
@@ -57,6 +59,128 @@ def _extract_text(content: str | list) -> str:
             if isinstance(part, dict) and part.get("type") == "text"
         )
     return ""
+
+
+def _history_message_dict(message: OpenAIMessage) -> dict[str, Any]:
+    data: dict[str, Any] = {
+        "role": message.role,
+        "content": _extract_text(message.content) or "",
+    }
+    if message.tool_calls:
+        data["tool_calls"] = message.tool_calls
+    if message.tool_call_id:
+        data["tool_call_id"] = message.tool_call_id
+    if message.name:
+        data["name"] = message.name
+    return data
+
+
+def _tool_function(tool: dict[str, Any]) -> dict[str, Any] | None:
+    if tool.get("type") == "function":
+        func = tool.get("function")
+        return func if isinstance(func, dict) else None
+    if "name" in tool:
+        return tool
+    return None
+
+
+def _tool_choice_name(tool_choice: str | dict[str, Any] | None) -> str | None:
+    if isinstance(tool_choice, str):
+        return tool_choice
+    if not isinstance(tool_choice, dict):
+        return None
+    func = tool_choice.get("function")
+    if isinstance(func, dict) and isinstance(func.get("name"), str):
+        return func["name"]
+    if isinstance(tool_choice.get("name"), str):
+        return tool_choice["name"]
+    return None
+
+
+def _format_tool_call(tool_call: dict[str, Any]) -> str:
+    func = tool_call.get("function") if isinstance(tool_call, dict) else None
+    func = func if isinstance(func, dict) else {}
+    name = func.get("name") or tool_call.get("name") or "unknown_tool"
+    args = func.get("arguments")
+    if isinstance(args, (dict, list)):
+        args_text = json.dumps(args, sort_keys=True)
+    elif isinstance(args, str) and args:
+        args_text = args
+    else:
+        args_text = "{}"
+    call_id = tool_call.get("id")
+    prefix = f"{call_id}: " if call_id else ""
+    return f"{prefix}{name}({args_text})"
+
+
+def _format_native_tools_for_repl(
+    tools: list[dict[str, Any]] | None,
+    tool_choice: str | dict[str, Any] | None,
+) -> str | None:
+    if not tools:
+        return None
+
+    lines = [
+        "OpenAI native tools were supplied by the caller.",
+        "Use the existing REPL bridge to execute function tools as Python code:",
+        '  result = CALL("tool_name", arg=value)',
+        "Do not invent tool results; call the tool before FINAL when the answer depends on it.",
+    ]
+    choice = _tool_choice_name(tool_choice)
+    if choice and choice not in {"auto", "none"}:
+        lines.append(f"Tool choice policy: {choice}.")
+    lines.append("Available function tools:")
+
+    added = 0
+    for tool in tools:
+        func = _tool_function(tool)
+        if not func:
+            continue
+        name = func.get("name")
+        if not isinstance(name, str) or not name:
+            continue
+        desc = func.get("description")
+        params = func.get("parameters")
+        suffix = f" - {desc}" if isinstance(desc, str) and desc else ""
+        lines.append(f"- {name}{suffix}")
+        if isinstance(params, dict) and params:
+            lines.append(f"  parameters: {json.dumps(params, sort_keys=True)}")
+        added += 1
+
+    if added == 0:
+        return None
+    return "\n".join(lines)
+
+
+def _context_parts_from_history(
+    history_messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None,
+    tool_choice: str | dict[str, Any] | None,
+) -> list[str]:
+    context_parts: list[str] = []
+    for msg in history_messages:
+        role = str(msg.get("role", "user"))
+        content = str(msg.get("content", ""))
+        tool_calls = msg.get("tool_calls")
+        if role == "tool":
+            label = msg.get("name") or msg.get("tool_call_id") or "tool"
+            if content:
+                context_parts.append(f"Tool result {label}: {content}")
+            continue
+        role_label = role.capitalize()
+        if content:
+            context_parts.append(f"{role_label}: {content}")
+        if isinstance(tool_calls, list) and tool_calls:
+            calls = "; ".join(
+                _format_tool_call(tc) for tc in tool_calls if isinstance(tc, dict)
+            )
+            if calls:
+                context_parts.append(f"{role_label} tool_calls: {calls}")
+
+    native_tools = _format_native_tools_for_repl(tools, tool_choice)
+    if native_tools:
+        context_parts.append(native_tools)
+    return context_parts
 
 COMPATIBILITY_MODEL_ALIASES = ("orchestrator", "architect", "worker")
 
@@ -164,10 +288,7 @@ async def openai_chat_completions(
             from src.context_compression import ContextCompressor
             _compressor = ContextCompressor()
             _result = _compressor.compress(
-                [{"role": m.role, "content": _extract_text(m.content) or "",
-                  **({"tool_calls": m.tool_calls} if getattr(m, "tool_calls", None) else {}),
-                  **({"tool_call_id": m.tool_call_id} if getattr(m, "tool_call_id", None) else {})}
-                 for m in history_messages]
+                [_history_message_dict(m) for m in history_messages]
             )
             if _result.tool_outputs_summarized > 0 or _result.tool_pairs_fixed > 0:
                 import logging
@@ -177,20 +298,15 @@ async def openai_chat_completions(
                 )
             history_messages_dicts = _result.messages
         except Exception:
-            history_messages_dicts = [
-                {"role": m.role, "content": _extract_text(m.content) or ""} for m in history_messages
-            ]
+            history_messages_dicts = [_history_message_dict(m) for m in history_messages]
     else:
-        history_messages_dicts = [
-            {"role": m.role, "content": _extract_text(m.content) or ""} for m in history_messages
-        ]
+        history_messages_dicts = [_history_message_dict(m) for m in history_messages]
 
-    context_parts = []
-    for msg in history_messages_dicts:
-        role_label = msg.get("role", "user").capitalize()
-        content = msg.get("content", "")
-        if content:
-            context_parts.append(f"{role_label}: {content}")
+    context_parts = _context_parts_from_history(
+        history_messages_dicts,
+        request.tools,
+        request.tool_choice,
+    )
     context = "\n\n".join(context_parts) if context_parts else None
 
     # Map model to role — x_force_model > x_orchestrator_role > model field

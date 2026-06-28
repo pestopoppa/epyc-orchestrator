@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from src.api.routes import openai_compat
+from src.api.models import OpenAIMessage
 
 
 def test_available_roles_falls_back_to_current_live_role_surface(monkeypatch):
@@ -191,3 +192,67 @@ def test_degraded_available_roles_follow_server_lists_without_literal_port_map(
         "vision_escalation",
         "worker_summarize",
     ]
+
+
+def test_history_message_dict_preserves_native_tool_fields():
+    message = OpenAIMessage(
+        role="assistant",
+        content=None,
+        tool_calls=[
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "web_search", "arguments": '{"query":"x"}'},
+            }
+        ],
+    )
+
+    data = openai_compat._history_message_dict(message)
+
+    assert data["role"] == "assistant"
+    assert data["content"] == ""
+    assert data["tool_calls"][0]["id"] == "call_1"
+
+
+def test_context_parts_render_tool_history_and_native_repl_bridge():
+    history = [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "web_search", "arguments": '{"query":"x"}'},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "result text"},
+    ]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "web_search",
+                "description": "Search the web",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                },
+            },
+        }
+    ]
+
+    parts = openai_compat._context_parts_from_history(
+        history,
+        tools,
+        {"type": "function", "function": {"name": "web_search"}},
+    )
+    rendered = "\n".join(parts)
+
+    assert 'Assistant tool_calls: call_1: web_search({"query":"x"})' in rendered
+    assert "Tool result call_1: result text" in rendered
+    assert 'result = CALL("tool_name", arg=value)' in rendered
+    assert "Tool choice policy: web_search." in rendered
+    assert "- web_search - Search the web" in rendered

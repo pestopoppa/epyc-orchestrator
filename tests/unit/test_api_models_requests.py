@@ -52,6 +52,23 @@ class TestChatRequest:
         assert req.thinking_budget == 0
         assert req.permission_mode == "normal"
         assert req.session_id is None
+        assert req.tools is None
+        assert req.tool_choice is None
+
+    def test_native_tool_fields(self):
+        req = ChatRequest(
+            prompt="x",
+            tools=[
+                {
+                    "type": "function",
+                    "function": {"name": "web_search", "parameters": {"type": "object"}},
+                }
+            ],
+            tool_choice="auto",
+        )
+
+        assert req.tools[0]["function"]["name"] == "web_search"
+        assert req.tool_choice == "auto"
 
     def test_prompt_required(self):
         with pytest.raises(ValidationError):

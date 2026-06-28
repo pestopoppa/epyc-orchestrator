@@ -56,6 +56,31 @@ class TestOpenAIMessage:
         msg = OpenAIMessage(role="assistant", content="Sure!")
         assert msg.role == "assistant"
 
+    def test_assistant_tool_calls_allow_null_content(self):
+        msg = OpenAIMessage(
+            role="assistant",
+            content=None,
+            tool_calls=[
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "web_search", "arguments": '{"query":"x"}'},
+                }
+            ],
+        )
+
+        assert msg.content is None
+        assert msg.tool_calls[0]["function"]["name"] == "web_search"
+
+    def test_tool_result_role(self):
+        msg = OpenAIMessage(role="tool", tool_call_id="call_1", content="result")
+        assert msg.role == "tool"
+        assert msg.tool_call_id == "call_1"
+
+    def test_content_still_required_without_tool_calls(self):
+        with pytest.raises(ValidationError):
+            OpenAIMessage(role="assistant", content=None)
+
 
 class TestOpenAIChatRequest:
     """Test OpenAIChatRequest field constraints."""
@@ -69,8 +94,29 @@ class TestOpenAIChatRequest:
         assert req.temperature == 0.0
         assert req.max_tokens == 1024
         assert req.stream is False
+        assert req.tools is None
+        assert req.tool_choice is None
         assert req.x_orchestrator_role is None
         assert req.x_show_routing is False
+
+    def test_native_tools_preserved(self):
+        req = OpenAIChatRequest(
+            messages=self._messages(),
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "web_search",
+                        "description": "Search the web",
+                        "parameters": {"type": "object"},
+                    },
+                }
+            ],
+            tool_choice={"type": "function", "function": {"name": "web_search"}},
+        )
+
+        assert req.tools[0]["function"]["name"] == "web_search"
+        assert req.tool_choice["function"]["name"] == "web_search"
 
     def test_temperature_lower_bound(self):
         req = OpenAIChatRequest(messages=self._messages(), temperature=0.0)

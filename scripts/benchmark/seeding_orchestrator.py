@@ -621,6 +621,8 @@ def call_orchestrator_forced(
     session_id: str = "",
     scoring_method: str = "",
     stop_sequences: list[str] | None = None,
+    tools: list[dict[str, Any]] | None = None,
+    tool_choice: str | dict[str, Any] | None = None,
     watcher: Any | None = None,
     llama_port: int | None = None,
 ) -> dict[str, Any]:
@@ -637,6 +639,9 @@ def call_orchestrator_forced(
         client: Reusable httpx.Client for connection pooling.
         allow_delegation: Override delegation (None=feature flag, True=allow, False=disable).
         session_id: Optional session ID for cross-request persistence (Phase 3 checkpoints).
+        tools: Optional OpenAI-compatible function-tool schemas to forward to the
+            orchestrator request. Omitted by default to preserve legacy eval traffic.
+        tool_choice: Optional OpenAI-compatible tool choice policy for tools.
         watcher: Optional OrchestratorWatcher (autopilot.scripts.autopilot.
             orchestrator_watch) — when supplied, exogenous reloads of the
             orchestrator API or the target llama-server are detected and
@@ -686,6 +691,10 @@ def call_orchestrator_forced(
         payload["scoring_method"] = scoring_method
     if stop_sequences:
         payload["stop_sequences"] = stop_sequences
+    if tools is not None:
+        payload["tools"] = tools
+    if tool_choice is not None:
+        payload["tool_choice"] = tool_choice
 
     # When no watcher: preserve the EXACT legacy code path. Critical for
     # the non-autopilot callers of this function (14 impacted symbols per

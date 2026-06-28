@@ -128,6 +128,15 @@ class ChatRequest(BaseModel):
         "Merged with any pipeline-default stop sequences (e.g. QWEN_STOP). "
         "Used by benchmark seeding to stop after answer tags.",
     )
+    tools: list[dict] | None = Field(
+        default=None,
+        description="Optional OpenAI-compatible tool schemas for callers that route "
+        "through the chat API. Function tools are exposed to the REPL as CALL(name, **kwargs).",
+    )
+    tool_choice: str | dict | None = Field(
+        default=None,
+        description="Optional OpenAI-compatible tool choice policy for the provided tools.",
+    )
     output_schema: dict | None = Field(
         default=None,
         description="Optional JSON Schema for the agent's FINAL() value. "

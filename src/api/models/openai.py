@@ -4,18 +4,36 @@ import time
 import uuid
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class OpenAIMessage(BaseModel):
     """OpenAI message format."""
 
-    role: str = Field(..., description="Role: system, user, assistant")
-    content: str | list = Field(
-        ...,
+    role: str = Field(..., description="Role: system, user, assistant, tool")
+    content: str | list | None = Field(
+        default=None,
         description="Message content: string or multipart content array "
         '(e.g. [{"type": "text", "text": "..."}, {"type": "image_url", ...}])',
     )
+    tool_calls: list[dict[str, Any]] | None = Field(
+        default=None,
+        description="Assistant tool calls in OpenAI chat-completions format",
+    )
+    tool_call_id: str | None = Field(
+        default=None,
+        description="Tool-call id for role=tool result messages",
+    )
+    name: str | None = Field(
+        default=None,
+        description="Optional participant or tool name",
+    )
+
+    @model_validator(mode="after")
+    def _require_content_or_tool_call(self) -> "OpenAIMessage":
+        if self.content is None and not self.tool_calls:
+            raise ValueError("content is required unless assistant tool_calls are present")
+        return self
 
 
 class OpenAIChatRequest(BaseModel):
@@ -26,6 +44,14 @@ class OpenAIChatRequest(BaseModel):
     temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     max_tokens: int = Field(default=1024, ge=1, le=32768)
     stream: bool = Field(default=False, description="Enable streaming")
+    tools: list[dict[str, Any]] | None = Field(
+        default=None,
+        description="OpenAI native tool definitions. Function tools are bridged to REPL CALL().",
+    )
+    tool_choice: str | dict[str, Any] | None = Field(
+        default=None,
+        description="OpenAI tool choice policy, e.g. 'auto', 'none', 'required', or function choice.",
+    )
     # Extension fields — orchestrator routing overrides
     x_orchestrator_role: str | None = Field(
         default=None,

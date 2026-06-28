@@ -258,6 +258,13 @@ def test_call_orchestrator_forced_includes_optional_payload_fields():
         session_id="sess-1",
         scoring_method="score-x",
         stop_sequences=["</answer>"],
+        tools=[
+            {
+                "type": "function",
+                "function": {"name": "web_search", "parameters": {"type": "object"}},
+            }
+        ],
+        tool_choice={"type": "function", "function": {"name": "web_search"}},
     )
 
     payload = client.post.call_args.kwargs["json"]
@@ -267,6 +274,19 @@ def test_call_orchestrator_forced_includes_optional_payload_fields():
     assert payload["session_id"] == "sess-1"
     assert payload["scoring_method"] == "score-x"
     assert payload["stop_sequences"] == ["</answer>"]
+    assert payload["tools"][0]["function"]["name"] == "web_search"
+    assert payload["tool_choice"]["function"]["name"] == "web_search"
+
+
+def test_call_orchestrator_forced_omits_native_tool_payload_by_default():
+    client = Mock()
+    client.post.return_value = _Resp(200, {"answer": "ok"})
+
+    _MOD.call_orchestrator_forced(prompt="hello", force_role="worker", client=client)
+
+    payload = client.post.call_args.kwargs["json"]
+    assert "tools" not in payload
+    assert "tool_choice" not in payload
 
 
 class _Future:
