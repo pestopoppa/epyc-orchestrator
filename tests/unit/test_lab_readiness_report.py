@@ -133,6 +133,28 @@ def test_report_treats_missing_logs_as_zero_evidence(tmp_path: Path) -> None:
     assert report["jobs"][0]["promotion"]["reviewed"]["eligible"] is False
 
 
+def test_report_surfaces_pending_review_records(tmp_path: Path) -> None:
+    jobs_file = tmp_path / "lab_jobs.yaml"
+    _write_jobs_file(jobs_file)
+    queue = tmp_path / "queue"
+    _write_jsonl(queue / "task_records.jsonl", _records("shadow_ready", "shadow", 3))
+    _write_jsonl(
+        queue / "review_verdicts.jsonl",
+        _verdicts("shadow_ready", "shadow", ["accept"]),
+    )
+
+    report = readiness_report.run_from_args(_args(tmp_path, jobs_file))
+
+    assert report["summary"]["pending_reviews"] == 2
+    assert report["summary"]["pending_review_job_ids"] == ["shadow_ready"]
+    ready = report["jobs"][0]
+    assert ready["review"] == {
+        "pending": 2,
+        "pending_run_ids": ["shadow-1", "shadow-2"],
+        "pending_run_ids_truncated": False,
+    }
+
+
 def test_report_separates_schedulable_from_ready_now(tmp_path: Path, monkeypatch) -> None:
     jobs_file = tmp_path / "lab_jobs.yaml"
     _write_jobs_file(jobs_file)

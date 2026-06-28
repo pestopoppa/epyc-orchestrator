@@ -80,6 +80,22 @@ def _gold_tuple_count(rows: list[dict[str, Any]]) -> int:
     return sum(1 for row in rows if row.get("tuple_path") or row.get("gold_tuple_path"))
 
 
+def _review_status(
+    records: list[dict[str, Any]], verdicts: list[dict[str, Any]]
+) -> dict[str, Any]:
+    verdict_run_ids = {str(row.get("run_id")) for row in verdicts if row.get("run_id")}
+    pending = [
+        str(row.get("run_id"))
+        for row in records
+        if row.get("run_id") and str(row.get("run_id")) not in verdict_run_ids
+    ]
+    return {
+        "pending": len(pending),
+        "pending_run_ids": pending[:25],
+        "pending_run_ids_truncated": len(pending) > 25,
+    }
+
+
 def _active_processes(marker: str) -> list[dict[str, Any]]:
     try:
         proc = subprocess.run(
@@ -173,6 +189,7 @@ def _job_readiness(
     job_id = str(job.get("job_id") or "")
     job_records = _records_for(task_records, job_id)
     job_verdicts = _verdicts_for(verdicts, job_id)
+    review = _review_status(job_records, job_verdicts)
     promotion: dict[str, Any] = {}
     if job_id:
         promotion["reviewed"] = _promotion_decision(
@@ -214,6 +231,7 @@ def _job_readiness(
             "by_stage": _stage_counts(job_verdicts),
             "gold_tuples": _gold_tuple_count(job_verdicts),
         },
+        "review": review,
         "promotion": promotion,
     }
 
@@ -268,6 +286,10 @@ def build_report(
         if row["promotion"].get("reviewed", {}).get("eligible")
         or row["promotion"].get("autonomous", {}).get("eligible")
     ]
+    pending_reviews = sum(row["review"]["pending"] for row in rows)
+    pending_review_job_ids = [
+        row["job_id"] for row in rows if row["review"]["pending"] > 0
+    ]
     quiet = quiet_window or {
         "ready": None,
         "blockers": [],
@@ -293,6 +315,8 @@ def build_report(
             "task_records": len(task_records),
             "verdicts": len(verdicts),
             "gold_tuples": _gold_tuple_count(verdicts),
+            "pending_reviews": pending_reviews,
+            "pending_review_job_ids": pending_review_job_ids,
             "promotion_ready": len(promotion_ready),
             "promotion_ready_job_ids": promotion_ready,
         },
