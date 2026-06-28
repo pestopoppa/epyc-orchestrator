@@ -179,6 +179,15 @@ def test_validate_numeric_trial_accepts_empty_params_for_optuna() -> None:
     ) is None
 
 
+def test_validate_numeric_trial_accepts_all_configured_surfaces() -> None:
+    from species.numeric_swarm import SURFACES
+
+    assert set(SURFACES) == controller_io._NUMERIC_SURFACES
+    assert controller_io.validate_single_variable(
+        {"type": "numeric_trial", "surface": "kv_compaction", "params": {}}
+    ) is None
+
+
 def test_validate_numeric_trial_rejects_unknown_surface() -> None:
     err = controller_io.validate_single_variable(
         {"type": "numeric_trial", "surface": "not_a_surface", "params": {}}

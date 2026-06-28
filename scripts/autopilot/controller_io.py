@@ -53,7 +53,24 @@ PLANNER_SUBPROCESS_STATUS_PATH = Path(
 DEFAULT_CLAUDE_MODEL = "opus"
 DEFAULT_CLAUDE_FALLBACK_MODEL = "sonnet"
 
-_NUMERIC_SURFACES = {"memrl_retrieval", "think_harder", "monitor", "escalation"}
+_FALLBACK_NUMERIC_SURFACES = {"memrl_retrieval", "think_harder", "monitor", "escalation"}
+
+
+def _configured_numeric_surfaces() -> set[str]:
+    try:
+        from species.numeric_swarm import SURFACES as _NS_SURFACES
+    except Exception:
+        return set(_FALLBACK_NUMERIC_SURFACES)
+
+    surfaces = {
+        surface
+        for surface in _NS_SURFACES
+        if isinstance(surface, str) and surface.strip()
+    }
+    return surfaces or set(_FALLBACK_NUMERIC_SURFACES)
+
+
+_NUMERIC_SURFACES = _configured_numeric_surfaces()
 _PROMPT_MUTATIONS = {"targeted_fix", "compress", "few_shot_evolution"}
 _CODE_MUTATIONS = {"targeted_fix"}
 _SLOT_SCORERS = {"expected_attention", "knorm"}
