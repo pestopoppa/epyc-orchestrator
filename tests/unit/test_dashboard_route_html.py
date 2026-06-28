@@ -117,6 +117,9 @@ def test_dashboard_topology_activity_stats_refresh_with_live_age_tick() -> None:
     assert "const liveActiveCount = Math.max(lockActiveCount, tapActiveCount);" in body
     assert "active CPU-region/tap holder(s)" in body
     assert "summary ${stats.avg_tps_recent.toFixed(2)} t/s" in body
+    assert "renderRegionLocksBasicGrid(grid, d);" in body
+    assert "basic matrix fallback; rich overlay still initializing" in body
+    assert "setTimeout(ensureRegionLocksPanelPainted, 750)" in body
     assert "_latestSnapshot = snap || {};" in body
     assert "buildSlotInferredRegionLocks(byRole)" in body
     assert "SLOT ACTIVE" in body
@@ -142,6 +145,8 @@ def test_dashboard_live_panel_refreshes_ignore_stale_responses_where_possible() 
     assert "const result = fn();" in body
     assert "result.catch((err) =>" in body
     assert "return updateRegionLocks(refreshSeq, snap.region_locks);" in body
+    assert "let _lastRegionLocksPayload = null;" in body
+    assert "rich overlay failed" in body
     assert "fetch(`/dashboard/api/snapshot?t=${Date.now()}`, { cache: 'no-store' })" in body
     assert "setInterval(updateSnapshotPoll, 2500)" in body
     assert "window_s=${TOPOLOGY_ACTIVITY_WINDOW_S}&t=${Date.now()}" in body
