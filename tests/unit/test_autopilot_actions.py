@@ -1377,9 +1377,16 @@ def test_frontier_rerun_pending_clear_stops_after_min_trials() -> None:
     )
 
     assert action == requested
-    assert rationale["frontier_rerun_pending_clear"] is True
+    assert rationale["frontier_rerun_cleared"] is True
     assert rationale["frontier_rerun_completed_numeric_trials"] == 2
     assert rationale["frontier_rerun_min_numeric_trials"] == 2
+    assert state["frontier_rerun_required"]["required"] is False
+    assert state["frontier_rerun_required"]["cleared_after_trial_id"] == 7
+    assert state["frontier_rerun_required"]["completed_numeric_trials"] == 2
+    assert state["frontier_rerun_required"]["min_numeric_trials"] == 2
+    assert "frontier rerun satisfied" in state["frontier_rerun_required"]["reason"]
+    assert state["frontier_rerun_forced"] is None
+    assert "frontier_rerun_pending_clear" not in state
 
 
 def test_frontier_rerun_records_block_when_all_numeric_surfaces_blacklisted() -> None:

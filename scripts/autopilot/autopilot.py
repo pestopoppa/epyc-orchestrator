@@ -1004,6 +1004,20 @@ def _maybe_force_frontier_rerun_action(
                 min_trials=min_trials,
             )
             return action, forced_rationale
+        if journal is not None and completed_trials >= min_trials:
+            _clear_frontier_rerun_marker(
+                state,
+                marker=marker,
+                pending=pending,
+                completed_trials=completed_trials,
+                min_trials=min_trials,
+            )
+            return action, {
+                **(rationale or {}),
+                "frontier_rerun_cleared": True,
+                "frontier_rerun_completed_numeric_trials": completed_trials,
+                "frontier_rerun_min_numeric_trials": min_trials,
+            }
         return action, {
             **(rationale or {}),
             "frontier_rerun_pending_clear": True,
@@ -1033,6 +1047,33 @@ def _maybe_force_frontier_rerun_action(
         completed_trials=completed_trials,
         min_trials=min_trials,
     )
+
+
+def _clear_frontier_rerun_marker(
+    state: dict[str, Any],
+    *,
+    marker: dict[str, Any],
+    pending: dict[str, Any],
+    completed_trials: int,
+    min_trials: int,
+) -> None:
+    """Persist that the era-scoped frontier rerun has satisfied its gate."""
+    reason = str(marker.get("reason") or "frontier rerun required")
+    state["frontier_rerun_required"] = {
+        **marker,
+        "required": False,
+        "cleared_at": datetime.now(timezone.utc).isoformat(),
+        "cleared_after_trial_id": pending.get("trial_id"),
+        "completed_numeric_trials": completed_trials,
+        "min_numeric_trials": min_trials,
+        "reason": (
+            f"frontier rerun satisfied: {completed_trials}/{min_trials} "
+            f"current-era numeric trials complete; {reason}"
+        ),
+    }
+    state["frontier_rerun_forced"] = None
+    state.pop("frontier_rerun_pending_clear", None)
+    state.pop("frontier_rerun_blocked", None)
 
 
 def _frontier_rerun_min_trials(marker: dict[str, Any]) -> int:
