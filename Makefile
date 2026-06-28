@@ -8,7 +8,7 @@
 # Run specific:  make shellcheck
 
 SHELL := /usr/bin/env bash
-.PHONY: all gates schema shellcheck shfmt mdlint format lint typecheck coverage coverage-orchestrator-slice warnings-orchestrator-slice integration-sanity unit integration security security-check bench clean help setup bootstrap download-models validate-paths docker-build docker-build-dev docker-run docker-dev docker-test docker-lint docker-clean nix-develop nix-build nix-shell nextplaid-reindex check-agent-config check-numerics report-numerics
+.PHONY: all gates schema shellcheck shfmt mdlint format lint typecheck coverage coverage-orchestrator-slice warnings-orchestrator-slice integration-sanity unit integration security security-check health docs docs-check bench clean help setup bootstrap download-models validate-paths docker-build docker-build-dev docker-run docker-dev docker-test docker-lint docker-clean nix-develop nix-build nix-shell nextplaid-reindex check-agent-config check-numerics report-numerics
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -65,6 +65,8 @@ help:
 	@echo "  make unit       - Run unit tests"
 	@echo "  make validate-registry - Validate model registry and paths"
 	@echo "  make security-check - Run tracked-file security audit"
+	@echo "  make health - Run no-inference session health checks"
+	@echo "  make docs-check - Verify generated docs index is current"
 	@echo "  make check-memory - Check available RAM before tests (prevents crashes)"
 	@echo "  make check-agent-config - Validate agent prompt structure and CLAUDE matrix"
 	@echo "  make check-numerics - Enforce numeric literal policy on changed Python files"
@@ -154,6 +156,18 @@ lint: shellcheck mdlint
 security-check:
 	@echo "==> security-check"
 	@$(PY) scripts/security/audit_repository.py
+
+health:
+	@echo "==> health"
+	@scripts/session/health_check.sh
+
+docs:
+	@echo "==> docs"
+	@$(PY) scripts/docs/generate_docs_index.py
+
+docs-check:
+	@echo "==> docs-check"
+	@$(PY) scripts/docs/generate_docs_index.py --check
 
 pylint:
 	@echo "==> pylint (ruff)"
