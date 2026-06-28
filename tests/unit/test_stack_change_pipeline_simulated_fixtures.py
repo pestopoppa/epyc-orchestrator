@@ -685,6 +685,25 @@ def _assert_worker_pool_stack_prior_consumer(
     assert worker.managed_process is False
 
 
+def _assert_factual_risk_stack_prior_consumer(
+    stack_priors_path: Path,
+    *,
+    expected_tiers: dict[str, str],
+) -> None:
+    from src.classifiers.factual_risk import _role_adjustment, _role_tier_for_role
+
+    adjustment_by_tier = {"tier_1": 0.11, "tier_2": 0.22, "tier_3": 0.33}
+    config = {"role_adjustments": adjustment_by_tier}
+
+    for role, expected_tier in expected_tiers.items():
+        assert _role_tier_for_role(role, stack_priors_path=stack_priors_path) == expected_tier
+        assert _role_adjustment(
+            role,
+            config=config,
+            stack_priors_path=stack_priors_path,
+        ) == pytest.approx(adjustment_by_tier[expected_tier])
+
+
 def _assert_seeding_descriptor_fallback_consumer(
     descriptors_path: Path,
     *,
@@ -1022,6 +1041,10 @@ def test_simulated_worker_swap_updates_generated_consumers_with_approval(
         expected_model_path_fragment="gemma-4-26B-A4B-it-Q8_0.gguf",
         monkeypatch=monkeypatch,
     )
+    _assert_factual_risk_stack_prior_consumer(
+        config.stack_priors,
+        expected_tiers={"worker_general": "tier_2"},
+    )
 
     calls: list[dict[str, Any]] = []
     original_run = pipeline.subprocess.run
@@ -1137,6 +1160,13 @@ def test_simulated_vision_swap_updates_generated_consumers_with_approval(
     assert q_priors.baseline_tps_source_by_role["worker_vision"] == PRIOR_SOURCE_STACK_PRIORS
     assert q_priors.baseline_quality_by_role["vision_escalation"] == pytest.approx(0.92)
     assert validate_live_q_scorer_prior_sources(config.stack_priors) == []
+    _assert_factual_risk_stack_prior_consumer(
+        config.stack_priors,
+        expected_tiers={
+            "worker_vision": "tier_3",
+            "vision_escalation": "tier_2",
+        },
+    )
 
     calls: list[dict[str, Any]] = []
     original_run = pipeline.subprocess.run
@@ -1245,6 +1275,10 @@ def test_simulated_ingest_swap_updates_generated_consumers_with_approval(
     assert q_priors.baseline_tps_source_by_role["ingest_long_context"] == PRIOR_SOURCE_STACK_PRIORS
     assert q_priors.baseline_quality_by_role["ingest_long_context"] == pytest.approx(0.963)
     assert validate_live_q_scorer_prior_sources(config.stack_priors) == []
+    _assert_factual_risk_stack_prior_consumer(
+        config.stack_priors,
+        expected_tiers={"ingest_long_context": "tier_1"},
+    )
 
     calls: list[dict[str, Any]] = []
     original_run = pipeline.subprocess.run
