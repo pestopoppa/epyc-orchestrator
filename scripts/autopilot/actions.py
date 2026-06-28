@@ -1353,22 +1353,43 @@ _PROMPT_DIR_MUTATORS = {"prompt_mutation", "gepa_optimize"}
 _PROMPT_FILE_MUTATORS = {"structural_prune"}
 
 
-def _pathspec_has_pending_changes(pathspec: Path) -> bool:
-    """True if ``git status --porcelain`` reports any change (modified, staged,
-    or untracked) under ``pathspec``. Fail-closed: returns True on git error."""
+def _pathspec_pending_change_report(pathspec: Path) -> tuple[bool, str]:
+    """Return (is_dirty, evidence) for pending changes under ``pathspec``.
+
+    Fail-closed: git errors are dirty. The evidence string is intentionally
+    short because it is surfaced in AutoPilot skip reasons.
+    """
+    path_text = str(pathspec)
     try:
         result = subprocess.run(
-            ["git", "status", "--porcelain", "--", str(pathspec)],
+            ["git", "status", "--porcelain", "--", path_text],
             cwd=str(_REPO_ROOT),
             capture_output=True,
             text=True,
             timeout=10,
         )
-    except Exception:  # noqa: BLE001 — fail closed on any git/subprocess error
-        return True
+    except Exception as exc:  # noqa: BLE001 — fail closed on any git/subprocess error
+        return True, f"pathspec={path_text}; git status raised {type(exc).__name__}: {exc}"
     if result.returncode != 0:
-        return True
-    return bool(result.stdout.strip())
+        stderr = result.stderr.strip() or "<no stderr>"
+        return (
+            True,
+            f"pathspec={path_text}; git status rc={result.returncode}; stderr={stderr[:500]}",
+        )
+    status = result.stdout.strip()
+    if status:
+        lines = status.splitlines()
+        sample = "\\n".join(lines[:8])
+        if len(lines) > 8:
+            sample += f"\\n... +{len(lines) - 8} more"
+        return True, f"pathspec={path_text}; git status reported:\\n{sample}"
+    return False, f"pathspec={path_text}; git status clean"
+
+
+def _pathspec_has_pending_changes(pathspec: Path) -> bool:
+    """True if ``git status --porcelain`` reports any change (modified, staged,
+    or untracked) under ``pathspec``. Fail-closed: returns True on git error."""
+    return _pathspec_pending_change_report(pathspec)[0]
 
 
 def _mutation_dirty_target_reason(action: dict[str, Any]) -> str | None:
@@ -1381,29 +1402,34 @@ def _mutation_dirty_target_reason(action: dict[str, Any]) -> str | None:
         if not target:
             return None  # missing-file is handled by the scope validator
         path = (_REPO_ROOT / target).resolve()
-        if _pathspec_has_pending_changes(path):
+        is_dirty, evidence = _pathspec_pending_change_report(path)
+        if is_dirty:
             return (
                 f"{action_type} target '{target}' has pre-existing uncommitted "
-                "changes; skipping to avoid committing unrelated work"
+                "changes; skipping to avoid committing unrelated work "
+                f"({evidence})"
             )
     elif action_type in _PROMPT_DIR_MUTATORS:
         # The prompt commit path stages the whole prompts dir, so any dirty
         # sibling prompt would be swept in — check the entire directory.
-        if _pathspec_has_pending_changes(_PROMPTS_DIR):
+        is_dirty, evidence = _pathspec_pending_change_report(_PROMPTS_DIR)
+        if is_dirty:
             return (
                 f"{action_type} would stage the whole prompts dir, which has "
                 "pre-existing uncommitted changes; skipping to avoid committing "
-                "unrelated work"
+                f"unrelated work ({evidence})"
             )
     elif action_type in _PROMPT_FILE_MUTATORS:
         target = action.get("file", "")
         if not target:
             return None  # missing-file is handled by the scope validator
         path = (_PROMPTS_DIR / target).resolve()
-        if _pathspec_has_pending_changes(path):
+        is_dirty, evidence = _pathspec_pending_change_report(path)
+        if is_dirty:
             return (
                 f"{action_type} target '{target}' has pre-existing uncommitted "
-                "changes; skipping to avoid overwriting unrelated work"
+                "changes; skipping to avoid overwriting unrelated work "
+                f"({evidence})"
             )
     return None
 
