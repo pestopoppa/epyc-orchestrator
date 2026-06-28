@@ -1391,6 +1391,52 @@ def test_frontier_rerun_records_block_when_all_numeric_surfaces_blacklisted() ->
     assert state["frontier_rerun_blocked"]["trial_id"] == 3
 
 
+def test_frontier_rerun_summary_reports_live_progress() -> None:
+    state = {
+        "frontier_rerun_required": {
+            "required": True,
+            "reason": "v6 kernel era opened",
+            "opened_at": "2026-06-28T01:40:00Z",
+            "min_numeric_trials": 4,
+        },
+        "frontier_rerun_pending_clear": {
+            "trial_id": 8,
+            "action": {"type": "numeric_trial", "surface": "think_harder"},
+        },
+    }
+    journal = SimpleNamespace(
+        entries_with_supersessions=lambda: [
+            SimpleNamespace(
+                bug_corrupted_by="",
+                action_type="numeric_trial",
+                tier=1,
+                timestamp="2026-06-28T01:41:00Z",
+            ),
+            SimpleNamespace(
+                bug_corrupted_by="autopilot_killed_mid_trial",
+                action_type="numeric_trial",
+                tier=1,
+                timestamp="2026-06-28T01:42:00Z",
+            ),
+        ]
+    )
+
+    lines = autopilot._frontier_rerun_summary_lines(state, journal)
+
+    assert "Frontier rerun: required (1/4 numeric trials complete)" in lines
+    assert "Frontier rerun reason: v6 kernel era opened" in lines
+    assert "Frontier rerun opened: 2026-06-28T01:40:00Z" in lines
+    assert "Frontier rerun pending: trial #8 numeric_trial/think_harder" in lines
+
+
+def test_frontier_rerun_summary_reports_inactive_marker() -> None:
+    journal = SimpleNamespace(entries_with_supersessions=lambda: [])
+
+    assert autopilot._frontier_rerun_summary_lines({}, journal) == [
+        "Frontier rerun: not required"
+    ]
+
+
 def test_numeric_swarm_epoch_label_prefers_autopilot_speed_era() -> None:
     state = {
         "active_instrument_eras": {

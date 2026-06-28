@@ -4543,6 +4543,42 @@ def _baseline_promotion_summary_lines(
     return format_baseline_ledger_summary(reconciliation)
 
 
+def _frontier_rerun_summary_lines(
+    state: dict[str, Any], journal: ExperimentJournal,
+) -> list[str]:
+    """Read-only frontier-rerun marker summary for operator commands."""
+    marker = state.get("frontier_rerun_required")
+    if not (isinstance(marker, dict) and marker.get("required")):
+        return ["Frontier rerun: not required"]
+
+    completed = _frontier_rerun_completed_numeric_trials(marker, journal)
+    min_trials = _frontier_rerun_min_trials(marker)
+    reason = str(marker.get("reason") or "frontier rerun required")
+    lines = [
+        f"Frontier rerun: required ({completed}/{min_trials} numeric trials complete)",
+        f"Frontier rerun reason: {reason}",
+    ]
+    opened = marker.get("rerun_started_at") or marker.get("opened_at")
+    if opened:
+        lines.append(f"Frontier rerun opened: {opened}")
+
+    pending = state.get("frontier_rerun_pending_clear")
+    if isinstance(pending, dict) and pending.get("trial_id") is not None:
+        action = pending.get("action") if isinstance(pending.get("action"), dict) else {}
+        action_type = action.get("type", "unknown")
+        surface = action.get("surface")
+        action_label = f"{action_type}/{surface}" if surface else str(action_type)
+        lines.append(
+            f"Frontier rerun pending: trial #{pending.get('trial_id')} {action_label}"
+        )
+
+    blocked = state.get("frontier_rerun_blocked")
+    if isinstance(blocked, dict):
+        lines.append(f"Frontier rerun blocked: {blocked.get('reason', 'unknown')}")
+
+    return lines
+
+
 def cmd_status(args: argparse.Namespace) -> None:
     """Show current status."""
     state = load_state()
@@ -4560,6 +4596,8 @@ def cmd_status(args: argparse.Namespace) -> None:
     if archive_source != ARCHIVE_SOURCE_STATE:
         print(f"Archive source: {archive_source}")
     for line in _baseline_promotion_summary_lines(state, journal):
+        print(line)
+    for line in _frontier_rerun_summary_lines(state, journal):
         print(line)
     print()
     print(archive.summary_text(tier=DEFAULT_FRONTIER_TIER))
@@ -4605,6 +4643,10 @@ def cmd_report(args: argparse.Namespace) -> None:
     print()
     print("## Baseline Promotion Ledger")
     for line in _baseline_promotion_summary_lines(load_state(), journal):
+        print(line)
+    print()
+    print("## Frontier Rerun")
+    for line in _frontier_rerun_summary_lines(load_state(), journal):
         print(line)
     print()
     print("## Summary")
