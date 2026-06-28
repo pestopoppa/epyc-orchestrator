@@ -182,6 +182,93 @@ def test_dependency_stage_waits_for_prior_stage(monkeypatch, tmp_path: Path) -> 
     cleanup_sandbox_dir(sb)
 
 
+def test_parallel_stage_failure_rolls_back_sandbox_successes(monkeypatch, tmp_path: Path) -> None:
+    root = _repo(tmp_path, {"a.py": "old-a\n", "b.py": "old-b\n"})
+    ps = PatchSet(files=[
+        _modify("a.py", "old-a\n", [Hunk(start_line=1, end_line=1, replacement="new-a\n")]),
+        _modify("b.py", "old-b\n", [Hunk(start_line=1, end_line=1, replacement="new-b\n")]),
+    ])
+    sb = stage_sandbox(ps, root)
+    real_apply = R.apply_file_patch_to_text
+
+    def flaky_apply(original, fp):
+        if fp.path == "b.py":
+            raise OSError("simulated patch failure")
+        return real_apply(original, fp)
+
+    monkeypatch.setattr(R, "apply_file_patch_to_text", flaky_apply)
+    res = apply_patchset_to_dir(ps, sb, compute_current_shas(ps, root))
+    assert not res.ok
+    assert res.applied == []
+    assert any(f["failure_type"] == FailureType.APPLY_ERROR for f in res.failed)
+    assert (sb / "a.py").read_text() == "old-a\n"
+    assert (sb / "b.py").read_text() == "old-b\n"
+    cleanup_sandbox_dir(sb)
+
+
+def test_parallel_create_delete_failure_rolls_back_sandbox(monkeypatch, tmp_path: Path) -> None:
+    root = _repo(tmp_path, {"gone.py": "old-gone\n"})
+    ps = PatchSet(files=[
+        FilePatch(path="new.py", operation="create", new_content="created\n"),
+        FilePatch(
+            path="gone.py",
+            operation="delete",
+            base_content_sha256=sha256_text("old-gone\n"),
+        ),
+    ])
+    sb = stage_sandbox(ps, root)
+    real_unlink = Path.unlink
+
+    def flaky_unlink(self, *args, **kwargs):
+        if self == sb / "gone.py":
+            raise OSError("simulated delete failure")
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", flaky_unlink)
+    res = apply_patchset_to_dir(ps, sb, compute_current_shas(ps, root))
+    assert not res.ok
+    assert res.applied == []
+    assert any(f["failure_type"] == FailureType.APPLY_ERROR for f in res.failed)
+    assert not (sb / "new.py").exists()
+    assert (sb / "gone.py").read_text() == "old-gone\n"
+    cleanup_sandbox_dir(sb)
+
+
+def test_later_stage_failure_restores_rename_source_and_destination(monkeypatch, tmp_path: Path) -> None:
+    root = _repo(tmp_path, {"old.py": "old-content\n", "b.py": "old-b\n"})
+    ps = PatchSet(files=[
+        FilePatch(
+            path="old.py",
+            operation="rename",
+            rename_to="new.py",
+            base_content_sha256=sha256_text("old-content\n"),
+        ),
+        FilePatch(
+            path="b.py",
+            operation="modify",
+            base_content_sha256=sha256_text("old-b\n"),
+            hunks=[Hunk(start_line=1, end_line=1, replacement="new-b\n")],
+            depends_on=["old.py"],
+        ),
+    ])
+    sb = stage_sandbox(ps, root)
+    real_apply = R.apply_file_patch_to_text
+
+    def flaky_apply(original, fp):
+        if fp.path == "b.py":
+            raise OSError("simulated later-stage failure")
+        return real_apply(original, fp)
+
+    monkeypatch.setattr(R, "apply_file_patch_to_text", flaky_apply)
+    res = apply_patchset_to_dir(ps, sb, compute_current_shas(ps, root))
+    assert not res.ok
+    assert res.applied == []
+    assert (sb / "old.py").read_text() == "old-content\n"
+    assert not (sb / "new.py").exists()
+    assert (sb / "b.py").read_text() == "old-b\n"
+    cleanup_sandbox_dir(sb)
+
+
 # ─── sandboxed end-to-end + verify + promote ─────────────────────────────────────
 
 def test_sandboxed_with_passing_verify_then_promote(tmp_path: Path) -> None:

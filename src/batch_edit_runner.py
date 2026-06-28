@@ -172,6 +172,52 @@ def _merge_apply_result(dst: ApplyResult, src: ApplyResult) -> None:
     dst.renamed_paths.extend(src.renamed_paths)
 
 
+def _remove_path(path: Path) -> None:
+    if path.is_dir():
+        shutil.rmtree(path)
+    else:
+        path.unlink(missing_ok=True)
+
+
+def _snapshot_paths(root: Path, rel_paths: set[str], backup_root: Path) -> dict[str, bool]:
+    existed: dict[str, bool] = {}
+    for rel in sorted(rel_paths):
+        src = root / rel
+        existed[rel] = src.exists()
+        if not src.exists():
+            continue
+        dst = backup_root / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if src.is_dir():
+            shutil.copytree(src, dst)
+        else:
+            shutil.copy2(src, dst)
+    return existed
+
+
+def _restore_paths(root: Path, rel_paths: set[str], backup_root: Path, existed: dict[str, bool]) -> None:
+    for rel in sorted(rel_paths):
+        live = root / rel
+        backup = backup_root / rel
+        if existed.get(rel):
+            if live.exists() and (live.is_dir() or backup.is_dir()):
+                _remove_path(live)
+            live.parent.mkdir(parents=True, exist_ok=True)
+            if backup.is_dir():
+                shutil.copytree(backup, live)
+            else:
+                shutil.copy2(backup, live)
+        elif live.exists():
+            _remove_path(live)
+
+
+def _clear_successful_apply_state(result: ApplyResult) -> None:
+    result.applied.clear()
+    result.diff_paths.clear()
+    result.deleted_paths.clear()
+    result.renamed_paths.clear()
+
+
 def apply_patchset_to_dir(ps: PatchSet, target_dir: Path | str, current_shas: dict[str, str]) -> ApplyResult:
     """Apply a patch set to files under target_dir. All-or-nothing pre-flight; pure (no git/LM).
 
@@ -186,20 +232,31 @@ def apply_patchset_to_dir(ps: PatchSet, target_dir: Path | str, current_shas: di
 
     root = Path(target_dir)
     patches_by_path = {fp.path: fp for fp in ps.files}
-    for stage in dependency_stages(ps):
-        if len(stage) == 1:
-            stage_results = [_apply_one_file_patch(root, patches_by_path[stage[0]])]
-        else:
-            with ThreadPoolExecutor(max_workers=len(stage)) as executor:
-                futures = {
-                    path: executor.submit(_apply_one_file_patch, root, patches_by_path[path])
-                    for path in stage
-                }
-                stage_results = [futures[path].result() for path in stage]
-        for stage_result in stage_results:
-            _merge_apply_result(result, stage_result)
-        if result.failed:
-            return result
+    affected_paths = {
+        rel
+        for fp in ps.files
+        for rel in (fp.path, fp.rename_to)
+        if rel
+    }
+    with tempfile.TemporaryDirectory(prefix="bep4-apply-backup-") as tmp:
+        backup_root = Path(tmp)
+        existed = _snapshot_paths(root, affected_paths, backup_root)
+        for stage in dependency_stages(ps):
+            if len(stage) == 1:
+                stage_results = [_apply_one_file_patch(root, patches_by_path[stage[0]])]
+            else:
+                with ThreadPoolExecutor(max_workers=len(stage)) as executor:
+                    futures = {
+                        path: executor.submit(_apply_one_file_patch, root, patches_by_path[path])
+                        for path in stage
+                    }
+                    stage_results = [futures[path].result() for path in stage]
+            for stage_result in stage_results:
+                _merge_apply_result(result, stage_result)
+            if result.failed:
+                _restore_paths(root, affected_paths, backup_root, existed)
+                _clear_successful_apply_state(result)
+                return result
     return result
 
 
