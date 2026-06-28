@@ -330,6 +330,122 @@ class TestStrategyStore:
         assert all(r.id != sid for r in results)
         assert any(r.source_trial_id == 3 for r in results)
 
+    def test_retrieve_conventions_filters_species_plus_global(self, store):
+        prompt_id = store.store(
+            "PromptForge guardrail",
+            "Avoid prompt edits when route ownership is unclear",
+            source_trial_id=1,
+            species="prompt_forge",
+            entry_type="convention",
+        )
+        global_id = store.store(
+            "Global handoff hypothesis",
+            "Prefer evidence-gated restarts after live policy changes",
+            source_trial_id=2,
+            species="all",
+            entry_type="convention",
+        )
+        store.store(
+            "Numeric-only guardrail",
+            "Do not use qwen2-tokenized drafts for qwen3.5 bins",
+            source_trial_id=3,
+            species="numeric_swarm",
+            entry_type="convention",
+        )
+        store.store(
+            "Raw PromptForge row",
+            "Not a convention",
+            source_trial_id=4,
+            species="prompt_forge",
+        )
+
+        results = store.retrieve_conventions(species="prompt_forge")
+
+        result_ids = [entry.id for entry in results]
+        assert result_ids == [prompt_id, global_id]
+        assert all(entry.entry_type == "convention" for entry in results)
+        assert all(entry.validity_score == 0.5 for entry in results)
+        assert all(entry.staleness == 1.0 for entry in results)
+
+    def test_retrieve_conventions_applies_folded_evidence_exclusions(self, store):
+        excluded_id = store.store(
+            "Excluded convention",
+            "This should not appear through a folded journal",
+            source_trial_id=99,
+            species="structural_lab",
+            entry_type="convention",
+            evidence_trial_ids=[1, 2],
+        )
+        kept_id = store.store(
+            "Kept convention",
+            "This remains planner-visible",
+            source_trial_id=3,
+            species="structural_lab",
+            entry_type="convention",
+        )
+
+        class FakeJournal:
+            def entries_with_supersessions(self):
+                return [
+                    SimpleNamespace(trial_id=2, bug_corrupted_by="superseded"),
+                ]
+
+        results = store.retrieve_conventions(
+            species="structural_lab",
+            journal=FakeJournal(),
+        )
+
+        result_ids = {entry.id for entry in results}
+        assert excluded_id not in result_ids
+        assert kept_id in result_ids
+
+    def test_retrieve_conventions_honors_quarantine_and_min_validity(self, store):
+        quarantined_id = store.store(
+            "Quarantined convention",
+            "Should be hidden by default",
+            source_trial_id=1,
+            species="seeder",
+            entry_type="convention",
+        )
+        low_validity_id = store.store(
+            "Low validity convention",
+            "Visible unless min_validity excludes it",
+            source_trial_id=2,
+            species="seeder",
+            entry_type="convention",
+        )
+        for _ in range(20):
+            store.update_validity(quarantined_id, failure=True)
+        store.update_validity(low_validity_id, failure=True)
+
+        default_results = store.retrieve_conventions(species="seeder")
+        strict_results = store.retrieve_conventions(species="seeder", min_validity=0.70)
+        full_results = store.retrieve_conventions(
+            species="seeder",
+            include_quarantined=True,
+        )
+
+        assert all(entry.id != quarantined_id for entry in default_results)
+        assert all(entry.id != low_validity_id for entry in strict_results)
+        assert any(entry.id == quarantined_id for entry in full_results)
+
+    def test_retrieve_conventions_reports_staleness(self, store):
+        sid = store.store(
+            "Stale convention",
+            "Created in an older context epoch",
+            source_trial_id=1,
+            species="numeric_swarm",
+            entry_type="convention",
+        )
+
+        fresh = store.retrieve_conventions(species="numeric_swarm")
+        store.compute_context_hash = lambda *args, **kwargs: "DIFFERENTHASH0001"
+        stale = store.retrieve_conventions(species="numeric_swarm")
+
+        assert [entry.id for entry in fresh] == [sid]
+        assert fresh[0].staleness == 1.0
+        assert stale[0].staleness == 0.5
+
     def test_strategy_rows_for_compression_applies_folded_evidence_exclusions(self, store):
         excluded_id = store.store(
             "Strategy A",

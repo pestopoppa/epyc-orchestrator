@@ -1266,6 +1266,107 @@ class StrategyStore:
             excluded_trial_ids=excluded_strategy_evidence_trial_ids(journal),
         )
 
+    def retrieve_conventions(
+        self,
+        *,
+        species: Optional[str] = None,
+        journal: Any | None = None,
+        excluded_trial_ids: set[int] | None = None,
+        include_quarantined: bool = False,
+        min_validity: float = 0.0,
+        stale_penalty: float = 0.5,
+        limit: int | None = None,
+    ) -> list[StrategyEntry]:
+        """Return planner-usable convention strategy rows.
+
+        This reads ``strategies.entry_type='convention'`` rows, not the
+        separate MDL ``strategy_conventions`` compression table. Species
+        callers receive rows for their species plus global ``all`` rows.
+        """
+        excluded = set(excluded_trial_ids or set())
+        if journal is not None:
+            excluded.update(excluded_strategy_evidence_trial_ids(journal))
+
+        params: list[Any] = ["convention"]
+        species_clause = ""
+        if species:
+            species_clause = " AND species IN (?, ?)"
+            params.extend([species, "all"])
+
+        rows = self._conn.execute(
+            "SELECT * FROM strategies WHERE entry_type = ?"
+            f"{species_clause} ORDER BY created_at ASC",
+            tuple(params),
+        ).fetchall()
+
+        current_hash = self.compute_context_hash()
+        quarantined = set() if include_quarantined else self.quarantined_ids()
+        entries: list[StrategyEntry] = []
+        for row in rows:
+            sid = row["id"]
+            if sid in quarantined:
+                continue
+            evidence_trial_ids = self._evidence_trial_ids_for_row(row)
+            if excluded and excluded.intersection(evidence_trial_ids):
+                continue
+            validity = self._validity_score(sid)
+            if validity < min_validity:
+                continue
+            try:
+                stored_hash = row["context_hash"] or ""
+            except (IndexError, KeyError):
+                stored_hash = ""
+            staleness = (
+                1.0
+                if (not stored_hash or stored_hash == current_hash)
+                else stale_penalty
+            )
+            try:
+                meta = json.loads(row["metadata_json"]) if row["metadata_json"] else {}
+            except (TypeError, json.JSONDecodeError):
+                meta = {}
+            if not isinstance(meta, dict):
+                meta = {}
+            format_meta = meta.get("insight_format")
+            if not isinstance(format_meta, dict):
+                format_meta = {}
+            title = _compact_text(format_meta.get("title")) or _derive_title(
+                row["description"]
+            )
+            generalized_content = (
+                _compact_text(format_meta.get("generalized_content"))
+                or _compact_text(row["insight"])
+            )
+            flags = format_meta.get("specificity_flags")
+            specificity_flags = (
+                sorted({str(flag) for flag in flags})
+                if isinstance(flags, list)
+                else _specificity_flags(title, row["description"], generalized_content)
+            )
+            entries.append(
+                StrategyEntry(
+                    id=sid,
+                    description=row["description"],
+                    insight=row["insight"],
+                    source_trial_id=row["source_trial_id"],
+                    species=row["species"],
+                    created_at=row["created_at"],
+                    metadata=meta,
+                    similarity_score=validity * staleness,
+                    entry_type="convention",
+                    validity_score=validity,
+                    staleness=staleness,
+                    rrf_score=0.0,
+                    evidence_trial_ids=evidence_trial_ids,
+                    title=title,
+                    generalized_content=generalized_content,
+                    specificity_flags=specificity_flags,
+                )
+            )
+            if limit is not None and len(entries) >= limit:
+                break
+        return entries
+
     def audit_insight_specificity(
         self,
         *,
