@@ -6,93 +6,15 @@ from src.api.routes import openai_compat
 from src.api.models import OpenAIMessage
 
 
-def test_available_roles_falls_back_to_current_live_role_surface(monkeypatch):
+def test_available_roles_degrades_to_compatibility_aliases(monkeypatch):
     monkeypatch.setattr(openai_compat, "_live_stack_role_ids", lambda: [])
-    monkeypatch.setattr(
-        openai_compat,
-        "HOT_SERVERS",
-        [
-            {"port": 8070, "roles": ["frontdoor", "coder", "worker_summarize"]},
-            {"port": 8072, "roles": ["worker_fast", "worker_math", "toolrunner"]},
-            {"port": 8083, "roles": ["architect_general"]},
-            {"port": 8085, "roles": ["ingest_long_context"]},
-            {"port": 8086, "roles": ["worker_vision"]},
-            {"port": 8087, "roles": ["vision_escalation"]},
-        ],
-    )
-    monkeypatch.setattr(
-        openai_compat,
-        "WARM_SERVERS",
-        [{"port": 8070, "roles": ["frontdoor"]}],
-    )
 
-    roles = openai_compat.available_roles()
-
-    assert roles[:3] == ["orchestrator", "architect", "worker"]
-    assert "worker_fast" not in roles
-    assert {
-        "frontdoor",
-        "coder_escalation",
-        "architect_general",
-        "worker_general",
-        "worker_math",
-        "toolrunner",
-        "worker_vision",
-        "ingest_long_context",
-        "vision_escalation",
-        "worker_summarize",
-    } <= set(roles)
-    assert openai_compat._degraded_available_roles() == [
-        "frontdoor",
-        "coder_escalation",
-        "worker_summarize",
-        "worker_general",
-        "worker_math",
-        "toolrunner",
-        "architect_general",
-        "ingest_long_context",
-        "worker_vision",
-        "vision_escalation",
-    ]
+    assert openai_compat.available_roles() == ["orchestrator", "architect", "worker"]
+    assert openai_compat._degraded_available_roles() == []
 
 
-def test_degraded_available_roles_follow_manifest_order(monkeypatch):
-    monkeypatch.setattr(
-        openai_compat,
-        "HOT_SERVERS",
-        [
-            {"port": 8070, "roles": ["frontdoor", "coder", "worker_summarize"]},
-            {"port": 8072, "roles": ["worker_fast", "worker_math", "toolrunner"]},
-            {"port": 8090, "roles": ["embedder"]},
-        ],
-    )
-    monkeypatch.setattr(
-        openai_compat,
-        "WARM_SERVERS",
-        [
-            {"port": 8083, "roles": ["architect_general"]},
-            {"port": 8085, "roles": ["ingest_long_context"]},
-        ],
-    )
-    monkeypatch.setattr(
-        openai_compat,
-        "ROLE_LAUNCH_META",
-        {
-            "embedder": {"mode": "embedding"},
-            "worker_fast": {"mode": "worker_pool"},
-        },
-    )
-
-    assert openai_compat._degraded_available_roles() == [
-        "frontdoor",
-        "coder_escalation",
-        "worker_summarize",
-        "worker_general",
-        "worker_math",
-        "toolrunner",
-        "architect_general",
-        "ingest_long_context",
-    ]
+def test_degraded_available_roles_does_not_reconstruct_manifest_topology() -> None:
+    assert openai_compat._degraded_available_roles() == []
 
 
 def test_available_roles_uses_stack_prior_roles_when_present(monkeypatch):
@@ -156,43 +78,6 @@ def test_ordered_live_role_ids_uses_stack_prior_topology():
         "toolrunner",
         "worker_general",
         "vision_escalation",
-    ]
-
-
-def test_degraded_available_roles_follow_server_lists_without_literal_port_map(
-    monkeypatch,
-):
-    monkeypatch.setattr(
-        openai_compat,
-        "HOT_SERVERS",
-        [
-            {"port": 8070, "roles": ["frontdoor", "coder", "worker_fast"]},
-            {"port": 8072, "roles": ["worker_coder", "worker_math", "toolrunner"]},
-        ],
-    )
-    monkeypatch.setattr(
-        openai_compat,
-        "WARM_SERVERS",
-        [
-            {"port": 8083, "roles": ["architect_general"]},
-            {"port": 8086, "roles": ["worker_vision"]},
-            {"port": 8085, "roles": ["ingest_long_context"]},
-            {"port": 8087, "roles": ["vision_escalation"]},
-            {"port": 8070, "roles": ["worker_summarize", "embedder"]},
-        ],
-    )
-
-    assert openai_compat._degraded_available_roles() == [
-        "frontdoor",
-        "coder_escalation",
-        "worker_general",
-        "worker_math",
-        "toolrunner",
-        "architect_general",
-        "worker_vision",
-        "ingest_long_context",
-        "vision_escalation",
-        "worker_summarize",
     ]
 
 

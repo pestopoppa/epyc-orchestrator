@@ -37,7 +37,6 @@ from src.registry.stack_priors import (
     stack_prior_primary_port,
     stack_prior_serving,
 )
-from scripts.server.stack_manifest import HOT_SERVERS, ROLE_LAUNCH_META, WARM_SERVERS
 from src.repl_environment import REPLEnvironment
 from src.roles import Role
 
@@ -231,27 +230,13 @@ def _canonical_role_name(role: str) -> str:
 
 
 def _degraded_available_roles() -> list[str]:
-    """Return the degraded /models fallback from computed model-serving lists."""
-    ordered_roles: list[str] = []
-    seen: set[str] = set()
-    for server in HOT_SERVERS + WARM_SERVERS:
-        if not isinstance(server, dict):
-            continue
-        roles = server.get("roles")
-        if not isinstance(roles, list):
-            continue
-        for role in roles:
-            if not isinstance(role, str) or role == "orchestrator":
-                continue
-            launch_meta = ROLE_LAUNCH_META.get(role)
-            if isinstance(launch_meta, dict) and launch_meta.get("mode") == "embedding":
-                continue
-            canonical = _canonical_role_name(role)
-            if canonical in seen:
-                continue
-            seen.add(canonical)
-            ordered_roles.append(canonical)
-    return ordered_roles
+    """Return degraded concrete roles when generated stack priors are absent.
+
+    Concrete live roles intentionally do not fall back to stack_manifest
+    constants here; those are launch inputs, not the /v1/models truth source.
+    ``available_roles()`` still exposes compatibility aliases in degraded mode.
+    """
+    return []
 
 
 def _ordered_live_role_ids(records: dict[str, dict]) -> list[str]:
