@@ -180,18 +180,36 @@ def _gate_success_detail(output: str) -> str:
     return "; ".join(selected) or "passed"
 
 
+def _jsonl_paths(path: Path) -> list[Path]:
+    if path.name != "autopilot_journal.jsonl":
+        return [path]
+    paths = [path]
+    batch = 1
+    while True:
+        batch_path = path.with_name(f"autopilot_journal_{batch}.jsonl")
+        if not batch_path.exists():
+            break
+        paths.append(batch_path)
+        batch += 1
+    return paths
+
+
 def _load_jsonl(path: Path) -> list[dict]:
     rows: list[dict] = []
     if not path.exists():
         return rows
-    for line_num, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-        try:
-            row = json.loads(line)
-        except Exception:
-            log.debug("Skipping malformed JSONL line %d in %s", line_num, path)
-            continue
-        if isinstance(row, dict):
-            rows.append(row)
+    for jsonl_path in _jsonl_paths(path):
+        for line_num, line in enumerate(
+            jsonl_path.read_text(encoding="utf-8").splitlines(),
+            1,
+        ):
+            try:
+                row = json.loads(line)
+            except Exception:
+                log.debug("Skipping malformed JSONL line %d in %s", line_num, jsonl_path)
+                continue
+            if isinstance(row, dict):
+                rows.append(row)
     return rows
 
 

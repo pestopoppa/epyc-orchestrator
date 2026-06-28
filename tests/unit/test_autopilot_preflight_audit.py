@@ -420,6 +420,42 @@ def test_audit_archive_authority_uses_state_and_journal_paths(
     assert _MOD.audit_archive_authority() is False
 
 
+def test_load_jsonl_includes_autopilot_journal_rollover_batches(tmp_path: Path) -> None:
+    journal_path = tmp_path / "autopilot_journal.jsonl"
+    journal_path.write_text(
+        json.dumps({"trial_id": 999}) + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "autopilot_journal_1.jsonl").write_text(
+        json.dumps({"trial_id": 1000}) + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "autopilot_journal_2.jsonl").write_text(
+        json.dumps({"trial_id": 2000}) + "\n",
+        encoding="utf-8",
+    )
+
+    assert [row["trial_id"] for row in _MOD._load_jsonl(journal_path)] == [
+        999,
+        1000,
+        2000,
+    ]
+
+
+def test_load_jsonl_keeps_explicit_batch_path_scoped(tmp_path: Path) -> None:
+    (tmp_path / "autopilot_journal.jsonl").write_text(
+        json.dumps({"trial_id": 999}) + "\n",
+        encoding="utf-8",
+    )
+    batch_path = tmp_path / "autopilot_journal_1.jsonl"
+    batch_path.write_text(
+        json.dumps({"trial_id": 1000}) + "\n",
+        encoding="utf-8",
+    )
+
+    assert [row["trial_id"] for row in _MOD._load_jsonl(batch_path)] == [1000]
+
+
 def test_audit_archive_authority_accepts_invalidated_snapshot_with_full_replay(
     tmp_path: Path,
     monkeypatch,
