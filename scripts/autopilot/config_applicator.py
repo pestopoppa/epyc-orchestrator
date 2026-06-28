@@ -23,6 +23,7 @@ log = logging.getLogger("autopilot.config")
 ORCHESTRATOR_URL = "http://localhost:8000"
 ORCH_ROOT = Path(__file__).resolve().parents[1].parent
 DEFAULT_STACK_PRIORS_PATH = ORCH_ROOT / "orchestration" / "derived" / "stack_priors.yaml"
+DEFAULT_AUTOPILOT_STATE_PATH = ORCH_ROOT / "orchestration" / "autopilot_state.json"
 
 # Parameters that can be hot-swapped via POST /config (feature flags)
 HOT_SWAP_FEATURES = {
@@ -406,6 +407,87 @@ def _run_role_smoke_check(
     )
 
 
+def _resolve_autopilot_state_path(path: Path | None = None) -> Path:
+    """Resolve the AutoPilot state path without importing the heavy loop module."""
+    if path is not None:
+        return path
+    import os
+
+    env_override = os.environ.get("AUTOPILOT_STATE")
+    return Path(env_override) if env_override else DEFAULT_AUTOPILOT_STATE_PATH
+
+
+def _pause_autopilot_dispatch(
+    *,
+    state_path: Path | None = None,
+    grace_s: float = 11.0,
+) -> dict[str, Any]:
+    """Set AutoPilot paused=True so the loop stops dispatching new trials."""
+    import json
+    import os
+
+    resolved = _resolve_autopilot_state_path(state_path)
+    result: dict[str, Any] = {
+        "status": "ok",
+        "state_path": str(resolved),
+        "paused_pre": None,
+        "paused_set": False,
+        "grace_s": grace_s,
+    }
+    try:
+        with open(resolved, encoding="utf-8") as handle:
+            state = json.load(handle)
+        paused_pre = bool(state.get("paused", False))
+        state["paused"] = True
+        tmp = resolved.with_suffix(resolved.suffix + ".tmp")
+        with open(tmp, "w", encoding="utf-8") as handle:
+            json.dump(state, handle, indent=2)
+            handle.write("\n")
+        os.replace(tmp, resolved)
+        result["paused_pre"] = paused_pre
+        result["paused_set"] = True
+        if grace_s > 0:
+            time.sleep(grace_s)
+    except Exception as exc:
+        result.update({"status": "error", "error": str(exc)})
+    return result
+
+
+def _restore_autopilot_dispatch_pause(pause_result: dict[str, Any]) -> dict[str, Any]:
+    """Restore paused=False only when this applicator set it from False."""
+    import json
+    import os
+
+    state_path = Path(str(pause_result.get("state_path") or DEFAULT_AUTOPILOT_STATE_PATH))
+    result: dict[str, Any] = {
+        "status": "skipped",
+        "state_path": str(state_path),
+        "restored": False,
+    }
+    if pause_result.get("status") != "ok" or not pause_result.get("paused_set"):
+        result["reason"] = "pause_not_set"
+        return result
+    if pause_result.get("paused_pre") is not False:
+        result["reason"] = "already_paused"
+        return result
+    try:
+        with open(state_path, encoding="utf-8") as handle:
+            state = json.load(handle)
+        if state.get("paused") is True:
+            state["paused"] = False
+            tmp = state_path.with_suffix(state_path.suffix + ".tmp")
+            with open(tmp, "w", encoding="utf-8") as handle:
+                json.dump(state, handle, indent=2)
+                handle.write("\n")
+            os.replace(tmp, state_path)
+            result.update({"status": "ok", "restored": True})
+        else:
+            result.update({"status": "skipped", "reason": "pause_already_cleared"})
+    except Exception as exc:
+        result.update({"status": "error", "error": str(exc)})
+    return result
+
+
 def restart_api(
     env_overrides: dict[str, str] | None = None,
     url: str = ORCHESTRATOR_URL,
@@ -455,6 +537,9 @@ def restart_role(
     boundary_reason: str = "intentional role restart",
     actor: str = "config_applicator.restart_role",
     smoke_check: RoleSmokeCheck | None = None,
+    pause_dispatch: bool = False,
+    autopilot_state_path: Path | None = None,
+    dispatch_pause_grace_s: float = 11.0,
 ) -> dict[str, Any]:
     """Reload one stack role with rollback to the prior environment on failure.
 
@@ -463,32 +548,80 @@ def restart_role(
     """
     import os
 
-    role = role.strip()
-    if not role:
-        return {"status": "error", "error": "role is required", "method": "stack_reload"}
-    if registry_overrides:
-        return {
-            "status": "error",
-            "method": "stack_reload",
-            "role": role,
-            "error": "registry_overrides are not yet supported",
-            "registry_override_keys": sorted(registry_overrides.keys()),
-        }
+    dispatch_pause: dict[str, Any] | None = None
+    try:
+        role = role.strip()
+        if not role:
+            return {"status": "error", "error": "role is required", "method": "stack_reload"}
+        if registry_overrides:
+            return {
+                "status": "error",
+                "method": "stack_reload",
+                "role": role,
+                "error": "registry_overrides are not yet supported",
+                "registry_override_keys": sorted(registry_overrides.keys()),
+            }
 
-    env_overrides = dict(env_overrides or {})
-    resolved_affected_roles = affected_roles or resolve_restart_affected_roles(role)
-    prior_env = {key: os.environ.get(key) for key in env_overrides}
-    first = _reload_role_via_stack(
-        role=role,
-        env_overrides=env_overrides,
-        env_unset=[],
-    )
-    first["role"] = role
-    first["affected_roles"] = list(resolved_affected_roles)
-    if first.get("status") == "ok":
-        if role == "orchestrator":
-            health = health_check(url)
-            if health:
+        if pause_dispatch:
+            dispatch_pause = _pause_autopilot_dispatch(
+                state_path=autopilot_state_path,
+                grace_s=dispatch_pause_grace_s,
+            )
+            if dispatch_pause.get("status") != "ok":
+                return {
+                    "status": "error",
+                    "method": "stack_reload",
+                    "role": role,
+                    "error": "failed to pause autopilot dispatch",
+                    "dispatch_pause": dispatch_pause,
+                }
+
+        env_overrides = dict(env_overrides or {})
+        resolved_affected_roles = affected_roles or resolve_restart_affected_roles(role)
+        prior_env = {key: os.environ.get(key) for key in env_overrides}
+        first = _reload_role_via_stack(
+            role=role,
+            env_overrides=env_overrides,
+            env_unset=[],
+        )
+        first["role"] = role
+        first["affected_roles"] = list(resolved_affected_roles)
+        if dispatch_pause is not None:
+            first["dispatch_pause"] = dispatch_pause
+        if first.get("status") == "ok":
+            if role == "orchestrator":
+                health = health_check(url)
+                if health:
+                    smoke = _run_role_smoke_check(
+                        role=role,
+                        affected_roles=resolved_affected_roles,
+                        smoke_check=smoke_check,
+                    )
+                    first["smoke_check"] = smoke.to_dict()
+                    if smoke.failed:
+                        first.update(smoke.to_dict())
+                    else:
+                        _attach_restart_boundary_event(
+                            first,
+                            journal=journal,
+                            role=role,
+                            affected_roles=resolved_affected_roles,
+                            env_keys=sorted(env_overrides),
+                            registry_override_keys=[],
+                            trial_id=trial_id,
+                            reason=boundary_reason,
+                            actor=actor,
+                        )
+                        return first
+                if first.get("status") == "ok":
+                    first.update(
+                        {
+                            "status": "error",
+                            "error": health.failure_reason,
+                            "detail": health.failure_detail,
+                        }
+                    )
+            else:
                 smoke = _run_role_smoke_check(
                     role=role,
                     affected_roles=resolved_affected_roles,
@@ -510,63 +643,36 @@ def restart_role(
                         actor=actor,
                     )
                     return first
-            if first.get("status") == "ok":
-                first.update(
-                    {
-                        "status": "error",
-                        "error": health.failure_reason,
-                        "detail": health.failure_detail,
-                    }
-                )
-        else:
-            smoke = _run_role_smoke_check(
-                role=role,
-                affected_roles=resolved_affected_roles,
-                smoke_check=smoke_check,
-            )
-            first["smoke_check"] = smoke.to_dict()
-            if smoke.failed:
-                first.update(smoke.to_dict())
-            else:
-                _attach_restart_boundary_event(
-                    first,
-                    journal=journal,
-                    role=role,
-                    affected_roles=resolved_affected_roles,
-                    env_keys=sorted(env_overrides),
-                    registry_override_keys=[],
-                    trial_id=trial_id,
-                    reason=boundary_reason,
-                    actor=actor,
-                )
-                return first
 
-    rollback_overrides = {
-        key: value for key, value in prior_env.items() if value is not None
-    }
-    rollback_unset = [key for key, value in prior_env.items() if value is None]
-    rollback = _reload_role_via_stack(
-        role=role,
-        env_overrides=rollback_overrides,
-        env_unset=rollback_unset,
-    )
-    first["rollback"] = {
-        "attempted": True,
-        "status": rollback.get("status", "error"),
-        "env_keys": sorted(prior_env),
-    }
-    _attach_restart_boundary_event(
-        first,
-        journal=journal,
-        role=role,
-        affected_roles=resolved_affected_roles,
-        env_keys=sorted(env_overrides),
-        registry_override_keys=[],
-        trial_id=trial_id,
-        reason=boundary_reason,
-        actor=actor,
-    )
-    return first
+        rollback_overrides = {
+            key: value for key, value in prior_env.items() if value is not None
+        }
+        rollback_unset = [key for key, value in prior_env.items() if value is None]
+        rollback = _reload_role_via_stack(
+            role=role,
+            env_overrides=rollback_overrides,
+            env_unset=rollback_unset,
+        )
+        first["rollback"] = {
+            "attempted": True,
+            "status": rollback.get("status", "error"),
+            "env_keys": sorted(prior_env),
+        }
+        _attach_restart_boundary_event(
+            first,
+            journal=journal,
+            role=role,
+            affected_roles=resolved_affected_roles,
+            env_keys=sorted(env_overrides),
+            registry_override_keys=[],
+            trial_id=trial_id,
+            reason=boundary_reason,
+            actor=actor,
+        )
+        return first
+    finally:
+        if dispatch_pause is not None:
+            dispatch_pause["restore"] = _restore_autopilot_dispatch_pause(dispatch_pause)
 
 
 def _attach_restart_boundary_event(

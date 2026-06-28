@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import json
 from pathlib import Path
 
 import pytest
@@ -116,6 +117,102 @@ def test_restart_role_success_journals_restart_boundary(
             "command": "orchestrator_stack.py reload frontdoor",
         }
     ]
+
+
+def test_restart_role_pause_dispatch_restores_after_success(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls: list[dict[str, object]] = []
+    state_path = tmp_path / "autopilot_state.json"
+    state_path.write_text(json.dumps({"paused": False}) + "\n", encoding="utf-8")
+
+    def fake_run(cmd, *, cwd, env, timeout, check):
+        calls.append({
+            "cmd": cmd,
+            "cwd": cwd,
+            "env": env,
+            "timeout": timeout,
+            "check": check,
+        })
+        assert json.loads(state_path.read_text(encoding="utf-8"))["paused"] is True
+
+    monkeypatch.setattr(applicator.subprocess, "run", fake_run)
+    monkeypatch.setattr(applicator, "resolve_restart_affected_roles", lambda role: [role])
+
+    result = applicator.restart_role(
+        "frontdoor",
+        pause_dispatch=True,
+        autopilot_state_path=state_path,
+        dispatch_pause_grace_s=0,
+    )
+
+    assert result["status"] == "ok"
+    assert len(calls) == 1
+    assert result["dispatch_pause"]["paused_pre"] is False
+    assert result["dispatch_pause"]["restore"] == {
+        "status": "ok",
+        "state_path": str(state_path),
+        "restored": True,
+    }
+    assert json.loads(state_path.read_text(encoding="utf-8"))["paused"] is False
+
+
+def test_restart_role_pause_dispatch_restores_after_rollback(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls = 0
+    state_path = tmp_path / "autopilot_state.json"
+    state_path.write_text(json.dumps({"paused": False}) + "\n", encoding="utf-8")
+
+    def fake_run(cmd, *, cwd, env, timeout, check):
+        nonlocal calls
+        calls += 1
+        assert json.loads(state_path.read_text(encoding="utf-8"))["paused"] is True
+        if calls == 1:
+            raise subprocess.CalledProcessError(1, cmd)
+
+    monkeypatch.setattr(applicator.subprocess, "run", fake_run)
+    monkeypatch.setattr(applicator, "resolve_restart_affected_roles", lambda role: [role])
+
+    result = applicator.restart_role(
+        "worker_general",
+        env_overrides={"ORCHESTRATOR_WORKER_CALL_BUDGET_CAP": "12"},
+        pause_dispatch=True,
+        autopilot_state_path=state_path,
+        dispatch_pause_grace_s=0,
+    )
+
+    assert result["status"] == "error"
+    assert result["rollback"]["status"] == "ok"
+    assert calls == 2
+    assert result["dispatch_pause"]["restore"]["status"] == "ok"
+    assert json.loads(state_path.read_text(encoding="utf-8"))["paused"] is False
+
+
+def test_restart_role_pause_dispatch_missing_state_fails_before_reload(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls: list[object] = []
+    monkeypatch.setattr(
+        applicator.subprocess,
+        "run",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+
+    result = applicator.restart_role(
+        "frontdoor",
+        pause_dispatch=True,
+        autopilot_state_path=tmp_path / "missing_state.json",
+        dispatch_pause_grace_s=0,
+    )
+
+    assert result["status"] == "error"
+    assert result["error"] == "failed to pause autopilot dispatch"
+    assert result["dispatch_pause"]["status"] == "error"
+    assert calls == []
 
 
 def test_restart_role_resolves_stack_affinity_from_priors(
