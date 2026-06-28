@@ -65,6 +65,7 @@ def _record_command(
     verdict: str,
     destination_handoff: str,
     destination_index: str,
+    label_source: str = "operator",
 ) -> str:
     parts = [
         "uv",
@@ -84,6 +85,7 @@ def _record_command(
         parts.extend(["--destination-handoff", destination_handoff])
     if destination_index:
         parts.extend(["--destination-index", destination_index])
+    parts.extend(["--label-source", label_source])
     return " ".join(shlex.quote(part) for part in parts)
 
 
@@ -110,6 +112,7 @@ def build_review_item(
         "current_verdict": verdict,
         "destination_handoff": destination_handoff,
         "destination_index": destination_index,
+        "label_source": "operator",
         "features_text": json.dumps(features, sort_keys=True),
         "record_command": _record_command(
             intake_path=intake_path,
@@ -118,6 +121,7 @@ def build_review_item(
             verdict=verdict or "<verdict>",
             destination_handoff=destination_handoff,
             destination_index=destination_index,
+            label_source="operator",
         ),
         "source_text_excluded": True,
     }

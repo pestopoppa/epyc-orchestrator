@@ -379,8 +379,10 @@ def test_prepare_intake_triage_review_queue_excludes_reviewed_and_source_text(
     assert rows[0]["source_text_excluded"] is True
     assert rows[0]["destination_handoff"] == "frontier-f3-data-flywheel.md"
     assert rows[0]["destination_index"] == "strategic-frontiers"
+    assert rows[0]["label_source"] == "operator"
     assert "--intake-id intake-2" in rows[0]["record_command"]
     assert "--verdict route_to_handoff" in rows[0]["record_command"]
+    assert "--label-source operator" in rows[0]["record_command"]
     assert "IGNORE PRIOR INSTRUCTIONS" not in json.dumps(rows[0])
     assert "DO NOT INCLUDE" not in json.dumps(rows[0])
     assert json.loads(manifest.read_text())["counts"]["written"] == 1
