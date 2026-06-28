@@ -1537,6 +1537,7 @@ function updateTopology(activity, inflight) {
 
 let _latestSnapshot = null;
 let _latestProcessStatus = null;
+let _processStatusFetchSeq = 0;
 let _latestAutopilotProgress = null;
 let _latestRegionLockSummary = { activeLockCount: 0, heldRegions: 0, enabled: null };
 let _latestRegionLockActivitySignature = null;
@@ -2284,9 +2285,10 @@ function scheduleRegionLocksRefresh(force = false) {
     const now = Date.now();
     if (!force && now - _lastRegionLockPollStarted < 700) return;
     _lastRegionLockPollStarted = now;
-    updateRegionLocks();
-    updateContentionGate();
-    updateTopologyActivity();
+    const refreshSeq = ++_regionLocksRefreshSeq;
+    updateRegionLocks(refreshSeq);
+    updateContentionGate(refreshSeq);
+    updateTopologyActivity(refreshSeq);
 }
 
 function rememberStructuredTapAccordion(detailsEl) {
@@ -4363,9 +4365,11 @@ function _renderAutopilotPhase(d, ap) {
 }
 
 async function updateProcessStatus() {
+    const requestSeq = ++_processStatusFetchSeq;
     try {
         const r = await fetch(`/dashboard/api/process_status?t=${Date.now()}`, { cache: 'no-store' });
         const d = await r.json();
+        if (requestSeq !== _processStatusFetchSeq) return;
         _latestProcessStatus = d;
         if (_rawTapRenderMode === 'structured') paintRawTap();
         renderAutopilotRunStrip();
@@ -4483,6 +4487,7 @@ const TOPOLOGY_ACTIVITY_AGE_TICK_MS = 1000;
 let _latestTopologyActivity = null;  // {perRole, window_s, now, fetchedAtMs}
 let _topologyActivityFetchInFlight = false;
 let _topologyActivityRefreshQueued = false;
+let _regionLocksRefreshSeq = 0;
 
 function topologyActivityAgeS(stats) {
     if (!stats || stats.last_activity_age_s == null) return null;
@@ -4547,7 +4552,7 @@ function renderTopologyActivity() {
     });
 }
 
-async function updateTopologyActivity() {
+async function updateTopologyActivity(refreshSeq = _regionLocksRefreshSeq) {
     // Per-role recent activity stats from /dashboard/api/topology_activity.
     // Populates each topology row's .activity-stats element with:
     //   "12 req · 31 t/s · 3s ago"
@@ -4559,8 +4564,9 @@ async function updateTopologyActivity() {
     }
     _topologyActivityFetchInFlight = true;
     try {
-        const r = await fetch(`/dashboard/api/topology_activity?window_s=${TOPOLOGY_ACTIVITY_WINDOW_S}`);
+        const r = await fetch(`/dashboard/api/topology_activity?window_s=${TOPOLOGY_ACTIVITY_WINDOW_S}&t=${Date.now()}`, { cache: 'no-store' });
         const d = await r.json();
+        if (refreshSeq !== _regionLocksRefreshSeq) return;
         _latestTopologyActivity = {
             perRole: d.per_role || {},
             window_s: Number(d.window_s || TOPOLOGY_ACTIVITY_WINDOW_S),
@@ -4818,7 +4824,7 @@ function startDashboard() {
             // Silent fail — panel just stays hidden
         }
     }
-    async function updateContentionGate() {
+async function updateContentionGate(refreshSeq = _regionLocksRefreshSeq) {
         // Compact strip merged into the CPU region-locks panel (2026-05-27).
         // The lock grid above already shows which instances are active/blocked,
         // so this only adds the bits the grid can't: matrix status, cumulative
@@ -4826,8 +4832,9 @@ function startDashboard() {
         const el = document.getElementById('contention-gate-compact');
         if (!el) return;
         try {
-            const r = await fetch('/dashboard/api/contention');
+            const r = await fetch(`/dashboard/api/contention?t=${Date.now()}`, { cache: 'no-store' });
             const d = await r.json();
+            if (refreshSeq !== _regionLocksRefreshSeq) return;
             const ms = (d.matrix_status || 'unavailable').toUpperCase();
             const msColor = {
                 OK: 'var(--good, #34d399)', MISSING: 'var(--bad, #f87171)',
@@ -4891,10 +4898,11 @@ function startDashboard() {
             el.innerHTML = '<span style="color:var(--dim)">— contention fetch failed</span>';
         }
     }
-    async function updateRegionLocks() {
+async function updateRegionLocks(refreshSeq = _regionLocksRefreshSeq) {
         try {
             const r = await fetch(`/dashboard/api/region_locks?t=${Date.now()}`, { cache: 'no-store' });
             const d = await r.json();
+            if (refreshSeq !== _regionLocksRefreshSeq) return;
             const status = document.getElementById('region-locks-status');
             const grid = document.getElementById('region-locks-grid');
             if (!grid) return;

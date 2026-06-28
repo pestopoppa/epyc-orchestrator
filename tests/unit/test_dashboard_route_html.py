@@ -102,13 +102,32 @@ def test_dashboard_topology_activity_stats_refresh_with_live_age_tick() -> None:
     assert "TOPOLOGY_ACTIVITY_AGE_TICK_MS = 1000" in body
     assert "topologyActivityAgeS" in body
     assert "renderTopologyActivity" in body
-    assert "topology_activity?window_s=${TOPOLOGY_ACTIVITY_WINDOW_S}" in body
+    assert "topology_activity?window_s=${TOPOLOGY_ACTIVITY_WINDOW_S}&t=${Date.now()}" in body
     assert "scheduleRegionLocksRefresh(true);" in body
-    assert "updateContentionGate();" in body
-    assert "updateTopologyActivity();" in body
+    assert "const refreshSeq = ++_regionLocksRefreshSeq;" in body
+    assert "updateContentionGate(refreshSeq);" in body
+    assert "updateTopologyActivity(refreshSeq);" in body
     assert "setInterval(() => scheduleRegionLocksRefresh(true), 1500)" in body
     assert "setInterval(renderTopologyActivity, TOPOLOGY_ACTIVITY_AGE_TICK_MS)" in body
     assert "lockActivitySignature" in body
+
+
+def test_dashboard_live_panel_refreshes_ignore_stale_responses_where_possible() -> None:
+    """Live inference and CPU-lock refreshes should not repaint older responses."""
+    html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    body = html_path.read_text()
+
+    assert "let _processStatusFetchSeq = 0;" in body
+    assert "const requestSeq = ++_processStatusFetchSeq;" in body
+    assert "if (requestSeq !== _processStatusFetchSeq) return;" in body
+    assert "let _regionLocksRefreshSeq = 0;" in body
+    assert "const refreshSeq = ++_regionLocksRefreshSeq;" in body
+    assert "updateRegionLocks(refreshSeq);" in body
+    assert "updateContentionGate(refreshSeq);" in body
+    assert "updateTopologyActivity(refreshSeq);" in body
+    assert "window_s=${TOPOLOGY_ACTIVITY_WINDOW_S}&t=${Date.now()}" in body
+    assert "fetch(`/dashboard/api/contention?t=${Date.now()}`, { cache: 'no-store' })" in body
+    assert "if (refreshSeq !== _regionLocksRefreshSeq) return;" in body
 
 
 def test_dashboard_pareto_plot_uses_journal_sources_and_nonnegative_axes() -> None:
