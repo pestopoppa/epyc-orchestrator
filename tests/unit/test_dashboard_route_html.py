@@ -67,6 +67,9 @@ def test_dashboard_html_distinguishes_waiting_tap_from_active_locks() -> None:
     assert "tap-inferred active stream" in body
     assert "TAP ACTIVE" in body
     assert "structuredTapPrimaryRole" in body
+    assert "function inferStructuredTapLockIdentity(req, byRole = null)" in body
+    assert "const topoNode = (topology && Number.isFinite(port))" in body
+    assert "const identity = inferStructuredTapLockIdentity(req" in body
     assert "status === 'quiet'" in body
     assert "blocked_by_roles" in body
     assert "lockOnlyStructuredTapHolders" in body

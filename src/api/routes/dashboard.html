@@ -2037,6 +2037,71 @@ function structuredTapPrimaryRole(req) {
     return String(req.lock_role || req.topology_role || req.role || '?');
 }
 
+function topologyRoleShapeFromLabel(label) {
+    let base = String(label || '');
+    let shape = '';
+    const m = base.match(/^(.+?)\.(q\d+|[a-z]+_\d+)$/);
+    if (m) {
+        base = m[1];
+        shape = m[2];
+    } else {
+        const m2 = base.match(/^([a-z_]+?)_(\d+)$/);
+        if (m2 && m2[1] === 'embedder') {
+            base = m2[1];
+            shape = `_${m2[2]}`;
+        }
+    }
+    return { base: clientBaseRole(base), shape };
+}
+
+function inferStructuredTapLockIdentity(req, byRole = null) {
+    if (!req) return null;
+    const directRole = String(req.lock_role || req.topology_role || (req.role ? clientBaseRole(req.role) : '') || req.role || '');
+    const directIdx = req.instance_idx != null ? Number(req.instance_idx) : null;
+    const directRegions = (req.instance_regions || []).map(String).filter(Boolean);
+    if (directRole && directIdx != null && Number.isFinite(directIdx) && directRegions.length) {
+        return {
+            role: directRole,
+            idx: directIdx,
+            shape: req.instance_shape || `idx${directIdx}`,
+            regions: directRegions,
+        };
+    }
+
+    const port = req.port != null ? Number(req.port) : null;
+    const topoNode = (topology && Number.isFinite(port))
+        ? (topology.nodes || []).find(n => Number(n.port) === port)
+        : null;
+    const topo = topoNode ? topologyRoleShapeFromLabel(topoNode.label || topoNode.role || '') : { base: '', shape: '' };
+    const role = topo.base || directRole;
+    const roleInfo = byRole && role ? byRole[role] : null;
+    const insts = roleInfo && Array.isArray(roleInfo.instances) ? roleInfo.instances : [];
+    let inst = null;
+    if (directIdx != null && Number.isFinite(directIdx)) {
+        inst = insts.find(i => Number(i.idx) === directIdx) || null;
+    }
+    if (!inst && topo.shape) {
+        inst = insts.find(i => String(i.shape) === topo.shape) || null;
+    }
+    if (!inst && req.instance_shape) {
+        inst = insts.find(i => String(i.shape) === String(req.instance_shape)) || null;
+    }
+    if (!inst && insts.length) {
+        inst = insts[0];
+    }
+    if (!role || !inst || inst.idx == null) return null;
+    const idx = Number(inst.idx);
+    if (!Number.isFinite(idx)) return null;
+    const regions = directRegions.length ? directRegions : (inst.regions || []).map(String).filter(Boolean);
+    if (!regions.length) return null;
+    return {
+        role,
+        idx,
+        shape: req.instance_shape || inst.shape || `idx${idx}`,
+        regions,
+    };
+}
+
 function currentAutopilotActionSource() {
     const proc = _latestProcessStatus || {};
     const phase = proc.autopilot_phase || {};
@@ -2056,13 +2121,11 @@ function buildTapInferredRegionLocks() {
     const inferred = {};
     const requests = typeof liveStructuredTapRequests === 'function' ? liveStructuredTapRequests() : [];
     for (const req of requests) {
-        const role = String(req.lock_role || req.topology_role || (req.role ? clientBaseRole(req.role) : '') || req.role || '');
-        if (!role) continue;
-        if (req.instance_idx == null) continue;
-        const idx = Number(req.instance_idx);
-        if (!Number.isFinite(idx)) continue;
-        const regions = structuredTapRequestedRegions(req);
-        if (!regions.length) continue;
+        const identity = inferStructuredTapLockIdentity(req, _lastRegionLocksPayload && _lastRegionLocksPayload.by_role ? _lastRegionLocksPayload.by_role : null);
+        if (!identity) continue;
+        const role = identity.role;
+        const idx = identity.idx;
+        const regions = identity.regions;
         const bucket = inferred[role] || {
             instanceIdxs: new Set(),
             regions: new Set(),
@@ -2094,20 +2157,7 @@ function buildSlotInferredRegionLocks(byRole) {
         if (!n || n.kind !== 'llama-server' || !n.port) continue;
         const slotActivity = activity[n.port] || {};
         if (!slotActivity.n_active) continue;
-        let base = n.label || n.role || '';
-        let shape = '';
-        const m = String(base).match(/^(.+?)\.(q\d+|[a-z]+_\d+)$/);
-        if (m) {
-            base = m[1];
-            shape = m[2];
-        } else {
-            const m2 = String(base).match(/^([a-z_]+?)_(\d+)$/);
-            if (m2 && m2[1] === 'embedder') {
-                base = m2[1];
-                shape = `_${m2[2]}`;
-            }
-        }
-        base = clientBaseRole(base);
+        const { base, shape } = topologyRoleShapeFromLabel(n.label || n.role || '');
         const roleInfo = byRole && byRole[base];
         if (!roleInfo || !Array.isArray(roleInfo.instances) || !roleInfo.instances.length) continue;
         const inst = shape
