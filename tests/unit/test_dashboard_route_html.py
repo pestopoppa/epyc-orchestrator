@@ -118,7 +118,10 @@ def test_dashboard_topology_activity_stats_refresh_with_live_age_tick() -> None:
     assert "active CPU-region/tap holder(s)" in body
     assert "summary ${stats.avg_tps_recent.toFixed(2)} t/s" in body
     assert "renderRegionLocksBasicGrid(grid, d);" in body
+    assert "grid.dataset.regionLocksPainted = '1';" in body
     assert "basic matrix fallback; rich overlay still initializing" in body
+    assert "loading CPU region-lock matrix" in body
+    assert "ensureRegionLocksPanelPainted();\n        scheduleRegionLocksRefresh(true);\n        await loadTopology();" in body
     assert "setTimeout(ensureRegionLocksPanelPainted, 750)" in body
     assert "_latestSnapshot = snap || {};" in body
     assert "buildSlotInferredRegionLocks(byRole)" in body

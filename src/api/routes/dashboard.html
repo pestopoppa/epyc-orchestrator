@@ -831,7 +831,9 @@ details.section-accordion > *:not(summary) { margin-top: 14px; }
         cpu region locks
         <span class="count-suffix" id="region-locks-status">— per-region cross-process lock state (Phase 5 / 2026-05-22)</span>
       </h2>
-      <div id="region-locks-grid" style="display:grid;grid-template-columns:160px repeat(7,1fr);gap:4px;font-size:11px;font-family:var(--font-mono,ui-monospace,monospace);align-items:center"></div>
+      <div id="region-locks-grid" style="display:grid;grid-template-columns:160px repeat(7,1fr);gap:4px;font-size:11px;font-family:var(--font-mono,ui-monospace,monospace);align-items:center">
+        <div style="grid-column:1/-1;color:var(--dim);font-size:11px">loading CPU region-lock matrix…</div>
+      </div>
       <!-- Contention gate: merged in (2026-05-27) as a compact strip rather than
            its own panel — the lock grid above already visualizes which instances
            are active/blocked, so the gate only needs to add the admission counters
@@ -2350,6 +2352,7 @@ function scheduleRegionLocksRefresh(force = false) {
 
 function renderRegionLocksBasicGrid(grid, d, note = '') {
     if (!grid) return;
+    grid.dataset.regionLocksPainted = '1';
     const byRole = d && d.by_role ? d.by_role : {};
     const roleEntries = Object.entries(byRole).sort((a, b) => {
         const wa = a[1].wired ? 0 : 1, wb = b[1].wired ? 0 : 1;
@@ -5391,7 +5394,7 @@ async function updateRegionLocks(refreshSeq = _regionLocksRefreshSeq, regionLock
 
     async function ensureRegionLocksPanelPainted() {
         const grid = document.getElementById('region-locks-grid');
-        if (!grid || grid.children.length > 0) return;
+        if (!grid || grid.dataset.regionLocksPainted === '1') return;
         const status = document.getElementById('region-locks-status');
         if (status) {
             status.textContent = '— loading CPU region-lock matrix…';
@@ -5413,6 +5416,8 @@ async function updateRegionLocks(refreshSeq = _regionLocksRefreshSeq, regionLock
     }
 
     (async function () {
+        ensureRegionLocksPanelPainted();
+        scheduleRegionLocksRefresh(true);
         await loadTopology();
         startStream();
         startTapStream();
@@ -5451,7 +5456,6 @@ async function updateRegionLocks(refreshSeq = _regionLocksRefreshSeq, regionLock
         setInterval(updateBuildRev, 30000);  // build-drift poll
         updateSnapshotPoll();
         setInterval(updateSnapshotPoll, 2500);  // fallback for stream stalls + per-panel render isolation
-        scheduleRegionLocksRefresh(true);
         setTimeout(ensureRegionLocksPanelPainted, 750);
         setInterval(() => scheduleRegionLocksRefresh(true), 1500);  // shared live-inference refresh for locks + topology activity
         setInterval(updateAutopilotProgress, 3000);  // 3s poll — trial progress bar (state.json mtime polling)
