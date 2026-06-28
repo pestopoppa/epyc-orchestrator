@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Any
 
 from scripts.autopilot.audit_block_report import build_report as _w6_build_report
+from src.autopilot_core.baseline_ledger import baseline_ledger_authority_enabled
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_STATE_PATH = REPO_ROOT / "orchestration" / "autopilot_state.json"
@@ -97,10 +98,48 @@ def latest_digest_text(digest_dir: Path) -> str:
 # --------------------------------------------------------------------------- #
 # Section builders
 # --------------------------------------------------------------------------- #
-def authority_banner(state: dict[str, Any], w6: dict[str, Any]) -> dict[str, Any]:
-    """Surface whether any planner finding can currently be ratified."""
-    baseline = bool(state.get("baseline_ledger_authority_enabled"))
-    sequential = bool(state.get("sequential_authority_enabled"))
+def _autopilot_seq_verdict_live() -> bool:
+    """True iff a live ``autopilot.py`` process has ``AUTOPILOT_SEQ_VERDICT``
+    truthy. Sequential-verdict authority is env-gated on the running autopilot
+    (not a state flag), so we read it from the live process. Fail-safe: if no
+    autopilot is running or the env is unreadable, returns False (off)."""
+    import glob
+
+    for cmdpath in glob.glob("/proc/[0-9]*/cmdline"):
+        try:
+            cmd = open(cmdpath, "rb").read()
+        except OSError:
+            continue
+        if b"autopilot.py" not in cmd:
+            continue
+        pid = cmdpath.rsplit("/", 2)[1]
+        try:
+            raw = open(f"/proc/{pid}/environ", "rb").read()
+        except OSError:
+            continue
+        for entry in raw.split(b"\0"):
+            if entry.startswith(b"AUTOPILOT_SEQ_VERDICT="):
+                return entry.split(b"=", 1)[1].strip().lower() in (b"1", b"true", b"yes", b"on")
+    return False
+
+
+def authority_banner(
+    state: dict[str, Any],
+    w6: dict[str, Any],
+    *,
+    seq_verdict_live: bool | None = None,
+) -> dict[str, Any]:
+    """Surface whether any planner finding can currently be ratified.
+
+    Baseline authority = the **consent-gated** state flag (state flag AND the
+    operator-owned consent file). Sequential authority = the live autopilot's
+    ``AUTOPILOT_SEQ_VERDICT`` env (env-gated, not a state flag). Both must hold
+    and the W6 gaming alarm must be clear for findings to be decision-grade.
+    """
+    baseline = baseline_ledger_authority_enabled(state)
+    if seq_verdict_live is None:
+        seq_verdict_live = _autopilot_seq_verdict_live()
+    sequential = bool(seq_verdict_live)
     gaming_alarm = bool(w6.get("gaming_alarm"))
     decision_grade_possible = baseline and sequential and not gaming_alarm
     return {
@@ -113,7 +152,7 @@ def authority_banner(state: dict[str, Any], w6: dict[str, Any]) -> dict[str, Any
         "current_era_audited_trials": w6.get("trusted_audited_trial_count"),
         "decision_grade_possible": decision_grade_possible,
         "trust_note": (
-            "Authority ENABLED — kept configs are decision-grade."
+            "Authority ENABLED (baseline + sequential, W6 clear) — kept configs are decision-grade."
             if decision_grade_possible
             else "Authority OFF — every finding below is an OBSERVATION, not "
             "decision-grade; no config can be promoted yet."

@@ -40,18 +40,26 @@ def test_levers_ranked_by_importance_with_recommended_value():
 
 
 def test_authority_banner_off_is_observation_only():
-    banner = ob.authority_banner({}, {"gaming_alarm": True})
+    banner = ob.authority_banner({}, {"gaming_alarm": True}, seq_verdict_live=False)
     assert banner["decision_grade_possible"] is False
     assert "OBSERVATION" in banner["trust_note"]
 
 
-def test_authority_banner_on_when_enabled_and_no_alarm():
-    state = {
-        "baseline_ledger_authority_enabled": True,
-        "sequential_authority_enabled": True,
-    }
-    banner = ob.authority_banner(state, {"gaming_alarm": False})
-    assert banner["decision_grade_possible"] is True
+def test_authority_banner_on_requires_consent_flag_and_seq(tmp_path, monkeypatch):
+    grant = tmp_path / "c.json"
+    grant.write_text(json.dumps({"baseline_ledger": "allow"}))
+    monkeypatch.setenv("AUTOPILOT_AUTHORITY_CONSENT_PATH", str(grant))
+    state = {"baseline_ledger_authority_enabled": True}
+    # baseline (flag + consent) + sequential (live env) + no alarm => decision-grade
+    on = ob.authority_banner(state, {"gaming_alarm": False}, seq_verdict_live=True)
+    assert on["decision_grade_possible"] is True
+    # sequential off => not decision-grade
+    seq_off = ob.authority_banner(state, {"gaming_alarm": False}, seq_verdict_live=False)
+    assert seq_off["decision_grade_possible"] is False
+    # consent revoked => baseline off => not decision-grade even with seq + no alarm
+    monkeypatch.setenv("AUTOPILOT_AUTHORITY_CONSENT_PATH", str(tmp_path / "gone.json"))
+    no_consent = ob.authority_banner(state, {"gaming_alarm": False}, seq_verdict_live=True)
+    assert no_consent["decision_grade_possible"] is False
 
 
 def test_ruled_out_and_exploring_split_by_entry_type(tmp_path):
