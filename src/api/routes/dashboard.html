@@ -947,7 +947,7 @@ details.section-accordion > *:not(summary) { margin-top: 14px; }
 
     <div class="panel" id="insight-graph-panel">
       <h2>
-        insight graph
+        planner insight graph
         <span class="count-suffix" id="insight-graph-status">read-only</span>
       </h2>
       <div class="insight-graph-shell">
@@ -958,7 +958,7 @@ details.section-accordion > *:not(summary) { margin-top: 14px; }
             type="text"
             spellcheck="false"
             autocomplete="off"
-            placeholder="focus by trial, strategy, campaign, species, or handoff"
+            placeholder="focus by trial, strategy, hint, campaign, species, or handoff"
           />
           <button class="insight-graph-button" id="insight-graph-focus-btn" type="button">Focus</button>
           <button class="insight-graph-button" id="insight-graph-reset-btn" type="button">Reset</button>
@@ -3768,6 +3768,7 @@ function insightGraphDetailHTML(node, graph) {
     if (node.state) chips.push(`<span class="insight-graph-chip">${escapeHTML(node.state)}</span>`);
     if (node.entry_type) chips.push(`<span class="insight-graph-chip">${escapeHTML(node.entry_type)}</span>`);
     if (node.species) chips.push(`<span class="insight-graph-chip">${escapeHTML(node.species)}</span>`);
+    if (node.tranche) chips.push(`<span class="insight-graph-chip">${escapeHTML(node.tranche)}</span>`);
     if (node.bind_status) chips.push(`<span class="insight-graph-chip">bind ${escapeHTML(node.bind_status)}</span>`);
     if (node.seed_campaign) chips.push(`<span class="insight-graph-chip">${escapeHTML(node.seed_campaign)}</span>`);
     if (node.source_handoff) chips.push(`<span class="insight-graph-chip">${escapeHTML(node.source_handoff)}</span>`);
@@ -3883,8 +3884,11 @@ function renderInsightGraph(graph) {
         const summary = graph && graph.summary ? graph.summary : {};
         const stateCounts = summary.state_counts || {};
         const kindCounts = summary.kind_counts || {};
+        const source = graph && graph.source ? graph.source : {};
         const bits = [];
         if (graph && graph.read_only) bits.push('read-only');
+        if (source.graph_source === 'planner_hint_seed') bits.push('seed fallback');
+        else if (source.graph_source === 'empty') bits.push('empty');
         if (summary.node_count != null) bits.push(`${summary.node_count} nodes`);
         if (summary.edge_count != null) bits.push(`${summary.edge_count} edges`);
         if (stateCounts.applied != null) bits.push(`applied ${stateCounts.applied}`);
@@ -3894,8 +3898,8 @@ function renderInsightGraph(graph) {
     }
 
     if (!nodes.length) {
-        svg.innerHTML = '<text x="260" y="160" text-anchor="middle" fill="#64748b" font-size="11">no insight graph data</text>';
-        detail.innerHTML = '<div style="color:var(--dim)">no graph rows available yet</div>';
+        svg.innerHTML = '<text x="260" y="160" text-anchor="middle" fill="#64748b" font-size="11">no planner insight graph data</text>';
+        detail.innerHTML = '<div style="color:var(--dim)">no planner insight or StrategyStore rows available yet</div>';
         return;
     }
 

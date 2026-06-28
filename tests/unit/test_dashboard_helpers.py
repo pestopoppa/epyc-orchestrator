@@ -1068,6 +1068,40 @@ def test_read_strategy_store_rows_reads_read_only_sqlite(tmp_path, monkeypatch) 
     assert row["evidence_trial_ids"] == [12]
 
 
+def test_read_planner_hint_seed_rows_reads_yaml(tmp_path, monkeypatch) -> None:
+    seed_path = tmp_path / "operator_seed_strategies.yaml"
+    seed_path.write_text(
+        """
+- slug: graph-panel
+  tranche: green
+  species: prompt_forge
+  entry_type: pattern
+  title: Graph panel
+  description: keep the dashboard graph small
+  insight: Keep the dashboard panel compact.
+  evidence_trial_ids: [12]
+  source_handoff: dashboard-graph-panel
+  seeded_reason: Keep the dashboard panel compact
+  confidence: medium
+  bind_status: future
+  bind_identifiers: [graph_panel]
+""".strip()
+    )
+
+    monkeypatch.setattr(dashboard, "_PLANNER_HINT_SEEDS_PATH", seed_path)
+
+    rows = dashboard._read_planner_hint_seed_rows()
+
+    assert rows is not None
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["id"] == "seed:graph-panel"
+    assert row["planner_hint"] is True
+    assert row["metadata"]["source_handoff"] == "dashboard-graph-panel"
+    assert row["metadata"]["bind_identifiers"] == ["graph_panel"]
+    assert row["evidence_trial_ids"] == [12]
+
+
 def test_insight_graph_endpoint_merges_strategy_and_journal_rows(monkeypatch) -> None:
     journal_rows = [
         {
@@ -1160,6 +1194,41 @@ def test_insight_graph_endpoint_merges_strategy_and_journal_rows(monkeypatch) ->
 
     edge_kinds = {edge["kind"] for edge in data["edges"]}
     assert {"projection", "campaign", "handoff", "parent"} <= edge_kinds
+
+
+def test_insight_graph_endpoint_falls_back_to_planner_hints(monkeypatch, tmp_path) -> None:
+    seed_path = tmp_path / "operator_seed_strategies.yaml"
+    seed_path.write_text(
+        """
+- slug: graph-panel
+  tranche: green
+  species: prompt_forge
+  entry_type: pattern
+  title: Graph panel
+  description: keep the dashboard graph small
+  insight: Keep the dashboard panel compact.
+  evidence_trial_ids: []
+  source_handoff: dashboard-graph-panel
+  seeded_reason: Keep the dashboard panel compact
+  confidence: medium
+  bind_status: future
+  bind_identifiers: [graph_panel]
+""".strip()
+    )
+
+    monkeypatch.setattr(dashboard, "_PLANNER_HINT_SEEDS_PATH", seed_path)
+    monkeypatch.setattr(dashboard, "_read_strategy_store_rows", lambda path=None: None)
+    monkeypatch.setattr(dashboard, "_read_autopilot_journal_rows", lambda path=None: None)
+
+    response = asyncio.run(dashboard.insight_graph(focus="dashboard-graph-panel", depth=1))
+    data = json.loads(response.body)
+
+    assert data["available"] is True
+    assert data["source"]["graph_source"] == "planner_hint_seed"
+    assert data["summary"]["strategy_rows"] == 0
+    assert data["summary"]["planner_hint_rows"] == 1
+    kinds = {node["kind"] for node in data["nodes"]}
+    assert "planner_hint" in kinds
 
 
 # ----- dashboard.py route module smoke test -----

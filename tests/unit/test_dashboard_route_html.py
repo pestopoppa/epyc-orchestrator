@@ -168,8 +168,10 @@ def test_dashboard_insight_graph_panel_is_wired_read_only() -> None:
     body = html_path.read_text()
 
     assert 'id="insight-graph-panel"' in body
+    assert "planner insight graph" in body
     assert 'id="insight-graph-svg"' in body
     assert 'id="insight-graph-query"' in body
+    assert "focus by trial, strategy, hint, campaign, species, or handoff" in body
     assert "/dashboard/api/insight_graph" in body
     assert "function renderInsightGraph(graph)" in body
     assert "function updateInsightGraph(focusOverride)" in body

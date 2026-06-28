@@ -1255,6 +1255,7 @@ def _read_git_short_sha() -> str | None:
 _AUTOPILOT_STATE_PATH = Path(__file__).resolve().parents[3] / "orchestration" / "autopilot_state.json"
 _AUTOPILOT_JOURNAL_PATH = Path(__file__).resolve().parents[3] / "orchestration" / "autopilot_journal.jsonl"
 _STRATEGY_STORE_PATH = Path(__file__).resolve().parents[3] / "orchestration" / "repl_memory" / "strategies"
+_PLANNER_HINT_SEEDS_PATH = Path(__file__).resolve().parents[3] / "scripts" / "autopilot" / "operator_seed_strategies.yaml"
 _AUTOPILOT_LOG_DIR = Path(__file__).resolve().parents[3] / "logs"
 _EPHEMERAL_ACTION_KEYS = EPHEMERAL_ACTION_KEYS
 _WITHIN_NOISE_EXCL = WITHIN_NOISE_EXCLUSIONS
@@ -1395,6 +1396,76 @@ def _read_strategy_store_rows(path: Path | None = None) -> list[dict[str, Any]] 
                 pass
 
 
+def _read_planner_hint_seed_rows(path: Path | None = None) -> list[dict[str, Any]] | None:
+    """Read planner-hint seed rows from the curated YAML source."""
+    seed_path = path or _PLANNER_HINT_SEEDS_PATH
+    if not seed_path.exists():
+        return None
+    try:
+        import yaml
+    except Exception:
+        return None
+
+    try:
+        loaded = yaml.safe_load(seed_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(loaded, list):
+        return None
+
+    rows: list[dict[str, Any]] = []
+    for item in loaded:
+        if not isinstance(item, dict):
+            continue
+        slug = str(item.get("slug") or "").strip()
+        title = str(item.get("title") or "").strip()
+        description = str(item.get("description") or "").strip()
+        insight = str(item.get("insight") or "").strip()
+        source_handoff = str(item.get("source_handoff") or "").strip()
+        if not slug or not title or not description or not insight or not source_handoff:
+            continue
+        evidence_trial_ids: list[int] = []
+        evidence_raw = item.get("evidence_trial_ids")
+        if isinstance(evidence_raw, list):
+            for evidence_id in evidence_raw:
+                try:
+                    evidence_trial_ids.append(int(evidence_id))
+                except (TypeError, ValueError):
+                    continue
+        bind_identifiers_raw = item.get("bind_identifiers")
+        bind_identifiers = [
+            str(value).strip()
+            for value in bind_identifiers_raw
+            if str(value).strip()
+        ] if isinstance(bind_identifiers_raw, list) else []
+        rows.append(
+            {
+                "id": f"seed:{slug}",
+                "description": description,
+                "insight": insight,
+                "source_trial_id": None,
+                "species": str(item.get("species") or "").strip(),
+                "created_at": "",
+                "metadata": {
+                    "tranche": str(item.get("tranche") or "").strip(),
+                    "confidence": str(item.get("confidence") or "").strip(),
+                    "bind_status": str(item.get("bind_status") or "").strip().lower(),
+                    "bind_identifiers": bind_identifiers,
+                    "seed_campaign": slug,
+                    "source_handoff": source_handoff,
+                    "seeded_reason": str(item.get("seeded_reason") or "").strip(),
+                    "seeded_from": str(seed_path.name),
+                },
+                "entry_type": str(item.get("entry_type") or "pattern").strip() or "pattern",
+                "evidence_trial_ids": evidence_trial_ids,
+                "planner_hint": True,
+                "slug": slug,
+                "title": title,
+            }
+        )
+    return rows
+
+
 def _insight_graph_payload(
     *,
     focus: str | None = None,
@@ -1415,6 +1486,16 @@ def _insight_graph_payload(
     journal_rows = journal_rows or []
     journal_rows, journal_meta = _latest_journal_run_rows(_effective_journal_trial_rows(journal_rows))
     strategy_rows = _read_strategy_store_rows() or []
+    planner_hint_rows = _read_planner_hint_seed_rows() or []
+    if strategy_rows:
+        graph_rows = [{**row, "_graph_kind": "strategy"} for row in strategy_rows]
+        graph_source = "strategy_store"
+    elif planner_hint_rows:
+        graph_rows = [{**row, "_graph_kind": "planner_hint"} for row in planner_hint_rows]
+        graph_source = "planner_hint_seed"
+    else:
+        graph_rows = []
+        graph_source = "empty"
 
     def _compact(value: Any, *, max_chars: int = 140) -> str:
         text = " ".join(str(value or "").split())
@@ -1425,12 +1506,17 @@ def _insight_graph_payload(
     def _strategy_status(metadata: dict[str, Any], entry_type: str) -> tuple[str, str]:
         bind_status = str(metadata.get("bind_status") or "").strip().lower()
         generated_from = str(metadata.get("generated_from") or "").strip().lower()
+        tranche = str(metadata.get("tranche") or "").strip().lower()
         if generated_from == "journal_frontier":
             return "applied", "applied"
         if bind_status == "live":
             return "live", "applied"
         if bind_status in {"context", "future"}:
             return bind_status, "pending"
+        if tranche == "guardrail":
+            return "guardrail", "guardrail"
+        if tranche == "frozen":
+            return "frozen", "frozen"
         if entry_type == "convention":
             return "convention", "applied"
         if entry_type == "pattern":
@@ -1459,12 +1545,14 @@ def _insight_graph_payload(
                 "corrupted": "var(--bad, #f87171)",
                 "dominated": "var(--dim, #64748b)",
             }.get(state_group, "var(--muted, #94a3b8)")
-        if kind == "strategy":
+        if kind in {"strategy", "planner_hint"}:
             return {
                 "applied": "var(--accent, #38bdf8)",
                 "pending": "var(--warn, #fbbf24)",
                 "live": "var(--good, #34d399)",
                 "context": "var(--muted, #94a3b8)",
+                "guardrail": "var(--accent, #38bdf8)",
+                "frozen": "var(--dim, #64748b)",
                 "future": "var(--dim, #64748b)",
                 "pattern": "var(--good, #34d399)",
                 "convention": "var(--accent, #38bdf8)",
@@ -1479,7 +1567,7 @@ def _insight_graph_payload(
     def _node_label_text(node: dict[str, Any]) -> str:
         if node["kind"] == "journal":
             return f"T{node.get('trial_id')}"
-        if node["kind"] == "strategy":
+        if node["kind"] in {"strategy", "planner_hint"}:
             return node.get("title") or node.get("description") or node["id"]
         if node["kind"] == "campaign":
             return node.get("campaign") or node["id"]
@@ -1488,7 +1576,7 @@ def _insight_graph_payload(
         return node["id"]
 
     def _node_sort_key(node: dict[str, Any]) -> tuple[Any, ...]:
-        kind_rank = {"journal": 0, "strategy": 1, "campaign": 2, "handoff": 3}.get(node["kind"], 4)
+        kind_rank = {"planner_hint": 0, "strategy": 1, "campaign": 2, "handoff": 3, "journal": 4}.get(node["kind"], 5)
         if node["kind"] == "journal":
             try:
                 recency = -int(node.get("trial_id") or 0)
@@ -1507,6 +1595,7 @@ def _insight_graph_payload(
             node.get("state", ""),
             node.get("state_group", ""),
             node.get("kind", ""),
+            node.get("slug", ""),
             node.get("species", ""),
             node.get("entry_type", ""),
             node.get("campaign", ""),
@@ -1514,6 +1603,8 @@ def _insight_graph_payload(
             node.get("bind_status", ""),
             node.get("source_handoff", ""),
             node.get("seed_campaign", ""),
+            node.get("seeded_reason", ""),
+            node.get("tranche", ""),
         ]
         trial_id = node.get("trial_id")
         if trial_id is not None:
@@ -1530,13 +1621,14 @@ def _insight_graph_payload(
     def _focus_match_key(node_id: str, node: dict[str, Any], focus_text: str) -> tuple[int, tuple[Any, ...]]:
         exact_fields = [
             node_id,
+            node.get("slug", ""),
             node.get("label", ""),
             node.get("title", ""),
             node.get("seed_campaign", ""),
             node.get("source_handoff", ""),
         ]
         exact = any(focus_text == str(field).lower() for field in exact_fields if field)
-        kind_rank = {"campaign": 0, "handoff": 1, "strategy": 2, "journal": 3}.get(node.get("kind"), 4)
+        kind_rank = {"campaign": 0, "handoff": 1, "planner_hint": 2, "strategy": 3, "journal": 4}.get(node.get("kind"), 5)
         return (0 if exact else 1, (kind_rank, *_node_sort_key(node)))
 
     nodes: dict[str, dict[str, Any]] = {}
@@ -1623,11 +1715,12 @@ def _insight_graph_payload(
         }
         _add_node(node)
 
-    # Strategy nodes and the campaign/handoff buckets they belong to.
-    for row in strategy_rows:
+    # Planner-hint / StrategyStore nodes and the campaign/handoff buckets they belong to.
+    for row in graph_rows:
         metadata = row.get("metadata") or {}
         if not isinstance(metadata, dict):
             metadata = {}
+        row_kind = str(row.get("_graph_kind") or "strategy")
         status, state_group = _strategy_status(metadata, row.get("entry_type") or "raw")
         source_trial_id = row.get("source_trial_id")
         try:
@@ -1648,8 +1741,8 @@ def _insight_graph_payload(
         )
         evidence_ids = list(row.get("evidence_trial_ids") or [])
         node = {
-            "id": f"strategy:{row['id']}",
-            "kind": "strategy",
+            "id": f"{row_kind}:{row['id']}",
+            "kind": row_kind,
             "label": title,
             "title": title,
             "subtitle": " · ".join(
@@ -1657,6 +1750,7 @@ def _insight_graph_payload(
                 for part in (
                     _compact(row.get("entry_type") or "raw"),
                     _compact(row.get("species") or "unknown"),
+                    _compact(metadata.get("tranche") or ""),
                     status,
                 )
                 if part
@@ -1674,6 +1768,7 @@ def _insight_graph_payload(
             "bind_identifiers": list(bind_identifiers),
             "confidence": metadata.get("confidence"),
             "tranche": metadata.get("tranche"),
+            "seeded_reason": metadata.get("seeded_reason"),
             "color": _state_color("strategy", state_group),
             "depth": 99,
             "degree": 0,
@@ -1701,6 +1796,7 @@ def _insight_graph_payload(
     # separate cluster head.
     for campaign, ids in strategy_ids_by_campaign.items():
         members = [strategy_by_id.get(strategy_id) for strategy_id in ids if strategy_by_id.get(strategy_id)]
+        cluster_label = "planner hint rows" if any((member or {}).get("kind") == "planner_hint" for member in members) else "strategy rows"
         node_id = f"campaign:{campaign}"
         _add_node(
             {
@@ -1708,7 +1804,7 @@ def _insight_graph_payload(
                 "kind": "campaign",
                 "label": campaign,
                 "title": campaign,
-                "subtitle": f"{len(members)} strategy rows",
+                "subtitle": f"{len(members)} {cluster_label}",
                 "summary": _compact(
                     next(
                         (
@@ -1729,8 +1825,9 @@ def _insight_graph_payload(
             }
         )
         for strategy_id in ids:
-            _add_edge(node_id, f"strategy:{strategy_id}", "campaign", label="seed campaign", weight=1.4)
-            source_trial_id = strategy_by_id.get(strategy_id, {}).get("source_trial_id")
+            strategy_node = strategy_by_id.get(strategy_id) or {}
+            _add_edge(node_id, strategy_node.get("id", f"strategy:{strategy_id}"), "campaign", label="seed campaign", weight=1.4)
+            source_trial_id = strategy_node.get("source_trial_id")
             if source_trial_id is not None and source_trial_id in journal_by_trial:
                 _add_edge(
                     node_id,
@@ -1742,6 +1839,7 @@ def _insight_graph_payload(
 
     for handoff, ids in strategy_ids_by_handoff.items():
         members = [strategy_by_id.get(strategy_id) for strategy_id in ids if strategy_by_id.get(strategy_id)]
+        cluster_label = "planner hint rows" if any((member or {}).get("kind") == "planner_hint" for member in members) else "strategy rows"
         node_id = f"handoff:{handoff}"
         _add_node(
             {
@@ -1749,7 +1847,7 @@ def _insight_graph_payload(
                 "kind": "handoff",
                 "label": handoff,
                 "title": handoff,
-                "subtitle": f"{len(members)} strategy rows",
+                "subtitle": f"{len(members)} {cluster_label}",
                 "summary": _compact(
                     next(
                         (
@@ -1770,8 +1868,9 @@ def _insight_graph_payload(
             }
         )
         for strategy_id in ids:
-            _add_edge(node_id, f"strategy:{strategy_id}", "handoff", label="source handoff", weight=1.2)
-            source_trial_id = strategy_by_id.get(strategy_id, {}).get("source_trial_id")
+            strategy_node = strategy_by_id.get(strategy_id) or {}
+            _add_edge(node_id, strategy_node.get("id", f"strategy:{strategy_id}"), "handoff", label="source handoff", weight=1.2)
+            source_trial_id = strategy_node.get("source_trial_id")
             if source_trial_id is not None and source_trial_id in journal_by_trial:
                 _add_edge(
                     node_id,
@@ -1782,13 +1881,13 @@ def _insight_graph_payload(
                 )
 
     # Link strategy rows to their journal evidence and source trial when present.
-    for strategy_id, node in strategy_by_id.items():
+    for node in strategy_by_id.values():
         source_trial_id = node.get("source_trial_id")
         if source_trial_id is not None and source_trial_id in journal_by_trial:
-            _add_edge(f"journal:{source_trial_id}", strategy_id, "projection", label="source trial", weight=1.6)
+            _add_edge(f"journal:{source_trial_id}", node["id"], "projection", label="source trial", weight=1.6)
         for evidence_trial_id in node.get("evidence_trial_ids") or []:
             if evidence_trial_id in journal_by_trial:
-                _add_edge(f"journal:{evidence_trial_id}", strategy_id, "evidence", label="evidence", weight=1.0)
+                _add_edge(f"journal:{evidence_trial_id}", node["id"], "evidence", label="evidence", weight=1.0)
         if node.get("bind_identifiers"):
             node["summary"] = node.get("summary") or _compact(", ".join(str(x) for x in node["bind_identifiers"]))
 
@@ -1837,7 +1936,7 @@ def _insight_graph_payload(
                 key=lambda item: _node_sort_key(item[1]),
             )
             if (
-                (node["kind"] == "strategy" and node.get("state_group") in {"applied", "pending", "context"})
+                (node["kind"] in {"strategy", "planner_hint"} and node.get("state_group") in {"applied", "pending", "context", "guardrail", "frozen", "live"})
                 or (node["kind"] == "journal" and node.get("state_group") in {"frontier", "audit"})
             )
         ][:16]
@@ -1928,10 +2027,13 @@ def _insight_graph_payload(
             "journal_run_start_index": journal_meta.get("journal_run_start_index"),
             "journal_run_start_trial_id": journal_meta.get("journal_run_start_trial_id"),
             "strategy_store_path": str(_STRATEGY_STORE_PATH / "strategies.db"),
+            "planner_hint_seed_path": str(_PLANNER_HINT_SEEDS_PATH),
+            "graph_source": graph_source,
         },
         "summary": {
             "journal_rows": len(journal_rows),
             "strategy_rows": len(strategy_rows),
+            "planner_hint_rows": len(planner_hint_rows),
             "node_count": len(selected_nodes),
             "edge_count": len(selected_edges),
             "state_counts": state_counts,
