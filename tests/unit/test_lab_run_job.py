@@ -62,6 +62,15 @@ def _write_dcp_jobs_file(path: Path) -> None:
     path.write_text(yaml.safe_dump(doc, sort_keys=False))
 
 
+def _write_kb_jobs_file(path: Path) -> None:
+    _write_jobs_file(path, enabled=True)
+    doc = yaml.safe_load(path.read_text())
+    doc["jobs"][0]["input_spec"]["context_modes"] = ["kb_rag", "source_excerpt"]
+    doc["jobs"][0]["input_spec"]["kb_queries"] = ["freshness lint handoff"]
+    doc["jobs"][0]["input_spec"]["kb_top_k"] = 2
+    path.write_text(yaml.safe_dump(doc, sort_keys=False))
+
+
 def _args(tmp_path: Path, jobs_file: Path, **overrides) -> Namespace:
     values = {
         "job_id": "sample_shadow",
@@ -176,3 +185,70 @@ def test_dcp_context_mode_packs_declared_sources_with_fallback_available(tmp_pat
     assert any(kind.startswith("dcp_pack:") for kind in task_record["context"]["kinds"])
     manifest = json.loads((result.output_path.parent / "context_manifest.json").read_text())
     assert manifest["summary"] == task_record["context"]
+
+
+def test_kb_rag_context_mode_adds_retrieved_snippets(tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "source.md").write_text("# source\nEvidence.\n")
+    jobs_file = tmp_path / "lab_jobs.yaml"
+    _write_kb_jobs_file(jobs_file)
+
+    def fake_query(text: str, *, top_k: int, index_dir) -> list[dict]:
+        assert text == "freshness lint handoff"
+        assert top_k == 2
+        return [
+            {
+                "file": "/workspace/wiki/autonomous-research.md",
+                "heading_path": ["AutoPilot"],
+                "line_range": (22, 24),
+                "snippet": "AutoPilot may suggest closure candidates but not archive handoffs.",
+                "score": 0.91,
+                "content_hash": "abc123",
+            }
+        ]
+
+    monkeypatch.setattr(run_job.kb_rag, "query", fake_query)
+
+    result = run_job.run_from_args(
+        _args(
+            tmp_path,
+            jobs_file,
+            allow_disabled=False,
+            max_context_chars=1000,
+        )
+    )
+
+    task_record = json.loads(result.task_record_path.read_text())
+    assert task_record["context"]["kinds"] == {"kb_rag": 1}
+    assert task_record["context"]["repos"] == ["kb-rag"]
+    manifest = json.loads((result.output_path.parent / "context_manifest.json").read_text())
+    assert manifest["sources"][0]["path"].endswith("autonomous-research.md:22-24")
+    prompt = (result.output_path.parent / "prompt.txt").read_text()
+    assert "AutoPilot may suggest closure candidates" in prompt
+
+
+def test_kb_rag_context_mode_falls_back_to_sources_on_empty_results(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "source.md").write_text("# source\nEvidence.\n")
+    jobs_file = tmp_path / "lab_jobs.yaml"
+    _write_kb_jobs_file(jobs_file)
+    monkeypatch.setattr(run_job.kb_rag, "query", lambda *args, **kwargs: [])
+
+    result = run_job.run_from_args(
+        _args(
+            tmp_path,
+            jobs_file,
+            allow_disabled=False,
+            max_context_chars=1000,
+        )
+    )
+
+    task_record = json.loads(result.task_record_path.read_text())
+    assert task_record["context"]["kinds"] == {"source_excerpt": 1}
+    manifest = json.loads((result.output_path.parent / "context_manifest.json").read_text())
+    assert manifest["missing_sources"] == [
+        {"repo": "kb-rag", "path": "freshness lint handoff", "reason": "kb_rag_no_results"}
+    ]

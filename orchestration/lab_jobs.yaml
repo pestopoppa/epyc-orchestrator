@@ -43,7 +43,11 @@ jobs:
       context_budget_tokens: 16000
       context_modes:
         - dcp_pack
+        - kb_rag
         - source_excerpt
+      kb_top_k: 6
+      kb_queries:
+        - "handoff freshness index hygiene active handoffs progress reporting stale gates"
       max_bundle_files: 40
       required_checks:
         - stale_active_handoff_over_14d_without_gate
@@ -123,6 +127,12 @@ jobs:
         - repo: epyc-root
           path: progress/
       context_budget_tokens: 12000
+      context_modes:
+        - kb_rag
+        - source_excerpt
+      kb_top_k: 6
+      kb_queries:
+        - "attestation drift production flags model registry worker heterogeneity missing snapshot"
       compare_against: previous_attestation_snapshot
       required_checks:
         - production_flag_drift

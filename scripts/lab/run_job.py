@@ -32,6 +32,7 @@ from src.context_assembly import (
     pack_to_budget,
 )
 from src.context_discovery import build_python_codemap
+from src.retrieval import kb_rag
 
 
 DEFAULT_API_URL = "http://127.0.0.1:8000"
@@ -48,7 +49,9 @@ IGNORE_DIRS = {
 MAX_SOURCE_FILES = 80
 MAX_EXCERPT_CHARS = 2200
 DCP_CONTEXT_MODE = "dcp_pack"
+KB_RAG_CONTEXT_MODE = "kb_rag"
 SOURCE_CONTEXT_MODE = "source_excerpt"
+DEFAULT_KB_RAG_TOP_K = 6
 
 
 class LabRunnerError(RuntimeError):
@@ -368,6 +371,85 @@ def _collect_dcp_excerpts(
     return excerpts, missing
 
 
+def _kb_rag_queries(input_spec: dict[str, Any]) -> list[str]:
+    raw_queries = input_spec.get("kb_queries") or input_spec.get("kb_query")
+    queries: list[str] = []
+    if isinstance(raw_queries, str):
+        queries = [raw_queries]
+    elif isinstance(raw_queries, list):
+        queries = [str(item) for item in raw_queries if str(item).strip()]
+    if queries:
+        return queries
+
+    parts: list[str] = []
+    for check in input_spec.get("required_checks", []) or []:
+        parts.append(str(check).replace("_", " "))
+    for source in input_spec.get("sources", []) or []:
+        if not isinstance(source, dict):
+            continue
+        repo = str(source.get("repo", "")).strip()
+        path = str(source.get("path", "")).strip()
+        if repo or path:
+            parts.append(f"{repo} {path}".strip())
+    if not parts:
+        return []
+    return ["; ".join(parts[:12])]
+
+
+def _collect_kb_rag_excerpts(
+    input_spec: dict[str, Any],
+    *,
+    max_context_chars: int,
+) -> tuple[list[SourceExcerpt], list[dict[str, Any]]]:
+    excerpts: list[SourceExcerpt] = []
+    missing: list[dict[str, Any]] = []
+    queries = _kb_rag_queries(input_spec)
+    if not queries:
+        return excerpts, [{"repo": "kb-rag", "path": "", "reason": "kb_rag_no_query"}]
+
+    top_k = int(input_spec.get("kb_top_k") or DEFAULT_KB_RAG_TOP_K)
+    index_dir = input_spec.get("kb_index_dir") or kb_rag.DEFAULT_INDEX_DIR
+    remaining = max_context_chars
+    seen: set[tuple[str, str]] = set()
+    for query in queries:
+        try:
+            rows = kb_rag.query(query, top_k=top_k, index_dir=index_dir)
+        except Exception as exc:  # noqa: BLE001
+            missing.append({"repo": "kb-rag", "path": query, "reason": f"kb_rag_error:{exc}"})
+            continue
+        if not rows:
+            missing.append({"repo": "kb-rag", "path": query, "reason": "kb_rag_no_results"})
+            continue
+        for row in rows:
+            file_path = str(row.get("file", ""))
+            line_range = row.get("line_range") or ("", "")
+            key = (file_path, str(line_range))
+            if key in seen:
+                continue
+            seen.add(key)
+            snippet = str(row.get("snippet", ""))
+            if remaining <= 0:
+                break
+            excerpt = snippet[: min(MAX_EXCERPT_CHARS, remaining)]
+            remaining = max(0, remaining - len(excerpt))
+            line_text = "-".join(str(part) for part in line_range)
+            excerpts.append(
+                SourceExcerpt(
+                    repo="kb-rag",
+                    path=f"{file_path}:{line_text}" if line_text else file_path,
+                    abs_path=file_path,
+                    kind=KB_RAG_CONTEXT_MODE,
+                    bytes=len(snippet.encode("utf-8")),
+                    sha256=str(row.get("content_hash") or ""),
+                    excerpt=excerpt,
+                    truncated=len(snippet) > len(excerpt),
+                )
+            )
+        if remaining <= 0:
+            break
+    return excerpts, missing
+
+
 def collect_context(
     input_spec: dict[str, Any],
     roots: dict[str, Path],
@@ -383,6 +465,13 @@ def collect_context(
             roots,
             max_context_chars=max_context_chars,
         )
+    if KB_RAG_CONTEXT_MODE in modes:
+        kb_excerpts, kb_missing = _collect_kb_rag_excerpts(
+            input_spec,
+            max_context_chars=max(0, max_context_chars - sum(len(item.excerpt) for item in excerpts)),
+        )
+        excerpts.extend(kb_excerpts)
+        missing.extend(kb_missing)
     if not excerpts and SOURCE_CONTEXT_MODE in modes:
         source_excerpts, source_missing = _collect_source_excerpts(
             input_spec,
