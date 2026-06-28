@@ -2152,6 +2152,8 @@ function scheduleRegionLocksRefresh(force = false) {
     if (!force && now - _lastRegionLockPollStarted < 700) return;
     _lastRegionLockPollStarted = now;
     updateRegionLocks();
+    updateContentionGate();
+    updateTopologyActivity();
 }
 
 function rememberStructuredTapAccordion(detailsEl) {
@@ -3521,10 +3523,11 @@ function renderParetoScatter(d) {
             parts.push(paretoMarker(tier, x, y, prod ? 5 : 4, `fill="${color}"${ring}`, tip));
         });
     });
-    // Per-tier legend (top-right): audit tiers (T0) appended after the frontier tiers.
+    // Per-tier legend (lower-right): audit tiers (T0) appended after the frontier tiers.
     const legendKeys = series.map(s => String(s[0]));
     if ((d.t0_audit || []).length && !legendKeys.includes('0')) legendKeys.push('0');
-    parts.push(paretoTierLegend(legendKeys, VB.w - 44, PAD.t + 6));
+    const legendY = Math.max(PAD.t + 6, VB.h - PAD.b - (legendKeys.length * 14) - 4);
+    parts.push(paretoTierLegend(legendKeys, VB.w - 44, legendY));
 
     svg.innerHTML = parts.join('');
 }
@@ -3589,7 +3592,8 @@ function renderHypervolumeTimeline(d) {
         const last = hist[hist.length - 1];
         parts.push(`<circle cx="${sx(last[0]).toFixed(1)}" cy="${sy(last[1]).toFixed(1)}" r="4" fill="${color}"><title>T${tier} trial ${last[0]} · hv=${last[1].toFixed(3)}</title></circle>`);
     });
-    parts.push(paretoTierLegend(series.map(s => s[0]), VB.w - 38, PAD.t + 6));
+    const legendY = Math.max(PAD.t + 6, VB.h - PAD.b - (series.length * 14) - 4);
+    parts.push(paretoTierLegend(series.map(s => s[0]), VB.w - 38, legendY));
 
     svg.innerHTML = parts.join('');
 }
@@ -4607,8 +4611,6 @@ function startDashboard() {
                     return `${role}:${insts}:${regions}`;
                 })
                 .join('|');
-            const lockActivityChanged = _latestRegionLockActivitySignature !== null
-                && lockActivitySignature !== _latestRegionLockActivitySignature;
             _latestRegionLockActivitySignature = lockActivitySignature;
 
             // Cross-role physical-core occupancy: { quarter: [{role, shape}] }.
@@ -4741,9 +4743,6 @@ function startDashboard() {
                 footer.innerHTML = footMsg;
                 grid.appendChild(footer);
             }
-            if (lockActivityChanged) {
-                updateTopologyActivity();
-            }
         } catch (err) {
             const status = document.getElementById('region-locks-status');
             const grid = document.getElementById('region-locks-grid');
@@ -4766,20 +4765,16 @@ function startDashboard() {
         updateGepa();
         updateProcessStatus();
         updateBuildRev();
-        updateRegionLocks();
-        updateContentionGate();
         updateAutopilotProgress();
         updateRepoReadiness();
         updatePareto();  // initial paint of Pareto plots even when accordion closed (so summary text is fresh)
         setInterval(updateGepa, 5000);
         setInterval(updateProcessStatus, 3000);
         setInterval(updateBuildRev, 30000);  // build-drift poll
-        setInterval(updateRegionLocks, 1500);  // 1.5s poll — fast enough to catch transient locks during inference
-        setInterval(updateContentionGate, 2000);  // 2s poll — gate metrics are cumulative counters; cheap
+        scheduleRegionLocksRefresh(true);
+        setInterval(() => scheduleRegionLocksRefresh(true), 1500);  // shared live-inference refresh for locks + topology activity
         setInterval(updateAutopilotProgress, 3000);  // 3s poll — trial progress bar (state.json mtime polling)
         setInterval(updateRepoReadiness, 60000);  // advisory artifacts change only on scorer/checkpoint runs
-        updateTopologyActivity();
-        setInterval(updateTopologyActivity, TOPOLOGY_ACTIVITY_POLL_MS);  // topology row activity stats
         setInterval(renderTopologyActivity, TOPOLOGY_ACTIVITY_AGE_TICK_MS);  // local "Ns ago" tick between polls
         // Pareto poll: only fetch when the GEPA accordion is open. Cheap when
         // closed (no fetch, just summary text from the last successful call).

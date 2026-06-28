@@ -103,7 +103,10 @@ def test_dashboard_topology_activity_stats_refresh_with_live_age_tick() -> None:
     assert "topologyActivityAgeS" in body
     assert "renderTopologyActivity" in body
     assert "topology_activity?window_s=${TOPOLOGY_ACTIVITY_WINDOW_S}" in body
-    assert "setInterval(updateTopologyActivity, TOPOLOGY_ACTIVITY_POLL_MS)" in body
+    assert "scheduleRegionLocksRefresh(true);" in body
+    assert "updateContentionGate();" in body
+    assert "updateTopologyActivity();" in body
+    assert "setInterval(() => scheduleRegionLocksRefresh(true), 1500)" in body
     assert "setInterval(renderTopologyActivity, TOPOLOGY_ACTIVITY_AGE_TICK_MS)" in body
     assert "lockActivitySignature" in body
 
@@ -119,6 +122,10 @@ def test_dashboard_pareto_plot_uses_journal_sources_and_nonnegative_axes() -> No
     assert "d.canonical_tier" in body
     assert "d.frontiers_by_tier" in body
     assert "tiers ${tierKeys.map" in body
+    assert "const legendY = Math.max(PAD.t + 6, VB.h - PAD.b - (legendKeys.length * 14) - 4);" in body
+    assert "const legendY = Math.max(PAD.t + 6, VB.h - PAD.b - (series.length * 14) - 4);" in body
+    assert "paretoTierLegend(legendKeys, VB.w - 44, legendY)" in body
+    assert "paretoTierLegend(series.map(s => s[0]), VB.w - 38, legendY)" in body
 
 
 def test_dashboard_repo_readiness_panel_is_advisory_only() -> None:
