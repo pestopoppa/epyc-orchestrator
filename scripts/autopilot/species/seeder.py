@@ -42,6 +42,7 @@ CONVERGENCE_WINDOW = 5  # N consecutive batches with |TD| < epsilon
 class SeederBatchResult:
     n_questions: int = 0
     n_correct: int = 0
+    n_role_successes: int = 0
     n_errors: int = 0
     rewards_injected: int = 0
     rewards_delivery: list[dict[str, Any]] = field(default_factory=list)
@@ -84,6 +85,13 @@ def _tail_below_threshold(values: list[float], threshold: float) -> int:
         else:
             break
     return count
+
+
+def _is_success_reward(value: Any) -> bool:
+    try:
+        return float(value) > 0.5
+    except (TypeError, ValueError):
+        return False
 
 
 def _question_with_strategy_hints(
@@ -292,16 +300,23 @@ class Seeder:
                         if marker:
                             batch_result.exogenous_marker_log.append(marker)
 
-                    # Track per-role stats
+                    # Track per-role stats. `n_correct` is question-level for
+                    # the batch summary denominator; per-role wins are tracked
+                    # separately so N roles cannot produce >N-question "correct"
+                    # counts.
+                    question_has_success = False
                     for role_name, reward in rewards.items():
                         if role_name not in batch_result.per_action_stats:
                             batch_result.per_action_stats[role_name] = {
                                 "total": 0, "correct": 0
                             }
                         batch_result.per_action_stats[role_name]["total"] += 1
-                        if reward > 0.5:
+                        if _is_success_reward(reward):
                             batch_result.per_action_stats[role_name]["correct"] += 1
-                            batch_result.n_correct += 1
+                            batch_result.n_role_successes += 1
+                            question_has_success = True
+                    if question_has_success:
+                        batch_result.n_correct += 1
 
                     # Inject rewards
                     delivery: dict[str, Any] = {}
@@ -354,7 +369,7 @@ class Seeder:
                     self._question_results.append(result_row)
 
                 except Exception as e:
-                    log.error("Error on question %d: %s", i, e)
+                    log.exception("Error on question %d: %s", i, e)
                     batch_result.n_errors += 1
                     qid = q.get("id", q.get("question_id", f"q_{i}"))
                     result_row = {
@@ -392,11 +407,13 @@ class Seeder:
 
         self._batch_count += 1
         log.info(
-            "Seeder batch %d done: %d/%d correct, %d rewards, "
-            "TD=%.4f, converged=%d/%d, memories=%d, roles=%d",
+            "Seeder batch %d done: %d/%d questions with >=1 success, "
+            "%d role successes, %d rewards, TD=%.4f, converged=%d/%d, "
+            "memories=%d, roles=%d",
             self._batch_count - 1,
             batch_result.n_correct,
             batch_result.n_questions,
+            batch_result.n_role_successes,
             batch_result.rewards_injected,
             avg_td,
             self._consecutive_converged,
