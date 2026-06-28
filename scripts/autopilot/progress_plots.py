@@ -298,6 +298,49 @@ def plot_trial_timeline(
     return path
 
 
+def _current_archive_trial_ids(archive: Any) -> set[int]:
+    """Trial ids present in the current archive view.
+
+    ``cmd_plot`` passes a journal-reconstructed archive that may be fenced by
+    ``pareto_exclude_before_ts``. Using its entry ids keeps non-frontier plot
+    panels in the same instrument era as the Pareto frontier.
+    """
+    ids: set[int] = set()
+    entries = getattr(archive, "_all_entries", None) or []
+    is_eligible = getattr(archive, "is_frontier_eligible", None)
+    for entry in entries:
+        if callable(is_eligible):
+            try:
+                if not is_eligible(entry):
+                    continue
+            except Exception:
+                pass
+        try:
+            ids.add(int(getattr(entry, "trial_id")))
+        except (TypeError, ValueError):
+            continue
+    return ids
+
+
+def _species_effectiveness_from_entries(entries: list[Any]) -> dict[str, dict[str, float]]:
+    stats: dict[str, dict[str, float]] = {}
+    for entry in entries:
+        species = str(getattr(entry, "species", "") or "unknown")
+        if species not in stats:
+            stats[species] = {
+                "total": 0,
+                "pareto": 0,
+                "rate": 0.0,
+            }
+        stats[species]["total"] += 1
+        if getattr(entry, "pareto_status", "") == "frontier":
+            stats[species]["pareto"] += 1
+    for species, item in stats.items():
+        total = item["total"]
+        item["rate"] = item["pareto"] / total if total > 0 else 0.0
+    return stats
+
+
 def generate_all_plots(
     archive,  # ParetoArchive
     journal,  # ExperimentJournal
@@ -318,9 +361,13 @@ def generate_all_plots(
     paths = []
 
     try:
+        current_archive_ids = _current_archive_trial_ids(archive)
         trustworthy_tiered_entries = [
-            e for e in journal.all_entries()
-            if e.tier > 0 and not getattr(e, "bug_corrupted_by", "")
+            e
+            for e in journal.all_entries()
+            if e.tier > 0
+            and not getattr(e, "bug_corrupted_by", "")
+            and (not current_archive_ids or e.trial_id in current_archive_ids)
         ]
 
         # 1. Hypervolume trend (canonical production tier)
@@ -347,17 +394,19 @@ def generate_all_plots(
         paths.append(plot_pareto_frontier_2d(frontier, dominated, output_dir))
 
         # 3. Species effectiveness
-        eff = journal.species_effectiveness()
+        eff = _species_effectiveness_from_entries(trustworthy_tiered_entries)
         paths.append(plot_species_effectiveness(eff, output_dir))
 
         # 4. Per-suite quality
         suite_data = []
         for e in trustworthy_tiered_entries:
             if e.eval_details.get("per_suite_quality"):
-                suite_data.append({
-                    "trial_id": e.trial_id,
-                    "per_suite": e.eval_details["per_suite_quality"],
-                })
+                suite_data.append(
+                    {
+                        "trial_id": e.trial_id,
+                        "per_suite": e.eval_details["per_suite_quality"],
+                    }
+                )
         paths.append(plot_per_suite_quality(suite_data, output_dir))
 
         # 5. Memory convergence

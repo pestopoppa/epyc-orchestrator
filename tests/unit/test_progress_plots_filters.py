@@ -22,6 +22,7 @@ class _Entry:
     reliability: float = 1.0
     species: str = "seeder"
     bug_corrupted_by: str = ""
+    pareto_status: str = "dominated"
     eval_details: dict = field(default_factory=dict)
 
 
@@ -69,14 +70,34 @@ class _Archive:
 class _Journal:
     def __init__(self) -> None:
         self._entries = [
-            _Entry(1, 0, 2.4, eval_details={"per_suite_quality": {"sentinel": 2.4}}),
-            _Entry(2, 1, 1.5, eval_details={"per_suite_quality": {"t1": 1.5}}),
+            _Entry(
+                1,
+                0,
+                2.4,
+                pareto_status="frontier",
+                eval_details={"per_suite_quality": {"sentinel": 2.4}},
+            ),
+            _Entry(
+                2,
+                1,
+                1.5,
+                pareto_status="frontier",
+                eval_details={"per_suite_quality": {"t1": 1.5}},
+            ),
             _Entry(
                 3,
                 1,
                 2.4,
                 bug_corrupted_by="ec9622d",
+                pareto_status="frontier",
                 eval_details={"per_suite_quality": {"stale": 2.4}},
+            ),
+            _Entry(
+                99,
+                1,
+                2.2,
+                pareto_status="frontier",
+                eval_details={"per_suite_quality": {"pre_epoch": 2.2}},
             ),
         ]
 
@@ -87,7 +108,9 @@ class _Journal:
         return {}
 
 
-def test_generate_all_plots_filters_t0_and_bug_corrupted_points(monkeypatch, tmp_path: Path) -> None:
+def test_generate_all_plots_filters_t0_and_bug_corrupted_points(
+    monkeypatch, tmp_path: Path
+) -> None:
     captured: dict[str, object] = {}
 
     monkeypatch.setattr(
@@ -105,7 +128,9 @@ def test_generate_all_plots_filters_t0_and_bug_corrupted_points(monkeypatch, tmp
     monkeypatch.setattr(
         progress_plots,
         "plot_species_effectiveness",
-        lambda eff, output_dir=None: tmp_path / "species.png",
+        lambda eff, output_dir=None: (
+            captured.setdefault("species", eff) or tmp_path / "species.png"
+        ),
     )
 
     def _suite(data, output_dir=None):
@@ -129,6 +154,7 @@ def test_generate_all_plots_filters_t0_and_bug_corrupted_points(monkeypatch, tmp
 
     assert [p["trial_id"] for p in captured["frontier"]] == [2]
     assert [p["trial_id"] for p in captured["dominated"]] == [3]
+    assert captured["species"] == {"seeder": {"total": 1, "pareto": 1, "rate": 1.0}}
     assert [p["trial_id"] for p in captured["suite_data"]] == [2]
     assert [p["trial_id"] for p in captured["timeline"]] == [2]
 
