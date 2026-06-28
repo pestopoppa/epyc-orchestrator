@@ -19,7 +19,7 @@ from src.trace import (
     upsert_events,
 )
 from src.trace import ingest_agent_audit, ingest_autopilot, ingest_progress
-from src.trace.query import query, stats
+from src.trace.query import query, stats, trial_context
 
 
 def _cmd_ingest(args: argparse.Namespace) -> int:
@@ -82,13 +82,7 @@ def _cmd_query(args: argparse.Namespace) -> int:
         print(json.dumps(rows, indent=2, default=str))
     else:
         for r in rows:
-            ts = r["ts_utc"]
-            cat = r["category"] or "?"
-            src = r["source"]
-            sid = (r["session_id"] or "-")[:18]
-            tid = r["trial_id"] if r["trial_id"] is not None else "-"
-            summary = (r["summary"] or "")[:90]
-            print(f"{ts}  {src:<18}  {cat:<18}  ses={sid:<18}  trial={tid}  {summary}")
+            print(_format_row(r))
         print(f"\n{len(rows)} rows")
     return 0
 
@@ -96,6 +90,39 @@ def _cmd_query(args: argparse.Namespace) -> int:
 def _cmd_stats(args: argparse.Namespace) -> int:
     s = stats(args.db or DEFAULT_DB_PATH)
     print(json.dumps(s, indent=2, default=str))
+    return 0
+
+
+def _format_row(row: dict) -> str:
+    ts = row["ts_utc"]
+    cat = row["category"] or "?"
+    src = row["source"]
+    sid = (row["session_id"] or "-")[:18]
+    tid = row["trial_id"] if row["trial_id"] is not None else "-"
+    summary = (row["summary"] or "")[:90]
+    return f"{ts}  {src:<18}  {cat:<18}  ses={sid:<18}  trial={tid}  {summary}"
+
+
+def _cmd_trial_context(args: argparse.Namespace) -> int:
+    ctx = trial_context(
+        db_path=args.db or DEFAULT_DB_PATH,
+        trial_id=args.trial,
+        window_minutes=args.window_minutes,
+        limit=args.limit,
+    )
+    if args.json:
+        print(json.dumps(ctx, indent=2, default=str))
+        return 0
+
+    print(
+        f"trial={ctx['trial_id']} window={ctx['window_minutes']}m "
+        f"range={ctx['from_ts'] or '-'}..{ctx['to_ts'] or '-'}"
+    )
+    print(f"counts={json.dumps(ctx['counts'], sort_keys=True)}")
+    print("\nTimeline:")
+    for row in ctx["timeline"]:
+        print(_format_row(row))
+    print(f"\n{len(ctx['timeline'])} rows")
     return 0
 
 
@@ -131,6 +158,13 @@ def main(argv: list[str] | None = None) -> int:
 
     ps = sub.add_parser("stats", help="summary counts")
     ps.set_defaults(func=_cmd_stats)
+
+    pt = sub.add_parser("trial-context", help="timeline around one autopilot trial")
+    pt.add_argument("--trial", type=int, required=True)
+    pt.add_argument("--window-minutes", type=int, default=60)
+    pt.add_argument("--limit", type=int, default=200)
+    pt.add_argument("--json", action="store_true")
+    pt.set_defaults(func=_cmd_trial_context)
 
     args = p.parse_args(argv)
     return args.func(args)

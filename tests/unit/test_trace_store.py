@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 from pathlib import Path
 from textwrap import dedent
 
@@ -16,6 +15,7 @@ from src.trace import (
     ensure_schema,
     upsert_events,
     query,
+    trial_context,
 )
 from src.trace import ingest_agent_audit, ingest_autopilot, ingest_progress
 
@@ -272,3 +272,82 @@ def test_query_filter_combinations(db_path: Path) -> None:
     assert len(rows) == 1
     # Order: most recent first.
     assert rows[0]["summary"] == "recent"
+
+
+def test_trial_context_includes_nearby_cross_source_rows(db_path: Path) -> None:
+    conn = ensure_schema(db_path)
+    upsert_events(
+        conn,
+        [
+            Event(
+                ts_utc="2026-05-06T11:45:00+00:00",
+                source=EventSource.AGENT_AUDIT,
+                source_path="/audit",
+                source_line=1,
+                session_id="S",
+                category=EventCategory.TASK_START,
+                summary="prepare trial",
+            ),
+            Event(
+                ts_utc="2026-05-06T12:00:00+00:00",
+                source=EventSource.AUTOPILOT_JOURNAL,
+                source_path="/journal",
+                source_line=1,
+                trial_id=7,
+                category="trial_summary",
+                summary="trial 7 summary",
+            ),
+            Event(
+                ts_utc="2026-05-06T12:04:00+00:00",
+                source=EventSource.AUTOPILOT_JOURNAL,
+                source_path="/journal-jsonl",
+                source_line=1,
+                trial_id=7,
+                category="mutation",
+                summary="trial 7 mutation",
+            ),
+            Event(
+                ts_utc="2026-05-06T12:15:00+00:00",
+                source=EventSource.PROGRESS,
+                source_path="/progress",
+                source_line=1,
+                category=EventCategory.SESSION_SUMMARY,
+                summary="nearby progress note",
+            ),
+            Event(
+                ts_utc="2026-05-06T14:00:00+00:00",
+                source=EventSource.PROGRESS,
+                source_path="/progress",
+                source_line=2,
+                category=EventCategory.SESSION_SUMMARY,
+                summary="outside window",
+            ),
+        ],
+    )
+    conn.close()
+
+    ctx = trial_context(db_path=db_path, trial_id=7, window_minutes=20, limit=20)
+
+    assert ctx["counts"] == {"trial_events": 2, "context_events": 2, "timeline": 4}
+    assert [row["summary"] for row in ctx["trial_events"]] == [
+        "trial 7 summary",
+        "trial 7 mutation",
+    ]
+    timeline = [row["summary"] for row in ctx["timeline"]]
+    assert timeline == [
+        "prepare trial",
+        "trial 7 summary",
+        "trial 7 mutation",
+        "nearby progress note",
+    ]
+    assert "outside window" not in timeline
+
+
+def test_trial_context_handles_missing_trial(db_path: Path) -> None:
+    ensure_schema(db_path).close()
+
+    ctx = trial_context(db_path=db_path, trial_id=404)
+
+    assert ctx["trial_id"] == 404
+    assert ctx["from_ts"] is None
+    assert ctx["counts"] == {"trial_events": 0, "context_events": 0, "timeline": 0}

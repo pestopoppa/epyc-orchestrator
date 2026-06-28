@@ -19,7 +19,7 @@ from src.trace.store import (
     ensure_schema,
     upsert_events,
 )
-from src.trace.query import query
+from src.trace.query import query, trial_context
 from src.trace.harness_schema import (
     SCHEMA_VERSION,
     GovernanceLevel,
@@ -51,6 +51,7 @@ __all__ = [
     "ensure_schema",
     "upsert_events",
     "query",
+    "trial_context",
     # shared harness/trace schema (intake-607 cluster)
     "SCHEMA_VERSION",
     "GovernanceLevel",

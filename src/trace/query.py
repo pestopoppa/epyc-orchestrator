@@ -22,6 +22,7 @@ Cross-source recipes (a few high-value patterns):
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -98,6 +99,104 @@ def query(
     rows = conn.execute(sql, params).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+def _parse_ts(ts: str) -> datetime | None:
+    raw = ts.strip()
+    if not raw:
+        return None
+    try:
+        if raw.endswith("Z"):
+            dt = datetime.fromisoformat(raw[:-1]).replace(tzinfo=timezone.utc)
+        else:
+            dt = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _format_ts(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).isoformat()
+
+
+def trial_context(
+    db_path: Path | str = DEFAULT_DB_PATH,
+    trial_id: int | None = None,
+    window_minutes: int = 60,
+    limit: int = 200,
+) -> dict[str, Any]:
+    """Return exact trial events plus nearby cross-source provenance rows.
+
+    This implements the handoff's "all events for trial N" recipe as a stable
+    API: exact trial rows anchor the time window, then the surrounding timeline
+    pulls in agent-audit/progress/autopilot context for provenance debugging.
+    """
+    if trial_id is None:
+        raise ValueError("trial_id is required")
+
+    trial_rows = query(db_path=db_path, trial_id=trial_id, limit=limit)
+    parsed_ts = [
+        dt
+        for row in trial_rows
+        if (dt := _parse_ts(str(row.get("ts_utc") or ""))) is not None
+    ]
+    if not parsed_ts:
+        return {
+            "trial_id": trial_id,
+            "window_minutes": window_minutes,
+            "from_ts": None,
+            "to_ts": None,
+            "trial_events": trial_rows,
+            "context_events": [],
+            "timeline": list(reversed(trial_rows)),
+            "counts": {
+                "trial_events": len(trial_rows),
+                "context_events": 0,
+                "timeline": len(trial_rows),
+            },
+        }
+
+    window = timedelta(minutes=max(0, int(window_minutes)))
+    from_ts = _format_ts(min(parsed_ts) - window)
+    to_ts = _format_ts(max(parsed_ts) + window)
+    trial_event_ids = {row["id"] for row in trial_rows}
+    window_rows = query(db_path=db_path, from_ts=from_ts, to_ts=to_ts, limit=limit)
+    context_rows = [row for row in window_rows if row["id"] not in trial_event_ids]
+    timeline = sorted(
+        trial_rows + context_rows,
+        key=lambda row: (
+            _parse_ts(str(row.get("ts_utc") or "")) or datetime.min.replace(tzinfo=timezone.utc),
+            row.get("id") or 0,
+        ),
+    )
+    return {
+        "trial_id": trial_id,
+        "window_minutes": int(window_minutes),
+        "from_ts": from_ts,
+        "to_ts": to_ts,
+        "trial_events": sorted(
+            trial_rows,
+            key=lambda row: (
+                _parse_ts(str(row.get("ts_utc") or "")) or datetime.min.replace(tzinfo=timezone.utc),
+                row.get("id") or 0,
+            ),
+        ),
+        "context_events": sorted(
+            context_rows,
+            key=lambda row: (
+                _parse_ts(str(row.get("ts_utc") or "")) or datetime.min.replace(tzinfo=timezone.utc),
+                row.get("id") or 0,
+            ),
+        ),
+        "timeline": timeline,
+        "counts": {
+            "trial_events": len(trial_rows),
+            "context_events": len(context_rows),
+            "timeline": len(timeline),
+        },
+    }
 
 
 def stats(db_path: Path | str = DEFAULT_DB_PATH) -> dict[str, Any]:
