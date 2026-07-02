@@ -52,6 +52,7 @@ PLANNER_SUBPROCESS_STATUS_PATH = Path(
 # metered/temporary, and a stale global default can brick AutoPilot planning.
 DEFAULT_CLAUDE_MODEL = "opus"
 DEFAULT_CLAUDE_FALLBACK_MODEL = "sonnet"
+PLANNER_ALLOWED_TOOLS = {"Read", "Grep", "Glob"}
 
 _FALLBACK_NUMERIC_SURFACES = {"memrl_retrieval", "think_harder", "monitor", "escalation"}
 
@@ -370,6 +371,7 @@ def invoke_controller(
     # routine grep, and the user can always reconstruct via the live tap.
     archive_events: list[str] = []
     archive_meta: dict[str, Any] = {}
+    disallowed_tool_uses: list[str] = []
     session_start_ts = time.time()
 
     def _archive_controller_call(
@@ -435,6 +437,14 @@ def invoke_controller(
                     archive_meta["subtype"] = evt.get("subtype")
                 elif evt.get("type") == "system" and evt.get("subtype") == "init":
                     final_session_id = evt.get("session_id", final_session_id)
+                elif evt.get("type") == "assistant":
+                    msg = evt.get("message") or {}
+                    for content in msg.get("content", []):
+                        if not isinstance(content, dict) or content.get("type") != "tool_use":
+                            continue
+                        name = str(content.get("name") or "")
+                        if name and name not in PLANNER_ALLOWED_TOOLS:
+                            disallowed_tool_uses.append(name)
         except Exception as exc:
             log.warning("Planner stdout drain failed: %s", exc)
 
@@ -446,6 +456,7 @@ def invoke_controller(
             text=True,
             bufsize=1,  # line-buffered
             cwd=str(cwd) if cwd else None,
+            env={k: v for k, v in os.environ.items() if k != "CLAUDECODE"},
         )
         _write_planner_subprocess_status(
             status="running",
@@ -549,6 +560,32 @@ def invoke_controller(
                 error=stderr[:1000],
             )
             return "", session_id
+
+        if disallowed_tool_uses:
+            tools = sorted(set(disallowed_tool_uses))
+            error = "planner used disallowed tool(s): " + ", ".join(tools)
+            log.error(error)
+            _write_planner_subprocess_status(
+                status="disallowed_tool_use",
+                prompt=prompt,
+                cmd=cmd,
+                child_pid=proc.pid,
+                started_at=session_start_ts,
+                returncode=proc.returncode,
+                error=error,
+            )
+            if tap is not None:
+                try:
+                    tap.write(f"[FAIL disallowed_tool_use] {error}\n{'=' * 72}\n")
+                    tap.flush()
+                except Exception:
+                    pass
+            _archive_controller_call(
+                status="disallowed_tool_use",
+                ok=False,
+                error=error,
+            )
+            return "", None
 
         if tap is not None:
             try:

@@ -397,8 +397,10 @@ def test_invoke_controller_pins_planner_model_args(monkeypatch) -> None:
 
     def fake_popen(cmd, *args, **kwargs):
         captured["cmd"] = cmd
+        captured["env"] = kwargs.get("env", {})
         return FakeTimeoutProcess()
 
+    monkeypatch.setenv("CLAUDECODE", "parent-session")
     monkeypatch.setenv("AUTOPILOT_CLAUDE_MODEL", "opus")
     monkeypatch.setenv("AUTOPILOT_CLAUDE_FALLBACK_MODEL", "sonnet")
     monkeypatch.setattr(controller_io.subprocess, "Popen", fake_popen)
@@ -412,3 +414,61 @@ def test_invoke_controller_pins_planner_model_args(monkeypatch) -> None:
     assert captured["cmd"][captured["cmd"].index("--model") + 1] == "opus"
     assert "--fallback-model" in captured["cmd"]
     assert captured["cmd"][captured["cmd"].index("--fallback-model") + 1] == "sonnet"
+    assert "CLAUDECODE" not in captured["env"]
+
+
+def test_invoke_controller_rejects_disallowed_tool_use(monkeypatch) -> None:
+    records = []
+    statuses = []
+
+    class FakeSuccessProcess:
+        stderr = None
+        pid = 12345
+        returncode = 0
+        stdout = iter(
+            [
+                '{"type":"system","subtype":"init","session_id":"new-session"}\n',
+                (
+                    '{"type":"assistant","message":{"content":['
+                    '{"type":"tool_use","name":"Write","input":{"file_path":"x"}}'
+                    ']}}\n'
+                ),
+                (
+                    '{"type":"result","subtype":"success","session_id":"new-session",'
+                    '"result":"```json:autopilot_actions\\n'
+                    '{\\"type\\":\\"numeric_trial\\",\\"surface\\":\\"monitor\\",\\"params\\":{}}'
+                    '\\n```"}\n'
+                ),
+            ]
+        )
+
+        def wait(self, timeout):
+            return self.returncode
+
+        def kill(self):
+            pass
+
+    monkeypatch.setattr(controller_io.subprocess, "Popen", lambda *a, **k: FakeSuccessProcess())
+    monkeypatch.setattr(controller_io, "_open_planner_tap", lambda: None)
+    monkeypatch.setattr(controller_io, "_append_planner_archive", records.append)
+    monkeypatch.setattr(
+        controller_io,
+        "_write_planner_subprocess_status",
+        lambda **kwargs: statuses.append(kwargs),
+    )
+
+    text, session_id = controller_io.invoke_controller(
+        "prompt",
+        session_id="old-session",
+        timeout=1,
+    )
+
+    assert text == ""
+    assert session_id is None
+    assert records[-1]["status"] == "disallowed_tool_use"
+    assert records[-1]["ok"] is False
+    assert "Write" in records[-1]["error"]
+    assert [status["status"] for status in statuses] == [
+        "running",
+        "disallowed_tool_use",
+    ]
