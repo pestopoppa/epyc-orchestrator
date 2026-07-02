@@ -9,8 +9,6 @@ speed sample. See `handoffs/active/autopilot-continuous-optimization.md` (2026-0
 
 Objectives are (quality, speed, -cost, reliability), all maximised.
 """
-from pathlib import Path
-
 from scripts.autopilot.pareto_archive import ParetoArchive, ParetoEntry
 
 
@@ -93,13 +91,26 @@ def test_tier_segregation(tmp_path):
 
 
 def test_cluster_and_representative_persist_round_trip(tmp_path):
-    """The reproduction cluster + representative survive save/reload so medians keep
-    accumulating across autopilot restarts."""
+    """The reproduction cluster + representative survive explicit payload reloads so medians
+    keep accumulating across autopilot restarts."""
     a = _archive(tmp_path)
     for tid, spd in [(1, 50.0), (2, 60.0)]:
         a.upsert_representative("cfgA", 1, (1.8, spd, -0.5, 1.0), trial_id=tid)
-    a.save()
-    b = ParetoArchive(state_path=tmp_path / "state.json")
+    payload = {
+        "all_entries": [entry.to_dict() for entry in a._all_entries],
+        "hv_history_by_tier": {
+            str(tier): [[trial_id, hv] for trial_id, hv in history]
+            for tier, history in a._hv_history_by_tier.items()
+        },
+        "repro_clusters": a._repro_clusters,
+    }
+
+    b = ParetoArchive.from_archive_payload(
+        payload,
+        state_path=tmp_path / "state.json",
+        read_only=False,
+    )
+
     assert b.reproduction_count(1, "cfgA") == 2
     assert b.frontier_size(1) == 1
     # A further reproduction continues the median over the persisted cluster.

@@ -721,6 +721,135 @@ class ParetoArchive:
                 )
         return "\n".join(lines)
 
+    @staticmethod
+    def _entry_action_label(entry: ParetoEntry) -> str:
+        """Best-effort action label from the planner reasoning payload."""
+        try:
+            payload = json.loads(entry.reasoning or "{}")
+        except (TypeError, json.JSONDecodeError):
+            return ""
+        if not isinstance(payload, dict):
+            return ""
+        action = payload.get("type") or payload.get("action_type")
+        return str(action) if action else ""
+
+    def _dominance_margin(
+        self,
+        entry: ParetoEntry,
+        front: list[ParetoEntry],
+        ranges: tuple[float, float, float, float],
+    ) -> float:
+        """Smaller means the dominated entry is closer to the active frontier."""
+        dominating = [candidate for candidate in front if candidate.dominates(entry)]
+        if not dominating:
+            return 0.0
+        best_margin = float("inf")
+        for candidate in dominating:
+            margin = 0.0
+            for idx, scale in enumerate(ranges):
+                deficit = max(0.0, candidate.objectives[idx] - entry.objectives[idx])
+                margin += deficit / scale
+            best_margin = min(best_margin, margin)
+        return best_margin
+
+    def stepping_stones(
+        self,
+        tier: int | None = None,
+        *,
+        limit: int = 8,
+    ) -> list[dict[str, Any]]:
+        """Dominated-but-near archive entries for planner exploration.
+
+        These rows are intentionally advisory. They do not change Pareto membership,
+        production-best selection, or baseline authority; they surface near misses
+        from diverse species/action buckets so a planner can escape local optima
+        without blindly replaying the current frontier.
+        """
+        if limit <= 0:
+            return []
+        t = self._tier(tier)
+        front = self._front(t)
+        if not front:
+            return []
+        frontier_ids = {entry.trial_id for entry in front}
+        candidates = [
+            entry
+            for entry in self._all_entries
+            if int(entry.eval_tier) == t
+            and self.is_frontier_eligible(entry)
+            and entry.trial_id not in frontier_ids
+            and not entry.is_production_best
+            and any(frontier_entry.dominates(entry) for frontier_entry in front)
+        ]
+        if not candidates:
+            return []
+
+        axis_values = [candidate.objectives for candidate in [*front, *candidates]]
+        ranges = tuple(
+            max(max(values) - min(values), 1e-9)
+            for values in zip(*axis_values, strict=True)
+        )
+
+        ranked: list[tuple[tuple[float, float, int], ParetoEntry, str]] = []
+        for entry in candidates:
+            action = self._entry_action_label(entry)
+            margin = self._dominance_margin(entry, front, ranges)
+            quality = float(entry.objectives[0])
+            ranked.append(((margin, -quality, -entry.trial_id), entry, action))
+        ranked.sort(key=lambda item: item[0])
+
+        selected: list[tuple[ParetoEntry, str, float]] = []
+        seen_buckets: set[tuple[str, str]] = set()
+        for _rank, entry, action in ranked:
+            bucket = (entry.species or "", action)
+            if bucket in seen_buckets:
+                continue
+            seen_buckets.add(bucket)
+            selected.append((entry, action, self._dominance_margin(entry, front, ranges)))
+            if len(selected) >= limit:
+                break
+        if len(selected) < limit:
+            selected_ids = {entry.trial_id for entry, _action, _margin in selected}
+            for _rank, entry, action in ranked:
+                if entry.trial_id in selected_ids:
+                    continue
+                selected.append((entry, action, self._dominance_margin(entry, front, ranges)))
+                if len(selected) >= limit:
+                    break
+
+        return [
+            {
+                "trial_id": entry.trial_id,
+                "species": entry.species,
+                "action": action,
+                "objectives": list(entry.objectives),
+                "dominance_margin": margin,
+                "config_fingerprint": entry.config_fingerprint,
+                "reasoning": entry.reasoning,
+            }
+            for entry, action, margin in selected
+        ]
+
+    def stepping_stones_text(self, tier: int | None = None, *, limit: int = 8) -> str:
+        """Render dominated-but-near stepping stones for planner prompt context."""
+        rows = self.stepping_stones(tier=tier, limit=limit)
+        if not rows:
+            return "(no dominated near-frontier stepping stones for this tier)"
+        lines = [
+            "Observe-only dominated near-frontier candidates; use for hypothesis "
+            "generation, not replay authorization:"
+        ]
+        for row in rows:
+            objectives = row["objectives"]
+            action = row["action"] or "unknown_action"
+            lines.append(
+                f"  #{row['trial_id']} [{row['species'] or 'unknown_species'}:{action}] "
+                f"q={objectives[0]:.3f} s={objectives[1]:.1f} "
+                f"c={-objectives[2]:.3f} r={objectives[3]:.2f} "
+                f"margin={row['dominance_margin']:.3f}"
+            )
+        return "\n".join(lines)
+
     # ── frontier geometry (2026-05-23) ────────────────────────────────
     # Goes beyond summary_text() by surfacing structural info that helps the
     # planner choose WHICH axis to attack rather than just emitting blind

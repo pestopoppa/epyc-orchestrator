@@ -31,11 +31,15 @@ def _entry(
     speed: float = 50.0,
     cost: float = -0.5,
     reliability: float = 0.9,
+    species: str = "",
+    reasoning: str = "",
 ) -> ParetoEntry:
     return ParetoEntry(
         trial_id=trial_id,
         objectives=(q, speed, cost, reliability),
         eval_tier=tier,
+        species=species,
+        reasoning=reasoning,
     )
 
 
@@ -162,3 +166,74 @@ def test_readonly_archive_refuses_mutation_methods() -> None:
 
 def test_generic_raw_payload_loader_is_not_public_api() -> None:
     assert not hasattr(ParetoArchive, "load_archive_payload")
+
+
+def test_stepping_stones_surface_dominated_diverse_near_misses(tmp_path: Path) -> None:
+    archive = ParetoArchive(state_path=tmp_path / "state.json")
+
+    assert archive.update(_entry(1, tier=1, q=2.0, speed=50.0, reliability=1.0)) == "frontier"
+    assert archive.update(_entry(2, tier=1, q=1.8, speed=70.0, reliability=1.0)) == "frontier"
+    assert archive.update(
+        _entry(
+            3,
+            tier=1,
+            q=1.7,
+            speed=45.0,
+            reliability=0.95,
+            species="prompt_forge",
+            reasoning='{"type": "prompt_mutation"}',
+        )
+    ) == "dominated"
+    assert archive.update(
+        _entry(
+            4,
+            tier=1,
+            q=1.91,
+            speed=49.0,
+            reliability=0.99,
+            species="prompt_forge",
+            reasoning='{"type": "prompt_mutation"}',
+        )
+    ) == "dominated"
+    assert archive.update(
+        _entry(
+            5,
+            tier=1,
+            q=1.72,
+            speed=68.0,
+            reliability=0.98,
+            species="numeric_swarm",
+            reasoning='{"type": "numeric_trial"}',
+        )
+    ) == "dominated"
+
+    rows = archive.stepping_stones(limit=2)
+
+    assert [row["trial_id"] for row in rows] == [4, 5]
+    assert {(row["species"], row["action"]) for row in rows} == {
+        ("prompt_forge", "prompt_mutation"),
+        ("numeric_swarm", "numeric_trial"),
+    }
+    assert {entry.trial_id for entry in archive.frontier()} == {1, 2}
+
+
+def test_stepping_stones_text_is_explicitly_observe_only(tmp_path: Path) -> None:
+    archive = ParetoArchive(state_path=tmp_path / "state.json")
+    archive.update(_entry(1, tier=1, q=2.0, speed=50.0, reliability=1.0))
+    archive.update(
+        _entry(
+            2,
+            tier=1,
+            q=1.9,
+            speed=45.0,
+            reliability=0.95,
+            species="structural_lab",
+            reasoning='{"type": "structural_experiment"}',
+        )
+    )
+
+    text = archive.stepping_stones_text()
+
+    assert "Observe-only" in text
+    assert "not replay authorization" in text
+    assert "#2 [structural_lab:structural_experiment]" in text
