@@ -664,6 +664,7 @@ def test_intake_triage_review_status_reports_label_gap(tmp_path: Path) -> None:
     assert report["labels_needed"] == 1
     assert report["ready_for_baseline"] is False
     assert report["privacy"]["raw_text_in_report"] is False
+    assert report["next_review_items"] == []
 
 
 def test_intake_triage_review_status_ignores_shadow_labels_by_default(
@@ -688,6 +689,78 @@ def test_intake_triage_review_status_ignores_shadow_labels_by_default(
     assert report["trusted_reviewed_unique_intake_ids"] == 0
     assert report["labels_needed"] == 1
     assert report["ready_for_baseline"] is False
+
+
+def test_intake_triage_review_status_reports_sanitized_pending_sample(
+    tmp_path: Path,
+) -> None:
+    queue = tmp_path / "review_queue.jsonl"
+    reviewed = tmp_path / "reviewed.jsonl"
+    queue.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "intake_id": "intake-1",
+                        "title": "Candidate One",
+                        "url": "https://example.test/one",
+                        "source_type": "paper",
+                        "categories": ["agent_architecture"],
+                        "novelty": "high",
+                        "relevance": "medium",
+                        "current_verdict": "worth_investigating",
+                        "destination_handoff": "routing-intelligence.md",
+                        "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake-id intake-1",
+                        "source_text_excluded": True,
+                        "source_text": "must not appear",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "intake_id": "intake-2",
+                        "title": "Candidate Two",
+                        "record_command": "record intake-2",
+                        "source_text_excluded": True,
+                    }
+                ),
+            ]
+        )
+        + "\n"
+    )
+    reviewed.write_text(
+        json.dumps({"intake_id": "intake-1", "label_source": "shadow_job"}) + "\n"
+    )
+
+    report = intake_triage_review_status.summarize(
+        queue_path=queue,
+        reviewed_labels_path=reviewed,
+        min_reviewed_labels=2,
+        pending_sample_limit=1,
+    )
+
+    assert report["trusted_reviewed_rows"] == 0
+    assert report["next_review_items"] == [
+        {
+            "intake_id": "intake-1",
+            "title": "Candidate One",
+            "url": "https://example.test/one",
+            "source_type": "paper",
+            "categories": ["agent_architecture"],
+            "novelty": "high",
+            "relevance": "medium",
+            "current_verdict": "worth_investigating",
+            "destination_handoff": "routing-intelligence.md",
+            "destination_index": "",
+            "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake-id intake-1",
+            "source_text_excluded": True,
+        }
+    ]
+    assert "source_text" not in report["next_review_items"][0]
+    assert report["privacy"]["raw_text_in_report"] is False
+    assert (
+        report["privacy"]["reported_fields"]
+        == "aggregate counts plus sanitized pending review sample"
+    )
 
 
 def test_intake_triage_review_status_reports_ready(tmp_path: Path) -> None:

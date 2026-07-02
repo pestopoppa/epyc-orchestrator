@@ -49,12 +49,47 @@ def _source_counts(rows: list[dict[str, Any]]) -> dict[str, int]:
     return counts
 
 
+def _pending_sample(
+    queue_rows: list[dict[str, Any]],
+    *,
+    reviewed_ids: set[str],
+    limit: int,
+) -> list[dict[str, Any]]:
+    if limit <= 0:
+        return []
+    sample: list[dict[str, Any]] = []
+    for row in queue_rows:
+        intake_id = str(row.get("intake_id") or "")
+        if not intake_id or intake_id in reviewed_ids:
+            continue
+        sample.append(
+            {
+                "intake_id": intake_id,
+                "title": row.get("title") or "",
+                "url": row.get("url") or "",
+                "source_type": row.get("source_type") or "",
+                "categories": row.get("categories") or [],
+                "novelty": row.get("novelty") or "",
+                "relevance": row.get("relevance") or "",
+                "current_verdict": row.get("current_verdict") or "",
+                "destination_handoff": row.get("destination_handoff") or "",
+                "destination_index": row.get("destination_index") or "",
+                "record_command": row.get("record_command") or "",
+                "source_text_excluded": row.get("source_text_excluded") is True,
+            }
+        )
+        if len(sample) >= limit:
+            break
+    return sample
+
+
 def summarize(
     *,
     queue_path: Path,
     reviewed_labels_path: Path,
     min_reviewed_labels: int,
     trusted_label_sources: set[str] | None = None,
+    pending_sample_limit: int = 0,
 ) -> dict[str, Any]:
     queue_rows = _load_jsonl_if_present(queue_path)
     reviewed_rows = _load_jsonl_if_present(reviewed_labels_path)
@@ -78,6 +113,11 @@ def summarize(
     else:
         status = "needs_reviewed_labels"
 
+    next_review_items = _pending_sample(
+        queue_rows,
+        reviewed_ids=reviewed_ids,
+        limit=max(0, pending_sample_limit),
+    )
     return {
         "schema_version": REPORT_VERSION,
         "generated_at": utc_now(),
@@ -96,10 +136,15 @@ def summarize(
         "reviewed_queue_items": len(reviewed_queue_ids),
         "remaining_queue_items": len(remaining_queue_ids),
         "labels_needed": labels_needed,
+        "next_review_items": next_review_items,
         "ready_for_baseline": status == "ready_for_baseline",
         "privacy": {
             "raw_text_in_report": False,
-            "reported_fields": "aggregate counts only",
+            "reported_fields": (
+                "aggregate counts plus sanitized pending review sample"
+                if next_review_items
+                else "aggregate counts only"
+            ),
         },
     }
 
@@ -114,6 +159,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         trusted_label_sources=_effective_label_sources(
             getattr(args, "trusted_label_source", [])
         ),
+        pending_sample_limit=max(0, args.pending_sample),
     )
     if args.report:
         report_path = Path(args.report).expanduser()
@@ -128,6 +174,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--queue", default=str(DEFAULT_QUEUE))
     parser.add_argument("--reviewed-labels", default=str(DEFAULT_REVIEWED_LABELS))
     parser.add_argument("--min-reviewed-labels", type=int, default=100)
+    parser.add_argument(
+        "--pending-sample",
+        type=int,
+        default=0,
+        help="Include this many sanitized pending review rows and recorder commands.",
+    )
     parser.add_argument(
         "--trusted-label-source",
         action="append",
