@@ -690,6 +690,12 @@ def build_report_summary(
         "ds_e1_ready_for_profile_decision": (
             ds_e1.details.get("ready_for_profile_decision") if ds_e1 is not None else None
         ),
+        "ds_e1_clean_window_ready": (
+            ds_e1.details.get("clean_window_ready") if ds_e1 is not None else None
+        ),
+        "ds_e1_clean_window_blockers": (
+            ds_e1.details.get("clean_window_blockers") if ds_e1 is not None else None
+        ),
         "xmas_mode": xmas.details.get("mode") if xmas is not None else None,
         "xmas_quiet_window_ready": (
             xmas.details.get("quiet_window_ready") if xmas is not None else None

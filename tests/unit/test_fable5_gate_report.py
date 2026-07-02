@@ -49,6 +49,14 @@ xmas_routing:
     )
     monkeypatch.setattr(
         report_mod,
+        "ds_e1_clean_window_report",
+        lambda: {
+            "ready": False,
+            "blockers": ["active AutoPilot process(es): 123 autopilot"],
+        },
+    )
+    monkeypatch.setattr(
+        report_mod,
         "build_restart_readiness_report",
         lambda state, rows, **kwargs: {
             "restart_ready": False,
@@ -169,6 +177,10 @@ xmas_routing:
     assert report["summary"]["restart_ready"] is False
     assert report["summary"]["phase_trial_id"] == 896
     assert report["summary"]["ds_e1_ready_for_profile_decision"] is False
+    assert report["summary"]["ds_e1_clean_window_ready"] is False
+    assert report["summary"]["ds_e1_clean_window_blockers"] == [
+        "active AutoPilot process(es): 123 autopilot"
+    ]
     assert report["summary"]["xmas_mode"] == "off"
     assert report["summary"]["xmas_latest_ab_policy"] == "unknown_legacy"
     assert report["summary"]["xmas_latest_ab_decision_status"] == "hold"
