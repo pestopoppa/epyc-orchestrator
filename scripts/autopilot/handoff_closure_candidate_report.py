@@ -344,6 +344,16 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--campaign", default=DEFAULT_CAMPAIGN)
     parser.add_argument("--json", action="store_true")
     parser.add_argument(
+        "--out-json",
+        type=Path,
+        help="Write the structured report JSON to this path while preserving stdout.",
+    )
+    parser.add_argument(
+        "--out-md",
+        type=Path,
+        help="Write the rendered Markdown report to this path while preserving stdout.",
+    )
+    parser.add_argument(
         "--strict",
         action="store_true",
         help="Exit nonzero if report warnings were emitted.",
@@ -367,10 +377,19 @@ def main(argv: list[str] | None = None) -> int:
         print(f"handoff closure candidate report failed: {exc}", file=sys.stderr)
         return 2
 
+    json_payload = json.dumps(report, sort_keys=True, default=str)
+    markdown_payload = render_markdown(report)
+    if args.out_json:
+        args.out_json.parent.mkdir(parents=True, exist_ok=True)
+        args.out_json.write_text(json_payload + "\n", encoding="utf-8")
+    if args.out_md:
+        args.out_md.parent.mkdir(parents=True, exist_ok=True)
+        args.out_md.write_text(markdown_payload + "\n", encoding="utf-8")
+
     if args.json:
-        print(json.dumps(report, sort_keys=True, default=str))
+        print(json_payload)
     else:
-        print(render_markdown(report))
+        print(markdown_payload)
     if args.strict and not report["ok"]:
         return 1
     return 0

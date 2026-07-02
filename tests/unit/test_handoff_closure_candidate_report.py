@@ -175,3 +175,42 @@ def test_markdown_makes_memory_only_boundary_explicit() -> None:
 
     assert "Handoff writes permitted: false" in rendered
     assert "Seeded planner memory alone is not handoff closure evidence" in rendered
+
+
+def test_main_writes_optional_json_and_markdown_outputs(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    seed_file = tmp_path / "seeds.yaml"
+    strategy_path = tmp_path / "strategies"
+    journal_dir = tmp_path / "journal"
+    out_json = tmp_path / "reports" / "closure.json"
+    out_md = tmp_path / "reports" / "closure.md"
+    _write_seed_file(seed_file, evidence_trial_ids=[42])
+    _write_strategy_db(strategy_path, evidence_trial_ids=[42])
+    _write_journal(journal_dir, 42)
+
+    code = report_mod.main(
+        [
+            "--seed-file",
+            str(seed_file),
+            "--strategy-path",
+            str(strategy_path),
+            "--journal-dir",
+            str(journal_dir),
+            "--json",
+            "--out-json",
+            str(out_json),
+            "--out-md",
+            str(out_md),
+        ]
+    )
+
+    assert code == 0
+    stdout = json.loads(capsys.readouterr().out)
+    persisted = json.loads(out_json.read_text(encoding="utf-8"))
+    assert stdout["closure_candidate_count"] == 1
+    assert persisted["closure_candidate_count"] == 1
+    assert "# AutoPilot Handoff Closure Candidate Report" in out_md.read_text(
+        encoding="utf-8"
+    )
