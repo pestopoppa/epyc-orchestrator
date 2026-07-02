@@ -34,6 +34,10 @@ ORCHESTRATOR_URL = "http://localhost:8000"
 EVAL_T1_SPEC_N = 100
 EVAL_T2_SPEC_N = 500
 EVAL_SPEC_SEED = 42
+PROMOTION_EVAL_MIN_N = 200
+PROMOTION_EVAL_MAX_N = 500
+PROMOTION_EVAL_DEFAULT_N = 500
+PROMOTION_EVAL_SUITE_HEALTH_GLOB = "item_analytics*.json"
 _EXPECTED_FREE_SCORERS = {"programmatic"}
 _CORE_METADATA_KEY = "__core_metadata__"
 
@@ -136,8 +140,25 @@ def _sample_scoreable_eval_questions(
     pool: dict[str, list[dict]],
     n: int,
     rng: random.Random,
+    *,
+    exclude_qids: set[str] | None = None,
+    exclude_suites: set[str] | None = None,
 ) -> list[dict]:
     if not pool or n <= 0:
+        return []
+    excluded = exclude_qids or set()
+    excluded_suites = exclude_suites or set()
+    filtered_pool = {
+        suite: [
+            q
+            for q in suite_qs
+            if _question_qid(q) not in excluded and _is_scoreable_question(q)
+        ]
+        for suite, suite_qs in pool.items()
+        if suite not in excluded_suites
+    }
+    pool = {suite: qs for suite, qs in filtered_pool.items() if qs}
+    if not pool:
         return []
 
     suites = list(pool.keys())
@@ -246,6 +267,70 @@ def _annotate_partition(questions: list[dict], partition: str) -> list[dict]:
 def _audit_seed(trial_id: int, core_id: str) -> int:
     payload = f"w6-audit-v1\x00{trial_id}\x00{core_id}".encode("utf-8")
     return int(hashlib.sha256(payload).hexdigest()[:16], 16)
+
+
+def _promotion_eval_seed(trial_id: int, n: int) -> int:
+    payload = f"w8-promotion-eval-v1\x00{trial_id}\x00{n}".encode("utf-8")
+    return int(hashlib.sha256(payload).hexdigest()[:16], 16)
+
+
+def _promotion_eval_n(default: int = PROMOTION_EVAL_DEFAULT_N) -> int:
+    raw = _env_int("AUTOPILOT_SEQ_PROMOTION_EVAL_N", default)
+    return min(PROMOTION_EVAL_MAX_N, max(PROMOTION_EVAL_MIN_N, raw))
+
+
+def _latest_promotion_suite_health_path() -> Path | None:
+    override = os.environ.get("AUTOPILOT_SEQ_PROMOTION_SUITE_HEALTH_PATH", "").strip()
+    if override:
+        path = Path(override)
+        return path if path.exists() else None
+    reports_dir = Path(__file__).resolve().parents[2] / "orchestration" / "reports"
+    candidates = sorted(
+        reports_dir.glob(PROMOTION_EVAL_SUITE_HEALTH_GLOB),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    return candidates[0] if candidates else None
+
+
+def _promotion_excluded_suites_from_health() -> tuple[set[str], dict[str, Any]]:
+    path = _latest_promotion_suite_health_path()
+    if path is None:
+        return set(), {"path": None, "status": "missing", "excluded_suites": []}
+    try:
+        data = json.loads(path.read_text())
+    except Exception as exc:  # noqa: BLE001
+        return set(), {
+            "path": str(path),
+            "status": "unreadable",
+            "error": str(exc),
+            "excluded_suites": [],
+        }
+    windows = data.get("windows") if isinstance(data, dict) else {}
+    window = {}
+    if isinstance(windows, dict):
+        window = windows.get("last_100_trials") or windows.get("last_7_days") or {}
+    suite_rows = window.get("suite_summary") if isinstance(window, dict) else []
+    excluded: set[str] = set()
+    reasons: dict[str, str] = {}
+    if isinstance(suite_rows, list):
+        for row in suite_rows:
+            if not isinstance(row, dict):
+                continue
+            suite = str(row.get("suite") or "").strip()
+            if not suite:
+                continue
+            flags = set(str(flag) for flag in (row.get("flags") or []))
+            verdict = str(row.get("artifact_verdict") or "")
+            if verdict == "artifact" or "pinned_zero_or_broken" in flags:
+                excluded.add(suite)
+                reasons[suite] = verdict or ",".join(sorted(flags))
+    return excluded, {
+        "path": str(path),
+        "status": "ok",
+        "excluded_suites": sorted(excluded),
+        "reasons": reasons,
+    }
 
 
 def _read_registry_timeout(category: str, key: str, fallback: int) -> int:
@@ -1758,15 +1843,93 @@ class EvalTower:
         )
         return result
 
-    def eval_t2(self, n: int = 500, seed: int = 42) -> EvalResult:
+    def eval_t2(
+        self,
+        n: int = 500,
+        seed: int = 42,
+        *,
+        promotion_eval: bool = False,
+        trial_id: int | None = None,
+        exclude_qids: set[str] | None = None,
+    ) -> EvalResult:
         """Tier 2: 500+ full benchmark, ~30min."""
         pool = self._load_pool()
         if not pool:
             log.error("No question pool available for T2")
             return EvalResult(tier=2, quality=0, speed=0, cost=0, reliability=0)
 
+        resolved_trial_id = self._resolve_trial_id(trial_id)
+        requested_n = int(n)
+        draw_seed = int(seed)
+        promotion_policy: dict[str, Any] = {
+            "enabled": bool(promotion_eval),
+        }
+        if promotion_eval:
+            requested_n = _promotion_eval_n()
+            if resolved_trial_id is None:
+                error = "promotion eval requires a trial_id"
+                log.error("T2 promotion eval misconfigured: %s", error)
+                return EvalResult(
+                    tier=2,
+                    quality=0,
+                    speed=0,
+                    cost=0,
+                    reliability=0,
+                    details={
+                        "promotion_eval_policy": {
+                            **promotion_policy,
+                            "error": error,
+                        },
+                    },
+                )
+            draw_seed = _promotion_eval_seed(resolved_trial_id, requested_n)
+            excluded_suites, suite_health = _promotion_excluded_suites_from_health()
+            promotion_policy.update(
+                {
+                    "version": "w8-promotion-eval-v1",
+                    "trial_id": resolved_trial_id,
+                    "requested_n": requested_n,
+                    "min_n": PROMOTION_EVAL_MIN_N,
+                    "max_n": PROMOTION_EVAL_MAX_N,
+                    "seed": draw_seed,
+                    "recent_exclusion_qids": len(exclude_qids or set()),
+                    "recency_window_days": 60,
+                    "suite_health": suite_health,
+                }
+            )
+        else:
+            excluded_suites = set()
+
         rng = random.Random(seed)
-        questions = _sample_scoreable_eval_questions(pool, n, rng)
+        if promotion_eval:
+            rng = random.Random(draw_seed)
+        questions = _sample_scoreable_eval_questions(
+            pool,
+            requested_n,
+            rng,
+            exclude_qids=exclude_qids if promotion_eval else None,
+            exclude_suites=excluded_suites if promotion_eval else None,
+        )
+        if promotion_eval and len(questions) < PROMOTION_EVAL_MIN_N:
+            error = (
+                f"promotion eval drew {len(questions)} scoreable fresh question(s); "
+                f"requires >= {PROMOTION_EVAL_MIN_N}"
+            )
+            log.error("T2 promotion eval failed closed: %s", error)
+            return EvalResult(
+                tier=2,
+                quality=0,
+                speed=0,
+                cost=0,
+                reliability=0,
+                details={
+                    "promotion_eval_policy": {
+                        **promotion_policy,
+                        "actual_n": len(questions),
+                        "error": error,
+                    },
+                },
+            )
         # Tool-use sentinels also join T2 (the journaled deep eval) for the same
         # reason as T1. Inert ([]) unless AUTOPILOT_TOOL_SENTINELS=1.
         questions = (
@@ -1777,7 +1940,16 @@ class EvalTower:
         with httpx.Client(timeout=self.timeout) as client:
             results = self._eval_batch(questions, client, log_every=50, label="T2")
 
-        return self._aggregate(results, tier=2)
+        result = self._aggregate(results, tier=2)
+        if promotion_eval:
+            promotion_policy["actual_n"] = len(
+                [q for q in questions if q.get("eval_partition") == "core"]
+            )
+            result.details["promotion_eval_policy"] = promotion_policy
+            result.core_id = (
+                f"w8_promotion_eval_v1_trial_{resolved_trial_id}_n{requested_n}"
+            )
+        return result
 
     def evaluate(
         self,
@@ -1785,6 +1957,8 @@ class EvalTower:
         n: int | None = None,
         seed: int = 42,
         trial_id: int | None = None,
+        promotion_eval: bool = False,
+        exclude_qids: set[str] | None = None,
     ) -> EvalResult:
         """Run the production eval spec for a tier.
 
@@ -1804,6 +1978,14 @@ class EvalTower:
                 trial_id=trial_id,
             )
         elif tier == 2:
+            if promotion_eval or trial_id is not None or exclude_qids:
+                return self.eval_t2(
+                    n=EVAL_T2_SPEC_N,
+                    seed=EVAL_SPEC_SEED,
+                    promotion_eval=promotion_eval,
+                    trial_id=trial_id,
+                    exclude_qids=exclude_qids,
+                )
             return self.eval_t2(n=EVAL_T2_SPEC_N, seed=EVAL_SPEC_SEED)
         else:
             raise ValueError(f"Unknown eval tier: {tier}")

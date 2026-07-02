@@ -756,3 +756,148 @@ def test_eval_t1_w6_audit_block_requires_trial_id(tmp_path, monkeypatch) -> None
     assert result.reliability == 0
     assert result.core_id == "core_v2"
     assert "requires a trial_id" in result.details["audit_error"]
+
+
+def test_eval_t2_promotion_eval_uses_trial_seed_and_excludes_recent_qids(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(eval_tower, "PROMOTION_EVAL_MIN_N", 2)
+    monkeypatch.setattr(eval_tower, "PROMOTION_EVAL_MAX_N", 5)
+    monkeypatch.setenv("AUTOPILOT_SEQ_PROMOTION_EVAL_N", "3")
+    health_path = tmp_path / "item_health.json"
+    health_path.write_text(
+        json.dumps(
+            {
+                "windows": {
+                    "last_100_trials": {
+                        "suite_summary": [
+                            {
+                                "suite": "broken",
+                                "artifact_verdict": "artifact",
+                                "flags": ["pinned_zero_or_broken"],
+                            }
+                        ]
+                    }
+                }
+            }
+        )
+    )
+    monkeypatch.setenv("AUTOPILOT_SEQ_PROMOTION_SUITE_HEALTH_PATH", str(health_path))
+    tower = EvalTower()
+    tower._pool = {
+        "math": [
+            {
+                "id": "recent-math",
+                "suite": "math",
+                "prompt": "old",
+                "expected": "old",
+                "scoring_method": "exact_match",
+            },
+            {
+                "id": "fresh-math",
+                "suite": "math",
+                "prompt": "2+2?",
+                "expected": "4",
+                "scoring_method": "exact_match",
+            },
+        ],
+        "coder": [
+            {
+                "id": "fresh-coder",
+                "suite": "coder",
+                "prompt": "Return x",
+                "expected": "x",
+                "scoring_method": "exact_match",
+            },
+            {
+                "id": "fresh-coder-2",
+                "suite": "coder",
+                "prompt": "Return y",
+                "expected": "y",
+                "scoring_method": "exact_match",
+            },
+        ],
+        "broken": [
+            {
+                "id": "broken-item",
+                "suite": "broken",
+                "prompt": "broken",
+                "expected": "broken",
+                "scoring_method": "exact_match",
+            },
+        ],
+    }
+
+    captured: list[str] = []
+
+    def _fake_eval_batch(self, questions, client, **_kwargs):  # noqa: ANN001, ARG001
+        captured.extend(q["id"] for q in questions)
+        return [
+            QuestionResult(
+                question_id=q["id"],
+                suite=q["suite"],
+                prompt=q["prompt"],
+                expected=q["expected"],
+                correct=True,
+                tokens_generated=1,
+                elapsed_s=1.0,
+                eval_partition=q["eval_partition"],
+            )
+            for q in questions
+        ]
+
+    monkeypatch.setattr(EvalTower, "_eval_batch", _fake_eval_batch)
+
+    result = tower.eval_t2(
+        promotion_eval=True,
+        trial_id=42,
+        exclude_qids={"recent-math"},
+    )
+
+    assert "recent-math" not in captured
+    assert "broken-item" not in captured
+    assert set(captured) == {"fresh-math", "fresh-coder", "fresh-coder-2"}
+    assert result.core_id == "w8_promotion_eval_v1_trial_42_n3"
+    assert result.details["promotion_eval_policy"] == {
+        "enabled": True,
+        "version": "w8-promotion-eval-v1",
+        "trial_id": 42,
+        "requested_n": 3,
+        "min_n": 2,
+        "max_n": 5,
+        "seed": eval_tower._promotion_eval_seed(42, 3),
+        "recent_exclusion_qids": 1,
+        "recency_window_days": 60,
+        "suite_health": {
+            "path": str(health_path),
+            "status": "ok",
+            "excluded_suites": ["broken"],
+            "reasons": {"broken": "artifact"},
+        },
+        "actual_n": 3,
+    }
+
+
+def test_eval_t2_promotion_eval_fails_closed_without_trial_id(monkeypatch) -> None:
+    monkeypatch.setattr(eval_tower, "PROMOTION_EVAL_MIN_N", 2)
+    monkeypatch.setattr(eval_tower, "PROMOTION_EVAL_MAX_N", 5)
+    tower = EvalTower()
+    tower._pool = {
+        "math": [
+            {
+                "id": "fresh-math",
+                "suite": "math",
+                "prompt": "2+2?",
+                "expected": "4",
+                "scoring_method": "exact_match",
+            },
+        ],
+    }
+
+    result = tower.eval_t2(promotion_eval=True)
+
+    assert result.quality == 0
+    assert result.reliability == 0
+    assert result.details["promotion_eval_policy"]["enabled"] is True
+    assert "requires a trial_id" in result.details["promotion_eval_policy"]["error"]

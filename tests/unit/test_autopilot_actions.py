@@ -497,6 +497,7 @@ def test_deep_eval_replays_seq_promotion_numeric_candidate(monkeypatch) -> None:
 
     tower = FakeTower()
     state = {
+        "trial_counter": 21,
         "_seq_promotion_candidate_replay": {
             "candidate": "candidate-a",
             "source_trial_id": 12,
@@ -507,15 +508,29 @@ def test_deep_eval_replays_seq_promotion_numeric_candidate(monkeypatch) -> None:
             },
         }
     }
+    journal = SimpleNamespace(
+        recent=lambda _limit: [
+            SimpleNamespace(
+                eval_details={"question_results": [{"qid": "recent-qid"}]}
+            )
+        ]
+    )
 
     result, species = actions._action_deep_eval(
         {"type": "deep_eval", "tier": 2},
-        _ctx(tower=tower, state=state),
+        _ctx(tower=tower, state=state, journal=journal),
     )
 
     assert species == "seeder"
     assert applied == [{"ORCHESTRATOR_MONITOR_THRESHOLD": 0.42}]
-    assert tower.calls == [{"tier": 2}]
+    assert tower.calls == [
+        {
+            "tier": 2,
+            "promotion_eval": True,
+            "trial_id": 21,
+            "exclude_qids": {"recent-qid"},
+        }
+    ]
     assert "_seq_promotion_candidate_replay" not in state
     assert result.details["seq_promotion_candidate_replay"] == {
         "candidate_action_type": "numeric_trial",
@@ -551,6 +566,31 @@ def test_deep_eval_rejects_unreplayable_seq_promotion_numeric_candidate() -> Non
     assert result.status == "invalid"
     assert "lacks replayable applied params" in result.reason
     assert "_seq_promotion_candidate_replay" not in state
+
+
+def test_recent_eval_qids_excludes_only_rows_inside_recency_window(monkeypatch) -> None:
+    monkeypatch.setattr(actions, "SEQ_PROMOTION_RECENT_QID_DAYS", 60)
+    journal = SimpleNamespace(
+        entries_with_supersessions=lambda: [
+            SimpleNamespace(
+                timestamp="2026-01-01T00:00:00Z",
+                eval_details={"question_results": [{"qid": "old-q"}]},
+            ),
+            SimpleNamespace(
+                timestamp="2026-07-01T00:00:00Z",
+                eval_details={"question_results": [{"qid": "fresh-q"}]},
+            ),
+            SimpleNamespace(
+                timestamp="not-a-date",
+                eval_details={"question_results": [{"qid": "malformed-time-q"}]},
+            ),
+        ]
+    )
+
+    assert actions._recent_eval_qids(journal, days=60) == {
+        "fresh-q",
+        "malformed-time-q",
+    }
 
 
 def _eval_result(

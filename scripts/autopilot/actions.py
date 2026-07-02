@@ -17,11 +17,19 @@ import logging
 import os
 import subprocess
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from controller_io import validate_single_variable
 from safety_gate import EvalResult, SafetyGate
+
+SEQ_PROMOTION_RECENT_QID_TRIALS = int(
+    os.environ.get("AUTOPILOT_SEQ_PROMOTION_RECENT_QID_TRIALS", "100")
+)
+SEQ_PROMOTION_RECENT_QID_DAYS = int(
+    os.environ.get("AUTOPILOT_SEQ_PROMOTION_RECENT_QID_DAYS", "60")
+)
 
 
 def _apply_params(*args, **kwargs):
@@ -1201,6 +1209,74 @@ def _action_reset_memories(action: dict[str, Any], ctx: _ActionContext):
     return None, "structural_lab"
 
 
+def _parse_entry_timestamp(value: Any) -> datetime | None:
+    if not value:
+        return None
+    text = str(value)
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _recent_eval_qids(
+    journal: Any,
+    *,
+    limit: int = SEQ_PROMOTION_RECENT_QID_TRIALS,
+    days: int = SEQ_PROMOTION_RECENT_QID_DAYS,
+) -> set[str]:
+    """Return recently seen compact eval qids for W8 promotion fresh draws."""
+    if journal is None or limit <= 0:
+        return set()
+    try:
+        if hasattr(journal, "entries_with_supersessions"):
+            entries = list(journal.entries_with_supersessions())[-limit:]
+        elif hasattr(journal, "all_entries"):
+            entries = list(journal.all_entries())[-limit:]
+        elif hasattr(journal, "recent"):
+            entries = list(journal.recent(limit))
+        else:
+            entries = []
+    except Exception:  # noqa: BLE001
+        log.warning("Could not load recent journal entries for promotion eval qid exclusion")
+        return set()
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max(0, days))
+    qids: set[str] = set()
+    for entry in entries:
+        timestamp = _parse_entry_timestamp(getattr(entry, "timestamp", None))
+        # Missing timestamps are treated as recent so a malformed row cannot
+        # silently re-enter a promotion draw.
+        if timestamp is not None and timestamp < cutoff:
+            continue
+        details = getattr(entry, "eval_details", {}) or {}
+        if not isinstance(details, dict):
+            continue
+        nested = details.get("details") or {}
+        if not isinstance(nested, dict):
+            nested = {}
+        rows = (
+            details.get("question_results")
+            or nested.get("question_results")
+            or getattr(entry, "question_results", None)
+            or []
+        )
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            qid = str(row.get("qid") or row.get("question_id") or "").strip()
+            if qid:
+                qids.add(qid)
+    return qids
+
+
 def _action_deep_eval(action: dict[str, Any], ctx: _ActionContext):
     tier = action.get("tier", 2)
     replay_marker = ctx.state.pop("_seq_promotion_candidate_replay", None)
@@ -1279,7 +1355,16 @@ def _action_deep_eval(action: dict[str, Any], ctx: _ActionContext):
                 ),
                 "seeder",
             )
-    eval_result = ctx.tower.evaluate(tier=tier)
+    eval_kwargs: dict[str, Any] = {"tier": tier}
+    if replay_detail is not None:
+        eval_kwargs.update(
+            {
+                "promotion_eval": True,
+                "trial_id": ctx.state.get("trial_counter"),
+                "exclude_qids": _recent_eval_qids(ctx.journal),
+            }
+        )
+    eval_result = ctx.tower.evaluate(**eval_kwargs)
     if replay_detail is not None:
         eval_result.details.setdefault("seq_promotion_candidate_replay", replay_detail)
     return eval_result, "seeder"
