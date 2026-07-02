@@ -209,6 +209,7 @@ def _summary_report(report: dict[str, Any]) -> dict[str, Any]:
     archive = report["archive_authority"]
     baseline = report["baseline_authority"]
     baseline_seed = baseline.get("seed_preflight") or {}
+    w8 = seq.get("w8_promotion_evidence") or {}
     seq_thresholds = seq.get("thresholds") or {}
     seq_trusted_count = seq.get("trusted_vector_trials")
     seq_min_trusted = seq_thresholds.get("min_trusted_vector_trials")
@@ -253,6 +254,19 @@ def _summary_report(report: dict[str, Any]) -> dict[str, Any]:
         "seq_shadow_rows": seq_shadow_rows,
         "seq_min_shadow_rows": seq_min_shadow,
         "seq_shadow_rows_remaining": seq_shadow_remaining,
+        "w8_promotion_status": w8.get("status"),
+        "w8_pending_candidate": w8.get("pending_candidate"),
+        "w8_pending_source_trial_id": w8.get("pending_source_trial_id"),
+        "w8_pending_attempts": w8.get("pending_attempts"),
+        "w8_last_finalized_trial_id": w8.get("last_finalized_trial_id"),
+        "w8_last_finalized_candidate": w8.get("last_finalized_candidate"),
+        "w8_last_finalized_combined_E": w8.get("last_finalized_combined_E"),
+        "w8_last_finalized_delta_excludes_regression": w8.get(
+            "last_finalized_delta_excludes_regression"
+        ),
+        "w8_last_blocked_trial_id": w8.get("last_blocked_trial_id"),
+        "w8_last_blocked_candidate": w8.get("last_blocked_candidate"),
+        "w8_last_blocked_reason": w8.get("last_blocked_reason"),
         "w6_audit_cutover_ready": w6.get("cutover_ready"),
         "w6_audited_trial_count": w6_audited_count,
         "w6_raw_audited_trial_count": w6.get("raw_audited_trial_count"),
@@ -330,7 +344,7 @@ def build_restart_readiness_report(
     archive_report = build_archive_authority_report(state, journal_rows)
     snapshot_report = _snapshot_restart_report(state, journal_rows)
     baseline_report = _baseline_restart_report(state, journal_rows)
-    seq_report = build_seq_readiness_report(journal_rows)
+    seq_report = build_seq_readiness_report(journal_rows, state=state)
     if w6_exclude_before_ts is None:
         w6_exclude_before_ts = _state_float(state, "pareto_exclude_before_ts")
     w6_report = _w6_audit_restart_report(
@@ -402,6 +416,13 @@ def render_markdown(report: dict[str, Any]) -> str:
             f"ready={summary['seq_cutover_ready']}, "
             f"trusted_vectors={summary['seq_trusted_vector_trials']}, "
             f"seq_shadow_rows={summary['seq_shadow_rows']}"
+        ),
+        (
+            "- W8 promotion evidence: "
+            f"status={summary['w8_promotion_status']}, "
+            f"pending_candidate={summary['w8_pending_candidate']}, "
+            f"last_finalized_trial={summary['w8_last_finalized_trial_id']}, "
+            f"last_blocked_reason={summary['w8_last_blocked_reason']}"
         ),
         (
             "- W6 audit cutover: "

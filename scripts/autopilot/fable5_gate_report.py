@@ -167,6 +167,21 @@ def restart_section(restart_report: dict[str, Any]) -> GateSection:
             "seq_shadow_rows": summary.get("seq_shadow_rows"),
             "seq_min_shadow_rows": summary.get("seq_min_shadow_rows"),
             "seq_shadow_rows_remaining": summary.get("seq_shadow_rows_remaining"),
+            "w8_promotion_status": summary.get("w8_promotion_status"),
+            "w8_pending_candidate": summary.get("w8_pending_candidate"),
+            "w8_pending_source_trial_id": summary.get("w8_pending_source_trial_id"),
+            "w8_pending_attempts": summary.get("w8_pending_attempts"),
+            "w8_last_finalized_trial_id": summary.get("w8_last_finalized_trial_id"),
+            "w8_last_finalized_candidate": summary.get("w8_last_finalized_candidate"),
+            "w8_last_finalized_combined_E": summary.get(
+                "w8_last_finalized_combined_E"
+            ),
+            "w8_last_finalized_delta_excludes_regression": summary.get(
+                "w8_last_finalized_delta_excludes_regression"
+            ),
+            "w8_last_blocked_trial_id": summary.get("w8_last_blocked_trial_id"),
+            "w8_last_blocked_candidate": summary.get("w8_last_blocked_candidate"),
+            "w8_last_blocked_reason": summary.get("w8_last_blocked_reason"),
             "w6_audit_cutover_ready": summary.get("w6_audit_cutover_ready"),
             "w6_audited_trial_count": summary.get("w6_audited_trial_count"),
             "w6_min_audited_trials": summary.get("w6_min_audited_trials"),
@@ -621,6 +636,42 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
                 "follow_up": STRICT_FABLE5_GATE_COMMAND,
             }
         )
+
+    if restart and restart.status == "ready":
+        details = restart.details
+        if details.get("w8_promotion_status") != "finalized":
+            actions.append(
+                {
+                    "key": "collect_w8_promotion_eval_evidence",
+                    "priority": "P0",
+                    "status": (
+                        "active"
+                        if phase and phase.details.get("status") == "active"
+                        else "blocked"
+                    ),
+                    "reason": (
+                        "W4/W6 authority is restart-ready; W8 still needs live "
+                        "promotion-eval finalization evidence before closing the tail."
+                    ),
+                    "evidence": {
+                        "w8_promotion_status": details.get("w8_promotion_status"),
+                        "pending_candidate": details.get("w8_pending_candidate"),
+                        "pending_source_trial_id": details.get(
+                            "w8_pending_source_trial_id"
+                        ),
+                        "pending_attempts": details.get("w8_pending_attempts"),
+                        "last_blocked_trial_id": details.get(
+                            "w8_last_blocked_trial_id"
+                        ),
+                        "last_blocked_candidate": details.get(
+                            "w8_last_blocked_candidate"
+                        ),
+                        "last_blocked_reason": details.get("w8_last_blocked_reason"),
+                    },
+                    "command": STRICT_RESTART_READINESS_COMMAND,
+                    "follow_up": STRICT_FABLE5_GATE_COMMAND,
+                }
+            )
 
     ds_e1 = by_key.get("ds_e1_dynamic_stack")
     if ds_e1 and ds_e1.status != "ready":

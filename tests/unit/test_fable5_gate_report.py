@@ -506,6 +506,38 @@ def test_xmas_next_action_ready_when_only_evidence_is_missing() -> None:
     ]
 
 
+def test_w8_next_action_when_restart_ready_without_promotion_finalization() -> None:
+    sections = [
+        report_mod.GateSection(
+            key="phase_health",
+            status="ready",
+            summary="active",
+            blockers=[],
+            details={"status": "active"},
+        ),
+        report_mod.GateSection(
+            key="w4_w6_restart_cutover",
+            status="ready",
+            summary="ready",
+            blockers=[],
+            details={
+                "w8_promotion_status": "pending_fresh_eval",
+                "w8_pending_candidate": "candidate-a",
+                "w8_pending_source_trial_id": 41,
+                "w8_pending_attempts": 1,
+                "w8_last_blocked_reason": None,
+            },
+        ),
+    ]
+
+    actions = report_mod.build_next_actions(sections)
+
+    assert actions[0]["key"] == "collect_w8_promotion_eval_evidence"
+    assert actions[0]["status"] == "active"
+    assert actions[0]["evidence"]["w8_promotion_status"] == "pending_fresh_eval"
+    assert actions[0]["evidence"]["pending_candidate"] == "candidate-a"
+
+
 def test_render_markdown_surfaces_section_details() -> None:
     rendered = report_mod.render_markdown(
         {

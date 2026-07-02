@@ -55,6 +55,7 @@ DEFAULT_MIN_SEQ_SHADOW_ROWS = 30
 DEFAULT_MIN_FLIP_RATE = 0.30
 DEFAULT_HOLD_FLIP_RATE = 0.10
 DEFAULT_MIN_SHARED_QIDS = 35
+DEFAULT_STATE_PATH = ORCH_ROOT / "orchestration" / "autopilot_state.json"
 
 LEGACY_MAD_EXCLUSIONS = frozenset({"mad_noise", "reproduction_confirmed"})
 UNTRUSTED_OUTCOME_STATUSES = frozenset({"invalid", "skipped"})
@@ -87,6 +88,7 @@ class PairwiseReplay:
 def build_seq_readiness_report(
     rows: Iterable[Mapping[str, Any]],
     *,
+    state: Mapping[str, Any] | None = None,
     min_trusted_vector_trials: int = DEFAULT_MIN_TRUSTED_VECTOR_TRIALS,
     min_seq_shadow_rows: int = DEFAULT_MIN_SEQ_SHADOW_ROWS,
     min_flip_rate: float = DEFAULT_MIN_FLIP_RATE,
@@ -131,6 +133,7 @@ def build_seq_readiness_report(
         "candidate_clusters": [asdict(cluster) for cluster in clusters],
         "pairwise_replays": [asdict(replay) for replay in pairwise],
         "seq_shadow": shadow,
+        "w8_promotion_evidence": _w8_promotion_evidence(state),
         "cutover_blockers": blockers,
         "recommendation": _recommendation(
             cutover_ready=cutover_ready,
@@ -169,6 +172,16 @@ def render_markdown(report: Mapping[str, Any]) -> str:
             f"seq_shadow>={thresholds['min_seq_shadow_rows']}, "
             f"flip_rate>={thresholds['min_flip_rate']:.0%}, "
             f"shared_qids>={thresholds['min_shared_qids']}"
+        ),
+        (
+            "- W8 promotion evidence: "
+            f"status={report.get('w8_promotion_evidence', {}).get('status', 'unknown')}, "
+            f"pending_candidate="
+            f"{report.get('w8_promotion_evidence', {}).get('pending_candidate')}, "
+            f"last_finalized_trial="
+            f"{report.get('w8_promotion_evidence', {}).get('last_finalized_trial_id')}, "
+            f"last_blocked_reason="
+            f"{report.get('w8_promotion_evidence', {}).get('last_blocked_reason')}"
         ),
         "",
         "## Candidate Clusters",
@@ -336,6 +349,50 @@ def _seq_shadow_disagreement(rows: list[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _safe_mapping(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _w8_promotion_evidence(state: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Project W8 promotion-eval state into read-only reports."""
+    state_map = _safe_mapping(state)
+    pending = _safe_mapping(state_map.get("seq_pending_promotion_fresh_eval"))
+    finalized = _safe_mapping(state_map.get("seq_last_promotion_finalized"))
+    blocked = _safe_mapping(state_map.get("seq_last_promotion_blocked"))
+    finalized_delta_ci = _safe_mapping(finalized.get("delta_ci"))
+
+    if pending:
+        status = "pending_fresh_eval"
+    elif finalized:
+        status = "finalized"
+    elif blocked:
+        status = "blocked"
+    else:
+        status = "none"
+
+    return {
+        "status": status,
+        "pending": pending,
+        "last_finalized": finalized,
+        "last_blocked": blocked,
+        "pending_candidate": pending.get("candidate"),
+        "pending_source_trial_id": pending.get("source_trial_id"),
+        "pending_attempts": pending.get("attempts"),
+        "pending_combined_E": pending.get("combined_E"),
+        "last_finalized_trial_id": finalized.get("trial_id"),
+        "last_finalized_candidate": finalized.get("candidate"),
+        "last_finalized_combined_E": finalized.get("combined_E"),
+        "last_finalized_delta_ci": finalized_delta_ci,
+        "last_finalized_delta_excludes_regression": finalized_delta_ci.get(
+            "excludes_regression"
+        ),
+        "last_blocked_trial_id": blocked.get("trial_id"),
+        "last_blocked_candidate": blocked.get("candidate"),
+        "last_blocked_reason": blocked.get("reason"),
+        "last_blocked_combined_E": blocked.get("combined_E"),
+    }
+
+
 def _cutover_blockers(
     *,
     trusted_vector_trials: int,
@@ -474,6 +531,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         description="Report read-only W4/W6 sequential-verdict cutover readiness."
     )
     parser.add_argument("--journal", type=Path, default=DEFAULT_JOURNAL_DIR)
+    parser.add_argument(
+        "--state",
+        type=Path,
+        default=DEFAULT_STATE_PATH,
+        help="Optional AutoPilot state JSON path for W8 promotion-eval evidence.",
+    )
     parser.add_argument("--json", action="store_true", help="Emit structured JSON.")
     parser.add_argument(
         "--out-json",
@@ -510,8 +573,10 @@ def _write_text(path: Path, text: str) -> None:
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     rows = list(iter_journal_rows(args.journal))
+    state = _read_optional_state(args.state)
     report = build_seq_readiness_report(
         rows,
+        state=state,
         min_trusted_vector_trials=max(0, args.min_trusted_vector_trials),
         min_seq_shadow_rows=max(0, args.min_seq_shadow_rows),
         min_flip_rate=max(0.0, args.min_flip_rate),
@@ -531,6 +596,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.strict and not report["cutover_ready"]:
         return 1
     return 0
+
+
+def _read_optional_state(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.expanduser().read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 if __name__ == "__main__":

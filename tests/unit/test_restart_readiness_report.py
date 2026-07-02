@@ -42,6 +42,7 @@ def _seq_ready(*, ready: bool = False) -> dict[str, Any]:
         "cutover_ready": ready,
         "trusted_vector_trials": 61,
         "seq_shadow": {"seq_shadow_rows": 9},
+        "w8_promotion_evidence": {"status": "none"},
         "cutover_blockers": [] if ready else ["trusted vector history too small"],
     }
 
@@ -103,7 +104,7 @@ def _patch_ready_dependencies(monkeypatch, *, audit_report: dict[str, Any] | Non
     monkeypatch.setattr(
         report_mod,
         "build_seq_readiness_report",
-        lambda rows: _seq_ready(ready=True),
+        lambda rows, **kwargs: _seq_ready(ready=True),
     )
     monkeypatch.setattr(
         report_mod,
@@ -152,7 +153,7 @@ def test_restart_ready_accepts_tail_fold_snapshot_and_state_baseline(monkeypatch
     monkeypatch.setattr(
         report_mod,
         "build_seq_readiness_report",
-        lambda rows: _seq_ready(ready=False),
+        lambda rows, **kwargs: _seq_ready(ready=False),
     )
     monkeypatch.setattr(
         report_mod,
@@ -204,6 +205,7 @@ def test_restart_ready_accepts_tail_fold_snapshot_and_state_baseline(monkeypatch
     assert report["summary"]["seq_trusted_vector_trials_remaining"] is None
     assert report["summary"]["seq_min_shadow_rows"] is None
     assert report["summary"]["seq_shadow_rows_remaining"] is None
+    assert report["summary"]["w8_promotion_status"] == "none"
     assert report["summary"]["w6_audited_trial_count"] == 0
     assert report["summary"]["w6_audited_trial_count_remaining"] == 30
     assert report["summary"]["cutover_horizon_clean_trials_remaining"] == 30
@@ -212,6 +214,49 @@ def test_restart_ready_accepts_tail_fold_snapshot_and_state_baseline(monkeypatch
         "w6_audited_trials": 30,
         "w6_alarm_clearance": 0,
     }
+
+
+def test_restart_summary_projects_w8_promotion_finalization(monkeypatch) -> None:
+    _patch_ready_dependencies(monkeypatch, audit_report=_audit_report(audited_trial_count=30))
+    monkeypatch.setattr(
+        report_mod,
+        "build_seq_readiness_report",
+        lambda rows, state=None: {
+            "cutover_ready": True,
+            "trusted_vector_trials": 120,
+            "seq_shadow": {"seq_shadow_rows": 30},
+            "thresholds": {
+                "min_trusted_vector_trials": 120,
+                "min_seq_shadow_rows": 30,
+            },
+            "w8_promotion_evidence": {
+                "status": "finalized",
+                "last_finalized_trial_id": 44,
+                "last_finalized_candidate": "candidate-a",
+                "last_finalized_combined_E": 110.0,
+                "last_finalized_delta_excludes_regression": True,
+            },
+        },
+    )
+    state = {
+        **_state(),
+        "seq_last_promotion_finalized": {
+            "trial_id": 44,
+            "candidate": "candidate-a",
+            "combined_E": 110.0,
+            "delta_ci": {"excludes_regression": True, "lower_bound": 0.01},
+        },
+    }
+
+    report = report_mod.build_restart_readiness_report(state, [], require_w6_audit=True)
+
+    assert report["summary"]["w8_promotion_status"] == "finalized"
+    assert report["summary"]["w8_last_finalized_trial_id"] == 44
+    assert report["summary"]["w8_last_finalized_candidate"] == "candidate-a"
+    assert report["summary"]["w8_last_finalized_combined_E"] == 110.0
+    assert report["summary"]["w8_last_finalized_delta_excludes_regression"] is True
+    rendered = report_mod.render_markdown(report)
+    assert "W8 promotion evidence: status=finalized" in rendered
 
 
 def test_restart_ready_accepts_full_replay_when_snapshot_invalidated(monkeypatch) -> None:
@@ -223,7 +268,7 @@ def test_restart_ready_accepts_full_replay_when_snapshot_invalidated(monkeypatch
     monkeypatch.setattr(
         report_mod,
         "build_seq_readiness_report",
-        lambda rows: _seq_ready(ready=False),
+        lambda rows, **kwargs: _seq_ready(ready=False),
     )
     monkeypatch.setattr(
         report_mod,
@@ -298,7 +343,11 @@ def test_require_seq_cutover_blocks_when_seq_report_not_ready(monkeypatch) -> No
         "build_baseline_authority_report",
         lambda state, rows: {"ok": False, "status": "no_events"},
     )
-    monkeypatch.setattr(report_mod, "build_seq_readiness_report", lambda rows: _seq_ready())
+    monkeypatch.setattr(
+        report_mod,
+        "build_seq_readiness_report",
+        lambda rows, **kwargs: _seq_ready(),
+    )
     monkeypatch.setattr(
         report_mod,
         "build_snapshot_replay_diagnostic",
@@ -383,7 +432,7 @@ def test_cutover_horizon_reports_largest_remaining_clean_trial_blocker(
     monkeypatch.setattr(
         report_mod,
         "build_seq_readiness_report",
-        lambda rows: {
+        lambda rows, **kwargs: {
             "cutover_ready": False,
             "trusted_vector_trials": 80,
             "seq_shadow": {"seq_shadow_rows": 28},
@@ -461,7 +510,7 @@ def test_cutover_horizon_has_no_blocker_when_all_components_clear(monkeypatch) -
     monkeypatch.setattr(
         report_mod,
         "build_seq_readiness_report",
-        lambda rows: {
+        lambda rows, **kwargs: {
             "cutover_ready": True,
             "trusted_vector_trials": 120,
             "seq_shadow": {"seq_shadow_rows": 30},
@@ -644,7 +693,7 @@ def test_restart_report_blocks_without_baseline_source(monkeypatch) -> None:
     monkeypatch.setattr(
         report_mod,
         "build_seq_readiness_report",
-        lambda rows: _seq_ready(ready=True),
+        lambda rows, **kwargs: _seq_ready(ready=True),
     )
     monkeypatch.setattr(
         report_mod,

@@ -150,6 +150,40 @@ def test_report_can_be_cutover_ready_with_sufficient_shadow_disagreement() -> No
     assert report["cutover_blockers"] == []
 
 
+def test_report_projects_w8_promotion_eval_state() -> None:
+    state = {
+        "seq_pending_promotion_fresh_eval": {
+            "candidate": "candidate-a",
+            "source_trial_id": 41,
+            "attempts": 1,
+            "combined_E": 32.0,
+        },
+        "seq_last_promotion_blocked": {
+            "trial_id": 39,
+            "candidate": "candidate-b",
+            "reason": "fresh_eval_required",
+        },
+    }
+
+    report = seq_readiness_report.build_seq_readiness_report(
+        [_row(1, "fp-a", set(range(20)))],
+        state=state,
+        min_trusted_vector_trials=1,
+        min_seq_shadow_rows=0,
+        min_shared_qids=1,
+    )
+
+    w8 = report["w8_promotion_evidence"]
+    assert w8["status"] == "pending_fresh_eval"
+    assert w8["pending_candidate"] == "candidate-a"
+    assert w8["pending_source_trial_id"] == 41
+    assert w8["pending_attempts"] == 1
+    assert w8["last_blocked_reason"] == "fresh_eval_required"
+    assert "W8 promotion evidence: status=pending_fresh_eval" in (
+        seq_readiness_report.render_markdown(report)
+    )
+
+
 def test_main_strict_returns_nonzero_when_blocked(tmp_path: Path, capsys) -> None:
     journal = tmp_path / "autopilot_journal.jsonl"
     journal.write_text(json.dumps(_row(1, "fp-a", set(range(20)))) + "\n")
