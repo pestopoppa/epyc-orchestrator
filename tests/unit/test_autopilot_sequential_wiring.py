@@ -305,7 +305,13 @@ def test_maybe_force_seq_baseline_draw_records_block_when_all_fallbacks_blacklis
 
 
 def test_seq_promotion_finalization_requires_fresh_eval_fresh_reference_and_e() -> None:
-    seq = {"confirmed": True, "E_quality": 120.0, "E_rate_noninf": 110.0}
+    seq = {
+        "confirmed": True,
+        "E_quality": 120.0,
+        "E_rate_noninf": 110.0,
+        "z": 0.2,
+        "r_eff": 200,
+    }
     reference = {
         "tier": 2,
         "latest_reference_trial_id": 4,
@@ -324,12 +330,19 @@ def test_seq_promotion_finalization_requires_fresh_eval_fresh_reference_and_e() 
     assert finalized is True
     assert seq["baseline_promotion_finalized"] is True
     assert seq["baseline_promotion_combined_E"] == pytest.approx(110.0)
+    assert seq["baseline_promotion_delta_ci"]["excludes_regression"] is True
     assert seq["baseline_promotion_fresh_eval_for"] == {
         "candidate": "abc",
         "source_trial_id": 3,
     }
 
-    not_fresh = {"confirmed": True, "E_quality": 120.0, "E_rate_noninf": 110.0}
+    not_fresh = {
+        "confirmed": True,
+        "E_quality": 120.0,
+        "E_rate_noninf": 110.0,
+        "z": 0.2,
+        "r_eff": 200,
+    }
     assert (
         autopilot._annotate_seq_promotion_finalization(
             not_fresh,
@@ -339,7 +352,13 @@ def test_seq_promotion_finalization_requires_fresh_eval_fresh_reference_and_e() 
         is False
     )
 
-    stale = {"confirmed": True, "E_quality": 120.0, "E_rate_noninf": 110.0}
+    stale = {
+        "confirmed": True,
+        "E_quality": 120.0,
+        "E_rate_noninf": 110.0,
+        "z": 0.2,
+        "r_eff": 200,
+    }
     stale_reference = dict(reference, stale_reference=True)
     assert (
         autopilot._annotate_seq_promotion_finalization(
@@ -351,7 +370,13 @@ def test_seq_promotion_finalization_requires_fresh_eval_fresh_reference_and_e() 
     )
     assert stale["baseline_reference_state"] == "stale-reference"
 
-    low_e = {"confirmed": True, "E_quality": 120.0, "E_rate_noninf": 99.0}
+    low_e = {
+        "confirmed": True,
+        "E_quality": 120.0,
+        "E_rate_noninf": 99.0,
+        "z": 0.2,
+        "r_eff": 200,
+    }
     assert (
         autopilot._annotate_seq_promotion_finalization(
             low_e,
@@ -360,6 +385,50 @@ def test_seq_promotion_finalization_requires_fresh_eval_fresh_reference_and_e() 
         )
         is False
     )
+
+
+def test_seq_promotion_finalization_requires_delta_ci_excluding_regression() -> None:
+    reference = {
+        "tier": 2,
+        "latest_reference_trial_id": 4,
+        "latest_reference_age_s": 120.0,
+        "trials_since_reference": 1,
+        "stale_reference": False,
+    }
+    missing_delta = {"confirmed": True, "E_quality": 120.0, "E_rate_noninf": 110.0}
+
+    assert (
+        autopilot._annotate_seq_promotion_finalization(
+            missing_delta,
+            baseline_reference=reference,
+            is_fresh_eval=True,
+        )
+        is False
+    )
+    assert missing_delta["baseline_promotion_delta_ci"] == {
+        "status": "missing",
+        "excludes_regression": False,
+        "reason": "missing z/r_eff promotion-delta evidence",
+    }
+
+    noisy_delta = {
+        "confirmed": True,
+        "E_quality": 120.0,
+        "E_rate_noninf": 110.0,
+        "z": 0.01,
+        "r_eff": 200,
+    }
+    assert (
+        autopilot._annotate_seq_promotion_finalization(
+            noisy_delta,
+            baseline_reference=reference,
+            is_fresh_eval=True,
+        )
+        is False
+    )
+    assert noisy_delta["baseline_promotion_delta_ci"]["status"] == "ok"
+    assert noisy_delta["baseline_promotion_delta_ci"]["lower_bound"] < 0.0
+    assert noisy_delta["baseline_promotion_delta_ci"]["excludes_regression"] is False
 
 
 def test_seq_promotion_state_queues_and_forces_one_fresh_eval() -> None:
@@ -531,6 +600,7 @@ def test_seq_promotion_finalized_requires_baseline_update_acceptance() -> None:
             "confirmed": True,
             "baseline_reference_state": "fresh",
             "baseline_promotion_combined_E": 120.0,
+            "baseline_promotion_delta_ci": {"excludes_regression": True},
         },
         action={"type": "deep_eval", "tier": 2},
         eval_result=eval_result,
@@ -551,6 +621,7 @@ def test_seq_promotion_finalized_requires_baseline_update_acceptance() -> None:
         "reason": "baseline-update-refused",
         "baseline_update_reason": "not a monotonic same-tier improvement",
         "combined_E": 120.0,
+        "delta_ci": {"excludes_regression": True},
     }
 
 
@@ -1020,6 +1091,8 @@ def test_run_loop_inner_forwards_finalized_seq_to_gate_and_clears_pending(
             "confirmed": True,
             "E_quality": 120.0,
             "E_rate_noninf": 120.0,
+            "z": 0.2,
+            "r_eff": 200,
         },
         force_fresh_eval_context={
             "candidate": "candidate-a",
@@ -1033,6 +1106,16 @@ def test_run_loop_inner_forwards_finalized_seq_to_gate_and_clears_pending(
         "candidate": "candidate-a",
         "combined_E": 120.0,
         "baseline_update_reason": "",
+        "delta_ci": {
+            "status": "ok",
+            "confidence": 0.95,
+            "alpha": 0.05,
+            "n_eff": 200,
+            "mean_delta": 0.2,
+            "half_width": 0.173082,
+            "lower_bound": 0.026918,
+            "excludes_regression": True,
+        },
     }
     assert "seq_pending_promotion_fresh_eval" not in returned_state
 
@@ -1102,6 +1185,8 @@ def test_run_loop_inner_fresh_eval_exclusion_consumes_pending_promotion(
             "confirmed": False,
             "E_quality": 12.0,
             "E_rate_noninf": 11.0,
+            "z": 0.0,
+            "r_eff": 200,
         },
         force_fresh_eval_context={
             "candidate": "candidate-a",
@@ -1117,4 +1202,14 @@ def test_run_loop_inner_fresh_eval_exclusion_consumes_pending_promotion(
         "candidate": "candidate-a",
         "reason": "fresh-eval did not confirm",
         "combined_E": 11.0,
+        "delta_ci": {
+            "status": "ok",
+            "confidence": 0.95,
+            "alpha": 0.05,
+            "n_eff": 200,
+            "mean_delta": 0.0,
+            "half_width": 0.173082,
+            "lower_bound": -0.173082,
+            "excludes_regression": False,
+        },
     }

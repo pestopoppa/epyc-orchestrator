@@ -31,6 +31,7 @@ from dataclasses import asdict
 import fcntl
 import json
 import logging
+import math
 import os
 import re
 import signal
@@ -188,6 +189,9 @@ SEQ_BASELINE_REFERENCE_STALE_AFTER_S = float(
 )
 SEQ_PROMOTION_FINAL_CONFIRM_E = float(
     os.environ.get("AUTOPILOT_SEQ_PROMOTION_FINAL_CONFIRM_E", "100")
+)
+SEQ_PROMOTION_DELTA_CI_ALPHA = float(
+    os.environ.get("AUTOPILOT_SEQ_PROMOTION_DELTA_CI_ALPHA", "0.05")
 )
 SEQ_PROMOTION_FRESH_EVAL_TIER = int(
     os.environ.get("AUTOPILOT_SEQ_PROMOTION_FRESH_EVAL_TIER", "2")
@@ -752,6 +756,47 @@ def _seq_combined_e(seq: dict[str, Any] | None) -> float | None:
     return min(e_quality, e_rate)
 
 
+def _seq_promotion_delta_ci(seq: dict[str, Any] | None) -> dict[str, Any]:
+    """Return the Phase-2.4 one-sided non-regression CI for a promotion eval."""
+    if not isinstance(seq, dict):
+        return {
+            "status": "missing",
+            "excludes_regression": False,
+            "reason": "missing seq block",
+        }
+    try:
+        mean_delta = float(seq["z"])
+        n_eff = int(seq["r_eff"])
+    except (KeyError, TypeError, ValueError):
+        return {
+            "status": "missing",
+            "excludes_regression": False,
+            "reason": "missing z/r_eff promotion-delta evidence",
+        }
+    if n_eff <= 0:
+        return {
+            "status": "insufficient",
+            "n_eff": n_eff,
+            "mean_delta": round(mean_delta, 6),
+            "excludes_regression": False,
+            "reason": "no effective paired questions in promotion eval",
+        }
+
+    alpha = max(1e-12, min(0.5, SEQ_PROMOTION_DELTA_CI_ALPHA))
+    half_width = math.sqrt(2.0 * math.log(1.0 / alpha) / n_eff)
+    lower_bound = mean_delta - half_width
+    return {
+        "status": "ok",
+        "confidence": round(1.0 - alpha, 6),
+        "alpha": alpha,
+        "n_eff": n_eff,
+        "mean_delta": round(mean_delta, 6),
+        "half_width": round(half_width, 6),
+        "lower_bound": round(lower_bound, 6),
+        "excludes_regression": lower_bound >= 0.0,
+    }
+
+
 def _annotate_seq_promotion_finalization(
     seq: dict[str, Any] | None,
     *,
@@ -764,6 +809,7 @@ def _annotate_seq_promotion_finalization(
         return None
     reference = baseline_reference or {}
     combined_e = _seq_combined_e(seq)
+    delta_ci = _seq_promotion_delta_ci(seq) if is_fresh_eval else None
     stale_reference = bool(reference.get("stale_reference"))
     seq["baseline_reference"] = {
         "tier": reference.get("tier"),
@@ -779,6 +825,8 @@ def _annotate_seq_promotion_finalization(
     seq["baseline_promotion_fresh_eval"] = bool(is_fresh_eval)
     if combined_e is not None:
         seq["baseline_promotion_combined_E"] = round(combined_e, 6)
+    if delta_ci is not None:
+        seq["baseline_promotion_delta_ci"] = delta_ci
     if fresh_eval_context:
         seq["baseline_promotion_fresh_eval_for"] = {
             "candidate": fresh_eval_context.get("candidate"),
@@ -790,6 +838,8 @@ def _annotate_seq_promotion_finalization(
         and not stale_reference
         and combined_e is not None
         and combined_e >= SEQ_PROMOTION_FINAL_CONFIRM_E
+        and delta_ci is not None
+        and bool(delta_ci.get("excludes_regression"))
     )
     seq["baseline_promotion_finalized"] = finalized
     return finalized
@@ -896,25 +946,32 @@ def _update_seq_promotion_fresh_eval_state(
     if not isinstance(seq, dict):
         return
     baseline_update_reason = getattr(baseline_update, "reason", None)
+    delta_ci = seq.get("baseline_promotion_delta_ci")
     if finalized:
         state.pop("_seq_promotion_candidate_replay", None)
         if baseline_update is not None and not bool(getattr(baseline_update, "updated", False)):
             state.pop("seq_pending_promotion_fresh_eval", None)
-            state["seq_last_promotion_blocked"] = {
+            blocked = {
                 "trial_id": trial_counter,
                 "candidate": seq.get("candidate"),
                 "reason": "baseline-update-refused",
                 "baseline_update_reason": baseline_update_reason,
                 "combined_E": seq.get("baseline_promotion_combined_E"),
             }
+            if delta_ci is not None:
+                blocked["delta_ci"] = delta_ci
+            state["seq_last_promotion_blocked"] = blocked
             return
         state.pop("seq_pending_promotion_fresh_eval", None)
-        state["seq_last_promotion_finalized"] = {
+        finalized_state = {
             "trial_id": trial_counter,
             "candidate": seq.get("candidate"),
             "combined_E": seq.get("baseline_promotion_combined_E"),
             "baseline_update_reason": baseline_update_reason,
         }
+        if delta_ci is not None:
+            finalized_state["delta_ci"] = delta_ci
+        state["seq_last_promotion_finalized"] = finalized_state
         return
     if seq.get("baseline_reference_state") == "stale-reference":
         state.pop("_seq_promotion_candidate_replay", None)
@@ -928,7 +985,7 @@ def _update_seq_promotion_fresh_eval_state(
     if is_fresh_eval:
         state.pop("_seq_promotion_candidate_replay", None)
         state.pop("seq_pending_promotion_fresh_eval", None)
-        state["seq_last_promotion_blocked"] = {
+        blocked = {
             "trial_id": trial_counter,
             "candidate": seq.get("candidate"),
             "reason": (
@@ -938,6 +995,9 @@ def _update_seq_promotion_fresh_eval_state(
             ),
             "combined_E": seq.get("baseline_promotion_combined_E"),
         }
+        if delta_ci is not None:
+            blocked["delta_ci"] = delta_ci
+        state["seq_last_promotion_blocked"] = blocked
         return
     if not seq.get("confirmed"):
         return

@@ -773,6 +773,7 @@ class SafetyGate:
             policy=policy,
             rate_noninf_update=rate_update,
         )
+        block["r_eff"] = stat.r_eff
         # journal_seq_block records the QUALITY-only state; override with the joint
         # verdict so consumers (categories, update_baseline gate) read one decision.
         block["state"] = state

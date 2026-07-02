@@ -173,6 +173,7 @@ def test_check_seq_confirmed_requires_both_axes(tmp_path):
     assert verdict.seq["confirmed"] is True
     assert verdict.seq["E_quality"] >= 20.0
     assert verdict.seq["E_rate_noninf"] >= 20.0
+    assert verdict.seq["r_eff"] == 1
     assert "seq_confirmed" in verdict.categories
 
 
