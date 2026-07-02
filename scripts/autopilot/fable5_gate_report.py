@@ -156,6 +156,11 @@ def restart_section(restart_report: dict[str, Any]) -> GateSection:
         blockers=blockers,
         details={
             "restart_ready": restart_report.get("restart_ready"),
+            "archive_source_surface_ok": summary.get("archive_source_surface_ok"),
+            "archive_source_surface_count": summary.get("archive_source_surface_count"),
+            "archive_source_surface_failed_count": summary.get(
+                "archive_source_surface_failed_count"
+            ),
             "seq_cutover_ready": summary.get("seq_cutover_ready"),
             "seq_trusted_vector_trials": summary.get("seq_trusted_vector_trials"),
             "seq_min_trusted_vector_trials": summary.get(

@@ -69,6 +69,9 @@ xmas_routing:
                 "seq_min_shadow_rows": 30,
                 "seq_shadow_rows_remaining": 20,
                 "snapshot_restart_readiness": "tail_fold_ready",
+                "archive_source_surface_ok": True,
+                "archive_source_surface_count": 6,
+                "archive_source_surface_failed_count": 0,
                 "w6_audit_cutover_ready": False,
                 "w6_audited_trial_count": 34,
                 "w6_min_audited_trials": 30,
@@ -155,6 +158,9 @@ xmas_routing:
     assert restart["details"]["state_trial_counter"] == 896
     assert restart["details"]["seq_trusted_vector_trials_remaining"] == 58
     assert restart["details"]["seq_shadow_rows_remaining"] == 20
+    assert restart["details"]["archive_source_surface_ok"] is True
+    assert restart["details"]["archive_source_surface_count"] == 6
+    assert restart["details"]["archive_source_surface_failed_count"] == 0
     assert restart["details"]["w6_audited_trial_count_remaining"] == 0
     assert restart["details"]["w6_alarm_clearance_clean_trials_required"] == 4
     assert restart["details"]["snapshot_restart_readiness"] == "tail_fold_ready"

@@ -98,6 +98,16 @@ def _patch_ready_dependencies(monkeypatch, *, audit_report: dict[str, Any] | Non
     )
     monkeypatch.setattr(
         report_mod,
+        "build_archive_source_surface_audit",
+        lambda root=report_mod.ORCH_ROOT: {
+            "ok": True,
+            "surface_count": 4,
+            "failed_count": 0,
+            "results": [],
+        },
+    )
+    monkeypatch.setattr(
+        report_mod,
         "build_baseline_authority_report",
         lambda state, rows: {"ok": False, "status": "no_events"},
     )
@@ -257,6 +267,40 @@ def test_restart_summary_projects_w8_promotion_finalization(monkeypatch) -> None
     assert report["summary"]["w8_last_finalized_delta_excludes_regression"] is True
     rendered = report_mod.render_markdown(report)
     assert "W8 promotion evidence: status=finalized" in rendered
+
+
+def test_restart_report_blocks_on_archive_source_surface_audit_failure(monkeypatch) -> None:
+    _patch_ready_dependencies(monkeypatch, audit_report=_audit_report(audited_trial_count=30))
+    monkeypatch.setattr(
+        report_mod,
+        "build_archive_source_surface_audit",
+        lambda root=report_mod.ORCH_ROOT: {
+            "ok": False,
+            "surface_count": 4,
+            "failed_count": 1,
+            "results": [
+                {
+                    "name": "legacy fallback",
+                    "path": "scripts/autopilot/example.py",
+                    "ok": False,
+                    "missing": ["archive-source guard"],
+                    "reason": "unit fixture",
+                }
+            ],
+        },
+    )
+
+    report = report_mod.build_restart_readiness_report(_state(), [])
+
+    assert report["restart_ready"] is False
+    assert "archive source surface audit failed: 1 surface(s)" in report["blockers"]
+    assert report["summary"]["archive_source_surface_ok"] is False
+    assert report["summary"]["archive_source_surface_count"] == 4
+    assert report["summary"]["archive_source_surface_failed_count"] == 1
+    assert (
+        "Archive source surfaces: ok=False, failed=1/4"
+        in report_mod.render_markdown(report)
+    )
 
 
 def test_restart_ready_accepts_full_replay_when_snapshot_invalidated(monkeypatch) -> None:

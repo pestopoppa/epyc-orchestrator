@@ -16,6 +16,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 sys.path.insert(0, str(ORCH_ROOT))
 
 from archive_authority_report import build_archive_authority_report  # noqa: E402
+from archive_source_surface_audit import build_archive_source_surface_audit  # noqa: E402
 from audit_block_report import build_report as build_audit_block_report  # noqa: E402
 from baseline_authority_report import build_baseline_authority_report  # noqa: E402
 from baseline_authority_seed import build_baseline_seed_event  # noqa: E402
@@ -208,6 +209,7 @@ def _summary_report(report: dict[str, Any]) -> dict[str, Any]:
     snapshot = report["snapshot_replay"]
     archive = report["archive_authority"]
     baseline = report["baseline_authority"]
+    archive_source = report["archive_source_surface_audit"]
     baseline_seed = baseline.get("seed_preflight") or {}
     w8 = seq.get("w8_promotion_evidence") or {}
     seq_thresholds = seq.get("thresholds") or {}
@@ -233,6 +235,9 @@ def _summary_report(report: dict[str, Any]) -> dict[str, Any]:
         "restart_ready": report["restart_ready"],
         "blockers": report["blockers"],
         "archive_status": archive["diagnostic"].get("status"),
+        "archive_source_surface_ok": archive_source.get("ok"),
+        "archive_source_surface_count": archive_source.get("surface_count"),
+        "archive_source_surface_failed_count": archive_source.get("failed_count"),
         "snapshot_restart_readiness": snapshot.get("restart_readiness"),
         "snapshot_payload_available": snapshot.get("payload_available"),
         "baseline_authority_source": baseline.get("authority_source"),
@@ -342,6 +347,7 @@ def build_restart_readiness_report(
 ) -> dict[str, Any]:
     """Build a no-write report for safe AutoPilot restart/cutover decisions."""
     archive_report = build_archive_authority_report(state, journal_rows)
+    archive_source_report = build_archive_source_surface_audit(ORCH_ROOT)
     snapshot_report = _snapshot_restart_report(state, journal_rows)
     baseline_report = _baseline_restart_report(state, journal_rows)
     seq_report = build_seq_readiness_report(journal_rows, state=state)
@@ -357,6 +363,9 @@ def build_restart_readiness_report(
     if not archive_report.get("ok"):
         status = (archive_report.get("diagnostic") or {}).get("status", "unknown")
         blockers.append(f"archive authority is not aligned: {status}")
+    if not archive_source_report.get("ok"):
+        failed = archive_source_report.get("failed_count", "unknown")
+        blockers.append(f"archive source surface audit failed: {failed} surface(s)")
     if not snapshot_report.get("ok"):
         readiness = snapshot_report.get("restart_readiness", "unknown")
         blockers.append(f"journal archive is not restart-replayable: {readiness}")
@@ -377,6 +386,7 @@ def build_restart_readiness_report(
         "require_w6_audit": require_w6_audit,
         "blockers": blockers,
         "archive_authority": archive_report,
+        "archive_source_surface_audit": archive_source_report,
         "snapshot_replay": snapshot_report,
         "baseline_authority": baseline_report,
         "sequential_cutover": seq_report,
@@ -395,6 +405,12 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- Sequential cutover required: {str(report['require_seq_cutover']).lower()}",
         f"- W6 audit cutover required: {str(report['require_w6_audit']).lower()}",
         f"- Archive authority: {summary['archive_status']}",
+        (
+            "- Archive source surfaces: "
+            f"ok={summary['archive_source_surface_ok']}, "
+            f"failed={summary['archive_source_surface_failed_count']}/"
+            f"{summary['archive_source_surface_count']}"
+        ),
         (
             "- Snapshot replay: "
             f"{summary['snapshot_restart_readiness']} "
