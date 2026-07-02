@@ -141,6 +141,37 @@ xmas_routing:
     )
 
     assert report["ready"] is False
+    assert report["summary"]["ready"] is False
+    assert report["summary"]["blocker_count"] == 6
+    assert report["summary"]["blocked_sections"] == [
+        "w4_w6_restart_cutover",
+        "ds_e1_dynamic_stack",
+        "xmas_production_path",
+    ]
+    assert report["summary"]["section_statuses"]["phase_health"] == "ready"
+    assert report["summary"]["section_statuses"]["w4_w6_restart_cutover"] == "blocked"
+    assert report["summary"]["next_action_keys"] == [
+        "append_baseline_seed_event",
+        "continue_w4_w6_accrual",
+        "run_ds_e1_kv_measurements",
+        "collect_ri10_canary_arm_telemetry",
+        "run_xmas_constrained_policy_ab",
+    ]
+    assert report["summary"]["active_next_action_keys"] == [
+        "continue_w4_w6_accrual",
+        "collect_ri10_canary_arm_telemetry",
+    ]
+    assert report["summary"]["blocked_next_action_keys"] == [
+        "append_baseline_seed_event",
+        "run_ds_e1_kv_measurements",
+        "run_xmas_constrained_policy_ab",
+    ]
+    assert report["summary"]["restart_ready"] is False
+    assert report["summary"]["phase_trial_id"] == 896
+    assert report["summary"]["ds_e1_ready_for_profile_decision"] is False
+    assert report["summary"]["xmas_mode"] == "off"
+    assert report["summary"]["xmas_latest_ab_policy"] == "unknown_legacy"
+    assert report["summary"]["xmas_latest_ab_decision_status"] == "hold"
     assert "w4_w6_restart_cutover: sequential verdict cutover readiness is blocked" in report[
         "blockers"
     ]

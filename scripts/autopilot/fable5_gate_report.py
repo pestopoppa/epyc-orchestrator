@@ -564,11 +564,92 @@ def build_fable5_gate_report(
         for section in sections
         for blocker in section.blockers
     ]
+    next_actions = build_next_actions(sections)
     return {
         "ready": not blockers,
+        "summary": build_report_summary(sections, blockers, next_actions),
         "blockers": blockers,
         "sections": [asdict(section) for section in sections],
-        "next_actions": build_next_actions(sections),
+        "next_actions": next_actions,
+    }
+
+
+def build_report_summary(
+    sections: list[GateSection],
+    blockers: list[str],
+    next_actions: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Return compact read-only status for dashboards and handoff triage."""
+    by_key = {section.key: section for section in sections}
+    restart = by_key.get("w4_w6_restart_cutover")
+    ds_e1 = by_key.get("ds_e1_dynamic_stack")
+    xmas = by_key.get("xmas_production_path")
+    phase = by_key.get("phase_health")
+    return {
+        "ready": not blockers,
+        "blocker_count": len(blockers),
+        "blocked_sections": [
+            section.key
+            for section in sections
+            if section.blockers or section.status == "blocked"
+        ],
+        "section_statuses": {section.key: section.status for section in sections},
+        "next_action_keys": [str(action.get("key")) for action in next_actions],
+        "next_action_statuses": {
+            str(action.get("key")): action.get("status") for action in next_actions
+        },
+        "active_next_action_keys": [
+            str(action.get("key"))
+            for action in next_actions
+            if action.get("status") == "active"
+        ],
+        "blocked_next_action_keys": [
+            str(action.get("key"))
+            for action in next_actions
+            if action.get("status") == "blocked"
+        ],
+        "ready_next_action_keys": [
+            str(action.get("key"))
+            for action in next_actions
+            if action.get("status") == "ready"
+        ],
+        "phase_status": phase.details.get("status") if phase else None,
+        "phase_trial_id": phase.details.get("trial_id") if phase else None,
+        "phase_action_type": phase.details.get("action_type") if phase else None,
+        "restart_ready": (
+            restart.details.get("restart_ready") if restart is not None else None
+        ),
+        "w8_promotion_status": (
+            restart.details.get("w8_promotion_status") if restart is not None else None
+        ),
+        "w8_latest_seq_trial_id": (
+            restart.details.get("w8_latest_seq_trial_id") if restart is not None else None
+        ),
+        "w8_latest_combined_E": (
+            restart.details.get("w8_latest_combined_E") if restart is not None else None
+        ),
+        "w8_latest_required_E": (
+            restart.details.get("w8_latest_required_E") if restart is not None else None
+        ),
+        "w8_latest_seq_state": (
+            restart.details.get("w8_latest_seq_state") if restart is not None else None
+        ),
+        "w8_latest_fresh_eval": (
+            restart.details.get("w8_latest_fresh_eval") if restart is not None else None
+        ),
+        "ds_e1_ready_for_profile_decision": (
+            ds_e1.details.get("ready_for_profile_decision") if ds_e1 is not None else None
+        ),
+        "xmas_mode": xmas.details.get("mode") if xmas is not None else None,
+        "xmas_quiet_window_ready": (
+            xmas.details.get("quiet_window_ready") if xmas is not None else None
+        ),
+        "xmas_latest_ab_policy": (
+            xmas.details.get("latest_ab_policy") if xmas is not None else None
+        ),
+        "xmas_latest_ab_decision_status": (
+            xmas.details.get("latest_ab_decision_status") if xmas is not None else None
+        ),
     }
 
 
