@@ -167,7 +167,7 @@ class TestRateLimitMiddleware:
 
         from httpx import ASGITransport, AsyncClient
 
-        transport = ASGITransport(app=test_app)
+        transport = ASGITransport(app=test_app, client=("203.0.113.10", 12345))
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             # First request should succeed
             resp1 = await client.get("/")
@@ -195,7 +195,7 @@ class TestRateLimitMiddleware:
 
         from httpx import ASGITransport, AsyncClient
 
-        transport = ASGITransport(app=test_app)
+        transport = ASGITransport(app=test_app, client=("203.0.113.10", 12345))
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             await client.get("/")  # consume token
             resp = await client.get("/")  # rate limited
