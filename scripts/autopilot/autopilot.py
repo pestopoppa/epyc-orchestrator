@@ -3526,6 +3526,21 @@ def _run_loop_inner(
             except Exception as _exc:
                 pareto_geometry_text = f"(geometry unavailable: {_exc})"
 
+            # Stepping-stone lane (intake-772 Darwin Gödel Machine): append a diverse sample of
+            # dominated-but-novel configs to the geometry block so the planner sees exploration
+            # seeds beyond the frontier. Observe-only + fully guarded — never breaks the prompt.
+            # Gated by AUTOPILOT_STEPPING_STONES (default on); set to "0" for the frontier-only
+            # arm of the ablation in scripts/autopilot/STEPPING_STONE_ABLATION_PROTOCOL.md.
+            if os.environ.get("AUTOPILOT_STEPPING_STONES", "1") != "0":
+                try:
+                    _stepping_text = archive.stepping_stones_text(k=8, tier=DEFAULT_FRONTIER_TIER)
+                    if _stepping_text:
+                        pareto_geometry_text = f"{pareto_geometry_text}\n\n{_stepping_text}"
+                except Exception as _exc:
+                    pareto_geometry_text = (
+                        f"{pareto_geometry_text}\n\n(stepping-stones unavailable: {_exc})"
+                    )
+
             try:
                 planner_evidence_text = format_planner_evidence_section(
                     asdict(entry)

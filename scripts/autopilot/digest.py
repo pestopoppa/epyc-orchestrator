@@ -166,6 +166,68 @@ def _journal_section(journal: Any, lookback: int = 20) -> list[str]:
     return lines
 
 
+# Mechanism-class map (2026-07-02, intake-753 "Don't Train the Model, Evolve the Harness").
+# Maps a trial's action_type to a coarse mechanism CLASS so the digest can report frontier-rate
+# per class — testing, observe-only, whether deterministic code/structural mechanisms out-perform
+# prompt edits on our frozen served models (the intake's central claim) BEFORE any budget prior is
+# wired into MetaOptimizer.rebalance. Unmapped action_types fall into "other".
+_MECHANISM_CLASS: dict[str, str] = {
+    "code_mutation": "code/structural",
+    "structural_experiment": "code/structural",
+    "structural_prune": "code/structural",
+    "numeric_trial": "numeric",
+    "prompt_mutation": "prompt",
+    "gepa_optimize": "prompt",
+}
+
+
+def _mechanism_effectiveness_section(journal: Any) -> list[str]:
+    """Observe-only frontier-rate per mechanism class (code/structural vs numeric vs prompt).
+
+    Distills intake-753: for frozen served models, deterministic-code mechanisms tended to beat
+    prompt edits. This reports — WITHOUT judging or promoting — whether that holds on our fleet, so
+    a per-mechanism budget prior is measured, not assumed. Resolution-aware: the trial count (n) is
+    printed beside each rate; a small n is not decision-grade (MEASUREMENT.md).
+    """
+    lines = ["### Mechanism-class effectiveness (observe-only)"]
+    # Prefer the supersession-folded view so bug_corrupted_by / pareto_status reflect post-hoc
+    # operator overrides — matching the frontier-rate helpers (trustworthy_entries et al.) this
+    # section mirrors. Fall back to the raw rows only if that API is unavailable.
+    try:
+        entries = journal.entries_with_supersessions()
+    except Exception:  # best-effort: digest never fails the loop
+        entries = getattr(journal, "_entries", None)
+    if entries is None:
+        return lines + ["- (journal entries unavailable)"]
+    buckets: dict[str, list[Any]] = {}
+    for e in entries or []:
+        if getattr(e, "bug_corrupted_by", None):
+            continue  # exclude corrupted trials, as the frontier-rate helpers do
+        if int(getattr(e, "tier", 0) or 0) <= 0:
+            continue  # T0 fast-reject is never frontier-eligible
+        cls = _MECHANISM_CLASS.get(getattr(e, "action_type", "") or "", "other")
+        buckets.setdefault(cls, []).append(e)
+    if not buckets:
+        return lines + ["- (no frontier-eligible trials yet)"]
+    lines.append("")
+    lines.append("| mechanism class | trials (n) | frontier | frontier-rate |")
+    lines.append("|---|---|---|---|")
+    for cls in ("code/structural", "numeric", "prompt", "other"):
+        es = buckets.get(cls)
+        if not es:
+            continue
+        n = len(es)
+        fr = sum(1 for e in es if getattr(e, "pareto_status", "") == "frontier")
+        lines.append(f"| {cls} | {n} | {fr} | {(fr / n if n else 0.0):.1%} |")
+    lines.append("")
+    lines.append(
+        "- Observe-only (intake-753): a higher frontier-rate for code/structural vs prompt would "
+        "corroborate 'code > prompt for frozen models' on our fleet. NOT a budget signal until a "
+        "resolution-aware separation is confirmed — small n is not decision-grade (MEASUREMENT.md)."
+    )
+    return lines
+
+
 def _economics_section(now: datetime, repo_root: Path | None = None) -> list[str]:
     """Render a compact read-only economics summary for the daily digest."""
     root = repo_root or Path(__file__).resolve().parents[2]
@@ -247,6 +309,8 @@ def render_digest(
         body.append("")
     if journal is not None:
         body.extend(_journal_section(journal))
+        body.append("")
+        body.extend(_mechanism_effectiveness_section(journal))
         body.append("")
     body.append("---")
     body.append("")

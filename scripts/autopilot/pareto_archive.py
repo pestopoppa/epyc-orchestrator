@@ -910,6 +910,91 @@ class ParetoArchive:
         lines.append(f"\nSuggested attack: {g['suggested_attack']}")
         return "\n".join(lines)
 
+    # ── stepping-stone lane (2026-07-02, intake-772 Darwin Gödel Machine) ──
+    # DGM (arXiv 2505.22954) keeps ALL variants as stepping stones, not just the
+    # Pareto-optimal ones, so search can traverse lower-performing nodes to escape
+    # local optima. Our archive already RETAINS every trial in _all_entries, but the
+    # planner prompt only ever renders the frontier (summary_text / geometry_text) —
+    # so dominated-but-novel configs are archive-dead in practice. These two methods
+    # surface a small, DIVERSITY-sampled (not score-ranked) subset of dominated
+    # entries as candidate exploration seeds. Read-only, inference-free, observe-only:
+    # nothing here promotes or re-runs a config; the controller may choose to seed
+    # from a stone, but a stone only earns a frontier point by winning the existing
+    # 4D dominance test. Promotion of this lane to an AUTHORITATIVE parent-selection
+    # signal is gated behind the paired A/B in
+    # scripts/autopilot/STEPPING_STONE_ABLATION_PROTOCOL.md.
+
+    def stepping_stones(
+        self, k: int = 8, tier: int | None = None, *, recency: int = 200
+    ) -> list[ParetoEntry]:
+        """Up to ``k`` DOMINATED-but-novel entries for one tier, diversity-sampled.
+
+        A stepping stone is a frontier-ELIGIBLE entry (eval_tier >= MIN_FRONTIER_EVAL_TIER)
+        that is NOT on the current frontier — i.e. dominated within its tier. Candidates are
+        drawn from the most recent ``recency`` entries (a bounded, current view). Selection is
+        by farthest-point (max-min) spread in per-axis range-normalized objective space, seeded
+        by the most recent candidate — deterministic, no RNG, no score ranking — so the lane is
+        deliberately DIVERSE rather than a second-best frontier.
+        """
+        t = self._tier(tier)
+        on_frontier = {id(e) for e in self._front(t)}
+        cands = [
+            e
+            for e in self._all_entries[-recency:]
+            if self.is_frontier_eligible(e)
+            and int(e.eval_tier) == t
+            and id(e) not in on_frontier
+        ]
+        if len(cands) <= k:
+            return list(cands)
+        ref = spec_for(t).reference_point
+        n_axes = len(cands[0].objectives)
+        axis_max = [max(e.objectives[a] for e in cands) for a in range(n_axes)]
+        axis_rng = [(axis_max[a] - ref[a]) or 1.0 for a in range(n_axes)]
+        vecs = [
+            [(e.objectives[a] - ref[a]) / axis_rng[a] for a in range(n_axes)]
+            for e in cands
+        ]
+        # Greedy farthest-point sampling: start at the most recent candidate, then repeatedly
+        # add whichever remaining candidate is farthest (max of its min-distance) from the
+        # already-selected set. Deterministic and cheap for the small k we surface.
+        selected = [len(cands) - 1]
+        while len(selected) < k:
+            best_i, best_d = -1, -1.0
+            for i in range(len(cands)):
+                if i in selected:
+                    continue
+                d = min(
+                    sum((vecs[i][a] - vecs[j][a]) ** 2 for a in range(n_axes))
+                    for j in selected
+                )
+                if d > best_d:
+                    best_d, best_i = d, i
+            if best_i < 0:
+                break
+            selected.append(best_i)
+        return [cands[i] for i in selected]
+
+    def stepping_stones_text(self, k: int = 8, tier: int | None = None) -> str:
+        """Render :meth:`stepping_stones` for the controller prompt (empty string if none)."""
+        stones = self.stepping_stones(k=k, tier=tier)
+        if not stones:
+            return ""
+        t = self._tier(tier)
+        lines = [
+            f"── Stepping-stone candidates (dominated-but-novel, T{t}) ──",
+            "Diverse DOMINATED configs the frontier view omits — candidate exploration seeds to "
+            "escape local optima (Darwin-Gödel open-endedness, intake-772). NOT frontier points; "
+            "observe-only, not a promotion signal.",
+        ]
+        for e in stones:
+            lines.append(
+                f"  #{e.trial_id} [{e.species}] "
+                f"q={e.objectives[0]:.3f} s={e.objectives[1]:.1f} "
+                f"c={-e.objectives[2]:.3f} r={e.objectives[3]:.2f}"
+            )
+        return "\n".join(lines)
+
 
 def pareto_archive_from_journal_rows(
     rows: list[dict[str, Any]],
