@@ -637,6 +637,26 @@ def test_w8_next_action_when_restart_ready_without_promotion_finalization() -> N
     assert actions[0]["evidence"]["latest_baseline_reference_state"] == "fresh"
 
 
+def test_quiet_window_process_matcher_ignores_script_names_in_prompts() -> None:
+    planner_line = (
+        "123 claude -p Use scripts/benchmark/seed_specialist_routing.py "
+        "only when the clean window is approved"
+    )
+    real_line = (
+        "456 uv run python scripts/benchmark/seed_specialist_routing.py "
+        "--dry-run"
+    )
+
+    assert not report_mod._process_line_matches_pattern(
+        planner_line,
+        "seed_specialist_routing.py",
+    )
+    assert report_mod._process_line_matches_pattern(
+        real_line,
+        "seed_specialist_routing.py",
+    )
+
+
 def test_render_markdown_surfaces_section_details() -> None:
     rendered = report_mod.render_markdown(
         {

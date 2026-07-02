@@ -382,8 +382,49 @@ def _pgrep_lines(pattern: str) -> list[str]:
     return [
         line.strip()
         for line in result.stdout.splitlines()
-        if line.strip() and line.split(maxsplit=1)[0] != current_pid
+        if line.strip()
+        and line.split(maxsplit=1)[0] != current_pid
+        and _process_line_matches_pattern(line, pattern)
     ]
+
+
+def _process_line_matches_pattern(line: str, pattern: str) -> bool:
+    """Return True when a pgrep row is an actual script invocation."""
+    parts = line.split()
+    if len(parts) < 2:
+        return False
+    argv = parts[1:]
+    pattern_parts = pattern.split()
+    script_idx = next(
+        (
+            idx
+            for idx, token in enumerate(pattern_parts)
+            if re.search(r"\.(py|sh)$", Path(token).name)
+        ),
+        None,
+    )
+    if script_idx is None:
+        return pattern in " ".join(argv)
+
+    script_name = Path(pattern_parts[script_idx]).name
+    trailing = pattern_parts[script_idx + 1 :]
+    for idx, token in enumerate(argv):
+        if Path(token).name != script_name:
+            continue
+        if not _script_token_has_runner_context(argv, idx):
+            continue
+        if trailing and any(part not in argv[idx + 1 :] for part in trailing):
+            continue
+        return True
+    return False
+
+
+def _script_token_has_runner_context(argv: list[str], idx: int) -> bool:
+    token = argv[idx]
+    if idx <= 1 or token.endswith(".sh"):
+        return True
+    prior = {Path(item).name for item in argv[max(0, idx - 3) : idx]}
+    return bool(prior & {"python", "python3", "uv", "bash", "sh"})
 
 
 def restart_orchestrator(env: dict[str, str]) -> str:

@@ -128,6 +128,23 @@ def test_ensure_host_quiet_filters_current_process(monkeypatch) -> None:
     xmas_live_ab.ensure_host_quiet()
 
 
+def test_pgrep_lines_ignores_script_names_embedded_in_planner_prompt(monkeypatch) -> None:
+    def fake_run(cmd, *, capture_output, text):
+        assert cmd == ["pgrep", "-af", "seed_specialist_routing.py"]
+        return SimpleNamespace(
+            stdout=(
+                "123 claude -p Consider scripts/benchmark/seed_specialist_routing.py later\n"
+                "456 uv run python scripts/benchmark/seed_specialist_routing.py --dry-run\n"
+            )
+        )
+
+    monkeypatch.setattr(xmas_live_ab.subprocess, "run", fake_run)
+
+    assert xmas_live_ab._pgrep_lines("seed_specialist_routing.py") == [
+        "456 uv run python scripts/benchmark/seed_specialist_routing.py --dry-run"
+    ]
+
+
 def test_real_run_reports_clean_host_quiet_refusal(monkeypatch, tmp_path: Path) -> None:
     prompts = tmp_path / "prompts.jsonl"
     prompts.write_text(
