@@ -1059,6 +1059,7 @@ body.insight-fullscreen-open { overflow: hidden; }
 <script>
 const NODE_RADIUS = 18;
 let topology = null;
+let _topologySig = null;
 let activeStream = null;
 let detailStream = null;
 let _roleAliasToBase = {};
@@ -1067,10 +1068,38 @@ let _insightGraphData = null;
 let _latestSnapshotFrameTs = 0;
 let _snapshotPollInFlight = false;
 
+// Signature of the strip's *structure* — the fields renderTopologyStrip lays
+// out (role labels, ports, backing models, kind). Live activity (dots, tps,
+// holders) is NOT included: those overlay the existing DOM every poll and must
+// not force a rebuild. Only a real topology change (stack reload, post-reboot
+// re-launch with different ports/models/roles) changes this string.
+function _computeTopologySig(topo) {
+    if (!topo || !Array.isArray(topo.nodes)) return '';
+    return topo.nodes
+        .map(n => `${n.id}|${n.label || ''}|${n.port || ''}|${n.kind || ''}|${(n.model || '').trim()}`)
+        .sort()
+        .join('\n');
+}
+
 async function loadTopology() {
-    const r = await fetch('/dashboard/api/topology');
+    const r = await fetch(`/dashboard/api/topology?t=${Date.now()}`, { cache: 'no-store' });
     topology = await r.json();
+    // Re-render the strip only when its structure actually changed. This keeps
+    // the periodic poll cheap and non-disruptive in steady state (preserving
+    // per-row expand/collapse state), while still self-healing when the stack
+    // topology shifts under a running tab — e.g. after a reboot/stack reload,
+    // where the old code left the strip (and the region-lock slot-dots layered
+    // on it) frozen on the pre-reboot ports until a manual browser refresh.
+    const sig = _computeTopologySig(topology);
+    const strip = document.getElementById('topology-strip');
+    const needsPaint = sig !== _topologySig || !strip || !strip.children.length;
+    if (!needsPaint) return;
+    _topologySig = sig;
     renderTopologyStrip();
+    // Freshly built rows have empty overlays — repaint the live layers now
+    // instead of waiting for the next interval tick, so a rebuilt strip is
+    // never momentarily blank.
+    scheduleRegionLocksRefresh(true);
 }
 
 function renderTopologyStrip() {
@@ -5708,6 +5737,7 @@ async function updateRegionLocks(refreshSeq = _regionLocksRefreshSeq, regionLock
         setInterval(updateSnapshotPoll, 2500);  // fallback for stream stalls + per-panel render isolation
         setTimeout(ensureRegionLocksPanelPainted, 750);
         setInterval(() => scheduleRegionLocksRefresh(true), 1500);  // shared live-inference refresh for locks + topology activity
+        setInterval(() => startPanelSafely('topology-refresh', loadTopology), 5000);  // rebuild strip when stack topology shifts (reboot/reload) — no-op when unchanged
         setInterval(updateAutopilotProgress, 3000);  // 3s poll — trial progress bar (state.json mtime polling)
         setInterval(updateRepoReadiness, 60000);  // advisory artifacts change only on scorer/checkpoint runs
         setInterval(updateOptimizationBrief, 60000);
