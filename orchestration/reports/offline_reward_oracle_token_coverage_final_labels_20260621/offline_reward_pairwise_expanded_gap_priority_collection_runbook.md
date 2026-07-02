@@ -7,6 +7,18 @@ Do not run these commands during active AutoPilot or another live measurement
 window. `--dry-run` prevents reward injection, but it still performs live model
 evaluation and consumes model slots.
 
+## Read-Only Status
+
+Check whether this collection window is structurally ready and whether the
+AutoPilot guard is currently blocking execution:
+
+```bash
+uv run python scripts/graph_router/offline_reward_pairwise_collection_status.py
+```
+
+Exit code `0` means ready, `75` means the manifest is valid but AutoPilot is
+active, and `2` means the manifest or guard contract needs repair.
+
 ## Priority 0 — Source-Family Blockers
 
 Set a shared run id:
