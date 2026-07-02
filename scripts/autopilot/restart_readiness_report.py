@@ -301,6 +301,8 @@ def _cutover_horizon(components: dict[str, Any]) -> dict[str, Any]:
     if not remaining:
         return {"remaining": None, "blocker": None, "components": components}
     blocker, count = max(remaining.items(), key=lambda item: (item[1], item[0]))
+    if count <= 0:
+        blocker = None
     return {"remaining": count, "blocker": blocker, "components": remaining}
 
 

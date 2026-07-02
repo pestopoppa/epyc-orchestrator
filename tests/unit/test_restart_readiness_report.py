@@ -453,6 +453,42 @@ def test_require_w6_audit_accepts_clean_minimum(monkeypatch) -> None:
     assert report["summary"]["w6_audited_trial_count_remaining"] == 0
 
 
+def test_cutover_horizon_has_no_blocker_when_all_components_clear(monkeypatch) -> None:
+    _patch_ready_dependencies(
+        monkeypatch,
+        audit_report=_audit_report(audited_trial_count=30),
+    )
+    monkeypatch.setattr(
+        report_mod,
+        "build_seq_readiness_report",
+        lambda rows: {
+            "cutover_ready": True,
+            "trusted_vector_trials": 120,
+            "seq_shadow": {"seq_shadow_rows": 30},
+            "thresholds": {
+                "min_trusted_vector_trials": 120,
+                "min_seq_shadow_rows": 30,
+            },
+            "cutover_blockers": [],
+        },
+    )
+
+    report = report_mod.build_restart_readiness_report(
+        _state(),
+        [],
+        require_w6_audit=True,
+    )
+
+    assert report["summary"]["cutover_horizon_clean_trials_remaining"] == 0
+    assert report["summary"]["cutover_horizon_blocker"] is None
+    assert report["summary"]["cutover_horizon_components"] == {
+        "seq_trusted_vectors": 0,
+        "seq_shadow_rows": 0,
+        "w6_audited_trials": 0,
+        "w6_alarm_clearance": 0,
+    }
+
+
 def test_require_w6_audit_uses_trailing_alarm_window(monkeypatch) -> None:
     _patch_ready_dependencies(monkeypatch)
 
