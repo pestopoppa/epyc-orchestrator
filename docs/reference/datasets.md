@@ -66,6 +66,10 @@ Implemented builder scaffolds live in `scripts/datasets/` on
   `reviewed_intake_triage_verdict.v1` JSONL row for an intake ID, including
   source-index hash, extracted classification features, reviewer, destination,
   quarantine policy version, and output contract version.
+- `apply_intake_triage_review_batch.py`: validate JSONL/YAML batches of reviewed
+  intake-triage decisions and append them through the same recorder only when
+  `--apply` is set. Without `--apply`, it is a dry-run package check for
+  operator review batches.
 - `prepare_intake_triage_review.py`: intake index ->
   `intake_triage_review_queue.v1` JSONL plus `dataset_builder_manifest.v1`;
   excludes already reviewed intake IDs, supports verdict filters, and emits
@@ -136,9 +140,11 @@ Initial keep rule:
 - Per-question `question_results` are branch-ready in
   `feat/paired-question-stats-current` but not deployed, so historical journal
   rows do not yet contain outcome vectors.
-- Failed Claude planner calls and reviewed intake-triage label capture are
-  branch-ready on `feat/intake-triage-label-capture`; the W7 branch additionally
-  removes draft session persistence. Neither branch is deployed.
+- Failed Claude planner calls are branch-ready on
+  `feat/intake-triage-label-capture`; the W7 branch additionally removes draft
+  session persistence. Intake-triage label capture is live through the queue,
+  single-row recorder, readiness reporter, and dry-run-by-default batch
+  applicator.
 - F2 lab jobs, review queue, verdict recorder, and shadow-batch wrapper are
   branch-ready on `feat/lab-reliability-ladder` but not deployed; real reviewed
   `lab_gold_tuple.v1` rows do not exist yet.
@@ -149,6 +155,8 @@ Initial keep rule:
   `orchestration/datasets/intake_triage_reviewed.jsonl`. Use
   `scripts/datasets/intake_triage_review_status.py` to report the live queue,
   reviewed-label count, and remaining labels needed before running the baseline
-  acceptance gate.
+  acceptance gate. Use `scripts/datasets/apply_intake_triage_review_batch.py`
+  for operator-reviewed batches; it validates without writing unless `--apply`
+  is provided.
 - No builder should train on strategy-memory text from scrubbed or gate-lock-era
   rows until it joins each strategy to trustworthy journal evidence.
