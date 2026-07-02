@@ -26,6 +26,7 @@ from scripts.datasets.record_intake_triage_verdict import (
 
 DEFAULT_OUTPUT = Path("orchestration/datasets/intake_triage_review_queue.jsonl")
 DEFAULT_MANIFEST = Path("orchestration/datasets/intake_triage_review_queue.manifest.json")
+DEFAULT_BATCH_TEMPLATE = Path("orchestration/datasets/intake_triage_review_batch_template.jsonl")
 BUILDER_VERSION = "intake_triage_review_queue_builder.v1"
 DEFAULT_TRUSTED_REVIEWED_LABEL_SOURCES = ("operator",)
 
@@ -201,6 +202,28 @@ def build_queue(
     return queue, counts
 
 
+def build_batch_template(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    template: list[dict[str, Any]] = []
+    for row in rows:
+        template.append(
+            {
+                "intake_id": row["intake_id"],
+                "title": row.get("title") or "",
+                "url": row.get("url") or "",
+                "source_type": row.get("source_type") or "",
+                "categories": row.get("categories") or [],
+                "suggested_verdict": row.get("current_verdict") or "",
+                "verdict": "",
+                "destination_handoff": row.get("destination_handoff") or "",
+                "destination_index": row.get("destination_index") or "",
+                "label_source": row.get("label_source") or "operator",
+                "notes": "",
+                "source_text_excluded": True,
+            }
+        )
+    return template
+
+
 def run(args: argparse.Namespace) -> dict[str, Any]:
     intake_path = Path(args.intake).expanduser().resolve()
     output_path = Path(args.output).expanduser()
@@ -224,6 +247,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         limit=limit,
     )
     written = write_jsonl(output_path, rows)
+    batch_template_path = Path(args.batch_template).expanduser() if args.batch_template else None
+    batch_template_written = 0
+    if batch_template_path is not None:
+        batch_template_written = write_jsonl(batch_template_path, build_batch_template(rows))
     generated_at = utc_now()
     write_manifest(
         manifest_path,
@@ -234,6 +261,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         counts={**counts, "written": written},
         options={
             "reviewed_labels": str(reviewed_labels_path),
+            "batch_template": str(batch_template_path) if batch_template_path else "",
             "include_verdict": sorted(include_verdicts) if include_verdicts is not None else [],
             "exclude_verdict": sorted(exclude_verdicts) if exclude_verdicts is not None else [],
             "label_source": args.label_source,
@@ -241,7 +269,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "limit": limit,
         },
     )
-    return {"output": str(output_path), "manifest": str(manifest_path), "counts": counts}
+    return {
+        "output": str(output_path),
+        "manifest": str(manifest_path),
+        "batch_template": str(batch_template_path) if batch_template_path else "",
+        "batch_template_written": batch_template_written,
+        "counts": counts,
+    }
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -249,6 +283,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--intake", default=str(DEFAULT_INTAKE))
     parser.add_argument("--output", default=str(DEFAULT_OUTPUT))
     parser.add_argument("--manifest", default=str(DEFAULT_MANIFEST))
+    parser.add_argument(
+        "--batch-template",
+        nargs="?",
+        const=str(DEFAULT_BATCH_TEMPLATE),
+        default="",
+        help=(
+            "Optionally write operator-fillable JSONL decisions for "
+            "apply_intake_triage_review_batch.py; defaults to the standard "
+            "template path when no value is supplied."
+        ),
+    )
     parser.add_argument("--reviewed-labels", default=str(DEFAULT_REVIEWED_LABELS))
     parser.add_argument("--include-verdict", action="append", default=[])
     parser.add_argument("--exclude-verdict", action="append", default=[])

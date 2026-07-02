@@ -519,6 +519,7 @@ def test_prepare_intake_triage_review_queue_excludes_reviewed_and_source_text(
             include_verdict=["route_to_handoff"],
             exclude_verdict=[],
             label_source="operator",
+            batch_template="",
             limit=0,
         )
     )
@@ -537,6 +538,72 @@ def test_prepare_intake_triage_review_queue_excludes_reviewed_and_source_text(
     assert "IGNORE PRIOR INSTRUCTIONS" not in json.dumps(rows[0])
     assert "DO NOT INCLUDE" not in json.dumps(rows[0])
     assert json.loads(manifest.read_text())["counts"]["written"] == 1
+
+
+def test_prepare_intake_triage_review_queue_writes_safe_batch_template(
+    tmp_path: Path,
+) -> None:
+    intake = tmp_path / "intake_index.yaml"
+    intake.write_text(
+        yaml.safe_dump(
+            [
+                {
+                    "id": "intake-1",
+                    "url": "https://example.test/tool",
+                    "source_type": "repo",
+                    "title": "Needs batch review",
+                    "categories": ["datasets"],
+                    "verdict": "route_to_handoff",
+                    "citation_context": "DO NOT INCLUDE",
+                    "cross_references": {
+                        "handoffs": ["frontier-f3-data-flywheel.md"],
+                        "indices": ["strategic-frontiers"],
+                    },
+                },
+            ],
+            sort_keys=False,
+        )
+    )
+    output = tmp_path / "review_queue.jsonl"
+    manifest = tmp_path / "manifest.json"
+    batch_template = tmp_path / "batch_template.jsonl"
+
+    result = prepare_intake_triage_review.run(
+        Namespace(
+            intake=str(intake),
+            output=str(output),
+            manifest=str(manifest),
+            reviewed_labels="",
+            include_verdict=[],
+            exclude_verdict=[],
+            label_source="operator",
+            trusted_reviewed_label_source=[],
+            batch_template=str(batch_template),
+            limit=0,
+        )
+    )
+
+    rows = _read_jsonl(batch_template)
+    assert result["batch_template"] == str(batch_template)
+    assert result["batch_template_written"] == 1
+    assert rows == [
+        {
+            "intake_id": "intake-1",
+            "title": "Needs batch review",
+            "url": "https://example.test/tool",
+            "source_type": "repo",
+            "categories": ["datasets"],
+            "suggested_verdict": "route_to_handoff",
+            "verdict": "",
+            "destination_handoff": "frontier-f3-data-flywheel.md",
+            "destination_index": "strategic-frontiers",
+            "label_source": "operator",
+            "notes": "",
+            "source_text_excluded": True,
+        }
+    ]
+    assert "DO NOT INCLUDE" not in batch_template.read_text()
+    assert json.loads(manifest.read_text())["options"]["batch_template"] == str(batch_template)
 
 
 def test_prepare_intake_triage_review_queue_accepts_shadow_job_label_source(
@@ -567,6 +634,7 @@ def test_prepare_intake_triage_review_queue_accepts_shadow_job_label_source(
             include_verdict=[],
             exclude_verdict=[],
             label_source="shadow_job",
+            batch_template="",
             limit=0,
         )
     )
@@ -604,6 +672,7 @@ def test_prepare_intake_triage_review_queue_ignores_shadow_labels_by_default(
             include_verdict=[],
             exclude_verdict=[],
             label_source="operator",
+            batch_template="",
             limit=0,
         )
     )

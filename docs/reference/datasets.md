@@ -73,7 +73,10 @@ Implemented builder scaffolds live in `scripts/datasets/` on
 - `prepare_intake_triage_review.py`: intake index ->
   `intake_triage_review_queue.v1` JSONL plus `dataset_builder_manifest.v1`;
   excludes already reviewed intake IDs, supports verdict filters, and emits
-  prompt-free review rows with ready-to-run recorder commands.
+  prompt-free review rows with ready-to-run recorder commands. It can also write
+  an operator-fillable batch template with `--batch-template`; the template
+  leaves `verdict` blank and carries the intake row's current verdict only as
+  `suggested_verdict`.
 - `intake_triage_review_status.py`: read-only readiness report for the review
   queue and reviewed-label corpus; reports aggregate counts only and identifies
   whether the 100-reviewed-label baseline gate can run.
