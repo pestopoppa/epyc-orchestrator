@@ -304,6 +304,9 @@ def test_archive_authority_diagnostic_matches_reconstructed_state() -> None:
     assert diagnostic["journal_entry_count"] == 1
     assert diagnostic["state_frontier_count"] == 1
     assert diagnostic["journal_frontier_count"] == 1
+    assert diagnostic["snapshot_tail_trial_count"] == 0
+    assert diagnostic["snapshot_tail_max_trial_id"] is None
+    assert diagnostic["snapshot_journal_max_trial_id"] is None
 
 
 def test_archive_authority_diagnostic_accepts_missing_state_cache() -> None:

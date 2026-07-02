@@ -343,6 +343,21 @@ def archive_authority_diagnostic(state: dict, journal_rows: list[dict]) -> dict:
     if snapshot_diagnostic.bounded_replay_readiness == "prefix_invalidated":
         snapshot_warnings.append("latest journal snapshot prefix is invalidated")
 
+    snapshot_tail_details = {
+        "snapshot_through_trial_id": getattr(
+            snapshot_diagnostic, "through_trial_id", None
+        ),
+        "snapshot_tail_trial_count": getattr(
+            snapshot_diagnostic, "tail_trial_count", 0
+        ),
+        "snapshot_tail_max_trial_id": getattr(
+            snapshot_diagnostic, "tail_max_trial_id", None
+        ),
+        "snapshot_journal_max_trial_id": getattr(
+            snapshot_diagnostic, "journal_max_trial_id", None
+        ),
+    }
+
     journal_view = _archive_authority_view(journal_archive)
     if not state_archive_present:
         status = "match" if not warnings else "drift"
@@ -357,6 +372,7 @@ def archive_authority_diagnostic(state: dict, journal_rows: list[dict]) -> dict:
             "journal_frontier_count": len(journal_view["frontier"]),
             "snapshot_readiness": snapshot_diagnostic.bounded_replay_readiness,
             "snapshot_replay_status": snapshot_diagnostic.status,
+            **snapshot_tail_details,
             "snapshot_warnings": snapshot_warnings,
             "replay_kwargs": replay_kwargs,
             "warnings": warnings,
@@ -375,6 +391,7 @@ def archive_authority_diagnostic(state: dict, journal_rows: list[dict]) -> dict:
         "journal_frontier_count": len(journal_view["frontier"]),
         "snapshot_readiness": snapshot_diagnostic.bounded_replay_readiness,
         "snapshot_replay_status": snapshot_diagnostic.status,
+        **snapshot_tail_details,
         "snapshot_warnings": snapshot_warnings,
         "replay_kwargs": replay_kwargs,
         "warnings": warnings,
@@ -641,6 +658,9 @@ def audit_archive_authority() -> bool:
         (
             f"readiness={diagnostic.get('snapshot_readiness', 'n/a')} "
             f"replay={diagnostic.get('snapshot_replay_status', 'n/a')} "
+            f"through={diagnostic.get('snapshot_through_trial_id', 'n/a')} "
+            f"tail_trials={diagnostic.get('snapshot_tail_trial_count', 'n/a')} "
+            f"tail_max={diagnostic.get('snapshot_tail_max_trial_id', 'n/a')} "
             f"full_replay_available={full_replay_available}"
         ),
     )

@@ -194,6 +194,13 @@ def render_markdown(report: dict[str, Any]) -> str:
             f"readiness={diagnostic.get('snapshot_readiness', 'n/a')}, "
             f"status={diagnostic.get('snapshot_replay_status', 'n/a')}"
         ),
+        (
+            "- Snapshot tail: "
+            f"through_trial_id={diagnostic.get('snapshot_through_trial_id', 'n/a')}, "
+            f"tail_trials={diagnostic.get('snapshot_tail_trial_count', 'n/a')}, "
+            f"tail_max_trial_id={diagnostic.get('snapshot_tail_max_trial_id', 'n/a')}, "
+            f"journal_max_trial_id={diagnostic.get('snapshot_journal_max_trial_id', 'n/a')}"
+        ),
         "",
         "## Trial ID Deltas",
         "",

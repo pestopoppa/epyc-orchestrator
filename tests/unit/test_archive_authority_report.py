@@ -139,6 +139,10 @@ def test_markdown_renders_structured_report_core_fields() -> None:
         f"- Common-entry value mismatches: {report['entry_mismatches']['count']}"
         in rendered
     )
+    assert (
+        "- Snapshot tail: through_trial_id=None, tail_trials=0, "
+        "tail_max_trial_id=None, journal_max_trial_id=None"
+    ) in rendered
 
 
 def test_cli_json_strict_returns_nonzero_on_drift(
