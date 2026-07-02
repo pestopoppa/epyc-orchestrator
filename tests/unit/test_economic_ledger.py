@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import json
 import sys
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -12,6 +13,22 @@ sys.path.insert(0, str(ROOT))
 
 ledger_mod = importlib.import_module("scripts.economics.ledger")
 digest = importlib.import_module("scripts.autopilot.digest")
+
+
+@dataclass
+class _DigestEntry:
+    action_type: str
+    pareto_status: str
+    tier: int = 1
+    bug_corrupted_by: str = ""
+
+
+class _DigestJournal:
+    def __init__(self, entries: list[_DigestEntry]) -> None:
+        self._entries = entries
+
+    def entries_with_supersessions(self) -> list[_DigestEntry]:
+        return self._entries
 
 
 def _append_jsonl(path: Path, rows: list[dict]) -> None:
@@ -144,6 +161,34 @@ def test_digest_economics_section_is_best_effort(tmp_path: Path) -> None:
     assert any("planner monthly projection" in line and "(hold)" in line for line in section)
     assert any("operator gate-latency rule: not evaluated" in line for line in section)
     assert any("economic rules source: built-in defaults" in line for line in section)
+
+
+def test_digest_mechanism_effectiveness_is_observe_only() -> None:
+    section = digest._mechanism_effectiveness_section(
+        _DigestJournal(
+            [
+                _DigestEntry("prompt_mutation", "frontier"),
+                _DigestEntry("gepa_optimize", "dominated"),
+                _DigestEntry("numeric_trial", "frontier"),
+                _DigestEntry("structural_experiment", "dominated"),
+                _DigestEntry("code_mutation", "frontier"),
+                _DigestEntry("seed_batch", "dominated"),
+                _DigestEntry("deep_eval", "frontier", tier=0),
+                _DigestEntry("numeric_trial", "frontier", bug_corrupted_by="badc0de"),
+            ]
+        )
+    )
+
+    text = "\n".join(section)
+    assert section[0] == "### Mechanism effectiveness (observe-only)"
+    assert "| `prompt_search` | 2 | 1 | 0.5 | `gepa_optimize`, `prompt_mutation` |" in text
+    assert (
+        "| `deterministic_code_config` | 3 | 2 | 0.667 | `code_mutation`, `numeric_trial`, `structural_experiment` |"
+        in text
+    )
+    assert "| `data_training` | 1 | 0 | 0 | `seed_batch` |" in text
+    assert "evaluation_control" not in text
+    assert "observe-only diagnostic" in text
 
 
 def test_planner_spend_rule_triggers_with_low_threshold(tmp_path: Path) -> None:

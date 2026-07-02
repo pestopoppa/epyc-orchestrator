@@ -166,6 +166,92 @@ def _journal_section(journal: Any, lookback: int = 20) -> list[str]:
     return lines
 
 
+def _journal_entries_for_digest(journal: Any) -> list[Any]:
+    for attr in ("entries_with_supersessions", "trustworthy_entries"):
+        fn = getattr(journal, attr, None)
+        if callable(fn):
+            try:
+                return list(fn())
+            except Exception:
+                continue
+    entries = getattr(journal, "_entries", None)
+    if entries is not None:
+        try:
+            return list(entries)
+        except Exception:
+            pass
+    return []
+
+
+def _mechanism_class(action_type: str) -> str:
+    if action_type in {"prompt_mutation", "gepa_optimize"}:
+        return "prompt_search"
+    if action_type in {"numeric_trial", "structural_experiment", "code_mutation"}:
+        return "deterministic_code_config"
+    if action_type in {"train_routing_models", "distill_skillbank", "seed_batch"}:
+        return "data_training"
+    if action_type in {"deep_eval", "rollback"}:
+        return "evaluation_control"
+    return "other"
+
+
+def _mechanism_effectiveness_section(journal: Any) -> list[str]:
+    """Observe-only frontier-rate split by mechanism class.
+
+    This intentionally reports only; it does not feed MetaOptimizer budgets,
+    planner prompts, SafetyGate, or archive authority.
+    """
+    lines = ["### Mechanism effectiveness (observe-only)"]
+    rows = []
+    for entry in _journal_entries_for_digest(journal):
+        if getattr(entry, "bug_corrupted_by", ""):
+            continue
+        try:
+            tier = int(getattr(entry, "tier", 0))
+        except (TypeError, ValueError):
+            tier = 0
+        if tier <= 0:
+            continue
+        rows.append(entry)
+    if not rows:
+        lines.append("- no trustworthy T1/T2 journal rows available")
+        return lines
+
+    stats: dict[str, dict[str, Any]] = {}
+    for entry in rows:
+        action_type = str(getattr(entry, "action_type", "") or "unknown")
+        mechanism = _mechanism_class(action_type)
+        item = stats.setdefault(
+            mechanism,
+            {"total": 0, "frontier": 0, "actions": set()},
+        )
+        item["total"] += 1
+        item["actions"].add(action_type)
+        if getattr(entry, "pareto_status", "") == "frontier":
+            item["frontier"] += 1
+
+    lines.extend(
+        [
+            "| Mechanism class | T1/T2 rows | Frontier rows | Frontier rate | Action types |",
+            "|---|---:|---:|---:|---|",
+        ]
+    )
+    for mechanism, item in sorted(
+        stats.items(), key=lambda kv: (-kv[1]["total"], kv[0])
+    ):
+        total = int(item["total"])
+        frontier = int(item["frontier"])
+        rate = frontier / total if total else 0.0
+        action_types = ", ".join(f"`{name}`" for name in sorted(item["actions"]))
+        lines.append(
+            f"| `{mechanism}` | {total} | {frontier} | {_fmt_num(rate, 3)} | {action_types} |"
+        )
+    lines.append(
+        "- note: observe-only diagnostic; no planner budget, prompt, gate, or archive authority change."
+    )
+    return lines
+
+
 def _economics_section(now: datetime, repo_root: Path | None = None) -> list[str]:
     """Render a compact read-only economics summary for the daily digest."""
     root = repo_root or Path(__file__).resolve().parents[2]
@@ -246,6 +332,8 @@ def render_digest(
         body.extend(_surface_section(swarm, surface))
         body.append("")
     if journal is not None:
+        body.extend(_mechanism_effectiveness_section(journal))
+        body.append("")
         body.extend(_journal_section(journal))
         body.append("")
     body.append("---")
