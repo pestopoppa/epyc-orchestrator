@@ -121,6 +121,14 @@ def test_kv_measurement_section_flags_missing_series(tmp_path: Path) -> None:
 
     assert section.status == "missing"
     assert section.details["required_contexts"] == ["2K", "8K", "32K"]
+    assert section.details["required_measurements"]["frontdoor"] == [
+        2048,
+        8192,
+        32768,
+    ]
+    assert section.details["required_measurements"]["architect_general"] == [2048, 8192]
+    assert "server_kv_size_mb" in section.details["expected_csv_columns"]
+    assert "ds_e1_kv_measurements.sh --execute" in section.details["producer_command"]
 
 
 def test_kv_measurement_section_finds_recursive_relative_candidates(tmp_path: Path) -> None:

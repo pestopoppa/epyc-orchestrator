@@ -116,7 +116,24 @@ xmas_routing:
             "ready_for_profile_decision": False,
             "generated_at": "2026-06-20T00:00:00Z",
             "blockers": ["kv_size_measurements: missing"],
-            "sections": [{"key": "kv_size_measurements", "status": "missing"}],
+            "sections": [
+                {
+                    "key": "kv_size_measurements",
+                    "status": "missing",
+                    "details": {
+                        "required_measurements": {
+                            "frontdoor": [2048, 8192, 32768],
+                            "worker_general": [2048, 8192],
+                        },
+                        "expected_csv_columns": [
+                            "role",
+                            "context_length",
+                            "server_kv_size_mb",
+                        ],
+                        "searched_globs": ["orchestration/reports/ds_e1*kv*"],
+                    },
+                }
+            ],
         },
         config_path=config,
         xmas_table_path=table,
@@ -232,8 +249,23 @@ xmas_routing:
     assert report["next_actions"][1]["follow_up"] == (
         "python3 scripts/autopilot/fable5_gate_report.py --json --strict"
     )
+    ds_e1 = [
+        section for section in report["sections"] if section["key"] == "ds_e1_dynamic_stack"
+    ][0]
+    assert ds_e1["details"]["kv_required_measurements"]["frontdoor"] == [
+        2048,
+        8192,
+        32768,
+    ]
+    assert ds_e1["details"]["kv_expected_csv_columns"] == [
+        "role",
+        "context_length",
+        "server_kv_size_mb",
+    ]
     assert "ds_e1_kv_measurements.sh --execute" in report["next_actions"][2]["command"]
     assert report["next_actions"][2]["status"] == "blocked"
+    assert "$(date -u +%Y%m%dT%H%M%SZ)" in report["next_actions"][2]["follow_up"]
+    assert "ds_e1_evidence_packet_20260620.md" not in report["next_actions"][2]["follow_up"]
     assert report["next_actions"][3]["command"] == (
         "python3 scripts/analysis/ri10_canary_sample_report.py"
     )

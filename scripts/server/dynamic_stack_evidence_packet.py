@@ -42,6 +42,21 @@ REQUIRED_KV_MEASUREMENTS = {
     "worker_general": {2048, 8192},
     "architect_general": {2048, 8192},
 }
+KV_MEASUREMENT_COLUMNS = [
+    "role",
+    "model_id",
+    "model_path",
+    "context_length",
+    "max_context",
+    "status",
+    "rss_load_mb",
+    "rss_after_prefill_mb",
+    "server_kv_size_mb",
+    "prompt_tokens",
+    "prompt_tps",
+    "log_file",
+    "notes",
+]
 
 sys.path.insert(0, str(ORCH_ROOT))
 sys.path.insert(0, str(ORCH_ROOT / "scripts" / "server"))
@@ -313,6 +328,12 @@ def kv_measurement_section(
             {
                 "searched_globs": list(patterns),
                 "required_contexts": ["2K", "8K", "32K"],
+                "required_measurements": _required_kv_measurements_json(),
+                "expected_csv_columns": KV_MEASUREMENT_COLUMNS,
+                "producer_command": (
+                    "cd /mnt/raid0/llm/epyc-inference-research && "
+                    "scripts/benchmark/ds_e1_kv_measurements.sh --execute"
+                ),
             },
         )
     return _assess_kv_measurement_artifacts(unique, patterns)
@@ -380,10 +401,7 @@ def _assess_kv_measurement_artifacts(
         "paths": candidate_paths,
         "searched_globs": list(patterns),
         "required_contexts": ["2K", "8K", "32K"],
-        "required_measurements": {
-            role: sorted(contexts)
-            for role, contexts in sorted(REQUIRED_KV_MEASUREMENTS.items())
-        },
+        "required_measurements": _required_kv_measurements_json(),
         "observed_measurements": {
             role: sorted(contexts)
             for role, contexts in sorted(observed.items())
@@ -414,6 +432,13 @@ def _assess_kv_measurement_artifacts(
         "Direct DS-E1 production KV-size measurements cover all required role/context rows.",
         details,
     )
+
+
+def _required_kv_measurements_json() -> dict[str, list[int]]:
+    return {
+        role: sorted(contexts)
+        for role, contexts in sorted(REQUIRED_KV_MEASUREMENTS.items())
+    }
 
 
 def _kv_row_is_successful(row: dict[str, str | None]) -> bool:

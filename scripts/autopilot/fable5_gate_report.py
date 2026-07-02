@@ -251,6 +251,20 @@ def ds_e1_section(
     blockers = list(packet.get("blockers") or [])
     clean_window_report = clean_window or ds_e1_clean_window_report()
     clean_window_blockers = list(clean_window_report.get("blockers") or [])
+    sections = [
+        section for section in packet.get("sections") or [] if isinstance(section, dict)
+    ]
+    section_statuses = {
+        section.get("key"): section.get("status")
+        for section in sections
+    }
+    kv_section = next(
+        (section for section in sections if section.get("key") == "kv_size_measurements"),
+        {},
+    )
+    kv_details = kv_section.get("details") if isinstance(kv_section, dict) else {}
+    if not isinstance(kv_details, dict):
+        kv_details = {}
     return GateSection(
         key="ds_e1_dynamic_stack",
         status="ready" if packet.get("ready_for_profile_decision") else "blocked",
@@ -262,11 +276,13 @@ def ds_e1_section(
         details={
             "ready_for_profile_decision": packet.get("ready_for_profile_decision"),
             "generated_at": packet.get("generated_at"),
-            "section_statuses": {
-                section.get("key"): section.get("status")
-                for section in packet.get("sections") or []
-                if isinstance(section, dict)
-            },
+            "section_statuses": section_statuses,
+            "kv_required_measurements": kv_details.get("required_measurements"),
+            "kv_observed_measurements": kv_details.get("observed_measurements"),
+            "kv_missing_measurements": kv_details.get("missing_measurements"),
+            "kv_expected_csv_columns": kv_details.get("expected_csv_columns"),
+            "kv_candidate_paths": kv_details.get("paths"),
+            "kv_searched_globs": kv_details.get("searched_globs"),
             "clean_window_ready": clean_window_report.get("ready"),
             "clean_window_blockers": clean_window_blockers,
         },
@@ -702,7 +718,9 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
                     "follow_up": (
                         "cd /mnt/raid0/llm/epyc-orchestrator && "
                         "python3 scripts/server/dynamic_stack_evidence_packet.py "
-                        "--output orchestration/reports/ds_e1_evidence_packet_20260620.md --strict"
+                        "--output orchestration/reports/"
+                        "ds_e1_evidence_packet_$(date -u +%Y%m%dT%H%M%SZ).md "
+                        "--strict"
                     ),
                 }
             )
