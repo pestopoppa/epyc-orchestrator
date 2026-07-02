@@ -3998,6 +3998,7 @@ def _run_loop_inner(
         has_exo_recovered = (
             getattr(eval_result, "n_exogenous_recovered", 0) > 0
         )
+        seq_finalized = False
 
         if has_exo_unrecovered:
             # Bypass safety gate + archive update. Trial is journaled below
@@ -4199,16 +4200,17 @@ def _run_loop_inner(
                     trial_counter,
                     baseline_update.reason,
                 )
-            _update_seq_promotion_fresh_eval_state(
-                state,
-                seq=verdict.seq,
-                action=action,
-                eval_result=eval_result,
-                trial_counter=trial_counter,
-                is_fresh_eval=seq_fresh_eval_context is not None,
-                finalized=seq_finalized,
-                baseline_update=baseline_update,
-            )
+
+        _update_seq_promotion_fresh_eval_state(
+            state,
+            seq=getattr(verdict, "seq", None),
+            action=action,
+            eval_result=eval_result,
+            trial_counter=trial_counter,
+            is_fresh_eval=seq_fresh_eval_context is not None,
+            finalized=seq_finalized if baseline_update is not None else False,
+            baseline_update=baseline_update,
+        )
 
         # Extract hypothesis and expected mechanism from action/controller
         hypothesis = action.get("description", "")

@@ -542,6 +542,7 @@ def _run_loop_inner_seq_harness(
     state: dict[str, Any],
     verdict_seq: dict[str, Any],
     force_fresh_eval_context: dict[str, Any] | None = None,
+    learning_exclusion: tuple[str | None, str, Any] = (None, "", None),
 ) -> tuple[dict[str, Any], list[tuple[bool, int]]]:
     baseline_update_calls: list[tuple[bool, int]] = []
 
@@ -893,7 +894,11 @@ def _run_loop_inner_seq_harness(
         fake_maybe_force_seq_baseline_draw,
     )
     monkeypatch.setattr(autopilot, "dispatch_action", fake_dispatch_action)
-    monkeypatch.setattr(autopilot, "_journal_archive_payload_for_authority", lambda *args: None)
+    monkeypatch.setattr(
+        autopilot,
+        "_journal_archive_payload_for_authority",
+        lambda *args, **kwargs: None,
+    )
     monkeypatch.setattr(autopilot, "_sync_startup_archive_from_journal_authority", lambda *args, **kwargs: False)
     monkeypatch.setattr(
         autopilot,
@@ -910,7 +915,7 @@ def _run_loop_inner_seq_harness(
     monkeypatch.setattr(
         autopilot,
         "classify_learning_exclusion",
-        lambda *args, **kwargs: (None, "", None),
+        lambda *args, **kwargs: learning_exclusion,
     )
     monkeypatch.setattr(autopilot.peaf, "compute_surprise", lambda *args, **kwargs: 0.0)
     monkeypatch.setattr(
@@ -1004,3 +1009,49 @@ def test_run_loop_inner_nonfinalized_seq_does_not_promote_and_leaves_pending(
     assert baseline_update_calls == [(False, 0)]
     assert "seq_last_promotion_finalized" not in returned_state
     assert "seq_pending_promotion_fresh_eval" in returned_state
+
+
+def test_run_loop_inner_fresh_eval_exclusion_consumes_pending_promotion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state: dict[str, Any] = {
+        "trial_counter": 0,
+        "paused": False,
+        "td_errors": [],
+        "seeder_state": {},
+        "consecutive_failures": 0,
+        "quality_history": [],
+        "quality_history_by_tier": {},
+        "baseline_state": {},
+        "seq_pending_promotion_fresh_eval": {
+            "candidate": "candidate-a",
+            "source_trial_id": 13,
+            "tier": 2,
+            "attempts": 1,
+        },
+    }
+
+    returned_state, baseline_update_calls = _run_loop_inner_seq_harness(
+        monkeypatch,
+        state=state,
+        verdict_seq={
+            "candidate": "candidate-a",
+            "confirmed": False,
+            "E_quality": 12.0,
+            "E_rate_noninf": 11.0,
+        },
+        force_fresh_eval_context={
+            "candidate": "candidate-a",
+            "source_trial_id": 13,
+        },
+        learning_exclusion=("seq_accumulating", "sequential evidence accumulating", None),
+    )
+
+    assert baseline_update_calls == []
+    assert "seq_pending_promotion_fresh_eval" not in returned_state
+    assert returned_state["seq_last_promotion_blocked"] == {
+        "trial_id": 0,
+        "candidate": "candidate-a",
+        "reason": "fresh-eval did not confirm",
+        "combined_E": 11.0,
+    }
