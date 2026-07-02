@@ -4477,7 +4477,10 @@ async function openDetail(taskId, port, slotId) {
             // Fall back to inference_tap.log section (completed task)
             promptText = (d.tap_section.prompt || '').toString();
             initialContent = (d.tap_section.response || '').toString();
-            dataSource = `inference_tap.log section @ ${d.tap_section.timestamp} (role=${d.tap_section.role})`;
+            const legacyTap = d.tap_section.legacy_source || d.tap_section.non_authoritative;
+            const matchHint = d.tap_section.match_hint ? ` · ${d.tap_section.match_hint}` : '';
+            const authorityHint = legacyTap ? ' · legacy best-effort/non-authoritative' : '';
+            dataSource = `inference_tap.log section @ ${d.tap_section.timestamp} (role=${d.tap_section.role})${matchHint}${authorityHint}`;
         } else {
             const startedEv = events.find(e => e.event_type === 'task_started');
             if (startedEv) {
