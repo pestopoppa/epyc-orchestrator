@@ -45,7 +45,7 @@ dependencies = [
 
     # LangGraph migration (Phase 1: hybrid bridge alongside pydantic-graph)
     "langgraph>=0.2.0",
-    "langgraph-checkpoint-sqlite>=2.0.0",
+    "langgraph-checkpoint-sqlite>=3.1.0",
 
     # Utilities
     "psutil>=5.9.0",  # Memory monitoring
