@@ -20,7 +20,7 @@ import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterable, Iterator
 
 log = logging.getLogger("autopilot.phase")
 
@@ -49,6 +49,13 @@ AUTOPILOT_ENV_FLAGS = (
     "AUTOPILOT_W6_AUDIT_EVERY_N_TRIALS",
     "AUTOPILOT_W6_AUDIT_SHADOW_ONLY",
     "AUTOPILOT_PLANNER_TIMEOUT",
+)
+AUTOPILOT_RUNTIME_SOURCE_PATHS = (
+    ORCH_ROOT / "scripts" / "autopilot" / "autopilot.py",
+    ORCH_ROOT / "scripts" / "autopilot" / "actions.py",
+    ORCH_ROOT / "scripts" / "autopilot" / "eval_tower.py",
+    ORCH_ROOT / "scripts" / "autopilot" / "safety_gate.py",
+    ORCH_ROOT / "scripts" / "autopilot" / "phase_status.py",
 )
 
 
@@ -248,6 +255,64 @@ def _process_exists(pid: int | None) -> bool | None:
     return True
 
 
+def _process_started_at_s(pid: int | None) -> float | None:
+    """Return process start time as epoch seconds on Linux /proc systems."""
+    if pid is None or pid < 1:
+        return None
+    stat_path = Path("/proc") / str(pid) / "stat"
+    proc_stat_path = Path("/proc/stat")
+    try:
+        stat_text = stat_path.read_text(encoding="utf-8")
+        proc_stat_text = proc_stat_path.read_text(encoding="utf-8")
+        ticks_per_second = os.sysconf(os.sysconf_names["SC_CLK_TCK"])
+    except (OSError, KeyError, ValueError):
+        return None
+
+    try:
+        start_ticks = int(stat_text.rsplit(") ", 1)[1].split()[19])
+    except (IndexError, ValueError):
+        return None
+
+    boot_time: int | None = None
+    for line in proc_stat_text.splitlines():
+        if not line.startswith("btime "):
+            continue
+        try:
+            boot_time = int(line.split()[1])
+        except (IndexError, ValueError):
+            return None
+        break
+    if boot_time is None:
+        return None
+    return float(boot_time) + (float(start_ticks) / float(ticks_per_second))
+
+
+def _stale_runtime_sources(
+    *,
+    process_started_at_s: float | None,
+    source_paths: Iterable[Path],
+) -> list[dict[str, Any]]:
+    if process_started_at_s is None:
+        return []
+
+    stale: list[dict[str, Any]] = []
+    for path in source_paths:
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            continue
+        if mtime <= process_started_at_s + 1.0:
+            continue
+        stale.append(
+            {
+                "path": str(path),
+                "mtime": mtime,
+                "stale_by_s": max(0.0, mtime - process_started_at_s),
+            }
+        )
+    return stale
+
+
 def _read_process_env_flags(pid: int | None) -> dict[str, str] | None:
     if pid is None or pid < 1:
         return None
@@ -280,6 +345,8 @@ def build_phase_health_report(
     *,
     path: Path = PHASE_PATH,
     log_path: Path | None = None,
+    source_paths: Iterable[Path] | None = None,
+    require_current_code: bool = False,
     now: float | None = None,
     stale_after_s: float = DEFAULT_STALE_AFTER_S,
 ) -> dict[str, Any]:
@@ -312,6 +379,12 @@ def build_phase_health_report(
         pid = None
     pid_alive = _process_exists(pid)
     env_flags = _read_process_env_flags(pid) if pid_alive else None
+    process_started_at_s = _process_started_at_s(pid) if pid_alive else None
+    source_paths = tuple(source_paths or AUTOPILOT_RUNTIME_SOURCE_PATHS)
+    stale_sources = _stale_runtime_sources(
+        process_started_at_s=process_started_at_s,
+        source_paths=source_paths,
+    )
     phase_name = payload.get("phase")
     terminal_stopped = phase_name == "stopped"
     stale = heartbeat_age_s is None or heartbeat_age_s > stale_after_s
@@ -324,9 +397,21 @@ def build_phase_health_report(
         blockers.append(
             f"phase heartbeat is stale: {heartbeat_age_s:.1f}s > {stale_after_s:.1f}s"
         )
+    if require_current_code and stale_sources and not terminal_stopped:
+        blockers.append(
+            "autopilot process predates runtime source changes: "
+            + ", ".join(Path(item["path"]).name for item in stale_sources[:5])
+        )
     status = "stopped" if terminal_stopped else "active"
     if blockers:
-        status = "stale" if stale else "pid_dead"
+        if stale and not terminal_stopped:
+            status = "stale"
+        elif pid_alive is False and not terminal_stopped:
+            status = "pid_dead"
+        elif require_current_code and stale_sources and not terminal_stopped:
+            status = "code_stale"
+        else:
+            status = "blocked"
     report = {
         "ok": not blockers,
         "status": status,
@@ -335,6 +420,11 @@ def build_phase_health_report(
         "heartbeat_age_s": heartbeat_age_s,
         "pid": pid,
         "pid_alive": pid_alive,
+        "process_started_at_s": process_started_at_s,
+        "runtime_source_paths_checked": [str(p) for p in source_paths],
+        "code_stale": bool(stale_sources),
+        "code_stale_paths": stale_sources,
+        "require_current_code": require_current_code,
         "phase": phase_name,
         "phase_started_at": payload.get("phase_started_at"),
         "phase_age_s_recorded": payload.get("phase_age_s"),
@@ -367,10 +457,15 @@ def build_phase_health_report(
         "heartbeat": payload,
     }
     report.update({field: payload.get(field) for field in EVAL_PROGRESS_FIELDS})
+    heartbeat_unusable_for_log_tail = (
+        pid_alive is False
+        or heartbeat_age_s is None
+        or (stale and not terminal_stopped)
+    )
     should_tail_log = (
         report.get("eval_total_questions") is None
         and report.get("trial_id") is not None
-        and not blockers
+        and not heartbeat_unusable_for_log_tail
     )
     if should_tail_log:
         for candidate_log_path in _eval_progress_log_candidates(path=path, log_path=log_path):
@@ -409,6 +504,8 @@ def format_phase_health_report(report: dict[str, Any]) -> list[str]:
         f"- Action: {report.get('action_type')}",
         f"- Idle reason: {report.get('idle_reason')}",
         f"- PID: {report.get('pid')} (alive={report.get('pid_alive')})",
+        f"- Process started at: {report.get('process_started_at_s')}",
+        f"- Runtime source stale: {report.get('code_stale')}",
         f"- Planner hints env: {report.get('planner_hints_enabled')}",
         f"- Seq verdict env: {report.get('seq_verdict_enabled')}",
         (
@@ -425,6 +522,10 @@ def format_phase_health_report(report: dict[str, Any]) -> list[str]:
     ]
     if eval_progress:
         lines.append(f"- Eval progress: {eval_progress}")
+    if report.get("code_stale_paths"):
+        lines.extend(["", "## Runtime Source Drift", ""])
+        for item in report["code_stale_paths"]:
+            lines.append(f"- {item.get('path')} (stale_by_s={item.get('stale_by_s'):.1f})")
     if report.get("blockers"):
         lines.extend(["", "## Blockers", ""])
         lines.extend(f"- {blocker}" for blocker in report["blockers"])

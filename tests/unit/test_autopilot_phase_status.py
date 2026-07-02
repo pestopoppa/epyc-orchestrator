@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -75,6 +76,86 @@ def test_phase_health_report_accepts_fresh_alive_heartbeat(tmp_path, monkeypatch
     formatted = "\n".join(format_phase_health_report(report))
     assert "Status: active" in formatted
     assert "Eval progress: 200/500 (72% correct)" in formatted
+
+
+def test_phase_health_report_surfaces_runtime_source_drift_without_blocking(
+    tmp_path, monkeypatch
+):
+    snapshot = tmp_path / "phase.json"
+    source = tmp_path / "actions.py"
+    snapshot.write_text(
+        json.dumps(
+            {
+                "phase": "dispatch_action",
+                "pid": 123,
+                "trial_id": 1055,
+                "action_type": "numeric_trial",
+                "updated_at": 100.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    source.write_text("# changed after start\n", encoding="utf-8")
+    source_mtime = 75.0
+    os.utime(source, (source_mtime, source_mtime))
+    monkeypatch.setattr("phase_status._process_exists", lambda pid: True)
+    monkeypatch.setattr("phase_status._read_process_env_flags", lambda pid: {})
+    monkeypatch.setattr("phase_status._process_started_at_s", lambda pid: 50.0)
+    monkeypatch.setattr("phase_status._tail_eval_progress", lambda *a, **k: None)
+
+    report = build_phase_health_report(
+        path=snapshot,
+        source_paths=[source],
+        now=120.0,
+        stale_after_s=60.0,
+    )
+
+    assert report["ok"] is True
+    assert report["status"] == "active"
+    assert report["process_started_at_s"] == 50.0
+    assert report["code_stale"] is True
+    assert report["code_stale_paths"][0]["path"] == str(source)
+    assert report["blockers"] == []
+    formatted = "\n".join(format_phase_health_report(report))
+    assert "Runtime source stale: True" in formatted
+    assert "Runtime Source Drift" in formatted
+
+
+def test_phase_health_report_can_block_on_runtime_source_drift(tmp_path, monkeypatch):
+    snapshot = tmp_path / "phase.json"
+    source = tmp_path / "eval_tower.py"
+    snapshot.write_text(
+        json.dumps(
+            {
+                "phase": "dispatch_action",
+                "pid": 123,
+                "trial_id": 1055,
+                "action_type": "numeric_trial",
+                "updated_at": 100.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    source.write_text("# changed after start\n", encoding="utf-8")
+    os.utime(source, (80.0, 80.0))
+    monkeypatch.setattr("phase_status._process_exists", lambda pid: True)
+    monkeypatch.setattr("phase_status._read_process_env_flags", lambda pid: {})
+    monkeypatch.setattr("phase_status._process_started_at_s", lambda pid: 50.0)
+    monkeypatch.setattr("phase_status._tail_eval_progress", lambda *a, **k: None)
+
+    report = build_phase_health_report(
+        path=snapshot,
+        source_paths=[source],
+        require_current_code=True,
+        now=120.0,
+        stale_after_s=60.0,
+    )
+
+    assert report["ok"] is False
+    assert report["status"] == "code_stale"
+    assert report["blockers"] == [
+        "autopilot process predates runtime source changes: eval_tower.py"
+    ]
 
 
 def test_phase_health_report_exposes_allowlisted_autopilot_env_flags(tmp_path, monkeypatch):

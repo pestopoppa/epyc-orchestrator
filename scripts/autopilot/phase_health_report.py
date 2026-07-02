@@ -53,6 +53,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Exit nonzero when the heartbeat is missing, dead, or stale.",
     )
+    parser.add_argument(
+        "--require-current-code",
+        action="store_true",
+        help=(
+            "Also fail strict checks when the live AutoPilot process predates "
+            "runtime AutoPilot source changes."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -63,6 +71,7 @@ def main(argv: list[str] | None = None) -> int:
         report = build_phase_health_report(
             path=args.phase_path.expanduser().resolve(),
             log_path=log_path,
+            require_current_code=args.require_current_code,
             stale_after_s=args.stale_after_s,
         )
     except ValueError as exc:
