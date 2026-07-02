@@ -260,6 +260,7 @@ def _summary_report(report: dict[str, Any]) -> dict[str, Any]:
         "seq_min_shadow_rows": seq_min_shadow,
         "seq_shadow_rows_remaining": seq_shadow_remaining,
         "w8_promotion_status": w8.get("status"),
+        "w8_open_requirements": w8.get("open_requirements", []),
         "w8_pending_candidate": w8.get("pending_candidate"),
         "w8_pending_source_trial_id": w8.get("pending_source_trial_id"),
         "w8_pending_attempts": w8.get("pending_attempts"),
@@ -467,7 +468,8 @@ def render_markdown(report: dict[str, Any]) -> str:
             f"latest_seq_trial={summary['w8_latest_seq_trial_id']}, "
             f"latest_combined_E={summary['w8_latest_combined_E']}/"
             f"{summary['w8_latest_required_E']}, "
-            f"baseline_reference={summary['w8_latest_baseline_reference_state']}"
+            f"baseline_reference={summary['w8_latest_baseline_reference_state']}, "
+            f"open_requirements={summary['w8_open_requirements']}"
         ),
         (
             "- W6 audit cutover: "

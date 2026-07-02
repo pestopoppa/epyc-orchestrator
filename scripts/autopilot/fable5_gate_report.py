@@ -177,6 +177,7 @@ def restart_section(restart_report: dict[str, Any]) -> GateSection:
             "seq_min_shadow_rows": summary.get("seq_min_shadow_rows"),
             "seq_shadow_rows_remaining": summary.get("seq_shadow_rows_remaining"),
             "w8_promotion_status": summary.get("w8_promotion_status"),
+            "w8_open_requirements": summary.get("w8_open_requirements"),
             "w8_pending_candidate": summary.get("w8_pending_candidate"),
             "w8_pending_source_trial_id": summary.get("w8_pending_source_trial_id"),
             "w8_pending_attempts": summary.get("w8_pending_attempts"),
@@ -622,6 +623,9 @@ def build_report_summary(
         "w8_promotion_status": (
             restart.details.get("w8_promotion_status") if restart is not None else None
         ),
+        "w8_open_requirements": (
+            restart.details.get("w8_open_requirements") if restart is not None else None
+        ),
         "w8_latest_seq_trial_id": (
             restart.details.get("w8_latest_seq_trial_id") if restart is not None else None
         ),
@@ -786,6 +790,7 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
                     ),
                     "evidence": {
                         "w8_promotion_status": details.get("w8_promotion_status"),
+                        "open_requirements": details.get("w8_open_requirements"),
                         "pending_candidate": details.get("w8_pending_candidate"),
                         "pending_source_trial_id": details.get(
                             "w8_pending_source_trial_id"
@@ -803,6 +808,7 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
                         "latest_combined_E": details.get("w8_latest_combined_E"),
                         "latest_required_E": details.get("w8_latest_required_E"),
                         "latest_confirmed": details.get("w8_latest_confirmed"),
+                        "latest_fresh_eval": details.get("w8_latest_fresh_eval"),
                         "latest_seq_state": details.get("w8_latest_seq_state"),
                         "latest_baseline_reference_state": details.get(
                             "w8_latest_baseline_reference_state"

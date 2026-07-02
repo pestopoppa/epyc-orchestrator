@@ -187,7 +187,9 @@ def render_markdown(report: Mapping[str, Any]) -> str:
             f"latest_combined_E="
             f"{report.get('w8_promotion_evidence', {}).get('latest_combined_E')}, "
             f"required_E="
-            f"{report.get('w8_promotion_evidence', {}).get('latest_required_E')}"
+            f"{report.get('w8_promotion_evidence', {}).get('latest_required_E')}, "
+            f"open_requirements="
+            f"{report.get('w8_promotion_evidence', {}).get('open_requirements', [])}"
         ),
         "",
         "## Candidate Clusters",
@@ -382,8 +384,16 @@ def _w8_promotion_evidence(
     else:
         status = "none"
 
+    open_requirements = _w8_open_requirements(
+        status=status,
+        latest_seq=latest_seq,
+        pending=pending,
+        blocked=blocked,
+    )
+
     return {
         "status": status,
+        "open_requirements": open_requirements,
         "pending": pending,
         "last_finalized": finalized,
         "last_blocked": blocked,
@@ -420,6 +430,43 @@ def _w8_promotion_evidence(
         "baseline_reference_blocked_trial_id": baseline_blocked.get("trial_id"),
         "baseline_reference_blocked_reason": baseline_blocked.get("reason"),
     }
+
+
+def _w8_open_requirements(
+    *,
+    status: str,
+    latest_seq: Mapping[str, Any],
+    pending: Mapping[str, Any],
+    blocked: Mapping[str, Any],
+) -> list[str]:
+    """Return unmet W8 promotion-eval requirements as stable report keys."""
+    if status == "finalized":
+        return []
+
+    requirements: list[str] = []
+    if pending:
+        requirements.append("pending_fresh_eval_queued")
+    if blocked.get("reason"):
+        requirements.append(f"last_blocked:{blocked['reason']}")
+    if not latest_seq:
+        requirements.append("missing_seq_promotion_snapshot")
+        return requirements
+
+    combined = latest_seq.get("combined_E")
+    required = latest_seq.get("required_E")
+    if isinstance(combined, (int, float)) and isinstance(required, (int, float)):
+        if combined < required:
+            requirements.append("combined_E_below_required")
+    elif required is not None:
+        requirements.append("combined_E_unavailable")
+
+    if latest_seq.get("fresh_eval") is not True:
+        requirements.append("fresh_promotion_eval_required")
+    if latest_seq.get("baseline_reference_state") != "fresh":
+        requirements.append("fresh_baseline_reference_required")
+    if latest_seq.get("confirmed") is not True:
+        requirements.append("seq_confirmation_required")
+    return requirements
 
 
 def _latest_w8_seq_snapshot(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:

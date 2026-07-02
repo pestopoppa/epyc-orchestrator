@@ -200,10 +200,18 @@ def test_report_projects_w8_promotion_eval_state() -> None:
     assert w8["latest_combined_E"] == 32.0
     assert w8["latest_required_E"] == 100.0
     assert w8["latest_baseline_reference_state"] == "fresh"
+    assert w8["open_requirements"] == [
+        "pending_fresh_eval_queued",
+        "last_blocked:fresh_eval_required",
+        "combined_E_below_required",
+        "fresh_promotion_eval_required",
+        "seq_confirmation_required",
+    ]
     assert "W8 promotion evidence: status=pending_fresh_eval" in (
         seq_readiness_report.render_markdown(report)
     )
     assert "latest_combined_E=32.0" in seq_readiness_report.render_markdown(report)
+    assert "open_requirements=" in seq_readiness_report.render_markdown(report)
 
 
 def test_main_strict_returns_nonzero_when_blocked(tmp_path: Path, capsys) -> None:

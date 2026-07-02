@@ -241,6 +241,7 @@ def test_restart_summary_projects_w8_promotion_finalization(monkeypatch) -> None
             },
             "w8_promotion_evidence": {
                 "status": "finalized",
+                "open_requirements": [],
                 "last_finalized_trial_id": 44,
                 "last_finalized_candidate": "candidate-a",
                 "last_finalized_combined_E": 110.0,
@@ -265,6 +266,7 @@ def test_restart_summary_projects_w8_promotion_finalization(monkeypatch) -> None
     report = report_mod.build_restart_readiness_report(state, [], require_w6_audit=True)
 
     assert report["summary"]["w8_promotion_status"] == "finalized"
+    assert report["summary"]["w8_open_requirements"] == []
     assert report["summary"]["w8_last_finalized_trial_id"] == 44
     assert report["summary"]["w8_last_finalized_candidate"] == "candidate-a"
     assert report["summary"]["w8_last_finalized_combined_E"] == 110.0
@@ -276,6 +278,7 @@ def test_restart_summary_projects_w8_promotion_finalization(monkeypatch) -> None
     rendered = report_mod.render_markdown(report)
     assert "W8 promotion evidence: status=finalized" in rendered
     assert "latest_combined_E=110.0/100.0" in rendered
+    assert "open_requirements=[]" in rendered
 
 
 def test_restart_report_blocks_on_archive_source_surface_audit_failure(monkeypatch) -> None:

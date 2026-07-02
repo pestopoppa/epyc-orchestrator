@@ -601,6 +601,11 @@ def test_w8_next_action_when_restart_ready_without_promotion_finalization() -> N
             blockers=[],
             details={
                 "w8_promotion_status": "pending_fresh_eval",
+                "w8_open_requirements": [
+                    "pending_fresh_eval_queued",
+                    "combined_E_below_required",
+                    "fresh_promotion_eval_required",
+                ],
                 "w8_pending_candidate": "candidate-a",
                 "w8_pending_source_trial_id": 41,
                 "w8_pending_attempts": 1,
@@ -608,6 +613,7 @@ def test_w8_next_action_when_restart_ready_without_promotion_finalization() -> N
                 "w8_latest_seq_trial_id": 40,
                 "w8_latest_combined_E": 32.0,
                 "w8_latest_required_E": 100.0,
+                "w8_latest_fresh_eval": False,
                 "w8_latest_baseline_reference_state": "fresh",
             },
         ),
@@ -618,10 +624,16 @@ def test_w8_next_action_when_restart_ready_without_promotion_finalization() -> N
     assert actions[0]["key"] == "collect_w8_promotion_eval_evidence"
     assert actions[0]["status"] == "active"
     assert actions[0]["evidence"]["w8_promotion_status"] == "pending_fresh_eval"
+    assert actions[0]["evidence"]["open_requirements"] == [
+        "pending_fresh_eval_queued",
+        "combined_E_below_required",
+        "fresh_promotion_eval_required",
+    ]
     assert actions[0]["evidence"]["pending_candidate"] == "candidate-a"
     assert actions[0]["evidence"]["latest_seq_trial_id"] == 40
     assert actions[0]["evidence"]["latest_combined_E"] == 32.0
     assert actions[0]["evidence"]["latest_required_E"] == 100.0
+    assert actions[0]["evidence"]["latest_fresh_eval"] is False
     assert actions[0]["evidence"]["latest_baseline_reference_state"] == "fresh"
 
 
