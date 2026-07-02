@@ -8,6 +8,7 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[2] / "scripts" / "autopilot"
 sys.path.insert(0, str(_ROOT))
 
+import phase_status  # noqa: E402
 from phase_status import (  # noqa: E402
     AsyncTaskRunner,
     PhaseTracker,
@@ -156,6 +157,13 @@ def test_phase_health_report_can_block_on_runtime_source_drift(tmp_path, monkeyp
     assert report["blockers"] == [
         "autopilot process predates runtime source changes: eval_tower.py"
     ]
+
+
+def test_phase_health_default_runtime_sources_include_planner_modules():
+    checked = {path.name for path in phase_status.AUTOPILOT_RUNTIME_SOURCE_PATHS}
+
+    assert "controller_io.py" in checked
+    assert "planner_providers.py" in checked
 
 
 def test_phase_health_report_exposes_allowlisted_autopilot_env_flags(tmp_path, monkeypatch):
