@@ -60,6 +60,13 @@ def _load_jsonl(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def _resolve_repo_path(repo_root: Path, raw_path: str | Path) -> Path:
+    path = Path(raw_path).expanduser()
+    if not path.is_absolute():
+        path = repo_root / path
+    return path.resolve()
+
+
 def _records_for(records: list[dict[str, Any]], job_id: str) -> list[dict[str, Any]]:
     return [row for row in records if row.get("job_id") == job_id]
 
@@ -335,8 +342,12 @@ def run_from_args(args: argparse.Namespace) -> dict[str, Any]:
     if not queue_dir.is_absolute():
         queue_dir = repo_root / queue_dir
     queue_dir = queue_dir.resolve()
-    records_file = Path(args.task_records_file or queue_dir / DEFAULT_RECORDS)
-    verdicts_file = Path(args.verdicts_file or queue_dir / DEFAULT_VERDICTS)
+    records_file = _resolve_repo_path(
+        repo_root, args.task_records_file or queue_dir / DEFAULT_RECORDS
+    )
+    verdicts_file = _resolve_repo_path(
+        repo_root, args.verdicts_file or queue_dir / DEFAULT_VERDICTS
+    )
     return build_report(
         jobs_doc=_load_yaml(jobs_file),
         jobs_file=jobs_file,

@@ -188,6 +188,37 @@ def test_report_skip_process_check_leaves_ready_now_unknown(tmp_path: Path) -> N
     assert report["quiet_window"]["ready"] is None
 
 
+def test_report_resolves_explicit_queue_files_against_repo_root(
+    tmp_path: Path, monkeypatch
+) -> None:
+    jobs_file = tmp_path / "lab_jobs.yaml"
+    _write_jobs_file(jobs_file)
+    queue = tmp_path / "queue"
+    custom_dir = tmp_path / "custom"
+    _write_jsonl(custom_dir / "task_records.jsonl", _records("shadow_ready", "shadow", 1))
+    _write_jsonl(
+        custom_dir / "review_verdicts.jsonl",
+        _verdicts("shadow_ready", "shadow", ["accept"]),
+    )
+    (tmp_path / "outside").mkdir()
+    monkeypatch.chdir(tmp_path / "outside")
+
+    report = readiness_report.run_from_args(
+        _args(
+            tmp_path,
+            jobs_file,
+            queue_dir=str(queue),
+            task_records_file="custom/task_records.jsonl",
+            verdicts_file="custom/review_verdicts.jsonl",
+            skip_process_check=True,
+        )
+    )
+
+    assert report["summary"]["task_records"] == 1
+    assert report["summary"]["verdicts"] == 1
+    assert report["summary"]["promotion_ready"] == 0
+
+
 def test_active_processes_only_counts_llama_server_executables(monkeypatch) -> None:
     class FakeProc:
         returncode = 0
