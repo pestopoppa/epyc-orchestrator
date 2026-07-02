@@ -363,6 +363,71 @@ def test_parse_structured_tap_requests_marks_quiet_open_request() -> None:
     assert "no tap output" in req["status_reason"]
 
 
+def test_topology_activity_uses_structured_tap_not_legacy_sections(monkeypatch) -> None:
+    now = 1_000.0
+    structured_lines = [
+        json.dumps({
+            "event": "start",
+            "request_id": "req-worker",
+            "role": "worker_general",
+            "topology_role": "worker_general",
+            "port": 8072,
+            "ts": "2026-07-02T20:00:00+00:00",
+            "ts_epoch": now - 5,
+            "prompt": "worker prompt",
+        }),
+        json.dumps({
+            "event": "timings",
+            "request_id": "req-worker",
+            "role": "worker_general",
+            "topology_role": "worker_general",
+            "port": 8072,
+            "ts": "2026-07-02T20:00:01+00:00",
+            "ts_epoch": now - 4,
+            "tokens": 10,
+            "prompt_ms": 0,
+            "gen_ms": 1000,
+            "tps": 42.0,
+            "total_s": 1.0,
+        }),
+    ]
+    legacy_tap = (
+        f"[2026-07-02 20:00:00] ROLE=frontdoor\n{'-' * 72}\n"
+        f"PROMPT: stale legacy prompt\n{'-' * 72}\n"
+        f"RESPONSE:\nTIMINGS: 1 tokens in 1.00s (prompt=0ms, gen=1000ms, 9.0 t/s)\n"
+        f"{'=' * 72}\n"
+    )
+
+    def fake_read_tail(path, *args, **kwargs):
+        if str(path).endswith("inference_tap_events.jsonl"):
+            return "\n".join(structured_lines)
+        if str(path).endswith("inference_tap.log"):
+            return legacy_tap
+        return ""
+
+    monkeypatch.setattr(dashboard, "_read_tail", fake_read_tail)
+    monkeypatch.setattr(
+        dashboard,
+        "_discover_llama_ports",
+        lambda: {8070: "frontdoor", 8072: "worker_general"},
+    )
+    monkeypatch.setattr(dashboard, "expected_stack_services", lambda: [
+        {"role": "frontdoor", "port": 8070},
+        {"role": "worker_general", "port": 8072},
+    ])
+    monkeypatch.setattr(dashboard, "_todays_progress_log", lambda: Path("/does/not/exist"))
+    monkeypatch.setattr(dashboard, "_scan_recent_decisions", lambda _path: ([], [], []))
+    monkeypatch.setattr(dashboard, "_scan_orchestrator_tasks", lambda *a, **kw: ([], []))
+    monkeypatch.setattr(dashboard.time, "time", lambda: now)
+
+    response = asyncio.run(dashboard.topology_activity(window_s=60.0))
+    payload = json.loads(response.body)
+
+    assert payload["per_role"]["worker_general"]["n_recent"] == 1
+    assert payload["per_role"]["worker_general"]["avg_tps_recent"] == 42.0
+    assert payload["per_role"]["frontdoor"]["n_recent"] == 0
+
+
 def test_enrich_structured_tap_requests_recovers_alias_port_lock_metadata(monkeypatch) -> None:
     monkeypatch.setattr(
         dashboard,

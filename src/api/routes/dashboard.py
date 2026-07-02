@@ -2804,7 +2804,7 @@ async def topology_activity(window_s: float = 600.0) -> JSONResponse:
     """Per-role recent activity stats for the topology strip.
 
     Aggregates from two cheap sources:
-      - inference_tap.log sections (last ~80) — provides per-role recent
+      - inference_tap_events.jsonl request groups — provides concurrency-safe
         request count, last activity timestamp, and TIMINGS (t/s).
       - recent_completed_tasks (last 10 min, from progress JSONL) —
         provides per-role per-task durations.
@@ -2821,16 +2821,20 @@ async def topology_activity(window_s: float = 600.0) -> JSONResponse:
           ...
         }
 
-    Cheap: tap parse is already what the live tap polling uses; we just
-    aggregate it here. Cached header advised but not required at current
-    request rates.
+    Cheap: structured tap parse is already what the live tap polling uses; we
+    just aggregate it here. Do not use legacy inference_tap.log sections for
+    this panel: plaintext tap writes are not cross-process atomic and can
+    interleave prompt/response sections during concurrent eval traffic.
     """
-    inference_tail = _read_tail(_INFERENCE_TAP_PATH, max_bytes=512 * 1024)
-    sections = _parse_inference_sections(inference_tail, max_sections=80)
+    structured_tail = _read_tail(_INFERENCE_TAP_EVENTS_PATH, max_bytes=1024 * 1024)
     now = time.time()
+    structured_requests = _parse_structured_tap_requests(
+        structured_tail,
+        max_requests=160,
+        now_epoch=now,
+        quiet_after_s=max(15.0, min(window_s, 60.0)),
+    )
 
-    # Per-role aggregation from tap sections. timestamp format is
-    # "YYYY-MM-DD HH:MM:SS" in local time (writer uses datetime.now()).
     per_role: dict[str, dict[str, Any]] = {}
     live_ports = _discover_llama_ports()
     for svc in expected_stack_services():
@@ -2855,8 +2859,9 @@ async def topology_activity(window_s: float = 600.0) -> JSONResponse:
             if port in live_ports and port not in bucket["running_ports"]:
                 bucket["running_ports"].append(port)
                 bucket["running"] = True
-    for s in sections:
-        role = base_role(s.get("role") or "")
+
+    for req in structured_requests:
+        role = base_role(req.get("topology_role") or req.get("role") or "")
         if not role:
             continue
         bucket = per_role.setdefault(role, {
@@ -2869,25 +2874,43 @@ async def topology_activity(window_s: float = 600.0) -> JSONResponse:
             "running_ports": [],
             "running": False,
         })
-        ts = s.get("timestamp")
-        if ts:
+        try:
+            updated_epoch = float(req.get("updated_at_epoch") or req.get("started_at_epoch") or 0.0)
+        except (TypeError, ValueError):
+            updated_epoch = 0.0
+        age = max(0.0, now - updated_epoch) if updated_epoch else None
+        if age is not None and age <= window_s:
+            bucket["n_recent"] += 1
+            if bucket["last_activity_age_s"] is None or age < bucket["last_activity_age_s"]:
+                bucket["last_activity_age_s"] = age
+        timings_raw = req.get("timings_raw")
+        if isinstance(timings_raw, dict):
             try:
-                dt = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
-                age = max(0.0, now - dt.timestamp())
-            except Exception:
-                age = None
-            if age is not None and age <= window_s:
-                bucket["n_recent"] += 1
-                if bucket["last_activity_age_s"] is None or age < bucket["last_activity_age_s"]:
-                    bucket["last_activity_age_s"] = age
-        # Parse the TIMINGS line for t/s — format "N tokens in Xs (prompt=..., gen=..., Y.Y t/s)"
-        timings_str = (s.get("response") or "")
-        m = re.search(r"([\d.]+)\s*t/s", timings_str)
-        if m:
+                tps = float(timings_raw.get("tps") or 0.0)
+            except (TypeError, ValueError):
+                tps = 0.0
+            if tps > 0:
+                bucket["_tps_samples"].append(tps)
+        elif req.get("timings"):
+            m = re.search(r"([\d.]+)\s*t/s", str(req.get("timings") or ""))
+            if m:
+                try:
+                    bucket["_tps_samples"].append(float(m.group(1)))
+                except ValueError:
+                    pass
+        port = req.get("port")
+        if isinstance(port, int) and port in live_ports and port not in bucket["running_ports"]:
+            bucket["running_ports"].append(port)
+            bucket["running"] = True
+        elif isinstance(port, str):
             try:
-                bucket["_tps_samples"].append(float(m.group(1)))
+                port_int = int(port)
             except ValueError:
                 pass
+            else:
+                if port_int in live_ports and port_int not in bucket["running_ports"]:
+                    bucket["running_ports"].append(port_int)
+                    bucket["running"] = True
 
     # Augment from recent_completed_tasks (gives chat-XXX-tracked durations).
     log_path = _todays_progress_log()
