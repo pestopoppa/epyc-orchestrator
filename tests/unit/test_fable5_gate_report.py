@@ -262,6 +262,10 @@ def test_phase_section_surfaces_eval_progress() -> None:
             "heartbeat_age_s": 4.0,
             "pid": 123,
             "pid_alive": True,
+            "process_started_at_s": 1783021658.69,
+            "require_current_code": True,
+            "code_stale": True,
+            "code_stale_paths": [{"path": "scripts/autopilot/autopilot.py"}],
             "eval_label": "T2",
             "eval_completed_questions": 200,
             "eval_total_questions": 500,
@@ -282,6 +286,12 @@ def test_phase_section_surfaces_eval_progress() -> None:
     assert "T2 200/500" in section.summary
     assert section.details["eval_completed_questions"] == 200
     assert section.details["eval_correct_pct"] == 72.0
+    assert section.details["process_started_at_s"] == 1783021658.69
+    assert section.details["require_current_code"] is True
+    assert section.details["code_stale"] is True
+    assert section.details["code_stale_paths"] == [
+        {"path": "scripts/autopilot/autopilot.py"}
+    ]
     assert section.details["planner_hints_enabled"] is True
     assert section.details["seq_verdict_enabled"] is True
     assert section.details["w6_audit_accrual_enabled"] is True
@@ -589,7 +599,13 @@ def test_cli_strict_returns_one_when_gate_blocks(tmp_path: Path, monkeypatch, ca
     journal.write_text("", encoding="utf-8")
     phase.write_text("{}\n", encoding="utf-8")
     monkeypatch.setattr(report_mod, "_load_jsonl", lambda path: [])
-    monkeypatch.setattr(report_mod, "build_phase_health_report", lambda path: {"ok": False, "blockers": ["stale"]})
+    phase_kwargs = {}
+
+    def fake_phase_health(**kwargs):
+        phase_kwargs.update(kwargs)
+        return {"ok": False, "blockers": ["stale"]}
+
+    monkeypatch.setattr(report_mod, "build_phase_health_report", fake_phase_health)
     monkeypatch.setattr(report_mod, "build_ds_e1_packet", lambda: {"ready_for_profile_decision": True, "blockers": [], "sections": []})
     monkeypatch.setattr(
         report_mod,
@@ -615,6 +631,7 @@ def test_cli_strict_returns_one_when_gate_blocks(tmp_path: Path, monkeypatch, ca
     )
 
     assert rc == 1
+    assert phase_kwargs["require_current_code"] is True
     assert "phase_health: stale" in capsys.readouterr().out
 
 
@@ -635,7 +652,7 @@ def test_cli_writes_json_and_markdown_outputs(
     monkeypatch.setattr(
         report_mod,
         "build_phase_health_report",
-        lambda path: {"ok": False, "blockers": ["stale"]},
+        lambda **kwargs: {"ok": False, "blockers": ["stale"]},
     )
     monkeypatch.setattr(
         report_mod,

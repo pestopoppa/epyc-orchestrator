@@ -124,6 +124,10 @@ def phase_section(phase_report: dict[str, Any]) -> GateSection:
             "heartbeat_age_s": phase_report.get("heartbeat_age_s"),
             "pid": phase_report.get("pid"),
             "pid_alive": phase_report.get("pid_alive"),
+            "process_started_at_s": phase_report.get("process_started_at_s"),
+            "require_current_code": phase_report.get("require_current_code"),
+            "code_stale": phase_report.get("code_stale"),
+            "code_stale_paths": phase_report.get("code_stale_paths"),
             "eval_label": phase_report.get("eval_label"),
             "eval_completed_questions": phase_report.get("eval_completed_questions"),
             "eval_total_questions": phase_report.get("eval_total_questions"),
@@ -854,6 +858,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--out-json", type=Path, help="Write structured JSON to this path.")
     parser.add_argument("--out-md", type=Path, help="Write Markdown report to this path.")
     parser.add_argument("--strict", action="store_true", help="Exit nonzero when any gate blocks.")
+    parser.add_argument(
+        "--require-current-code",
+        action="store_true",
+        help=(
+            "Block when the live AutoPilot process predates runtime source changes. "
+            "Enabled automatically by --strict."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -868,7 +880,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         state = _load_json_object(args.state.expanduser().resolve())
         journal_rows = _load_jsonl(args.journal.expanduser().resolve())
-        phase_report = build_phase_health_report(path=args.phase.expanduser().resolve())
+        phase_report = build_phase_health_report(
+            path=args.phase.expanduser().resolve(),
+            require_current_code=args.require_current_code or args.strict,
+        )
         ds_e1_packet = build_ds_e1_packet()
         report = build_fable5_gate_report(
             state=state,
