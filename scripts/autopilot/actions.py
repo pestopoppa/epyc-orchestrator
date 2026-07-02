@@ -391,6 +391,7 @@ def _action_numeric_trial(action: dict[str, Any], ctx: _ActionContext):
                 apply_result.get("errors") or apply_result,
             )
             return None, "numeric_swarm"
+        action["params"] = dict(explicit_params)
     else:
         # Let Optuna suggest
         trial = ctx.swarm.suggest_trial(surface)
@@ -403,12 +404,15 @@ def _action_numeric_trial(action: dict[str, Any], ctx: _ActionContext):
                 reason,
             )
             return None, "numeric_swarm"
+        action["params"] = dict(trial["params"])
         ctx.state["_current_optuna_trial"] = {
             "surface": surface,
             "trial_number": trial["trial_number"],
         }
 
     eval_result = ctx.tower.hybrid_eval()
+    if eval_result:
+        eval_result.details.setdefault("numeric_trial_applied_params", dict(action.get("params") or {}))
     # Report to Optuna if we have a trial
     if "_current_optuna_trial" in ctx.state and eval_result:
         t = ctx.state.pop("_current_optuna_trial")
@@ -1199,7 +1203,85 @@ def _action_reset_memories(action: dict[str, Any], ctx: _ActionContext):
 
 def _action_deep_eval(action: dict[str, Any], ctx: _ActionContext):
     tier = action.get("tier", 2)
+    replay_marker = ctx.state.pop("_seq_promotion_candidate_replay", None)
+    candidate_action = (
+        replay_marker.get("action")
+        if isinstance(replay_marker, dict)
+        else None
+    )
+    replay_detail: dict[str, Any] | None = None
+    if isinstance(candidate_action, dict):
+        candidate_type = str(candidate_action.get("type") or "")
+        if candidate_type == "numeric_trial":
+            params = candidate_action.get("params")
+            if not isinstance(params, dict) or not params:
+                return (
+                    SkipOutcome(
+                        "invalid",
+                        "seq promotion candidate numeric_trial lacks replayable applied params",
+                        "deep_eval",
+                    ),
+                    "seeder",
+                )
+            apply_result = _apply_params(params)
+            if apply_result.get("status") == "error":
+                reason = "; ".join(apply_result.get("errors", [])) or str(apply_result)
+                return (
+                    SkipOutcome(
+                        "invalid",
+                        f"seq promotion candidate params were not applied: {reason}",
+                        "deep_eval",
+                    ),
+                    "seeder",
+                )
+            replay_detail = {
+                "candidate_action_type": candidate_type,
+                "surface": candidate_action.get("surface"),
+                "applied_params": dict(params),
+                "apply_result": apply_result,
+            }
+        elif candidate_type == "structural_experiment":
+            flags = candidate_action.get("flags")
+            if not isinstance(flags, dict) or not flags:
+                return (
+                    SkipOutcome(
+                        "invalid",
+                        "seq promotion candidate structural_experiment lacks replayable flags",
+                        "deep_eval",
+                    ),
+                    "seeder",
+                )
+            validation = ctx.lab.propose_flag_experiment(flags)
+            if validation.get("status") != "valid":
+                reason = "; ".join(validation.get("errors", [])) or str(
+                    validation.get("error") or validation
+                )
+                return (
+                    SkipOutcome(
+                        "invalid",
+                        f"seq promotion candidate flags are invalid: {reason}",
+                        "deep_eval",
+                    ),
+                    "seeder",
+                )
+            apply_result = ctx.lab.apply_flag_experiment(flags)
+            replay_detail = {
+                "candidate_action_type": candidate_type,
+                "flags": dict(flags),
+                "apply_result": apply_result,
+            }
+        else:
+            return (
+                SkipOutcome(
+                    "invalid",
+                    f"seq promotion candidate action is not replayable: {candidate_type or 'unknown'}",
+                    "deep_eval",
+                ),
+                "seeder",
+            )
     eval_result = ctx.tower.evaluate(tier=tier)
+    if replay_detail is not None:
+        eval_result.details.setdefault("seq_promotion_candidate_replay", replay_detail)
     return eval_result, "seeder"
 
 

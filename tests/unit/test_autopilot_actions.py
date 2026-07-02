@@ -257,6 +257,48 @@ def test_numeric_trial_convention_suppresses_live_bound_surface(
     assert species == "numeric_swarm"
 
 
+def test_numeric_trial_records_applied_optuna_params(monkeypatch) -> None:
+    monkeypatch.setattr(
+        autopilot,
+        "apply_params",
+        lambda params: {"status": "ok", "applied": dict(params)},
+    )
+
+    class FakeSwarm:
+        def suggest_trial(self, surface):
+            assert surface == "monitor"
+            return {
+                "trial_number": 7,
+                "surface": surface,
+                "params": {"ORCHESTRATOR_MONITOR_THRESHOLD": 0.42},
+            }
+
+        def report_result(self, surface, trial_number, objectives):
+            self.reported = (surface, trial_number, objectives)
+
+    class FakeTower:
+        def hybrid_eval(self):
+            return actions.EvalResult(
+                tier=1,
+                quality=2.0,
+                speed=10.0,
+                cost=0.1,
+                reliability=1.0,
+            )
+
+    action = {"type": "numeric_trial", "surface": "monitor", "params": {}}
+    swarm = FakeSwarm()
+    result, species = actions._action_numeric_trial(
+        action,
+        _ctx(swarm=swarm, tower=FakeTower(), state={}),
+    )
+
+    assert species == "numeric_swarm"
+    assert action["params"] == {"ORCHESTRATOR_MONITOR_THRESHOLD": 0.42}
+    assert result.details["numeric_trial_applied_params"] == action["params"]
+    assert swarm.reported == ("monitor", 7, result.objectives)
+
+
 def test_dispatcher_routes_to_correct_handler(monkeypatch) -> None:
     """Smoke test that each registered handler is callable from dispatch_action."""
     captured = {}
@@ -428,6 +470,87 @@ def test_deep_eval_handler_calls_tower_evaluate_with_tier() -> None:
     assert result == "DEEP_EVAL"
     assert species == "seeder"
     assert tower.calls == [{"tier": 2}]
+
+
+def test_deep_eval_replays_seq_promotion_numeric_candidate(monkeypatch) -> None:
+    applied: list[dict] = []
+
+    def fake_apply_params(params):
+        applied.append(dict(params))
+        return {"status": "ok", "applied": dict(params)}
+
+    monkeypatch.setattr(autopilot, "apply_params", fake_apply_params)
+
+    class FakeTower:
+        def __init__(self):
+            self.calls = []
+
+        def evaluate(self, **kwargs):
+            self.calls.append(kwargs)
+            return actions.EvalResult(
+                tier=2,
+                quality=2.0,
+                speed=10.0,
+                cost=0.1,
+                reliability=1.0,
+            )
+
+    tower = FakeTower()
+    state = {
+        "_seq_promotion_candidate_replay": {
+            "candidate": "candidate-a",
+            "source_trial_id": 12,
+            "action": {
+                "type": "numeric_trial",
+                "surface": "monitor",
+                "params": {"ORCHESTRATOR_MONITOR_THRESHOLD": 0.42},
+            },
+        }
+    }
+
+    result, species = actions._action_deep_eval(
+        {"type": "deep_eval", "tier": 2},
+        _ctx(tower=tower, state=state),
+    )
+
+    assert species == "seeder"
+    assert applied == [{"ORCHESTRATOR_MONITOR_THRESHOLD": 0.42}]
+    assert tower.calls == [{"tier": 2}]
+    assert "_seq_promotion_candidate_replay" not in state
+    assert result.details["seq_promotion_candidate_replay"] == {
+        "candidate_action_type": "numeric_trial",
+        "surface": "monitor",
+        "applied_params": {"ORCHESTRATOR_MONITOR_THRESHOLD": 0.42},
+        "apply_result": {
+            "status": "ok",
+            "applied": {"ORCHESTRATOR_MONITOR_THRESHOLD": 0.42},
+        },
+    }
+
+
+def test_deep_eval_rejects_unreplayable_seq_promotion_numeric_candidate() -> None:
+    state = {
+        "_seq_promotion_candidate_replay": {
+            "candidate": "candidate-a",
+            "source_trial_id": 12,
+            "action": {
+                "type": "numeric_trial",
+                "surface": "monitor",
+                "params": {},
+            },
+        }
+    }
+
+    result, species = actions._action_deep_eval(
+        {"type": "deep_eval", "tier": 2},
+        _ctx(tower=SimpleNamespace(evaluate=lambda **_: "should not run"), state=state),
+    )
+
+    assert species == "seeder"
+    assert isinstance(result, actions.SkipOutcome)
+    assert result.status == "invalid"
+    assert "lacks replayable applied params" in result.reason
+    assert "_seq_promotion_candidate_replay" not in state
 
 
 def _eval_result(

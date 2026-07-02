@@ -364,7 +364,11 @@ def test_seq_promotion_finalization_requires_fresh_eval_fresh_reference_and_e() 
 
 def test_seq_promotion_state_queues_and_forces_one_fresh_eval() -> None:
     state: dict = {}
-    action = {"type": "seed_batch", "n_questions": 12}
+    action = {
+        "type": "numeric_trial",
+        "surface": "monitor",
+        "params": {"ORCHESTRATOR_MONITOR_THRESHOLD": 0.42},
+    }
     eval_result = autopilot.EvalResult(
         tier=2,
         quality=3.0,
@@ -406,6 +410,60 @@ def test_seq_promotion_state_queues_and_forces_one_fresh_eval() -> None:
     assert context is not None
     assert context["candidate"] == "candidate-a"
     assert state["seq_pending_promotion_fresh_eval"]["attempts"] == 1
+    assert state["_seq_promotion_candidate_replay"] == {
+        "trial_id": 12,
+        "candidate": "candidate-a",
+        "source_trial_id": 11,
+        "action": action,
+    }
+
+
+def test_seq_promotion_unreplayable_candidate_blocks_without_fresh_eval() -> None:
+    state: dict = {}
+    action = {"type": "numeric_trial", "surface": "monitor", "params": {}}
+    eval_result = autopilot.EvalResult(
+        tier=2,
+        quality=3.0,
+        speed=10.0,
+        cost=0.1,
+        reliability=1.0,
+    )
+
+    autopilot._update_seq_promotion_fresh_eval_state(
+        state,
+        seq={
+            "candidate": "candidate-a",
+            "confirmed": True,
+            "baseline_reference_state": "fresh",
+            "baseline_promotion_combined_E": 25.0,
+        },
+        action=action,
+        eval_result=eval_result,
+        trial_counter=11,
+        is_fresh_eval=False,
+        finalized=False,
+    )
+
+    original = {"type": "seed_batch", "n_questions": 12}
+    forced, rationale, context = autopilot._maybe_force_seq_promotion_fresh_eval(
+        original,
+        state=state,
+        blacklist=[],
+        rationale={"source": "test"},
+        trial_counter=12,
+        enabled=True,
+    )
+
+    assert forced == original
+    assert rationale == {"source": "test"}
+    assert context is None
+    assert "seq_pending_promotion_fresh_eval" not in state
+    assert state["seq_last_promotion_blocked"] == {
+        "trial_id": 12,
+        "candidate": "candidate-a",
+        "source_trial_id": 11,
+        "reason": "candidate numeric_trial lacks replayable applied params",
+    }
 
 
 def test_seq_promotion_failed_fresh_eval_consumes_pending_attempt() -> None:
@@ -503,6 +561,11 @@ def test_seq_promotion_fresh_eval_blacklist_suppresses_retry() -> None:
             "source_trial_id": 20,
             "tier": 2,
             "attempts": 0,
+            "action": {
+                "type": "numeric_trial",
+                "surface": "monitor",
+                "params": {"ORCHESTRATOR_MONITOR_THRESHOLD": 0.42},
+            },
         }
     }
 

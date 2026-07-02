@@ -812,6 +812,23 @@ def _maybe_force_seq_promotion_fresh_eval(
     if attempts >= 1:
         return action, rationale, None
     tier = max(MIN_FRONTIER_EVAL_TIER, int(pending.get("tier") or SEQ_PROMOTION_FRESH_EVAL_TIER))
+    candidate_action = pending.get("action")
+    replay_blocker = _seq_promotion_replay_blocker(candidate_action)
+    if replay_blocker:
+        state.pop("seq_pending_promotion_fresh_eval", None)
+        state.pop("_seq_promotion_candidate_replay", None)
+        state["seq_last_promotion_blocked"] = {
+            "trial_id": trial_counter,
+            "candidate": pending.get("candidate"),
+            "source_trial_id": pending.get("source_trial_id"),
+            "reason": replay_blocker,
+        }
+        log.warning(
+            "Seq promotion fresh eval blocked for candidate %s: %s",
+            pending.get("candidate"),
+            replay_blocker,
+        )
+        return action, rationale, None
     forced = {"type": "deep_eval", "tier": tier}
     blocked_reason = check_blacklist(forced, blacklist)
     if blocked_reason:
@@ -829,6 +846,12 @@ def _maybe_force_seq_promotion_fresh_eval(
     pending["attempts"] = attempts + 1
     pending["forced_trial_id"] = trial_counter
     state["seq_pending_promotion_fresh_eval"] = pending
+    state["_seq_promotion_candidate_replay"] = {
+        "trial_id": trial_counter,
+        "candidate": pending.get("candidate"),
+        "source_trial_id": pending.get("source_trial_id"),
+        "action": candidate_action,
+    }
     next_rationale = dict(rationale or {})
     next_rationale["seq_promotion_fresh_eval"] = True
     next_rationale["seq_promotion_candidate"] = pending.get("candidate")
@@ -838,6 +861,24 @@ def _maybe_force_seq_promotion_fresh_eval(
         pending.get("candidate"),
     )
     return forced, next_rationale, dict(pending)
+
+
+def _seq_promotion_replay_blocker(action: Any) -> str:
+    """Return why a seq-promotion candidate cannot be replayed for fresh eval."""
+    if not isinstance(action, dict):
+        return "candidate action is missing or not an object"
+    action_type = str(action.get("type") or "")
+    if action_type == "numeric_trial":
+        params = action.get("params")
+        if not isinstance(params, dict) or not params:
+            return "candidate numeric_trial lacks replayable applied params"
+        return ""
+    if action_type == "structural_experiment":
+        flags = action.get("flags")
+        if not isinstance(flags, dict) or not flags:
+            return "candidate structural_experiment lacks replayable flags"
+        return ""
+    return f"candidate action type is not replayable: {action_type or 'unknown'}"
 
 
 def _update_seq_promotion_fresh_eval_state(
@@ -856,6 +897,7 @@ def _update_seq_promotion_fresh_eval_state(
         return
     baseline_update_reason = getattr(baseline_update, "reason", None)
     if finalized:
+        state.pop("_seq_promotion_candidate_replay", None)
         if baseline_update is not None and not bool(getattr(baseline_update, "updated", False)):
             state.pop("seq_pending_promotion_fresh_eval", None)
             state["seq_last_promotion_blocked"] = {
@@ -875,6 +917,7 @@ def _update_seq_promotion_fresh_eval_state(
         }
         return
     if seq.get("baseline_reference_state") == "stale-reference":
+        state.pop("_seq_promotion_candidate_replay", None)
         state.pop("seq_pending_promotion_fresh_eval", None)
         state["seq_last_promotion_blocked"] = {
             "trial_id": trial_counter,
@@ -883,6 +926,7 @@ def _update_seq_promotion_fresh_eval_state(
         }
         return
     if is_fresh_eval:
+        state.pop("_seq_promotion_candidate_replay", None)
         state.pop("seq_pending_promotion_fresh_eval", None)
         state["seq_last_promotion_blocked"] = {
             "trial_id": trial_counter,
