@@ -133,7 +133,7 @@ def build_seq_readiness_report(
         "candidate_clusters": [asdict(cluster) for cluster in clusters],
         "pairwise_replays": [asdict(replay) for replay in pairwise],
         "seq_shadow": shadow,
-        "w8_promotion_evidence": _w8_promotion_evidence(state),
+        "w8_promotion_evidence": _w8_promotion_evidence(state, normalized),
         "cutover_blockers": blockers,
         "recommendation": _recommendation(
             cutover_ready=cutover_ready,
@@ -181,7 +181,13 @@ def render_markdown(report: Mapping[str, Any]) -> str:
             f"last_finalized_trial="
             f"{report.get('w8_promotion_evidence', {}).get('last_finalized_trial_id')}, "
             f"last_blocked_reason="
-            f"{report.get('w8_promotion_evidence', {}).get('last_blocked_reason')}"
+            f"{report.get('w8_promotion_evidence', {}).get('last_blocked_reason')}, "
+            f"latest_seq_trial="
+            f"{report.get('w8_promotion_evidence', {}).get('latest_seq_trial_id')}, "
+            f"latest_combined_E="
+            f"{report.get('w8_promotion_evidence', {}).get('latest_combined_E')}, "
+            f"required_E="
+            f"{report.get('w8_promotion_evidence', {}).get('latest_required_E')}"
         ),
         "",
         "## Candidate Clusters",
@@ -353,12 +359,18 @@ def _safe_mapping(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
 
 
-def _w8_promotion_evidence(state: Mapping[str, Any] | None) -> dict[str, Any]:
+def _w8_promotion_evidence(
+    state: Mapping[str, Any] | None,
+    rows: Iterable[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
     """Project W8 promotion-eval state into read-only reports."""
     state_map = _safe_mapping(state)
     pending = _safe_mapping(state_map.get("seq_pending_promotion_fresh_eval"))
     finalized = _safe_mapping(state_map.get("seq_last_promotion_finalized"))
     blocked = _safe_mapping(state_map.get("seq_last_promotion_blocked"))
+    baseline_forced = _safe_mapping(state_map.get("seq_baseline_draw_forced"))
+    baseline_blocked = _safe_mapping(state_map.get("seq_baseline_draw_blocked"))
+    latest_seq = _latest_w8_seq_snapshot(rows)
     finalized_delta_ci = _safe_mapping(finalized.get("delta_ci"))
 
     if pending:
@@ -390,6 +402,53 @@ def _w8_promotion_evidence(state: Mapping[str, Any] | None) -> dict[str, Any]:
         "last_blocked_candidate": blocked.get("candidate"),
         "last_blocked_reason": blocked.get("reason"),
         "last_blocked_combined_E": blocked.get("combined_E"),
+        "latest_seq_trial_id": latest_seq.get("trial_id"),
+        "latest_candidate": latest_seq.get("candidate"),
+        "latest_combined_E": latest_seq.get("combined_E"),
+        "latest_required_E": latest_seq.get("required_E"),
+        "latest_confirmed": latest_seq.get("confirmed"),
+        "latest_seq_state": latest_seq.get("state"),
+        "latest_baseline_reference_state": latest_seq.get("baseline_reference_state"),
+        "latest_fresh_eval": latest_seq.get("fresh_eval"),
+        "baseline_reference_last_forced_trial_id": baseline_forced.get("trial_id"),
+        "baseline_reference_last_forced_reason": _safe_mapping(
+            baseline_forced.get("reference")
+        ).get("reason"),
+        "baseline_reference_last_forced_stale": _safe_mapping(
+            baseline_forced.get("reference")
+        ).get("stale_reference"),
+        "baseline_reference_blocked_trial_id": baseline_blocked.get("trial_id"),
+        "baseline_reference_blocked_reason": baseline_blocked.get("reason"),
+    }
+
+
+def _latest_w8_seq_snapshot(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+    """Return the latest journal seq row relevant to W8 promotion progress."""
+    latest: Mapping[str, Any] | None = None
+    for row in rows:
+        seq = row.get("seq") if isinstance(row, Mapping) else None
+        if not isinstance(seq, Mapping):
+            continue
+        if not (
+            "baseline_promotion_combined_E" in seq
+            or "baseline_reference_state" in seq
+            or "baseline_promotion_fresh_eval" in seq
+        ):
+            continue
+        if latest is None or _latest_trial_id(row) >= _latest_trial_id(latest):
+            latest = row
+    if latest is None:
+        return {}
+    seq = _safe_mapping(latest.get("seq"))
+    return {
+        "trial_id": _trial_id(latest),
+        "candidate": seq.get("candidate"),
+        "combined_E": seq.get("baseline_promotion_combined_E"),
+        "required_E": seq.get("baseline_promotion_required_E"),
+        "confirmed": seq.get("confirmed"),
+        "state": seq.get("state"),
+        "baseline_reference_state": seq.get("baseline_reference_state"),
+        "fresh_eval": seq.get("baseline_promotion_fresh_eval"),
     }
 
 

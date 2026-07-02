@@ -272,6 +272,31 @@ def _summary_report(report: dict[str, Any]) -> dict[str, Any]:
         "w8_last_blocked_trial_id": w8.get("last_blocked_trial_id"),
         "w8_last_blocked_candidate": w8.get("last_blocked_candidate"),
         "w8_last_blocked_reason": w8.get("last_blocked_reason"),
+        "w8_latest_seq_trial_id": w8.get("latest_seq_trial_id"),
+        "w8_latest_candidate": w8.get("latest_candidate"),
+        "w8_latest_combined_E": w8.get("latest_combined_E"),
+        "w8_latest_required_E": w8.get("latest_required_E"),
+        "w8_latest_confirmed": w8.get("latest_confirmed"),
+        "w8_latest_seq_state": w8.get("latest_seq_state"),
+        "w8_latest_baseline_reference_state": w8.get(
+            "latest_baseline_reference_state"
+        ),
+        "w8_latest_fresh_eval": w8.get("latest_fresh_eval"),
+        "w8_baseline_reference_last_forced_trial_id": w8.get(
+            "baseline_reference_last_forced_trial_id"
+        ),
+        "w8_baseline_reference_last_forced_reason": w8.get(
+            "baseline_reference_last_forced_reason"
+        ),
+        "w8_baseline_reference_last_forced_stale": w8.get(
+            "baseline_reference_last_forced_stale"
+        ),
+        "w8_baseline_reference_blocked_trial_id": w8.get(
+            "baseline_reference_blocked_trial_id"
+        ),
+        "w8_baseline_reference_blocked_reason": w8.get(
+            "baseline_reference_blocked_reason"
+        ),
         "w6_audit_cutover_ready": w6.get("cutover_ready"),
         "w6_audited_trial_count": w6_audited_count,
         "w6_raw_audited_trial_count": w6.get("raw_audited_trial_count"),
@@ -438,7 +463,11 @@ def render_markdown(report: dict[str, Any]) -> str:
             f"status={summary['w8_promotion_status']}, "
             f"pending_candidate={summary['w8_pending_candidate']}, "
             f"last_finalized_trial={summary['w8_last_finalized_trial_id']}, "
-            f"last_blocked_reason={summary['w8_last_blocked_reason']}"
+            f"last_blocked_reason={summary['w8_last_blocked_reason']}, "
+            f"latest_seq_trial={summary['w8_latest_seq_trial_id']}, "
+            f"latest_combined_E={summary['w8_latest_combined_E']}/"
+            f"{summary['w8_latest_required_E']}, "
+            f"baseline_reference={summary['w8_latest_baseline_reference_state']}"
         ),
         (
             "- W6 audit cutover: "

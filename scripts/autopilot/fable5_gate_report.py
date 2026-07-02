@@ -191,6 +191,31 @@ def restart_section(restart_report: dict[str, Any]) -> GateSection:
             "w8_last_blocked_trial_id": summary.get("w8_last_blocked_trial_id"),
             "w8_last_blocked_candidate": summary.get("w8_last_blocked_candidate"),
             "w8_last_blocked_reason": summary.get("w8_last_blocked_reason"),
+            "w8_latest_seq_trial_id": summary.get("w8_latest_seq_trial_id"),
+            "w8_latest_candidate": summary.get("w8_latest_candidate"),
+            "w8_latest_combined_E": summary.get("w8_latest_combined_E"),
+            "w8_latest_required_E": summary.get("w8_latest_required_E"),
+            "w8_latest_confirmed": summary.get("w8_latest_confirmed"),
+            "w8_latest_seq_state": summary.get("w8_latest_seq_state"),
+            "w8_latest_baseline_reference_state": summary.get(
+                "w8_latest_baseline_reference_state"
+            ),
+            "w8_latest_fresh_eval": summary.get("w8_latest_fresh_eval"),
+            "w8_baseline_reference_last_forced_trial_id": summary.get(
+                "w8_baseline_reference_last_forced_trial_id"
+            ),
+            "w8_baseline_reference_last_forced_reason": summary.get(
+                "w8_baseline_reference_last_forced_reason"
+            ),
+            "w8_baseline_reference_last_forced_stale": summary.get(
+                "w8_baseline_reference_last_forced_stale"
+            ),
+            "w8_baseline_reference_blocked_trial_id": summary.get(
+                "w8_baseline_reference_blocked_trial_id"
+            ),
+            "w8_baseline_reference_blocked_reason": summary.get(
+                "w8_baseline_reference_blocked_reason"
+            ),
             "w6_audit_cutover_ready": summary.get("w6_audit_cutover_ready"),
             "w6_audited_trial_count": summary.get("w6_audited_trial_count"),
             "w6_min_audited_trials": summary.get("w6_min_audited_trials"),
@@ -692,6 +717,24 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
                             "w8_last_blocked_candidate"
                         ),
                         "last_blocked_reason": details.get("w8_last_blocked_reason"),
+                        "latest_seq_trial_id": details.get("w8_latest_seq_trial_id"),
+                        "latest_candidate": details.get("w8_latest_candidate"),
+                        "latest_combined_E": details.get("w8_latest_combined_E"),
+                        "latest_required_E": details.get("w8_latest_required_E"),
+                        "latest_confirmed": details.get("w8_latest_confirmed"),
+                        "latest_seq_state": details.get("w8_latest_seq_state"),
+                        "latest_baseline_reference_state": details.get(
+                            "w8_latest_baseline_reference_state"
+                        ),
+                        "baseline_reference_last_forced_trial_id": details.get(
+                            "w8_baseline_reference_last_forced_trial_id"
+                        ),
+                        "baseline_reference_last_forced_reason": details.get(
+                            "w8_baseline_reference_last_forced_reason"
+                        ),
+                        "baseline_reference_blocked_reason": details.get(
+                            "w8_baseline_reference_blocked_reason"
+                        ),
                     },
                     "command": STRICT_RESTART_READINESS_COMMAND,
                     "follow_up": STRICT_FABLE5_GATE_COMMAND,

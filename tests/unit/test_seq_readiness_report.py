@@ -26,6 +26,7 @@ def _row(
     *,
     learning_exclusion: str | None = None,
     seq_state: str | None = None,
+    seq_extra: dict | None = None,
     corrupt: str | None = None,
 ) -> dict:
     eval_details: dict = {
@@ -49,6 +50,8 @@ def _row(
             "state": seq_state,
             "policy_version": "seq-v1",
         }
+        if seq_extra:
+            row["seq"].update(seq_extra)
     if corrupt:
         row["bug_corrupted_by"] = corrupt
     return row
@@ -166,7 +169,21 @@ def test_report_projects_w8_promotion_eval_state() -> None:
     }
 
     report = seq_readiness_report.build_seq_readiness_report(
-        [_row(1, "fp-a", set(range(20)))],
+        [
+            _row(
+                1,
+                "fp-a",
+                set(range(20)),
+                seq_state="accumulating",
+                seq_extra={
+                    "baseline_promotion_combined_E": 32.0,
+                    "baseline_promotion_required_E": 100.0,
+                    "baseline_reference_state": "fresh",
+                    "baseline_promotion_fresh_eval": False,
+                    "confirmed": False,
+                },
+            )
+        ],
         state=state,
         min_trusted_vector_trials=1,
         min_seq_shadow_rows=0,
@@ -179,9 +196,14 @@ def test_report_projects_w8_promotion_eval_state() -> None:
     assert w8["pending_source_trial_id"] == 41
     assert w8["pending_attempts"] == 1
     assert w8["last_blocked_reason"] == "fresh_eval_required"
+    assert w8["latest_seq_trial_id"] == 1
+    assert w8["latest_combined_E"] == 32.0
+    assert w8["latest_required_E"] == 100.0
+    assert w8["latest_baseline_reference_state"] == "fresh"
     assert "W8 promotion evidence: status=pending_fresh_eval" in (
         seq_readiness_report.render_markdown(report)
     )
+    assert "latest_combined_E=32.0" in seq_readiness_report.render_markdown(report)
 
 
 def test_main_strict_returns_nonzero_when_blocked(tmp_path: Path, capsys) -> None:

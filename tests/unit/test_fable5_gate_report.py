@@ -574,6 +574,10 @@ def test_w8_next_action_when_restart_ready_without_promotion_finalization() -> N
                 "w8_pending_source_trial_id": 41,
                 "w8_pending_attempts": 1,
                 "w8_last_blocked_reason": None,
+                "w8_latest_seq_trial_id": 40,
+                "w8_latest_combined_E": 32.0,
+                "w8_latest_required_E": 100.0,
+                "w8_latest_baseline_reference_state": "fresh",
             },
         ),
     ]
@@ -584,6 +588,10 @@ def test_w8_next_action_when_restart_ready_without_promotion_finalization() -> N
     assert actions[0]["status"] == "active"
     assert actions[0]["evidence"]["w8_promotion_status"] == "pending_fresh_eval"
     assert actions[0]["evidence"]["pending_candidate"] == "candidate-a"
+    assert actions[0]["evidence"]["latest_seq_trial_id"] == 40
+    assert actions[0]["evidence"]["latest_combined_E"] == 32.0
+    assert actions[0]["evidence"]["latest_required_E"] == 100.0
+    assert actions[0]["evidence"]["latest_baseline_reference_state"] == "fresh"
 
 
 def test_render_markdown_surfaces_section_details() -> None:

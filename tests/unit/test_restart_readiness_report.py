@@ -245,6 +245,10 @@ def test_restart_summary_projects_w8_promotion_finalization(monkeypatch) -> None
                 "last_finalized_candidate": "candidate-a",
                 "last_finalized_combined_E": 110.0,
                 "last_finalized_delta_excludes_regression": True,
+                "latest_seq_trial_id": 44,
+                "latest_combined_E": 110.0,
+                "latest_required_E": 100.0,
+                "latest_baseline_reference_state": "fresh",
             },
         },
     )
@@ -265,8 +269,13 @@ def test_restart_summary_projects_w8_promotion_finalization(monkeypatch) -> None
     assert report["summary"]["w8_last_finalized_candidate"] == "candidate-a"
     assert report["summary"]["w8_last_finalized_combined_E"] == 110.0
     assert report["summary"]["w8_last_finalized_delta_excludes_regression"] is True
+    assert report["summary"]["w8_latest_seq_trial_id"] == 44
+    assert report["summary"]["w8_latest_combined_E"] == 110.0
+    assert report["summary"]["w8_latest_required_E"] == 100.0
+    assert report["summary"]["w8_latest_baseline_reference_state"] == "fresh"
     rendered = report_mod.render_markdown(report)
     assert "W8 promotion evidence: status=finalized" in rendered
+    assert "latest_combined_E=110.0/100.0" in rendered
 
 
 def test_restart_report_blocks_on_archive_source_surface_audit_failure(monkeypatch) -> None:
