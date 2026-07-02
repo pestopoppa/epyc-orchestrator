@@ -105,6 +105,29 @@ def score_rows(
     return scored, summary
 
 
+def render_markdown(summary: dict[str, Any]) -> str:
+    lines = [
+        "# Offline Reward Oracle Token Coverage Scores",
+        "",
+        f"- Schema: `{summary['schema_version']}`",
+        f"- Model: `{summary['model_id']}`",
+        f"- Score source: `{summary['oracle_score_source']}`",
+        f"- Rows: `{summary['rows']}`",
+        f"- Score min / max / mean: `{summary['score_min']}` / `{summary['score_max']}` / `{summary['score_mean']}`",
+        "",
+        f"- Score definition: {summary['score_definition']}",
+        "",
+        "## Stats",
+        "",
+        "| Key | Value |",
+        "|---|---:|",
+    ]
+    for key, value in sorted(summary.get("stats", {}).items()):
+        lines.append(f"| `{key}` | `{value}` |")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def write_jsonl(rows: Iterable[dict[str, Any]], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as handle:
@@ -119,6 +142,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--input-jsonl", required=True, type=Path)
     parser.add_argument("--output-jsonl", required=True, type=Path)
     parser.add_argument("--summary-json", required=True, type=Path)
+    parser.add_argument("--summary-md", type=Path)
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args(argv)
 
@@ -130,6 +154,9 @@ def main(argv: list[str] | None = None) -> int:
         json.dumps(summary, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+    if args.summary_md:
+        args.summary_md.parent.mkdir(parents=True, exist_ok=True)
+        args.summary_md.write_text(render_markdown(summary), encoding="utf-8")
     return 0
 
 

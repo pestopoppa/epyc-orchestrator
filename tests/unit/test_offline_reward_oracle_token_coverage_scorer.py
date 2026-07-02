@@ -100,6 +100,7 @@ def test_cli_writes_scored_jsonl_and_summary(tmp_path: Path) -> None:
     )
     output_path = tmp_path / "scored.jsonl"
     summary_path = tmp_path / "summary.json"
+    summary_md_path = tmp_path / "summary.md"
 
     assert scorer_mod.main(
         [
@@ -109,6 +110,8 @@ def test_cli_writes_scored_jsonl_and_summary(tmp_path: Path) -> None:
             str(output_path),
             "--summary-json",
             str(summary_path),
+            "--summary-md",
+            str(summary_md_path),
         ]
     ) == 0
 
@@ -118,3 +121,6 @@ def test_cli_writes_scored_jsonl_and_summary(tmp_path: Path) -> None:
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     assert scored[0]["oracle_score"] == 0.5
     assert summary["model_id"] == "deterministic/reference-token-coverage-v1"
+    assert "Offline Reward Oracle Token Coverage Scores" in summary_md_path.read_text(
+        encoding="utf-8"
+    )

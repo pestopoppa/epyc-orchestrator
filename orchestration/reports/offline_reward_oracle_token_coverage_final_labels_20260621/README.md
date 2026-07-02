@@ -6,8 +6,8 @@ label report.
 
 Committed artifacts:
 
-- `score_summary.json` records the deterministic scorer definition and aggregate
-  score statistics.
+- `score_summary.json` and `score_summary.md` record the deterministic scorer
+  definition and aggregate score statistics.
 - `eval.json` and `eval.md` record the calibrated gate run at oracle threshold
   `0.86`.
 - `adoption_manifest.json` is the fail-closed, machine-readable adoption packet

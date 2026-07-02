@@ -490,7 +490,8 @@ def _post_collection_commands() -> list[str]:
             "uv run python scripts/graph_router/score_offline_reward_oracle_token_coverage.py "
             f"--input-jsonl {report_dir}/offline_reward_pairwise_expanded_gap_oracle_rows.jsonl "
             f"--output-jsonl {report_dir}/offline_reward_pairwise_expanded_gap_scored_rows.jsonl "
-            f"--summary-json {report_dir}/offline_reward_pairwise_expanded_gap_score_summary.json"
+            f"--summary-json {report_dir}/offline_reward_pairwise_expanded_gap_score_summary.json "
+            f"--summary-md {report_dir}/offline_reward_pairwise_expanded_gap_score_summary.md"
         ),
         (
             "uv run python scripts/graph_router/export_offline_reward_expansion_labels.py "
