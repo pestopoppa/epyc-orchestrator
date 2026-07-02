@@ -104,7 +104,13 @@ def _task_text_snapshot(
                 f"role={role})"
             )
         else:
-            source_note = f"(source: inference_tap.log section @ {ts} · role={role})"
+            trust = (
+                " · legacy best-effort/non-authoritative"
+                if tap_section.get("legacy_source")
+                or tap_section.get("non_authoritative")
+                else ""
+            )
+            source_note = f"(source: inference_tap.log section @ {ts} · role={role}{trust})"
     if not prompt_text:
         for ev in events:
             if ev.get("event_type") == "task_started":
@@ -264,7 +270,12 @@ def _find_section_by_objective(
     def _match(sections_iter, needle: str) -> dict | None:
         for s in sections_iter:
             if needle in (s.get("prompt") or ""):
-                return s
+                out = dict(s)
+                out.setdefault("source", "legacy_inference_tap")
+                out["legacy_source"] = True
+                out["non_authoritative"] = True
+                out["match_hint"] = "objective_substring"
+                return out
         return None
 
     # Pass 1 — role-filtered (if known). Higher precision; prefer over global.

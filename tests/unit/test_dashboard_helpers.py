@@ -849,6 +849,9 @@ def test_find_section_by_objective_matches_recent_first(monkeypatch) -> None:
     out = dashboard_tasks._find_section_by_objective("solve fizzbuzz")
     assert out is not None
     assert out["prompt"].startswith("recent:")
+    assert out["source"] == "legacy_inference_tap"
+    assert out["legacy_source"] is True
+    assert out["non_authoritative"] is True
 
 
 def test_find_section_by_objective_role_filtered_no_global_fallback(monkeypatch) -> None:
@@ -878,6 +881,26 @@ def test_find_section_by_objective_role_alias_canonicalizes_worker_explore(monke
     )
     assert out is not None
     assert out["role"] == "worker_general"
+    assert out["legacy_source"] is True
+
+
+def test_task_text_snapshot_marks_legacy_tap_source_non_authoritative() -> None:
+    out = dashboard_tasks._task_text_snapshot(
+        "chat-legacy",
+        [],
+        None,
+        tap_section={
+            "source": "legacy_inference_tap",
+            "legacy_source": True,
+            "non_authoritative": True,
+            "timestamp": "2026-05-22T10:00:00+00:00",
+            "role": "frontdoor",
+            "prompt": "hello",
+            "response": "world",
+        },
+    )
+
+    assert "legacy best-effort/non-authoritative" in out
 
 
 def test_find_structured_request_by_task_id_matches_chat_id(monkeypatch) -> None:
