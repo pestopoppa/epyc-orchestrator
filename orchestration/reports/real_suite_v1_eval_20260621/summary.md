@@ -1,6 +1,6 @@
 # real_suite_v1 EvalTower Run
 
-- Generated at: `2026-06-21T01:50:52+00:00`
+- Generated at: `2026-07-02T23:23:58+00:00`
 - Source JSONL: `/mnt/raid0/llm/tmp/real_suite_v1_eval_20260621T0141Z.jsonl`
 - Core ID: `real_suite_v1`
 - Questions: `50`
@@ -22,6 +22,12 @@ Run is isolated from AutoPilot journal/state, but was collected while the W4/W6 
 | Suite | Count | Correct | Accuracy |
 |---|---:|---:|---:|
 | `real_suite_v1` | 50 | 11 | 0.2200 |
+
+## Task-Class Breakdown
+
+| Task Class | Count | Correct | Errors | Accuracy | Reliability |
+|---|---:|---:|---:|---:|---:|
+| `unknown` | 50 | 11 | 34 | 0.2200 | 0.3200 |
 
 ## Error Breakdown
 

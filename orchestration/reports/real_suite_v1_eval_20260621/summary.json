@@ -7,6 +7,15 @@
       "count": 50
     }
   },
+  "by_task_class": {
+    "unknown": {
+      "accuracy": 0.22,
+      "correct": 11,
+      "count": 50,
+      "errors": 34,
+      "reliability": 0.32
+    }
+  },
   "caveat": "Run is isolated from AutoPilot journal/state, but was collected while the W4/W6 AutoPilot accrual process was live; treat timing as a concurrent-window observation, not a promotion-grade throughput claim.",
   "error_breakdown": {
     "Server error '500 Internal Server Error' for url 'http://localhost:8000/chat' For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/500": 1,
@@ -14,7 +23,7 @@
     "[Errno 104] Connection reset by peer": 1,
     "[Errno 111] Connection refused": 29
   },
-  "generated_at": "2026-06-21T01:50:52+00:00",
+  "generated_at": "2026-07-02T23:23:58+00:00",
   "metrics": {
     "accuracy": 0.22,
     "aggregate_speed": 24.539958674148544,
@@ -31,8 +40,10 @@
   },
   "privacy": {
     "committed_question_results": "compact prompt-free EvalTower result rows",
-    "private_key_matches": []
+    "private_key_matches": [],
+    "question_ledger_rows": "compact prompt-free per-question ledger rows"
   },
+  "question_ledger_path": "orchestration/reports/real_suite_v1_eval_20260621/question_ledger.jsonl",
   "run": {
     "calibration_id": "real_suite_v1_eval_20260621T0141Z",
     "core_id": "real_suite_v1",
