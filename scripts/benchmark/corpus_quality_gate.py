@@ -9,7 +9,7 @@ Usage:
     python scripts/benchmark/corpus_quality_gate.py --models frontdoor --preflight-only
     python scripts/benchmark/corpus_quality_gate.py --models frontdoor --dry-run
     python scripts/benchmark/corpus_quality_gate.py --models frontdoor worker_general --results-only
-    python scripts/benchmark/corpus_quality_gate.py --models frontdoor --mode rag
+    python scripts/benchmark/corpus_quality_gate.py --models frontdoor --mode rag --confirm-clean-window
 
 Modes:
   speed (default): Inject snippets silently in ## Reference Code (Phase 2A)
@@ -378,6 +378,35 @@ def warmup(port: int) -> None:
         log.warning("  Warmup failed (non-fatal): %s", e)
 
 
+def _active_autopilot() -> bool:
+    result = subprocess.run(
+        ["pgrep", "-f", "scripts/autopilot/autopilot.py start"],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return result.returncode == 0
+
+
+def _live_generation_refusal(args: argparse.Namespace) -> tuple[int, str] | None:
+    """Return a refusal for production-port generation outside a clean window."""
+    if args.preflight_only or args.dry_run or args.results_only:
+        return None
+    if not args.confirm_clean_window:
+        return (
+            2,
+            "refusing to run live generation: pass --confirm-clean-window for "
+            "corpus-on/off production-port A/B",
+        )
+    if _active_autopilot() and not args.allow_active_autopilot:
+        return (
+            75,
+            "refusing to run live generation: AutoPilot appears active; stop it "
+            "or pass --allow-active-autopilot for non-claim-grade live-load telemetry",
+        )
+    return None
+
+
 def _run_single_pair(
     model_key: str, port: int, prompt_info: dict, corpus_config: dict, mode: str,
 ) -> tuple[GenerationResult, GenerationResult]:
@@ -622,6 +651,16 @@ def main():
         help="Run generation and write results without invoking Claude-as-Judge.",
     )
     parser.add_argument(
+        "--confirm-clean-window",
+        action="store_true",
+        help="Required for live generation against production ports.",
+    )
+    parser.add_argument(
+        "--allow-active-autopilot",
+        action="store_true",
+        help="Override the default refusal when AutoPilot is running.",
+    )
+    parser.add_argument(
         "--max-prompts",
         type=int,
         help="Limit prompt pairs for shakedown runs before a full A/B.",
@@ -678,6 +717,12 @@ def main():
             preflight["ready_for_ab"],
         )
         sys.exit(0 if preflight["ready_for_ab"] else 1)
+
+    refusal = _live_generation_refusal(args)
+    if refusal is not None:
+        status, message = refusal
+        print(message, file=sys.stderr)
+        sys.exit(status)
 
     # Gate threshold: speed mode tolerates slight degradation, RAG must improve
     gate_threshold = 0.0 if args.mode == "rag" else -0.5

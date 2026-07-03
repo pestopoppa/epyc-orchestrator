@@ -6,6 +6,7 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 
 _BENCH = Path(__file__).resolve().parents[2] / "scripts" / "benchmark"
@@ -240,3 +241,51 @@ def test_run_corpus_preflight_marks_missing_snippets_not_ready(tmp_path: Path) -
     assert preflight["failure_count"] == 0
     assert preflight["ready_for_ab"] is False
     assert preflight["records"][0]["corpus"]["snippets_returned"] == 0
+
+
+def _gate_args(**overrides):
+    defaults = {
+        "preflight_only": False,
+        "dry_run": False,
+        "results_only": None,
+        "confirm_clean_window": False,
+        "allow_active_autopilot": False,
+    }
+    defaults.update(overrides)
+    return SimpleNamespace(**defaults)
+
+
+def test_live_generation_refuses_without_clean_window() -> None:
+    refusal = _MOD._live_generation_refusal(_gate_args())
+
+    assert refusal is not None
+    status, message = refusal
+    assert status == 2
+    assert "--confirm-clean-window" in message
+
+
+def test_preflight_and_results_only_do_not_require_clean_window() -> None:
+    assert _MOD._live_generation_refusal(_gate_args(preflight_only=True)) is None
+    assert _MOD._live_generation_refusal(_gate_args(dry_run=True)) is None
+    assert _MOD._live_generation_refusal(_gate_args(results_only="results.json")) is None
+
+
+def test_live_generation_refuses_active_autopilot(monkeypatch) -> None:
+    monkeypatch.setattr(_MOD, "_active_autopilot", lambda: True)
+
+    refusal = _MOD._live_generation_refusal(_gate_args(confirm_clean_window=True))
+
+    assert refusal is not None
+    status, message = refusal
+    assert status == 75
+    assert "AutoPilot appears active" in message
+
+
+def test_live_generation_allows_explicit_active_autopilot_override(monkeypatch) -> None:
+    monkeypatch.setattr(_MOD, "_active_autopilot", lambda: True)
+
+    refusal = _MOD._live_generation_refusal(
+        _gate_args(confirm_clean_window=True, allow_active_autopilot=True)
+    )
+
+    assert refusal is None
