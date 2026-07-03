@@ -237,6 +237,12 @@ class TestGetFeatures:
         assert f.session_compaction is True
         assert f.depth_model_overrides is True
 
+    def test_logit_probe_defaults_off_and_env_enables(self, monkeypatch):
+        """The routing logit probe is default-off and explicitly env-gated."""
+        assert get_features(production=True).logit_probe is False
+        monkeypatch.setenv("ORCHESTRATOR_LOGIT_PROBE", "1")
+        assert get_features(production=True).logit_probe is True
+
     def test_override_applies(self):
         """Explicit override dict takes precedence over defaults."""
         f = get_features(override={"memrl": True})
@@ -346,10 +352,14 @@ class TestRegistryConsistency:
         assert not missing_in_registry, f"Dataclass fields not in registry: {missing_in_registry}"
         assert not missing_in_dataclass, f"Registry entries not in dataclass: {missing_in_dataclass}"
 
-    def test_registry_test_defaults_match_get_features(self):
+    def test_registry_test_defaults_match_get_features(self, monkeypatch, tmp_path):
         """Registry default_test must match get_features(production=False) output."""
         from src.features import _FEATURE_REGISTRY
 
+        monkeypatch.setenv(
+            "ORCHESTRATOR_RUNTIME_FLAGS_PATH",
+            str(tmp_path / "missing-runtime-flags.json"),
+        )
         f = get_features(production=False)
         for spec in _FEATURE_REGISTRY:
             actual = getattr(f, spec.name)
@@ -358,10 +368,14 @@ class TestRegistryConsistency:
                 f"!= registry default_test={spec.default_test}"
             )
 
-    def test_registry_prod_defaults_match_get_features(self):
+    def test_registry_prod_defaults_match_get_features(self, monkeypatch, tmp_path):
         """Registry default_prod must match get_features(production=True) output."""
         from src.features import _FEATURE_REGISTRY
 
+        monkeypatch.setenv(
+            "ORCHESTRATOR_RUNTIME_FLAGS_PATH",
+            str(tmp_path / "missing-runtime-flags.json"),
+        )
         f = get_features(production=True)
         for spec in _FEATURE_REGISTRY:
             actual = getattr(f, spec.name)

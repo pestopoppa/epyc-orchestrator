@@ -1,5 +1,6 @@
 """Unit tests for llama_server backend."""
 
+import json
 from unittest.mock import Mock, patch
 
 import httpx
@@ -211,6 +212,31 @@ class TestLlamaServerBackend:
         assert default_payload["seed"] == 42
         assert override_payload["seed"] == 1234
 
+    def test_build_payload_adds_logit_probe_probs_for_frontdoor_only(self, role_config):
+        """Logit probe should request top-k probabilities only for frontdoor."""
+        backend = LlamaServerBackend(base_url="http://test:8080")
+        request = InferenceRequest(role="frontdoor", prompt="Hello")
+        role_config.name = "frontdoor"
+
+        with patch("src.features.features", return_value=Mock(logit_probe=True)):
+            frontdoor_payload = backend._build_payload(role_config, request)
+            role_config.name = "worker_general"
+            worker_payload = backend._build_payload(role_config, request)
+
+        assert frontdoor_payload["n_probs"] == 64
+        assert "n_probs" not in worker_payload
+
+    def test_build_payload_omits_logit_probe_probs_when_disabled(self, role_config):
+        """The default-off logit probe flag should leave payloads unchanged."""
+        backend = LlamaServerBackend(base_url="http://test:8080")
+        request = InferenceRequest(role="frontdoor", prompt="Hello")
+        role_config.name = "frontdoor"
+
+        with patch("src.features.features", return_value=Mock(logit_probe=False)):
+            payload = backend._build_payload(role_config, request)
+
+        assert "n_probs" not in payload
+
     def test_infer_success(self, role_config):
         """Test successful inference with mocked HTTP response."""
         backend = LlamaServerBackend(base_url="http://test:8080")
@@ -244,6 +270,62 @@ class TestLlamaServerBackend:
         assert result.generation_ms == 50.0
         assert result.predicted_per_second == 33.0
         assert backend.cache_stats.cache_hits == 1  # cached_tokens > 0
+
+    def test_infer_writes_logit_probe_for_frontdoor_completion_probs(
+        self,
+        role_config,
+        tmp_path,
+    ):
+        """Frontdoor logit probe writes hashed first-token top-k probabilities."""
+        from src.backends import llama_server
+
+        probe_path = tmp_path / "logit_probe.jsonl"
+        backend = LlamaServerBackend(base_url="http://test:8080")
+        role_config.name = "frontdoor"
+        request = InferenceRequest(role="frontdoor", prompt="Sensitive prompt", n_tokens=64)
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "content": "OK",
+            "tokens_predicted": 1,
+            "tokens_evaluated": 5,
+            "tokens_cached": 0,
+            "completion_probabilities": [
+                {
+                    "content": "O",
+                    "probs": [
+                        {"tok_str": "O", "prob": 0.7},
+                        {"tok_str": "K", "prob": 0.2},
+                    ],
+                }
+            ],
+            "timings": {
+                "prompt_ms": 100.0,
+                "predicted_ms": 50.0,
+                "predicted_per_second": 20.0,
+            },
+        }
+
+        with (
+            patch.object(backend.client, "post", return_value=mock_response),
+            patch("src.features.features", return_value=Mock(logit_probe=True)),
+            patch.object(llama_server, "_LOGIT_PROBE_PATH", str(probe_path)),
+        ):
+            result = backend.infer(role_config, request)
+
+        assert result.success is True
+        rows = probe_path.read_text().splitlines()
+        assert len(rows) == 1
+        entry = json.loads(rows[0])
+        assert entry["prompt_len"] == len("Sensitive prompt")
+        assert entry["prompt_hash"]
+        assert "Sensitive prompt" not in rows[0]
+        assert entry["first_token"] == "O"
+        assert entry["top_k_probs"] == [
+            {"tok": "O", "prob": 0.7},
+            {"tok": "K", "prob": 0.2},
+        ]
 
     def test_infer_empty_long_generation_is_failure(self, role_config):
         """Long-running empty /completion responses should not look successful."""
