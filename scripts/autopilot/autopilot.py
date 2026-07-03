@@ -934,13 +934,17 @@ def _seq_promotion_replay_blocker(action: Any) -> str:
         params = action.get("params")
         if not isinstance(params, dict) or not params:
             return "candidate numeric_trial lacks replayable applied params"
-        return ""
-    if action_type == "structural_experiment":
+    elif action_type == "structural_experiment":
         flags = action.get("flags")
         if not isinstance(flags, dict) or not flags:
             return "candidate structural_experiment lacks replayable flags"
-        return ""
-    return f"candidate action type is not replayable: {action_type or 'unknown'}"
+    else:
+        return f"candidate action type is not replayable: {action_type or 'unknown'}"
+
+    scope_err = controller_io.validate_single_variable(action)
+    if scope_err:
+        return f"candidate action violates AP-9: {scope_err}"
+    return ""
 
 
 def _seq_candidate_replay_payload(

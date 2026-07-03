@@ -378,6 +378,62 @@ def test_seq_candidate_replay_payload_requires_neutral_quality_e(
     assert autopilot._seq_candidate_replay_payload(journal, tier=1) is None
 
 
+def test_seq_candidate_replay_payload_skips_dispatch_invalid_action(
+    tmp_path: Path,
+) -> None:
+    invalid_action = {
+        "type": "numeric_trial",
+        "surface": "repl_executor",
+        "params": {
+            "repl.turn_token_cap": 3684,
+            "repl.frontdoor_non_tool_token_cap": 1988,
+        },
+    }
+    valid_action = {
+        "type": "numeric_trial",
+        "surface": "repl_budget",
+        "params": {"repl.worker_call_budget_cap": 31},
+    }
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    journal.record(
+        _entry(
+            10,
+            invalid_action,
+            seq={
+                "candidate": autopilot._config_fingerprint(invalid_action),
+                "core_id": "core_v1",
+                "k": 1,
+                "z": 0.2,
+                "z_rate": -0.1,
+                "E_quality": 1.4,
+                "E_rate_noninf": 1.2,
+                "state": "accumulating",
+            },
+        )
+    )
+    journal.record(
+        _entry(
+            11,
+            valid_action,
+            seq={
+                "candidate": autopilot._config_fingerprint(valid_action),
+                "core_id": "core_v1",
+                "k": 1,
+                "z": 0.1,
+                "z_rate": -0.1,
+                "E_quality": 1.02,
+                "E_rate_noninf": 0.96,
+                "state": "accumulating",
+            },
+        )
+    )
+
+    payload = autopilot._seq_candidate_replay_payload(journal, tier=1)
+
+    assert payload is not None
+    assert payload["action"] == valid_action
+
+
 def test_maybe_force_seq_candidate_replay_respects_blacklist(tmp_path: Path) -> None:
     action = {
         "type": "numeric_trial",
