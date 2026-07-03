@@ -184,6 +184,29 @@
   bind_status: future
   bind_identifiers:
   - tool_use_sentinel_lane
+- slug: v6-tool-activation-latency
+  tranche: green
+  species: structural_lab
+  entry_type: pattern
+  title: Test tool activation as a v6 latency lever
+  description: v6 tool activation and zero tool-call telemetry in structural_lab
+  insight: Recent v6-era AutoPilot rows show total_tool_calls=0 despite tools/repl/react_mode being enabled; test a narrow tool-activation lane on retrieval, math, and code-check tasks where CALL() should replace long reasoning and reduce latency without quality loss.
+  evidence_trial_ids:
+  - 1063
+  - 1065
+  - 1066
+  - 1067
+  - 1068
+  - 1069
+  source_handoff: operator-observation-2026-07-03-tool-use-zero-call-v6
+  seeded_reason: Bias StructuralLab toward measuring whether enabled tools are actually exercised and whether that improves processing time
+  confidence: high
+  bind_status: future
+  bind_identifiers:
+  - tool_use_sentinel_lane
+  - tools
+  - repl
+  - react_mode
 - slug: xmas-winner-table
   tranche: green
   species: structural_lab
