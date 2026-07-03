@@ -1,0 +1,433 @@
+{
+  "generated_at": "2026-07-03T14:03:13",
+  "live_affinity_verified": true,
+  "live_memory_placement_verified": true,
+  "memory_locality_required": false,
+  "memory_locality_threshold": 0.85,
+  "memory_required_entries": 4,
+  "memory_mismatches": 0,
+  "roles_checked": [
+    "frontdoor",
+    "architect_general",
+    "worker_general"
+  ],
+  "instances": [
+    {
+      "role": "frontdoor",
+      "instance_idx": 0,
+      "port": 8070,
+      "pid": "1114960",
+      "expected_cpus": "0-47,96-143",
+      "observed_thread_union": "0-47,96-143",
+      "expected_numa_nodes": "N0,N1",
+      "n_expected": 96,
+      "n_observed": 96,
+      "match": true,
+      "memory_placement": {
+        "checked": true,
+        "required": false,
+        "match": null,
+        "threshold": 0.85,
+        "no_mmap": false,
+        "signal_kind": "mmap_gguf_pages",
+        "expected_nodes": "N0,N1",
+        "pages_by_node": {
+          "N0": 4613058,
+          "N1": 4613040,
+          "N2": 4613046,
+          "N3": 4613058
+        },
+        "total_pages": 18452202,
+        "expected_node_pages": 9226098,
+        "local_fraction": 0.4999998374177781,
+        "model_files": [
+          "/mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf"
+        ],
+        "largest_anon_pages_by_node": {
+          "N0": 337232,
+          "N1": 16081
+        },
+        "largest_anon_total_pages": 353313,
+        "note": "shared mmap placement observed"
+      },
+      "note": "ok"
+    },
+    {
+      "role": "frontdoor",
+      "instance_idx": 1,
+      "port": 8080,
+      "pid": "1115754",
+      "expected_cpus": "0-23,96-119",
+      "observed_thread_union": "0-23,96-119",
+      "expected_numa_nodes": "N0",
+      "n_expected": 48,
+      "n_observed": 48,
+      "match": true,
+      "memory_placement": {
+        "checked": true,
+        "required": false,
+        "match": null,
+        "threshold": 0.85,
+        "no_mmap": false,
+        "signal_kind": "mmap_gguf_pages",
+        "expected_nodes": "N0",
+        "pages_by_node": {
+          "N0": 4613058,
+          "N1": 4613040,
+          "N2": 4613046,
+          "N3": 4613058
+        },
+        "total_pages": 18452202,
+        "expected_node_pages": 4613058,
+        "local_fraction": 0.2500004064555547,
+        "model_files": [
+          "/mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf"
+        ],
+        "largest_anon_pages_by_node": {
+          "N0": 210441,
+          "N1": 1536
+        },
+        "largest_anon_total_pages": 211977,
+        "note": "shared mmap placement observed"
+      },
+      "note": "ok"
+    },
+    {
+      "role": "frontdoor",
+      "instance_idx": 2,
+      "port": 8180,
+      "pid": "1116048",
+      "expected_cpus": "24-47,120-143",
+      "observed_thread_union": "24-47,120-143",
+      "expected_numa_nodes": "N1",
+      "n_expected": 48,
+      "n_observed": 48,
+      "match": true,
+      "memory_placement": {
+        "checked": true,
+        "required": false,
+        "match": null,
+        "threshold": 0.85,
+        "no_mmap": false,
+        "signal_kind": "mmap_gguf_pages",
+        "expected_nodes": "N1",
+        "pages_by_node": {
+          "N0": 4613058,
+          "N1": 4613040,
+          "N2": 4613046,
+          "N3": 4613058
+        },
+        "total_pages": 18452202,
+        "expected_node_pages": 4613040,
+        "local_fraction": 0.24999943096222338,
+        "model_files": [
+          "/mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf"
+        ],
+        "largest_anon_pages_by_node": {
+          "N1": 167449
+        },
+        "largest_anon_total_pages": 167449,
+        "note": "shared mmap placement observed"
+      },
+      "note": "ok"
+    },
+    {
+      "role": "frontdoor",
+      "instance_idx": 3,
+      "port": 8280,
+      "pid": "1116363",
+      "expected_cpus": "48-71,144-167",
+      "observed_thread_union": "48-71,144-167",
+      "expected_numa_nodes": "N2",
+      "n_expected": 48,
+      "n_observed": 48,
+      "match": true,
+      "memory_placement": {
+        "checked": true,
+        "required": false,
+        "match": null,
+        "threshold": 0.85,
+        "no_mmap": false,
+        "signal_kind": "mmap_gguf_pages",
+        "expected_nodes": "N2",
+        "pages_by_node": {
+          "N0": 4613058,
+          "N1": 4613040,
+          "N2": 4613046,
+          "N3": 4613058
+        },
+        "total_pages": 18452202,
+        "expected_node_pages": 4613046,
+        "local_fraction": 0.24999975612666717,
+        "model_files": [
+          "/mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf"
+        ],
+        "largest_anon_pages_by_node": {
+          "N2": 382914
+        },
+        "largest_anon_total_pages": 382914,
+        "note": "shared mmap placement observed"
+      },
+      "note": "ok"
+    },
+    {
+      "role": "frontdoor",
+      "instance_idx": 4,
+      "port": 8380,
+      "pid": "1116637",
+      "expected_cpus": "72-95,168-191",
+      "observed_thread_union": "72-95,168-191",
+      "expected_numa_nodes": "N3",
+      "n_expected": 48,
+      "n_observed": 48,
+      "match": true,
+      "memory_placement": {
+        "checked": true,
+        "required": false,
+        "match": null,
+        "threshold": 0.85,
+        "no_mmap": false,
+        "signal_kind": "mmap_gguf_pages",
+        "expected_nodes": "N3",
+        "pages_by_node": {
+          "N0": 4613058,
+          "N1": 4613040,
+          "N2": 4613046,
+          "N3": 4613058
+        },
+        "total_pages": 18452202,
+        "expected_node_pages": 4613058,
+        "local_fraction": 0.2500004064555547,
+        "model_files": [
+          "/mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf"
+        ],
+        "largest_anon_pages_by_node": {
+          "N3": 322568
+        },
+        "largest_anon_total_pages": 322568,
+        "note": "shared mmap placement observed"
+      },
+      "note": "ok"
+    },
+    {
+      "role": "architect_general",
+      "instance_idx": 0,
+      "port": 8083,
+      "pid": "1131429",
+      "expected_cpus": "0-95",
+      "observed_thread_union": "0-95",
+      "expected_numa_nodes": "N0,N1,N2,N3",
+      "n_expected": 96,
+      "n_observed": 96,
+      "match": true,
+      "memory_placement": {
+        "checked": true,
+        "required": false,
+        "match": null,
+        "threshold": 0.85,
+        "no_mmap": false,
+        "signal_kind": "mmap_gguf_pages",
+        "expected_nodes": "N0,N1,N2,N3",
+        "pages_by_node": {
+          "N0": 9552066,
+          "N1": 9551868,
+          "N2": 9551762,
+          "N3": 9552026
+        },
+        "total_pages": 38207722,
+        "expected_node_pages": 38207722,
+        "local_fraction": 1.0,
+        "model_files": [
+          "/mnt/raid0/llm/models/Qwen3.5-122B-A10B-MTP-GGUF/UD-Q4_K_M/Qwen3.5-122B-A10B-UD-Q4_K_M-00001-of-00003.gguf",
+          "/mnt/raid0/llm/models/Qwen3.5-122B-A10B-MTP-GGUF/UD-Q4_K_M/Qwen3.5-122B-A10B-UD-Q4_K_M-00002-of-00003.gguf",
+          "/mnt/raid0/llm/models/Qwen3.5-122B-A10B-MTP-GGUF/UD-Q4_K_M/Qwen3.5-122B-A10B-UD-Q4_K_M-00003-of-00003.gguf"
+        ],
+        "largest_anon_pages_by_node": {
+          "N0": 159310,
+          "N1": 173134,
+          "N2": 164431,
+          "N3": 164942
+        },
+        "largest_anon_total_pages": 661817,
+        "note": "shared mmap placement observed"
+      },
+      "note": "ok"
+    },
+    {
+      "role": "worker_general",
+      "instance_idx": 0,
+      "port": 8072,
+      "pid": "1116996",
+      "expected_cpus": "0-95",
+      "observed_thread_union": "0-95",
+      "expected_numa_nodes": "N0,N1,N2,N3",
+      "n_expected": 96,
+      "n_observed": 96,
+      "match": true,
+      "memory_placement": {
+        "checked": true,
+        "required": false,
+        "match": null,
+        "threshold": 0.85,
+        "no_mmap": true,
+        "signal_kind": "anon_pages",
+        "expected_nodes": "N0,N1,N2,N3",
+        "pages_by_node": {
+          "N0": 1674174,
+          "N1": 1679834,
+          "N2": 1680706,
+          "N3": 1677088
+        },
+        "total_pages": 6711802,
+        "expected_node_pages": 6711802,
+        "local_fraction": 1.0,
+        "model_files": [],
+        "largest_anon_pages_by_node": {
+          "N0": 1061508,
+          "N1": 1062019,
+          "N2": 1062019,
+          "N3": 1060996
+        },
+        "largest_anon_total_pages": 4246542,
+        "note": "multi-node no_mmap placement observed"
+      },
+      "note": "ok"
+    },
+    {
+      "role": "worker_general",
+      "instance_idx": 1,
+      "port": 8082,
+      "pid": "1117328",
+      "expected_cpus": "0-23,96-119",
+      "observed_thread_union": "0-23,96-119",
+      "expected_numa_nodes": "N0",
+      "n_expected": 48,
+      "n_observed": 48,
+      "match": true,
+      "memory_placement": {
+        "checked": true,
+        "required": true,
+        "match": true,
+        "threshold": 0.85,
+        "no_mmap": true,
+        "signal_kind": "anon_pages",
+        "expected_nodes": "N0",
+        "pages_by_node": {
+          "N0": 4974519
+        },
+        "total_pages": 4974519,
+        "expected_node_pages": 4974519,
+        "local_fraction": 1.0,
+        "model_files": [],
+        "largest_anon_pages_by_node": {
+          "N0": 4244575
+        },
+        "largest_anon_total_pages": 4244575,
+        "note": "ok"
+      },
+      "note": "ok"
+    },
+    {
+      "role": "worker_general",
+      "instance_idx": 2,
+      "port": 8182,
+      "pid": "1117611",
+      "expected_cpus": "24-47,120-143",
+      "observed_thread_union": "24-47,120-143",
+      "expected_numa_nodes": "N1",
+      "n_expected": 48,
+      "n_observed": 48,
+      "match": true,
+      "memory_placement": {
+        "checked": true,
+        "required": true,
+        "match": true,
+        "threshold": 0.85,
+        "no_mmap": true,
+        "signal_kind": "anon_pages",
+        "expected_nodes": "N1",
+        "pages_by_node": {
+          "N1": 4536536
+        },
+        "total_pages": 4536536,
+        "expected_node_pages": 4536536,
+        "local_fraction": 1.0,
+        "model_files": [],
+        "largest_anon_pages_by_node": {
+          "N1": 4244576
+        },
+        "largest_anon_total_pages": 4244576,
+        "note": "ok"
+      },
+      "note": "ok"
+    },
+    {
+      "role": "worker_general",
+      "instance_idx": 3,
+      "port": 8282,
+      "pid": "1117883",
+      "expected_cpus": "48-71,144-167",
+      "observed_thread_union": "48-71,144-167",
+      "expected_numa_nodes": "N2",
+      "n_expected": 48,
+      "n_observed": 48,
+      "match": true,
+      "memory_placement": {
+        "checked": true,
+        "required": true,
+        "match": true,
+        "threshold": 0.85,
+        "no_mmap": true,
+        "signal_kind": "anon_pages",
+        "expected_nodes": "N2",
+        "pages_by_node": {
+          "N2": 5457339
+        },
+        "total_pages": 5457339,
+        "expected_node_pages": 5457339,
+        "local_fraction": 1.0,
+        "model_files": [],
+        "largest_anon_pages_by_node": {
+          "N2": 4244575
+        },
+        "largest_anon_total_pages": 4244575,
+        "note": "ok"
+      },
+      "note": "ok"
+    },
+    {
+      "role": "worker_general",
+      "instance_idx": 4,
+      "port": 8382,
+      "pid": "1118216",
+      "expected_cpus": "72-95,168-191",
+      "observed_thread_union": "72-95,168-191",
+      "expected_numa_nodes": "N3",
+      "n_expected": 48,
+      "n_observed": 48,
+      "match": true,
+      "memory_placement": {
+        "checked": true,
+        "required": true,
+        "match": true,
+        "threshold": 0.85,
+        "no_mmap": true,
+        "signal_kind": "anon_pages",
+        "expected_nodes": "N3",
+        "pages_by_node": {
+          "N3": 5321206
+        },
+        "total_pages": 5321206,
+        "expected_node_pages": 5321206,
+        "local_fraction": 1.0,
+        "model_files": [],
+        "largest_anon_pages_by_node": {
+          "N3": 4246585
+        },
+        "largest_anon_total_pages": 4246585,
+        "note": "ok"
+      },
+      "note": "ok"
+    }
+  ]
+}
