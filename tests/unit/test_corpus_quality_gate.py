@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -15,6 +16,36 @@ _SPEC = importlib.util.spec_from_file_location(
 _MOD = importlib.util.module_from_spec(_SPEC)
 sys.modules["corpus_quality_gate_test"] = _MOD
 _SPEC.loader.exec_module(_MOD)
+
+
+def _write_v1_corpus(index_path: Path, prompt: str, *, match: bool = True) -> None:
+    from src.services.corpus_retrieval import extract_code_query
+
+    index_path.mkdir(parents=True)
+    query = extract_code_query(prompt)
+    words = query.lower().split()
+    grams = [" ".join(words[idx : idx + 4]) for idx in range(max(len(words) - 3, 0))]
+    index_path.joinpath("meta.json").write_text(
+        json.dumps({"ngram_size": 4}),
+        encoding="utf-8",
+    )
+    index_path.joinpath("snippets.json").write_text(
+        json.dumps(
+            [
+                {
+                    "code": "def alpha_beta():\n    return 'ok'\n",
+                    "file": "alpha.py",
+                    "start_line": 10,
+                    "hash": "snippet-hash",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    index_path.joinpath("ngram_index.json").write_text(
+        json.dumps({gram: [0] for gram in grams} if match else {}),
+        encoding="utf-8",
+    )
 
 
 def test_load_live_models_reads_stack_prior_ports(tmp_path: Path) -> None:
@@ -142,3 +173,70 @@ def test_default_model_keys_falls_back_to_available_models() -> None:
     models = {"custom_role": {"port": 9000}}
 
     assert _MOD._default_model_keys(models) == ["custom_role"]
+
+
+def test_build_corpus_prompt_with_diagnostics_reports_injection(tmp_path: Path) -> None:
+    from src.services.corpus_retrieval import CorpusRetriever
+
+    prompt = "Implement alpha_beta gamma_delta helper with retry logic."
+    index_path = tmp_path / "corpus"
+    _write_v1_corpus(index_path, prompt)
+    CorpusRetriever.reset_instance()
+
+    try:
+        build = _MOD.build_corpus_prompt_with_diagnostics(
+            prompt,
+            {
+                "index_path": str(index_path),
+                "max_snippets": 1,
+                "max_chars": 1000,
+                "min_score": 0.5,
+            },
+            mode="speed",
+        )
+    finally:
+        CorpusRetriever.reset_instance()
+
+    assert build.prompt.startswith("<reference_code")
+    assert prompt in build.prompt
+    assert build.diagnostics["injected"] is True
+    assert build.diagnostics["snippets_returned"] == 1
+    assert build.diagnostics["loaded"] is True
+    assert build.diagnostics["format"] == "json"
+    assert build.diagnostics["snippet_sources"] == [
+        {
+            "file": "alpha.py",
+            "start_line": 10,
+            "score": 1.0,
+            "hash": "snippet-hash",
+        }
+    ]
+
+
+def test_run_corpus_preflight_marks_missing_snippets_not_ready(tmp_path: Path) -> None:
+    from src.services.corpus_retrieval import CorpusRetriever
+
+    prompt = "Implement alpha_beta gamma_delta helper with retry logic."
+    index_path = tmp_path / "corpus"
+    _write_v1_corpus(index_path, prompt, match=False)
+    CorpusRetriever.reset_instance()
+
+    try:
+        preflight = _MOD.run_corpus_preflight(
+            {
+                "index_path": str(index_path),
+                "max_snippets": 1,
+                "max_chars": 1000,
+                "min_score": 0.5,
+            },
+            mode="speed",
+            prompts=[{"id": "alpha", "prompt": prompt, "language": "python"}],
+        )
+    finally:
+        CorpusRetriever.reset_instance()
+
+    assert preflight["prompt_count"] == 1
+    assert preflight["injected_count"] == 0
+    assert preflight["failure_count"] == 0
+    assert preflight["ready_for_ab"] is False
+    assert preflight["records"][0]["corpus"]["snippets_returned"] == 0

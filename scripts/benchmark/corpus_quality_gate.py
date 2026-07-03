@@ -6,6 +6,7 @@ then uses Claude to judge whether corpus injection degrades output quality.
 
 Usage:
     python scripts/benchmark/corpus_quality_gate.py --models frontdoor worker_general
+    python scripts/benchmark/corpus_quality_gate.py --models frontdoor --preflight-only
     python scripts/benchmark/corpus_quality_gate.py --models frontdoor --dry-run
     python scripts/benchmark/corpus_quality_gate.py --models frontdoor worker_general --results-only
     python scripts/benchmark/corpus_quality_gate.py --models frontdoor --mode rag
@@ -28,8 +29,9 @@ import os
 import subprocess
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import Any
 
 import requests
 
@@ -170,6 +172,13 @@ class GenerationResult:
     draft_n: int = 0
     draft_accepted: int = 0
     wall_time: float = 0.0
+    corpus_diagnostics: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class CorpusPromptBuild:
+    prompt: str
+    diagnostics: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -212,19 +221,93 @@ def generate(port: int, prompt: str, max_tokens: int = 1024) -> dict:
     }
 
 
-def build_corpus_prompt(prompt: str, corpus_config: dict, mode: str = "speed") -> str:
-    """Build prompt with corpus context injected.
+def _same_retriever_config(current: Any, desired: Any) -> bool:
+    """Return True when the singleton already has the requested corpus config."""
+    return (
+        bool(getattr(current, "enabled", False)) == bool(getattr(desired, "enabled", False))
+        and str(getattr(current, "index_path", "")) == str(getattr(desired, "index_path", ""))
+        and int(getattr(current, "max_snippets", 0) or 0)
+        == int(getattr(desired, "max_snippets", 0) or 0)
+        and int(getattr(current, "max_chars", 0) or 0)
+        == int(getattr(desired, "max_chars", 0) or 0)
+        and float(getattr(current, "min_score", 0.0) or 0.0)
+        == float(getattr(desired, "min_score", 0.0) or 0.0)
+        and bool(getattr(current, "rag_enabled", False))
+        == bool(getattr(desired, "rag_enabled", False))
+        and int(getattr(current, "rag_max_snippets", 0) or 0)
+        == int(getattr(desired, "rag_max_snippets", 0) or 0)
+        and int(getattr(current, "rag_max_chars", 0) or 0)
+        == int(getattr(desired, "rag_max_chars", 0) or 0)
+        and float(getattr(current, "rag_min_score", 0.0) or 0.0)
+        == float(getattr(desired, "rag_min_score", 0.0) or 0.0)
+    )
 
-    Args:
-        prompt: The task prompt.
-        corpus_config: Dict with index_path, max_snippets, max_chars.
-        mode: "speed" for silent injection (Phase 2A), "rag" for quality RAG (Phase 2B).
-    """
+
+def _configured_retriever(retriever_cls: Any, config: Any) -> Any:
+    """Reuse the corpus singleton when possible so the harness matches production."""
+    retriever = retriever_cls.get_instance(config)
+    if not _same_retriever_config(retriever.config, config):
+        retriever_cls.reset_instance()
+        retriever = retriever_cls.get_instance(config)
+    else:
+        retriever.config = config
+    return retriever
+
+
+def _snippet_sources(snippets: list[Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "file": str(getattr(snippet, "file", "") or ""),
+            "start_line": int(getattr(snippet, "start_line", 0) or 0),
+            "score": float(getattr(snippet, "score", 0.0) or 0.0),
+            "hash": str(getattr(snippet, "hash", "") or ""),
+        }
+        for snippet in snippets
+    ]
+
+
+def _corpus_diagnostics_payload(
+    *,
+    mode: str,
+    query: str,
+    snippets: list[Any],
+    retriever: Any,
+    prompt: str,
+    built_prompt: str,
+) -> dict[str, Any]:
+    diagnostics = getattr(retriever, "last_diagnostics", None)
+    diag_payload = asdict(diagnostics) if diagnostics is not None else {}
+    return {
+        "mode": mode,
+        "query": query,
+        "injected": built_prompt != prompt,
+        "prompt_chars_added": max(len(built_prompt) - len(prompt), 0),
+        "snippets_returned": len(snippets),
+        "snippet_sources": _snippet_sources(snippets),
+        "loaded": bool(diag_payload.get("loaded", False)),
+        "format": str(diag_payload.get("format", "") or ""),
+        "query_ngrams": int(diag_payload.get("query_ngrams", 0) or 0),
+        "candidates_found": int(diag_payload.get("candidates_found", 0) or 0),
+        "retrieval_latency_ms": round(
+            float(diag_payload.get("elapsed_ms", 0.0) or 0.0),
+            3,
+        ),
+        "failure_reason": str(diag_payload.get("failure_reason", "") or ""),
+        "failure_detail": str(diag_payload.get("failure_detail", "") or ""),
+        "shards_queried": int(diag_payload.get("shards_queried", 0) or 0),
+        "shards_failed": int(diag_payload.get("shards_failed", 0) or 0),
+        "shards_unavailable": int(diag_payload.get("shards_unavailable", 0) or 0),
+    }
+
+
+def build_corpus_prompt_with_diagnostics(
+    prompt: str,
+    corpus_config: dict,
+    mode: str = "speed",
+) -> CorpusPromptBuild:
+    """Build a corpus prompt and return lookup diagnostics for the A/B artifact."""
     sys.path.insert(0, str(Path(__file__).parent.parent.parent))
     from src.services.corpus_retrieval import CorpusConfig, CorpusRetriever, extract_code_query
-
-    # Reset singleton to ensure fresh config is applied
-    CorpusRetriever.reset_instance()
 
     if mode == "rag":
         config = CorpusConfig(
@@ -232,33 +315,57 @@ def build_corpus_prompt(prompt: str, corpus_config: dict, mode: str = "speed") -
             index_path=corpus_config.get("index_path", "/mnt/raid0/llm/cache/corpus/mvp_index"),
             max_snippets=corpus_config.get("max_snippets", 3),
             max_chars=corpus_config.get("max_chars", 3000),
+            min_score=corpus_config.get("min_score", 0.5),
             rag_enabled=True,
             rag_max_snippets=corpus_config.get("rag_max_snippets", 5),
             rag_max_chars=corpus_config.get("rag_max_chars", 5000),
             rag_min_score=corpus_config.get("rag_min_score", 0.3),
         )
-        retriever = CorpusRetriever.get_instance(config)
+        retriever = _configured_retriever(CorpusRetriever, config)
         query = extract_code_query(prompt)
         snippets = retriever.retrieve_for_rag(query)
-        log.info("    RAG retrieval: query=%r → %d snippets", query[:60], len(snippets))
-        if snippets:
-            return retriever.format_for_rag(snippets, prompt)
-        return prompt
-    else:
-        config = CorpusConfig(
-            enabled=True,
-            index_path=corpus_config.get("index_path", "/mnt/raid0/llm/cache/corpus/mvp_index"),
-            max_snippets=corpus_config.get("max_snippets", 3),
-            max_chars=corpus_config.get("max_chars", 3000),
+        log.info("    RAG retrieval: query=%r -> %d snippets", query[:60], len(snippets))
+        built_prompt = retriever.format_for_rag(snippets, prompt) if snippets else prompt
+        return CorpusPromptBuild(
+            prompt=built_prompt,
+            diagnostics=_corpus_diagnostics_payload(
+                mode=mode,
+                query=query,
+                snippets=snippets,
+                retriever=retriever,
+                prompt=prompt,
+                built_prompt=built_prompt,
+            ),
         )
-        retriever = CorpusRetriever.get_instance(config)
-        query = extract_code_query(prompt)
-        snippets = retriever.retrieve(query)
-        corpus_ctx = retriever.format_for_prompt(snippets)
 
-        if corpus_ctx:
-            return f"{corpus_ctx}\n\n{prompt}"
-        return prompt
+    config = CorpusConfig(
+        enabled=True,
+        index_path=corpus_config.get("index_path", "/mnt/raid0/llm/cache/corpus/mvp_index"),
+        max_snippets=corpus_config.get("max_snippets", 3),
+        max_chars=corpus_config.get("max_chars", 3000),
+        min_score=corpus_config.get("min_score", 0.5),
+    )
+    retriever = _configured_retriever(CorpusRetriever, config)
+    query = extract_code_query(prompt)
+    snippets = retriever.retrieve(query)
+    corpus_ctx = retriever.format_for_prompt(snippets)
+    built_prompt = f"{corpus_ctx}\n\n{prompt}" if corpus_ctx else prompt
+    return CorpusPromptBuild(
+        prompt=built_prompt,
+        diagnostics=_corpus_diagnostics_payload(
+            mode=mode,
+            query=query,
+            snippets=snippets,
+            retriever=retriever,
+            prompt=prompt,
+            built_prompt=built_prompt,
+        ),
+    )
+
+
+def build_corpus_prompt(prompt: str, corpus_config: dict, mode: str = "speed") -> str:
+    """Build prompt with corpus context injected and discard benchmark diagnostics."""
+    return build_corpus_prompt_with_diagnostics(prompt, corpus_config, mode=mode).prompt
 
 
 def warmup(port: int) -> None:
@@ -293,8 +400,12 @@ def _run_single_pair(
 
     log.info("  [%s] %s — with corpus (%s)...", model_key, p["id"], mode)
 
-    corpus_prompt = build_corpus_prompt(p["prompt"], corpus_config, mode=mode)
-    result_c = generate(port, corpus_prompt)
+    corpus_build = build_corpus_prompt_with_diagnostics(
+        p["prompt"],
+        corpus_config,
+        mode=mode,
+    )
+    result_c = generate(port, corpus_build.prompt)
     corpus = GenerationResult(
         model=model_key,
         prompt_id=p["id"],
@@ -305,11 +416,18 @@ def _run_single_pair(
         draft_n=result_c["draft_n"],
         draft_accepted=result_c["draft_accepted"],
         wall_time=result_c["wall_time"],
+        corpus_diagnostics=corpus_build.diagnostics,
     )
 
     log.info(
-        "    [%s] %s done: baseline=%.1f t/s, corpus=%.1f t/s",
-        model_key, p["id"], baseline.speed_tps, corpus.speed_tps,
+        "    [%s] %s done: baseline=%.1f t/s, corpus=%.1f t/s, "
+        "snippets=%s, lookup_ms=%.1f",
+        model_key,
+        p["id"],
+        baseline.speed_tps,
+        corpus.speed_tps,
+        corpus.corpus_diagnostics.get("snippets_returned", 0),
+        corpus.corpus_diagnostics.get("retrieval_latency_ms", 0.0),
     )
     return baseline, corpus
 
@@ -319,6 +437,7 @@ def run_generation_pairs(
     corpus_config: dict,
     dry_run: bool = False,
     mode: str = "speed",
+    prompts: list[dict[str, Any]] | None = None,
 ) -> list[tuple[GenerationResult, GenerationResult]]:
     """Run all prompts with and without corpus for a model.
 
@@ -327,6 +446,7 @@ def run_generation_pairs(
     """
     cfg = MODELS[model_key]
     port = cfg["port"]
+    selected_prompts = list(prompts or PROMPTS)
 
     if dry_run:
         return [
@@ -334,18 +454,72 @@ def run_generation_pairs(
                 GenerationResult(model_key, p["id"], False, "# dry run", 0, 0),
                 GenerationResult(model_key, p["id"], True, "# dry run", 0, 0),
             )
-            for p in PROMPTS
+            for p in selected_prompts
         ]
 
     # Run prompt pairs sequentially — each pair does baseline then corpus
     # to ensure fair comparison. Pairs themselves are sequential since
     # each pair uses 2 requests and the server has limited slots.
     pairs = []
-    for p in PROMPTS:
+    for p in selected_prompts:
         pair = _run_single_pair(model_key, port, p, corpus_config, mode)
         pairs.append(pair)
 
     return pairs
+
+
+def _selected_prompts(max_prompts: int | None) -> list[dict[str, Any]]:
+    if max_prompts is None:
+        return list(PROMPTS)
+    if max_prompts <= 0:
+        return []
+    return list(PROMPTS[:max_prompts])
+
+
+def run_corpus_preflight(
+    corpus_config: dict[str, Any],
+    *,
+    mode: str,
+    prompts: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Build corpus prompts without inference and summarize injection readiness."""
+    records: list[dict[str, Any]] = []
+    for prompt_info in prompts:
+        build = build_corpus_prompt_with_diagnostics(
+            prompt_info["prompt"],
+            corpus_config,
+            mode=mode,
+        )
+        diagnostics = build.diagnostics
+        records.append(
+            {
+                "prompt_id": prompt_info["id"],
+                "language": prompt_info.get("language", ""),
+                "prompt_chars": len(prompt_info["prompt"]),
+                "built_prompt_chars": len(build.prompt),
+                "injected": bool(diagnostics.get("injected", False)),
+                "corpus": diagnostics,
+            }
+        )
+
+    injected_count = sum(1 for record in records if record["injected"])
+    failure_count = sum(
+        1
+        for record in records
+        if record["corpus"].get("failure_reason")
+        or int(record["corpus"].get("shards_failed", 0) or 0) > 0
+    )
+    ready = bool(records) and injected_count == len(records) and failure_count == 0
+    return {
+        "schema_version": "corpus_quality_preflight.v1",
+        "mode": mode,
+        "index_path": corpus_config.get("index_path", ""),
+        "prompt_count": len(records),
+        "injected_count": injected_count,
+        "failure_count": failure_count,
+        "ready_for_ab": ready,
+        "records": records,
+    }
 
 
 def judge_pair(
@@ -418,6 +592,13 @@ def judge_pair(
         return None
 
 
+def _write_json(path: str | Path, payload: Any) -> None:
+    output = Path(path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with output.open("w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Corpus quality gate")
     parser.add_argument(
@@ -430,9 +611,37 @@ def main():
     parser.add_argument("--mode", choices=["speed", "rag"], default="speed",
                         help="speed: silent injection (2A), rag: quality RAG instruction (2B)")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--preflight-only",
+        action="store_true",
+        help="Build corpus prompts and write injection diagnostics without inference.",
+    )
+    parser.add_argument(
+        "--skip-judge",
+        action="store_true",
+        help="Run generation and write results without invoking Claude-as-Judge.",
+    )
+    parser.add_argument(
+        "--max-prompts",
+        type=int,
+        help="Limit prompt pairs for shakedown runs before a full A/B.",
+    )
+    parser.add_argument(
+        "--min-score",
+        type=float,
+        default=0.0,
+        help="Minimum n-gram overlap for speed-mode retrieval candidate evaluation.",
+    )
+    parser.add_argument(
+        "--rag-min-score",
+        type=float,
+        default=0.3,
+        help="Minimum n-gram overlap for RAG-mode retrieval candidate evaluation.",
+    )
     parser.add_argument("--results-only", help="Path to existing results JSON to re-judge")
     parser.add_argument("--output", default="/mnt/raid0/llm/tmp/corpus_quality_gate.json")
     args = parser.parse_args()
+    selected_prompts = _selected_prompts(args.max_prompts)
 
     # RAG mode uses more snippets and lower threshold for diverse examples
     if args.mode == "rag":
@@ -440,16 +649,35 @@ def main():
             "index_path": args.index_path,
             "max_snippets": 3,
             "max_chars": 3000,
+            "min_score": args.min_score,
             "rag_max_snippets": 5,
             "rag_max_chars": 5000,
-            "rag_min_score": 0.3,
+            "rag_min_score": args.rag_min_score,
         }
     else:
         corpus_config = {
             "index_path": args.index_path,
             "max_snippets": 3,
             "max_chars": 3000,
+            "min_score": args.min_score,
         }
+
+    if args.preflight_only:
+        preflight = run_corpus_preflight(
+            corpus_config,
+            mode=args.mode,
+            prompts=selected_prompts,
+        )
+        _write_json(args.output, preflight)
+        log.info(
+            "Preflight saved to %s: injected=%d/%d, failures=%d, ready_for_ab=%s",
+            args.output,
+            preflight["injected_count"],
+            preflight["prompt_count"],
+            preflight["failure_count"],
+            preflight["ready_for_ab"],
+        )
+        sys.exit(0 if preflight["ready_for_ab"] else 1)
 
     # Gate threshold: speed mode tolerates slight degradation, RAG must improve
     gate_threshold = 0.0 if args.mode == "rag" else -0.5
@@ -470,14 +698,14 @@ def main():
                 warmup(port)
 
             if args.dry_run:
-                for p in PROMPTS:
+                for p in selected_prompts:
                     model_results.append({
                         "prompt_id": p["id"],
                         "baseline": {"output": "# dry run", "speed": 0, "tokens": 0, "draft_n": 0, "draft_accepted": 0, "wall_time": 0},
                         "corpus": {"output": "# dry run", "speed": 0, "tokens": 0, "draft_n": 0, "draft_accepted": 0, "wall_time": 0},
                     })
             else:
-                for p in PROMPTS:
+                for p in selected_prompts:
                     baseline, corpus = _run_single_pair(model_key, port, p, corpus_config, args.mode)
                     model_results.append({
                         "prompt_id": baseline.prompt_id,
@@ -496,20 +724,28 @@ def main():
                             "draft_n": corpus.draft_n,
                             "draft_accepted": corpus.draft_accepted,
                             "wall_time": corpus.wall_time,
+                            "retrieval": corpus.corpus_diagnostics,
                         },
                     })
                     # Write after each prompt pair so partial results are reviewable
                     all_results[model_key] = model_results
-                    with open(args.output, "w") as f:
-                        json.dump(all_results, f, indent=2)
-                    log.info("  Incremental results written (%d/%d prompts)", len(model_results), len(PROMPTS))
+                    _write_json(args.output, all_results)
+                    log.info(
+                        "  Incremental results written (%d/%d prompts)",
+                        len(model_results),
+                        len(selected_prompts),
+                    )
 
             all_results[model_key] = model_results
 
         log.info("Generation results saved to %s", args.output)
 
     if args.dry_run:
-        log.info("[DRY RUN] Would judge %d pairs per model", len(PROMPTS))
+        log.info("[DRY RUN] Would judge %d pairs per model", len(selected_prompts))
+        return
+
+    if args.skip_judge:
+        log.info("[SKIP JUDGE] Generation results saved to %s", args.output)
         return
 
     # Judge phase
