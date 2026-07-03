@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import scripts.server.dynamic_stack_evidence_packet as packet_mod
+import stack_numa
+from src.scheduling.contention import topology_fingerprint
 
 
 def test_stack_roster_section_packages_live_generated_roles(tmp_path: Path) -> None:
@@ -59,6 +61,81 @@ def test_ds5_manifest_section_flags_stale_compile(tmp_path: Path) -> None:
     assert section.status == "stale"
     assert section.details["manifest_compiled_at"] == "2026-06-14T00:00:00Z"
     assert section.details["stack_priors_compiled_at"] == "2026-06-20T00:00:00Z"
+
+
+def test_contention_section_ignores_unmeasured_auxiliary_topology(
+    tmp_path: Path, monkeypatch
+) -> None:
+    measured = {
+        "frontdoor": {"instances": [("0-1", 8070, 2)]},
+        "worker_general": {"instances": [("2-3", 8072, 2)]},
+    }
+    with_auxiliary = {
+        **measured,
+        "eval_batch_frontdoor": {"instances": [("0-1", 18070, 2)]},
+    }
+    matrix = tmp_path / "contention_matrix.yaml"
+    matrix.write_text(
+        f"""
+version: 1
+measured_at: "2099-01-01T00:00:00+00:00"
+host: "test"
+topology_hash: "{topology_fingerprint(measured)}"
+default_floor: 0.85
+pairs:
+  - roles: ["frontdoor", "worker_general"]
+    ratio: 0.91
+    verdict: "allow"
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(stack_numa, "NUMA_CONFIG", with_auxiliary)
+
+    section = packet_mod.contention_section(matrix)
+
+    assert section.status == "ready"
+    assert section.details["contention_topology_hash"] == section.details[
+        "matrix_topology_hash"
+    ]
+    assert section.details["topology_hash"] == topology_fingerprint(with_auxiliary)
+    assert section.details["excluded_auxiliary_roles"] == ["eval_batch_frontdoor"]
+    assert section.details["measured_roles"] == ["frontdoor", "worker_general"]
+
+
+def test_contention_section_stale_when_measured_role_topology_changes(
+    tmp_path: Path, monkeypatch
+) -> None:
+    measured = {
+        "frontdoor": {"instances": [("0-1", 8070, 2)]},
+        "worker_general": {"instances": [("2-3", 8072, 2)]},
+    }
+    changed = {
+        "frontdoor": {"instances": [("0-3", 8070, 4)]},
+        "worker_general": {"instances": [("2-3", 8072, 2)]},
+    }
+    matrix = tmp_path / "contention_matrix.yaml"
+    matrix.write_text(
+        f"""
+version: 1
+measured_at: "2099-01-01T00:00:00+00:00"
+host: "test"
+topology_hash: "{topology_fingerprint(measured)}"
+default_floor: 0.85
+pairs:
+  - roles: ["frontdoor", "worker_general"]
+    ratio: 0.91
+    verdict: "allow"
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(stack_numa, "NUMA_CONFIG", changed)
+
+    section = packet_mod.contention_section(matrix)
+
+    assert section.status == "stale"
+    assert section.details["contention_topology_hash"] != section.details[
+        "matrix_topology_hash"
+    ]
 
 
 def test_ri10_section_reports_config_but_missing_decision_data(tmp_path: Path, monkeypatch) -> None:

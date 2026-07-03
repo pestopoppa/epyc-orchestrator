@@ -190,7 +190,12 @@ def ds5_manifest_section(
 def contention_section(matrix_path: Path = DEFAULT_CONTENTION_MATRIX) -> EvidenceSection:
     try:
         from stack_numa import NUMA_CONFIG
-        from src.scheduling.contention import MatrixStatus, matrix_status, topology_fingerprint
+        from src.scheduling.contention import (
+            MatrixStatus,
+            load_contention_matrix,
+            matrix_status,
+            topology_fingerprint,
+        )
     except Exception as exc:
         return EvidenceSection(
             "contention_matrix",
@@ -199,9 +204,45 @@ def contention_section(matrix_path: Path = DEFAULT_CONTENTION_MATRIX) -> Evidenc
             {"error": str(exc), "path": str(matrix_path)},
         )
     current_hash = topology_fingerprint(NUMA_CONFIG)
+    try:
+        matrix = load_contention_matrix(matrix_path)
+    except FileNotFoundError:
+        matrix = None
+        measured_roles: set[str] = set()
+        contention_hash = current_hash
+        excluded_roles: list[str] = []
+        missing_roles: list[str] = []
+    except Exception as exc:
+        return EvidenceSection(
+            "contention_matrix",
+            "invalid",
+            "Contention matrix could not be parsed.",
+            {"error": str(exc), "path": str(matrix_path), "topology_hash": current_hash},
+        )
+    else:
+        measured_roles = _contention_matrix_roles(matrix)
+        missing_roles = sorted(role for role in measured_roles if role not in NUMA_CONFIG)
+        excluded_roles = sorted(role for role in NUMA_CONFIG if role not in measured_roles)
+        if missing_roles:
+            return EvidenceSection(
+                "contention_matrix",
+                "stale",
+                "Contention matrix references roles missing from current NUMA topology.",
+                {
+                    "path": str(matrix_path),
+                    "topology_hash": current_hash,
+                    "matrix_topology_hash": matrix.topology_hash,
+                    "matrix_status": MatrixStatus.STALE.value,
+                    "measured_roles": sorted(measured_roles),
+                    "missing_measured_roles": missing_roles,
+                    "excluded_auxiliary_roles": excluded_roles,
+                },
+            )
+        measured_config = {role: NUMA_CONFIG[role] for role in sorted(measured_roles)}
+        contention_hash = topology_fingerprint(measured_config)
     status = matrix_status(
         matrix_path,
-        current_topology_hash=current_hash,
+        current_topology_hash=contention_hash,
         max_age_days=30,
     )
     mapped = {
@@ -220,9 +261,28 @@ def contention_section(matrix_path: Path = DEFAULT_CONTENTION_MATRIX) -> Evidenc
         {
             "path": str(matrix_path),
             "topology_hash": current_hash,
+            "contention_topology_hash": contention_hash,
+            "matrix_topology_hash": matrix.topology_hash if matrix is not None else None,
+            "measured_roles": sorted(measured_roles),
+            "excluded_auxiliary_roles": excluded_roles,
             "matrix_status": getattr(status, "value", str(status)),
         },
     )
+
+
+def _contention_matrix_roles(matrix: Any) -> set[str]:
+    roles: set[str] = set()
+    for pair in getattr(matrix, "pairs", {}) or {}:
+        roles.update(pair)
+    for role in getattr(matrix, "same_role", {}) or {}:
+        roles.add(role)
+    for pair in getattr(matrix, "unknown_pairs", []) or []:
+        roles.update(pair)
+    for nway in getattr(matrix, "n_way", {}) or {}:
+        roles.update(nway)
+    roles.update(getattr(matrix, "light_roles", frozenset()) or frozenset())
+    roles.update(getattr(matrix, "heavy_roles", frozenset()) or frozenset())
+    return roles
 
 
 def ri10_canary_section(config_path: Path = DEFAULT_CLASSIFIER_CONFIG) -> EvidenceSection:
