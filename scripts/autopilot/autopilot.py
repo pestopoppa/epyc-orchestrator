@@ -196,6 +196,18 @@ SEQ_PROMOTION_DELTA_CI_ALPHA = float(
 SEQ_PROMOTION_FRESH_EVAL_TIER = int(
     os.environ.get("AUTOPILOT_SEQ_PROMOTION_FRESH_EVAL_TIER", "2")
 )
+SEQ_CANDIDATE_REPLAY_ENABLED = os.environ.get(
+    "AUTOPILOT_SEQ_CANDIDATE_REPLAY", "1"
+).strip().lower() not in {"0", "false", "no", "off"}
+SEQ_CANDIDATE_REPLAY_MIN_COMBINED_E = float(
+    os.environ.get("AUTOPILOT_SEQ_CANDIDATE_REPLAY_MIN_COMBINED_E", "0.9")
+)
+SEQ_CANDIDATE_REPLAY_MIN_QUALITY_E = float(
+    os.environ.get("AUTOPILOT_SEQ_CANDIDATE_REPLAY_MIN_QUALITY_E", "1.0")
+)
+SEQ_CANDIDATE_REPLAY_MAX_K = int(
+    os.environ.get("AUTOPILOT_SEQ_CANDIDATE_REPLAY_MAX_K", "12")
+)
 SAFE_FALLBACK_SEED_N = 14
 FALLBACK_SEED_CANDIDATES = (14, 16, 18, 20, 24, 30)
 
@@ -929,6 +941,158 @@ def _seq_promotion_replay_blocker(action: Any) -> str:
             return "candidate structural_experiment lacks replayable flags"
         return ""
     return f"candidate action type is not replayable: {action_type or 'unknown'}"
+
+
+def _seq_candidate_replay_payload(
+    journal: ExperimentJournal,
+    *,
+    tier: int,
+    min_combined_e: float = SEQ_CANDIDATE_REPLAY_MIN_COMBINED_E,
+    min_quality_e: float = SEQ_CANDIDATE_REPLAY_MIN_QUALITY_E,
+    max_k: int = SEQ_CANDIDATE_REPLAY_MAX_K,
+    core_id: str = DEFAULT_EVIDENCE_CORE_ID,
+) -> dict[str, Any] | None:
+    """Pick an accumulating replayable candidate that needs more W8 power."""
+    best: dict[str, Any] | None = None
+    try:
+        entries = journal.entries_with_supersessions()
+    except Exception:  # noqa: BLE001 - diagnostics should not halt AutoPilot
+        return None
+    latest_by_candidate: dict[str, Any] = {}
+    for entry in entries:
+        if getattr(entry, "bug_corrupted_by", ""):
+            continue
+        if getattr(entry, "outcome_status", "ok") in {"invalid", "skipped"}:
+            continue
+        try:
+            if int(getattr(entry, "tier", -1)) != int(tier):
+                continue
+        except (TypeError, ValueError):
+            continue
+        seq = getattr(entry, "seq", {}) or {}
+        if not isinstance(seq, dict):
+            continue
+        if str(seq.get("core_id") or core_id) != core_id:
+            continue
+        candidate = str(seq.get("candidate") or "")
+        if not candidate:
+            continue
+        previous = latest_by_candidate.get(candidate)
+        previous_trial = int(getattr(previous, "trial_id", -1) or -1) if previous else -1
+        trial_id = int(getattr(entry, "trial_id", -1) or -1)
+        if trial_id >= previous_trial:
+            latest_by_candidate[candidate] = entry
+
+    for entry in latest_by_candidate.values():
+        seq = getattr(entry, "seq", {}) or {}
+        if seq.get("confirmed") is True or str(seq.get("state") or "") != "accumulating":
+            continue
+        candidate = str(seq.get("candidate") or "")
+        try:
+            k = int(seq.get("k") or 0)
+        except (TypeError, ValueError):
+            k = 0
+        if max_k > 0 and k >= max_k:
+            continue
+        action = getattr(entry, "config_snapshot", {}) or {}
+        if _seq_promotion_replay_blocker(action):
+            continue
+        combined = _seq_combined_e(seq)
+        if combined is None:
+            combined = seq.get("baseline_promotion_combined_E")
+        try:
+            combined_f = float(combined)
+        except (TypeError, ValueError):
+            continue
+        if combined_f < min_combined_e:
+            continue
+        try:
+            e_quality = float(seq.get("E_quality") or 0.0)
+        except (TypeError, ValueError):
+            e_quality = 0.0
+        if e_quality < min_quality_e:
+            continue
+        try:
+            e_rate = float(seq.get("E_rate_noninf") or 0.0)
+        except (TypeError, ValueError):
+            e_rate = 0.0
+        payload = {
+            "candidate": candidate,
+            "source_trial_id": int(getattr(entry, "trial_id", 0) or 0),
+            "action": dict(action),
+            "k": k,
+            "combined_E": round(combined_f, 6),
+            "E_quality": round(e_quality, 6),
+            "E_rate_noninf": round(e_rate, 6),
+        }
+        key = (combined_f, e_quality, e_rate, payload["source_trial_id"])
+        best_key = (
+            float(best.get("combined_E", 0.0)),
+            float(best.get("E_quality", 0.0)),
+            float(best.get("E_rate_noninf", 0.0)),
+            int(best.get("source_trial_id", 0)),
+        ) if best else None
+        if best is None or key > best_key:
+            best = payload
+    return best
+
+
+def _maybe_force_seq_candidate_replay(
+    action: dict[str, Any],
+    *,
+    state: dict[str, Any],
+    journal: ExperimentJournal,
+    tier: int,
+    blacklist: list[dict[str, Any]],
+    rationale: dict[str, Any] | None,
+    trial_counter: int,
+    enabled: bool,
+) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any] | None]:
+    """Replay an accumulating W8 candidate before it is abandoned underpowered."""
+    if not enabled or not SEQ_CANDIDATE_REPLAY_ENABLED:
+        return action, rationale, None
+    if isinstance(state.get("seq_pending_promotion_fresh_eval"), dict):
+        return action, rationale, None
+    payload = _seq_candidate_replay_payload(journal, tier=tier)
+    if payload is None:
+        return action, rationale, None
+    forced = dict(payload["action"])
+    blocked_reason = check_blacklist(forced, blacklist)
+    if blocked_reason:
+        state["seq_candidate_replay_blocked"] = {
+            "trial_id": trial_counter,
+            "candidate": payload["candidate"],
+            "source_trial_id": payload["source_trial_id"],
+            "reason": blocked_reason,
+            "action": forced,
+            "combined_E": payload["combined_E"],
+        }
+        return action, rationale, None
+    state["seq_candidate_replay_forced"] = {
+        "trial_id": trial_counter,
+        "candidate": payload["candidate"],
+        "source_trial_id": payload["source_trial_id"],
+        "action": forced,
+        "k": payload["k"],
+        "combined_E": payload["combined_E"],
+        "E_quality": payload["E_quality"],
+        "E_rate_noninf": payload["E_rate_noninf"],
+    }
+    state.pop("seq_candidate_replay_blocked", None)
+    next_rationale = dict(rationale or {})
+    next_rationale["seq_candidate_replay"] = True
+    next_rationale["seq_candidate"] = payload["candidate"]
+    next_rationale["seq_candidate_source_trial_id"] = payload["source_trial_id"]
+    log.info(
+        "Forcing seq candidate replay at trial %d for candidate %s "
+        "(source trial %s, k=%s, combined_E=%s)",
+        trial_counter,
+        payload["candidate"],
+        payload["source_trial_id"],
+        payload["k"],
+        payload["combined_E"],
+    )
+    return forced, next_rationale, dict(payload)
 
 
 def _update_seq_promotion_fresh_eval_state(
@@ -3839,8 +4003,20 @@ def _run_loop_inner(
             enabled=gate.use_sequential,
         )
         seq_baseline_draw_reference: dict[str, Any] | None = None
+        seq_candidate_replay_context: dict[str, Any] | None = None
         if seq_fresh_eval_context is None:
             action, rationale, seq_baseline_draw_reference = _maybe_force_seq_baseline_draw(
+                action,
+                state=state,
+                journal=journal,
+                tier=DEFAULT_FRONTIER_TIER,
+                blacklist=blacklist,
+                rationale=rationale,
+                trial_counter=trial_counter,
+                enabled=gate.use_sequential,
+            )
+        if seq_fresh_eval_context is None and seq_baseline_draw_reference is None:
+            action, rationale, seq_candidate_replay_context = _maybe_force_seq_candidate_replay(
                 action,
                 state=state,
                 journal=journal,
@@ -4568,6 +4744,13 @@ def _run_loop_inner(
             eval_details_dict["seq_promotion_fresh_eval"] = {
                 "candidate": seq_fresh_eval_context.get("candidate"),
                 "source_trial_id": seq_fresh_eval_context.get("source_trial_id"),
+            }
+        if seq_candidate_replay_context is not None:
+            eval_details_dict["seq_candidate_replay"] = {
+                "candidate": seq_candidate_replay_context.get("candidate"),
+                "source_trial_id": seq_candidate_replay_context.get("source_trial_id"),
+                "k": seq_candidate_replay_context.get("k"),
+                "combined_E": seq_candidate_replay_context.get("combined_E"),
             }
 
         journal_entry = JournalEntry(

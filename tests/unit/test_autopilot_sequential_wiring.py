@@ -216,6 +216,266 @@ def test_seq_baseline_reference_state_tracks_cadence_and_staleness(
     assert stale["stale_reference"] is True
 
 
+def test_seq_candidate_replay_payload_selects_replayable_accumulating_candidate(
+    tmp_path: Path,
+) -> None:
+    action = {
+        "type": "numeric_trial",
+        "surface": "repl_budget",
+        "params": {"repl.worker_call_budget_cap": 31},
+    }
+    candidate = autopilot._config_fingerprint(action)
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    journal.record(
+        _entry(
+            10,
+            action,
+            seq={
+                "candidate": candidate,
+                "core_id": "core_v1",
+                "k": 1,
+                "z": 0.1,
+                "z_rate": -0.1,
+                "E_quality": 1.02,
+                "E_rate_noninf": 0.96,
+                "state": "accumulating",
+                "confirmed": False,
+            },
+        )
+    )
+
+    payload = autopilot._seq_candidate_replay_payload(journal, tier=1)
+
+    assert payload == {
+        "candidate": candidate,
+        "source_trial_id": 10,
+        "action": action,
+        "k": 1,
+        "combined_E": 0.96,
+        "E_quality": 1.02,
+        "E_rate_noninf": 0.96,
+    }
+
+
+def test_seq_candidate_replay_payload_skips_unreplayable_and_refuted_rows(
+    tmp_path: Path,
+) -> None:
+    seed_action = {"type": "seed_batch", "n_questions": 18}
+    numeric_action = {
+        "type": "numeric_trial",
+        "surface": "repl_budget",
+        "params": {"repl.worker_call_budget_cap": 31},
+    }
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    journal.record(
+        _entry(
+            10,
+            seed_action,
+            seq={
+                "candidate": autopilot._config_fingerprint(seed_action),
+                "core_id": "core_v1",
+                "k": 1,
+                "z": 0.1,
+                "z_rate": 0.1,
+                "E_quality": 1.1,
+                "E_rate_noninf": 1.1,
+                "state": "accumulating",
+            },
+        )
+    )
+    journal.record(
+        _entry(
+            11,
+            numeric_action,
+            seq={
+                "candidate": autopilot._config_fingerprint(numeric_action),
+                "core_id": "core_v1",
+                "k": 8,
+                "z": 0.1,
+                "z_rate": 0.1,
+                "E_quality": 1.8,
+                "E_rate_noninf": 0.96,
+                "state": "refuted",
+            },
+        )
+    )
+
+    assert autopilot._seq_candidate_replay_payload(journal, tier=1) is None
+
+
+def test_seq_candidate_replay_payload_uses_latest_candidate_state(
+    tmp_path: Path,
+) -> None:
+    action = {
+        "type": "numeric_trial",
+        "surface": "repl_budget",
+        "params": {"repl.worker_call_budget_cap": 31},
+    }
+    candidate = autopilot._config_fingerprint(action)
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    journal.record(
+        _entry(
+            10,
+            action,
+            seq={
+                "candidate": candidate,
+                "core_id": "core_v1",
+                "k": 1,
+                "z": 0.1,
+                "z_rate": -0.1,
+                "E_quality": 1.02,
+                "E_rate_noninf": 0.96,
+                "state": "accumulating",
+            },
+        )
+    )
+    journal.record(
+        _entry(
+            11,
+            action,
+            seq={
+                "candidate": candidate,
+                "core_id": "core_v1",
+                "k": 2,
+                "z": -0.8,
+                "z_rate": -0.8,
+                "E_quality": 0.04,
+                "E_rate_noninf": 0.04,
+                "state": "refuted",
+            },
+        )
+    )
+
+    assert autopilot._seq_candidate_replay_payload(journal, tier=1) is None
+
+
+def test_seq_candidate_replay_payload_requires_neutral_quality_e(
+    tmp_path: Path,
+) -> None:
+    action = {
+        "type": "numeric_trial",
+        "surface": "repl_budget",
+        "params": {"repl.worker_call_budget_cap": 31},
+    }
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    journal.record(
+        _entry(
+            10,
+            action,
+            seq={
+                "candidate": autopilot._config_fingerprint(action),
+                "core_id": "core_v1",
+                "k": 1,
+                "z": -0.01,
+                "z_rate": -0.1,
+                "E_quality": 0.99,
+                "E_rate_noninf": 0.96,
+                "state": "accumulating",
+            },
+        )
+    )
+
+    assert autopilot._seq_candidate_replay_payload(journal, tier=1) is None
+
+
+def test_maybe_force_seq_candidate_replay_respects_blacklist(tmp_path: Path) -> None:
+    action = {
+        "type": "numeric_trial",
+        "surface": "repl_budget",
+        "params": {"repl.worker_call_budget_cap": 31},
+    }
+    candidate = autopilot._config_fingerprint(action)
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    journal.record(
+        _entry(
+            10,
+            action,
+            seq={
+                "candidate": candidate,
+                "core_id": "core_v1",
+                "k": 1,
+                "z": 0.1,
+                "z_rate": -0.1,
+                "E_quality": 1.02,
+                "E_rate_noninf": 0.96,
+                "state": "accumulating",
+                "confirmed": False,
+            },
+        )
+    )
+    state: dict[str, Any] = {}
+    blacklist = [{"pattern": action, "reason": "blocked replay"}]
+
+    forced, rationale, payload = autopilot._maybe_force_seq_candidate_replay(
+        {"type": "seed_batch", "n_questions": 14},
+        state=state,
+        journal=journal,
+        tier=1,
+        blacklist=blacklist,
+        rationale=None,
+        trial_counter=20,
+        enabled=True,
+    )
+
+    assert forced == {"type": "seed_batch", "n_questions": 14}
+    assert rationale is None
+    assert payload is None
+    assert state["seq_candidate_replay_blocked"]["candidate"] == candidate
+    assert state["seq_candidate_replay_blocked"]["reason"] == "blocked replay"
+
+
+def test_maybe_force_seq_candidate_replay_forces_action_and_rationale(
+    tmp_path: Path,
+) -> None:
+    action = {
+        "type": "numeric_trial",
+        "surface": "repl_budget",
+        "params": {"repl.worker_call_budget_cap": 31},
+    }
+    candidate = autopilot._config_fingerprint(action)
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    journal.record(
+        _entry(
+            10,
+            action,
+            seq={
+                "candidate": candidate,
+                "core_id": "core_v1",
+                "k": 1,
+                "z": 0.1,
+                "z_rate": -0.1,
+                "E_quality": 1.02,
+                "E_rate_noninf": 0.96,
+                "state": "accumulating",
+                "confirmed": False,
+            },
+        )
+    )
+    state: dict[str, Any] = {}
+
+    forced, rationale, payload = autopilot._maybe_force_seq_candidate_replay(
+        {"type": "seed_batch", "n_questions": 14},
+        state=state,
+        journal=journal,
+        tier=1,
+        blacklist=[],
+        rationale={"planner": "kept"},
+        trial_counter=20,
+        enabled=True,
+    )
+
+    assert forced == action
+    assert payload is not None
+    assert rationale == {
+        "planner": "kept",
+        "seq_candidate_replay": True,
+        "seq_candidate": candidate,
+        "seq_candidate_source_trial_id": 10,
+    }
+    assert state["seq_candidate_replay_forced"]["candidate"] == candidate
+    assert state["seq_candidate_replay_forced"]["action"] == action
+
+
 def test_maybe_force_seq_baseline_draw_marks_rationale_and_state(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

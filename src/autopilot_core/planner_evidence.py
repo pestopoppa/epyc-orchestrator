@@ -145,7 +145,9 @@ def _instrument_power_line(
         f"vector_trials={len(vector_rows)} candidates={len(candidates)} "
         f"seq_candidates={len(seq_candidates)} median_questions={median_q} "
         f"quality_quantum~{quality_quantum:.3f}. "
-        "Below-quantum deltas need paired/reproduced evidence before acting."
+        "Below-quantum deltas need paired/reproduced evidence before acting. "
+        "W8 confirmation needs repeated replayable numeric/structural candidates "
+        "with both E_quality and E_rate_noninf accumulating."
     )
 
 
@@ -298,10 +300,28 @@ def _seq_note(
         core_id=core_id,
         observations=seq_observations,
     )
+    latest = max(seq_observations, key=_latest_trial_id)
+    latest_seq = latest.get("seq") if isinstance(latest.get("seq"), Mapping) else {}
+    e_rate = _float(latest_seq.get("E_rate_noninf"))
+    combined = min(view.quality_state.wealth, e_rate) if e_rate > 0.0 else 0.0
+    replayable = "yes" if _replayable_config(latest.get("config_snapshot")) else "no"
     return (
-        f"seq={view.state} k={view.quality_state.k} "
-        f"E_quality={view.quality_state.wealth:.3f}"
+        f"seq={latest_seq.get('state') or view.state} k={view.quality_state.k} "
+        f"E_quality={view.quality_state.wealth:.3f} "
+        f"E_rate={e_rate:.3f} combined={combined:.3f} "
+        f"replayable={replayable}"
     )
+
+
+def _replayable_config(value: Any) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    action_type = str(value.get("type") or "")
+    if action_type == "numeric_trial":
+        return isinstance(value.get("params"), Mapping) and bool(value.get("params"))
+    if action_type == "structural_experiment":
+        return isinstance(value.get("flags"), Mapping) and bool(value.get("flags"))
+    return False
 
 
 def _latest_trial_id(row_or_rows: Mapping[str, Any] | list[dict[str, Any]]) -> int:
