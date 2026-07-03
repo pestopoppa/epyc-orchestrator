@@ -1,0 +1,134 @@
+{
+  "blockers": [
+    "eval_batch_frontdoor health is not OK"
+  ],
+  "decision_grade": false,
+  "generated_at": "2026-07-03T23:45:19+00:00",
+  "preflight": {
+    "activation_commands": [
+      "cd /mnt/raid0/llm/epyc-orchestrator && uv run python scripts/server/orchestrator_stack.py start --include-warm eval_batch_frontdoor",
+      "cd /mnt/raid0/llm/epyc-orchestrator && ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING=1 ORCHESTRATOR_EVAL_BATCH_FRONTDOOR_URL=http://localhost:18070 uv run python scripts/server/orchestrator_stack.py reload orchestrator",
+      "cd /mnt/raid0/llm/epyc-orchestrator && uv run python scripts/benchmark/eval_batch_serving_probe.py --smoke --confirm-clean-window --require-enabled"
+    ],
+    "api_health": {
+      "elapsed_s": 0.061593567006639205,
+      "error": null,
+      "json_body": {
+        "backend_health": {},
+        "backend_probes": {
+          "architect_general": {
+            "failure_detail": "",
+            "failure_reason": "",
+            "latency_ms": 16.2,
+            "ok": true,
+            "status_code": 200,
+            "url": "http://localhost:8083"
+          },
+          "coder_escalation/frontdoor/worker_summarize": {
+            "failure_detail": "",
+            "failure_reason": "",
+            "latency_ms": 22.7,
+            "ok": true,
+            "status_code": 200,
+            "url": "http://localhost:8070"
+          },
+          "ingest_long_context": {
+            "failure_detail": "",
+            "failure_reason": "",
+            "latency_ms": 13.5,
+            "ok": true,
+            "status_code": 200,
+            "url": "http://localhost:8085"
+          },
+          "toolrunner/worker_general/worker_math": {
+            "failure_detail": "",
+            "failure_reason": "",
+            "latency_ms": 19.1,
+            "ok": true,
+            "status_code": 200,
+            "url": "http://localhost:8072"
+          },
+          "vision_escalation": {
+            "failure_detail": "",
+            "failure_reason": "",
+            "latency_ms": 5.3,
+            "ok": true,
+            "status_code": 200,
+            "url": "http://localhost:8087"
+          },
+          "worker_vision": {
+            "failure_detail": "",
+            "failure_reason": "",
+            "latency_ms": 10.8,
+            "ok": true,
+            "status_code": 200,
+            "url": "http://localhost:8086"
+          }
+        },
+        "knowledge_tools": {
+          "available": false,
+          "tools": {
+            "get_wikipedia_article": {
+              "available": false,
+              "error": "No module named 'mwclient'"
+            },
+            "search_arxiv": {
+              "available": false,
+              "error": "No module named 'arxiv'"
+            },
+            "search_books": {
+              "available": false,
+              "error": "No module named 'googleapiclient'"
+            },
+            "search_papers": {
+              "available": false,
+              "error": "No module named 'semanticscholar'"
+            },
+            "search_wikipedia": {
+              "available": false,
+              "error": "No module named 'mwclient'"
+            }
+          }
+        },
+        "mock_mode_available": true,
+        "models_loaded": 6,
+        "status": "ok",
+        "version": "0.1.0"
+      },
+      "ok": true,
+      "status": 200,
+      "url": "http://localhost:8000/health"
+    },
+    "api_url": "http://localhost:8000",
+    "autopilot_active": true,
+    "config_attest": {
+      "all_sampled_workers_enabled": false,
+      "any_sampled_worker_disabled": true,
+      "eval_batch_serving_by_pid": {
+        "2269767": false,
+        "2269768": false,
+        "2269771": false,
+        "2269772": false
+      },
+      "eval_batch_serving_sources_by_pid": {
+        "2269767": "ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING",
+        "2269768": "ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING",
+        "2269771": "ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING",
+        "2269772": "ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING"
+      },
+      "samples_requested": 12,
+      "workers_seen": 4
+    },
+    "eval_batch_frontdoor_health": {
+      "elapsed_s": 0.0005175550031708553,
+      "error": "<urlopen error [Errno 111] Connection refused>",
+      "json_body": null,
+      "ok": false,
+      "status": null,
+      "url": "http://localhost:18070/health"
+    },
+    "eval_batch_url": "http://localhost:18070"
+  },
+  "smoke": null,
+  "status": "blocked"
+}
