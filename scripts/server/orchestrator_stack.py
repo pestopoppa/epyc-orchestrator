@@ -851,8 +851,6 @@ def _append_acceleration_args(cmd: list[str], role_name: str, accel: Any, model_
     elif accel.type == "self_speculation" and accel.n_layer_exit_draft:
         cmd.extend(
             [
-                "-md",
-                model_path,
                 "--n-layer-exit-draft",
                 str(accel.n_layer_exit_draft),
                 "--spec-draft-n-max",  # 2026-06-26 v6 cutover: renamed from --draft-max
@@ -864,8 +862,6 @@ def _append_acceleration_args(cmd: list[str], role_name: str, accel: Any, model_
     elif accel.type == "hierarchical_speculation":
         cmd.extend(
             [
-                "-md",
-                model_path,
                 "--n-layer-exit-draft",
                 str(accel.n_layer_exit_draft or 0),
                 "--hierarchical-spec",

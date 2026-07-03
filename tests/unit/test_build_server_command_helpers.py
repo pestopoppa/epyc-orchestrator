@@ -658,7 +658,7 @@ def test_append_acceleration_args_architect_general_uses_nextn_self_draft() -> N
     assert cmd == []
 
 
-def test_append_acceleration_args_self_speculation_emits_md_and_n_layer() -> None:
+def test_append_acceleration_args_self_speculation_omits_same_file_md() -> None:
     accel = SimpleNamespace(
         type="self_speculation",
         n_layer_exit_draft=4,
@@ -669,8 +669,7 @@ def test_append_acceleration_args_self_speculation_emits_md_and_n_layer() -> Non
     )
     cmd: list[str] = []
     oss._append_acceleration_args(cmd, "some_role", accel, "/m/target.gguf")
-    assert "-md" in cmd
-    assert cmd[cmd.index("-md") + 1] == "/m/target.gguf"
+    assert "-md" not in cmd
     assert cmd[cmd.index("--n-layer-exit-draft") + 1] == "4"
     # 2026-06-26 v6 cutover: n-max emitted via --spec-draft-n-max (was --draft-max).
     assert cmd[cmd.index("--spec-draft-n-max") + 1] == "8"
@@ -687,6 +686,7 @@ def test_append_acceleration_args_hierarchical_speculation_with_intermediate() -
     )
     cmd: list[str] = []
     oss._append_acceleration_args(cmd, "some_role", accel, "/m/x.gguf")
+    assert "-md" not in cmd
     assert "--hierarchical-spec" in cmd
     assert cmd[cmd.index("--n-layer-exit-intermediate") + 1] == "7"
 
