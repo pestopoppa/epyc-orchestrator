@@ -322,12 +322,47 @@ def create_app() -> FastAPI:
     from fastapi.responses import JSONResponse
     from src.scheduling.contention_gate import ContentionDenied
 
+    def _log_contention_denied(request: Request, exc: ContentionDenied) -> None:
+        state = get_state()
+        progress_logger = getattr(state, "progress_logger", None)
+        if not progress_logger:
+            return
+        try:
+            from orchestration.repl_memory.progress_logger import EventType, ProgressEntry
+
+            task_id = (
+                request.headers.get("x-task-id")
+                or request.query_params.get("task_id")
+                or f"contention-denied:{request.url.path}"
+            )
+            progress_logger.log(
+                ProgressEntry(
+                    event_type=EventType.ROUTING_FALLBACK,
+                    task_id=task_id,
+                    data={
+                        "kind": "contention_denied",
+                        "path": request.url.path,
+                        "method": request.method,
+                        "detail": str(exc)[:500],
+                        "retry_after_s": 5,
+                    },
+                    outcome="failure",
+                    outcome_details=str(exc)[:500],
+                )
+            )
+            flush = getattr(progress_logger, "flush", None)
+            if callable(flush):
+                flush()
+        except Exception:
+            logger.debug("ContentionDenied progress telemetry failed", exc_info=True)
+
     @app.exception_handler(ContentionDenied)
     async def _contention_denied_handler(request: Request, exc: ContentionDenied):
         # Retry-After: short for foreground (next active decode should clear
         # within ~5 s), longer when explicitly background. We can't fully
         # introspect the request priority from here without re-parsing, so
         # use a conservative middle-ground default.
+        _log_contention_denied(request, exc)
         return JSONResponse(
             status_code=503,
             content={

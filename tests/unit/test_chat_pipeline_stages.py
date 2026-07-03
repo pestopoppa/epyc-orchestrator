@@ -862,6 +862,54 @@ class TestExecuteDelegated:
         call = mock_state.progress_logger.log_task_completed.call_args
         assert call.kwargs["success"] is False
 
+    def test_delegated_completion_logs_cache_counters(self, mock_primitives, mock_state):
+        """Delegated completions expose cache hit/miss counters for bake telemetry."""
+        request = ChatRequest(prompt="Use delegation", real_mode=True)
+        routing = RoutingResult(
+            task_id="deleg-cache-counters",
+            task_ir={},
+            use_mock=False,
+            routing_decision=["architect_general"],
+            routing_strategy="deterministic",
+        )
+        start_time = time.perf_counter()
+
+        stats = {
+            "loops": 1,
+            "phases": [{"loop": 0, "phase": "B", "ms": 12, "delegate_to": "worker_general"}],
+            "delegation_events": [],
+            "delegation_cache_lookups": 3,
+            "delegation_cache_hits": 1,
+            "delegation_cache_misses": 2,
+        }
+        with patch("src.api.routes.chat_pipeline.delegation_stage.features") as mock_features:
+            mock_features.return_value.architect_delegation = True
+            with patch(
+                "src.api.routes.chat_pipeline.delegation_stage._architect_delegated_answer",
+                return_value=("Delegated answer", stats),
+            ):
+                with patch("src.api.routes.chat_pipeline.delegation_stage.score_completed_task"):
+                    result = _execute_delegated(
+                        request,
+                        routing,
+                        mock_primitives,
+                        mock_state,
+                        start_time,
+                        initial_role="architect_general",
+                        execution_mode="direct",
+                    )
+
+        assert result is not None
+        call = mock_state.progress_logger.log_task_completed.call_args
+        meta = call.kwargs["completion_meta"]
+        assert meta["delegation_cache_lookups"] == 3
+        assert meta["delegation_cache_hits"] == 1
+        assert meta["delegation_cache_misses"] == 2
+        assert meta["delegation_cache_hit_rate"] == pytest.approx(1 / 3, abs=0.0001)
+        assert result.delegation_diagnostics["delegation_cache_lookups"] == 3
+        assert result.delegation_diagnostics["delegation_cache_hits"] == 1
+        assert result.delegation_diagnostics["delegation_cache_misses"] == 2
+
     def test_forced_delegated_mode(self, mock_primitives, mock_state):
         """execution_mode='delegated' forces delegation for non-architect."""
         request = ChatRequest(prompt="Force delegated", real_mode=True)

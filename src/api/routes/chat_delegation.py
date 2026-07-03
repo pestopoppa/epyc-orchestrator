@@ -728,6 +728,9 @@ def _architect_delegated_answer(
         "effective_max_loops": max_loops,
         "reentrant_depth": 0,
         "report_handles": [],
+        "delegation_cache_lookups": 0,
+        "delegation_cache_hits": 0,
+        "delegation_cache_misses": 0,
     }
 
     # Optional TOON encoding for context
@@ -973,6 +976,9 @@ def _architect_delegated_answer_inner(
         _cache_key = _deleg_cache.make_key(brief, delegate_to)
         phase_tool_timings: list[dict] = []
         specialist_repl_errors: list[dict] = []
+        stats["delegation_cache_lookups"] = (
+            int(stats.get("delegation_cache_lookups", 0) or 0) + 1
+        )
         _cached = _deleg_cache.get(_cache_key)
         if _cached is not None:
             report = _cached.report
@@ -984,13 +990,17 @@ def _architect_delegated_answer_inner(
             specialist_infer_meta: dict = {}
             if report_handle:
                 stats["report_handles"].append(report_handle)
-            stats.setdefault("delegation_cache_hits", 0)
-            stats["delegation_cache_hits"] += 1
+            stats["delegation_cache_hits"] = (
+                int(stats.get("delegation_cache_hits", 0) or 0) + 1
+            )
             log.info(
                 "Delegation cache hit (loop %d, target=%s, age=%.0fs)",
                 loop, delegate_to, _cached.age_seconds,
             )
         else:
+            stats["delegation_cache_misses"] = (
+                int(stats.get("delegation_cache_misses", 0) or 0) + 1
+            )
             # Give specialist its full role timeout instead of squeezing it
             # by the parent's remaining deadline.  The specialist loop already
             # enforces wall-clock limits via elapsed checks and specialist_budget_s.

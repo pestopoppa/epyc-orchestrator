@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -56,3 +57,36 @@ def test_503_response_carries_retry_after() -> None:
     assert body["error"] == "contention_denied"
     assert "frontdoor" in body["detail"]
     assert body["retry_after_s"] == 5
+
+
+def test_503_response_logs_progress_counter() -> None:
+    """ContentionDenied responses emit a durable counter event for bake gates."""
+    import os
+    os.environ["PYTEST_CURRENT_TEST"] = "1"
+    from fastapi.testclient import TestClient
+    from src.api import app
+    from src.api.state import get_state
+    from src.scheduling.contention_gate import ContentionDenied
+
+    state = get_state()
+    state.progress_logger = MagicMock()
+
+    @app.get("/__test_contention_denied_progress")
+    def _raise_with_task_id():
+        raise ContentionDenied("test pair frontdoor+worker blocked")
+
+    client = TestClient(app)
+    resp = client.get(
+        "/__test_contention_denied_progress",
+        headers={"x-task-id": "task-contention-1"},
+    )
+
+    assert resp.status_code == 503
+    state.progress_logger.log.assert_called_once()
+    entry = state.progress_logger.log.call_args.args[0]
+    assert entry.task_id == "task-contention-1"
+    assert entry.event_type.value == "routing_fallback"
+    assert entry.data["kind"] == "contention_denied"
+    assert entry.data["retry_after_s"] == 5
+    assert "frontdoor" in entry.data["detail"]
+    state.progress_logger.flush.assert_called_once()

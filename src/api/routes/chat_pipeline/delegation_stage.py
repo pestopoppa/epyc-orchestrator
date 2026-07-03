@@ -54,6 +54,9 @@ def _delegation_diagnostics(
         g = [float(m.get("gen_ms", 0) or 0) for m in infer]
         avg_prompt_ms = round(sum(p) / max(len(p), 1), 1)
         avg_gen_ms = round(sum(g) / max(len(g), 1), 1)
+    cache_lookups = int(delegation_stats.get("delegation_cache_lookups", 0) or 0)
+    cache_hits = int(delegation_stats.get("delegation_cache_hits", 0) or 0)
+    cache_misses = int(delegation_stats.get("delegation_cache_misses", 0) or 0)
     return {
         "architect_role": architect_role,
         "loops": int(delegation_stats.get("loops", 0) or 0),
@@ -66,7 +69,12 @@ def _delegation_diagnostics(
         "repeated_roles": repeated_roles,
         "report_handles_count": len(delegation_stats.get("report_handles", []) or []),
         "report_handles": delegation_stats.get("report_handles", [])[:4],
-        "delegation_cache_hits": int(delegation_stats.get("delegation_cache_hits", 0) or 0),
+        "delegation_cache_lookups": cache_lookups,
+        "delegation_cache_hits": cache_hits,
+        "delegation_cache_misses": cache_misses,
+        "delegation_cache_hit_rate": round(cache_hits / cache_lookups, 4)
+        if cache_lookups
+        else None,
         "delegation_inference_hops": len(infer),
         "avg_prompt_ms": avg_prompt_ms,
         "avg_gen_ms": avg_gen_ms,
@@ -195,6 +203,19 @@ def _execute_delegated(
 
     elapsed = time.perf_counter() - start_time
     loops = delegation_stats.get("loops", 0)
+    delegation_cache_meta = {
+        "delegation_cache_lookups": int(delegation_stats.get("delegation_cache_lookups", 0) or 0),
+        "delegation_cache_hits": int(delegation_stats.get("delegation_cache_hits", 0) or 0),
+        "delegation_cache_misses": int(delegation_stats.get("delegation_cache_misses", 0) or 0),
+    }
+    if delegation_cache_meta["delegation_cache_lookups"]:
+        delegation_cache_meta["delegation_cache_hit_rate"] = round(
+            delegation_cache_meta["delegation_cache_hits"]
+            / delegation_cache_meta["delegation_cache_lookups"],
+            4,
+        )
+    else:
+        delegation_cache_meta["delegation_cache_hit_rate"] = None
     state.increment_request(mock_mode=False, turns=1 + loops)
     if state.progress_logger:
         phases_log = ", ".join(
@@ -214,6 +235,7 @@ def _execute_delegated(
                     if p.get("phase") == "B"
                 ],
                 "final_answer_role": str(initial_role),
+                **delegation_cache_meta,
                 **llm_completion_meta(primitives),
             },
         )
