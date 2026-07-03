@@ -64,9 +64,16 @@ _VALID_APPLICATOR = frozenset(
 )
 _VALID_RISK = frozenset({"low", "medium", "high"})
 _VALID_PROMOTION_STATE = frozenset({"placeholder", "candidate", "promoted"})
+_RESTART_APPLICATORS = frozenset({"role_restart", "stack_restart"})
 
 # Required sub-fields within the evidence map.
 _REQUIRED_EVIDENCE_FIELDS: tuple[str, ...] = ("measured", "protocol", "source")
+_REQUIRED_RESTART_TRIAL_PROTOCOL_FIELDS: tuple[str, ...] = (
+    "class",
+    "min_trials",
+    "restore_after_batch",
+    "boundary_event",
+)
 
 
 class CapabilityRegistryError(Exception):
@@ -158,6 +165,38 @@ def _validate_entry(entry: Any, idx: int) -> list[str]:
             for ef in _REQUIRED_EVIDENCE_FIELDS:
                 if ef not in evidence:
                     errors.append(f"{label}: evidence missing required sub-field {ef!r}")
+
+    if entry.get("applicator") in _RESTART_APPLICATORS:
+        trial_protocol = entry.get("trial_protocol")
+        if not isinstance(trial_protocol, dict):
+            errors.append(
+                f"{label}: restart applicator rows must define trial_protocol mapping"
+            )
+        else:
+            for field in _REQUIRED_RESTART_TRIAL_PROTOCOL_FIELDS:
+                if field not in trial_protocol:
+                    errors.append(
+                        f"{label}: trial_protocol missing required field {field!r}"
+                    )
+            protocol_class = trial_protocol.get("class")
+            if protocol_class != "batched_restart":
+                errors.append(
+                    f"{label}: trial_protocol.class must be 'batched_restart'"
+                )
+            min_trials = trial_protocol.get("min_trials")
+            if type(min_trials) is not int or min_trials < 1:
+                errors.append(
+                    f"{label}: trial_protocol.min_trials must be an integer >= 1"
+                )
+            if trial_protocol.get("restore_after_batch") is not True:
+                errors.append(
+                    f"{label}: trial_protocol.restore_after_batch must be true"
+                )
+            boundary_event = trial_protocol.get("boundary_event")
+            if not isinstance(boundary_event, str) or not boundary_event.strip():
+                errors.append(
+                    f"{label}: trial_protocol.boundary_event must be a non-empty string"
+                )
 
     return errors
 

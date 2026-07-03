@@ -60,6 +60,14 @@
 #                     candidate    — evidence exists; applicator not yet wired
 #                     promoted     — all W4 preconditions met; ready for autopilot
 #
+# trial_protocol:   (map, required for role_restart/stack_restart applicators)
+#                   Declares the restart-class experiment contract that must be
+#                   enforced before any future promotion:
+#                     class: batched_restart
+#                     min_trials: minimum post-restart evaluation trials
+#                     restore_after_batch: must be true
+#                     boundary_event: journal event emitted at restart boundary
+#
 # handoff:          (str, optional) Filename of the primary handoff tracking this lever.
 #
 # kill_condition:   (str, optional) Required before promotion. Defines the
@@ -110,6 +118,11 @@ capabilities:
       measured: "+7.3–15.2% tps observed in moe-spec handoff (pp32 batch)"
       protocol: none  # protocol-id TBD; awaiting evidence-plane Phase 1
       source: moe-spec-cpu-spec-dec-integration.md
+    trial_protocol:
+      class: batched_restart
+      min_trials: 5
+      restore_after_batch: true
+      boundary_event: role_restart_boundary
     risk: medium
     actionable_by: "gated:evidence-plane-ledger.md Phase 1"
     promotion_state: placeholder
@@ -167,6 +180,11 @@ capabilities:
       measured: "EA S8/S9 compaction profiles listed as first-cohort candidate in §C.3"
       protocol: none  # protocol-id TBD; awaiting evidence-plane Phase 1
       source: fable5-findings-04-impl-plan.md §C.3
+    trial_protocol:
+      class: batched_restart
+      min_trials: 5
+      restore_after_batch: true
+      boundary_event: role_restart_boundary
     risk: medium
     actionable_by: "gated:evidence-plane-ledger.md Phase 1"
     promotion_state: placeholder
@@ -200,6 +218,11 @@ capabilities:
       measured: "draft_max=24 and p_split=0 are current production values for architect_general"
       protocol: none  # protocol-id TBD; awaiting evidence-plane Phase 1
       source: orchestration/model_registry.yaml server_mode.architect_general
+    trial_protocol:
+      class: batched_restart
+      min_trials: 5
+      restore_after_batch: true
+      boundary_event: role_restart_boundary
     risk: medium
     actionable_by: "gated:evidence-plane-ledger.md Phase 1"
     promotion_state: placeholder

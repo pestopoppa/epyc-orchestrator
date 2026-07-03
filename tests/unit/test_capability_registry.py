@@ -51,6 +51,12 @@ def _minimal_entry(**overrides: object) -> dict:
         "risk": "medium",
         "actionable_by": "operator",
         "promotion_state": "placeholder",
+        "trial_protocol": {
+            "class": "batched_restart",
+            "min_trials": 5,
+            "restore_after_batch": True,
+            "boundary_event": "role_restart_boundary",
+        },
     }
     base.update(overrides)
     return base
@@ -143,7 +149,12 @@ def test_load_multiple_entries(tmp_path: Path) -> None:
     entries = [
         _minimal_entry(id="lever_a"),
         _minimal_entry(id="lever_b"),
-        _minimal_entry(id="lever_c", kind="flag", applicator="config_post"),
+        _minimal_entry(
+            id="lever_c",
+            kind="flag",
+            applicator="config_post",
+            trial_protocol=None,
+        ),
     ]
     path = _write_registry(tmp_path, entries)
     caps = load_capability_registry(path)
@@ -455,6 +466,55 @@ def test_promoted_entry_requires_text_kill_condition(tmp_path: Path) -> None:
         load_capability_registry(path)
 
 
+def test_restart_applicator_requires_trial_protocol(tmp_path: Path) -> None:
+    entry = _minimal_entry()
+    del entry["trial_protocol"]
+    path = _write_registry(tmp_path, [entry])
+    with pytest.raises(
+        CapabilityRegistryError,
+        match="restart applicator rows must define trial_protocol mapping",
+    ):
+        load_capability_registry(path)
+
+
+def test_restart_trial_protocol_requires_batched_restore_boundary(tmp_path: Path) -> None:
+    path = _write_registry(
+        tmp_path,
+        [
+            _minimal_entry(
+                trial_protocol={
+                    "class": "single_restart",
+                    "min_trials": 0,
+                    "restore_after_batch": False,
+                    "boundary_event": "",
+                },
+            )
+        ],
+    )
+    with pytest.raises(CapabilityRegistryError) as exc_info:
+        load_capability_registry(path)
+    msg = str(exc_info.value)
+    assert "trial_protocol.class must be 'batched_restart'" in msg
+    assert "trial_protocol.min_trials must be an integer >= 1" in msg
+    assert "trial_protocol.restore_after_batch must be true" in msg
+    assert "trial_protocol.boundary_event must be a non-empty string" in msg
+
+
+def test_non_restart_applicator_does_not_require_trial_protocol(tmp_path: Path) -> None:
+    path = _write_registry(
+        tmp_path,
+        [
+            _minimal_entry(
+                kind="flag",
+                applicator="config_post",
+                trial_protocol=None,
+            )
+        ],
+    )
+    caps = load_capability_registry(path)
+    assert caps[0]["applicator"] == "config_post"
+
+
 @pytest.mark.parametrize("valid_kind", ["env", "flag", "numeric", "prompt", "registry-field", "restart-class"])
 def test_all_valid_kinds_accepted(tmp_path: Path, valid_kind: str) -> None:
     path = _write_registry(tmp_path, [_minimal_entry(id=f"lever_{valid_kind.replace('-', '_')}", kind=valid_kind)])
@@ -464,7 +524,26 @@ def test_all_valid_kinds_accepted(tmp_path: Path, valid_kind: str) -> None:
 
 @pytest.mark.parametrize("valid_applicator", ["config_post", "env_hotswap", "role_restart", "stack_restart"])
 def test_all_valid_applicators_accepted(tmp_path: Path, valid_applicator: str) -> None:
-    path = _write_registry(tmp_path, [_minimal_entry(id=f"lever_{valid_applicator}", applicator=valid_applicator)])
+    trial_protocol = (
+        {
+            "class": "batched_restart",
+            "min_trials": 5,
+            "restore_after_batch": True,
+            "boundary_event": "role_restart_boundary",
+        }
+        if valid_applicator in {"role_restart", "stack_restart"}
+        else None
+    )
+    path = _write_registry(
+        tmp_path,
+        [
+            _minimal_entry(
+                id=f"lever_{valid_applicator}",
+                applicator=valid_applicator,
+                trial_protocol=trial_protocol,
+            )
+        ],
+    )
     caps = load_capability_registry(path)
     assert caps[0]["applicator"] == valid_applicator
 
