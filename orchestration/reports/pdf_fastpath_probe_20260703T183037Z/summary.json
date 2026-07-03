@@ -1,0 +1,132 @@
+{
+  "backend_count": 4,
+  "backend_summaries": {
+    "liteparse": {
+      "attempts": 1,
+      "backend": "liteparse",
+      "failure_reasons": {
+        "missing_dependency": 1
+      },
+      "failures": 1,
+      "median_char_count": null,
+      "median_latency_ms": null,
+      "median_quality_score": null,
+      "successes": 0,
+      "total_table_like_lines": 0
+    },
+    "opendataloader": {
+      "attempts": 1,
+      "backend": "opendataloader",
+      "failure_reasons": {
+        "missing_dependency": 1
+      },
+      "failures": 1,
+      "median_char_count": null,
+      "median_latency_ms": null,
+      "median_quality_score": null,
+      "successes": 0,
+      "total_table_like_lines": 0
+    },
+    "opendataloader_structured": {
+      "attempts": 1,
+      "backend": "opendataloader_structured",
+      "failure_reasons": {
+        "missing_dependency": 1
+      },
+      "failures": 1,
+      "median_char_count": null,
+      "median_latency_ms": null,
+      "median_quality_score": null,
+      "successes": 0,
+      "total_table_like_lines": 0
+    },
+    "pdftotext": {
+      "attempts": 1,
+      "backend": "pdftotext",
+      "failure_reasons": {},
+      "failures": 0,
+      "median_char_count": 1801.0,
+      "median_latency_ms": 8.863726994604804,
+      "median_quality_score": 0.8222334032245147,
+      "successes": 1,
+      "total_table_like_lines": 0
+    }
+  },
+  "failure_count": 3,
+  "pdf_count": 1,
+  "records": [
+    {
+      "backend": "pdftotext",
+      "bbox_count": null,
+      "char_count": 1801,
+      "elapsed_ms": 8.863726994604804,
+      "failure_detail": "",
+      "failure_reason": "",
+      "line_count": 63,
+      "needs_ocr": true,
+      "non_empty_line_count": 21,
+      "page_image_count": null,
+      "pdf_path": "/mnt/raid0/llm/llama.cpp/docs/development/llama-star/idea-arch.pdf",
+      "quality_score": 0.8222334032245147,
+      "structured_counts": {},
+      "success": true,
+      "table_like_line_count": 0,
+      "text_sha256": "d864d56cb79df957e3b52f3d1e7ebbb1ce6b7d842925295d891921a3ce24ca91"
+    },
+    {
+      "backend": "opendataloader",
+      "bbox_count": null,
+      "char_count": 0,
+      "elapsed_ms": 0.0,
+      "failure_detail": "",
+      "failure_reason": "missing_dependency",
+      "line_count": 0,
+      "needs_ocr": true,
+      "non_empty_line_count": 0,
+      "page_image_count": null,
+      "pdf_path": "/mnt/raid0/llm/llama.cpp/docs/development/llama-star/idea-arch.pdf",
+      "quality_score": 0.0,
+      "structured_counts": {},
+      "success": false,
+      "table_like_line_count": 0,
+      "text_sha256": ""
+    },
+    {
+      "backend": "opendataloader_structured",
+      "bbox_count": null,
+      "char_count": 0,
+      "elapsed_ms": 0.0,
+      "failure_detail": "",
+      "failure_reason": "missing_dependency",
+      "line_count": 0,
+      "needs_ocr": true,
+      "non_empty_line_count": 0,
+      "page_image_count": null,
+      "pdf_path": "/mnt/raid0/llm/llama.cpp/docs/development/llama-star/idea-arch.pdf",
+      "quality_score": 0.0,
+      "structured_counts": {},
+      "success": false,
+      "table_like_line_count": 0,
+      "text_sha256": ""
+    },
+    {
+      "backend": "liteparse",
+      "bbox_count": null,
+      "char_count": 0,
+      "elapsed_ms": 0.0,
+      "failure_detail": "No module named 'liteparse'",
+      "failure_reason": "missing_dependency",
+      "line_count": 0,
+      "needs_ocr": null,
+      "non_empty_line_count": 0,
+      "page_image_count": null,
+      "pdf_path": "/mnt/raid0/llm/llama.cpp/docs/development/llama-star/idea-arch.pdf",
+      "quality_score": null,
+      "structured_counts": {},
+      "success": false,
+      "table_like_line_count": 0,
+      "text_sha256": ""
+    }
+  ],
+  "success_count": 1
+}
