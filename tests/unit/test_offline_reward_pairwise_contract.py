@@ -212,3 +212,80 @@ def test_cli_writes_jsonl_summary_and_markdown(tmp_path: Path) -> None:
     assert len(out_jsonl.read_text(encoding="utf-8").strip().splitlines()) == 1
     assert json.loads(summary_json.read_text(encoding="utf-8"))["decision"]["status"] == "contract_ready"
     assert "# Offline Reward Pairwise Contract" in summary_md.read_text(encoding="utf-8")
+
+
+def test_candidate_only_manifest_cannot_overwrite_broad_contract(tmp_path: Path) -> None:
+    manifest = tmp_path / "offline_reward_feature_manifest_pairwise_holdout_expansion.jsonl"
+    manifest.write_text(
+        "\n".join(
+            json.dumps(row, sort_keys=True)
+            for row in [
+                _manifest_row(item_id="pos", role_key="frontdoor", label=1, score=0.9),
+                _manifest_row(item_id="neg", role_key="coder_escalation", label=0, score=0.1),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert (
+        mod.main(
+            [
+                "--manifest-jsonl",
+                str(manifest),
+                "--output-jsonl",
+                str(tmp_path / "offline_reward_pairwise_preference_contract_score_ordered.jsonl"),
+                "--summary-json",
+                str(tmp_path / "summary.json"),
+                "--pairing-mode",
+                "score_ordered",
+            ]
+        )
+        == 2
+    )
+
+
+def test_candidate_only_scope_records_distinct_artifact_mode(tmp_path: Path) -> None:
+    manifest = tmp_path / "offline_reward_feature_manifest_pairwise_expanded_gap.jsonl"
+    manifest.write_text(
+        "\n".join(
+            json.dumps(row, sort_keys=True)
+            for row in [
+                _manifest_row(item_id="pos", role_key="frontdoor", label=1, score=0.9),
+                _manifest_row(item_id="neg", role_key="coder_escalation", label=0, score=0.1),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    out_jsonl = tmp_path / "offline_reward_pairwise_preference_contract_candidate_only_expanded_gap.jsonl"
+    summary_json = tmp_path / "summary.json"
+
+    assert (
+        mod.main(
+            [
+                "--manifest-jsonl",
+                str(manifest),
+                "--output-jsonl",
+                str(out_jsonl),
+                "--summary-json",
+                str(summary_json),
+                "--artifact-scope",
+                "candidate_only",
+                "--min-pairs",
+                "1",
+                "--min-cross-action-pairs",
+                "1",
+            ]
+        )
+        == 0
+    )
+
+    payload = json.loads(summary_json.read_text(encoding="utf-8"))
+    assert payload["decision"]["status"] == "contract_ready"
+    assert payload["artifact_scope"] == {
+        "allow_protected_output_overwrite": False,
+        "candidate_only_manifest": True,
+        "mode": "candidate_only",
+        "protected_broad_output": False,
+    }

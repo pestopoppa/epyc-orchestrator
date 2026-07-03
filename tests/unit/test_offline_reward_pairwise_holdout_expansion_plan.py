@@ -705,6 +705,10 @@ def test_pairwise_holdout_writes_guarded_collection_manifest_and_script(
     assert payload["schema_version"] == mod.COLLECTION_MANIFEST_SCHEMA_VERSION
     assert payload["requires_active_autopilot_absent"] is True
     assert payload["autopilot_guard"]["refusal_exit_code"] == 75
+    pipeline_text = "\n".join(payload["post_collection_pipeline"])
+    assert "--artifact-scope candidate_only" in pipeline_text
+    assert "offline_reward_pairwise_preference_contract_candidate_only_expanded_gap.jsonl" in pipeline_text
+    assert "offline_reward_pairwise_preference_contract_expanded_gap.jsonl" not in pipeline_text
     assert payload["batch_count"] == 1
     batch = payload["batches"][0]
     assert batch["target"] == "source_family:orchestrator_live_seed:architect_general>frontdoor"

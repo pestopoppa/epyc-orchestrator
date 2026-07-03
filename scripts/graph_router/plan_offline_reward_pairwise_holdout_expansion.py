@@ -512,15 +512,16 @@ def _post_collection_commands() -> list[str]:
         (
             "uv run python scripts/graph_router/build_offline_reward_pairwise_contract.py "
             f"--manifest-jsonl {report_dir}/offline_reward_feature_manifest_pairwise_expanded_gap.jsonl "
-            f"--output-jsonl {report_dir}/offline_reward_pairwise_preference_contract_expanded_gap.jsonl "
-            f"--summary-json {report_dir}/offline_reward_pairwise_preference_contract_expanded_gap_summary.json "
-            f"--summary-md {report_dir}/offline_reward_pairwise_preference_contract_expanded_gap_summary.md"
+            f"--output-jsonl {report_dir}/offline_reward_pairwise_preference_contract_candidate_only_expanded_gap.jsonl "
+            f"--summary-json {report_dir}/offline_reward_pairwise_preference_contract_candidate_only_expanded_gap_summary.json "
+            f"--summary-md {report_dir}/offline_reward_pairwise_preference_contract_candidate_only_expanded_gap_summary.md "
+            "--artifact-scope candidate_only"
         ),
         (
             "uv run python scripts/graph_router/evaluate_offline_reward_pairwise_ranker.py "
-            f"--pairwise-jsonl {report_dir}/offline_reward_pairwise_preference_contract_expanded_gap.jsonl "
-            f"--summary-json {report_dir}/offline_reward_pairwise_ranker_expanded_gap_summary.json "
-            f"--summary-md {report_dir}/offline_reward_pairwise_ranker_expanded_gap_summary.md"
+            f"--pairwise-jsonl {report_dir}/offline_reward_pairwise_preference_contract_candidate_only_expanded_gap.jsonl "
+            f"--summary-json {report_dir}/offline_reward_pairwise_ranker_candidate_only_expanded_gap_summary.json "
+            f"--summary-md {report_dir}/offline_reward_pairwise_ranker_candidate_only_expanded_gap_summary.md"
         ),
     ]
 

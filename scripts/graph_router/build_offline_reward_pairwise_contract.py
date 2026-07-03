@@ -38,6 +38,17 @@ PAIRWISE_ROW_SCHEMA_VERSION = "offline_reward_pairwise_preference.v1"
 SUMMARY_SCHEMA_VERSION = "offline_reward_pairwise_contract_summary.v1"
 CONTRACT_NAME = "within_task_pairwise_preference_v1"
 PAIRING_MODES = ("binary_label", "score_ordered")
+ARTIFACT_SCOPES = ("canonical", "candidate_only")
+BROAD_PAIRWISE_OUTPUT_NAMES = frozenset(
+    {
+        "offline_reward_pairwise_preference_contract_score_ordered.jsonl",
+        "offline_reward_pairwise_preference_contract_score_ordered_holdout_expanded.jsonl",
+        "offline_reward_pairwise_preference_contract_score_ordered_audit_target_expanded.jsonl",
+        "offline_reward_pairwise_preference_contract_score_ordered_hard_holdouts_expanded.jsonl",
+    }
+)
+CANDIDATE_ONLY_MANIFEST_PREFIX = "offline_reward_feature_manifest_pairwise_"
+CANDIDATE_ONLY_OUTPUT_MARKERS = ("candidate_only", "expanded_gap", "diagnostic")
 
 
 class PairwiseContractError(ValueError):
@@ -89,6 +100,49 @@ def load_jsonl(path: Path) -> list[dict[str, Any]]:
                 raise PairwiseContractError(f"{path}:{line_number}: expected object")
             rows.append(value)
     return rows
+
+
+def _looks_candidate_only_manifest(path: Path) -> bool:
+    return path.name.startswith(CANDIDATE_ONLY_MANIFEST_PREFIX)
+
+
+def _looks_candidate_only_output(path: Path) -> bool:
+    name = path.name.lower()
+    return any(marker in name for marker in CANDIDATE_ONLY_OUTPUT_MARKERS)
+
+
+def _validate_artifact_scope(
+    *,
+    manifest_jsonl: Path,
+    output_jsonl: Path,
+    artifact_scope: str,
+    allow_protected_output_overwrite: bool,
+) -> dict[str, Any]:
+    if artifact_scope not in ARTIFACT_SCOPES:
+        raise PairwiseContractError(f"unsupported artifact_scope={artifact_scope!r}")
+    candidate_only_manifest = _looks_candidate_only_manifest(manifest_jsonl)
+    protected_broad_output = output_jsonl.name in BROAD_PAIRWISE_OUTPUT_NAMES
+    if (
+        candidate_only_manifest
+        and protected_broad_output
+        and not allow_protected_output_overwrite
+    ):
+        raise PairwiseContractError(
+            "candidate-only feature manifests must not overwrite broad pairwise "
+            "contract artifacts; choose an output path containing candidate_only, "
+            "expanded_gap, or diagnostic, or pass --allow-protected-output-overwrite"
+        )
+    if artifact_scope == "candidate_only" and not _looks_candidate_only_output(output_jsonl):
+        raise PairwiseContractError(
+            "candidate_only artifact scope requires a distinct output filename "
+            "containing candidate_only, expanded_gap, or diagnostic"
+        )
+    return {
+        "mode": artifact_scope,
+        "candidate_only_manifest": candidate_only_manifest,
+        "protected_broad_output": protected_broad_output,
+        "allow_protected_output_overwrite": allow_protected_output_overwrite,
+    }
 
 
 def _assert_prompt_free(row: dict[str, Any], *, row_number: int) -> None:
@@ -485,11 +539,31 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-cross-action-pairs", type=int, default=50)
     parser.add_argument("--pairing-mode", choices=PAIRING_MODES, default="binary_label")
     parser.add_argument("--min-score-delta", type=float, default=0.0)
+    parser.add_argument(
+        "--artifact-scope",
+        choices=ARTIFACT_SCOPES,
+        default="canonical",
+        help=(
+            "Label the output artifact. candidate_only refuses broad output names "
+            "unless explicitly overridden."
+        ),
+    )
+    parser.add_argument(
+        "--allow-protected-output-overwrite",
+        action="store_true",
+        help="Allow candidate-only manifests to overwrite a known broad contract path.",
+    )
     parser.add_argument("--generated-at")
     return parser
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
+    artifact_scope = _validate_artifact_scope(
+        manifest_jsonl=args.manifest_jsonl,
+        output_jsonl=args.output_jsonl,
+        artifact_scope=str(args.artifact_scope),
+        allow_protected_output_overwrite=bool(args.allow_protected_output_overwrite),
+    )
     rows = load_jsonl(args.manifest_jsonl)
     pair_rows, summary = build_pairwise_contract(
         rows,
@@ -500,6 +574,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         min_score_delta=max(0.0, float(args.min_score_delta)),
         generated_at=args.generated_at,
     )
+    summary["artifact_scope"] = artifact_scope
     summary["inputs"]["manifest_jsonl"] = str(args.manifest_jsonl)
     summary["outputs"] = {
         "pairwise_jsonl": str(args.output_jsonl),
