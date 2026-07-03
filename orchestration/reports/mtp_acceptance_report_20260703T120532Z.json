@@ -1,0 +1,1616 @@
+{
+  "attestation_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/attestation/latest.json",
+  "generated_at": "2026-07-03T12:05:32.706859+00:00",
+  "logs_dir": "/mnt/raid0/llm/epyc-orchestrator/logs",
+  "min_lines_per_mtp_role": 1,
+  "notes": [
+    "Rates are process/log aggregates. Shared ports such as 8070 cannot be split by alias role unless server acceptance lines are joined to request-level role telemetry.",
+    "Roles without draft-mtp in the current serving attestation are reported as not_mtp_configured."
+  ],
+  "ports": [
+    {
+      "accepted_drafts": 1196,
+      "accepted_tokens": 3745,
+      "cpu_intent": "0-95",
+      "draft_acceptance_rate": 0.8755490483162518,
+      "draft_model_path": "/mnt/raid0/llm/models/Qwen3.5-122B-A10B-MTP-GGUF/UD-Q4_K_M/Qwen3.5-122B-A10B-UD-Q4_K_M-00001-of-00003.gguf",
+      "evidence_source": "latest_cumulative_stats",
+      "generated_drafts": 1366,
+      "generated_tokens": 5464,
+      "log": {
+        "cumulative_line_count": 43,
+        "exists": true,
+        "latest_cumulative": {
+          "accepted_drafts": 1196,
+          "accepted_tokens": 3745,
+          "generated_drafts": 1366,
+          "generated_tokens": 5464,
+          "line_number": 8380,
+          "mean_acceptance_length": 3.74,
+          "per_position_rates": [
+            0.876,
+            0.736,
+            0.615,
+            0.515
+          ],
+          "spec_type": "draft-mtp"
+        },
+        "latest_task": {
+          "acceptance_rate": 0.45,
+          "accepted_tokens": 18,
+          "generated_tokens": 40,
+          "line_number": 8379,
+          "mean_acceptance_length": 2.8,
+          "per_position_rates": [
+            0.5,
+            0.5,
+            0.4,
+            0.4
+          ],
+          "task_id": 9730
+        },
+        "line_count": 12264,
+        "mtime_utc": "2026-07-03T12:05:32.371920+00:00",
+        "no_spec_implementation": false,
+        "path": "/mnt/raid0/llm/epyc-orchestrator/logs/llama-server-8083.log",
+        "size_bytes": 724702,
+        "task_accepted_tokens": 3745,
+        "task_generated_tokens": 5464,
+        "task_line_count": 43
+      },
+      "mean_acceptance_length": 3.74,
+      "model_path": "/mnt/raid0/llm/models/Qwen3.5-122B-A10B-MTP-GGUF/UD-Q4_K_M/Qwen3.5-122B-A10B-UD-Q4_K_M-00001-of-00003.gguf",
+      "mtp_configured": true,
+      "per_position_rates": [
+        0.876,
+        0.736,
+        0.615,
+        0.515
+      ],
+      "pid": 3811260,
+      "port": 8083,
+      "primary_role": "architect_general",
+      "registry_roles": [
+        "architect_general"
+      ],
+      "spec_type": "draft-mtp",
+      "status": "ok",
+      "token_acceptance_rate": 0.6853953147877013
+    },
+    {
+      "accepted_drafts": null,
+      "accepted_tokens": 0,
+      "cpu_intent": null,
+      "draft_acceptance_rate": null,
+      "draft_model_path": null,
+      "evidence_source": "none",
+      "generated_drafts": null,
+      "generated_tokens": 0,
+      "log": {
+        "cumulative_line_count": 0,
+        "exists": false,
+        "latest_cumulative": null,
+        "latest_task": null,
+        "line_count": 0,
+        "mtime_utc": null,
+        "no_spec_implementation": false,
+        "path": "/mnt/raid0/llm/epyc-orchestrator/logs/llama-server-8092.log",
+        "size_bytes": null,
+        "task_accepted_tokens": 0,
+        "task_generated_tokens": 0,
+        "task_line_count": 0
+      },
+      "mean_acceptance_length": null,
+      "model_path": "/mnt/raid0/llm/models/bge-large-en-v1.5-f16.gguf",
+      "mtp_configured": false,
+      "per_position_rates": [],
+      "pid": 3766327,
+      "port": 8092,
+      "primary_role": "code",
+      "registry_roles": [
+        "code"
+      ],
+      "spec_type": null,
+      "status": "not_mtp_configured",
+      "token_acceptance_rate": null
+    },
+    {
+      "accepted_drafts": 7256,
+      "accepted_tokens": 22351,
+      "cpu_intent": "0-47,96-143",
+      "draft_acceptance_rate": 0.847366577134182,
+      "draft_model_path": "/mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf",
+      "evidence_source": "latest_cumulative_stats",
+      "generated_drafts": 8563,
+      "generated_tokens": 34237,
+      "log": {
+        "cumulative_line_count": 181,
+        "exists": true,
+        "latest_cumulative": {
+          "accepted_drafts": 7256,
+          "accepted_tokens": 22351,
+          "generated_drafts": 8563,
+          "generated_tokens": 34237,
+          "line_number": 18425,
+          "mean_acceptance_length": 3.61,
+          "per_position_rates": [
+            0.847,
+            0.696,
+            0.584,
+            0.483
+          ],
+          "spec_type": "draft-mtp"
+        },
+        "latest_task": {
+          "acceptance_rate": 1.0,
+          "accepted_tokens": 16,
+          "generated_tokens": 16,
+          "line_number": 18424,
+          "mean_acceptance_length": 5.0,
+          "per_position_rates": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "task_id": 21568
+        },
+        "line_count": 18532,
+        "mtime_utc": "2026-07-03T12:05:29.198877+00:00",
+        "no_spec_implementation": false,
+        "path": "/mnt/raid0/llm/epyc-orchestrator/logs/llama-server-8070.log",
+        "size_bytes": 1528108,
+        "task_accepted_tokens": 22339,
+        "task_generated_tokens": 34221,
+        "task_line_count": 181
+      },
+      "mean_acceptance_length": 3.61,
+      "model_path": "/mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf",
+      "mtp_configured": true,
+      "per_position_rates": [
+        0.847,
+        0.696,
+        0.584,
+        0.483
+      ],
+      "pid": 3792598,
+      "port": 8070,
+      "primary_role": "frontdoor",
+      "registry_roles": [
+        "coder_escalation",
+        "frontdoor"
+      ],
+      "spec_type": "draft-mtp",
+      "status": "ok",
+      "token_acceptance_rate": 0.6528317317521979
+    },
+    {
+      "accepted_drafts": 1,
+      "accepted_tokens": 4,
+      "cpu_intent": "0-23,96-119",
+      "draft_acceptance_rate": 1.0,
+      "draft_model_path": "/mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf",
+      "evidence_source": "latest_cumulative_stats",
+      "generated_drafts": 1,
+      "generated_tokens": 4,
+      "log": {
+        "cumulative_line_count": 1,
+        "exists": true,
+        "latest_cumulative": {
+          "accepted_drafts": 1,
+          "accepted_tokens": 4,
+          "generated_drafts": 1,
+          "generated_tokens": 4,
+          "line_number": 5710,
+          "mean_acceptance_length": 5.0,
+          "per_position_rates": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "spec_type": "draft-mtp"
+        },
+        "latest_task": {
+          "acceptance_rate": 1.0,
+          "accepted_tokens": 4,
+          "generated_tokens": 4,
+          "line_number": 5709,
+          "mean_acceptance_length": 5.0,
+          "per_position_rates": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "task_id": 5659
+        },
+        "line_count": 11397,
+        "mtime_utc": "2026-07-03T12:05:32.370920+00:00",
+        "no_spec_implementation": false,
+        "path": "/mnt/raid0/llm/epyc-orchestrator/logs/llama-server-8080.log",
+        "size_bytes": 620318,
+        "task_accepted_tokens": 4,
+        "task_generated_tokens": 4,
+        "task_line_count": 1
+      },
+      "mean_acceptance_length": 5.0,
+      "model_path": "/mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf",
+      "mtp_configured": true,
+      "per_position_rates": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "pid": 3761909,
+      "port": 8080,
+      "primary_role": "frontdoor",
+      "registry_roles": [
+        "frontdoor"
+      ],
+      "spec_type": "draft-mtp",
+      "status": "ok",
+      "token_acceptance_rate": 1.0
+    },
+    {
+      "accepted_drafts": null,
+      "accepted_tokens": 0,
+      "cpu_intent": "24-47,120-143",
+      "draft_acceptance_rate": null,
+      "draft_model_path": "/mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf",
+      "evidence_source": "none",
+      "generated_drafts": null,
+      "generated_tokens": 0,
+      "log": {
+        "cumulative_line_count": 0,
+        "exists": true,
+        "latest_cumulative": null,
+        "latest_task": null,
+        "line_count": 11380,
+        "mtime_utc": "2026-07-03T12:05:32.370920+00:00",
+        "no_spec_implementation": false,
+        "path": "/mnt/raid0/llm/epyc-orchestrator/logs/llama-server-8180.log",
+        "size_bytes": 618387,
+        "task_accepted_tokens": 0,
+        "task_generated_tokens": 0,
+        "task_line_count": 0
+      },
+      "mean_acceptance_length": null,
+      "model_path": "/mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf",
+      "mtp_configured": true,
+      "per_position_rates": [],
+      "pid": 3762213,
+      "port": 8180,
+      "primary_role": "frontdoor",
+      "registry_roles": [
+        "frontdoor"
+      ],
+      "spec_type": "draft-mtp",
+      "status": "missing_acceptance_evidence",
+      "token_acceptance_rate": null
+    },
+    {
+      "accepted_drafts": 1802,
+      "accepted_tokens": 5716,
+      "cpu_intent": "48-71,144-167",
+      "draft_acceptance_rate": 0.8536238749407864,
+      "draft_model_path": "/mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf",
+      "evidence_source": "latest_cumulative_stats",
+      "generated_drafts": 2111,
+      "generated_tokens": 8439,
+      "log": {
+        "cumulative_line_count": 62,
+        "exists": true,
+        "latest_cumulative": {
+          "accepted_drafts": 1802,
+          "accepted_tokens": 5716,
+          "generated_drafts": 2111,
+          "generated_tokens": 8439,
+          "line_number": 13371,
+          "mean_acceptance_length": 3.71,
+          "per_position_rates": [
+            0.854,
+            0.723,
+            0.611,
+            0.521
+          ],
+          "spec_type": "draft-mtp"
+        },
+        "latest_task": {
+          "acceptance_rate": 1.0,
+          "accepted_tokens": 4,
+          "generated_tokens": 4,
+          "line_number": 13370,
+          "mean_acceptance_length": 5.0,
+          "per_position_rates": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "task_id": 13544
+        },
+        "line_count": 13478,
+        "mtime_utc": "2026-07-03T12:05:31.622910+00:00",
+        "no_spec_implementation": false,
+        "path": "/mnt/raid0/llm/epyc-orchestrator/logs/llama-server-8280.log",
+        "size_bytes": 889934,
+        "task_accepted_tokens": 5716,
+        "task_generated_tokens": 8439,
+        "task_line_count": 62
+      },
+      "mean_acceptance_length": 3.71,
+      "model_path": "/mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf",
+      "mtp_configured": true,
+      "per_position_rates": [
+        0.854,
+        0.723,
+        0.611,
+        0.521
+      ],
+      "pid": 3762471,
+      "port": 8280,
+      "primary_role": "frontdoor",
+      "registry_roles": [
+        "frontdoor"
+      ],
+      "spec_type": "draft-mtp",
+      "status": "ok",
+      "token_acceptance_rate": 0.6773314373740965
+    },
+    {
+      "accepted_drafts": 366,
+      "accepted_tokens": 1248,
+      "cpu_intent": "72-95,168-191",
+      "draft_acceptance_rate": 0.9081885856079405,
+      "draft_model_path": "/mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf",
+      "evidence_source": "latest_cumulative_stats",
+      "generated_drafts": 403,
+      "generated_tokens": 1612,
+      "log": {
+        "cumulative_line_count": 18,
+        "exists": true,
+        "latest_cumulative": {
+          "accepted_drafts": 366,
+          "accepted_tokens": 1248,
+          "generated_drafts": 403,
+          "generated_tokens": 1612,
+          "line_number": 11584,
+          "mean_acceptance_length": 4.1,
+          "per_position_rates": [
+            0.908,
+            0.829,
+            0.722,
+            0.638
+          ],
+          "spec_type": "draft-mtp"
+        },
+        "latest_task": {
+          "acceptance_rate": 0.95,
+          "accepted_tokens": 19,
+          "generated_tokens": 20,
+          "line_number": 11583,
+          "mean_acceptance_length": 4.8,
+          "per_position_rates": [
+            1.0,
+            1.0,
+            1.0,
+            0.8
+          ],
+          "task_id": 11650
+        },
+        "line_count": 11713,
+        "mtime_utc": "2026-07-03T12:05:32.370920+00:00",
+        "no_spec_implementation": false,
+        "path": "/mnt/raid0/llm/epyc-orchestrator/logs/llama-server-8380.log",
+        "size_bytes": 670027,
+        "task_accepted_tokens": 1248,
+        "task_generated_tokens": 1612,
+        "task_line_count": 18
+      },
+      "mean_acceptance_length": 4.1,
+      "model_path": "/mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf",
+      "mtp_configured": true,
+      "per_position_rates": [
+        0.908,
+        0.829,
+        0.722,
+        0.638
+      ],
+      "pid": 3762730,
+      "port": 8380,
+      "primary_role": "frontdoor",
+      "registry_roles": [
+        "frontdoor"
+      ],
+      "spec_type": "draft-mtp",
+      "status": "ok",
+      "token_acceptance_rate": 0.7741935483870968
+    },
+    {
+      "accepted_drafts": null,
+      "accepted_tokens": 0,
+      "cpu_intent": "0-47,96-143",
+      "draft_acceptance_rate": null,
+      "draft_model_path": null,
+      "evidence_source": "none",
+      "generated_drafts": null,
+      "generated_tokens": 0,
+      "log": {
+        "cumulative_line_count": 0,
+        "exists": true,
+        "latest_cumulative": null,
+        "latest_task": null,
+        "line_count": 11762,
+        "mtime_utc": "2026-07-03T12:05:32.371920+00:00",
+        "no_spec_implementation": true,
+        "path": "/mnt/raid0/llm/epyc-orchestrator/logs/llama-server-8085.log",
+        "size_bytes": 674909,
+        "task_accepted_tokens": 0,
+        "task_generated_tokens": 0,
+        "task_line_count": 0
+      },
+      "mean_acceptance_length": null,
+      "model_path": "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-Next-80B-A3B-Instruct-GGUF/Qwen3-Next-80B-A3B-Instruct-Q4_K_M.gguf",
+      "mtp_configured": false,
+      "per_position_rates": [],
+      "pid": 3793024,
+      "port": 8085,
+      "primary_role": "ingest_long_context",
+      "registry_roles": [
+        "ingest_long_context"
+      ],
+      "spec_type": null,
+      "status": "not_mtp_configured",
+      "token_acceptance_rate": null
+    },
+    {
+      "accepted_drafts": null,
+      "accepted_tokens": 0,
+      "cpu_intent": "0-23,96-119",
+      "draft_acceptance_rate": null,
+      "draft_model_path": null,
+      "evidence_source": "none",
+      "generated_drafts": null,
+      "generated_tokens": 0,
+      "log": {
+        "cumulative_line_count": 0,
+        "exists": true,
+        "latest_cumulative": null,
+        "latest_task": null,
+        "line_count": 11295,
+        "mtime_utc": "2026-07-03T12:05:32.371920+00:00",
+        "no_spec_implementation": true,
+        "path": "/mnt/raid0/llm/epyc-orchestrator/logs/llama-server-8185.log",
+        "size_bytes": 613623,
+        "task_accepted_tokens": 0,
+        "task_generated_tokens": 0,
+        "task_line_count": 0
+      },
+      "mean_acceptance_length": null,
+      "model_path": "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-Next-80B-A3B-Instruct-GGUF/Qwen3-Next-80B-A3B-Instruct-Q4_K_M.gguf",
+      "mtp_configured": false,
+      "per_position_rates": [],
+      "pid": 3763323,
+      "port": 8185,
+      "primary_role": "ingest_long_context",
+      "registry_roles": [
+        "ingest_long_context"
+      ],
+      "spec_type": null,
+      "status": "not_mtp_configured",
+      "token_acceptance_rate": null
+    },
+    {
+      "accepted_drafts": null,
+      "accepted_tokens": 0,
+      "cpu_intent": "24-47,120-143",
+      "draft_acceptance_rate": null,
+      "draft_model_path": null,
+      "evidence_source": "none",
+      "generated_drafts": null,
+      "generated_tokens": 0,
+      "log": {
+        "cumulative_line_count": 0,
+        "exists": true,
+        "latest_cumulative": null,
+        "latest_task": null,
+        "line_count": 11294,
+        "mtime_utc": "2026-07-03T12:05:32.371920+00:00",
+        "no_spec_implementation": true,
+        "path": "/mnt/raid0/llm/epyc-orchestrator/logs/llama-server-8285.log",
+        "size_bytes": 613568,
+        "task_accepted_tokens": 0,
+        "task_generated_tokens": 0,
+        "task_line_count": 0
+      },
+      "mean_acceptance_length": null,
+      "model_path": "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-Next-80B-A3B-Instruct-GGUF/Qwen3-Next-80B-A3B-Instruct-Q4_K_M.gguf",
+      "mtp_configured": false,
+      "per_position_rates": [],
+      "pid": 3763591,
+      "port": 8285,
+      "primary_role": "ingest_long_context",
+      "registry_roles": [
+        "ingest_long_context"
+      ],
+      "spec_type": null,
+      "status": "not_mtp_configured",
+      "token_acceptance_rate": null
+    },
+    {
+      "accepted_drafts": null,
+      "accepted_tokens": 0,
+      "cpu_intent": "48-71,144-167",
+      "draft_acceptance_rate": null,
+      "draft_model_path": null,
+      "evidence_source": "none",
+      "generated_drafts": null,
+      "generated_tokens": 0,
+      "log": {
+        "cumulative_line_count": 0,
+        "exists": true,
+        "latest_cumulative": null,
+        "latest_task": null,
+        "line_count": 11295,
+        "mtime_utc": "2026-07-03T12:05:32.371920+00:00",
+        "no_spec_implementation": true,
+        "path": "/mnt/raid0/llm/epyc-orchestrator/logs/llama-server-8385.log",
+        "size_bytes": 614115,
+        "task_accepted_tokens": 0,
+        "task_generated_tokens": 0,
+        "task_line_count": 0
+      },
+      "mean_acceptance_length": null,
+      "model_path": "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-Next-80B-A3B-Instruct-GGUF/Qwen3-Next-80B-A3B-Instruct-Q4_K_M.gguf",
+      "mtp_configured": false,
+      "per_position_rates": [],
+      "pid": 3763867,
+      "port": 8385,
+      "primary_role": "ingest_long_context",
+      "registry_roles": [
+        "ingest_long_context"
+      ],
+      "spec_type": null,
+      "status": "not_mtp_configured",
+      "token_acceptance_rate": null
+    },
+    {
+      "accepted_drafts": null,
+      "accepted_tokens": 0,
+      "cpu_intent": "72-95,168-191",
+      "draft_acceptance_rate": null,
+      "draft_model_path": null,
+      "evidence_source": "none",
+      "generated_drafts": null,
+      "generated_tokens": 0,
+      "log": {
+        "cumulative_line_count": 0,
+        "exists": true,
+        "latest_cumulative": null,
+        "latest_task": null,
+        "line_count": 11272,
+        "mtime_utc": "2026-07-03T12:05:32.371920+00:00",
+        "no_spec_implementation": true,
+        "path": "/mnt/raid0/llm/epyc-orchestrator/logs/llama-server-8485.log",
+        "size_bytes": 612380,
+        "task_accepted_tokens": 0,
+        "task_generated_tokens": 0,
+        "task_line_count": 0
+      },
+      "mean_acceptance_length": null,
+      "model_path": "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-Next-80B-A3B-Instruct-GGUF/Qwen3-Next-80B-A3B-Instruct-Q4_K_M.gguf",
+      "mtp_configured": false,
+      "per_position_rates": [],
+      "pid": 3764125,
+      "port": 8485,
+      "primary_role": "ingest_long_context",
+      "registry_roles": [
+        "ingest_long_context"
+      ],
+      "spec_type": null,
+      "status": "not_mtp_configured",
+      "token_acceptance_rate": null
+    },
+    {
+      "accepted_drafts": null,
+      "accepted_tokens": 0,
+      "cpu_intent": null,
+      "draft_acceptance_rate": null,
+      "draft_model_path": null,
+      "evidence_source": "none",
+      "generated_drafts": null,
+      "generated_tokens": 0,
+      "log": {
+        "cumulative_line_count": 0,
+        "exists": false,
+        "latest_cumulative": null,
+        "latest_task": null,
+        "line_count": 0,
+        "mtime_utc": null,
+        "no_spec_implementation": false,
+        "path": "/mnt/raid0/llm/epyc-orchestrator/logs/llama-server-8090.log",
+        "size_bytes": null,
+        "task_accepted_tokens": 0,
+        "task_generated_tokens": 0,
+        "task_line_count": 0
+      },
+      "mean_acceptance_length": null,
+      "model_path": "/mnt/raid0/llm/models/bge-large-en-v1.5-f16.gguf",
+      "mtp_configured": false,
+      "per_position_rates": [],
+      "pid": 3765914,
+      "port": 8090,
+      "primary_role": "port_8090",
+      "registry_roles": [],
+      "spec_type": null,
+      "status": "not_mtp_configured",
+      "token_acceptance_rate": null
+    },
+    {
+      "accepted_drafts": null,
+      "accepted_tokens": 0,
+      "cpu_intent": null,
+      "draft_acceptance_rate": null,
+      "draft_model_path": null,
+      "evidence_source": "none",
+      "generated_drafts": null,
+      "generated_tokens": 0,
+      "log": {
+        "cumulative_line_count": 0,
+        "exists": false,
+        "latest_cumulative": null,
+        "latest_task": null,
+        "line_count": 0,
+        "mtime_utc": null,
+        "no_spec_implementation": false,
+        "path": "/mnt/raid0/llm/epyc-orchestrator/logs/llama-server-8091.log",
+        "size_bytes": null,
+        "task_accepted_tokens": 0,
+        "task_generated_tokens": 0,
+        "task_line_count": 0
+      },
+      "mean_acceptance_length": null,
+      "model_path": "/mnt/raid0/llm/models/bge-large-en-v1.5-f16.gguf",
+      "mtp_configured": false,
+      "per_position_rates": [],
+      "pid": 3766118,
+      "port": 8091,
+      "primary_role": "port_8091",
+      "registry_roles": [],
+      "spec_type": null,
+      "status": "not_mtp_configured",
+      "token_acceptance_rate": null
+    },
+    {
+      "accepted_drafts": null,
+      "accepted_tokens": 0,
+      "cpu_intent": null,
+      "draft_acceptance_rate": null,
+      "draft_model_path": null,
+      "evidence_source": "none",
+      "generated_drafts": null,
+      "generated_tokens": 0,
+      "log": {
+        "cumulative_line_count": 0,
+        "exists": false,
+        "latest_cumulative": null,
+        "latest_task": null,
+        "line_count": 0,
+        "mtime_utc": null,
+        "no_spec_implementation": false,
+        "path": "/mnt/raid0/llm/epyc-orchestrator/logs/llama-server-8093.log",
+        "size_bytes": null,
+        "task_accepted_tokens": 0,
+        "task_generated_tokens": 0,
+        "task_line_count": 0
+      },
+      "mean_acceptance_length": null,
+      "model_path": "/mnt/raid0/llm/models/bge-large-en-v1.5-f16.gguf",
+      "mtp_configured": false,
+      "per_position_rates": [],
+      "pid": 3766546,
+      "port": 8093,
+      "primary_role": "port_8093",
+      "registry_roles": [],
+      "spec_type": null,
+      "status": "not_mtp_configured",
+      "token_acceptance_rate": null
+    },
+    {
+      "accepted_drafts": null,
+      "accepted_tokens": 0,
+      "cpu_intent": null,
+      "draft_acceptance_rate": null,
+      "draft_model_path": null,
+      "evidence_source": "none",
+      "generated_drafts": null,
+      "generated_tokens": 0,
+      "log": {
+        "cumulative_line_count": 0,
+        "exists": false,
+        "latest_cumulative": null,
+        "latest_task": null,
+        "line_count": 0,
+        "mtime_utc": null,
+        "no_spec_implementation": false,
+        "path": "/mnt/raid0/llm/epyc-orchestrator/logs/llama-server-8094.log",
+        "size_bytes": null,
+        "task_accepted_tokens": 0,
+        "task_generated_tokens": 0,
+        "task_line_count": 0
+      },
+      "mean_acceptance_length": null,
+      "model_path": "/mnt/raid0/llm/models/bge-large-en-v1.5-f16.gguf",
+      "mtp_configured": false,
+      "per_position_rates": [],
+      "pid": 3766750,
+      "port": 8094,
+      "primary_role": "port_8094",
+      "registry_roles": [],
+      "spec_type": null,
+      "status": "not_mtp_configured",
+      "token_acceptance_rate": null
+    },
+    {
+      "accepted_drafts": null,
+      "accepted_tokens": 0,
+      "cpu_intent": null,
+      "draft_acceptance_rate": null,
+      "draft_model_path": null,
+      "evidence_source": "none",
+      "generated_drafts": null,
+      "generated_tokens": 0,
+      "log": {
+        "cumulative_line_count": 0,
+        "exists": false,
+        "latest_cumulative": null,
+        "latest_task": null,
+        "line_count": 0,
+        "mtime_utc": null,
+        "no_spec_implementation": false,
+        "path": "/mnt/raid0/llm/epyc-orchestrator/logs/llama-server-8095.log",
+        "size_bytes": null,
+        "task_accepted_tokens": 0,
+        "task_generated_tokens": 0,
+        "task_line_count": 0
+      },
+      "mean_acceptance_length": null,
+      "model_path": "/mnt/raid0/llm/models/bge-large-en-v1.5-f16.gguf",
+      "mtp_configured": false,
+      "per_position_rates": [],
+      "pid": 3766966,
+      "port": 8095,
+      "primary_role": "port_8095",
+      "registry_roles": [],
+      "spec_type": null,
+      "status": "not_mtp_configured",
+      "token_acceptance_rate": null
+    },
+    {
+      "accepted_drafts": null,
+      "accepted_tokens": 0,
+      "cpu_intent": "48-95,144-191",
+      "draft_acceptance_rate": null,
+      "draft_model_path": null,
+      "evidence_source": "none",
+      "generated_drafts": null,
+      "generated_tokens": 0,
+      "log": {
+        "cumulative_line_count": 0,
+        "exists": false,
+        "latest_cumulative": null,
+        "latest_task": null,
+        "line_count": 0,
+        "mtime_utc": null,
+        "no_spec_implementation": false,
+        "path": "/mnt/raid0/llm/epyc-orchestrator/logs/llama-server-8087.log",
+        "size_bytes": null,
+        "task_accepted_tokens": 0,
+        "task_generated_tokens": 0,
+        "task_line_count": 0
+      },
+      "mean_acceptance_length": null,
+      "model_path": "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/Qwen3-VL-30B-A3B-Instruct-Q4_K_M.gguf",
+      "mtp_configured": false,
+      "per_position_rates": [],
+      "pid": 3783433,
+      "port": 8087,
+      "primary_role": "vision_escalation",
+      "registry_roles": [
+        "vision_escalation"
+      ],
+      "spec_type": null,
+      "status": "not_mtp_configured",
+      "token_acceptance_rate": null
+    },
+    {
+      "accepted_drafts": null,
+      "accepted_tokens": 0,
+      "cpu_intent": "0-23,96-119",
+      "draft_acceptance_rate": null,
+      "draft_model_path": null,
+      "evidence_source": "none",
+      "generated_drafts": null,
+      "generated_tokens": 0,
+      "log": {
+        "cumulative_line_count": 0,
+        "exists": false,
+        "latest_cumulative": null,
+        "latest_task": null,
+        "line_count": 0,
+        "mtime_utc": null,
+        "no_spec_implementation": false,
+        "path": "/mnt/raid0/llm/epyc-orchestrator/logs/llama-server-8187.log",
+        "size_bytes": null,
+        "task_accepted_tokens": 0,
+        "task_generated_tokens": 0,
+        "task_line_count": 0
+      },
+      "mean_acceptance_length": null,
+      "model_path": "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/Qwen3-VL-30B-A3B-Instruct-Q4_K_M.gguf",
+      "mtp_configured": false,
+      "per_position_rates": [],
+      "pid": 3764905,
+      "port": 8187,
+      "primary_role": "vision_escalation",
+      "registry_roles": [
+        "vision_escalation"
+      ],
+      "spec_type": null,
+      "status": "not_mtp_configured",
+      "token_acceptance_rate": null
+    },
+    {
+      "accepted_drafts": null,
+      "accepted_tokens": 0,
+      "cpu_intent": "24-47,120-143",
+      "draft_acceptance_rate": null,
+      "draft_model_path": null,
+      "evidence_source": "none",
+      "generated_drafts": null,
+      "generated_tokens": 0,
+      "log": {
+        "cumulative_line_count": 0,
+        "exists": false,
+        "latest_cumulative": null,
+        "latest_task": null,
+        "line_count": 0,
+        "mtime_utc": null,
+        "no_spec_implementation": false,
+        "path": "/mnt/raid0/llm/epyc-orchestrator/logs/llama-server-8287.log",
+        "size_bytes": null,
+        "task_accepted_tokens": 0,
+        "task_generated_tokens": 0,
+        "task_line_count": 0
+      },
+      "mean_acceptance_length": null,
+      "model_path": "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/Qwen3-VL-30B-A3B-Instruct-Q4_K_M.gguf",
+      "mtp_configured": false,
+      "per_position_rates": [],
+      "pid": 3765155,
+      "port": 8287,
+      "primary_role": "vision_escalation",
+      "registry_roles": [
+        "vision_escalation"
+      ],
+      "spec_type": null,
+      "status": "not_mtp_configured",
+      "token_acceptance_rate": null
+    },
+    {
+      "accepted_drafts": null,
+      "accepted_tokens": 0,
+      "cpu_intent": "48-71,144-167",
+      "draft_acceptance_rate": null,
+      "draft_model_path": null,
+      "evidence_source": "none",
+      "generated_drafts": null,
+      "generated_tokens": 0,
+      "log": {
+        "cumulative_line_count": 0,
+        "exists": false,
+        "latest_cumulative": null,
+        "latest_task": null,
+        "line_count": 0,
+        "mtime_utc": null,
+        "no_spec_implementation": false,
+        "path": "/mnt/raid0/llm/epyc-orchestrator/logs/llama-server-8387.log",
+        "size_bytes": null,
+        "task_accepted_tokens": 0,
+        "task_generated_tokens": 0,
+        "task_line_count": 0
+      },
+      "mean_acceptance_length": null,
+      "model_path": "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/Qwen3-VL-30B-A3B-Instruct-Q4_K_M.gguf",
+      "mtp_configured": false,
+      "per_position_rates": [],
+      "pid": 3765406,
+      "port": 8387,
+      "primary_role": "vision_escalation",
+      "registry_roles": [
+        "vision_escalation"
+      ],
+      "spec_type": null,
+      "status": "not_mtp_configured",
+      "token_acceptance_rate": null
+    },
+    {
+      "accepted_drafts": null,
+      "accepted_tokens": 0,
+      "cpu_intent": "72-95,168-191",
+      "draft_acceptance_rate": null,
+      "draft_model_path": null,
+      "evidence_source": "none",
+      "generated_drafts": null,
+      "generated_tokens": 0,
+      "log": {
+        "cumulative_line_count": 0,
+        "exists": false,
+        "latest_cumulative": null,
+        "latest_task": null,
+        "line_count": 0,
+        "mtime_utc": null,
+        "no_spec_implementation": false,
+        "path": "/mnt/raid0/llm/epyc-orchestrator/logs/llama-server-8487.log",
+        "size_bytes": null,
+        "task_accepted_tokens": 0,
+        "task_generated_tokens": 0,
+        "task_line_count": 0
+      },
+      "mean_acceptance_length": null,
+      "model_path": "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/Qwen3-VL-30B-A3B-Instruct-Q4_K_M.gguf",
+      "mtp_configured": false,
+      "per_position_rates": [],
+      "pid": 3765663,
+      "port": 8487,
+      "primary_role": "vision_escalation",
+      "registry_roles": [
+        "vision_escalation"
+      ],
+      "spec_type": null,
+      "status": "not_mtp_configured",
+      "token_acceptance_rate": null
+    },
+    {
+      "accepted_drafts": 24041,
+      "accepted_tokens": 45368,
+      "cpu_intent": "0-95",
+      "draft_acceptance_rate": 0.8806549690464852,
+      "draft_model_path": "/mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-v6-Q8_0.gguf",
+      "evidence_source": "latest_cumulative_stats",
+      "generated_drafts": 27299,
+      "generated_tokens": 54592,
+      "log": {
+        "cumulative_line_count": 281,
+        "exists": true,
+        "latest_cumulative": {
+          "accepted_drafts": 24041,
+          "accepted_tokens": 45368,
+          "generated_drafts": 27299,
+          "generated_tokens": 54592,
+          "line_number": 33927,
+          "mean_acceptance_length": 2.66,
+          "per_position_rates": [
+            0.881,
+            0.781
+          ],
+          "spec_type": "draft-mtp"
+        },
+        "latest_task": {
+          "acceptance_rate": 0.92857,
+          "accepted_tokens": 13,
+          "generated_tokens": 14,
+          "line_number": 33926,
+          "mean_acceptance_length": 2.86,
+          "per_position_rates": [
+            1.0,
+            0.857
+          ],
+          "task_id": 39786
+        },
+        "line_count": 33989,
+        "mtime_utc": "2026-07-03T12:05:32.371920+00:00",
+        "no_spec_implementation": false,
+        "path": "/mnt/raid0/llm/epyc-orchestrator/logs/worker-explore-8072.log",
+        "size_bytes": 3285798,
+        "task_accepted_tokens": 45368,
+        "task_generated_tokens": 54592,
+        "task_line_count": 281
+      },
+      "mean_acceptance_length": 2.66,
+      "model_path": "/mnt/raid0/llm/models/gemma-4-26B-A4B-it-ORIG-Q4_K_M.gguf",
+      "mtp_configured": true,
+      "per_position_rates": [
+        0.881,
+        0.781
+      ],
+      "pid": 1373518,
+      "port": 8072,
+      "primary_role": "worker_general",
+      "registry_roles": [
+        "worker",
+        "worker_general"
+      ],
+      "spec_type": "draft-mtp",
+      "status": "ok",
+      "token_acceptance_rate": 0.8310375146541618
+    },
+    {
+      "accepted_drafts": 4370,
+      "accepted_tokens": 8270,
+      "cpu_intent": "0-23,96-119",
+      "draft_acceptance_rate": 0.865689381933439,
+      "draft_model_path": "/mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-v6-Q8_0.gguf",
+      "evidence_source": "latest_cumulative_stats",
+      "generated_drafts": 5048,
+      "generated_tokens": 10096,
+      "log": {
+        "cumulative_line_count": 36,
+        "exists": true,
+        "latest_cumulative": {
+          "accepted_drafts": 4370,
+          "accepted_tokens": 8270,
+          "generated_drafts": 5048,
+          "generated_tokens": 10096,
+          "line_number": 11513,
+          "mean_acceptance_length": 2.64,
+          "per_position_rates": [
+            0.866,
+            0.773
+          ],
+          "spec_type": "draft-mtp"
+        },
+        "latest_task": {
+          "acceptance_rate": 0.9086,
+          "accepted_tokens": 169,
+          "generated_tokens": 186,
+          "line_number": 11512,
+          "mean_acceptance_length": 2.82,
+          "per_position_rates": [
+            0.925,
+            0.892
+          ],
+          "task_id": 16292
+        },
+        "line_count": 11593,
+        "mtime_utc": "2026-07-03T12:05:32.371920+00:00",
+        "no_spec_implementation": false,
+        "path": "/mnt/raid0/llm/epyc-orchestrator/logs/worker-explore-8082.log",
+        "size_bytes": 702231,
+        "task_accepted_tokens": 8270,
+        "task_generated_tokens": 10096,
+        "task_line_count": 36
+      },
+      "mean_acceptance_length": 2.64,
+      "model_path": "/mnt/raid0/llm/models/gemma-4-26B-A4B-it-ORIG-Q4_K_M.gguf",
+      "mtp_configured": true,
+      "per_position_rates": [
+        0.866,
+        0.773
+      ],
+      "pid": 3750433,
+      "port": 8082,
+      "primary_role": "worker_general",
+      "registry_roles": [
+        "explore",
+        "worker",
+        "worker_general"
+      ],
+      "spec_type": "draft-mtp",
+      "status": "ok",
+      "token_acceptance_rate": 0.819136291600634
+    },
+    {
+      "accepted_drafts": null,
+      "accepted_tokens": 0,
+      "cpu_intent": "24-47,120-143",
+      "draft_acceptance_rate": null,
+      "draft_model_path": "/mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-v6-Q8_0.gguf",
+      "evidence_source": "none",
+      "generated_drafts": null,
+      "generated_tokens": 0,
+      "log": {
+        "cumulative_line_count": 0,
+        "exists": true,
+        "latest_cumulative": null,
+        "latest_task": null,
+        "line_count": 11353,
+        "mtime_utc": "2026-07-03T12:05:32.370920+00:00",
+        "no_spec_implementation": false,
+        "path": "/mnt/raid0/llm/epyc-orchestrator/logs/worker-explore-8182.log",
+        "size_bytes": 617696,
+        "task_accepted_tokens": 0,
+        "task_generated_tokens": 0,
+        "task_line_count": 0
+      },
+      "mean_acceptance_length": null,
+      "model_path": "/mnt/raid0/llm/models/gemma-4-26B-A4B-it-ORIG-Q4_K_M.gguf",
+      "mtp_configured": true,
+      "per_position_rates": [],
+      "pid": 3750708,
+      "port": 8182,
+      "primary_role": "worker_general",
+      "registry_roles": [
+        "worker",
+        "worker_general"
+      ],
+      "spec_type": "draft-mtp",
+      "status": "missing_acceptance_evidence",
+      "token_acceptance_rate": null
+    },
+    {
+      "accepted_drafts": 3473,
+      "accepted_tokens": 6508,
+      "cpu_intent": "48-71,144-167",
+      "draft_acceptance_rate": 0.8624286069034021,
+      "draft_model_path": "/mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-v6-Q8_0.gguf",
+      "evidence_source": "latest_cumulative_stats",
+      "generated_drafts": 4027,
+      "generated_tokens": 8050,
+      "log": {
+        "cumulative_line_count": 34,
+        "exists": true,
+        "latest_cumulative": {
+          "accepted_drafts": 3473,
+          "accepted_tokens": 6508,
+          "generated_drafts": 4027,
+          "generated_tokens": 8050,
+          "line_number": 11938,
+          "mean_acceptance_length": 2.62,
+          "per_position_rates": [
+            0.862,
+            0.754
+          ],
+          "spec_type": "draft-mtp"
+        },
+        "latest_task": {
+          "acceptance_rate": 0.71759,
+          "accepted_tokens": 310,
+          "generated_tokens": 432,
+          "line_number": 11937,
+          "mean_acceptance_length": 2.44,
+          "per_position_rates": [
+            0.796,
+            0.639
+          ],
+          "task_id": 15160
+        },
+        "line_count": 11943,
+        "mtime_utc": "2026-07-03T12:05:32.373920+00:00",
+        "no_spec_implementation": false,
+        "path": "/mnt/raid0/llm/epyc-orchestrator/logs/worker-explore-8282.log",
+        "size_bytes": 734848,
+        "task_accepted_tokens": 6504,
+        "task_generated_tokens": 8046,
+        "task_line_count": 34
+      },
+      "mean_acceptance_length": 2.62,
+      "model_path": "/mnt/raid0/llm/models/gemma-4-26B-A4B-it-ORIG-Q4_K_M.gguf",
+      "mtp_configured": true,
+      "per_position_rates": [
+        0.862,
+        0.754
+      ],
+      "pid": 3750987,
+      "port": 8282,
+      "primary_role": "worker_general",
+      "registry_roles": [
+        "worker",
+        "worker_general"
+      ],
+      "spec_type": "draft-mtp",
+      "status": "ok",
+      "token_acceptance_rate": 0.8084472049689441
+    },
+    {
+      "accepted_drafts": 2939,
+      "accepted_tokens": 5544,
+      "cpu_intent": "72-95,168-191",
+      "draft_acceptance_rate": 0.879940119760479,
+      "draft_model_path": "/mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-v6-Q8_0.gguf",
+      "evidence_source": "latest_cumulative_stats",
+      "generated_drafts": 3340,
+      "generated_tokens": 6679,
+      "log": {
+        "cumulative_line_count": 24,
+        "exists": true,
+        "latest_cumulative": {
+          "accepted_drafts": 2939,
+          "accepted_tokens": 5544,
+          "generated_drafts": 3340,
+          "generated_tokens": 6679,
+          "line_number": 11192,
+          "mean_acceptance_length": 2.66,
+          "per_position_rates": [
+            0.88,
+            0.78
+          ],
+          "spec_type": "draft-mtp"
+        },
+        "latest_task": {
+          "acceptance_rate": 0.88989,
+          "accepted_tokens": 493,
+          "generated_tokens": 554,
+          "line_number": 11191,
+          "mean_acceptance_length": 2.78,
+          "per_position_rates": [
+            0.921,
+            0.859
+          ],
+          "task_id": 14241
+        },
+        "line_count": 11362,
+        "mtime_utc": "2026-07-03T12:05:29.272878+00:00",
+        "no_spec_implementation": false,
+        "path": "/mnt/raid0/llm/epyc-orchestrator/logs/worker-explore-8382.log",
+        "size_bytes": 674567,
+        "task_accepted_tokens": 5544,
+        "task_generated_tokens": 6679,
+        "task_line_count": 24
+      },
+      "mean_acceptance_length": 2.66,
+      "model_path": "/mnt/raid0/llm/models/gemma-4-26B-A4B-it-ORIG-Q4_K_M.gguf",
+      "mtp_configured": true,
+      "per_position_rates": [
+        0.88,
+        0.78
+      ],
+      "pid": 3751257,
+      "port": 8382,
+      "primary_role": "worker_general",
+      "registry_roles": [
+        "worker",
+        "worker_general"
+      ],
+      "spec_type": "draft-mtp",
+      "status": "ok",
+      "token_acceptance_rate": 0.8300643808953436
+    },
+    {
+      "accepted_drafts": null,
+      "accepted_tokens": 0,
+      "cpu_intent": "24-47,120-143",
+      "draft_acceptance_rate": null,
+      "draft_model_path": null,
+      "evidence_source": "none",
+      "generated_drafts": null,
+      "generated_tokens": 0,
+      "log": {
+        "cumulative_line_count": 0,
+        "exists": false,
+        "latest_cumulative": null,
+        "latest_task": null,
+        "line_count": 0,
+        "mtime_utc": null,
+        "no_spec_implementation": false,
+        "path": "/mnt/raid0/llm/epyc-orchestrator/logs/llama-server-8086.log",
+        "size_bytes": null,
+        "task_accepted_tokens": 0,
+        "task_generated_tokens": 0,
+        "task_line_count": 0
+      },
+      "mean_acceptance_length": null,
+      "model_path": "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen2.5-VL-7B-Instruct-GGUF/Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf",
+      "mtp_configured": false,
+      "per_position_rates": [],
+      "pid": 3764382,
+      "port": 8086,
+      "primary_role": "worker_vision",
+      "registry_roles": [
+        "worker_vision"
+      ],
+      "spec_type": null,
+      "status": "not_mtp_configured",
+      "token_acceptance_rate": null
+    }
+  ],
+  "roles": [
+    {
+      "acceptance_line_count": 43,
+      "accepted_drafts": 1196,
+      "accepted_tokens": 3745,
+      "cumulative_line_count": 43,
+      "draft_acceptance_rate": 0.8755490483162518,
+      "evidence_ports": [
+        8083
+      ],
+      "generated_drafts": 1366,
+      "generated_tokens": 5464,
+      "missing_evidence_ports": [],
+      "mtp_configured_ports": [
+        8083
+      ],
+      "ports": [
+        8083
+      ],
+      "registry_roles": [
+        "architect_general"
+      ],
+      "role": "architect_general",
+      "status": "ok",
+      "token_acceptance_rate": 0.6853953147877013
+    },
+    {
+      "acceptance_line_count": 0,
+      "accepted_drafts": 0,
+      "accepted_tokens": 0,
+      "cumulative_line_count": 0,
+      "draft_acceptance_rate": null,
+      "evidence_ports": [],
+      "generated_drafts": 0,
+      "generated_tokens": 0,
+      "missing_evidence_ports": [],
+      "mtp_configured_ports": [],
+      "ports": [
+        8092
+      ],
+      "registry_roles": [
+        "code"
+      ],
+      "role": "code",
+      "status": "not_mtp_configured",
+      "token_acceptance_rate": null
+    },
+    {
+      "acceptance_line_count": 262,
+      "accepted_drafts": 9425,
+      "accepted_tokens": 29319,
+      "cumulative_line_count": 262,
+      "draft_acceptance_rate": 0.8507853403141361,
+      "evidence_ports": [
+        8070,
+        8080,
+        8280,
+        8380
+      ],
+      "generated_drafts": 11078,
+      "generated_tokens": 44292,
+      "missing_evidence_ports": [
+        8180
+      ],
+      "mtp_configured_ports": [
+        8070,
+        8080,
+        8180,
+        8280,
+        8380
+      ],
+      "ports": [
+        8070,
+        8080,
+        8180,
+        8280,
+        8380
+      ],
+      "registry_roles": [
+        "coder_escalation",
+        "frontdoor"
+      ],
+      "role": "frontdoor",
+      "status": "ok_partial_port_traffic",
+      "token_acceptance_rate": 0.6619479815768085
+    },
+    {
+      "acceptance_line_count": 0,
+      "accepted_drafts": 0,
+      "accepted_tokens": 0,
+      "cumulative_line_count": 0,
+      "draft_acceptance_rate": null,
+      "evidence_ports": [],
+      "generated_drafts": 0,
+      "generated_tokens": 0,
+      "missing_evidence_ports": [],
+      "mtp_configured_ports": [],
+      "ports": [
+        8085,
+        8185,
+        8285,
+        8385,
+        8485
+      ],
+      "registry_roles": [
+        "ingest_long_context"
+      ],
+      "role": "ingest_long_context",
+      "status": "not_mtp_configured",
+      "token_acceptance_rate": null
+    },
+    {
+      "acceptance_line_count": 0,
+      "accepted_drafts": 0,
+      "accepted_tokens": 0,
+      "cumulative_line_count": 0,
+      "draft_acceptance_rate": null,
+      "evidence_ports": [],
+      "generated_drafts": 0,
+      "generated_tokens": 0,
+      "missing_evidence_ports": [],
+      "mtp_configured_ports": [],
+      "ports": [
+        8090
+      ],
+      "registry_roles": [],
+      "role": "port_8090",
+      "status": "not_mtp_configured",
+      "token_acceptance_rate": null
+    },
+    {
+      "acceptance_line_count": 0,
+      "accepted_drafts": 0,
+      "accepted_tokens": 0,
+      "cumulative_line_count": 0,
+      "draft_acceptance_rate": null,
+      "evidence_ports": [],
+      "generated_drafts": 0,
+      "generated_tokens": 0,
+      "missing_evidence_ports": [],
+      "mtp_configured_ports": [],
+      "ports": [
+        8091
+      ],
+      "registry_roles": [],
+      "role": "port_8091",
+      "status": "not_mtp_configured",
+      "token_acceptance_rate": null
+    },
+    {
+      "acceptance_line_count": 0,
+      "accepted_drafts": 0,
+      "accepted_tokens": 0,
+      "cumulative_line_count": 0,
+      "draft_acceptance_rate": null,
+      "evidence_ports": [],
+      "generated_drafts": 0,
+      "generated_tokens": 0,
+      "missing_evidence_ports": [],
+      "mtp_configured_ports": [],
+      "ports": [
+        8093
+      ],
+      "registry_roles": [],
+      "role": "port_8093",
+      "status": "not_mtp_configured",
+      "token_acceptance_rate": null
+    },
+    {
+      "acceptance_line_count": 0,
+      "accepted_drafts": 0,
+      "accepted_tokens": 0,
+      "cumulative_line_count": 0,
+      "draft_acceptance_rate": null,
+      "evidence_ports": [],
+      "generated_drafts": 0,
+      "generated_tokens": 0,
+      "missing_evidence_ports": [],
+      "mtp_configured_ports": [],
+      "ports": [
+        8094
+      ],
+      "registry_roles": [],
+      "role": "port_8094",
+      "status": "not_mtp_configured",
+      "token_acceptance_rate": null
+    },
+    {
+      "acceptance_line_count": 0,
+      "accepted_drafts": 0,
+      "accepted_tokens": 0,
+      "cumulative_line_count": 0,
+      "draft_acceptance_rate": null,
+      "evidence_ports": [],
+      "generated_drafts": 0,
+      "generated_tokens": 0,
+      "missing_evidence_ports": [],
+      "mtp_configured_ports": [],
+      "ports": [
+        8095
+      ],
+      "registry_roles": [],
+      "role": "port_8095",
+      "status": "not_mtp_configured",
+      "token_acceptance_rate": null
+    },
+    {
+      "acceptance_line_count": 0,
+      "accepted_drafts": 0,
+      "accepted_tokens": 0,
+      "cumulative_line_count": 0,
+      "draft_acceptance_rate": null,
+      "evidence_ports": [],
+      "generated_drafts": 0,
+      "generated_tokens": 0,
+      "missing_evidence_ports": [],
+      "mtp_configured_ports": [],
+      "ports": [
+        8087,
+        8187,
+        8287,
+        8387,
+        8487
+      ],
+      "registry_roles": [
+        "vision_escalation"
+      ],
+      "role": "vision_escalation",
+      "status": "not_mtp_configured",
+      "token_acceptance_rate": null
+    },
+    {
+      "acceptance_line_count": 375,
+      "accepted_drafts": 34823,
+      "accepted_tokens": 65690,
+      "cumulative_line_count": 375,
+      "draft_acceptance_rate": 0.8768444377297678,
+      "evidence_ports": [
+        8072,
+        8082,
+        8282,
+        8382
+      ],
+      "generated_drafts": 39714,
+      "generated_tokens": 79417,
+      "missing_evidence_ports": [
+        8182
+      ],
+      "mtp_configured_ports": [
+        8072,
+        8082,
+        8182,
+        8282,
+        8382
+      ],
+      "ports": [
+        8072,
+        8082,
+        8182,
+        8282,
+        8382
+      ],
+      "registry_roles": [
+        "explore",
+        "worker",
+        "worker_general"
+      ],
+      "role": "worker_general",
+      "status": "ok_partial_port_traffic",
+      "token_acceptance_rate": 0.8271528765881361
+    },
+    {
+      "acceptance_line_count": 0,
+      "accepted_drafts": 0,
+      "accepted_tokens": 0,
+      "cumulative_line_count": 0,
+      "draft_acceptance_rate": null,
+      "evidence_ports": [],
+      "generated_drafts": 0,
+      "generated_tokens": 0,
+      "missing_evidence_ports": [],
+      "mtp_configured_ports": [],
+      "ports": [
+        8086
+      ],
+      "registry_roles": [
+        "worker_vision"
+      ],
+      "role": "worker_vision",
+      "status": "not_mtp_configured",
+      "token_acceptance_rate": null
+    }
+  ],
+  "summary": {
+    "accepted_tokens": 98754,
+    "failed_mtp_roles": [],
+    "generated_tokens": 129173,
+    "mtp_configured_role_count": 3,
+    "port_count": 28,
+    "role_count": 12,
+    "roles_with_acceptance_evidence": [
+      "architect_general",
+      "frontdoor",
+      "worker_general"
+    ],
+    "token_acceptance_rate": 0.7645096111416473
+  }
+}
