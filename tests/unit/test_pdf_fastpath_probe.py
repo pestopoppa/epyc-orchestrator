@@ -38,7 +38,9 @@ def test_run_probe_summarizes_local_backends(tmp_path: Path) -> None:
     pdf_path.write_bytes(b"%PDF-1.4\n")
 
     original_executable_exists = probe._executable_exists
-    probe._executable_exists = lambda command: command == "pdftotext"
+    original_python_module_exists = probe._python_module_exists
+    probe._executable_exists = lambda command: command in {"pdftotext", "java"}
+    probe._python_module_exists = lambda module_name: module_name == "opendataloader_pdf"
     try:
         summary = probe.run_probe(
             [pdf_path],
@@ -47,6 +49,7 @@ def test_run_probe_summarizes_local_backends(tmp_path: Path) -> None:
         )
     finally:
         probe._executable_exists = original_executable_exists
+        probe._python_module_exists = original_python_module_exists
 
     assert summary.pdf_count == 1
     assert summary.success_count == 3
@@ -70,6 +73,23 @@ def test_pdftotext_missing_binary_records_missing_dependency(tmp_path: Path, mon
 
     assert summary.failure_count == 1
     assert summary.records[0].failure_reason == "missing_dependency"
+
+
+def test_opendataloader_missing_java_records_missing_dependency(tmp_path: Path, monkeypatch) -> None:
+    pdf_path = tmp_path / "sample.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+
+    monkeypatch.setattr(probe, "_python_module_exists", lambda module_name: True)
+    monkeypatch.setattr(probe, "_executable_exists", lambda command: command != "java")
+    summary = probe.run_probe(
+        [pdf_path],
+        backends=["opendataloader_structured"],
+        router=FakeRouter(),  # type: ignore[arg-type]
+    )
+
+    assert summary.failure_count == 1
+    assert summary.records[0].failure_reason == "missing_dependency"
+    assert summary.records[0].failure_detail == "java runtime not found"
 
 
 def test_missing_pdf_records_failure(tmp_path: Path) -> None:

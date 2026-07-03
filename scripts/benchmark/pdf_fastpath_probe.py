@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import importlib
+import importlib.util
 import json
 import os
 import re
@@ -336,6 +337,15 @@ def _run_backend(pdf_path: Path, backend: str, router: PDFRouter) -> ExtractionR
         )
 
     if backend == "opendataloader":
+        dependency_failure = _opendataloader_dependency_failure()
+        if dependency_failure is not None:
+            reason, detail = dependency_failure
+            return _failure_record(
+                backend=backend,
+                pdf_path=pdf_path,
+                reason=reason,
+                detail=detail,
+            )
         text, elapsed_ms = router._extract_with_opendataloader(pdf_path)
         reason = "missing_dependency" if elapsed_ms == 0.0 and not text else ""
         record = _record_from_text(
@@ -350,6 +360,15 @@ def _run_backend(pdf_path: Path, backend: str, router: PDFRouter) -> ExtractionR
         return record
 
     if backend == "opendataloader_structured":
+        dependency_failure = _opendataloader_dependency_failure()
+        if dependency_failure is not None:
+            reason, detail = dependency_failure
+            return _failure_record(
+                backend=backend,
+                pdf_path=pdf_path,
+                reason=reason,
+                detail=detail,
+            )
         text, structured, elapsed_ms = router._extract_with_opendataloader_structured(pdf_path)
         reason = "missing_dependency" if elapsed_ms == 0.0 and not text and structured is None else ""
         record = _record_from_text(
@@ -385,6 +404,18 @@ def _run_backend(pdf_path: Path, backend: str, router: PDFRouter) -> ExtractionR
         )
 
     raise ValueError(f"unsupported backend: {backend}")
+
+
+def _python_module_exists(module_name: str) -> bool:
+    return importlib.util.find_spec(module_name) is not None
+
+
+def _opendataloader_dependency_failure() -> tuple[str, str] | None:
+    if not _python_module_exists("opendataloader_pdf"):
+        return "missing_dependency", "opendataloader_pdf is not importable"
+    if not _executable_exists("java"):
+        return "missing_dependency", "java runtime not found"
+    return None
 
 
 def _executable_exists(command: str) -> bool:

@@ -237,13 +237,27 @@ class PDFRouter:
         Returns:
             (markdown_text, latency_ms)
         """
+        import tempfile
+
         start = time.perf_counter()
 
         try:
             from opendataloader_pdf.wrapper import convert as odl_convert
 
-            result = odl_convert(str(pdf_path), format="markdown")
-            latency_ms = (time.perf_counter() - start) * 1000
+            with tempfile.TemporaryDirectory(prefix="odl_md_") as tmp:
+                result = odl_convert(
+                    str(pdf_path),
+                    output_dir=tmp,
+                    format="markdown",
+                    quiet=True,
+                )
+                latency_ms = (time.perf_counter() - start) * 1000
+
+                if isinstance(result, str) and result.strip():
+                    return result, latency_ms
+
+                md_path = Path(tmp) / f"{pdf_path.stem}.md"
+                result = md_path.read_text(encoding="utf-8") if md_path.exists() else ""
 
             if not result or not result.strip():
                 logger.warning("OpenDataLoader returned empty output for %s", pdf_path.name)

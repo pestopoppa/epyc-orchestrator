@@ -1,0 +1,130 @@
+{
+  "backend_count": 4,
+  "backend_summaries": {
+    "liteparse": {
+      "attempts": 1,
+      "backend": "liteparse",
+      "failure_reasons": {},
+      "failures": 0,
+      "median_char_count": 1963.0,
+      "median_latency_ms": 11.069860993302427,
+      "median_quality_score": 0.9352569901446179,
+      "successes": 1,
+      "total_table_like_lines": 2
+    },
+    "opendataloader": {
+      "attempts": 1,
+      "backend": "opendataloader",
+      "failure_reasons": {},
+      "failures": 0,
+      "median_char_count": 953.0,
+      "median_latency_ms": 238.1284729926847,
+      "median_quality_score": 0.9870597833093047,
+      "successes": 1,
+      "total_table_like_lines": 34
+    },
+    "opendataloader_structured": {
+      "attempts": 1,
+      "backend": "opendataloader_structured",
+      "failure_reasons": {},
+      "failures": 0,
+      "median_char_count": 953.0,
+      "median_latency_ms": 303.43716900097206,
+      "median_quality_score": 0.9870597833093047,
+      "successes": 1,
+      "total_table_like_lines": 34
+    },
+    "pdftotext": {
+      "attempts": 1,
+      "backend": "pdftotext",
+      "failure_reasons": {},
+      "failures": 0,
+      "median_char_count": 1801.0,
+      "median_latency_ms": 9.768857999006286,
+      "median_quality_score": 0.8222334032245147,
+      "successes": 1,
+      "total_table_like_lines": 0
+    }
+  },
+  "failure_count": 0,
+  "pdf_count": 1,
+  "records": [
+    {
+      "backend": "pdftotext",
+      "bbox_count": null,
+      "char_count": 1801,
+      "elapsed_ms": 9.768857999006286,
+      "failure_detail": "",
+      "failure_reason": "",
+      "line_count": 63,
+      "needs_ocr": true,
+      "non_empty_line_count": 21,
+      "page_image_count": null,
+      "pdf_path": "/mnt/raid0/llm/llama.cpp/docs/development/llama-star/idea-arch.pdf",
+      "quality_score": 0.8222334032245147,
+      "structured_counts": {},
+      "success": true,
+      "table_like_line_count": 0,
+      "text_sha256": "d864d56cb79df957e3b52f3d1e7ebbb1ce6b7d842925295d891921a3ce24ca91"
+    },
+    {
+      "backend": "opendataloader",
+      "bbox_count": null,
+      "char_count": 953,
+      "elapsed_ms": 238.1284729926847,
+      "failure_detail": "",
+      "failure_reason": "",
+      "line_count": 96,
+      "needs_ocr": false,
+      "non_empty_line_count": 53,
+      "page_image_count": null,
+      "pdf_path": "/mnt/raid0/llm/llama.cpp/docs/development/llama-star/idea-arch.pdf",
+      "quality_score": 0.9870597833093047,
+      "structured_counts": {},
+      "success": true,
+      "table_like_line_count": 34,
+      "text_sha256": "c4bea1305073a68f3d3d26cc8b6eb8eb33d695796d0b9dd09e489ab8f31fee0d"
+    },
+    {
+      "backend": "opendataloader_structured",
+      "bbox_count": null,
+      "char_count": 953,
+      "elapsed_ms": 303.43716900097206,
+      "failure_detail": "",
+      "failure_reason": "",
+      "line_count": 96,
+      "needs_ocr": false,
+      "non_empty_line_count": 53,
+      "page_image_count": null,
+      "pdf_path": "/mnt/raid0/llm/llama.cpp/docs/development/llama-star/idea-arch.pdf",
+      "quality_score": 0.9870597833093047,
+      "structured_counts": {
+        "figures": 0,
+        "headings": 0,
+        "tables": 0
+      },
+      "success": true,
+      "table_like_line_count": 34,
+      "text_sha256": "c4bea1305073a68f3d3d26cc8b6eb8eb33d695796d0b9dd09e489ab8f31fee0d"
+    },
+    {
+      "backend": "liteparse",
+      "bbox_count": 0,
+      "char_count": 1963,
+      "elapsed_ms": 11.069860993302427,
+      "failure_detail": "",
+      "failure_reason": "",
+      "line_count": 68,
+      "needs_ocr": false,
+      "non_empty_line_count": 40,
+      "page_image_count": 0,
+      "pdf_path": "/mnt/raid0/llm/llama.cpp/docs/development/llama-star/idea-arch.pdf",
+      "quality_score": 0.9352569901446179,
+      "structured_counts": {},
+      "success": true,
+      "table_like_line_count": 2,
+      "text_sha256": "bdb119e67097f37b675a507851f9d17de4b02a587ae74c1cc8dac20262e9dabb"
+    }
+  ],
+  "success_count": 4
+}

@@ -338,6 +338,32 @@ class TestPDFRouterExtraction:
         assert result.text == "Intro\nBody"
         assert result.structured_data is structured
 
+    def test_extract_with_opendataloader_reads_temp_markdown(self, tmp_path):
+        pdf_path = tmp_path / "structured.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\n%EOF\n")
+        sibling_md = tmp_path / "structured.md"
+
+        router = PDFRouter()
+        with patch.dict("sys.modules", {"opendataloader_pdf.wrapper": MagicMock()}):
+            from opendataloader_pdf.wrapper import convert as mock_convert
+
+            def write_markdown(path: str, **kwargs):
+                output_dir = Path(kwargs["output_dir"])
+                (output_dir / "structured.md").write_text("Intro\nBody", encoding="utf-8")
+                return None
+
+            mock_convert.side_effect = write_markdown
+            text, latency = router._extract_with_opendataloader(pdf_path)
+
+        assert text == "Intro\nBody"
+        assert latency >= 0
+        assert not sibling_md.exists()
+        mock_convert.assert_called_once()
+        _, kwargs = mock_convert.call_args
+        assert kwargs["format"] == "markdown"
+        assert kwargs["quiet"] is True
+        assert Path(kwargs["output_dir"]).name.startswith("odl_md_")
+
     def test_extract_with_opendataloader_hybrid_passes_client_options(
         self,
         tmp_path,
