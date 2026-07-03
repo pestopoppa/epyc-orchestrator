@@ -544,6 +544,7 @@ def xmas_section(
     )
     details["latest_ab_policy"] = ab_summary.get("xmas_policy") if ab_summary else None
     details["required_ab_policy"] = REQUIRED_XMAS_AB_POLICY
+    latest_ab_ready = False
     if not ab_summary:
         blockers.append("no X-MAS held-out A/B summary artifact was found")
     else:
@@ -558,6 +559,11 @@ def xmas_section(
                 "latest X-MAS held-out A/B decision is "
                 f"{ab_summary.get('decision_status') or '<missing>'}"
             )
+        latest_ab_ready = (
+            ab_summary.get("xmas_policy") == REQUIRED_XMAS_AB_POLICY
+            and ab_summary.get("decision_status") == "promote_candidate"
+        )
+    details["latest_ab_ready"] = latest_ab_ready
 
     return GateSection(
         key="xmas_production_path",
@@ -981,7 +987,50 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
         latest_policy = xmas.details.get("latest_ab_policy")
         latest_decision = xmas.details.get("latest_ab_decision_status")
         latest_results_path = xmas.details.get("latest_ab_results_path")
-        if latest_policy == REQUIRED_XMAS_AB_POLICY and latest_decision not in (
+        latest_summary_path = xmas.details.get("latest_ab_summary_path")
+        if xmas.details.get("latest_ab_ready"):
+            deployment_blockers = [
+                blocker
+                for blocker in xmas.blockers
+                if not blocker.startswith("xmas_routing.mode is ")
+            ]
+            actions.append(
+                {
+                    "key": "decide_xmas_enforce_enablement",
+                    "priority": "P0",
+                    "status": "blocked" if deployment_blockers else "ready",
+                    "reason": (
+                        "The repaired X-MAS held-out A/B passed; the remaining "
+                        "gate is an explicit production enablement, reload, and "
+                        "attestation decision."
+                    ),
+                    "blocked_by": deployment_blockers,
+                    "evidence_blockers": xmas.blockers,
+                    "latest_ab_summary_path": latest_summary_path,
+                    "latest_ab_results_path": latest_results_path,
+                    "latest_ab_decision_status": latest_decision,
+                    "latest_ab_score_delta": xmas.details.get(
+                        "latest_ab_score_delta"
+                    ),
+                    "latest_ab_latency_ratio": xmas.details.get(
+                        "latest_ab_latency_ratio"
+                    ),
+                    "required_policy": REQUIRED_XMAS_AB_POLICY,
+                    "follow_up": (
+                        "If accepted, set xmas_routing.mode=enforce through the "
+                        "normal config/reload path and rerun runtime attestation; "
+                        "do not rerun the held-out A/B unless the policy/table "
+                        "changes."
+                    ),
+                    "command": (
+                        "cd /mnt/raid0/llm/epyc-orchestrator && "
+                        "uv run python scripts/benchmark/xmas_live_ab.py "
+                        f"--summarize-results {latest_results_path or '<results.jsonl>'} "
+                        "--output /tmp/xmas-constrained-policy-diagnostics"
+                    ),
+                }
+            )
+        elif latest_policy == REQUIRED_XMAS_AB_POLICY and latest_decision not in (
             None,
             "promote_candidate",
         ):
@@ -1016,30 +1065,35 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
                 }
             )
             return actions
-        quiet_window_blockers = list(xmas.details.get("quiet_window_blockers") or [])
-        actions.append(
-            {
-                "key": "run_xmas_constrained_policy_ab",
-                "priority": "P0",
-                "status": "ready" if xmas.details.get("quiet_window_ready") else "blocked",
-                "reason": (
-                    "X-MAS enforce needs a fresh held-out A/B carrying "
-                    f"{REQUIRED_XMAS_AB_POLICY} and a promote_candidate verdict."
-                ),
-                "requires": "attested quiet window; runner preflight refuses AutoPilot and competing benchmark coordinators",
-                "blocked_by": quiet_window_blockers,
-                "evidence_blockers": xmas.blockers,
-                "prompt_manifest": DEFAULT_XMAS_HELDOUT_PROMPTS_ARG,
-                "required_policy": REQUIRED_XMAS_AB_POLICY,
-                "command": (
-                    "cd /mnt/raid0/llm/epyc-orchestrator && "
-                    "uv run python scripts/benchmark/xmas_live_ab.py "
-                    f"--prompts {DEFAULT_XMAS_HELDOUT_PROMPTS_ARG} "
-                    "--reps 2 --host-quiet-confirmed "
-                    f"--output {DEFAULT_XMAS_CONSTRAINED_OUTPUT_ARG}"
-                ),
-            }
-        )
+        else:
+            quiet_window_blockers = list(
+                xmas.details.get("quiet_window_blockers") or []
+            )
+            actions.append(
+                {
+                    "key": "run_xmas_constrained_policy_ab",
+                    "priority": "P0",
+                    "status": (
+                        "ready" if xmas.details.get("quiet_window_ready") else "blocked"
+                    ),
+                    "reason": (
+                        "X-MAS enforce needs a fresh held-out A/B carrying "
+                        f"{REQUIRED_XMAS_AB_POLICY} and a promote_candidate verdict."
+                    ),
+                    "requires": "attested quiet window; runner preflight refuses AutoPilot and competing benchmark coordinators",
+                    "blocked_by": quiet_window_blockers,
+                    "evidence_blockers": xmas.blockers,
+                    "prompt_manifest": DEFAULT_XMAS_HELDOUT_PROMPTS_ARG,
+                    "required_policy": REQUIRED_XMAS_AB_POLICY,
+                    "command": (
+                        "cd /mnt/raid0/llm/epyc-orchestrator && "
+                        "uv run python scripts/benchmark/xmas_live_ab.py "
+                        f"--prompts {DEFAULT_XMAS_HELDOUT_PROMPTS_ARG} "
+                        "--reps 2 --host-quiet-confirmed "
+                        f"--output {DEFAULT_XMAS_CONSTRAINED_OUTPUT_ARG}"
+                    ),
+                }
+            )
 
     a9 = by_key.get("a9_pairwise_collection")
     if a9 is not None:

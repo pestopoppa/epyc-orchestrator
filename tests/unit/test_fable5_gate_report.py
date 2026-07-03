@@ -555,6 +555,46 @@ xmas_routing:
     assert section.details["latest_ab_policy"] == (
         "incumbent_constrained_cheapfirst_v2"
     )
+    assert section.details["latest_ab_ready"] is True
+
+
+def test_xmas_section_promote_candidate_off_mode_waits_for_enablement(
+    monkeypatch, tmp_path: Path
+) -> None:
+    config = tmp_path / "classifier_config.yaml"
+    config.write_text(
+        """
+xmas_routing:
+  mode: "off"
+  winner_table_path: "xmas_winner_table.yaml"
+  require_complete_table: true
+""",
+        encoding="utf-8",
+    )
+    table = tmp_path / "xmas_winner_table.yaml"
+    table.write_text("placeholder: true\n", encoding="utf-8")
+    ab_root = tmp_path / "ab"
+    run = ab_root / "run"
+    run.mkdir(parents=True)
+    (run / "summary.json").write_text(
+        '{"decision": {"status": "promote_candidate", "blockers": []}, '
+        '"xmas_policy": "incumbent_constrained_cheapfirst_v2"}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(report_mod, "validate_xmas_config", lambda path: [])
+    monkeypatch.setattr(report_mod, "validate_xmas_table", lambda path, **kwargs: [])
+
+    section = report_mod.xmas_section(
+        config_path=config,
+        candidate_table_path=table,
+        ab_root=ab_root,
+        quiet_window={"ready": True, "blockers": []},
+    )
+
+    assert section.status == "blocked"
+    assert section.blockers == ["xmas_routing.mode is off; enforce remains default-off"]
+    assert section.details["latest_ab_ready"] is True
+    assert section.details["latest_ab_decision_status"] == "promote_candidate"
 
 
 def test_xmas_section_blocks_promote_candidate_from_legacy_policy(
@@ -640,6 +680,38 @@ def test_xmas_next_action_ready_when_only_evidence_is_missing() -> None:
             ),
         }
     ]
+
+
+def test_xmas_next_action_enablement_when_repaired_ab_passed() -> None:
+    section = report_mod.GateSection(
+        key="xmas_production_path",
+        status="blocked",
+        summary="blocked",
+        blockers=["xmas_routing.mode is off; enforce remains default-off"],
+        details={
+            "latest_ab_ready": True,
+            "latest_ab_policy": "incumbent_constrained_cheapfirst_v2",
+            "latest_ab_decision_status": "promote_candidate",
+            "latest_ab_summary_path": "benchmarks/results/runs/xmas_live_ab/run/summary.json",
+            "latest_ab_results_path": "benchmarks/results/runs/xmas_live_ab/run/results.jsonl",
+            "latest_ab_score_delta": 0.1,
+            "latest_ab_latency_ratio": 0.938,
+        },
+    )
+
+    actions = report_mod.build_next_actions([section])
+
+    assert len(actions) == 1
+    action = actions[0]
+    assert action["key"] == "decide_xmas_enforce_enablement"
+    assert action["status"] == "ready"
+    assert action["blocked_by"] == []
+    assert action["evidence_blockers"] == [
+        "xmas_routing.mode is off; enforce remains default-off"
+    ]
+    assert action["latest_ab_decision_status"] == "promote_candidate"
+    assert action["required_policy"] == "incumbent_constrained_cheapfirst_v2"
+    assert "--summarize-results benchmarks/results/runs/xmas_live_ab/run/results.jsonl" in action["command"]
 
 
 def test_a9_next_action_ready_when_collection_window_clear() -> None:
