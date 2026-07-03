@@ -298,6 +298,20 @@ def test_learning_exclusion_seq_confirmed_includes_normally():
     assert by == "", "a confirmed improvement is learned from, not excluded"
 
 
+def test_learning_exclusion_seq_refuted_is_non_benign_quarantine():
+    assert "seq_refuted" not in BENIGN_LEARNING_EXCLUSIONS
+    by, reason, override = classify_learning_exclusion(_Verdict(["seq_refuted"]), _Eval())
+    assert by == "seq_refuted"
+    assert override == "seq_refuted"
+    assert "refuted" in reason
+    assert "strategy distillation" in reason
+
+
+def test_learning_exclusion_seq_refuted_preserves_primary_failed_verdict():
+    by, _, _ = classify_learning_exclusion(_Verdict(["quality_floor", "seq_refuted"], passed=False), _Eval())
+    assert by == ""
+
+
 def test_learning_exclusion_seq_stale_reference_is_benign():
     assert "seq_stale_reference" in BENIGN_LEARNING_EXCLUSIONS
     by, reason, override = classify_learning_exclusion(_Verdict(["seq_stale_reference"]), _Eval())
