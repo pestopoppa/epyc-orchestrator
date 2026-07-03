@@ -142,3 +142,46 @@ def test_build_report_requires_decision_grade_arm_counts(tmp_path: Path) -> None
     assert summary["canary_arm_sample_count_ready"] is False
     assert summary["canary_arm_balance_ready"] is False
     assert summary["canary_decision_ready"] is False
+
+
+def test_build_report_does_not_count_non_canary_role_shadow_as_arm(tmp_path: Path) -> None:
+    _write_jsonl(
+        tmp_path / "2026-04-07.jsonl",
+        [
+            _routing_row(
+                "2026-04-07T00:00:00Z",
+                band="high",
+                mode="enforce",
+                routing=["frontdoor"],
+            ),
+            _routing_row(
+                "2026-04-07T00:01:00Z",
+                band="high",
+                mode="shadow",
+                routing=["frontdoor"],
+            ),
+            _routing_row(
+                "2026-04-07T00:02:00Z",
+                band="high",
+                mode="shadow",
+                routing=["worker_general"],
+            ),
+        ],
+    )
+
+    summary = report_mod.build_report(
+        tmp_path,
+        canary_start="2026-04-06",
+        decision_gate=3,
+        min_arm_samples=1,
+    )
+
+    assert summary["high_risk_rows_since_canary_start"] == 3
+    assert summary["canary_roles"] == ["frontdoor"]
+    assert summary["canary_role_high_risk_rows_since_canary_start"] == 2
+    assert summary["non_canary_role_high_risk_rows_since_canary_start"] == 1
+    assert summary["evaluable_canary_arm_high_risk_rows"] == 2
+    assert summary["canary_arm_counts_since_canary_start"] == {
+        "enforce_high_risk": 1,
+        "shadow_high_risk": 1,
+    }
