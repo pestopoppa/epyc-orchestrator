@@ -261,7 +261,7 @@ xmas_routing:
     assert "--expect-journal-max-trial-id 895" in seed_action["command"]
     assert seed_action["follow_up"] == (
         "cd /mnt/raid0/llm/epyc-orchestrator && "
-        "python3 scripts/autopilot/restart_readiness_report.py "
+        "uv run python scripts/autopilot/restart_readiness_report.py "
         "--json --strict --require-seq-cutover --require-w6-audit"
     )
     assert report["next_actions"][1]["status"] == "active"
@@ -290,7 +290,7 @@ xmas_routing:
     assert "restart_readiness_report.py" in report["next_actions"][1]["command"]
     assert "--require-seq-cutover --require-w6-audit" in report["next_actions"][1]["command"]
     assert report["next_actions"][1]["follow_up"] == (
-        "python3 scripts/autopilot/fable5_gate_report.py --json --strict"
+        "uv run python scripts/autopilot/fable5_gate_report.py --json --strict"
     )
     ds_e1 = [
         section for section in report["sections"] if section["key"] == "ds_e1_dynamic_stack"
@@ -310,7 +310,7 @@ xmas_routing:
     assert "$(date -u +%Y%m%dT%H%M%SZ)" in report["next_actions"][2]["follow_up"]
     assert "ds_e1_evidence_packet_20260620.md" not in report["next_actions"][2]["follow_up"]
     assert report["next_actions"][3]["command"] == (
-        "python3 scripts/analysis/ri10_canary_sample_report.py"
+        "uv run python scripts/analysis/ri10_canary_sample_report.py"
     )
     xmas_action = report["next_actions"][4]
     assert xmas_action["status"] == "blocked"

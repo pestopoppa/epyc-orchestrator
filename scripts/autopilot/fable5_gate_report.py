@@ -66,10 +66,12 @@ XMAS_QUIET_WINDOW_PROCESS_PATTERNS: tuple[tuple[str, str], ...] = (
 )
 STRICT_RESTART_READINESS_COMMAND = (
     "cd /mnt/raid0/llm/epyc-orchestrator && "
-    "python3 scripts/autopilot/restart_readiness_report.py "
+    "uv run python scripts/autopilot/restart_readiness_report.py "
     "--json --strict --require-seq-cutover --require-w6-audit"
 )
-STRICT_FABLE5_GATE_COMMAND = "python3 scripts/autopilot/fable5_gate_report.py --json --strict"
+STRICT_FABLE5_GATE_COMMAND = (
+    "uv run python scripts/autopilot/fable5_gate_report.py --json --strict"
+)
 REQUIRED_XMAS_AB_POLICY = "incumbent_constrained_cheapfirst_v2"
 
 
@@ -723,7 +725,7 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
                 "status": "blocked",
                 "reason": "AutoPilot phase health is not ready; do not trust evidence accrual until recovered.",
                 "blocked_by": phase.blockers,
-                "command": "python3 scripts/autopilot/phase_health_report.py --json",
+                "command": "uv run python scripts/autopilot/phase_health_report.py --json",
             }
         )
         return actions
@@ -734,7 +736,7 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
         if details.get("baseline_seed_append_required"):
             command_parts = [
                 "cd /mnt/raid0/llm/epyc-orchestrator &&",
-                "python3 scripts/autopilot/baseline_authority_seed.py",
+                "uv run python scripts/autopilot/baseline_authority_seed.py",
                 "--append",
             ]
             expected_trial_counter = details.get(
@@ -899,7 +901,7 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
                     ),
                     "follow_up": (
                         "cd /mnt/raid0/llm/epyc-orchestrator && "
-                        "python3 scripts/server/dynamic_stack_evidence_packet.py "
+                        "uv run python scripts/server/dynamic_stack_evidence_packet.py "
                         "--output orchestration/reports/"
                         "ds_e1_evidence_packet_$(date -u +%Y%m%dT%H%M%SZ).md "
                         "--strict"
@@ -913,7 +915,7 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
                     "priority": "P0",
                     "status": "active",
                     "reason": "RI-10 has raw high-risk samples, but arm-attributed canary telemetry is not yet decision-grade.",
-                    "command": "python3 scripts/analysis/ri10_canary_sample_report.py",
+                    "command": "uv run python scripts/analysis/ri10_canary_sample_report.py",
                 }
             )
 
