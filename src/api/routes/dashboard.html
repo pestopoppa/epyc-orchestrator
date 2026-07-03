@@ -690,6 +690,12 @@ details.section-accordion > *:not(summary) { margin-top: 14px; }
 .pareto-plot .point-frontier { fill: var(--accent); }
 .pareto-plot .point-production { fill: var(--good); stroke: var(--text-strong); stroke-width: 1.5; }
 .pareto-plot .frontier-line { stroke: var(--accent); stroke-width: 1.5; fill: none; opacity: 0.5; stroke-dasharray: 3,3; }
+.pareto-scope-btn {
+    background: transparent; border: 0; color: var(--muted);
+    font-size: 10px; font-family: var(--font-mono);
+    padding: 3px 9px; cursor: pointer; text-transform: uppercase; letter-spacing: .04em;
+}
+.pareto-scope-btn.active { background: var(--accent-soft); color: var(--accent); }
 
 /* Insight graph */
 .insight-graph-shell {
@@ -965,6 +971,13 @@ body.insight-fullscreen-open { overflow: hidden; }
       <details class="section-accordion" style="margin-top:14px" open>
         <summary>GEPA + Pareto frontier <span style="color:var(--dim);font-weight:400;text-transform:none;letter-spacing:0;margin-left:8px;font-size:10px" id="pareto-summary"></span></summary>
         <div id="pareto-container">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+            <div id="pareto-scope-toggle" style="display:inline-flex;border:1px solid var(--border-strong);border-radius:6px;overflow:hidden">
+              <button type="button" class="pareto-scope-btn" data-scope="all_eras" onclick="setParetoScope('all_eras')">all eras</button>
+              <button type="button" class="pareto-scope-btn" data-scope="current" onclick="setParetoScope('current')">current era</button>
+            </div>
+            <span id="pareto-era-note" style="color:var(--dim);font-size:10px"></span>
+          </div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
             <div>
               <h2 style="margin-bottom:8px">Pareto frontier — quality × speed</h2>
@@ -3712,10 +3725,43 @@ async function updateGepa() {
 // Polls /dashboard/api/pareto every ~10s. Idempotent — full SVG repaint
 // each tick (cheap; the dataset is bounded to ~600 points).
 
+// Panel scope: 'all_eras' shows every journaled trial across instrument eras
+// (era-labeled, pre-E2 speeds ×0.5 deinflated server-side, per-era underlay
+// clouds); 'current' is the operational current-era view (decision-grade).
+let paretoScope = (() => {
+    try { return localStorage.getItem('paretoScope') || 'all_eras'; }
+    catch (e) { return 'all_eras'; }
+})();
+function setParetoScope(s) {
+    paretoScope = s;
+    try { localStorage.setItem('paretoScope', s); } catch (e) {}
+    syncParetoScopeButtons();
+    updatePareto();
+}
+function syncParetoScopeButtons() {
+    document.querySelectorAll('#pareto-scope-toggle .pareto-scope-btn').forEach(b =>
+        b.classList.toggle('active', b.dataset.scope === paretoScope));
+}
+
 async function updatePareto() {
     try {
-        const r = await fetch('/dashboard/api/pareto');
+        syncParetoScopeButtons();
+        // All-era view lifts the dominated-point cap: the whole point is seeing
+        // the full historical cloud, and the journal is bounded (~1k rows).
+        const url = '/dashboard/api/pareto?scope=' + encodeURIComponent(paretoScope)
+            + (paretoScope === 'all_eras' ? '&max_dominated=5000' : '');
+        const r = await fetch(url);
         const d = await r.json();
+        const noteEl = document.getElementById('pareto-era-note');
+        if (noteEl) {
+            if (d.available && Array.isArray(d.eras) && d.eras.length) {
+                noteEl.textContent = 'era clouds from instrument_eras.yaml · pre-E2 speeds ×0.5 (double-count fix) · cross-era view is comparative, not decision-grade';
+            } else if (d.available && d.era_registry_error) {
+                noteEl.textContent = '⚠ era registry: ' + d.era_registry_error;
+            } else {
+                noteEl.textContent = '';
+            }
+        }
         const sumEl = document.getElementById('pareto-summary');
         if (sumEl) {
             if (d.available) {
@@ -3724,6 +3770,9 @@ async function updatePareto() {
                 const tierKeys = Object.keys(d.frontiers_by_tier || {}).sort((a, b) => Number(a) - Number(b));
                 const tierText = tierKeys.length ? ` · tiers ${tierKeys.map(t => `T${t}`).join('/')}` : '';
                 let txt = `${canonicalTier} ${d.totals.frontier_size} frontier · ${d.totals.all_entries} trials · ${source}${tierText}`;
+                if (Array.isArray(d.eras) && d.eras.length) {
+                    txt += ` · ${d.eras.filter(e => e.n_points > 0).length} eras`;
+                }
                 // Surface why trials may be missing rather than letting the plot
                 // look silently complete (the recurring "frozen at ~700" confusion).
                 if (d.stale_state_warning) {
@@ -3788,13 +3837,66 @@ function paretoMarker(tier, cx, cy, r, attrs, title) {
     }
     return `${open} ${attrs}>${titleEl}${close}`;
 }
-function paretoTierLegend(tierKeys, x, y) {
+function paretoTierLegend(tierKeys, x, y, neutral) {
     return (tierKeys || []).map((t, i) => {
         const cy = y - i * 14;
         const audit = paretoIsAuditTier(t);
-        const glyph = paretoMarker(t, x + 4, cy - 2, 4, `fill="${paretoTierFill(t)}"${audit ? ' opacity="0.6"' : ''}`, '');
+        const fill = neutral && !audit ? '#94a3b8' : paretoTierFill(t);
+        const glyph = paretoMarker(t, x + 4, cy - 2, 4, `fill="${fill}"${audit ? ' opacity="0.6"' : ''}`, '');
         const label = audit ? `T${Number(t)} audit` : `T${t}`;
         return glyph + `<text class="axis-label" x="${x + 14}" y="${(cy + 1).toFixed(1)}" fill="#94a3b8">${label}</text>`;
+    }).join('');
+}
+
+// ── Instrument-era view helpers ──────────────────────────────────────
+// Chronological RAINBOW ramp per era region: oldest = red, stepping through
+// the spectrum toward blue for the newest era (blue/magenta steps reserved
+// for future eras), so time reads across the spectrum at a glance. Alpha
+// additionally ramps oldest→newest so the current era pops. Active steps
+// CVD-validated on the dark surface (worst adjacent pair ΔE 21.5); the
+// blue↔magenta reserve pair sits in the 8–12 floor band, covered by the
+// secondary encodings (alpha ramp, hull/band direct labels, era legend).
+// Tier remains encoded by marker SHAPE (triangle=T0, circle=T1, square=T2),
+// so color is free to carry the era.
+const PARETO_ERA_COLORS = ['#ef4444', '#fb923c', '#facc15', '#4ade80', '#22d3ee', '#60a5fa', '#e879f9'];
+function paretoEraColor(idx) {
+    const i = Number(idx) || 0;
+    return PARETO_ERA_COLORS[((i % PARETO_ERA_COLORS.length) + PARETO_ERA_COLORS.length) % PARETO_ERA_COLORS.length];
+}
+function paretoEraAlpha(idx, n) {
+    if (!(n > 1)) return 1;
+    const i = Math.max(0, Math.min(n - 1, Number(idx) || 0));
+    return 0.45 + 0.55 * (i / (n - 1));
+}
+// Monotone-chain convex hull over [x, y] pixel pairs — the per-era
+// "underimpressed cloud" outline. Returns <3 points when degenerate.
+function convexHull2D(pts) {
+    const p = pts.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    if (p.length < 3) return p;
+    const cross = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+    const lower = [];
+    for (const pt of p) {
+        while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], pt) <= 0) lower.pop();
+        lower.push(pt);
+    }
+    const upper = [];
+    for (let i = p.length - 1; i >= 0; i--) {
+        const pt = p[i];
+        while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], pt) <= 0) upper.pop();
+        upper.push(pt);
+    }
+    lower.pop(); upper.pop();
+    return lower.concat(upper);
+}
+function paretoEraLegend(eras, x, y) {
+    const shown = (eras || []).filter(e => e.n_points > 0);
+    const n = (eras || []).length;
+    return shown.map((e, i) => {
+        const cy = y + i * 12;
+        const color = paretoEraColor(e.index);
+        const a = paretoEraAlpha(e.index, n);
+        return `<rect x="${x}" y="${cy - 7}" width="7" height="7" rx="1.5" fill="${color}" opacity="${a.toFixed(2)}"/>`
+            + `<text class="axis-label" x="${x + 11}" y="${cy}" fill="#94a3b8">${e.id}</text>`;
     }).join('');
 }
 // Build the [tier, points] series list, falling back to the canonical projection if the
@@ -3843,10 +3945,20 @@ function paretoEnvelope2D(points) {
 function renderParetoScatter(d) {
     // Quality (x) × Speed (y) scatter. Dominated points dim; each TIER's frontier is its
     // own colored series + line; production-best ringed green. Axis labels + tick gridlines.
+    // In all-era scope (d.eras present) color carries the ERA instead of the tier
+    // (tier stays on marker shape) and each era gets an underimpressed hull cloud.
     const svg = document.getElementById('pareto-plot-qs');
     if (!svg) return;
+    const eras = Array.isArray(d.eras) ? d.eras : [];
+    const eraMode = eras.length > 0;
+    const eraCount = eras.length;
+    const eraFillOf = p => paretoEraColor(p.era_index ?? (eraCount - 1));
+    const eraAlphaOf = p => paretoEraAlpha(p.era_index ?? (eraCount - 1), eraCount);
+    const eraTip = p => (eraMode && p.era ? ` · ${p.era}` : '') + (p.speed_deinflated ? ' · sp×0.5' : '');
     const VB = { w: 400, h: 280 };
-    const PAD = { l: 40, r: 14, t: 14, b: 32 };
+    // Left/bottom pads sized so tick numbers and the rotated axis TITLE get
+    // their own lanes instead of fusing (title ~10px lane, ticks ~14px lane).
+    const PAD = { l: 48, r: 14, t: 14, b: 40 };
     const plotW = VB.w - PAD.l - PAD.r;
     const plotH = VB.h - PAD.t - PAD.b;
 
@@ -3888,14 +4000,40 @@ function renderParetoScatter(d) {
     for (let i = 0; i <= 4; i++) {
         const xVal = xLo + (i / 4) * (xHi - xLo);
         const xPx = PAD.l + (i / 4) * plotW;
-        parts.push(`<text class="axis-label" x="${xPx}" y="${VB.h - 12}" text-anchor="middle">${xVal.toFixed(2)}</text>`);
+        parts.push(`<text class="axis-label" x="${xPx}" y="${PAD.t + plotH + 13}" text-anchor="middle">${xVal.toFixed(2)}</text>`);
         const yVal = yLo + (i / 4) * (yHi - yLo);
         const yPx = PAD.t + plotH - (i / 4) * plotH;
         parts.push(`<text class="axis-label" x="${PAD.l - 6}" y="${yPx + 3}" text-anchor="end">${yVal.toFixed(1)}</text>`);
     }
-    // Axis titles
-    parts.push(`<text class="axis-label" x="${PAD.l + plotW / 2}" y="${VB.h - 2}" text-anchor="middle" font-size="10" fill="#94a3b8">quality →</text>`);
-    parts.push(`<text class="axis-label" x="10" y="${PAD.t + plotH / 2}" text-anchor="middle" font-size="10" fill="#94a3b8" transform="rotate(-90 10 ${PAD.t + plotH / 2})">speed (t/s) →</text>`);
+    // Axis titles — own lane below/left of the tick numbers, never fused.
+    parts.push(`<text class="axis-label" x="${PAD.l + plotW / 2}" y="${VB.h - 4}" text-anchor="middle" font-size="10" fill="#94a3b8">quality →</text>`);
+    parts.push(`<text class="axis-label" x="9" y="${PAD.t + plotH / 2}" text-anchor="middle" font-size="10" fill="#94a3b8" transform="rotate(-90 9 ${PAD.t + plotH / 2})">speed (t/s) →</text>`);
+
+    // Era clouds FIRST so every mark paints on top of them: per era, the convex
+    // hull of its frontier-tier points (T0 audit excluded — it keeps its own
+    // slate audit styling) filled at low alpha. The fat round-join stroke pads
+    // the hull a few px so it reads as a soft region, not a taut polygon.
+    if (eraMode) {
+        const byEra = {};
+        (tierFront.length ? tierFront : (d.frontier || [])).concat(d.dominated || []).forEach(p => {
+            if (p.era_index == null) return;
+            (byEra[p.era_index] = byEra[p.era_index] || []).push(p);
+        });
+        Object.keys(byEra).map(Number).sort((a, b) => a - b).forEach(k => {
+            const color = paretoEraColor(k);
+            const eraId = (eras[k] && eras[k].id) || `era ${k}`;
+            const px = byEra[k].map(p => [sx(p.objectives[0]), sy(p.objectives[1])]);
+            const hull = convexHull2D(px);
+            if (hull.length < 3) {
+                // 1-2 points can't enclose a region — a soft halo marks the era spot.
+                px.forEach(pt => parts.push(
+                    `<circle cx="${pt[0].toFixed(1)}" cy="${pt[1].toFixed(1)}" r="9" fill="${color}" opacity="0.10"><title>${eraId}</title></circle>`));
+                return;
+            }
+            const path = hull.map((pt, i) => `${i === 0 ? 'M' : 'L'} ${pt[0].toFixed(1)} ${pt[1].toFixed(1)}`).join(' ') + ' Z';
+            parts.push(`<path d="${path}" fill="${color}" fill-opacity="0.10" stroke="${color}" stroke-opacity="0.10" stroke-width="10" stroke-linejoin="round"><title>${eraId} · ${byEra[k].length} trials</title></path>`);
+        });
+    }
 
     // T0 audit first (with its own dashed audit-frontier line), then dominated,
     // then the tier frontiers (so frontiers paint on top).
@@ -3914,15 +4052,18 @@ function renderParetoScatter(d) {
     t0pts.forEach(p => {
         const x = sx(p.objectives[0]), y = sy(p.objectives[1]);
         const onFront = t0frontSet.has(p);
-        const tip = `T${p.eval_tier ?? 0} audit${onFront ? ' · frontier' : ''} · trial ${p.trial_id} · ${p.species || ''} · q=${p.objectives[0].toFixed(2)} sp=${p.objectives[1].toFixed(1)}`;
+        const tip = `T${p.eval_tier ?? 0} audit${onFront ? ' · frontier' : ''} · trial ${p.trial_id} · ${p.species || ''} · q=${p.objectives[0].toFixed(2)} sp=${p.objectives[1].toFixed(1)}${eraTip(p)}`;
         parts.push(paretoMarker(p.eval_tier ?? 0, x, y, onFront ? 3.5 : 3, `fill="${PARETO_AUDIT_FILL}" opacity="${onFront ? 0.85 : 0.4}"`, tip));
     });
-    // Dominated points: colored by their own tier (dimmed via opacity), shaped by tier.
+    // Dominated points: colored by their own tier (dimmed via opacity), shaped
+    // by tier. Era mode: colored by ERA instead, alpha ramped oldest→newest.
     (d.dominated || []).forEach(p => {
         const x = sx(p.objectives[0]), y = sy(p.objectives[1]);
         const tier = p.eval_tier ?? d.canonical_tier ?? 1;
-        const tip = `T${tier} trial ${p.trial_id} · ${p.species || ''} · q=${p.objectives[0].toFixed(2)} sp=${p.objectives[1].toFixed(1)}`;
-        parts.push(paretoMarker(tier, x, y, 2.5, `fill="${paretoTierFill(tier)}" opacity="0.4"`, tip));
+        const tip = `T${tier} trial ${p.trial_id} · ${p.species || ''} · q=${p.objectives[0].toFixed(2)} sp=${p.objectives[1].toFixed(1)}${eraTip(p)}`;
+        const fill = eraMode ? eraFillOf(p) : paretoTierFill(tier);
+        const op = eraMode ? Math.max(0.22, 0.5 * eraAlphaOf(p)).toFixed(2) : '0.4';
+        parts.push(paretoMarker(tier, x, y, 2.5, `fill="${fill}" opacity="${op}"`, tip));
     });
     // Per-tier frontiers: each tier drawn as its own colored line + points.
     // The LINE is the tier's 2D quality×speed envelope over ALL its shown points
@@ -3940,27 +4081,37 @@ function renderParetoScatter(d) {
     const series = paretoTierSeries(d.frontiers_by_tier, d.frontier, d.canonical_tier);
     series.forEach(([tier, front]) => {
         const color = paretoTierColor(tier);
-        const envelope = paretoEnvelope2D(ptsByTier[String(tier)] || front || []);
-        if (envelope.length > 1) {
-            const path = envelope.map((p, i) =>
-                `${i === 0 ? 'M' : 'L'} ${sx(p.objectives[0]).toFixed(1)} ${sy(p.objectives[1]).toFixed(1)}`
-            ).join(' ');
-            parts.push(`<path class="frontier-line" style="stroke:${color}" d="${path}"/>`);
+        // Era mode skips the per-tier envelope lines — the era clouds already
+        // carry the region shape, and a cross-era envelope would imply a
+        // decision-grade cross-era frontier.
+        if (!eraMode) {
+            const envelope = paretoEnvelope2D(ptsByTier[String(tier)] || front || []);
+            if (envelope.length > 1) {
+                const path = envelope.map((p, i) =>
+                    `${i === 0 ? 'M' : 'L'} ${sx(p.objectives[0]).toFixed(1)} ${sy(p.objectives[1]).toFixed(1)}`
+                ).join(' ');
+                parts.push(`<path class="frontier-line" style="stroke:${color}" d="${path}"/>`);
+            }
         }
         const sorted = (front || []).slice().sort((a, b) => a.objectives[0] - b.objectives[0]);
         sorted.forEach(p => {
             const x = sx(p.objectives[0]), y = sy(p.objectives[1]);
             const prod = p.is_production_best;
-            const tip = `T${tier} trial ${p.trial_id} · ${p.species || ''} · q=${p.objectives[0].toFixed(2)} sp=${p.objectives[1].toFixed(1)}${prod ? ' · PRODUCTION' : ''}`;
+            const tip = `T${tier} trial ${p.trial_id} · ${p.species || ''} · q=${p.objectives[0].toFixed(2)} sp=${p.objectives[1].toFixed(1)}${eraTip(p)}${prod ? ' · PRODUCTION' : ''}`;
             const ring = prod ? ' stroke="var(--good)" stroke-width="1.5"' : '';
-            parts.push(paretoMarker(tier, x, y, prod ? 5 : 4, `fill="${color}"${ring}`, tip));
+            const fill = eraMode ? eraFillOf(p) : color;
+            const op = eraMode ? ` opacity="${eraAlphaOf(p).toFixed(2)}"` : '';
+            parts.push(paretoMarker(tier, x, y, prod ? 5 : 4, `fill="${fill}"${ring}${op}`, tip));
         });
     });
-    // Per-tier legend (lower-right): audit tiers (T0) appended after the frontier tiers.
+    // Per-tier legend (lower-right): audit tiers (T0) appended after the frontier
+    // tiers. Era mode: tier glyphs go neutral (shape carries tier, color carries
+    // era) and an era swatch legend is added top-left.
     const legendKeys = series.map(s => String(s[0]));
     if ((d.t0_audit || []).length && !legendKeys.includes('0')) legendKeys.push('0');
     const legendY = VB.h - PAD.b - 4;
-    parts.push(paretoTierLegend(legendKeys, VB.w - 44, legendY));
+    parts.push(paretoTierLegend(legendKeys, VB.w - 44, legendY, eraMode));
+    if (eraMode) parts.push(paretoEraLegend(eras, PAD.l + 6, PAD.t + 12));
 
     svg.innerHTML = parts.join('');
 }
@@ -3971,7 +4122,10 @@ function renderHypervolumeTimeline(d) {
     const svg = document.getElementById('pareto-plot-hv');
     if (!svg) return;
     const VB = { w: 400, h: 280 };
-    const PAD = { l: 48, r: 14, t: 14, b: 32 };
+    // Wider left pad: 5-char hv tick labels ("75.08") + a separate lane for the
+    // rotated axis title so the two never fuse. Bottom pad likewise splits
+    // trial ticks from the "trial →" title.
+    const PAD = { l: 56, r: 14, t: 14, b: 40 };
     const plotW = VB.w - PAD.l - PAD.r;
     const plotH = VB.h - PAD.t - PAD.b;
 
@@ -3991,6 +4145,26 @@ function renderHypervolumeTimeline(d) {
     const sy = v => PAD.t + plotH - ((v - yMin) / yRange) * plotH;
 
     const parts = [];
+    // All-era scope: underimpress each era's span as a color band behind the HV
+    // lines (band k runs from its first trial to the next populated era's first
+    // trial), with the era id direct-labeled at the band start. Painted before
+    // gridlines/lines so every stroke stays on top.
+    const eras = Array.isArray(d.eras) ? d.eras : [];
+    if (eras.length) {
+        const populated = eras.filter(e => e.n_points > 0 && e.first_trial_id != null)
+            .sort((a, b) => a.first_trial_id - b.first_trial_id);
+        populated.forEach((e, i) => {
+            const x0 = Math.max(xMin, e.first_trial_id);
+            const x1 = (i + 1 < populated.length) ? Math.min(xMax, populated[i + 1].first_trial_id) : xMax;
+            if (!(x1 > x0)) return;
+            const color = paretoEraColor(e.index);
+            parts.push(`<rect x="${sx(x0).toFixed(1)}" y="${PAD.t}" width="${(sx(x1) - sx(x0)).toFixed(1)}" height="${plotH}" fill="${color}" opacity="0.08"><title>${e.id} · trials ${e.first_trial_id}–${e.last_trial_id}</title></rect>`);
+            if (i > 0) parts.push(`<line x1="${sx(x0).toFixed(1)}" y1="${PAD.t}" x2="${sx(x0).toFixed(1)}" y2="${PAD.t + plotH}" stroke="${color}" stroke-opacity="0.35" stroke-dasharray="2,3"/>`);
+            // Stagger labels on two rows so narrow bands (e.g. E3a/E3b) don't collide.
+            const ly = PAD.t + 9 + (i % 2) * 10;
+            parts.push(`<text x="${(sx(x0) + 3).toFixed(1)}" y="${ly}" font-size="8" style="font-family:var(--font-mono)" fill="${color}" opacity="0.85">${e.id}</text>`);
+        });
+    }
     // Gridlines
     for (let i = 1; i < 5; i++) {
         const gx = PAD.l + (i / 5) * plotW;
@@ -4005,14 +4179,14 @@ function renderHypervolumeTimeline(d) {
     for (let i = 0; i <= 4; i++) {
         const xVal = xMin + (i / 4) * xRange;
         const xPx = PAD.l + (i / 4) * plotW;
-        parts.push(`<text class="axis-label" x="${xPx}" y="${VB.h - 12}" text-anchor="middle">${Math.round(xVal)}</text>`);
+        parts.push(`<text class="axis-label" x="${xPx}" y="${PAD.t + plotH + 13}" text-anchor="middle">${Math.round(xVal)}</text>`);
         const yVal = yMin + (i / 4) * yRange;
         const yPx = PAD.t + plotH - (i / 4) * plotH;
         parts.push(`<text class="axis-label" x="${PAD.l - 6}" y="${yPx + 3}" text-anchor="end">${yVal.toFixed(2)}</text>`);
     }
-    // Axis titles
-    parts.push(`<text class="axis-label" x="${PAD.l + plotW / 2}" y="${VB.h - 2}" text-anchor="middle" font-size="10" fill="#94a3b8">trial →</text>`);
-    parts.push(`<text class="axis-label" x="14" y="${PAD.t + plotH / 2}" text-anchor="middle" font-size="10" fill="#94a3b8" transform="rotate(-90 14 ${PAD.t + plotH / 2})">hypervolume →</text>`);
+    // Axis titles — own lane below/left of the tick numbers, never fused.
+    parts.push(`<text class="axis-label" x="${PAD.l + plotW / 2}" y="${VB.h - 4}" text-anchor="middle" font-size="10" fill="#94a3b8">trial →</text>`);
+    parts.push(`<text class="axis-label" x="11" y="${PAD.t + plotH / 2}" text-anchor="middle" font-size="10" fill="#94a3b8" transform="rotate(-90 11 ${PAD.t + plotH / 2})">hypervolume →</text>`);
 
     // Per-tier hypervolume lines (each tier its own color + endpoint dot)
     series.forEach(([tier, hist]) => {

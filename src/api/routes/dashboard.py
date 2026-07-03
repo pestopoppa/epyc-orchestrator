@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import yaml
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
@@ -83,6 +84,10 @@ from src.autopilot_core.journal_reconstruction import (
     objectives_from_journal_row as core_objectives_from_journal_row,
     parse_journal_ts as core_parse_journal_ts,
     reconstruct_archive_from_journal_rows,
+)
+from src.autopilot_core.instrument_era_guard import (
+    _parse_epoch as core_parse_era_epoch,
+    instrument_eras_path,
 )
 from src.autopilot_core.learning_exclusions import (
     WITHIN_NOISE_EXCLUSIONS,
@@ -1516,6 +1521,97 @@ def _shape_pareto_entry(entry: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# ── Instrument-era display regions (all-era Pareto view) ────────────────────
+# The append-only era registry (orchestration/instrument_eras.yaml, human-owned)
+# is the source of truth for metric-comparability boundaries. The all-era Pareto
+# view labels every point with the era region it falls in, so the operator sees
+# the full performance progression without silently mixing instruments: the one
+# codified read-time rescale (pre-E2 speed deinflation) is applied; every later
+# boundary (e.g. the E5 v6+iqk kernel cutover) is labeled, never rescaled.
+_PARETO_ERA_SCOPES = {"autopilot_speed", "autopilot_quality"}
+# The only era boundary with a codified read-time rescale: speeds journaled
+# before E2 (2026-06-01 double-count fix) multiply by
+# `pareto_pre_epoch_speed_factor` (state knob, default 0.5).
+_PARETO_SPEED_DEINFLATE_ERA_ID = "E2"
+
+
+def _era_short_label(era_id: str) -> str:
+    """Compact chart label for a registry era id: 'E5-autopilot-speed' → 'E5'."""
+    m = re.match(r"(E\d+[a-z]?)", str(era_id))
+    return m.group(1) if m else str(era_id)
+
+
+def _autopilot_era_regions() -> tuple[list[dict[str, Any]], str | None]:
+    """Chronological era regions for the autopilot Pareto plots.
+
+    Reads the instrument-era registry and slices time at every autopilot-scoped
+    `from` boundary. Region 0 is a synthetic 'pre-<first era>' interval so rows
+    older than the earliest registered boundary still get a label. Returns
+    (regions, error); on any registry problem the regions are empty and the
+    error string is surfaced to the client instead of guessing boundaries.
+    """
+    try:
+        data = yaml.safe_load(instrument_eras_path().read_text())
+    except Exception as exc:
+        return [], f"instrument-era registry unavailable: {exc}"
+    if not isinstance(data, dict) or not isinstance(data.get("eras"), list):
+        return [], "instrument-era registry must contain an eras list"
+
+    boundaries: dict[float, list[str]] = {}
+    for row in data["eras"]:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("scope", "")).strip() not in _PARETO_ERA_SCOPES:
+            continue
+        from_ts = core_parse_era_epoch(row.get("from"))
+        if from_ts is None:
+            continue
+        boundaries.setdefault(from_ts, []).append(str(row.get("id", "")))
+    if not boundaries:
+        return [], "no autopilot-scoped era rows with a from boundary in registry"
+
+    ordered = sorted(boundaries.items())
+    first_label = "+".join(
+        sorted({_era_short_label(i) for i in ordered[0][1]})
+    )
+    regions: list[dict[str, Any]] = [{
+        "index": 0,
+        "id": f"pre-{first_label}",
+        "era_ids": [],
+        "from_ts": None,
+        "until_ts": ordered[0][0],
+    }]
+    for i, (ts, ids) in enumerate(ordered):
+        regions.append({
+            "index": i + 1,
+            "id": "+".join(sorted({_era_short_label(era_id) for era_id in ids})),
+            "era_ids": ids,
+            "from_ts": ts,
+            "until_ts": ordered[i + 1][0] if i + 1 < len(ordered) else None,
+        })
+    return regions, None
+
+
+def _era_region_index_for_ts(regions: list[dict[str, Any]], ts: float | None) -> int | None:
+    if ts is None:
+        return None
+    for region in regions:
+        start, end = region.get("from_ts"), region.get("until_ts")
+        if (start is None or ts >= start) and (end is None or ts < end):
+            return region["index"]
+    return None
+
+
+def _label_pareto_entries_with_eras(
+    entries: list[dict[str, Any]], regions: list[dict[str, Any]]
+) -> None:
+    """Stamp each shaped entry with the era region its timestamp falls in."""
+    for entry in entries:
+        idx = _era_region_index_for_ts(regions, _parse_journal_ts(entry.get("timestamp")))
+        entry["era_index"] = idx
+        entry["era"] = regions[idx]["id"] if idx is not None else None
+
+
 def _autopilot_journal_shards() -> list[Path]:
     """All autopilot journal shards, oldest→newest.
 
@@ -2632,7 +2728,7 @@ async def autopilot_progress() -> JSONResponse:
 
 
 @router.get("/dashboard/api/pareto")
-async def pareto(max_dominated: int = 600) -> JSONResponse:
+async def pareto(max_dominated: int = 600, scope: str = "current") -> JSONResponse:
     """Return the autopilot's Pareto archive for visualization.
 
     Prefer reconstructing all trusted progress from the append-only journal. This
@@ -2643,6 +2739,21 @@ async def pareto(max_dominated: int = 600) -> JSONResponse:
     The dashboard plots the first two by default since they're the most
     operationally meaningful; -cost and reliability ride along as
     per-point fields the client can surface in tooltips.
+
+    `scope` selects the reconstruction window:
+      - "current" (default): the operational current-era progress view —
+        latest trial-id-reset segment, rows before `pareto_exclude_before_ts`
+        dropped. This is the decision-grade view.
+      - "all_eras" (also "all"/"history"): every journaled trial across
+        instrument eras, era-labeled from orchestration/instrument_eras.yaml.
+        Pre-E2 speeds get the codified ×`pareto_pre_epoch_speed_factor`
+        deinflation so the speed axis is comparable; later era boundaries
+        (e.g. the E5 v6+iqk kernel cutover) are labeled, never rescaled.
+        Comparative visualization only — not decision-grade (MEASUREMENT.md:
+        cross-era dominance never gates decisions). Assumes trial ids are
+        monotonic across the retained journal shards (true since the 2026-05
+        scrubs); a future deliberate rewind would interleave this view but
+        leaves scope="current" correct.
     """
     data: dict[str, Any] = {}
     state_error: str | None = None
@@ -2702,17 +2813,50 @@ async def pareto(max_dominated: int = 600) -> JSONResponse:
         journal_rows,
         current_run_only=True,
     )
-    journal_archive = _pareto_from_journal(
-        None,
-        current_run_only=True,
-        max_trial_id=None,
-        deinflate_before_ts=pareto_epoch_ts,
-        deinflate_factor=deinflate_factor,
-        exclude_before_ts=pareto_exclude_before_ts,
-        rows=journal_rows,
-    )
-    source = "journal_current_run"
-    source_reason = "reconstructed from latest trial-id reset segment in autopilot_journal.jsonl"
+    all_eras = str(scope).strip().lower() in {"all", "all_eras", "history"}
+    era_regions: list[dict[str, Any]] = []
+    era_registry_error: str | None = None
+    if all_eras:
+        era_regions, era_registry_error = _autopilot_era_regions()
+        # E2 is the only rescaled boundary (see _PARETO_SPEED_DEINFLATE_ERA_ID).
+        # Registry unreadable → fail open WITHOUT deinflation and surface the
+        # error; the state's pareto_epoch_ts is NOT a substitute (it advances on
+        # every rebase — currently the E5 cutover — and would falsify honest
+        # E2..E5 speeds if used as the deinflate boundary here).
+        deinflate_e2_ts = next(
+            (
+                region["from_ts"]
+                for region in era_regions
+                if _PARETO_SPEED_DEINFLATE_ERA_ID in (region.get("era_ids") or [])
+            ),
+            None,
+        )
+        journal_archive = _pareto_from_journal(
+            None,
+            current_run_only=False,
+            max_trial_id=None,
+            deinflate_before_ts=deinflate_e2_ts,
+            deinflate_factor=deinflate_factor if deinflate_e2_ts is not None else 1.0,
+            exclude_before_ts=None,
+            rows=journal_rows,
+        )
+        source = "journal_all_eras"
+        source_reason = (
+            "reconstructed from ALL journal shards across instrument eras "
+            "(era-labeled; comparative visualization, not decision-grade)"
+        )
+    else:
+        journal_archive = _pareto_from_journal(
+            None,
+            current_run_only=True,
+            max_trial_id=None,
+            deinflate_before_ts=pareto_epoch_ts,
+            deinflate_factor=deinflate_factor,
+            exclude_before_ts=pareto_exclude_before_ts,
+            rows=journal_rows,
+        )
+        source = "journal_current_run"
+        source_reason = "reconstructed from latest trial-id reset segment in autopilot_journal.jsonl"
 
     stale_state_warning = None
     if journal_archive:
@@ -2798,10 +2942,55 @@ async def pareto(max_dominated: int = 600) -> JSONResponse:
             except (TypeError, ValueError):
                 continue
 
+    # All-era view: stamp every shipped point with its era region, and report
+    # per-region trial ranges so the client can shade era bands on the timeline.
+    eras_payload: list[dict[str, Any]] | None = None
+    if all_eras and era_regions:
+        for entries in (
+            frontier,
+            dominated_shaped,
+            t0_audit_shaped,
+            *frontiers_by_tier.values(),
+        ):
+            _label_pareto_entries_with_eras(entries, era_regions)
+        region_stats: dict[int, dict[str, Any]] = {}
+        seen_trial_ids: set[Any] = set()
+        # `frontier` mirrors the canonical tier of `frontiers_by_tier`, so
+        # iterating the by-tier lists + dominated + t0 covers every point once.
+        for entries in (dominated_shaped, t0_audit_shaped, *frontiers_by_tier.values()):
+            for entry in entries:
+                tid, idx = entry.get("trial_id"), entry.get("era_index")
+                if idx is None or tid is None or tid in seen_trial_ids:
+                    continue
+                seen_trial_ids.add(tid)
+                stats = region_stats.setdefault(
+                    idx, {"n_points": 0, "first_trial_id": None, "last_trial_id": None}
+                )
+                stats["n_points"] += 1
+                stats["first_trial_id"] = (
+                    tid if stats["first_trial_id"] is None else min(stats["first_trial_id"], tid)
+                )
+                stats["last_trial_id"] = (
+                    tid if stats["last_trial_id"] is None else max(stats["last_trial_id"], tid)
+                )
+        eras_payload = [
+            {
+                **region,
+                **region_stats.get(
+                    region["index"],
+                    {"n_points": 0, "first_trial_id": None, "last_trial_id": None},
+                ),
+            }
+            for region in era_regions
+        ]
+
     return JSONResponse({
         "available": True,
         "source": source,
         "source_reason": source_reason,
+        "scope": "all_eras" if all_eras else "current",
+        "eras": eras_payload,
+        "era_registry_error": era_registry_error if all_eras else None,
         # Visibility into why trials may be missing from the frontier, so the
         # operator never has to guess whether the plot is stale or the data is.
         "stale_state_warning": stale_state_warning,

@@ -184,8 +184,13 @@ def test_dashboard_pareto_plot_uses_journal_sources_and_nonnegative_axes() -> No
     assert "d.frontiers_by_tier" in body
     assert "tiers ${tierKeys.map" in body
     assert "const legendY = VB.h - PAD.b - 4;" in body
-    assert "paretoTierLegend(legendKeys, VB.w - 44, legendY)" in body
+    assert "paretoTierLegend(legendKeys, VB.w - 44, legendY, eraMode)" in body
     assert "paretoTierLegend(series.map(s => s[0]), VB.w - 38, legendY)" in body
+    # All-era scope wiring: toggle, era-labeled fetch, underlay clouds + bands.
+    assert "setParetoScope('all_eras')" in body
+    assert "/dashboard/api/pareto?scope=" in body
+    assert "function convexHull2D(pts)" in body
+    assert "paretoEraLegend(eras, PAD.l + 6, PAD.t + 12)" in body
 
 
 def test_dashboard_repo_readiness_panel_is_advisory_only() -> None:
