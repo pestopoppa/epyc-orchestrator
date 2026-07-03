@@ -1073,8 +1073,8 @@ class TestBuildFormalizerPrompt:
 
         long_prompt = "x" * 1000
         result = build_formalizer_prompt("answer", long_prompt, "JSON")
-        # Prompt should be truncated to 500 chars (allow 1 extra for edge case)
-        assert result.count("x") <= 501
+        question = result.split("Original question: ", 1)[1].split("\n\nOriginal answer:", 1)[0]
+        assert question == "x" * 500
         # Structural: Should still have format spec
         assert "JSON" in result
 
