@@ -484,6 +484,9 @@ from rubric_scoring import (  # noqa: E402
     build_rubric_judge_prompt,
     deterministic_rubric_fallback,
 )
+from src.autopilot_core.instrument_era_guard import (  # noqa: E402
+    designed_core_activation_guard,
+)
 
 DEFAULT_CORE_DIR = _orch_root / "benchmarks" / "prompts"
 
@@ -1669,6 +1672,7 @@ class EvalTower:
         configured_core_path = os.environ.get("AUTOPILOT_T1_CORE_PATH", "").strip()
         core_metadata: dict[str, Any] = {}
         core_path = ""
+        core_era_guard: dict[str, Any] = {}
         core_selection = "legacy_pool_seed"
         resolved_trial_id = self._resolve_trial_id(trial_id)
         audit_policy: dict[str, Any] = {
@@ -1699,6 +1703,25 @@ class EvalTower:
 
         if configured_core_id:
             core_path = str(self._core_path(configured_core_id))
+            core_era_guard = designed_core_activation_guard(configured_core_id)
+            if not core_era_guard.get("ok"):
+                error = str(core_era_guard.get("reason", "designed core is not era-authorized"))
+                log.error("T1 designed core activation blocked: %s", error)
+                return EvalResult(
+                    tier=1,
+                    quality=0,
+                    speed=0,
+                    cost=0,
+                    reliability=0,
+                    core_id=configured_core_id,
+                    details={
+                        "core_id": configured_core_id,
+                        "core_selection": "designed_core",
+                        "core_path": core_path,
+                        "core_error": error,
+                        "core_era_guard": core_era_guard,
+                    },
+                )
             try:
                 questions, core_metadata, core_file = self._load_designed_core(configured_core_id)
                 core_path = str(core_file)
@@ -1717,6 +1740,7 @@ class EvalTower:
                         "core_selection": "designed_core",
                         "core_path": core_path,
                         "core_error": str(exc),
+                        "core_era_guard": core_era_guard,
                     },
                 )
             core_id = configured_core_id
@@ -1835,6 +1859,7 @@ class EvalTower:
                 "core_selection": core_selection,
                 "core_path": core_path,
                 "core_metadata": core_metadata,
+                "core_era_guard": core_era_guard,
                 "requested_n": n,
                 "base_core_questions": base_core_questions,
                 "base_audit_questions": base_audit_questions,

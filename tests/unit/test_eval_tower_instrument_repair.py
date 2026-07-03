@@ -19,6 +19,25 @@ class _PrefixRng:
         return list(population[:k])
 
 
+def _authorize_core(monkeypatch, tmp_path: Path, core_id: str = "core_v2") -> Path:
+    eras_path = tmp_path / "instrument_eras.yaml"
+    eras_path.write_text(
+        "\n".join(
+            [
+                "eras:",
+                "  - id: E4-unit",
+                '    from: "2000-01-01T00:00:00Z"',
+                "    scope: autopilot_quality",
+                f'    core_id: "{core_id}"',
+                '    policy_version: "unit-test"',
+            ]
+        )
+        + "\n"
+    )
+    monkeypatch.setenv("AUTOPILOT_INSTRUMENT_ERAS_PATH", str(eras_path))
+    return eras_path
+
+
 def test_programmatic_scorer_runs_with_empty_expected(monkeypatch) -> None:
     tower = EvalTower()
 
@@ -329,6 +348,7 @@ def test_eval_t1_uses_designed_core_when_enabled(tmp_path, monkeypatch) -> None:
     core_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
     monkeypatch.setenv("AUTOPILOT_T1_CORE_ID", "core_v2")
     monkeypatch.setenv("AUTOPILOT_T1_CORE_PATH", str(core_path))
+    _authorize_core(monkeypatch, tmp_path)
 
     captured = {}
 
@@ -360,9 +380,57 @@ def test_eval_t1_uses_designed_core_when_enabled(tmp_path, monkeypatch) -> None:
     assert result.details["base_core_questions"] == 2
 
 
+def test_eval_t1_designed_core_requires_matching_instrument_era(tmp_path, monkeypatch) -> None:
+    core_path = tmp_path / "core_v2.jsonl"
+    core_path.write_text(
+        json.dumps({"__core_metadata__": True, "core_id": "core_v2"}) + "\n"
+        + json.dumps(
+            {
+                "id": "core-a",
+                "suite": "math",
+                "prompt": "2+2?",
+                "expected": "4",
+                "scoring_method": "exact_match",
+            }
+        )
+        + "\n"
+    )
+    eras_path = tmp_path / "instrument_eras.yaml"
+    eras_path.write_text(
+        "\n".join(
+            [
+                "eras:",
+                "  - id: E3b",
+                '    from: "2000-01-01T00:00:00Z"',
+                "    scope: autopilot_quality",
+                '    note: "pre-core quality era"',
+            ]
+        )
+        + "\n"
+    )
+    monkeypatch.setenv("AUTOPILOT_T1_CORE_ID", "core_v2")
+    monkeypatch.setenv("AUTOPILOT_T1_CORE_PATH", str(core_path))
+    monkeypatch.setenv("AUTOPILOT_INSTRUMENT_ERAS_PATH", str(eras_path))
+
+    def _fail_eval_batch(self, questions, client, **_kwargs):  # noqa: ANN001, ARG001
+        raise AssertionError("designed core should fail closed before evaluation")
+
+    monkeypatch.setattr(EvalTower, "_eval_batch", _fail_eval_batch)
+
+    result = EvalTower().eval_t1(n=50, seed=42)
+
+    assert result.core_id == "core_v2"
+    assert result.quality == 0
+    assert result.reliability == 0
+    assert result.details["core_selection"] == "designed_core"
+    assert result.details["core_era_guard"]["status"] == "missing_core_era"
+    assert "human-owned E4/core row" in result.details["core_error"]
+
+
 def test_eval_t1_missing_designed_core_fails_closed(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("AUTOPILOT_T1_CORE_ID", "core_v2")
     monkeypatch.setenv("AUTOPILOT_T1_CORE_PATH", str(tmp_path / "missing.jsonl"))
+    _authorize_core(monkeypatch, tmp_path)
 
     result = EvalTower().eval_t1(n=50, seed=42)
 
@@ -401,6 +469,7 @@ def test_eval_t1_designed_core_rejects_metadata_mismatch(tmp_path, monkeypatch) 
     core_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
     monkeypatch.setenv("AUTOPILOT_T1_CORE_ID", "core_v2")
     monkeypatch.setenv("AUTOPILOT_T1_CORE_PATH", str(core_path))
+    _authorize_core(monkeypatch, tmp_path)
 
     result = EvalTower().eval_t1(n=50, seed=42)
 
@@ -425,6 +494,7 @@ def test_eval_t1_designed_core_rejects_unscoreable_rows(tmp_path, monkeypatch) -
     core_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
     monkeypatch.setenv("AUTOPILOT_T1_CORE_ID", "core_v2")
     monkeypatch.setenv("AUTOPILOT_T1_CORE_PATH", str(core_path))
+    _authorize_core(monkeypatch, tmp_path)
 
     result = EvalTower().eval_t1(n=50, seed=42)
 
@@ -443,6 +513,7 @@ def test_eval_t1_designed_core_can_reference_question_pool_ids(tmp_path, monkeyp
     core_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
     monkeypatch.setenv("AUTOPILOT_T1_CORE_ID", "core_v2")
     monkeypatch.setenv("AUTOPILOT_T1_CORE_PATH", str(core_path))
+    _authorize_core(monkeypatch, tmp_path)
     tower = EvalTower()
     tower._pool = {
         "math": [
@@ -550,6 +621,7 @@ def test_eval_t1_w6_audit_block_appends_trial_seeded_questions(
     monkeypatch.setenv("AUTOPILOT_T1_CORE_PATH", str(core_path))
     monkeypatch.setenv("AUTOPILOT_W6_AUDIT_BLOCK", "1")
     monkeypatch.setenv("AUTOPILOT_W6_AUDIT_N", "2")
+    _authorize_core(monkeypatch, tmp_path)
     tower = EvalTower()
     tower._pool = {
         "math": [
@@ -639,6 +711,7 @@ def test_eval_t1_w6_audit_block_can_count_audit_in_decision_metrics(
     monkeypatch.setenv("AUTOPILOT_W6_AUDIT_BLOCK", "1")
     monkeypatch.setenv("AUTOPILOT_W6_AUDIT_N", "2")
     monkeypatch.setenv("AUTOPILOT_W6_AUDIT_SHADOW_ONLY", "0")
+    _authorize_core(monkeypatch, tmp_path)
     tower = EvalTower()
     tower._pool = {
         "math": [
@@ -704,6 +777,7 @@ def test_eval_t1_w6_audit_block_honors_cadence(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("AUTOPILOT_W6_AUDIT_BLOCK", "1")
     monkeypatch.setenv("AUTOPILOT_W6_AUDIT_N", "2")
     monkeypatch.setenv("AUTOPILOT_W6_AUDIT_EVERY_N_TRIALS", "2")
+    _authorize_core(monkeypatch, tmp_path)
 
     captured = []
 
@@ -749,6 +823,7 @@ def test_eval_t1_w6_audit_block_requires_trial_id(tmp_path, monkeypatch) -> None
     monkeypatch.setenv("AUTOPILOT_T1_CORE_ID", "core_v2")
     monkeypatch.setenv("AUTOPILOT_T1_CORE_PATH", str(core_path))
     monkeypatch.setenv("AUTOPILOT_W6_AUDIT_BLOCK", "1")
+    _authorize_core(monkeypatch, tmp_path)
 
     result = EvalTower().eval_t1(n=999, seed=123)
 

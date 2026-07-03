@@ -1,0 +1,107 @@
+{
+  "activation_env": {
+    "AUTOPILOT_T1_CORE_ID": "core_v2_ledger_20260703_min5",
+    "AUTOPILOT_T1_CORE_PATH": "/mnt/raid0/llm/epyc-orchestrator/benchmarks/prompts/core_v2_ledger_20260703_min5.jsonl"
+  },
+  "blockers": [
+    "instrument era: no active autopilot_quality instrument-era row declares a core_id; append the human-owned E4/core row before enabling AUTOPILOT_T1_CORE_ID"
+  ],
+  "core": {
+    "blockers": [],
+    "embedded_selection_report": {
+      "blockers": [],
+      "core_id": "core_v2_ledger_20260703_min5",
+      "eligible_items": 79,
+      "generated_at": "2026-07-03T10:24:53Z",
+      "observed_items": 923,
+      "ok": true,
+      "parameters": {
+        "include_partitions": [
+          "core"
+        ],
+        "min_attempts": 5,
+        "p_max": 0.8,
+        "p_min": 0.2,
+        "source": "ledger",
+        "target_size": 40
+      },
+      "present": true,
+      "selected_count": 40,
+      "shortfall": 0,
+      "source_provenance": {
+        "era_excluded_rows": 849,
+        "exclude_before_ts": 1782511631.0,
+        "journal_batches": [
+          "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_journal.jsonl",
+          "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_journal_1.jsonl"
+        ],
+        "trusted_rows": 77,
+        "untrusted_rows": 25
+      },
+      "source_rows": 77,
+      "unresolved_selected_count": 0
+    },
+    "exists": true,
+    "metadata": {
+      "core_id": "core_v2_ledger_20260703_min5",
+      "generated_at": "2026-07-03T10:24:53Z",
+      "generator": "scripts/autopilot/core_v2_select.py",
+      "selected_count": 40,
+      "target_size": 40
+    },
+    "ok": true,
+    "path": "/mnt/raid0/llm/epyc-orchestrator/benchmarks/prompts/core_v2_ledger_20260703_min5.jsonl",
+    "question_rows": 40
+  },
+  "core_id": "core_v2_ledger_20260703_min5",
+  "generated_at": "2026-07-03T11:05:29Z",
+  "instrument_era_guard": {
+    "active_quality_eras": [
+      "E3a",
+      "E3b"
+    ],
+    "core_id": "core_v2_ledger_20260703_min5",
+    "inactive_matching_eras": [],
+    "ok": false,
+    "path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/instrument_eras.yaml",
+    "reason": "no active autopilot_quality instrument-era row declares a core_id; append the human-owned E4/core row before enabling AUTOPILOT_T1_CORE_ID",
+    "required_scope": "autopilot_quality",
+    "status": "missing_core_era"
+  },
+  "ok": false,
+  "promotion_ready": false,
+  "recommendation": "candidate artifact is inspected, but activation remains blocked until the operator appends a matching autopilot_quality instrument-era row",
+  "selection": {
+    "blockers": [],
+    "core_id": "core_v2_ledger_20260703_min5",
+    "eligible_items": 79,
+    "generated_at": "2026-07-03T10:24:53Z",
+    "observed_items": 923,
+    "ok": true,
+    "parameters": {
+      "include_partitions": [
+        "core"
+      ],
+      "min_attempts": 5,
+      "p_max": 0.8,
+      "p_min": 0.2,
+      "source": "ledger",
+      "target_size": 40
+    },
+    "present": true,
+    "selected_count": 40,
+    "shortfall": 0,
+    "source_provenance": {
+      "era_excluded_rows": 849,
+      "exclude_before_ts": 1782511631.0,
+      "journal_batches": [
+        "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_journal.jsonl",
+        "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_journal_1.jsonl"
+      ],
+      "trusted_rows": 77,
+      "untrusted_rows": 25
+    },
+    "source_rows": 77,
+    "unresolved_selected_count": 0
+  }
+}
