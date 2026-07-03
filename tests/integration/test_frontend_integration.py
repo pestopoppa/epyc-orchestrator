@@ -6,6 +6,7 @@ and session management in mock mode.
 
 from __future__ import annotations
 
+import base64
 import json
 
 import pytest
@@ -205,6 +206,59 @@ class TestOpenAICompatibility:
                 },
             )
             assert response.status_code == 200
+
+    def test_openai_accepts_multimodal_data_url_message(self, client):
+        """OpenAI multipart data-URL images are accepted in mock-mode requests."""
+        payload = base64.b64encode(b"image-bytes").decode("ascii")
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "orchestrator",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Describe this image"},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/png;base64,{payload}",
+                                },
+                            },
+                        ],
+                    }
+                ],
+                "stream": False,
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.json()["choices"][0]["message"]["role"] == "assistant"
+
+    def test_openai_rejects_remote_image_url_message(self, client):
+        """Remote image fetching is not part of the OpenAI compat vision bridge."""
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "orchestrator",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Describe this image"},
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": "https://example.com/image.png"},
+                            },
+                        ],
+                    }
+                ],
+                "stream": False,
+            },
+        )
+
+        assert response.status_code == 400
+        assert "data:image" in response.json()["detail"]
 
     def test_openai_models_list(self, client):
         """GET /v1/models returns available roles."""

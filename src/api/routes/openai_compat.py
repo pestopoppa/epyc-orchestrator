@@ -10,6 +10,9 @@ import json
 import logging
 import time
 import uuid
+from base64 import b64decode
+from binascii import Error as Base64Error
+from dataclasses import dataclass
 from typing import Any, AsyncGenerator
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -45,19 +48,67 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _extract_text(content: str | list) -> str:
-    """Extract text from OpenAI content field (string or multipart array)."""
-    if content is None:
-        return ""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        return " ".join(
-            part.get("text", "")
-            for part in content
-            if isinstance(part, dict) and part.get("type") == "text"
+@dataclass(frozen=True)
+class _OpenAIContentParts:
+    text: str
+    image_base64: str | None = None
+
+
+def _parse_image_data_url(url: str) -> str:
+    header, sep, payload = url.partition(",")
+    header_l = header.lower()
+    if sep != "," or not header_l.startswith("data:image/") or ";base64" not in header_l:
+        raise ValueError(
+            "OpenAI image_url content must use a data:image/...;base64 URL"
         )
-    return ""
+    payload = payload.strip()
+    try:
+        b64decode(payload, validate=True)
+    except (Base64Error, ValueError) as exc:
+        raise ValueError("OpenAI image_url content contains invalid base64") from exc
+    return payload
+
+
+def _extract_openai_content(content: str | list | None, *, parse_images: bool) -> _OpenAIContentParts:
+    """Extract text and, when requested, one data-URL image from OpenAI content."""
+    if content is None:
+        return _OpenAIContentParts(text="")
+    if isinstance(content, str):
+        return _OpenAIContentParts(text=content)
+    if not isinstance(content, list):
+        return _OpenAIContentParts(text="")
+
+    text_parts: list[str] = []
+    image_base64: str | None = None
+    for part in content:
+        if not isinstance(part, dict):
+            continue
+        part_type = part.get("type")
+        if part_type == "text":
+            text = part.get("text", "")
+            if isinstance(text, str):
+                text_parts.append(text)
+            continue
+        if part_type != "image_url" or not parse_images:
+            continue
+
+        raw_image_url = part.get("image_url")
+        if isinstance(raw_image_url, dict):
+            url = raw_image_url.get("url")
+        else:
+            url = raw_image_url
+        if not isinstance(url, str) or not url:
+            raise ValueError("OpenAI image_url content must include image_url.url")
+        if image_base64 is not None:
+            raise ValueError("Only one OpenAI image_url part is supported per request")
+        image_base64 = _parse_image_data_url(url)
+
+    return _OpenAIContentParts(text=" ".join(text_parts), image_base64=image_base64)
+
+
+def _extract_text(content: str | list | None) -> str:
+    """Extract text from OpenAI content field (string or multipart array)."""
+    return _extract_openai_content(content, parse_images=False).text
 
 
 def _history_message_dict(message: OpenAIMessage) -> dict[str, Any]:
@@ -219,6 +270,48 @@ def _apply_openai_tool_contract_metadata(
     return meta
 
 
+def _combined_prompt_with_context(prompt: str, context: str | None) -> str:
+    if context:
+        return f"{context}\n\nUser: {prompt}"
+    return prompt
+
+
+def _role_name(role: str | Role) -> str:
+    return role.value if isinstance(role, Role) else str(role)
+
+
+async def _run_openai_vision_completion(
+    *,
+    prompt: str,
+    context: str | None,
+    image_base64: str,
+    role: str | Role,
+    primitives: Any,
+    state: AppState,
+    task_id: str,
+) -> str:
+    from src.api.models import ChatRequest
+    from src.api.routes.chat_vision import _handle_vision_request
+
+    role_id = _role_name(role)
+    force_server = role_id if role_id in {"worker_vision", "vision_escalation"} else None
+    vision_prompt = _combined_prompt_with_context(prompt or "Describe the image.", context)
+    vision_request = ChatRequest(
+        prompt=vision_prompt,
+        mock_mode=False,
+        real_mode=True,
+        role=role_id,
+        image_base64=image_base64,
+    )
+    return await _handle_vision_request(
+        vision_request,
+        primitives,
+        state,
+        task_id=task_id,
+        force_server=force_server,
+    )
+
+
 COMPATIBILITY_MODEL_ALIASES = ("orchestrator", "architect", "worker")
 
 
@@ -300,7 +393,11 @@ async def openai_chat_completions(
     if not user_messages:
         raise HTTPException(status_code=400, detail="No user message provided")
 
-    prompt = _extract_text(user_messages[-1].content)
+    try:
+        prompt_parts = _extract_openai_content(user_messages[-1].content, parse_images=True)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    prompt = prompt_parts.text
 
     # Build conversation context from message history
     # B2: Apply context compression on structured messages before flattening
@@ -429,11 +526,23 @@ async def openai_chat_completions(
 
                 if primitives:
                     # Build combined context
-                    combined_context = prompt
-                    if context:
-                        combined_context = f"{context}\n\nUser: {prompt}"
+                    combined_context = _combined_prompt_with_context(prompt, context)
 
-                    if disable_repl:
+                    if prompt_parts.image_base64:
+                        try:
+                            response_text = await _run_openai_vision_completion(
+                                prompt=prompt,
+                                context=context,
+                                image_base64=prompt_parts.image_base64,
+                                role=role,
+                                primitives=primitives,
+                                state=state,
+                                task_id=chat_id,
+                            )
+                        except Exception as e:
+                            response_text = f"[ERROR] Vision request failed: {e}"
+                        total_tokens = primitives.total_tokens_generated
+                    elif disable_repl:
                         # Direct LLM call — no REPL, no code execution
                         try:
                             response_text = primitives.llm_call(
@@ -572,11 +681,19 @@ async def openai_chat_completions(
                         detail="LLM primitives not initialized — check server_urls config",
                     )
 
-                combined_context = prompt
-                if context:
-                    combined_context = f"{context}\n\nUser: {prompt}"
+                combined_context = _combined_prompt_with_context(prompt, context)
 
-                if disable_repl:
+                if prompt_parts.image_base64:
+                    response_text = await _run_openai_vision_completion(
+                        prompt=prompt,
+                        context=context,
+                        image_base64=prompt_parts.image_base64,
+                        role=role,
+                        primitives=primitives,
+                        state=state,
+                        task_id=chat_id,
+                    )
+                elif disable_repl:
                     # Direct LLM call — no REPL, no code execution
                     response_text = primitives.llm_call(
                         combined_context, role=role,
