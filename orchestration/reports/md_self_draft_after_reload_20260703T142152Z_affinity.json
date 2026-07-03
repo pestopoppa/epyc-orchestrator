@@ -1,0 +1,132 @@
+{
+  "generated_at": "2026-07-03T14:21:52Z",
+  "records": [
+    {
+      "affinity": [
+        "0",
+        "96"
+      ],
+      "pid": 1661738,
+      "port": 8070,
+      "state_keys": [
+        "coder_escalation",
+        "frontdoor",
+        "server_8070",
+        "worker_summarize"
+      ]
+    },
+    {
+      "affinity": [
+        "0"
+      ],
+      "pid": 1116996,
+      "port": 8072,
+      "state_keys": [
+        "server_8072",
+        "toolrunner",
+        "worker_explore",
+        "worker_general",
+        "worker_math"
+      ]
+    },
+    {
+      "affinity": [
+        "0",
+        "96"
+      ],
+      "pid": 1665110,
+      "port": 8080,
+      "state_keys": [
+        "server_8080"
+      ]
+    },
+    {
+      "affinity": [
+        "0",
+        "96"
+      ],
+      "pid": 1117328,
+      "port": 8082,
+      "state_keys": [
+        "server_8082"
+      ]
+    },
+    {
+      "affinity": [
+        "0"
+      ],
+      "pid": 1662585,
+      "port": 8083,
+      "state_keys": [
+        "architect_general",
+        "server_8083"
+      ]
+    },
+    {
+      "affinity": [
+        "24",
+        "120"
+      ],
+      "pid": 1665424,
+      "port": 8180,
+      "state_keys": [
+        "server_8180"
+      ]
+    },
+    {
+      "affinity": [
+        "24",
+        "120"
+      ],
+      "pid": 1117611,
+      "port": 8182,
+      "state_keys": [
+        "server_8182"
+      ]
+    },
+    {
+      "affinity": [
+        "48",
+        "144"
+      ],
+      "pid": 1665782,
+      "port": 8280,
+      "state_keys": [
+        "server_8280"
+      ]
+    },
+    {
+      "affinity": [
+        "48",
+        "144"
+      ],
+      "pid": 1117883,
+      "port": 8282,
+      "state_keys": [
+        "server_8282"
+      ]
+    },
+    {
+      "affinity": [
+        "72",
+        "168"
+      ],
+      "pid": 1666152,
+      "port": 8380,
+      "state_keys": [
+        "server_8380"
+      ]
+    },
+    {
+      "affinity": [
+        "72",
+        "168"
+      ],
+      "pid": 1118216,
+      "port": 8382,
+      "state_keys": [
+        "server_8382"
+      ]
+    }
+  ]
+}
