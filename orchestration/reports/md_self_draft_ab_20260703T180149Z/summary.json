@@ -1,0 +1,389 @@
+{
+  "arm_summaries": {
+    "embedded_self_draft": {
+      "acceptance": {
+        "cumulative_line_count": 10,
+        "latest_cumulative": {
+          "accepted_drafts": 439,
+          "accepted_tokens": 1449,
+          "generated_drafts": 461,
+          "generated_tokens": 1824,
+          "line_number": 240,
+          "mean_acceptance_length": 4.14,
+          "per_position_rates": [
+            0.952,
+            0.781,
+            0.738,
+            0.672
+          ],
+          "spec_type": "draft-mtp"
+        },
+        "no_spec_implementation": false,
+        "task_accepted_tokens": 1449,
+        "task_generated_tokens": 1824,
+        "task_line_count": 10,
+        "task_token_acceptance_rate": 0.7944078947368421
+      },
+      "errors": [],
+      "failed_runs": 0,
+      "include_same_file_md": false,
+      "load_pss_mib": 7085.2158203125,
+      "load_rss_mib": 37134.1328125,
+      "mean_tps": 34.806036929658674,
+      "median_tps": 34.81479475554753,
+      "name": "embedded_self_draft",
+      "post_run_pss_mib": 7365.1611328125,
+      "post_run_rss_mib": 37414.5390625,
+      "startup_error": null,
+      "successful_runs": 8
+    },
+    "same_file_md": {
+      "acceptance": {
+        "cumulative_line_count": 10,
+        "latest_cumulative": {
+          "accepted_drafts": 439,
+          "accepted_tokens": 1449,
+          "generated_drafts": 461,
+          "generated_tokens": 1824,
+          "line_number": 241,
+          "mean_acceptance_length": 4.14,
+          "per_position_rates": [
+            0.952,
+            0.781,
+            0.738,
+            0.672
+          ],
+          "spec_type": "draft-mtp"
+        },
+        "no_spec_implementation": false,
+        "task_accepted_tokens": 1449,
+        "task_generated_tokens": 1824,
+        "task_line_count": 10,
+        "task_token_acceptance_rate": 0.7944078947368421
+      },
+      "errors": [],
+      "failed_runs": 0,
+      "include_same_file_md": true,
+      "load_pss_mib": 11453.521484375,
+      "load_rss_mib": 73251.62109375,
+      "mean_tps": 36.440642140487874,
+      "median_tps": 36.19389889835907,
+      "name": "same_file_md",
+      "post_run_pss_mib": 11716.3037109375,
+      "post_run_rss_mib": 73514.80078125,
+      "startup_error": null,
+      "successful_runs": 8
+    }
+  },
+  "arms": [
+    {
+      "acceptance": {
+        "cumulative_line_count": 10,
+        "latest_cumulative": {
+          "accepted_drafts": 439,
+          "accepted_tokens": 1449,
+          "generated_drafts": 461,
+          "generated_tokens": 1824,
+          "line_number": 241,
+          "mean_acceptance_length": 4.14,
+          "per_position_rates": [
+            0.952,
+            0.781,
+            0.738,
+            0.672
+          ],
+          "spec_type": "draft-mtp"
+        },
+        "no_spec_implementation": false,
+        "task_accepted_tokens": 1449,
+        "task_generated_tokens": 1824,
+        "task_line_count": 10,
+        "task_token_acceptance_rate": 0.7944078947368421
+      },
+      "command": [
+        "/mnt/raid0/llm/llama.cpp/build/bin/llama-server",
+        "-m",
+        "/mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf",
+        "-md",
+        "/mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "18070",
+        "-np",
+        "1",
+        "-c",
+        "32768",
+        "-t",
+        "96",
+        "-ub",
+        "8192",
+        "--flash-attn",
+        "on",
+        "--jinja",
+        "-ctk",
+        "q8_0",
+        "-ctv",
+        "q8_0",
+        "--mlock",
+        "--spec-type",
+        "draft-mtp",
+        "--spec-draft-n-max",
+        "4"
+      ],
+      "include_same_file_md": true,
+      "load_memory": {
+        "pss_kib": 11728406,
+        "rss_kib": 75009660
+      },
+      "log_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/reports/md_self_draft_ab_20260703T180149Z/same_file_md.log",
+      "name": "same_file_md",
+      "pid": 1955460,
+      "post_run_memory": {
+        "pss_kib": 11997495,
+        "rss_kib": 75279156
+      },
+      "runs": [
+        {
+          "error": null,
+          "latency_s": 5.614901719003683,
+          "predicted_tokens": 192,
+          "predicted_tokens_per_second": 37.24235852753025,
+          "prompt_tokens": 65,
+          "repetition": 1,
+          "response_chars": 585
+        },
+        {
+          "error": null,
+          "latency_s": 5.643072706996463,
+          "predicted_tokens": 192,
+          "predicted_tokens_per_second": 37.07521363626357,
+          "prompt_tokens": 65,
+          "repetition": 2,
+          "response_chars": 585
+        },
+        {
+          "error": null,
+          "latency_s": 5.758138820005115,
+          "predicted_tokens": 192,
+          "predicted_tokens_per_second": 36.24842404312656,
+          "prompt_tokens": 65,
+          "repetition": 3,
+          "response_chars": 585
+        },
+        {
+          "error": null,
+          "latency_s": 5.769782948991633,
+          "predicted_tokens": 192,
+          "predicted_tokens_per_second": 36.139373753591585,
+          "prompt_tokens": 65,
+          "repetition": 4,
+          "response_chars": 585
+        },
+        {
+          "error": null,
+          "latency_s": 5.795650792992092,
+          "predicted_tokens": 192,
+          "predicted_tokens_per_second": 36.02698195780002,
+          "prompt_tokens": 65,
+          "repetition": 5,
+          "response_chars": 585
+        },
+        {
+          "error": null,
+          "latency_s": 5.847808452992467,
+          "predicted_tokens": 192,
+          "predicted_tokens_per_second": 35.66889677774246,
+          "prompt_tokens": 65,
+          "repetition": 6,
+          "response_chars": 585
+        },
+        {
+          "error": null,
+          "latency_s": 5.801837782986695,
+          "predicted_tokens": 192,
+          "predicted_tokens_per_second": 35.99183660156081,
+          "prompt_tokens": 65,
+          "repetition": 7,
+          "response_chars": 585
+        },
+        {
+          "error": null,
+          "latency_s": 5.63270408999233,
+          "predicted_tokens": 192,
+          "predicted_tokens_per_second": 37.13205182628776,
+          "prompt_tokens": 65,
+          "repetition": 8,
+          "response_chars": 585
+        }
+      ],
+      "startup_error": null
+    },
+    {
+      "acceptance": {
+        "cumulative_line_count": 10,
+        "latest_cumulative": {
+          "accepted_drafts": 439,
+          "accepted_tokens": 1449,
+          "generated_drafts": 461,
+          "generated_tokens": 1824,
+          "line_number": 240,
+          "mean_acceptance_length": 4.14,
+          "per_position_rates": [
+            0.952,
+            0.781,
+            0.738,
+            0.672
+          ],
+          "spec_type": "draft-mtp"
+        },
+        "no_spec_implementation": false,
+        "task_accepted_tokens": 1449,
+        "task_generated_tokens": 1824,
+        "task_line_count": 10,
+        "task_token_acceptance_rate": 0.7944078947368421
+      },
+      "command": [
+        "/mnt/raid0/llm/llama.cpp/build/bin/llama-server",
+        "-m",
+        "/mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "18070",
+        "-np",
+        "1",
+        "-c",
+        "32768",
+        "-t",
+        "96",
+        "-ub",
+        "8192",
+        "--flash-attn",
+        "on",
+        "--jinja",
+        "-ctk",
+        "q8_0",
+        "-ctv",
+        "q8_0",
+        "--mlock",
+        "--spec-type",
+        "draft-mtp",
+        "--spec-draft-n-max",
+        "4"
+      ],
+      "include_same_file_md": false,
+      "load_memory": {
+        "pss_kib": 7255261,
+        "rss_kib": 38025352
+      },
+      "log_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/reports/md_self_draft_ab_20260703T180149Z/embedded_self_draft.log",
+      "name": "embedded_self_draft",
+      "pid": 1956695,
+      "post_run_memory": {
+        "pss_kib": 7541925,
+        "rss_kib": 38312488
+      },
+      "runs": [
+        {
+          "error": null,
+          "latency_s": 6.0778550669929245,
+          "predicted_tokens": 192,
+          "predicted_tokens_per_second": 34.40464993179099,
+          "prompt_tokens": 65,
+          "repetition": 1,
+          "response_chars": 585
+        },
+        {
+          "error": null,
+          "latency_s": 6.091923735002638,
+          "predicted_tokens": 192,
+          "predicted_tokens_per_second": 34.400772584017616,
+          "prompt_tokens": 65,
+          "repetition": 2,
+          "response_chars": 585
+        },
+        {
+          "error": null,
+          "latency_s": 5.981715819987585,
+          "predicted_tokens": 192,
+          "predicted_tokens_per_second": 35.18308397322568,
+          "prompt_tokens": 65,
+          "repetition": 3,
+          "response_chars": 585
+        },
+        {
+          "error": null,
+          "latency_s": 5.971846758999163,
+          "predicted_tokens": 192,
+          "predicted_tokens_per_second": 35.27104234564188,
+          "prompt_tokens": 65,
+          "repetition": 4,
+          "response_chars": 585
+        },
+        {
+          "error": null,
+          "latency_s": 6.046952976001194,
+          "predicted_tokens": 192,
+          "predicted_tokens_per_second": 34.777864541304425,
+          "prompt_tokens": 65,
+          "repetition": 5,
+          "response_chars": 585
+        },
+        {
+          "error": null,
+          "latency_s": 6.121935389004648,
+          "predicted_tokens": 192,
+          "predicted_tokens_per_second": 34.26015987717733,
+          "prompt_tokens": 65,
+          "repetition": 6,
+          "response_chars": 585
+        },
+        {
+          "error": null,
+          "latency_s": 6.039777170997695,
+          "predicted_tokens": 192,
+          "predicted_tokens_per_second": 34.85172496979064,
+          "prompt_tokens": 65,
+          "repetition": 7,
+          "response_chars": 585
+        },
+        {
+          "error": null,
+          "latency_s": 5.96833591000177,
+          "predicted_tokens": 192,
+          "predicted_tokens_per_second": 35.298997214320806,
+          "prompt_tokens": 65,
+          "repetition": 8,
+          "response_chars": 585
+        }
+      ],
+      "startup_error": null
+    }
+  ],
+  "config": {
+    "binary": "/mnt/raid0/llm/llama.cpp/build/bin/llama-server",
+    "context_tokens": 32768,
+    "draft_max": 4,
+    "host": "127.0.0.1",
+    "min_speedup_ratio": 1.05,
+    "mlock": true,
+    "model": "/mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf",
+    "n_predict": 192,
+    "no_mmap": false,
+    "port": 18070,
+    "repetitions": 8,
+    "seed": 1234,
+    "slots": 1,
+    "spec_type": "draft-mtp",
+    "temperature": 0.0,
+    "threads": 96,
+    "ubatch": 8192,
+    "warmups": 2
+  },
+  "decision": "embedded_self_draft_slower",
+  "generated_at": "2026-07-03T18:03:58+00:00",
+  "pss_delta_mib_embedded_minus_same_file_md": -4368.3056640625,
+  "schema_version": "md_self_draft_ab.v1",
+  "speedup_ratio_median_tps_embedded_over_same_file_md": 0.9618967786066821
+}
