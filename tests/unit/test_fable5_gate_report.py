@@ -55,6 +55,25 @@ xmas_routing:
             "blockers": ["active AutoPilot process(es): 123 autopilot"],
         },
     )
+    a9_manifest = tmp_path / "offline_reward_pairwise_expanded_gap_collection_manifest.json"
+    monkeypatch.setattr(
+        report_mod,
+        "build_a9_collection_status",
+        lambda path: {
+            "ready": False,
+            "status": "blocked",
+            "manifest_path": str(a9_manifest),
+            "manifest_schema_version": (
+                "offline_reward_pairwise_collection_window.v1"
+            ),
+            "source_plan_decision": {"status": "expansion_plan_ready"},
+            "batch_count": 9,
+            "post_collection_step_count": 7,
+            "autopilot_guard": {"refusal_exit_code": 75},
+            "blockers": ["active AutoPilot process(es): 123 autopilot"],
+            "warnings": [],
+        },
+    )
     monkeypatch.setattr(
         report_mod,
         "build_restart_readiness_report",
@@ -146,24 +165,28 @@ xmas_routing:
         config_path=config,
         xmas_table_path=table,
         xmas_ab_root=ab_root,
+        a9_collection_manifest=a9_manifest,
     )
 
     assert report["ready"] is False
     assert report["summary"]["ready"] is False
-    assert report["summary"]["blocker_count"] == 6
+    assert report["summary"]["blocker_count"] == 7
     assert report["summary"]["blocked_sections"] == [
         "w4_w6_restart_cutover",
         "ds_e1_dynamic_stack",
+        "a9_pairwise_collection",
         "xmas_production_path",
     ]
     assert report["summary"]["section_statuses"]["phase_health"] == "ready"
     assert report["summary"]["section_statuses"]["w4_w6_restart_cutover"] == "blocked"
+    assert report["summary"]["section_statuses"]["a9_pairwise_collection"] == "blocked"
     assert report["summary"]["next_action_keys"] == [
         "append_baseline_seed_event",
         "continue_w4_w6_accrual",
         "run_ds_e1_kv_measurements",
         "collect_ri10_canary_arm_telemetry",
         "run_xmas_constrained_policy_ab",
+        "run_a9_pairwise_collection_window",
     ]
     assert report["summary"]["active_next_action_keys"] == [
         "continue_w4_w6_accrual",
@@ -173,12 +196,19 @@ xmas_routing:
         "append_baseline_seed_event",
         "run_ds_e1_kv_measurements",
         "run_xmas_constrained_policy_ab",
+        "run_a9_pairwise_collection_window",
     ]
     assert report["summary"]["restart_ready"] is False
     assert report["summary"]["phase_trial_id"] == 896
     assert report["summary"]["ds_e1_ready_for_profile_decision"] is False
     assert report["summary"]["ds_e1_clean_window_ready"] is False
     assert report["summary"]["ds_e1_clean_window_blockers"] == [
+        "active AutoPilot process(es): 123 autopilot"
+    ]
+    assert report["summary"]["a9_collection_status"] == "blocked"
+    assert report["summary"]["a9_collection_ready"] is False
+    assert report["summary"]["a9_collection_batch_count"] == 9
+    assert report["summary"]["a9_collection_blockers"] == [
         "active AutoPilot process(es): 123 autopilot"
     ]
     assert report["summary"]["xmas_mode"] == "off"
@@ -188,6 +218,9 @@ xmas_routing:
         "blockers"
     ]
     assert "ds_e1_dynamic_stack: kv_size_measurements: missing" in report["blockers"]
+    assert "a9_pairwise_collection: active AutoPilot process(es): 123 autopilot" in report[
+        "blockers"
+    ]
     assert "xmas_production_path: xmas_routing.mode is off; enforce remains default-off" in report[
         "blockers"
     ]
@@ -244,6 +277,7 @@ xmas_routing:
         "run_ds_e1_kv_measurements",
         "collect_ri10_canary_arm_telemetry",
         "run_xmas_constrained_policy_ab",
+        "run_a9_pairwise_collection_window",
     ]
     seed_action = report["next_actions"][0]
     assert seed_action["status"] == "blocked"
@@ -324,6 +358,17 @@ xmas_routing:
     assert xmas_action["required_policy"] == "incumbent_constrained_cheapfirst_v2"
     assert f"--prompts {xmas_action['prompt_manifest']}" in xmas_action["command"]
     assert "$(date -u +%Y%m%dT%H%M%SZ)-constrained-policy" in xmas_action["command"]
+    a9_action = report["next_actions"][5]
+    assert a9_action["status"] == "blocked"
+    assert a9_action["blocked_by"] == [
+        "active AutoPilot process(es): 123 autopilot"
+    ]
+    assert a9_action["manifest"] == str(a9_manifest)
+    assert a9_action["batch_count"] == 9
+    assert a9_action["post_collection_step_count"] == 7
+    assert a9_action["source_plan_decision"] == {"status": "expansion_plan_ready"}
+    assert "collect_offline_reward_pairwise_expanded_gap.sh" in a9_action["command"]
+    assert "offline_reward_pairwise_collection_status.py" in a9_action["follow_up"]
 
 
 def test_phase_section_surfaces_eval_progress() -> None:
@@ -595,6 +640,38 @@ def test_xmas_next_action_ready_when_only_evidence_is_missing() -> None:
             ),
         }
     ]
+
+
+def test_a9_next_action_ready_when_collection_window_clear() -> None:
+    section = report_mod.GateSection(
+        key="a9_pairwise_collection",
+        status="ready",
+        summary="ready",
+        blockers=[],
+        details={
+            "ready": True,
+            "status": "ready",
+            "manifest_path": "/tmp/a9_manifest.json",
+            "batch_count": 9,
+            "post_collection_step_count": 7,
+            "source_plan_decision": {"status": "expansion_plan_ready"},
+        },
+    )
+
+    actions = report_mod.build_next_actions([section])
+
+    assert len(actions) == 1
+    action = actions[0]
+    assert action["key"] == "run_a9_pairwise_collection_window"
+    assert action["priority"] == "P1"
+    assert action["status"] == "ready"
+    assert action["blocked_by"] == []
+    assert action["manifest"] == "/tmp/a9_manifest.json"
+    assert action["batch_count"] == 9
+    assert action["post_collection_step_count"] == 7
+    assert action["source_plan_decision"] == {"status": "expansion_plan_ready"}
+    assert "collect_offline_reward_pairwise_expanded_gap.sh" in action["command"]
+    assert "offline_reward_pairwise_collection_status.py" in action["follow_up"]
 
 
 def test_w8_next_action_when_restart_ready_without_promotion_finalization() -> None:

@@ -31,6 +31,10 @@ sys.path.insert(0, str(VALIDATE_DIR))
 sys.path.insert(0, str(ORCH_ROOT))
 
 from dynamic_stack_evidence_packet import build_packet as build_ds_e1_packet  # noqa: E402
+from scripts.graph_router.offline_reward_pairwise_collection_status import (  # noqa: E402
+    DEFAULT_MANIFEST as DEFAULT_A9_COLLECTION_MANIFEST,
+    build_status as build_a9_collection_status,
+)
 from phase_status import PHASE_PATH, build_phase_health_report  # noqa: E402
 from preflight_audit import JOURNAL_PATH, STATE_PATH, _load_jsonl  # noqa: E402
 from restart_readiness_report import build_restart_readiness_report  # noqa: E402
@@ -42,6 +46,13 @@ from validate_xmas_winner_table import (  # noqa: E402
 
 DEFAULT_XMAS_TABLE = ORCH_ROOT / "orchestration" / "xmas_winner_table.yaml"
 DEFAULT_XMAS_AB_ROOT = ORCH_ROOT / "benchmarks" / "results" / "runs" / "xmas_live_ab"
+DEFAULT_A9_COLLECTION_SCRIPT = (
+    ORCH_ROOT
+    / "orchestration"
+    / "reports"
+    / "offline_reward_oracle_token_coverage_final_labels_20260621"
+    / "collect_offline_reward_pairwise_expanded_gap.sh"
+)
 DEFAULT_DS_E1_KV_PORT = 8194
 DEFAULT_XMAS_HELDOUT_PROMPTS_ARG = (
     "benchmarks/results/runs/xmas_live_ab/20260618-heldout-resilient/prompts.jsonl"
@@ -424,6 +435,37 @@ def _compact_processes(lines: list[str], *, limit: int = 4) -> str:
     return "; ".join(lines[:limit]) + f"; ... +{len(lines) - limit} more"
 
 
+def a9_collection_section(
+    manifest_path: Path = DEFAULT_A9_COLLECTION_MANIFEST,
+) -> GateSection:
+    """Surface the guarded A9 pairwise source-acquisition window."""
+    status = build_a9_collection_status(manifest_path)
+    blockers = list(status.get("blockers") or [])
+    ready = bool(status.get("ready"))
+    status_label = str(status.get("status") or "unknown")
+    return GateSection(
+        key="a9_pairwise_collection",
+        status="ready" if ready else "blocked",
+        summary=(
+            "A9 pairwise source-acquisition window "
+            f"is {status_label} with {status.get('batch_count', 0)} batch(es)."
+        ),
+        blockers=blockers,
+        details={
+            "ready": ready,
+            "status": status_label,
+            "manifest_path": status.get("manifest_path"),
+            "manifest_schema_version": status.get("manifest_schema_version"),
+            "source_plan_decision": status.get("source_plan_decision"),
+            "batch_count": status.get("batch_count"),
+            "post_collection_step_count": status.get("post_collection_step_count"),
+            "autopilot_guard": status.get("autopilot_guard"),
+            "blockers": blockers,
+            "warnings": list(status.get("warnings") or []),
+        },
+    )
+
+
 def xmas_section(
     *,
     config_path: Path = DEFAULT_CLASSIFIER_CONFIG,
@@ -590,6 +632,7 @@ def build_fable5_gate_report(
     config_path: Path = DEFAULT_CLASSIFIER_CONFIG,
     xmas_table_path: Path = DEFAULT_XMAS_TABLE,
     xmas_ab_root: Path = DEFAULT_XMAS_AB_ROOT,
+    a9_collection_manifest: Path = DEFAULT_A9_COLLECTION_MANIFEST,
 ) -> dict[str, Any]:
     sections = [
         phase_section(phase_report),
@@ -602,6 +645,7 @@ def build_fable5_gate_report(
             )
         ),
         ds_e1_section(ds_e1_packet),
+        a9_collection_section(a9_collection_manifest),
         xmas_section(
             config_path=config_path,
             candidate_table_path=xmas_table_path,
@@ -632,6 +676,7 @@ def build_report_summary(
     by_key = {section.key: section for section in sections}
     restart = by_key.get("w4_w6_restart_cutover")
     ds_e1 = by_key.get("ds_e1_dynamic_stack")
+    a9 = by_key.get("a9_pairwise_collection")
     xmas = by_key.get("xmas_production_path")
     phase = by_key.get("phase_health")
     return {
@@ -697,6 +742,18 @@ def build_report_summary(
         ),
         "ds_e1_clean_window_blockers": (
             ds_e1.details.get("clean_window_blockers") if ds_e1 is not None else None
+        ),
+        "a9_collection_status": (
+            a9.details.get("status") if a9 is not None else None
+        ),
+        "a9_collection_ready": (
+            a9.details.get("ready") if a9 is not None else None
+        ),
+        "a9_collection_batch_count": (
+            a9.details.get("batch_count") if a9 is not None else None
+        ),
+        "a9_collection_blockers": (
+            a9.details.get("blockers") if a9 is not None else None
         ),
         "xmas_mode": xmas.details.get("mode") if xmas is not None else None,
         "xmas_quiet_window_ready": (
@@ -980,6 +1037,37 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
                     f"--prompts {DEFAULT_XMAS_HELDOUT_PROMPTS_ARG} "
                     "--reps 2 --host-quiet-confirmed "
                     f"--output {DEFAULT_XMAS_CONSTRAINED_OUTPUT_ARG}"
+                ),
+            }
+        )
+
+    a9 = by_key.get("a9_pairwise_collection")
+    if a9 is not None:
+        actions.append(
+            {
+                "key": "run_a9_pairwise_collection_window",
+                "priority": "P1",
+                "status": "ready" if a9.details.get("ready") else "blocked",
+                "reason": (
+                    "A9 offline reward-oracle pairwise holdouts need the "
+                    "guarded priority-0/1 collection window before another "
+                    "pairwise contract rebuild."
+                ),
+                "requires": "coordinated clean window; collection script refuses active AutoPilot",
+                "blocked_by": a9.blockers,
+                "manifest": a9.details.get("manifest_path"),
+                "batch_count": a9.details.get("batch_count"),
+                "post_collection_step_count": a9.details.get(
+                    "post_collection_step_count"
+                ),
+                "source_plan_decision": a9.details.get("source_plan_decision"),
+                "command": (
+                    "cd /mnt/raid0/llm/epyc-orchestrator && "
+                    f"{DEFAULT_A9_COLLECTION_SCRIPT.relative_to(ORCH_ROOT)}"
+                ),
+                "follow_up": (
+                    "cd /mnt/raid0/llm/epyc-orchestrator && "
+                    "uv run python scripts/graph_router/offline_reward_pairwise_collection_status.py"
                 ),
             }
         )
