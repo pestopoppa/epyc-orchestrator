@@ -327,6 +327,36 @@ class TestGetMode:
     def test_configured_canary_does_not_sample_arm(self):
         assert get_configured_mode({"mode": "canary", "canary_enforce_pct": 1.0}) == "canary"
 
+    def test_canary_role_filter_keeps_excluded_role_in_shadow(self, monkeypatch):
+        monkeypatch.setattr("random.random", lambda: 0.0)
+
+        assert (
+            get_mode(
+                {
+                    "mode": "canary",
+                    "canary_ratio": 1.0,
+                    "canary_roles": ["frontdoor", "worker_general"],
+                },
+                role="worker_vision",
+            )
+            == "shadow"
+        )
+
+    def test_canary_role_filter_samples_included_role(self, monkeypatch):
+        monkeypatch.setattr("random.random", lambda: 0.0)
+
+        assert (
+            get_mode(
+                {
+                    "mode": "canary",
+                    "canary_ratio": 1.0,
+                    "canary_roles": ["frontdoor", "worker_general"],
+                },
+                role="worker_general",
+            )
+            == "enforce"
+        )
+
     def test_explicit_shadow(self):
         assert get_mode({"mode": "shadow"}) == "shadow"
 

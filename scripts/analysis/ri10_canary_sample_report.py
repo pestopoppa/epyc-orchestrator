@@ -10,9 +10,12 @@ import json
 from pathlib import Path
 from typing import Any, Iterable
 
+import yaml
+
 SCRIPT_PATH = Path(__file__).resolve()
 ORCH_ROOT = SCRIPT_PATH.parents[2]
 DEFAULT_LOG_DIR = ORCH_ROOT / "logs" / "progress"
+DEFAULT_CLASSIFIER_CONFIG = ORCH_ROOT / "orchestration" / "classifier_config.yaml"
 DEFAULT_CANARY_START = "2026-04-06"
 DEFAULT_TELEMETRY_HEALTH_START = "2026-06-20"
 DEFAULT_GATE = 50
@@ -87,6 +90,24 @@ def _is_shadow_arm(data: dict[str, Any], canary_roles: set[str]) -> bool:
     mode = _factual_risk_mode(data)
     action = str(data.get("risk_gate_action") or "")
     return mode == "shadow" or action in {"shadow", "not_enforced_shadow"}
+
+
+def _configured_canary_roles(config_path: Path = DEFAULT_CLASSIFIER_CONFIG) -> list[str] | None:
+    try:
+        loaded = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return None
+    if not isinstance(loaded, dict):
+        return None
+    factual = loaded.get("factual_risk") or {}
+    if not isinstance(factual, dict):
+        return None
+    roles = factual.get("canary_roles")
+    if roles is None:
+        return None
+    if not isinstance(roles, list):
+        return None
+    return [str(role) for role in roles if str(role)]
 
 
 def build_report(
@@ -371,6 +392,7 @@ def build_report(
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--log-dir", type=Path, default=DEFAULT_LOG_DIR)
+    parser.add_argument("--classifier-config", type=Path, default=DEFAULT_CLASSIFIER_CONFIG)
     parser.add_argument("--canary-start", default=DEFAULT_CANARY_START)
     parser.add_argument("--telemetry-health-start", default=DEFAULT_TELEMETRY_HEALTH_START)
     parser.add_argument("--decision-gate", type=int, default=DEFAULT_GATE)
@@ -400,13 +422,19 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
+    if args.all_canary_roles:
+        canary_roles: Iterable[str] = ()
+    elif args.canary_role is not None:
+        canary_roles = args.canary_role
+    else:
+        canary_roles = _configured_canary_roles(args.classifier_config) or DEFAULT_CANARY_ROLES
     report = build_report(
         args.log_dir,
         canary_start=args.canary_start,
         telemetry_health_start=args.telemetry_health_start,
         decision_gate=args.decision_gate,
         min_arm_samples=args.min_arm_samples,
-        canary_roles=() if args.all_canary_roles else (args.canary_role or DEFAULT_CANARY_ROLES),
+        canary_roles=canary_roles,
     )
     rendered = json.dumps(report, indent=2, sort_keys=True) + "\n"
     if args.output:

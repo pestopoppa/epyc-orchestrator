@@ -344,3 +344,70 @@ def test_build_report_flags_current_missing_factual_mode(tmp_path: Path) -> None
     )
     assert summary["telemetry_producer_currently_healthy"] is False
     assert summary["telemetry_collection_blocker"] == "current_missing_factual_risk_mode"
+
+
+def test_configured_canary_roles_reads_classifier_config(tmp_path: Path) -> None:
+    config = tmp_path / "classifier_config.yaml"
+    config.write_text(
+        """
+factual_risk:
+  mode: canary
+  canary_roles:
+    - frontdoor
+    - worker_general
+    - worker_vision
+""",
+        encoding="utf-8",
+    )
+
+    assert report_mod._configured_canary_roles(config) == [
+        "frontdoor",
+        "worker_general",
+        "worker_vision",
+    ]
+
+
+def test_main_uses_configured_canary_roles_by_default(tmp_path: Path) -> None:
+    config = tmp_path / "classifier_config.yaml"
+    config.write_text(
+        """
+factual_risk:
+  mode: canary
+  canary_roles: [frontdoor, worker_general]
+""",
+        encoding="utf-8",
+    )
+    log_dir = tmp_path / "logs"
+    _write_jsonl(
+        log_dir / "2026-06-20.jsonl",
+        [
+            _routing_row(
+                "2026-06-20T00:00:00Z",
+                band="high",
+                mode="shadow",
+                routing=["worker_general"],
+            )
+        ],
+    )
+    output = tmp_path / "report.json"
+
+    rc = report_mod.main(
+        [
+            "--log-dir",
+            str(log_dir),
+            "--classifier-config",
+            str(config),
+            "--canary-start",
+            "2026-04-06",
+            "--telemetry-health-start",
+            "2026-06-20",
+            "--output",
+            str(output),
+        ]
+    )
+
+    assert rc == 0
+    summary = json.loads(output.read_text(encoding="utf-8"))
+    assert summary["canary_roles"] == ["frontdoor", "worker_general"]
+    assert summary["canary_role_high_risk_rows_since_telemetry_health_start"] == 1
+    assert summary["non_canary_role_high_risk_rows_since_telemetry_health_start"] == 0
