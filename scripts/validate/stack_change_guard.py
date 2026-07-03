@@ -35,6 +35,7 @@ DEFAULT_ADD_MODEL_PROCEDURE = REPO_ROOT / "orchestration" / "procedures" / "add_
 DEFAULT_PROCEDURE_SCHEMA = REPO_ROOT / "orchestration" / "procedure.schema.json"
 RETIRED_LIVE_ROLES = {"architect_coding"}
 MANIFEST_OWNED_AUXILIARY_LAUNCH_ROLES = frozenset({"worker_fast"})
+MANIFEST_OWNED_DEFAULT_AUXILIARY_LAUNCH_ROLES = frozenset({"eval_batch_frontdoor"})
 MANIFEST_OWNED_AUXILIARY_LAUNCH_MODES = frozenset({"embedding"})
 REQUIRED_SOURCE_ARTIFACTS = (
     "registry",
@@ -1058,6 +1059,8 @@ def _launch_target_is_manifest_owned_auxiliary(role: str, target: dict[str, Any]
     modes = _launch_target_modes(target)
     if modes and modes <= MANIFEST_OWNED_AUXILIARY_LAUNCH_MODES:
         return True
+    if role in MANIFEST_OWNED_DEFAULT_AUXILIARY_LAUNCH_ROLES:
+        return bool(modes) and target.get("tier") == "warm" and modes <= {"default"}
     if role in MANIFEST_OWNED_AUXILIARY_LAUNCH_ROLES:
         return bool(modes) and target.get("tier") == "warm" and modes <= {"worker_pool"}
     return False

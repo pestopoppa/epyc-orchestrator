@@ -547,6 +547,36 @@ def test_validate_stack_priors_allows_manifest_owned_embedding_targets(
     assert result.ok
 
 
+def test_validate_stack_priors_allows_manifest_owned_eval_batch_frontdoor_targets(
+    tmp_path: Path,
+) -> None:
+    registry = _write_yaml(tmp_path / "registry.yaml", {"roles": {}})
+    descriptors = _write_yaml(tmp_path / "descriptors.yaml", {"models": []})
+    priors = _write_yaml(tmp_path / "stack_priors.yaml", _priors(registry, descriptors))
+
+    result = validate_stack_priors(
+        priors,
+        launch_manifest_targets={
+            "frontdoor": {"port": 8070, "tier": "hot"},
+            "eval_batch_frontdoor": {
+                "port": 18070,
+                "ports": [18070],
+                "tier": "warm",
+                "launch_entries": [
+                    {
+                        "port": 18070,
+                        "primary_role": "eval_batch_frontdoor",
+                        "mode": "default",
+                        "alias": False,
+                    }
+                ],
+            },
+        },
+    )
+
+    assert result.ok
+
+
 def test_validate_stack_priors_allows_alias_targets_covered_by_live_primary(
     tmp_path: Path,
 ) -> None:
