@@ -26,6 +26,7 @@ Usage:
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
 import time
@@ -39,6 +40,10 @@ from src.config import _registry_timeout
 from src.registry_loader import RegistryLoader, RoleConfig
 
 logger = logging.getLogger(__name__)
+
+
+def _same_real_model_path(left: str, right: str) -> bool:
+    return os.path.realpath(left) == os.path.realpath(right)
 
 
 class ModelState(Enum):
@@ -287,7 +292,10 @@ class LlamaCppBackend(ModelBackend):
         # Add acceleration-specific flags
         if accel_type == "speculative_decoding":
             draft = self.registry.get_draft_for_role(role_config.name)
-            if draft:
+            if draft and not _same_real_model_path(
+                role_config.model.full_path,
+                draft.model.full_path,
+            ):
                 parts.append(f"-md {draft.model.full_path}")
             k = role_config.acceleration.k or 16
             parts.append(f"--draft-max {k}")

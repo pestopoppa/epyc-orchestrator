@@ -164,6 +164,22 @@ class TestLlamaCppBackendBuildCommand:
         assert "--draft-max 24" in cmd
         assert "-n 256" in cmd
 
+    def test_build_command_speculative_decoding_omits_same_file_md(self, minimal_registry):
+        """Self-draft NEXTN roles must not emit a redundant same-file -md."""
+        backend = LlamaCppBackend(minimal_registry)
+        role_config = minimal_registry.get_role("spec_role")
+        request = InferenceRequest(role="spec_role", prompt="Code this", n_tokens=256)
+
+        with patch("src.config.get_config") as mock_config:
+            mock_config.return_value.paths.llama_cpp_bin = Path("/usr/bin")
+            with patch.object(minimal_registry, "get_draft_for_role", return_value=role_config):
+                cmd = backend._build_command(role_config, request)
+
+        assert "llama-speculative" in cmd
+        assert "-md" not in cmd
+        assert "test-target.gguf" in cmd
+        assert "--draft-max 24" in cmd
+
     def test_build_command_moe_expert_reduction(self, minimal_registry):
         """Test command building for MoE expert reduction."""
         backend = LlamaCppBackend(minimal_registry)
