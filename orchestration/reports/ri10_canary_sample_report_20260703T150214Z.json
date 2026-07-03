@@ -1,0 +1,300 @@
+{
+  "band_counts": {
+    "<missing>": 4828,
+    "high": 510,
+    "low": 86282,
+    "medium": 21383
+  },
+  "band_counts_since_canary_start": {
+    "<missing>": 114,
+    "high": 464,
+    "low": 78849,
+    "medium": 19390
+  },
+  "canary_arm_balance_ready": false,
+  "canary_arm_counts_since_canary_start": {
+    "enforce_high_risk": 1,
+    "shadow_high_risk": 19
+  },
+  "canary_arm_counts_since_telemetry_health_start": {
+    "enforce_high_risk": 1,
+    "shadow_high_risk": 19
+  },
+  "canary_arm_sample_count_ready": false,
+  "canary_decision_ready": false,
+  "canary_role_factual_risk_modes_since_canary_start": {
+    "<missing>": 330,
+    "enforce": 1,
+    "shadow": 19
+  },
+  "canary_role_factual_risk_modes_since_telemetry_health_start": {
+    "enforce": 1,
+    "shadow": 19
+  },
+  "canary_role_high_risk_rows_since_canary_start": 350,
+  "canary_role_high_risk_rows_since_telemetry_health_start": 20,
+  "canary_role_missing_factual_risk_mode_high_risk_rows": 330,
+  "canary_role_missing_factual_risk_mode_high_risk_rows_since_telemetry_health_start": 0,
+  "canary_role_observable_factual_risk_mode_high_risk_rows": 20,
+  "canary_role_observable_factual_risk_mode_high_risk_rows_since_telemetry_health_start": 20,
+  "canary_roles": [
+    "frontdoor",
+    "worker_general",
+    "worker_vision"
+  ],
+  "canary_start": "2026-04-06",
+  "decision_gate_high_risk_samples": 50,
+  "decision_reason": "only 20 high-risk rows have observable enforce/shadow canary arms; gate requires 50",
+  "evaluable_canary_arm_high_risk_rows": 20,
+  "evaluable_canary_arm_high_risk_rows_since_telemetry_health_start": 20,
+  "example_high_risk_rows": [
+    {
+      "decision_source": "learned",
+      "factual_risk_mode": null,
+      "factual_risk_score": 0.7385,
+      "line": 1017,
+      "path": "/mnt/raid0/llm/epyc-orchestrator/logs/progress/2026-04-07.jsonl",
+      "risk_gate_action": "not_enforced",
+      "risk_gate_reason": "risk_control_disabled",
+      "routing": [
+        "frontdoor"
+      ],
+      "timestamp": "2026-04-07T02:14:02.722339+00:00"
+    },
+    {
+      "decision_source": "learned",
+      "factual_risk_mode": null,
+      "factual_risk_score": 0.7385,
+      "line": 1020,
+      "path": "/mnt/raid0/llm/epyc-orchestrator/logs/progress/2026-04-07.jsonl",
+      "risk_gate_action": "not_enforced",
+      "risk_gate_reason": "risk_control_disabled",
+      "routing": [
+        "frontdoor"
+      ],
+      "timestamp": "2026-04-07T02:15:23.159722+00:00"
+    },
+    {
+      "decision_source": "learned",
+      "factual_risk_mode": null,
+      "factual_risk_score": 0.7385,
+      "line": 1027,
+      "path": "/mnt/raid0/llm/epyc-orchestrator/logs/progress/2026-04-07.jsonl",
+      "risk_gate_action": "not_enforced",
+      "risk_gate_reason": "risk_control_disabled",
+      "routing": [
+        "architect_coding"
+      ],
+      "timestamp": "2026-04-07T02:17:37.414202+00:00"
+    },
+    {
+      "decision_source": "learned",
+      "factual_risk_mode": null,
+      "factual_risk_score": 0.7385,
+      "line": 1030,
+      "path": "/mnt/raid0/llm/epyc-orchestrator/logs/progress/2026-04-07.jsonl",
+      "risk_gate_action": "not_enforced",
+      "risk_gate_reason": "risk_control_disabled",
+      "routing": [
+        "architect_coding"
+      ],
+      "timestamp": "2026-04-07T02:17:40.469312+00:00"
+    },
+    {
+      "decision_source": "learned",
+      "factual_risk_mode": null,
+      "factual_risk_score": 0.725,
+      "line": 1609,
+      "path": "/mnt/raid0/llm/epyc-orchestrator/logs/progress/2026-04-07.jsonl",
+      "risk_gate_action": "not_enforced",
+      "risk_gate_reason": "risk_control_disabled",
+      "routing": [
+        "frontdoor"
+      ],
+      "timestamp": "2026-04-07T03:36:37.146677+00:00"
+    },
+    {
+      "decision_source": "learned",
+      "factual_risk_mode": null,
+      "factual_risk_score": 0.725,
+      "line": 1613,
+      "path": "/mnt/raid0/llm/epyc-orchestrator/logs/progress/2026-04-07.jsonl",
+      "risk_gate_action": "not_enforced",
+      "risk_gate_reason": "risk_control_disabled",
+      "routing": [
+        "frontdoor"
+      ],
+      "timestamp": "2026-04-07T03:38:10.530933+00:00"
+    },
+    {
+      "decision_source": "learned",
+      "factual_risk_mode": null,
+      "factual_risk_score": 0.725,
+      "line": 1620,
+      "path": "/mnt/raid0/llm/epyc-orchestrator/logs/progress/2026-04-07.jsonl",
+      "risk_gate_action": "not_enforced",
+      "risk_gate_reason": "risk_control_disabled",
+      "routing": [
+        "architect_coding"
+      ],
+      "timestamp": "2026-04-07T03:41:18.487080+00:00"
+    },
+    {
+      "decision_source": "learned",
+      "factual_risk_mode": null,
+      "factual_risk_score": 0.725,
+      "line": 1623,
+      "path": "/mnt/raid0/llm/epyc-orchestrator/logs/progress/2026-04-07.jsonl",
+      "risk_gate_action": "not_enforced",
+      "risk_gate_reason": "risk_control_disabled",
+      "routing": [
+        "architect_coding"
+      ],
+      "timestamp": "2026-04-07T03:41:21.549335+00:00"
+    },
+    {
+      "decision_source": "learned",
+      "factual_risk_mode": null,
+      "factual_risk_score": 0.7113,
+      "line": 3924,
+      "path": "/mnt/raid0/llm/epyc-orchestrator/logs/progress/2026-04-07.jsonl",
+      "risk_gate_action": "not_enforced",
+      "risk_gate_reason": "risk_control_disabled",
+      "routing": [
+        "frontdoor"
+      ],
+      "timestamp": "2026-04-07T09:12:08.618877+00:00"
+    },
+    {
+      "decision_source": "learned",
+      "factual_risk_mode": null,
+      "factual_risk_score": 0.7113,
+      "line": 3937,
+      "path": "/mnt/raid0/llm/epyc-orchestrator/logs/progress/2026-04-07.jsonl",
+      "risk_gate_action": "not_enforced",
+      "risk_gate_reason": "risk_control_disabled",
+      "routing": [
+        "frontdoor"
+      ],
+      "timestamp": "2026-04-07T09:12:59.053309+00:00"
+    },
+    {
+      "decision_source": "learned",
+      "factual_risk_mode": null,
+      "factual_risk_score": 0.7113,
+      "line": 3944,
+      "path": "/mnt/raid0/llm/epyc-orchestrator/logs/progress/2026-04-07.jsonl",
+      "risk_gate_action": "not_enforced",
+      "risk_gate_reason": "risk_control_disabled",
+      "routing": [
+        "architect_coding"
+      ],
+      "timestamp": "2026-04-07T09:14:23.166915+00:00"
+    },
+    {
+      "decision_source": "learned",
+      "factual_risk_mode": null,
+      "factual_risk_score": 0.7113,
+      "line": 3947,
+      "path": "/mnt/raid0/llm/epyc-orchestrator/logs/progress/2026-04-07.jsonl",
+      "risk_gate_action": "not_enforced",
+      "risk_gate_reason": "risk_control_disabled",
+      "routing": [
+        "architect_coding"
+      ],
+      "timestamp": "2026-04-07T09:14:26.213483+00:00"
+    }
+  ],
+  "frontdoor_high_risk_rows_since_canary_start": 285,
+  "frontdoor_high_risk_rows_since_telemetry_health_start": 2,
+  "generated_at": "2026-07-03T15:02:23Z",
+  "high_risk_by_date_since_canary_start": {
+    "2026-04-07": 16,
+    "2026-04-09": 12,
+    "2026-04-11": 3,
+    "2026-04-12": 24,
+    "2026-04-13": 12,
+    "2026-04-14": 29,
+    "2026-04-15": 60,
+    "2026-04-16": 84,
+    "2026-04-17": 2,
+    "2026-05-09": 14,
+    "2026-05-19": 2,
+    "2026-05-23": 40,
+    "2026-05-24": 8,
+    "2026-05-25": 4,
+    "2026-05-27": 3,
+    "2026-05-29": 9,
+    "2026-05-30": 30,
+    "2026-06-01": 36,
+    "2026-06-02": 14,
+    "2026-06-03": 15,
+    "2026-06-04": 12,
+    "2026-06-05": 3,
+    "2026-06-11": 3,
+    "2026-06-14": 1,
+    "2026-06-15": 5,
+    "2026-06-18": 1,
+    "2026-06-19": 2,
+    "2026-06-20": 3,
+    "2026-06-21": 2,
+    "2026-06-22": 2,
+    "2026-06-27": 7,
+    "2026-06-28": 5,
+    "2026-07-03": 1
+  },
+  "high_risk_by_date_since_telemetry_health_start": {
+    "2026-06-20": 3,
+    "2026-06-21": 2,
+    "2026-06-22": 2,
+    "2026-06-27": 7,
+    "2026-06-28": 5,
+    "2026-07-03": 1
+  },
+  "high_risk_decision_sources_since_canary_start": {
+    "classifier": 46,
+    "forced": 10,
+    "learned": 258,
+    "rules": 150
+  },
+  "high_risk_factual_risk_modes_since_canary_start": {
+    "<missing>": 444,
+    "enforce": 1,
+    "shadow": 19
+  },
+  "high_risk_factual_risk_modes_since_telemetry_health_start": {
+    "enforce": 1,
+    "shadow": 19
+  },
+  "high_risk_gate_actions_since_canary_start": {
+    "<missing>": 56,
+    "not_enforced:risk_control_disabled": 408
+  },
+  "high_risk_gate_actions_since_telemetry_health_start": {
+    "<missing>": 2,
+    "not_enforced:risk_control_disabled": 18
+  },
+  "high_risk_rows_since_canary_start": 464,
+  "high_risk_rows_since_telemetry_health_start": 20,
+  "high_risk_rows_total": 510,
+  "memory_risk_gate_actions_since_canary_start": {
+    "<missing>": 56,
+    "not_enforced:risk_control_disabled": 408
+  },
+  "min_canary_arm_samples": 10,
+  "missing_factual_risk_mode_high_risk_rows_since_telemetry_health_start": 0,
+  "non_canary_role_high_risk_rows_since_canary_start": 114,
+  "non_canary_role_high_risk_rows_since_telemetry_health_start": 0,
+  "non_evaluable_high_risk_rows_since_canary_start": 330,
+  "observable_factual_risk_mode_high_risk_rows_since_telemetry_health_start": 20,
+  "risk_control_disabled_high_risk_rows_since_canary_start": 408,
+  "routing_decision_rows": 113003,
+  "routing_decision_rows_since_canary_start": 98817,
+  "sample_count_ready": true,
+  "source_glob": "/mnt/raid0/llm/epyc-orchestrator/logs/progress/*.jsonl",
+  "telemetry_canary_role_scope_starved": false,
+  "telemetry_collection_blocker": "canary_role_sample_count_insufficient",
+  "telemetry_collection_reason": "only 20 current high-risk row(s) matched configured canary_roles; gate requires 50",
+  "telemetry_health_start": "2026-06-20",
+  "telemetry_producer_currently_healthy": true
+}
