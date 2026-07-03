@@ -327,6 +327,60 @@ def test_renderer_uses_endpoint_port_when_stack_prior_ports_missing(
     ]
 
 
+def test_renderer_distinguishes_embedded_nextn_from_separate_draft(
+    tmp_path: Path,
+) -> None:
+    qwen_model = tmp_path / "Qwen3.6-35B-A3B-MTP-Q8_0.gguf"
+    gemma_model = tmp_path / "gemma-4-26B-A4B-it-ORIG-Q4_K_M.gguf"
+    gemma_draft = tmp_path / "gemma-4-26B-A4B-it-assistant-v6-Q8_0.gguf"
+    stack_priors = {
+        "roles": {
+            "frontdoor": {
+                "deployment_status": "live_stack",
+                "status": "compiled",
+                "display_name": qwen_model.name,
+                "serving": {
+                    "ports": [8070],
+                    "tier": "hot",
+                    "binding": "server_mode.direct",
+                    "launch": {
+                        "requirements": {
+                            "model_path": str(qwen_model),
+                            "draft_model_path": str(qwen_model),
+                        }
+                    },
+                },
+                "priors": {"throughput_tps": 24.3},
+                "acceleration": {"spec_type": "draft-mtp", "draft_max": 4},
+            },
+            "worker_general": {
+                "deployment_status": "live_stack",
+                "status": "compiled",
+                "display_name": gemma_model.name,
+                "serving": {
+                    "ports": [8072],
+                    "tier": "hot",
+                    "binding": "server_mode.model_role",
+                    "launch": {
+                        "requirements": {
+                            "model_path": str(gemma_model),
+                            "draft_model_path": str(gemma_draft),
+                        }
+                    },
+                },
+                "priors": {"throughput_tps": 60.7},
+                "acceleration": {"spec_type": "draft-mtp", "draft_max": 2},
+            },
+        }
+    }
+
+    rendered = "\n".join(render_stack_summary.stack_prior_role_rows(stack_priors))
+
+    assert f"embedded_nextn={qwen_model.name}" in rendered
+    assert f"draft={qwen_model.name}" not in rendered
+    assert f"draft={gemma_draft.name}" in rendered
+
+
 def test_renderer_degraded_registry_fallback_canonicalizes_live_aliases(
     tmp_path: Path,
 ) -> None:

@@ -388,6 +388,7 @@ def test_update_then_check_succeeds_with_known_gaps_allowed(tmp_path: Path) -> N
     ) == render_current_stack_summary(
         stack_priors_path=check_config.stack_priors,
         registry_path=check_config.lean_registry,
+        descriptor_path=check_config.descriptors,
     )
     promotion_step = next(step for step in check_report.steps if step.name == "promotion_gate")
     assert promotion_step.status == "reference"

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -115,6 +116,10 @@ def format_acceleration(config: Any) -> str:
     return accel_type if not details else f"{accel_type} ({', '.join(details)})"
 
 
+def _same_real_model_path(left: str, right: str) -> bool:
+    return os.path.realpath(left) == os.path.realpath(right)
+
+
 def format_launch_requirements(requirements: Any) -> str:
     if not isinstance(requirements, dict):
         return "none"
@@ -123,8 +128,13 @@ def format_launch_requirements(requirements: Any) -> str:
     if mmproj_path:
         parts.append(f"mmproj={Path(str(mmproj_path)).name}")
     draft_path = requirements.get("draft_model_path")
-    if draft_path:
-        parts.append(f"draft={Path(str(draft_path)).name}")
+    model_path = requirements.get("model_path")
+    if isinstance(draft_path, str) and draft_path:
+        draft_name = Path(draft_path).name
+        if isinstance(model_path, str) and model_path and _same_real_model_path(model_path, draft_path):
+            parts.append(f"embedded_nextn={draft_name}")
+        else:
+            parts.append(f"draft={draft_name}")
     return ", ".join(parts) if parts else "none"
 
 
