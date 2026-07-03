@@ -15,6 +15,7 @@ ORCH_ROOT = SCRIPT_PATH.parents[2]
 DEFAULT_LOG_DIR = ORCH_ROOT / "logs" / "progress"
 DEFAULT_CANARY_START = "2026-04-06"
 DEFAULT_GATE = 50
+DEFAULT_MIN_ARM_SAMPLES = 10
 
 
 def _iso_now() -> str:
@@ -68,6 +69,7 @@ def build_report(
     *,
     canary_start: str = DEFAULT_CANARY_START,
     decision_gate: int = DEFAULT_GATE,
+    min_arm_samples: int = DEFAULT_MIN_ARM_SAMPLES,
 ) -> dict[str, Any]:
     routing_rows = 0
     since_rows = 0
@@ -131,26 +133,48 @@ def build_report(
                 }
             )
 
+    arm_attributed_high = enforce_high + shadow_high
+    risk_control_disabled_high = high_actions.get("not_enforced:risk_control_disabled", 0)
+    non_evaluable_high = max(0, high_since - arm_attributed_high)
     sample_count_ready = high_since >= decision_gate
-    canary_decision_ready = sample_count_ready and enforce_high > 0 and shadow_high > 0
+    arm_sample_count_ready = arm_attributed_high >= decision_gate
+    arm_balance_ready = enforce_high >= min_arm_samples and shadow_high >= min_arm_samples
+    canary_decision_ready = sample_count_ready and arm_sample_count_ready and arm_balance_ready
     if not sample_count_ready:
         decision_reason = f"high-risk sample count {high_since} is below gate {decision_gate}"
-    elif not canary_decision_ready:
-        decision_reason = "high-risk samples exist, but enforce/shadow canary arm telemetry is not observable"
+    elif not arm_sample_count_ready:
+        decision_reason = (
+            f"only {arm_attributed_high} high-risk rows have observable enforce/shadow "
+            f"canary arms; gate requires {decision_gate}"
+        )
+    elif not arm_balance_ready:
+        decision_reason = (
+            "enforce/shadow canary arm counts are below the per-arm gate "
+            f"{min_arm_samples} (enforce={enforce_high}, shadow={shadow_high})"
+        )
     else:
-        decision_reason = "high-risk sample count and enforce/shadow arm telemetry are present"
+        decision_reason = (
+            "high-risk sample count and enforce/shadow arm-attributed telemetry "
+            "are decision-grade"
+        )
 
     return {
         "generated_at": _iso_now(),
         "source_glob": str(log_dir / "*.jsonl"),
         "canary_start": canary_start,
         "decision_gate_high_risk_samples": decision_gate,
+        "min_canary_arm_samples": min_arm_samples,
         "routing_decision_rows": routing_rows,
         "routing_decision_rows_since_canary_start": since_rows,
         "high_risk_rows_total": high_total,
         "high_risk_rows_since_canary_start": high_since,
         "frontdoor_high_risk_rows_since_canary_start": frontdoor_high_since,
+        "evaluable_canary_arm_high_risk_rows": arm_attributed_high,
+        "non_evaluable_high_risk_rows_since_canary_start": non_evaluable_high,
+        "risk_control_disabled_high_risk_rows_since_canary_start": risk_control_disabled_high,
         "sample_count_ready": sample_count_ready,
+        "canary_arm_sample_count_ready": arm_sample_count_ready,
+        "canary_arm_balance_ready": arm_balance_ready,
         "canary_decision_ready": canary_decision_ready,
         "decision_reason": decision_reason,
         "band_counts": _counter_dict(band_counts),
@@ -171,6 +195,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--log-dir", type=Path, default=DEFAULT_LOG_DIR)
     parser.add_argument("--canary-start", default=DEFAULT_CANARY_START)
     parser.add_argument("--decision-gate", type=int, default=DEFAULT_GATE)
+    parser.add_argument(
+        "--min-arm-samples",
+        type=int,
+        default=DEFAULT_MIN_ARM_SAMPLES,
+        help="Minimum high-risk rows required in each observable canary arm.",
+    )
     parser.add_argument("--output", type=Path, help="Write JSON report to this path.")
     return parser.parse_args(argv)
 
@@ -181,6 +211,7 @@ def main(argv: list[str] | None = None) -> int:
         args.log_dir,
         canary_start=args.canary_start,
         decision_gate=args.decision_gate,
+        min_arm_samples=args.min_arm_samples,
     )
     rendered = json.dumps(report, indent=2, sort_keys=True) + "\n"
     if args.output:

@@ -912,7 +912,7 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
                     "key": "collect_ri10_canary_arm_telemetry",
                     "priority": "P0",
                     "status": "active",
-                    "reason": "RI-10 has enough high-risk samples, but fresh enforce/shadow canary-arm telemetry is still missing.",
+                    "reason": "RI-10 has raw high-risk samples, but arm-attributed canary telemetry is not yet decision-grade.",
                     "command": "python3 scripts/analysis/ri10_canary_sample_report.py",
                 }
             )

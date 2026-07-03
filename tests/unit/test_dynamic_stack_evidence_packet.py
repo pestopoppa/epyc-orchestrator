@@ -116,6 +116,47 @@ factual_risk:
     assert section.details["report_summary"]["high_risk_rows_since_canary_start"] == 490
 
 
+def test_ri10_section_requires_decision_grade_arm_report(tmp_path: Path, monkeypatch) -> None:
+    config = tmp_path / "classifier_config.yaml"
+    config.write_text(
+        """
+factual_risk:
+  mode: canary
+  canary_ratio: 0.25
+  canary_roles: [frontdoor]
+""",
+        encoding="utf-8",
+    )
+    report_dir = tmp_path / "orchestration" / "reports"
+    report_dir.mkdir(parents=True)
+    report_path = report_dir / "ri10_canary_sample_report_20260703.json"
+    report_path.write_text(
+        """
+{
+  "sample_count_ready": true,
+  "canary_arm_sample_count_ready": false,
+  "canary_arm_balance_ready": false,
+  "canary_decision_ready": false,
+  "high_risk_rows_since_canary_start": 463,
+  "evaluable_canary_arm_high_risk_rows": 19,
+  "canary_arm_counts_since_canary_start": {
+    "enforce_high_risk": 1,
+    "shadow_high_risk": 18
+  },
+  "decision_reason": "only 19 high-risk rows have observable enforce/shadow canary arms; gate requires 50"
+}
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(packet_mod, "ORCH_ROOT", tmp_path)
+
+    section = packet_mod.ri10_canary_section(config)
+
+    assert section.status == "insufficient_data"
+    assert section.details["report_path"] == str(report_path)
+    assert section.details["report_summary"]["evaluable_canary_arm_high_risk_rows"] == 19
+
+
 def test_kv_measurement_section_flags_missing_series(tmp_path: Path) -> None:
     section = packet_mod.kv_measurement_section(root=tmp_path, patterns=("missing*",))
 

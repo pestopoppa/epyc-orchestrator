@@ -52,12 +52,19 @@ def test_build_report_counts_high_risk_and_canary_arms(tmp_path: Path) -> None:
         [_routing_row("2026-04-05T00:00:00Z", band="high", action="enforce")],
     )
 
-    summary = report_mod.build_report(tmp_path, canary_start="2026-04-06", decision_gate=2)
+    summary = report_mod.build_report(
+        tmp_path,
+        canary_start="2026-04-06",
+        decision_gate=2,
+        min_arm_samples=1,
+    )
 
     assert summary["high_risk_rows_total"] == 3
     assert summary["high_risk_rows_since_canary_start"] == 2
     assert summary["frontdoor_high_risk_rows_since_canary_start"] == 2
     assert summary["sample_count_ready"] is True
+    assert summary["canary_arm_sample_count_ready"] is True
+    assert summary["canary_arm_balance_ready"] is True
     assert summary["canary_decision_ready"] is True
     assert summary["canary_arm_counts_since_canary_start"] == {
         "enforce_high_risk": 1,
@@ -88,4 +95,50 @@ def test_build_report_requires_observable_canary_arms(tmp_path: Path) -> None:
 
     assert summary["sample_count_ready"] is True
     assert summary["canary_decision_ready"] is False
-    assert "enforce/shadow canary arm telemetry is not observable" in summary["decision_reason"]
+    assert "observable enforce/shadow canary arms" in summary["decision_reason"]
+
+
+def test_build_report_requires_decision_grade_arm_counts(tmp_path: Path) -> None:
+    rows = []
+    rows.extend(
+        _routing_row(
+            f"2026-04-07T00:{idx:02d}:00Z",
+            band="high",
+            mode="shadow",
+            routing=["frontdoor"],
+        )
+        for idx in range(18)
+    )
+    rows.append(
+        _routing_row(
+            "2026-04-07T01:00:00Z",
+            band="high",
+            mode="enforce",
+            routing=["frontdoor"],
+        )
+    )
+    rows.extend(
+        _routing_row(
+            f"2026-04-07T02:{idx:02d}:00Z",
+            band="high",
+            action="not_enforced",
+            routing=["frontdoor"],
+        )
+        for idx in range(40)
+    )
+    _write_jsonl(tmp_path / "2026-04-07.jsonl", rows)
+
+    summary = report_mod.build_report(
+        tmp_path,
+        canary_start="2026-04-06",
+        decision_gate=50,
+        min_arm_samples=10,
+    )
+
+    assert summary["high_risk_rows_since_canary_start"] == 59
+    assert summary["evaluable_canary_arm_high_risk_rows"] == 19
+    assert summary["non_evaluable_high_risk_rows_since_canary_start"] == 40
+    assert summary["sample_count_ready"] is True
+    assert summary["canary_arm_sample_count_ready"] is False
+    assert summary["canary_arm_balance_ready"] is False
+    assert summary["canary_decision_ready"] is False
