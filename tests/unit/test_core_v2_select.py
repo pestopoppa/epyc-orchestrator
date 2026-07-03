@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -14,6 +15,35 @@ core_v2_select = importlib.import_module("core_v2_select")
 
 def _row(trial_id: int, results: list[dict]) -> dict:
     return {"trial_id": trial_id, "eval_details": {"question_results": results}}
+
+
+def _ledger_row(
+    trial_id: int,
+    *,
+    timestamp: str,
+    results: list[dict],
+    bug_corrupted_by: str = "",
+    outcome_status: str = "ok",
+) -> dict:
+    return {
+        "trial_id": trial_id,
+        "timestamp": timestamp,
+        "species": "numeric_swarm",
+        "action_type": "numeric_trial",
+        "tier": 1,
+        "quality": 1.5,
+        "speed": 42.0,
+        "cost": 0.5,
+        "reliability": 1.0,
+        "pareto_status": "dominated",
+        "eval_details": {"question_results": results},
+        "bug_corrupted_by": bug_corrupted_by,
+        "outcome_status": outcome_status,
+    }
+
+
+def _ts(value: str) -> float:
+    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc).timestamp()
 
 
 def test_collect_item_stats_treats_missing_partition_as_core() -> None:
@@ -190,4 +220,134 @@ def test_cli_writes_report_and_core_file(tmp_path: Path, monkeypatch) -> None:
     core_rows = [json.loads(line) for line in core.read_text(encoding="utf-8").splitlines()]
     assert report_obj["selected_count"] == 1
     assert report_obj["eligible_items"] == 1
+    assert core_rows[1]["id"] == "math-1"
+
+
+def test_ledger_source_uses_rollover_supersession_trust_and_era_fence(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    pool = tmp_path / "pool.jsonl"
+    journal_dir = tmp_path / "journal"
+    journal_dir.mkdir()
+    state_json = tmp_path / "state.json"
+    report = tmp_path / "report.json"
+    core = tmp_path / "core.jsonl"
+    question = {
+        "id": "math-1",
+        "suite": "math",
+        "prompt": "2+2?",
+        "expected": "4",
+        "scoring_method": "exact_match",
+    }
+    stable_qid = core_v2_select._stable_question_qid("math", question["prompt"])
+    pool.write_text(
+        json.dumps({"__pool_metadata__": True}) + "\n" + json.dumps(question) + "\n",
+        encoding="utf-8",
+    )
+    old = "2026-06-01T00:00:00+00:00"
+    current = "2026-06-28T00:00:00+00:00"
+    fence = "2026-06-26T22:07:11+00:00"
+    (journal_dir / "autopilot_journal.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    _ledger_row(
+                        990,
+                        timestamp=old,
+                        results=[{"qid": stable_qid, "suite": "math", "correct": True}],
+                    )
+                ),
+                json.dumps(
+                    _ledger_row(
+                        1000,
+                        timestamp=current,
+                        results=[{"qid": stable_qid, "suite": "math", "correct": True}],
+                    )
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (journal_dir / "autopilot_journal_1.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    _ledger_row(
+                        1001,
+                        timestamp=current,
+                        results=[{"qid": stable_qid, "suite": "math", "correct": False}],
+                    )
+                ),
+                json.dumps(
+                    _ledger_row(
+                        1002,
+                        timestamp=current,
+                        results=[{"qid": stable_qid, "suite": "math", "correct": True}],
+                    )
+                ),
+                json.dumps(
+                    {
+                        "type": "supersession",
+                        "target_trial_ids": [1002],
+                        "fields": {"bug_corrupted_by": "resource_contention"},
+                        "reason": "unit-test folded trust exclusion",
+                        "policy_version": "unit-test",
+                        "actor": "test",
+                        "timestamp": current,
+                    }
+                ),
+                json.dumps(
+                    _ledger_row(
+                        1003,
+                        timestamp=current,
+                        results=[{"qid": stable_qid, "suite": "math", "correct": True}],
+                        outcome_status="skipped",
+                    )
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    state_json.write_text(json.dumps({"pareto_exclude_before_ts": _ts(fence)}), encoding="utf-8")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "core_v2_select.py",
+            "--source",
+            "ledger",
+            "--journal-dir",
+            str(journal_dir),
+            "--state-json",
+            str(state_json),
+            "--pool",
+            str(pool),
+            "--out-core",
+            str(core),
+            "--report-json",
+            str(report),
+            "--target-size",
+            "1",
+            "--min-attempts",
+            "2",
+        ],
+    )
+
+    assert core_v2_select.main() == 0
+
+    report_obj = json.loads(report.read_text(encoding="utf-8"))
+    provenance = report_obj["source_provenance"]
+    core_rows = [json.loads(line) for line in core.read_text(encoding="utf-8").splitlines()]
+    assert report_obj["parameters"]["source"] == "ledger"
+    assert report_obj["source_rows"] == 2
+    assert report_obj["selected_count"] == 1
+    assert report_obj["selected"][0]["p_correct"] == 0.5
+    assert provenance["loaded_trial_rows"] == 5
+    assert provenance["trusted_rows"] == 2
+    assert provenance["untrusted_trial_ids"] == [1002, 1003]
+    assert provenance["era_excluded_trial_ids"] == [990]
+    assert any(path.endswith("autopilot_journal_1.jsonl") for path in provenance["journal_batches"])
     assert core_rows[1]["id"] == "math-1"

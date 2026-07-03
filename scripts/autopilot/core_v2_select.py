@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Select a candidate core_v2 fixed eval core from calibration outcomes.
+"""Select a candidate core_v2 fixed eval core from per-question outcomes.
 
-This is a zero-inference utility. It expects prior calibration/eval journal rows
-with compact ``eval_details.question_results`` vectors, estimates per-item
-correctness, selects medium-difficulty items, and writes a designed-core JSONL
-that EvalTower can load with ``AUTOPILOT_T1_CORE_ID``.
+This is a zero-inference utility. It can read legacy calibration JSONL rows or
+the live folded AutoPilot ledger, estimates per-item correctness, selects
+medium-difficulty items, and writes a designed-core JSONL that EvalTower can
+load with ``AUTOPILOT_T1_CORE_ID``.
 """
 
 from __future__ import annotations
@@ -12,13 +12,16 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
+
+from experiment_journal import DEFAULT_JOURNAL_DIR, ExperimentJournal
 
 ORCH_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_JOURNAL = ORCH_ROOT / "orchestration" / "autopilot_journal.jsonl"
+DEFAULT_STATE = ORCH_ROOT / "orchestration" / "autopilot_state.json"
 DEFAULT_CORE_OUT = ORCH_ROOT / "benchmarks" / "prompts" / "core_v2.jsonl"
 DEFAULT_REPORT_OUT = ORCH_ROOT / "orchestration" / "reports" / "core_v2_selection.json"
 DEFAULT_POOL_CANDIDATES = (
@@ -26,6 +29,7 @@ DEFAULT_POOL_CANDIDATES = (
     Path("/mnt/raid0/llm/epyc-inference-research/benchmarks/prompts/question_pool.jsonl"),
 )
 POOL_METADATA_KEY = "__pool_metadata__"
+UNTRUSTED_OUTCOME_STATUSES = frozenset({"invalid", "skipped"})
 
 
 @dataclass
@@ -85,6 +89,142 @@ def iter_jsonl(paths: list[Path]) -> list[dict[str, Any]]:
                 if isinstance(obj, dict):
                     rows.append(obj)
     return rows
+
+
+def _jsonl_batch_key(path: Path) -> tuple[int, str]:
+    stem = path.stem
+    if stem == "autopilot_journal":
+        return (0, path.name)
+    prefix = "autopilot_journal_"
+    if stem.startswith(prefix):
+        try:
+            return (int(stem.removeprefix(prefix)), path.name)
+        except ValueError:
+            pass
+    return (10**9, path.name)
+
+
+def _jsonl_batches(journal_dir: Path) -> list[Path]:
+    return sorted(journal_dir.glob("autopilot_journal*.jsonl"), key=_jsonl_batch_key)
+
+
+def _row_timestamp(row: Mapping[str, Any]) -> float | None:
+    raw = row.get("timestamp")
+    if isinstance(raw, bool) or raw is None:
+        return None
+    if isinstance(raw, int | float):
+        return float(raw)
+    text = str(raw).strip()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        pass
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
+
+
+def _excluded_by_timestamp(row: Mapping[str, Any], exclude_before_ts: float | None) -> bool:
+    if exclude_before_ts is None:
+        return False
+    row_ts = _row_timestamp(row)
+    return row_ts is None or row_ts < exclude_before_ts
+
+
+def _trial_ids(rows: list[dict[str, Any]]) -> list[int]:
+    trial_ids: list[int] = []
+    for row in rows:
+        try:
+            trial_ids.append(int(row["trial_id"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return sorted(trial_ids)
+
+
+def _load_state(path: Path) -> dict[str, Any]:
+    try:
+        obj = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return obj if isinstance(obj, dict) else {}
+
+
+def _state_exclude_before_ts(path: Path) -> float | None:
+    state = _load_state(path)
+    try:
+        return float(state.get("pareto_exclude_before_ts") or 0.0) or None
+    except (TypeError, ValueError):
+        return None
+
+
+def _entry_to_row(entry: Any) -> dict[str, Any]:
+    if is_dataclass(entry):
+        return asdict(entry)
+    if isinstance(entry, dict):
+        return dict(entry)
+    return dict(getattr(entry, "__dict__", {}) or {})
+
+
+def _is_trusted_ledger_row(row: Mapping[str, Any]) -> bool:
+    if row.get("bug_corrupted_by"):
+        return False
+    try:
+        if int(row.get("tier", 1)) < 1:
+            return False
+    except (TypeError, ValueError):
+        return False
+    status = str(row.get("outcome_status") or "ok")
+    if status in UNTRUSTED_OUTCOME_STATUSES:
+        return False
+    return bool(question_results(dict(row)))
+
+
+def load_ledger_rows(
+    *,
+    journal_dir: Path,
+    state_path: Path,
+    exclude_before_ts: float | None,
+    use_state_era_fence: bool,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    era_fence_source = "override" if exclude_before_ts is not None else "none"
+    if exclude_before_ts is None and use_state_era_fence:
+        exclude_before_ts = _state_exclude_before_ts(state_path)
+        if exclude_before_ts is not None:
+            era_fence_source = "state"
+
+    journal = ExperimentJournal(journal_dir=journal_dir)
+    raw_rows = [_entry_to_row(entry) for entry in journal.entries_with_supersessions()]
+    era_excluded = [
+        row for row in raw_rows if _excluded_by_timestamp(row, exclude_before_ts)
+    ]
+    current_rows = [
+        row for row in raw_rows if not _excluded_by_timestamp(row, exclude_before_ts)
+    ]
+    trusted = [row for row in current_rows if _is_trusted_ledger_row(row)]
+    untrusted = [row for row in current_rows if not _is_trusted_ledger_row(row)]
+
+    return trusted, {
+        "source": "ledger",
+        "journal_dir": str(journal_dir),
+        "journal_batches": [str(path) for path in _jsonl_batches(journal_dir)],
+        "state_path": str(state_path),
+        "era_fence_source": era_fence_source,
+        "exclude_before_ts": exclude_before_ts,
+        "loaded_trial_rows": len(raw_rows),
+        "trusted_rows": len(trusted),
+        "untrusted_rows": len(untrusted),
+        "untrusted_trial_ids": _trial_ids(untrusted),
+        "era_excluded_rows": len(era_excluded),
+        "era_excluded_trial_ids": _trial_ids(era_excluded),
+    }
 
 
 def _eval_details(row: dict[str, Any]) -> dict[str, Any]:
@@ -223,6 +363,7 @@ def build_report(
     stats: dict[tuple[str, str], ItemStats],
     unresolved: list[ItemStats],
     args: argparse.Namespace,
+    source_provenance: dict[str, Any],
 ) -> dict[str, Any]:
     eligible = [
         item
@@ -241,7 +382,9 @@ def build_report(
             "p_max": args.p_max,
             "max_per_suite": args.max_per_suite,
             "include_partitions": sorted(set(args.include_partition)),
+            "source": args.source,
         },
+        "source_provenance": source_provenance,
         "source_rows": len(rows),
         "observed_items": len(stats),
         "eligible_items": len(eligible),
@@ -294,11 +437,40 @@ def write_core_jsonl(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
+        "--source",
+        choices=("jsonl", "ledger"),
+        default="jsonl",
+        help="Input source. jsonl preserves legacy calibration mode; ledger reads the folded live AutoPilot journal.",
+    )
+    parser.add_argument(
         "--journal",
         action="append",
         type=Path,
         default=[],
         help="Journal/calibration JSONL file. May be passed more than once.",
+    )
+    parser.add_argument(
+        "--journal-dir",
+        type=Path,
+        default=DEFAULT_JOURNAL_DIR,
+        help="AutoPilot journal directory for --source ledger.",
+    )
+    parser.add_argument(
+        "--state-json",
+        type=Path,
+        default=DEFAULT_STATE,
+        help="AutoPilot state file used for the ledger era fence.",
+    )
+    parser.add_argument(
+        "--exclude-before-ts",
+        type=float,
+        default=None,
+        help="Override the ledger era fence timestamp. Defaults to autopilot_state.pareto_exclude_before_ts.",
+    )
+    parser.add_argument(
+        "--no-state-era-fence",
+        action="store_true",
+        help="For --source ledger, do not read autopilot_state.pareto_exclude_before_ts.",
     )
     parser.add_argument("--pool", type=Path, default=None, help="Question-pool JSONL.")
     parser.add_argument("--out-core", type=Path, default=DEFAULT_CORE_OUT)
@@ -320,8 +492,23 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    journals = args.journal or [DEFAULT_JOURNAL]
-    rows = iter_jsonl(journals)
+    if args.source == "ledger":
+        if args.journal:
+            raise SystemExit("--journal is only valid with --source jsonl; use --journal-dir for ledger")
+        rows, source_provenance = load_ledger_rows(
+            journal_dir=args.journal_dir,
+            state_path=args.state_json,
+            exclude_before_ts=args.exclude_before_ts,
+            use_state_era_fence=not args.no_state_era_fence,
+        )
+    else:
+        journals = args.journal or [DEFAULT_JOURNAL]
+        rows = iter_jsonl(journals)
+        source_provenance = {
+            "source": "jsonl",
+            "journal_paths": [str(path) for path in journals],
+            "loaded_rows": len(rows),
+        }
     stats = collect_item_stats(rows, include_partitions=set(args.include_partition))
     selected = select_core_items(
         stats,
@@ -340,6 +527,7 @@ def main() -> int:
         stats=stats,
         unresolved=unresolved,
         args=args,
+        source_provenance=source_provenance,
     )
     if args.report_json:
         args.report_json.parent.mkdir(parents=True, exist_ok=True)
