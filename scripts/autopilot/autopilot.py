@@ -278,6 +278,24 @@ _PLANNER_HINTS_ENABLED = os.environ.get(
 ).strip().lower() in {"1", "true", "yes", "on"}
 _PLANNER_SUPPRESSED_NUMERIC_SURFACES: set[str] = set()
 _PLANNER_DENYLISTED_FEATURE_FLAGS: set[str] = set()
+_PLANNER_STRATEGY_HINT_QUERIES: tuple[tuple[str, str], ...] = (
+    (
+        "structural_lab",
+        "tool use sentinel lane native tools repl react_mode activation latency",
+    ),
+    (
+        "seeder",
+        "seed_batch tool_use repl native tools code math retrieval tool_helpfulness",
+    ),
+    (
+        "prompt_forge",
+        "prompt mutation repl tool helpfulness verbosity CALL native tools",
+    ),
+    (
+        "numeric_swarm",
+        "tool output compression repl tool budget latency tool_helpfulness",
+    ),
+)
 
 
 def _configured_numeric_surfaces() -> tuple[str, ...]:
@@ -382,6 +400,129 @@ def _install_planner_convention_bindings(
             sorted(_PLANNER_DENYLISTED_FEATURE_FLAGS),
             sorted(_PLANNER_SUPPRESSED_NUMERIC_SURFACES),
         )
+
+
+def _planner_strategy_entry_line(entry: Any) -> str:
+    metadata = getattr(entry, "metadata", {}) or {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+    species = str(getattr(entry, "species", "") or "unknown")
+    entry_type = str(getattr(entry, "entry_type", "") or "raw")
+    title = (
+        str(getattr(entry, "title", "") or "").strip()
+        or str(getattr(entry, "description", "") or "").strip()
+        or "strategy"
+    )
+    content = (
+        str(getattr(entry, "generalized_content", "") or "").strip()
+        or str(getattr(entry, "insight", "") or "").strip()
+    )
+    if len(content) > 260:
+        content = content[:257].rstrip() + "..."
+
+    tags = [f"{species}/{entry_type}"]
+    bind_status = str(metadata.get("bind_status", "") or "").strip()
+    if bind_status:
+        tags.append(f"bind={bind_status}")
+    identifiers = metadata.get("bind_identifiers", [])
+    if isinstance(identifiers, list) and identifiers:
+        joined = ",".join(str(item) for item in identifiers[:4])
+        tags.append(f"ids={joined}")
+    source_handoff = str(metadata.get("source_handoff", "") or "").strip()
+    if source_handoff:
+        tags.append(f"handoff={source_handoff}")
+
+    return f"- [{' | '.join(tags)}] {title}: {content}".strip()
+
+
+def _build_planner_strategy_hints(
+    strategy_store: StrategyStore | None,
+    journal: ExperimentJournal | None,
+    *,
+    max_rows: int = 10,
+) -> str:
+    """Render bounded StrategyStore rows into the planner prompt each turn."""
+    if not _PLANNER_HINTS_ENABLED:
+        return "(disabled; set AUTOPILOT_PLANNER_HINTS=1 to include StrategyStore rows)"
+    if strategy_store is None:
+        return "(unavailable: StrategyStore did not load)"
+
+    rows: list[Any] = []
+    seen: set[str] = set()
+
+    def add_entries(entries: Any) -> None:
+        if not entries:
+            return
+        for entry in entries:
+            entry_id = str(getattr(entry, "id", "") or "")
+            if entry_id and entry_id in seen:
+                continue
+            if entry_id:
+                seen.add(entry_id)
+            rows.append(entry)
+            if len(rows) >= max_rows:
+                return
+
+    try:
+        if hasattr(strategy_store, "retrieve_for_journal"):
+            for species, query in _PLANNER_STRATEGY_HINT_QUERIES:
+                add_entries(
+                    strategy_store.retrieve_for_journal(
+                        query,
+                        journal=journal,
+                        k=3,
+                        species=species,
+                    )
+                )
+                if len(rows) >= max_rows:
+                    break
+    except Exception as exc:
+        rows.append(
+            {
+                "id": "strategy-retrieval-error",
+                "species": "system",
+                "entry_type": "error",
+                "title": "StrategyStore retrieval unavailable",
+                "generalized_content": str(exc),
+            }
+        )
+
+    try:
+        if len(rows) < max_rows and hasattr(strategy_store, "retrieve_conventions"):
+            for species in ("structural_lab", "numeric_swarm", "seeder", "prompt_forge"):
+                add_entries(
+                    strategy_store.retrieve_conventions(
+                        species=species,
+                        journal=journal,
+                        limit=3,
+                    )
+                )
+                if len(rows) >= max_rows:
+                    break
+    except Exception as exc:
+        rows.append(
+            {
+                "id": "strategy-conventions-error",
+                "species": "system",
+                "entry_type": "error",
+                "title": "StrategyStore conventions unavailable",
+                "generalized_content": str(exc),
+            }
+        )
+
+    if not rows:
+        return "(no StrategyStore rows matched the current planner hint queries)"
+
+    return "\n".join(
+        _planner_strategy_entry_line(entry)
+        if not isinstance(entry, dict)
+        else (
+            f"- [{entry.get('species', 'system')}/{entry.get('entry_type', 'error')}] "
+            f"{entry.get('title', 'StrategyStore error')}: "
+            f"{entry.get('generalized_content', '')}"
+        )
+        for entry in rows[:max_rows]
+    )
 
 
 _QUOTA_NUMERIC_SURFACES = _configured_numeric_surfaces()
@@ -2086,6 +2227,9 @@ Your job: analyze current system state and propose the SINGLE best next action.
 ### Action Availability
 {action_availability}
 
+### StrategyStore Planner Hints (refreshed each planner turn)
+{planner_strategy_hints}
+
 ### Repo-Readiness Advisory Pickup (default-off, non-authority)
 {repo_readiness_advisory}
 
@@ -3751,6 +3895,11 @@ def _run_loop_inner(
                 action_availability_text = "(action availability unavailable)"
                 stagnation_signal = "unknown"
 
+            planner_strategy_hints_text = _build_planner_strategy_hints(
+                strategy_store,
+                journal,
+            )
+
             prompt = CONTROLLER_PROMPT_TEMPLATE.format(
                 constitution=constitution_text,
                 system_card=system_card_text,
@@ -3770,6 +3919,7 @@ def _run_loop_inner(
                 converged=converged,
                 slot_memory=slot_memory_text,
                 action_availability=action_availability_text,
+                planner_strategy_hints=planner_strategy_hints_text,
                 repo_readiness_advisory=_build_repo_readiness_advisory(),
                 budget=json.dumps(meta.budget.as_dict(), indent=2),
                 suite_quality_trends=_format_suite_trends(journal.suite_quality_trend(10)),

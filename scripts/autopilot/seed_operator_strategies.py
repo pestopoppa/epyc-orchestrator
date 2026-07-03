@@ -378,7 +378,7 @@ def seed_rows(
                         seeded_date=seeded_date,
                     ),
                     entry_type=row.entry_type,
-                    evidence_trial_ids=row.evidence_trial_ids or [source_trial_id],
+                    evidence_trial_ids=row.evidence_trial_ids,
                     title=row.title,
                     generalized_content=row.insight,
                     entry_id=row.entry_id,

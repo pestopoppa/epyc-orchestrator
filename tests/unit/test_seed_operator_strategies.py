@@ -101,3 +101,35 @@ def test_parse_args_accepts_explicit_dry_run():
 def test_parse_args_rejects_apply_with_dry_run():
     with pytest.raises(SystemExit):
         seeds._parse_args(["--apply", "--dry-run"])
+
+
+def test_seed_rows_preserves_empty_operator_evidence(tmp_path, monkeypatch):
+    monkeypatch.setattr(seeds, "_agent_log", lambda *_args: None)
+    strategy_path = tmp_path / "strategies"
+    row = _row(
+        slug="empty-evidence",
+        species="structural_lab",
+        bind_status="future",
+        bind_identifiers=["tool_use_sentinel_lane"],
+    )
+
+    report = seeds.seed_rows(
+        rows=[row],
+        strategy_path=strategy_path,
+        source_trial_id=1036,
+        campaign="operator-handoff-distillation",
+        apply=True,
+    )
+
+    assert report["inserted_count"] == 1
+
+    store = seeds.StrategyStore(path=strategy_path)
+    try:
+        stored = store._conn.execute(
+            "SELECT evidence_trial_ids FROM strategies WHERE id = ?",
+            (row.entry_id,),
+        ).fetchone()
+        assert stored is not None
+        assert stored["evidence_trial_ids"] == "[]"
+    finally:
+        store.close()

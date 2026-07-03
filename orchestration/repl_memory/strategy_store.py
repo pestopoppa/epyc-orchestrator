@@ -1187,8 +1187,18 @@ class StrategyStore:
                 continue
             if sid in quarantined:
                 continue
+            try:
+                meta = json.loads(row["metadata_json"]) if row["metadata_json"] else {}
+            except (TypeError, json.JSONDecodeError):
+                meta = {}
+            if not isinstance(meta, dict):
+                meta = {}
             evidence_trial_ids = self._evidence_trial_ids_for_row(row)
-            if excluded_trial_ids and excluded_trial_ids.intersection(evidence_trial_ids):
+            if (
+                excluded_trial_ids
+                and meta.get("seeded_by") != "operator"
+                and excluded_trial_ids.intersection(evidence_trial_ids)
+            ):
                 continue
 
             validity = self._validity_score(sid)
@@ -1201,7 +1211,6 @@ class StrategyStore:
 
             adjusted = rrf_score * (0.5 + validity) * staleness
 
-            meta = json.loads(row["metadata_json"]) if row["metadata_json"] else {}
             try:
                 entry_type = row["entry_type"] or "raw"
             except (IndexError, KeyError):
@@ -1306,8 +1315,18 @@ class StrategyStore:
             sid = row["id"]
             if sid in quarantined:
                 continue
+            try:
+                meta = json.loads(row["metadata_json"]) if row["metadata_json"] else {}
+            except (TypeError, json.JSONDecodeError):
+                meta = {}
+            if not isinstance(meta, dict):
+                meta = {}
             evidence_trial_ids = self._evidence_trial_ids_for_row(row)
-            if excluded and excluded.intersection(evidence_trial_ids):
+            if (
+                excluded
+                and meta.get("seeded_by") != "operator"
+                and excluded.intersection(evidence_trial_ids)
+            ):
                 continue
             validity = self._validity_score(sid)
             if validity < min_validity:
@@ -1321,12 +1340,6 @@ class StrategyStore:
                 if (not stored_hash or stored_hash == current_hash)
                 else stale_penalty
             )
-            try:
-                meta = json.loads(row["metadata_json"]) if row["metadata_json"] else {}
-            except (TypeError, json.JSONDecodeError):
-                meta = {}
-            if not isinstance(meta, dict):
-                meta = {}
             format_meta = meta.get("insight_format")
             if not isinstance(format_meta, dict):
                 format_meta = {}

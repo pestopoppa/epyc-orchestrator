@@ -16,6 +16,7 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[2]
 AUTOPILOT_DIR = ROOT / "scripts" / "autopilot"
@@ -474,6 +475,88 @@ def test_planner_convention_install_does_not_touch_w6_audit_env(monkeypatch) -> 
     finally:
         autopilot._PLANNER_DENYLISTED_FEATURE_FLAGS.clear()
         autopilot._PLANNER_SUPPRESSED_NUMERIC_SURFACES.clear()
+
+
+def test_planner_strategy_hints_default_off_does_not_read_store(monkeypatch) -> None:
+    monkeypatch.setattr(autopilot, "_PLANNER_HINTS_ENABLED", False)
+
+    class FakeStore:
+        def retrieve_conventions(self, **_kwargs):
+            raise AssertionError("disabled planner hints must not read StrategyStore")
+
+        def retrieve_for_journal(self, *_args, **_kwargs):
+            raise AssertionError("disabled planner hints must not read StrategyStore")
+
+    text = autopilot._build_planner_strategy_hints(FakeStore(), "journal")
+
+    assert "disabled" in text
+
+
+def test_planner_strategy_hints_refresh_store_rows_for_prompt(monkeypatch) -> None:
+    monkeypatch.setattr(autopilot, "_PLANNER_HINTS_ENABLED", True)
+    calls: list[tuple[str, str, object, int]] = []
+
+    class FakeStore:
+        def retrieve_conventions(self, *, species, journal, limit):
+            calls.append(("conventions", species, journal, limit))
+            if species == "structural_lab":
+                return [
+                    SimpleNamespace(
+                        id="operator-convention",
+                        species="structural_lab",
+                        entry_type="convention",
+                        title="Gate tool-use sentinel lane",
+                        generalized_content=(
+                            "Use tool_helpfulness, not raw call count, when "
+                            "judging tool-use exploration."
+                        ),
+                        metadata={
+                            "bind_status": "future",
+                            "bind_identifiers": ["tool_use_sentinel_lane"],
+                            "source_handoff": "tool-use-eval-contract",
+                        },
+                    )
+                ]
+            return []
+
+        def retrieve_for_journal(self, query, *, journal, k, species):
+            calls.append(("journal", species, journal, k))
+            assert query
+            if species == "structural_lab":
+                return [
+                    SimpleNamespace(
+                        id="tool-activation",
+                        species="structural_lab",
+                        entry_type="pattern",
+                        title="Test v6 tool activation",
+                        generalized_content=(
+                            "Measure whether CALL() reduces latency without "
+                            "quality loss on retrieval, math, and code-check tasks."
+                        ),
+                        metadata={
+                            "bind_status": "future",
+                            "bind_identifiers": ["tools", "repl", "react_mode"],
+                            "source_handoff": (
+                                "operator-observation-2026-07-03-tool-use-zero-call-v6"
+                            ),
+                        },
+                    )
+                ]
+            return []
+
+    journal = object()
+    text = autopilot._build_planner_strategy_hints(
+        FakeStore(),
+        journal,
+        max_rows=6,
+    )
+
+    assert "Gate tool-use sentinel lane" in text
+    assert "tool_helpfulness" in text
+    assert "Test v6 tool activation" in text
+    assert "tools,repl,react_mode" in text
+    assert ("conventions", "structural_lab", journal, 3) in calls
+    assert ("journal", "structural_lab", journal, 3) in calls
 
 
 def test_slot_query_ports_from_stack_priors_uses_live_primary_llama_entries(tmp_path: Path) -> None:

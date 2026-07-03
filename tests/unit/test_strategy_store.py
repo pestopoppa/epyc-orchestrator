@@ -330,6 +330,32 @@ class TestStrategyStore:
         assert all(r.id != sid for r in results)
         assert any(r.source_trial_id == 3 for r in results)
 
+    def test_retrieve_for_journal_keeps_operator_seeded_hints(self, store):
+        operator_id = store.store(
+            "tool use sentinel lane",
+            "Use tool_helpfulness instead of raw tool-call count.",
+            source_trial_id=1036,
+            species="structural_lab",
+            metadata={"seeded_by": "operator"},
+            entry_type="pattern",
+            evidence_trial_ids=[1036],
+        )
+
+        class FakeJournal:
+            def entries_with_supersessions(self):
+                return [
+                    SimpleNamespace(trial_id=1036, bug_corrupted_by="superseded"),
+                ]
+
+        results = store.retrieve_for_journal(
+            "tool use sentinel",
+            journal=FakeJournal(),
+            k=10,
+            species="structural_lab",
+        )
+
+        assert operator_id in {entry.id for entry in results}
+
     def test_retrieve_conventions_filters_species_plus_global(self, store):
         prompt_id = store.store(
             "PromptForge guardrail",
@@ -398,6 +424,30 @@ class TestStrategyStore:
         result_ids = {entry.id for entry in results}
         assert excluded_id not in result_ids
         assert kept_id in result_ids
+
+    def test_retrieve_conventions_keeps_operator_seeded_hints(self, store):
+        operator_id = store.store(
+            "tool-use convention",
+            "Keep native tool sentinels in a clean restart window.",
+            source_trial_id=1036,
+            species="structural_lab",
+            metadata={"seeded_by": "operator"},
+            entry_type="convention",
+            evidence_trial_ids=[1036],
+        )
+
+        class FakeJournal:
+            def entries_with_supersessions(self):
+                return [
+                    SimpleNamespace(trial_id=1036, bug_corrupted_by="superseded"),
+                ]
+
+        results = store.retrieve_conventions(
+            species="structural_lab",
+            journal=FakeJournal(),
+        )
+
+        assert operator_id in {entry.id for entry in results}
 
     def test_retrieve_conventions_honors_quarantine_and_min_validity(self, store):
         quarantined_id = store.store(
