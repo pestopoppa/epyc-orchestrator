@@ -180,7 +180,22 @@ def _gate_success_detail(output: str) -> str:
     return "; ".join(selected) or "passed"
 
 
+def _jsonl_batch_key(path: Path) -> tuple[int, str]:
+    stem = path.stem
+    if stem == "autopilot_journal":
+        return (0, path.name)
+    prefix = "autopilot_journal_"
+    if stem.startswith(prefix):
+        try:
+            return (int(stem.removeprefix(prefix)), path.name)
+        except ValueError:
+            pass
+    return (10**9, path.name)
+
+
 def _jsonl_paths(path: Path) -> list[Path]:
+    if path.is_dir():
+        return sorted(path.glob("autopilot_journal*.jsonl"), key=_jsonl_batch_key)
     if path.name != "autopilot_journal.jsonl":
         return [path]
     paths = [path]

@@ -813,3 +813,45 @@ def test_cli_json_strict_returns_one_on_restart_blocker(tmp_path: Path, capsys, 
 
     assert rc == 1
     assert out["blockers"] == ["blocked"]
+
+
+def test_cli_accepts_journal_directory_and_rollover_batches(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    state_path = tmp_path / "autopilot_state.json"
+    journal_dir = tmp_path / "journal"
+    journal_dir.mkdir()
+    state_path.write_text("{}", encoding="utf-8")
+    (journal_dir / "autopilot_journal.jsonl").write_text(
+        json.dumps({"trial_id": 999}) + "\n",
+        encoding="utf-8",
+    )
+    (journal_dir / "autopilot_journal_1.jsonl").write_text(
+        json.dumps({"trial_id": 1000}) + "\n",
+        encoding="utf-8",
+    )
+
+    observed: dict[str, list[int]] = {}
+
+    def fake_report(state, rows, **kwargs):
+        observed["trial_ids"] = [row["trial_id"] for row in rows]
+        return {"restart_ready": True, "blockers": []}
+
+    monkeypatch.setattr(report_mod, "build_restart_readiness_report", fake_report)
+
+    rc = report_mod.main(
+        [
+            "--state",
+            str(state_path),
+            "--journal",
+            str(journal_dir),
+            "--json",
+        ]
+    )
+    out = json.loads(capsys.readouterr().out)
+
+    assert rc == 0
+    assert out["restart_ready"] is True
+    assert observed["trial_ids"] == [999, 1000]

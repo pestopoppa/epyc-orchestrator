@@ -445,6 +445,25 @@ def test_load_jsonl_includes_autopilot_journal_rollover_batches(tmp_path: Path) 
     ]
 
 
+def test_load_jsonl_accepts_journal_directory_with_rollover_batches(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "autopilot_journal_10.jsonl").write_text(
+        json.dumps({"trial_id": 10}) + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "autopilot_journal_1.jsonl").write_text(
+        json.dumps({"trial_id": 1}) + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "autopilot_journal.jsonl").write_text(
+        json.dumps({"trial_id": 0}) + "\n",
+        encoding="utf-8",
+    )
+
+    assert [row["trial_id"] for row in _MOD._load_jsonl(tmp_path)] == [0, 1, 10]
+
+
 def test_load_jsonl_keeps_explicit_batch_path_scoped(tmp_path: Path) -> None:
     (tmp_path / "autopilot_journal.jsonl").write_text(
         json.dumps({"trial_id": 999}) + "\n",
