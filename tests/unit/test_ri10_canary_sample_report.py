@@ -138,6 +138,13 @@ def test_build_report_requires_decision_grade_arm_counts(tmp_path: Path) -> None
     assert summary["high_risk_rows_since_canary_start"] == 59
     assert summary["evaluable_canary_arm_high_risk_rows"] == 19
     assert summary["non_evaluable_high_risk_rows_since_canary_start"] == 40
+    assert summary["canary_role_observable_factual_risk_mode_high_risk_rows"] == 19
+    assert summary["canary_role_missing_factual_risk_mode_high_risk_rows"] == 40
+    assert summary["canary_role_factual_risk_modes_since_canary_start"] == {
+        "<missing>": 40,
+        "enforce": 1,
+        "shadow": 18,
+    }
     assert summary["sample_count_ready"] is True
     assert summary["canary_arm_sample_count_ready"] is False
     assert summary["canary_arm_balance_ready"] is False
@@ -181,7 +188,48 @@ def test_build_report_does_not_count_non_canary_role_shadow_as_arm(tmp_path: Pat
     assert summary["canary_role_high_risk_rows_since_canary_start"] == 2
     assert summary["non_canary_role_high_risk_rows_since_canary_start"] == 1
     assert summary["evaluable_canary_arm_high_risk_rows"] == 2
+    assert summary["canary_role_factual_risk_modes_since_canary_start"] == {
+        "enforce": 1,
+        "shadow": 1,
+    }
     assert summary["canary_arm_counts_since_canary_start"] == {
         "enforce_high_risk": 1,
         "shadow_high_risk": 1,
     }
+
+
+def test_build_report_separates_factual_mode_from_memory_gate_action(tmp_path: Path) -> None:
+    _write_jsonl(
+        tmp_path / "2026-04-07.jsonl",
+        [
+            _routing_row(
+                "2026-04-07T00:00:00Z",
+                band="high",
+                action="not_enforced",
+                routing=["frontdoor"],
+            ),
+            _routing_row(
+                "2026-04-07T00:01:00Z",
+                band="high",
+                mode="shadow",
+                action="not_enforced",
+                routing=["frontdoor"],
+            ),
+        ],
+    )
+
+    summary = report_mod.build_report(
+        tmp_path,
+        canary_start="2026-04-06",
+        decision_gate=2,
+        min_arm_samples=1,
+    )
+
+    assert summary["high_risk_gate_actions_since_canary_start"] == {"not_enforced": 2}
+    assert summary["memory_risk_gate_actions_since_canary_start"] == {"not_enforced": 2}
+    assert summary["canary_role_factual_risk_modes_since_canary_start"] == {
+        "<missing>": 1,
+        "shadow": 1,
+    }
+    assert summary["canary_role_missing_factual_risk_mode_high_risk_rows"] == 1
+    assert summary["evaluable_canary_arm_high_risk_rows"] == 1

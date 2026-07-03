@@ -53,6 +53,10 @@ def _action_key(data: dict[str, Any]) -> str:
     return action or "<missing>"
 
 
+def _factual_risk_mode(data: dict[str, Any]) -> str:
+    return str(data.get("factual_risk_mode") or data.get("canary_mode") or "")
+
+
 def _routing_roles(data: dict[str, Any]) -> set[str]:
     routing = data.get("routing") or []
     if isinstance(routing, str):
@@ -71,7 +75,7 @@ def _is_canary_participant(data: dict[str, Any], canary_roles: set[str]) -> bool
 def _is_enforce_arm(data: dict[str, Any], canary_roles: set[str]) -> bool:
     if not _is_canary_participant(data, canary_roles):
         return False
-    mode = str(data.get("factual_risk_mode") or data.get("canary_mode") or "")
+    mode = _factual_risk_mode(data)
     action = str(data.get("risk_gate_action") or "")
     return mode == "enforce" or action in {"enforce", "forced_enforce", "risk_enforced"}
 
@@ -79,7 +83,7 @@ def _is_enforce_arm(data: dict[str, Any], canary_roles: set[str]) -> bool:
 def _is_shadow_arm(data: dict[str, Any], canary_roles: set[str]) -> bool:
     if not _is_canary_participant(data, canary_roles):
         return False
-    mode = str(data.get("factual_risk_mode") or data.get("canary_mode") or "")
+    mode = _factual_risk_mode(data)
     action = str(data.get("risk_gate_action") or "")
     return mode == "shadow" or action in {"shadow", "not_enforced_shadow"}
 
@@ -103,6 +107,8 @@ def build_report(
     since_band_counts = Counter()
     high_by_date = Counter()
     high_actions = Counter()
+    high_modes = Counter()
+    canary_role_modes = Counter()
     high_sources = Counter()
     enforce_high = 0
     shadow_high = 0
@@ -131,10 +137,13 @@ def build_report(
 
         high_since += 1
         routing = sorted(_routing_roles(data))
+        factual_mode = _factual_risk_mode(data) or "<missing>"
+        high_modes[factual_mode] += 1
         if "frontdoor" in routing:
             frontdoor_high_since += 1
         if _is_canary_participant(data, canary_role_set):
             canary_role_high_since += 1
+            canary_role_modes[factual_mode] += 1
         high_by_date[date] += 1
         high_actions[_action_key(data)] += 1
         high_sources[str(data.get("decision_source") or data.get("strategy") or "<missing>")] += 1
@@ -150,6 +159,7 @@ def build_report(
                     "timestamp": record.get("timestamp"),
                     "routing": routing,
                     "factual_risk_score": data.get("factual_risk_score"),
+                    "factual_risk_mode": data.get("factual_risk_mode") or data.get("canary_mode"),
                     "risk_gate_action": data.get("risk_gate_action"),
                     "risk_gate_reason": data.get("risk_gate_reason"),
                     "decision_source": data.get("decision_source") or data.get("strategy"),
@@ -160,6 +170,8 @@ def build_report(
     risk_control_disabled_high = high_actions.get("not_enforced:risk_control_disabled", 0)
     non_evaluable_high = max(0, canary_role_high_since - arm_attributed_high)
     non_canary_role_high = max(0, high_since - canary_role_high_since)
+    canary_role_missing_mode_high = canary_role_modes.get("<missing>", 0)
+    canary_role_observable_mode_high = canary_role_high_since - canary_role_missing_mode_high
     sample_count_ready = high_since >= decision_gate
     arm_sample_count_ready = arm_attributed_high >= decision_gate
     arm_balance_ready = enforce_high >= min_arm_samples and shadow_high >= min_arm_samples
@@ -198,6 +210,8 @@ def build_report(
         "evaluable_canary_arm_high_risk_rows": arm_attributed_high,
         "non_evaluable_high_risk_rows_since_canary_start": non_evaluable_high,
         "non_canary_role_high_risk_rows_since_canary_start": non_canary_role_high,
+        "canary_role_observable_factual_risk_mode_high_risk_rows": canary_role_observable_mode_high,
+        "canary_role_missing_factual_risk_mode_high_risk_rows": canary_role_missing_mode_high,
         "risk_control_disabled_high_risk_rows_since_canary_start": risk_control_disabled_high,
         "sample_count_ready": sample_count_ready,
         "canary_arm_sample_count_ready": arm_sample_count_ready,
@@ -207,7 +221,10 @@ def build_report(
         "band_counts": _counter_dict(band_counts),
         "band_counts_since_canary_start": _counter_dict(since_band_counts),
         "high_risk_by_date_since_canary_start": _counter_dict(high_by_date),
+        "high_risk_factual_risk_modes_since_canary_start": _counter_dict(high_modes),
+        "canary_role_factual_risk_modes_since_canary_start": _counter_dict(canary_role_modes),
         "high_risk_gate_actions_since_canary_start": _counter_dict(high_actions),
+        "memory_risk_gate_actions_since_canary_start": _counter_dict(high_actions),
         "high_risk_decision_sources_since_canary_start": _counter_dict(high_sources),
         "canary_arm_counts_since_canary_start": {
             "enforce_high_risk": enforce_high,

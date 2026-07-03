@@ -285,6 +285,8 @@ def ri10_canary_section(config_path: Path = DEFAULT_CLASSIFIER_CONFIG) -> Eviden
             "evaluable_canary_arm_high_risk_rows",
             "non_evaluable_high_risk_rows_since_canary_start",
             "non_canary_role_high_risk_rows_since_canary_start",
+            "canary_role_observable_factual_risk_mode_high_risk_rows",
+            "canary_role_missing_factual_risk_mode_high_risk_rows",
             "risk_control_disabled_high_risk_rows_since_canary_start",
             "sample_count_ready",
             "canary_arm_sample_count_ready",
@@ -292,6 +294,9 @@ def ri10_canary_section(config_path: Path = DEFAULT_CLASSIFIER_CONFIG) -> Eviden
             "canary_decision_ready",
             "decision_reason",
             "canary_arm_counts_since_canary_start",
+            "high_risk_factual_risk_modes_since_canary_start",
+            "canary_role_factual_risk_modes_since_canary_start",
+            "memory_risk_gate_actions_since_canary_start",
             "high_risk_gate_actions_since_canary_start",
         )
         if key in latest_report

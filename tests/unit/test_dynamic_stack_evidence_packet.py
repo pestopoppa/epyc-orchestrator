@@ -139,6 +139,12 @@ factual_risk:
   "canary_decision_ready": false,
   "high_risk_rows_since_canary_start": 463,
   "evaluable_canary_arm_high_risk_rows": 19,
+  "canary_role_missing_factual_risk_mode_high_risk_rows": 444,
+  "canary_role_factual_risk_modes_since_canary_start": {
+    "enforce": 1,
+    "shadow": 18,
+    "<missing>": 444
+  },
   "canary_arm_counts_since_canary_start": {
     "enforce_high_risk": 1,
     "shadow_high_risk": 18
@@ -155,6 +161,12 @@ factual_risk:
     assert section.status == "insufficient_data"
     assert section.details["report_path"] == str(report_path)
     assert section.details["report_summary"]["evaluable_canary_arm_high_risk_rows"] == 19
+    assert (
+        section.details["report_summary"][
+            "canary_role_missing_factual_risk_mode_high_risk_rows"
+        ]
+        == 444
+    )
 
 
 def test_kv_measurement_section_flags_missing_series(tmp_path: Path) -> None:
