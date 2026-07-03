@@ -40,6 +40,8 @@ from src.api.routes.dashboard_snapshot import (
     scan_recent_decisions as _scan_recent_decisions_impl,
     todays_progress_log as _todays_progress_log_impl,
 )
+from src.api.routes.dashboard_freshness import envelope as _freshness_envelope
+from src.api.routes.dashboard_panels import PANELS as _PANELS, PANELS_BY_KEY as _PANELS_BY_KEY
 from src.api.routes.dashboard_tap import (
     _INFERENCE_TAP_EVENTS_PATH,
     _INFERENCE_TAP_PATH,
@@ -109,6 +111,24 @@ REPO_READINESS_PROGRESS_DIR = Path("/mnt/raid0/llm/epyc-root/progress/2026-06")
 def _load_state_services() -> list[dict[str, Any]]:
     """Wrapper supplying ORCHESTRATOR_STATE_PATH to dashboard_topology helper."""
     return _load_state_services_impl(ORCHESTRATOR_STATE_PATH)
+
+
+def _stamp(payload: dict[str, Any], key: str, *, now: float | None = None) -> dict[str, Any]:
+    """Attach a uniform ``_freshness`` envelope to a panel payload, in place.
+
+    Additive and non-breaking — existing keys are untouched, so current frontend
+    code keeps working while new code reads ``payload["_freshness"]``. Sources
+    and thresholds come from the central ``dashboard_panels`` registry keyed by
+    ``key``; an unregistered key (guarded against by ``test_dashboard_panels``)
+    degrades to a minimal live envelope rather than crashing the endpoint.
+    """
+    now = time.time() if now is None else now
+    spec = _PANELS_BY_KEY.get(key)
+    sources = spec.live_sources() if spec is not None else []
+    payload["_freshness"] = _freshness_envelope(
+        sources, now=now, generated_at=payload.get("generated_at", now)
+    )
+    return payload
 
 
 def _canonical_role_name(role: Any) -> str:
@@ -367,7 +387,7 @@ async def inference_tap_snapshot(max_sections: int = 20) -> JSONResponse:
         except Exception:
             return None
 
-    return JSONResponse({
+    return JSONResponse(_stamp({
         "tap_active": tap_active,
         "current_prompt": current_prompt,
         "current_prompt_mtime": mtime(_PROMPT_TAP_PATH),
@@ -378,7 +398,7 @@ async def inference_tap_snapshot(max_sections: int = 20) -> JSONResponse:
         "repl_tail": repl_tail,
         "repl_tap_mtime": mtime(_REPL_TAP_PATH),
         "now": now_epoch,
-    })
+    }, "inference_tap", now=now_epoch))
 
 
 @router.get("/dashboard/api/contention")
@@ -438,7 +458,7 @@ async def contention_gate_snapshot(request: Request) -> JSONResponse:
         per_role = {"_error": str(exc)}
     snap["per_role_scheduling"] = per_role
     snap["generated_at"] = _time.time()
-    return JSONResponse(snap)
+    return JSONResponse(_stamp(snap, "contention", now=snap["generated_at"]))
 
 
 # ── region_locks helpers (module-scope so tests can import) ─────────────
@@ -785,7 +805,52 @@ async def region_locks_snapshot() -> JSONResponse:
     backend never acquires `cpu_region_lock`, so cross-process
     concurrency isn't actually enforced for them yet).
     """
-    return JSONResponse(_region_locks_payload())
+    return JSONResponse(_stamp(_region_locks_payload(), "region_locks"))
+
+
+# Severity ranking for folding many panels into one dashboard-data health verdict.
+_HEALTH_SEVERITY = {"fresh": 0, "aging": 1, "stale": 2, "dead": 3}
+_HEALTH_STATUS = {"fresh": "ok", "aging": "ok", "stale": "degraded", "dead": "degraded"}
+
+
+@router.get("/dashboard/api/health")
+async def dashboard_health() -> JSONResponse:
+    """Fold every registered panel's freshness into one dashboard-data health view.
+
+    This is the anti-whack-a-mole guard. Each prior "dashboard panel stale"
+    incident was a different producer dying silently; here, if ANY file-backed
+    producer stops advancing, this endpoint reports ``degraded`` naming the
+    offending panel + source, so breakage is caught loudly by curl/monitor
+    instead of by eyeballing a panel. Live panels (recomputed per request) are
+    fresh by construction and never drag the verdict down on their own.
+    """
+    now = time.time()
+    panels_out: list[dict[str, Any]] = []
+    worst = "fresh"
+    for spec in _PANELS:
+        env = _freshness_envelope(spec.live_sources(), now=now)
+        cls = env["staleness_class"]
+        if _HEALTH_SEVERITY[cls] > _HEALTH_SEVERITY[worst]:
+            worst = cls
+        panels_out.append({
+            "key": spec.key,
+            "title": spec.title,
+            "endpoint": spec.endpoint,
+            "mechanism": spec.mechanism,
+            "live": spec.live,
+            "staleness_class": cls,
+            "worst_age_s": env["worst_age_s"],
+            "reason": env["reason"],
+            "sources": env["sources"],
+        })
+    return JSONResponse({
+        "status": _HEALTH_STATUS[worst],
+        "worst_class": worst,
+        "generated_at": now,
+        "panel_count": len(panels_out),
+        "degraded_panels": [p["key"] for p in panels_out if p["staleness_class"] in ("stale", "dead")],
+        "panels": panels_out,
+    })
 
 
 @router.get("/dashboard/events/raw_tap")
@@ -1145,7 +1210,7 @@ async def process_status() -> JSONResponse:
         phase = dict(phase)
         phase.setdefault("idle_reason", "autopilot process not running")
 
-    return JSONResponse({
+    return JSONResponse(_stamp({
         "autopilot": autopilot,
         "gepa_worker_count": n_workers,
         "last_autopilot_log_age_s": last_log_age_s,
@@ -1155,7 +1220,7 @@ async def process_status() -> JSONResponse:
         "autopilot_phase_age_s": phase_age_s,
         "inference_tap_age_s": _age_s(_INFERENCE_TAP_PATH),
         "planner_tap_age_s": _age_s(Path("/mnt/raid0/llm/tmp/planner_tap.log")),
-    }, headers=_NO_STORE_HEADERS)
+    }, "process_status"), headers=_NO_STORE_HEADERS)
 
 
 @router.get("/dashboard/api/repo_readiness")
@@ -1451,25 +1516,67 @@ def _shape_pareto_entry(entry: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _read_autopilot_journal_rows(path: Path | None = None) -> list[dict[str, Any]] | None:
-    path = path or _AUTOPILOT_JOURNAL_PATH
-    if not path.exists():
-        return None
-    rows: list[dict[str, Any]] = []
+def _autopilot_journal_shards() -> list[Path]:
+    """All autopilot journal shards, oldest→newest.
+
+    The autopilot rotates its journal on restart — trial 999 ended
+    ``autopilot_journal.jsonl`` and the live run continued into
+    ``autopilot_journal_1.jsonl`` at trial 1000+ — matching the multi-path
+    convention already used by ``optimization_brief.DEFAULT_JOURNAL_PATHS``. The
+    dashboard must read the base file PLUS every ``autopilot_journal_<n>.jsonl``
+    rotation, or its journal-derived panels (gepa, pareto frontier, trial
+    progress) silently freeze at the last trial in the base file. That is exactly
+    how the gepa/frontier panels sat at trial 999 for days while the live run
+    advanced past 1073 in ``_1`` — a stale-panel bug the freshness health check
+    surfaced. Sorted by numeric rotation suffix so the merge preserves trial
+    order even past ``_9`` → ``_10``; the un-suffixed base file sorts first. Only
+    pure numeric suffixes are included — snapshot/backup files with other
+    suffixes are ignored.
+    """
+    base = _AUTOPILOT_JOURNAL_PATH
+    stem = base.stem  # "autopilot_journal"
+    shard_re = re.compile(rf"{re.escape(stem)}_(\d+)\.jsonl$")
+    ordered: list[tuple[int, Path]] = []
     try:
-        with open(path) as f:
-            for line in f:
-                if not line.strip():
-                    continue
-                try:
-                    row = json.loads(line)
-                except Exception:
-                    continue
-                if isinstance(row, dict):
-                    rows.append(row)
-    except Exception:
-        return None
-    return rows
+        candidates = list(base.parent.glob(f"{stem}*.jsonl"))
+    except OSError:
+        candidates = []
+    for p in candidates:
+        if p.name == base.name:
+            ordered.append((-1, p))
+            continue
+        m = shard_re.match(p.name)
+        if m:
+            ordered.append((int(m.group(1)), p))
+    return [p for _, p in sorted(ordered, key=lambda t: t[0])]
+
+
+def _read_autopilot_journal_rows(path: Path | None = None) -> list[dict[str, Any]] | None:
+    # With no explicit path, read ALL journal shards (base + rotations) in trial
+    # order so journal-derived panels follow the live run across a rotation
+    # instead of freezing at the last trial in the base file. An explicit path
+    # keeps single-file behaviour for callers that want exactly one shard.
+    paths = [path] if path is not None else _autopilot_journal_shards()
+    rows: list[dict[str, Any]] = []
+    any_read = False
+    for p in paths:
+        if not p or not p.exists():
+            continue
+        try:
+            with open(p) as f:
+                for line in f:
+                    if not line.strip():
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except Exception:
+                        continue
+                    if isinstance(row, dict):
+                        rows.append(row)
+            any_read = True
+        except Exception:
+            continue
+    return rows if any_read else None
 
 
 def _read_strategy_store_rows(path: Path | None = None) -> list[dict[str, Any]] | None:
@@ -2521,7 +2628,7 @@ async def autopilot_progress() -> JSONResponse:
             # the precise number is in elapsed_s if anyone needs it.
             out["percent"] = round(min(150.0, max(0.0, pct)), 1)
 
-    return JSONResponse(out, headers=_NO_STORE_HEADERS)
+    return JSONResponse(_stamp(out, "autopilot_progress"), headers=_NO_STORE_HEADERS)
 
 
 @router.get("/dashboard/api/pareto")
@@ -2952,12 +3059,19 @@ async def topology_activity(window_s: float = 600.0) -> JSONResponse:
         b["avg_tps_recent"] = (sum(tps_samples) / len(tps_samples)) if tps_samples else None
         b["avg_duration_s"] = (sum(dur_samples) / len(dur_samples)) if dur_samples else None
         out[role] = b
-    return JSONResponse({"per_role": out, "window_s": window_s, "now": now})
+    return JSONResponse(_stamp({"per_role": out, "window_s": window_s, "now": now}, "topology_activity", now=now))
 
 
-@router.get("/dashboard/api/topology")
-async def topology() -> JSONResponse:
-    """Return the static topology: nodes with role + display color + port."""
+def _build_topology_nodes() -> list[dict[str, Any]]:
+    """Build the topology node list (roles, ports, colors, backing models).
+
+    Factored out of ``/dashboard/api/topology`` so the snapshot endpoint can
+    embed the SAME structure under one ``generated_at``. The topology strip and
+    the lock/activity overlays that decorate it then derive from one coherent
+    object and cannot disagree about which roles exist — this is what closes the
+    post-reboot 'frozen strip' class of dashboard staleness, where the strip was
+    fetched on a different cadence than the overlays keyed to it.
+    """
     llama_ports = _discover_llama_ports()
     llama_models = _discover_llama_models()
     services = _load_state_services()
@@ -3053,7 +3167,49 @@ async def topology() -> JSONResponse:
             "worker_pool": bool(svc.get("worker_pool")),
         })
 
-    return JSONResponse({"nodes": nodes, "generated_at": time.time()})
+    return nodes
+
+
+_TOPOLOGY_NODES_CACHE: dict[str, Any] = {"ts": 0.0, "nodes": None}
+_TOPOLOGY_NODES_TTL_S = 3.0
+
+
+def _topology_nodes_cached() -> list[dict[str, Any]]:
+    """Topology nodes with a short TTL.
+
+    Topology STRUCTURE (which roles/ports exist) changes only on stack
+    changes/reboots, so rebuilding it (~90ms of /proc scanning) on every 2 Hz
+    snapshot tick — across 6 uvicorn workers — would burn real CPU on the
+    inference host for no benefit. A 3s TTL keeps the snapshot cheap while still
+    reflecting a stack change within 3s. The live overlays (region locks, slot
+    activity) are still rebuilt every tick, so per-role liveness stays
+    real-time; only the node scaffold is cached. Per-worker cache (separate
+    processes) is fine — the structure is identical across workers.
+    """
+    now = time.time()
+    c = _TOPOLOGY_NODES_CACHE
+    nodes = c.get("nodes")
+    if nodes is not None and (now - c["ts"]) < _TOPOLOGY_NODES_TTL_S:
+        return nodes
+    nodes = _build_topology_nodes()
+    c["ts"] = now
+    c["nodes"] = nodes
+    return nodes
+
+
+@router.get("/dashboard/api/topology")
+async def topology() -> JSONResponse:
+    """Return the live topology: nodes with role + display color + port.
+
+    Uncached: the standalone endpoint is polled only every 5s, so its ~90ms
+    rebuild is cheap here, and staying uncached keeps it deterministic w.r.t.
+    injected inputs (the 2 Hz snapshot is the path that needs the TTL cache).
+    """
+    _topo_now = time.time()
+    return JSONResponse(_stamp(
+        {"nodes": _build_topology_nodes(), "generated_at": _topo_now},
+        "topology", now=_topo_now,
+    ))
 
 
 # ---------------------------------------------------------------------------
@@ -3259,8 +3415,16 @@ async def snapshot() -> JSONResponse:
         alias_to_topology_role=alias_to_topology_role,
     )
 
-    return JSONResponse({
-        "generated_at": time.time(),
+    _snap_now = time.time()
+    return JSONResponse(_stamp({
+        "generated_at": _snap_now,
+        # Coherent live correlation: topology + region locks + activity are all
+        # built within THIS single snapshot() call and stamped with one
+        # generated_at, so the strip, the region-lock grid, and the slot/activity
+        # dots the frontend renders from this one object can never reflect
+        # different instants. This is the keystone that kills the "tap shows
+        # active inference beside a 'no locks held' grid" inconsistency.
+        "topology": {"nodes": _topology_nodes_cached()},
         "activity": activity,
         "in_flight_tasks": in_flight_tasks,
         "recent_completed_tasks": recent_completed_tasks,
@@ -3270,7 +3434,7 @@ async def snapshot() -> JSONResponse:
         "source_counts_rolling": rolling,
         "source_counts_cumulative": cumulative,
         "log_counts": log_counts,
-    })
+    }, "snapshot", now=_snap_now))
 
 
 # ---------------------------------------------------------------------------
@@ -3623,12 +3787,12 @@ async def gepa_status() -> JSONResponse:
         except Exception:
             pass
 
-    return JSONResponse({
+    return JSONResponse(_stamp({
         "active": bool(gepa_lines),
         "lines": gepa_lines,
         "state": trial_state,
         "recent_trials": recent_trials,
-    })
+    }, "gepa"))
 
 
 # ---------------------------------------------------------------------------

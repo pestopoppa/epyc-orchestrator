@@ -905,6 +905,15 @@ body.insight-fullscreen-open { overflow: hidden; }
         .rl-blocked { background: rgba(248,113,113,0.30); color: #f87171; }
         .rl-ready   { background: rgba(52,211,153,0.18); color: var(--good, #34d399); }
         .rl-na      { background: rgba(100,100,100,0.10); color: var(--dim, #6b7280); font-style: italic; }
+        /* Uniform per-panel freshness badge (dashboard_freshness contract). */
+        .freshness-badge { display:inline-block; margin-left:8px; padding:1px 6px; border-radius:8px;
+          font-size:10px; font-weight:600; font-family:var(--font-mono,ui-monospace,monospace);
+          vertical-align:middle; letter-spacing:0.02em; }
+        .freshness-badge:empty { display:none; }
+        .freshness-badge.fresh { background:rgba(52,211,153,0.16); color:var(--good,#34d399); }
+        .freshness-badge.aging { background:rgba(251,191,36,0.18); color:#fbbf24; }
+        .freshness-badge.stale { background:rgba(248,113,113,0.22); color:#f87171; }
+        .freshness-badge.dead  { background:rgba(100,100,100,0.18); color:var(--dim,#9ca3af); }
       </style>
     </div>
 
@@ -1083,13 +1092,21 @@ function _computeTopologySig(topo) {
 
 async function loadTopology() {
     const r = await fetch(`/dashboard/api/topology?t=${Date.now()}`, { cache: 'no-store' });
-    topology = await r.json();
-    // Re-render the strip only when its structure actually changed. This keeps
-    // the periodic poll cheap and non-disruptive in steady state (preserving
-    // per-row expand/collapse state), while still self-healing when the stack
-    // topology shifts under a running tab — e.g. after a reboot/stack reload,
-    // where the old code left the strip (and the region-lock slot-dots layered
-    // on it) frozen on the pre-reboot ports until a manual browser refresh.
+    applyTopologyPayload(await r.json());
+}
+
+function applyTopologyPayload(topo) {
+    // Apply a topology payload — from /api/topology OR the coherent snapshot's
+    // snap.topology — to the strip. Re-render only when the structure actually
+    // changed, so the periodic path is cheap and preserves per-row
+    // expand/collapse state, while still self-healing when the stack topology
+    // shifts under a running tab (reboot/stack reload). Previously the old code
+    // left the strip (and the region-lock slot-dots layered on it) frozen on the
+    // pre-reboot ports until a manual browser refresh; driving it from the
+    // snapshot means it re-syncs on the same 2 Hz tick as its overlays.
+    if (!topo || !Array.isArray(topo.nodes)) return;
+    topology = topo;
+    if (topo._freshness) setPanelFreshness('topology', topo._freshness);
     const sig = _computeTopologySig(topology);
     const strip = document.getElementById('topology-strip');
     const needsPaint = sig !== _topologySig || !strip || !strip.children.length;
@@ -4612,12 +4629,26 @@ function applyDashboardSnapshot(snap, source) {
     _latestSnapshotFrameTs = frameTs;
     _latestSnapshot = snap || {};
     const refreshSeq = ++_regionLocksRefreshSeq;
+    // Keystone coherence: drive the topology strip STRUCTURE from the SAME
+    // snapshot as the region-lock grid + activity overlay, so all three reflect
+    // one instant and the strip can never freeze on a stale structure while its
+    // overlays keep updating.
+    if (snap.topology && Array.isArray(snap.topology.nodes)) {
+        updatePanelSafely('topology_struct', () => applyTopologyPayload(snap.topology));
+    }
     updatePanelSafely('region_locks', () => {
         if (snap.region_locks) {
             return updateRegionLocks(refreshSeq, snap.region_locks);
         }
     });
     updatePanelSafely('topology', () => updateTopology(snap.activity || {}, snap.in_flight_tasks || []));
+    // Topology + region-lock panels are live-recomputed server-side; their real
+    // staleness signal is the coherent stream's own age, so feed both badges
+    // from the snapshot envelope — a dropped stream then visibly ages them.
+    if (snap._freshness) {
+        setPanelFreshness('topology', snap._freshness);
+        setPanelFreshness('region_locks', snap._freshness);
+    }
     updatePanelSafely('counters', () => updateCounters(snap));
     updatePanelSafely('completed', () => updateTasks(snap));
     updatePanelSafely('decisions', () => updateDecisions(snap));
@@ -4637,6 +4668,88 @@ async function updateSnapshotPoll() {
         console.error('[dashboard:snapshot_poll]', err);
     } finally {
         _snapshotPollInFlight = false;
+    }
+}
+
+// ── Uniform panel freshness badges ─────────────────────────────────────────
+// Every panel with a server-side `_freshness` envelope gets one badge, ticked
+// once a second off the CLIENT clock so a panel that stops being refreshed (dead
+// fetch / dropped SSE) visibly ages into "stale" instead of silently showing old
+// data. Same host as the server (localhost), so client and server clocks agree.
+const _FRESHNESS_ANCHORS = {
+    topology: 'inflight-count',
+    region_locks: 'region-locks-status',
+    inference_tap: 'tap-status',
+    autopilot: 'autopilot-status',
+};
+const _panelFreshnessStore = {};
+const _FRESH_SEVERITY = { fresh: 0, aging: 1, stale: 2, dead: 3 };
+function _worstClass(a, b) { return (_FRESH_SEVERITY[b] > _FRESH_SEVERITY[a]) ? b : a; }
+
+function injectFreshnessBadges() {
+    for (const [key, anchorId] of Object.entries(_FRESHNESS_ANCHORS)) {
+        try {
+            const anchor = document.getElementById(anchorId);
+            if (!anchor || document.getElementById('fresh-' + key)) continue;
+            const span = document.createElement('span');
+            span.className = 'freshness-badge';
+            span.id = 'fresh-' + key;
+            anchor.parentNode.insertBefore(span, anchor.nextSibling);
+        } catch (e) { console.error('[freshness:inject]', key, e); }
+    }
+}
+
+// Build an envelope-shaped object from a single source age — for panels whose
+// freshness we read as an age off another endpoint (e.g. inference-tap age from
+// process_status). generated_at = now, worst_age_s = age; the 1s tick advances
+// both together, consistent with real server envelopes.
+function freshnessFromAge(ageS, warnS, staleS, label) {
+    let cls = 'fresh';
+    if (ageS == null) cls = 'dead';
+    else if (ageS >= staleS) cls = 'stale';
+    else if (ageS >= warnS) cls = 'aging';
+    return {
+        generated_at: Date.now() / 1000,
+        staleness_class: cls,
+        worst_age_s: (ageS == null ? null : ageS),
+        reason: (cls !== 'fresh' && label && ageS != null) ? `${label}: ${Math.round(ageS)}s old` : '',
+    };
+}
+
+function renderFreshness(badgeId, fresh) {
+    const el = document.getElementById(badgeId);
+    if (!el) return;
+    if (!fresh) { el.textContent = ''; el.className = 'freshness-badge'; el.title = ''; return; }
+    const now = Date.now() / 1000;
+    let cls = fresh.staleness_class || 'fresh';
+    const baseAge = (fresh.worst_age_s != null) ? fresh.worst_age_s : 0;
+    let ageS = (fresh.worst_age_s != null) ? fresh.worst_age_s : null;
+    if (fresh.generated_at != null) {
+        // Age since this payload was built: advances the reported source age and,
+        // past a threshold, escalates the class — a panel not refreshed in >30s is
+        // not "live" no matter what the server last reported (transport stall).
+        const transportAge = Math.max(0, now - fresh.generated_at);
+        ageS = baseAge + transportAge;
+        if (transportAge > 30) cls = _worstClass(cls, 'stale');
+        else if (transportAge > 12) cls = _worstClass(cls, 'aging');
+    }
+    el.className = 'freshness-badge ' + cls;
+    const labelMap = { fresh: 'live', aging: '', stale: 'stale', dead: 'no data' };
+    const agestr = (ageS != null) ? formatShortDuration(ageS) : '';
+    el.textContent = [agestr, labelMap[cls]].filter(Boolean).join(' ');
+    el.title = fresh.reason || (cls === 'fresh' && agestr ? `updated ${agestr} ago` :
+        (cls === 'stale' ? 'panel not updating' : ''));
+}
+
+function setPanelFreshness(key, fresh) {
+    if (!fresh) return;
+    _panelFreshnessStore[key] = fresh;
+    try { renderFreshness('fresh-' + key, fresh); } catch (e) { console.error('[freshness:set]', key, e); }
+}
+
+function tickFreshnessBadges() {
+    for (const key in _panelFreshnessStore) {
+        try { renderFreshness('fresh-' + key, _panelFreshnessStore[key]); } catch (e) { /* keep ticking */ }
     }
 }
 
@@ -4776,6 +4889,10 @@ async function updateProcessStatus() {
         const d = await r.json();
         if (requestSeq !== _processStatusFetchSeq) return;
         _latestProcessStatus = d;
+        // File-backed panel badges: autopilot health (phase/log) from the
+        // process_status envelope; live-inference from the tap age it reports.
+        setPanelFreshness('autopilot', d._freshness);
+        setPanelFreshness('inference_tap', freshnessFromAge(d.inference_tap_age_s, 120, 600, 'inference tap'));
         if (_rawTapRenderMode === 'structured') paintRawTap();
         renderAutopilotRunStrip();
         const ap = d.autopilot || {};
@@ -5674,6 +5791,7 @@ async function updateRegionLocks(refreshSeq = _regionLocksRefreshSeq, regionLock
     }
 
     (async function () {
+        startPanelSafely('freshness-badges', injectFreshnessBadges);
         startPanelSafely('region-locks-primer', ensureRegionLocksPanelPainted);
         startPanelSafely('region-locks-refresh', () => scheduleRegionLocksRefresh(true));
         startPanelSafely('topology', loadTopology);
@@ -5735,6 +5853,7 @@ async function updateRegionLocks(refreshSeq = _regionLocksRefreshSeq, regionLock
         });
         setInterval(updateGepa, 5000);
         setInterval(updateProcessStatus, 3000);
+        setInterval(tickFreshnessBadges, 1000);  // age panel freshness badges off the client clock
         setInterval(updateBuildRev, 30000);  // build-drift poll
         startPanelSafely('snapshot-poll', updateSnapshotPoll);
         setInterval(updateSnapshotPoll, 2500);  // fallback for stream stalls + per-panel render isolation
