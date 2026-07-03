@@ -264,6 +264,10 @@ def _cmdline_has_path(cmdline: list[str], expected_path: str) -> bool:
     return expected_path in cmdline or any(Path(token).name == expected_name for token in cmdline)
 
 
+def _same_real_model_path(left: str, right: str) -> bool:
+    return os.path.realpath(left) == os.path.realpath(right)
+
+
 def _stack_prior_launch_requirements(path: Path | None = None) -> dict[str, dict[str, str]]:
     contracts = _stack_prior_launch_contracts(path)
     return {
@@ -416,7 +420,16 @@ def _runtime_attestation_warnings(
     draft_model_path = requirements.get("draft_model_path")
     if isinstance(draft_model_path, str) and draft_model_path:
         draft_values = _cmdline_flag_values(cmdline, "-md")
-        if not any(_cmdline_has_path([value], draft_model_path) for value in draft_values):
+        has_explicit_draft = any(
+            _cmdline_has_path([value], draft_model_path) for value in draft_values
+        )
+        has_embedded_nextn_spec = (
+            not draft_values
+            and isinstance(model_path, str)
+            and bool(_cmdline_flag_values(cmdline, "--spec-type"))
+            and _same_real_model_path(model_path, draft_model_path)
+        )
+        if not has_explicit_draft and not has_embedded_nextn_spec:
             actual = ", ".join(Path(value).name for value in draft_values) or "no -md"
             warnings.append(_runtime_value_warning(
                 name, info, "draft_model_path", Path(draft_model_path).name, actual

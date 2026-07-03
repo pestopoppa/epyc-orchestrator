@@ -556,6 +556,95 @@ def test_runtime_attestation_warnings_report_runtime_flag_drift(monkeypatch) -> 
     ]
 
 
+def test_runtime_attestation_accepts_embedded_nextn_without_md() -> None:
+    info = stack_commands.ProcessInfo(
+        role="frontdoor",
+        pid=123,
+        port=8070,
+        started_at="now",
+        model_path="/models/qwen-mtp.gguf",
+        log_file="frontdoor.log",
+    )
+
+    warnings = stack_commands._runtime_attestation_warnings(
+        "frontdoor",
+        info,
+        [
+            "llama-server",
+            "-m",
+            "/models/qwen-mtp.gguf",
+            "--spec-type",
+            "draft-mtp",
+            "--spec-draft-n-max",
+            "4",
+        ],
+        {
+            "requirements": {
+                "model_path": "/models/qwen-mtp.gguf",
+                "draft_model_path": "/models/qwen-mtp.gguf",
+            },
+            "runtime": {
+                "flags": {
+                    "spec": {
+                        "enabled": True,
+                        "type": "draft-mtp",
+                        "draft_max": 4,
+                    }
+                }
+            },
+        },
+    )
+
+    assert warnings == []
+
+
+def test_runtime_attestation_still_warns_when_separate_draft_missing() -> None:
+    info = stack_commands.ProcessInfo(
+        role="worker_general",
+        pid=123,
+        port=8072,
+        started_at="now",
+        model_path="/models/gemma.gguf",
+        log_file="worker.log",
+    )
+
+    warnings = stack_commands._runtime_attestation_warnings(
+        "worker_general",
+        info,
+        [
+            "llama-server",
+            "-m",
+            "/models/gemma.gguf",
+            "--spec-type",
+            "draft-mtp",
+            "--spec-draft-n-max",
+            "2",
+        ],
+        {
+            "requirements": {
+                "model_path": "/models/gemma.gguf",
+                "draft_model_path": "/models/gemma-assistant.gguf",
+            },
+            "runtime": {
+                "flags": {
+                    "spec": {
+                        "enabled": True,
+                        "type": "draft-mtp",
+                        "draft_max": 2,
+                    }
+                }
+            },
+        },
+    )
+
+    assert warnings == [
+        (
+            "worker_general pid 123 runtime draft_model_path expected "
+            "gemma-assistant.gguf; live cmdline has no -md"
+        )
+    ]
+
+
 def test_launch_contract_for_process_canonicalizes_alias_role() -> None:
     info = stack_commands.ProcessInfo(
         role="worker_explore",

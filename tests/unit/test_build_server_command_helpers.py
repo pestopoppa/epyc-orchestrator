@@ -78,7 +78,10 @@ def _optional_float(value: str | None) -> float | None:
 
 
 def _command_runtime_signature(cmd: list[str]) -> dict[str, Any]:
-    spec_enabled = "-md" in cmd and "--spec-type" in cmd
+    spec_enabled = "-md" in cmd or "--spec-type" in cmd
+    draft_model_path = _flag_value(cmd, "-md")
+    if draft_model_path is None and spec_enabled:
+        draft_model_path = _flag_value(cmd, "-m")
     return {
         "binary_path": cmd[0],
         "cache": {
@@ -101,7 +104,7 @@ def _command_runtime_signature(cmd: list[str]) -> dict[str, Any]:
                 # 2026-06-26 v6 cutover: --spec-type token is now 'draft-mtp' (the
                 # bare 'mtp' token was removed); flag name itself is unchanged.
                 "type": _flag_value(cmd, "--spec-type") if spec_enabled else None,
-                "draft_model_path": _flag_value(cmd, "-md") if spec_enabled else None,
+                "draft_model_path": draft_model_path if spec_enabled else None,
                 # 2026-06-26 v6 cutover: n-max value now carried by --spec-draft-n-max
                 # (v6 removed --draft-max); same schema field 'draft_max'.
                 "draft_max": (
@@ -528,6 +531,46 @@ def test_build_worker_explore_command_keeps_compatibility_wrapper() -> None:
 # -----------------------------------------------------------------------------
 
 
+def test_append_runtime_spec_args_omits_md_for_embedded_nextn_self_draft() -> None:
+    cmd = ["llama-server", "-m", "/models/qwen-mtp.gguf"]
+    runtime = {
+        "flags": {
+            "spec": {
+                "enabled": True,
+                "type": "draft-mtp",
+                "draft_model_path": "/models/qwen-mtp.gguf",
+                "draft_max": 4,
+            }
+        }
+    }
+
+    oss._append_runtime_spec_args(cmd, runtime, "/models/qwen-mtp.gguf")
+
+    assert "-md" not in cmd
+    assert _flag_value(cmd, "--spec-type") == "draft-mtp"
+    assert _flag_value(cmd, "--spec-draft-n-max") == "4"
+
+
+def test_append_runtime_spec_args_keeps_md_for_separate_draft_model() -> None:
+    cmd = ["llama-server", "-m", "/models/gemma.gguf"]
+    runtime = {
+        "flags": {
+            "spec": {
+                "enabled": True,
+                "type": "draft-mtp",
+                "draft_model_path": "/models/gemma-assistant.gguf",
+                "draft_max": 2,
+            }
+        }
+    }
+
+    oss._append_runtime_spec_args(cmd, runtime, "/models/gemma.gguf")
+
+    assert _flag_value(cmd, "-md") == "/models/gemma-assistant.gguf"
+    assert _flag_value(cmd, "--spec-type") == "draft-mtp"
+    assert _flag_value(cmd, "--spec-draft-n-max") == "2"
+
+
 def test_resolve_thread_count_from_numa_config() -> None:
     # frontdoor[0] is NUMA_NODE0 = 96 threads
     assert oss._resolve_thread_count("frontdoor") == "96"
@@ -700,6 +743,63 @@ def test_build_role_command_prefers_stack_prior_runtime(
     assert "--mlock" not in cmd
     assert "--jinja" not in cmd
     assert "--flash-attn" not in cmd
+
+
+def test_build_role_command_omits_md_for_embedded_nextn_stack_prior(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    model_path = "/prior/qwen-mtp.gguf"
+    runtime = {
+        "binary_path": "/prior/llama-server",
+        "cache": {
+            "context_tokens": 24576,
+            "slots": 1,
+            "ubatch": 2048,
+            "kv_type_k": "q8_0",
+            "kv_type_v": "q8_0",
+            "no_mmap": False,
+            "mlock": True,
+            "slot_save_path": str(oss.SLOT_SAVE_DIR / "frontdoor"),
+        },
+        "flags": {
+            "flash_attn": True,
+            "jinja": True,
+            "reasoning": "off",
+            "override_kv": [],
+            "spec": {
+                "enabled": True,
+                "type": "draft-mtp",
+                "draft_model_path": model_path,
+                "draft_max": 4,
+                "draft_p_min": None,
+                "threads_draft": None,
+            },
+        },
+    }
+    priors = _write_launch_prior(
+        tmp_path,
+        "frontdoor",
+        requirements={
+            "model_path": model_path,
+            "draft_model_path": model_path,
+        },
+        runtime=runtime,
+    )
+    monkeypatch.setattr(oss, "STACK_PRIORS_PATH", priors)
+    role = SimpleNamespace(
+        name="frontdoor",
+        model=SimpleNamespace(full_path=model_path),
+        acceleration=SimpleNamespace(type="none", experts=None, draft_role=None),
+    )
+
+    cmd = oss._build_role_command(role, port=9070)
+
+    assert _flag_value(cmd, "-m") == model_path
+    assert "-md" not in cmd
+    assert _flag_value(cmd, "--spec-type") == "draft-mtp"
+    assert _flag_value(cmd, "--spec-draft-n-max") == "4"
+    assert _command_runtime_signature(cmd) == _stack_prior_runtime_signature(runtime)
 
 
 # -----------------------------------------------------------------------------

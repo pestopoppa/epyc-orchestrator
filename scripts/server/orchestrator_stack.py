@@ -256,6 +256,10 @@ def _runtime_string(container: dict[str, Any], key: str, fallback: str) -> str:
     return value if isinstance(value, str) and value else fallback
 
 
+def _same_real_model_path(left: str, right: str) -> bool:
+    return os.path.realpath(left) == os.path.realpath(right)
+
+
 def _append_runtime_kv_args(cmd: list[str], cache: dict[str, Any]) -> None:
     kv_type_k = cache.get("kv_type_k")
     kv_type_v = cache.get("kv_type_v")
@@ -267,14 +271,15 @@ def _append_runtime_kv_args(cmd: list[str], cache: dict[str, Any]) -> None:
         pass
 
 
-def _append_runtime_spec_args(cmd: list[str], runtime: dict[str, Any]) -> None:
+def _append_runtime_spec_args(cmd: list[str], runtime: dict[str, Any], model_path: str) -> None:
     spec = _runtime_flags(runtime).get("spec")
     if not isinstance(spec, dict) or spec.get("enabled") is not True:
         return
     draft_model_path = spec.get("draft_model_path")
     if not isinstance(draft_model_path, str) or not draft_model_path:
         return
-    cmd.extend(["-md", draft_model_path])
+    if not _same_real_model_path(model_path, draft_model_path):
+        cmd.extend(["-md", draft_model_path])
     spec_type = spec.get("type")
     if isinstance(spec_type, str) and spec_type:
         cmd.extend(["--spec-type", spec_type])
@@ -911,7 +916,7 @@ def _build_role_command(role_config: Any, port: int, numa_instance: int = 0) -> 
         for override in flags.get("override_kv") or []:
             if isinstance(override, str) and override:
                 cmd.extend(["--override-kv", override])
-        _append_runtime_spec_args(cmd, runtime)
+        _append_runtime_spec_args(cmd, runtime, model_path)
         reasoning = flags.get("reasoning")
         if isinstance(reasoning, str) and reasoning:
             cmd.extend(["--reasoning", reasoning])
