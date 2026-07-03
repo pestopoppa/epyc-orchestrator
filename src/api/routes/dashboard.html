@@ -4361,7 +4361,8 @@ function renderOptimizationBrief(b) {
     if (bc.available) {
         const o = bc.objective || {};
         parts.push(`<div class="ob-section-title">best config (${escapeHTML(bc.status || '')})</div>`);
-        parts.push(`<div class="ob-best">trial <b>${escapeHTML(String(bc.trial_id))}</b> · q <b>${fmt(o.quality)}</b> · ${fmt(o.speed, 1)} t/s · rel ${fmt(o.reliability)}</div>`);
+        const bcTags = [bc.pareto_status, bc.keep_revert_decision].filter(Boolean).map(t => ` · ${escapeHTML(t)}`).join('');
+        parts.push(`<div class="ob-best">trial <b>${escapeHTML(String(bc.trial_id))}</b> · q <b>${fmt(o.quality)}</b> · ${fmt(o.speed, 1)} t/s · rel ${fmt(o.reliability)}${bcTags}</div>`);
     }
     const levers = Array.isArray(b.levers) ? b.levers : [];
     if (levers.length) {

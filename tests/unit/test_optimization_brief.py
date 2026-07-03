@@ -109,18 +109,67 @@ def test_best_config_picks_highest_quality_current_era_trusted():
         {"trial_id": 1, "tier": 1, "quality": 2.0, "speed": 50, "timestamp": 100.0,
          "config_snapshot": {"a": 1}},
         {"trial_id": 2, "tier": 1, "quality": 2.2, "speed": 40, "timestamp": 200.0,
-         "config_snapshot": {"a": 2}},
+         "config_snapshot": {"a": 2}, "keep_revert_decision": "keep"},
         # corrupted -> excluded even though higher quality
         {"trial_id": 3, "tier": 1, "quality": 9.9, "speed": 99, "timestamp": 300.0,
          "bug_corrupted_by": "rollback"},
         # pre-era -> excluded by exclude_before_ts
         {"trial_id": 4, "tier": 1, "quality": 5.0, "speed": 99, "timestamp": 50.0},
     ]
-    best = ob.best_config(rows, exclude_before_ts=99.0, promoted=False)
+    best = ob.best_config(rows, exclude_before_ts=99.0)
     assert best["available"] is True
     assert best["trial_id"] == 2
     assert best["status"] == "incumbent"
     assert best["objective"]["quality"] == 2.2
+
+
+def test_best_config_excludes_reverted_and_learning_excluded_trials():
+    """A verdict-failed (reverted) or AP-24 learning-excluded trial keeps
+    outcome_status="ok", so the keep/revert record is the only honest gate —
+    regression test for trial 1061 (2026-07-02) being crowned after rollback."""
+    rows = [
+        # verdict failed, config rolled back -> ineligible despite top quality
+        {"trial_id": 1061, "tier": 1, "quality": 2.22, "speed": 35.5,
+         "timestamp": 300.0, "outcome_status": "ok",
+         "keep_revert_decision": "revert", "pareto_status": "dominated"},
+        # learning-excluded (mad_noise) -> ineligible
+        {"trial_id": 1056, "tier": 1, "quality": 2.22, "speed": 29.0,
+         "timestamp": 250.0, "keep_revert_decision": "excluded"},
+        # kept frontier config -> the honest best
+        {"trial_id": 1005, "tier": 1, "quality": 2.16, "speed": 47.5,
+         "timestamp": 200.0, "keep_revert_decision": "keep",
+         "pareto_status": "frontier", "config_snapshot": {"a": 1}},
+        # legacy row without the field stays eligible
+        {"trial_id": 900, "tier": 1, "quality": 2.0, "speed": 60,
+         "timestamp": 150.0},
+    ]
+    best = ob.best_config(rows, exclude_before_ts=99.0)
+    assert best["trial_id"] == 1005
+    assert best["keep_revert_decision"] == "keep"
+    assert best["pareto_status"] == "frontier"
+    assert best["status"] == "incumbent"
+
+
+def test_best_config_promoted_only_from_seq_promotion_record():
+    """"promoted" must come from the trial's own finalized sequential promotion
+    record, never from the global authority banner."""
+    kept = {"trial_id": 7, "tier": 1, "quality": 2.1, "speed": 60,
+            "timestamp": 200.0, "keep_revert_decision": "keep"}
+    # no seq record -> incumbent
+    best = ob.best_config([dict(kept)], exclude_before_ts=None)
+    assert best["promoted"] is False and best["status"] == "incumbent"
+    # accumulating (not finalized) seq verdict -> still incumbent
+    best = ob.best_config(
+        [dict(kept, seq={"baseline_promotion_finalized": False})],
+        exclude_before_ts=None,
+    )
+    assert best["promoted"] is False and best["status"] == "incumbent"
+    # finalized promotion record -> promoted
+    best = ob.best_config(
+        [dict(kept, seq={"baseline_promotion_finalized": True})],
+        exclude_before_ts=None,
+    )
+    assert best["promoted"] is True and best["status"] == "promoted"
 
 
 def test_build_brief_end_to_end(tmp_path):

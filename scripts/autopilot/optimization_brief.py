@@ -50,6 +50,14 @@ DEFAULT_STRATEGY_DB = (
 DEFAULT_DIGEST_DIR = Path("/mnt/raid0/llm/epyc-root/progress")
 
 _UNTRUSTED_STATUSES = {"invalid", "skipped"}
+# AP-24 verdict records that disqualify a trial from "best config": a reverted
+# config is not running, and a learning-excluded measurement (mad_noise /
+# exogenous reload) must not crown an incumbent. Legacy rows without the field
+# ("") and kept/unchanged rows stay eligible. NOTE: a journal row's
+# outcome_status stays "ok" when the safety verdict fails (the *experiment* ran
+# fine), so _is_trusted alone cannot catch these — trial 1061 (2026-07-02) was
+# displayed as best config after failing its verdict and being rolled back.
+_INELIGIBLE_KEEP_REVERT = {"revert", "excluded"}
 
 
 # --------------------------------------------------------------------------- #
@@ -234,24 +242,19 @@ def best_config(
     rows: list[dict[str, Any]],
     *,
     exclude_before_ts: float | None,
-    promoted: bool,
 ) -> dict[str, Any]:
-    """Current best (highest-quality, speed tie-break) trusted current-era trial,
-    decomposed into its config settings. Honestly labelled `incumbent` unless
-    authority has actually promoted it."""
-
-    def _ts(row: dict[str, Any]) -> float:
-        try:
-            return float(row.get("timestamp")) if isinstance(row.get("timestamp"), (int, float)) else 0.0
-        except (TypeError, ValueError):
-            return 0.0
-
+    """Current best (highest-quality, speed tie-break) trusted current-era trial
+    whose config survived its safety verdict (AP-24 keep), decomposed into its
+    config settings. `status` is "promoted" only when the trial's own sequential
+    promotion record finalized (seq.baseline_promotion_finalized) — the global
+    authority banner enables promotion but never constitutes one."""
     eligible = [
         r
         for r in rows
         if _is_trusted(r)
         and (exclude_before_ts is None or _row_ts(r) >= exclude_before_ts)
         and r.get("quality") is not None
+        and str(r.get("keep_revert_decision") or "") not in _INELIGIBLE_KEEP_REVERT
     ]
     if not eligible:
         return {"available": False}
@@ -265,11 +268,15 @@ def best_config(
         if isinstance(snap, dict)
         else []
     )
+    seq = best.get("seq") if isinstance(best.get("seq"), dict) else {}
+    promoted = bool(seq.get("baseline_promotion_finalized"))
     return {
         "available": True,
         "trial_id": best.get("trial_id"),
         "promoted": promoted,
         "status": "promoted" if promoted else "incumbent",
+        "keep_revert_decision": str(best.get("keep_revert_decision") or ""),
+        "pareto_status": str(best.get("pareto_status") or ""),
         "objective": {
             "quality": best.get("quality"),
             "speed": best.get("speed"),
@@ -363,9 +370,10 @@ def _narrative(
         parts.append("No NumericSwarm importance data is available yet")
     if best.get("available"):
         q = best["objective"].get("quality")
+        label = best.get("status") or "incumbent"
         parts.append(
-            f"the incumbent best config is trial {best.get('trial_id')} "
-            f"(quality {q})" if q is not None else "an incumbent best config exists"
+            f"the {label} best config is trial {best.get('trial_id')} "
+            f"(quality {q})" if q is not None else f"an {label} best config exists"
         )
     parts.append(f"{len(ruled_out)} dead-ends remain fenced")
     parts.append(f"{len(exploring)} hypotheses are queued")
@@ -415,11 +423,7 @@ def build_optimization_brief(
     if digest_text is None:
         digest_text = latest_digest_text(digest_dir)
     levers = levers_from_digest(digest_text)
-    best = best_config(
-        rows,
-        exclude_before_ts=exclude_before_ts,
-        promoted=banner["decision_grade_possible"],
-    )
+    best = best_config(rows, exclude_before_ts=exclude_before_ts)
     ruled_out, exploring = ruled_out_and_exploring(strategy_db)
 
     # decision_grade is a property of the whole brief right now: nothing can be
