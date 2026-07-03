@@ -170,10 +170,14 @@ def active_roles_from_launch_meta(launch_meta: dict[str, Any]) -> set[str]:
     The lean registry still needs their `roles.X` / `server_mode.X` records for
     routing, timeout, descriptor, and attestation consumers.
     """
-    active = set(launch_meta.keys())
-    for meta in launch_meta.values():
+    active: set[str] = set()
+    for role, meta in launch_meta.items():
         if not isinstance(meta, dict):
+            active.add(str(role))
             continue
+        if meta.get("launcher_only") is True:
+            continue
+        active.add(str(role))
         aliases = meta.get("shared_with_first_n")
         if isinstance(aliases, list):
             active.update(str(alias) for alias in aliases)

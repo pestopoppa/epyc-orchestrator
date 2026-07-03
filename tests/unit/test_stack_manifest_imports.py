@@ -200,6 +200,21 @@ def test_dense_retriever_candidates_are_warm_embedding_roles() -> None:
         assert EMBEDDING_SERVER_RECIPES[port]["model_path"].endswith(".gguf")
 
 
+def test_eval_batch_frontdoor_is_warm_launcher_only() -> None:
+    from scripts.server.stack_manifest import HOT_SERVERS, PORT_MAP, ROLE_LAUNCH_META, WARM_SERVERS
+
+    hot_roles = {role for server in HOT_SERVERS for role in server.get("roles", [])}
+    warm_servers = {
+        role: server for server in WARM_SERVERS for role in server.get("roles", [])
+    }
+
+    assert PORT_MAP["eval_batch_frontdoor"] == 18070
+    assert "eval_batch_frontdoor" not in hot_roles
+    assert warm_servers["eval_batch_frontdoor"]["port"] == 18070
+    assert warm_servers["eval_batch_frontdoor"]["eval_batch_frontdoor"] is True
+    assert ROLE_LAUNCH_META["eval_batch_frontdoor"]["launcher_only"] is True
+
+
 def test_launch_kv_quant_configs_keep_canonical_worker_roles_only() -> None:
     from scripts.server.stack_manifest import LAUNCH_KV_QUANT_CONFIGS
 

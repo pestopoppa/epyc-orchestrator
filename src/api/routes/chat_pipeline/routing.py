@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import urllib.request
 import uuid
 
 from fastapi import HTTPException
@@ -46,6 +48,14 @@ log = logging.getLogger(__name__)
 
 _XMAS_MAX_EVIDENCE_LATENCY_RATIO = 1.10
 _XMAS_MIN_SPEEDUP_FOR_TIE = 0.95
+_EVAL_BATCH_FRONTDOOR_URL_ENV = "ORCHESTRATOR_EVAL_BATCH_FRONTDOOR_URL"
+_EVAL_BATCH_FRONTDOOR_ROLES_ENV = "ORCHESTRATOR_EVAL_BATCH_FRONTDOOR_ROLES"
+_EVAL_BATCH_FRONTDOOR_HEALTH_TIMEOUT_S = 0.5
+_DEFAULT_EVAL_BATCH_FRONTDOOR_ROLES = (
+    "frontdoor",
+    "coder_escalation",
+    "worker_summarize",
+)
 
 
 def _numeric_metric(metrics: dict, key: str) -> float | None:
@@ -63,6 +73,73 @@ def _xmas_quality(metrics: dict) -> float | None:
     if correct is not None:
         return correct
     return _numeric_metric(metrics, "accuracy")
+
+
+def _eval_batch_frontdoor_url() -> str | None:
+    raw = os.environ.get(_EVAL_BATCH_FRONTDOOR_URL_ENV, "").strip()
+    if raw:
+        return raw.rstrip("/")
+    try:
+        from scripts.server.stack_manifest import PORT_MAP
+
+        port = PORT_MAP.get("eval_batch_frontdoor")
+        if isinstance(port, int) and port > 0:
+            return f"http://localhost:{port}"
+    except Exception:
+        return None
+    return None
+
+
+def _eval_batch_frontdoor_roles() -> tuple[str, ...]:
+    raw = os.environ.get(_EVAL_BATCH_FRONTDOOR_ROLES_ENV, "").strip()
+    if not raw:
+        return _DEFAULT_EVAL_BATCH_FRONTDOOR_ROLES
+    return tuple(role.strip() for role in raw.split(",") if role.strip())
+
+
+def _eval_batch_frontdoor_healthy(url: str) -> bool:
+    try:
+        with urllib.request.urlopen(
+            f"{url.rstrip('/')}/health",
+            timeout=_EVAL_BATCH_FRONTDOOR_HEALTH_TIMEOUT_S,
+        ) as resp:
+            return 200 <= int(getattr(resp, "status", 0)) < 300
+    except Exception:
+        return False
+
+
+def _server_urls_with_eval_batch_frontdoor(
+    request: ChatRequest,
+    server_urls: dict[str, str],
+) -> tuple[dict[str, str], bool]:
+    """Optionally route eval-batch traffic to the warm P-BENCH-3 lane.
+
+    This is deliberately default-off and request-specific: normal primitives are
+    cached/reused, while eval-batch rewrites create a fresh primitive map so an
+    opt-in batch endpoint cannot leak into interactive traffic.
+    """
+    if request.server_urls or not request.real_mode:
+        return server_urls, False
+    if request.workload_class != "eval_batch":
+        return server_urls, False
+    if not features().eval_batch_serving:
+        return server_urls, False
+
+    url = _eval_batch_frontdoor_url()
+    if not url:
+        log.warning("eval_batch_serving enabled but no eval-batch frontdoor URL is configured")
+        return server_urls, False
+    if not _eval_batch_frontdoor_healthy(url):
+        log.warning("eval_batch_serving enabled but eval-batch frontdoor is not healthy: %s", url)
+        return server_urls, False
+
+    rewritten = dict(server_urls)
+    changed = False
+    for role in _eval_batch_frontdoor_roles():
+        if role in rewritten:
+            rewritten[role] = url
+            changed = True
+    return (rewritten, changed) if changed else (server_urls, False)
 
 
 def _xmas_latency_ratio(suggested: dict, incumbent: dict) -> float | None:
@@ -367,11 +444,16 @@ def _init_primitives(request: ChatRequest, state) -> LLMPrimitives:
     """
     if request.real_mode:
         server_urls = request.server_urls or get_config().server_urls.as_dict()
+        server_urls, eval_batch_urls = _server_urls_with_eval_batch_frontdoor(
+            request,
+            server_urls,
+        )
+        request_specific_urls = bool(request.server_urls) or eval_batch_urls
 
         if (
             hasattr(state, "_real_primitives")
             and state._real_primitives is not None
-            and not request.server_urls
+            and not request_specific_urls
         ):
             primitives = state._real_primitives
             primitives.reset_counters()
@@ -385,7 +467,7 @@ def _init_primitives(request: ChatRequest, state) -> LLMPrimitives:
                     admission_controller=getattr(state, "admission", None),
                     num_slots=get_config().server.num_slots,
                 )
-                if not request.server_urls:
+                if not request_specific_urls:
                     state._real_primitives = primitives
             except Exception as e:
                 raise HTTPException(

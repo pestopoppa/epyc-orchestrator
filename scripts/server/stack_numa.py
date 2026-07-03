@@ -79,6 +79,19 @@ NUMA_CONFIG: dict[str, dict] = {
         # quarter instances above will run noticeably slower than the full;
         # ConcurrencyAwareBackend prefers the full for solo requests anyway.
     },
+    # P-BENCH-3/A7 eval-batch serving lane. Warm/explicit-only; normal stack start
+    # does not launch it. Uses the frontdoor model on a dedicated high port with
+    # -np 8 so EvalTower batches can be tested without mutating the interactive
+    # frontdoor process. CPU shape intentionally matches frontdoor's full instance
+    # so existing frontdoor region locks remain conservative when traffic is
+    # routed to this endpoint.
+    "eval_batch_frontdoor": {
+        "instances": [
+            (NUMA_NODE0[0], 18070, NUMA_NODE0[1]),
+        ],
+        "mlock": True,
+        "numactl_policy": "interleave=all",
+    },
     # coder_escalation NUMA_CONFIG entry REMOVED 2026-05-09 — consolidated onto
     # frontdoor's server (same Qwen3.6-35B-A3B Q8 GGUF since 2026-05-06 swap).
     # Historical: ports 8071 (full) + 8081/8181/8281/8381 (quarters), spec_overrides

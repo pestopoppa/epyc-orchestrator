@@ -36,6 +36,20 @@ def test_active_roles_from_launch_meta_includes_shared_aliases() -> None:
     }
 
 
+def test_active_roles_from_launch_meta_excludes_launcher_only_servers() -> None:
+    launch_meta = {
+        "frontdoor": {"tier": "hot"},
+        "eval_batch_frontdoor": {
+            "tier": "warm",
+            "mode": "eval_batch_frontdoor",
+            "launcher_only": True,
+            "shared_with_first_n": ["should_not_leak"],
+        },
+    }
+
+    assert active_roles_from_launch_meta(launch_meta) == {"frontdoor"}
+
+
 def test_compile_lean_keeps_alias_records_when_active_roles_include_aliases(
     tmp_path: Path,
 ) -> None:

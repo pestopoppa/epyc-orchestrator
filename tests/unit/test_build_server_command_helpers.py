@@ -802,6 +802,24 @@ def test_build_role_command_omits_md_for_embedded_nextn_stack_prior(
     assert _command_runtime_signature(cmd) == _stack_prior_runtime_signature(runtime)
 
 
+def test_eval_batch_frontdoor_command_uses_pbench3_serving_shape() -> None:
+    cmd = oss._build_eval_batch_frontdoor_command(18070)
+
+    assert _flag_value(cmd, "--port") == "18070"
+    assert _flag_value(cmd, "-np") == "8"
+    assert _flag_value(cmd, "-c") == "32768"
+    assert _flag_value(cmd, "-t") == "96"
+    assert _flag_value(cmd, "-ub") == "8192"
+    assert _flag_value(cmd, "-ctk") == "q8_0"
+    assert _flag_value(cmd, "-ctv") == "q8_0"
+    assert _flag_value(cmd, "--spec-type") == "draft-mtp"
+    assert _flag_value(cmd, "--spec-draft-n-max") == "4"
+    assert "--jinja" in cmd
+    assert "--mlock" in cmd
+    assert "--log-colors" in cmd
+    assert "-md" not in cmd
+
+
 # -----------------------------------------------------------------------------
 # Dispatcher routing
 # -----------------------------------------------------------------------------
@@ -821,6 +839,13 @@ def test_dispatcher_routes_embedding_mode() -> None:
         out = oss.build_server_command(None, 8090, embedding_mode=True)
     assert out == ["EMB"]
     m.assert_called_once_with(8090)
+
+
+def test_dispatcher_routes_eval_batch_frontdoor_mode() -> None:
+    with patch.object(oss, "_build_eval_batch_frontdoor_command", return_value=["EVAL"]) as m:
+        out = oss.build_server_command(None, 18070, eval_batch_frontdoor_mode=True)
+    assert out == ["EVAL"]
+    m.assert_called_once_with(18070, 0)
 
 
 def test_dispatcher_routes_worker_fast() -> None:

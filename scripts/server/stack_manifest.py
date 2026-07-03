@@ -34,6 +34,7 @@ PORT_MAP = {
     "toolrunner": 8072,  # Shares with worker_general
     "worker_vision": 8086,  # Dedicated VL server
     "vision_escalation": 8087,  # VL escalation (Qwen3-VL-30B MoE)
+    "eval_batch_frontdoor": 18070,  # Warm eval-batch Qwen3.6 frontdoor lane (-np 8)
     "worker_coder": 8102,  # Fast coding worker semantic role (1.5B backend) — DEPRECATED (worker_pool)
     "worker_fast": 8102,  # Fast worker (1.5B, WARM, 4 slots) — DEPRECATED (worker_pool)
     # Specialists (no pre-warm — already multi-instance or too large for quarters)
@@ -196,6 +197,14 @@ ROLE_LAUNCH_META: dict[str, dict] = {
         "worker_type": "fast",
         "no_numa": True,
         "port": 8102,
+    },
+    # P-BENCH-3/A7: explicit-only batch-serving lane for EvalTower traffic.
+    # launcher_only keeps this warm process out of lean-registry and descriptor
+    # compile inputs; it is not a distinct model-routing role.
+    "eval_batch_frontdoor": {
+        "tier": "warm",
+        "mode": "eval_batch_frontdoor",
+        "launcher_only": True,
     },
     # architect_coding REMOVED 2026-05-06 (REAP-246B role eliminated; 139 GB freed)
     # ingest_long_context PROMOTED to HOT 2026-05-06 (Stage 1 of three_stage_summarization)
@@ -500,6 +509,8 @@ def _build_servers_from_classification() -> tuple[list[dict], list[dict]]:
                 mode_flags["vision_type"] = meta["vision_type"]
         elif mode == "embedding":
             mode_flags["embedding"] = True
+        elif mode == "eval_batch_frontdoor":
+            mode_flags["eval_batch_frontdoor"] = True
 
         if meta.get("no_numa"):
             # Single port, no NUMA pinning (embedders, worker_fast, etc.)

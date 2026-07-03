@@ -78,7 +78,11 @@ def _descriptor_active_roles() -> set[str]:
     `write_model_descriptors()` expands shared aliases from registry state on its
     own, so the launch helper only needs the canonical launch-role keys here.
     """
-    return set(ROLE_LAUNCH_META.keys())
+    return {
+        role
+        for role, meta in ROLE_LAUNCH_META.items()
+        if not (isinstance(meta, dict) and meta.get("launcher_only") is True)
+    }
 
 
 def wait_for_health(
@@ -1056,6 +1060,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         worker_type = server.get("worker_type")
         vision_mode = server.get("vision", False)
         vision_type = server.get("vision_type")
+        eval_batch_frontdoor_mode = server.get("eval_batch_frontdoor", False)
         numa_instance = server.get("numa_instance", 0)
 
         info = start_server(
@@ -1068,6 +1073,7 @@ def cmd_start(args: argparse.Namespace) -> int:
             worker_type=worker_type,
             vision_mode=vision_mode,
             vision_type=vision_type,
+            eval_batch_frontdoor_mode=eval_batch_frontdoor_mode,
             numa_instance=numa_instance,
         )
         if info:
@@ -1079,7 +1085,12 @@ def cmd_start(args: argparse.Namespace) -> int:
         else:
             print(f"  [!] Failed to start server on port {port}")
             # Embedding/worker_pool/vision server failure is non-fatal (fallback available)
-            is_optional = embedding_mode or worker_pool_mode or vision_mode
+            is_optional = (
+                embedding_mode
+                or worker_pool_mode
+                or vision_mode
+                or eval_batch_frontdoor_mode
+            )
             if not args.dev and not is_optional:
                 return 1
 
@@ -1423,6 +1434,7 @@ def cmd_reload(args: argparse.Namespace) -> int:
             embedding_mode = False
             vision_mode = False
             vision_type = None
+            eval_batch_frontdoor_mode = False
 
             numa_instance = 0
             for server in HOT_SERVERS + WARM_SERVERS:
@@ -1433,6 +1445,7 @@ def cmd_reload(args: argparse.Namespace) -> int:
                     embedding_mode = server.get("embedding", False)
                     vision_mode = server.get("vision", False)
                     vision_type = server.get("vision_type")
+                    eval_batch_frontdoor_mode = server.get("eval_batch_frontdoor", False)
                     numa_instance = server.get(
                         "numa_instance", 0
                     )  # fix: reload must preserve per-quarter -t
@@ -1456,6 +1469,7 @@ def cmd_reload(args: argparse.Namespace) -> int:
                 worker_type=worker_type,
                 vision_mode=vision_mode,
                 vision_type=vision_type,
+                eval_batch_frontdoor_mode=eval_batch_frontdoor_mode,
                 numa_instance=numa_instance,
             )
             if info:

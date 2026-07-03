@@ -15,6 +15,7 @@ from src.api.routes.chat_pipeline.routing import (
     _plan_review_gate,
     _preprocess,
     _route_request,
+    _server_urls_with_eval_batch_frontdoor,
 )
 from src.api.routes.chat_pipeline.routing_decision import (
     normalize_ingress_role,
@@ -788,6 +789,60 @@ class TestInitPrimitives:
         # Should create NEW primitives, not reuse cache
         mock_primitives_cls.assert_called_once()
         # Cache should NOT be updated (custom URLs)
+        assert state._real_primitives is cached_primitives
+
+    def test_eval_batch_serving_rewrites_frontdoor_urls_when_enabled(self, monkeypatch):
+        request = ChatRequest(prompt="test", real_mode=True, workload_class="eval_batch")
+        monkeypatch.setenv("ORCHESTRATOR_EVAL_BATCH_FRONTDOOR_URL", "http://localhost:18070")
+        monkeypatch.setattr(
+            "src.api.routes.chat_pipeline.routing.features",
+            lambda: SimpleNamespace(eval_batch_serving=True),
+        )
+        monkeypatch.setattr(
+            "src.api.routes.chat_pipeline.routing._eval_batch_frontdoor_healthy",
+            lambda _url: True,
+        )
+
+        urls, changed = _server_urls_with_eval_batch_frontdoor(
+            request,
+            {
+                "frontdoor": "full:http://localhost:8070,http://localhost:8080",
+                "coder_escalation": "http://localhost:8070",
+                "worker_general": "http://localhost:8072",
+            },
+        )
+
+        assert changed is True
+        assert urls["frontdoor"] == "http://localhost:18070"
+        assert urls["coder_escalation"] == "http://localhost:18070"
+        assert urls["worker_general"] == "http://localhost:8072"
+
+    def test_eval_batch_serving_does_not_poison_cached_primitives(self, monkeypatch):
+        request = ChatRequest(prompt="test", real_mode=True, workload_class="eval_batch")
+        cached_primitives = MagicMock()
+        state = MagicMock()
+        state._real_primitives = cached_primitives
+        state.registry = MagicMock()
+        monkeypatch.setenv("ORCHESTRATOR_EVAL_BATCH_FRONTDOOR_URL", "http://localhost:18070")
+        monkeypatch.setattr(
+            "src.api.routes.chat_pipeline.routing.features",
+            lambda: SimpleNamespace(eval_batch_serving=True),
+        )
+        monkeypatch.setattr(
+            "src.api.routes.chat_pipeline.routing._eval_batch_frontdoor_healthy",
+            lambda _url: True,
+        )
+
+        with patch("src.api.routes.chat_pipeline.routing.LLMPrimitives") as mock_primitives_cls:
+            mock_primitives = MagicMock()
+            mock_primitives._backends = {"frontdoor": MagicMock()}
+            mock_primitives_cls.return_value = mock_primitives
+
+            _init_primitives(request, state)
+
+        mock_primitives_cls.assert_called_once()
+        kwargs = mock_primitives_cls.call_args.kwargs
+        assert kwargs["server_urls"]["frontdoor"] == "http://localhost:18070"
         assert state._real_primitives is cached_primitives
 
     def test_real_mode_raises_on_init_failure(self):

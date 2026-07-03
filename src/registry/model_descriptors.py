@@ -942,8 +942,14 @@ def _roles_from_stack_manifest() -> set[str]:
     sys.path.insert(0, "/mnt/raid0/llm/epyc-orchestrator/scripts/server")
     from stack_manifest import ROLE_LAUNCH_META  # type: ignore[import]
 
-    active = set(ROLE_LAUNCH_META.keys())
-    for meta in ROLE_LAUNCH_META.values():
+    active: set[str] = set()
+    for role, meta in ROLE_LAUNCH_META.items():
+        if not isinstance(meta, dict):
+            active.add(str(role))
+            continue
+        if meta.get("launcher_only") is True:
+            continue
+        active.add(str(role))
         aliases = meta.get("shared_with_first_n") if isinstance(meta, dict) else None
         if isinstance(aliases, list):
             active.update(str(alias) for alias in aliases)

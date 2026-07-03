@@ -684,6 +684,61 @@ def _build_dev_command(port: int) -> list[str]:
     ]
 
 
+def _build_eval_batch_frontdoor_command(port: int, numa_instance: int = 0) -> list[str]:
+    """Warm eval-batch frontdoor lane measured by P-BENCH-3/E2.
+
+    This intentionally reuses the frontdoor model/runtime priors but overrides
+    the serving shape to a single `-np 8` process on a dedicated high port. The
+    role is launcher-only; normal routing still speaks in frontdoor aliases.
+    """
+    source_role = "frontdoor"
+    requirements, runtime = _stack_prior_launch(source_role)
+    cache = _runtime_cache(runtime)
+    flags = _runtime_flags(runtime)
+    model_path = _runtime_string(requirements, "model_path", "")
+    if not model_path:
+        source_config = RegistryLoader().get_role(source_role)
+        if source_config is not None:
+            model_path = str(source_config.model.full_path)
+    binary = _runtime_string(runtime, "binary_path", str(_resolve_binary_for_role(source_role)))
+    cmd = [
+        binary,
+        "-m",
+        model_path,
+        "--host",
+        "127.0.0.1",
+        "--port",
+        str(port),
+        "-np",
+        "8",
+        "-c",
+        _runtime_positive_int(cache, "context_tokens", 32768),
+        "-t",
+        _resolve_thread_count("eval_batch_frontdoor", numa_instance),
+        "-ub",
+        _runtime_positive_int(cache, "ubatch", 8192),
+        "-ctk",
+        _runtime_string(cache, "kv_type_k", "q8_0"),
+        "-ctv",
+        _runtime_string(cache, "kv_type_v", "q8_0"),
+        "--log-colors",
+        "off",
+    ]
+    if flags.get("flash_attn", True) is True:
+        cmd.extend(["--flash-attn", "on"])
+    if flags.get("jinja", True) is True:
+        cmd.append("--jinja")
+    if cache.get("mlock", True) is True:
+        cmd.append("--mlock")
+    if cache.get("no_mmap", False) is True:
+        cmd.append("--no-mmap")
+    _append_runtime_spec_args(cmd, runtime, model_path)
+    reasoning = flags.get("reasoning")
+    if isinstance(reasoning, str) and reasoning:
+        cmd.extend(["--reasoning", reasoning])
+    return cmd
+
+
 # -----------------------------------------------------------------------------
 # Default-role builder sub-helpers (called by _build_role_command).
 # -----------------------------------------------------------------------------
@@ -946,6 +1001,7 @@ def build_server_command(
     worker_type: str = None,
     vision_mode: bool = False,
     vision_type: str = None,
+    eval_batch_frontdoor_mode: bool = False,
     binary_override: str | None = None,
     numa_instance: int = 0,
 ) -> list[str]:
@@ -964,6 +1020,8 @@ def build_server_command(
         return _build_vision_command(port, vision_type, numa_instance)
     if embedding_mode:
         return _build_embedding_command(port)
+    if eval_batch_frontdoor_mode:
+        return _build_eval_batch_frontdoor_command(port, numa_instance)
     if worker_pool_mode and worker_type:
         model_path = WORKER_POOL_MODELS.get(worker_type)
         if not model_path:
@@ -986,6 +1044,7 @@ def start_server(
     worker_type: str = None,
     vision_mode: bool = False,
     vision_type: str = None,
+    eval_batch_frontdoor_mode: bool = False,
     numa_instance: int = 0,
 ) -> ProcessInfo | None:
     """Start a llama-server for the given roles."""
@@ -994,6 +1053,63 @@ def start_server(
         "start_new_session": True,
         "close_fds": True,
     }
+
+    # P-BENCH-3/A7 warm eval-batch lane: dedicated frontdoor-model server
+    # used only when explicitly started and when EVAL_BATCH_SERVING routes
+    # eval-batch traffic to it.
+    if eval_batch_frontdoor_mode:
+        primary_role = roles[0]
+        source_role = "frontdoor"
+        log_file = LOG_DIR / f"eval-batch-frontdoor-{port}.log"
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+        cmd = build_server_command(
+            None,
+            port,
+            eval_batch_frontdoor_mode=True,
+            numa_instance=numa_instance,
+        )
+        requirements, _runtime = _stack_prior_launch(source_role)
+        model_path = _runtime_string(requirements, "model_path", "")
+        model_name = Path(model_path).name if model_path else "frontdoor model"
+
+        print(f"  Starting eval-batch frontdoor on port {port}: {model_name}")
+        print(f"    Roles: {', '.join(roles)}")
+        print(f"    Command: {' '.join(cmd[:6])}...")
+
+        try:
+            _write_llama_marker(port, roles, source=_FLEET_SRC_STACK, tmp_dir=_PATHS["tmp_dir"])
+        except Exception as exc:
+            print(f"    [WARN] Failed to write llama fleet marker for port {port}: {exc}")
+
+        with open(log_file, "w") as log:
+            env = build_launch_env(source_role, os.environ.copy())
+            proc = subprocess.Popen(
+                _numa_prefix(primary_role, numa_instance) + cmd,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                env=env,
+                **detached_stdio,
+            )
+
+        print(f"    PID: {proc.pid}")
+        print("    Waiting for health...")
+
+        if wait_for_health(port, timeout=max(_HEALTH_SERVER_STARTUP, 180)):
+            print("    [OK] Eval-batch frontdoor ready")
+            return ProcessInfo(
+                role=primary_role,
+                pid=proc.pid,
+                port=port,
+                started_at=datetime.now().isoformat(),
+                model_path=model_path,
+                log_file=str(log_file),
+            )
+
+        print("    [FAIL] Eval-batch frontdoor did not become healthy")
+        print(f"    Check log: {log_file}")
+        kill_process(proc.pid)
+        return None
 
     # Vision mode - VL models with multimodal projector
     if vision_mode:
