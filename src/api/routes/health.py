@@ -237,14 +237,16 @@ async def health(
 
     # Probe core backends for liveness
     backend_probes = await _probe_core_backends()
+    probe_healthy = 0
     if backend_probes:
+        probe_healthy = sum(1 for p in backend_probes.values() if p.get("ok", False))
         any_down = any(not p.get("ok", False) for p in backend_probes.values())
         if any_down and status == "ok":
             status = "degraded"
 
     return HealthResponse(
         status=status,
-        models_loaded=backends_healthy,
+        models_loaded=backends_healthy if backends_total else probe_healthy,
         mock_mode_available=True,
         version="0.1.0",
         backend_health=backend_health,

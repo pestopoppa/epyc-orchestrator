@@ -141,6 +141,41 @@ class TestHealthEndpoint:
         assert data["backend_probes"]["frontdoor"]["ok"] is False
         assert data["backend_probes"]["frontdoor"]["failure_reason"] == "http_status"
 
+    def test_health_models_loaded_falls_back_to_live_probe_count(
+        self, client, mock_state, monkeypatch
+    ):
+        """Fresh API reloads with an empty tracker still report probed live backends."""
+        mock_state.health_tracker.get_status.return_value = {}
+
+        async def fake_probe_core_backends():
+            return {
+                "frontdoor": {
+                    "ok": True,
+                    "latency_ms": 12.3,
+                    "url": "http://localhost:8070",
+                    "status_code": 200,
+                    "failure_reason": "",
+                    "failure_detail": "",
+                },
+                "worker_general": {
+                    "ok": True,
+                    "latency_ms": 10.1,
+                    "url": "http://localhost:8072",
+                    "status_code": 200,
+                    "failure_reason": "",
+                    "failure_detail": "",
+                },
+            }
+
+        monkeypatch.setattr(health_route, "_probe_core_backends", fake_probe_core_backends)
+
+        resp = client.get("/health")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "ok"
+        assert data["models_loaded"] == 2
+
 
 # ── Stats endpoint ────────────────────────────────────────────────────
 
