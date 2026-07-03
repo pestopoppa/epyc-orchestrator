@@ -233,3 +233,114 @@ def test_build_report_separates_factual_mode_from_memory_gate_action(tmp_path: P
     }
     assert summary["canary_role_missing_factual_risk_mode_high_risk_rows"] == 1
     assert summary["evaluable_canary_arm_high_risk_rows"] == 1
+
+
+def test_build_report_separates_historical_missing_modes_from_current_scope_starvation(
+    tmp_path: Path,
+) -> None:
+    _write_jsonl(
+        tmp_path / "2026-04-07.jsonl",
+        [
+            _routing_row(
+                "2026-04-07T00:00:00Z",
+                band="high",
+                action="not_enforced",
+                routing=["frontdoor"],
+            )
+        ],
+    )
+    _write_jsonl(
+        tmp_path / "2026-06-20.jsonl",
+        [
+            _routing_row(
+                "2026-06-20T00:00:00Z",
+                band="high",
+                mode="shadow",
+                routing=["worker_general"],
+            ),
+            _routing_row(
+                "2026-06-20T00:01:00Z",
+                band="high",
+                mode="shadow",
+                routing=["worker_vision"],
+            ),
+            _routing_row(
+                "2026-06-20T00:02:00Z",
+                band="high",
+                mode="shadow",
+                routing=["worker_general"],
+            ),
+            _routing_row(
+                "2026-06-20T00:03:00Z",
+                band="high",
+                mode="shadow",
+                routing=["frontdoor"],
+            ),
+            _routing_row(
+                "2026-06-20T00:04:00Z",
+                band="high",
+                mode="enforce",
+                routing=["frontdoor"],
+            ),
+        ],
+    )
+
+    summary = report_mod.build_report(
+        tmp_path,
+        canary_start="2026-04-06",
+        telemetry_health_start="2026-06-20",
+        decision_gate=10,
+        min_arm_samples=1,
+    )
+
+    assert summary["canary_role_missing_factual_risk_mode_high_risk_rows"] == 1
+    assert summary["high_risk_rows_since_telemetry_health_start"] == 5
+    assert summary["canary_role_high_risk_rows_since_telemetry_health_start"] == 2
+    assert summary["non_canary_role_high_risk_rows_since_telemetry_health_start"] == 3
+    assert summary["missing_factual_risk_mode_high_risk_rows_since_telemetry_health_start"] == 0
+    assert (
+        summary[
+            "canary_role_missing_factual_risk_mode_high_risk_rows_since_telemetry_health_start"
+        ]
+        == 0
+    )
+    assert summary["telemetry_producer_currently_healthy"] is True
+    assert summary["telemetry_canary_role_scope_starved"] is True
+    assert summary["telemetry_collection_blocker"] == "canary_role_scope_starved"
+    assert summary["canary_arm_counts_since_telemetry_health_start"] == {
+        "enforce_high_risk": 1,
+        "shadow_high_risk": 1,
+    }
+
+
+def test_build_report_flags_current_missing_factual_mode(tmp_path: Path) -> None:
+    _write_jsonl(
+        tmp_path / "2026-06-20.jsonl",
+        [
+            _routing_row(
+                "2026-06-20T00:00:00Z",
+                band="high",
+                action="not_enforced",
+                routing=["frontdoor"],
+            )
+        ],
+    )
+
+    summary = report_mod.build_report(
+        tmp_path,
+        canary_start="2026-04-06",
+        telemetry_health_start="2026-06-20",
+        decision_gate=1,
+        min_arm_samples=1,
+    )
+
+    assert summary["high_risk_rows_since_telemetry_health_start"] == 1
+    assert summary["missing_factual_risk_mode_high_risk_rows_since_telemetry_health_start"] == 1
+    assert (
+        summary[
+            "canary_role_missing_factual_risk_mode_high_risk_rows_since_telemetry_health_start"
+        ]
+        == 1
+    )
+    assert summary["telemetry_producer_currently_healthy"] is False
+    assert summary["telemetry_collection_blocker"] == "current_missing_factual_risk_mode"

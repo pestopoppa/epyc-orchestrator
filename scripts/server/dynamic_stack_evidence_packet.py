@@ -263,6 +263,20 @@ def ri10_canary_section(config_path: Path = DEFAULT_CLASSIFIER_CONFIG) -> Eviden
         if latest_report.get("canary_decision_ready") is True:
             status = "ready"
             summary = "RI-10 canary arm-attributed high-risk sample coverage is sufficient."
+        elif latest_report.get("telemetry_collection_blocker") == "canary_role_scope_starved":
+            status = "insufficient_data"
+            summary = (
+                "RI-10 current factual-risk telemetry is populated, but configured "
+                "canary_roles are starving enforce/shadow arm samples."
+            )
+        elif latest_report.get("telemetry_producer_currently_healthy") is False and latest_report.get(
+            "high_risk_rows_since_telemetry_health_start", 0
+        ):
+            status = "insufficient_data"
+            summary = (
+                "RI-10 current high-risk telemetry still has missing factual-risk "
+                "mode rows."
+            )
         elif latest_report.get("sample_count_ready") is True:
             status = "insufficient_data"
             summary = (
@@ -277,6 +291,7 @@ def ri10_canary_section(config_path: Path = DEFAULT_CLASSIFIER_CONFIG) -> Eviden
         for key in (
             "generated_at",
             "canary_start",
+            "telemetry_health_start",
             "decision_gate_high_risk_samples",
             "min_canary_arm_samples",
             "high_risk_rows_since_canary_start",
@@ -288,6 +303,19 @@ def ri10_canary_section(config_path: Path = DEFAULT_CLASSIFIER_CONFIG) -> Eviden
             "canary_role_observable_factual_risk_mode_high_risk_rows",
             "canary_role_missing_factual_risk_mode_high_risk_rows",
             "risk_control_disabled_high_risk_rows_since_canary_start",
+            "high_risk_rows_since_telemetry_health_start",
+            "frontdoor_high_risk_rows_since_telemetry_health_start",
+            "canary_role_high_risk_rows_since_telemetry_health_start",
+            "non_canary_role_high_risk_rows_since_telemetry_health_start",
+            "evaluable_canary_arm_high_risk_rows_since_telemetry_health_start",
+            "observable_factual_risk_mode_high_risk_rows_since_telemetry_health_start",
+            "missing_factual_risk_mode_high_risk_rows_since_telemetry_health_start",
+            "canary_role_observable_factual_risk_mode_high_risk_rows_since_telemetry_health_start",
+            "canary_role_missing_factual_risk_mode_high_risk_rows_since_telemetry_health_start",
+            "telemetry_producer_currently_healthy",
+            "telemetry_canary_role_scope_starved",
+            "telemetry_collection_blocker",
+            "telemetry_collection_reason",
             "sample_count_ready",
             "canary_arm_sample_count_ready",
             "canary_arm_balance_ready",
@@ -296,8 +324,12 @@ def ri10_canary_section(config_path: Path = DEFAULT_CLASSIFIER_CONFIG) -> Eviden
             "canary_arm_counts_since_canary_start",
             "high_risk_factual_risk_modes_since_canary_start",
             "canary_role_factual_risk_modes_since_canary_start",
+            "high_risk_factual_risk_modes_since_telemetry_health_start",
+            "canary_role_factual_risk_modes_since_telemetry_health_start",
             "memory_risk_gate_actions_since_canary_start",
             "high_risk_gate_actions_since_canary_start",
+            "high_risk_gate_actions_since_telemetry_health_start",
+            "canary_arm_counts_since_telemetry_health_start",
         )
         if key in latest_report
     }

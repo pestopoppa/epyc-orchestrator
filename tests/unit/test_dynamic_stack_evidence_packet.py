@@ -169,6 +169,59 @@ factual_risk:
     )
 
 
+def test_ri10_section_surfaces_current_canary_role_scope_starvation(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config = tmp_path / "classifier_config.yaml"
+    config.write_text(
+        """
+factual_risk:
+  mode: canary
+  canary_ratio: 0.25
+  canary_roles: [frontdoor]
+""",
+        encoding="utf-8",
+    )
+    report_dir = tmp_path / "orchestration" / "reports"
+    report_dir.mkdir(parents=True)
+    report_path = report_dir / "ri10_canary_sample_report_20260703.json"
+    report_path.write_text(
+        """
+{
+  "sample_count_ready": true,
+  "canary_decision_ready": false,
+  "high_risk_rows_since_canary_start": 464,
+  "telemetry_health_start": "2026-06-20",
+  "high_risk_rows_since_telemetry_health_start": 20,
+  "canary_role_high_risk_rows_since_telemetry_health_start": 2,
+  "non_canary_role_high_risk_rows_since_telemetry_health_start": 18,
+  "telemetry_producer_currently_healthy": true,
+  "telemetry_canary_role_scope_starved": true,
+  "telemetry_collection_blocker": "canary_role_scope_starved",
+  "telemetry_collection_reason": "current factual-risk telemetry is populated"
+}
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(packet_mod, "ORCH_ROOT", tmp_path)
+
+    section = packet_mod.ri10_canary_section(config)
+
+    assert section.status == "insufficient_data"
+    assert "canary_roles are starving" in section.summary
+    assert section.details["report_path"] == str(report_path)
+    assert (
+        section.details["report_summary"]["telemetry_collection_blocker"]
+        == "canary_role_scope_starved"
+    )
+    assert (
+        section.details["report_summary"][
+            "non_canary_role_high_risk_rows_since_telemetry_health_start"
+        ]
+        == 18
+    )
+
+
 def test_kv_measurement_section_flags_missing_series(tmp_path: Path) -> None:
     section = packet_mod.kv_measurement_section(root=tmp_path, patterns=("missing*",))
 

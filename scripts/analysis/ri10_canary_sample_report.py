@@ -14,6 +14,7 @@ SCRIPT_PATH = Path(__file__).resolve()
 ORCH_ROOT = SCRIPT_PATH.parents[2]
 DEFAULT_LOG_DIR = ORCH_ROOT / "logs" / "progress"
 DEFAULT_CANARY_START = "2026-04-06"
+DEFAULT_TELEMETRY_HEALTH_START = "2026-06-20"
 DEFAULT_GATE = 50
 DEFAULT_MIN_ARM_SAMPLES = 10
 DEFAULT_CANARY_ROLES = ("frontdoor",)
@@ -92,6 +93,7 @@ def build_report(
     log_dir: Path = DEFAULT_LOG_DIR,
     *,
     canary_start: str = DEFAULT_CANARY_START,
+    telemetry_health_start: str = DEFAULT_TELEMETRY_HEALTH_START,
     decision_gate: int = DEFAULT_GATE,
     min_arm_samples: int = DEFAULT_MIN_ARM_SAMPLES,
     canary_roles: Iterable[str] = DEFAULT_CANARY_ROLES,
@@ -112,6 +114,16 @@ def build_report(
     high_sources = Counter()
     enforce_high = 0
     shadow_high = 0
+    telemetry_high_since = 0
+    telemetry_frontdoor_high_since = 0
+    telemetry_canary_role_high_since = 0
+    telemetry_non_canary_role_high_since = 0
+    telemetry_high_by_date = Counter()
+    telemetry_high_actions = Counter()
+    telemetry_high_modes = Counter()
+    telemetry_canary_role_modes = Counter()
+    telemetry_enforce_high = 0
+    telemetry_shadow_high = 0
     examples: list[dict[str, Any]] = []
 
     for path, line_no, record in _iter_progress_records(log_dir):
@@ -138,19 +150,39 @@ def build_report(
         high_since += 1
         routing = sorted(_routing_roles(data))
         factual_mode = _factual_risk_mode(data) or "<missing>"
+        in_telemetry_window = date >= telemetry_health_start
+        is_canary_participant = _is_canary_participant(data, canary_role_set)
+        is_enforce_arm = _is_enforce_arm(data, canary_role_set)
+        is_shadow_arm = _is_shadow_arm(data, canary_role_set)
         high_modes[factual_mode] += 1
         if "frontdoor" in routing:
             frontdoor_high_since += 1
-        if _is_canary_participant(data, canary_role_set):
+        if is_canary_participant:
             canary_role_high_since += 1
             canary_role_modes[factual_mode] += 1
         high_by_date[date] += 1
         high_actions[_action_key(data)] += 1
         high_sources[str(data.get("decision_source") or data.get("strategy") or "<missing>")] += 1
-        if _is_enforce_arm(data, canary_role_set):
+        if is_enforce_arm:
             enforce_high += 1
-        if _is_shadow_arm(data, canary_role_set):
+        if is_shadow_arm:
             shadow_high += 1
+        if in_telemetry_window:
+            telemetry_high_since += 1
+            telemetry_high_by_date[date] += 1
+            telemetry_high_modes[factual_mode] += 1
+            telemetry_high_actions[_action_key(data)] += 1
+            if "frontdoor" in routing:
+                telemetry_frontdoor_high_since += 1
+            if is_canary_participant:
+                telemetry_canary_role_high_since += 1
+                telemetry_canary_role_modes[factual_mode] += 1
+            else:
+                telemetry_non_canary_role_high_since += 1
+            if is_enforce_arm:
+                telemetry_enforce_high += 1
+            if is_shadow_arm:
+                telemetry_shadow_high += 1
         if len(examples) < 12:
             examples.append(
                 {
@@ -172,6 +204,62 @@ def build_report(
     non_canary_role_high = max(0, high_since - canary_role_high_since)
     canary_role_missing_mode_high = canary_role_modes.get("<missing>", 0)
     canary_role_observable_mode_high = canary_role_high_since - canary_role_missing_mode_high
+    telemetry_arm_attributed_high = telemetry_enforce_high + telemetry_shadow_high
+    telemetry_missing_mode_high = telemetry_high_modes.get("<missing>", 0)
+    telemetry_observable_mode_high = telemetry_high_since - telemetry_missing_mode_high
+    telemetry_canary_role_missing_mode_high = telemetry_canary_role_modes.get("<missing>", 0)
+    telemetry_canary_role_observable_mode_high = (
+        telemetry_canary_role_high_since - telemetry_canary_role_missing_mode_high
+    )
+    telemetry_producer_currently_healthy = (
+        telemetry_high_since > 0 and telemetry_missing_mode_high == 0
+    )
+    telemetry_canary_role_scope_starved = (
+        telemetry_producer_currently_healthy
+        and telemetry_non_canary_role_high_since > telemetry_canary_role_high_since
+        and telemetry_canary_role_high_since < decision_gate
+    )
+    if telemetry_high_since == 0:
+        telemetry_collection_blocker = "no_recent_high_risk_rows"
+        telemetry_collection_reason = (
+            "no high-risk routing rows were observed in the telemetry health window"
+        )
+    elif telemetry_missing_mode_high:
+        telemetry_collection_blocker = "current_missing_factual_risk_mode"
+        telemetry_collection_reason = (
+            f"{telemetry_missing_mode_high} current high-risk row(s) still lack "
+            "factual_risk_mode/canary_mode"
+        )
+    elif telemetry_canary_role_scope_starved:
+        telemetry_collection_blocker = "canary_role_scope_starved"
+        telemetry_collection_reason = (
+            "current factual-risk telemetry is populated, but most recent high-risk "
+            "traffic routes outside the configured canary_roles"
+        )
+    elif telemetry_canary_role_high_since < decision_gate:
+        telemetry_collection_blocker = "canary_role_sample_count_insufficient"
+        telemetry_collection_reason = (
+            f"only {telemetry_canary_role_high_since} current high-risk row(s) "
+            f"matched configured canary_roles; gate requires {decision_gate}"
+        )
+    elif telemetry_arm_attributed_high < decision_gate:
+        telemetry_collection_blocker = "canary_arm_volume_insufficient"
+        telemetry_collection_reason = (
+            f"only {telemetry_arm_attributed_high} current high-risk row(s) have "
+            f"observable enforce/shadow canary arms; gate requires {decision_gate}"
+        )
+    elif telemetry_enforce_high < min_arm_samples or telemetry_shadow_high < min_arm_samples:
+        telemetry_collection_blocker = "canary_arm_balance_insufficient"
+        telemetry_collection_reason = (
+            "current enforce/shadow canary arm counts are below the per-arm gate "
+            f"{min_arm_samples} (enforce={telemetry_enforce_high}, "
+            f"shadow={telemetry_shadow_high})"
+        )
+    else:
+        telemetry_collection_blocker = "decision_ready"
+        telemetry_collection_reason = (
+            "current high-risk telemetry has decision-grade canary arm coverage"
+        )
     sample_count_ready = high_since >= decision_gate
     arm_sample_count_ready = arm_attributed_high >= decision_gate
     arm_balance_ready = enforce_high >= min_arm_samples and shadow_high >= min_arm_samples
@@ -198,6 +286,7 @@ def build_report(
         "generated_at": _iso_now(),
         "source_glob": str(log_dir / "*.jsonl"),
         "canary_start": canary_start,
+        "telemetry_health_start": telemetry_health_start,
         "decision_gate_high_risk_samples": decision_gate,
         "min_canary_arm_samples": min_arm_samples,
         "canary_roles": sorted(canary_role_set),
@@ -213,6 +302,35 @@ def build_report(
         "canary_role_observable_factual_risk_mode_high_risk_rows": canary_role_observable_mode_high,
         "canary_role_missing_factual_risk_mode_high_risk_rows": canary_role_missing_mode_high,
         "risk_control_disabled_high_risk_rows_since_canary_start": risk_control_disabled_high,
+        "high_risk_rows_since_telemetry_health_start": telemetry_high_since,
+        "frontdoor_high_risk_rows_since_telemetry_health_start": (
+            telemetry_frontdoor_high_since
+        ),
+        "canary_role_high_risk_rows_since_telemetry_health_start": (
+            telemetry_canary_role_high_since
+        ),
+        "non_canary_role_high_risk_rows_since_telemetry_health_start": (
+            telemetry_non_canary_role_high_since
+        ),
+        "evaluable_canary_arm_high_risk_rows_since_telemetry_health_start": (
+            telemetry_arm_attributed_high
+        ),
+        "observable_factual_risk_mode_high_risk_rows_since_telemetry_health_start": (
+            telemetry_observable_mode_high
+        ),
+        "missing_factual_risk_mode_high_risk_rows_since_telemetry_health_start": (
+            telemetry_missing_mode_high
+        ),
+        "canary_role_observable_factual_risk_mode_high_risk_rows_since_telemetry_health_start": (
+            telemetry_canary_role_observable_mode_high
+        ),
+        "canary_role_missing_factual_risk_mode_high_risk_rows_since_telemetry_health_start": (
+            telemetry_canary_role_missing_mode_high
+        ),
+        "telemetry_producer_currently_healthy": telemetry_producer_currently_healthy,
+        "telemetry_canary_role_scope_starved": telemetry_canary_role_scope_starved,
+        "telemetry_collection_blocker": telemetry_collection_blocker,
+        "telemetry_collection_reason": telemetry_collection_reason,
         "sample_count_ready": sample_count_ready,
         "canary_arm_sample_count_ready": arm_sample_count_ready,
         "canary_arm_balance_ready": arm_balance_ready,
@@ -221,14 +339,30 @@ def build_report(
         "band_counts": _counter_dict(band_counts),
         "band_counts_since_canary_start": _counter_dict(since_band_counts),
         "high_risk_by_date_since_canary_start": _counter_dict(high_by_date),
+        "high_risk_by_date_since_telemetry_health_start": _counter_dict(
+            telemetry_high_by_date
+        ),
         "high_risk_factual_risk_modes_since_canary_start": _counter_dict(high_modes),
         "canary_role_factual_risk_modes_since_canary_start": _counter_dict(canary_role_modes),
+        "high_risk_factual_risk_modes_since_telemetry_health_start": _counter_dict(
+            telemetry_high_modes
+        ),
+        "canary_role_factual_risk_modes_since_telemetry_health_start": _counter_dict(
+            telemetry_canary_role_modes
+        ),
         "high_risk_gate_actions_since_canary_start": _counter_dict(high_actions),
+        "high_risk_gate_actions_since_telemetry_health_start": _counter_dict(
+            telemetry_high_actions
+        ),
         "memory_risk_gate_actions_since_canary_start": _counter_dict(high_actions),
         "high_risk_decision_sources_since_canary_start": _counter_dict(high_sources),
         "canary_arm_counts_since_canary_start": {
             "enforce_high_risk": enforce_high,
             "shadow_high_risk": shadow_high,
+        },
+        "canary_arm_counts_since_telemetry_health_start": {
+            "enforce_high_risk": telemetry_enforce_high,
+            "shadow_high_risk": telemetry_shadow_high,
         },
         "example_high_risk_rows": examples,
     }
@@ -238,6 +372,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--log-dir", type=Path, default=DEFAULT_LOG_DIR)
     parser.add_argument("--canary-start", default=DEFAULT_CANARY_START)
+    parser.add_argument("--telemetry-health-start", default=DEFAULT_TELEMETRY_HEALTH_START)
     parser.add_argument("--decision-gate", type=int, default=DEFAULT_GATE)
     parser.add_argument(
         "--canary-role",
@@ -268,6 +403,7 @@ def main(argv: list[str] | None = None) -> int:
     report = build_report(
         args.log_dir,
         canary_start=args.canary_start,
+        telemetry_health_start=args.telemetry_health_start,
         decision_gate=args.decision_gate,
         min_arm_samples=args.min_arm_samples,
         canary_roles=() if args.all_canary_roles else (args.canary_role or DEFAULT_CANARY_ROLES),
