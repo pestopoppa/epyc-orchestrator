@@ -163,6 +163,9 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     FeatureSpec("output_spill_to_file", False, True, "OUTPUT_SPILL_TO_FILE", "Spill truncated output to file"),
     # Pipeline monitoring
     FeatureSpec("model_grading", False, False, "MODEL_GRADING", "Post-hoc model-graded evals"),
+    # P-BENCH-3 A7: eval-batch serving-class switch. Metadata/shadow support may
+    # land separately, but execution routing remains off until this flag is set.
+    FeatureSpec("eval_batch_serving", False, False, "EVAL_BATCH_SERVING", "Route eval batches through an evidence-gated batch-serving class"),
     # HSD
     FeatureSpec("self_speculation", False, False, "SELF_SPECULATION", "Self-speculation with layer-exit draft"),
     FeatureSpec("hierarchical_speculation", False, False, "HIERARCHICAL_SPECULATION", "Hierarchical intermediate verification"),
@@ -468,6 +471,9 @@ class Features:
 
     # Pipeline monitoring: model-graded subjective evals
     model_grading: bool = False  # Post-hoc model-graded evals via the live worker-general path
+
+    # P-BENCH-3 A7: opt-in eval-batch serving-class switch.
+    eval_batch_serving: bool = False
 
     # HSD: Hierarchical Self-Speculation
     self_speculation: bool = False  # Self-speculation with layer-exit draft

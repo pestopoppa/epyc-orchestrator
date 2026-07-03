@@ -88,6 +88,7 @@ def test_stack_production_feature_env_is_complete_and_wave_gated() -> None:
     assert env["ORCHESTRATOR_FEATURE_PARALLEL_EXECUTION"] == "0"
     assert env["ORCHESTRATOR_FEATURE_UNIFIED_STREAMING"] == "0"
     assert env["ORCHESTRATOR_FEATURE_ROUTING_CLASSIFIER"] == "0"
+    assert env["ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING"] == "0"
     assert "ORCHESTRATOR_FEATURE_LANGGRAPH_ARCHITECT_CODING" not in env
     assert "ORCHESTRATOR_REPL" not in env
     assert "ORCHESTRATOR_LANGGRAPH_ARCHITECT_CODING" not in env

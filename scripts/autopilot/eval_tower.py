@@ -467,6 +467,17 @@ def _eval_concurrency() -> int:
     except Exception:
         return 1
 
+
+def _eval_batch_id(*, label: str, n_questions: int, started_at_s: float) -> str:
+    safe_label = "".join(
+        ch if ch.isalnum() or ch in {"-", "_"} else "-"
+        for ch in str(label or "eval").strip()
+    ).strip("-_")
+    if not safe_label:
+        safe_label = "eval"
+    return f"evaltower-{safe_label}-{int(started_at_s * 1000)}-{max(0, n_questions)}q"
+
+
 # Import seeding infrastructure
 import sys
 
@@ -991,7 +1002,12 @@ class EvalTower:
                 "image_path": image_path,
                 "client": client,
                 "watcher": getattr(self, "watcher", None),
+                "request_priority": "background",
+                "workload_class": "eval_batch",
             }
+            eval_batch_id = str(q.get("_eval_batch_id") or "").strip()
+            if eval_batch_id:
+                call_kwargs["batch_id"] = eval_batch_id
             if "tools" in q:
                 call_kwargs["tools"] = q.get("tools")
             if "tool_choice" in q:
@@ -1124,10 +1140,19 @@ class EvalTower:
         if n == 0:
             return []
         workers = min(n, _eval_concurrency())
+        eval_batch_id = _eval_batch_id(
+            label=label,
+            n_questions=n,
+            started_at_s=time.time(),
+        )
+        dispatch_questions = [
+            {**q, "_eval_batch_id": str(q.get("_eval_batch_id") or eval_batch_id)}
+            for q in questions
+        ]
         results: list[QuestionResult | None] = [None] * n
         batch_start = time.time()
         if workers <= 1:
-            for i, q in enumerate(questions):
+            for i, q in enumerate(dispatch_questions):
                 results[i] = self._eval_question(q, client)
                 if log_every and (i + 1) % log_every == 0:
                     correct_so_far = sum(1 for r in results if r and r.correct)
@@ -1154,7 +1179,7 @@ class EvalTower:
         try:
             future_to_idx = {
                 ex.submit(self._eval_question, q, client): i
-                for i, q in enumerate(questions)
+                for i, q in enumerate(dispatch_questions)
             }
             pending = set(future_to_idx)
             no_progress_timeout_s = _eval_no_progress_timeout_s(self.timeout)

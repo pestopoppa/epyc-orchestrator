@@ -277,6 +277,9 @@ def _call_orchestrator_with_slot_poll(
     session_id: str = "",
     scoring_method: str = "",
     stop_sequences: list[str] | None = None,
+    request_priority: str | None = None,
+    workload_class: str | None = None,
+    batch_id: int | str | None = None,
     watcher: Any | None = None,
 ) -> tuple[dict[str, Any], float, dict[str, Any]]:
     """Call orchestrator while polling slot progress for live visibility.
@@ -332,6 +335,9 @@ def _call_orchestrator_with_slot_poll(
             session_id=session_id,
             scoring_method=scoring_method,
             stop_sequences=stop_sequences,
+            request_priority=request_priority,
+            workload_class=workload_class,
+            batch_id=batch_id,
             watcher=watcher,
         )
 
@@ -621,6 +627,9 @@ def call_orchestrator_forced(
     session_id: str = "",
     scoring_method: str = "",
     stop_sequences: list[str] | None = None,
+    request_priority: str | None = None,
+    workload_class: str | None = None,
+    batch_id: int | str | None = None,
     tools: list[dict[str, Any]] | None = None,
     tool_choice: str | dict[str, Any] | None = None,
     watcher: Any | None = None,
@@ -639,6 +648,11 @@ def call_orchestrator_forced(
         client: Reusable httpx.Client for connection pooling.
         allow_delegation: Override delegation (None=feature flag, True=allow, False=disable).
         session_id: Optional session ID for cross-request persistence (Phase 3 checkpoints).
+        request_priority: Optional admission priority override. Defaults to the
+            legacy background seeding priority.
+        workload_class: Optional traffic-class stamp for attribution/shadow
+            routing. Omitted when not supplied to preserve legacy payload shape.
+        batch_id: Optional batch identifier for inference-tap attribution.
         tools: Optional OpenAI-compatible function-tool schemas to forward to the
             orchestrator request. Omitted by default to preserve legacy eval traffic.
         tool_choice: Optional OpenAI-compatible tool choice policy for tools.
@@ -674,7 +688,11 @@ def call_orchestrator_forced(
         # is decoding, an ingest probe is held until frontdoor releases).
         # Without this stamp, autopilot probes contend with user chats and
         # crater both sides per the 2026-05-24 contention matrix.
-        "request_priority": "background",
+        "request_priority": (
+            request_priority
+            if str(request_priority or "").strip()
+            else "background"
+        ),
         # Background autopilot can wait up to 90 s for the gate; foreground
         # chats default to 5 s. Adjust if seed timeouts shorten in future.
         "max_queue_wait_ms": min(int(timeout * 1000), 90_000),
@@ -691,6 +709,10 @@ def call_orchestrator_forced(
         payload["scoring_method"] = scoring_method
     if stop_sequences:
         payload["stop_sequences"] = stop_sequences
+    if workload_class:
+        payload["workload_class"] = workload_class
+    if batch_id is not None:
+        payload["batch_id"] = batch_id
     if tools is not None:
         payload["tools"] = tools
     if tool_choice is not None:

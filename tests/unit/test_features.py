@@ -59,6 +59,7 @@ class TestFeaturesDefaults:
         assert f.resume_tokens is False
         assert f.approval_gates is False
         assert f.binding_routing is False
+        assert f.eval_batch_serving is False
 
         # Explicitly True by default
         assert f.tools is True
@@ -242,6 +243,12 @@ class TestGetFeatures:
         assert get_features(production=True).logit_probe is False
         monkeypatch.setenv("ORCHESTRATOR_LOGIT_PROBE", "1")
         assert get_features(production=True).logit_probe is True
+
+    def test_eval_batch_serving_defaults_off_and_env_enables(self, monkeypatch):
+        """The P-BENCH-3 eval-batch serving hook is default-off."""
+        assert get_features(production=True).eval_batch_serving is False
+        monkeypatch.setenv("ORCHESTRATOR_EVAL_BATCH_SERVING", "1")
+        assert get_features(production=True).eval_batch_serving is True
 
     def test_override_applies(self):
         """Explicit override dict takes precedence over defaults."""

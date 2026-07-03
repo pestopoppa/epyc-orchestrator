@@ -258,6 +258,9 @@ def test_call_orchestrator_forced_includes_optional_payload_fields():
         session_id="sess-1",
         scoring_method="score-x",
         stop_sequences=["</answer>"],
+        request_priority="background",
+        workload_class="eval_batch",
+        batch_id="evaltower-T1-123-43q",
         tools=[
             {
                 "type": "function",
@@ -274,6 +277,9 @@ def test_call_orchestrator_forced_includes_optional_payload_fields():
     assert payload["session_id"] == "sess-1"
     assert payload["scoring_method"] == "score-x"
     assert payload["stop_sequences"] == ["</answer>"]
+    assert payload["request_priority"] == "background"
+    assert payload["workload_class"] == "eval_batch"
+    assert payload["batch_id"] == "evaltower-T1-123-43q"
     assert payload["tools"][0]["function"]["name"] == "web_search"
     assert payload["tool_choice"]["function"]["name"] == "web_search"
 

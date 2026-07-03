@@ -70,6 +70,34 @@ def test_eval_batch_progress_callback_reports_logged_milestones(monkeypatch) -> 
     ]
 
 
+def test_eval_batch_stamps_shared_eval_batch_id(monkeypatch) -> None:
+    monkeypatch.setenv("AUTOPILOT_EVAL_CONCURRENCY", "1")
+    tower = EvalTower()
+    seen_batch_ids: list[str] = []
+
+    def fake_eval_question(q: dict, client: object) -> QuestionResult:
+        seen_batch_ids.append(str(q.get("_eval_batch_id") or ""))
+        return QuestionResult(
+            question_id=str(q["id"]),
+            suite="unit",
+            prompt=str(q["id"]),
+            expected="ok",
+            correct=True,
+        )
+
+    monkeypatch.setattr(tower, "_eval_question", fake_eval_question)
+
+    tower._eval_batch(
+        [{"id": "q1"}, {"id": "q2"}, {"id": "q3"}],
+        client=object(),  # type: ignore[arg-type]
+        label="T1",
+    )
+
+    assert len(set(seen_batch_ids)) == 1
+    assert seen_batch_ids[0].startswith("evaltower-T1-")
+    assert seen_batch_ids[0].endswith("-3q")
+
+
 def test_eval_batch_fails_remaining_questions_after_no_progress_timeout(monkeypatch) -> None:
     monkeypatch.setenv("AUTOPILOT_EVAL_CONCURRENCY", "2")
     monkeypatch.setenv("AUTOPILOT_EVAL_NO_PROGRESS_TIMEOUT_S", "0.05")
@@ -591,6 +619,33 @@ def test_eval_question_forwards_native_tool_schema_when_present(monkeypatch) -> 
     assert result.tools_called == ["get_eval_secret"]
     assert calls[0]["tools"] == tool_schema
     assert calls[0]["tool_choice"] == tool_choice
+
+
+def test_eval_question_stamps_eval_batch_request_metadata(monkeypatch) -> None:
+    tower = EvalTower()
+    calls: list[dict] = []
+
+    def _fake_call(**kwargs):  # noqa: ANN001
+        calls.append(kwargs)
+        return {"answer": "ok", "tokens_generated": 1}
+
+    monkeypatch.setattr(eval_tower, "call_orchestrator_forced", _fake_call)
+
+    with eval_tower.httpx.Client(timeout=1) as client:
+        tower._eval_question(
+            {
+                "id": "q-meta",
+                "suite": "unit",
+                "prompt": "Say ok.",
+                "expected": "ok",
+                "_eval_batch_id": "evaltower-T1-123-1q",
+            },
+            client,
+        )
+
+    assert calls[0]["request_priority"] == "background"
+    assert calls[0]["workload_class"] == "eval_batch"
+    assert calls[0]["batch_id"] == "evaltower-T1-123-1q"
 
 
 def test_eval_question_omits_native_tool_schema_by_default(monkeypatch) -> None:
