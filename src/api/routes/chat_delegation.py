@@ -392,7 +392,12 @@ def _run_specialist_loop(
         )
         # Retrieve corpus context once for the delegation (turn 0 only)
         corpus_ctx = (
-            build_corpus_context(role=delegate_to, task_description=q_for_specialist)
+            build_corpus_context(
+                role=delegate_to,
+                task_description=q_for_specialist,
+                task_id=primitives.get_request_task_id(),
+                request_id=primitives.get_request_id(),
+            )
             if cfg.specialist_corpus_context
             else ""
         )

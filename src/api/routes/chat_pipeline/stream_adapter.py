@@ -199,6 +199,8 @@ async def _stream_repl(
                 corpus_ctx = build_corpus_context(
                     role=current_role,
                     task_description=request.prompt,
+                    task_id=task_id,
+                    request_id=request.request_id,
                 )
             root_prompt = build_root_lm_prompt(
                 state=repl_state,

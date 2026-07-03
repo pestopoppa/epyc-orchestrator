@@ -9,6 +9,7 @@ Contains:
 
 from __future__ import annotations
 
+from dataclasses import asdict
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -27,11 +28,13 @@ from src.prompt_builders.constants import (
     DEFAULT_ROOT_LM_TOOLS,
 )
 from src.prompt_builders.resolver import resolve_prompt
-from src.roles import Role, get_tier
+from src.roles import Role, chain_name_to_role, get_tier
 from src.task_ir import canonicalize_task_ir
 from src.features import features as _get_features
 
 _log = logging.getLogger(__name__)
+_CORPUS_REGISTRY: Any | None = None
+_DEFAULT_CORPUS_SLOW_QUERY_MS = 5000.0
 
 # ── Fallback Constants ──────────────────────────────────────────────────────
 
@@ -797,10 +800,100 @@ def build_routing_context(
         return ""
 
 
+def _role_name_for_registry(role: str) -> str:
+    """Normalize enum/generic role names before registry lookup."""
+    role_text = str(role or "").strip()
+    normalized = Role.from_string(role_text)
+    if normalized is not None:
+        return normalized.value
+    chained = chain_name_to_role(role_text)
+    if chained is not None:
+        return chained.value
+    return role_text
+
+
+def _get_corpus_registry() -> Any:
+    """Load the default registry once for corpus retrieval metadata."""
+    global _CORPUS_REGISTRY
+    if _CORPUS_REGISTRY is None:
+        from src.registry.registry_loader import RegistryLoader
+
+        _CORPUS_REGISTRY = RegistryLoader(validate_paths=False)
+    return _CORPUS_REGISTRY
+
+
+def _corpus_config_from_mapping(config_data: dict[str, Any], corpus_config_cls: Any) -> Any:
+    cfg = corpus_config_cls(
+        enabled=bool(config_data.get("enabled", False)),
+        index_path=str(config_data.get("index_path", "") or ""),
+        max_snippets=int(config_data.get("max_snippets", 3) or 3),
+        max_chars=int(config_data.get("max_chars", 3000) or 3000),
+    )
+    for key in (
+        "min_score",
+        "exact_only",
+        "rag_enabled",
+        "rag_max_snippets",
+        "rag_max_chars",
+        "rag_min_score",
+        "rag_roles",
+    ):
+        if key in config_data:
+            setattr(cfg, key, config_data[key])
+    return cfg
+
+
+def _same_corpus_config(current: Any, desired: Any) -> bool:
+    return (
+        bool(getattr(current, "enabled", False)) == bool(getattr(desired, "enabled", False))
+        and str(getattr(current, "index_path", "")) == str(getattr(desired, "index_path", ""))
+        and int(getattr(current, "max_snippets", 0) or 0)
+        == int(getattr(desired, "max_snippets", 0) or 0)
+        and int(getattr(current, "max_chars", 0) or 0)
+        == int(getattr(desired, "max_chars", 0) or 0)
+    )
+
+
+def _configured_corpus_retriever(retriever_cls: Any, desired_config: Any) -> Any:
+    retriever = retriever_cls.get_instance()
+    if not _same_corpus_config(retriever.config, desired_config):
+        retriever_cls.reset_instance()
+        retriever = retriever_cls.get_instance(desired_config)
+    else:
+        retriever.config = desired_config
+    return retriever
+
+
+def _emit_corpus_context_event(event: dict[str, Any]) -> None:
+    status = str(event.get("status") or "")
+    reason = str(event.get("reason") or "")
+    msg = (
+        "Corpus retrieval %s role=%s reason=%s snippets=%s chars=%s latency_ms=%s"
+    )
+    args = (
+        status,
+        event.get("role"),
+        reason,
+        event.get("snippet_count", 0),
+        event.get("context_chars", 0),
+        event.get("retrieval_latency_ms", 0.0),
+    )
+    extra = {"corpus_retrieval": event}
+    if status in {"injected"}:
+        _log.info(msg, *args, extra=extra)
+    elif status in {"error", "slow_query"}:
+        _log.warning(msg, *args, extra=extra)
+    else:
+        _log.debug(msg, *args, extra=extra)
+
+
 def build_corpus_context(
     role: str,
     task_description: str,
     config: Any | None = None,
+    *,
+    task_id: str | None = None,
+    request_id: str | None = None,
 ) -> str:
     """Build corpus context for prompt-lookup acceleration.
 
@@ -811,49 +904,129 @@ def build_corpus_context(
         role: Current model's role name.
         task_description: The user's task description.
         config: Optional CorpusConfig override.
+        task_id: Optional orchestrator task id for retrieval telemetry.
+        request_id: Optional caller request id for retrieval telemetry.
 
     Returns:
         Formatted reference code string, or "" if not applicable.
     """
+    role_name = _role_name_for_registry(role)
+    event: dict[str, Any] = {
+        "role": role_name,
+        "task_id": task_id,
+        "request_id": request_id,
+        "status": "skipped",
+        "reason": "",
+        "snippet_count": 0,
+        "context_chars": 0,
+        "retrieval_latency_ms": 0.0,
+    }
     try:
         from src.services.corpus_retrieval import (
+            CorpusConfig,
             CorpusRetriever,
             extract_code_query,
         )
-    except ImportError:
+    except ImportError as exc:
+        event.update(
+            status="error",
+            reason="import_error",
+            failure_detail=f"{type(exc).__name__}: {exc}",
+        )
+        _emit_corpus_context_event(event)
         return ""
 
     try:
-        retriever = CorpusRetriever.get_instance(config)
-
-        # Auto-init from registry if singleton has default (disabled) config
-        if not retriever.config.enabled and config is None:
+        desired_config = config
+        slow_query_ms = _DEFAULT_CORPUS_SLOW_QUERY_MS
+        if desired_config is None:
             try:
-                from src.registry_loader import ModelRegistry
-                registry = ModelRegistry.get_instance()
-                cfg = registry.get_corpus_config()
-                if cfg.get("enabled", False):
-                    retriever.config.enabled = True
-                    retriever.config.index_path = cfg.get(
-                        "index_path", retriever.config.index_path,
+                registry = _get_corpus_registry()
+                runtime_cfg = registry.get_corpus_config()
+                role_cfg = registry.get_role(role_name)
+                role_enabled = bool(role_cfg.acceleration.corpus_retrieval)
+                event.update(
+                    index_path=runtime_cfg.get("index_path", ""),
+                    role_corpus_enabled=role_enabled,
+                    runtime_corpus_enabled=bool(runtime_cfg.get("enabled", False)),
+                )
+                if not runtime_cfg.get("enabled", False):
+                    event.update(status="skipped", reason="config_disabled")
+                    _emit_corpus_context_event(event)
+                    return ""
+                if not role_enabled:
+                    event.update(status="skipped", reason="role_disabled")
+                    _emit_corpus_context_event(event)
+                    return ""
+                desired_config = _corpus_config_from_mapping(runtime_cfg, CorpusConfig)
+                slow_query_ms = float(
+                    runtime_cfg.get(
+                        "slow_query_ms",
+                        runtime_cfg.get("timeout_ms", _DEFAULT_CORPUS_SLOW_QUERY_MS),
                     )
-                    retriever.config.max_snippets = cfg.get(
-                        "max_snippets", retriever.config.max_snippets,
-                    )
-                    retriever.config.max_chars = cfg.get(
-                        "max_chars", retriever.config.max_chars,
-                    )
-            except Exception:
-                pass
+                    or _DEFAULT_CORPUS_SLOW_QUERY_MS
+                )
+            except Exception as exc:
+                event.update(
+                    status="error",
+                    reason="registry_error",
+                    failure_detail=f"{type(exc).__name__}: {exc}",
+                )
+                _emit_corpus_context_event(event)
+                return ""
+
+        retriever = _configured_corpus_retriever(CorpusRetriever, desired_config)
+        event.update(
+            index_path=getattr(retriever.config, "index_path", ""),
+            runtime_corpus_enabled=bool(getattr(retriever.config, "enabled", False)),
+        )
 
         if not retriever.config.enabled:
+            event.update(status="skipped", reason="config_disabled")
+            _emit_corpus_context_event(event)
             return ""
 
         query = extract_code_query(task_description)
         snippets = retriever.retrieve(query)
-        return retriever.format_for_prompt(snippets)
+        diagnostics = retriever.last_diagnostics
+        if diagnostics is not None:
+            diag_payload = asdict(diagnostics)
+            event.update(
+                query_ngrams=diag_payload.get("query_ngrams", 0),
+                shards_queried=diag_payload.get("shards_queried", 0),
+                shards_failed=diag_payload.get("shards_failed", 0),
+                shards_unavailable=diag_payload.get("shards_unavailable", 0),
+                candidates_found=diag_payload.get("candidates_found", 0),
+                retrieval_latency_ms=round(float(diag_payload.get("elapsed_ms") or 0.0), 3),
+                failure_reason=diag_payload.get("failure_reason", ""),
+                failure_detail=diag_payload.get("failure_detail", ""),
+            )
+        elapsed_ms = float(event.get("retrieval_latency_ms") or 0.0)
+        if slow_query_ms > 0 and elapsed_ms > slow_query_ms:
+            event.update(
+                status="slow_query",
+                reason="retrieval_latency_exceeded",
+                slow_query_ms=slow_query_ms,
+                snippet_count=len(snippets),
+            )
+            _emit_corpus_context_event(event)
+            return ""
+        context = retriever.format_for_prompt(snippets)
+        event.update(
+            status="injected" if context else "skipped",
+            reason="" if context else "no_snippets",
+            snippet_count=len(snippets),
+            context_chars=len(context),
+        )
+        _emit_corpus_context_event(event)
+        return context
     except Exception as exc:
-        _log.warning("Corpus retrieval failed: %s", exc)
+        event.update(
+            status="error",
+            reason="retrieval_error",
+            failure_detail=f"{type(exc).__name__}: {exc}",
+        )
+        _emit_corpus_context_event(event)
         return ""
 
 

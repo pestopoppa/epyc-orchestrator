@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -19,7 +21,6 @@ from src.services.corpus_retrieval import (
     CodeSnippet,
     CorpusConfig,
     CorpusRetriever,
-    RetrievalDiagnostics,
     extract_code_query,
 )
 
@@ -119,6 +120,118 @@ class TestReturnsEmptyForNonLookupRole:
             task_description="Design a system",
         )
         assert result == ""
+
+    def test_build_corpus_context_requires_role_corpus_flag(
+        self,
+        mini_index: Path,
+        monkeypatch,
+        caplog,
+    ):
+        from src.prompt_builders import builder
+
+        fake_registry = SimpleNamespace(
+            get_corpus_config=lambda: {
+                "enabled": True,
+                "index_path": str(mini_index),
+                "max_snippets": 3,
+                "max_chars": 3000,
+            },
+            get_role=lambda _role: SimpleNamespace(
+                acceleration=SimpleNamespace(corpus_retrieval=False)
+            ),
+        )
+        monkeypatch.setattr(builder, "_get_corpus_registry", lambda: fake_registry)
+
+        with caplog.at_level(logging.DEBUG, logger="src.prompt_builders.builder"):
+            result = builder.build_corpus_context(
+                role="coder_escalation",
+                task_description="return sum((p - t) ** 2 for predictions targets",
+                task_id="task-1",
+                request_id="req-1",
+            )
+
+        assert result == ""
+        event = caplog.records[-1].corpus_retrieval
+        assert event["status"] == "skipped"
+        assert event["reason"] == "role_disabled"
+        assert event["role"] == "coder_escalation"
+        assert event["task_id"] == "task-1"
+        assert event["request_id"] == "req-1"
+
+    def test_build_corpus_context_uses_enabled_role_registry_config(
+        self,
+        mini_index: Path,
+        monkeypatch,
+        caplog,
+    ):
+        from src.prompt_builders import builder
+
+        fake_registry = SimpleNamespace(
+            get_corpus_config=lambda: {
+                "enabled": True,
+                "index_path": str(mini_index),
+                "max_snippets": 3,
+                "max_chars": 3000,
+            },
+            get_role=lambda _role: SimpleNamespace(
+                acceleration=SimpleNamespace(corpus_retrieval=True)
+            ),
+        )
+        monkeypatch.setattr(builder, "_get_corpus_registry", lambda: fake_registry)
+
+        with caplog.at_level(logging.INFO, logger="src.prompt_builders.builder"):
+            result = builder.build_corpus_context(
+                role="coder_escalation",
+                task_description=(
+                    "return sum((p - t) ** 2 for p, t in zip(predictions, targets)"
+                ),
+                task_id="task-2",
+            )
+
+        assert "<reference_code" in result
+        assert "calculate_loss" in result
+        event = caplog.records[-1].corpus_retrieval
+        assert event["status"] == "injected"
+        assert event["snippet_count"] >= 1
+        assert event["context_chars"] == len(result)
+        assert event["query_ngrams"] > 0
+        assert event["index_path"] == str(mini_index)
+
+    def test_build_corpus_context_suppresses_slow_retrieval(
+        self,
+        mini_index: Path,
+        monkeypatch,
+        caplog,
+    ):
+        from src.prompt_builders import builder
+
+        fake_registry = SimpleNamespace(
+            get_corpus_config=lambda: {
+                "enabled": True,
+                "index_path": str(mini_index),
+                "max_snippets": 3,
+                "max_chars": 3000,
+                "slow_query_ms": 0.000001,
+            },
+            get_role=lambda _role: SimpleNamespace(
+                acceleration=SimpleNamespace(corpus_retrieval=True)
+            ),
+        )
+        monkeypatch.setattr(builder, "_get_corpus_registry", lambda: fake_registry)
+
+        with caplog.at_level(logging.WARNING, logger="src.prompt_builders.builder"):
+            result = builder.build_corpus_context(
+                role="coder_escalation",
+                task_description=(
+                    "return sum((p - t) ** 2 for p, t in zip(predictions, targets)"
+                ),
+            )
+
+        assert result == ""
+        event = caplog.records[-1].corpus_retrieval
+        assert event["status"] == "slow_query"
+        assert event["reason"] == "retrieval_latency_exceeded"
+        assert event["snippet_count"] >= 1
 
 
 # ── Format Respects Max Chars ─────────────────────────────────────────────

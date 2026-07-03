@@ -627,6 +627,7 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
             corpus_ctx = build_corpus_context(
                 role=str(role),
                 task_description=state.prompt,
+                task_id=state.task_id or None,
             )
 
             # Speculative pre-warm of architect KV cache for complex tasks (WS3C)
@@ -1314,6 +1315,5 @@ def _format_validation_failure_message(
         f"Rejected value: {rejected_trunc}\n"
         "Fix the value and call FINAL again. State is preserved."
     )
-
 
 
