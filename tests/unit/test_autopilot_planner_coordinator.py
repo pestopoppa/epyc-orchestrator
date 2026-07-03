@@ -767,6 +767,8 @@ def test_critique_prompt_surfaces_flag_and_feedback_context() -> None:
     assert "BINDING" in out
     assert "dependencies are not all currently ON" in out
     assert "below-MDE" in out
+    assert "unrelated dirty files" in out
+    assert "target-path dirty fence" in out
 
 
 def test_critique_prompt_caps_selected_sections() -> None:

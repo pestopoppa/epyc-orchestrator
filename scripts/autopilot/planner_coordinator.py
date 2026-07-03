@@ -507,6 +507,9 @@ of the following — the relevant evidence is in the selected context below:
 Do NOT manufacture host-noise / contention narratives when System Health is
 nominal, and do NOT propose operator-domain actions (widening safety-gate
 thresholds, baseline refresh) — those are outside the autopilot action space.
+Do NOT reject solely because the shared worktree has unrelated dirty files.
+The dispatcher has a target-path dirty fence: cite dirty state only when the
+parsed action would write/stage that same target path or prompt directory.
 
 Return JSON ONLY in this fenced block:
 

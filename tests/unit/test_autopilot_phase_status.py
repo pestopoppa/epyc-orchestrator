@@ -163,6 +163,7 @@ def test_phase_health_default_runtime_sources_include_planner_modules():
     checked = {path.name for path in phase_status.AUTOPILOT_RUNTIME_SOURCE_PATHS}
 
     assert "controller_io.py" in checked
+    assert "planner_coordinator.py" in checked
     assert "planner_providers.py" in checked
 
 
