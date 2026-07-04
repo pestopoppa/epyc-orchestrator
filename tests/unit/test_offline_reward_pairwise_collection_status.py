@@ -112,6 +112,31 @@ def test_a9_collection_status_reports_no_runnable_batches(
     assert status["warnings"] == ["manifest has no runnable collection batches"]
 
 
+def test_a9_collection_status_no_runnable_batches_overrides_active_autopilot(
+    tmp_path: Path, monkeypatch
+) -> None:
+    manifest = tmp_path / "manifest.json"
+    _write_manifest(manifest)
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["batch_count"] = 0
+    payload["batches"] = []
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(
+        mod,
+        "_active_processes",
+        lambda pattern: ["123 python scripts/autopilot/autopilot.py start"],
+    )
+
+    status = mod.build_status(manifest)
+
+    assert status["ready"] is False
+    assert status["status"] == "no_runnable_batches"
+    assert status["blockers"] == []
+    assert status["autopilot_guard"]["active_processes"] == [
+        "123 python scripts/autopilot/autopilot.py start"
+    ]
+
+
 def test_a9_collection_status_main_uses_guard_exit_code(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:

@@ -123,17 +123,18 @@ def build_status(manifest_path: Path) -> dict[str, Any]:
     pattern = str(guard.get("process_pattern") or "scripts/autopilot/autopilot.py start")
     active = _active_processes(pattern)
     autopilot_blocked = bool(active)
-    if autopilot_blocked:
-        blockers.append(f"active AutoPilot process(es): {'; '.join(active)}")
 
     batches = manifest.get("batches") if isinstance(manifest.get("batches"), list) else []
     status = "ready"
     if manifest_blockers:
         status = "invalid"
-    elif autopilot_blocked:
-        status = "blocked"
     elif not batches:
         status = "no_runnable_batches"
+    elif autopilot_blocked:
+        status = "blocked"
+
+    if autopilot_blocked and status == "blocked":
+        blockers.append(f"active AutoPilot process(es): {'; '.join(active)}")
 
     return {
         "schema_version": "offline_reward_pairwise_collection_status.v1",
