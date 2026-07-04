@@ -197,6 +197,82 @@ class TestReturnsEmptyForNonLookupRole:
         assert event["query_ngrams"] > 0
         assert event["index_path"] == str(mini_index)
 
+    def test_build_corpus_context_allows_task_scoped_worker_code_task(
+        self,
+        mini_index: Path,
+        monkeypatch,
+        caplog,
+    ):
+        from src.prompt_builders import builder
+
+        fake_registry = SimpleNamespace(
+            get_corpus_config=lambda: {
+                "enabled": True,
+                "index_path": str(mini_index),
+                "max_snippets": 3,
+                "max_chars": 3000,
+                "task_scoped_roles": ["worker_general"],
+            },
+            get_role=lambda _role: SimpleNamespace(
+                acceleration=SimpleNamespace(corpus_retrieval=False)
+            ),
+        )
+        monkeypatch.setattr(builder, "_get_corpus_registry", lambda: fake_registry)
+
+        with caplog.at_level(logging.INFO, logger="src.prompt_builders.builder"):
+            result = builder.build_corpus_context(
+                role="worker_general",
+                task_description=(
+                    "Implement Python code that returns sum((p - t) ** 2 "
+                    "for p, t in zip(predictions, targets)"
+                ),
+                task_id="task-worker-code",
+            )
+
+        assert "<reference_code" in result
+        assert "calculate_loss" in result
+        event = caplog.records[-1].corpus_retrieval
+        assert event["status"] == "injected"
+        assert event["role"] == "worker_general"
+        assert event["role_corpus_scope"] == "code_task"
+        assert event["corpus_task_scope"] == "code"
+
+    def test_build_corpus_context_skips_task_scoped_worker_non_code_task(
+        self,
+        mini_index: Path,
+        monkeypatch,
+        caplog,
+    ):
+        from src.prompt_builders import builder
+
+        fake_registry = SimpleNamespace(
+            get_corpus_config=lambda: {
+                "enabled": True,
+                "index_path": str(mini_index),
+                "max_snippets": 3,
+                "max_chars": 3000,
+                "task_scoped_roles": ["worker_general"],
+            },
+            get_role=lambda _role: SimpleNamespace(
+                acceleration=SimpleNamespace(corpus_retrieval=False)
+            ),
+        )
+        monkeypatch.setattr(builder, "_get_corpus_registry", lambda: fake_registry)
+
+        with caplog.at_level(logging.DEBUG, logger="src.prompt_builders.builder"):
+            result = builder.build_corpus_context(
+                role="worker_general",
+                task_description="Summarize the governance tradeoffs in plain English",
+                task_id="task-worker-general",
+            )
+
+        assert result == ""
+        event = caplog.records[-1].corpus_retrieval
+        assert event["status"] == "skipped"
+        assert event["reason"] == "task_scope_disabled"
+        assert event["role"] == "worker_general"
+        assert event["corpus_task_scope"] == "code"
+
     def test_build_corpus_context_suppresses_slow_retrieval(
         self,
         mini_index: Path,

@@ -35,6 +35,30 @@ from src.features import features as _get_features
 _log = logging.getLogger(__name__)
 _CORPUS_REGISTRY: Any | None = None
 _DEFAULT_CORPUS_SLOW_QUERY_MS = 5000.0
+_CORPUS_TASK_SCOPED_ROLES_ENV = "ORCHESTRATOR_CORPUS_TASK_SCOPED_ROLES"
+_CODE_CORPUS_TASK_MARKERS = (
+    "```",
+    ".py",
+    ".js",
+    ".ts",
+    ".go",
+    ".rs",
+    ".cpp",
+    ".java",
+    "def ",
+    "class ",
+    "function ",
+    "import ",
+    "return ",
+    "traceback",
+    "stack trace",
+    "implement",
+    "refactor",
+    "debug",
+    "fix bug",
+    "write code",
+    "unit test",
+)
 
 # ── Fallback Constants ──────────────────────────────────────────────────────
 
@@ -864,6 +888,36 @@ def _configured_corpus_retriever(retriever_cls: Any, desired_config: Any) -> Any
     return retriever
 
 
+def _split_role_list(value: Any) -> set[str]:
+    if value is None:
+        return set()
+    if isinstance(value, str):
+        items = value.split(",")
+    elif isinstance(value, (list, tuple, set)):
+        items = value
+    else:
+        return set()
+    return {str(item).strip() for item in items if str(item).strip()}
+
+
+def _task_scoped_corpus_roles(config_data: dict[str, Any]) -> set[str]:
+    """Roles allowed to use corpus retrieval only for code-looking tasks."""
+    roles = _split_role_list(config_data.get("task_scoped_roles"))
+    roles.update(_split_role_list(config_data.get("code_task_roles")))
+    try:
+        import os
+
+        roles.update(_split_role_list(os.environ.get(_CORPUS_TASK_SCOPED_ROLES_ENV)))
+    except Exception:
+        pass
+    return roles
+
+
+def _looks_like_code_corpus_task(task_description: str) -> bool:
+    text = str(task_description or "").lower()
+    return any(marker in text for marker in _CODE_CORPUS_TASK_MARKERS)
+
+
 def _emit_corpus_context_event(event: dict[str, Any]) -> None:
     status = str(event.get("status") or "")
     reason = str(event.get("reason") or "")
@@ -945,9 +999,12 @@ def build_corpus_context(
                 runtime_cfg = registry.get_corpus_config()
                 role_cfg = registry.get_role(role_name)
                 role_enabled = bool(role_cfg.acceleration.corpus_retrieval)
+                task_scoped_roles = _task_scoped_corpus_roles(runtime_cfg)
+                task_scope_enabled = False
                 event.update(
                     index_path=runtime_cfg.get("index_path", ""),
                     role_corpus_enabled=role_enabled,
+                    task_scoped_roles=sorted(task_scoped_roles),
                     runtime_corpus_enabled=bool(runtime_cfg.get("enabled", False)),
                 )
                 if not runtime_cfg.get("enabled", False):
@@ -955,9 +1012,22 @@ def build_corpus_context(
                     _emit_corpus_context_event(event)
                     return ""
                 if not role_enabled:
-                    event.update(status="skipped", reason="role_disabled")
-                    _emit_corpus_context_event(event)
-                    return ""
+                    if role_name in task_scoped_roles:
+                        if not _looks_like_code_corpus_task(task_description):
+                            event.update(
+                                status="skipped",
+                                reason="task_scope_disabled",
+                                corpus_task_scope="code",
+                            )
+                            _emit_corpus_context_event(event)
+                            return ""
+                        role_enabled = True
+                        task_scope_enabled = True
+                        event.update(role_corpus_enabled=True, role_corpus_scope="code_task")
+                    else:
+                        event.update(status="skipped", reason="role_disabled")
+                        _emit_corpus_context_event(event)
+                        return ""
                 desired_config = _corpus_config_from_mapping(runtime_cfg, CorpusConfig)
                 slow_query_ms = float(
                     runtime_cfg.get(
@@ -966,6 +1036,8 @@ def build_corpus_context(
                     )
                     or _DEFAULT_CORPUS_SLOW_QUERY_MS
                 )
+                if task_scope_enabled:
+                    event.update(corpus_task_scope="code")
             except Exception as exc:
                 event.update(
                     status="error",
