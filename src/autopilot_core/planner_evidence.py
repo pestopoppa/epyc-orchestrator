@@ -304,7 +304,11 @@ def _seq_note(
     latest_seq = latest.get("seq") if isinstance(latest.get("seq"), Mapping) else {}
     e_rate = _float(latest_seq.get("E_rate_noninf"))
     combined = min(view.quality_state.wealth, e_rate) if e_rate > 0.0 else 0.0
-    replayable = "yes" if _replayable_config(latest.get("config_snapshot")) else "no"
+    keep_revert = str(latest.get("keep_revert_decision") or "").strip()
+    if keep_revert in {"revert", "excluded"}:
+        replayable = f"no(AP-24={keep_revert})"
+    else:
+        replayable = "yes" if _replayable_config(latest.get("config_snapshot")) else "no"
     return (
         f"seq={latest_seq.get('state') or view.state} k={view.quality_state.k} "
         f"E_quality={view.quality_state.wealth:.3f} "

@@ -18,11 +18,13 @@ def _row(
     fresh_eval: bool = False,
     confirmed: bool = False,
     finalized: bool = False,
+    keep_revert_decision: str = "",
 ) -> dict:
     return {
         "trial_id": trial_id,
         "action_type": "numeric_trial",
         "quality": 2.1,
+        "keep_revert_decision": keep_revert_decision,
         "seq": {
             "candidate": candidate,
             "state": state,
@@ -95,6 +97,31 @@ def test_report_flags_concentrated_replay_attempts() -> None:
     assert concentration["stale_accumulating_count"] == 1
     assert "replay_concentration_warning" in report["open_requirements"]
     assert "Replay Concentration" in w8_promotion_trajectory_report.render_markdown(report)
+
+
+def test_report_excludes_latest_reverted_candidate_from_active_replay() -> None:
+    report = w8_promotion_trajectory_report.build_w8_trajectory_report(
+        [
+            _row(10, "candidate-a", combined=0.91, k=1),
+            _row(
+                12,
+                "candidate-a",
+                combined=0.93,
+                k=2,
+                keep_revert_decision="revert",
+            ),
+            _row(13, "candidate-b", combined=0.88, state="refuted", k=12),
+        ],
+        stale_trials=5,
+    )
+
+    statuses = {item["candidate"]: item["status"] for item in report["trajectories"]}
+    assert statuses["candidate-a"] == "reverted"
+    assert report["recent_active_candidates"] == []
+    assert report["status_counts"]["reverted"] == 1
+    assert "no_recent_multi_observation_accumulating_candidate" in report[
+        "open_requirements"
+    ]
 
 
 def test_report_classifies_refuted_and_finalized_candidates() -> None:

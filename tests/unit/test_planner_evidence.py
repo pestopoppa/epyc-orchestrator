@@ -13,6 +13,7 @@ def _row(
     quality: float = 1.8,
     reliability: float = 0.98,
     corrupt: str = "",
+    keep_revert_decision: str = "",
     question_count: int = 50,
     question_results: list[dict] | None = None,
 ) -> dict:
@@ -22,6 +23,7 @@ def _row(
         "quality": quality,
         "reliability": reliability,
         "bug_corrupted_by": corrupt,
+        "keep_revert_decision": keep_revert_decision,
         "config_snapshot": config or {"type": "seed_batch", "n_questions": 10},
         "eval_details": {
             "eval_wall_s": 600.0,
@@ -96,6 +98,29 @@ def test_seq_rows_fold_by_candidate_and_skip_malformed_z() -> None:
     assert "fp=candidate-a" in text
     assert "seq=accumulating k=2 E_quality=1.650" in text
     assert "trials=[20,21,22]" in text
+
+
+def test_seq_rows_mark_latest_reverted_candidate_not_replayable() -> None:
+    candidate = "candidate-a"
+    rows = [
+        _row(
+            20,
+            config={"type": "numeric_trial", "surface": "memrl_retrieval"},
+            seq={"candidate": candidate, "core_id": "core_v1", "z": 1.0},
+        ),
+        _row(
+            21,
+            config={"type": "numeric_trial", "surface": "memrl_retrieval"},
+            seq={"candidate": candidate, "core_id": "core_v1", "z": 1.0},
+            keep_revert_decision="revert",
+        ),
+    ]
+
+    text = format_planner_evidence_section(rows)
+
+    assert "seq_candidates=1" in text
+    assert "replayable=no(AP-24=revert)" in text
+    assert "replayable=yes" not in text
 
 
 def test_seq_rows_ignore_non_matching_core_ids() -> None:

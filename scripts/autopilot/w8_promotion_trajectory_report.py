@@ -50,6 +50,7 @@ class W8Snapshot:
     fresh_eval: bool | None
     baseline_reference_state: str | None
     finalized: bool | None
+    keep_revert_decision: str | None
 
 
 @dataclass(frozen=True)
@@ -61,6 +62,7 @@ class CandidateTrajectory:
     first_trial_id: int
     latest_trial_id: int
     latest_state: str | None
+    latest_keep_revert_decision: str | None
     latest_confirmed: bool | None
     latest_combined_E: float | None
     required_E: float | None
@@ -252,10 +254,12 @@ def _candidate_trajectory(
     capacity_remaining = (
         max(0, max_replay_attempts - latest.k) if latest.k is not None else None
     )
+    latest_ap24_ineligible = _ineligible_keep_revert(latest.keep_revert_decision)
     stale_accumulating = (
         latest.state == "accumulating"
         and not latest.confirmed
         and latest.finalized is not True
+        and not latest_ap24_ineligible
         and not recent
         and (capacity_remaining is None or capacity_remaining > 0)
     )
@@ -274,6 +278,7 @@ def _candidate_trajectory(
         first_trial_id=first.trial_id,
         latest_trial_id=latest.trial_id,
         latest_state=latest.state,
+        latest_keep_revert_decision=latest.keep_revert_decision,
         latest_confirmed=latest.confirmed,
         latest_combined_E=latest.combined_E,
         required_E=latest.required_E,
@@ -299,6 +304,11 @@ def _candidate_status(
     stale_accumulating: bool,
     max_replay_attempts: int,
 ) -> str:
+    keep_revert = str(latest.keep_revert_decision or "").strip()
+    if keep_revert == "revert":
+        return "reverted"
+    if keep_revert == "excluded":
+        return "excluded"
     if latest.finalized:
         return "finalized"
     if latest.state == "refuted":
@@ -411,6 +421,7 @@ def _snapshot_from_row(row: Mapping[str, Any]) -> W8Snapshot:
             fresh_eval=None,
             baseline_reference_state=None,
             finalized=None,
+            keep_revert_decision=None,
         )
     if not (
         "baseline_promotion_combined_E" in seq
@@ -433,6 +444,7 @@ def _snapshot_from_row(row: Mapping[str, Any]) -> W8Snapshot:
             fresh_eval=None,
             baseline_reference_state=None,
             finalized=None,
+            keep_revert_decision=None,
         )
     return W8Snapshot(
         trial_id=_int(row.get("trial_id"), default=-1),
@@ -450,6 +462,7 @@ def _snapshot_from_row(row: Mapping[str, Any]) -> W8Snapshot:
         fresh_eval=_optional_bool(seq.get("baseline_promotion_fresh_eval")),
         baseline_reference_state=_optional_str(seq.get("baseline_reference_state")),
         finalized=_optional_bool(seq.get("baseline_promotion_finalized")),
+        keep_revert_decision=_optional_str(row.get("keep_revert_decision")),
     )
 
 
@@ -464,6 +477,10 @@ def _optional_str(value: Any) -> str | None:
         return None
     text = str(value)
     return text if text else None
+
+
+def _ineligible_keep_revert(decision: str | None) -> bool:
+    return str(decision or "").strip() in {"revert", "excluded"}
 
 
 def _optional_float(value: Any) -> float | None:
