@@ -156,6 +156,26 @@ def test_pairwise_contract_score_ordered_expands_beyond_binary_contrast() -> Non
     assert all(pair["preferred_oracle_score"] > pair["rejected_oracle_score"] for pair in score_pairs)
 
 
+def test_pairwise_contract_score_ordered_skips_equal_score_ties() -> None:
+    rows = [
+        _manifest_row(item_id="a", role_key="frontdoor", label=1, score=0.5),
+        _manifest_row(item_id="b", role_key="architect_general", label=0, score=0.5),
+        _manifest_row(item_id="c", role_key="coder_escalation", label=0, score=0.5),
+    ]
+
+    pairs, summary = mod.build_pairwise_contract(
+        rows,
+        min_pairs=1,
+        min_cross_action_pairs=1,
+        pairing_mode="score_ordered",
+        min_score_delta=0.0,
+    )
+
+    assert pairs == []
+    assert summary["decision"]["status"] == "insufficient_contrast"
+    assert summary["coverage"]["skipped_no_contrast_groups"] == 1
+
+
 def test_pairwise_contract_rejects_private_text_fields() -> None:
     rows = [
         {

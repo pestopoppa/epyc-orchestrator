@@ -309,6 +309,8 @@ def _candidate_pairs(
                 left_score = _float_value(left.get("oracle_score"))
                 right_score = _float_value(right.get("oracle_score"))
                 delta = left_score - right_score
+                if delta == 0.0:
+                    continue
                 if abs(delta) < min_score_delta:
                     continue
                 if delta > 0:
