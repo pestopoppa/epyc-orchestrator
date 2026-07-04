@@ -2094,6 +2094,83 @@ def test_repo_readiness_advisory_ignores_authority_gate(tmp_path) -> None:
     assert "readiness:x" not in text
 
 
+def test_fable_gate_advisory_reports_missing_artifact(tmp_path) -> None:
+    text = autopilot._build_fable_gate_advisory(reports_dir=tmp_path)
+
+    assert "no Fable gate report artifact found" in text
+    assert "fable5_gate_report.py" in text
+
+
+def test_fable_gate_advisory_renders_latest_next_actions(tmp_path) -> None:
+    older = tmp_path / "fable5_gate_report_20260704T000000Z.json"
+    older.write_text(json.dumps({"ready": True, "next_actions": []}))
+    report = tmp_path / "fable5_gate_report_20260704T010000Z.json"
+    report.write_text(
+        json.dumps(
+            {
+                "ready": False,
+                "summary": {
+                    "active_next_action_keys": [
+                        "collect_w8_promotion_eval_evidence",
+                        "collect_ri10_canary_arm_telemetry",
+                    ],
+                    "blocked_next_action_keys": ["run_ds_e1_kv_measurements"],
+                },
+                "next_actions": [
+                    {
+                        "key": "run_ds_e1_kv_measurements",
+                        "priority": "P0",
+                        "status": "blocked",
+                        "reason": "Needs direct production KV-size rows.",
+                        "blocked_by": ["active AutoPilot process 123"],
+                    },
+                    {
+                        "key": "collect_w8_promotion_eval_evidence",
+                        "priority": "P0",
+                        "status": "active",
+                        "reason": "W8 still needs promotion evidence.",
+                        "evidence": {
+                            "latest_seq_trial_id": 1119,
+                            "latest_combined_E": 0.931557,
+                            "latest_required_E": 100.0,
+                            "latest_fresh_eval": False,
+                            "latest_seq_state": "accumulating",
+                            "open_requirements": [
+                                "combined_E_below_required",
+                                "fresh_promotion_eval_required",
+                            ],
+                        },
+                    },
+                    {
+                        "key": "collect_ri10_canary_arm_telemetry",
+                        "priority": "P0",
+                        "status": "active",
+                        "reason": "RI-10 needs canary arm telemetry.",
+                        "evidence": {
+                            "canary_role_sample_deficit": 30,
+                            "canary_arm_volume_deficit": 30,
+                        },
+                    },
+                ],
+            }
+        )
+    )
+
+    text = autopilot._build_fable_gate_advisory(reports_dir=tmp_path, limit=3)
+
+    assert "Planner context only" in text
+    assert "NOT an acceptance gate" in text
+    assert report.name in text
+    assert "ready=False" in text
+    assert "active_next_actions=['collect_w8_promotion_eval_evidence'" in text
+    assert "P0 active collect_w8_promotion_eval_evidence" in text
+    assert "latest_combined_E=0.931557" in text
+    assert "P0 active collect_ri10_canary_arm_telemetry" in text
+    assert "canary_role_sample_deficit=30" in text
+    assert "P0 blocked run_ds_e1_kv_measurements" in text
+    assert "blocked_by=active AutoPilot process 123" in text
+
+
 # ----- draft_critique: rejected-draft feedback (req #3) -----
 
 

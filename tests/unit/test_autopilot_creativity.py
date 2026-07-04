@@ -783,6 +783,7 @@ def test_controller_prompt_uses_fresh_strategy_hints_section(monkeypatch) -> Non
             converged=False,
             slot_memory="slots",
             action_availability="actions",
+            fable_gate_advisory="fable-gate",
             planner_strategy_hints=planner_strategy_hints,
             repo_readiness_advisory="repo",
             budget="budget",
@@ -823,6 +824,7 @@ def test_controller_prompt_uses_fresh_strategy_hints_section(monkeypatch) -> Non
     second_prompt = format_controller_prompt()
 
     assert "### StrategyStore Planner Hints (refreshed each planner turn)" in first_prompt
+    assert "### Fable 5 Gate Advisory (latest generated report, non-authority)" in first_prompt
     assert "no StrategyStore rows matched" in first_prompt
     assert "Fresh planner-loop tool hint" not in first_prompt
     assert "Fresh planner-loop tool hint" in second_prompt

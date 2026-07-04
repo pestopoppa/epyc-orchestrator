@@ -2044,6 +2044,132 @@ def _build_repo_readiness_advisory(
     return "\n".join(lines)
 
 
+def _latest_fable_gate_report_path(reports_dir: Path | None = None) -> Path | None:
+    """Return the newest generated Fable gate report artifact, if present."""
+    base = reports_dir or ORCH_ROOT / "orchestration" / "reports"
+    candidates: list[Path] = []
+    for pattern in FABLE_GATE_REPORT_GLOBS:
+        candidates.extend(path for path in base.glob(pattern) if path.is_file())
+    if not candidates:
+        return None
+    return max(candidates, key=lambda path: path.stat().st_mtime)
+
+
+def _fable_gate_evidence_brief(action: dict[str, Any]) -> str:
+    evidence = action.get("evidence")
+    if not isinstance(evidence, dict) or not evidence:
+        return ""
+
+    wanted_keys = (
+        "latest_seq_trial_id",
+        "latest_combined_E",
+        "latest_required_E",
+        "latest_fresh_eval",
+        "latest_seq_state",
+        "open_requirements",
+        "telemetry_collection_reason",
+        "telemetry_collection_blocker",
+        "canary_role_sample_deficit",
+        "canary_arm_volume_deficit",
+        "canary_arm_balance_deficits",
+    )
+    parts: list[str] = []
+    for key in wanted_keys:
+        if key not in evidence:
+            continue
+        value = evidence.get(key)
+        if isinstance(value, float):
+            value_text = f"{value:.6g}"
+        else:
+            value_text = str(value)
+        parts.append(f"{key}={value_text[:120]}")
+    return "; ".join(parts[:6])
+
+
+def _build_fable_gate_advisory(
+    report_path: Path | None = None,
+    *,
+    reports_dir: Path | None = None,
+    limit: int = 4,
+) -> str:
+    """Render latest generated Fable gate next-actions for planner context.
+
+    This intentionally consumes an existing report artifact instead of running
+    fable5_gate_report.py in the planner loop. The report generator performs
+    live process and evidence checks that are too expensive for every planner
+    turn; this block only makes the latest durable snapshot visible.
+    """
+    path = report_path or _latest_fable_gate_report_path(reports_dir)
+    if path is None:
+        return (
+            "  (no Fable gate report artifact found; run "
+            "uv run python scripts/autopilot/fable5_gate_report.py --json --strict)"
+        )
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        stat = path.stat()
+    except Exception as exc:
+        return f"  (Fable gate advisory unavailable: {exc})"
+
+    summary = payload.get("summary") if isinstance(payload, dict) else {}
+    if not isinstance(summary, dict):
+        summary = {}
+    actions = payload.get("next_actions") if isinstance(payload, dict) else []
+    if not isinstance(actions, list):
+        actions = []
+
+    now_s = datetime.now(timezone.utc).timestamp()
+    age_s = max(0, int(now_s - stat.st_mtime))
+    freshness = "fresh" if age_s <= FABLE_GATE_ADVISORY_MAX_AGE_S else "stale"
+    lines = [
+        "  Planner context only. This is NOT an acceptance gate and MUST NOT "
+        "override owning handoffs, GitNexus impact, or measurement gates.",
+        (
+            f"  latest_artifact={path.name} age_s={age_s} freshness={freshness} "
+            f"ready={bool(payload.get('ready'))}"
+        ),
+    ]
+
+    active = summary.get("active_next_action_keys")
+    blocked = summary.get("blocked_next_action_keys")
+    if active:
+        lines.append(f"  active_next_actions={active}")
+    if blocked:
+        lines.append(f"  blocked_next_actions={blocked}")
+
+    if not actions:
+        lines.append("  (report contains no next_actions)")
+        return "\n".join(lines)
+
+    status_rank = {"active": 0, "ready": 1, "blocked": 2}
+    sorted_actions = sorted(
+        (action for action in actions if isinstance(action, dict)),
+        key=lambda action: (
+            status_rank.get(str(action.get("status") or ""), 9),
+            str(action.get("priority") or "P9"),
+        ),
+    )
+    for action in sorted_actions[: max(0, limit)]:
+        key = str(action.get("key") or "?")
+        status = str(action.get("status") or "?")
+        priority = str(action.get("priority") or "?")
+        reason = str(action.get("reason") or "").replace("\n", " ").strip()
+        line = f"  - {priority} {status} {key}"
+        if reason:
+            line += f": {reason[:180]}"
+        evidence = _fable_gate_evidence_brief(action)
+        if evidence:
+            line += f" [{evidence}]"
+        elif status == "blocked":
+            blocked_by = action.get("blocked_by")
+            if isinstance(blocked_by, list) and blocked_by:
+                line += f" [blocked_by={str(blocked_by[0])[:140]}]"
+        lines.append(line)
+
+    return "\n".join(lines)
+
+
 def _record_skip_trial(
     journal: Any,
     trial_id: int,
@@ -2210,6 +2336,13 @@ CONSTITUTION_PATH = SCRIPT_DIR / "constitution.md"
 SYSTEM_CARD_PATH = SCRIPT_DIR / "system_card.md"
 STACK_PRIORS_PATH = ORCH_ROOT / "orchestration" / "derived" / "stack_priors.yaml"
 REPO_READINESS_PICKUP_ENV = "AUTOPILOT_REPO_READINESS_PICKUP"
+FABLE_GATE_REPORT_GLOBS = (
+    "fable5_gate_report_*.json",
+    "fable5_gate_*.json",
+)
+FABLE_GATE_ADVISORY_MAX_AGE_S = int(
+    os.environ.get("AUTOPILOT_FABLE_GATE_ADVISORY_MAX_AGE_S", "14400")
+)
 
 CONTROLLER_PROMPT_TEMPLATE = """\
 You are the AutoPilot meta-reasoning controller for an LLM orchestration stack.
@@ -2262,6 +2395,9 @@ Your job: analyze current system state and propose the SINGLE best next action.
 
 ### Action Availability
 {action_availability}
+
+### Fable 5 Gate Advisory (latest generated report, non-authority)
+{fable_gate_advisory}
 
 ### StrategyStore Planner Hints (refreshed each planner turn)
 Planner tool boundary: StrategyStore rows mentioning tools, REPL, CALL, or
@@ -3970,6 +4106,7 @@ def _run_loop_inner(
                 converged=converged,
                 slot_memory=slot_memory_text,
                 action_availability=action_availability_text,
+                fable_gate_advisory=_build_fable_gate_advisory(),
                 planner_strategy_hints=planner_strategy_hints_text,
                 repo_readiness_advisory=_build_repo_readiness_advisory(),
                 budget=json.dumps(meta.budget.as_dict(), indent=2),
