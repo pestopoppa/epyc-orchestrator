@@ -255,11 +255,11 @@ class TestRouteRequest:
         assert call_kwargs["task_id"] == result.task_id
         assert "routing_decision" in call_kwargs
 
-    def test_xmas_default_off_omits_routing_metadata(self, monkeypatch):
-        """Default-off X-MAS telemetry should not alter progress metadata."""
+    def test_xmas_off_mode_omits_routing_metadata(self, monkeypatch):
+        """Explicitly disabled X-MAS telemetry should not alter progress metadata."""
         from src.classifiers.config_loader import reset_classifier_config
 
-        monkeypatch.delenv("ORCHESTRATOR_XMAS_ROUTING_MODE", raising=False)
+        monkeypatch.setenv("ORCHESTRATOR_XMAS_ROUTING_MODE", "off")
         monkeypatch.delenv("ORCHESTRATOR_XMAS_WINNER_TABLE_PATH", raising=False)
         reset_classifier_config()
         request = ChatRequest(prompt="Refactor this Python function.", real_mode=True)

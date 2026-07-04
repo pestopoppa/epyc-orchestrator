@@ -289,7 +289,7 @@ difficulty_signal:
 # can route to the table winner only when a complete table is configured and
 # the classifier is confident; failure-veto and downstream guards still apply.
 xmas_routing:
-  mode: "off"              # off|shadow|enforce
+  mode: "enforce"          # off|shadow|enforce
   confidence_threshold: 0.55
-  winner_table_path: "orchestration/xmas_winner_table.yaml"  # validated function-axis table; mode remains default-off
+  winner_table_path: "orchestration/xmas_winner_table.yaml"  # validated function-axis table; enforce enabled after repaired A/B promote_candidate
   require_complete_table: true

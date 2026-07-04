@@ -18,7 +18,7 @@ from src.llm_primitives import LLMPrimitives
 from src.task_ir import canonicalize_task_ir
 
 from src.api.routes.chat_pipeline.routing_decision import (
-    _TIER_COST_WEIGHTS,
+    _TIER_COST_WEIGHTS as _TIER_COST_WEIGHTS,  # noqa: F401 - compatibility re-export
     apply_failure_veto,
     apply_ingest_triviality_guard,
     assess_difficulty,
