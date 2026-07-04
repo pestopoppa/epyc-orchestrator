@@ -108,6 +108,7 @@ def _entry(
     outcome_status: str = "ok",
     timestamp: str = "2026-06-18T00:00:00Z",
     eval_details_extra: dict | None = None,
+    keep_revert_decision: str = "",
 ) -> JournalEntry:
     eval_details = {
         "eval_wall_s": 1800.0,
@@ -131,6 +132,7 @@ def _entry(
         seq=seq or {},
         bug_corrupted_by=corrupt,
         outcome_status=outcome_status,
+        keep_revert_decision=keep_revert_decision,
     )
 
 
@@ -343,6 +345,46 @@ def test_seq_candidate_replay_payload_uses_latest_candidate_state(
                 "E_rate_noninf": 0.04,
                 "state": "refuted",
             },
+        )
+    )
+
+    assert autopilot._seq_candidate_replay_payload(journal, tier=1) is None
+
+
+def test_seq_candidate_replay_payload_skips_latest_reverted_candidate(
+    tmp_path: Path,
+) -> None:
+    action = {
+        "type": "numeric_trial",
+        "surface": "repl_budget",
+        "params": {"repl.worker_call_budget_cap": 31},
+    }
+    candidate = autopilot._config_fingerprint(action)
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    seq = {
+        "candidate": candidate,
+        "core_id": "core_v1",
+        "k": 1,
+        "z": 0.1,
+        "z_rate": -0.1,
+        "E_quality": 1.02,
+        "E_rate_noninf": 0.96,
+        "state": "accumulating",
+    }
+    journal.record(
+        _entry(
+            10,
+            action,
+            seq=seq,
+            keep_revert_decision="keep",
+        )
+    )
+    journal.record(
+        _entry(
+            11,
+            action,
+            seq={**seq, "k": 2},
+            keep_revert_decision="revert",
         )
     )
 

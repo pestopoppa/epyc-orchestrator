@@ -1129,6 +1129,12 @@ def _seq_candidate_replay_payload(
             latest_by_candidate[candidate] = entry
 
     for entry in latest_by_candidate.values():
+        keep_revert = str(getattr(entry, "keep_revert_decision", "") or "").strip()
+        if keep_revert in {"revert", "excluded"}:
+            # AP-24 verdict-failed rows keep outcome_status="ok"; replay must
+            # honor the explicit keep/revert decision or W8 can force
+            # already-reverted configs back into the measurement loop.
+            continue
         seq = getattr(entry, "seq", {}) or {}
         if seq.get("confirmed") is True or str(seq.get("state") or "") != "accumulating":
             continue
