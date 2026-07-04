@@ -169,6 +169,9 @@ def _format_native_tools_for_repl(
 ) -> str | None:
     if not tools:
         return None
+    choice = _tool_choice_name(tool_choice)
+    if choice == "none":
+        return None
 
     lines = [
         "OpenAI native tools were supplied by the caller.",
@@ -176,7 +179,6 @@ def _format_native_tools_for_repl(
         '  result = CALL("tool_name", arg=value)',
         "Do not invent tool results; call the tool before FINAL when the answer depends on it.",
     ]
-    choice = _tool_choice_name(tool_choice)
     if choice and choice not in {"auto", "none"}:
         lines.append(f"Tool choice policy: {choice}.")
     lines.append("Available function tools:")

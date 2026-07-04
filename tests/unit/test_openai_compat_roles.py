@@ -245,6 +245,26 @@ def test_context_parts_render_tool_history_and_native_repl_bridge():
     assert "- web_search - Search the web" in rendered
 
 
+def test_context_parts_honor_tool_choice_none():
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "web_search",
+                "description": "Search the web",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                },
+            },
+        }
+    ]
+
+    parts = openai_compat._context_parts_from_history([], tools, "none")
+
+    assert parts == []
+
+
 def test_openai_metadata_reports_internal_repl_tool_contract():
     repl = SimpleNamespace(
         _tool_invocations=2,
