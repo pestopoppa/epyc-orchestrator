@@ -10,6 +10,7 @@ the planner looped until the critic guard halted it.
 Two coupled fixes:
   1. safety_gate.per_suite_regression_threshold() widens the floor to the coarser
      of the result/baseline single-flip quantum (3/n) when counts are known.
+     Low-support threshold crossings are advisory unless the drop is catastrophic.
   2. classify_learning_exclusion() treats mad_noise as benign ONLY when the
      verdict otherwise passed, so a failed verdict can't be laundered into a
      trusted Pareto representative.
@@ -26,6 +27,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts" / "autopilot"))
 from safety_gate import (  # type: ignore[import-not-found]
     EvalResult,
     SafetyGate,
+    PER_SUITE_BINDING_MIN_COUNT,
     PER_SUITE_REGRESSION,
     per_suite_regression_threshold,
 )
@@ -90,6 +92,21 @@ def test_single_question_flip_at_n2_is_not_a_regression(tmp_path):
     g.baseline.per_suite_counts_by_tier = {1: {"hotpotqa": 2}}
     verdict = g.check(_trial({"hotpotqa": 1.5}, {"hotpotqa": 2}))
     assert "per_suite_regression" not in verdict.categories
+
+
+def test_sparse_baseline_moderate_drop_is_advisory_not_terminal(tmp_path):
+    """W8 case: a two-question baseline should not make moderate drops terminal."""
+    g = _gate(tmp_path)
+    g.baseline.per_suite_quality_by_tier = {1: {"general": 3.0}}
+    g.baseline.per_suite_counts_by_tier = {1: {"general": 2}}
+    verdict = g.check(_trial({"general": 1.2}, {"general": 5}))
+    assert verdict.passed
+    assert "per_suite_regression" not in verdict.categories
+    assert "per_suite_regression_advisory" in verdict.categories
+    assert any(
+        f"below n={PER_SUITE_BINDING_MIN_COUNT}" in warning
+        for warning in verdict.warnings
+    )
 
 
 def test_total_collapse_at_n2_still_regresses(tmp_path):

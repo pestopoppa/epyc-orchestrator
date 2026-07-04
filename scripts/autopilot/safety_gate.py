@@ -47,13 +47,21 @@ QUALITY_FLOOR_T0 = 2.0  # Average quality >= 2.0/3.0
 QUALITY_FLOOR_T1 = 1.0  # ~33% correct minimum
 REGRESSION_THRESHOLD = -0.05  # Max quality drop vs baseline (fraction of baseline)
 PER_SUITE_REGRESSION = -0.1  # Max per-suite quality drop (fixed floor; see below)
-# Minimum per-suite sample below which the per-suite regression gate is purely
-# advisory: at n questions a single correct→incorrect flip moves the 0-3 score by
-# 3/n, so the *smallest observable* regression is already 3/n. When 3/n exceeds the
-# fixed PER_SUITE_REGRESSION floor the gate cannot distinguish a real regression
-# from one-question sampling noise — so the threshold is widened to that quantum.
+# Minimum per-suite sample below which a threshold-crossing per-suite regression
+# is advisory unless the suite collapses catastrophically. At n questions a single
+# correct->incorrect flip moves the 0-3 score by 3/n, so sparse result/baseline
+# samples can produce large apparent drops. The threshold below still detects
+# those drops; SafetyGate.check decides whether the sparse signal is binding.
 # (2026-06-06: at ~2 q/suite the -0.1 floor fired -1.5 "regressions" on every
 # seeder trial, mass-excluding via mad_noise and deadlocking the planner/critic.)
+# (2026-07-04: W8 candidate generation deadlocked again when a T1 general baseline
+# with n=2 scored 3.0 and moderate 5-question candidate drops bound as AP-24
+# terminal failures. Keep sparse drops visible as warnings, but require either
+# adequate support or a catastrophic drop before failing the trial.)
+PER_SUITE_BINDING_MIN_COUNT = 5
+PER_SUITE_LOW_SUPPORT_CATASTROPHIC_DROP = 2.5
+
+
 def per_suite_regression_threshold(
     result_n: int | None, baseline_n: int | None
 ) -> float:
@@ -69,6 +77,21 @@ def per_suite_regression_threshold(
     if baseline_n and baseline_n > 0:
         quanta.append(3.0 / baseline_n)
     return -max(quanta)
+
+
+def _per_suite_regression_binding(
+    suite_delta: float, result_n: int | None, baseline_n: int | None
+) -> bool:
+    """Whether a threshold-crossing per-suite drop should fail the trial."""
+    if result_n is None or baseline_n is None:
+        return True
+    if result_n <= 0 or baseline_n <= 0:
+        return True
+    if min(result_n, baseline_n) >= PER_SUITE_BINDING_MIN_COUNT:
+        return True
+    return suite_delta < -PER_SUITE_LOW_SUPPORT_CATASTROPHIC_DROP
+
+
 ARCHITECT_ROUTING_CAP = 0.80  # Max fraction routed to architect-tier
 MAX_CONSECUTIVE_FAILURES = 3  # Auto-rollback after this many failures
 # MAD noise filter (intake-421 pi-autoresearch). Quality history depth + significance threshold.
@@ -954,6 +977,8 @@ class SafetyGate:
         # deadlocked the planner. The threshold is widened to the coarser of the
         # result's and baseline's single-flip quantum (3/n); counts default empty
         # ⇒ fixed -0.1 floor (unchanged behavior for pre-2026-06-06 baselines).
+        # If either side has very low support, a threshold-crossing drop remains
+        # visible but advisory unless it is a catastrophic 0-3 scale collapse.
         baseline_suites = self.baseline.per_suite_for_tier(result.tier)
         baseline_counts = self.baseline.per_suite_counts_for_tier(result.tier)
         result_counts = getattr(result, "per_suite_counts", None) or {}
@@ -961,18 +986,29 @@ class SafetyGate:
             baseline_q = baseline_suites.get(suite)
             if baseline_q is not None:
                 suite_delta = quality - baseline_q
+                result_n = result_counts.get(suite)
+                baseline_n = baseline_counts.get(suite)
                 threshold = per_suite_regression_threshold(
-                    result_counts.get(suite), baseline_counts.get(suite)
+                    result_n, baseline_n
                 )
                 if suite_delta < threshold:
-                    violations.append(
+                    msg = (
                         f"Suite '{suite}' regression: {suite_delta:+.3f} "
                         f"(threshold: {threshold:+.3f}; "
-                        f"n_result={result_counts.get(suite)}, "
-                        f"n_baseline={baseline_counts.get(suite)})"
+                        f"n_result={result_n}, n_baseline={baseline_n})"
                     )
-                    if "per_suite_regression" not in categories:
-                        categories.append("per_suite_regression")
+                    if _per_suite_regression_binding(suite_delta, result_n, baseline_n):
+                        violations.append(msg)
+                        if "per_suite_regression" not in categories:
+                            categories.append("per_suite_regression")
+                    else:
+                        warnings.append(
+                            f"{msg} treated as advisory because per-suite support "
+                            f"is below n={PER_SUITE_BINDING_MIN_COUNT} and the "
+                            "drop is not catastrophic."
+                        )
+                        if "per_suite_regression_advisory" not in categories:
+                            categories.append("per_suite_regression_advisory")
 
         # 4. Routing diversity
         architect_frac = result.routing_distribution.get("architect", 0.0)
