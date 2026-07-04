@@ -1,0 +1,58 @@
+{
+  "blockers": [
+    "window_too_short:28.96h<48.00h",
+    "delegation_cache_split_comparison_unavailable"
+  ],
+  "duration_hours": 28.960685,
+  "first_half": {
+    "contention_denied_events": 0,
+    "contention_denied_per_hour": 0.0,
+    "contention_denied_task_ids": [],
+    "delegation_cache_completion_rows": 6,
+    "delegation_cache_hit_rate": 0.0,
+    "delegation_cache_hits": 0,
+    "delegation_cache_lookups": 3,
+    "delegation_cache_miss_rate": 1.0,
+    "delegation_cache_misses": 3,
+    "progress_rows": 22080
+  },
+  "full_window": {
+    "contention_denied_events": 0,
+    "contention_denied_per_hour": 0.0,
+    "contention_denied_task_ids": [],
+    "delegation_cache_completion_rows": 6,
+    "delegation_cache_hit_rate": 0.0,
+    "delegation_cache_hits": 0,
+    "delegation_cache_lookups": 3,
+    "delegation_cache_miss_rate": 1.0,
+    "delegation_cache_misses": 3,
+    "progress_rows": 48132
+  },
+  "gate_ready": false,
+  "log_paths": [
+    "/mnt/raid0/llm/epyc-orchestrator/logs/progress/2026-07-03.jsonl",
+    "/mnt/raid0/llm/epyc-orchestrator/logs/progress/2026-07-04.jsonl"
+  ],
+  "min_delegation_lookups": 1,
+  "min_hours": 48.0,
+  "progress_dir": "/mnt/raid0/llm/epyc-orchestrator/logs/progress",
+  "rise_checks": {
+    "contention_denied_rate_rose": false,
+    "delegation_cache_miss_rate_rose": null
+  },
+  "schema_version": "internal_interaction_bake_report.v1",
+  "second_half": {
+    "contention_denied_events": 0,
+    "contention_denied_per_hour": 0.0,
+    "contention_denied_task_ids": [],
+    "delegation_cache_completion_rows": 0,
+    "delegation_cache_hit_rate": null,
+    "delegation_cache_hits": 0,
+    "delegation_cache_lookups": 0,
+    "delegation_cache_miss_rate": null,
+    "delegation_cache_misses": 0,
+    "progress_rows": 26052
+  },
+  "window_end": "2026-07-04T20:38:08.466986+00:00",
+  "window_start": "2026-07-03T15:40:30+00:00"
+}

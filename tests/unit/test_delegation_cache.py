@@ -2,7 +2,7 @@
 
 import time
 
-from src.delegation_cache import DelegationCache, DelegationCacheEntry
+from src.delegation_cache import DelegationCache
 
 
 def test_make_key_deterministic():
@@ -24,6 +24,27 @@ def test_make_key_normalizes():
     k1 = c.make_key("  Solve X^2 = 4  ", "coder")
     k2 = c.make_key("solve x^2 = 4", "coder")
     assert k1 == k2
+
+
+def test_make_key_namespaces_consult_skill_without_changing_legacy_delegate_key():
+    c = DelegationCache()
+    legacy = c.make_key("brief", "architect_general")
+    explicit_legacy = c.make_key(
+        "brief",
+        "architect_general",
+        interaction_type="delegate",
+        policy_version="1.0",
+    )
+    consult = c.make_key(
+        "brief",
+        "architect_general",
+        interaction_type="consult",
+        skill="review_before_commit",
+        schema_hash="abc123",
+    )
+
+    assert explicit_legacy == legacy
+    assert consult != legacy
 
 
 def test_put_and_get():

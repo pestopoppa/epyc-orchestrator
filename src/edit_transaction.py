@@ -19,7 +19,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 # Safety caps on how much the model is shown / can rewrite in ONE transaction when target_files is
 # not explicitly scoped (review finding 2026-05-27). Generous but bounded — prevents an unscoped
@@ -152,9 +152,11 @@ class EditResult:
     rejected: list[str] = field(default_factory=list)
     error: str = ""
     summary: str = ""
+    consult_events: list[dict[str, Any]] = field(default_factory=list)
 
 
 Verifier = Callable[[Path], bool | tuple[bool, str] | None]
+ReviewBeforeCommit = Callable[[str], tuple[dict[str, Any], dict[str, Any]]]
 
 
 def _run_verifier(verify_fn: Verifier | None, root: Path) -> None:
@@ -238,6 +240,56 @@ def apply_edit_transaction(
     )
 
 
+def _draft_review_context(
+    task_prompt: str,
+    files_ctx: dict[str, str],
+    raw_model_output: str,
+    files: dict[str, str],
+    deletes: list[str],
+) -> str:
+    """Compact context sent to an optional review-before-commit consult."""
+    touched = sorted(set(files) | set(deletes))
+    current_paths = sorted(files_ctx)
+    return (
+        f"Task:\n{task_prompt.strip()}\n\n"
+        f"Current target files: {', '.join(current_paths) or '(none)'}\n"
+        f"Draft touched paths: {', '.join(touched) or '(none)'}\n"
+        f"Delete paths: {', '.join(sorted(deletes)) or '(none)'}\n\n"
+        "Raw draft output:\n"
+        f"{raw_model_output[:12000]}"
+    )
+
+
+def _coerce_confidence(value: object) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _advisory_requests_rerun(advisory: dict[str, Any]) -> bool:
+    blocking = advisory.get("blocking_issues")
+    return (
+        isinstance(blocking, list)
+        and any(str(item).strip() for item in blocking)
+        and _coerce_confidence(advisory.get("confidence")) >= 0.6
+    )
+
+
+def _format_advisory_for_rerun(advisory: dict[str, Any]) -> str:
+    lines = ["Architect review before commit found blocking issues."]
+    for key in ("blocking_issues", "risks", "do_not_do"):
+        values = advisory.get(key)
+        if isinstance(values, list) and values:
+            joined = "; ".join(str(item).strip() for item in values if str(item).strip())
+            if joined:
+                lines.append(f"{key}: {joined}")
+    recommended_delta = str(advisory.get("recommended_delta") or "").strip()
+    if recommended_delta:
+        lines.append(f"recommended_delta: {recommended_delta}")
+    return "\n".join(lines)
+
+
 def run_edit_transaction(
     llm_call: Callable[[str], str],
     task_prompt: str,
@@ -245,6 +297,8 @@ def run_edit_transaction(
     target_files: list[str] | None = None,
     self_check: bool = True,
     verify_fn: Verifier | None = None,
+    review_before_commit: ReviewBeforeCommit | None = None,
+    enable_review_before_commit: bool = False,
 ) -> tuple[EditResult, str]:
     """End-to-end: assemble -> one-shot prompt -> single model call -> parse -> transactional apply.
     `llm_call` is any prompt->text callable (orchestrator primitives, or a direct chat client).
@@ -255,10 +309,50 @@ def run_edit_transaction(
         return EditResult(ok=False, error=str(e)), ""  # fail-closed: no model call, no writes
     raw = llm_call(build_edit_prompt(task_prompt, files_ctx)) or ""
     new_files, deletes = parse_edit_response(raw)
-    return apply_edit_transaction(
+    consult_events: list[dict[str, Any]] = []
+    if enable_review_before_commit and review_before_commit is not None:
+        review_context = _draft_review_context(
+            task_prompt,
+            files_ctx,
+            raw,
+            new_files,
+            deletes,
+        )
+        try:
+            advisory, stats = review_before_commit(review_context)
+        except Exception as exc:
+            consult_events.append(
+                {
+                    "interaction_type": "consult",
+                    "skill": "review_before_commit",
+                    "success": False,
+                    "reason": getattr(exc, "reason", type(exc).__name__),
+                }
+            )
+        else:
+            rerun = _advisory_requests_rerun(advisory)
+            consult_events.append(
+                {
+                    "interaction_type": "consult",
+                    "skill": "review_before_commit",
+                    "success": True,
+                    "rerun_requested": rerun,
+                    **dict(stats or {}),
+                }
+            )
+            if rerun:
+                rerun_prompt = (
+                    f"{task_prompt.strip()}\n\n"
+                    f"{_format_advisory_for_rerun(advisory)}"
+                )
+                raw = llm_call(build_edit_prompt(rerun_prompt, files_ctx)) or ""
+                new_files, deletes = parse_edit_response(raw)
+    result = apply_edit_transaction(
         root,
         new_files,
         deletes,
         self_check=self_check,
         verify_fn=verify_fn,
-    ), raw
+    )
+    result.consult_events.extend(consult_events)
+    return result, raw

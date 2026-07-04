@@ -188,6 +188,101 @@ def test_run_edit_transaction_with_stub_llm(tmp_path):
     assert res.ok and "square" in (tmp_path / "calc.py").read_text()
 
 
+def test_run_edit_transaction_review_is_default_inert(tmp_path):
+    (tmp_path / "calc.py").write_text("VALUE = 1\n")
+
+    calls = {"review": 0}
+
+    def stub(_prompt):
+        return "<<<FILE: calc.py>>>\nVALUE = 2\n<<<END>>>"
+
+    def review(_context):
+        calls["review"] += 1
+        return {
+            "risks": [],
+            "blocking_issues": ["should not run"],
+            "confidence": 1.0,
+            "recommended_delta": "rerun",
+        }, {}
+
+    res, raw = run_edit_transaction(
+        stub,
+        "Edit value",
+        tmp_path,
+        ["calc.py"],
+        review_before_commit=review,
+    )
+
+    assert raw
+    assert res.ok
+    assert calls["review"] == 0
+    assert res.consult_events == []
+    assert (tmp_path / "calc.py").read_text() == "VALUE = 2"
+
+
+def test_run_edit_transaction_review_reruns_on_blocking_advisory(tmp_path):
+    (tmp_path / "calc.py").write_text("VALUE = 1\n")
+    prompts: list[str] = []
+
+    def stub(prompt):
+        prompts.append(prompt)
+        if len(prompts) == 1:
+            return "<<<FILE: calc.py>>>\nVALUE = 2\n<<<END>>>"
+        assert "Architect review before commit found blocking issues" in prompt
+        return "<<<FILE: calc.py>>>\nVALUE = 3\n<<<END>>>"
+
+    def review(context):
+        assert "VALUE = 2" in context
+        return {
+            "risks": ["missed requested value"],
+            "blocking_issues": ["final value must be 3"],
+            "confidence": 0.9,
+            "recommended_delta": "write VALUE = 3",
+        }, {"schema_hash": "abc123"}
+
+    res, raw = run_edit_transaction(
+        stub,
+        "Set value",
+        tmp_path,
+        ["calc.py"],
+        review_before_commit=review,
+        enable_review_before_commit=True,
+    )
+
+    assert raw
+    assert res.ok
+    assert len(prompts) == 2
+    assert res.consult_events[0]["success"] is True
+    assert res.consult_events[0]["rerun_requested"] is True
+    assert res.consult_events[0]["schema_hash"] == "abc123"
+    assert (tmp_path / "calc.py").read_text() == "VALUE = 3"
+
+
+def test_run_edit_transaction_review_denied_proceeds_with_original_draft(tmp_path):
+    (tmp_path / "calc.py").write_text("VALUE = 1\n")
+
+    def stub(_prompt):
+        return "<<<FILE: calc.py>>>\nVALUE = 2\n<<<END>>>"
+
+    def review(_context):
+        raise RuntimeError("consult unavailable")
+
+    res, raw = run_edit_transaction(
+        stub,
+        "Set value",
+        tmp_path,
+        ["calc.py"],
+        review_before_commit=review,
+        enable_review_before_commit=True,
+    )
+
+    assert raw
+    assert res.ok
+    assert res.consult_events[0]["success"] is False
+    assert res.consult_events[0]["reason"] == "RuntimeError"
+    assert (tmp_path / "calc.py").read_text() == "VALUE = 2"
+
+
 def test_run_edit_transaction_uses_only_explicit_targets(tmp_path):
     (tmp_path / "a.py").write_text("A = 1\n")
     (tmp_path / "b.py").write_text("B = 2\n")

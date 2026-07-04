@@ -1,0 +1,40 @@
+interaction_skills:
+  architect_general:
+    review_before_commit:
+      kind: consult
+      description: "Advisory review of a coder draft before it commits."
+      output_schema:
+        type: object
+        required: [risks, blocking_issues, confidence, recommended_delta]
+        properties:
+          risks:
+            type: array
+            items:
+              type: string
+          blocking_issues:
+            type: array
+            items:
+              type: string
+          confidence:
+            type: number
+            minimum: 0
+            maximum: 1
+          recommended_delta:
+            type: string
+          do_not_do:
+            type: array
+            items:
+              type: string
+          needs_input:
+            type:
+              - string
+              - "null"
+        additionalProperties: false
+      max_output_tokens: 400
+      scheduler_defaults:
+        priority: background
+        workload_class: consult
+        max_queue_wait_ms: 2000
+        cancellable: true
+      tools_budget: 0
+      cache_ttl_seconds: 1800

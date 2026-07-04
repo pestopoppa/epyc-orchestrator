@@ -441,6 +441,35 @@ class ProgressLogger:
             interaction_type="delegate",
         )
 
+    def log_consult(
+        self,
+        task_id: str,
+        skill: str,
+        consultant_role: str,
+        requester_role: str,
+        confidence: float,
+        *,
+        outcome: str = "advisory",
+        reason: str = "",
+    ) -> None:
+        """Log an internal consult decision/advisory event."""
+        self.log(
+            ProgressEntry(
+                event_type=EventType.DELEGATION_DECISION,
+                task_id=task_id,
+                data={
+                    "interaction_type": "consult",
+                    "interaction_policy_version": self.INTERACTION_POLICY_VERSION,
+                    "skill": skill,
+                    "consultant_role": consultant_role,
+                    "requester_role": requester_role,
+                    "confidence": confidence,
+                    "outcome": outcome,
+                    "reason": reason,
+                },
+            )
+        )
+
     def log_task_completed(
         self,
         task_id: str,

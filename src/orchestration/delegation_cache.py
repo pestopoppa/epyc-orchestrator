@@ -19,7 +19,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -67,14 +67,33 @@ class DelegationCache:
         self._misses = 0
 
     @staticmethod
-    def make_key(brief: str, delegate_to: str) -> str:
-        """Generate cache key from delegation brief + target role.
+    def make_key(
+        brief: str,
+        delegate_to: str,
+        *,
+        interaction_type: str = "delegate",
+        skill: str = "",
+        schema_hash: str = "",
+        policy_version: str = "1.0",
+    ) -> str:
+        """Generate cache key from brief, role, and interaction namespace.
 
         Normalizes the brief (lowercase, strip, truncate to 200 chars)
         to match the semantic dedup key in the delegation loop.
         """
         normalized = brief.strip().lower()[:200]
-        payload = f"{normalized}|{delegate_to}"
+        if (
+            interaction_type == "delegate"
+            and not skill
+            and not schema_hash
+            and policy_version == "1.0"
+        ):
+            payload = f"{normalized}|{delegate_to}"
+        else:
+            payload = (
+                f"{interaction_type}|{skill}|{normalized}|{delegate_to}|"
+                f"{schema_hash}|{policy_version}"
+            )
         return hashlib.sha256(payload.encode()).hexdigest()
 
     def get(self, key: str) -> DelegationCacheEntry | None:
