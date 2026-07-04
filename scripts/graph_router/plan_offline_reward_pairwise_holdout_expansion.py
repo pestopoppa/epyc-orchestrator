@@ -42,6 +42,7 @@ from scripts.graph_router.plan_offline_reward_verifier_expansion import (  # noq
     _iter_input_files,
     _parse_csv,
 )
+from scripts.benchmark.seeding_types import DEFAULT_SUITES  # noqa: E402
 
 
 SUMMARY_SCHEMA_VERSION = "offline_reward_pairwise_holdout_expansion_plan.v1"
@@ -283,6 +284,26 @@ def _slug(value: str) -> str:
     return compact or "target"
 
 
+def _collection_sample_size_for_suite_arg(
+    requested_records: int,
+    *,
+    suite_argument: str,
+) -> tuple[int, int]:
+    """Return CLI sample-size and estimated records for a collection target.
+
+    seed_specialist_routing.py interprets --sample-size as questions per suite.
+    Source-family targets use --suites all, so passing the requested target
+    rows directly would multiply the clean-window run across every default
+    suite. Keep the target record budget approximately stable instead.
+    """
+    requested = max(1, requested_records)
+    if suite_argument != "all":
+        return requested, requested
+    suite_count = max(1, len(DEFAULT_SUITES))
+    cli_sample_size = max(1, (requested + suite_count - 1) // suite_count)
+    return cli_sample_size, cli_sample_size * suite_count
+
+
 def _collection_batches(requirements: list[dict[str, Any]]) -> list[dict[str, Any]]:
     batches: list[dict[str, Any]] = []
     ordered_requirements = sorted(
@@ -298,12 +319,16 @@ def _collection_batches(requirements: list[dict[str, Any]]) -> list[dict[str, An
             continue
         actions = list(requirement["actions_to_evaluate_on_same_source_record"])
         roles = " ".join(actions)
-        sample_size = int(requirement.get("suggested_min_new_source_records") or 20)
+        requested_records = int(requirement.get("suggested_min_new_source_records") or 20)
         target = str(requirement["target"])
         target_slug = _slug(target)
         stratum_field = str(requirement["stratum_field"])
         stratum_value = str(requirement["stratum_value"])
         suite = stratum_value if stratum_field == "suite" else "all"
+        sample_size, estimated_records = _collection_sample_size_for_suite_arg(
+            requested_records,
+            suite_argument=suite,
+        )
         if stratum_field == "source_family" and stratum_value == "orchestrator_live_seed":
             output = (
                 "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/"
@@ -330,6 +355,13 @@ def _collection_batches(requirements: list[dict[str, Any]]) -> list[dict[str, An
                 "roles_argument": actions,
                 "modes_argument": ["direct"],
                 "sample_size": sample_size,
+                "requested_new_source_records": requested_records,
+                "estimated_new_source_records": estimated_records,
+                "sample_size_semantics": (
+                    "seed_specialist_routing.py interprets --sample-size as "
+                    "questions per suite; source-family targets with --suites "
+                    "all are downscaled to approximate the requested total."
+                ),
                 "collection_priority": int(requirement.get("collection_priority") or 0),
                 "collection_priority_reason": str(
                     requirement.get("collection_priority_reason") or "unknown"

@@ -12,22 +12,25 @@
       "collection_priority": 0,
       "collection_priority_reason": "independent_holdout_source_family_blocker",
       "collection_timestamp": "<YYYYMMDDTHHMMSSZ>",
-      "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites all --roles architect_general frontdoor --modes direct --sample-size 20 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/orchestrator/seeding_live_a9_source_family_orchestrator_live_seed_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
-      "command_template": "uv run python scripts/benchmark/seed_specialist_routing.py --suites all --roles architect_general frontdoor --modes direct --sample-size 20 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/orchestrator/seeding_live_a9_source_family_orchestrator_live_seed_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
+      "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites all --roles architect_general frontdoor --modes direct --sample-size 2 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/orchestrator/seeding_live_a9_source_family_orchestrator_live_seed_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
+      "command_template": "uv run python scripts/benchmark/seed_specialist_routing.py --suites all --roles architect_general frontdoor --modes direct --sample-size 2 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/orchestrator/seeding_live_a9_source_family_orchestrator_live_seed_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
       "command_workdir": "/mnt/raid0/llm/epyc-orchestrator",
       "dry_run_semantics": "--dry-run still performs scoring/evaluation; it only prevents reward injection into runtime memory.",
       "durable_source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/orchestrator/seeding_live_a9_source_family_orchestrator_live_seed_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
       "durable_source_path_template": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/orchestrator/seeding_live_a9_source_family_orchestrator_live_seed_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
+      "estimated_new_source_records": 36,
       "expected_source_family": "orchestrator_live_seed",
       "modes_argument": [
         "direct"
       ],
       "reason": "Consumes live model slots and should be run in a coordinated measurement window so A9 evidence is not mixed with W6/T2 accrual.",
+      "requested_new_source_records": 20,
       "roles_argument": [
         "architect_general",
         "frontdoor"
       ],
-      "sample_size": 20,
+      "sample_size": 2,
+      "sample_size_semantics": "seed_specialist_routing.py interprets --sample-size as questions per suite; source-family targets with --suites all are downscaled to approximate the requested total.",
       "suite_argument": "all",
       "target": "source_family:orchestrator_live_seed:architect_general>frontdoor"
     },
@@ -37,22 +40,25 @@
       "collection_priority": 0,
       "collection_priority_reason": "independent_holdout_source_family_blocker",
       "collection_timestamp": "<YYYYMMDDTHHMMSSZ>",
-      "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites all --roles architect_general coder_escalation --modes direct --sample-size 20 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
-      "command_template": "uv run python scripts/benchmark/seed_specialist_routing.py --suites all --roles architect_general coder_escalation --modes direct --sample-size 20 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
+      "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites all --roles architect_general coder_escalation --modes direct --sample-size 2 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
+      "command_template": "uv run python scripts/benchmark/seed_specialist_routing.py --suites all --roles architect_general coder_escalation --modes direct --sample-size 2 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
       "command_workdir": "/mnt/raid0/llm/epyc-orchestrator",
       "dry_run_semantics": "--dry-run still performs scoring/evaluation; it only prevents reward injection into runtime memory.",
       "durable_source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
       "durable_source_path_template": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
+      "estimated_new_source_records": 36,
       "expected_source_family": "seeding_eval",
       "modes_argument": [
         "direct"
       ],
       "reason": "Consumes live model slots and should be run in a coordinated measurement window so A9 evidence is not mixed with W6/T2 accrual.",
+      "requested_new_source_records": 20,
       "roles_argument": [
         "architect_general",
         "coder_escalation"
       ],
-      "sample_size": 20,
+      "sample_size": 2,
+      "sample_size_semantics": "seed_specialist_routing.py interprets --sample-size as questions per suite; source-family targets with --suites all are downscaled to approximate the requested total.",
       "suite_argument": "all",
       "target": "source_family:seeding_eval:architect_general>coder_escalation"
     },
@@ -62,22 +68,25 @@
       "collection_priority": 0,
       "collection_priority_reason": "independent_holdout_source_family_blocker",
       "collection_timestamp": "<YYYYMMDDTHHMMSSZ>",
-      "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites all --roles architect_general frontdoor --modes direct --sample-size 20 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
-      "command_template": "uv run python scripts/benchmark/seed_specialist_routing.py --suites all --roles architect_general frontdoor --modes direct --sample-size 20 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
+      "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites all --roles architect_general frontdoor --modes direct --sample-size 2 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
+      "command_template": "uv run python scripts/benchmark/seed_specialist_routing.py --suites all --roles architect_general frontdoor --modes direct --sample-size 2 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
       "command_workdir": "/mnt/raid0/llm/epyc-orchestrator",
       "dry_run_semantics": "--dry-run still performs scoring/evaluation; it only prevents reward injection into runtime memory.",
       "durable_source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
       "durable_source_path_template": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
+      "estimated_new_source_records": 36,
       "expected_source_family": "seeding_eval",
       "modes_argument": [
         "direct"
       ],
       "reason": "Consumes live model slots and should be run in a coordinated measurement window so A9 evidence is not mixed with W6/T2 accrual.",
+      "requested_new_source_records": 20,
       "roles_argument": [
         "architect_general",
         "frontdoor"
       ],
-      "sample_size": 20,
+      "sample_size": 2,
+      "sample_size_semantics": "seed_specialist_routing.py interprets --sample-size as questions per suite; source-family targets with --suites all are downscaled to approximate the requested total.",
       "suite_argument": "all",
       "target": "source_family:seeding_eval:architect_general>frontdoor"
     },
@@ -93,16 +102,19 @@
       "dry_run_semantics": "--dry-run still performs scoring/evaluation; it only prevents reward injection into runtime memory.",
       "durable_source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
       "durable_source_path_template": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
+      "estimated_new_source_records": 20,
       "expected_source_family": "seeding_eval",
       "modes_argument": [
         "direct"
       ],
       "reason": "Consumes live model slots and should be run in a coordinated measurement window so A9 evidence is not mixed with W6/T2 accrual.",
+      "requested_new_source_records": 20,
       "roles_argument": [
         "architect_general",
         "coder_escalation"
       ],
       "sample_size": 20,
+      "sample_size_semantics": "seed_specialist_routing.py interprets --sample-size as questions per suite; source-family targets with --suites all are downscaled to approximate the requested total.",
       "suite_argument": "general",
       "target": "suite:general:architect_general>coder_escalation"
     },
@@ -118,16 +130,19 @@
       "dry_run_semantics": "--dry-run still performs scoring/evaluation; it only prevents reward injection into runtime memory.",
       "durable_source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
       "durable_source_path_template": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
+      "estimated_new_source_records": 20,
       "expected_source_family": "seeding_eval",
       "modes_argument": [
         "direct"
       ],
       "reason": "Consumes live model slots and should be run in a coordinated measurement window so A9 evidence is not mixed with W6/T2 accrual.",
+      "requested_new_source_records": 20,
       "roles_argument": [
         "architect_general",
         "frontdoor"
       ],
       "sample_size": 20,
+      "sample_size_semantics": "seed_specialist_routing.py interprets --sample-size as questions per suite; source-family targets with --suites all are downscaled to approximate the requested total.",
       "suite_argument": "hotpotqa",
       "target": "suite:hotpotqa:architect_general>frontdoor"
     },
@@ -143,16 +158,19 @@
       "dry_run_semantics": "--dry-run still performs scoring/evaluation; it only prevents reward injection into runtime memory.",
       "durable_source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_instruction_precision_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
       "durable_source_path_template": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_instruction_precision_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
+      "estimated_new_source_records": 20,
       "expected_source_family": "seeding_eval",
       "modes_argument": [
         "direct"
       ],
       "reason": "Consumes live model slots and should be run in a coordinated measurement window so A9 evidence is not mixed with W6/T2 accrual.",
+      "requested_new_source_records": 20,
       "roles_argument": [
         "architect_general",
         "coder_escalation"
       ],
       "sample_size": 20,
+      "sample_size_semantics": "seed_specialist_routing.py interprets --sample-size as questions per suite; source-family targets with --suites all are downscaled to approximate the requested total.",
       "suite_argument": "instruction_precision",
       "target": "suite:instruction_precision:architect_general>coder_escalation"
     },
@@ -168,16 +186,19 @@
       "dry_run_semantics": "--dry-run still performs scoring/evaluation; it only prevents reward injection into runtime memory.",
       "durable_source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_instruction_precision_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
       "durable_source_path_template": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_instruction_precision_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
+      "estimated_new_source_records": 20,
       "expected_source_family": "seeding_eval",
       "modes_argument": [
         "direct"
       ],
       "reason": "Consumes live model slots and should be run in a coordinated measurement window so A9 evidence is not mixed with W6/T2 accrual.",
+      "requested_new_source_records": 20,
       "roles_argument": [
         "architect_general",
         "frontdoor"
       ],
       "sample_size": 20,
+      "sample_size_semantics": "seed_specialist_routing.py interprets --sample-size as questions per suite; source-family targets with --suites all are downscaled to approximate the requested total.",
       "suite_argument": "instruction_precision",
       "target": "suite:instruction_precision:architect_general>frontdoor"
     },
@@ -193,16 +214,19 @@
       "dry_run_semantics": "--dry-run still performs scoring/evaluation; it only prevents reward injection into runtime memory.",
       "durable_source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
       "durable_source_path_template": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
+      "estimated_new_source_records": 20,
       "expected_source_family": "seeding_eval",
       "modes_argument": [
         "direct"
       ],
       "reason": "Consumes live model slots and should be run in a coordinated measurement window so A9 evidence is not mixed with W6/T2 accrual.",
+      "requested_new_source_records": 20,
       "roles_argument": [
         "architect_general",
         "coder_escalation"
       ],
       "sample_size": 20,
+      "sample_size_semantics": "seed_specialist_routing.py interprets --sample-size as questions per suite; source-family targets with --suites all are downscaled to approximate the requested total.",
       "suite_argument": "simpleqa",
       "target": "suite:simpleqa:architect_general>coder_escalation"
     },
@@ -218,16 +242,19 @@
       "dry_run_semantics": "--dry-run still performs scoring/evaluation; it only prevents reward injection into runtime memory.",
       "durable_source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_thinking_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
       "durable_source_path_template": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_thinking_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
+      "estimated_new_source_records": 20,
       "expected_source_family": "seeding_eval",
       "modes_argument": [
         "direct"
       ],
       "reason": "Consumes live model slots and should be run in a coordinated measurement window so A9 evidence is not mixed with W6/T2 accrual.",
+      "requested_new_source_records": 20,
       "roles_argument": [
         "architect_general",
         "coder_escalation"
       ],
       "sample_size": 20,
+      "sample_size_semantics": "seed_specialist_routing.py interprets --sample-size as questions per suite; source-family targets with --suites all are downscaled to approximate the requested total.",
       "suite_argument": "thinking",
       "target": "suite:thinking:architect_general>coder_escalation"
     }

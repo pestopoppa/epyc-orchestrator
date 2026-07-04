@@ -14,15 +14,15 @@ cd /mnt/raid0/llm/epyc-orchestrator
 
 echo 'A9 collection batch 1/9: source_family:orchestrator_live_seed:architect_general>frontdoor'
 mkdir -p "$(dirname "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/orchestrator/seeding_live_a9_source_family_orchestrator_live_seed_architect_general_frontdoor_${RUN_TS}.json")"
-uv run python scripts/benchmark/seed_specialist_routing.py --suites all --roles architect_general frontdoor --modes direct --sample-size 20 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/orchestrator/seeding_live_a9_source_family_orchestrator_live_seed_architect_general_frontdoor_${RUN_TS}.json
+uv run python scripts/benchmark/seed_specialist_routing.py --suites all --roles architect_general frontdoor --modes direct --sample-size 2 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/orchestrator/seeding_live_a9_source_family_orchestrator_live_seed_architect_general_frontdoor_${RUN_TS}.json
 
 echo 'A9 collection batch 2/9: source_family:seeding_eval:architect_general>coder_escalation'
 mkdir -p "$(dirname "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_architect_general_coder_escalation_${RUN_TS}.json")"
-uv run python scripts/benchmark/seed_specialist_routing.py --suites all --roles architect_general coder_escalation --modes direct --sample-size 20 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_architect_general_coder_escalation_${RUN_TS}.json
+uv run python scripts/benchmark/seed_specialist_routing.py --suites all --roles architect_general coder_escalation --modes direct --sample-size 2 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_architect_general_coder_escalation_${RUN_TS}.json
 
 echo 'A9 collection batch 3/9: source_family:seeding_eval:architect_general>frontdoor'
 mkdir -p "$(dirname "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_architect_general_frontdoor_${RUN_TS}.json")"
-uv run python scripts/benchmark/seed_specialist_routing.py --suites all --roles architect_general frontdoor --modes direct --sample-size 20 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_architect_general_frontdoor_${RUN_TS}.json
+uv run python scripts/benchmark/seed_specialist_routing.py --suites all --roles architect_general frontdoor --modes direct --sample-size 2 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_architect_general_frontdoor_${RUN_TS}.json
 
 echo 'A9 collection batch 4/9: suite:general:architect_general>coder_escalation'
 mkdir -p "$(dirname "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_${RUN_TS}.json")"

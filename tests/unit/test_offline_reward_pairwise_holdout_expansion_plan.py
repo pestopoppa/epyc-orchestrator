@@ -394,7 +394,14 @@ def test_pairwise_holdout_plan_filters_to_audit_collection_targets(tmp_path: Pat
             "suite_argument": "all",
             "roles_argument": ["coder_escalation", "frontdoor"],
             "modes_argument": ["direct"],
-            "sample_size": 19,
+            "sample_size": 2,
+            "requested_new_source_records": 19,
+            "estimated_new_source_records": 36,
+            "sample_size_semantics": (
+                "seed_specialist_routing.py interprets --sample-size as "
+                "questions per suite; source-family targets with --suites "
+                "all are downscaled to approximate the requested total."
+            ),
             "collection_priority": 0,
             "collection_priority_reason": "independent_holdout_source_family_blocker",
             "durable_source_path": (
@@ -414,7 +421,7 @@ def test_pairwise_holdout_plan_filters_to_audit_collection_targets(tmp_path: Pat
             "command": (
                 "uv run python scripts/benchmark/seed_specialist_routing.py "
                 "--suites all --roles coder_escalation frontdoor "
-                "--modes direct --sample-size 19 --dry-run --output "
+                "--modes direct --sample-size 2 --dry-run --output "
                 "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/"
                 "eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_"
                 "<YYYYMMDDTHHMMSSZ>.json"
@@ -547,6 +554,12 @@ def test_pairwise_holdout_collection_batches_prioritize_source_family_blockers()
         "source_family:seeding_eval:architect_general>frontdoor",
         "suite:instruction_precision:architect_general>frontdoor",
     ]
+    assert batches[0]["sample_size"] == 2
+    assert batches[0]["requested_new_source_records"] == 20
+    assert batches[0]["estimated_new_source_records"] == 36
+    assert batches[1]["sample_size"] == 20
+    assert batches[1]["requested_new_source_records"] == 20
+    assert batches[1]["estimated_new_source_records"] == 20
     assert batches[0]["collection_priority_reason"] == (
         "independent_holdout_source_family_blocker"
     )
@@ -714,6 +727,9 @@ def test_pairwise_holdout_writes_guarded_collection_manifest_and_script(
     assert batch["target"] == "source_family:orchestrator_live_seed:architect_general>frontdoor"
     assert batch["command_workdir"] == "/mnt/raid0/llm/epyc-orchestrator"
     assert batch["collection_timestamp"] == "20260628T120000Z"
+    assert batch["sample_size"] == 2
+    assert batch["requested_new_source_records"] == 20
+    assert batch["estimated_new_source_records"] == 36
     assert "<YYYYMMDDTHHMMSSZ>" in batch["command_template"]
     assert "<YYYYMMDDTHHMMSSZ>" not in batch["command"]
     assert batch["durable_source_path"].endswith("20260628T120000Z.json")
