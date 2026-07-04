@@ -1,0 +1,124 @@
+{
+  "activation_env": {
+    "AUTOPILOT_T1_CORE_ID": "core_v2_ledger_20260703_min5",
+    "AUTOPILOT_T1_CORE_PATH": "/mnt/raid0/llm/epyc-orchestrator/benchmarks/prompts/core_v2_ledger_20260703_min5.jsonl"
+  },
+  "blockers": [
+    "instrument era: no active autopilot_quality instrument-era row declares a core_id; append the human-owned E4/core row before enabling AUTOPILOT_T1_CORE_ID"
+  ],
+  "core": {
+    "blockers": [],
+    "embedded_selection_report": {
+      "blockers": [],
+      "core_id": "core_v2_ledger_20260703_min5",
+      "eligible_items": 79,
+      "generated_at": "2026-07-03T10:24:53Z",
+      "observed_items": 923,
+      "ok": true,
+      "parameters": {
+        "include_partitions": [
+          "core"
+        ],
+        "min_attempts": 5,
+        "p_max": 0.8,
+        "p_min": 0.2,
+        "source": "ledger",
+        "target_size": 40
+      },
+      "present": true,
+      "selected_count": 40,
+      "shortfall": 0,
+      "source_provenance": {
+        "era_excluded_rows": 849,
+        "exclude_before_ts": 1782511631.0,
+        "journal_batches": [
+          "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_journal.jsonl",
+          "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_journal_1.jsonl"
+        ],
+        "trusted_rows": 77,
+        "untrusted_rows": 25
+      },
+      "source_rows": 77,
+      "unresolved_selected_count": 0
+    },
+    "exists": true,
+    "metadata": {
+      "core_id": "core_v2_ledger_20260703_min5",
+      "generated_at": "2026-07-03T10:24:53Z",
+      "generator": "scripts/autopilot/core_v2_select.py",
+      "selected_count": 40,
+      "target_size": 40
+    },
+    "ok": true,
+    "path": "/mnt/raid0/llm/epyc-orchestrator/benchmarks/prompts/core_v2_ledger_20260703_min5.jsonl",
+    "question_rows": 40
+  },
+  "core_id": "core_v2_ledger_20260703_min5",
+  "generated_at": "2026-07-04T00:15:43Z",
+  "instrument_era_guard": {
+    "active_quality_eras": [
+      "E3a",
+      "E3b"
+    ],
+    "core_id": "core_v2_ledger_20260703_min5",
+    "inactive_matching_eras": [],
+    "ok": false,
+    "path": "orchestration/instrument_eras.yaml",
+    "reason": "no active autopilot_quality instrument-era row declares a core_id; append the human-owned E4/core row before enabling AUTOPILOT_T1_CORE_ID",
+    "required_scope": "autopilot_quality",
+    "status": "missing_core_era"
+  },
+  "ok": false,
+  "operator_era_row_draft": {
+    "append_under": "eras",
+    "core_path": "/mnt/raid0/llm/epyc-orchestrator/benchmarks/prompts/core_v2_ledger_20260703_min5.jsonl",
+    "operator_must_review": true,
+    "post_append_validation_command": "uv run python scripts/autopilot/core_v2_promotion_report.py --core-id core_v2_ledger_20260703_min5 --core-path /mnt/raid0/llm/epyc-orchestrator/benchmarks/prompts/core_v2_ledger_20260703_min5.jsonl --eras-path orchestration/instrument_eras.yaml --json",
+    "proposed_from": "2026-07-04T00:15:43Z",
+    "row": {
+      "core_id": "core_v2_ledger_20260703_min5",
+      "from": "2026-07-04T00:15:43Z",
+      "id": "E4-core-core-v2-ledger-20260703-min5",
+      "note": "Human-owned designed T1 core activation draft. Core artifact selected 40 rows from current-era ledger evidence; trusted_rows=77, untrusted_rows=25, era_excluded_rows=849. Agents may generate this draft but must not append it to instrument_eras.yaml.",
+      "policy_version": "core-v2-ledger-20260703",
+      "scope": "autopilot_quality"
+    },
+    "status": "draft_only",
+    "target_path": "orchestration/instrument_eras.yaml"
+  },
+  "promotion_ready": false,
+  "recommendation": "candidate artifact is inspected, but activation remains blocked until the operator appends a matching autopilot_quality instrument-era row",
+  "selection": {
+    "blockers": [],
+    "core_id": "core_v2_ledger_20260703_min5",
+    "eligible_items": 79,
+    "generated_at": "2026-07-03T10:24:53Z",
+    "observed_items": 923,
+    "ok": true,
+    "parameters": {
+      "include_partitions": [
+        "core"
+      ],
+      "min_attempts": 5,
+      "p_max": 0.8,
+      "p_min": 0.2,
+      "source": "ledger",
+      "target_size": 40
+    },
+    "present": true,
+    "selected_count": 40,
+    "shortfall": 0,
+    "source_provenance": {
+      "era_excluded_rows": 849,
+      "exclude_before_ts": 1782511631.0,
+      "journal_batches": [
+        "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_journal.jsonl",
+        "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_journal_1.jsonl"
+      ],
+      "trusted_rows": 77,
+      "untrusted_rows": 25
+    },
+    "source_rows": 77,
+    "unresolved_selected_count": 0
+  }
+}

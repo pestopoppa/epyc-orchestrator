@@ -86,6 +86,17 @@ def test_promotion_report_blocks_without_core_era(tmp_path) -> None:
     assert report["selection"]["ok"] is True
     assert report["instrument_era_guard"]["status"] == "missing_core_era"
     assert any("instrument era" in blocker for blocker in report["blockers"])
+    draft = report["operator_era_row_draft"]
+    assert draft["status"] == "draft_only"
+    assert draft["operator_must_review"] is True
+    assert draft["append_under"] == "eras"
+    assert draft["row"]["scope"] == "autopilot_quality"
+    assert draft["row"]["core_id"] == "core_v2"
+    assert draft["row"]["id"] == "E4-core-core-v2"
+    rendered = core_v2_promotion_report.render_markdown(report)
+    assert "## Operator Era Row Draft" in rendered
+    assert "draft-only" in rendered
+    assert 'core_id: "core_v2"' in rendered
 
 
 def test_promotion_report_ready_with_matching_core_era(tmp_path) -> None:
@@ -103,4 +114,6 @@ def test_promotion_report_ready_with_matching_core_era(tmp_path) -> None:
     assert report["promotion_ready"] is True
     assert report["blockers"] == []
     assert report["instrument_era_guard"]["era"]["id"] == "E4-unit"
+    assert report["operator_era_row_draft"]["status"] == "already_authorized"
+    assert report["operator_era_row_draft"]["row"] is None
     assert "Status: ready" in core_v2_promotion_report.render_markdown(report)

@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
+import shlex
 from datetime import datetime, timezone
 from pathlib import Path
 import sys
@@ -192,6 +194,7 @@ def build_core_v2_promotion_report(
     eras_path: Path | None = None,
 ) -> dict[str, Any]:
     """Build a no-write readiness report for activating a designed T1 core."""
+    generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     resolved_core_path = _core_path(core_id, core_path)
     core = _inspect_core(resolved_core_path, core_id)
     explicit_selection = (
@@ -222,10 +225,18 @@ def build_core_v2_promotion_report(
         "ok": not blockers,
         "promotion_ready": not blockers,
         "core_id": core_id,
-        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "generated_at": generated_at,
         "core": core,
         "selection": explicit_selection,
         "instrument_era_guard": guard,
+        "operator_era_row_draft": _operator_era_row_draft(
+            core_id,
+            generated_at=generated_at,
+            core=core,
+            selection=explicit_selection,
+            guard=guard,
+            core_path=resolved_core_path,
+        ),
         "activation_env": {
             "AUTOPILOT_T1_CORE_ID": core_id,
             "AUTOPILOT_T1_CORE_PATH": str(resolved_core_path),
@@ -244,6 +255,100 @@ def _recommendation(blockers: list[str], guard: Mapping[str, Any]) -> str:
             "the operator appends a matching autopilot_quality instrument-era row"
         )
     return "resolve listed blockers before enabling AUTOPILOT_T1_CORE_ID"
+
+
+def _slug(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    return slug or "core"
+
+
+def _date_token(value: Any) -> str:
+    raw = str(value or "").strip()
+    if len(raw) >= 10 and raw[4] == "-" and raw[7] == "-":
+        return raw[:10].replace("-", "")
+    return _utc_compact()[:8]
+
+
+def _operator_era_row_draft(
+    core_id: str,
+    *,
+    generated_at: str,
+    core: Mapping[str, Any],
+    selection: Mapping[str, Any],
+    guard: Mapping[str, Any],
+    core_path: Path,
+) -> dict[str, Any]:
+    """Return a human-owned instrument-era row draft without mutating the registry."""
+    if guard.get("ok"):
+        return {
+            "status": "already_authorized",
+            "operator_must_review": False,
+            "reason": "an active autopilot_quality era already authorizes this core_id",
+            "row": None,
+        }
+    if not core.get("ok") or not selection.get("ok"):
+        return {
+            "status": "unavailable",
+            "operator_must_review": True,
+            "reason": "core artifact and selection evidence must be clean before drafting an era row",
+            "row": None,
+        }
+
+    provenance = (
+        selection.get("source_provenance")
+        if isinstance(selection.get("source_provenance"), Mapping)
+        else {}
+    )
+    selected_count = selection.get("selected_count")
+    generated_token = _date_token(selection.get("generated_at"))
+    row = {
+        "id": f"E4-core-{_slug(core_id)}",
+        "from": generated_at,
+        "scope": "autopilot_quality",
+        "core_id": core_id,
+        "policy_version": f"core-v2-ledger-{generated_token}",
+        "note": (
+            "Human-owned designed T1 core activation draft. "
+            f"Core artifact selected {selected_count} rows from current-era ledger evidence; "
+            f"trusted_rows={provenance.get('trusted_rows')}, "
+            f"untrusted_rows={provenance.get('untrusted_rows')}, "
+            f"era_excluded_rows={provenance.get('era_excluded_rows')}. "
+            "Agents may generate this draft but must not append it to instrument_eras.yaml."
+        ),
+    }
+    return {
+        "status": "draft_only",
+        "operator_must_review": True,
+        "target_path": str(guard.get("path") or ""),
+        "append_under": "eras",
+        "proposed_from": generated_at,
+        "core_path": str(core_path),
+        "row": row,
+        "post_append_validation_command": (
+            "uv run python scripts/autopilot/core_v2_promotion_report.py "
+            f"--core-id {shlex.quote(core_id)} "
+            f"--core-path {shlex.quote(str(core_path))} "
+            "--eras-path "
+            f"{shlex.quote(str(guard.get('path') or 'orchestration/instrument_eras.yaml'))} "
+            "--json"
+        ),
+    }
+
+
+def _quote_yaml(value: Any) -> str:
+    return json.dumps(str(value))
+
+
+def _render_era_row_yaml(row: Mapping[str, Any]) -> list[str]:
+    lines = [
+        "```yaml",
+        "# Append this row under the existing top-level `eras:` list.",
+        "  - id: " + _quote_yaml(row.get("id")),
+    ]
+    for key in ("from", "scope", "core_id", "policy_version", "note"):
+        lines.append(f"    {key}: {_quote_yaml(row.get(key))}")
+    lines.append("```")
+    return lines
 
 
 def render_markdown(report: Mapping[str, Any]) -> str:
@@ -300,6 +405,25 @@ def render_markdown(report: Mapping[str, Any]) -> str:
     env = report.get("activation_env") if isinstance(report.get("activation_env"), Mapping) else {}
     for key in ("AUTOPILOT_T1_CORE_ID", "AUTOPILOT_T1_CORE_PATH"):
         lines.append(f"- `{key}={env.get(key)}`")
+    draft = (
+        report.get("operator_era_row_draft")
+        if isinstance(report.get("operator_era_row_draft"), Mapping)
+        else {}
+    )
+    row = draft.get("row") if isinstance(draft.get("row"), Mapping) else None
+    if row:
+        lines.extend(
+            [
+                "",
+                "## Operator Era Row Draft",
+                "",
+                "- Status: draft-only; append requires human approval under `/workspace/MEASUREMENT.md`.",
+                f"- Target path: `{draft.get('target_path')}`",
+                f"- Post-append validation: `{draft.get('post_append_validation_command')}`",
+                "",
+            ]
+        )
+        lines.extend(_render_era_row_yaml(row))
     lines.append("")
     return "\n".join(lines)
 
