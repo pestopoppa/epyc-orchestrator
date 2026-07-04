@@ -816,6 +816,7 @@ def test_w8_trajectory_section_surfaces_concentration_warning() -> None:
     assert section.blockers == [
         "replay_concentration_warning: recent replay evidence is concentrated"
     ]
+    assert section.details["candidate_generation_required"] is False
     assert section.details["stale_accumulating_candidate_count"] == 2
     assert section.details["replay_concentration"]["top_active_candidate"] == "abc"
 
@@ -1171,6 +1172,66 @@ def test_w8_next_action_when_restart_ready_without_promotion_finalization() -> N
     assert actions[0]["evidence"]["latest_required_E"] == 100.0
     assert actions[0]["evidence"]["latest_fresh_eval"] is False
     assert actions[0]["evidence"]["latest_baseline_reference_state"] == "fresh"
+
+
+def test_w8_next_action_surfaces_candidate_generation_requirement() -> None:
+    sections = [
+        report_mod.GateSection(
+            key="phase_health",
+            status="ready",
+            summary="active",
+            blockers=[],
+            details={"status": "active"},
+        ),
+        report_mod.GateSection(
+            key="w4_w6_restart_cutover",
+            status="ready",
+            summary="ready",
+            blockers=[],
+            details={
+                "w8_promotion_status": "none",
+                "w8_open_requirements": [
+                    "combined_E_below_required",
+                    "fresh_promotion_eval_required",
+                    "no_recent_multi_observation_accumulating_candidate",
+                    "seq_confirmation_required",
+                ],
+                "w8_latest_seq_trial_id": 1120,
+                "w8_latest_candidate": "ec17bc71c6472ae4",
+                "w8_latest_combined_E": 0.98638,
+                "w8_latest_required_E": 100.0,
+                "w8_latest_fresh_eval": False,
+            },
+        ),
+        report_mod.w8_trajectory_section(
+            {
+                "status": "evidence_bound",
+                "ok": False,
+                "latest_trial_id": 1120,
+                "snapshot_count": 170,
+                "candidate_count": 49,
+                "status_counts": {"excluded": 6, "refuted": 3, "reverted": 40},
+                "open_requirements": [
+                    "no_recent_multi_observation_accumulating_candidate"
+                ],
+                "recent_active_candidates": [],
+                "stale_accumulating_candidates": [],
+                "replay_concentration": {"warning": False},
+            }
+        ),
+    ]
+
+    actions = report_mod.build_next_actions(sections)
+
+    assert actions[0]["key"] == "collect_w8_promotion_eval_evidence"
+    assert "new keepable candidate" in actions[0]["reason"]
+    assert actions[0]["evidence"]["candidate_generation_required"] is True
+    assert actions[0]["evidence"]["candidate_status_counts"] == {
+        "excluded": 6,
+        "refuted": 3,
+        "reverted": 40,
+    }
+    assert actions[0]["evidence"]["recent_active_candidates"] == []
 
 
 def test_quiet_window_process_matcher_ignores_script_names_in_prompts() -> None:

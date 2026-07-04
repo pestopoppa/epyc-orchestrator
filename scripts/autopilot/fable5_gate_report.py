@@ -487,6 +487,16 @@ def restart_section(restart_report: dict[str, Any]) -> GateSection:
 def w8_trajectory_section(trajectory_report: dict[str, Any]) -> GateSection:
     """Surface W8 replay concentration without changing authority semantics."""
     concentration = trajectory_report.get("replay_concentration") or {}
+    status_counts = trajectory_report.get("status_counts") or {}
+    recent_active_candidates = trajectory_report.get("recent_active_candidates") or []
+    stale_accumulating_candidates = (
+        trajectory_report.get("stale_accumulating_candidates") or []
+    )
+    candidate_generation_required = _w8_candidate_generation_required(
+        status_counts=status_counts,
+        recent_active_candidates=recent_active_candidates,
+        stale_accumulating_candidates=stale_accumulating_candidates,
+    )
     blockers: list[str] = []
     warning_reason = concentration.get("warning_reason")
     if concentration.get("warning"):
@@ -509,17 +519,35 @@ def w8_trajectory_section(trajectory_report: dict[str, Any]) -> GateSection:
             "latest_trial_id": trajectory_report.get("latest_trial_id"),
             "snapshot_count": trajectory_report.get("snapshot_count"),
             "candidate_count": trajectory_report.get("candidate_count"),
-            "status_counts": trajectory_report.get("status_counts"),
+            "status_counts": status_counts,
             "open_requirements": trajectory_report.get("open_requirements"),
-            "recent_active_candidates": trajectory_report.get(
-                "recent_active_candidates"
-            ),
-            "stale_accumulating_candidate_count": len(
-                trajectory_report.get("stale_accumulating_candidates") or []
-            ),
+            "candidate_generation_required": candidate_generation_required,
+            "recent_active_candidates": recent_active_candidates,
+            "stale_accumulating_candidate_count": len(stale_accumulating_candidates),
             "replay_concentration": concentration,
         },
     )
+
+
+def _w8_candidate_generation_required(
+    *,
+    status_counts: dict[str, Any],
+    recent_active_candidates: list[Any],
+    stale_accumulating_candidates: list[Any],
+) -> bool:
+    """Return True when W8 has no replayable accumulating candidate surface."""
+    if recent_active_candidates or stale_accumulating_candidates:
+        return False
+    replayable_statuses = {
+        "active_recent_replay",
+        "single_observation",
+        "stale_accumulating",
+        "confirmed_waiting_fresh_eval",
+    }
+    if any(int(status_counts.get(status) or 0) > 0 for status in replayable_statuses):
+        return False
+    terminal_statuses = {"reverted", "excluded", "refuted", "finalized"}
+    return any(int(status_counts.get(status) or 0) > 0 for status in terminal_statuses)
 
 
 def ds_e1_section(
@@ -1231,6 +1259,11 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
                 if w8_trajectory is not None
                 else {}
             )
+            candidate_generation_required = (
+                bool(w8_trajectory.details.get("candidate_generation_required"))
+                if w8_trajectory is not None
+                else False
+            )
             actions.append(
                 {
                     "key": "collect_w8_promotion_eval_evidence",
@@ -1241,8 +1274,13 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
                         else "blocked"
                     ),
                     "reason": (
-                        "W4/W6 authority is restart-ready; W8 still needs live "
-                        "promotion-eval finalization evidence before closing the tail."
+                        "W4/W6 authority is restart-ready; W8 needs a new "
+                        "keepable candidate before replay/promotion evidence can accrue."
+                        if candidate_generation_required
+                        else (
+                            "W4/W6 authority is restart-ready; W8 still needs live "
+                            "promotion-eval finalization evidence before closing the tail."
+                        )
                     ),
                     "evidence": {
                         "w8_promotion_status": details.get("w8_promotion_status"),
@@ -1277,6 +1315,19 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
                         ),
                         "baseline_reference_blocked_reason": details.get(
                             "w8_baseline_reference_blocked_reason"
+                        ),
+                        "candidate_generation_required": (
+                            candidate_generation_required
+                        ),
+                        "candidate_status_counts": (
+                            w8_trajectory.details.get("status_counts")
+                            if w8_trajectory is not None
+                            else None
+                        ),
+                        "recent_active_candidates": (
+                            w8_trajectory.details.get("recent_active_candidates")
+                            if w8_trajectory is not None
+                            else None
                         ),
                         "replay_concentration_warning": concentration.get("warning"),
                         "replay_concentration_reason": concentration.get(
