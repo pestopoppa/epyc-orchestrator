@@ -158,6 +158,16 @@ class TestDefaultYamlRoundTrip:
         result = validate_template(t)
         assert result.valid, f"default template should validate: {result.errors}"
 
+    def test_default_yaml_preserves_ds7_decision_metadata(self):
+        t = load_template("default")
+        assert t.metadata["ds7_profile"] == "steady_state_static_prewarm"
+        decision = t.metadata["ds7_decision"]
+        assert decision["status"] == "retain_default"
+        assert decision["ds6_quarter_scheduler"] == "parked_until_static_prewarm_gap"
+        assert decision["evidence_packet"].endswith(
+            "ds_e1_evidence_packet_20260704T192333Z.md"
+        )
+
     def test_hot_vs_loaded_breakdown(self):
         t = load_template("default")
         # Production default stack is all-HOT

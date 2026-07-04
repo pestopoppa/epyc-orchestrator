@@ -1,5 +1,6 @@
-# DS-7: Default stack template — matches current stack_manifest.py launch topology
-# This is the production baseline that AR-3 Pareto frontiers are compared against.
+# DS-7: Default stack template — matches current stack_manifest.py launch topology.
+# This is the production steady-state/static-prewarm baseline retained by the
+# DS-E1 profile decision on 2026-07-04.
 #
 # System: 2×AMD EPYC 9004, 192 cores (384 threads), 1130 GB RAM
 # NUMA topology: 2 nodes × 2 quarters = 4 quarters (Q0A, Q0B, Q1A, Q1B)
@@ -16,8 +17,19 @@
 # Single-instance roles: 1×96t, 1×24t, or embedding-mode dedicated
 
 name: default
-description: Production baseline (2026-06-13) — current manifest topology with explicit aliases
+description: Production steady-state static-prewarm baseline (DS-E1 retained 2026-07-04) — current manifest topology with explicit aliases
 version: "1"
+
+metadata:
+  ds7_profile: steady_state_static_prewarm
+  ds7_decision:
+    status: retain_default
+    decided_at: "2026-07-04T19:40:20Z"
+    evidence_packet: orchestration/reports/ds_e1_evidence_packet_20260704T192333Z.md
+    evidence_packet_json: orchestration/reports/ds_e1_evidence_packet_20260704T192333Z.json
+    rationale: DS-E1 packaged stack roster, DS-5 manifest freshness, contention matrix, RI-10 canary evidence, and production KV-size rows with no blockers; no evidence shows static pre-warm leaves a material throughput or latency gap.
+    ds6_quarter_scheduler: parked_until_static_prewarm_gap
+    validation_command: python3 scripts/server/orchestrator_stack.py start --stack-profile default --validate-only
 
 # Fine-grained resource budget (NIB2-19 / DS-7 Gap 4). Omitting this block
 # falls back to system defaults (744 / 930 / 100). System total is 1130 GB.

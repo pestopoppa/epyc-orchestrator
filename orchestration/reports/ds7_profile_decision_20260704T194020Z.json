@@ -1,0 +1,110 @@
+{
+  "generated_at": "2026-07-04T19:40:20Z",
+  "decision": "retain_default_static_prewarm",
+  "profile": "default",
+  "profile_path": "stack_templates/default.yaml",
+  "ds7_profile": "steady_state_static_prewarm",
+  "ready_for_profile_decision": true,
+  "evidence_packet": "orchestration/reports/ds_e1_evidence_packet_20260704T192333Z.json",
+  "evidence": {
+    "stack_roster": {
+      "status": "ready",
+      "compiled_at": "2026-07-04T19:16:46Z",
+      "source_commit": "b2deb1b5",
+      "live_roles": 10
+    },
+    "ds5_roster_manifest": {
+      "status": "ready",
+      "manifest_compiled_at": "2026-07-04T19:16:46Z",
+      "stack_priors_compiled_at": "2026-07-04T19:16:46Z"
+    },
+    "contention_matrix": {
+      "status": "ready",
+      "topology_hash": "5d19b3e4edf6fc27",
+      "contention_topology_hash": "df373c79cc4af06f",
+      "matrix_status": "ok",
+      "measured_roles": [
+        "architect_general",
+        "frontdoor",
+        "ingest_long_context",
+        "vision_escalation",
+        "worker_general",
+        "worker_vision"
+      ],
+      "excluded_auxiliary_roles": [
+        "eval_batch_frontdoor"
+      ]
+    },
+    "ri10_canary": {
+      "status": "ready",
+      "decision_reason": "high-risk sample count and enforce/shadow arm-attributed telemetry are decision-grade",
+      "evaluable_canary_arm_high_risk_rows": 80,
+      "canary_arm_counts_since_telemetry_health_start": {
+        "enforce_high_risk": 31,
+        "shadow_high_risk": 49
+      },
+      "sample_count_ready": true,
+      "canary_decision_ready": true
+    },
+    "kv_size_measurements": {
+      "status": "ready",
+      "required_measurements": {
+        "architect_general": [
+          2048,
+          8192
+        ],
+        "frontdoor": [
+          2048,
+          8192,
+          32768
+        ],
+        "ingest_long_context": [
+          2048,
+          8192,
+          32768
+        ],
+        "worker_general": [
+          2048,
+          8192
+        ]
+      },
+      "observed_measurements": {
+        "architect_general": [
+          2048,
+          8192
+        ],
+        "frontdoor": [
+          2048,
+          8192,
+          32768
+        ],
+        "ingest_long_context": [
+          2048,
+          8192,
+          32768
+        ],
+        "worker_general": [
+          2048,
+          8192
+        ]
+      },
+      "parsed_csv_rows": 10,
+      "failed_rows": []
+    }
+  },
+  "template_validation": {
+    "command": "python3 scripts/server/orchestrator_stack.py start --stack-profile default --validate-only",
+    "status": "ok",
+    "roles": 17,
+    "instances": 28,
+    "ram_gb": 657
+  },
+  "ds6_quarter_scheduler": {
+    "status": "parked",
+    "reopen_condition": "Reopen only if future DS-E1-equivalent evidence shows static pre-warm leaves material throughput or latency on the table."
+  },
+  "notes": [
+    "This is a profile decision artifact, not a live stack change.",
+    "The default profile remains the production baseline; DS-7 launch integration still validates templates before launch and reports that launch consumption is pending DS-7 Phase 2."
+  ]
+}

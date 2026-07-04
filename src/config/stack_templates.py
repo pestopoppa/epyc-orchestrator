@@ -101,6 +101,7 @@ class StackTemplate:
     version: str = "1"
     roles: dict[str, RoleConfig] = field(default_factory=dict)
     resource_budget: ResourceBudget = field(default_factory=ResourceBudget)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
     def total_ram_gb(self) -> float:
@@ -164,6 +165,7 @@ def load_template(name: str, templates_dir: Path | None = None) -> StackTemplate
         description=data.get("description", ""),
         version=str(data.get("version", "1")),
         resource_budget=budget,
+        metadata=dict(data.get("metadata") or {}),
     )
 
     for role_name, role_data in data.get("roles", {}).items():
