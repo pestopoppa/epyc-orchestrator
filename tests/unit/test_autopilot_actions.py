@@ -1501,6 +1501,22 @@ def test_first_unblacklisted_seed_action_reports_exhaustion() -> None:
     assert reason == f"blocked {autopilot.FALLBACK_SEED_CANDIDATES[-1]}"
 
 
+def test_first_unblacklisted_seed_action_uses_extended_seed_ladder() -> None:
+    legacy_exhausted = (14, 16, 18, 20, 24, 30)
+    blacklist = [
+        {
+            "pattern": {"type": "seed_batch", "n_questions": n_questions},
+            "reason": f"blocked {n_questions}",
+        }
+        for n_questions in legacy_exhausted
+    ]
+
+    action, reason = autopilot._first_unblacklisted_seed_action(blacklist)
+
+    assert action == {"type": "seed_batch", "n_questions": 40}
+    assert reason == ""
+
+
 def test_critic_fallback_seed_skip_when_seed_candidates_exhausted() -> None:
     skip = autopilot._critic_fallback_seed_skip(
         {"type": "seed_batch", "n_questions": autopilot.SAFE_FALLBACK_SEED_N},

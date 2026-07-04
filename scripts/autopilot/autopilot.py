@@ -221,7 +221,7 @@ SEQ_CANDIDATE_REPLAY_MAX_K = int(
     os.environ.get("AUTOPILOT_SEQ_CANDIDATE_REPLAY_MAX_K", "12")
 )
 SAFE_FALLBACK_SEED_N = 14
-FALLBACK_SEED_CANDIDATES = (14, 16, 18, 20, 24, 30)
+FALLBACK_SEED_CANDIDATES = (14, 16, 18, 20, 24, 30, 40, 50, 10)
 
 # 2026-05-23 constrained-creativity planner knobs (gated on stagnation).
 # Lean prompt is the default; the rich rubric+synthesis fragment activates
