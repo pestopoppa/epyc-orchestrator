@@ -34,26 +34,26 @@ create train or validation sets.
 | Corpus | Location | Schema Owner | Current Status | Intended Use | Era Label Rule |
 |---|---|---|---|---|---|
 | AutoPilot experiment journal | `orchestration/autopilot_journal*.jsonl` | `scripts/autopilot/experiment_journal.py::JournalEntry` | live | Outcome labels for planner SFT, replay, per-question vectors, sequential verdicts | `timestamp`, `trial_id`, `metric_schema_version`, `bug_corrupted_by`, `bug_corrupted_reason`, `outcome_status`, plus `orchestration/instrument_eras.yaml` |
-| Planner archive | `logs/planner_archive.jsonl` | `scripts/autopilot/controller_io.py`, `scripts/autopilot/planner_coordinator.py`, `scripts/autopilot/planner_providers.py` | live; failed Claude calls are branch-ready on `feat/data-flywheel-capture` | Planner/critic context-action pairs, cloud spend, failure examples | `ts`/`ts_iso`, provider/type/subtype/status fields when present, `resume_session_id`, prompt hash, branch/commit of archive writer |
+| Planner archive | `logs/planner_archive.jsonl` | `scripts/autopilot/controller_io.py`, `scripts/autopilot/planner_coordinator.py`, `scripts/autopilot/planner_providers.py` | live; Claude/Codex provider calls, failed calls, and coordinator decisions archive on the current branch | Planner/critic context-action pairs, cloud spend, failure examples | `ts`/`ts_iso`, provider/type/subtype/status fields when present, `resume_session_id`, prompt hash, branch/commit of archive writer |
 | Strategy memory | `orchestration/repl_memory/strategies/strategies.db` and adjacent FAISS files | `orchestration/repl_memory/strategy_store.py` | live | Retrieved strategy corpus, positive/negative strategy examples after outcome join | `source_trial_id`, `created_at`, `entry_type`, `context_hash`, `strategy_validity`, joined journal `bug_corrupted_by` |
 | Research intake index | `/mnt/raid0/llm/epyc-root/research/intake_index.yaml` | `research-intake` skill index schema | live | Intake triage classifier and source-categorization set | `ingested_date`, `id`, `source_type`, `verdict`, `novelty`, `relevance`; source text remains quarantined per F5 |
 | Research deep dives | `/mnt/raid0/llm/epyc-root/research/deep-dives/*.md` | root research process | live narrative | Decision-chain retrieval, synthesis examples after review | file path, document date/title, linked intake IDs, linked handoffs; narrative-only unless joined to a reviewed verdict |
 | Handoffs and progress notes | `/mnt/raid0/llm/epyc-root/handoffs/`, `/mnt/raid0/llm/epyc-root/progress/` | root handoff workflow | live narrative | Decision chronology, task planning examples, backlog state reconstruction | file path, status header, date heading, commit that modified the row; historical docs are narrative and must be verified against code |
 | Progress telemetry JSONL | `logs/progress/YYYY-MM-DD.jsonl` | `orchestration/repl_memory/progress_logger.py` and call sites | live | Real-task/routing telemetry and future F1 task records | `timestamp`, `event_type`, `task_id`, `agent_role`, schema version if present, outcome field when present |
-| Per-question eval ledger | `eval_details.question_results` in future `autopilot_journal*.jsonl` rows | `feat/paired-question-stats-current` | branch-ready, not deployed | Sequential verdicts, paired replay, item difficulty | Opens at branch merge/deploy; use `qid`, suite, core ID/pool version, and journal era labels |
+| Per-question eval ledger | `eval_details.question_results` in `orchestration/autopilot_journal*.jsonl` rows | `scripts/autopilot/experiment_journal.py` and eval harness writers | live for current journal rows | Sequential verdicts, paired replay, item difficulty | Use `qid`, suite, core ID/pool version when present, and journal era labels |
 | Seeding diagnostics | `logs/seeding_diagnostics.jsonl` | seeding benchmark infra | historical/live depending run | Item-difficulty priors, factual-risk calibration | `timestamp`, suite/domain, scoring method/config when present; rows without scoring method are priors only |
 | Factual-risk calibration rows | `orchestration/factual_risk_calibration_v2_{train,val,test}.jsonl` | factual-risk calibration scripts | live generated dataset | Risk classifier and abstention calibration | file split, `label_source`, `prompt_hash`, generator version; regex labels are calibration labels, not quality verdicts |
 | Routing classifier snapshots | `orchestration/repl_memory/training_data.npz`, `routing_classifier_weights.npz` | `orchestration/repl_memory/routing_classifier.py` and training scripts | generated artifact | Routing classifier replay and calibration, not planner SFT | generation timestamp, source progress/embedding snapshot, embedding model/index version, held-out split seed |
 | Benchmark question pool | `/mnt/raid0/llm/epyc-inference-research/benchmarks/prompts/question_pool*.jsonl` | inference-research benchmark scripts | live eval data | Eval core construction, qid derivation, per-question replay | manifest/version file, suite, prompt hash/qid, pool version, core ID when selected |
 | Benchmark result ledger | `/mnt/raid0/llm/epyc-inference-research/benchmarks/results/*.jsonl` and `data/**/*.csv` | inference-research benchmark scripts | live benchmark archive | Model descriptors, throughput baselines, calibration covariates | result timestamp, script/config name, model registry ref, host/runtime metadata |
 | Root workload packs | `/mnt/raid0/llm/epyc-inference-research/benchmarks/root_workload/*.json` | F1 real-task corpus | seed packs exist; passive task capture still pending | Real-task eval distribution and promotion cohorts | pack name/version, prompt/task ID, source commit, reviewed outcome when available |
-| Lab job outputs | planned `orchestration/lab_review_queue/` plus future `task_record` events | F2 self-running lab | branch-ready on `feat/lab-reliability-ladder`, not deployed | Reviewed job dataset, local-lab reliability ladder, task tuples for F3 | job ID, contract version, risk class, model role, review verdict, reviewer, timestamp |
+| Lab job outputs | `orchestration/lab_review_queue/`, `task_records.jsonl`, `review_verdicts.jsonl`, and `gold_tuples/` | `scripts/lab/run_job.py`, `scripts/lab/record_verdict.py`, `scripts/lab/promote_job.py` | live scaffolding; two read-only nightly jobs enabled, but no real task records/verdicts/gold tuples yet | Reviewed job dataset, local-lab reliability ladder, task tuples for F3 | job ID, contract version, risk class, model role, review verdict, reviewer, timestamp |
 | Intake-triage labels | `orchestration/datasets/intake_triage_reviewed.jsonl` | F3 recorder, F2/F5 review workflow | recorder/builder live; 120-row review queue generated | Triage classifier (`relevant`, `duplicate`, `park`, destination index) | source intake ID, quarantine policy version, output contract version, human review verdict |
 
 ## Required Fields by Builder
 
-Implemented builder scaffolds live in `scripts/datasets/` on
-`feat/intake-triage-label-capture`:
+Implemented builder scaffolds live in `scripts/datasets/` on the current
+orchestrator branch:
 
 - `build_planner_sft.py`: planner archive -> `planner_sft_example.v1`
   JSONL plus `dataset_builder_manifest.v1`.
@@ -140,17 +140,15 @@ Initial keep rule:
 
 ## Known Gaps
 
-- Per-question `question_results` are branch-ready in
-  `feat/paired-question-stats-current` but not deployed, so historical journal
-  rows do not yet contain outcome vectors.
-- Failed Claude planner calls are branch-ready on
-  `feat/intake-triage-label-capture`; the W7 branch additionally removes draft
-  session persistence. Intake-triage label capture is live through the queue,
-  single-row recorder, readiness reporter, and dry-run-by-default batch
-  applicator.
-- F2 lab jobs, review queue, verdict recorder, and shadow-batch wrapper are
-  branch-ready on `feat/lab-reliability-ladder` but not deployed; real reviewed
-  `lab_gold_tuple.v1` rows do not exist yet.
+- Historical AutoPilot rows before the per-question ledger was deployed may lack
+  `eval_details.question_results`; builders must treat missing vectors as schema
+  exclusions rather than imputing item-level outcomes.
+- Planner archive capture is live, including failed provider calls and
+  coordinator decisions. Planner-SFT rows still need a trustworthy outcome join
+  before they become training-grade examples.
+- F2 lab jobs, the review queue, verdict recorder, promotion gate, and
+  shadow-batch wrapper are live scaffolding. Real quiet-window outputs,
+  reviewed verdicts, and `lab_gold_tuple.v1` rows do not exist yet.
 - Intake-triage label capture is live, and
   `orchestration/datasets/intake_triage_review_queue.jsonl` contains the first
   120 actionable intake rows for operator/F2/F5 review. No reviewed production
