@@ -11,7 +11,8 @@ from __future__ import annotations
 
 import argparse
 import json
-from collections import defaultdict
+import re
+from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -51,6 +52,7 @@ class W8Snapshot:
     baseline_reference_state: str | None
     finalized: bool | None
     keep_revert_decision: str | None
+    failure_first_violation: str | None
 
 
 @dataclass(frozen=True)
@@ -73,6 +75,8 @@ class CandidateTrajectory:
     replay_capacity_remaining: int | None
     fresh_eval_count: int
     stale_reference_count: int
+    latest_failure_first_violation: str | None
+    latest_failure_violation_details: dict[str, Any]
     recent: bool
     stale_accumulating: bool
 
@@ -115,6 +119,7 @@ def build_w8_trajectory_report(
     status_counts: dict[str, int] = {}
     for trajectory in trajectories:
         status_counts[trajectory.status] = status_counts.get(trajectory.status, 0) + 1
+    terminal_reason = _terminal_reason_summary(trajectories)
 
     recent_active = [
         item for item in trajectories if item.status == "active_recent_replay"
@@ -151,6 +156,8 @@ def build_w8_trajectory_report(
         "max_replay_attempts": max_replay_attempts,
         "stale_trials": stale_trials,
         "status_counts": dict(sorted(status_counts.items())),
+        "terminal_reason_counts": terminal_reason["counts"],
+        "dominant_terminal_reason": terminal_reason["dominant"],
         "replay_concentration": concentration,
         "open_requirements": blocked,
         "recent_active_candidates": [item.candidate for item in recent_active],
@@ -201,6 +208,26 @@ def render_markdown(report: Mapping[str, Any]) -> str:
         reason = concentration.get("warning_reason")
         if reason:
             lines.append(f"- reason: {reason}")
+    dominant_reason = report.get("dominant_terminal_reason") or {}
+    if dominant_reason:
+        lines.extend(
+            [
+                "",
+                "## Terminal Candidate Reasons",
+                "",
+                (
+                    "- dominant: {reason} ({count} candidate(s), status={status})".format(
+                        reason=dominant_reason.get("reason") or "unknown",
+                        count=dominant_reason.get("count"),
+                        status=dominant_reason.get("status") or "unknown",
+                    )
+                ),
+            ]
+        )
+        if dominant_reason.get("baseline_sample_warning"):
+            lines.append(
+                "- warning: dominant per-suite regression compares against a very small baseline sample"
+            )
     requirements = list(report.get("open_requirements") or [])
     if requirements:
         lines.extend(["", "## Open Requirements", ""])
@@ -290,6 +317,10 @@ def _candidate_trajectory(
         fresh_eval_count=sum(1 for snapshot in group if snapshot.fresh_eval is True),
         stale_reference_count=sum(
             1 for snapshot in group if snapshot.baseline_reference_state == "stale"
+        ),
+        latest_failure_first_violation=latest.failure_first_violation,
+        latest_failure_violation_details=_parse_suite_regression(
+            latest.failure_first_violation
         ),
         recent=recent,
         stale_accumulating=stale_accumulating,
@@ -402,6 +433,87 @@ def _replay_concentration(
     }
 
 
+def _terminal_reason_summary(
+    trajectories: Iterable[CandidateTrajectory],
+) -> dict[str, Any]:
+    terminal = {"reverted", "excluded", "refuted"}
+    counts: Counter[str] = Counter()
+    examples: dict[str, CandidateTrajectory] = {}
+    for trajectory in trajectories:
+        if trajectory.status not in terminal:
+            continue
+        reason = (
+            trajectory.latest_failure_first_violation
+            or f"candidate status {trajectory.status}"
+        )
+        counts[reason] += 1
+        examples.setdefault(reason, trajectory)
+    if not counts:
+        return {"counts": {}, "dominant": None}
+    reason, count = counts.most_common(1)[0]
+    example = examples[reason]
+    details = dict(example.latest_failure_violation_details or {})
+    baseline_n = details.get("n_baseline")
+    baseline_sample_warning = (
+        details.get("kind") == "suite_regression"
+        and isinstance(baseline_n, int)
+        and baseline_n <= 2
+    )
+    dominant = {
+        "reason": reason,
+        "count": count,
+        "status": example.status,
+        "candidate": example.candidate,
+        "latest_trial_id": example.latest_trial_id,
+        "details": details,
+        "baseline_sample_warning": baseline_sample_warning,
+    }
+    return {"counts": dict(counts), "dominant": dominant}
+
+
+_SUITE_REGRESSION_RE = re.compile(
+    r"^Suite '(?P<suite>[^']+)' regression: (?P<delta>[+-]?\d+(?:\.\d+)?) "
+    r"\(threshold: (?P<threshold>[+-]?\d+(?:\.\d+)?); "
+    r"n_result=(?P<n_result>[^,]+), n_baseline=(?P<n_baseline>[^)]+)\)"
+)
+
+
+def _parse_suite_regression(reason: str | None) -> dict[str, Any]:
+    if not reason:
+        return {}
+    match = _SUITE_REGRESSION_RE.match(reason.strip())
+    if not match:
+        return {}
+
+    def parse_int(value: str) -> int | None:
+        value = value.strip()
+        if value in {"", "None", "null"}:
+            return None
+        try:
+            return int(value)
+        except ValueError:
+            return None
+
+    return {
+        "kind": "suite_regression",
+        "suite": match.group("suite"),
+        "delta": float(match.group("delta")),
+        "threshold": float(match.group("threshold")),
+        "n_result": parse_int(match.group("n_result")),
+        "n_baseline": parse_int(match.group("n_baseline")),
+    }
+
+
+def _first_failure_violation(failure_analysis: Any) -> str | None:
+    if not isinstance(failure_analysis, str):
+        return None
+    for line in failure_analysis.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("- "):
+            return stripped[2:].strip() or None
+    return None
+
+
 def _snapshot_from_row(row: Mapping[str, Any]) -> W8Snapshot:
     seq = row.get("seq") if isinstance(row, Mapping) else None
     if not isinstance(seq, Mapping):
@@ -422,6 +534,9 @@ def _snapshot_from_row(row: Mapping[str, Any]) -> W8Snapshot:
             baseline_reference_state=None,
             finalized=None,
             keep_revert_decision=None,
+            failure_first_violation=_first_failure_violation(
+                row.get("failure_analysis")
+            ),
         )
     if not (
         "baseline_promotion_combined_E" in seq
@@ -445,6 +560,9 @@ def _snapshot_from_row(row: Mapping[str, Any]) -> W8Snapshot:
             baseline_reference_state=None,
             finalized=None,
             keep_revert_decision=None,
+            failure_first_violation=_first_failure_violation(
+                row.get("failure_analysis")
+            ),
         )
     return W8Snapshot(
         trial_id=_int(row.get("trial_id"), default=-1),
@@ -463,6 +581,7 @@ def _snapshot_from_row(row: Mapping[str, Any]) -> W8Snapshot:
         baseline_reference_state=_optional_str(seq.get("baseline_reference_state")),
         finalized=_optional_bool(seq.get("baseline_promotion_finalized")),
         keep_revert_decision=_optional_str(row.get("keep_revert_decision")),
+        failure_first_violation=_first_failure_violation(row.get("failure_analysis")),
     )
 
 

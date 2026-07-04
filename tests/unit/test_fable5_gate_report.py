@@ -1508,6 +1508,27 @@ def test_w8_next_action_surfaces_candidate_generation_requirement() -> None:
                 "snapshot_count": 170,
                 "candidate_count": 49,
                 "status_counts": {"excluded": 6, "refuted": 3, "reverted": 40},
+                "terminal_reason_counts": {
+                    "Suite 'general' regression: -1.800 "
+                    "(threshold: -1.500; n_result=5, n_baseline=2)": 40
+                },
+                "dominant_terminal_reason": {
+                    "reason": "Suite 'general' regression: -1.800 "
+                    "(threshold: -1.500; n_result=5, n_baseline=2)",
+                    "count": 40,
+                    "status": "reverted",
+                    "candidate": "ec17bc71c6472ae4",
+                    "latest_trial_id": 1120,
+                    "details": {
+                        "kind": "suite_regression",
+                        "suite": "general",
+                        "delta": -1.8,
+                        "threshold": -1.5,
+                        "n_result": 5,
+                        "n_baseline": 2,
+                    },
+                    "baseline_sample_warning": True,
+                },
                 "open_requirements": [
                     "no_recent_multi_observation_accumulating_candidate"
                 ],
@@ -1522,12 +1543,16 @@ def test_w8_next_action_surfaces_candidate_generation_requirement() -> None:
 
     assert actions[0]["key"] == "collect_w8_promotion_eval_evidence"
     assert "new keepable candidate" in actions[0]["reason"]
+    assert "Dominant terminal blocker: 40 candidate(s)" in actions[0]["reason"]
     assert actions[0]["evidence"]["candidate_generation_required"] is True
     assert actions[0]["evidence"]["candidate_status_counts"] == {
         "excluded": 6,
         "refuted": 3,
         "reverted": 40,
     }
+    assert actions[0]["evidence"]["dominant_terminal_reason"][
+        "baseline_sample_warning"
+    ] is True
     assert actions[0]["evidence"]["recent_active_candidates"] == []
 
 

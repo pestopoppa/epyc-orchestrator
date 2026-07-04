@@ -526,6 +526,8 @@ def w8_trajectory_section(trajectory_report: dict[str, Any]) -> GateSection:
     """Surface W8 replay concentration without changing authority semantics."""
     concentration = trajectory_report.get("replay_concentration") or {}
     status_counts = trajectory_report.get("status_counts") or {}
+    terminal_reason_counts = trajectory_report.get("terminal_reason_counts") or {}
+    dominant_terminal_reason = trajectory_report.get("dominant_terminal_reason") or {}
     recent_active_candidates = trajectory_report.get("recent_active_candidates") or []
     stale_accumulating_candidates = (
         trajectory_report.get("stale_accumulating_candidates") or []
@@ -558,6 +560,8 @@ def w8_trajectory_section(trajectory_report: dict[str, Any]) -> GateSection:
             "snapshot_count": trajectory_report.get("snapshot_count"),
             "candidate_count": trajectory_report.get("candidate_count"),
             "status_counts": status_counts,
+            "terminal_reason_counts": terminal_reason_counts,
+            "dominant_terminal_reason": dominant_terminal_reason,
             "open_requirements": trajectory_report.get("open_requirements"),
             "candidate_generation_required": candidate_generation_required,
             "recent_active_candidates": recent_active_candidates,
@@ -1453,11 +1457,25 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
                 if w8_trajectory is not None
                 else {}
             )
+            dominant_terminal_reason = (
+                (w8_trajectory.details.get("dominant_terminal_reason") or {})
+                if w8_trajectory is not None
+                else {}
+            )
             candidate_generation_required = (
                 bool(w8_trajectory.details.get("candidate_generation_required"))
                 if w8_trajectory is not None
                 else False
             )
+            reason_suffix = ""
+            if candidate_generation_required and dominant_terminal_reason:
+                reason_text = dominant_terminal_reason.get("reason")
+                count = dominant_terminal_reason.get("count")
+                if reason_text:
+                    reason_suffix = (
+                        f" Dominant terminal blocker: {count} candidate(s) ended "
+                        f"at {reason_text}."
+                    )
             actions.append(
                 {
                     "key": "collect_w8_promotion_eval_evidence",
@@ -1468,8 +1486,11 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
                         else "blocked"
                     ),
                     "reason": (
-                        "W4/W6 authority is restart-ready; W8 needs a new "
-                        "keepable candidate before replay/promotion evidence can accrue."
+                        (
+                            "W4/W6 authority is restart-ready; W8 needs a new "
+                            "keepable candidate before replay/promotion evidence can accrue."
+                            + reason_suffix
+                        )
                         if candidate_generation_required
                         else (
                             "W4/W6 authority is restart-ready; W8 still needs live "
@@ -1518,6 +1539,12 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
                             if w8_trajectory is not None
                             else None
                         ),
+                        "terminal_reason_counts": (
+                            w8_trajectory.details.get("terminal_reason_counts")
+                            if w8_trajectory is not None
+                            else None
+                        ),
+                        "dominant_terminal_reason": dominant_terminal_reason,
                         "recent_active_candidates": (
                             w8_trajectory.details.get("recent_active_candidates")
                             if w8_trajectory is not None

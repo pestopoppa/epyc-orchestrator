@@ -19,12 +19,14 @@ def _row(
     confirmed: bool = False,
     finalized: bool = False,
     keep_revert_decision: str = "",
+    failure_analysis: str = "",
 ) -> dict:
     return {
         "trial_id": trial_id,
         "action_type": "numeric_trial",
         "quality": 2.1,
         "keep_revert_decision": keep_revert_decision,
+        "failure_analysis": failure_analysis,
         "seq": {
             "candidate": candidate,
             "state": state,
@@ -100,6 +102,11 @@ def test_report_flags_concentrated_replay_attempts() -> None:
 
 
 def test_report_excludes_latest_reverted_candidate_from_active_replay() -> None:
+    violation = (
+        "VIOLATIONS:\n"
+        "  - Suite 'general' regression: -1.800 "
+        "(threshold: -1.500; n_result=5, n_baseline=2)"
+    )
     report = w8_promotion_trajectory_report.build_w8_trajectory_report(
         [
             _row(10, "candidate-a", combined=0.91, k=1),
@@ -109,6 +116,15 @@ def test_report_excludes_latest_reverted_candidate_from_active_replay() -> None:
                 combined=0.93,
                 k=2,
                 keep_revert_decision="revert",
+                failure_analysis=violation,
+            ),
+            _row(
+                11,
+                "candidate-c",
+                combined=0.92,
+                k=1,
+                keep_revert_decision="revert",
+                failure_analysis=violation,
             ),
             _row(13, "candidate-b", combined=0.88, state="refuted", k=12),
         ],
@@ -118,7 +134,24 @@ def test_report_excludes_latest_reverted_candidate_from_active_replay() -> None:
     statuses = {item["candidate"]: item["status"] for item in report["trajectories"]}
     assert statuses["candidate-a"] == "reverted"
     assert report["recent_active_candidates"] == []
-    assert report["status_counts"]["reverted"] == 1
+    assert report["status_counts"]["reverted"] == 2
+    dominant = report["dominant_terminal_reason"]
+    assert dominant["reason"] == (
+        "Suite 'general' regression: -1.800 "
+        "(threshold: -1.500; n_result=5, n_baseline=2)"
+    )
+    assert dominant["details"] == {
+        "kind": "suite_regression",
+        "suite": "general",
+        "delta": -1.8,
+        "threshold": -1.5,
+        "n_result": 5,
+        "n_baseline": 2,
+    }
+    assert dominant["baseline_sample_warning"] is True
+    assert "Terminal Candidate Reasons" in w8_promotion_trajectory_report.render_markdown(
+        report
+    )
     assert "no_recent_multi_observation_accumulating_candidate" in report[
         "open_requirements"
     ]
