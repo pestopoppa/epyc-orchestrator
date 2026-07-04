@@ -12,9 +12,17 @@ from unittest.mock import Mock, patch
 import pytest
 
 from src.llm_primitives import LLMPrimitives
-from src.llm_primitives.inference import _extract_port, _primary_url
+from src.llm_primitives.inference import _extract_port, _primary_url, _sampling_cache_key
 from src.config import reset_config
 from src.model_server import InferenceRequest, InferenceResult
+from src.registry_loader import (
+    AccelerationConfig,
+    GenerationDefaults,
+    MemoryConfig,
+    ModelConfig,
+    PerformanceMetrics,
+    RoleConfig,
+)
 
 
 @pytest.fixture
@@ -108,7 +116,15 @@ class TestInferenceMixinRealCall:
             success=True,
         )
 
-        result = prims._real_call("Test prompt", "test_role", n_tokens=256)
+        result = prims._real_call(
+            "Test prompt",
+            "test_role",
+            n_tokens=256,
+            temperature=0.2,
+            seed=1234,
+            top_p=0.8,
+            top_k=64,
+        )
 
         assert result == "Server response"
         mock_model_server.infer.assert_called_once()
@@ -118,6 +134,10 @@ class TestInferenceMixinRealCall:
         request = call_args[0][1]
         assert isinstance(request, InferenceRequest)
         assert request.n_tokens == 256
+        assert request.temperature == 0.2
+        assert request.seed == 1234
+        assert request.top_p == 0.8
+        assert request.top_k == 64
 
     def test_real_call_records_inference_meta_for_non_frontdoor_model_server(self, mock_model_server):
         """Specialist roles should also publish timing metadata."""
@@ -191,6 +211,76 @@ class TestCallCachingBackend:
         assert result == "def hello(): pass"
         assert prims.total_tokens_generated == 20
         mock_health_tracker.record_success.assert_called_once_with("http://localhost:8081")
+
+    def test_call_caching_backend_uses_registry_role_config(self, mock_backend):
+        """CachingBackend must not replace registry generation defaults with greedy."""
+        role_config = RoleConfig(
+            name="coder",
+            tier="C",
+            description="Coder",
+            model=ModelConfig(
+                name="coder-model",
+                path="",
+                quant="Q4_K_M",
+                size_gb=0.0,
+            ),
+            acceleration=AccelerationConfig(type="baseline", temperature=None),
+            performance=PerformanceMetrics(),
+            memory=MemoryConfig(residency="warm"),
+            generation_defaults=GenerationDefaults(temperature=0.3),
+        )
+        registry = Mock()
+        registry.get_role.return_value = role_config
+        prims = LLMPrimitives(mock_mode=False, registry=registry)
+
+        def infer_with_config(config, request):
+            assert config is role_config
+            assert request.temperature is None
+            return InferenceResult(
+                role="coder",
+                output="ok",
+                tokens_generated=1,
+                generation_speed=1.0,
+                elapsed_time=0.1,
+                success=True,
+            )
+
+        mock_backend.infer.side_effect = infer_with_config
+
+        assert prims._call_caching_backend(mock_backend, "Prompt", "coder") == "ok"
+
+    def test_call_caching_backend_forwards_sampling_params(self, mock_backend):
+        prims = LLMPrimitives(mock_mode=False)
+        mock_backend.infer.return_value = InferenceResult(
+            role="coder",
+            output="ok",
+            tokens_generated=1,
+            generation_speed=1.0,
+            elapsed_time=0.1,
+            success=True,
+        )
+
+        prims._call_caching_backend(
+            mock_backend,
+            "Prompt",
+            "coder",
+            temperature=0.2,
+            seed=1234,
+            top_p=0.8,
+            top_k=64,
+        )
+
+        request = mock_backend.infer.call_args[0][1]
+        assert request.temperature == 0.2
+        assert request.seed == 1234
+        assert request.top_p == 0.8
+        assert request.top_k == 64
+
+    def test_sampling_cache_key_only_includes_explicit_params(self):
+        assert _sampling_cache_key() == ""
+        assert _sampling_cache_key(temperature=0.0, seed=7, top_p=0.8, top_k=64) == (
+            '{"seed":7,"temperature":0.0,"top_k":64,"top_p":0.8}'
+        )
 
     def test_call_caching_backend_uses_concrete_url_for_full_speed_role(
         self, mock_backend, mock_health_tracker

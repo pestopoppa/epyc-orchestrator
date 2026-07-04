@@ -278,6 +278,27 @@ def _combined_prompt_with_context(prompt: str, context: str | None) -> str:
     return prompt
 
 
+def _sampling_kwargs(request: OpenAIChatRequest) -> dict[str, Any]:
+    """Return only caller-explicit sampling controls for downstream inference."""
+    explicit_fields = getattr(request, "model_fields_set", set())
+    kwargs: dict[str, Any] = {}
+    if "temperature" in explicit_fields:
+        kwargs["temperature"] = request.temperature
+    if request.seed is not None:
+        kwargs["seed"] = request.seed
+    if request.top_p is not None:
+        kwargs["top_p"] = request.top_p
+    if request.top_k is not None:
+        kwargs["top_k"] = request.top_k
+    return kwargs
+
+
+def _sampling_metadata(sampling_kwargs: dict[str, Any]) -> dict[str, Any]:
+    if not sampling_kwargs:
+        return {}
+    return {"sampling": dict(sorted(sampling_kwargs.items()))}
+
+
 def _role_name(role: str | Role) -> str:
     return role.value if isinstance(role, Role) else str(role)
 
@@ -445,6 +466,7 @@ async def openai_chat_completions(
     # Escalation cap and REPL disable flags — pass through to metadata
     max_escalation = request.x_max_escalation
     disable_repl = request.x_disable_repl
+    sampling_kwargs = _sampling_kwargs(request)
 
     chat_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
     created = int(time.time())
@@ -550,6 +572,7 @@ async def openai_chat_completions(
                             response_text = primitives.llm_call(
                                 combined_context, role=role,
                                 n_tokens=request.max_tokens,
+                                **sampling_kwargs,
                             )
                         except Exception as e:
                             response_text = f"[ERROR] Direct call failed: {e}"
@@ -580,7 +603,12 @@ async def openai_chat_completions(
                             )
 
                             try:
-                                code = primitives.llm_call(root_prompt, role=role, n_tokens=1024)
+                                code = primitives.llm_call(
+                                    root_prompt,
+                                    role=role,
+                                    n_tokens=1024,
+                                    **sampling_kwargs,
+                                )
                                 code = extract_code_from_response(code)
                                 code = auto_wrap_final(code)
                             except Exception as e:
@@ -647,6 +675,7 @@ async def openai_chat_completions(
                     meta["max_escalation"] = max_escalation
                 if disable_repl:
                     meta["repl_disabled"] = True
+                meta.update(_sampling_metadata(sampling_kwargs))
                 _apply_openai_tool_contract_metadata(
                     meta,
                     request_tools=request.tools,
@@ -700,6 +729,7 @@ async def openai_chat_completions(
                     response_text = primitives.llm_call(
                         combined_context, role=role,
                         n_tokens=request.max_tokens,
+                        **sampling_kwargs,
                     )
                 else:
                     repl = REPLEnvironment(
@@ -725,7 +755,12 @@ async def openai_chat_completions(
                             turn=turn,
                         )
 
-                        code = primitives.llm_call(root_prompt, role=role, n_tokens=1024)
+                        code = primitives.llm_call(
+                            root_prompt,
+                            role=role,
+                            n_tokens=1024,
+                            **sampling_kwargs,
+                        )
                         code = extract_code_from_response(code)
                         code = auto_wrap_final(code)
 
@@ -766,6 +801,7 @@ async def openai_chat_completions(
                     "elapsed_seconds": elapsed,
                     **({"max_escalation": max_escalation} if max_escalation else {}),
                     **({"repl_disabled": True} if disable_repl else {}),
+                    **_sampling_metadata(sampling_kwargs),
                 },
                 request_tools=request.tools,
                 repl=repl_for_metadata,

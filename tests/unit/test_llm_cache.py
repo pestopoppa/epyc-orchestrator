@@ -49,6 +49,21 @@ class TestMakeKey:
         key2 = ContentAddressableCache.make_key("prompt", "coder", 512, model_hash="v2")
         assert key1 != key2
 
+    def test_sampling_params_affect_key(self):
+        key1 = ContentAddressableCache.make_key(
+            "prompt",
+            "coder",
+            512,
+            sampling_key='{"temperature":0.0}',
+        )
+        key2 = ContentAddressableCache.make_key(
+            "prompt",
+            "coder",
+            512,
+            sampling_key='{"temperature":0.3}',
+        )
+        assert key1 != key2
+
     def test_key_is_hex_sha256(self):
         key = ContentAddressableCache.make_key("prompt", "coder", 512)
         assert len(key) == 64

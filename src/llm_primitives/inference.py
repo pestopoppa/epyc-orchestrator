@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import contextvars
+import json
 import logging
 import os
 import time
@@ -73,6 +74,57 @@ def _extract_port(url: str) -> int | None:
         return parsed.port
     except Exception:
         return None
+
+
+def _sampling_cache_key(
+    *,
+    temperature: float | None = None,
+    seed: int | None = None,
+    top_p: float | None = None,
+    top_k: int | None = None,
+) -> str:
+    sampling = {
+        "temperature": temperature,
+        "seed": seed,
+        "top_p": top_p,
+        "top_k": top_k,
+    }
+    active = {key: value for key, value in sampling.items() if value is not None}
+    if not active:
+        return ""
+    return json.dumps(active, sort_keys=True, separators=(",", ":"))
+
+
+def _role_config_for_backend(registry: Any | None, role: str):
+    """Use registry generation defaults instead of a synthetic greedy role."""
+    if registry is not None:
+        try:
+            return registry.get_role(role)
+        except Exception:
+            pass
+
+    from src.registry_loader import (
+        AccelerationConfig,
+        MemoryConfig,
+        ModelConfig,
+        PerformanceMetrics,
+        RoleConfig,
+    )
+
+    return RoleConfig(
+        name=role,
+        tier="C",
+        description=f"Dynamic role for {role}",
+        model=ModelConfig(
+            name="dynamic-model",
+            path="",  # Backend already knows the model.
+            quant="Q4_K_M",
+            size_gb=0.0,
+        ),
+        acceleration=AccelerationConfig(type="baseline", temperature=None),
+        performance=PerformanceMetrics(),
+        memory=MemoryConfig(residency="warm"),
+    )
 
 
 def _per_region_locks_enabled() -> bool:
@@ -213,6 +265,10 @@ class InferenceMixin:
         stop_sequences: list[str] | None = None,
         json_schema: dict | None = None,
         grammar: str | None = None,
+        temperature: float | None = None,
+        seed: int | None = None,
+        top_p: float | None = None,
+        top_k: int | None = None,
     ) -> str:
         """Make a real inference call via CachingBackend or legacy ModelServer.
 
@@ -223,6 +279,10 @@ class InferenceMixin:
             stop_sequences: Optional stop sequences to halt generation.
             json_schema: Optional JSON schema to constrain output structure.
             grammar: Optional GBNF grammar for constrained generation.
+            temperature: Optional explicit decode temperature override.
+            seed: Optional explicit deterministic decode seed.
+            top_p: Optional explicit nucleus sampling override.
+            top_k: Optional explicit top-k sampling override.
 
         Returns:
             Model response.
@@ -266,10 +326,12 @@ class InferenceMixin:
                 return self._real_call_impl(
                     prompt, role, n_tokens, stop_sequences,
                     json_schema=json_schema, grammar=grammar,
+                    temperature=temperature, seed=seed, top_p=top_p, top_k=top_k,
                 )
         return self._real_call_impl(
             prompt, role, n_tokens, stop_sequences,
             json_schema=json_schema, grammar=grammar,
+            temperature=temperature, seed=seed, top_p=top_p, top_k=top_k,
         )
 
     def _real_call_impl(
@@ -280,6 +342,10 @@ class InferenceMixin:
         stop_sequences: list[str] | None = None,
         json_schema: dict | None = None,
         grammar: str | None = None,
+        temperature: float | None = None,
+        seed: int | None = None,
+        top_p: float | None = None,
+        top_k: int | None = None,
     ) -> str:
         """Internal real call implementation (no concurrency gating)."""
         # Content-addressable cache check
@@ -290,9 +356,13 @@ class InferenceMixin:
         if cache is not None and _get_features().content_cache and stop_sequences is None:
             from src.llm_cache import ContentAddressableCache
 
+            sampling_key = _sampling_cache_key(
+                temperature=temperature, seed=seed, top_p=top_p, top_k=top_k
+            )
             cache_key = ContentAddressableCache.make_key(
                 prompt, role, n_tokens,
                 model_hash=getattr(self, "_model_hash", ""),
+                sampling_key=sampling_key,
             )
             cached = cache.get(cache_key)
             if cached is not None:
@@ -303,6 +373,7 @@ class InferenceMixin:
             result = self._real_call_single(
                 prompt, role, n_tokens, stop_sequences,
                 json_schema=json_schema, grammar=grammar,
+                temperature=temperature, seed=seed, top_p=top_p, top_k=top_k,
             )
         except RuntimeError as primary_error:
             # Model fallback: try same-tier alternatives on infrastructure failure
@@ -331,6 +402,7 @@ class InferenceMixin:
                     result = self._real_call_single(
                         prompt, fb_role_str, n_tokens, stop_sequences,
                         json_schema=json_schema, grammar=grammar,
+                        temperature=temperature, seed=seed, top_p=top_p, top_k=top_k,
                     )
                     break
                 except RuntimeError:
@@ -353,6 +425,10 @@ class InferenceMixin:
         stop_sequences: list[str] | None = None,
         json_schema: dict | None = None,
         grammar: str | None = None,
+        temperature: float | None = None,
+        seed: int | None = None,
+        top_p: float | None = None,
+        top_k: int | None = None,
     ) -> str:
         """Execute a single inference call against one role's backend."""
         # Try CachingBackend first (RadixAttention)
@@ -361,6 +437,7 @@ class InferenceMixin:
             return self._call_caching_backend(
                 backend, prompt, role, n_tokens, stop_sequences,
                 json_schema=json_schema, grammar=grammar,
+                temperature=temperature, seed=seed, top_p=top_p, top_k=top_k,
             )
 
         # Fall back to legacy ModelServer
@@ -384,6 +461,10 @@ class InferenceMixin:
             timeout=role_timeout,
             stop_sequences=stop_sequences,
             cache_prompt=self.cache_prompt,
+            temperature=temperature,
+            seed=seed,
+            top_p=top_p,
+            top_k=top_k,
             json_schema=json_schema,
             grammar=grammar,
         )
@@ -465,6 +546,10 @@ class InferenceMixin:
         stop_sequences: list[str] | None = None,
         json_schema: dict | None = None,
         grammar: str | None = None,
+        temperature: float | None = None,
+        seed: int | None = None,
+        top_p: float | None = None,
+        top_k: int | None = None,
     ) -> str:
         """Call a CachingBackend with RadixAttention prefix caching.
 
@@ -481,29 +566,7 @@ class InferenceMixin:
             Model response.
         """
         from src.model_server import InferenceRequest
-        from src.registry_loader import (
-            RoleConfig,
-            AccelerationConfig,
-            ModelConfig,
-            PerformanceMetrics,
-            MemoryConfig,
-        )
-
-        # Create minimal RoleConfig for backend
-        role_config = RoleConfig(
-            name=role,
-            tier="C",
-            description=f"Dynamic role for {role}",
-            model=ModelConfig(
-                name="dynamic-model",
-                path="",  # Backend already knows the model
-                quant="Q4_K_M",
-                size_gb=0.0,
-            ),
-            acceleration=AccelerationConfig(type="baseline", temperature=0.0),
-            performance=PerformanceMetrics(),
-            memory=MemoryConfig(residency="warm"),
-        )
+        role_config = _role_config_for_backend(getattr(self, "registry", None), role)
 
         from src.config import get_config
 
@@ -519,6 +582,10 @@ class InferenceMixin:
             timeout=role_timeout,
             stop_sequences=stop_sequences,
             cache_prompt=self.cache_prompt,
+            temperature=temperature,
+            seed=seed,
+            top_p=top_p,
+            top_k=top_k,
             json_schema=json_schema,
             grammar=grammar,
         )

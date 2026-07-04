@@ -92,6 +92,9 @@ class TestOpenAIChatRequest:
         req = OpenAIChatRequest(messages=self._messages())
         assert req.model == "orchestrator"
         assert req.temperature == 0.0
+        assert req.top_p is None
+        assert req.top_k is None
+        assert req.seed is None
         assert req.max_tokens == 1024
         assert req.stream is False
         assert req.tools is None
@@ -133,6 +136,31 @@ class TestOpenAIChatRequest:
     def test_temperature_above_two_rejected(self):
         with pytest.raises(ValidationError):
             OpenAIChatRequest(messages=self._messages(), temperature=2.1)
+
+    def test_sampling_overrides_are_preserved(self):
+        req = OpenAIChatRequest(
+            messages=self._messages(),
+            top_p=0.8,
+            top_k=64,
+            seed=1234,
+        )
+
+        assert req.top_p == 0.8
+        assert req.top_k == 64
+        assert req.seed == 1234
+
+    def test_top_p_bounds(self):
+        assert OpenAIChatRequest(messages=self._messages(), top_p=0.0).top_p == 0.0
+        assert OpenAIChatRequest(messages=self._messages(), top_p=1.0).top_p == 1.0
+        with pytest.raises(ValidationError):
+            OpenAIChatRequest(messages=self._messages(), top_p=-0.1)
+        with pytest.raises(ValidationError):
+            OpenAIChatRequest(messages=self._messages(), top_p=1.1)
+
+    def test_top_k_lower_bound(self):
+        assert OpenAIChatRequest(messages=self._messages(), top_k=1).top_k == 1
+        with pytest.raises(ValidationError):
+            OpenAIChatRequest(messages=self._messages(), top_k=0)
 
     def test_max_tokens_lower_bound(self):
         req = OpenAIChatRequest(messages=self._messages(), max_tokens=1)

@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from src.api.routes import openai_compat
-from src.api.models import OpenAIMessage
+from src.api.models import OpenAIChatRequest, OpenAIMessage
 
 
 def test_available_roles_degrades_to_compatibility_aliases(monkeypatch):
@@ -153,6 +153,36 @@ def test_extract_openai_content_rejects_multiple_images() -> None:
             ],
             parse_images=True,
         )
+
+
+def test_sampling_kwargs_omits_default_temperature_when_caller_omits_it() -> None:
+    request = OpenAIChatRequest(messages=[OpenAIMessage(role="user", content="Hi")])
+
+    assert openai_compat._sampling_kwargs(request) == {}
+
+
+def test_sampling_kwargs_preserves_explicit_greedy_temperature_and_overrides() -> None:
+    request = OpenAIChatRequest(
+        messages=[OpenAIMessage(role="user", content="Hi")],
+        temperature=0.0,
+        seed=1234,
+        top_p=0.8,
+        top_k=64,
+    )
+
+    assert openai_compat._sampling_kwargs(request) == {
+        "temperature": 0.0,
+        "seed": 1234,
+        "top_p": 0.8,
+        "top_k": 64,
+    }
+
+
+def test_sampling_metadata_is_stable_and_absent_when_empty() -> None:
+    assert openai_compat._sampling_metadata({}) == {}
+    assert openai_compat._sampling_metadata({"seed": 2, "temperature": 0.1}) == {
+        "sampling": {"seed": 2, "temperature": 0.1}
+    }
 
 
 @pytest.mark.asyncio

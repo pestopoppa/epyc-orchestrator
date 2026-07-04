@@ -42,6 +42,13 @@ class OpenAIChatRequest(BaseModel):
     model: str = Field(default="orchestrator", description="Model/role to use")
     messages: list[OpenAIMessage] = Field(..., description="Conversation messages")
     temperature: float = Field(default=0.0, ge=0.0, le=2.0)
+    top_p: float | None = Field(default=None, ge=0.0, le=1.0)
+    top_k: int | None = Field(
+        default=None,
+        ge=1,
+        description="Orchestrator extension: llama.cpp top-k sampling override.",
+    )
+    seed: int | None = Field(default=None, description="Optional deterministic decode seed")
     max_tokens: int = Field(default=1024, ge=1, le=32768)
     stream: bool = Field(default=False, description="Enable streaming")
     tools: list[dict[str, Any]] | None = Field(

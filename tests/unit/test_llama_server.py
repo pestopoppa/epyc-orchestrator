@@ -173,25 +173,36 @@ class TestLlamaServerBackend:
         assert payload["cache_prompt"] is False
 
     def test_build_payload_temperature_from_role(self, role_config):
-        """Test temperature from role config overrides request."""
+        """Role temperature should apply when request omits temperature."""
         role_config.acceleration.temperature = 0.7
         backend = LlamaServerBackend(base_url="http://test:8080")
-        request = InferenceRequest(role="test", prompt="Hello", temperature=0.2)
+        request = InferenceRequest(role="test", prompt="Hello")
 
         payload = backend._build_payload(role_config, request)
 
-        assert payload["temperature"] == 0.7  # Role wins
+        assert payload["temperature"] == 0.7
 
     def test_build_payload_temperature_from_generation_defaults(self, role_config):
-        """Role generation defaults should win before request temperature."""
+        """Role generation defaults should apply when request and acceleration omit temp."""
         role_config.acceleration.temperature = None
+        role_config.generation_defaults = GenerationDefaults(temperature=0.3)
+        backend = LlamaServerBackend(base_url="http://test:8080")
+        request = InferenceRequest(role="test", prompt="Hello")
+
+        payload = backend._build_payload(role_config, request)
+
+        assert payload["temperature"] == 0.3
+
+    def test_build_payload_explicit_temperature_overrides_registry(self, role_config):
+        """Caller-supplied temperature is an explicit override."""
+        role_config.acceleration.temperature = 0.7
         role_config.generation_defaults = GenerationDefaults(temperature=0.3)
         backend = LlamaServerBackend(base_url="http://test:8080")
         request = InferenceRequest(role="test", prompt="Hello", temperature=0.2)
 
         payload = backend._build_payload(role_config, request)
 
-        assert payload["temperature"] == 0.3
+        assert payload["temperature"] == 0.2
 
     def test_build_payload_pins_sampling_seed_and_allows_request_override(self, role_config):
         """Sampling params should be reproducible, with per-request seed override."""
@@ -203,7 +214,7 @@ class TestLlamaServerBackend:
         )
         override_payload = backend._build_payload(
             role_config,
-            InferenceRequest(role="test", prompt="Hello", seed=1234),
+            InferenceRequest(role="test", prompt="Hello", seed=1234, top_p=0.8, top_k=64),
         )
 
         assert default_payload["top_k"] == 40
@@ -211,6 +222,8 @@ class TestLlamaServerBackend:
         assert default_payload["repeat_penalty"] == 1.1
         assert default_payload["seed"] == 42
         assert override_payload["seed"] == 1234
+        assert override_payload["top_p"] == 0.8
+        assert override_payload["top_k"] == 64
 
     def test_build_payload_adds_logit_probe_probs_for_frontdoor_only(self, role_config):
         """Logit probe should request top-k probabilities only for frontdoor."""

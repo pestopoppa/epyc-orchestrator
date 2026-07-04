@@ -92,7 +92,10 @@ class TestInferenceRequest:
         assert request.role == "test_role"
         assert request.prompt == "Hello"
         assert request.n_tokens == -1
-        assert request.temperature == 0.0
+        assert request.temperature is None
+        assert request.top_p is None
+        assert request.top_k is None
+        assert request.seed is None
         assert request.timeout == 600
 
     def test_max_tokens_alias_sets_n_tokens(self):

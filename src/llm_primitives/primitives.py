@@ -537,6 +537,10 @@ class LLMPrimitives(
         persona: str | None = None,
         json_schema: dict | None = None,
         grammar: str | None = None,
+        temperature: float | None = None,
+        seed: int | None = None,
+        top_p: float | None = None,
+        top_k: int | None = None,
     ) -> str:
         """Call a sub-LM with optional context slice.
 
@@ -554,6 +558,10 @@ class LLMPrimitives(
                 before the user prompt.
             json_schema: Optional JSON schema to constrain output structure.
             grammar: Optional GBNF grammar for constrained generation.
+            temperature: Optional explicit decode temperature override.
+            seed: Optional explicit deterministic decode seed.
+            top_p: Optional explicit nucleus sampling override.
+            top_k: Optional explicit top-k sampling override.
 
         Returns:
             Sub-LM response (capped at output_cap chars).
@@ -574,9 +582,18 @@ class LLMPrimitives(
         )
 
         try:
+            sampling_kwargs: dict[str, float | int] = {}
+            if temperature is not None:
+                sampling_kwargs["temperature"] = temperature
+            if seed is not None:
+                sampling_kwargs["seed"] = seed
+            if top_p is not None:
+                sampling_kwargs["top_p"] = top_p
+            if top_k is not None:
+                sampling_kwargs["top_k"] = top_k
             return self._llm_call_impl(
                 prompt, context_slice, role, n_tokens, skip_suffix, stop_sequences,
-                persona, json_schema, grammar,
+                persona, json_schema, grammar, **sampling_kwargs,
             )
         finally:
             self._recursion_depth -= 1
@@ -592,6 +609,10 @@ class LLMPrimitives(
         persona: str | None = None,
         json_schema: dict | None = None,
         grammar: str | None = None,
+        temperature: float | None = None,
+        seed: int | None = None,
+        top_p: float | None = None,
+        top_k: int | None = None,
     ) -> str:
         """Internal implementation of llm_call (after recursion check)."""
         start_time = time.perf_counter()
@@ -646,9 +667,19 @@ class LLMPrimitives(
                 result = self._mock_call(full_prompt, role)
             else:
                 role_for_call = self._resolve_depth_override_role(role)
+                sampling_kwargs: dict[str, float | int] = {}
+                if temperature is not None:
+                    sampling_kwargs["temperature"] = temperature
+                if seed is not None:
+                    sampling_kwargs["seed"] = seed
+                if top_p is not None:
+                    sampling_kwargs["top_p"] = top_p
+                if top_k is not None:
+                    sampling_kwargs["top_k"] = top_k
                 result = self._real_call(
                     full_prompt, role_for_call, n_tokens, stop_sequences,
                     json_schema=json_schema, grammar=grammar,
+                    **sampling_kwargs,
                 )
 
             # Cap output

@@ -92,7 +92,9 @@ class InferenceRequest:
     prompt: str | None = None
     prompt_file: Path | None = None
     n_tokens: int = -1
-    temperature: float = 0.0
+    temperature: float | None = None
+    top_p: float | None = None
+    top_k: int | None = None
     context_length: int = 8192
     timeout: int = field(
         default_factory=lambda: int(_registry_timeout("server", "request", 600))
@@ -314,11 +316,22 @@ class LlamaCppBackend(ModelBackend):
         parts.append(f"-t {self.registry._runtime_defaults.get('threads', 96)}")
         parts.append(f"-n {request.n_tokens}")
 
-        # Temperature - use role default if set, otherwise request value
-        temp = role_config.acceleration.temperature
+        # Sampling: explicit request overrides registry intent; omitted request
+        # values fall back to role acceleration/generation defaults, then greedy.
+        temp = request.temperature
         if temp is None:
-            temp = request.temperature
+            temp = role_config.acceleration.temperature
+        if temp is None and role_config.generation_defaults is not None:
+            temp = role_config.generation_defaults.temperature
+        if temp is None:
+            temp = 0.0
         parts.append(f"--temp {temp}")
+        if request.top_p is not None:
+            parts.append(f"--top-p {request.top_p}")
+        if request.top_k is not None:
+            parts.append(f"--top-k {request.top_k}")
+        if request.seed is not None:
+            parts.append(f"--seed {request.seed}")
 
         # Add prompt
         if request.prompt_file:

@@ -93,6 +93,7 @@ class ContentAddressableCache:
         role: str,
         n_tokens: int,
         model_hash: str = "",
+        sampling_key: str = "",
     ) -> str:
         """Generate SHA-256 cache key from prompt parameters.
 
@@ -101,11 +102,14 @@ class ContentAddressableCache:
             role: The role name.
             n_tokens: Max tokens to generate.
             model_hash: Model identifier for invalidation on swap.
+            sampling_key: Stable sampling parameters that affect decode output.
 
         Returns:
             Hex-encoded SHA-256 hash.
         """
         payload = f"{prompt}|{role}|{n_tokens}|{model_hash}"
+        if sampling_key:
+            payload = f"{payload}|{sampling_key}"
         return hashlib.sha256(payload.encode()).hexdigest()
 
     def get(self, key: str) -> str | None:
