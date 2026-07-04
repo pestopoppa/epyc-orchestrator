@@ -292,6 +292,66 @@ def test_report_excludes_pre_era_audited_rows_from_counts_and_alarm(
     assert report["cumulative_gaming_alarm"] is False
 
 
+def test_report_accounts_for_pre_era_excluded_gaming_events(tmp_path: Path) -> None:
+    journal = tmp_path / "autopilot_journal.jsonl"
+    cutoff = dt.datetime(2026, 6, 26, 22, 7, 11, tzinfo=dt.timezone.utc).timestamp()
+    _write_journal(
+        journal,
+        [
+            _trial(
+                1,
+                core_correct=1,
+                core_total=4,
+                audit_correct=3,
+                audit_total=4,
+                timestamp="2026-06-26T22:07:09+00:00",
+            ),
+            _trial(
+                2,
+                core_correct=3,
+                core_total=4,
+                audit_correct=1,
+                audit_total=4,
+                timestamp="2026-06-26T22:07:10+00:00",
+            ),
+            _trial(
+                3,
+                core_correct=1,
+                core_total=4,
+                audit_correct=1,
+                audit_total=4,
+                timestamp="2026-06-26T22:07:11+00:00",
+            ),
+            _trial(
+                4,
+                core_correct=1,
+                core_total=4,
+                audit_correct=1,
+                audit_total=4,
+                timestamp="2026-06-27T00:00:00+00:00",
+            ),
+        ],
+    )
+
+    report = audit_block_report.build_report(
+        audit_block_report.load_journal_rows([journal]),
+        alarm_window=2,
+        exclude_before_ts=cutoff,
+    )
+
+    assert report["era_excluded_gaming_event_count"] == 1
+    assert report["era_excluded_gaming_events"] == [
+        {
+            "trial_id": 2,
+            "previous_trial_id": 1,
+            "core_delta": 1.5,
+            "audit_delta": -1.5,
+        }
+    ]
+    assert report["gaming_alarm"] is False
+    assert report["cumulative_gaming_alarm"] is False
+
+
 def test_no_gaming_alarm_with_insufficient_audited_history(tmp_path: Path) -> None:
     journal = tmp_path / "autopilot_journal.jsonl"
     _write_journal(
@@ -328,6 +388,63 @@ def test_gaming_alarm_ignores_flat_audit_and_one_question_wobble(tmp_path: Path)
     assert report["cumulative_gaming_events"] == []
     assert report["gaming_alarm_clearance_clean_trials_required"] == 0
     assert report["transfer_diagnostic"]["clearance_clean_trials_required"] == 0
+
+
+def test_core_inflation_warning_flags_core_up_audit_flat(tmp_path: Path) -> None:
+    journal = tmp_path / "autopilot_journal.jsonl"
+    _write_journal(
+        journal,
+        [
+            _trial(1, core_correct=30, core_total=50, audit_correct=7, audit_total=10),
+            _trial(2, core_correct=31, core_total=50, audit_correct=7, audit_total=10),
+            _trial(3, core_correct=32, core_total=50, audit_correct=7, audit_total=10),
+        ],
+    )
+
+    report = audit_block_report.build_report(
+        audit_block_report.load_journal_rows([journal]),
+        monotone_core_steps=2,
+    )
+
+    assert report["gaming_alarm"] is False
+    assert report["core_inflation_warning"] is True
+    assert report["core_inflation_events"] == [
+        {
+            "start_trial_id": 1,
+            "end_trial_id": 3,
+            "trial_count": 3,
+            "core_delta": 0.12,
+            "audit_delta": 0.0,
+            "audit_span": 0.0,
+            "core_step": 0.06,
+            "audit_step": 0.3,
+            "min_core_steps": 2,
+            "core_steps_observed": 2.0,
+        }
+    ]
+    assert report["transfer_diagnostic"]["core_inflation_warnings"] == 1
+
+
+def test_core_inflation_warning_requires_audit_flat_below_resolution(
+    tmp_path: Path,
+) -> None:
+    journal = tmp_path / "autopilot_journal.jsonl"
+    _write_journal(
+        journal,
+        [
+            _trial(1, core_correct=30, core_total=50, audit_correct=7, audit_total=10),
+            _trial(2, core_correct=31, core_total=50, audit_correct=7, audit_total=10),
+            _trial(3, core_correct=32, core_total=50, audit_correct=8, audit_total=10),
+        ],
+    )
+
+    report = audit_block_report.build_report(
+        audit_block_report.load_journal_rows([journal]),
+        monotone_core_steps=2,
+    )
+
+    assert report["core_inflation_warning"] is False
+    assert report["core_inflation_events"] == []
 
 
 def test_gaming_alarm_detects_beyond_resolution_divergence(tmp_path: Path) -> None:

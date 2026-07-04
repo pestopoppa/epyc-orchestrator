@@ -52,10 +52,17 @@ def _audit_report(
     audited_trial_count: int = 0,
     gaming_alarm: bool = False,
     divergences: int = 0,
+    core_inflation_warning: bool = False,
+    era_excluded_gaming_events: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    excluded_events = era_excluded_gaming_events or []
     return {
         "trial_count": audited_trial_count,
         "raw_audited_trial_count": audited_trial_count,
+        "all_raw_audited_trial_count": audited_trial_count,
+        "era_exclude_before_ts": None,
+        "era_excluded_audited_trial_count": 0,
+        "era_excluded_audited_trial_ids": [],
         "trusted_audited_trial_count": audited_trial_count,
         "untrusted_audited_trial_count": 0,
         "untrusted_audited_trial_ids": [],
@@ -77,6 +84,29 @@ def _audit_report(
         "gaming_alarm_clearance_clean_trials_required": 4 if gaming_alarm else 0,
         "cumulative_gaming_alarm": gaming_alarm,
         "cumulative_gaming_events": [{"trial_id": 2}] if gaming_alarm else [],
+        "era_excluded_gaming_event_count": len(excluded_events),
+        "era_excluded_gaming_events": excluded_events,
+        "core_inflation_warning": core_inflation_warning,
+        "core_inflation_events": (
+            [
+                {
+                    "start_trial_id": 10,
+                    "end_trial_id": 12,
+                    "core_delta": 0.12,
+                    "audit_delta": 0.0,
+                }
+            ]
+            if core_inflation_warning
+            else []
+        ),
+        "core_inflation_warning_window": 30,
+        "core_inflation_warning_window_trial_count": min(audited_trial_count, 30),
+        "cumulative_core_inflation_warning": core_inflation_warning,
+        "cumulative_core_inflation_events": (
+            [{"start_trial_id": 10, "end_trial_id": 12}]
+            if core_inflation_warning
+            else []
+        ),
         "transfer_diagnostic": {
             "audited_trial_count": audited_trial_count,
             "potential_overfit_divergences": divergences,
@@ -84,6 +114,14 @@ def _audit_report(
             "clearance_clean_trials_required": 4 if gaming_alarm else 0,
             "cumulative_potential_overfit_divergences": divergences,
             "cumulative_events": [{"trial_id": 2}] if divergences else [],
+            "era_excluded_potential_overfit_divergences": len(excluded_events),
+            "era_excluded_events": excluded_events,
+            "core_inflation_warnings": 1 if core_inflation_warning else 0,
+            "core_inflation_events": (
+                [{"start_trial_id": 10, "end_trial_id": 12}]
+                if core_inflation_warning
+                else []
+            ),
             "alarm_window": 30,
             "alarm_window_trial_count": min(audited_trial_count, 30),
         },
@@ -814,6 +852,137 @@ def test_require_w6_audit_defaults_to_state_era_fence(monkeypatch) -> None:
     assert report["summary"]["w6_era_excluded_audited_trial_ids"] == [1, 2]
     assert report["summary"]["w6_gaming_alarm"] is False
     assert report["summary"]["w6_cumulative_gaming_alarm"] is False
+
+
+def test_w6_core_inflation_warning_is_visible_without_blocking_restart(
+    monkeypatch,
+) -> None:
+    _patch_ready_dependencies(
+        monkeypatch,
+        audit_report=_audit_report(
+            audited_trial_count=30,
+            core_inflation_warning=True,
+        ),
+    )
+
+    report = report_mod.build_restart_readiness_report(
+        _state(),
+        [],
+        require_w6_audit=True,
+    )
+
+    assert report["restart_ready"] is True
+    assert report["summary"]["w6_core_inflation_warning"] is True
+    assert report["w6_audit_cutover"]["core_inflation_events"] == [
+        {
+            "start_trial_id": 10,
+            "end_trial_id": 12,
+            "core_delta": 0.12,
+            "audit_delta": 0.0,
+        }
+    ]
+    assert "core_inflation_warning=True" in report_mod.render_markdown(report)
+
+
+def test_require_w6_audit_blocks_undisposed_fenced_gaming_event(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    event = {
+        "trial_id": 22,
+        "previous_trial_id": 21,
+        "core_delta": 1.5,
+        "audit_delta": -1.5,
+    }
+    _patch_ready_dependencies(
+        monkeypatch,
+        audit_report=_audit_report(
+            audited_trial_count=30,
+            era_excluded_gaming_events=[event],
+        ),
+    )
+    eras = tmp_path / "instrument_eras.yaml"
+    eras.write_text(
+        """
+eras:
+  - id: E-test
+    from: "2026-06-26T22:07:11Z"
+    scope: autopilot_speed
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    state = _state()
+    state["pareto_exclude_before_ts"] = 1782511631.0
+    report = report_mod.build_restart_readiness_report(
+        state,
+        [],
+        require_w6_audit=True,
+        instrument_eras_path=eras,
+    )
+
+    assert report["restart_ready"] is False
+    assert report["summary"]["w6_fence_governance_status"] == "blocked"
+    assert report["summary"]["w6_era_excluded_gaming_event_count"] == 1
+    assert report["summary"]["w6_fence_governance_missing_disposition_events"] == [
+        event
+    ]
+    assert report["blockers"] == [
+        "W6 audit cutover readiness is blocked: "
+        "W6 audit era fence excludes gaming events without disposition: 21->22"
+    ]
+
+
+def test_require_w6_audit_accepts_disposed_fenced_gaming_event(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    _patch_ready_dependencies(
+        monkeypatch,
+        audit_report=_audit_report(
+            audited_trial_count=30,
+            era_excluded_gaming_events=[
+                {
+                    "trial_id": 22,
+                    "previous_trial_id": 21,
+                    "core_delta": 1.5,
+                    "audit_delta": -1.5,
+                }
+            ],
+        ),
+    )
+    eras = tmp_path / "instrument_eras.yaml"
+    eras.write_text(
+        """
+eras:
+  - id: E-test
+    from: "2026-06-26T22:07:11Z"
+    scope: autopilot_speed
+    w6_fence_dispositions:
+      - previous_trial_id: 21
+        trial_id: 22
+        disposition: demoted
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    state = _state()
+    state["pareto_exclude_before_ts"] = 1782511631.0
+    report = report_mod.build_restart_readiness_report(
+        state,
+        [],
+        require_w6_audit=True,
+        instrument_eras_path=eras,
+    )
+
+    assert report["restart_ready"] is True
+    assert report["summary"]["w6_fence_governance_status"] == "ok"
+    assert report["summary"]["w6_fence_governance_blockers"] == []
+    assert report["w6_audit_cutover"]["fence_governance"]["matching_era_ids"] == [
+        "E-test"
+    ]
 
 
 def test_restart_report_blocks_without_baseline_source(monkeypatch) -> None:

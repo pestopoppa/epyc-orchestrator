@@ -452,6 +452,16 @@ def restart_section(restart_report: dict[str, Any]) -> GateSection:
                 "w6_untrusted_audited_trial_ids"
             ),
             "w6_gaming_alarm": summary.get("w6_gaming_alarm"),
+            "w6_core_inflation_warning": summary.get("w6_core_inflation_warning"),
+            "w6_era_excluded_gaming_event_count": summary.get(
+                "w6_era_excluded_gaming_event_count"
+            ),
+            "w6_fence_governance_status": summary.get(
+                "w6_fence_governance_status"
+            ),
+            "w6_fence_governance_blockers": summary.get(
+                "w6_fence_governance_blockers"
+            ),
             "w6_potential_overfit_divergences": summary.get(
                 "w6_potential_overfit_divergences"
             ),
@@ -1232,6 +1242,18 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
                         "w6_audited_trial_count_remaining"
                     ),
                     "w6_gaming_alarm": details.get("w6_gaming_alarm"),
+                    "w6_core_inflation_warning": details.get(
+                        "w6_core_inflation_warning"
+                    ),
+                    "w6_era_excluded_gaming_event_count": details.get(
+                        "w6_era_excluded_gaming_event_count"
+                    ),
+                    "w6_fence_governance_status": details.get(
+                        "w6_fence_governance_status"
+                    ),
+                    "w6_fence_governance_blockers": details.get(
+                        "w6_fence_governance_blockers"
+                    ),
                     "w6_alarm_clearance_clean_trials_required": details.get(
                         "w6_alarm_clearance_clean_trials_required"
                     ),

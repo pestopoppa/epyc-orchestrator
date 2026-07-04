@@ -5,13 +5,17 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import asdict, is_dataclass
+import datetime as dt
 import json
 from pathlib import Path
 import sys
 from typing import Any
 
+import yaml
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 ORCH_ROOT = SCRIPT_DIR.parents[1]
+INSTRUMENT_ERAS_PATH = ORCH_ROOT / "orchestration" / "instrument_eras.yaml"
 sys.path.insert(0, str(SCRIPT_DIR))
 sys.path.insert(0, str(ORCH_ROOT))
 
@@ -156,11 +160,171 @@ def _baseline_seed_preflight(
     }
 
 
+VALID_W6_FENCE_DISPOSITIONS = frozenset({"adjudicated", "demoted", "superseded"})
+
+
+def _parse_era_timestamp(raw: Any) -> float | None:
+    if isinstance(raw, bool) or raw is None:
+        return None
+    if isinstance(raw, int | float):
+        return float(raw)
+    text = str(raw).strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = dt.datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    return parsed.timestamp()
+
+
+def _matching_era_rows(path: Path, timestamp_s: float) -> list[dict[str, Any]]:
+    try:
+        loaded = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return []
+    eras = loaded.get("eras") if isinstance(loaded, dict) else None
+    if not isinstance(eras, list):
+        return []
+    matches: list[dict[str, Any]] = []
+    for row in eras:
+        if not isinstance(row, dict):
+            continue
+        row_ts = _parse_era_timestamp(row.get("from"))
+        if row_ts is not None and abs(row_ts - timestamp_s) <= 1.0:
+            matches.append(row)
+    return matches
+
+
+def _matching_era_ids(path: Path, timestamp_s: float) -> list[str]:
+    return [
+        str(row.get("id") or "")
+        for row in _matching_era_rows(path, timestamp_s)
+        if isinstance(row, dict)
+    ]
+
+
+def _w6_event_key(event: dict[str, Any]) -> str:
+    explicit = str(event.get("event") or event.get("event_key") or "").strip()
+    if explicit:
+        return explicit
+    previous_id = event.get("previous_trial_id")
+    trial_id = event.get("trial_id")
+    if previous_id is None or trial_id is None:
+        return ""
+    return f"{previous_id}->{trial_id}"
+
+
+def _w6_dispositions_from_era_rows(
+    era_rows: list[dict[str, Any]],
+) -> tuple[dict[str, str], list[str]]:
+    disposition_map: dict[str, str] = {}
+    invalid: list[str] = []
+    for row in era_rows:
+        for key in ("w6_fence_dispositions", "w6_fenced_event_dispositions"):
+            raw_entries = row.get(key)
+            if raw_entries is None:
+                continue
+            if not isinstance(raw_entries, list):
+                invalid.append(f"{row.get('id', '<unknown>')}:{key}:not-list")
+                continue
+            for entry in raw_entries:
+                if not isinstance(entry, dict):
+                    invalid.append(f"{row.get('id', '<unknown>')}:{key}:not-object")
+                    continue
+                event_key = _w6_event_key(entry)
+                disposition = str(entry.get("disposition") or "").strip().lower()
+                if not event_key:
+                    invalid.append(f"{row.get('id', '<unknown>')}:{key}:missing-event")
+                    continue
+                if disposition not in VALID_W6_FENCE_DISPOSITIONS:
+                    invalid.append(f"{event_key}={disposition or '<missing>'}")
+                    continue
+                disposition_map[event_key] = disposition
+    return disposition_map, invalid
+
+
+def _w6_fence_governance(
+    report: dict[str, Any],
+    *,
+    exclude_before_ts: float | None,
+    instrument_eras_path: Path,
+) -> dict[str, Any]:
+    events = list(report.get("era_excluded_gaming_events") or [])
+    if exclude_before_ts is None:
+        return {
+            "required": False,
+            "ok": True,
+            "status": "not_required",
+            "blockers": [],
+            "fenced_gaming_event_count": 0,
+        }
+    if not events:
+        return {
+            "required": False,
+            "ok": True,
+            "status": "no_excluded_gaming_events",
+            "blockers": [],
+            "fenced_gaming_event_count": 0,
+            "instrument_eras_path": str(instrument_eras_path),
+            "matching_era_ids": _matching_era_ids(
+                instrument_eras_path,
+                exclude_before_ts,
+            ),
+        }
+
+    matching_eras = _matching_era_rows(instrument_eras_path, exclude_before_ts)
+    disposition_map, invalid_dispositions = _w6_dispositions_from_era_rows(
+        matching_eras
+    )
+    missing_events = [
+        event
+        for event in events
+        if _w6_event_key(event) not in disposition_map
+    ]
+    blockers: list[str] = []
+    if not matching_eras:
+        blockers.append(
+            "W6 audit era fence excludes gaming events but has no matching "
+            "instrument_eras.yaml row"
+        )
+    if missing_events:
+        blockers.append(
+            "W6 audit era fence excludes gaming events without disposition: "
+            + ", ".join(_w6_event_key(event) for event in missing_events)
+        )
+    if invalid_dispositions:
+        blockers.append(
+            "W6 audit era fence has invalid disposition values: "
+            + ", ".join(invalid_dispositions)
+        )
+    return {
+        "required": True,
+        "ok": not blockers,
+        "status": "ok" if not blockers else "blocked",
+        "blockers": blockers,
+        "fenced_gaming_event_count": len(events),
+        "instrument_eras_path": str(instrument_eras_path),
+        "matching_era_ids": [
+            str(row.get("id") or "") for row in matching_eras if isinstance(row, dict)
+        ],
+        "disposition_event_count": len(disposition_map),
+        "missing_disposition_events": missing_events,
+        "invalid_dispositions": invalid_dispositions,
+        "allowed_dispositions": sorted(VALID_W6_FENCE_DISPOSITIONS),
+    }
+
+
 def _w6_audit_restart_report(
     journal_rows: list[dict[str, Any]],
     *,
     min_audited_trials: int,
     exclude_before_ts: float | None = None,
+    instrument_eras_path: Path = INSTRUMENT_ERAS_PATH,
 ) -> dict[str, Any]:
     report = build_audit_block_report(
         journal_rows,
@@ -169,6 +333,11 @@ def _w6_audit_restart_report(
     )
     audited_trial_count = int(report.get("audited_trial_count") or 0)
     gaming_alarm = bool(report.get("gaming_alarm"))
+    fence_governance = _w6_fence_governance(
+        report,
+        exclude_before_ts=exclude_before_ts,
+        instrument_eras_path=instrument_eras_path,
+    )
     blockers: list[str] = []
     if audited_trial_count < min_audited_trials:
         blockers.append(
@@ -176,6 +345,7 @@ def _w6_audit_restart_report(
         )
     if gaming_alarm:
         blockers.append("W6 audit gaming alarm is triggered")
+    blockers.extend(fence_governance.get("blockers") or [])
     return {
         "cutover_ready": not blockers,
         "min_audited_trials": min_audited_trials,
@@ -196,6 +366,18 @@ def _w6_audit_restart_report(
             "gaming_alarm_clearance_clean_trials_required"
         ),
         "gaming_alarm": gaming_alarm,
+        "core_inflation_warning": report.get("core_inflation_warning"),
+        "core_inflation_events": report.get("core_inflation_events"),
+        "core_inflation_warning_window": report.get("core_inflation_warning_window"),
+        "core_inflation_warning_window_trial_count": report.get(
+            "core_inflation_warning_window_trial_count"
+        ),
+        "cumulative_core_inflation_warning": report.get(
+            "cumulative_core_inflation_warning"
+        ),
+        "cumulative_core_inflation_events": report.get(
+            "cumulative_core_inflation_events"
+        ),
         "potential_overfit_divergences": (
             report.get("transfer_diagnostic") or {}
         ).get("potential_overfit_divergences"),
@@ -203,6 +385,11 @@ def _w6_audit_restart_report(
         "cumulative_potential_overfit_divergences": (
             report.get("transfer_diagnostic") or {}
         ).get("cumulative_potential_overfit_divergences"),
+        "era_excluded_gaming_event_count": report.get(
+            "era_excluded_gaming_event_count"
+        ),
+        "era_excluded_gaming_events": report.get("era_excluded_gaming_events"),
+        "fence_governance": fence_governance,
         "blockers": blockers,
         "report": report,
     }
@@ -229,6 +416,7 @@ def _summary_report(report: dict[str, Any]) -> dict[str, Any]:
     seq_shadow_remaining = _remaining_count(seq_shadow_rows, seq_min_shadow)
     w6_audited_remaining = _remaining_count(w6_audited_count, w6_min_audited)
     w6_alarm_clearance_remaining = w6.get("alarm_clearance_clean_trials_required")
+    w6_fence_governance = w6.get("fence_governance") or {}
     cutover_horizon = _cutover_horizon(
         {
             "seq_trusted_vectors": seq_trusted_remaining,
@@ -334,10 +522,29 @@ def _summary_report(report: dict[str, Any]) -> dict[str, Any]:
             "alarm_clearance_clean_trials_required"
         ),
         "w6_gaming_alarm": w6.get("gaming_alarm"),
+        "w6_core_inflation_warning": w6.get("core_inflation_warning"),
+        "w6_core_inflation_events": w6.get("core_inflation_events"),
+        "w6_cumulative_core_inflation_warning": w6.get(
+            "cumulative_core_inflation_warning"
+        ),
+        "w6_cumulative_core_inflation_events": w6.get(
+            "cumulative_core_inflation_events"
+        ),
         "w6_potential_overfit_divergences": w6.get("potential_overfit_divergences"),
         "w6_cumulative_gaming_alarm": w6.get("cumulative_gaming_alarm"),
         "w6_cumulative_potential_overfit_divergences": w6.get(
             "cumulative_potential_overfit_divergences"
+        ),
+        "w6_era_excluded_gaming_event_count": w6.get(
+            "era_excluded_gaming_event_count"
+        ),
+        "w6_fence_governance_ok": w6_fence_governance.get("ok"),
+        "w6_fence_governance_status": w6_fence_governance.get("status"),
+        "w6_fence_governance_required": w6_fence_governance.get("required"),
+        "w6_fence_governance_blockers": w6_fence_governance.get("blockers", []),
+        "w6_fence_governance_missing_disposition_events": w6_fence_governance.get(
+            "missing_disposition_events",
+            [],
         ),
         "cutover_horizon_clean_trials_remaining": cutover_horizon["remaining"],
         "cutover_horizon_blocker": cutover_horizon["blocker"],
@@ -389,6 +596,7 @@ def build_restart_readiness_report(
     phase_stale_after_s: float = DEFAULT_STALE_AFTER_S,
     min_w6_audited_trials: int = 30,
     w6_exclude_before_ts: float | None = None,
+    instrument_eras_path: Path = INSTRUMENT_ERAS_PATH,
 ) -> dict[str, Any]:
     """Build a no-write report for safe AutoPilot restart/cutover decisions."""
     phase_report = build_phase_health_report(
@@ -407,6 +615,7 @@ def build_restart_readiness_report(
         journal_rows,
         min_audited_trials=min_w6_audited_trials,
         exclude_before_ts=w6_exclude_before_ts,
+        instrument_eras_path=instrument_eras_path,
     )
 
     blockers: list[str] = []
@@ -524,7 +733,9 @@ def render_markdown(report: dict[str, Any]) -> str:
             "potential_overfit_divergences="
             f"{summary['w6_potential_overfit_divergences']}, "
             "cumulative_divergences="
-            f"{summary['w6_cumulative_potential_overfit_divergences']}"
+            f"{summary['w6_cumulative_potential_overfit_divergences']}, "
+            f"core_inflation_warning={summary['w6_core_inflation_warning']}, "
+            f"fence_governance={summary['w6_fence_governance_status']}"
         ),
         (
             "- W4/W6 clean-trial horizon: "
@@ -597,6 +808,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "autopilot_state.json:pareto_exclude_before_ts when present."
         ),
     )
+    parser.add_argument(
+        "--instrument-eras",
+        type=Path,
+        default=INSTRUMENT_ERAS_PATH,
+        help="Append-only instrument era registry used for W6 fence governance.",
+    )
     return parser.parse_args(argv)
 
 
@@ -637,6 +854,7 @@ def main(argv: list[str] | None = None) -> int:
         phase_stale_after_s=args.phase_stale_after_s,
         min_w6_audited_trials=args.min_w6_audited_trials,
         w6_exclude_before_ts=args.w6_exclude_before_ts,
+        instrument_eras_path=args.instrument_eras.expanduser().resolve(),
     )
     if args.json:
         print(json.dumps(report, sort_keys=True, default=str))

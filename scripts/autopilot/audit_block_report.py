@@ -12,6 +12,7 @@ from typing import Any
 
 UNTRUSTED_OUTCOME_STATUSES = frozenset({"invalid", "skipped"})
 DEFAULT_ALARM_WINDOW = 30
+DEFAULT_MONOTONE_CORE_STEPS = 2
 
 
 def _expand_journal_paths(raw_paths: Iterable[Path]) -> list[Path]:
@@ -141,12 +142,16 @@ def build_report(
     *,
     alarm_window: int | None = None,
     exclude_before_ts: float | None = None,
+    monotone_core_steps: int = DEFAULT_MONOTONE_CORE_STEPS,
 ) -> dict[str, Any]:
     trial_rows = [row for row in rows if _is_trial_row(row)]
     audit_rows = [
         (row, summary)
         for row in trial_rows
         if (summary := _trial_summary(row)) is not None
+    ]
+    all_trusted_audit_rows = [
+        (row, summary) for row, summary in audit_rows if _is_trusted_trial_row(row)
     ]
     era_excluded_audit_rows = [
         (row, summary)
@@ -167,6 +172,20 @@ def build_report(
         if not _is_trusted_trial_row(row)
     ]
     trial_summaries = [summary for _row, summary in trusted_audit_rows]
+    all_trusted_trial_summaries = [
+        summary for _row, summary in all_trusted_audit_rows
+    ]
+    era_excluded_ids = {
+        int(row["trial_id"])
+        for row, _summary in era_excluded_audit_rows
+        if _is_trusted_trial_row(row)
+    }
+    all_cumulative_gaming_events = _gaming_events(all_trusted_trial_summaries)
+    era_excluded_gaming_events = [
+        event
+        for event in all_cumulative_gaming_events
+        if event.get("trial_id") in era_excluded_ids
+    ]
     totals = {
         "core_correct": sum(summary["core_correct"] for summary in trial_summaries),
         "core_total": sum(summary["core_total"] for summary in trial_summaries),
@@ -178,7 +197,11 @@ def build_report(
     totals["delta_audit_minus_core"] = round(
         totals["audit_quality_0_3"] - totals["core_quality_0_3"], 6
     )
-    gaming_diagnostic = _gaming_diagnostic(trial_summaries, alarm_window=alarm_window)
+    gaming_diagnostic = _gaming_diagnostic(
+        trial_summaries,
+        alarm_window=alarm_window,
+        monotone_core_steps=monotone_core_steps,
+    )
     return {
         "trial_count": len(trial_rows),
         "raw_audited_trial_count": len(eligible_audit_rows),
@@ -205,6 +228,23 @@ def build_report(
         ],
         "cumulative_gaming_alarm": gaming_diagnostic["cumulative_gaming_alarm"],
         "cumulative_gaming_events": gaming_diagnostic["cumulative_gaming_events"],
+        "era_excluded_gaming_event_count": len(era_excluded_gaming_events),
+        "era_excluded_gaming_events": era_excluded_gaming_events,
+        "monotone_core_steps": gaming_diagnostic["monotone_core_steps"],
+        "core_inflation_warning": gaming_diagnostic["core_inflation_warning"],
+        "core_inflation_events": gaming_diagnostic["core_inflation_events"],
+        "core_inflation_warning_window": gaming_diagnostic[
+            "core_inflation_warning_window"
+        ],
+        "core_inflation_warning_window_trial_count": gaming_diagnostic[
+            "core_inflation_warning_window_trial_count"
+        ],
+        "cumulative_core_inflation_warning": gaming_diagnostic[
+            "cumulative_core_inflation_warning"
+        ],
+        "cumulative_core_inflation_events": gaming_diagnostic[
+            "cumulative_core_inflation_events"
+        ],
         "transfer_diagnostic": {
             "audited_trial_count": len(trial_summaries),
             "potential_overfit_divergences": len(gaming_diagnostic["gaming_events"]),
@@ -213,6 +253,20 @@ def build_report(
                 gaming_diagnostic["cumulative_gaming_events"]
             ),
             "cumulative_events": gaming_diagnostic["cumulative_gaming_events"],
+            "era_excluded_potential_overfit_divergences": len(
+                era_excluded_gaming_events
+            ),
+            "era_excluded_events": era_excluded_gaming_events,
+            "core_inflation_warnings": len(
+                gaming_diagnostic["core_inflation_events"]
+            ),
+            "core_inflation_events": gaming_diagnostic["core_inflation_events"],
+            "cumulative_core_inflation_warnings": len(
+                gaming_diagnostic["cumulative_core_inflation_events"]
+            ),
+            "cumulative_core_inflation_events": gaming_diagnostic[
+                "cumulative_core_inflation_events"
+            ],
             "alarm_window": gaming_diagnostic["gaming_alarm_window"],
             "alarm_window_trial_count": gaming_diagnostic[
                 "gaming_alarm_window_trial_count"
@@ -285,7 +339,9 @@ def _gaming_diagnostic(
     trials: list[dict[str, Any]],
     *,
     alarm_window: int | None = None,
+    monotone_core_steps: int = DEFAULT_MONOTONE_CORE_STEPS,
 ) -> dict[str, Any]:
+    monotone_core_steps = max(1, int(monotone_core_steps or 1))
     if len(trials) < 3:
         return {
             "gaming_alarm": False,
@@ -295,11 +351,26 @@ def _gaming_diagnostic(
             "gaming_alarm_clearance_clean_trials_required": 0,
             "cumulative_gaming_alarm": False,
             "cumulative_gaming_events": [],
+            "monotone_core_steps": monotone_core_steps,
+            "core_inflation_warning": False,
+            "core_inflation_events": [],
+            "core_inflation_warning_window": alarm_window,
+            "core_inflation_warning_window_trial_count": len(trials),
+            "cumulative_core_inflation_warning": False,
+            "cumulative_core_inflation_events": [],
         }
 
     cumulative_events = _gaming_events(trials)
+    cumulative_core_events = _core_inflation_events(
+        trials,
+        min_core_steps=monotone_core_steps,
+    )
     window_trials = _alarm_window_trials(trials, alarm_window)
     active_events = _gaming_events(window_trials)
+    active_core_events = _core_inflation_events(
+        window_trials,
+        min_core_steps=monotone_core_steps,
+    )
     return {
         "gaming_alarm": bool(active_events),
         "gaming_events": active_events,
@@ -314,6 +385,13 @@ def _gaming_diagnostic(
         ),
         "cumulative_gaming_alarm": bool(cumulative_events),
         "cumulative_gaming_events": cumulative_events,
+        "monotone_core_steps": monotone_core_steps,
+        "core_inflation_warning": bool(active_core_events),
+        "core_inflation_events": active_core_events,
+        "core_inflation_warning_window": alarm_window,
+        "core_inflation_warning_window_trial_count": len(window_trials),
+        "cumulative_core_inflation_warning": bool(cumulative_core_events),
+        "cumulative_core_inflation_events": cumulative_core_events,
     }
 
 
@@ -351,6 +429,52 @@ def _gaming_events(trials: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return events
 
 
+def _core_inflation_events(
+    trials: list[dict[str, Any]],
+    *,
+    min_core_steps: int,
+) -> list[dict[str, Any]]:
+    """Warn when core rises across the window while audit stays resolution-flat."""
+    if len(trials) < 3:
+        return []
+
+    first = trials[0]
+    last = trials[-1]
+    core_values = [float(trial["core_quality_0_3"]) for trial in trials]
+    audit_values = [float(trial["audit_quality_0_3"]) for trial in trials]
+    core_step = max(_quality_step(trial.get("core_total")) for trial in trials)
+    audit_step = max(_quality_step(trial.get("audit_total")) for trial in trials)
+    if core_step <= 0 or audit_step <= 0:
+        return []
+
+    core_delta = round(core_values[-1] - core_values[0], 6)
+    audit_delta = round(audit_values[-1] - audit_values[0], 6)
+    audit_span = round(max(audit_values) - min(audit_values), 6)
+    core_monotone = all(
+        later >= earlier
+        for earlier, later in zip(core_values, core_values[1:], strict=False)
+    )
+    audit_flat = abs(audit_delta) < audit_step and audit_span < audit_step
+    required_delta = round(max(1, min_core_steps) * core_step, 6)
+    if not (core_monotone and audit_flat and core_delta >= required_delta):
+        return []
+
+    return [
+        {
+            "start_trial_id": first["trial_id"],
+            "end_trial_id": last["trial_id"],
+            "trial_count": len(trials),
+            "core_delta": core_delta,
+            "audit_delta": audit_delta,
+            "audit_span": audit_span,
+            "core_step": core_step,
+            "audit_step": audit_step,
+            "min_core_steps": max(1, min_core_steps),
+            "core_steps_observed": round(core_delta / core_step, 3),
+        }
+    ]
+
+
 def _gaming_alarm_clearance_clean_trials_required(
     trials: list[dict[str, Any]],
     active_events: list[dict[str, Any]],
@@ -385,6 +509,11 @@ def render_markdown(report: Mapping[str, Any]) -> str:
     gaming_alarm = bool(report.get("gaming_alarm"))
     alarm_window = report.get("gaming_alarm_window")
     cumulative_events = report.get("cumulative_gaming_events") or gaming_events
+    core_inflation_events = report.get("core_inflation_events") or []
+    core_inflation_warning = bool(report.get("core_inflation_warning"))
+    cumulative_core_inflation_events = (
+        report.get("cumulative_core_inflation_events") or core_inflation_events
+    )
     lines = [
         "# W6 Rotating Audit Block Report",
         "",
@@ -410,6 +539,13 @@ def render_markdown(report: Mapping[str, Any]) -> str:
             "- Gaming alarm: "
             f"{'triggered' if gaming_alarm else 'clear'} "
             f"({len(gaming_events)} event{'s' if len(gaming_events) != 1 else ''})"
+        ),
+        (
+            "- Core-inflation warning: "
+            f"{'triggered' if core_inflation_warning else 'clear'} "
+            f"({len(core_inflation_events)} event"
+            f"{'s' if len(core_inflation_events) != 1 else ''}; "
+            f"threshold={report.get('monotone_core_steps')} core steps)"
         ),
     ]
     if alarm_window is not None:
@@ -463,6 +599,31 @@ def render_markdown(report: Mapping[str, Any]) -> str:
         else:
             lines.append("- No suspicious gaming trend detected.")
 
+    lines.extend(["", "## Core Inflation Warning"])
+    if core_inflation_warning:
+        lines.append("")
+        for event in core_inflation_events:
+            lines.append(
+                "- trials {start_trial_id}->{end_trial_id}: "
+                "core_delta={core_delta:+.3f} ({core_steps_observed} steps), "
+                "audit_delta={audit_delta:+.3f}, audit_span={audit_span:.3f}".format(
+                    **event
+                )
+            )
+        lines.append(
+            "- Action: review for optimizer-visible core gains that do not transfer "
+            "to the held-out audit block."
+        )
+    elif cumulative_core_inflation_events:
+        lines.append("- No core-inflation warning in the current window.")
+        lines.append(
+            "- Historical core-inflation warnings remain in cumulative evidence: "
+            f"{len(cumulative_core_inflation_events)} event"
+            f"{'s' if len(cumulative_core_inflation_events) != 1 else ''}."
+        )
+    else:
+        lines.append("- No monotone core-up/audit-flat warning detected.")
+
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -510,6 +671,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "Rows without parseable timestamps are excluded when this fence is set."
         ),
     )
+    parser.add_argument(
+        "--monotone-core-steps",
+        type=int,
+        default=DEFAULT_MONOTONE_CORE_STEPS,
+        help=(
+            "Warn when core quality rises by at least this many core-question "
+            "resolution steps across the alarm window while audit quality remains flat."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -521,6 +691,7 @@ def main(argv: list[str] | None = None) -> int:
         rows,
         alarm_window=args.alarm_window,
         exclude_before_ts=args.exclude_before_ts,
+        monotone_core_steps=args.monotone_core_steps,
     )
     if args.out_json is None and args.out_md is None:
         print(json.dumps(report, indent=2, sort_keys=True, allow_nan=False))
