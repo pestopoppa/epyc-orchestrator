@@ -275,6 +275,51 @@ def test_phase_health_report_tails_eval_progress_when_heartbeat_lacks_counters(
     assert "Eval progress: 400/500 (70% correct)" in formatted
 
 
+def test_phase_health_report_tails_t3_eval_progress(tmp_path, monkeypatch):
+    """The T3 expert/hard lane emits `T3 progress:` lines — the tail parser must
+    pick them up (regression guard for the old `T[12]` hardcode)."""
+    snapshot = tmp_path / "phase.json"
+    snapshot.write_text(
+        json.dumps(
+            {
+                "phase": "dispatch_action",
+                "pid": 123,
+                "trial_id": 903,
+                "action_type": "deep_eval",
+                "updated_at": 100.0,
+                "updated_at_iso": "2026-07-04T12:13:13+00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+    log_path = tmp_path / "autopilot.log"
+    log_path.write_text(
+        "\n".join(
+            [
+                '2026-07-04 19:14:09 [autopilot] INFO: Trial 903: {"type": "deep_eval"}',
+                "2026-07-04 19:29:11 [autopilot.eval] INFO: T3 progress: 40/160 (55% correct)",
+                "2026-07-04 21:43:41 [autopilot.eval] INFO: T3 progress: 120/160 (58% correct)",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("phase_status._process_exists", lambda pid: True)
+
+    report = build_phase_health_report(
+        path=snapshot,
+        log_path=log_path,
+        now=120.0,
+        stale_after_s=60.0,
+    )
+
+    assert report["ok"] is True
+    assert report["eval_label"] == "T3"
+    assert report["eval_completed_questions"] == 120
+    assert report["eval_total_questions"] == 160
+    assert report["eval_correct_pct"] == 58.0
+    assert report["eval_progress_source"] == "log_tail"
+
+
 def test_phase_health_report_tails_numeric_trial_progress_from_recent_tmp_log(
     tmp_path, monkeypatch
 ):

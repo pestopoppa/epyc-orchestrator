@@ -3746,18 +3746,33 @@ async function updateGepa() {
         if (d.recent_trials && d.recent_trials.length) {
             trialsTable = '<div style="margin:8px 0 4px 0;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.05em">last 10 trials (pareto trajectory)</div>';
             trialsTable += '<div style="font-size:10px">';
-            trialsTable += '<div style="display:grid;grid-template-columns:48px 80px 60px 70px 60px 60px 1fr;gap:6px;color:var(--muted);padding:2px 0;border-bottom:1px solid var(--border)">' +
-                '<div>trial</div><div>species</div><div>quality</div><div>speed</div><div>cost</div><div>pareto</div><div>desc</div></div>';
+            // Tier column: quality is per-tier and NOT cross-tier comparable, so the
+            // trajectory table tags each row with its tier (color-matched to the
+            // Pareto/HV series) — otherwise a by-design-low T3 hard-only row reads
+            // as a quality regression next to T1 rows.
+            trialsTable += '<div style="display:grid;grid-template-columns:48px 34px 74px 60px 70px 60px 60px 1fr;gap:6px;color:var(--muted);padding:2px 0;border-bottom:1px solid var(--border)">' +
+                '<div>trial</div><div>tier</div><div>species</div><div>quality</div><div>speed</div><div>cost</div><div>pareto</div><div>desc</div></div>';
             d.recent_trials.slice(-10).reverse().forEach(t => {
-                const paretoColor = t.pareto_status === 'pareto_frontier' ? '#34d399' :
+                // Killed / bug-corrupted placeholders: muted row + a status tag in
+                // the pareto column so a mid-trial kill is visible instead of the
+                // row silently vanishing (which read as a frozen panel).
+                const killed = !!t.bug_corrupted_by;
+                const paretoColor = killed ? '#f87171' :
+                                     t.pareto_status === 'pareto_frontier' ? '#34d399' :
                                      t.pareto_status === 'dominated' ? '#94a3b8' : '#fcd34d';
-                trialsTable += `<div style="display:grid;grid-template-columns:48px 80px 60px 70px 60px 60px 1fr;gap:6px;padding:1px 0">
+                const statusText = killed
+                    ? (String(t.bug_corrupted_by).includes('killed') ? 'killed' : 'corrupted')
+                    : (t.pareto_status||'').replace('pareto_','');
+                const tierColor = (t.tier != null && !paretoIsAuditTier(t.tier)) ? paretoTierColor(t.tier) : '#64748b';
+                const rowStyle = killed ? 'opacity:0.5' : '';
+                trialsTable += `<div style="display:grid;grid-template-columns:48px 34px 74px 60px 70px 60px 60px 1fr;gap:6px;padding:1px 0;${rowStyle}">
                     <div>${t.trial_id||'-'}</div>
+                    <div style="color:${tierColor};font-weight:600">${t.tier!=null?('T'+t.tier):'-'}</div>
                     <div>${(t.species||'').slice(0,12)}</div>
-                    <div>${t.quality!=null?t.quality.toFixed(2):'-'}</div>
-                    <div>${t.speed!=null?t.speed.toFixed(1):'-'}</div>
-                    <div>${t.cost!=null?t.cost.toFixed(2):'-'}</div>
-                    <div style="color:${paretoColor}">${(t.pareto_status||'').replace('pareto_','')}</div>
+                    <div>${(!killed && t.quality!=null)?t.quality.toFixed(2):'-'}</div>
+                    <div>${(!killed && t.speed!=null)?t.speed.toFixed(1):'-'}</div>
+                    <div>${(!killed && t.cost!=null)?t.cost.toFixed(2):'-'}</div>
+                    <div style="color:${paretoColor}" title="${killed?escapeHTML(String(t.bug_corrupted_by)):''}">${statusText}</div>
                     <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHTML(t.description||'')}">${escapeHTML((t.description||'').slice(0,80))}</div>
                 </div>`;
             });
@@ -3914,8 +3929,8 @@ function paretoTierLegend(tierKeys, x, y, neutral) {
 // CVD-validated on the dark surface (worst adjacent pair ΔE 21.5); the
 // blue↔magenta reserve pair sits in the 8–12 floor band, covered by the
 // secondary encodings (alpha ramp, hull/band direct labels, era legend).
-// Tier remains encoded by marker SHAPE (triangle=T0, circle=T1, square=T2),
-// so color is free to carry the era.
+// Tier remains encoded by marker SHAPE (triangle=T0, circle=T1, square=T2,
+// diamond=T3+), so color is free to carry the era.
 const PARETO_ERA_COLORS = ['#ef4444', '#fb923c', '#facc15', '#4ade80', '#22d3ee', '#60a5fa', '#e879f9'];
 function paretoEraColor(idx) {
     const i = Number(idx) || 0;

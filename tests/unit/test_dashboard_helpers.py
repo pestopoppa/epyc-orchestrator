@@ -1601,7 +1601,14 @@ def test_gepa_status_uses_superseded_journal_rows(
     response = asyncio.run(dashboard.gepa_status())
     payload = json.loads(response.body)
 
-    assert [trial["trial_id"] for trial in payload["recent_trials"]] == [1]
+    # Superseded/corrupted trials are no longer dropped from the trajectory list —
+    # they ride along tagged so a mid-trial kill stays visible. The supersession
+    # fold must still be APPLIED, so trial 2 carries the corruption tag while the
+    # clean trial 1 does not.
+    by_trial = {t["trial_id"]: t for t in payload["recent_trials"]}
+    assert set(by_trial) == {1, 2}
+    assert by_trial[1]["bug_corrupted_by"] is None
+    assert by_trial[2]["bug_corrupted_by"] == "resource_contention"
 
 
 def test_gepa_status_recent_trials_carry_tier(tmp_path: Path, monkeypatch) -> None:

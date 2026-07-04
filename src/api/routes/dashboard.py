@@ -2487,7 +2487,7 @@ def _tail_deep_eval_progress(log_path: Path) -> tuple[int, int] | None:
     than the historical-median estimate. Returns (completed, total) or None.
 
     Matches any tier digit (`T0`..`T3` and future tiers) — the label tracks the
-    eval tier, so a hardcoded `T[12]` silently dropped the T3 hard-only lane back
+    eval tier, so a hardcoded `T[12]` silently dropped the T3 expert/hard lane back
     to the p90 estimate. `\\d+` keeps this generic as new tiers land.
     """
     if not log_path.exists():
@@ -4154,15 +4154,19 @@ async def gepa_status() -> JSONResponse:
     journal_rows = _read_autopilot_journal_rows()
     if journal_rows:
         try:
+            # Include killed/bug-corrupted placeholders here (tagged, not dropped).
+            # They are still excluded from every FRONTIER/HV computation upstream,
+            # but silently filtering them from the trajectory list made the panel
+            # look frozen after a mid-trial kill/restart — the operator's newest
+            # trial simply vanished with no signal it had died. The client greys +
+            # tags these rows so recent activity is always visible.
             for j in _effective_journal_trial_rows(journal_rows)[-15:]:
-                if j.get("bug_corrupted_by"):
-                    continue
                 recent_trials.append({
                     "trial_id": j.get("trial_id"),
                     "timestamp": j.get("timestamp", ""),
                     "species": j.get("species"),
                     # Tier is REQUIRED context here: quality is scored per-tier and
-                    # is NOT comparable across tiers (T3 hard-only rows sit well
+                    # is NOT comparable across tiers (T3 expert/hard rows sit well
                     # below T1 by design), so a tier-less trajectory row reads a
                     # healthy T3 eval as a quality regression. Default to the
                     # canonical tier when absent (legacy rows predate the field).
@@ -4172,6 +4176,9 @@ async def gepa_status() -> JSONResponse:
                     "cost": j.get("cost"),
                     "reliability": j.get("reliability"),
                     "pareto_status": j.get("pareto_status"),
+                    # Non-empty when the trial was killed mid-flight or otherwise
+                    # quarantined; the client renders these muted + tagged.
+                    "bug_corrupted_by": j.get("bug_corrupted_by") or None,
                     "description": (j.get("config_snapshot", {}).get("description") or "")[:140],
                 })
         except Exception:
