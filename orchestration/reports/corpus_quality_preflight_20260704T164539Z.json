@@ -1,0 +1,275 @@
+{
+  "schema_version": "corpus_quality_preflight.v1",
+  "mode": "speed",
+  "index_path": "/mnt/raid0/llm/cache/corpus/v3_sharded",
+  "prompt_count": 6,
+  "injected_count": 6,
+  "failure_count": 0,
+  "ready_for_ab": true,
+  "records": [
+    {
+      "prompt_id": "async_retry",
+      "language": "python",
+      "prompt_chars": 140,
+      "built_prompt_chars": 3165,
+      "injected": true,
+      "corpus": {
+        "mode": "speed",
+        "query": "python async http client with retry logic exponential backoff and circuit breaker pattern include type hints and usage example",
+        "injected": true,
+        "prompt_chars_added": 3025,
+        "snippets_returned": 3,
+        "snippet_sources": [
+          {
+            "file": "tly1980/async_keepalive_httpc:setup.py",
+            "start_line": 0,
+            "score": 0.0625,
+            "hash": "ac5cd3a4c5bf"
+          },
+          {
+            "file": "MiddleFork/nbviewer:nbviewer/providers/url/client.py",
+            "start_line": 0,
+            "score": 0.0625,
+            "hash": "6f3422038ad1"
+          },
+          {
+            "file": "agaviria/oxide:sentry/src/token.rs",
+            "start_line": 0,
+            "score": 0.0625,
+            "hash": "434e520fdcf4"
+          }
+        ],
+        "loaded": true,
+        "format": "sharded_sqlite",
+        "query_ngrams": 16,
+        "candidates_found": 4,
+        "retrieval_latency_ms": 416.357,
+        "failure_reason": "",
+        "failure_detail": "",
+        "shards_queried": 10,
+        "shards_failed": 0,
+        "shards_unavailable": 0
+      }
+    },
+    {
+      "prompt_id": "bst_iterator",
+      "language": "python",
+      "prompt_chars": 203,
+      "built_prompt_chars": 2764,
+      "injected": true,
+      "corpus": {
+        "mode": "speed",
+        "query": "binary search tree in python with iterator uses memory where h is height of tree include insert search delete and iterator protocol __iter__ __next__",
+        "injected": true,
+        "prompt_chars_added": 2561,
+        "snippets_returned": 3,
+        "snippet_sources": [
+          {
+            "file": "Jatin-Shihora/LeetCode-Solutions:701-insert-into-a-binary-search-tree/701-insert-into-a-binary-search-tree.cpp",
+            "start_line": 0,
+            "score": 0.14285714285714285,
+            "hash": "19bfbb97775b"
+          },
+          {
+            "file": "Sanjeev911/Algorithms:data_structures/binary_search_tree.py",
+            "start_line": 0,
+            "score": 0.09523809523809523,
+            "hash": "3df15a0afeef"
+          },
+          {
+            "file": "DasAllFolks/PyAlgo:bst.py",
+            "start_line": 0,
+            "score": 0.09523809523809523,
+            "hash": "94ee47af8f8b"
+          }
+        ],
+        "loaded": true,
+        "format": "sharded_sqlite",
+        "query_ngrams": 21,
+        "candidates_found": 6,
+        "retrieval_latency_ms": 31.281,
+        "failure_reason": "",
+        "failure_detail": "",
+        "shards_queried": 10,
+        "shards_failed": 0,
+        "shards_unavailable": 0
+      }
+    },
+    {
+      "prompt_id": "lru_cache",
+      "language": "python",
+      "prompt_chars": 173,
+      "built_prompt_chars": 2149,
+      "injected": true,
+      "corpus": {
+        "mode": "speed",
+        "query": "lru cache in python using list and dictionary support get put and resize operations include proper locking and decorator version",
+        "injected": true,
+        "prompt_chars_added": 1976,
+        "snippets_returned": 3,
+        "snippet_sources": [
+          {
+            "file": "RawRapter/python-vscode:ProgPracFol/BasicsProgramSet6.py",
+            "start_line": 0,
+            "score": 0.17647058823529413,
+            "hash": "7c325c9f09f5"
+          },
+          {
+            "file": "dangerstudios/OpenPype:openpype/lib/local_settings.py",
+            "start_line": 0,
+            "score": 0.058823529411764705,
+            "hash": "9079cd2498d5"
+          },
+          {
+            "file": "simonebarbieri/pype:igniter/user_settings.py",
+            "start_line": 0,
+            "score": 0.058823529411764705,
+            "hash": "b7f66f76995b"
+          }
+        ],
+        "loaded": true,
+        "format": "sharded_sqlite",
+        "query_ngrams": 17,
+        "candidates_found": 6,
+        "retrieval_latency_ms": 7.171,
+        "failure_reason": "",
+        "failure_detail": "",
+        "shards_queried": 12,
+        "shards_failed": 0,
+        "shards_unavailable": 0
+      }
+    },
+    {
+      "prompt_id": "json_parser",
+      "language": "python",
+      "prompt_chars": 199,
+      "built_prompt_chars": 2027,
+      "injected": true,
+      "corpus": {
+        "mode": "speed",
+        "query": "recursive descent json parser in python from scratch no json handle strings with escapes numbers int and float booleans null arrays and objects return native python types",
+        "injected": true,
+        "prompt_chars_added": 1828,
+        "snippets_returned": 3,
+        "snippet_sources": [
+          {
+            "file": "KaloyanKaludov/Element:source/VirtualMachine.cpp",
+            "start_line": 0,
+            "score": 0.08333333333333333,
+            "hash": "84ce40075d8f"
+          },
+          {
+            "file": "eric-erki/datacube-core:datacube/utils/documents.py",
+            "start_line": 0,
+            "score": 0.041666666666666664,
+            "hash": "6476d7daddf9"
+          },
+          {
+            "file": "HyperEntangledQubit/Data_Structures_and_Algorithms_in_Python:DynamicArray/DynamicArray.py",
+            "start_line": 0,
+            "score": 0.041666666666666664,
+            "hash": "5e4f8e08842b"
+          }
+        ],
+        "loaded": true,
+        "format": "sharded_sqlite",
+        "query_ngrams": 24,
+        "candidates_found": 6,
+        "retrieval_latency_ms": 7.434,
+        "failure_reason": "",
+        "failure_detail": "",
+        "shards_queried": 14,
+        "shards_failed": 0,
+        "shards_unavailable": 0
+      }
+    },
+    {
+      "prompt_id": "rate_limiter",
+      "language": "python",
+      "prompt_chars": 165,
+      "built_prompt_chars": 3197,
+      "injected": true,
+      "corpus": {
+        "mode": "speed",
+        "query": "token bucket rate limiter in python supports limits burst capacity and automatic refill it work both synchronously and with asyncio",
+        "injected": true,
+        "prompt_chars_added": 3032,
+        "snippets_returned": 3,
+        "snippet_sources": [
+          {
+            "file": "AllSeeingEyeTolledEweSew/tbucket:tbucket.py",
+            "start_line": 0,
+            "score": 0.11764705882352941,
+            "hash": "0c58caf4cabc"
+          },
+          {
+            "file": "MacWR/Click-changed-for-ParaGraph:include/click/tokenbucket.hh",
+            "start_line": 0,
+            "score": 0.11764705882352941,
+            "hash": "6afca5558aad"
+          },
+          {
+            "file": "p7g/dd-trace-py:ddtrace/internal/rate_limiter.py",
+            "start_line": 0,
+            "score": 0.058823529411764705,
+            "hash": "c7673597ef44"
+          }
+        ],
+        "loaded": true,
+        "format": "sharded_sqlite",
+        "query_ngrams": 17,
+        "candidates_found": 6,
+        "retrieval_latency_ms": 8.342,
+        "failure_reason": "",
+        "failure_detail": "",
+        "shards_queried": 11,
+        "shards_failed": 0,
+        "shards_unavailable": 0
+      }
+    },
+    {
+      "prompt_id": "graph_shortest",
+      "language": "python",
+      "prompt_chars": 188,
+      "built_prompt_chars": 1661,
+      "injected": true,
+      "corpus": {
+        "mode": "speed",
+        "query": "algorithm and search in python support weighted directed graphs with adjacency list representation include priority queue implementation and path reconstruction",
+        "injected": true,
+        "prompt_chars_added": 1473,
+        "snippets_returned": 3,
+        "snippet_sources": [
+          {
+            "file": "KGene1901/Algorithms-Data-Structures-Yr1:Graphing.py",
+            "start_line": 0,
+            "score": 0.058823529411764705,
+            "hash": "c66c7996ac8b"
+          },
+          {
+            "file": "ANUBHAVNATANI/Data-Strucures:Data-Structures/Graph/graph.cpp",
+            "start_line": 0,
+            "score": 0.058823529411764705,
+            "hash": "1654ac456c2a"
+          },
+          {
+            "file": "dcyrus/ProAlgos-Cpp:2.DFS.cpp",
+            "start_line": 0,
+            "score": 0.058823529411764705,
+            "hash": "cc27a3668206"
+          }
+        ],
+        "loaded": true,
+        "format": "sharded_sqlite",
+        "query_ngrams": 17,
+        "candidates_found": 5,
+        "retrieval_latency_ms": 4.99,
+        "failure_reason": "",
+        "failure_detail": "",
+        "shards_queried": 10,
+        "shards_failed": 0,
+        "shards_unavailable": 0
+      }
+    }
+  ]
+}

@@ -52,6 +52,7 @@ runtime_defaults:
     index_path: /mnt/raid0/llm/cache/corpus/v3_sharded
     max_snippets: 3
     max_chars: 3000
+    min_score: 0.0
   prefix_cache:
     enabled: true
     prefix_length: 4096
@@ -1306,6 +1307,7 @@ roles:
       draft_max: 4
       draft_model: Qwen3.6-35B-A3B-MTP-Q8_0.gguf
       lookup: false
+      corpus_retrieval: true
     performance:
       baseline_tps: 24.3
       optimized_tps: 24.3
@@ -1352,6 +1354,7 @@ roles:
     acceleration:
       type: none
       lookup: false
+      corpus_retrieval: true
     performance:
       baseline_tps: 24.3
       optimized_tps: 24.3
