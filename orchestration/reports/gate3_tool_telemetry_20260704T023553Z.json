@@ -1,0 +1,76 @@
+{
+  "generated_at": "2026-07-04T02:35:53Z",
+  "command": "AUTOPILOT_TOOL_SENTINELS=1 AUTOPILOT_EVAL_CONCURRENCY=1 .venv/bin/python scripts/autopilot/gate3_tool_telemetry.py",
+  "status": "pass",
+  "hard_gate": {
+    "status": "PASS",
+    "driver_autopilot_tool_sentinels": true,
+    "orchestrator_autopilot_tool_sentinels": true,
+    "orchestrator_structured_tool_output": true,
+    "get_eval_secret_count": 7,
+    "get_eval_secret_min_required": 3,
+    "get_eval_secret_success_rows": 7,
+    "get_eval_secret_timing_rows": 7,
+    "isolation_no_tool_tools_called": [],
+    "isolation_no_tool_tools_used": 0
+  },
+  "sentinel_batch": [
+    {
+      "id": "tool_use_secret_alpha",
+      "force_mode": "repl",
+      "duration_s": 24.9,
+      "tools_called": ["get_eval_secret", "get_eval_secret"],
+      "tools_used": 2
+    },
+    {
+      "id": "tool_use_secret_bravo",
+      "force_mode": "repl",
+      "duration_s": 20.1,
+      "tools_called": ["get_eval_secret", "get_eval_secret"],
+      "tools_used": 2
+    },
+    {
+      "id": "tool_use_secret_charlie",
+      "force_mode": "repl",
+      "duration_s": 10.3,
+      "tools_called": ["get_eval_secret"],
+      "tools_used": 1
+    },
+    {
+      "id": "tool_use_secret_delta",
+      "force_mode": "repl",
+      "duration_s": 10.7,
+      "tools_called": ["get_eval_secret"],
+      "tools_used": 1
+    },
+    {
+      "id": "tool_use_secret_echo",
+      "force_mode": "repl",
+      "duration_s": 10.0,
+      "tools_called": ["get_eval_secret"],
+      "tools_used": 1
+    }
+  ],
+  "isolation_probe": {
+    "id": "isolation_no_tool",
+    "force_mode": "repl",
+    "duration_s": 9.5,
+    "tools_called": [],
+    "tools_used": 0,
+    "status": "PASS"
+  },
+  "soft_probe": {
+    "id": "soft_web_research",
+    "force_mode": "repl",
+    "duration_s": 166.4,
+    "status": "PASS",
+    "note": "web_research telemetry succeeded with 10 result(s); response carried post-tool error \"[FAILED: Terminal role architect_general: AttributeError: 'str' object has no attribute 'get']\", which gate3 classifies as non-fatal soft telemetry."
+  },
+  "tool_name_counts": {
+    "get_eval_secret": 7
+  },
+  "notes": [
+    "Functional smoke only; sentinel durations are not throughput evidence.",
+    "Fable5 still reports latest_eval_total_tool_calls_zero until the next sentinel-enabled AutoPilot eval is journaled."
+  ]
+}
