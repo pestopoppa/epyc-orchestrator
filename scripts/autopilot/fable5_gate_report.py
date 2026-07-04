@@ -1660,8 +1660,9 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
                     "command": (
                         "At a controlled trial boundary, reload the orchestrator API "
                         "with AUTOPILOT_TOOL_SENTINELS=1, restart AutoPilot with "
-                        "AUTOPILOT_TOOL_SENTINELS=1 plus the existing W4/W6/planner "
-                        "env, then run AUTOPILOT_TOOL_SENTINELS=1 uv run python "
+                        "uv run python scripts/autopilot/"
+                        "start_fable_authority_daemon.py --max-trials 2000, "
+                        "then run AUTOPILOT_TOOL_SENTINELS=1 uv run python "
                         "scripts/autopilot/gate3_tool_telemetry.py"
                     ),
                     "follow_up": STRICT_FABLE5_GATE_COMMAND,

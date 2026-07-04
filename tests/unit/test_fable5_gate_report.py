@@ -611,8 +611,9 @@ def test_tool_use_next_action_requires_controlled_restart() -> None:
             "command": (
                 "At a controlled trial boundary, reload the orchestrator API "
                 "with AUTOPILOT_TOOL_SENTINELS=1, restart AutoPilot with "
-                "AUTOPILOT_TOOL_SENTINELS=1 plus the existing W4/W6/planner "
-                "env, then run AUTOPILOT_TOOL_SENTINELS=1 uv run python "
+                "uv run python scripts/autopilot/"
+                "start_fable_authority_daemon.py --max-trials 2000, "
+                "then run AUTOPILOT_TOOL_SENTINELS=1 uv run python "
                 "scripts/autopilot/gate3_tool_telemetry.py"
             ),
             "follow_up": report_mod.STRICT_FABLE5_GATE_COMMAND,
