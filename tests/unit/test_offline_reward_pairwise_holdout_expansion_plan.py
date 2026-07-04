@@ -390,6 +390,7 @@ def test_pairwise_holdout_plan_filters_to_audit_collection_targets(tmp_path: Pat
     assert summary["collection_batches"] == [
         {
             "target": "source_family:seeding_eval:coder_escalation>frontdoor",
+            "targets": ["source_family:seeding_eval:coder_escalation>frontdoor"],
             "expected_source_family": "seeding_eval",
             "suite_argument": "all",
             "roles_argument": ["coder_escalation", "frontdoor"],
@@ -615,11 +616,14 @@ def test_pairwise_holdout_plan_uses_reference_backed_instruction_source(
     assert len(summary["collection_batches"]) == 1
     batch = summary["collection_batches"][0]
     assert batch["target"] == "suite:instruction_precision:architect_general>frontdoor"
+    assert batch["targets"] == ["suite:instruction_precision:architect_general>frontdoor"]
     assert batch["suite_argument"] == "instruction_precision"
     assert batch["question_source"] == "yaml"
     assert batch["debug_prompts_dir"] == (
         "/mnt/raid0/llm/epyc-inference-research/benchmarks/prompts/v1"
     )
+    assert batch["sample_size"] <= 20
+    assert batch["estimated_new_source_records"] == batch["reference_source_prompt_count"]
     assert "--question-source yaml" in batch["command"]
     assert (
         "--debug-prompts-dir /mnt/raid0/llm/epyc-inference-research/benchmarks/prompts/v1"
@@ -657,16 +661,88 @@ def test_pairwise_holdout_collection_batches_prioritize_source_family_blockers()
     assert batches[0]["question_source"] == "auto"
     assert batches[0]["requested_new_source_records"] == 20
     assert batches[0]["estimated_new_source_records"] == 36
-    assert batches[1]["sample_size"] == 20
+    assert 1 <= batches[1]["sample_size"] <= 20
     assert batches[1]["question_source"] == "yaml"
     assert batches[1]["debug_prompts_dir"] == (
         "/mnt/raid0/llm/epyc-inference-research/benchmarks/prompts/v1"
     )
     assert batches[1]["requested_new_source_records"] == 20
-    assert batches[1]["estimated_new_source_records"] == 20
+    assert batches[1]["estimated_new_source_records"] == batches[1]["reference_source_prompt_count"]
     assert batches[0]["collection_priority_reason"] == (
         "independent_holdout_source_family_blocker"
     )
+
+
+def test_pairwise_holdout_merges_reference_backed_suite_pairs(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    prompt_dir = tmp_path / "prompts"
+    prompt_dir.mkdir()
+    (prompt_dir / "instruction_precision.yaml").write_text(
+        "prompts:\n"
+        "  a:\n"
+        "    prompt: 'A'\n"
+        "    reference_answer: 'A ref'\n"
+        "  b:\n"
+        "    prompt: 'B'\n"
+        "    reference_answer: 'B ref'\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setitem(
+        mod.REFERENCE_BACKED_COLLECTION_SOURCES,
+        "instruction_precision",
+        prompt_dir,
+    )
+    requirements = [
+        {
+            "target": "suite:instruction_precision:architect_general>coder_escalation",
+            "stratum_field": "suite",
+            "stratum_value": "instruction_precision",
+            "action_pair": "architect_general>coder_escalation",
+            "actions_to_evaluate_on_same_source_record": [
+                "architect_general",
+                "coder_escalation",
+            ],
+            "target_preferred_actions": ["architect_general"],
+            "suggested_min_new_source_records": 20,
+            "collection_priority": 2,
+            "collection_priority_reason": "direction_balance_cleanup",
+        },
+        {
+            "target": "suite:instruction_precision:architect_general>frontdoor",
+            "stratum_field": "suite",
+            "stratum_value": "instruction_precision",
+            "action_pair": "architect_general>frontdoor",
+            "actions_to_evaluate_on_same_source_record": [
+                "architect_general",
+                "frontdoor",
+            ],
+            "target_preferred_actions": ["frontdoor"],
+            "suggested_min_new_source_records": 20,
+            "collection_priority": 2,
+            "collection_priority_reason": "direction_balance_cleanup",
+        },
+    ]
+
+    batches = mod._collection_batches(requirements)
+
+    assert len(batches) == 1
+    batch = batches[0]
+    assert batch["targets"] == [
+        "suite:instruction_precision:architect_general>coder_escalation",
+        "suite:instruction_precision:architect_general>frontdoor",
+    ]
+    assert batch["roles_argument"] == [
+        "architect_general",
+        "coder_escalation",
+        "frontdoor",
+    ]
+    assert "--roles architect_general coder_escalation frontdoor" in batch["command"]
+    assert batch["sample_size"] == 2
+    assert batch["estimated_new_source_records"] == 2
+    assert batch["reference_source_prompt_count"] == 2
+    assert batch["question_source"] == "yaml"
 
 
 def test_pairwise_holdout_negative_markdown_lists_source_record_requirements(

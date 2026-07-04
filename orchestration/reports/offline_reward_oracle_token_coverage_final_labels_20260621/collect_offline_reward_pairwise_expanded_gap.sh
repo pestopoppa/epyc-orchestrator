@@ -12,10 +12,6 @@ if pgrep -af 'scripts/autopilot/autopilot.py start' >/dev/null; then
 fi
 cd /mnt/raid0/llm/epyc-orchestrator
 
-echo 'A9 collection batch 1/2: suite:instruction_precision:architect_general>coder_escalation'
-mkdir -p "$(dirname "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_instruction_precision_architect_general_coder_escalation_${RUN_TS}.json")"
-uv run python scripts/benchmark/seed_specialist_routing.py --suites instruction_precision --roles architect_general coder_escalation --modes direct --sample-size 20 --question-source yaml --debug-prompts-dir /mnt/raid0/llm/epyc-inference-research/benchmarks/prompts/v1 --max-tokens 1024 --strict-modes --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_instruction_precision_architect_general_coder_escalation_${RUN_TS}.json
-
-echo 'A9 collection batch 2/2: suite:instruction_precision:architect_general>frontdoor'
-mkdir -p "$(dirname "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_instruction_precision_architect_general_frontdoor_${RUN_TS}.json")"
-uv run python scripts/benchmark/seed_specialist_routing.py --suites instruction_precision --roles architect_general frontdoor --modes direct --sample-size 20 --question-source yaml --debug-prompts-dir /mnt/raid0/llm/epyc-inference-research/benchmarks/prompts/v1 --max-tokens 1024 --strict-modes --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_instruction_precision_architect_general_frontdoor_${RUN_TS}.json
+echo 'A9 collection batch 1/1: suite:instruction_precision:architect_general>coder_escalation+suite:instruction_precision:architect_general>frontdoor'
+mkdir -p "$(dirname "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_instruction_precision_architect_general_coder_escalation_suite_instruction_precision_architect_general_frontdoor_${RUN_TS}.json")"
+uv run python scripts/benchmark/seed_specialist_routing.py --suites instruction_precision --roles architect_general coder_escalation frontdoor --modes direct --sample-size 11 --question-source yaml --debug-prompts-dir /mnt/raid0/llm/epyc-inference-research/benchmarks/prompts/v1 --max-tokens 1024 --strict-modes --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_instruction_precision_architect_general_coder_escalation_suite_instruction_precision_architect_general_frontdoor_${RUN_TS}.json

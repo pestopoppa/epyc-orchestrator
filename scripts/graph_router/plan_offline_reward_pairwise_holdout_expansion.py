@@ -324,10 +324,96 @@ def _collection_sample_size_for_suite_arg(
     return cli_sample_size, cli_sample_size * suite_count
 
 
+def _reference_backed_prompt_count(suite: str, source_dir: Path) -> int | None:
+    try:
+        import yaml
+    except ImportError:
+        return None
+
+    path = source_dir / f"{suite}.yaml"
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return None
+
+    questions = data.get("questions")
+    if isinstance(questions, list):
+        return sum(
+            1 for item in questions
+            if isinstance(item, dict) and item.get("prompt")
+        )
+    prompts = data.get("prompts")
+    if isinstance(prompts, dict):
+        return sum(
+            1 for item in prompts.values()
+            if isinstance(item, dict) and item.get("prompt")
+        )
+    return None
+
+
+def _ordered_unique(items: Iterable[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        value = str(item)
+        if value in seen:
+            continue
+        seen.add(value)
+        out.append(value)
+    return out
+
+
+def _merge_reference_backed_requirements(
+    requirements: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    suite_index: dict[str, dict[str, Any]] = {}
+    for requirement in requirements:
+        stratum_field = str(requirement.get("stratum_field") or "")
+        stratum_value = str(requirement.get("stratum_value") or "")
+        if (
+            stratum_field != "suite"
+            or stratum_value not in REFERENCE_BACKED_COLLECTION_SOURCES
+        ):
+            merged.append(requirement)
+            continue
+
+        existing = suite_index.get(stratum_value)
+        if existing is None:
+            existing = dict(requirement)
+            existing["merged_collection_targets"] = [str(requirement.get("target") or "")]
+            existing["merged_action_pairs"] = [str(requirement.get("action_pair") or "")]
+            suite_index[stratum_value] = existing
+            merged.append(existing)
+            continue
+
+        existing["merged_collection_targets"].append(str(requirement.get("target") or ""))
+        existing["merged_action_pairs"].append(str(requirement.get("action_pair") or ""))
+        existing["actions_to_evaluate_on_same_source_record"] = _ordered_unique(
+            [
+                *existing.get("actions_to_evaluate_on_same_source_record", []),
+                *requirement.get("actions_to_evaluate_on_same_source_record", []),
+            ]
+        )
+        existing["target_preferred_actions"] = _ordered_unique(
+            [
+                *existing.get("target_preferred_actions", []),
+                *requirement.get("target_preferred_actions", []),
+            ]
+        )
+        existing["suggested_min_new_source_records"] = max(
+            int(existing.get("suggested_min_new_source_records") or 0),
+            int(requirement.get("suggested_min_new_source_records") or 0),
+        )
+        existing["target"] = "+".join(existing["merged_collection_targets"])
+        existing["action_pair"] = "+".join(existing["merged_action_pairs"])
+    return merged
+
+
 def _collection_batches(requirements: list[dict[str, Any]]) -> list[dict[str, Any]]:
     batches: list[dict[str, Any]] = []
     ordered_requirements = sorted(
-        requirements,
+        _merge_reference_backed_requirements(requirements),
         key=lambda requirement: (
             int(requirement.get("collection_priority") or 0),
             -int(requirement.get("suggested_min_new_source_records") or 0),
@@ -354,6 +440,15 @@ def _collection_batches(requirements: list[dict[str, Any]]) -> list[dict[str, An
             requested_records,
             suite_argument=suite,
         )
+        reference_source_prompt_count = None
+        if source_override is not None:
+            reference_source_prompt_count = _reference_backed_prompt_count(
+                suite,
+                source_override,
+            )
+            if reference_source_prompt_count is not None:
+                sample_size = min(sample_size, max(1, reference_source_prompt_count))
+                estimated_records = min(estimated_records, reference_source_prompt_count)
         if stratum_field == "source_family" and stratum_value == "orchestrator_live_seed":
             output = (
                 "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/"
@@ -382,6 +477,7 @@ def _collection_batches(requirements: list[dict[str, Any]]) -> list[dict[str, An
         batches.append(
             {
                 "target": target,
+                "targets": list(requirement.get("merged_collection_targets") or [target]),
                 "expected_source_family": expected_source_family,
                 "suite_argument": suite,
                 "roles_argument": actions,
@@ -397,6 +493,11 @@ def _collection_batches(requirements: list[dict[str, Any]]) -> list[dict[str, An
                 ),
                 "requested_new_source_records": requested_records,
                 "estimated_new_source_records": estimated_records,
+                **(
+                    {"reference_source_prompt_count": reference_source_prompt_count}
+                    if reference_source_prompt_count is not None
+                    else {}
+                ),
                 "sample_size_semantics": (
                     "seed_specialist_routing.py interprets --sample-size as "
                     "questions per suite; source-family targets with --suites "
