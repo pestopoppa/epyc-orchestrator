@@ -159,6 +159,55 @@ xmas_routing:
                         ],
                         "searched_globs": ["orchestration/reports/ds_e1*kv*"],
                     },
+                },
+                {
+                    "key": "ri10_canary",
+                    "status": "insufficient_data",
+                    "details": {
+                        "telemetry_collection_blocker": (
+                            "canary_role_sample_count_insufficient"
+                        ),
+                        "telemetry_collection_reason": (
+                            "only 20 current high-risk row(s) matched "
+                            "configured canary_roles; gate requires 50"
+                        ),
+                        "canary_role_sample_deficit_since_telemetry_health_start": 30,
+                        "canary_arm_volume_deficit_since_telemetry_health_start": 30,
+                        "canary_arm_balance_deficits_since_telemetry_health_start": {
+                            "enforce_high_risk": 9,
+                            "shadow_high_risk": 0,
+                        },
+                        "report_summary": {
+                            "high_risk_by_role_since_telemetry_health_start": {
+                                "frontdoor": 2,
+                                "worker_general": 17,
+                                "worker_vision": 1,
+                            },
+                            "canary_role_high_risk_by_role_since_telemetry_health_start": {
+                                "frontdoor": 2,
+                                "worker_general": 17,
+                                "worker_vision": 1,
+                            },
+                            "canary_arm_counts_since_telemetry_health_start": {
+                                "enforce_high_risk": 1,
+                                "shadow_high_risk": 19,
+                            },
+                            "canary_arm_counts_by_role_since_telemetry_health_start": {
+                                "frontdoor": {
+                                    "enforce_high_risk": 0,
+                                    "shadow_high_risk": 2,
+                                },
+                                "worker_general": {
+                                    "enforce_high_risk": 1,
+                                    "shadow_high_risk": 16,
+                                },
+                                "worker_vision": {
+                                    "enforce_high_risk": 0,
+                                    "shadow_high_risk": 1,
+                                },
+                            },
+                        },
+                    },
                 }
             ],
         },
@@ -349,6 +398,47 @@ xmas_routing:
     assert report["next_actions"][3]["command"] == (
         "uv run python scripts/analysis/ri10_canary_sample_report.py"
     )
+    assert report["next_actions"][3]["evidence"] == {
+        "telemetry_collection_blocker": "canary_role_sample_count_insufficient",
+        "telemetry_collection_reason": (
+            "only 20 current high-risk row(s) matched configured canary_roles; "
+            "gate requires 50"
+        ),
+        "canary_role_sample_deficit": 30,
+        "canary_arm_volume_deficit": 30,
+        "canary_arm_balance_deficits": {
+            "enforce_high_risk": 9,
+            "shadow_high_risk": 0,
+        },
+        "high_risk_by_role_current": {
+            "frontdoor": 2,
+            "worker_general": 17,
+            "worker_vision": 1,
+        },
+        "canary_role_high_risk_by_role_current": {
+            "frontdoor": 2,
+            "worker_general": 17,
+            "worker_vision": 1,
+        },
+        "canary_arm_counts_current": {
+            "enforce_high_risk": 1,
+            "shadow_high_risk": 19,
+        },
+        "canary_arm_counts_by_role_current": {
+            "frontdoor": {
+                "enforce_high_risk": 0,
+                "shadow_high_risk": 2,
+            },
+            "worker_general": {
+                "enforce_high_risk": 1,
+                "shadow_high_risk": 16,
+            },
+            "worker_vision": {
+                "enforce_high_risk": 0,
+                "shadow_high_risk": 1,
+            },
+        },
+    }
     xmas_action = report["next_actions"][4]
     assert xmas_action["status"] == "blocked"
     assert xmas_action["blocked_by"] == ["active AutoPilot process(es): 123"]

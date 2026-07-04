@@ -129,8 +129,11 @@ def build_report(
     band_counts = Counter()
     since_band_counts = Counter()
     high_by_date = Counter()
+    high_by_role = Counter()
     high_actions = Counter()
     high_modes = Counter()
+    canary_role_high_by_role = Counter()
+    canary_arm_counts_by_role = Counter()
     canary_role_modes = Counter()
     high_sources = Counter()
     enforce_high = 0
@@ -140,8 +143,11 @@ def build_report(
     telemetry_canary_role_high_since = 0
     telemetry_non_canary_role_high_since = 0
     telemetry_high_by_date = Counter()
+    telemetry_high_by_role = Counter()
     telemetry_high_actions = Counter()
     telemetry_high_modes = Counter()
+    telemetry_canary_role_high_by_role = Counter()
+    telemetry_canary_arm_counts_by_role = Counter()
     telemetry_canary_role_modes = Counter()
     telemetry_enforce_high = 0
     telemetry_shadow_high = 0
@@ -182,15 +188,26 @@ def build_report(
             canary_role_high_since += 1
             canary_role_modes[factual_mode] += 1
         high_by_date[date] += 1
+        high_by_role.update(routing or ["<missing>"])
+        for role in routing:
+            if not canary_role_set or role in canary_role_set:
+                canary_role_high_by_role[role] += 1
         high_actions[_action_key(data)] += 1
         high_sources[str(data.get("decision_source") or data.get("strategy") or "<missing>")] += 1
         if is_enforce_arm:
             enforce_high += 1
+            for role in routing:
+                if not canary_role_set or role in canary_role_set:
+                    canary_arm_counts_by_role[(role, "enforce_high_risk")] += 1
         if is_shadow_arm:
             shadow_high += 1
+            for role in routing:
+                if not canary_role_set or role in canary_role_set:
+                    canary_arm_counts_by_role[(role, "shadow_high_risk")] += 1
         if in_telemetry_window:
             telemetry_high_since += 1
             telemetry_high_by_date[date] += 1
+            telemetry_high_by_role.update(routing or ["<missing>"])
             telemetry_high_modes[factual_mode] += 1
             telemetry_high_actions[_action_key(data)] += 1
             if "frontdoor" in routing:
@@ -198,12 +215,21 @@ def build_report(
             if is_canary_participant:
                 telemetry_canary_role_high_since += 1
                 telemetry_canary_role_modes[factual_mode] += 1
+                for role in routing:
+                    if not canary_role_set or role in canary_role_set:
+                        telemetry_canary_role_high_by_role[role] += 1
             else:
                 telemetry_non_canary_role_high_since += 1
             if is_enforce_arm:
                 telemetry_enforce_high += 1
+                for role in routing:
+                    if not canary_role_set or role in canary_role_set:
+                        telemetry_canary_arm_counts_by_role[(role, "enforce_high_risk")] += 1
             if is_shadow_arm:
                 telemetry_shadow_high += 1
+                for role in routing:
+                    if not canary_role_set or role in canary_role_set:
+                        telemetry_canary_arm_counts_by_role[(role, "shadow_high_risk")] += 1
         if len(examples) < 12:
             examples.append(
                 {
@@ -285,6 +311,10 @@ def build_report(
     arm_sample_count_ready = arm_attributed_high >= decision_gate
     arm_balance_ready = enforce_high >= min_arm_samples and shadow_high >= min_arm_samples
     canary_decision_ready = sample_count_ready and arm_sample_count_ready and arm_balance_ready
+    telemetry_canary_role_sample_deficit = max(0, decision_gate - telemetry_canary_role_high_since)
+    telemetry_canary_arm_volume_deficit = max(0, decision_gate - telemetry_arm_attributed_high)
+    telemetry_canary_enforce_arm_deficit = max(0, min_arm_samples - telemetry_enforce_high)
+    telemetry_canary_shadow_arm_deficit = max(0, min_arm_samples - telemetry_shadow_high)
     if not sample_count_ready:
         decision_reason = f"high-risk sample count {high_since} is below gate {decision_gate}"
     elif not arm_sample_count_ready:
@@ -363,6 +393,16 @@ def build_report(
         "high_risk_by_date_since_telemetry_health_start": _counter_dict(
             telemetry_high_by_date
         ),
+        "high_risk_by_role_since_canary_start": _counter_dict(high_by_role),
+        "high_risk_by_role_since_telemetry_health_start": _counter_dict(
+            telemetry_high_by_role
+        ),
+        "canary_role_high_risk_by_role_since_canary_start": _counter_dict(
+            canary_role_high_by_role
+        ),
+        "canary_role_high_risk_by_role_since_telemetry_health_start": _counter_dict(
+            telemetry_canary_role_high_by_role
+        ),
         "high_risk_factual_risk_modes_since_canary_start": _counter_dict(high_modes),
         "canary_role_factual_risk_modes_since_canary_start": _counter_dict(canary_role_modes),
         "high_risk_factual_risk_modes_since_telemetry_health_start": _counter_dict(
@@ -385,8 +425,34 @@ def build_report(
             "enforce_high_risk": telemetry_enforce_high,
             "shadow_high_risk": telemetry_shadow_high,
         },
+        "canary_arm_counts_by_role_since_canary_start": _role_arm_counts(
+            canary_arm_counts_by_role
+        ),
+        "canary_arm_counts_by_role_since_telemetry_health_start": _role_arm_counts(
+            telemetry_canary_arm_counts_by_role
+        ),
+        "canary_role_sample_deficit_since_telemetry_health_start": (
+            telemetry_canary_role_sample_deficit
+        ),
+        "canary_arm_volume_deficit_since_telemetry_health_start": (
+            telemetry_canary_arm_volume_deficit
+        ),
+        "canary_arm_balance_deficits_since_telemetry_health_start": {
+            "enforce_high_risk": telemetry_canary_enforce_arm_deficit,
+            "shadow_high_risk": telemetry_canary_shadow_arm_deficit,
+        },
         "example_high_risk_rows": examples,
     }
+
+
+def _role_arm_counts(counter: Counter[tuple[str, str]]) -> dict[str, dict[str, int]]:
+    by_role: dict[str, dict[str, int]] = {}
+    for (role, arm), count in sorted(counter.items(), key=lambda item: item[0]):
+        by_role.setdefault(str(role), {})[str(arm)] = int(count)
+    for counts in by_role.values():
+        counts.setdefault("enforce_high_risk", 0)
+        counts.setdefault("shadow_high_risk", 0)
+    return by_role
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:

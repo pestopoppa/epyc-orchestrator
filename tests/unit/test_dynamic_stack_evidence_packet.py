@@ -326,10 +326,35 @@ factual_risk:
   "telemetry_health_start": "2026-07-04",
   "high_risk_rows_since_telemetry_health_start": 20,
   "canary_role_high_risk_rows_since_telemetry_health_start": 20,
+  "canary_role_high_risk_by_role_since_telemetry_health_start": {
+    "frontdoor": 2,
+    "worker_general": 17,
+    "worker_vision": 1
+  },
   "evaluable_canary_arm_high_risk_rows_since_telemetry_health_start": 20,
   "canary_arm_counts_since_telemetry_health_start": {
     "enforce_high_risk": 1,
     "shadow_high_risk": 19
+  },
+  "canary_arm_counts_by_role_since_telemetry_health_start": {
+    "frontdoor": {
+      "enforce_high_risk": 0,
+      "shadow_high_risk": 2
+    },
+    "worker_general": {
+      "enforce_high_risk": 1,
+      "shadow_high_risk": 16
+    },
+    "worker_vision": {
+      "enforce_high_risk": 0,
+      "shadow_high_risk": 1
+    }
+  },
+  "canary_role_sample_deficit_since_telemetry_health_start": 30,
+  "canary_arm_volume_deficit_since_telemetry_health_start": 30,
+  "canary_arm_balance_deficits_since_telemetry_health_start": {
+    "enforce_high_risk": 9,
+    "shadow_high_risk": 0
   },
   "telemetry_producer_currently_healthy": true,
   "telemetry_canary_role_scope_starved": false,
@@ -358,6 +383,25 @@ factual_risk:
         ]["shadow_high_risk"]
         == 19
     )
+    assert (
+        section.details[
+            "canary_role_sample_deficit_since_telemetry_health_start"
+        ]
+        == 30
+    )
+    assert section.details["report_summary"][
+        "canary_role_high_risk_by_role_since_telemetry_health_start"
+    ] == {
+        "frontdoor": 2,
+        "worker_general": 17,
+        "worker_vision": 1,
+    }
+    assert section.details["report_summary"][
+        "canary_arm_counts_by_role_since_telemetry_health_start"
+    ]["worker_general"] == {
+        "enforce_high_risk": 1,
+        "shadow_high_risk": 16,
+    }
 
 
 def test_kv_measurement_section_flags_missing_series(tmp_path: Path) -> None:

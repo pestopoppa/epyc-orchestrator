@@ -30,6 +30,15 @@ DEFAULT_CLASSIFIER_CONFIG = ORCH_ROOT / "orchestration" / "classifier_config.yam
 DEFAULT_CONTENTION_MATRIX = ORCH_ROOT / "orchestration" / "contention_matrix.yaml"
 DEFAULT_RESEARCH_MANIFEST = RESEARCH_ROOT / "docs" / "MODEL_MANIFEST.md"
 DEFAULT_RI10_REPORT_GLOB = "orchestration/reports/ri10_canary_sample_report*.json"
+RI10_SCHEMA_REFRESH_KEYS = frozenset(
+    {
+        "canary_role_sample_deficit_since_telemetry_health_start",
+        "canary_arm_volume_deficit_since_telemetry_health_start",
+        "canary_arm_balance_deficits_since_telemetry_health_start",
+        "canary_role_high_risk_by_role_since_telemetry_health_start",
+        "canary_arm_counts_by_role_since_telemetry_health_start",
+    }
+)
 DEFAULT_KV_GLOBS = (
     "orchestration/reports/ds_e1*kv*",
     "orchestration/reports/dynamic_stack*kv*",
@@ -60,6 +69,10 @@ KV_MEASUREMENT_COLUMNS = [
 
 sys.path.insert(0, str(ORCH_ROOT))
 sys.path.insert(0, str(ORCH_ROOT / "scripts" / "server"))
+
+from scripts.analysis.ri10_canary_sample_report import (  # noqa: E402
+    build_report as build_ri10_canary_report,
+)
 
 
 @dataclass(frozen=True)
@@ -309,13 +322,29 @@ def ri10_canary_section(config_path: Path = DEFAULT_CLASSIFIER_CONFIG) -> Eviden
     report_paths = _resolve_glob(ORCH_ROOT, DEFAULT_RI10_REPORT_GLOB)
     latest_report: dict[str, Any] = {}
     latest_report_path: Path | None = report_paths[-1] if report_paths else None
+    report_source = "missing"
     if latest_report_path:
         try:
             loaded = json.loads(latest_report_path.read_text(encoding="utf-8"))
             if isinstance(loaded, dict):
                 latest_report = loaded
+                report_source = "artifact"
         except Exception as exc:
             latest_report = {"error": str(exc)}
+            report_source = "artifact_error"
+    progress_log_dir = ORCH_ROOT / "logs" / "progress"
+    needs_schema_refresh = latest_report and not RI10_SCHEMA_REFRESH_KEYS.issubset(
+        latest_report.keys()
+    )
+    if needs_schema_refresh and any(progress_log_dir.glob("*.jsonl")):
+        try:
+            latest_report = build_ri10_canary_report(
+                progress_log_dir,
+                canary_roles=canary_roles,
+            )
+            report_source = "live_progress_logs"
+        except Exception as exc:
+            latest_report = {**latest_report, "schema_refresh_error": str(exc)}
 
     status = "missing_data"
     summary = "RI-10 config is present, but no current canary sample-count artifact was found."
@@ -386,6 +415,9 @@ def ri10_canary_section(config_path: Path = DEFAULT_CLASSIFIER_CONFIG) -> Eviden
             "frontdoor_high_risk_rows_since_canary_start",
             "canary_role_high_risk_rows_since_canary_start",
             "evaluable_canary_arm_high_risk_rows",
+            "high_risk_by_role_since_canary_start",
+            "canary_role_high_risk_by_role_since_canary_start",
+            "canary_arm_counts_by_role_since_canary_start",
             "non_evaluable_high_risk_rows_since_canary_start",
             "non_canary_role_high_risk_rows_since_canary_start",
             "canary_role_observable_factual_risk_mode_high_risk_rows",
@@ -394,8 +426,14 @@ def ri10_canary_section(config_path: Path = DEFAULT_CLASSIFIER_CONFIG) -> Eviden
             "high_risk_rows_since_telemetry_health_start",
             "frontdoor_high_risk_rows_since_telemetry_health_start",
             "canary_role_high_risk_rows_since_telemetry_health_start",
+            "high_risk_by_role_since_telemetry_health_start",
+            "canary_role_high_risk_by_role_since_telemetry_health_start",
             "non_canary_role_high_risk_rows_since_telemetry_health_start",
             "evaluable_canary_arm_high_risk_rows_since_telemetry_health_start",
+            "canary_arm_counts_by_role_since_telemetry_health_start",
+            "canary_role_sample_deficit_since_telemetry_health_start",
+            "canary_arm_volume_deficit_since_telemetry_health_start",
+            "canary_arm_balance_deficits_since_telemetry_health_start",
             "observable_factual_risk_mode_high_risk_rows_since_telemetry_health_start",
             "missing_factual_risk_mode_high_risk_rows_since_telemetry_health_start",
             "canary_role_observable_factual_risk_mode_high_risk_rows_since_telemetry_health_start",
@@ -432,8 +470,18 @@ def ri10_canary_section(config_path: Path = DEFAULT_CLASSIFIER_CONFIG) -> Eviden
             "canary_roles": canary_roles,
             "decision_gate": ">=50 high-risk samples",
             "report_path": str(latest_report_path) if latest_report_path else None,
+            "report_source": report_source,
             "telemetry_collection_blocker": latest_report.get("telemetry_collection_blocker"),
             "telemetry_collection_reason": latest_report.get("telemetry_collection_reason"),
+            "canary_role_sample_deficit_since_telemetry_health_start": latest_report.get(
+                "canary_role_sample_deficit_since_telemetry_health_start"
+            ),
+            "canary_arm_volume_deficit_since_telemetry_health_start": latest_report.get(
+                "canary_arm_volume_deficit_since_telemetry_health_start"
+            ),
+            "canary_arm_balance_deficits_since_telemetry_health_start": latest_report.get(
+                "canary_arm_balance_deficits_since_telemetry_health_start"
+            ),
             "report_summary": report_summary,
         },
     )

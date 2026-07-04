@@ -311,6 +311,26 @@ def test_build_report_separates_historical_missing_modes_from_current_scope_star
         "enforce_high_risk": 1,
         "shadow_high_risk": 1,
     }
+    assert summary["high_risk_by_role_since_telemetry_health_start"] == {
+        "frontdoor": 2,
+        "worker_general": 2,
+        "worker_vision": 1,
+    }
+    assert summary["canary_role_high_risk_by_role_since_telemetry_health_start"] == {
+        "frontdoor": 2
+    }
+    assert summary["canary_arm_counts_by_role_since_telemetry_health_start"] == {
+        "frontdoor": {
+            "enforce_high_risk": 1,
+            "shadow_high_risk": 1,
+        }
+    }
+    assert summary["canary_role_sample_deficit_since_telemetry_health_start"] == 8
+    assert summary["canary_arm_volume_deficit_since_telemetry_health_start"] == 8
+    assert summary["canary_arm_balance_deficits_since_telemetry_health_start"] == {
+        "enforce_high_risk": 0,
+        "shadow_high_risk": 0,
+    }
 
 
 def test_build_report_flags_current_missing_factual_mode(tmp_path: Path) -> None:

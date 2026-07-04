@@ -544,6 +544,16 @@ def ds_e1_section(
     kv_details = kv_section.get("details") if isinstance(kv_section, dict) else {}
     if not isinstance(kv_details, dict):
         kv_details = {}
+    ri10_section = next(
+        (section for section in sections if section.get("key") == "ri10_canary"),
+        {},
+    )
+    ri10_details = ri10_section.get("details") if isinstance(ri10_section, dict) else {}
+    if not isinstance(ri10_details, dict):
+        ri10_details = {}
+    ri10_summary = ri10_details.get("report_summary")
+    if not isinstance(ri10_summary, dict):
+        ri10_summary = {}
     return GateSection(
         key="ds_e1_dynamic_stack",
         status="ready" if packet.get("ready_for_profile_decision") else "blocked",
@@ -564,6 +574,33 @@ def ds_e1_section(
             "kv_searched_globs": kv_details.get("searched_globs"),
             "clean_window_ready": clean_window_report.get("ready"),
             "clean_window_blockers": clean_window_blockers,
+            "ri10_telemetry_collection_blocker": ri10_details.get(
+                "telemetry_collection_blocker"
+            ),
+            "ri10_telemetry_collection_reason": ri10_details.get(
+                "telemetry_collection_reason"
+            ),
+            "ri10_canary_role_sample_deficit": ri10_details.get(
+                "canary_role_sample_deficit_since_telemetry_health_start"
+            ),
+            "ri10_canary_arm_volume_deficit": ri10_details.get(
+                "canary_arm_volume_deficit_since_telemetry_health_start"
+            ),
+            "ri10_canary_arm_balance_deficits": ri10_details.get(
+                "canary_arm_balance_deficits_since_telemetry_health_start"
+            ),
+            "ri10_high_risk_by_role_current": ri10_summary.get(
+                "high_risk_by_role_since_telemetry_health_start"
+            ),
+            "ri10_canary_role_high_risk_by_role_current": ri10_summary.get(
+                "canary_role_high_risk_by_role_since_telemetry_health_start"
+            ),
+            "ri10_canary_arm_counts_current": ri10_summary.get(
+                "canary_arm_counts_since_telemetry_health_start"
+            ),
+            "ri10_canary_arm_counts_by_role_current": ri10_summary.get(
+                "canary_arm_counts_by_role_since_telemetry_health_start"
+            ),
         },
     )
 
@@ -1386,12 +1423,18 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
                 }
             )
         if section_statuses.get("ri10_canary") != "ready":
+            ri10_evidence = {
+                key.removeprefix("ri10_"): value
+                for key, value in details.items()
+                if key.startswith("ri10_") and value is not None
+            }
             actions.append(
                 {
                     "key": "collect_ri10_canary_arm_telemetry",
                     "priority": "P0",
                     "status": "active",
                     "reason": "RI-10 has raw high-risk samples, but arm-attributed canary telemetry is not yet decision-grade.",
+                    "evidence": ri10_evidence,
                     "command": "uv run python scripts/analysis/ri10_canary_sample_report.py",
                 }
             )
