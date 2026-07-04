@@ -1197,47 +1197,92 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
     tool_use = by_key.get("tool_use_activation")
     if tool_use and tool_use.status != "ready":
         phase_active = bool(phase and phase.details.get("status") == "active")
-        actions.append(
-            {
-                "key": "activate_tool_use_sentinel_lane",
-                "priority": "P0",
-                "status": "blocked" if phase_active else "ready",
-                "reason": (
-                    "StrategyStore already exposes tool-use hints to the planner; "
-                    "the remaining gap is activating the API and AutoPilot "
-                    "tool-sentinel telemetry lane so tool use is measured."
-                ),
-                "requires": (
-                    "coordinated API reload plus AutoPilot restart at a trial "
-                    "boundary; this changes the active eval mix"
-                ),
-                "blocked_by": (
-                    ["active AutoPilot process; wait for a controlled trial boundary"]
-                    if phase_active
-                    else []
-                ),
-                "evidence": {
-                    "activation_gaps": tool_use.details.get("activation_gaps"),
-                    "autopilot_tool_sentinels_enabled": tool_use.details.get(
-                        "autopilot_tool_sentinels_enabled"
-                    ),
-                    "api_tool_sentinels_enabled": tool_use.details.get(
-                        "api_tool_sentinels_enabled"
-                    ),
-                    "api_tools_enabled": tool_use.details.get("api_tools_enabled"),
-                    "api_repl_enabled": tool_use.details.get("api_repl_enabled"),
-                    "latest_tool_metrics": tool_use.details.get("latest_tool_metrics"),
-                },
-                "command": (
-                    "At a controlled trial boundary, reload the orchestrator API "
-                    "with AUTOPILOT_TOOL_SENTINELS=1, restart AutoPilot with "
-                    "AUTOPILOT_TOOL_SENTINELS=1 plus the existing W4/W6/planner "
-                    "env, then run AUTOPILOT_TOOL_SENTINELS=1 uv run python "
-                    "scripts/autopilot/gate3_tool_telemetry.py"
-                ),
-                "follow_up": STRICT_FABLE5_GATE_COMMAND,
-            }
+        activation_gaps = list(tool_use.details.get("activation_gaps") or [])
+        sentinels_active = bool(
+            tool_use.details.get("autopilot_tool_sentinels_enabled")
+            and tool_use.details.get("api_tool_sentinels_enabled")
+            and tool_use.details.get("api_tools_enabled")
+            and tool_use.details.get("api_repl_enabled")
         )
+        evidence = {
+            "activation_gaps": activation_gaps,
+            "autopilot_tool_sentinels_enabled": tool_use.details.get(
+                "autopilot_tool_sentinels_enabled"
+            ),
+            "api_tool_sentinels_enabled": tool_use.details.get(
+                "api_tool_sentinels_enabled"
+            ),
+            "api_tools_enabled": tool_use.details.get("api_tools_enabled"),
+            "api_repl_enabled": tool_use.details.get("api_repl_enabled"),
+            "latest_tool_metrics": tool_use.details.get("latest_tool_metrics"),
+        }
+        if sentinels_active and activation_gaps and all(
+            gap
+            in {
+                "latest_eval_total_tool_calls_zero",
+                "latest_eval_tool_metrics_missing",
+            }
+            for gap in activation_gaps
+        ):
+            actions.append(
+                {
+                    "key": "collect_tool_use_sentinel_journal_evidence",
+                    "priority": "P0",
+                    "status": "active" if phase_active else "ready",
+                    "reason": (
+                        "The API and AutoPilot tool-sentinel lane is active; "
+                        "the remaining gap is waiting for a sentinel-enabled "
+                        "eval to journal nonzero tool telemetry."
+                    ),
+                    "requires": (
+                        "one completed AutoPilot eval with "
+                        "AUTOPILOT_TOOL_SENTINELS=1 and tool-use sentinels loaded"
+                    ),
+                    "blocked_by": [],
+                    "evidence": evidence,
+                    "command": (
+                        "Let the current sentinel-enabled AutoPilot eval finish, "
+                        "then rerun "
+                        "uv run python scripts/autopilot/fable5_gate_report.py "
+                        "--json --strict"
+                    ),
+                    "follow_up": STRICT_FABLE5_GATE_COMMAND,
+                }
+            )
+        else:
+            actions.append(
+                {
+                    "key": "activate_tool_use_sentinel_lane",
+                    "priority": "P0",
+                    "status": "blocked" if phase_active else "ready",
+                    "reason": (
+                        "StrategyStore already exposes tool-use hints to the planner; "
+                        "the remaining gap is activating the API and AutoPilot "
+                        "tool-sentinel telemetry lane so tool use is measured."
+                    ),
+                    "requires": (
+                        "coordinated API reload plus AutoPilot restart at a trial "
+                        "boundary; this changes the active eval mix"
+                    ),
+                    "blocked_by": (
+                        [
+                            "active AutoPilot process; "
+                            "wait for a controlled trial boundary"
+                        ]
+                        if phase_active
+                        else []
+                    ),
+                    "evidence": evidence,
+                    "command": (
+                        "At a controlled trial boundary, reload the orchestrator API "
+                        "with AUTOPILOT_TOOL_SENTINELS=1, restart AutoPilot with "
+                        "AUTOPILOT_TOOL_SENTINELS=1 plus the existing W4/W6/planner "
+                        "env, then run AUTOPILOT_TOOL_SENTINELS=1 uv run python "
+                        "scripts/autopilot/gate3_tool_telemetry.py"
+                    ),
+                    "follow_up": STRICT_FABLE5_GATE_COMMAND,
+                }
+            )
 
     ds_e1 = by_key.get("ds_e1_dynamic_stack")
     if ds_e1 and ds_e1.status != "ready":

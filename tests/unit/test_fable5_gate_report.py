@@ -478,6 +478,46 @@ def test_tool_use_next_action_requires_controlled_restart() -> None:
     ]
 
 
+def test_tool_use_next_action_waits_for_journal_when_lane_active() -> None:
+    phase = report_mod.GateSection(
+        key="phase_health",
+        status="ready",
+        summary="active",
+        blockers=[],
+        details={"status": "active"},
+    )
+    tool_use = report_mod.GateSection(
+        key="tool_use_activation",
+        status="attention",
+        summary="waiting for first journaled tool telemetry",
+        blockers=[],
+        details={
+            "activation_gaps": ["latest_eval_total_tool_calls_zero"],
+            "autopilot_tool_sentinels_enabled": True,
+            "api_tool_sentinels_enabled": True,
+            "api_tools_enabled": True,
+            "api_repl_enabled": True,
+            "latest_tool_metrics": {"trial_id": 1107, "total_tool_calls": 0},
+        },
+    )
+    ds_e1 = report_mod.GateSection(
+        key="ds_e1_dynamic_stack",
+        status="attention",
+        summary="blocked",
+        blockers=["kv missing"],
+        details={},
+    )
+
+    actions = report_mod.build_next_actions([phase, tool_use, ds_e1])
+
+    tool_action = actions[0]
+    assert tool_action["key"] == "collect_tool_use_sentinel_journal_evidence"
+    assert tool_action["status"] == "active"
+    assert tool_action["blocked_by"] == []
+    assert "sentinel-enabled AutoPilot eval finish" in tool_action["command"]
+    assert actions[1]["key"] == "run_ds_e1_kv_measurements"
+
+
 def test_phase_section_surfaces_eval_progress() -> None:
     section = report_mod.phase_section(
         {
