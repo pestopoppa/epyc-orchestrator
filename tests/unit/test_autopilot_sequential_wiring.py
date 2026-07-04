@@ -109,6 +109,7 @@ def _entry(
     timestamp: str = "2026-06-18T00:00:00Z",
     eval_details_extra: dict | None = None,
     keep_revert_decision: str = "",
+    failure_analysis: str = "",
 ) -> JournalEntry:
     eval_details = {
         "eval_wall_s": 1800.0,
@@ -128,6 +129,7 @@ def _entry(
         reliability=1.0,
         pareto_status="candidate",
         config_snapshot=dict(action),
+        failure_analysis=failure_analysis,
         eval_details=eval_details,
         seq=seq or {},
         bug_corrupted_by=corrupt,
@@ -385,6 +387,85 @@ def test_seq_candidate_replay_payload_skips_latest_reverted_candidate(
             action,
             seq={**seq, "k": 2},
             keep_revert_decision="revert",
+        )
+    )
+
+    assert autopilot._seq_candidate_replay_payload(journal, tier=1) is None
+
+
+def test_seq_candidate_replay_payload_allows_benign_excluded_accumulating_candidate(
+    tmp_path: Path,
+) -> None:
+    action = {
+        "type": "numeric_trial",
+        "surface": "repl_budget",
+        "params": {"repl.worker_call_budget_cap": 31},
+    }
+    candidate = autopilot._config_fingerprint(action)
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    seq = {
+        "candidate": candidate,
+        "core_id": "core_v1",
+        "k": 2,
+        "z": 0.1,
+        "z_rate": -0.1,
+        "E_quality": 1.02,
+        "E_rate_noninf": 0.96,
+        "state": "accumulating",
+        "confirmed": False,
+    }
+    journal.record(
+        _entry(
+            10,
+            action,
+            seq=seq,
+            keep_revert_decision="keep",
+        )
+    )
+    journal.record(
+        _entry(
+            11,
+            action,
+            seq={**seq, "k": 3},
+            keep_revert_decision="excluded",
+        )
+    )
+
+    payload = autopilot._seq_candidate_replay_payload(journal, tier=1)
+
+    assert payload is not None
+    assert payload["candidate"] == candidate
+    assert payload["source_trial_id"] == 11
+    assert payload["k"] == 3
+
+
+def test_seq_candidate_replay_payload_skips_terminal_excluded_candidate(
+    tmp_path: Path,
+) -> None:
+    action = {
+        "type": "numeric_trial",
+        "surface": "repl_budget",
+        "params": {"repl.worker_call_budget_cap": 31},
+    }
+    candidate = autopilot._config_fingerprint(action)
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    journal.record(
+        _entry(
+            10,
+            action,
+            seq={
+                "candidate": candidate,
+                "core_id": "core_v1",
+                "k": 1,
+                "z": 0.1,
+                "z_rate": -0.1,
+                "E_quality": 1.02,
+                "E_rate_noninf": 0.96,
+                "state": "accumulating",
+                "confirmed": False,
+            },
+            keep_revert_decision="excluded",
+            failure_analysis="VIOLATIONS:\n  - Suite 'general' regression",
         )
     )
 

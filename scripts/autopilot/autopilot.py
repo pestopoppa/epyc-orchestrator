@@ -1279,6 +1279,19 @@ def _seq_promotion_replay_blocker(action: Any) -> str:
     return ""
 
 
+def _seq_replay_terminal_keep_revert_decision(entry: Any) -> bool:
+    """Return whether AP-24 made this latest seq row terminal for replay."""
+    decision = str(getattr(entry, "keep_revert_decision", "") or "").strip()
+    if decision == "revert":
+        return True
+    if decision != "excluded":
+        return False
+    seq = getattr(entry, "seq", {}) or {}
+    if not isinstance(seq, dict) or str(seq.get("state") or "") != "accumulating":
+        return True
+    return bool(str(getattr(entry, "failure_analysis", "") or "").strip())
+
+
 def _seq_candidate_replay_payload(
     journal: ExperimentJournal,
     *,
@@ -1320,11 +1333,11 @@ def _seq_candidate_replay_payload(
             latest_by_candidate[candidate] = entry
 
     for entry in latest_by_candidate.values():
-        keep_revert = str(getattr(entry, "keep_revert_decision", "") or "").strip()
-        if keep_revert in {"revert", "excluded"}:
+        if _seq_replay_terminal_keep_revert_decision(entry):
             # AP-24 verdict-failed rows keep outcome_status="ok"; replay must
             # honor the explicit keep/revert decision or W8 can force
-            # already-reverted configs back into the measurement loop.
+            # already-failed configs back into the measurement loop. Benign
+            # learning exclusions remain replayable while still accumulating.
             continue
         seq = getattr(entry, "seq", {}) or {}
         if seq.get("confirmed") is True or str(seq.get("state") or "") != "accumulating":
