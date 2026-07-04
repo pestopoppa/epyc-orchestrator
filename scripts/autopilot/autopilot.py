@@ -4243,6 +4243,24 @@ def _run_loop_inner(
                 _record_rejected_draft(state, draft_action, crit, trial_counter)
                 blacklist = load_blacklist()  # may have grown
                 critic_fallback_skip = _critic_fallback_seed_skip(action, blacklist)
+                if critic_fallback_skip is not None:
+                    state["paused"] = True
+                    state["_dispatch_deficiency"] = "critic_reject_no_safe_fallback"
+                    state["last_invalid_action"] = action
+                    state["last_invalid_reason"] = critic_fallback_skip.reason
+                    state["last_invalid_status"] = "critic_reject_no_safe_fallback"
+                    save_state(state)
+                    log.error(
+                        "Critic rejected/revised planner draft but the safe fallback "
+                        "is unavailable — pausing before dispatch instead of "
+                        "journaling a skipped trial (%s).",
+                        critic_fallback_skip.reason,
+                    )
+                    phase.set(
+                        "critic_reject_no_safe_fallback_halt",
+                        trial_id=trial_counter,
+                    )
+                    break
                 if (
                     int(state.get("consecutive_rejected_drafts", 0))
                     >= MAX_CONSECUTIVE_REJECTED_DRAFTS
