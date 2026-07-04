@@ -1170,8 +1170,9 @@ def _seq_candidate_replay_payload(
             "E_quality": round(e_quality, 6),
             "E_rate_noninf": round(e_rate, 6),
         }
-        key = (combined_f, e_quality, e_rate, payload["source_trial_id"])
+        key = (-k, combined_f, e_quality, e_rate, payload["source_trial_id"])
         best_key = (
+            -int(best.get("k", 0)),
             float(best.get("combined_E", 0.0)),
             float(best.get("E_quality", 0.0)),
             float(best.get("E_rate_noninf", 0.0)),

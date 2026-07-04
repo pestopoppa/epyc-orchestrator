@@ -501,6 +501,35 @@ def test_ds_e1_section_surfaces_clean_window_blockers() -> None:
     ]
 
 
+def test_w8_trajectory_section_surfaces_concentration_warning() -> None:
+    section = report_mod.w8_trajectory_section(
+        {
+            "status": "progressing",
+            "ok": True,
+            "latest_trial_id": 1099,
+            "snapshot_count": 155,
+            "candidate_count": 41,
+            "status_counts": {"active_recent_replay": 1},
+            "open_requirements": ["replay_concentration_warning"],
+            "recent_active_candidates": ["abc"],
+            "stale_accumulating_candidates": ["def", "ghi"],
+            "replay_concentration": {
+                "warning": True,
+                "warning_reason": "recent replay evidence is concentrated",
+                "top_active_candidate": "abc",
+                "top_active_attempt_share": 1.0,
+            },
+        }
+    )
+
+    assert section.status == "blocked"
+    assert section.blockers == [
+        "replay_concentration_warning: recent replay evidence is concentrated"
+    ]
+    assert section.details["stale_accumulating_candidate_count"] == 2
+    assert section.details["replay_concentration"]["top_active_candidate"] == "abc"
+
+
 def test_ds_e1_clean_window_report_surfaces_measurement_port(
     monkeypatch,
 ) -> None:

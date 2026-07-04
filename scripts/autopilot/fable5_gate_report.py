@@ -43,6 +43,7 @@ from validate_xmas_winner_table import (  # noqa: E402
     validate_config as validate_xmas_config,
     validate_table as validate_xmas_table,
 )
+from w8_promotion_trajectory_report import build_w8_trajectory_report  # noqa: E402
 
 DEFAULT_XMAS_TABLE = ORCH_ROOT / "orchestration" / "xmas_winner_table.yaml"
 DEFAULT_XMAS_AB_ROOT = ORCH_ROOT / "benchmarks" / "results" / "runs" / "xmas_live_ab"
@@ -279,6 +280,44 @@ def restart_section(restart_report: dict[str, Any]) -> GateSection:
             "snapshot_payload_journal_max_trial_id": snapshot_replay.get(
                 "payload_journal_max_trial_id"
             ),
+        },
+    )
+
+
+def w8_trajectory_section(trajectory_report: dict[str, Any]) -> GateSection:
+    """Surface W8 replay concentration without changing authority semantics."""
+    concentration = trajectory_report.get("replay_concentration") or {}
+    blockers: list[str] = []
+    warning_reason = concentration.get("warning_reason")
+    if concentration.get("warning"):
+        blockers.append(
+            "replay_concentration_warning"
+            + (f": {warning_reason}" if warning_reason else "")
+        )
+    status = "blocked" if blockers else "ready"
+    return GateSection(
+        key="w8_promotion_trajectory",
+        status=status,
+        summary=(
+            "W8 replay trajectory "
+            f"{'has concentration warnings' if blockers else 'has no concentration warning'}."
+        ),
+        blockers=blockers,
+        details={
+            "status": trajectory_report.get("status"),
+            "ok": trajectory_report.get("ok"),
+            "latest_trial_id": trajectory_report.get("latest_trial_id"),
+            "snapshot_count": trajectory_report.get("snapshot_count"),
+            "candidate_count": trajectory_report.get("candidate_count"),
+            "status_counts": trajectory_report.get("status_counts"),
+            "open_requirements": trajectory_report.get("open_requirements"),
+            "recent_active_candidates": trajectory_report.get(
+                "recent_active_candidates"
+            ),
+            "stale_accumulating_candidate_count": len(
+                trajectory_report.get("stale_accumulating_candidates") or []
+            ),
+            "replay_concentration": concentration,
         },
     )
 
@@ -650,6 +689,7 @@ def build_fable5_gate_report(
                 require_w6_audit=True,
             )
         ),
+        w8_trajectory_section(build_w8_trajectory_report(journal_rows)),
         ds_e1_section(ds_e1_packet),
         a9_collection_section(a9_collection_manifest),
         xmas_section(
@@ -681,6 +721,7 @@ def build_report_summary(
     """Return compact read-only status for dashboards and handoff triage."""
     by_key = {section.key: section for section in sections}
     restart = by_key.get("w4_w6_restart_cutover")
+    w8_trajectory = by_key.get("w8_promotion_trajectory")
     ds_e1 = by_key.get("ds_e1_dynamic_stack")
     a9 = by_key.get("a9_pairwise_collection")
     xmas = by_key.get("xmas_production_path")
@@ -739,6 +780,23 @@ def build_report_summary(
         ),
         "w8_latest_fresh_eval": (
             restart.details.get("w8_latest_fresh_eval") if restart is not None else None
+        ),
+        "w8_replay_concentration_warning": (
+            (w8_trajectory.details.get("replay_concentration") or {}).get("warning")
+            if w8_trajectory is not None
+            else None
+        ),
+        "w8_replay_top_active_candidate": (
+            (w8_trajectory.details.get("replay_concentration") or {}).get(
+                "top_active_candidate"
+            )
+            if w8_trajectory is not None
+            else None
+        ),
+        "w8_replay_stale_accumulating_count": (
+            w8_trajectory.details.get("stale_accumulating_candidate_count")
+            if w8_trajectory is not None
+            else None
         ),
         "ds_e1_ready_for_profile_decision": (
             ds_e1.details.get("ready_for_profile_decision") if ds_e1 is not None else None
@@ -892,6 +950,12 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
     if restart and restart.status == "ready":
         details = restart.details
         if details.get("w8_promotion_status") != "finalized":
+            w8_trajectory = by_key.get("w8_promotion_trajectory")
+            concentration = (
+                (w8_trajectory.details.get("replay_concentration") or {})
+                if w8_trajectory is not None
+                else {}
+            )
             actions.append(
                 {
                     "key": "collect_w8_promotion_eval_evidence",
@@ -939,8 +1003,29 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
                         "baseline_reference_blocked_reason": details.get(
                             "w8_baseline_reference_blocked_reason"
                         ),
+                        "replay_concentration_warning": concentration.get("warning"),
+                        "replay_concentration_reason": concentration.get(
+                            "warning_reason"
+                        ),
+                        "replay_top_active_candidate": concentration.get(
+                            "top_active_candidate"
+                        ),
+                        "replay_top_active_attempt_share": concentration.get(
+                            "top_active_attempt_share"
+                        ),
+                        "replay_stale_accumulating_count": (
+                            w8_trajectory.details.get(
+                                "stale_accumulating_candidate_count"
+                            )
+                            if w8_trajectory is not None
+                            else None
+                        ),
                     },
-                    "command": STRICT_RESTART_READINESS_COMMAND,
+                    "command": (
+                        "cd /mnt/raid0/llm/epyc-orchestrator && "
+                        "uv run python scripts/autopilot/w8_promotion_trajectory_report.py "
+                        "--journal orchestration"
+                    ),
                     "follow_up": STRICT_FABLE5_GATE_COMMAND,
                 }
             )

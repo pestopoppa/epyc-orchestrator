@@ -120,10 +120,16 @@ def build_w8_trajectory_report(
     stale_accumulating = [
         item for item in trajectories if item.status == "stale_accumulating"
     ]
+    concentration = _replay_concentration(
+        trajectories,
+        recent_active=recent_active,
+        stale_accumulating=stale_accumulating,
+    )
     blocked = _open_requirements(
         trajectories,
         recent_active=recent_active,
         stale_accumulating=stale_accumulating,
+        concentration=concentration,
     )
     if not snapshots:
         status = "no_w8_snapshots"
@@ -143,6 +149,7 @@ def build_w8_trajectory_report(
         "max_replay_attempts": max_replay_attempts,
         "stale_trials": stale_trials,
         "status_counts": dict(sorted(status_counts.items())),
+        "replay_concentration": concentration,
         "open_requirements": blocked,
         "recent_active_candidates": [item.candidate for item in recent_active],
         "stale_accumulating_candidates": [item.candidate for item in stale_accumulating],
@@ -169,6 +176,29 @@ def render_markdown(report: Mapping[str, Any]) -> str:
             f"stale_trials={report.get('stale_trials')}"
         ),
     ]
+    concentration = dict(report.get("replay_concentration") or {})
+    if concentration:
+        lines.extend(
+            [
+                "",
+                "## Replay Concentration",
+                "",
+                (
+                    "- active_recent={active}, stale_accumulating={stale}, "
+                    "single_observation={single}, top_active_share={share}, "
+                    "warning={warning}".format(
+                        active=concentration.get("active_recent_candidate_count"),
+                        stale=concentration.get("stale_accumulating_count"),
+                        single=concentration.get("single_observation_count"),
+                        share=_fmt_float(concentration.get("top_active_attempt_share")),
+                        warning=concentration.get("warning"),
+                    )
+                ),
+            ]
+        )
+        reason = concentration.get("warning_reason")
+        if reason:
+            lines.append(f"- reason: {reason}")
     requirements = list(report.get("open_requirements") or [])
     if requirements:
         lines.extend(["", "## Open Requirements", ""])
@@ -291,6 +321,7 @@ def _open_requirements(
     *,
     recent_active: list[CandidateTrajectory],
     stale_accumulating: list[CandidateTrajectory],
+    concentration: Mapping[str, Any],
 ) -> list[str]:
     if not trajectories:
         return ["missing_w8_promotion_snapshots"]
@@ -299,9 +330,66 @@ def _open_requirements(
         requirements.append("no_recent_multi_observation_accumulating_candidate")
     if stale_accumulating:
         requirements.append("stale_accumulating_candidates_present")
+    if concentration.get("warning"):
+        requirements.append("replay_concentration_warning")
     if not any(item.latest_confirmed for item in trajectories):
         requirements.append("seq_confirmation_required")
     return requirements
+
+
+def _replay_concentration(
+    trajectories: list[CandidateTrajectory],
+    *,
+    recent_active: list[CandidateTrajectory],
+    stale_accumulating: list[CandidateTrajectory],
+) -> dict[str, Any]:
+    active_attempts = {
+        item.candidate: item.attempts
+        for item in recent_active
+        if item.attempts > 0
+    }
+    total_active_attempts = sum(active_attempts.values())
+    top_candidate = None
+    top_attempts = 0
+    if active_attempts:
+        top_candidate, top_attempts = max(
+            active_attempts.items(),
+            key=lambda item: (item[1], item[0]),
+        )
+    top_share = (
+        round(top_attempts / total_active_attempts, 6)
+        if total_active_attempts
+        else None
+    )
+    stale_count = len(stale_accumulating)
+    single_count = sum(1 for item in trajectories if item.status == "single_observation")
+    warning = bool(
+        recent_active
+        and stale_count > 0
+        and (
+            len(recent_active) == 1
+            or (top_share is not None and top_share >= 0.75)
+        )
+    )
+    reason = None
+    if warning:
+        reason = (
+            "recent replay evidence is concentrated in "
+            f"{top_candidate or 'one candidate'} while "
+            f"{stale_count} accumulating candidate(s) are stale"
+        )
+    return {
+        "warning": warning,
+        "warning_reason": reason,
+        "active_recent_candidate_count": len(recent_active),
+        "active_recent_attempts": active_attempts,
+        "total_active_recent_attempts": total_active_attempts,
+        "top_active_candidate": top_candidate,
+        "top_active_attempts": top_attempts,
+        "top_active_attempt_share": top_share,
+        "stale_accumulating_count": stale_count,
+        "single_observation_count": single_count,
+    }
 
 
 def _snapshot_from_row(row: Mapping[str, Any]) -> W8Snapshot:

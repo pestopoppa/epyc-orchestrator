@@ -58,6 +58,7 @@ def test_report_identifies_recent_replay_progress() -> None:
     assert trajectory["status"] == "active_recent_replay"
     assert trajectory["attempts"] == 2
     assert trajectory["combined_E_delta"] == 0.02
+    assert report["replay_concentration"]["warning"] is False
 
 
 def test_report_flags_stale_accumulating_candidates() -> None:
@@ -73,6 +74,27 @@ def test_report_flags_stale_accumulating_candidates() -> None:
     assert report["ok"] is False
     assert report["stale_accumulating_candidates"] == ["candidate-a"]
     assert "stale_accumulating_candidates_present" in report["open_requirements"]
+
+
+def test_report_flags_concentrated_replay_attempts() -> None:
+    report = w8_promotion_trajectory_report.build_w8_trajectory_report(
+        [
+            _row(1, "stale-a", combined=0.91, k=1),
+            _row(10, "candidate-a", combined=0.91, k=1),
+            _row(12, "candidate-a", combined=0.92, k=2),
+            _row(13, "candidate-a", combined=0.93, k=3),
+        ],
+        stale_trials=4,
+    )
+
+    concentration = report["replay_concentration"]
+    assert report["status"] == "progressing"
+    assert concentration["warning"] is True
+    assert concentration["top_active_candidate"] == "candidate-a"
+    assert concentration["top_active_attempt_share"] == 1.0
+    assert concentration["stale_accumulating_count"] == 1
+    assert "replay_concentration_warning" in report["open_requirements"]
+    assert "Replay Concentration" in w8_promotion_trajectory_report.render_markdown(report)
 
 
 def test_report_classifies_refuted_and_finalized_candidates() -> None:
