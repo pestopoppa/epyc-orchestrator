@@ -741,6 +741,94 @@ def test_controller_prompt_scopes_strategy_tool_hints_to_eval_tools() -> None:
     assert "let the orchestrator dispatch it" in template
 
 
+def test_controller_prompt_uses_fresh_strategy_hints_section(monkeypatch) -> None:
+    monkeypatch.setattr(autopilot, "_PLANNER_HINTS_ENABLED", True)
+    rows: list[SimpleNamespace] = []
+
+    class FakeStore:
+        def retrieve_conventions(self, *, species, journal, limit):
+            assert species
+            assert journal == "journal"
+            assert limit == 3
+            return []
+
+        def retrieve_for_journal(self, query, *, journal, k, species):
+            assert query
+            assert journal == "journal"
+            assert k == 3
+            if species == "structural_lab":
+                return list(rows)
+            return []
+
+    def format_controller_prompt() -> str:
+        planner_strategy_hints = autopilot._build_planner_strategy_hints(
+            FakeStore(),
+            "journal",
+            max_rows=3,
+        )
+        return autopilot.CONTROLLER_PROMPT_TEMPLATE.format(
+            constitution="constitution",
+            system_card="system-card",
+            pareto_summary="pareto",
+            pareto_geometry="geometry",
+            planner_evidence="evidence",
+            journal_trustworthiness="trust",
+            hypotheses_under_test="hypotheses",
+            journal_summary="journal-summary",
+            seeder_status="seeder",
+            batch_telemetry="batch",
+            species_effectiveness="species",
+            health_status="OK",
+            memory_count=1,
+            converged=False,
+            slot_memory="slots",
+            action_availability="actions",
+            planner_strategy_hints=planner_strategy_hints,
+            repo_readiness_advisory="repo",
+            budget="budget",
+            suite_quality_trends="suite-trends",
+            insights_structured="insights",
+            stagnation_signal="none",
+            exploration_block="explore",
+            short_term_memory="stm",
+            prior_planner_decisions="prior",
+            last_criticism="criticism",
+            model_signatures="models",
+            blacklist_text="blacklist",
+            feature_flags_block="flags",
+            last_invalid_feedback="invalid",
+            plot_paths="plots",
+            numeric_surface_options="numeric",
+            code_targets="targets",
+        )
+
+    first_prompt = format_controller_prompt()
+    rows.append(
+        SimpleNamespace(
+            id="fresh-planner-tool-hint",
+            species="structural_lab",
+            entry_type="pattern",
+            title="Fresh planner-loop tool hint",
+            generalized_content=(
+                "Steer the next planner turn toward a bounded REPL/tool-use "
+                "measurement when the sentinel lane is enabled."
+            ),
+            metadata={
+                "bind_status": "future",
+                "bind_identifiers": ["tools", "repl", "react_mode"],
+                "source_handoff": "tool-use-eval-contract",
+            },
+        )
+    )
+    second_prompt = format_controller_prompt()
+
+    assert "### StrategyStore Planner Hints (refreshed each planner turn)" in first_prompt
+    assert "no StrategyStore rows matched" in first_prompt
+    assert "Fresh planner-loop tool hint" not in first_prompt
+    assert "Fresh planner-loop tool hint" in second_prompt
+    assert "tools,repl,react_mode" in second_prompt
+
+
 def test_slot_query_ports_from_stack_priors_uses_live_primary_llama_entries(tmp_path: Path) -> None:
     priors = tmp_path / "stack_priors.yaml"
     priors.write_text(
