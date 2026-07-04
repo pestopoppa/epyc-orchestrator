@@ -606,6 +606,58 @@ def test_planner_strategy_hints_reflect_new_rows_between_turns(monkeypatch) -> N
     assert "tools,repl" in second
 
 
+def test_planner_strategy_hints_see_external_store_writes_without_restart(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(autopilot, "_PLANNER_HINTS_ENABLED", True)
+    from orchestration.repl_memory.strategy_store import StrategyStore
+
+    strategy_path = tmp_path / "strategies"
+    live_store = StrategyStore(path=strategy_path)
+    writer_store = StrategyStore(path=strategy_path)
+    journal = object()
+    try:
+        first = autopilot._build_planner_strategy_hints(
+            live_store,
+            journal,
+            max_rows=3,
+        )
+        writer_store.store(
+            description="tool use sentinel lane native tools repl activation latency",
+            insight=(
+                "Planner should steer a bounded REPL/tool-use measurement "
+                "without restarting AutoPilot."
+            ),
+            source_trial_id=1107,
+            species="structural_lab",
+            entry_type="pattern",
+            metadata={
+                "bind_status": "future",
+                "bind_identifiers": ["tools", "repl", "react_mode"],
+                "source_handoff": "tool-use-eval-contract",
+            },
+            title="Fresh external tool-use hint",
+            generalized_content=(
+                "Prefer a tool-use sentinel measurement before another plain "
+                "seed batch when native tools are enabled but unused."
+            ),
+        )
+
+        second = autopilot._build_planner_strategy_hints(
+            live_store,
+            journal,
+            max_rows=3,
+        )
+
+        assert "no StrategyStore rows matched" in first
+        assert "Fresh external tool-use hint" in second
+        assert "tools,repl,react_mode" in second
+    finally:
+        writer_store.close()
+        live_store.close()
+
+
 def test_planner_strategy_hints_refresh_store_rows_for_prompt(monkeypatch) -> None:
     monkeypatch.setattr(autopilot, "_PLANNER_HINTS_ENABLED", True)
     calls: list[tuple[str, str, object, int]] = []
