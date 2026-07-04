@@ -1519,6 +1519,82 @@ def test_critic_fallback_seed_skip_when_seed_candidates_exhausted() -> None:
     assert "critic fallback seed_batch unavailable" in skip.reason
 
 
+def test_exhausted_critic_seed_fallback_uses_numeric_trial(monkeypatch) -> None:
+    monkeypatch.setattr(
+        autopilot,
+        "_configured_numeric_surfaces",
+        lambda: ("memrl_retrieval", "think_harder"),
+    )
+    seed_blacklist = [
+        {
+            "pattern": {"type": "seed_batch", "n_questions": n_questions},
+            "reason": f"blocked {n_questions}",
+        }
+        for n_questions in autopilot.FALLBACK_SEED_CANDIDATES
+    ]
+
+    action, rationale, skip = autopilot._replace_exhausted_critic_seed_fallback(
+        {"type": "seed_batch", "n_questions": autopilot.SAFE_FALLBACK_SEED_N},
+        seed_blacklist,
+        {"falsifier": "fallback remains metric-bearing"},
+        trial_counter=0,
+    )
+
+    assert skip is None
+    assert action == {
+        "type": "numeric_trial",
+        "surface": "memrl_retrieval",
+        "params": {},
+    }
+    assert rationale is not None
+    assert rationale["falsifier"] == "fallback remains metric-bearing"
+    assert rationale["critic_seed_fallback_replaced"] is True
+    assert "critic fallback seed_batch unavailable" in (
+        rationale["critic_seed_fallback_unavailable_reason"]
+    )
+
+
+def test_exhausted_critic_seed_fallback_pauses_when_numeric_exhausted(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        autopilot,
+        "_configured_numeric_surfaces",
+        lambda: ("memrl_retrieval",),
+    )
+    blacklist = [
+        {
+            "pattern": {"type": "seed_batch", "n_questions": n_questions},
+            "reason": f"blocked {n_questions}",
+        }
+        for n_questions in autopilot.FALLBACK_SEED_CANDIDATES
+    ]
+    blacklist.append({
+        "pattern": {
+            "type": "numeric_trial",
+            "surface": "memrl_retrieval",
+            "params": {},
+        },
+        "reason": "numeric blocked",
+    })
+
+    action, rationale, skip = autopilot._replace_exhausted_critic_seed_fallback(
+        {"type": "seed_batch", "n_questions": autopilot.SAFE_FALLBACK_SEED_N},
+        blacklist,
+        {"falsifier": "noop"},
+        trial_counter=0,
+    )
+
+    assert action == {
+        "type": "seed_batch",
+        "n_questions": autopilot.SAFE_FALLBACK_SEED_N,
+    }
+    assert rationale == {"falsifier": "noop"}
+    assert skip is not None
+    assert "critic fallback seed_batch unavailable" in skip.reason
+    assert "numeric fallback unavailable" in skip.reason
+
+
 def test_first_meta_action_is_allowed() -> None:
     action, rationale = autopilot._force_metric_action_after_meta(
         {"type": "distill_knowledge", "last_n": 10},

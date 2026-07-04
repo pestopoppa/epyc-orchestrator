@@ -869,6 +869,48 @@ def _critic_fallback_seed_skip(
     )
 
 
+def _replace_exhausted_critic_seed_fallback(
+    action: dict[str, Any],
+    blacklist: list[dict[str, Any]],
+    rationale: dict[str, Any] | None = None,
+    *,
+    trial_counter: int = 0,
+) -> tuple[dict[str, Any], dict[str, Any] | None, SkipOutcome | None]:
+    """Replace an exhausted critic seed fallback with a metric-bearing action."""
+    seed_skip = _critic_fallback_seed_skip(action, blacklist)
+    if seed_skip is None:
+        return action, rationale, None
+
+    replacement, numeric_reason = _first_unblacklisted_numeric_trial_action(
+        blacklist,
+        trial_counter=trial_counter,
+    )
+    if replacement is None:
+        return (
+            action,
+            rationale,
+            SkipOutcome(
+                seed_skip.status,
+                f"{seed_skip.reason}; numeric fallback unavailable: {numeric_reason}",
+                seed_skip.action_type,
+            ),
+        )
+
+    next_rationale = {
+        **(rationale or {}),
+        "critic_seed_fallback_replaced": True,
+        "critic_seed_fallback_unavailable_reason": seed_skip.reason,
+        "critic_seed_fallback_replacement": dict(replacement),
+    }
+    log.warning(
+        "Critic seed fallback is unavailable (%s); using metric-bearing "
+        "numeric_trial fallback %s.",
+        seed_skip.reason,
+        json.dumps(replacement, default=str),
+    )
+    return replacement, next_rationale, None
+
+
 def _first_unblacklisted_numeric_trial_action(
     blacklist: list[dict[str, Any]],
     *,
@@ -4357,7 +4399,14 @@ def _run_loop_inner(
             ):
                 _record_rejected_draft(state, draft_action, crit, trial_counter)
                 blacklist = load_blacklist()  # may have grown
-                critic_fallback_skip = _critic_fallback_seed_skip(action, blacklist)
+                action, rationale, critic_fallback_skip = (
+                    _replace_exhausted_critic_seed_fallback(
+                        action,
+                        blacklist,
+                        rationale,
+                        trial_counter=trial_counter,
+                    )
+                )
                 if critic_fallback_skip is not None:
                     state["paused"] = True
                     state["_dispatch_deficiency"] = "critic_reject_no_safe_fallback"
