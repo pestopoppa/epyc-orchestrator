@@ -196,7 +196,7 @@ def _execute_direct(
     # strip_gemma4_channel_markers() — the helper is still in chat_utils.
 
     # Output formalizer: enforce format constraints
-    if answer and not answer.startswith("[ERROR"):
+    if answer and not answer.startswith("[ERROR") and not request.force_role:
         should_fmt, fmt_spec = _should_formalize(request.prompt)
         if should_fmt:
             answer = _formalize_output(answer, request.prompt, fmt_spec, primitives)

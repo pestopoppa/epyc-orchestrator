@@ -1399,6 +1399,49 @@ class TestExecuteDirect:
         assert result.answer == "Direct answer"
         assert mock_primitives.llm_call.call_args.kwargs["n_tokens"] == 1024
 
+    def test_forced_direct_call_skips_output_formalizer(self, mock_primitives, mock_state):
+        """Forced eval traffic measures the selected role, not a worker rewrite."""
+        request = ChatRequest(
+            prompt="Return exactly two bullet points.",
+            real_mode=True,
+            force_role="frontdoor",
+            max_tokens=1024,
+        )
+        routing = RoutingResult(
+            task_id="direct-force-no-formalizer",
+            task_ir={},
+            use_mock=False,
+            routing_decision=["frontdoor"],
+            routing_strategy="forced",
+        )
+        start_time = time.perf_counter()
+
+        mock_primitives.llm_call.return_value = "Direct answer"
+
+        with patch("src.api.routes.chat_pipeline.direct_stage._truncate_looped_answer") as mock_trunc:
+            mock_trunc.return_value = "Direct answer"
+            with patch("src.api.routes.chat_pipeline.direct_stage._should_formalize") as mock_should:
+                mock_should.return_value = (True, "exactly two bullet points")
+                with patch("src.api.routes.chat_pipeline.direct_stage._formalize_output") as mock_fmt:
+                    with patch("src.api.routes.chat_pipeline.stages.features") as mock_features:
+                        mock_features.return_value.generation_monitor = False
+                        with patch("src.api.routes.chat_pipeline.direct_stage._should_review") as mock_review:
+                            mock_review.return_value = False
+                            with patch("src.api.routes.chat_pipeline.direct_stage.score_completed_task"):
+                                result = _execute_direct(
+                                    request,
+                                    routing,
+                                    mock_primitives,
+                                    mock_state,
+                                    start_time,
+                                    initial_role="frontdoor",
+                                )
+
+        assert result.answer == "Direct answer"
+        mock_should.assert_not_called()
+        mock_fmt.assert_not_called()
+        assert mock_primitives.llm_call.call_count == 1
+
     def test_direct_with_context(self, mock_primitives, mock_state):
         """Direct call prepends context to prompt."""
         request = ChatRequest(
