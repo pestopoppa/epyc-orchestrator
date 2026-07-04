@@ -1221,7 +1221,7 @@ class TestTrinityRoleShadow:
         assert result.factual_risk_mode == "enforce"
         assert call_kwargs["routing_meta"]["factual_risk_mode"] == "enforce"
 
-    def test_factual_risk_mode_uses_task_id_as_canary_sample_key(self):
+    def test_factual_risk_mode_uses_task_id_as_canary_sample_key_without_request_id(self):
         request = ChatRequest(
             prompt="Verify this deployment claim.",
             mock_mode=True,
@@ -1236,6 +1236,24 @@ class TestTrinityRoleShadow:
         assert result.factual_risk_mode == "shadow"
         call_kwargs = mock_get_mode.call_args.kwargs
         assert call_kwargs["sample_key"] == result.task_id
+        assert call_kwargs["role"] == result.routing_decision[0]
+
+    def test_factual_risk_mode_uses_request_id_as_canary_sample_key_when_available(self):
+        request = ChatRequest(
+            prompt="Verify this deployment claim.",
+            mock_mode=True,
+            real_mode=False,
+            request_id="ri10-frontdoor-enforce-001",
+        )
+        state = self._state()
+        state.progress_logger = MagicMock()
+
+        with patch("src.classifiers.factual_risk.get_mode", return_value="enforce") as mock_get_mode:
+            result = _route_request(request, state)
+
+        assert result.factual_risk_mode == "enforce"
+        call_kwargs = mock_get_mode.call_args.kwargs
+        assert call_kwargs["sample_key"] == "ri10-frontdoor-enforce-001"
         assert call_kwargs["role"] == result.routing_decision[0]
 
 

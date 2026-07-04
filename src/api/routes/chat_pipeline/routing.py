@@ -335,12 +335,13 @@ def _route_request(request: ChatRequest, state) -> RoutingResult:
     # Estimated cost (tier weight × prompt tokens / 1M — relative units for Pareto)
     _estimated_cost = estimate_routing_cost(request, state, routing_decision)
 
+    sample_key = _factual_risk_sample_key(request, task_id)
     try:
         from src.classifiers.factual_risk import get_mode as _fr_get_mode
 
         _factual_risk_mode = _fr_get_mode(
             role=role_for_signals,
-            sample_key=task_id,
+            sample_key=sample_key,
         )
     except Exception:
         _factual_risk_mode = ""
@@ -517,7 +518,10 @@ def _plan_review_gate(
 
         factual_risk_mode = _fr_get_mode(
             role=_current_role,
-            sample_key=str(getattr(routing, "task_id", "") or ""),
+            sample_key=_factual_risk_sample_key(
+                request,
+                str(getattr(routing, "task_id", "") or ""),
+            ),
         )
     risk_forced = routing.factual_risk_band == "high" and factual_risk_mode == "enforce"
     needs_review = _needs_plan_review(routing.task_ir, routing.routing_decision, state)
@@ -536,3 +540,14 @@ def _plan_review_gate(
         if plan_review_result:
             _store_plan_review_episode(state, routing.task_id, routing.task_ir, plan_review_result)
     return plan_review_result
+
+
+def _factual_risk_sample_key(request: ChatRequest, task_id: str) -> str:
+    """Stable key for RI-10 canary arm assignment.
+
+    Caller-provided request IDs let controlled canary accrual jobs choose a
+    deterministic arm before dispatch. Ordinary traffic keeps the existing
+    server task-id behavior.
+    """
+    request_id = str(getattr(request, "request_id", "") or "").strip()
+    return request_id or str(task_id or "")
