@@ -1,0 +1,475 @@
+{
+  "blockers": [
+    "w8_promotion_trajectory: replay_concentration_warning: recent replay evidence is concentrated in 1bcc4e9c9920654f while 28 accumulating candidate(s) are stale",
+    "ds_e1_dynamic_stack: ri10_canary: RI-10 raw high-risk sample-count coverage exists, but enforce/shadow arm-attributed decision telemetry is not sufficient.",
+    "ds_e1_dynamic_stack: kv_size_measurements: No direct DS-E1 production KV-size measurement series was found.",
+    "a9_pairwise_collection: active AutoPilot process(es): 2440359 .venv/bin/python3 scripts/autopilot/autopilot.py start --max-trials 2000",
+    "xmas_production_path: xmas_routing.mode is off; enforce remains default-off"
+  ],
+  "next_actions": [
+    {
+      "command": "cd /mnt/raid0/llm/epyc-orchestrator && uv run python scripts/autopilot/w8_promotion_trajectory_report.py --journal orchestration",
+      "evidence": {
+        "baseline_reference_blocked_reason": null,
+        "baseline_reference_last_forced_reason": "10 trusted profile trials since baseline reference draw",
+        "baseline_reference_last_forced_trial_id": 1094,
+        "last_blocked_candidate": null,
+        "last_blocked_reason": null,
+        "last_blocked_trial_id": null,
+        "latest_baseline_reference_state": "fresh",
+        "latest_candidate": "edfe40b648ee8b26",
+        "latest_combined_E": 0.91,
+        "latest_confirmed": false,
+        "latest_fresh_eval": false,
+        "latest_required_E": 100.0,
+        "latest_seq_state": "accumulating",
+        "latest_seq_trial_id": 1102,
+        "open_requirements": [
+          "combined_E_below_required",
+          "fresh_promotion_eval_required",
+          "seq_confirmation_required"
+        ],
+        "pending_attempts": null,
+        "pending_candidate": null,
+        "pending_source_trial_id": null,
+        "replay_concentration_reason": "recent replay evidence is concentrated in 1bcc4e9c9920654f while 28 accumulating candidate(s) are stale",
+        "replay_concentration_warning": true,
+        "replay_stale_accumulating_count": 28,
+        "replay_top_active_attempt_share": 0.777778,
+        "replay_top_active_candidate": "1bcc4e9c9920654f",
+        "w8_promotion_status": "none"
+      },
+      "follow_up": "uv run python scripts/autopilot/fable5_gate_report.py --json --strict",
+      "key": "collect_w8_promotion_eval_evidence",
+      "priority": "P0",
+      "reason": "W4/W6 authority is restart-ready; W8 still needs live promotion-eval finalization evidence before closing the tail.",
+      "status": "active"
+    },
+    {
+      "blocked_by": [
+        "active AutoPilot process(es): 2440359 .venv/bin/python3 scripts/autopilot/autopilot.py start --max-trials 2000",
+        "live llama-server process(es): 2073983 /mnt/raid0/llm/llama.cpp/build/bin/llama-server -m /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf --host 127.0.0.1 --port 8070 -np 1 -c 32768 -t 96 -ub 8192 --flash-attn on --jinja -ctk q8_0 -ctv q8_0 --mlock --spec-type draft-mtp --spec-draft-n-max 4 --slot-save-path /mnt/raid0/llm/cache/kv_slots/frontdoor; 2074290 /mnt/raid0/llm/llama.cpp/build/bin/llama-server -m /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf --host 127.0.0.1 --port 8080 -np 1 -c 32768 -t 48 -ub 8192 --flash-attn on --jinja -ctk q8_0 -ctv q8_0 --mlock --spec-type draft-mtp --spec-draft-n-max 4 --slot-save-path /mnt/raid0/llm/cache/kv_slots/frontdoor; 2074558 /mnt/raid0/llm/llama.cpp/build/bin/llama-server -m /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf --host 127.0.0.1 --port 8180 -np 1 -c 32768 -t 48 -ub 8192 --flash-attn on --jinja -ctk q8_0 -ctv q8_0 --mlock --spec-type draft-mtp --spec-draft-n-max 4 --slot-save-path /mnt/raid0/llm/cache/kv_slots/frontdoor; 2074818 /mnt/raid0/llm/llama.cpp/build/bin/llama-server -m /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf --host 127.0.0.1 --port 8280 -np 1 -c 32768 -t 48 -ub 8192 --flash-attn on --jinja -ctk q8_0 -ctv q8_0 --mlock --spec-type draft-mtp --spec-draft-n-max 4 --slot-save-path /mnt/raid0/llm/cache/kv_slots/frontdoor; ... +24 more"
+      ],
+      "command": "cd /mnt/raid0/llm/epyc-inference-research && scripts/benchmark/ds_e1_kv_measurements.sh --execute",
+      "follow_up": "cd /mnt/raid0/llm/epyc-orchestrator && uv run python scripts/server/dynamic_stack_evidence_packet.py --output orchestration/reports/ds_e1_evidence_packet_$(date -u +%Y%m%dT%H%M%SZ).md --strict",
+      "key": "run_ds_e1_kv_measurements",
+      "priority": "P0",
+      "reason": "DS-E1 cannot decide DS-7/DS-6 profiles until direct production KV-size rows exist.",
+      "requires": "attested clean window with AutoPilot and live llama-server processes stopped/coordinated",
+      "status": "blocked"
+    },
+    {
+      "command": "uv run python scripts/analysis/ri10_canary_sample_report.py",
+      "key": "collect_ri10_canary_arm_telemetry",
+      "priority": "P0",
+      "reason": "RI-10 has raw high-risk samples, but arm-attributed canary telemetry is not yet decision-grade.",
+      "status": "active"
+    },
+    {
+      "blocked_by": [],
+      "command": "cd /mnt/raid0/llm/epyc-orchestrator && uv run python scripts/benchmark/xmas_live_ab.py --summarize-results /mnt/raid0/llm/epyc-orchestrator/benchmarks/results/runs/xmas_live_ab/20260703T213541Z-constrained-policy-v2/results.jsonl --output /tmp/xmas-constrained-policy-diagnostics",
+      "evidence_blockers": [
+        "xmas_routing.mode is off; enforce remains default-off"
+      ],
+      "follow_up": "If accepted, set xmas_routing.mode=enforce through the normal config/reload path and rerun runtime attestation; do not rerun the held-out A/B unless the policy/table changes.",
+      "key": "decide_xmas_enforce_enablement",
+      "latest_ab_decision_status": "promote_candidate",
+      "latest_ab_latency_ratio": 0.9383678904318052,
+      "latest_ab_results_path": "/mnt/raid0/llm/epyc-orchestrator/benchmarks/results/runs/xmas_live_ab/20260703T213541Z-constrained-policy-v2/results.jsonl",
+      "latest_ab_score_delta": 0.09999999999999998,
+      "latest_ab_summary_path": "/mnt/raid0/llm/epyc-orchestrator/benchmarks/results/runs/xmas_live_ab/20260703T213541Z-constrained-policy-v2/summary.json",
+      "priority": "P0",
+      "reason": "The repaired X-MAS held-out A/B passed; the remaining gate is an explicit production enablement, reload, and attestation decision.",
+      "required_policy": "incumbent_constrained_cheapfirst_v2",
+      "status": "ready"
+    },
+    {
+      "batch_count": 9,
+      "blocked_by": [
+        "active AutoPilot process(es): 2440359 .venv/bin/python3 scripts/autopilot/autopilot.py start --max-trials 2000"
+      ],
+      "command": "cd /mnt/raid0/llm/epyc-orchestrator && orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/collect_offline_reward_pairwise_expanded_gap.sh",
+      "follow_up": "cd /mnt/raid0/llm/epyc-orchestrator && uv run python scripts/graph_router/offline_reward_pairwise_collection_status.py",
+      "key": "run_a9_pairwise_collection_window",
+      "manifest": "/mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_collection_manifest.json",
+      "post_collection_step_count": 7,
+      "priority": "P1",
+      "reason": "A9 offline reward-oracle pairwise holdouts need the guarded priority-0/1 collection window before another pairwise contract rebuild.",
+      "requires": "coordinated clean window; collection script refuses active AutoPilot",
+      "source_plan_decision": {
+        "recommended_next": "add_more_source_records_for_failed_pairwise_holdout_strata",
+        "runtime_gate_change_allowed": false,
+        "status": "insufficient_non_overlapping_cross_action_candidates"
+      },
+      "status": "blocked"
+    }
+  ],
+  "ready": false,
+  "sections": [
+    {
+      "blockers": [],
+      "details": {
+        "action_type": null,
+        "autopilot_planner_timeout": "600",
+        "code_stale": false,
+        "code_stale_paths": [],
+        "eval_completed_questions": null,
+        "eval_concurrency": null,
+        "eval_correct_pct": null,
+        "eval_correct_questions": null,
+        "eval_label": null,
+        "eval_total_questions": null,
+        "heartbeat_age_s": 44.696831703186035,
+        "ok": true,
+        "phase": "planner_invoke",
+        "pid": 2440359,
+        "pid_alive": true,
+        "planner_hints_enabled": true,
+        "process_started_at_s": 1783123561.69,
+        "require_current_code": false,
+        "seq_verdict_enabled": true,
+        "status": "active",
+        "trial_id": 1103,
+        "w6_audit_accrual_enabled": true,
+        "w6_audit_every_n_trials": "1",
+        "w6_audit_n": "10",
+        "w6_audit_shadow_only": true
+      },
+      "key": "phase_health",
+      "status": "ready",
+      "summary": "AutoPilot phase heartbeat is active at trial 1103 / planner_invoke."
+    },
+    {
+      "blockers": [],
+      "details": {
+        "archive_source_surface_count": 6,
+        "archive_source_surface_failed_count": 0,
+        "archive_source_surface_ok": true,
+        "baseline_seed_append_expect_journal_max_trial_id": null,
+        "baseline_seed_append_expect_trial_counter": null,
+        "baseline_seed_append_ready": false,
+        "baseline_seed_append_required": false,
+        "cutover_horizon_blocker": null,
+        "cutover_horizon_clean_trials_remaining": 0,
+        "cutover_horizon_components": {
+          "seq_shadow_rows": 0,
+          "seq_trusted_vectors": 0,
+          "w6_alarm_clearance": 0,
+          "w6_audited_trials": 0
+        },
+        "durable_journal_max_trial_id": 1102,
+        "restart_ready": true,
+        "seq_cutover_ready": true,
+        "seq_min_shadow_rows": 30,
+        "seq_min_trusted_vector_trials": 120,
+        "seq_shadow_rows": 158,
+        "seq_shadow_rows_remaining": 0,
+        "seq_trusted_vector_trials": 235,
+        "seq_trusted_vector_trials_remaining": 0,
+        "snapshot_payload_journal_max_trial_id": 1102,
+        "snapshot_restart_readiness": "tail_fold_ready",
+        "state_trial_counter": 1103,
+        "w6_alarm_clearance_clean_trials_required": 0,
+        "w6_audit_cutover_ready": true,
+        "w6_audited_trial_count": 72,
+        "w6_audited_trial_count_remaining": 0,
+        "w6_gaming_alarm": false,
+        "w6_min_audited_trials": 30,
+        "w6_potential_overfit_divergences": 0,
+        "w6_raw_audited_trial_count": 72,
+        "w6_trusted_audited_trial_count": 72,
+        "w6_untrusted_audited_trial_count": 0,
+        "w6_untrusted_audited_trial_ids": [],
+        "w8_baseline_reference_blocked_reason": null,
+        "w8_baseline_reference_blocked_trial_id": null,
+        "w8_baseline_reference_last_forced_reason": "10 trusted profile trials since baseline reference draw",
+        "w8_baseline_reference_last_forced_stale": false,
+        "w8_baseline_reference_last_forced_trial_id": 1094,
+        "w8_last_blocked_candidate": null,
+        "w8_last_blocked_reason": null,
+        "w8_last_blocked_trial_id": null,
+        "w8_last_finalized_candidate": null,
+        "w8_last_finalized_combined_E": null,
+        "w8_last_finalized_delta_excludes_regression": null,
+        "w8_last_finalized_trial_id": null,
+        "w8_latest_baseline_reference_state": "fresh",
+        "w8_latest_candidate": "edfe40b648ee8b26",
+        "w8_latest_combined_E": 0.91,
+        "w8_latest_confirmed": false,
+        "w8_latest_fresh_eval": false,
+        "w8_latest_required_E": 100.0,
+        "w8_latest_seq_state": "accumulating",
+        "w8_latest_seq_trial_id": 1102,
+        "w8_open_requirements": [
+          "combined_E_below_required",
+          "fresh_promotion_eval_required",
+          "seq_confirmation_required"
+        ],
+        "w8_pending_attempts": null,
+        "w8_pending_candidate": null,
+        "w8_pending_source_trial_id": null,
+        "w8_promotion_status": "none"
+      },
+      "key": "w4_w6_restart_cutover",
+      "status": "ready",
+      "summary": "W4/W6 strict restart cutover is ready."
+    },
+    {
+      "blockers": [
+        "replay_concentration_warning: recent replay evidence is concentrated in 1bcc4e9c9920654f while 28 accumulating candidate(s) are stale"
+      ],
+      "details": {
+        "candidate_count": 41,
+        "latest_trial_id": 1102,
+        "ok": true,
+        "open_requirements": [
+          "combined_E_below_required",
+          "fresh_promotion_eval_required",
+          "stale_accumulating_candidates_present",
+          "replay_concentration_warning",
+          "seq_confirmation_required"
+        ],
+        "recent_active_candidates": [
+          "edfe40b648ee8b26",
+          "1bcc4e9c9920654f"
+        ],
+        "replay_concentration": {
+          "active_recent_attempts": {
+            "1bcc4e9c9920654f": 7,
+            "edfe40b648ee8b26": 2
+          },
+          "active_recent_candidate_count": 2,
+          "single_observation_count": 6,
+          "stale_accumulating_count": 28,
+          "top_active_attempt_share": 0.777778,
+          "top_active_attempts": 7,
+          "top_active_candidate": "1bcc4e9c9920654f",
+          "total_active_recent_attempts": 9,
+          "warning": true,
+          "warning_reason": "recent replay evidence is concentrated in 1bcc4e9c9920654f while 28 accumulating candidate(s) are stale"
+        },
+        "snapshot_count": 156,
+        "stale_accumulating_candidate_count": 28,
+        "status": "progressing",
+        "status_counts": {
+          "active_recent_replay": 2,
+          "refuted": 5,
+          "single_observation": 6,
+          "stale_accumulating": 28
+        }
+      },
+      "key": "w8_promotion_trajectory",
+      "status": "blocked",
+      "summary": "W8 replay trajectory has concentration warnings."
+    },
+    {
+      "blockers": [
+        "ri10_canary: RI-10 raw high-risk sample-count coverage exists, but enforce/shadow arm-attributed decision telemetry is not sufficient.",
+        "kv_size_measurements: No direct DS-E1 production KV-size measurement series was found."
+      ],
+      "details": {
+        "clean_window_blockers": [
+          "active AutoPilot process(es): 2440359 .venv/bin/python3 scripts/autopilot/autopilot.py start --max-trials 2000",
+          "live llama-server process(es): 2073983 /mnt/raid0/llm/llama.cpp/build/bin/llama-server -m /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf --host 127.0.0.1 --port 8070 -np 1 -c 32768 -t 96 -ub 8192 --flash-attn on --jinja -ctk q8_0 -ctv q8_0 --mlock --spec-type draft-mtp --spec-draft-n-max 4 --slot-save-path /mnt/raid0/llm/cache/kv_slots/frontdoor; 2074290 /mnt/raid0/llm/llama.cpp/build/bin/llama-server -m /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf --host 127.0.0.1 --port 8080 -np 1 -c 32768 -t 48 -ub 8192 --flash-attn on --jinja -ctk q8_0 -ctv q8_0 --mlock --spec-type draft-mtp --spec-draft-n-max 4 --slot-save-path /mnt/raid0/llm/cache/kv_slots/frontdoor; 2074558 /mnt/raid0/llm/llama.cpp/build/bin/llama-server -m /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf --host 127.0.0.1 --port 8180 -np 1 -c 32768 -t 48 -ub 8192 --flash-attn on --jinja -ctk q8_0 -ctv q8_0 --mlock --spec-type draft-mtp --spec-draft-n-max 4 --slot-save-path /mnt/raid0/llm/cache/kv_slots/frontdoor; 2074818 /mnt/raid0/llm/llama.cpp/build/bin/llama-server -m /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf --host 127.0.0.1 --port 8280 -np 1 -c 32768 -t 48 -ub 8192 --flash-attn on --jinja -ctk q8_0 -ctv q8_0 --mlock --spec-type draft-mtp --spec-draft-n-max 4 --slot-save-path /mnt/raid0/llm/cache/kv_slots/frontdoor; ... +24 more"
+        ],
+        "clean_window_ready": false,
+        "generated_at": "2026-07-04T00:25:40Z",
+        "kv_candidate_paths": null,
+        "kv_expected_csv_columns": [
+          "role",
+          "model_id",
+          "model_path",
+          "context_length",
+          "max_context",
+          "status",
+          "rss_load_mb",
+          "rss_after_prefill_mb",
+          "server_kv_size_mb",
+          "prompt_tokens",
+          "prompt_tps",
+          "log_file",
+          "notes"
+        ],
+        "kv_missing_measurements": null,
+        "kv_observed_measurements": null,
+        "kv_required_measurements": {
+          "architect_general": [
+            2048,
+            8192
+          ],
+          "frontdoor": [
+            2048,
+            8192,
+            32768
+          ],
+          "ingest_long_context": [
+            2048,
+            8192,
+            32768
+          ],
+          "worker_general": [
+            2048,
+            8192
+          ]
+        },
+        "kv_searched_globs": [
+          "orchestration/reports/ds_e1*kv*",
+          "orchestration/reports/dynamic_stack*kv*",
+          "../epyc-inference-research/data/dynamic_stack/**/kv*",
+          "../epyc-inference-research/data/kv_measurements/**"
+        ],
+        "ready_for_profile_decision": false,
+        "section_statuses": {
+          "contention_matrix": "ready",
+          "ds5_roster_manifest": "ready",
+          "kv_size_measurements": "missing",
+          "ri10_canary": "insufficient_data",
+          "stack_roster": "ready"
+        }
+      },
+      "key": "ds_e1_dynamic_stack",
+      "status": "blocked",
+      "summary": "DS-E1 dynamic-stack packet is not decision-ready."
+    },
+    {
+      "blockers": [
+        "active AutoPilot process(es): 2440359 .venv/bin/python3 scripts/autopilot/autopilot.py start --max-trials 2000"
+      ],
+      "details": {
+        "autopilot_guard": {
+          "active_processes": [
+            "2440359 .venv/bin/python3 scripts/autopilot/autopilot.py start --max-trials 2000"
+          ],
+          "process_pattern": "scripts/autopilot/autopilot.py start",
+          "refusal_exit_code": 75
+        },
+        "batch_count": 9,
+        "blockers": [
+          "active AutoPilot process(es): 2440359 .venv/bin/python3 scripts/autopilot/autopilot.py start --max-trials 2000"
+        ],
+        "manifest_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_collection_manifest.json",
+        "manifest_schema_version": "offline_reward_pairwise_collection_window.v1",
+        "post_collection_step_count": 7,
+        "ready": false,
+        "source_plan_decision": {
+          "recommended_next": "add_more_source_records_for_failed_pairwise_holdout_strata",
+          "runtime_gate_change_allowed": false,
+          "status": "insufficient_non_overlapping_cross_action_candidates"
+        },
+        "status": "blocked",
+        "warnings": []
+      },
+      "key": "a9_pairwise_collection",
+      "status": "blocked",
+      "summary": "A9 pairwise source-acquisition window is blocked with 9 batch(es)."
+    },
+    {
+      "blockers": [
+        "xmas_routing.mode is off; enforce remains default-off"
+      ],
+      "details": {
+        "candidate_table_errors": [],
+        "candidate_table_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/xmas_winner_table.yaml",
+        "candidate_table_ready": true,
+        "config_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/classifier_config.yaml",
+        "config_validation_errors": [],
+        "latest_ab_blockers": [],
+        "latest_ab_decision_status": "promote_candidate",
+        "latest_ab_latency_ratio": 0.9383678904318052,
+        "latest_ab_policy": "incumbent_constrained_cheapfirst_v2",
+        "latest_ab_ready": true,
+        "latest_ab_results_path": "/mnt/raid0/llm/epyc-orchestrator/benchmarks/results/runs/xmas_live_ab/20260703T213541Z-constrained-policy-v2/results.jsonl",
+        "latest_ab_score_delta": 0.09999999999999998,
+        "latest_ab_summary_path": "/mnt/raid0/llm/epyc-orchestrator/benchmarks/results/runs/xmas_live_ab/20260703T213541Z-constrained-policy-v2/summary.json",
+        "mode": "off",
+        "quiet_window_blockers": [
+          "active AutoPilot process(es): 2440359 .venv/bin/python3 scripts/autopilot/autopilot.py start --max-trials 2000"
+        ],
+        "quiet_window_ready": false,
+        "require_complete_table": true,
+        "required_ab_policy": "incumbent_constrained_cheapfirst_v2",
+        "winner_table_path": "orchestration/xmas_winner_table.yaml"
+      },
+      "key": "xmas_production_path",
+      "status": "blocked",
+      "summary": "X-MAS production routing remains gated."
+    }
+  ],
+  "summary": {
+    "a9_collection_batch_count": 9,
+    "a9_collection_blockers": [
+      "active AutoPilot process(es): 2440359 .venv/bin/python3 scripts/autopilot/autopilot.py start --max-trials 2000"
+    ],
+    "a9_collection_ready": false,
+    "a9_collection_status": "blocked",
+    "active_next_action_keys": [
+      "collect_w8_promotion_eval_evidence",
+      "collect_ri10_canary_arm_telemetry"
+    ],
+    "blocked_next_action_keys": [
+      "run_ds_e1_kv_measurements",
+      "run_a9_pairwise_collection_window"
+    ],
+    "blocked_sections": [
+      "w8_promotion_trajectory",
+      "ds_e1_dynamic_stack",
+      "a9_pairwise_collection",
+      "xmas_production_path"
+    ],
+    "blocker_count": 5,
+    "ds_e1_clean_window_blockers": [
+      "active AutoPilot process(es): 2440359 .venv/bin/python3 scripts/autopilot/autopilot.py start --max-trials 2000",
+      "live llama-server process(es): 2073983 /mnt/raid0/llm/llama.cpp/build/bin/llama-server -m /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf --host 127.0.0.1 --port 8070 -np 1 -c 32768 -t 96 -ub 8192 --flash-attn on --jinja -ctk q8_0 -ctv q8_0 --mlock --spec-type draft-mtp --spec-draft-n-max 4 --slot-save-path /mnt/raid0/llm/cache/kv_slots/frontdoor; 2074290 /mnt/raid0/llm/llama.cpp/build/bin/llama-server -m /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf --host 127.0.0.1 --port 8080 -np 1 -c 32768 -t 48 -ub 8192 --flash-attn on --jinja -ctk q8_0 -ctv q8_0 --mlock --spec-type draft-mtp --spec-draft-n-max 4 --slot-save-path /mnt/raid0/llm/cache/kv_slots/frontdoor; 2074558 /mnt/raid0/llm/llama.cpp/build/bin/llama-server -m /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf --host 127.0.0.1 --port 8180 -np 1 -c 32768 -t 48 -ub 8192 --flash-attn on --jinja -ctk q8_0 -ctv q8_0 --mlock --spec-type draft-mtp --spec-draft-n-max 4 --slot-save-path /mnt/raid0/llm/cache/kv_slots/frontdoor; 2074818 /mnt/raid0/llm/llama.cpp/build/bin/llama-server -m /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf --host 127.0.0.1 --port 8280 -np 1 -c 32768 -t 48 -ub 8192 --flash-attn on --jinja -ctk q8_0 -ctv q8_0 --mlock --spec-type draft-mtp --spec-draft-n-max 4 --slot-save-path /mnt/raid0/llm/cache/kv_slots/frontdoor; ... +24 more"
+    ],
+    "ds_e1_clean_window_ready": false,
+    "ds_e1_ready_for_profile_decision": false,
+    "next_action_keys": [
+      "collect_w8_promotion_eval_evidence",
+      "run_ds_e1_kv_measurements",
+      "collect_ri10_canary_arm_telemetry",
+      "decide_xmas_enforce_enablement",
+      "run_a9_pairwise_collection_window"
+    ],
+    "next_action_statuses": {
+      "collect_ri10_canary_arm_telemetry": "active",
+      "collect_w8_promotion_eval_evidence": "active",
+      "decide_xmas_enforce_enablement": "ready",
+      "run_a9_pairwise_collection_window": "blocked",
+      "run_ds_e1_kv_measurements": "blocked"
+    },
+    "phase_action_type": null,
+    "phase_status": "active",
+    "phase_trial_id": 1103,
+    "ready": false,
+    "ready_next_action_keys": [
+      "decide_xmas_enforce_enablement"
+    ],
+    "restart_ready": true,
+    "section_statuses": {
+      "a9_pairwise_collection": "blocked",
+      "ds_e1_dynamic_stack": "blocked",
+      "phase_health": "ready",
+      "w4_w6_restart_cutover": "ready",
+      "w8_promotion_trajectory": "blocked",
+      "xmas_production_path": "blocked"
+    },
+    "w8_latest_combined_E": 0.91,
+    "w8_latest_fresh_eval": false,
+    "w8_latest_required_E": 100.0,
+    "w8_latest_seq_state": "accumulating",
+    "w8_latest_seq_trial_id": 1102,
+    "w8_open_requirements": [
+      "combined_E_below_required",
+      "fresh_promotion_eval_required",
+      "seq_confirmation_required"
+    ],
+    "w8_promotion_status": "none",
+    "w8_replay_concentration_warning": true,
+    "w8_replay_stale_accumulating_count": 28,
+    "w8_replay_top_active_candidate": "1bcc4e9c9920654f",
+    "xmas_latest_ab_decision_status": "promote_candidate",
+    "xmas_latest_ab_policy": "incumbent_constrained_cheapfirst_v2",
+    "xmas_mode": "off",
+    "xmas_quiet_window_ready": false
+  }
+}
