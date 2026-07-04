@@ -1163,6 +1163,7 @@ def test_a9_section_surfaces_candidate_contract_decision(monkeypatch, tmp_path: 
         Path("/tmp/a9_manifest.json"),
         contract_summary_path=contract_summary,
         source_reward_diagnostic_summary_path=source_reward_summary,
+        source_reward_ranker_summary_path=None,
     )
     actions = report_mod.build_next_actions([section])
 
@@ -1185,6 +1186,209 @@ def test_a9_section_surfaces_candidate_contract_decision(monkeypatch, tmp_path: 
     assert action["source_reward_diagnostic_coverage"]["cross_action_pair_rows"] == 180
     assert "source-q-reward diagnostic" in action["reason"]
     assert "not collection volume" in action["reason"]
+
+
+def test_a9_next_action_preregisters_source_reward_target_when_ranker_ready(
+    monkeypatch, tmp_path: Path
+) -> None:
+    contract_summary = tmp_path / "candidate_contract_summary.json"
+    source_reward_summary = tmp_path / "source_reward_diagnostic_summary.json"
+    source_ranker_summary = tmp_path / "source_reward_ranker_summary.json"
+    contract_summary.write_text(
+        """
+{
+  "coverage": {
+    "pair_rows": 32,
+    "cross_action_pair_rows": 32
+  },
+  "decision": {
+    "status": "insufficient_contrast",
+    "runtime_gate_change_allowed": false
+  }
+}
+""",
+        encoding="utf-8",
+    )
+    source_reward_summary.write_text(
+        """
+{
+  "coverage": {
+    "pair_rows": 180,
+    "cross_action_pair_rows": 180
+  },
+  "decision": {
+    "status": "contract_ready",
+    "runtime_gate_change_allowed": false
+  },
+  "diagnostic": {
+    "score_source": "source_q_reward_passthrough",
+    "independent_oracle": false,
+    "diagnostic_only": true
+  }
+}
+""",
+        encoding="utf-8",
+    )
+    source_ranker_summary.write_text(
+        """
+{
+  "input": {
+    "pair_rows": 180,
+    "cross_action_pair_rows": 180
+  },
+  "aggregate": {
+    "decision": {
+      "status": "pairwise_ranker_signal",
+      "best_family": "hist_gradient_boosting",
+      "runtime_gate_change_allowed": false
+    }
+  },
+  "cross_validation": {
+    "decision": {
+      "status": "pairwise_ranker_signal",
+      "best_family": "hist_gradient_boosting",
+      "runtime_gate_change_allowed": false
+    }
+  },
+  "holdout_decision": {
+    "status": "holdout_signal_consistent",
+    "eligible_holdouts": 3,
+    "passing_holdouts": 3,
+    "runtime_gate_change_allowed": false
+  }
+}
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        report_mod,
+        "build_a9_collection_status",
+        lambda path: {
+            "ready": False,
+            "status": "no_runnable_batches",
+            "manifest_path": "/tmp/a9_manifest.json",
+            "manifest_schema_version": "offline_reward_pairwise_collection_window.v1",
+            "source_plan_decision": {"status": "expansion_plan_ready"},
+            "batch_count": 0,
+            "post_collection_step_count": 7,
+            "autopilot_guard": {"refusal_exit_code": 75},
+            "blockers": [],
+            "warnings": ["manifest has no runnable collection batches"],
+        },
+    )
+
+    section = report_mod.a9_collection_section(
+        Path("/tmp/a9_manifest.json"),
+        contract_summary_path=contract_summary,
+        source_reward_diagnostic_summary_path=source_reward_summary,
+        source_reward_ranker_summary_path=source_ranker_summary,
+        source_reward_target_contract_path=None,
+    )
+    actions = report_mod.build_next_actions([section])
+
+    assert "source-reward ranker is pairwise_ranker_signal" in section.summary
+    assert len(actions) == 1
+    action = actions[0]
+    assert action["key"] == "preregister_a9_source_reward_pairwise_target"
+    assert action["status"] == "active"
+    assert action["blocked_by"] == []
+    assert "not an independent oracle" in action["reason"]
+    assert "target-contract decision" in action["reason"]
+    assert action["source_reward_ranker_aggregate_decision"]["status"] == (
+        "pairwise_ranker_signal"
+    )
+    assert action["source_reward_ranker_cv_decision"]["status"] == (
+        "pairwise_ranker_signal"
+    )
+    assert action["source_reward_ranker_holdout_decision"]["status"] == (
+        "holdout_signal_consistent"
+    )
+    assert action["source_reward_ranker_input"]["pair_rows"] == 180
+    assert "runtime_gate_change_allowed=false" in action["command"]
+
+
+def test_a9_preregistered_source_reward_target_suppresses_next_action(
+    monkeypatch, tmp_path: Path
+) -> None:
+    contract_summary = tmp_path / "candidate_contract_summary.json"
+    source_reward_summary = tmp_path / "source_reward_diagnostic_summary.json"
+    source_ranker_summary = tmp_path / "source_reward_ranker_summary.json"
+    source_target_contract = tmp_path / "source_reward_target_contract.json"
+    contract_summary.write_text(
+        """
+{
+  "coverage": {"pair_rows": 32, "cross_action_pair_rows": 32},
+  "decision": {"status": "insufficient_contrast", "runtime_gate_change_allowed": false}
+}
+""",
+        encoding="utf-8",
+    )
+    source_reward_summary.write_text(
+        """
+{
+  "coverage": {"pair_rows": 180, "cross_action_pair_rows": 180},
+  "decision": {"status": "contract_ready", "runtime_gate_change_allowed": false},
+  "diagnostic": {"score_source": "source_q_reward_passthrough", "independent_oracle": false}
+}
+""",
+        encoding="utf-8",
+    )
+    source_ranker_summary.write_text(
+        """
+{
+  "input": {"pair_rows": 180, "cross_action_pair_rows": 180},
+  "aggregate": {"decision": {"status": "pairwise_ranker_signal", "runtime_gate_change_allowed": false}},
+  "cross_validation": {"decision": {"status": "pairwise_ranker_signal", "runtime_gate_change_allowed": false}},
+  "holdout_decision": {"status": "holdout_signal_consistent", "runtime_gate_change_allowed": false}
+}
+""",
+        encoding="utf-8",
+    )
+    source_target_contract.write_text(
+        """
+{
+  "schema_version": "offline_reward_source_reward_pairwise_target_contract.v1",
+  "status": "preregistered_offline_training_target",
+  "target": {
+    "name": "a9_source_q_reward_pairwise_training_target_v1",
+    "runtime_gate_change_allowed": false
+  }
+}
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        report_mod,
+        "build_a9_collection_status",
+        lambda path: {
+            "ready": False,
+            "status": "no_runnable_batches",
+            "manifest_path": "/tmp/a9_manifest.json",
+            "manifest_schema_version": "offline_reward_pairwise_collection_window.v1",
+            "source_plan_decision": {"status": "expansion_plan_ready"},
+            "batch_count": 0,
+            "post_collection_step_count": 7,
+            "autopilot_guard": {"refusal_exit_code": 75},
+            "blockers": [],
+            "warnings": [],
+        },
+    )
+
+    section = report_mod.a9_collection_section(
+        Path("/tmp/a9_manifest.json"),
+        contract_summary_path=contract_summary,
+        source_reward_diagnostic_summary_path=source_reward_summary,
+        source_reward_ranker_summary_path=source_ranker_summary,
+        source_reward_target_contract_path=source_target_contract,
+    )
+
+    assert "source-reward target contract is preregistered_offline_training_target" in (
+        section.summary
+    )
+    assert section.details["source_reward_target_contract"]["status"] == (
+        "preregistered_offline_training_target"
+    )
+    assert report_mod.build_next_actions([section]) == []
 
 
 def test_a9_next_action_switches_to_oracle_design_when_no_batches() -> None:

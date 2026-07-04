@@ -1,0 +1,173 @@
+{
+  "acceptance_constraints": {
+    "min_cross_action_pair_rows": 50,
+    "min_pair_rows": 100,
+    "required_aggregate_status": "pairwise_ranker_signal",
+    "required_cv_status": "pairwise_ranker_signal",
+    "required_holdout_status": "holdout_signal_consistent",
+    "runtime_gate_change_allowed": false
+  },
+  "allowed_use": [
+    "offline ranker/reward-model training experiments",
+    "offline feature-target validation and ablation",
+    "handoff planning for a future independent oracle/source contract"
+  ],
+  "evidence": {
+    "aggregate_decision": {
+      "best_family": "hist_gradient_boosting",
+      "blockers": [],
+      "recommended_next": "cross_validate_pairwise_ranker_on_expanded_contract",
+      "runtime_gate_change_allowed": false,
+      "status": "pairwise_ranker_signal"
+    },
+    "coverage": {
+      "action_pair_counts": {
+        "architect_general>coder_escalation": 14,
+        "architect_general>frontdoor": 8,
+        "coder_escalation>architect_general": 2,
+        "frontdoor>architect_general": 134,
+        "frontdoor>coder_escalation": 22
+      },
+      "contrastive_groups": 158,
+      "cross_action_pair_rows": 180,
+      "pair_rows": 180,
+      "same_action_pair_rows": 0,
+      "skipped_no_contrast_groups": 144,
+      "source_family_pair_counts": {
+        "orchestrator_live_seed": 20,
+        "seeding_eval": 160
+      },
+      "source_record_groups": 302,
+      "suite_pair_counts": {
+        "coder": 8,
+        "debugbench": 8,
+        "general": 8,
+        "gpqa": 8,
+        "hotpotqa": 48,
+        "instruction_precision": 44,
+        "livecodebench": 8,
+        "long_context": 8,
+        "math": 8,
+        "simpleqa": 18,
+        "thinking": 14
+      },
+      "unique_action_pairs": 5
+    },
+    "cross_validation_decision": {
+      "best_family": "hist_gradient_boosting",
+      "blockers": [],
+      "recommended_next": "resolve_independent_holdout_blockers_before_runtime_use",
+      "runtime_gate_change_allowed": false,
+      "status": "pairwise_ranker_signal"
+    },
+    "cv_folds": 5,
+    "diagnostic_boundary": {
+      "binary_threshold": 0.5,
+      "diagnostic_only": true,
+      "independent_oracle": false,
+      "interpretation": "Use this to test whether the candidate set contains enough within-task source-reward contrast. It is not an adopted independent reward oracle.",
+      "label_status": "diagnostic_source_reward_passthrough",
+      "recommended_next": "decide whether A9 should train on source-q-reward pairwise labels or build a new independent scorer/source contract before ranker use",
+      "runtime_gate_change_allowed": false,
+      "score_source": "source_q_reward_passthrough",
+      "score_value_counts": {
+        "-0.3": 60,
+        "-0.5": 8,
+        "0.0": 154,
+        "0.1": 56,
+        "0.363842889264226": 2,
+        "0.5": 30,
+        "1.0": 316
+      },
+      "source_reward_passthrough": true
+    },
+    "diagnostic_decision": {
+      "min_cross_action_pairs": 50,
+      "min_pairs": 100,
+      "recommended_next": "decide whether A9 should train on source-q-reward pairwise labels or build a new independent scorer/source contract before ranker use",
+      "runtime_gate_change_allowed": false,
+      "status": "contract_ready"
+    },
+    "families_requested": [
+      "logistic_l2",
+      "hist_gradient_boosting",
+      "random_forest"
+    ],
+    "holdout_decision": {
+      "blockers": [],
+      "eligible_holdouts": 3,
+      "passing_holdouts": 3,
+      "recommended_next": "preregister_downstream_pairwise_reward_use",
+      "runtime_gate_change_allowed": false,
+      "status": "holdout_signal_consistent"
+    },
+    "ranker_input": {
+      "action_pair_counts": {
+        "architect_general>coder_escalation": 14,
+        "architect_general>frontdoor": 8,
+        "coder_escalation>architect_general": 2,
+        "frontdoor>architect_general": 134,
+        "frontdoor>coder_escalation": 22
+      },
+      "cross_action_pair_rows": 180,
+      "group_count": 158,
+      "pair_rows": 180,
+      "pairing_mode_counts": {
+        "score_ordered": 180
+      },
+      "same_action_pair_rows": 0,
+      "source_family_pair_counts": {
+        "orchestrator_live_seed": 20,
+        "seeding_eval": 160
+      },
+      "suite_pair_counts": {
+        "coder": 8,
+        "debugbench": 8,
+        "general": 8,
+        "gpqa": 8,
+        "hotpotqa": 48,
+        "instruction_precision": 44,
+        "livecodebench": 8,
+        "long_context": 8,
+        "math": 8,
+        "simpleqa": 18,
+        "thinking": 14
+      }
+    },
+    "seeds": [
+      42,
+      7,
+      13,
+      101,
+      2026
+    ],
+    "source_reward_diagnostic_summary": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_source_reward_diagnostic_summary.json",
+    "source_reward_ranker_summary": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_ranker_source_reward_diagnostic_summary.json",
+    "split": {
+      "group_disjoint": true,
+      "test_split": 0.25
+    }
+  },
+  "forbidden_use": [
+    "live routing decisions",
+    "serve-time request gating",
+    "online reward updates",
+    "claiming independent oracle evidence",
+    "production promotion without a separate deployment gate"
+  ],
+  "generated_at": "2026-07-04T18:19:55.911523+00:00",
+  "next_step": "Use this only as an offline A9 training target candidate; any live use requires a separate independent deployment gate.",
+  "schema_version": "offline_reward_source_reward_pairwise_target_contract.v1",
+  "status": "preregistered_offline_training_target",
+  "target": {
+    "diagnostic_only": false,
+    "independent_oracle": false,
+    "learning_target": "within_source_record_score_ordered_preference_from_source_q_reward",
+    "name": "a9_source_q_reward_pairwise_training_target_v1",
+    "pairwise_jsonl": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_source_reward_diagnostic.jsonl",
+    "prompt_free": true,
+    "runtime_gate_change_allowed": false,
+    "score_source": "source_q_reward_passthrough",
+    "source_reward_passthrough": true
+  }
+}

@@ -70,6 +70,20 @@ DEFAULT_A9_SOURCE_REWARD_DIAGNOSTIC_SUMMARY = (
     / "offline_reward_oracle_token_coverage_final_labels_20260621"
     / "offline_reward_pairwise_source_reward_diagnostic_summary.json"
 )
+DEFAULT_A9_SOURCE_REWARD_RANKER_SUMMARY = (
+    ORCH_ROOT
+    / "orchestration"
+    / "reports"
+    / "offline_reward_oracle_token_coverage_final_labels_20260621"
+    / "offline_reward_pairwise_ranker_source_reward_diagnostic_summary.json"
+)
+DEFAULT_A9_SOURCE_REWARD_TARGET_CONTRACT = (
+    ORCH_ROOT
+    / "orchestration"
+    / "reports"
+    / "offline_reward_oracle_token_coverage_final_labels_20260621"
+    / "offline_reward_source_reward_pairwise_target_contract.json"
+)
 DEFAULT_DS_E1_KV_PORT = 8194
 DEFAULT_XMAS_HELDOUT_PROMPTS_ARG = (
     "benchmarks/results/runs/xmas_live_ab/20260618-heldout-resilient/prompts.jsonl"
@@ -769,6 +783,12 @@ def a9_collection_section(
     source_reward_diagnostic_summary_path: Path | None = (
         DEFAULT_A9_SOURCE_REWARD_DIAGNOSTIC_SUMMARY
     ),
+    source_reward_ranker_summary_path: Path | None = (
+        DEFAULT_A9_SOURCE_REWARD_RANKER_SUMMARY
+    ),
+    source_reward_target_contract_path: Path | None = (
+        DEFAULT_A9_SOURCE_REWARD_TARGET_CONTRACT
+    ),
 ) -> GateSection:
     """Surface the guarded A9 pairwise source-acquisition window."""
     status = build_a9_collection_status(manifest_path)
@@ -810,6 +830,50 @@ def a9_collection_section(
     source_reward_diagnostic = source_reward_summary.get("diagnostic")
     if not isinstance(source_reward_diagnostic, dict):
         source_reward_diagnostic = {}
+    source_reward_ranker_summary: dict[str, Any] = {}
+    if (
+        source_reward_ranker_summary_path is not None
+        and source_reward_ranker_summary_path.exists()
+    ):
+        try:
+            source_reward_ranker_summary = _load_json_object(
+                source_reward_ranker_summary_path
+            )
+        except Exception as exc:
+            source_reward_ranker_summary = {"load_error": str(exc)}
+    source_reward_ranker_aggregate = source_reward_ranker_summary.get("aggregate")
+    if not isinstance(source_reward_ranker_aggregate, dict):
+        source_reward_ranker_aggregate = {}
+    source_reward_ranker_aggregate_decision = source_reward_ranker_aggregate.get(
+        "decision"
+    )
+    if not isinstance(source_reward_ranker_aggregate_decision, dict):
+        source_reward_ranker_aggregate_decision = {}
+    source_reward_ranker_cv = source_reward_ranker_summary.get("cross_validation")
+    if not isinstance(source_reward_ranker_cv, dict):
+        source_reward_ranker_cv = {}
+    source_reward_ranker_cv_decision = source_reward_ranker_cv.get("decision")
+    if not isinstance(source_reward_ranker_cv_decision, dict):
+        source_reward_ranker_cv_decision = {}
+    source_reward_ranker_holdout_decision = source_reward_ranker_summary.get(
+        "holdout_decision"
+    )
+    if not isinstance(source_reward_ranker_holdout_decision, dict):
+        source_reward_ranker_holdout_decision = {}
+    source_reward_ranker_input = source_reward_ranker_summary.get("input")
+    if not isinstance(source_reward_ranker_input, dict):
+        source_reward_ranker_input = {}
+    source_reward_target_contract: dict[str, Any] = {}
+    if (
+        source_reward_target_contract_path is not None
+        and source_reward_target_contract_path.exists()
+    ):
+        try:
+            source_reward_target_contract = _load_json_object(
+                source_reward_target_contract_path
+            )
+        except Exception as exc:
+            source_reward_target_contract = {"load_error": str(exc)}
     summary_tail = ""
     if status_label == "no_runnable_batches" and contract_decision:
         summary_tail = (
@@ -820,6 +884,16 @@ def a9_collection_section(
             summary_tail += (
                 "; source-reward diagnostic is "
                 f"{source_reward_decision.get('status', 'unknown')}"
+            )
+        if source_reward_ranker_aggregate_decision:
+            summary_tail += (
+                "; source-reward ranker is "
+                f"{source_reward_ranker_aggregate_decision.get('status', 'unknown')}"
+            )
+        if source_reward_target_contract:
+            summary_tail += (
+                "; source-reward target contract is "
+                f"{source_reward_target_contract.get('status', 'unknown')}"
             )
     return GateSection(
         key="a9_pairwise_collection",
@@ -851,6 +925,29 @@ def a9_collection_section(
             "source_reward_diagnostic_decision": source_reward_decision or None,
             "source_reward_diagnostic_coverage": source_reward_coverage or None,
             "source_reward_diagnostic": source_reward_diagnostic or None,
+            "source_reward_ranker_summary_path": (
+                str(source_reward_ranker_summary_path)
+                if source_reward_ranker_summary_path is not None
+                else None
+            ),
+            "source_reward_ranker_input": source_reward_ranker_input or None,
+            "source_reward_ranker_aggregate_decision": (
+                source_reward_ranker_aggregate_decision or None
+            ),
+            "source_reward_ranker_cv_decision": (
+                source_reward_ranker_cv_decision or None
+            ),
+            "source_reward_ranker_holdout_decision": (
+                source_reward_ranker_holdout_decision or None
+            ),
+            "source_reward_target_contract_path": (
+                str(source_reward_target_contract_path)
+                if source_reward_target_contract_path is not None
+                else None
+            ),
+            "source_reward_target_contract": (
+                source_reward_target_contract or None
+            ),
             "autopilot_guard": status.get("autopilot_guard"),
             "blockers": blockers,
             "warnings": list(status.get("warnings") or []),
@@ -1714,9 +1811,115 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
             source_reward_diagnostic = (
                 a9.details.get("source_reward_diagnostic") or {}
             )
+            source_reward_ranker_input = (
+                a9.details.get("source_reward_ranker_input") or {}
+            )
+            source_reward_ranker_aggregate_decision = (
+                a9.details.get("source_reward_ranker_aggregate_decision") or {}
+            )
+            source_reward_ranker_cv_decision = (
+                a9.details.get("source_reward_ranker_cv_decision") or {}
+            )
+            source_reward_ranker_holdout_decision = (
+                a9.details.get("source_reward_ranker_holdout_decision") or {}
+            )
+            source_reward_target_contract = (
+                a9.details.get("source_reward_target_contract") or {}
+            )
             contract_status = str(contract_decision.get("status") or "unknown")
             contract_next = str(contract_decision.get("recommended_next") or "")
+            source_reward_ranker_ready = False
             if contract_status == "insufficient_contrast":
+                source_reward_ranker_ready = (
+                    source_reward_decision.get("status") == "contract_ready"
+                    and source_reward_ranker_aggregate_decision.get("status")
+                    == "pairwise_ranker_signal"
+                    and source_reward_ranker_cv_decision.get("status")
+                    == "pairwise_ranker_signal"
+                    and source_reward_ranker_holdout_decision.get("status")
+                    == "holdout_signal_consistent"
+                )
+                if source_reward_ranker_ready:
+                    if (
+                        source_reward_target_contract.get("status")
+                        != "preregistered_offline_training_target"
+                    ):
+                        actions.append(
+                            {
+                                "key": "preregister_a9_source_reward_pairwise_target",
+                                "priority": "P1",
+                                "status": "active",
+                                "reason": (
+                                    "A9 source-q-reward passthrough is not an "
+                                    "independent oracle, but the explicit offline "
+                                    "target now has pairwise coverage and ranker "
+                                    "signal: aggregate and group-disjoint CV are "
+                                    "pairwise_ranker_signal, and eligible "
+                                    "source/suite holdouts are consistent. The "
+                                    "remaining work is a target-contract decision, "
+                                    "not more collection."
+                                ),
+                                "requires": (
+                                    "pre-register source-q-reward pairwise labels "
+                                    "as an offline training target, including their "
+                                    "non-independent provenance and runtime-gate "
+                                    "prohibition, or explicitly reject them and "
+                                    "build an independent scorer/source contract"
+                                ),
+                                "blocked_by": [],
+                                "manifest": a9.details.get("manifest_path"),
+                                "candidate_contract_summary_path": a9.details.get(
+                                    "candidate_contract_summary_path"
+                                ),
+                                "candidate_contract_decision": (
+                                    contract_decision or None
+                                ),
+                                "candidate_contract_coverage": (
+                                    contract_coverage or None
+                                ),
+                                "source_reward_diagnostic_summary_path": a9.details.get(
+                                    "source_reward_diagnostic_summary_path"
+                                ),
+                                "source_reward_diagnostic_decision": (
+                                    source_reward_decision or None
+                                ),
+                                "source_reward_diagnostic_coverage": (
+                                    source_reward_coverage or None
+                                ),
+                                "source_reward_diagnostic": (
+                                    source_reward_diagnostic or None
+                                ),
+                                "source_reward_ranker_summary_path": a9.details.get(
+                                    "source_reward_ranker_summary_path"
+                                ),
+                                "source_reward_ranker_input": (
+                                    source_reward_ranker_input or None
+                                ),
+                                "source_reward_ranker_aggregate_decision": (
+                                    source_reward_ranker_aggregate_decision or None
+                                ),
+                                "source_reward_ranker_cv_decision": (
+                                    source_reward_ranker_cv_decision or None
+                                ),
+                                "source_reward_ranker_holdout_decision": (
+                                    source_reward_ranker_holdout_decision or None
+                                ),
+                                "source_reward_target_contract_path": a9.details.get(
+                                    "source_reward_target_contract_path"
+                                ),
+                                "command": (
+                                    "Draft/update the A9 source-q-reward pairwise "
+                                    "target contract: source_q_reward_passthrough is "
+                                    "offline-only, non-independent, prompt-free, and "
+                                    "runtime_gate_change_allowed=false; require a "
+                                    "separate deployment gate before any live use."
+                                ),
+                                "follow_up": (
+                                    "uv run python scripts/autopilot/"
+                                    "fable5_gate_report.py --json --strict"
+                                ),
+                            }
+                        )
                 if source_reward_decision.get("status") == "contract_ready":
                     reason = (
                         "A9 candidate scoring/rebuild is complete. The "
@@ -1762,43 +1965,44 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
                     "materially different scorer/feature design or a "
                     "reference-bearing instruction-following source"
                 )
-            actions.append(
-                {
-                    "key": "revise_a9_reward_oracle_or_reference_source",
-                    "priority": "P1",
-                    "status": "active",
-                    "reason": reason,
-                    "requires": requires,
-                    "blocked_by": [],
-                    "manifest": a9.details.get("manifest_path"),
-                    "batch_count": a9.details.get("batch_count"),
-                    "post_collection_step_count": a9.details.get(
-                        "post_collection_step_count"
-                    ),
-                    "source_plan_decision": a9.details.get("source_plan_decision"),
-                    "candidate_contract_summary_path": a9.details.get(
-                        "candidate_contract_summary_path"
-                    ),
-                    "candidate_contract_decision": contract_decision or None,
-                    "candidate_contract_coverage": contract_coverage or None,
-                    "candidate_contract_recommended_next": contract_next or None,
-                    "source_reward_diagnostic_summary_path": a9.details.get(
-                        "source_reward_diagnostic_summary_path"
-                    ),
-                    "source_reward_diagnostic_decision": (
-                        source_reward_decision or None
-                    ),
-                    "source_reward_diagnostic_coverage": (
-                        source_reward_coverage or None
-                    ),
-                    "source_reward_diagnostic": source_reward_diagnostic or None,
-                    "follow_up": (
-                        "Do not rerun the current collection script; regenerate "
-                        "A9 only after the oracle/source contract changes, then "
-                        "rebuild the candidate pairwise contract."
-                    ),
-                }
-            )
+            if not source_reward_ranker_ready:
+                actions.append(
+                    {
+                        "key": "revise_a9_reward_oracle_or_reference_source",
+                        "priority": "P1",
+                        "status": "active",
+                        "reason": reason,
+                        "requires": requires,
+                        "blocked_by": [],
+                        "manifest": a9.details.get("manifest_path"),
+                        "batch_count": a9.details.get("batch_count"),
+                        "post_collection_step_count": a9.details.get(
+                            "post_collection_step_count"
+                        ),
+                        "source_plan_decision": a9.details.get("source_plan_decision"),
+                        "candidate_contract_summary_path": a9.details.get(
+                            "candidate_contract_summary_path"
+                        ),
+                        "candidate_contract_decision": contract_decision or None,
+                        "candidate_contract_coverage": contract_coverage or None,
+                        "candidate_contract_recommended_next": contract_next or None,
+                        "source_reward_diagnostic_summary_path": a9.details.get(
+                            "source_reward_diagnostic_summary_path"
+                        ),
+                        "source_reward_diagnostic_decision": (
+                            source_reward_decision or None
+                        ),
+                        "source_reward_diagnostic_coverage": (
+                            source_reward_coverage or None
+                        ),
+                        "source_reward_diagnostic": source_reward_diagnostic or None,
+                        "follow_up": (
+                            "Do not rerun the current collection script; regenerate "
+                            "A9 only after the oracle/source contract changes, then "
+                            "rebuild the candidate pairwise contract."
+                        ),
+                    }
+                )
         else:
             actions.append(
                 {
