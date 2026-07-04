@@ -26,6 +26,11 @@ from preflight_audit import (  # noqa: E402
     _load_jsonl,
     archive_replay_kwargs_from_state,
 )
+from phase_status import (  # noqa: E402
+    DEFAULT_STALE_AFTER_S,
+    PHASE_PATH,
+    build_phase_health_report,
+)
 from seq_readiness_report import build_seq_readiness_report  # noqa: E402
 from src.autopilot_core.journal_reconstruction import (  # noqa: E402
     reconstruct_archive_from_journal_rows,
@@ -206,6 +211,7 @@ def _w6_audit_restart_report(
 def _summary_report(report: dict[str, Any]) -> dict[str, Any]:
     seq = report["sequential_cutover"]
     w6 = report["w6_audit_cutover"]
+    phase = report["phase_health"]
     snapshot = report["snapshot_replay"]
     archive = report["archive_authority"]
     baseline = report["baseline_authority"]
@@ -234,6 +240,16 @@ def _summary_report(report: dict[str, Any]) -> dict[str, Any]:
     return {
         "restart_ready": report["restart_ready"],
         "blockers": report["blockers"],
+        "phase_health_ok": phase.get("ok"),
+        "phase_health_status": phase.get("status"),
+        "phase_health_phase": phase.get("phase"),
+        "phase_health_pid": phase.get("pid"),
+        "phase_health_trial_id": phase.get("trial_id"),
+        "phase_health_heartbeat_age_s": phase.get("heartbeat_age_s"),
+        "phase_health_code_stale": phase.get("code_stale"),
+        "phase_health_code_stale_paths": phase.get("code_stale_paths", []),
+        "phase_health_require_current_code": phase.get("require_current_code"),
+        "phase_health_blockers": phase.get("blockers", []),
         "archive_status": archive["diagnostic"].get("status"),
         "archive_source_surface_ok": archive_source.get("ok"),
         "archive_source_surface_count": archive_source.get("surface_count"),
@@ -368,10 +384,18 @@ def build_restart_readiness_report(
     *,
     require_seq_cutover: bool = False,
     require_w6_audit: bool = False,
+    require_current_code: bool = False,
+    phase_path: Path = PHASE_PATH,
+    phase_stale_after_s: float = DEFAULT_STALE_AFTER_S,
     min_w6_audited_trials: int = 30,
     w6_exclude_before_ts: float | None = None,
 ) -> dict[str, Any]:
     """Build a no-write report for safe AutoPilot restart/cutover decisions."""
+    phase_report = build_phase_health_report(
+        path=phase_path,
+        require_current_code=require_current_code,
+        stale_after_s=phase_stale_after_s,
+    )
     archive_report = build_archive_authority_report(state, journal_rows)
     archive_source_report = build_archive_source_surface_audit(ORCH_ROOT)
     snapshot_report = _snapshot_restart_report(state, journal_rows)
@@ -404,13 +428,20 @@ def build_restart_readiness_report(
             "W6 audit cutover readiness is blocked: "
             + "; ".join(w6_report.get("blockers") or ["unknown"])
         )
+    if require_current_code and not phase_report.get("ok"):
+        blockers.append(
+            "phase/current-code health is blocked: "
+            + "; ".join(phase_report.get("blockers") or ["unknown"])
+        )
 
     report = {
         "ok": not blockers,
         "restart_ready": not blockers,
         "require_seq_cutover": require_seq_cutover,
         "require_w6_audit": require_w6_audit,
+        "require_current_code": require_current_code,
         "blockers": blockers,
+        "phase_health": phase_report,
         "archive_authority": archive_report,
         "archive_source_surface_audit": archive_source_report,
         "snapshot_replay": snapshot_report,
@@ -430,6 +461,16 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- Restart ready: {str(report['restart_ready']).lower()}",
         f"- Sequential cutover required: {str(report['require_seq_cutover']).lower()}",
         f"- W6 audit cutover required: {str(report['require_w6_audit']).lower()}",
+        f"- Current runtime code required: {str(report['require_current_code']).lower()}",
+        (
+            "- Phase/current-code health: "
+            f"ok={summary['phase_health_ok']}, "
+            f"status={summary['phase_health_status']}, "
+            f"phase={summary['phase_health_phase']}, "
+            f"trial={summary['phase_health_trial_id']}, "
+            f"pid={summary['phase_health_pid']}, "
+            f"code_stale={summary['phase_health_code_stale']}"
+        ),
         f"- Archive authority: {summary['archive_status']}",
         (
             "- Archive source surfaces: "
@@ -523,6 +564,26 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Treat blocked W6 rotating-audit cutover readiness as a restart blocker.",
     )
     parser.add_argument(
+        "--require-current-code",
+        action="store_true",
+        help=(
+            "Treat a missing, stale, dead, or runtime-source-stale AutoPilot "
+            "phase heartbeat as a restart blocker."
+        ),
+    )
+    parser.add_argument(
+        "--phase-path",
+        type=Path,
+        default=PHASE_PATH,
+        help="AutoPilot phase heartbeat path used for current-code readiness.",
+    )
+    parser.add_argument(
+        "--phase-stale-after-s",
+        type=float,
+        default=DEFAULT_STALE_AFTER_S,
+        help="Maximum allowed AutoPilot phase heartbeat age in seconds.",
+    )
+    parser.add_argument(
         "--min-w6-audited-trials",
         type=int,
         default=30,
@@ -543,6 +604,9 @@ def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     if args.min_w6_audited_trials < 1:
         print("--min-w6-audited-trials must be >= 1", file=sys.stderr)
+        return 2
+    if args.phase_stale_after_s < 0:
+        print("--phase-stale-after-s must be >= 0", file=sys.stderr)
         return 2
     state_path = args.state.expanduser().resolve()
     journal_path = args.journal.expanduser().resolve()
@@ -568,6 +632,9 @@ def main(argv: list[str] | None = None) -> int:
         journal_rows,
         require_seq_cutover=args.require_seq_cutover,
         require_w6_audit=args.require_w6_audit,
+        require_current_code=args.require_current_code,
+        phase_path=args.phase_path.expanduser().resolve(),
+        phase_stale_after_s=args.phase_stale_after_s,
         min_w6_audited_trials=args.min_w6_audited_trials,
         w6_exclude_before_ts=args.w6_exclude_before_ts,
     )

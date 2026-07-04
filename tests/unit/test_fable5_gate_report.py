@@ -297,7 +297,7 @@ xmas_routing:
     assert seed_action["follow_up"] == (
         "cd /mnt/raid0/llm/epyc-orchestrator && "
         "uv run python scripts/autopilot/restart_readiness_report.py "
-        "--json --strict --require-seq-cutover --require-w6-audit"
+        "--json --strict --require-seq-cutover --require-w6-audit --require-current-code"
     )
     assert report["next_actions"][1]["status"] == "active"
     assert report["next_actions"][1]["evidence"]["trusted_vectors_required"] == 120
@@ -323,7 +323,9 @@ xmas_routing:
         == "seq_trusted_vectors"
     )
     assert "restart_readiness_report.py" in report["next_actions"][1]["command"]
-    assert "--require-seq-cutover --require-w6-audit" in report["next_actions"][1]["command"]
+    assert "--require-seq-cutover --require-w6-audit --require-current-code" in report[
+        "next_actions"
+    ][1]["command"]
     assert report["next_actions"][1]["follow_up"] == (
         "uv run python scripts/autopilot/fable5_gate_report.py --json --strict"
     )

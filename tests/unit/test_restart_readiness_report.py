@@ -90,7 +90,42 @@ def _audit_report(
     }
 
 
-def _patch_ready_dependencies(monkeypatch, *, audit_report: dict[str, Any] | None = None) -> None:
+def _phase_health(
+    *,
+    ok: bool = True,
+    blockers: list[str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "ok": ok,
+        "status": "active" if ok else "code_stale",
+        "phase": "planner",
+        "pid": 12345,
+        "trial_id": 1118,
+        "heartbeat_age_s": 1.5,
+        "code_stale": not ok,
+        "code_stale_paths": [{"path": "scripts/autopilot/autopilot.py"}] if not ok else [],
+        "require_current_code": False,
+        "blockers": blockers or [],
+    }
+
+
+def _patch_ready_dependencies(
+    monkeypatch,
+    *,
+    audit_report: dict[str, Any] | None = None,
+    phase_health: dict[str, Any] | None = None,
+) -> None:
+    monkeypatch.setattr(
+        report_mod,
+        "build_phase_health_report",
+        lambda **kwargs: {**_phase_health(), "require_current_code": kwargs.get("require_current_code")},
+    )
+    if phase_health is not None:
+        monkeypatch.setattr(
+            report_mod,
+            "build_phase_health_report",
+            lambda **kwargs: {**phase_health, "require_current_code": kwargs.get("require_current_code")},
+        )
     monkeypatch.setattr(
         report_mod,
         "build_archive_authority_report",
@@ -594,6 +629,52 @@ def test_cutover_horizon_has_no_blocker_when_all_components_clear(monkeypatch) -
     }
 
 
+def test_require_current_code_blocks_on_phase_health_failure(monkeypatch) -> None:
+    _patch_ready_dependencies(
+        monkeypatch,
+        audit_report=_audit_report(audited_trial_count=30),
+        phase_health=_phase_health(
+            ok=False,
+            blockers=["autopilot process predates runtime source changes: autopilot.py"],
+        ),
+    )
+
+    report = report_mod.build_restart_readiness_report(
+        _state(),
+        [],
+        require_current_code=True,
+    )
+
+    assert report["restart_ready"] is False
+    assert report["summary"]["phase_health_ok"] is False
+    assert report["summary"]["phase_health_code_stale"] is True
+    assert report["summary"]["phase_health_require_current_code"] is True
+    assert report["blockers"] == [
+        (
+            "phase/current-code health is blocked: "
+            "autopilot process predates runtime source changes: autopilot.py"
+        )
+    ]
+
+
+def test_phase_health_is_informational_without_current_code_requirement(monkeypatch) -> None:
+    _patch_ready_dependencies(
+        monkeypatch,
+        audit_report=_audit_report(audited_trial_count=30),
+        phase_health=_phase_health(
+            ok=False,
+            blockers=["autopilot process predates runtime source changes: autopilot.py"],
+        ),
+    )
+
+    report = report_mod.build_restart_readiness_report(_state(), [])
+
+    assert report["restart_ready"] is True
+    assert report["blockers"] == []
+    assert report["summary"]["phase_health_ok"] is False
+    assert report["summary"]["phase_health_require_current_code"] is False
+
+
 def test_require_w6_audit_uses_trailing_alarm_window(monkeypatch) -> None:
     _patch_ready_dependencies(monkeypatch)
 
@@ -813,6 +894,44 @@ def test_cli_json_strict_returns_one_on_restart_blocker(tmp_path: Path, capsys, 
 
     assert rc == 1
     assert out["blockers"] == ["blocked"]
+
+
+def test_cli_threads_current_code_phase_options(tmp_path: Path, capsys, monkeypatch) -> None:
+    state_path = tmp_path / "autopilot_state.json"
+    journal_path = tmp_path / "autopilot_journal.jsonl"
+    phase_path = tmp_path / "phase.json"
+    state_path.write_text("{}", encoding="utf-8")
+    journal_path.write_text("", encoding="utf-8")
+    phase_path.write_text("{}", encoding="utf-8")
+    observed: dict[str, Any] = {}
+
+    def fake_report(state, rows, **kwargs):
+        observed.update(kwargs)
+        return {"restart_ready": True, "blockers": []}
+
+    monkeypatch.setattr(report_mod, "build_restart_readiness_report", fake_report)
+
+    rc = report_mod.main(
+        [
+            "--state",
+            str(state_path),
+            "--journal",
+            str(journal_path),
+            "--json",
+            "--require-current-code",
+            "--phase-path",
+            str(phase_path),
+            "--phase-stale-after-s",
+            "12.5",
+        ]
+    )
+    out = json.loads(capsys.readouterr().out)
+
+    assert rc == 0
+    assert out["restart_ready"] is True
+    assert observed["require_current_code"] is True
+    assert observed["phase_path"] == phase_path.resolve()
+    assert observed["phase_stale_after_s"] == 12.5
 
 
 def test_cli_accepts_journal_directory_and_rollover_batches(

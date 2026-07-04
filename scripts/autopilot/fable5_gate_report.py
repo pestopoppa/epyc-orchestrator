@@ -81,7 +81,7 @@ XMAS_QUIET_WINDOW_PROCESS_PATTERNS: tuple[tuple[str, str], ...] = (
 STRICT_RESTART_READINESS_COMMAND = (
     "cd /mnt/raid0/llm/epyc-orchestrator && "
     "uv run python scripts/autopilot/restart_readiness_report.py "
-    "--json --strict --require-seq-cutover --require-w6-audit"
+    "--json --strict --require-seq-cutover --require-w6-audit --require-current-code"
 )
 STRICT_FABLE5_GATE_COMMAND = (
     "uv run python scripts/autopilot/fable5_gate_report.py --json --strict"
@@ -891,6 +891,7 @@ def build_fable5_gate_report(
                 journal_rows,
                 require_seq_cutover=True,
                 require_w6_audit=True,
+                require_current_code=bool(phase_report.get("require_current_code")),
             )
         ),
         w8_trajectory_section(build_w8_trajectory_report(journal_rows)),
