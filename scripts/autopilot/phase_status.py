@@ -25,6 +25,7 @@ from typing import Any, Callable, Iterable, Iterator
 log = logging.getLogger("autopilot.phase")
 
 ORCH_ROOT = Path(__file__).resolve().parents[2]
+RESEARCH_ROOT = ORCH_ROOT.parent / "epyc-inference-research"
 PHASE_PATH = Path("/mnt/raid0/llm/tmp/autopilot_phase.json")
 PHASE_EVENTS_PATH = Path("/mnt/raid0/llm/tmp/autopilot_phase.jsonl")
 DEFAULT_AUTOPILOT_LOG_PATH = ORCH_ROOT / "logs" / "autopilot.log"
@@ -57,11 +58,15 @@ AUTOPILOT_RUNTIME_SOURCE_PATHS = (
     ORCH_ROOT / "scripts" / "autopilot" / "eval_tower.py",
     ORCH_ROOT / "scripts" / "autopilot" / "planner_coordinator.py",
     ORCH_ROOT / "scripts" / "autopilot" / "planner_providers.py",
+    ORCH_ROOT / "scripts" / "autopilot" / "species" / "seeder.py",
+    ORCH_ROOT / "scripts" / "benchmark" / "seeding_eval.py",
+    ORCH_ROOT / "scripts" / "benchmark" / "seeding_scoring.py",
     ORCH_ROOT / "orchestration" / "repl_memory" / "strategy_store.py",
     ORCH_ROOT / "orchestration" / "repl_memory" / "knowledge_distiller.py",
     ORCH_ROOT / "scripts" / "autopilot" / "species" / "evolution_manager.py",
     ORCH_ROOT / "scripts" / "autopilot" / "safety_gate.py",
     ORCH_ROOT / "scripts" / "autopilot" / "phase_status.py",
+    RESEARCH_ROOT / "scripts" / "benchmark" / "debug_scorer.py",
 )
 
 

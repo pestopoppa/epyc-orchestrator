@@ -159,12 +159,16 @@ def test_phase_health_report_can_block_on_runtime_source_drift(tmp_path, monkeyp
     ]
 
 
-def test_phase_health_default_runtime_sources_include_planner_modules():
+def test_phase_health_default_runtime_sources_include_planner_and_seeding_modules():
     checked = {path.name for path in phase_status.AUTOPILOT_RUNTIME_SOURCE_PATHS}
 
     assert "controller_io.py" in checked
     assert "planner_coordinator.py" in checked
     assert "planner_providers.py" in checked
+    assert "seeder.py" in checked
+    assert "seeding_eval.py" in checked
+    assert "seeding_scoring.py" in checked
+    assert "debug_scorer.py" in checked
     assert "strategy_store.py" in checked
     assert "knowledge_distiller.py" in checked
     assert "evolution_manager.py" in checked
