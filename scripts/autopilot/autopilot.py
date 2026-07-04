@@ -323,7 +323,7 @@ def _planner_convention_bindings(
     *,
     species: str,
 ) -> set[str]:
-    """Return startup-scoped live convention bindings for planner visibility."""
+    """Return live convention bindings for planner visibility."""
     if not _PLANNER_HINTS_ENABLED or strategy_store is None:
         return set()
     if not hasattr(strategy_store, "retrieve_conventions"):
@@ -367,11 +367,15 @@ def _planner_convention_bindings(
     return bindings
 
 
-def _install_planner_convention_bindings(
+def _refresh_planner_convention_bindings(
     strategy_store: StrategyStore | None,
     journal: ExperimentJournal | None,
+    *,
+    reason: str = "planner_turn",
 ) -> None:
-    """Load default-off convention bindings once for prompts and validation."""
+    """Refresh default-off convention bindings for prompts and validation."""
+    previous_flags = set(_PLANNER_DENYLISTED_FEATURE_FLAGS)
+    previous_surfaces = set(_PLANNER_SUPPRESSED_NUMERIC_SURFACES)
     _PLANNER_DENYLISTED_FEATURE_FLAGS.clear()
     _PLANNER_SUPPRESSED_NUMERIC_SURFACES.clear()
     if not _PLANNER_HINTS_ENABLED:
@@ -393,13 +397,32 @@ def _install_planner_convention_bindings(
         )
     )
     controller_io.set_suppressed_numeric_surfaces(_PLANNER_SUPPRESSED_NUMERIC_SURFACES)
-    if _PLANNER_DENYLISTED_FEATURE_FLAGS or _PLANNER_SUPPRESSED_NUMERIC_SURFACES:
+    current_flags = set(_PLANNER_DENYLISTED_FEATURE_FLAGS)
+    current_surfaces = set(_PLANNER_SUPPRESSED_NUMERIC_SURFACES)
+    if (
+        reason == "startup"
+        or current_flags != previous_flags
+        or current_surfaces != previous_surfaces
+    ):
         log.info(
-            "Planner convention bindings active: denylisted_flags=%s "
+            "Planner convention bindings refreshed (%s): denylisted_flags=%s "
             "suppressed_numeric_surfaces=%s",
-            sorted(_PLANNER_DENYLISTED_FEATURE_FLAGS),
-            sorted(_PLANNER_SUPPRESSED_NUMERIC_SURFACES),
+            reason,
+            sorted(current_flags),
+            sorted(current_surfaces),
         )
+
+
+def _install_planner_convention_bindings(
+    strategy_store: StrategyStore | None,
+    journal: ExperimentJournal | None,
+) -> None:
+    """Install planner convention bindings at startup."""
+    _refresh_planner_convention_bindings(
+        strategy_store,
+        journal,
+        reason="startup",
+    )
 
 
 def _planner_strategy_entry_line(entry: Any) -> str:
@@ -3870,6 +3893,12 @@ def _run_loop_inner(
                 )
             except Exception as _exc:
                 planner_evidence_text = f"(planner evidence unavailable: {_exc})"
+
+            _refresh_planner_convention_bindings(
+                strategy_store,
+                journal,
+                reason=f"planner_turn:{trial_counter}",
+            )
 
             try:
                 _known_actions = [

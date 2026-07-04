@@ -477,6 +477,69 @@ def test_planner_convention_install_does_not_touch_w6_audit_env(monkeypatch) -> 
         autopilot._PLANNER_SUPPRESSED_NUMERIC_SURFACES.clear()
 
 
+def test_planner_convention_bindings_refresh_without_restart(monkeypatch) -> None:
+    monkeypatch.setattr(autopilot, "_PLANNER_HINTS_ENABLED", True)
+
+    class FakeStore:
+        def __init__(self) -> None:
+            self.structural_flags = {"graph_router"}
+            self.numeric_surfaces = {"kv_compaction"}
+
+        def retrieve_conventions(self, *, species, journal):
+            assert journal == "journal"
+            if species == "structural_lab":
+                identifiers = self.structural_flags
+            elif species == "numeric_swarm":
+                identifiers = self.numeric_surfaces
+            else:
+                raise AssertionError(f"unexpected species: {species}")
+            return [
+                SimpleNamespace(
+                    metadata={
+                        "bind_status": "live",
+                        "bind_identifiers": sorted(identifiers),
+                    },
+                )
+            ]
+
+    suppressed_calls: list[set[str]] = []
+    monkeypatch.setattr(
+        autopilot.controller_io,
+        "set_suppressed_numeric_surfaces",
+        lambda surfaces: suppressed_calls.append(set(surfaces)),
+    )
+
+    store = FakeStore()
+    try:
+        autopilot._PLANNER_DENYLISTED_FEATURE_FLAGS.clear()
+        autopilot._PLANNER_SUPPRESSED_NUMERIC_SURFACES.clear()
+
+        autopilot._refresh_planner_convention_bindings(
+            store,
+            "journal",
+            reason="planner_turn:1",
+        )
+        assert autopilot._PLANNER_DENYLISTED_FEATURE_FLAGS == {"graph_router"}
+        assert autopilot._PLANNER_SUPPRESSED_NUMERIC_SURFACES == {"kv_compaction"}
+
+        store.structural_flags = {"xmas_routing_enforce"}
+        store.numeric_surfaces = {"monitor"}
+        autopilot._refresh_planner_convention_bindings(
+            store,
+            "journal",
+            reason="planner_turn:2",
+        )
+
+        assert autopilot._PLANNER_DENYLISTED_FEATURE_FLAGS == {
+            "xmas_routing_enforce"
+        }
+        assert autopilot._PLANNER_SUPPRESSED_NUMERIC_SURFACES == {"monitor"}
+        assert suppressed_calls[-2:] == [{"kv_compaction"}, {"monitor"}]
+    finally:
+        autopilot._PLANNER_DENYLISTED_FEATURE_FLAGS.clear()
+        autopilot._PLANNER_SUPPRESSED_NUMERIC_SURFACES.clear()
+
+
 def test_planner_strategy_hints_default_off_does_not_read_store(monkeypatch) -> None:
     monkeypatch.setattr(autopilot, "_PLANNER_HINTS_ENABLED", False)
 
@@ -490,6 +553,57 @@ def test_planner_strategy_hints_default_off_does_not_read_store(monkeypatch) -> 
     text = autopilot._build_planner_strategy_hints(FakeStore(), "journal")
 
     assert "disabled" in text
+
+
+def test_planner_strategy_hints_reflect_new_rows_between_turns(monkeypatch) -> None:
+    monkeypatch.setattr(autopilot, "_PLANNER_HINTS_ENABLED", True)
+    rows: list[SimpleNamespace] = []
+
+    class FakeStore:
+        def retrieve_conventions(self, *, species, journal, limit):
+            assert species
+            assert journal == "journal"
+            assert limit == 3
+            return []
+
+        def retrieve_for_journal(self, query, *, journal, k, species):
+            assert query
+            assert journal == "journal"
+            assert k == 3
+            if species == "seeder":
+                return list(rows)
+            return []
+
+    first = autopilot._build_planner_strategy_hints(
+        FakeStore(),
+        "journal",
+        max_rows=3,
+    )
+    rows.append(
+        SimpleNamespace(
+            id="late-tool-use-hint",
+            species="seeder",
+            entry_type="pattern",
+            title="Explore native tool use",
+            generalized_content=(
+                "Prefer a bounded REPL/tool-use measurement before another "
+                "plain seed batch."
+            ),
+            metadata={
+                "bind_status": "future",
+                "bind_identifiers": ["tools", "repl"],
+            },
+        )
+    )
+    second = autopilot._build_planner_strategy_hints(
+        FakeStore(),
+        "journal",
+        max_rows=3,
+    )
+
+    assert "no StrategyStore rows matched" in first
+    assert "Explore native tool use" in second
+    assert "tools,repl" in second
 
 
 def test_planner_strategy_hints_refresh_store_rows_for_prompt(monkeypatch) -> None:
