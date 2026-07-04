@@ -28,7 +28,7 @@ def _ok(url: str, body: object | None = None) -> probe.HttpResult:
 def test_activation_commands_use_stack_managed_feature_env() -> None:
     commands = "\n".join(probe.activation_commands("http://localhost:18070"))
 
-    assert "start --include-warm eval_batch_frontdoor" in commands
+    assert "start --only eval_batch_frontdoor" in commands
     assert "ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING=1" in commands
     assert "ORCHESTRATOR_EVAL_BATCH_FRONTDOOR_URL=http://localhost:18070" in commands
     assert "--smoke --confirm-clean-window --require-enabled" in commands

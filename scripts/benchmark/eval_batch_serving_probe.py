@@ -244,7 +244,7 @@ def _median(values: list[float]) -> float | None:
 def activation_commands(eval_batch_url: str) -> list[str]:
     return [
         "cd /mnt/raid0/llm/epyc-orchestrator && "
-        "uv run python scripts/server/orchestrator_stack.py start --include-warm eval_batch_frontdoor",
+        "uv run python scripts/server/orchestrator_stack.py start --only eval_batch_frontdoor",
         "cd /mnt/raid0/llm/epyc-orchestrator && "
         f"ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING=1 "
         f"ORCHESTRATOR_EVAL_BATCH_FRONTDOOR_URL={eval_batch_url.rstrip('/')} "
