@@ -2,7 +2,7 @@
 
 Quality (`fraction_correct * 3`) is computed on a per-tier question set and the tiers differ
 in difficulty (T0 ~10 easy q saturates ~2.4; T1 ~50 mixed ~1.6-1.9; T2 ~480 incl. GPQA/olympiad
-~1.16), so quality is NOT comparable across tiers. The archive and safety gate are therefore
+~1.16; T3 hard-only stress rows), so quality is NOT comparable across tiers. The archive and safety gate are therefore
 tier-segregated: each eval tier >= MIN_FRONTIER_EVAL_TIER keeps its OWN frontier + baseline, and a
 trial is only ever ranked / gated against the SAME tier.
 
@@ -32,7 +32,7 @@ TASK_RATE_REFERENCE_POINT: tuple[float, ...] = (0.0, 0.0, 0.0)
 # frontier/baseline. Tiers >= this each keep their own segregated frontier + baseline.
 MIN_FRONTIER_EVAL_TIER = 1
 # The canonical "production" tier the controller optimizes and the dashboard shows by default.
-# Other tiers (T2, future harder tiers) are periodic validation with their own frontiers.
+# Other tiers (T2, T3) are periodic validation/stress lanes with their own frontiers.
 DEFAULT_FRONTIER_TIER = 1
 
 
@@ -166,6 +166,7 @@ TIER_SPECS: dict[int, TierSpec] = {
     0: TierSpec(0, "T0 (10q sentinel, fast-reject)"),
     1: TierSpec(1, "T1 (50q gate)"),
     2: TierSpec(2, "T2 (480q comprehensive)"),
+    3: TierSpec(3, "T3 (hard-only stress eval)"),
 }
 
 

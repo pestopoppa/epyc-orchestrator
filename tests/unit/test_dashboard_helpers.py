@@ -739,13 +739,15 @@ def test_pareto_from_journal_excludes_tier0(tmp_path, monkeypatch) -> None:
 
 
 def test_pareto_from_journal_segregates_tiers(tmp_path, monkeypatch) -> None:
-    """T2 validation quality must not dominate the canonical T1 dashboard frontier."""
+    """Validation/stress quality must not dominate the canonical T1 dashboard frontier."""
     journal = tmp_path / "autopilot_journal.jsonl"
     rows = [
         {"trial_id": 20, "tier": 1, "quality": 1.5, "speed": 30.0, "cost": 0.5,
          "reliability": 0.9, "timestamp": "2026-05-31T10:00:00+00:00"},
         {"trial_id": 21, "tier": 2, "quality": 2.4, "speed": 40.0, "cost": 0.5,
          "reliability": 0.9, "timestamp": "2026-05-31T10:01:00+00:00"},
+        {"trial_id": 22, "tier": 3, "quality": 1.2, "speed": 45.0, "cost": 0.5,
+         "reliability": 0.9, "timestamp": "2026-05-31T10:02:00+00:00"},
     ]
     journal.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
     monkeypatch.setattr(dashboard, "_AUTOPILOT_JOURNAL_PATH", journal)
@@ -754,6 +756,7 @@ def test_pareto_from_journal_segregates_tiers(tmp_path, monkeypatch) -> None:
     assert archive is not None
     assert [e["trial_id"] for e in archive["frontier"]] == [20]
     assert [e["trial_id"] for e in archive["frontiers_by_tier"]["2"]] == [21]
+    assert [e["trial_id"] for e in archive["frontiers_by_tier"]["3"]] == [22]
 
 
 def test_task_text_snapshot_falls_back_to_objective_when_no_slot() -> None:

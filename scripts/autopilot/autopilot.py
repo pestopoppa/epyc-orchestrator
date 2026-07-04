@@ -2739,7 +2739,7 @@ Respond with EXACTLY ONE action in a ```json:autopilot_actions block:
 - Distill: {{"type": "distill_skillbank", "teacher": "claude", "categories": ["routing"]}}
 - Reset: {{"type": "reset_memories", "keep_seen": true, "keep_skills": true}}
 - Deep eval: {{"type": "deep_eval", "tier": 2}}
-  (Only tier is supported: 0, 1, or 2. Do NOT include target_trial, suites, baseline_recheck, or instrumentation fields.)
+  (Supported tiers: 0, 1, 2, or 3. T3 is a hard-only stress eval. Do NOT include target_trial, suites, baseline_recheck, or instrumentation fields.)
 - Rollback: {{"type": "rollback", "to_checkpoint": "production_best"}}
 - Distill: {{"type": "distill_knowledge", "last_n": 10}}
   (Run every ~5 trials to extract insights from recent outcomes into strategy memory)
@@ -6126,6 +6126,8 @@ def calibrate_baseline(
             result = tower.eval_t1(n=n or 100, seed=seed)
         elif tier == 2:
             result = tower.eval_t2(n=n or 500, seed=seed)
+        elif tier == 3:
+            result = tower.eval_t3(n=n or 160, seed=seed)
         else:
             raise ValueError(f"Unknown eval tier: {tier}")
         _apply_calibrated_baseline_result(baseline, result)

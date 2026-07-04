@@ -206,7 +206,7 @@ _ACTION_SCHEMAS: dict[str, dict[str, Any]] = {
     "deep_eval": {
         "allowed": {"type", "tier"},
         "required": {"tier"},
-        "enums": {"tier": {0, 1, 2}},
+        "enums": {"tier": {0, 1, 2, 3}},
     },
     "rollback": {
         "allowed": {"type", "to_checkpoint"},

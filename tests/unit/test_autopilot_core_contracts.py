@@ -17,6 +17,7 @@ from src.autopilot_core.journal_reconstruction import (
 from src.autopilot_core.tier_specs import (
     LEGACY_OBJECTIVE_POLICY,
     TASK_RATE_OBJECTIVE_POLICY,
+    TIER_SPECS,
     goodput_qph_from,
     goodput_qph_from_row,
     task_rate_objectives_from,
@@ -66,6 +67,10 @@ def test_action_fingerprint_ignores_narrative_keys() -> None:
     assert config_fingerprint(base) == config_fingerprint_from_row({
         "config_snapshot": narrated,
     })
+
+
+def test_tier_registry_includes_hard_only_stress_lane() -> None:
+    assert TIER_SPECS[3].label == "T3 (hard-only stress eval)"
 
 
 def test_task_rate_shadow_objectives_from_eval_result() -> None:

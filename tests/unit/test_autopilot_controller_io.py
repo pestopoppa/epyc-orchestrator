@@ -309,8 +309,11 @@ def test_validate_deep_eval_requires_valid_tier() -> None:
     assert controller_io.validate_single_variable(
         {"type": "deep_eval", "tier": 2}
     ) is None
+    assert controller_io.validate_single_variable(
+        {"type": "deep_eval", "tier": 3}
+    ) is None
     assert controller_io.validate_single_variable({"type": "deep_eval"})
-    assert controller_io.validate_single_variable({"type": "deep_eval", "tier": 3})
+    assert controller_io.validate_single_variable({"type": "deep_eval", "tier": 4})
     assert controller_io.validate_single_variable({"type": "deep_eval", "tier": "2"})
 
 

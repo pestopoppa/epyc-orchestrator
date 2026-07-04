@@ -1,4 +1,4 @@
-"""Tiered evaluation tower: T0 (10q/30s) → T1 (100q/5m) → T2 (500+/30m).
+"""Tiered evaluation tower: T0 (10q/30s) → T1 (100q/5m) → T2 (500+/30m) → T3 (hard-only).
 
 Wraps existing seeding infrastructure for orchestrator API calls and scoring.
 Training set (debug suites) is kept separate from validation set (HF benchmarks).
@@ -33,6 +33,7 @@ TOOL_SENTINEL_PATH = Path(__file__).resolve().parent / "tool_sentinels.yaml"
 ORCHESTRATOR_URL = "http://localhost:8000"
 EVAL_T1_SPEC_N = 100
 EVAL_T2_SPEC_N = 500
+EVAL_T3_SPEC_N = 160
 EVAL_SPEC_SEED = 42
 PROMOTION_EVAL_MIN_N = 200
 PROMOTION_EVAL_MAX_N = 500
@@ -194,6 +195,49 @@ def _sample_scoreable_eval_questions(
 
     rng.shuffle(questions)
     return questions[:n]
+
+
+def _question_pool_tier(q: dict[str, Any]) -> int | None:
+    raw = q.get("tier")
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _sample_scoreable_eval_questions_for_pool_tier(
+    pool: dict[str, list[dict]],
+    pool_tier: int,
+    n: int,
+    rng: random.Random,
+    *,
+    exclude_qids: set[str] | None = None,
+    exclude_suites: set[str] | None = None,
+) -> list[dict]:
+    """Sample scoreable questions whose source-pool difficulty tier matches exactly.
+
+    This keeps T3 as a first-class hard-only lane without changing the broader mixed
+    T1/T2 sampler, whose caller surface is much wider.
+    """
+    if not pool or n <= 0:
+        return []
+    filtered_pool = {
+        suite: [
+            q
+            for q in suite_qs
+            if _question_pool_tier(q) == int(pool_tier)
+        ]
+        for suite, suite_qs in pool.items()
+    }
+    return _sample_scoreable_eval_questions(
+        filtered_pool,
+        n,
+        rng,
+        exclude_qids=exclude_qids,
+        exclude_suites=exclude_suites,
+    )
 
 
 def _env_int(name: str, default: int) -> int:
@@ -674,7 +718,7 @@ def _parse_rubric_judge_scores(text: str) -> dict[str, float]:
 
 
 class EvalTower:
-    """Progressive evaluation: T0 → T1 → T2."""
+    """Progressive evaluation: T0 → T1 → T2, with T3 hard-only stress eval."""
 
     def __init__(
         self,
@@ -2001,6 +2045,65 @@ class EvalTower:
             )
         return result
 
+    def eval_t3(
+        self,
+        n: int = EVAL_T3_SPEC_N,
+        seed: int = EVAL_SPEC_SEED,
+        *,
+        exclude_qids: set[str] | None = None,
+    ) -> EvalResult:
+        """Tier 3: hard-only stress eval from pool rows explicitly labeled tier=3."""
+        pool = self._load_pool()
+        if not pool:
+            log.error("No question pool available for T3")
+            return EvalResult(tier=3, quality=0, speed=0, cost=0, reliability=0)
+
+        requested_n = int(n)
+        draw_seed = int(seed)
+        questions = _sample_scoreable_eval_questions_for_pool_tier(
+            pool,
+            3,
+            requested_n,
+            random.Random(draw_seed),
+            exclude_qids=exclude_qids,
+        )
+        if not questions:
+            error = "question pool has no scoreable tier=3 hard eval items"
+            log.error("T3 eval failed closed: %s", error)
+            return EvalResult(
+                tier=3,
+                quality=0,
+                speed=0,
+                cost=0,
+                reliability=0,
+                details={
+                    "t3_policy": {
+                        "version": "t3-hard-only-v1",
+                        "requested_n": requested_n,
+                        "actual_n": 0,
+                        "seed": draw_seed,
+                        "pool_tier": 3,
+                        "error": error,
+                    },
+                },
+            )
+
+        questions = _annotate_partition(questions, "core")
+
+        with httpx.Client(timeout=self.timeout) as client:
+            results = self._eval_batch(questions, client, log_every=50, label="T3")
+
+        result = self._aggregate(results, tier=3)
+        result.details["t3_policy"] = {
+            "version": "t3-hard-only-v1",
+            "requested_n": requested_n,
+            "actual_n": len(questions),
+            "seed": draw_seed,
+            "pool_tier": 3,
+        }
+        result.core_id = f"t3_hard_only_v1_seed_{draw_seed}_n{requested_n}"
+        return result
+
     def evaluate(
         self,
         tier: int = 0,
@@ -2037,6 +2140,12 @@ class EvalTower:
                     exclude_qids=exclude_qids,
                 )
             return self.eval_t2(n=EVAL_T2_SPEC_N, seed=EVAL_SPEC_SEED)
+        elif tier == 3:
+            return self.eval_t3(
+                n=EVAL_T3_SPEC_N,
+                seed=EVAL_SPEC_SEED,
+                exclude_qids=exclude_qids,
+            )
         else:
             raise ValueError(f"Unknown eval tier: {tier}")
 

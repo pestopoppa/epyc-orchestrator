@@ -137,7 +137,7 @@ class JournalEntry:
     timestamp: str
     species: str
     action_type: str
-    tier: int  # 0, 1, or 2
+    tier: int  # 0, 1, 2, or 3
     quality: float
     speed: float
     cost: float

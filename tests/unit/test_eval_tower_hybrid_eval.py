@@ -28,6 +28,10 @@ class FakeTower(EvalTower):
         self.calls.append(("t2", n, seed))
         return EvalResult(tier=2, quality=1.7, speed=50.0, cost=0.2, reliability=0.98)
 
+    def eval_t3(self, n: int = 160, seed: int = 42, **_kwargs) -> EvalResult:
+        self.calls.append(("t3", n, seed))
+        return EvalResult(tier=3, quality=1.2, speed=45.0, cost=0.2, reliability=0.98)
+
 
 def test_hybrid_eval_skips_t0_by_default(monkeypatch) -> None:
     monkeypatch.delenv("AUTOPILOT_HYBRID_T0_GATE", raising=False)
@@ -65,3 +69,12 @@ def test_evaluate_t2_uses_server_side_question_spec() -> None:
 
     assert result.tier == 2
     assert tower.calls == [("t2", 500, 42)]
+
+
+def test_evaluate_t3_uses_server_side_hard_question_spec() -> None:
+    tower = FakeTower()
+
+    result = tower.evaluate(tier=3, n=7, seed=999)
+
+    assert result.tier == 3
+    assert tower.calls == [("t3", 160, 42)]
