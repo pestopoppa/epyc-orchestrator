@@ -421,7 +421,9 @@ def test_invoke_controller_pins_planner_model_args(monkeypatch) -> None:
     disallowed = set(
         captured["cmd"][captured["cmd"].index("--disallowedTools") + 1].split(",")
     )
-    assert {"Bash", "Edit", "MultiEdit", "Task", "Write"}.issubset(disallowed)
+    assert {"Bash", "Edit", "Task", "Write"}.issubset(disallowed)
+    assert "MultiEdit" not in disallowed
+    assert "MultiEdit" in controller_io.PLANNER_DISALLOWED_TOOLS
     assert disallowed.isdisjoint(controller_io.PLANNER_ALLOWED_TOOLS)
     assert "--model" in captured["cmd"]
     assert captured["cmd"][captured["cmd"].index("--model") + 1] == "opus"

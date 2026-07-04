@@ -70,6 +70,12 @@ PLANNER_DISALLOWED_TOOLS = {
     "WebSearch",
     "Write",
 }
+PLANNER_CLI_DISALLOWED_TOOLS = PLANNER_DISALLOWED_TOOLS - {
+    # Current Claude Code rejects this legacy alias in --disallowedTools, but
+    # keep it in PLANNER_DISALLOWED_TOOLS so stream-level detection still fails
+    # closed if an older planner event emits it.
+    "MultiEdit",
+}
 
 _FALLBACK_NUMERIC_SURFACES = {"memrl_retrieval", "think_harder", "monitor", "escalation"}
 
@@ -355,7 +361,7 @@ def invoke_controller(
         "--verbose",  # required by claude CLI for stream-json output
         "--permission-mode", "plan",
         "--allowedTools", "Read,Grep,Glob",
-        "--disallowedTools", ",".join(sorted(PLANNER_DISALLOWED_TOOLS)),
+        "--disallowedTools", ",".join(sorted(PLANNER_CLI_DISALLOWED_TOOLS)),
     ]
     planner_model = os.environ.get("AUTOPILOT_CLAUDE_MODEL", DEFAULT_CLAUDE_MODEL).strip()
     if planner_model:
