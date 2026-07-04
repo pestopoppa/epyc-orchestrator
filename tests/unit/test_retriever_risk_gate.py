@@ -7,6 +7,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import numpy as np
+
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -165,3 +167,81 @@ def test_hybrid_router_prior_blend_can_flip_to_prior_favored_action():
     assert strategy == "learned"
     assert routing[0] == "frontdoor"
     assert hybrid.last_decision_meta.get("prior_term_topk")
+
+
+def test_retriever_default_preference_preserves_existing_selection_score():
+    retriever = _retriever(RetrievalConfig(cost_lambda=0.15, cost_tau=1.0))
+    memory = SimpleNamespace(
+        action="frontdoor",
+        q_value=0.8,
+        context={"elapsed_seconds": 3.0},
+        update_count=1,
+        embedding=None,
+        similarity_score=0.9,
+    )
+    retriever.store.retrieve_by_similarity.return_value = [memory]
+
+    results = retriever._retrieve(np.zeros(8), action_type="routing")
+
+    assert len(results) == 1
+    assert round(results[0].selection_score, 4) == 0.65
+    assert results[0].routing_pref_perf == 0.5
+    assert results[0].routing_pref_cost == 0.5
+    assert results[0].routing_preference_active is False
+
+
+def test_retriever_request_preference_can_flip_cost_quality_tradeoff():
+    retriever = _retriever(RetrievalConfig(cost_lambda=0.5, cost_tau=1.0))
+    slow_high_q = SimpleNamespace(
+        action="architect_general",
+        q_value=0.9,
+        context={"elapsed_seconds": 9.0, "cold_elapsed_seconds": 9.0},
+        update_count=1,
+        embedding=None,
+        similarity_score=0.9,
+    )
+    fast_lower_q = SimpleNamespace(
+        action="worker_general",
+        q_value=0.7,
+        context={"elapsed_seconds": 1.0, "cold_elapsed_seconds": 9.0},
+        update_count=1,
+        embedding=None,
+        similarity_score=0.9,
+    )
+    retriever.store.retrieve_by_similarity.return_value = [slow_high_q, fast_lower_q]
+
+    quality_first = retriever._retrieve(
+        np.zeros(8),
+        action_type="routing",
+        routing_preferences={"perf": 0.9, "cost": 0.1},
+    )
+    cost_first = retriever._retrieve(
+        np.zeros(8),
+        action_type="routing",
+        routing_preferences={"perf": 0.1, "cost": 0.9},
+    )
+
+    assert quality_first[0].memory.action == "architect_general"
+    assert cost_first[0].memory.action == "worker_general"
+    assert cost_first[0].routing_preference_active is True
+
+
+def test_hybrid_router_meta_includes_routing_preferences():
+    retriever = _retriever(RetrievalConfig(risk_control_enabled=False, confidence_threshold=0.5))
+    result = _result("worker_general", q_conf=0.9, q_value=0.8)
+    result.routing_pref_perf = 0.25
+    result.routing_pref_cost = 0.75
+    result.routing_cost_tau = 1.4
+    result.routing_cost_term = 0.3
+    result.normalized_cost = 0.4
+    result.routing_preference_active = True
+    retriever.retrieve_for_routing = MagicMock(return_value=[result])
+    retriever.should_use_learned = MagicMock(return_value=True)
+
+    hybrid = HybridRouter(retriever=retriever, rule_based_router=RuleBasedRouter([]))
+    hybrid.route({"task_type": "chat", "routing_preferences": {"perf": 0.25, "cost": 0.75}})
+
+    assert hybrid.last_decision_meta["routing_pref_perf"] == 0.25
+    assert hybrid.last_decision_meta["routing_pref_cost"] == 0.75
+    assert hybrid.last_decision_meta["routing_cost_tau"] == 1.4
+    assert hybrid.last_decision_meta["routing_preference_active"] is True

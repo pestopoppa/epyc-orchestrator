@@ -71,6 +71,30 @@ def test_canonicalize_task_ir_preserves_explicit_workload_class():
     assert out["workload_class"] == "campaign"
 
 
+def test_canonicalize_task_ir_normalizes_routing_preferences():
+    out = canonicalize_task_ir(
+        {
+            "task_type": "chat",
+            "objective": "Do thing",
+            "routing_preferences": {"performance": 4, "cost": 1},
+        }
+    )
+
+    assert out["routing_preferences"] == {"perf": 0.8, "cost": 0.2}
+
+
+def test_canonicalize_task_ir_omits_invalid_routing_preferences():
+    out = canonicalize_task_ir(
+        {
+            "task_type": "chat",
+            "objective": "Do thing",
+            "routing_preferences": {"perf": "bad", "cost": "also-bad"},
+        }
+    )
+
+    assert "routing_preferences" not in out
+
+
 def test_canonicalize_task_ir_json_is_deterministic():
     a = {
         "objective": "Do thing",

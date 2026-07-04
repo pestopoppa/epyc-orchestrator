@@ -121,6 +121,14 @@ class ChatRequest(BaseModel):
         "'interactive', 'eval_batch', or 'campaign'. When unset, the server "
         "infers it from existing request metadata without changing admission priority.",
     )
+    routing_preferences: dict[str, float] | None = Field(
+        default=None,
+        description=(
+            "Optional DAR-4b routing scalarization weights. Keys 'perf'/'performance' "
+            "and 'cost' are normalized onto the performance-cost simplex. "
+            "Absent means the existing retrieval score is preserved."
+        ),
+    )
     max_queue_wait_ms: int | None = Field(
         default=None,
         description="Maximum time the cross-role contention gate may queue "

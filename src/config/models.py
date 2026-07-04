@@ -836,6 +836,7 @@ class MemRLRetrievalConfigData:
     min_q_value: float = 0.3
     q_weight: float = 0.7
     cost_lambda: float = 0.15
+    cost_tau: float = 1.0
     top_n: int = 5
     confidence_threshold: float = 0.6
     confidence_estimator: str = "median"

@@ -35,6 +35,13 @@ class RetrievalResult:
     warm_cost_s: float = 0.0  # Estimated warm latency in seconds
     cold_cost_s: float = 0.0  # Estimated cold latency in seconds
     expected_cost_s: float = 0.0  # p_warm*warm + (1-p_warm)*cold
+    normalized_cost: float = 0.0  # expected_cost_s / cold_cost_s
+    routing_pref_perf: float = 0.5  # DAR-4b performance scalarization weight
+    routing_pref_cost: float = 0.5  # DAR-4b cost scalarization weight
+    routing_cost_tau: float = 1.0  # DAR-4b runtime cost multiplier
+    routing_perf_term: float = 0.0  # scalarized quality/performance term
+    routing_cost_term: float = 0.0  # scalarized cost penalty term
+    routing_preference_active: bool = False
     prior_term: float = 0.0  # Heuristic-prior contribution to posterior score
     posterior_score: float = 0.0  # selection_score + prior_term
 
@@ -58,6 +65,7 @@ class RetrievalConfig:
     min_q_value: float = field(default_factory=lambda: _retr_cfg().min_q_value)
     q_weight: float = field(default_factory=lambda: _retr_cfg().q_weight)
     cost_lambda: float = field(default_factory=lambda: _retr_cfg().cost_lambda)
+    cost_tau: float = field(default_factory=lambda: _retr_cfg().cost_tau)
 
     # Final selection
     top_n: int = field(default_factory=lambda: _retr_cfg().top_n)

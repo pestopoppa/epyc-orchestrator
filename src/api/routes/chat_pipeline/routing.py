@@ -247,6 +247,7 @@ def _route_request(request: ChatRequest, state) -> RoutingResult:
         "objective": request.prompt[:TASK_IR_OBJECTIVE_LEN],
         "priority": "interactive",
         "context_preview": request.context or "",
+        "routing_preferences": request.routing_preferences,
     })
 
     use_mock = request.mock_mode and not request.real_mode

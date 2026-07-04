@@ -12,10 +12,6 @@ Enhanced with failure anti-memory and hypothesis tracking from Graphiti-inspired
 from __future__ import annotations
 
 import logging
-import hashlib
-import os
-import random
-from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -27,9 +23,38 @@ logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from .failure_graph import FailureGraph
-    from .graph_router_predictor import GraphRouterPredictor
     from .hypothesis_graph import HypothesisGraph
-    from .routing_classifier import RoutingClassifier
+    from .skill_retriever import SkillRetriever
+
+
+def _routing_preference_weights(value: Any) -> Tuple[float, float, bool]:
+    if not isinstance(value, dict):
+        return 0.5, 0.5, False
+    try:
+        perf = float(value.get("perf", 0.5))
+        cost = float(value.get("cost", 0.5))
+    except (TypeError, ValueError):
+        return 0.5, 0.5, False
+    perf = max(0.0, perf)
+    cost = max(0.0, cost)
+    total = perf + cost
+    if total <= 0.0:
+        return 0.5, 0.5, False
+    return perf / total, cost / total, True
+
+
+def _scalarized_selection_score(
+    *,
+    q_value: float,
+    normalized_cost: float,
+    cost_lambda: float,
+    cost_tau: float,
+    pref_perf: float,
+    pref_cost: float,
+) -> tuple[float, float, float]:
+    perf_term = 2.0 * pref_perf * q_value
+    cost_term = 2.0 * pref_cost * cost_lambda * cost_tau * normalized_cost
+    return perf_term - cost_term, perf_term, cost_term
 
 
 # RetrievalConfig / RetrievalResult / ScoreComponents moved to retrieval_config.py
@@ -146,7 +171,11 @@ class TwoPhaseRetriever:
             List of RetrievalResult sorted by combined score
         """
         embedding = self.embedder.embed_task_ir(task_ir)
-        return self._retrieve(embedding, action_type="routing")
+        return self._retrieve(
+            embedding,
+            action_type="routing",
+            routing_preferences=task_ir.get("routing_preferences"),
+        )
 
     def retrieve_for_escalation(
         self,
@@ -207,6 +236,7 @@ class TwoPhaseRetriever:
         self,
         embedding: np.ndarray,
         action_type: Optional[str] = None,
+        routing_preferences: Optional[Dict[str, Any]] = None,
     ) -> List[RetrievalResult]:
         """
         Execute two-phase retrieval.
@@ -232,6 +262,10 @@ class TwoPhaseRetriever:
         # Compute similarities for candidates
         query_norm = embedding / (np.linalg.norm(embedding) + 1e-8)
         results = []
+        pref_perf, pref_cost, pref_active = _routing_preference_weights(
+            routing_preferences
+        )
+        cost_tau = float(getattr(self.config, "cost_tau", 1.0))
 
         for memory in candidates:
             if memory.embedding is None:
@@ -253,7 +287,14 @@ class TwoPhaseRetriever:
             expected_cost = p_warm * warm_cost + (1.0 - p_warm) * cold_cost
             # Selection score is quality-cost objective.
             cost_ratio = expected_cost / max(cold_cost, 1e-6)
-            selection = memory.q_value - (self.config.cost_lambda * cost_ratio)
+            selection, perf_term, cost_term = _scalarized_selection_score(
+                q_value=memory.q_value,
+                normalized_cost=cost_ratio,
+                cost_lambda=float(self.config.cost_lambda),
+                cost_tau=cost_tau,
+                pref_perf=pref_perf,
+                pref_cost=pref_cost,
+            )
 
             results.append(
                 RetrievalResult(
@@ -267,6 +308,13 @@ class TwoPhaseRetriever:
                     warm_cost_s=warm_cost,
                     cold_cost_s=cold_cost,
                     expected_cost_s=expected_cost,
+                    normalized_cost=cost_ratio,
+                    routing_pref_perf=pref_perf,
+                    routing_pref_cost=pref_cost,
+                    routing_cost_tau=cost_tau,
+                    routing_perf_term=perf_term,
+                    routing_cost_term=cost_term,
+                    routing_preference_active=pref_active or cost_tau != 1.0,
                 )
             )
 
@@ -654,6 +702,7 @@ class GraphEnhancedRetriever(TwoPhaseRetriever):
         embedding: np.ndarray,
         action_type: Optional[str] = None,
         task_type: Optional[str] = None,
+        routing_preferences: Optional[Dict[str, Any]] = None,
     ) -> List[RetrievalResult]:
         """
         Execute three-phase retrieval with graph enhancement.
@@ -680,6 +729,10 @@ class GraphEnhancedRetriever(TwoPhaseRetriever):
         # Compute similarities for candidates
         query_norm = embedding / (np.linalg.norm(embedding) + 1e-8)
         results = []
+        pref_perf, pref_cost, pref_active = _routing_preference_weights(
+            routing_preferences
+        )
+        cost_tau = float(getattr(self.config, "cost_tau", 1.0))
 
         for memory in candidates:
             # Handle case where embedding might be None (FAISS optimization)
@@ -723,7 +776,14 @@ class GraphEnhancedRetriever(TwoPhaseRetriever):
             p_warm, warm_cost, cold_cost = self._estimate_cost_components(memory)
             expected_cost = p_warm * warm_cost + (1.0 - p_warm) * cold_cost
             cost_ratio = expected_cost / max(cold_cost, 1e-6)
-            selection = memory.q_value - (self.config.cost_lambda * cost_ratio)
+            selection, perf_term, cost_term = _scalarized_selection_score(
+                q_value=memory.q_value,
+                normalized_cost=cost_ratio,
+                cost_lambda=float(self.config.cost_lambda),
+                cost_tau=cost_tau,
+                pref_perf=pref_perf,
+                pref_cost=pref_cost,
+            )
             # Calculate adjusted score
             adjusted_score = selection * (1 - failure_penalty) * hypothesis_confidence
 
@@ -738,6 +798,13 @@ class GraphEnhancedRetriever(TwoPhaseRetriever):
                     warm_cost_s=warm_cost,
                     cold_cost_s=cold_cost,
                     expected_cost_s=expected_cost,
+                    normalized_cost=cost_ratio,
+                    routing_pref_perf=pref_perf,
+                    routing_pref_cost=pref_cost,
+                    routing_cost_tau=cost_tau,
+                    routing_perf_term=perf_term,
+                    routing_cost_term=cost_term,
+                    routing_preference_active=pref_active or cost_tau != 1.0,
                     failure_penalty=failure_penalty,
                     hypothesis_confidence=hypothesis_confidence,
                     adjusted_score=adjusted_score,
@@ -759,7 +826,12 @@ class GraphEnhancedRetriever(TwoPhaseRetriever):
         """Retrieve with graph enhancement for routing."""
         embedding = self.embedder.embed_task_ir(task_ir)
         task_type = task_ir.get("task_type", "general")
-        return self._retrieve(embedding, action_type="routing", task_type=task_type)
+        return self._retrieve(
+            embedding,
+            action_type="routing",
+            task_type=task_type,
+            routing_preferences=task_ir.get("routing_preferences"),
+        )
 
     def retrieve_for_escalation(
         self,

@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import dataclasses
 import importlib
+import os
 from functools import lru_cache
 
 from ..env_parsing import env_bool as _env_bool
@@ -276,6 +277,9 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         min_q_value: float = 0.3
         q_weight: float = 0.7
         cost_lambda: float = 0.15
+        cost_tau: float = PydanticField(
+            default_factory=lambda: float(os.environ.get("DAR_COST_TAU", "1.0"))
+        )
         top_n: int = 5
         confidence_threshold: float = 0.6
         confidence_estimator: str = "median"
@@ -577,6 +581,10 @@ def _load_from_env() -> OrchestratorConfigData:
             min_q_value=_env_float(f"{P}MEMRL_RETRIEVAL_MIN_Q_VALUE", 0.3),
             q_weight=_env_float(f"{P}MEMRL_RETRIEVAL_Q_WEIGHT", 0.7),
             cost_lambda=_env_float(f"{P}MEMRL_RETRIEVAL_COST_LAMBDA", 0.15),
+            cost_tau=_env_float(
+                f"{P}MEMRL_RETRIEVAL_COST_TAU",
+                _env_float("DAR_COST_TAU", 1.0),
+            ),
             top_n=_env_int(f"{P}MEMRL_RETRIEVAL_TOP_N", 5),
             confidence_threshold=_env_float(f"{P}MEMRL_RETRIEVAL_CONFIDENCE_THRESHOLD", 0.6),
             confidence_estimator=_env_str(f"{P}MEMRL_RETRIEVAL_CONFIDENCE_ESTIMATOR", "median"),
@@ -804,6 +812,7 @@ def get_config() -> OrchestratorConfigData:
                 min_q_value=settings.memrl_retrieval.min_q_value,
                 q_weight=settings.memrl_retrieval.q_weight,
                 cost_lambda=settings.memrl_retrieval.cost_lambda,
+                cost_tau=settings.memrl_retrieval.cost_tau,
                 top_n=settings.memrl_retrieval.top_n,
                 confidence_threshold=settings.memrl_retrieval.confidence_threshold,
                 confidence_estimator=settings.memrl_retrieval.confidence_estimator,

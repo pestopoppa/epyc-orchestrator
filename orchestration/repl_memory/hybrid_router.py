@@ -18,16 +18,14 @@ from __future__ import annotations
 import logging
 import os
 import random
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from .retrieval_config import RetrievalResult, _retr_cfg
+from .retrieval_config import RetrievalResult
 
 if TYPE_CHECKING:
-    from .failure_graph import FailureGraph
     from .graph_router_predictor import GraphRouterPredictor
-    from .hypothesis_graph import HypothesisGraph
     from .routing_classifier import RoutingClassifier
     # Forward-only — these classes still live in retriever.py
     from .retriever import RuleBasedRouter, TwoPhaseRetriever
@@ -92,7 +90,6 @@ class HybridRouter:
                 from orchestration.repl_memory.bilinear_scorer import (
                     BilinearScorer,
                     extract_model_features,
-                    extract_prompt_features,
                 )
                 from orchestration.repl_memory.q_scorer import ScoringConfig
                 features = extract_model_features(ScoringConfig())
@@ -121,6 +118,21 @@ class HybridRouter:
             return action[:-len(":react")] + ":repl"
         return action
 
+    def _routing_cost_term(self, result: RetrievalResult) -> float:
+        term = float(getattr(result, "routing_cost_term", 0.0) or 0.0)
+        if term or bool(getattr(result, "routing_preference_active", False)):
+            return term
+        return float(self.retriever.config.cost_lambda) * (
+            result.expected_cost_s / max(result.cold_cost_s, 1e-6)
+        )
+
+    @staticmethod
+    def _normalized_cost(result: RetrievalResult) -> float:
+        normalized = float(getattr(result, "normalized_cost", 0.0) or 0.0)
+        if normalized:
+            return normalized
+        return float(result.expected_cost_s) / max(float(result.cold_cost_s), 1e-6)
+
     def _record_decision_meta(
         self,
         *,
@@ -147,13 +159,23 @@ class HybridRouter:
             "posterior_score_topk": [round(r.posterior_score, 4) for r in top],
             "learned_evidence_topk": [round(r.q_value, 4) for r in top],
             "cost_term_topk": [
-                round(
-                    self.retriever.config.cost_lambda
-                    * (r.expected_cost_s / max(r.cold_cost_s, 1e-6)),
-                    4,
-                )
-                for r in top
+                round(self._routing_cost_term(r), 4) for r in top
             ],
+            "normalized_cost_topk": [
+                round(self._normalized_cost(r), 4) for r in top
+            ],
+            "routing_pref_perf": round(
+                getattr(top[0], "routing_pref_perf", 0.5), 4
+            ) if top else 0.5,
+            "routing_pref_cost": round(
+                getattr(top[0], "routing_pref_cost", 0.5), 4
+            ) if top else 0.5,
+            "routing_cost_tau": round(
+                getattr(top[0], "routing_cost_tau", 1.0), 4
+            ) if top else 1.0,
+            "routing_preference_active": bool(
+                getattr(top[0], "routing_preference_active", False)
+            ) if top else False,
             "cache_state": (
                 "warm"
                 if top and top[0].p_warm >= 0.7
@@ -333,7 +355,8 @@ class HybridRouter:
             strategy_used is "learned" or "rules"
         """
         # Classifier fast-path: skip full retrieval if confident
-        if self.routing_classifier is not None:
+        preference_override = isinstance(task_ir.get("routing_preferences"), dict)
+        if self.routing_classifier is not None and not preference_override:
             features = self._build_classifier_features(task_ir)
             if features is not None:
                 action, confidence = self.routing_classifier.predict_action(features)
@@ -527,7 +550,8 @@ class HybridRouter:
             mode is "direct", "react", or "repl"
         """
         # Classifier fast-path
-        if self.routing_classifier is not None:
+        preference_override = isinstance(task_ir.get("routing_preferences"), dict)
+        if self.routing_classifier is not None and not preference_override:
             features = self._build_classifier_features(task_ir)
             if features is not None:
                 action, confidence = self.routing_classifier.predict_action(features)

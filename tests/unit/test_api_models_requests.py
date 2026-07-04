@@ -54,6 +54,7 @@ class TestChatRequest:
         assert req.session_id is None
         assert req.tools is None
         assert req.tool_choice is None
+        assert req.routing_preferences is None
 
     def test_native_tool_fields(self):
         req = ChatRequest(
@@ -69,6 +70,11 @@ class TestChatRequest:
 
         assert req.tools[0]["function"]["name"] == "web_search"
         assert req.tool_choice == "auto"
+
+    def test_routing_preferences_optional(self):
+        req = ChatRequest(prompt="x", routing_preferences={"perf": 0.8, "cost": 0.2})
+
+        assert req.routing_preferences == {"perf": 0.8, "cost": 0.2}
 
     def test_prompt_required(self):
         with pytest.raises(ValidationError):

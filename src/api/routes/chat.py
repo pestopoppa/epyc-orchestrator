@@ -315,6 +315,7 @@ async def _try_cheap_first(
                 task_ir = {
                     "task_type": "chat",
                     "objective": request.prompt[:TASK_IR_OBJECTIVE_LEN],
+                    "routing_preferences": request.routing_preferences,
                 }
                 task_ir = canonicalize_task_ir(task_ir)
                 results = state.hybrid_router.retriever.retrieve_for_routing(task_ir)
@@ -924,6 +925,7 @@ async def chat_stream(
             "task_type": "chat_stream",
             "objective": request.prompt[:TASK_IR_OBJECTIVE_LEN],
             "priority": "interactive",
+            "routing_preferences": request.routing_preferences,
         }
         task_ir = canonicalize_task_ir(task_ir)
         if state.progress_logger:

@@ -16,6 +16,8 @@ MAX_SNIPPETS = 4
 MAX_SNIPPET_LEN = 180
 MAX_PLAN_STEPS = 8
 MAX_PLAN_ACTION_LEN = 180
+_ROUTING_PREF_PERF_KEYS = ("perf", "performance", "quality", "omega_perf", "w_perf")
+_ROUTING_PREF_COST_KEYS = ("cost", "latency", "omega_cost", "w_cost")
 
 
 def _clean_text(value: Any, limit: int) -> str:
@@ -35,6 +37,41 @@ def _as_string_list(value: Any, *, item_limit: int, max_items: int) -> list[str]
         return []
     cleaned = [_clean_text(v, item_limit) for v in items if str(v).strip()]
     return cleaned[:max_items]
+
+
+def _first_float(src: dict[str, Any], keys: tuple[str, ...]) -> float | None:
+    for key in keys:
+        if key not in src:
+            continue
+        try:
+            return float(src[key])
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _normalize_routing_preferences(value: Any) -> dict[str, float] | None:
+    if not isinstance(value, dict):
+        return None
+    perf = _first_float(value, _ROUTING_PREF_PERF_KEYS)
+    cost = _first_float(value, _ROUTING_PREF_COST_KEYS)
+    if perf is None and cost is None:
+        return None
+    if perf is None:
+        cost = max(0.0, float(cost))
+        perf = max(0.0, 1.0 - cost)
+    if cost is None:
+        perf = max(0.0, float(perf))
+        cost = max(0.0, 1.0 - perf)
+    perf = max(0.0, float(perf))
+    cost = max(0.0, float(cost))
+    total = perf + cost
+    if total <= 0.0:
+        return None
+    return {
+        "perf": round(perf / total, 6),
+        "cost": round(cost / total, 6),
+    }
 
 
 def canonicalize_task_ir(task_ir: dict[str, Any] | None) -> dict[str, Any]:
@@ -91,6 +128,10 @@ def canonicalize_task_ir(task_ir: dict[str, Any] | None) -> dict[str, Any]:
     )
     if snippets:
         out["retrieval_snippets"] = snippets
+
+    routing_preferences = _normalize_routing_preferences(src.get("routing_preferences"))
+    if routing_preferences:
+        out["routing_preferences"] = routing_preferences
 
     plan = src.get("plan")
     if isinstance(plan, dict) and isinstance(plan.get("steps"), list):

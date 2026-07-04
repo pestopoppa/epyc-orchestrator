@@ -602,6 +602,23 @@ class TestEnvVarOverrides:
             cfg = get_config()
             assert cfg.server_urls.frontdoor == "http://custom:9999"
 
+    def test_dar_cost_tau_alias_override(self):
+        with patch.dict(os.environ, {"DAR_COST_TAU": "1.7"}):
+            reset_config()
+            cfg = get_config()
+            assert cfg.memrl_retrieval.cost_tau == 1.7
+
+        with patch.dict(
+            os.environ,
+            {
+                "DAR_COST_TAU": "1.7",
+                "ORCHESTRATOR_MEMRL_RETRIEVAL_COST_TAU": "2.3",
+            },
+        ):
+            reset_config()
+            cfg = get_config()
+            assert cfg.memrl_retrieval.cost_tau == 2.3
+
     def test_server_url_defaults_come_from_stack_priors(self, tmp_path: Path):
         priors = tmp_path / "stack_priors.yaml"
         priors.write_text(
