@@ -56,6 +56,13 @@ DEFAULT_A9_COLLECTION_SCRIPT = (
     / "offline_reward_oracle_token_coverage_final_labels_20260621"
     / "collect_offline_reward_pairwise_expanded_gap.sh"
 )
+DEFAULT_A9_CONTRACT_SUMMARY = (
+    ORCH_ROOT
+    / "orchestration"
+    / "reports"
+    / "offline_reward_oracle_token_coverage_final_labels_20260621"
+    / "offline_reward_pairwise_preference_contract_candidate_only_expanded_gap_summary.json"
+)
 DEFAULT_DS_E1_KV_PORT = 8194
 DEFAULT_XMAS_HELDOUT_PROMPTS_ARG = (
     "benchmarks/results/runs/xmas_live_ab/20260618-heldout-resilient/prompts.jsonl"
@@ -751,6 +758,7 @@ def _compact_processes(lines: list[str], *, limit: int = 4) -> str:
 
 def a9_collection_section(
     manifest_path: Path = DEFAULT_A9_COLLECTION_MANIFEST,
+    contract_summary_path: Path | None = DEFAULT_A9_CONTRACT_SUMMARY,
 ) -> GateSection:
     """Surface the guarded A9 pairwise source-acquisition window."""
     status = build_a9_collection_status(manifest_path)
@@ -760,12 +768,31 @@ def a9_collection_section(
     section_status = "ready" if ready else "blocked"
     if status_label == "no_runnable_batches":
         section_status = "attention"
+    contract_summary: dict[str, Any] = {}
+    if contract_summary_path is not None and contract_summary_path.exists():
+        try:
+            contract_summary = _load_json_object(contract_summary_path)
+        except Exception as exc:
+            contract_summary = {"load_error": str(exc)}
+    contract_decision = contract_summary.get("decision")
+    if not isinstance(contract_decision, dict):
+        contract_decision = {}
+    contract_coverage = contract_summary.get("coverage")
+    if not isinstance(contract_coverage, dict):
+        contract_coverage = {}
+    summary_tail = ""
+    if status_label == "no_runnable_batches" and contract_decision:
+        summary_tail = (
+            "; candidate-only contract decision is "
+            f"{contract_decision.get('status', 'unknown')}"
+        )
     return GateSection(
         key="a9_pairwise_collection",
         status=section_status,
         summary=(
             "A9 pairwise source-acquisition window "
-            f"is {status_label} with {status.get('batch_count', 0)} batch(es)."
+            f"is {status_label} with {status.get('batch_count', 0)} batch(es)"
+            f"{summary_tail}."
         ),
         blockers=blockers,
         details={
@@ -776,6 +803,11 @@ def a9_collection_section(
             "source_plan_decision": status.get("source_plan_decision"),
             "batch_count": status.get("batch_count"),
             "post_collection_step_count": status.get("post_collection_step_count"),
+            "candidate_contract_summary_path": (
+                str(contract_summary_path) if contract_summary_path is not None else None
+            ),
+            "candidate_contract_decision": contract_decision or None,
+            "candidate_contract_coverage": contract_coverage or None,
             "autopilot_guard": status.get("autopilot_guard"),
             "blockers": blockers,
             "warnings": list(status.get("warnings") or []),
@@ -1628,21 +1660,43 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
     a9 = by_key.get("a9_pairwise_collection")
     if a9 is not None:
         if a9.details.get("status") == "no_runnable_batches":
+            contract_decision = a9.details.get("candidate_contract_decision") or {}
+            contract_coverage = a9.details.get("candidate_contract_coverage") or {}
+            contract_status = str(contract_decision.get("status") or "unknown")
+            contract_next = str(contract_decision.get("recommended_next") or "")
+            if contract_status == "insufficient_contrast":
+                reason = (
+                    "A9 candidate scoring/rebuild is complete, but the "
+                    "candidate-only pairwise contract has insufficient "
+                    "within-source positive/negative contrasts "
+                    f"({contract_coverage.get('pair_rows', 0)} pair rows, "
+                    f"{contract_coverage.get('cross_action_pair_rows', 0)} "
+                    "cross-action rows). The current reference_token_coverage "
+                    "source/oracle contract is exhausted."
+                )
+                requires = (
+                    "materially different scorer/feature design or a "
+                    "reference-bearing source that yields enough within-task "
+                    "positive/negative contrasts"
+                )
+            else:
+                reason = (
+                    "A9 clean-window acquisition is exhausted for the "
+                    "current reference_token_coverage oracle; remaining "
+                    "instruction-precision targets have no reference text "
+                    "for that scorer."
+                )
+                requires = (
+                    "materially different scorer/feature design or a "
+                    "reference-bearing instruction-following source"
+                )
             actions.append(
                 {
                     "key": "revise_a9_reward_oracle_or_reference_source",
                     "priority": "P1",
                     "status": "active",
-                    "reason": (
-                        "A9 clean-window acquisition is exhausted for the "
-                        "current reference_token_coverage oracle; remaining "
-                        "instruction-precision targets have no reference text "
-                        "for that scorer."
-                    ),
-                    "requires": (
-                        "materially different scorer/feature design or a "
-                        "reference-bearing instruction-following source"
-                    ),
+                    "reason": reason,
+                    "requires": requires,
                     "blocked_by": [],
                     "manifest": a9.details.get("manifest_path"),
                     "batch_count": a9.details.get("batch_count"),
@@ -1650,9 +1704,16 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
                         "post_collection_step_count"
                     ),
                     "source_plan_decision": a9.details.get("source_plan_decision"),
+                    "candidate_contract_summary_path": a9.details.get(
+                        "candidate_contract_summary_path"
+                    ),
+                    "candidate_contract_decision": contract_decision or None,
+                    "candidate_contract_coverage": contract_coverage or None,
+                    "candidate_contract_recommended_next": contract_next or None,
                     "follow_up": (
                         "Do not rerun the current collection script; regenerate "
-                        "A9 only after the oracle/source contract changes."
+                        "A9 only after the oracle/source contract changes, then "
+                        "rebuild the candidate pairwise contract."
                     ),
                 }
             )

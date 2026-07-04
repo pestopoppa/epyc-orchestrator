@@ -1067,6 +1067,7 @@ def test_a9_next_action_ready_when_collection_window_clear() -> None:
 
 
 def test_a9_section_marks_empty_manifest_attention(monkeypatch) -> None:
+    contract_summary = Path("/tmp/missing_a9_contract_summary.json")
     monkeypatch.setattr(
         report_mod,
         "build_a9_collection_status",
@@ -1084,7 +1085,10 @@ def test_a9_section_marks_empty_manifest_attention(monkeypatch) -> None:
         },
     )
 
-    section = report_mod.a9_collection_section(Path("/tmp/a9_manifest.json"))
+    section = report_mod.a9_collection_section(
+        Path("/tmp/a9_manifest.json"),
+        contract_summary_path=contract_summary,
+    )
 
     assert section.status == "attention"
     assert section.blockers == []
@@ -1092,6 +1096,62 @@ def test_a9_section_marks_empty_manifest_attention(monkeypatch) -> None:
     assert section.details["warnings"] == [
         "manifest has no runnable collection batches"
     ]
+
+
+def test_a9_section_surfaces_candidate_contract_decision(monkeypatch, tmp_path: Path) -> None:
+    contract_summary = tmp_path / "candidate_contract_summary.json"
+    contract_summary.write_text(
+        """
+{
+  "schema_version": "offline_reward_pairwise_contract_summary.v1",
+  "coverage": {
+    "pair_rows": 32,
+    "cross_action_pair_rows": 32,
+    "source_record_groups": 302
+  },
+  "decision": {
+    "status": "insufficient_contrast",
+    "recommended_next": "collect_more_within_task_positive_negative_contrasts",
+    "runtime_gate_change_allowed": false
+  }
+}
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        report_mod,
+        "build_a9_collection_status",
+        lambda path: {
+            "ready": False,
+            "status": "no_runnable_batches",
+            "manifest_path": "/tmp/a9_manifest.json",
+            "manifest_schema_version": "offline_reward_pairwise_collection_window.v1",
+            "source_plan_decision": {"status": "expansion_plan_ready"},
+            "batch_count": 0,
+            "post_collection_step_count": 7,
+            "autopilot_guard": {"refusal_exit_code": 75},
+            "blockers": [],
+            "warnings": ["manifest has no runnable collection batches"],
+        },
+    )
+
+    section = report_mod.a9_collection_section(
+        Path("/tmp/a9_manifest.json"),
+        contract_summary_path=contract_summary,
+    )
+    actions = report_mod.build_next_actions([section])
+
+    assert section.status == "attention"
+    assert "insufficient_contrast" in section.summary
+    assert section.details["candidate_contract_decision"]["status"] == (
+        "insufficient_contrast"
+    )
+    assert section.details["candidate_contract_coverage"]["pair_rows"] == 32
+    action = actions[0]
+    assert action["key"] == "revise_a9_reward_oracle_or_reference_source"
+    assert action["candidate_contract_decision"]["status"] == "insufficient_contrast"
+    assert action["candidate_contract_coverage"]["cross_action_pair_rows"] == 32
+    assert "insufficient within-source positive/negative contrasts" in action["reason"]
 
 
 def test_a9_next_action_switches_to_oracle_design_when_no_batches() -> None:
