@@ -231,7 +231,7 @@ def test_lean_fragment_when_no_stagnation_signal(tmp_path: Path) -> None:
         journal=j, archive=archive, known_actions=KNOWN_ACTIONS,
     )
     assert "STAGNATING" not in block
-    assert "3–5 alternatives" in block
+    assert "up to 3 alternatives" in block
     assert signal == "none (lean prompt)"
 
 
@@ -246,6 +246,7 @@ def test_rich_fragment_when_hv_slope_below_eps(tmp_path: Path) -> None:
         journal=j, archive=archive, known_actions=KNOWN_ACTIONS,
     )
     assert "STAGNATING" in block
+    assert "Generate 3 candidate actions" in block
     assert "candidate actions" in block
     assert "BT tiebreak" not in block
     assert "hv_slope_10" in signal

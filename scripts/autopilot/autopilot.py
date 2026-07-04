@@ -174,7 +174,13 @@ BLACKLIST_PATH = SCRIPT_DIR / "failure_blacklist.yaml"
 # ~80KB prompt. Operator-tunable.
 BLACKLIST_RENDER_CAP = int(os.environ.get("AUTOPILOT_BLACKLIST_RENDER_CAP", "18"))
 PRIOR_DECISION_DIGEST_CAP = int(
-    os.environ.get("AUTOPILOT_PRIOR_DECISION_DIGEST_CAP", "8")
+    os.environ.get("AUTOPILOT_PRIOR_DECISION_DIGEST_CAP", "4")
+)
+PLANNER_JOURNAL_SUMMARY_LIMIT = int(
+    os.environ.get("AUTOPILOT_PLANNER_JOURNAL_SUMMARY_LIMIT", "12")
+)
+PLANNER_STRUCTURED_INSIGHTS_LIMIT = int(
+    os.environ.get("AUTOPILOT_PLANNER_STRUCTURED_INSIGHTS_LIMIT", "18")
 )
 ORCHESTRATOR_URL = "http://localhost:8000"
 SEQ_BASELINE_PROFILE_LIMIT = int(
@@ -215,7 +221,7 @@ FALLBACK_SEED_CANDIDATES = (14, 16, 18, 20, 24, 30)
 # Lean prompt is the default; the rich rubric+synthesis fragment activates
 # only when one of the stagnation signals fires, to avoid spending prompt
 # budget when autopilot is mid-exploit on a working lead.
-CREATIVITY_N = 5            # candidates the rich prompt asks the controller to generate
+CREATIVITY_N = 3            # candidates the rich prompt asks the controller to generate
 TAIL_WINDOW = 30            # lookback for action_distribution "under-used" classification
 TAIL_SEED_COUNT = 3         # seeds (not candidates) passed to LLM as inspiration
 STAGNATION_HV_EPS = 1e-3    # hv_slope_10 strictly below this triggers rich prompt
@@ -2485,7 +2491,7 @@ briefly in reasoning and still emit the closest valid AutoPilot action block.
 ### Hypotheses Under Test (last 3 trustworthy trials)
 {hypotheses_under_test}
 
-### Experiment Journal (last 20 entries)
+### Experiment Journal (bounded recent entries)
 {journal_summary}
 
 ### Seeder Status
@@ -2656,7 +2662,7 @@ def _render_system_card(state: dict[str, Any] | None = None) -> str:
 # ── Exploration block (stagnation-gated creative-prompt fragment) ─
 
 _EXPLORATION_LEAN = """\
-Before emitting your single action, briefly enumerate 3–5 alternatives you
+Before emitting your single action, briefly enumerate up to 3 alternatives you
 considered. For each, give a one-line reason for rejection OR pick it as
 your action.
 """
@@ -4121,7 +4127,8 @@ def _run_loop_inner(
 
             try:
                 insights_structured_text = journal.insights_structured_text(
-                    n=30, exclude_bug_corrupted=True
+                    n=PLANNER_STRUCTURED_INSIGHTS_LIMIT,
+                    exclude_bug_corrupted=True,
                 )
             except Exception as _exc:
                 insights_structured_text = f"(structured insights unavailable: {_exc})"
@@ -4187,7 +4194,7 @@ def _run_loop_inner(
                 )
             except Exception as _exc:
                 exploration_block = (
-                    "Briefly enumerate 3–5 alternatives with one-line reject/accept "
+                    "Briefly enumerate up to 3 alternatives with one-line reject/accept "
                     "reasons before committing to your single action.\n"
                     f"(exploration-block assembly failed: {_exc})"
                 )
@@ -4207,7 +4214,7 @@ def _run_loop_inner(
                 planner_evidence=planner_evidence_text,
                 journal_trustworthiness=journal_trustworthiness_text,
                 hypotheses_under_test=hypotheses_text,
-                journal_summary=journal.summary_text(20),
+                journal_summary=journal.summary_text(PLANNER_JOURNAL_SUMMARY_LIMIT),
                 seeder_status=json.dumps(seeder.convergence_status(), indent=2),
                 batch_telemetry=batch_telemetry_text,
                 species_effectiveness=json.dumps(
