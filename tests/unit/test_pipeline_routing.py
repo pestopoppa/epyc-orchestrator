@@ -1221,6 +1221,23 @@ class TestTrinityRoleShadow:
         assert result.factual_risk_mode == "enforce"
         assert call_kwargs["routing_meta"]["factual_risk_mode"] == "enforce"
 
+    def test_factual_risk_mode_uses_task_id_as_canary_sample_key(self):
+        request = ChatRequest(
+            prompt="Verify this deployment claim.",
+            mock_mode=True,
+            real_mode=False,
+        )
+        state = self._state()
+        state.progress_logger = MagicMock()
+
+        with patch("src.classifiers.factual_risk.get_mode", return_value="shadow") as mock_get_mode:
+            result = _route_request(request, state)
+
+        assert result.factual_risk_mode == "shadow"
+        call_kwargs = mock_get_mode.call_args.kwargs
+        assert call_kwargs["sample_key"] == result.task_id
+        assert call_kwargs["role"] == result.routing_decision[0]
+
 
 def test_routing_meta_persists_ure_uncertainty_when_shadow_enabled(monkeypatch):
     request = ChatRequest(prompt="Which backend should handle this?")

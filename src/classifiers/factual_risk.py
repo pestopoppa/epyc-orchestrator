@@ -18,6 +18,7 @@ Phase 3 of the routing-intelligence handoff.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -387,7 +388,17 @@ def get_configured_mode(config: dict[str, Any] | None = None) -> str:
     return str(config.get("mode", "off"))
 
 
-def get_mode(config: dict[str, Any] | None = None, role: str = "") -> str:
+def _canary_roll(sample_key: str, *, role: str, salt: str = "") -> float:
+    payload = f"{salt}\0{role}\0{sample_key}".encode("utf-8", errors="replace")
+    digest = hashlib.blake2s(payload, digest_size=8).digest()
+    return int.from_bytes(digest, "big") / float(1 << 64)
+
+
+def get_mode(
+    config: dict[str, Any] | None = None,
+    role: str = "",
+    sample_key: str = "",
+) -> str:
     """Get the current factual-risk mode.
 
     Environment override: ``ORCHESTRATOR_FACTUAL_RISK_MODE`` takes
@@ -399,6 +410,9 @@ def get_mode(config: dict[str, Any] | None = None, role: str = "") -> str:
     Args:
         config: Optional config override.
         role: Current routing role (for canary role filtering).
+        sample_key: Stable request key for deterministic canary arm assignment.
+            Callers should pass task_id/request_id. If omitted, legacy RNG sampling
+            is retained for compatibility with direct/unit callers.
 
     Returns:
         "off", "shadow", or "enforce".
@@ -412,11 +426,19 @@ def get_mode(config: dict[str, Any] | None = None, role: str = "") -> str:
 
     if mode == "canary":
         # RI-10: Probabilistic canary — enforce for a fraction of requests
-        canary_ratio = float(config.get("canary_ratio", 0.25))
+        canary_ratio = max(0.0, min(1.0, float(config.get("canary_ratio", 0.25))))
         canary_roles = config.get("canary_roles", [])
         # If role filter is set and current role doesn't match, stay in shadow
         if canary_roles and role and role not in canary_roles:
             return "shadow"
-        return "enforce" if random.random() < canary_ratio else "shadow"
+        if sample_key:
+            roll = _canary_roll(
+                str(sample_key),
+                role=role,
+                salt=str(config.get("canary_salt", "ri10-v1")),
+            )
+        else:
+            roll = random.random()
+        return "enforce" if roll < canary_ratio else "shadow"
 
     return mode

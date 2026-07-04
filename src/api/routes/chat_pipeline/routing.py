@@ -337,7 +337,10 @@ def _route_request(request: ChatRequest, state) -> RoutingResult:
     try:
         from src.classifiers.factual_risk import get_mode as _fr_get_mode
 
-        _factual_risk_mode = _fr_get_mode(role=role_for_signals)
+        _factual_risk_mode = _fr_get_mode(
+            role=role_for_signals,
+            sample_key=task_id,
+        )
     except Exception:
         _factual_risk_mode = ""
 
@@ -511,7 +514,10 @@ def _plan_review_gate(
     if not factual_risk_mode:
         from src.classifiers.factual_risk import get_mode as _fr_get_mode
 
-        factual_risk_mode = _fr_get_mode(role=_current_role)
+        factual_risk_mode = _fr_get_mode(
+            role=_current_role,
+            sample_key=str(getattr(routing, "task_id", "") or ""),
+        )
     risk_forced = routing.factual_risk_band == "high" and factual_risk_mode == "enforce"
     needs_review = _needs_plan_review(routing.task_ir, routing.routing_decision, state)
     if (

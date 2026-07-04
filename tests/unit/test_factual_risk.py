@@ -7,6 +7,7 @@ import pytest
 from src.classifiers.factual_risk import (
     FactualRiskResult,
     _extract_features,
+    _canary_roll,
     _compute_score,
     _role_tier_for_role,
     _role_adjustment,
@@ -355,6 +356,40 @@ class TestGetMode:
                 role="worker_general",
             )
             == "enforce"
+        )
+
+    def test_canary_sample_key_is_deterministic_without_rng(self, monkeypatch):
+        def fail_random() -> float:
+            raise AssertionError("stable canary sampling must not use process RNG")
+
+        monkeypatch.setattr("random.random", fail_random)
+
+        config = {
+            "mode": "canary",
+            "canary_ratio": 0.25,
+            "canary_roles": ["worker_general"],
+        }
+        first = get_mode(config, role="worker_general", sample_key="task-123")
+        second = get_mode(config, role="worker_general", sample_key="task-123")
+
+        assert first == second
+        assert first in {"shadow", "enforce"}
+
+    def test_canary_sample_key_uses_role_and_salt(self):
+        assert _canary_roll("task-123", role="frontdoor", salt="a") == _canary_roll(
+            "task-123",
+            role="frontdoor",
+            salt="a",
+        )
+        assert _canary_roll("task-123", role="frontdoor", salt="a") != _canary_roll(
+            "task-123",
+            role="worker_general",
+            salt="a",
+        )
+        assert _canary_roll("task-123", role="frontdoor", salt="a") != _canary_roll(
+            "task-123",
+            role="frontdoor",
+            salt="b",
         )
 
     def test_explicit_shadow(self):
