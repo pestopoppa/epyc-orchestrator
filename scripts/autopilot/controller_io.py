@@ -359,7 +359,12 @@ def invoke_controller(
         "claude", "-p", prompt,
         "--output-format", "stream-json",
         "--verbose",  # required by claude CLI for stream-json output
-        "--permission-mode", "plan",
+        # This is a JSON controller call, not Claude Code's interactive Plan
+        # Mode. Plan mode can steer the CLI toward writing ~/.claude/plans/*
+        # when it wants to escalate, which wastes a planner turn and returns an
+        # empty action. Keep the available tool surface explicitly read-only.
+        "--permission-mode", "default",
+        "--tools", "Read,Grep,Glob",
         "--allowedTools", "Read,Grep,Glob",
         "--disallowedTools", ",".join(sorted(PLANNER_CLI_DISALLOWED_TOOLS)),
     ]

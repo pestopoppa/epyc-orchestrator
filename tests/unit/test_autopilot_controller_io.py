@@ -411,7 +411,9 @@ def test_invoke_controller_pins_planner_model_args(monkeypatch) -> None:
 
     assert captured["cmd"][:3] == ["claude", "-p", "prompt"]
     assert "--permission-mode" in captured["cmd"]
-    assert captured["cmd"][captured["cmd"].index("--permission-mode") + 1] == "plan"
+    assert captured["cmd"][captured["cmd"].index("--permission-mode") + 1] == "default"
+    assert "--tools" in captured["cmd"]
+    assert captured["cmd"][captured["cmd"].index("--tools") + 1] == "Read,Grep,Glob"
     assert "--allowedTools" in captured["cmd"]
     assert (
         captured["cmd"][captured["cmd"].index("--allowedTools") + 1]
