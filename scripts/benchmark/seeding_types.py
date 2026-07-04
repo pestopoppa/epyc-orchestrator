@@ -653,6 +653,7 @@ class ComparativeResult:
     question_id: str
     prompt: str
     expected: str
+    reference: str = ""
     dataset_source: str = "yaml"
     prompt_hash: str = ""
     timestamp: str = ""

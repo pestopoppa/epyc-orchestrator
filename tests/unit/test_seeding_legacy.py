@@ -138,6 +138,7 @@ def test_evaluate_question_text_path_alias_clone_and_escalation_injection():
         "id": "q1",
         "prompt": "What is 2+2?",
         "expected": "4",
+        "reference": "Four",
     }
     combos = [("frontdoor", "direct"), ("worker_math", "direct")]
 
@@ -180,6 +181,7 @@ def test_evaluate_question_text_path_alias_clone_and_escalation_injection():
     assert comp is not None
     assert [call.kwargs["max_tokens"] for call in call_mock.call_args_list] == [1024, 1024]
     assert comp.rewards_injected == 3
+    assert comp.reference == "Four"
     # Alias clone path
     assert comp.rewards["worker_explore:direct"] == 0.2
     assert "worker_explore:direct" in comp.role_results
@@ -342,6 +344,64 @@ def test_run_batch_returns_completed_when_no_new_questions():
 
     assert len(out) == 1
     assert out[0].question_id == "q-done"
+
+
+def test_run_batch_forwards_prompt_source_overrides_to_imported_sampler(tmp_path):
+    calls = []
+    stub = ModuleType("seed_specialist_routing")
+
+    def _sample_unseen_questions(*_args, **kwargs):
+        calls.append(
+            {
+                "kwargs": kwargs,
+                "debug_prompts_dir": getattr(stub, "DEBUG_PROMPTS_DIR", None),
+            }
+        )
+        return []
+
+    stub.sample_unseen_questions = _sample_unseen_questions
+    prev = sys.modules.get("seed_specialist_routing")
+    sys.modules["seed_specialist_routing"] = stub
+    prompt_dir = tmp_path / "prompts"
+    try:
+        with (
+            patch.object(_MOD, "_check_server_health", return_value=True),
+            patch.object(_MOD, "load_checkpoint", return_value=[]),
+            patch.object(_MOD, "load_seen_questions", return_value=set()),
+            patch.object(_MOD, "_build_role_mode_combos", return_value=[("frontdoor", "direct")]),
+            patch.object(_MOD.logger, "info"),
+        ):
+            with pytest.deprecated_call(match="Legacy comparative seeding is deprecated"):
+                out = _MOD.run_batch(
+                    suites=["instruction_precision"],
+                    roles=["frontdoor"],
+                    modes=["direct"],
+                    sample_per_suite=1,
+                    seed=1,
+                    url="http://localhost:8000",
+                    timeout=60,
+                    session_id="sess-prompt-source",
+                    no_dedup=True,
+                    question_source="yaml",
+                    debug_prompts_dir=prompt_dir,
+                )
+    finally:
+        if prev is None:
+            sys.modules.pop("seed_specialist_routing", None)
+        else:
+            sys.modules["seed_specialist_routing"] = prev
+
+    assert out == []
+    assert calls == [
+        {
+            "kwargs": {
+                "use_pool": True,
+                "allow_reseen": False,
+                "question_source": "yaml",
+            },
+            "debug_prompts_dir": prompt_dir.resolve(),
+        }
+    ]
 
 
 def test_run_batch_main_loop_records_checkpoint_and_stops_after_three_zero_success():

@@ -135,6 +135,23 @@ def test_load_from_yaml_paths(tmp_path, monkeypatch):
     assert legacy_out[0]["dataset_source"] == "yaml_legacy_prompts"
     assert legacy_out[0]["scoring_config"]["legacy_auto_score"] == "format_pattern:^ok$"
 
+    (tmp_path / "legacy_reference.yaml").write_text(
+        "prompts:\n"
+        "  instruction_q1:\n"
+        "    tier: 1\n"
+        "    prompt: 'Answer with a constrained sentence.'\n"
+        "    expected: ''\n"
+        "    reference_answer: 'A compliant answer containing the scored tokens.'\n"
+        "    auto_score: 'rubric:instruction_precision'\n"
+    )
+    legacy_reference_out = mod._load_from_yaml("legacy_reference", 1, 1)
+    assert len(legacy_reference_out) == 1
+    assert legacy_reference_out[0]["expected"] == ""
+    assert (
+        legacy_reference_out[0]["reference"]
+        == "A compliant answer containing the scored tokens."
+    )
+
 
 def test_sample_unseen_questions_pool_fastpath(tmp_path, monkeypatch):
     mod = _load_module("seed_specialist_routing_helpers_pool_fast")

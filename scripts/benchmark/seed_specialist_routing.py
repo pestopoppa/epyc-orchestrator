@@ -397,6 +397,7 @@ def run_batch_3way(
                 question_id=qid,
                 prompt=prompt_info["prompt"][:200],
                 expected=prompt_info.get("expected", "")[:200],
+                reference=prompt_info.get("reference", ""),
                 timestamp=datetime.now(timezone.utc).isoformat(),
                 role_results=role_results,
                 rewards=rewards,
@@ -554,6 +555,7 @@ def run_batch_3way(
                                 question_id=rpi["id"],
                                 prompt=rpi["prompt"][:200],
                                 expected=rpi.get("expected", "")[:200],
+                                reference=rpi.get("reference", ""),
                                 timestamp=datetime.now(timezone.utc).isoformat(),
                                 role_results=rr_retry,
                                 rewards=rew_retry,
@@ -1487,6 +1489,7 @@ Examples (legacy mode - DEPRECATED):
             escalation_chains=not args.no_escalation_chains,
             use_pool=not args.no_pool,
             question_source=args.question_source,
+            debug_prompts_dir=DEBUG_PROMPTS_DIR,
             max_tokens=args.max_tokens,
             strict_modes=args.strict_modes,
         )

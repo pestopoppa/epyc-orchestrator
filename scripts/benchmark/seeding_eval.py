@@ -289,6 +289,7 @@ class ThreeWayResult:
     question_id: str
     prompt: str
     expected: str
+    reference: str = ""
     timestamp: str = ""
     role_results: dict[str, RoleResult] = field(default_factory=dict)
     rewards: dict[str, float] = field(default_factory=dict)

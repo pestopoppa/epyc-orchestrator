@@ -10,6 +10,7 @@ evaluate_question, run_batch, print_batch_summary, print_stats.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 import time
 import warnings
 from datetime import datetime, timezone
@@ -405,7 +406,8 @@ def evaluate_question(
     if not dry_run:
         comp_for_inject = ComparativeResult(
             suite=suite, question_id=qid, prompt=prompt[:200],
-            expected=expected[:200], rewards=rewards,
+            expected=expected[:200], reference=prompt_info.get("reference", ""),
+            rewards=rewards,
         )
         rewards_injected = _inject_rewards_http(comp_for_inject, url, client)
 
@@ -416,7 +418,8 @@ def evaluate_question(
         if escalation_data:
             comp_for_esc = ComparativeResult(
                 suite=suite, question_id=qid, prompt=prompt[:200],
-                expected=expected[:200], rewards=rewards,
+                expected=expected[:200], reference=prompt_info.get("reference", ""),
+                rewards=rewards,
             )
             esc_injected = _inject_escalation_chains_http(
                 comp_for_esc, escalation_data, url, client,
@@ -442,6 +445,7 @@ def evaluate_question(
         question_id=qid,
         prompt=prompt[:200],
         expected=expected[:200],
+        reference=prompt_info.get("reference", ""),
         dataset_source=dataset_source,
         prompt_hash=_prompt_hash(prompt),
         timestamp=datetime.now(timezone.utc).isoformat(),
@@ -467,6 +471,7 @@ def run_batch(
     escalation_chains: bool = False,
     use_pool: bool = True,
     question_source: str = "auto",
+    debug_prompts_dir: Path | None = None,
     debugger: Any = None,
     max_tokens: int | None = None,
     strict_modes: bool = False,
@@ -478,8 +483,14 @@ def run_batch(
     P(success) with cost. The 3-way mode uses binary rewards for faithful
     probability estimation.
     """
-    # Import here to avoid circular dependency at module level
-    from seed_specialist_routing import sample_unseen_questions
+    # Import here to avoid circular dependency at module level. When the
+    # entrypoint is running as __main__, this imports a second module instance,
+    # so carry CLI prompt-source overrides explicitly.
+    import seed_specialist_routing as seeding_entrypoint
+
+    if debug_prompts_dir is not None:
+        seeding_entrypoint.DEBUG_PROMPTS_DIR = Path(debug_prompts_dir).expanduser().resolve()
+    sample_unseen_questions = seeding_entrypoint.sample_unseen_questions
 
     warnings.warn(
         "Legacy comparative seeding is deprecated. Use --3way for binary rewards "

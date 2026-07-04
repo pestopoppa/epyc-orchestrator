@@ -21,6 +21,10 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 
+def _reference_text(q: dict) -> str:
+    return str(q.get("reference") or q.get("reference_answer") or "")
+
+
 def _normalise_yaml_question(suite_name: str, q: dict) -> dict:
     return {
         "id": q["id"],
@@ -28,6 +32,7 @@ def _normalise_yaml_question(suite_name: str, q: dict) -> dict:
         "prompt": q["prompt"].strip(),
         "context": str(q.get("context") or ""),
         "expected": q.get("expected", ""),
+        "reference": _reference_text(q),
         "image_path": q.get("image_path", ""),
         "tier": q.get("tier", 1),
         "scoring_method": q.get("scoring_method", "exact_match"),
@@ -48,6 +53,7 @@ def _normalise_legacy_prompt(suite_name: str, prompt_id: str, q: dict) -> dict:
         "prompt": str(q["prompt"]).strip(),
         "context": str(q.get("context") or ""),
         "expected": q.get("expected", ""),
+        "reference": _reference_text(q),
         "image_path": q.get("image_path", ""),
         "tier": q.get("tier", 1),
         "scoring_method": q.get("scoring_method", "exact_match"),
