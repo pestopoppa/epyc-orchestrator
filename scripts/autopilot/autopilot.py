@@ -2267,8 +2267,12 @@ Your job: analyze current system state and propose the SINGLE best next action.
 Planner tool boundary: StrategyStore rows mentioning tools, REPL, CALL, or
 tool-use refer to orchestrator/model execution inside AutoPilot actions and
 evals. They are not permission for this controller process to call planner-side
-tools. While drafting the JSON action, use only Read/Grep/Glob for repository
-inspection when needed; never use Bash or other planner tools to satisfy a hint.
+tools. The planner process is read-only: while drafting the JSON action, use
+only Read/Grep/Glob for repository inspection when needed. Never use Bash, Edit,
+MultiEdit, Write, NotebookEdit, apply_patch, or any other planner-side
+mutation/execution tool to satisfy a hint. If a mutation is warranted, return an
+AutoPilot action such as code_mutation, prompt_mutation, structural_experiment,
+or numeric_trial and let the orchestrator dispatch it.
 {planner_strategy_hints}
 
 ### Repo-Readiness Advisory Pickup (default-off, non-authority)

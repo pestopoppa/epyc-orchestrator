@@ -733,7 +733,12 @@ def test_controller_prompt_scopes_strategy_tool_hints_to_eval_tools() -> None:
 
     assert "StrategyStore Planner Hints" in template
     assert "orchestrator/model execution inside AutoPilot actions" in template
-    assert "never use Bash or other planner tools to satisfy a hint" in template
+    assert "planner process is read-only" in template
+    assert "Never use Bash, Edit" in template
+    assert "MultiEdit" in template
+    assert "Write" in template
+    assert "apply_patch" in template
+    assert "let the orchestrator dispatch it" in template
 
 
 def test_slot_query_ports_from_stack_priors_uses_live_primary_llama_entries(tmp_path: Path) -> None:
