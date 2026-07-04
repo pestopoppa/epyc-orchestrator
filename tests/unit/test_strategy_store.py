@@ -71,6 +71,84 @@ class TestStrategyStore:
         results = store.retrieve("anything", k=5)
         assert results == []
 
+    def test_retrieve_sees_external_strategy_seed_without_restart(self, tmp_path):
+        from orchestration.repl_memory.strategy_store import StrategyStore
+
+        strategy_path = tmp_path / "strategies"
+        live_store = StrategyStore(
+            path=strategy_path,
+            embedding_dim=1024,
+            embedder=MockEmbedder(),
+        )
+        writer_store = StrategyStore(
+            path=strategy_path,
+            embedding_dim=1024,
+            embedder=MockEmbedder(),
+        )
+        try:
+            assert live_store.retrieve("external planner hint", k=5) == []
+
+            seeded_id = writer_store.store(
+                "external planner hint",
+                "planner should see this StrategyStore row without restart",
+                source_trial_id=1104,
+                species="seeder",
+                entry_type="pattern",
+                evidence_trial_ids=[1104],
+            )
+
+            results = live_store.retrieve(
+                "external planner hint",
+                k=5,
+                species="seeder",
+            )
+            assert seeded_id in {entry.id for entry in results}
+        finally:
+            writer_store.close()
+            live_store.close()
+
+    def test_closing_stale_store_does_not_overwrite_external_faiss_seed(self, tmp_path):
+        from orchestration.repl_memory.strategy_store import StrategyStore
+
+        strategy_path = tmp_path / "strategies"
+        stale_store = StrategyStore(
+            path=strategy_path,
+            embedding_dim=1024,
+            embedder=MockEmbedder(),
+        )
+        writer_store = StrategyStore(
+            path=strategy_path,
+            embedding_dim=1024,
+            embedder=MockEmbedder(),
+        )
+        try:
+            seeded_id = writer_store.store(
+                "persistent external planner hint",
+                "stale StrategyStore close must not erase this row",
+                source_trial_id=1105,
+                species="seeder",
+                entry_type="pattern",
+                evidence_trial_ids=[1105],
+            )
+        finally:
+            writer_store.close()
+            stale_store.close()
+
+        reopened_store = StrategyStore(
+            path=strategy_path,
+            embedding_dim=1024,
+            embedder=MockEmbedder(),
+        )
+        try:
+            results = reopened_store.retrieve(
+                "persistent external planner hint",
+                k=5,
+                species="seeder",
+            )
+            assert seeded_id in {entry.id for entry in results}
+        finally:
+            reopened_store.close()
+
     def test_retrieve_with_species_filter(self, store):
         store.store("Strategy A", "Insight A", source_trial_id=1, species="alpha")
         store.store("Strategy B", "Insight B", source_trial_id=2, species="beta")

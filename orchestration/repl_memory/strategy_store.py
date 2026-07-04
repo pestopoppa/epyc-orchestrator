@@ -637,6 +637,8 @@ class StrategyStore:
         self._faiss.index = self._faiss._faiss.IndexFlatIP(self.embedding_dim)
         self._faiss.id_map = []
         self._faiss.id_to_idx = {}
+        if hasattr(self._faiss, "_dirty"):
+            self._faiss._dirty = True
         for row in rows:
             try:
                 metadata = json.loads(row["metadata_json"] or "{}")
@@ -709,6 +711,16 @@ class StrategyStore:
             return self._embedder.embed_text(text)
         # Hash fallback
         return self._hash_embed(text)
+
+    def _refresh_faiss_if_changed(self) -> None:
+        """Pick up StrategyStore vectors written by another live process."""
+        reload_if_changed = getattr(self._faiss, "reload_if_changed", None)
+        if not callable(reload_if_changed):
+            return
+        try:
+            reload_if_changed()
+        except Exception as exc:
+            logger.warning("Could not refresh StrategyStore FAISS mirror: %s", exc)
 
     def _hash_embed(self, text: str) -> np.ndarray:
         """Deterministic hash-based pseudo-embedding (no semantic similarity)."""
@@ -1141,6 +1153,7 @@ class StrategyStore:
         ``include_quarantined``; the new parameters default to values
         equivalent to the prior behaviour for those callers.
         """
+        self._refresh_faiss_if_changed()
         if self._faiss.count == 0:
             return []
 

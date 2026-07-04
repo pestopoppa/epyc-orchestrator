@@ -87,6 +87,11 @@ class FAISSEmbeddingStore:
         self.dim = dim
         self.index_path = self.path / index_filename
         self.id_map_path = self.path / id_map_filename
+        self._dirty = False
+        self._disk_signature: tuple[tuple[int, int] | None, tuple[int, int] | None] = (
+            None,
+            None,
+        )
 
         # Ensure directory exists
         self.path.mkdir(parents=True, exist_ok=True)
@@ -97,12 +102,24 @@ class FAISSEmbeddingStore:
         else:
             self._create_new()
 
+    def _current_disk_signature(self) -> tuple[tuple[int, int] | None, tuple[int, int] | None]:
+        def signature(path: Path) -> tuple[int, int] | None:
+            try:
+                stat = path.stat()
+            except FileNotFoundError:
+                return None
+            return (stat.st_mtime_ns, stat.st_size)
+
+        return (signature(self.index_path), signature(self.id_map_path))
+
     def _create_new(self) -> None:
         """Create new empty FAISS index."""
         # IndexFlatIP = inner product (cosine similarity after L2 normalization)
         self.index = self._faiss.IndexFlatIP(self.dim)
         self.id_map: list[str] = []
         self.id_to_idx: dict[str, int] = {}  # O(1) lookup
+        self._dirty = False
+        self._disk_signature = self._current_disk_signature()
         logger.info("Created new FAISS index at %s", self.index_path)
 
     def _load(self) -> None:
@@ -122,6 +139,8 @@ class FAISSEmbeddingStore:
 
             # Build O(1) lookup dict
             self.id_to_idx = {mid: i for i, mid in enumerate(self.id_map)}
+            self._dirty = False
+            self._disk_signature = self._current_disk_signature()
 
             logger.info(
                 "Loaded FAISS index with %d embeddings from %s",
@@ -159,8 +178,21 @@ class FAISSEmbeddingStore:
         self.index.add(embedding)
         self.id_map.append(memory_id)
         self.id_to_idx[memory_id] = idx  # O(1) insert
+        self._dirty = True
 
         return idx
+
+    def reload_if_changed(self) -> bool:
+        """Reload persisted FAISS files when another process updated them."""
+        if self._dirty:
+            return False
+        current = self._current_disk_signature()
+        if current == self._disk_signature:
+            return False
+        if current[0] is None or current[1] is None:
+            return False
+        self._load()
+        return True
 
     def search(self, query: np.ndarray, k: int = 20) -> list[tuple[str, float]]:
         """
@@ -224,8 +256,12 @@ class FAISSEmbeddingStore:
 
     def save(self) -> None:
         """Persist index and id_map to disk."""
+        if not self._dirty:
+            return
         self._faiss.write_index(self.index, str(self.index_path))
         np.save(self.id_map_path, np.array(self.id_map, dtype=object))
+        self._dirty = False
+        self._disk_signature = self._current_disk_signature()
         logger.debug("Saved FAISS index with %d embeddings", self.index.ntotal)
 
     @property
