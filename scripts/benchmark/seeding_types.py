@@ -1,8 +1,9 @@
 """Constants, dataclasses, and shared state for the seeding evaluation suite.
 
-This module has NO project imports — it sits at the bottom of the dependency graph.
 Generated stack priors are the primary source for live role metadata, with the
-model registry kept as the degraded/offline fallback.
+model registry kept as the degraded/offline fallback. Project imports are kept
+local so this module remains usable from benchmark entrypoints with minimal
+startup coupling.
 """
 
 from __future__ import annotations
@@ -76,23 +77,11 @@ def _load_live_stack_prior_roles(
 ) -> dict[str, dict[str, Any]]:
     """Return live stack-prior role records keyed by role name."""
     try:
-        with stack_priors_path.open() as f:
-            data = yaml.safe_load(f) or {}
-    except (OSError, yaml.YAMLError):
+        from src.registry.stack_priors import live_stack_role_records
+    except ImportError:
         return {}
 
-    roles = data.get("roles", {})
-    if not isinstance(roles, dict):
-        return {}
-
-    live: dict[str, dict[str, Any]] = {}
-    for role_name, record in sorted(roles.items()):
-        if not isinstance(role_name, str) or not isinstance(record, dict):
-            continue
-        if record.get("deployment_status") != "live_stack":
-            continue
-        live[role_name] = record
-    return live
+    return dict(sorted(live_stack_role_records(stack_priors_path).items()))
 
 
 def _read_stack_prior_default_roles(
