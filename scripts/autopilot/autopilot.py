@@ -426,20 +426,34 @@ def _install_planner_convention_bindings(
 
 
 def _planner_strategy_entry_line(entry: Any) -> str:
-    metadata = getattr(entry, "metadata", {}) or {}
+    if isinstance(entry, dict):
+        metadata = entry.get("metadata", {}) or {}
+        species = str(entry.get("species", "") or "unknown")
+        entry_type = str(entry.get("entry_type", "") or "raw")
+        title = (
+            str(entry.get("title", "") or "").strip()
+            or str(entry.get("description", "") or "").strip()
+            or "strategy"
+        )
+        content = (
+            str(entry.get("generalized_content", "") or "").strip()
+            or str(entry.get("insight", "") or "").strip()
+        )
+    else:
+        metadata = getattr(entry, "metadata", {}) or {}
+        species = str(getattr(entry, "species", "") or "unknown")
+        entry_type = str(getattr(entry, "entry_type", "") or "raw")
+        title = (
+            str(getattr(entry, "title", "") or "").strip()
+            or str(getattr(entry, "description", "") or "").strip()
+            or "strategy"
+        )
+        content = (
+            str(getattr(entry, "generalized_content", "") or "").strip()
+            or str(getattr(entry, "insight", "") or "").strip()
+        )
     if not isinstance(metadata, dict):
         metadata = {}
-    species = str(getattr(entry, "species", "") or "unknown")
-    entry_type = str(getattr(entry, "entry_type", "") or "raw")
-    title = (
-        str(getattr(entry, "title", "") or "").strip()
-        or str(getattr(entry, "description", "") or "").strip()
-        or "strategy"
-    )
-    content = (
-        str(getattr(entry, "generalized_content", "") or "").strip()
-        or str(getattr(entry, "insight", "") or "").strip()
-    )
     if len(content) > 260:
         content = content[:257].rstrip() + "..."
 
@@ -464,6 +478,99 @@ def _planner_strategy_entry_line(entry: Any) -> str:
     return f"- [{' | '.join(tags)}] {title}: {content}".strip()
 
 
+def _planner_entry_id(entry: Any) -> str:
+    if isinstance(entry, dict):
+        return str(entry.get("id", "") or "")
+    return str(getattr(entry, "id", "") or "")
+
+
+def _operator_seed_planner_entries(
+    strategy_store: StrategyStore | None,
+    *,
+    max_rows: int,
+) -> list[dict[str, Any]]:
+    """Return explicit operator-seeded hints without relying on vector search."""
+    if max_rows <= 0 or strategy_store is None:
+        return []
+    conn = getattr(strategy_store, "_conn", None)
+    if conn is None:
+        return []
+    try:
+        rows = conn.execute(
+            "SELECT id, species, entry_type, description, insight, "
+            "metadata_json, created_at "
+            "FROM strategies "
+            "WHERE entry_type IN ('pattern', 'convention') "
+            "ORDER BY created_at DESC "
+            "LIMIT 256"
+        ).fetchall()
+    except Exception as exc:
+        log.warning("Skipping operator StrategyStore planner hints: %s", exc)
+        return []
+
+    entries: list[dict[str, Any]] = []
+    for row in rows:
+        try:
+            metadata = (
+                json.loads(row["metadata_json"])
+                if row["metadata_json"]
+                else {}
+            )
+        except (TypeError, json.JSONDecodeError):
+            metadata = {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+
+        seed_campaign = str(metadata.get("seed_campaign", "") or "").lower()
+        entry_id = str(row["id"] or "")
+        if not (
+            metadata.get("planner_visible") is True
+            or str(metadata.get("seeded_by", "") or "").lower() == "operator"
+            or seed_campaign.startswith("operator")
+            or entry_id.startswith("opseed-")
+        ):
+            continue
+
+        insight_format = metadata.get("insight_format", {})
+        if not isinstance(insight_format, dict):
+            insight_format = {}
+        entries.append(
+            {
+                "id": entry_id,
+                "species": str(row["species"] or "all"),
+                "entry_type": str(row["entry_type"] or "pattern"),
+                "description": str(row["description"] or ""),
+                "insight": str(row["insight"] or ""),
+                "title": (
+                    str(insight_format.get("title", "") or "").strip()
+                    or str(row["description"] or "").strip()
+                ),
+                "generalized_content": (
+                    str(insight_format.get("generalized_content", "") or "").strip()
+                    or str(row["insight"] or "").strip()
+                ),
+                "metadata": metadata,
+                "created_at": str(row["created_at"] or ""),
+            }
+        )
+
+    bind_rank = {"live": 0, "future": 1, "context": 2}
+    tranche_rank = {"green": 0, "guardrail": 1, "frozen": 2}
+    entries.sort(
+        key=lambda entry: (
+            bind_rank.get(
+                str(entry["metadata"].get("bind_status", "") or "").lower(),
+                3,
+            ),
+            tranche_rank.get(
+                str(entry["metadata"].get("tranche", "") or "").lower(),
+                3,
+            ),
+        )
+    )
+    return entries[:max_rows]
+
+
 def _build_planner_strategy_hints(
     strategy_store: StrategyStore | None,
     journal: ExperimentJournal | None,
@@ -483,7 +590,7 @@ def _build_planner_strategy_hints(
         if not entries:
             return
         for entry in entries:
-            entry_id = str(getattr(entry, "id", "") or "")
+            entry_id = _planner_entry_id(entry)
             if entry_id and entry_id in seen:
                 continue
             if entry_id:
@@ -491,6 +598,13 @@ def _build_planner_strategy_hints(
             rows.append(entry)
             if len(rows) >= max_rows:
                 return
+
+    add_entries(
+        _operator_seed_planner_entries(
+            strategy_store,
+            max_rows=min(max_rows, max(4, max_rows // 2)),
+        )
+    )
 
     try:
         if hasattr(strategy_store, "retrieve_for_journal"):
@@ -544,12 +658,6 @@ def _build_planner_strategy_hints(
 
     return "\n".join(
         _planner_strategy_entry_line(entry)
-        if not isinstance(entry, dict)
-        else (
-            f"- [{entry.get('species', 'system')}/{entry.get('entry_type', 'error')}] "
-            f"{entry.get('title', 'StrategyStore error')}: "
-            f"{entry.get('generalized_content', '')}"
-        )
         for entry in rows[:max_rows]
     )
 

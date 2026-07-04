@@ -728,6 +728,69 @@ def test_planner_strategy_hints_refresh_store_rows_for_prompt(monkeypatch) -> No
     assert ("journal", "structural_lab", journal, 3) in calls
 
 
+def test_planner_strategy_hints_include_explicit_operator_seeds(monkeypatch) -> None:
+    monkeypatch.setattr(autopilot, "_PLANNER_HINTS_ENABLED", True)
+
+    class FakeResult:
+        def fetchall(self):
+            return [
+                {
+                    "id": "opseed-green-routing-handoff",
+                    "species": "routing",
+                    "entry_type": "pattern",
+                    "description": "routing handoff that fixed queries miss",
+                    "insight": "Planner should still see explicit operator seeds.",
+                    "metadata_json": json.dumps({
+                        "seeded_by": "operator",
+                        "seed_campaign": "operator-handoff-distillation",
+                        "bind_status": "context",
+                        "bind_identifiers": [],
+                        "source_handoff": "planner-hint-distillation",
+                        "tranche": "green",
+                        "insight_format": {
+                            "title": "Route handoff visible without vector hit",
+                            "generalized_content": (
+                                "Surface explicit operator handoff hints even "
+                                "when the fixed planner queries do not match."
+                            ),
+                        },
+                    }),
+                    "created_at": "2026-07-04T00:00:00+00:00",
+                }
+            ]
+
+    class FakeConn:
+        def execute(self, sql):
+            assert "entry_type IN ('pattern', 'convention')" in sql
+            return FakeResult()
+
+    class FakeStore:
+        _conn = FakeConn()
+
+        def retrieve_conventions(self, *, species, journal, limit):
+            assert species
+            assert journal == "journal"
+            assert limit == 3
+            return []
+
+        def retrieve_for_journal(self, query, *, journal, k, species):
+            assert query
+            assert journal == "journal"
+            assert k == 3
+            assert species
+            return []
+
+    text = autopilot._build_planner_strategy_hints(
+        FakeStore(),
+        "journal",
+        max_rows=4,
+    )
+
+    assert "Route handoff visible without vector hit" in text
+    assert "planner-hint-distillation" in text
+    assert "fixed planner queries do not match" in text
+
+
 def test_controller_prompt_scopes_strategy_tool_hints_to_eval_tools() -> None:
     template = autopilot.CONTROLLER_PROMPT_TEMPLATE
 
