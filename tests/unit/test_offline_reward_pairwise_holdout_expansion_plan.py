@@ -397,6 +397,7 @@ def test_pairwise_holdout_plan_filters_to_audit_collection_targets(tmp_path: Pat
             "sample_size": 2,
             "max_tokens": 1024,
             "strict_modes": True,
+            "question_source": "auto",
             "requested_new_source_records": 19,
             "estimated_new_source_records": 36,
             "sample_size_semantics": (
@@ -531,7 +532,7 @@ def test_pairwise_holdout_plan_rejects_non_matching_audit_collection_targets(
     )
 
 
-def test_pairwise_holdout_plan_does_not_collect_reference_empty_suite(
+def test_pairwise_holdout_plan_uses_reference_backed_instruction_source(
     tmp_path: Path,
 ) -> None:
     source = tmp_path / "seeding_a9_suite_instruction_precision.json"
@@ -603,17 +604,27 @@ def test_pairwise_holdout_plan_does_not_collect_reference_empty_suite(
     candidates, summary = mod.build_plan(args)
 
     assert candidates == []
-    assert summary["unavailable_collection_targets"] == {
-        "suite:instruction_precision:architect_general>frontdoor": (
-            "the current clean-window seeding suite emits no reference/expected text; "
-            "reference_token_coverage cannot score newly collected records"
+    assert summary["unavailable_collection_targets"] == {}
+    assert summary["collection_guidance"]["reference_backed_suite_sources"] == {
+        "instruction_precision": (
+            "/mnt/raid0/llm/epyc-inference-research/benchmarks/prompts/v1"
         )
     }
-    assert summary["source_record_requirements"][0]["status"] == (
-        "unavailable_with_current_oracle"
+    assert summary["source_record_requirements"][0]["status"] == "needs_new_source_records"
+    assert summary["source_record_requirements"][0]["suggested_min_new_source_records"] == 20
+    assert len(summary["collection_batches"]) == 1
+    batch = summary["collection_batches"][0]
+    assert batch["target"] == "suite:instruction_precision:architect_general>frontdoor"
+    assert batch["suite_argument"] == "instruction_precision"
+    assert batch["question_source"] == "yaml"
+    assert batch["debug_prompts_dir"] == (
+        "/mnt/raid0/llm/epyc-inference-research/benchmarks/prompts/v1"
     )
-    assert summary["source_record_requirements"][0]["suggested_min_new_source_records"] == 0
-    assert summary["collection_batches"] == []
+    assert "--question-source yaml" in batch["command"]
+    assert (
+        "--debug-prompts-dir /mnt/raid0/llm/epyc-inference-research/benchmarks/prompts/v1"
+        in batch["command"]
+    )
 
 
 def test_pairwise_holdout_collection_batches_prioritize_source_family_blockers() -> None:
@@ -643,9 +654,14 @@ def test_pairwise_holdout_collection_batches_prioritize_source_family_blockers()
         "suite:instruction_precision:architect_general>frontdoor",
     ]
     assert batches[0]["sample_size"] == 2
+    assert batches[0]["question_source"] == "auto"
     assert batches[0]["requested_new_source_records"] == 20
     assert batches[0]["estimated_new_source_records"] == 36
     assert batches[1]["sample_size"] == 20
+    assert batches[1]["question_source"] == "yaml"
+    assert batches[1]["debug_prompts_dir"] == (
+        "/mnt/raid0/llm/epyc-inference-research/benchmarks/prompts/v1"
+    )
     assert batches[1]["requested_new_source_records"] == 20
     assert batches[1]["estimated_new_source_records"] == 20
     assert batches[0]["collection_priority_reason"] == (
@@ -818,6 +834,7 @@ def test_pairwise_holdout_writes_guarded_collection_manifest_and_script(
     assert batch["sample_size"] == 2
     assert batch["max_tokens"] == 1024
     assert batch["strict_modes"] is True
+    assert batch["question_source"] == "auto"
     assert batch["requested_new_source_records"] == 20
     assert batch["estimated_new_source_records"] == 36
     assert "<YYYYMMDDTHHMMSSZ>" in batch["command_template"]

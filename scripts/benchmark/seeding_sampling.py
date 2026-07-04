@@ -18,7 +18,42 @@ import logging
 import random
 import sys
 from pathlib import Path
-from typing import Callable, Iterable, Optional
+from typing import Callable, Iterable
+
+
+def _normalise_yaml_question(suite_name: str, q: dict) -> dict:
+    return {
+        "id": q["id"],
+        "suite": suite_name,
+        "prompt": q["prompt"].strip(),
+        "context": str(q.get("context") or ""),
+        "expected": q.get("expected", ""),
+        "image_path": q.get("image_path", ""),
+        "tier": q.get("tier", 1),
+        "scoring_method": q.get("scoring_method", "exact_match"),
+        "scoring_config": q.get("scoring_config", {}),
+        "dataset_source": "yaml",
+    }
+
+
+def _normalise_legacy_prompt(suite_name: str, prompt_id: str, q: dict) -> dict:
+    scoring_config = dict(q.get("scoring_config") or {})
+    if q.get("auto_score") and "legacy_auto_score" not in scoring_config:
+        scoring_config["legacy_auto_score"] = q.get("auto_score")
+    if q.get("scoring") and "legacy_scoring_rubric" not in scoring_config:
+        scoring_config["legacy_scoring_rubric"] = q.get("scoring")
+    return {
+        "id": str(q.get("id") or prompt_id),
+        "suite": suite_name,
+        "prompt": str(q["prompt"]).strip(),
+        "context": str(q.get("context") or ""),
+        "expected": q.get("expected", ""),
+        "image_path": q.get("image_path", ""),
+        "tier": q.get("tier", 1),
+        "scoring_method": q.get("scoring_method", "exact_match"),
+        "scoring_config": scoring_config,
+        "dataset_source": "yaml_legacy_prompts",
+    }
 
 
 def load_from_dataset_adapter(
@@ -79,6 +114,12 @@ def load_from_yaml(
         data = yaml.safe_load(f)
 
     questions = data.get("questions", [])
+    if not questions and isinstance(data.get("prompts"), dict):
+        questions = [
+            _normalise_legacy_prompt(suite_name, str(prompt_id), prompt)
+            for prompt_id, prompt in data["prompts"].items()
+            if isinstance(prompt, dict) and prompt.get("prompt")
+        ]
     if not questions:
         return []
 
@@ -89,18 +130,10 @@ def load_from_yaml(
 
     result = []
     for q in sampled:
-        result.append({
-            "id": q["id"],
-            "suite": suite_name,
-            "prompt": q["prompt"].strip(),
-            "context": "",
-            "expected": q.get("expected", ""),
-            "image_path": q.get("image_path", ""),
-            "tier": q.get("tier", 1),
-            "scoring_method": q.get("scoring_method", "exact_match"),
-            "scoring_config": q.get("scoring_config", {}),
-            "dataset_source": "yaml",
-        })
+        if q.get("dataset_source") == "yaml_legacy_prompts":
+            result.append(q)
+        else:
+            result.append(_normalise_yaml_question(suite_name, q))
     return result
 
 
@@ -117,6 +150,7 @@ def sample_unseen_questions(
     load_from_dataset_adapter: Callable[..., list[dict]],
     load_from_yaml: Callable[..., list[dict]],
     logger: logging.Logger,
+    question_source: str = "auto",
 ) -> list[dict]:
     """Sample questions not in the seen set, interleaved across suites.
 
@@ -131,8 +165,12 @@ def sample_unseen_questions(
     """
     suite_names = list(default_suites) if suites == ["all"] else suites
 
+    source = str(question_source or "auto").strip().lower()
+    if source not in {"auto", "adapter", "yaml"}:
+        raise ValueError("question_source must be one of: auto, adapter, yaml")
+
     # Try the pre-extracted pool first
-    if use_pool:
+    if use_pool and source == "auto":
         try:
             from question_pool import POOL_FILE, build_pool, load_pool, sample_from_pool
 
@@ -158,8 +196,10 @@ def sample_unseen_questions(
     for suite_name in suite_names:
         oversample = sample_per_suite * 20
 
-        prompts = load_from_dataset_adapter(suite_name, oversample, seed)
-        if not prompts:
+        prompts = []
+        if source in {"auto", "adapter"}:
+            prompts = load_from_dataset_adapter(suite_name, oversample, seed)
+        if not prompts and source in {"auto", "yaml"}:
             prompts = load_from_yaml(suite_name, oversample, seed)
 
         fresh = [p for p in prompts if p["id"] not in seen]

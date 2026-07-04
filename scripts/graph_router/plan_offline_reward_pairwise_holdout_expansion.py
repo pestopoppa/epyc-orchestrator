@@ -51,6 +51,7 @@ COLLECTION_TIMESTAMP_PLACEHOLDER = "<YYYYMMDDTHHMMSSZ>"
 DEFAULT_COLLECTION_WORKDIR = Path("/mnt/raid0/llm/epyc-orchestrator")
 DEFAULT_COLLECTION_MAX_TOKENS = 1024
 DEFAULT_RESULTS_ROOT = Path("/mnt/raid0/llm/epyc-inference-research/benchmarks/results")
+REFERENCE_BACKED_PROMPTS_ROOT = Path("/mnt/raid0/llm/epyc-inference-research/benchmarks/prompts")
 DEFAULT_REPORT_DIR = (
     PROJECT_ROOT
     / "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621"
@@ -68,10 +69,11 @@ DEFAULT_PRIORITY_STRATA = {
     ("source_family", "seeding_eval"): (0, "independent_holdout_source_family_blocker"),
     ("suite", "general"): (1, "independent_holdout_suite_blocker"),
 }
-REFERENCE_TOKEN_COVERAGE_UNSCORABLE_COLLECTION_SUITES = {
-    # The current IFEval adapter emits pass/fail rewards but no expected/reference
-    # text, so acquiring more of this suite cannot feed reference-token coverage.
-    "instruction_precision",
+REFERENCE_BACKED_COLLECTION_SOURCES = {
+    # The live IFEval adapter and current debug YAML are programmatic and emit
+    # expected="", but the legacy v1 prompt bundle preserves text references
+    # that the A9 reference-token-coverage oracle can score.
+    "instruction_precision": REFERENCE_BACKED_PROMPTS_ROOT / "v1",
 }
 
 
@@ -343,6 +345,11 @@ def _collection_batches(requirements: list[dict[str, Any]]) -> list[dict[str, An
         stratum_field = str(requirement["stratum_field"])
         stratum_value = str(requirement["stratum_value"])
         suite = stratum_value if stratum_field == "suite" else "all"
+        source_override = (
+            REFERENCE_BACKED_COLLECTION_SOURCES.get(suite)
+            if stratum_field == "suite"
+            else None
+        )
         sample_size, estimated_records = _collection_sample_size_for_suite_arg(
             requested_records,
             suite_argument=suite,
@@ -360,10 +367,16 @@ def _collection_batches(requirements: list[dict[str, Any]]) -> list[dict[str, An
                 f"eval/seeding_a9_{target_slug}_{COLLECTION_TIMESTAMP_PLACEHOLDER}.json"
             )
             expected_source_family = "seeding_eval"
+        source_args = ""
+        if source_override is not None:
+            source_args = (
+                f"--question-source yaml --debug-prompts-dir {source_override} "
+            )
         command = (
             "uv run python scripts/benchmark/seed_specialist_routing.py "
             f"--suites {suite} --roles {roles} --modes direct "
-            f"--sample-size {sample_size} --max-tokens {DEFAULT_COLLECTION_MAX_TOKENS} "
+            f"--sample-size {sample_size} {source_args}"
+            f"--max-tokens {DEFAULT_COLLECTION_MAX_TOKENS} "
             f"--strict-modes --dry-run --output {output}"
         )
         batches.append(
@@ -376,6 +389,12 @@ def _collection_batches(requirements: list[dict[str, Any]]) -> list[dict[str, An
                 "sample_size": sample_size,
                 "max_tokens": DEFAULT_COLLECTION_MAX_TOKENS,
                 "strict_modes": True,
+                "question_source": "yaml" if source_override is not None else "auto",
+                **(
+                    {"debug_prompts_dir": str(source_override)}
+                    if source_override is not None
+                    else {}
+                ),
                 "requested_new_source_records": requested_records,
                 "estimated_new_source_records": estimated_records,
                 "sample_size_semantics": (
@@ -869,15 +888,13 @@ def build_plan(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str
         key = _target_requirement_key(target)
         if matched_collection_target_counts.get(key, 0):
             continue
-        if suite in REFERENCE_TOKEN_COVERAGE_UNSCORABLE_COLLECTION_SUITES:
-            unavailable_collection_targets[key] = (
-                "the current clean-window seeding suite emits no reference/expected text; "
-                "reference_token_coverage cannot score newly collected records"
-            )
-            continue
         missing_reference_count = int(stats.get(f"skipped_missing_reference_suite:{suite}") or 0)
         reference_available_count = int(stats.get(f"reference_available_suite:{suite}") or 0)
-        if missing_reference_count > 0 and reference_available_count == 0:
+        if (
+            missing_reference_count > 0
+            and reference_available_count == 0
+            and suite not in REFERENCE_BACKED_COLLECTION_SOURCES
+        ):
             unavailable_collection_targets[key] = (
                 "source records for this suite have no reference/expected text; "
                 "reference_token_coverage cannot score them"
@@ -952,6 +969,10 @@ def build_plan(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str
                 f"--max-tokens {DEFAULT_COLLECTION_MAX_TOKENS} --strict-modes --dry-run "
                 "--output <benchmarks/results/eval/seeding_a9_*.json>"
             ),
+            "reference_backed_suite_sources": {
+                suite: str(path)
+                for suite, path in sorted(REFERENCE_BACKED_COLLECTION_SOURCES.items())
+            },
             "orchestrator_live_seed_note": (
                 "add records under benchmarks/results/orchestrator/seeding_live*.json "
                 "or an equivalent orchestrator source path so source_family resolves "

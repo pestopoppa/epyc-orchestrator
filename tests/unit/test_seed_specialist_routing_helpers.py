@@ -118,6 +118,23 @@ def test_load_from_yaml_paths(tmp_path, monkeypatch):
     assert out[0]["id"] == "q1"
     assert out[0]["dataset_source"] == "yaml"
 
+    # Legacy prompt bundles use a top-level `prompts` mapping. A9 uses this
+    # path to keep reference-token-coverage source rows scoreable.
+    (tmp_path / "legacy.yaml").write_text(
+        "prompts:\n"
+        "  legacy_q1:\n"
+        "    tier: 1\n"
+        "    prompt: 'Follow this exact format.'\n"
+        "    expected: 'Exact format reference'\n"
+        "    auto_score: 'format_pattern:^ok$'\n"
+    )
+    legacy_out = mod._load_from_yaml("legacy", 1, 1)
+    assert len(legacy_out) == 1
+    assert legacy_out[0]["id"] == "legacy_q1"
+    assert legacy_out[0]["expected"] == "Exact format reference"
+    assert legacy_out[0]["dataset_source"] == "yaml_legacy_prompts"
+    assert legacy_out[0]["scoring_config"]["legacy_auto_score"] == "format_pattern:^ok$"
+
 
 def test_sample_unseen_questions_pool_fastpath(tmp_path, monkeypatch):
     mod = _load_module("seed_specialist_routing_helpers_pool_fast")
@@ -131,6 +148,61 @@ def test_sample_unseen_questions_pool_fastpath(tmp_path, monkeypatch):
 
     out = mod.sample_unseen_questions(["s"], 1, set(), seed=1, use_pool=True)
     assert out == [{"id": "q1", "suite": "s"}]
+
+
+def test_sample_unseen_questions_yaml_source_bypasses_pool_and_adapter(
+    tmp_path,
+    monkeypatch,
+):
+    mod = _load_module("seed_specialist_routing_helpers_yaml_source")
+    monkeypatch.setattr(mod, "DEBUG_PROMPTS_DIR", tmp_path)
+    (tmp_path / "instruction_precision.yaml").write_text(
+        "prompts:\n"
+        "  ip_q1:\n"
+        "    prompt: 'Return OK exactly.'\n"
+        "    expected: 'OK'\n"
+    )
+
+    pool_mod = ModuleType("question_pool")
+    pool_mod.POOL_FILE = tmp_path / "pool.json"
+    pool_mod.POOL_FILE.write_text("{}")
+    pool_mod.build_pool = Mock()
+    pool_mod.load_pool = lambda: {"pool": 1}
+    pool_mod.sample_from_pool = lambda *a, **k: [
+        {"id": "pool_q", "suite": "instruction_precision", "expected": ""}
+    ]
+    monkeypatch.setitem(sys.modules, "question_pool", pool_mod)
+
+    class _Adapter:
+        total_available = 1
+
+        @staticmethod
+        def sample(n, seed):  # noqa: ANN001
+            return [
+                {
+                    "id": "adapter_q",
+                    "suite": "instruction_precision",
+                    "prompt": "p",
+                    "expected": "",
+                }
+            ][:n]
+
+    fake = ModuleType("dataset_adapters")
+    fake.ADAPTER_SUITES = {"instruction_precision"}
+    fake.get_adapter = lambda _name: _Adapter()
+    monkeypatch.setitem(sys.modules, "dataset_adapters", fake)
+
+    out = mod.sample_unseen_questions(
+        ["instruction_precision"],
+        1,
+        set(),
+        seed=1,
+        use_pool=True,
+        question_source="yaml",
+    )
+    assert out[0]["id"] == "ip_q1"
+    assert out[0]["expected"] == "OK"
+    assert out[0]["dataset_source"] == "yaml_legacy_prompts"
 
 
 def test_sample_unseen_questions_fallback_interleave_and_seen_filter(monkeypatch):

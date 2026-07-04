@@ -235,6 +235,7 @@ def sample_unseen_questions(
     *,
     use_pool: bool = True,
     allow_reseen: bool = False,
+    question_source: str = "auto",
 ) -> list[dict]:
     """Sample questions not in the seen set, interleaved across suites.
 
@@ -251,6 +252,7 @@ def sample_unseen_questions(
         load_from_dataset_adapter=_load_from_dataset_adapter,
         load_from_yaml=_load_from_yaml,
         logger=logger,
+        question_source=question_source,
     )
 
 
@@ -268,6 +270,7 @@ def run_batch_3way(
     cooldown: float = 0.0,
     on_progress: "Callable[[int, int, str, str], None] | None" = None,
     use_pool: bool = True,
+    question_source: str = "auto",
     debugger: "ClaudeDebugger | None" = None,
     outcome_tracker: Any = None,
     questions_override: list[dict] | None = None,
@@ -307,7 +310,9 @@ def run_batch_3way(
         # Sample unseen questions (debug mode backfills with seen when exhausted)
         questions = sample_unseen_questions(
             suites, sample_per_suite, seen, seed,
-            use_pool=use_pool, allow_reseen=debugger is not None,
+            use_pool=use_pool,
+            allow_reseen=debugger is not None,
+            question_source=question_source,
         )
     if not questions:
         logger.info("No unseen questions available.")
@@ -860,6 +865,24 @@ Examples (legacy mode - DEPRECATED):
         "--no-pool", action="store_true",
         help="Bypass the question pool and load from HF adapters directly (slow).",
     )
+    parser.add_argument(
+        "--question-source",
+        choices=("auto", "adapter", "yaml"),
+        default="auto",
+        help=(
+            "Question source after optional pool lookup. 'yaml' bypasses pool "
+            "and dataset adapters, useful for reference-backed local prompt bundles."
+        ),
+    )
+    parser.add_argument(
+        "--debug-prompts-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Override the local YAML prompt directory for this process. "
+            "Use with --question-source yaml for legacy/reference-backed suites."
+        ),
+    )
     # Claude-in-the-loop debugging
     parser.add_argument(
         "--debug", action="store_true",
@@ -950,7 +973,18 @@ Examples (legacy mode - DEPRECATED):
     )
 
     args = parser.parse_args()
+    for attr, default in {
+        "question_source": "auto",
+        "debug_prompts_dir": None,
+        "max_tokens": None,
+        "strict_modes": False,
+    }.items():
+        if not hasattr(args, attr):
+            setattr(args, attr, default)
     _apply_profile(args)
+    if args.debug_prompts_dir is not None:
+        global DEBUG_PROMPTS_DIR
+        DEBUG_PROMPTS_DIR = args.debug_prompts_dir.expanduser().resolve()
 
     # Rebuild pool — build and exit
     if args.rebuild_pool:
@@ -1191,6 +1225,7 @@ Examples (legacy mode - DEPRECATED):
                             cooldown=args.cooldown,
                             on_progress=_on_progress,
                             use_pool=not args.no_pool,
+                            question_source=args.question_source,
                             debugger=_debugger,
                             outcome_tracker=_outcome_tracker,
                             questions_override=_questions_override,
@@ -1230,6 +1265,7 @@ Examples (legacy mode - DEPRECATED):
                     cooldown=args.cooldown,
                     on_progress=_on_progress,
                     use_pool=not args.no_pool,
+                    question_source=args.question_source,
                     debugger=_debugger,
                     outcome_tracker=_outcome_tracker,
                     questions_override=_questions_override,
@@ -1401,6 +1437,7 @@ Examples (legacy mode - DEPRECATED):
                     no_dedup=args.no_dedup,
                     escalation_chains=not args.no_escalation_chains,
                     use_pool=not args.no_pool,
+                    question_source=args.question_source,
                     max_tokens=args.max_tokens,
                     strict_modes=args.strict_modes,
                 )
@@ -1449,6 +1486,7 @@ Examples (legacy mode - DEPRECATED):
             no_dedup=args.no_dedup,
             escalation_chains=not args.no_escalation_chains,
             use_pool=not args.no_pool,
+            question_source=args.question_source,
             max_tokens=args.max_tokens,
             strict_modes=args.strict_modes,
         )

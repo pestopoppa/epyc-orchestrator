@@ -466,6 +466,7 @@ def run_batch(
     no_dedup: bool = False,
     escalation_chains: bool = False,
     use_pool: bool = True,
+    question_source: str = "auto",
     debugger: Any = None,
     max_tokens: int | None = None,
     strict_modes: bool = False,
@@ -513,7 +514,9 @@ def run_batch(
 
     questions = sample_unseen_questions(
         suites, sample_per_suite, seen, seed,
-        use_pool=use_pool, allow_reseen=debugger is not None,
+        use_pool=use_pool,
+        allow_reseen=debugger is not None,
+        question_source=question_source,
     )
     questions = [q for q in questions if q["id"] not in completed_ids]
 

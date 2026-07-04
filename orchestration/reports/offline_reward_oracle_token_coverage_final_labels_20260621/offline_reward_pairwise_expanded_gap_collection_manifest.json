@@ -4,8 +4,73 @@
     "reason": "A9 source acquisition consumes live model slots and must not mix with active W6/T2 AutoPilot accrual.",
     "refusal_exit_code": 75
   },
-  "batch_count": 0,
-  "batches": [],
+  "batch_count": 2,
+  "batches": [
+    {
+      "can_run_during_active_autopilot": false,
+      "checkpoint_note": "seed_specialist_routing.py also writes a seeding_*.jsonl checkpoint under benchmarks/results/eval; use the JSON path above when the target explicitly requires orchestrator_live_seed",
+      "collection_priority": 2,
+      "collection_priority_reason": "direction_balance_cleanup",
+      "collection_timestamp": "<YYYYMMDDTHHMMSSZ>",
+      "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites instruction_precision --roles architect_general coder_escalation --modes direct --sample-size 20 --question-source yaml --debug-prompts-dir /mnt/raid0/llm/epyc-inference-research/benchmarks/prompts/v1 --max-tokens 1024 --strict-modes --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_instruction_precision_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
+      "command_template": "uv run python scripts/benchmark/seed_specialist_routing.py --suites instruction_precision --roles architect_general coder_escalation --modes direct --sample-size 20 --question-source yaml --debug-prompts-dir /mnt/raid0/llm/epyc-inference-research/benchmarks/prompts/v1 --max-tokens 1024 --strict-modes --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_instruction_precision_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
+      "command_workdir": "/mnt/raid0/llm/epyc-orchestrator",
+      "debug_prompts_dir": "/mnt/raid0/llm/epyc-inference-research/benchmarks/prompts/v1",
+      "dry_run_semantics": "--dry-run still performs scoring/evaluation; it only prevents reward injection into runtime memory.",
+      "durable_source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_instruction_precision_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
+      "durable_source_path_template": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_instruction_precision_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
+      "estimated_new_source_records": 20,
+      "expected_source_family": "seeding_eval",
+      "max_tokens": 1024,
+      "modes_argument": [
+        "direct"
+      ],
+      "question_source": "yaml",
+      "reason": "Consumes live model slots and should be run in a coordinated measurement window so A9 evidence is not mixed with W6/T2 accrual.",
+      "requested_new_source_records": 20,
+      "roles_argument": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "sample_size": 20,
+      "sample_size_semantics": "seed_specialist_routing.py interprets --sample-size as questions per suite; source-family targets with --suites all are downscaled to approximate the requested total.",
+      "strict_modes": true,
+      "suite_argument": "instruction_precision",
+      "target": "suite:instruction_precision:architect_general>coder_escalation"
+    },
+    {
+      "can_run_during_active_autopilot": false,
+      "checkpoint_note": "seed_specialist_routing.py also writes a seeding_*.jsonl checkpoint under benchmarks/results/eval; use the JSON path above when the target explicitly requires orchestrator_live_seed",
+      "collection_priority": 2,
+      "collection_priority_reason": "direction_balance_cleanup",
+      "collection_timestamp": "<YYYYMMDDTHHMMSSZ>",
+      "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites instruction_precision --roles architect_general frontdoor --modes direct --sample-size 20 --question-source yaml --debug-prompts-dir /mnt/raid0/llm/epyc-inference-research/benchmarks/prompts/v1 --max-tokens 1024 --strict-modes --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_instruction_precision_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
+      "command_template": "uv run python scripts/benchmark/seed_specialist_routing.py --suites instruction_precision --roles architect_general frontdoor --modes direct --sample-size 20 --question-source yaml --debug-prompts-dir /mnt/raid0/llm/epyc-inference-research/benchmarks/prompts/v1 --max-tokens 1024 --strict-modes --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_instruction_precision_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
+      "command_workdir": "/mnt/raid0/llm/epyc-orchestrator",
+      "debug_prompts_dir": "/mnt/raid0/llm/epyc-inference-research/benchmarks/prompts/v1",
+      "dry_run_semantics": "--dry-run still performs scoring/evaluation; it only prevents reward injection into runtime memory.",
+      "durable_source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_instruction_precision_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
+      "durable_source_path_template": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_instruction_precision_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
+      "estimated_new_source_records": 20,
+      "expected_source_family": "seeding_eval",
+      "max_tokens": 1024,
+      "modes_argument": [
+        "direct"
+      ],
+      "question_source": "yaml",
+      "reason": "Consumes live model slots and should be run in a coordinated measurement window so A9 evidence is not mixed with W6/T2 accrual.",
+      "requested_new_source_records": 20,
+      "roles_argument": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "sample_size": 20,
+      "sample_size_semantics": "seed_specialist_routing.py interprets --sample-size as questions per suite; source-family targets with --suites all are downscaled to approximate the requested total.",
+      "strict_modes": true,
+      "suite_argument": "instruction_precision",
+      "target": "suite:instruction_precision:architect_general>frontdoor"
+    }
+  ],
   "collection_timestamp": "<YYYYMMDDTHHMMSSZ>",
   "command_workdir": "/mnt/raid0/llm/epyc-orchestrator",
   "post_collection_pipeline": [
