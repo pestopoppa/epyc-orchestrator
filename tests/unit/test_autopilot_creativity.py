@@ -604,6 +604,7 @@ def test_planner_strategy_hints_reflect_new_rows_between_turns(monkeypatch) -> N
     assert "no StrategyStore rows matched" in first
     assert "Explore native tool use" in second
     assert "tools,repl" in second
+    assert "scope=orchestrator_eval_tools_not_planner_tools" in second
 
 
 def test_planner_strategy_hints_see_external_store_writes_without_restart(
@@ -653,6 +654,7 @@ def test_planner_strategy_hints_see_external_store_writes_without_restart(
         assert "no StrategyStore rows matched" in first
         assert "Fresh external tool-use hint" in second
         assert "tools,repl,react_mode" in second
+        assert "scope=orchestrator_eval_tools_not_planner_tools" in second
     finally:
         writer_store.close()
         live_store.close()
@@ -721,8 +723,17 @@ def test_planner_strategy_hints_refresh_store_rows_for_prompt(monkeypatch) -> No
     assert "tool_helpfulness" in text
     assert "Test v6 tool activation" in text
     assert "tools,repl,react_mode" in text
+    assert "scope=orchestrator_eval_tools_not_planner_tools" in text
     assert ("conventions", "structural_lab", journal, 3) in calls
     assert ("journal", "structural_lab", journal, 3) in calls
+
+
+def test_controller_prompt_scopes_strategy_tool_hints_to_eval_tools() -> None:
+    template = autopilot.CONTROLLER_PROMPT_TEMPLATE
+
+    assert "StrategyStore Planner Hints" in template
+    assert "orchestrator/model execution inside AutoPilot actions" in template
+    assert "never use Bash or other planner tools to satisfy a hint" in template
 
 
 def test_slot_query_ports_from_stack_priors_uses_live_primary_llama_entries(tmp_path: Path) -> None:

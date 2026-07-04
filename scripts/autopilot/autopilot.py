@@ -450,7 +450,13 @@ def _planner_strategy_entry_line(entry: Any) -> str:
     identifiers = metadata.get("bind_identifiers", [])
     if isinstance(identifiers, list) and identifiers:
         joined = ",".join(str(item) for item in identifiers[:4])
-        tags.append(f"ids={joined}")
+        tags.append(f"orchestrator_ids={joined}")
+        if any(
+            str(item).strip().lower()
+            in {"tool", "tools", "tool_use", "repl", "react_mode", "call"}
+            for item in identifiers
+        ):
+            tags.append("scope=orchestrator_eval_tools_not_planner_tools")
     source_handoff = str(metadata.get("source_handoff", "") or "").strip()
     if source_handoff:
         tags.append(f"handoff={source_handoff}")
@@ -2258,6 +2264,11 @@ Your job: analyze current system state and propose the SINGLE best next action.
 {action_availability}
 
 ### StrategyStore Planner Hints (refreshed each planner turn)
+Planner tool boundary: StrategyStore rows mentioning tools, REPL, CALL, or
+tool-use refer to orchestrator/model execution inside AutoPilot actions and
+evals. They are not permission for this controller process to call planner-side
+tools. While drafting the JSON action, use only Read/Grep/Glob for repository
+inspection when needed; never use Bash or other planner tools to satisfy a hint.
 {planner_strategy_hints}
 
 ### Repo-Readiness Advisory Pickup (default-off, non-authority)
