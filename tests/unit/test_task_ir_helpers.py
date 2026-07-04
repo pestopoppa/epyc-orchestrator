@@ -51,6 +51,49 @@ class TestExtractCandidateFilesFromTaskIr:
 
 
 class TestAutoSeedTasksFromTaskIr:
+    def test_skips_non_list_steps(self):
+        from src.graph.task_ir_helpers import _auto_seed_tasks_from_task_ir
+
+        manager = MagicMock()
+        manager.has_tasks.return_value = False
+        state = SimpleNamespace(
+            task_ir={"plan": {"steps": {"action": "Should not happen"}}},
+            task_manager=manager,
+            task_type="coding",
+        )
+
+        _auto_seed_tasks_from_task_ir(state)
+
+        manager.create.assert_not_called()
+
+    def test_skips_non_dict_steps(self):
+        from src.graph.task_ir_helpers import _auto_seed_tasks_from_task_ir
+
+        manager = MagicMock()
+        manager.has_tasks.return_value = False
+        state = SimpleNamespace(
+            task_ir={
+                "plan": {
+                    "steps": [
+                        {"id": "step-1", "action": "Investigate"},
+                        "not-a-dict",
+                    ]
+                }
+            },
+            task_manager=manager,
+            task_type="coding",
+        )
+
+        _auto_seed_tasks_from_task_ir(state)
+
+        manager.create.assert_called_once_with(
+            subject="Investigate",
+            description="Investigate",
+            active_form="Working on step 1",
+            metadata={"source": "task_ir", "step_id": "step-1"},
+            task_type="coding",
+        )
+
     def test_seeds_only_non_empty_actions_and_preserves_step_id(self):
         from src.graph.task_ir_helpers import _auto_seed_tasks_from_task_ir
 
@@ -159,6 +202,38 @@ class TestCheckAntiPattern:
             state=SimpleNamespace(
                 consecutive_failures=2,
                 last_error="timeout",
+                current_role="worker",
+            ),
+        )
+
+        assert _check_anti_pattern(ctx) is None
+
+    def test_returns_none_when_no_matching_patterns(self):
+        from src.graph.task_ir_helpers import _check_anti_pattern
+
+        fg = MagicMock()
+        fg.find_matching_failures.return_value = []
+        ctx = SimpleNamespace(
+            deps=SimpleNamespace(failure_graph=fg),
+            state=SimpleNamespace(
+                consecutive_failures=2,
+                last_error="timeout",
+                current_role="worker",
+            ),
+        )
+
+        assert _check_anti_pattern(ctx) is None
+
+    def test_returns_none_when_symptoms_are_empty(self):
+        from src.graph.task_ir_helpers import _check_anti_pattern
+
+        fg = MagicMock()
+        fg.find_matching_failures.return_value = []
+        ctx = SimpleNamespace(
+            deps=SimpleNamespace(failure_graph=fg),
+            state=SimpleNamespace(
+                consecutive_failures=float("nan"),
+                last_error="",
                 current_role="worker",
             ),
         )
