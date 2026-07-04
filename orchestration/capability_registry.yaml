@@ -67,6 +67,8 @@
 #                     min_trials: minimum post-restart evaluation trials
 #                     restore_after_batch: must be true
 #                     boundary_event: journal event emitted at restart boundary
+#                     smoke_check: named post-reload role probe
+#                     require_explicit_affected_roles: must be true
 #
 # handoff:          (str, optional) Filename of the primary handoff tracking this lever.
 #
@@ -123,6 +125,8 @@ capabilities:
       min_trials: 5
       restore_after_batch: true
       boundary_event: role_restart_boundary
+      smoke_check: canned_completion
+      require_explicit_affected_roles: true
     risk: medium
     actionable_by: "gated:evidence-plane-ledger.md Phase 1"
     promotion_state: placeholder
@@ -185,6 +189,8 @@ capabilities:
       min_trials: 5
       restore_after_batch: true
       boundary_event: role_restart_boundary
+      smoke_check: canned_completion
+      require_explicit_affected_roles: true
     risk: medium
     actionable_by: "gated:evidence-plane-ledger.md Phase 1"
     promotion_state: placeholder
@@ -223,6 +229,8 @@ capabilities:
       min_trials: 5
       restore_after_batch: true
       boundary_event: role_restart_boundary
+      smoke_check: canned_completion
+      require_explicit_affected_roles: true
     risk: medium
     actionable_by: "gated:evidence-plane-ledger.md Phase 1"
     promotion_state: placeholder

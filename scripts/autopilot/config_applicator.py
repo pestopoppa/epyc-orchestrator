@@ -651,6 +651,8 @@ def restart_role(
     boundary_reason: str = "intentional role restart",
     actor: str = "config_applicator.restart_role",
     smoke_check: RoleSmokeCheck | None = None,
+    require_smoke_check: bool = False,
+    require_explicit_affected_roles: bool = False,
     pause_dispatch: bool = False,
     autopilot_state_path: Path | None = None,
     dispatch_pause_grace_s: float = 11.0,
@@ -671,6 +673,29 @@ def restart_role(
         if not role:
             return {"status": "error", "error": "role is required", "method": "stack_reload"}
 
+        if affected_roles is None:
+            if require_explicit_affected_roles:
+                return {
+                    "status": "error",
+                    "method": "stack_reload",
+                    "role": role,
+                    "error": "affected_roles required for strict role restart",
+                    "reason": "affected_roles_required",
+                }
+            resolved_affected_roles = resolve_restart_affected_roles(role)
+        else:
+            resolved_affected_roles = _ordered_roles(role, list(affected_roles))
+
+        if require_smoke_check and smoke_check is None:
+            return {
+                "status": "error",
+                "method": "stack_reload",
+                "role": role,
+                "affected_roles": list(resolved_affected_roles),
+                "error": "smoke_check required for strict role restart",
+                "reason": "smoke_check_required",
+            }
+
         if pause_dispatch:
             dispatch_pause = _pause_autopilot_dispatch(
                 state_path=autopilot_state_path,
@@ -687,7 +712,6 @@ def restart_role(
 
         env_overrides = dict(env_overrides or {})
         registry_overrides = dict(registry_overrides or {})
-        resolved_affected_roles = affected_roles or resolve_restart_affected_roles(role)
         prior_env = {key: os.environ.get(key) for key in env_overrides}
 
         if registry_overrides:

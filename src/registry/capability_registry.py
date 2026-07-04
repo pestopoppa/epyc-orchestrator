@@ -73,6 +73,8 @@ _REQUIRED_RESTART_TRIAL_PROTOCOL_FIELDS: tuple[str, ...] = (
     "min_trials",
     "restore_after_batch",
     "boundary_event",
+    "smoke_check",
+    "require_explicit_affected_roles",
 )
 
 
@@ -196,6 +198,15 @@ def _validate_entry(entry: Any, idx: int) -> list[str]:
             if not isinstance(boundary_event, str) or not boundary_event.strip():
                 errors.append(
                     f"{label}: trial_protocol.boundary_event must be a non-empty string"
+                )
+            smoke_check = trial_protocol.get("smoke_check")
+            if not isinstance(smoke_check, str) or not smoke_check.strip():
+                errors.append(
+                    f"{label}: trial_protocol.smoke_check must be a non-empty string"
+                )
+            if trial_protocol.get("require_explicit_affected_roles") is not True:
+                errors.append(
+                    f"{label}: trial_protocol.require_explicit_affected_roles must be true"
                 )
 
     return errors

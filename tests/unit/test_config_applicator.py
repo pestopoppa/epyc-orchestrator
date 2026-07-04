@@ -216,6 +216,81 @@ def test_restart_role_pause_dispatch_missing_state_fails_before_reload(
     assert calls == []
 
 
+def test_restart_role_strict_requires_explicit_affected_roles_before_reload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[object] = []
+    monkeypatch.setattr(
+        applicator.subprocess,
+        "run",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+
+    result = applicator.restart_role(
+        "frontdoor",
+        require_explicit_affected_roles=True,
+        smoke_check=lambda _role, _affected_roles: True,
+    )
+
+    assert result["status"] == "error"
+    assert result["reason"] == "affected_roles_required"
+    assert result["error"] == "affected_roles required for strict role restart"
+    assert calls == []
+
+
+def test_restart_role_strict_requires_smoke_check_before_reload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[object] = []
+    monkeypatch.setattr(
+        applicator.subprocess,
+        "run",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+
+    result = applicator.restart_role(
+        "frontdoor",
+        affected_roles=["frontdoor", "coder_escalation"],
+        require_smoke_check=True,
+    )
+
+    assert result["status"] == "error"
+    assert result["reason"] == "smoke_check_required"
+    assert result["error"] == "smoke_check required for strict role restart"
+    assert result["affected_roles"] == ["frontdoor", "coder_escalation"]
+    assert calls == []
+
+
+def test_restart_role_strict_accepts_explicit_scope_and_smoke_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_run(cmd, *, cwd, env, timeout, check):
+        calls.append({
+            "cmd": cmd,
+            "cwd": cwd,
+            "env": env,
+            "timeout": timeout,
+            "check": check,
+        })
+
+    monkeypatch.setattr(applicator.subprocess, "run", fake_run)
+
+    result = applicator.restart_role(
+        "frontdoor",
+        affected_roles=["coder_escalation", "frontdoor"],
+        require_explicit_affected_roles=True,
+        require_smoke_check=True,
+        smoke_check=lambda _role, _affected_roles: True,
+    )
+
+    assert result["status"] == "ok"
+    assert result["affected_roles"] == ["frontdoor", "coder_escalation"]
+    assert result["smoke_check"]["status"] == "ok"
+    assert calls[0]["cmd"][-2:] == ["reload", "frontdoor"]
+
+
 def test_restart_role_resolves_stack_affinity_from_priors(
     tmp_path: Path,
 ) -> None:

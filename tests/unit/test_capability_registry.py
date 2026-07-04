@@ -56,6 +56,8 @@ def _minimal_entry(**overrides: object) -> dict:
             "min_trials": 5,
             "restore_after_batch": True,
             "boundary_event": "role_restart_boundary",
+            "smoke_check": "canned_completion",
+            "require_explicit_affected_roles": True,
         },
     }
     base.update(overrides)
@@ -487,6 +489,8 @@ def test_restart_trial_protocol_requires_batched_restore_boundary(tmp_path: Path
                     "min_trials": 0,
                     "restore_after_batch": False,
                     "boundary_event": "",
+                    "smoke_check": "",
+                    "require_explicit_affected_roles": False,
                 },
             )
         ],
@@ -498,6 +502,8 @@ def test_restart_trial_protocol_requires_batched_restore_boundary(tmp_path: Path
     assert "trial_protocol.min_trials must be an integer >= 1" in msg
     assert "trial_protocol.restore_after_batch must be true" in msg
     assert "trial_protocol.boundary_event must be a non-empty string" in msg
+    assert "trial_protocol.smoke_check must be a non-empty string" in msg
+    assert "trial_protocol.require_explicit_affected_roles must be true" in msg
 
 
 def test_non_restart_applicator_does_not_require_trial_protocol(tmp_path: Path) -> None:
@@ -530,6 +536,8 @@ def test_all_valid_applicators_accepted(tmp_path: Path, valid_applicator: str) -
             "min_trials": 5,
             "restore_after_batch": True,
             "boundary_event": "role_restart_boundary",
+            "smoke_check": "canned_completion",
+            "require_explicit_affected_roles": True,
         }
         if valid_applicator in {"role_restart", "stack_restart"}
         else None
