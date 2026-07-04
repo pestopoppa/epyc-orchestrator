@@ -330,6 +330,7 @@ def append_blacklist(
         "mutation",
         "flags",
         "tier",
+        "last_n",
         "n_questions",
         "suites",
     ):

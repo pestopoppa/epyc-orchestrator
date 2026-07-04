@@ -155,6 +155,21 @@ def test_append_blacklist_keeps_specific_low_risk_pattern(tmp_path) -> None:
     assert data["blacklist"][0]["pattern"] == {"type": "deep_eval", "tier": 2}
 
 
+def test_append_blacklist_keeps_specific_distill_knowledge_window(tmp_path) -> None:
+    bl_path = tmp_path / "bl.yaml"
+    state_store.append_blacklist(
+        {"type": "distill_knowledge", "last_n": 30},
+        trial_id=1111,
+        reason="critic loop",
+        blacklist_path=bl_path,
+    )
+    data = yaml.safe_load(bl_path.read_text())
+    assert data["blacklist"][0]["pattern"] == {
+        "type": "distill_knowledge",
+        "last_n": 30,
+    }
+
+
 def test_append_blacklist_skips_unpatternable_actions(tmp_path) -> None:
     """If no patternable fields are in the action, no entry is written."""
     bl_path = tmp_path / "bl.yaml"
