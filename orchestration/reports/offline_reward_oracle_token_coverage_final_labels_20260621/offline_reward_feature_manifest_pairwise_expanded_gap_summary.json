@@ -23,11 +23,11 @@
     "text_represented_by_sha256_and_lengths": true
   },
   "roles": {
-    "architect_general:direct": 280,
-    "coder_escalation:direct": 160,
-    "frontdoor:direct": 120
+    "architect_general:direct": 302,
+    "coder_escalation:direct": 182,
+    "frontdoor:direct": 142
   },
-  "rows": 560,
+  "rows": 626,
   "schema_version": "offline_reward_feature_manifest_summary.v1",
   "sources": {
     "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_20260704_053533.jsonl": 40,
@@ -37,10 +37,12 @@
     "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_20260704_062216.jsonl": 40,
     "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_20260704_065401.jsonl": 40,
     "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_20260704_065621.jsonl": 40,
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_20260704_165725.jsonl": 33,
     "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_architect_general_coder_escalation_20260704T053533Z.json": 40,
     "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_architect_general_frontdoor_20260704T053533Z.json": 40,
     "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_20260704T053533Z.json": 40,
     "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_20260704T053533Z.json": 40,
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_instruction_precision_architect_general_coder_escalation_suite_instruction_precision_architect_general_frontdoor_20260704T165725Z.json": 33,
     "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_20260704T053533Z.json": 40,
     "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_thinking_architect_general_coder_escalation_20260704T053533Z.json": 40,
     "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/orchestrator/seeding_live_a9_source_family_orchestrator_live_seed_architect_general_frontdoor_20260704T053533Z.json": 40
@@ -51,11 +53,12 @@
     "general": 104,
     "gpqa": 24,
     "hotpotqa": 104,
+    "instruction_precision": 66,
     "livecodebench": 24,
     "long_context": 24,
     "math": 24,
     "simpleqa": 104,
     "thinking": 104
   },
-  "unique_source_records": 280
+  "unique_source_records": 302
 }

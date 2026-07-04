@@ -1,15 +1,15 @@
 # Offline Reward Pairwise Contract
 
-- Generated at: `2026-07-04T07:35:02.885553+00:00`
+- Generated at: `2026-07-04T16:59:44.456010+00:00`
 - Contract: `within_task_pairwise_preference_v1`
 - Pairing mode: `binary_label`
 - Minimum score delta: `0.0`
 - Decision: `insufficient_contrast`
 - Runtime gate change allowed: `False`
-- Pair rows: `24`
-- Cross-action pair rows: `24`
+- Pair rows: `32`
+- Cross-action pair rows: `32`
 - Same-action pair rows: `0`
-- Contrastive source-record groups: `24`
+- Contrastive source-record groups: `28`
 - Unique action pairs: `4`
 - Recommended next: `collect_more_within_task_positive_negative_contrasts`
 
@@ -23,9 +23,9 @@
 
 ## Top Action Pairs
 
-- `architect_general>coder_escalation`: `10`
+- `architect_general>coder_escalation`: `14`
+- `architect_general>frontdoor`: `8`
 - `frontdoor>architect_general`: `8`
-- `architect_general>frontdoor`: `4`
 - `coder_escalation>architect_general`: `2`
 
 ## Privacy

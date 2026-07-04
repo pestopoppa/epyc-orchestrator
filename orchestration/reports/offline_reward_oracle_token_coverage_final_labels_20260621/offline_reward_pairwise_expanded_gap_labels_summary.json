@@ -7,8 +7,8 @@
     "oracle_score_source": "reference_token_coverage",
     "oracle_threshold": 0.86
   },
-  "oracle_negative": 180,
-  "oracle_positive": 380,
+  "oracle_negative": 230,
+  "oracle_positive": 396,
   "privacy": {
     "commits_private_rows": false,
     "private_fields_excluded": [
@@ -20,14 +20,14 @@
     ]
   },
   "role_counts": {
-    "architect_general:direct": 280,
-    "coder_escalation:direct": 160,
-    "frontdoor:direct": 120
+    "architect_general:direct": 302,
+    "coder_escalation:direct": 182,
+    "frontdoor:direct": 142
   },
-  "rows": 560,
+  "rows": 626,
   "schema_version": "offline_reward_expansion_label_export_summary.v1",
   "scored_rows_jsonl": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_scored_rows.jsonl",
-  "target_agreement": 0.9357142857142857,
-  "target_compared": 560,
+  "target_agreement": 0.9361022364217252,
+  "target_compared": 626,
   "target_source": "verifier_sparse_action_expansion"
 }

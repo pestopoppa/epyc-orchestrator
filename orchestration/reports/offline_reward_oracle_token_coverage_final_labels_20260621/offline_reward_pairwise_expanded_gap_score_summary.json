@@ -1,13 +1,13 @@
 {
   "model_id": "deterministic/reference-token-coverage-v1",
   "oracle_score_source": "reference_token_coverage",
-  "rows": 560,
+  "rows": 626,
   "schema_version": "offline_reward_oracle_token_coverage_scores.v1",
   "score_definition": "unique lowercase alphanumeric/underscore reference tokens present in response divided by unique reference tokens",
   "score_max": 1.0,
-  "score_mean": 0.726641156462585,
+  "score_mean": 0.6858131751102997,
   "score_min": 0.0,
   "stats": {
-    "rows": 560
+    "rows": 626
   }
 }

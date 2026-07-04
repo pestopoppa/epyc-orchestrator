@@ -2,11 +2,11 @@
 
 - Pairwise JSONL: `orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_preference_contract_candidate_only_expanded_gap.jsonl`
 - Feature contract: `pairwise_action_response_delta_v1`
-- Pair rows: `24`
-- Cross-action pair rows: `24`
+- Pair rows: `32`
+- Cross-action pair rows: `32`
 - Same-action pair rows: `0`
-- Group count: `24`
-- Pairing mode counts: `{'binary_label': 24}`
+- Group count: `28`
+- Pairing mode counts: `{'binary_label': 32}`
 - Families: `['logistic_l2', 'hist_gradient_boosting', 'random_forest']`
 - Seeds: `[42, 7, 13, 101, 2026]`
 - Decision: `pairwise_ranker_signal`
@@ -16,9 +16,9 @@
 
 ## Family Summary
 
-- `hist_gradient_boosting`: acc mean `0.5000`, AUC mean `0.4167`, Brier mean `0.2500`, ECE mean `0.0000`, acc delta vs random `0.0000`
-- `logistic_l2`: acc mean `0.6333`, AUC mean `0.7833`, Brier mean `0.2353`, ECE mean `0.2934`, acc delta vs random `0.1333`
-- `random_forest`: acc mean `0.9333`, AUC mean `0.9889`, Brier mean `0.1091`, ECE mean `0.2676`, acc delta vs random `0.4333`
+- `hist_gradient_boosting`: acc mean `0.9800`, AUC mean `0.9720`, Brier mean `0.0259`, ECE mean `0.0796`, acc delta vs random `0.4800`
+- `logistic_l2`: acc mean `0.8728`, AUC mean `0.9168`, Brier mean `0.1211`, ECE mean `0.1936`, acc delta vs random `0.3728`
+- `random_forest`: acc mean `0.9900`, AUC mean `0.9980`, Brier mean `0.0510`, ECE mean `0.1869`, acc delta vs random `0.4900`
 
 ## Independent Holdout Summary
 

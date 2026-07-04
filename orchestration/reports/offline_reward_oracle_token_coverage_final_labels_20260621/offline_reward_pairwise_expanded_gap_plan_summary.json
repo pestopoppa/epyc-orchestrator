@@ -1,12 +1,12 @@
 {
   "candidate_action_counts": {
-    "architect_general": 280,
-    "coder_escalation": 160,
-    "frontdoor": 120
+    "architect_general": 302,
+    "coder_escalation": 182,
+    "frontdoor": 142
   },
   "candidate_group_source_family_counts": {
     "orchestrator_live_seed": 20,
-    "seeding_eval": 260
+    "seeding_eval": 282
   },
   "candidate_group_suite_counts": {
     "coder": 12,
@@ -14,18 +14,19 @@
     "general": 52,
     "gpqa": 12,
     "hotpotqa": 52,
+    "instruction_precision": 22,
     "livecodebench": 12,
     "long_context": 12,
     "math": 12,
     "simpleqa": 52,
     "thinking": 52
   },
-  "candidate_groups": 280,
-  "candidate_rows": 560,
+  "candidate_groups": 302,
+  "candidate_rows": 626,
   "candidate_schema_version": "offline_reward_verifier_expansion_candidate.v1",
   "candidate_source_family_counts": {
     "orchestrator_live_seed": 40,
-    "seeding_eval": 520
+    "seeding_eval": 586
   },
   "candidate_suite_counts": {
     "coder": 24,
@@ -33,48 +34,14 @@
     "general": 104,
     "gpqa": 24,
     "hotpotqa": 104,
+    "instruction_precision": 66,
     "livecodebench": 24,
     "long_context": 24,
     "math": 24,
     "simpleqa": 104,
     "thinking": 104
   },
-  "collection_batches": [
-    {
-      "can_run_during_active_autopilot": false,
-      "checkpoint_note": "seed_specialist_routing.py also writes a seeding_*.jsonl checkpoint under benchmarks/results/eval; use the JSON path above when the target explicitly requires orchestrator_live_seed",
-      "collection_priority": 2,
-      "collection_priority_reason": "direction_balance_cleanup",
-      "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites instruction_precision --roles architect_general coder_escalation frontdoor --modes direct --sample-size 11 --question-source yaml --debug-prompts-dir /mnt/raid0/llm/epyc-inference-research/benchmarks/prompts/v1 --max-tokens 1024 --strict-modes --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_instruction_precision_architect_general_coder_escalation_suite_instruction_precision_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
-      "debug_prompts_dir": "/mnt/raid0/llm/epyc-inference-research/benchmarks/prompts/v1",
-      "dry_run_semantics": "--dry-run still performs scoring/evaluation; it only prevents reward injection into runtime memory.",
-      "durable_source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_instruction_precision_architect_general_coder_escalation_suite_instruction_precision_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
-      "estimated_new_source_records": 11,
-      "expected_source_family": "seeding_eval",
-      "max_tokens": 1024,
-      "modes_argument": [
-        "direct"
-      ],
-      "question_source": "yaml",
-      "reason": "Consumes live model slots and should be run in a coordinated measurement window so A9 evidence is not mixed with W6/T2 accrual.",
-      "reference_source_prompt_count": 11,
-      "requested_new_source_records": 20,
-      "roles_argument": [
-        "architect_general",
-        "coder_escalation",
-        "frontdoor"
-      ],
-      "sample_size": 11,
-      "sample_size_semantics": "seed_specialist_routing.py interprets --sample-size as questions per suite; source-family targets with --suites all are downscaled to approximate the requested total.",
-      "strict_modes": true,
-      "suite_argument": "instruction_precision",
-      "target": "suite:instruction_precision:architect_general>coder_escalation+suite:instruction_precision:architect_general>frontdoor",
-      "targets": [
-        "suite:instruction_precision:architect_general>coder_escalation",
-        "suite:instruction_precision:architect_general>frontdoor"
-      ]
-    }
-  ],
+  "collection_batches": [],
   "collection_guidance": {
     "orchestrator_live_seed_note": "add records under benchmarks/results/orchestrator/seeding_live*.json or an equivalent orchestrator source path so source_family resolves to orchestrator_live_seed",
     "post_collection_pipeline": [
@@ -128,10 +95,12 @@
   ],
   "matched_collection_target_counts": {
     "source_family:orchestrator_live_seed:architect_general>frontdoor": 20,
-    "source_family:seeding_eval:architect_general>coder_escalation": 160,
-    "source_family:seeding_eval:architect_general>frontdoor": 100,
+    "source_family:seeding_eval:architect_general>coder_escalation": 182,
+    "source_family:seeding_eval:architect_general>frontdoor": 122,
     "suite:general:architect_general>coder_escalation": 44,
     "suite:hotpotqa:architect_general>frontdoor": 48,
+    "suite:instruction_precision:architect_general>coder_escalation": 22,
+    "suite:instruction_precision:architect_general>frontdoor": 22,
     "suite:simpleqa:architect_general>coder_escalation": 44,
     "suite:thinking:architect_general>coder_escalation": 44
   },
@@ -3140,7 +3109,7 @@
       "collection_priority_reason": "independent_holdout_source_family_blocker",
       "current_direction_balance": 0.0,
       "current_rows": 2,
-      "matched_candidate_groups": 160,
+      "matched_candidate_groups": 182,
       "needs_direction": [
         "prefer other-side of architect_general>coder_escalation"
       ],
@@ -3166,7 +3135,7 @@
       "collection_priority_reason": "independent_holdout_source_family_blocker",
       "current_direction_balance": 0.0,
       "current_rows": 2,
-      "matched_candidate_groups": 100,
+      "matched_candidate_groups": 122,
       "needs_direction": [
         "prefer other-side of architect_general>frontdoor"
       ],
@@ -3245,16 +3214,16 @@
       "collection_priority_reason": "direction_balance_cleanup",
       "current_direction_balance": 0.1667,
       "current_rows": 6,
-      "matched_candidate_groups": 0,
+      "matched_candidate_groups": 22,
       "needs_direction": [
         "balance both directions"
       ],
       "runtime_gate_change_allowed": false,
       "source_record_shape": "one prompt/reference evaluated by every action in action_pair with role_results, rewards, suite, prompt, and expected fields",
-      "status": "needs_new_source_records",
+      "status": "matched_existing_candidates",
       "stratum_field": "suite",
       "stratum_value": "instruction_precision",
-      "suggested_min_new_source_records": 20,
+      "suggested_min_new_source_records": 0,
       "suggested_min_rows": 20,
       "target": "suite:instruction_precision:architect_general>coder_escalation",
       "target_preferred_actions": [
@@ -3272,16 +3241,16 @@
       "collection_priority_reason": "direction_balance_cleanup",
       "current_direction_balance": 0.0,
       "current_rows": 3,
-      "matched_candidate_groups": 0,
+      "matched_candidate_groups": 22,
       "needs_direction": [
         "prefer other-side of architect_general>frontdoor"
       ],
       "runtime_gate_change_allowed": false,
       "source_record_shape": "one prompt/reference evaluated by every action in action_pair with role_results, rewards, suite, prompt, and expected fields",
-      "status": "needs_new_source_records",
+      "status": "matched_existing_candidates",
       "stratum_field": "suite",
       "stratum_value": "instruction_precision",
-      "suggested_min_new_source_records": 20,
+      "suggested_min_new_source_records": 0,
       "suggested_min_rows": 20,
       "target": "suite:instruction_precision:architect_general>frontdoor",
       "target_preferred_actions": [
@@ -3343,10 +3312,10 @@
     }
   ],
   "stats": {
-    "candidate_rows": 927,
-    "files_scanned": 2588,
+    "candidate_rows": 993,
+    "files_scanned": 2590,
     "reference_available_source_family:orchestrator_live_seed": 82,
-    "reference_available_source_family:seeding_eval": 738,
+    "reference_available_source_family:seeding_eval": 760,
     "reference_available_source_family:three_way_eval": 1463,
     "reference_available_suite:agentic": 10,
     "reference_available_suite:coder": 22,
@@ -3354,7 +3323,7 @@
     "reference_available_suite:general": 455,
     "reference_available_suite:gpqa": 62,
     "reference_available_suite:hotpotqa": 399,
-    "reference_available_suite:instruction_precision": 10,
+    "reference_available_suite:instruction_precision": 32,
     "reference_available_suite:livecodebench": 149,
     "reference_available_suite:long_context": 12,
     "reference_available_suite:math": 22,
@@ -3393,8 +3362,5 @@
     "thinking"
   ],
   "unavailable_collection_targets": {},
-  "unmatched_collection_targets": [
-    "suite:instruction_precision:architect_general>coder_escalation",
-    "suite:instruction_precision:architect_general>frontdoor"
-  ]
+  "unmatched_collection_targets": []
 }

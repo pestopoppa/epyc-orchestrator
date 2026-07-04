@@ -1,19 +1,19 @@
 # Offline Reward Pairwise Holdout Expansion Plan
 
 - Decision: `expansion_plan_ready`
-- Candidate rows: `560`
-- Candidate groups: `280`
+- Candidate rows: `626`
+- Candidate groups: `302`
 - Target source families: `['orchestrator_live_seed', 'seeding_eval']`
 - Target suites: `['general', 'hotpotqa', 'instruction_precision', 'simpleqa', 'thinking']`
 - Target match mode: `any`
 - Target actions: `['architect_general', 'coder_escalation', 'frontdoor']`
 - Collection targets: `9`
-- Matched collection targets: `{'source_family:orchestrator_live_seed:architect_general>frontdoor': 20, 'source_family:seeding_eval:architect_general>coder_escalation': 160, 'source_family:seeding_eval:architect_general>frontdoor': 100, 'suite:general:architect_general>coder_escalation': 44, 'suite:hotpotqa:architect_general>frontdoor': 48, 'suite:simpleqa:architect_general>coder_escalation': 44, 'suite:thinking:architect_general>coder_escalation': 44}`
-- Unmatched collection targets: `['suite:instruction_precision:architect_general>coder_escalation', 'suite:instruction_precision:architect_general>frontdoor']`
+- Matched collection targets: `{'source_family:orchestrator_live_seed:architect_general>frontdoor': 20, 'source_family:seeding_eval:architect_general>coder_escalation': 182, 'source_family:seeding_eval:architect_general>frontdoor': 122, 'suite:general:architect_general>coder_escalation': 44, 'suite:hotpotqa:architect_general>frontdoor': 48, 'suite:instruction_precision:architect_general>coder_escalation': 22, 'suite:instruction_precision:architect_general>frontdoor': 22, 'suite:simpleqa:architect_general>coder_escalation': 44, 'suite:thinking:architect_general>coder_escalation': 44}`
+- Unmatched collection targets: `[]`
 - Unavailable collection targets: `{}`
-- Candidate action counts: `{'architect_general': 280, 'coder_escalation': 160, 'frontdoor': 120}`
-- Candidate source-family counts: `{'orchestrator_live_seed': 40, 'seeding_eval': 520}`
-- Candidate suite counts: `{'coder': 24, 'debugbench': 24, 'general': 104, 'gpqa': 24, 'hotpotqa': 104, 'livecodebench': 24, 'long_context': 24, 'math': 24, 'simpleqa': 104, 'thinking': 104}`
+- Candidate action counts: `{'architect_general': 302, 'coder_escalation': 182, 'frontdoor': 142}`
+- Candidate source-family counts: `{'orchestrator_live_seed': 40, 'seeding_eval': 586}`
+- Candidate suite counts: `{'coder': 24, 'debugbench': 24, 'general': 104, 'gpqa': 24, 'hotpotqa': 104, 'instruction_precision': 66, 'livecodebench': 24, 'long_context': 24, 'math': 24, 'simpleqa': 104, 'thinking': 104}`
 - Existing pairwise groups: `1937`
 - Skipped pairwise-overlap groups: `6`
 - Skipped no-cross-action groups: `342`
@@ -28,8 +28,8 @@
 - `source_family:seeding_eval:architect_general>frontdoor`: `matched_existing_candidates`, priority `0` (`independent_holdout_source_family_blocker`), evaluate `['architect_general', 'frontdoor']` on the same source records; preferred winners `['architect_general']`; suggest `0` new records
 - `suite:general:architect_general>coder_escalation`: `matched_existing_candidates`, priority `1` (`independent_holdout_suite_blocker`), evaluate `['architect_general', 'coder_escalation']` on the same source records; preferred winners `['architect_general']`; suggest `0` new records
 - `suite:hotpotqa:architect_general>frontdoor`: `matched_existing_candidates`, priority `2` (`direction_balance_cleanup`), evaluate `['architect_general', 'frontdoor']` on the same source records; preferred winners `['architect_general', 'frontdoor']`; suggest `0` new records
-- `suite:instruction_precision:architect_general>coder_escalation`: `needs_new_source_records`, priority `2` (`direction_balance_cleanup`), evaluate `['architect_general', 'coder_escalation']` on the same source records; preferred winners `['architect_general', 'coder_escalation']`; suggest `20` new records
-- `suite:instruction_precision:architect_general>frontdoor`: `needs_new_source_records`, priority `2` (`direction_balance_cleanup`), evaluate `['architect_general', 'frontdoor']` on the same source records; preferred winners `['architect_general']`; suggest `20` new records
+- `suite:instruction_precision:architect_general>coder_escalation`: `matched_existing_candidates`, priority `2` (`direction_balance_cleanup`), evaluate `['architect_general', 'coder_escalation']` on the same source records; preferred winners `['architect_general', 'coder_escalation']`; suggest `0` new records
+- `suite:instruction_precision:architect_general>frontdoor`: `matched_existing_candidates`, priority `2` (`direction_balance_cleanup`), evaluate `['architect_general', 'frontdoor']` on the same source records; preferred winners `['architect_general']`; suggest `0` new records
 - `suite:simpleqa:architect_general>coder_escalation`: `matched_existing_candidates`, priority `2` (`direction_balance_cleanup`), evaluate `['architect_general', 'coder_escalation']` on the same source records; preferred winners `['architect_general']`; suggest `0` new records
 - `suite:thinking:architect_general>coder_escalation`: `matched_existing_candidates`, priority `2` (`direction_balance_cleanup`), evaluate `['architect_general', 'coder_escalation']` on the same source records; preferred winners `['architect_general', 'coder_escalation']`; suggest `0` new records
 
