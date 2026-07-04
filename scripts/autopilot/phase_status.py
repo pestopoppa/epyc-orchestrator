@@ -175,8 +175,11 @@ def _tail_eval_progress(log_path: Path, *, trial_id: Any | None = None) -> dict[
     if not log_path.exists():
         return None
 
+    # Match any tier digit (T0..T3 and future tiers); the label is echoed back
+    # verbatim below, so widening `[12]`→`\d+` picks up the T3 hard-only lane
+    # without any tier-specific casing.
     progress_pat = re.compile(
-        r"T(?P<label>[12]) progress: (?P<completed>\d+)/(?P<total>\d+)"
+        r"T(?P<label>\d+) progress: (?P<completed>\d+)/(?P<total>\d+)"
         r"(?: \((?P<correct_pct>\d+(?:\.\d+)?)% correct\))?"
     )
     trial_pat = re.compile(r"Trial (?P<trial_id>\d+): ")

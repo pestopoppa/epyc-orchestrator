@@ -2480,15 +2480,19 @@ def _newest_autopilot_log() -> Path | None:
 
 
 def _tail_deep_eval_progress(log_path: Path) -> tuple[int, int] | None:
-    """Scan the autopilot log for the most-recent `T2 progress: X/Y` line.
+    """Scan the autopilot log for the most-recent `T<n> progress: X/Y` line.
 
     The eval tower emits these lines as each question completes, so this gives
     the *true* completion fraction for a deep_eval trial — far more accurate
     than the historical-median estimate. Returns (completed, total) or None.
+
+    Matches any tier digit (`T0`..`T3` and future tiers) — the label tracks the
+    eval tier, so a hardcoded `T[12]` silently dropped the T3 hard-only lane back
+    to the p90 estimate. `\\d+` keeps this generic as new tiers land.
     """
     if not log_path.exists():
         return None
-    pat = re.compile(r"T[12] progress: (\d+)/(\d+)")
+    pat = re.compile(r"T\d+ progress: (\d+)/(\d+)")
     try:
         # Tail-read: tier-2 evals can run hours and the log can be large; read
         # only the last 64 KB to find the most recent progress marker.
@@ -4157,6 +4161,12 @@ async def gepa_status() -> JSONResponse:
                     "trial_id": j.get("trial_id"),
                     "timestamp": j.get("timestamp", ""),
                     "species": j.get("species"),
+                    # Tier is REQUIRED context here: quality is scored per-tier and
+                    # is NOT comparable across tiers (T3 hard-only rows sit well
+                    # below T1 by design), so a tier-less trajectory row reads a
+                    # healthy T3 eval as a quality regression. Default to the
+                    # canonical tier when absent (legacy rows predate the field).
+                    "tier": j.get("tier", DEFAULT_FRONTIER_TIER),
                     "quality": j.get("quality"),
                     "speed": j.get("speed"),
                     "cost": j.get("cost"),

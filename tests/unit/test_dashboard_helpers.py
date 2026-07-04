@@ -1596,12 +1596,41 @@ def test_gepa_status_uses_superseded_journal_rows(
     ]
     journal_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
     monkeypatch.setattr(dashboard, "AUTOPILOT_LOG", log_path)
-    monkeypatch.setattr(dashboard, "_AUTOPILOT_JOURNAL", journal_path)
+    monkeypatch.setattr(dashboard, "_AUTOPILOT_JOURNAL_PATH", journal_path)
 
     response = asyncio.run(dashboard.gepa_status())
     payload = json.loads(response.body)
 
     assert [trial["trial_id"] for trial in payload["recent_trials"]] == [1]
+
+
+def test_gepa_status_recent_trials_carry_tier(tmp_path: Path, monkeypatch) -> None:
+    """Trajectory rows must expose `tier` so the dashboard can label per-tier
+    quality (a by-design-low T3 row must not read as a T1 regression)."""
+    log_path = tmp_path / "autopilot.log"
+    journal_path = tmp_path / "autopilot_journal.jsonl"
+    log_path.write_text("2026-07-04 00:00:00,000 GEPA: Trial active\n")
+    rows = [
+        {
+            "trial_id": 30, "tier": 1, "timestamp": "2026-07-04T00:00:00+00:00",
+            "species": "prompt_forge", "quality": 1.8, "speed": 30.0,
+            "cost": 0.5, "reliability": 1.0, "pareto_status": "frontier",
+        },
+        {
+            "trial_id": 31, "tier": 3, "timestamp": "2026-07-04T00:01:00+00:00",
+            "species": "prompt_forge", "quality": 1.2, "speed": 45.0,
+            "cost": 0.5, "reliability": 1.0, "pareto_status": "frontier",
+        },
+    ]
+    journal_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+    monkeypatch.setattr(dashboard, "AUTOPILOT_LOG", log_path)
+    monkeypatch.setattr(dashboard, "_AUTOPILOT_JOURNAL_PATH", journal_path)
+
+    response = asyncio.run(dashboard.gepa_status())
+    payload = json.loads(response.body)
+
+    tier_by_trial = {t["trial_id"]: t["tier"] for t in payload["recent_trials"]}
+    assert tier_by_trial == {30: 1, 31: 3}
 
 
 def test_pareto_endpoint_prefers_current_journal_run_over_old_rows_and_state(
