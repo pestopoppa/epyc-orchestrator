@@ -77,6 +77,11 @@ class BackendSummary:
     median_quality_score: float | None
     median_char_count: float | None
     total_table_like_lines: int
+    total_structured_headings: int
+    total_structured_tables: int
+    total_structured_figures: int
+    total_bbox_count: int
+    total_page_image_count: int
     failure_reasons: dict[str, int]
 
 
@@ -90,6 +95,10 @@ class ProbeSummary:
     failure_count: int
     backend_summaries: dict[str, BackendSummary]
     records: list[ExtractionRecord]
+    corpus_name: str = "unspecified"
+    corpus_kind: str = "unspecified"
+    manifest_path: str = ""
+    structural_signal_totals: dict[str, int] = field(default_factory=dict)
 
     def to_dict(self, include_records: bool = True) -> dict[str, Any]:
         data = asdict(self)
@@ -447,8 +456,39 @@ def _summarize_backend(backend: str, records: list[ExtractionRecord]) -> Backend
         ),
         median_char_count=_percentile([float(record.char_count) for record in successful], 50.0),
         total_table_like_lines=sum(record.table_like_line_count for record in successful),
+        total_structured_headings=sum(
+            record.structured_counts.get("headings", 0) for record in successful
+        ),
+        total_structured_tables=sum(
+            record.structured_counts.get("tables", 0) for record in successful
+        ),
+        total_structured_figures=sum(
+            record.structured_counts.get("figures", 0) for record in successful
+        ),
+        total_bbox_count=sum(record.bbox_count or 0 for record in successful),
+        total_page_image_count=sum(record.page_image_count or 0 for record in successful),
         failure_reasons=dict(sorted(failure_reasons.items())),
     )
+
+
+def _structural_signal_totals(records: list[ExtractionRecord]) -> dict[str, int]:
+    successful = [record for record in records if record.success]
+    return {
+        "table_like_lines": sum(record.table_like_line_count for record in successful),
+        "structured_headings": sum(
+            record.structured_counts.get("headings", 0) for record in successful
+        ),
+        "structured_tables": sum(record.structured_counts.get("tables", 0) for record in successful),
+        "structured_figures": sum(
+            record.structured_counts.get("figures", 0) for record in successful
+        ),
+        "liteparse_bboxes": sum(
+            record.bbox_count or 0 for record in successful if record.backend == "liteparse"
+        ),
+        "liteparse_page_images": sum(
+            record.page_image_count or 0 for record in successful if record.backend == "liteparse"
+        ),
+    }
 
 
 def run_probe(
@@ -456,6 +496,9 @@ def run_probe(
     *,
     backends: list[str] | None = None,
     router: PDFRouter | None = None,
+    corpus_name: str = "unspecified",
+    corpus_kind: str = "unspecified",
+    manifest_path: Path | None = None,
 ) -> ProbeSummary:
     selected_backends = backends or list(BACKENDS)
     unsupported = sorted(set(selected_backends) - set(BACKENDS))
@@ -480,6 +523,10 @@ def run_probe(
         failure_count=len(records) - success_count,
         backend_summaries=backend_summaries,
         records=records,
+        corpus_name=corpus_name,
+        corpus_kind=corpus_kind,
+        manifest_path=str(manifest_path) if manifest_path else "",
+        structural_signal_totals=_structural_signal_totals(records),
     )
 
 
@@ -487,17 +534,72 @@ def default_pdf_paths() -> list[Path]:
     return [path for path in DEFAULT_PDFS if path.exists()]
 
 
+def _manifest_entry_path(entry: object, manifest_path: Path) -> Path:
+    if isinstance(entry, str):
+        raw_path = entry
+    elif isinstance(entry, dict):
+        raw_path = str(
+            entry.get("path")
+            or entry.get("pdf_path")
+            or entry.get("pdf")
+            or entry.get("file")
+            or ""
+        )
+    else:
+        raise ValueError(f"unsupported manifest entry type: {type(entry).__name__}")
+
+    if not raw_path:
+        raise ValueError("manifest entry is missing path/pdf_path/pdf/file")
+
+    path = Path(raw_path).expanduser()
+    if path.is_absolute():
+        return path
+    return (manifest_path.parent / path).resolve()
+
+
+def load_manifest_paths(manifest_path: Path) -> list[Path]:
+    """Load PDF paths from JSON, JSONL, or plain text manifests."""
+
+    text = manifest_path.read_text(encoding="utf-8")
+    if manifest_path.suffix.lower() == ".json":
+        payload = json.loads(text)
+        entries = payload.get("pdfs", payload) if isinstance(payload, dict) else payload
+        if not isinstance(entries, list):
+            raise ValueError("JSON manifest must be a list or an object with a 'pdfs' list")
+        return [_manifest_entry_path(entry, manifest_path) for entry in entries]
+
+    paths: list[Path] = []
+    for line_no, line in enumerate(text.splitlines(), start=1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if manifest_path.suffix.lower() == ".jsonl":
+            try:
+                entry = json.loads(stripped)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"invalid JSONL entry on line {line_no}: {exc}") from exc
+            paths.append(_manifest_entry_path(entry, manifest_path))
+        else:
+            paths.append(_manifest_entry_path(stripped, manifest_path))
+    return paths
+
+
 def render_markdown(summary: ProbeSummary) -> str:
     lines = [
         "# PDF Fast-Path Probe",
+        f"- corpus_name: `{summary.corpus_name}`",
+        f"- corpus_kind: `{summary.corpus_kind}`",
         f"- pdf_count: `{summary.pdf_count}`",
         f"- backend_count: `{summary.backend_count}`",
         f"- success_count: `{summary.success_count}`",
         f"- failure_count: `{summary.failure_count}`",
+        f"- structural_signal_totals: `{json.dumps(summary.structural_signal_totals, sort_keys=True)}`",
         "",
-        "| Backend | Attempts | Successes | Failures | Median latency ms | Median quality | Failure reasons |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | --- |",
+        "| Backend | Attempts | Successes | Failures | Median latency ms | Median quality | Table-like lines | Structured h/t/f | BBoxes | Page images | Failure reasons |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
     ]
+    if summary.manifest_path:
+        lines.insert(3, f"- manifest_path: `{summary.manifest_path}`")
     for backend, backend_summary in summary.backend_summaries.items():
         latency = (
             f"{backend_summary.median_latency_ms:.3f}"
@@ -510,13 +612,21 @@ def render_markdown(summary: ProbeSummary) -> str:
             else "n/a"
         )
         lines.append(
-            "| {backend} | {attempts} | {successes} | {failures} | {latency} | {quality} | `{reasons}` |".format(
+            "| {backend} | {attempts} | {successes} | {failures} | {latency} | {quality} | {table_lines} | {structured} | {bboxes} | {page_images} | `{reasons}` |".format(
                 backend=backend,
                 attempts=backend_summary.attempts,
                 successes=backend_summary.successes,
                 failures=backend_summary.failures,
                 latency=latency,
                 quality=quality,
+                table_lines=backend_summary.total_table_like_lines,
+                structured="{}/{}/{}".format(
+                    backend_summary.total_structured_headings,
+                    backend_summary.total_structured_tables,
+                    backend_summary.total_structured_figures,
+                ),
+                bboxes=backend_summary.total_bbox_count,
+                page_images=backend_summary.total_page_image_count,
                 reasons=json.dumps(backend_summary.failure_reasons, sort_keys=True),
             )
         )
@@ -527,10 +637,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pdf", type=Path, action="append", help="PDF path to probe. Repeatable.")
     parser.add_argument(
+        "--manifest",
+        type=Path,
+        help="JSON, JSONL, or text manifest of PDF paths. Relative paths resolve from the manifest.",
+    )
+    parser.add_argument(
         "--backend",
         choices=BACKENDS,
         action="append",
         help="Backend to probe. Repeatable. Defaults to all supported backends.",
+    )
+    parser.add_argument("--corpus-name", default="unspecified")
+    parser.add_argument(
+        "--corpus-kind",
+        default="unspecified",
+        help=(
+            "Free-form evidence label, e.g. born_digital_fastpath, "
+            "structural_table_heavy, or hybrid_sidecar."
+        ),
     )
     parser.add_argument("--output-json", type=Path)
     parser.add_argument("--output-md", type=Path)
@@ -545,7 +669,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    pdf_paths = args.pdf or default_pdf_paths()
+    pdf_paths: list[Path] = []
+    if args.manifest:
+        pdf_paths.extend(load_manifest_paths(args.manifest))
+    pdf_paths.extend(args.pdf or [])
+    if not pdf_paths:
+        pdf_paths = default_pdf_paths()
     if not pdf_paths:
         print(
             "No PDFs supplied and no default PDF samples exist. Pass --pdf <path>.",
@@ -553,7 +682,13 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    summary = run_probe(pdf_paths=pdf_paths, backends=args.backend)
+    summary = run_probe(
+        pdf_paths=pdf_paths,
+        backends=args.backend,
+        corpus_name=args.corpus_name,
+        corpus_kind=args.corpus_kind,
+        manifest_path=args.manifest,
+    )
     json_payload = json.dumps(
         summary.to_dict(include_records=not args.summary_only),
         indent=2,

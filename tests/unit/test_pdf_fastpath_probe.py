@@ -56,6 +56,8 @@ def test_run_probe_summarizes_local_backends(tmp_path: Path) -> None:
     assert summary.failure_count == 0
     assert summary.backend_summaries["pdftotext"].median_latency_ms == 12.5
     assert summary.backend_summaries["opendataloader"].total_table_like_lines == 2
+    assert summary.backend_summaries["opendataloader_structured"].total_structured_tables == 2
+    assert summary.structural_signal_totals["structured_tables"] == 2
     structured = next(record for record in summary.records if record.backend == "opendataloader_structured")
     assert structured.structured_counts == {"figures": 0, "headings": 1, "tables": 2}
 
@@ -153,6 +155,32 @@ def test_liteparse_adapter_accepts_nested_layout(monkeypatch, tmp_path: Path) ->
     assert record.char_count == len("alpha\nbeta")
     assert record.bbox_count == 2
     assert record.page_image_count == 1
+    assert summary.backend_summaries["liteparse"].total_bbox_count == 2
+    assert summary.structural_signal_totals["liteparse_bboxes"] == 2
+
+
+def test_manifest_paths_support_json_jsonl_and_text(tmp_path: Path) -> None:
+    pdf_a = tmp_path / "a.pdf"
+    pdf_b = tmp_path / "b.pdf"
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    pdf_c = nested / "c.pdf"
+    for pdf in (pdf_a, pdf_b, pdf_c):
+        pdf.write_bytes(b"%PDF-1.4\n")
+
+    json_manifest = tmp_path / "manifest.json"
+    json_manifest.write_text(
+        json.dumps({"pdfs": [{"path": "a.pdf"}, {"pdf_path": str(pdf_b)}]}),
+        encoding="utf-8",
+    )
+    jsonl_manifest = tmp_path / "manifest.jsonl"
+    jsonl_manifest.write_text('{"pdf": "nested/c.pdf"}\n', encoding="utf-8")
+    text_manifest = tmp_path / "manifest.txt"
+    text_manifest.write_text("# comment\na.pdf\n", encoding="utf-8")
+
+    assert probe.load_manifest_paths(json_manifest) == [pdf_a.resolve(), pdf_b]
+    assert probe.load_manifest_paths(jsonl_manifest) == [pdf_c.resolve()]
+    assert probe.load_manifest_paths(text_manifest) == [pdf_a.resolve()]
 
 
 def test_main_writes_json_and_markdown(tmp_path: Path, monkeypatch) -> None:
@@ -165,6 +193,10 @@ def test_main_writes_json_and_markdown(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(probe, "_executable_exists", lambda command: command == "pdftotext")
     rc = probe.main(
         [
+            "--corpus-name",
+            "unit",
+            "--corpus-kind",
+            "born_digital_fastpath",
             "--pdf",
             str(pdf_path),
             "--backend",
@@ -180,5 +212,9 @@ def test_main_writes_json_and_markdown(tmp_path: Path, monkeypatch) -> None:
     assert rc == 0
     data = json.loads(json_path.read_text(encoding="utf-8"))
     assert "records" not in data
+    assert data["corpus_name"] == "unit"
+    assert data["corpus_kind"] == "born_digital_fastpath"
     assert data["backend_summaries"]["pdftotext"]["successes"] == 1
-    assert "| pdftotext |" in md_path.read_text(encoding="utf-8")
+    markdown = md_path.read_text(encoding="utf-8")
+    assert "structural_signal_totals" in markdown
+    assert "| pdftotext |" in markdown
