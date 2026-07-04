@@ -3228,24 +3228,8 @@ function startAutopilotLogStream() {
         if (status) status.textContent = '— autopilot.log stream connected';
     };
     _autopilotLogStream.onmessage = (e) => {
-        try {
-            const data = JSON.parse(e.data);
-            if (data.error) {
-                if (status) status.textContent = `— autopilot.log error: ${data.error}`;
-                return;
-            }
-            if (data.initial) {
-                _autopilotLogBuffer = data.chunk || "";
-            } else {
-                _autopilotLogBuffer += (data.chunk || "");
-                if (_autopilotLogBuffer.length > _AUTOPILOT_LOG_MAX_CHARS) {
-                    _autopilotLogBuffer = _autopilotLogBuffer.slice(-_AUTOPILOT_LOG_MAX_CHARS);
-                }
-            }
-            const lines = _autopilotLogBuffer ? _autopilotLogBuffer.split('\n').filter(Boolean).length : 0;
-            if (status) status.textContent = `— autopilot.log stream connected · ${lines} lines`;
-            _paintAutopilotLog();
-        } catch (err) {
+        try { applyAutopilotLogData(JSON.parse(e.data)); }
+        catch (err) {
             if (status) status.textContent = `— autopilot.log render error: ${err && err.message ? err.message : err}`;
         }
     };
@@ -3276,43 +3260,46 @@ function startRawTapStream() {
     _rawTapBuffer = "";
     _rawTapStream = new EventSource('/dashboard/events/raw_tap');
     _rawTapStream.onmessage = (e) => {
-        try {
-            const data = JSON.parse(e.data);
-            if (data.error) return;
-            if (data.initial) {
-                _rawTapBuffer = data.chunk || "";
-            } else {
-                _rawTapBuffer += (data.chunk || "");
-                if (_rawTapBuffer.length > _RAW_TAP_MAX_CHARS) {
-                    _rawTapBuffer = _rawTapBuffer.slice(-_RAW_TAP_MAX_CHARS);
-                }
-            }
-            if (_rawTapRenderMode === 'structured') {
-                paintRawTap();
-            } else if (_rawTapRenderMode === 'raw') {
-                // Raw mode: paint immediately on each chunk (cheap, no parsing).
-                paintRawTap();
-            } else {
-                // Rendered mode: keep stream visible via a transient styled
-                // paint, then schedule the markdown + KaTeX pass for after
-                // the stream idles. The transient paint avoids a long blank
-                // window during continuous streaming.
-                const inner = document.getElementById('raw-tap-pre');
-                if (!inner) {
-                    paintRawTap();
-                } else {
-                    // Show plain styled text immediately for liveness; the
-                    // debounced timer below will swap in the rendered view.
-                    inner.innerHTML = styleRawTap(_rawTapBuffer);
-                    autoscrollRawPanel(inner);
-                }
-                scheduleRawTapRender();
-            }
-        } catch {}
+        try { applyRawTapData(JSON.parse(e.data)); } catch {}
     };
     _rawTapStream.onerror = () => {
         setTimeout(startRawTapStream, 2000);
     };
+}
+
+// Handler body shared by the standalone raw_tap EventSource and the multiplexed
+// connection (event: raw_tap).
+function applyRawTapData(data) {
+    if (data.error) return;
+    if (data.initial) {
+        _rawTapBuffer = data.chunk || "";
+    } else {
+        _rawTapBuffer += (data.chunk || "");
+        if (_rawTapBuffer.length > _RAW_TAP_MAX_CHARS) {
+            _rawTapBuffer = _rawTapBuffer.slice(-_RAW_TAP_MAX_CHARS);
+        }
+    }
+    if (_rawTapRenderMode === 'structured') {
+        paintRawTap();
+    } else if (_rawTapRenderMode === 'raw') {
+        // Raw mode: paint immediately on each chunk (cheap, no parsing).
+        paintRawTap();
+    } else {
+        // Rendered mode: keep stream visible via a transient styled
+        // paint, then schedule the markdown + KaTeX pass for after
+        // the stream idles. The transient paint avoids a long blank
+        // window during continuous streaming.
+        const inner = document.getElementById('raw-tap-pre');
+        if (!inner) {
+            paintRawTap();
+        } else {
+            // Show plain styled text immediately for liveness; the
+            // debounced timer below will swap in the rendered view.
+            inner.innerHTML = styleRawTap(_rawTapBuffer);
+            autoscrollRawPanel(inner);
+        }
+        scheduleRawTapRender();
+    }
 }
 
 function startStructuredTapStream() {
@@ -3320,20 +3307,24 @@ function startStructuredTapStream() {
     _structuredTapRequests = [];
     _structuredTapStream = new EventSource('/dashboard/events/structured_tap');
     _structuredTapStream.onmessage = (e) => {
-        try {
-            const data = JSON.parse(e.data);
-            _structuredTapRequests = data.structured_requests || [];
-            if (_rawTapRenderMode === 'structured') paintRawTap();
-            renderAutopilotRunStrip();
-            refreshLiveDotsFromStructuredTap();
-            repaintRegionLocksFromStructuredTapFrame();
-            scheduleRegionLocksRefresh();
-            refreshOpenStructuredTapDetail();
-        } catch {}
+        try { applyStructuredTapData(JSON.parse(e.data)); } catch {}
     };
     _structuredTapStream.onerror = () => {
         setTimeout(startStructuredTapStream, 2000);
     };
+}
+
+// Handler body shared by the standalone structured_tap EventSource and the
+// multiplexed connection (event: structured_tap). Keep all side effects here so
+// both transports behave identically.
+function applyStructuredTapData(data) {
+    _structuredTapRequests = data.structured_requests || [];
+    if (_rawTapRenderMode === 'structured') paintRawTap();
+    renderAutopilotRunStrip();
+    refreshLiveDotsFromStructuredTap();
+    repaintRegionLocksFromStructuredTapFrame();
+    scheduleRegionLocksRefresh();
+    refreshOpenStructuredTapDetail();
 }
 
 function renderInferenceTap(data) {
@@ -3452,23 +3443,8 @@ function startPlannerTapStream() {
         if (status) status.textContent = '— planner tap stream connected';
     };
     _plannerTapStream.onmessage = (e) => {
-        try {
-            const data = JSON.parse(e.data);
-            if (data.error) {
-                if (status) status.textContent = `— planner tap error: ${data.error}`;
-                return;
-            }
-            if (data.initial) _plannerTapBuffer = data.chunk || "";
-            else {
-                _plannerTapBuffer += (data.chunk || "");
-                if (_plannerTapBuffer.length > _PLANNER_TAP_MAX_CHARS) {
-                    _plannerTapBuffer = _plannerTapBuffer.slice(-_PLANNER_TAP_MAX_CHARS);
-                }
-            }
-            const lines = _plannerTapBuffer ? _plannerTapBuffer.split('\n').filter(Boolean).length : 0;
-            if (status) status.textContent = `— planner tap stream connected · ${lines} lines`;
-            _paintPlannerTap();
-        } catch (err) {
+        try { applyPlannerTapData(JSON.parse(e.data)); }
+        catch (err) {
             if (status) status.textContent = `— planner tap render error: ${err && err.message ? err.message : err}`;
         }
     };
@@ -3493,10 +3469,92 @@ function startPlannerTapStream() {
     }
 }
 
+// Handler bodies shared by the standalone byte-tail EventSources and the
+// multiplexed connection. They look the status element up by id so they work
+// regardless of which transport delivered the frame.
+function applyAutopilotLogData(data) {
+    const status = document.getElementById('autopilot-status');
+    if (data.error) {
+        if (status) status.textContent = `— autopilot.log error: ${data.error}`;
+        return;
+    }
+    if (data.initial) {
+        _autopilotLogBuffer = data.chunk || "";
+    } else {
+        _autopilotLogBuffer += (data.chunk || "");
+        if (_autopilotLogBuffer.length > _AUTOPILOT_LOG_MAX_CHARS) {
+            _autopilotLogBuffer = _autopilotLogBuffer.slice(-_AUTOPILOT_LOG_MAX_CHARS);
+        }
+    }
+    const lines = _autopilotLogBuffer ? _autopilotLogBuffer.split('\n').filter(Boolean).length : 0;
+    if (status) status.textContent = `— autopilot.log stream connected · ${lines} lines`;
+    _paintAutopilotLog();
+}
+
+function applyPlannerTapData(data) {
+    const status = document.getElementById('planner-status');
+    if (data.error) {
+        if (status) status.textContent = `— planner tap error: ${data.error}`;
+        return;
+    }
+    if (data.initial) _plannerTapBuffer = data.chunk || "";
+    else {
+        _plannerTapBuffer += (data.chunk || "");
+        if (_plannerTapBuffer.length > _PLANNER_TAP_MAX_CHARS) {
+            _plannerTapBuffer = _plannerTapBuffer.slice(-_PLANNER_TAP_MAX_CHARS);
+        }
+    }
+    const lines = _plannerTapBuffer ? _plannerTapBuffer.split('\n').filter(Boolean).length : 0;
+    if (status) status.textContent = `— planner tap stream connected · ${lines} lines`;
+    _paintPlannerTap();
+}
+
+// SSE multiplex kill-switch. A browser caps HTTP/1.1 at ~6 connections/host;
+// five always-on EventSources left no headroom for fetch polling and starved a
+// second tab. The multiplexed connection carries all five sources as named
+// events over ONE connection. Set localStorage.sseMultiplex='0' and reload to
+// fall back to the legacy five-connection path if anything misbehaves.
+let _multiplexStream = null;
+function sseMultiplexEnabled() {
+    try { return localStorage.getItem('sseMultiplex') !== '0'; } catch { return true; }
+}
+
+function startMultiplexStream() {
+    if (_multiplexStream) _multiplexStream.close();
+    const snapStatus = document.getElementById('status');
+    if (snapStatus) snapStatus.textContent = 'connecting…';
+    const es = new EventSource('/dashboard/events/multiplex');
+    _multiplexStream = es;
+    // Mirror the legacy activeStream reference so the snapshot poll fallback
+    // (which checks `activeStream` before painting a polled snapshot) keeps
+    // deferring to the live connection.
+    activeStream = es;
+    es.onopen = () => { if (snapStatus) snapStatus.textContent = 'live'; };
+    es.addEventListener('snapshot', (e) => {
+        try { applyDashboardSnapshot(JSON.parse(e.data), 'stream'); } catch (err) { console.error(err); }
+    });
+    es.addEventListener('structured_tap', (e) => { try { applyStructuredTapData(JSON.parse(e.data)); } catch {} });
+    es.addEventListener('raw_tap', (e) => { try { applyRawTapData(JSON.parse(e.data)); } catch {} });
+    es.addEventListener('autopilot_log', (e) => { try { applyAutopilotLogData(JSON.parse(e.data)); } catch {} });
+    es.addEventListener('planner_tap', (e) => { try { applyPlannerTapData(JSON.parse(e.data)); } catch {} });
+    es.onerror = () => {
+        if (snapStatus) snapStatus.textContent = 'reconnecting…';
+        // One reconnect drives all five panels; guard against stacking timers.
+        if (es._reconnectScheduled) return;
+        es._reconnectScheduled = true;
+        setTimeout(() => { if (_multiplexStream === es) startMultiplexStream(); }, 2000);
+    };
+}
+
 function startTapStream() {
     // Replaced the parsed-sections stream with the raw byte-level stream
     // (mirrors how autopilot's TUI displays inference — incremental tokens
     // as they're written, not waiting for section close).
+    if (sseMultiplexEnabled()) {
+        // All five always-on streams (snapshot + these four) ride one
+        // connection via startMultiplexStream(); nothing to open per-stream.
+        return;
+    }
     startStructuredTapStream();
     startRawTapStream();
     // Also start the autopilot.log stream so every phase autopilot is in
@@ -4735,6 +4793,12 @@ async function openDetail(taskId, port, slotId) {
                 return;
             }
             if (u.delta) {
+                // The task stream is sourced from the structured tap and is the
+                // single source of truth for the streamed body. Its first content
+                // frame carries reset:true because the initial GET already
+                // rendered the response-so-far — clear it so we don't double the
+                // prefix, then rebuild from the stream's own deltas.
+                if (u.reset) _currentTaskRawText.stream = '';
                 _currentTaskRawText.stream += u.delta;
                 // Scroll preservation: full-buffer re-render through marked +
                 // KaTeX rebuilds innerHTML, which resets scrollTop to 0. If the
@@ -4929,6 +4993,14 @@ function tickFreshnessBadges() {
 }
 
 function startStream() {
+    // With the multiplex enabled, the snapshot arrives as the `snapshot` event
+    // on the single multiplexed connection — open that instead of a dedicated
+    // /events/stream connection. startTapStream() becomes a no-op in this mode,
+    // so this is the one entry point that establishes the live connection.
+    if (sseMultiplexEnabled()) {
+        startMultiplexStream();
+        return;
+    }
     if (activeStream) activeStream.close();
     activeStream = new EventSource('/dashboard/events/stream');
     document.getElementById('status').textContent = 'connecting…';

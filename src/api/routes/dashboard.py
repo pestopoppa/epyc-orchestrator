@@ -3654,6 +3654,177 @@ async def stream(request: Request) -> StreamingResponse:
 
 
 # ---------------------------------------------------------------------------
+# Multiplexed event stream
+#
+# A browser caps HTTP/1.1 at ~6 concurrent connections per host. The dashboard
+# opened FIVE always-on EventSources (snapshot, structured_tap, raw_tap,
+# autopilot_log, planner_tap), leaving almost no room for fetch() polling and
+# fully starving a second tab (2 x 5 = 10 > 6). This endpoint fans every
+# always-on source into ONE SSE connection, tagging each with a named SSE event
+# so the client dispatches by name. One tab now holds one connection.
+#
+# The standalone /dashboard/events/{stream,structured_tap,raw_tap,autopilot_log,
+# planner_tap} endpoints are retained: they still back the client's one-shot
+# initial-payload fetch fallback, per-stream curl debugging, and the legacy
+# multi-connection path (client kill-switch sseMultiplex=0).
+# ---------------------------------------------------------------------------
+
+_PLANNER_TAP_PATH = Path("/mnt/raid0/llm/tmp/planner_tap.log")
+
+
+async def _snapshot_payloads():
+    """Yield full-snapshot JSON payload strings at 2 Hz (mirrors /events/stream).
+
+    Runs until cancelled — the multiplex main loop is the SOLE reader of the
+    request's disconnect channel; concurrent is_disconnected() reads across
+    producers would race the ASGI receive channel.
+    """
+    while True:
+        try:
+            resp = await snapshot()
+            payload = resp.body.decode("utf-8")  # type: ignore[union-attr]
+        except Exception as exc:
+            payload = json.dumps({"error": str(exc)})
+        yield payload
+        await asyncio.sleep(0.5)
+
+
+async def _structured_tap_payloads():
+    """Yield request-grouped structured tap JSON (mirrors /events/structured_tap)."""
+    last_mtime = -1.0
+    last_emit = 0.0
+    while True:
+        try:
+            mtime = (
+                _INFERENCE_TAP_EVENTS_PATH.stat().st_mtime
+                if _INFERENCE_TAP_EVENTS_PATH.exists()
+                else 0.0
+            )
+        except Exception:
+            mtime = 0.0
+        now_epoch = time.time()
+        if mtime != last_mtime or (now_epoch - last_emit) >= 2.0:
+            last_mtime = mtime
+            last_emit = now_epoch
+            tail = _read_tail(_INFERENCE_TAP_EVENTS_PATH, max_bytes=1024 * 1024)
+            structured_requests = _parse_structured_tap_requests(
+                tail, max_requests=40, now_epoch=now_epoch,
+            )
+            yield json.dumps({
+                "tap_active": _TAP_SENTINEL_PATH.exists(),
+                "structured_requests": _enrich_structured_tap_requests(structured_requests),
+                "structured_tap_mtime": mtime or None,
+                "now": now_epoch,
+            })
+        await asyncio.sleep(0.5)
+
+
+async def _tail_file_payloads(
+    path: Path, tail_bytes: int, *, create: bool = False,
+):
+    """Yield byte-tail JSON payloads ({chunk, initial}) for a growing text file.
+
+    Shared body for the raw_tap / autopilot_log / planner_tap byte streams.
+    Runs until cancelled (see _snapshot_payloads on disconnect handling).
+    """
+    fh = None
+    try:
+        if not path.exists():
+            if create:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.touch()
+            else:
+                yield json.dumps({"error": f"{path} does not exist"})
+                return
+        fh = open(path, "rb")
+        fh.seek(0, 2)
+        size = fh.tell()
+        start = max(0, size - tail_bytes)
+        fh.seek(start)
+        initial = fh.read().decode("utf-8", errors="replace")
+        yield json.dumps({"chunk": initial, "initial": True})
+        while True:
+            raw = fh.read(8192)
+            if raw:
+                yield json.dumps({
+                    "chunk": raw.decode("utf-8", errors="replace"),
+                    "initial": False,
+                })
+            else:
+                await asyncio.sleep(0.1)
+    except Exception as exc:
+        yield json.dumps({"error": str(exc)})
+    finally:
+        if fh is not None:
+            try:
+                fh.close()
+            except Exception:
+                pass
+
+
+@router.get("/dashboard/events/multiplex")
+async def multiplex_stream(request: Request) -> StreamingResponse:
+    """All always-on dashboard streams over a single SSE connection.
+
+    Each source is emitted as ``event: <name>`` (snapshot, structured_tap,
+    raw_tap, autopilot_log, planner_tap) so the browser dispatches by name via
+    addEventListener. Collapses five persistent connections into one — see the
+    section header above for the connection-limit rationale.
+    """
+
+    async def event_gen():
+        producers = {
+            "snapshot": _snapshot_payloads(),
+            "structured_tap": _structured_tap_payloads(),
+            "raw_tap": _tail_file_payloads(_INFERENCE_TAP_PATH, 8192),
+            "autopilot_log": _tail_file_payloads(AUTOPILOT_LOG, 16384),
+            "planner_tap": _tail_file_payloads(
+                _PLANNER_TAP_PATH, 16384, create=True,
+            ),
+        }
+        queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
+
+        async def pump(name: str, gen):
+            try:
+                async for payload in gen:
+                    await queue.put((name, payload))
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                try:
+                    await queue.put((name, json.dumps({"error": str(exc)})))
+                except Exception:
+                    pass
+
+        tasks = [asyncio.create_task(pump(n, g)) for n, g in producers.items()]
+        try:
+            yield ": multiplex open\n\n"
+            while True:
+                if await request.is_disconnected():
+                    return
+                try:
+                    name, payload = await asyncio.wait_for(queue.get(), timeout=3.0)
+                except asyncio.TimeoutError:
+                    # Keep the single connection warm during idle windows.
+                    yield ": heartbeat\n\n"
+                    continue
+                yield f"event: {name}\ndata: {payload}\n\n"
+        finally:
+            for t in tasks:
+                t.cancel()
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
 # Task detail
 # ---------------------------------------------------------------------------
 
@@ -3809,20 +3980,34 @@ async def task_detail(task_id: str) -> JSONResponse:
 
 @router.get("/dashboard/events/task/{task_id}")
 async def task_stream(task_id: str, request: Request) -> StreamingResponse:
-    """5Hz SSE stream of the slot serving this task — live token feed via polling.
+    """SSE stream of a task's live inference output, sourced from the structured
+    tap event stream (inference_tap_events.jsonl).
 
-    Matches by prompt content (objective from progress JSONL). Tolerant of brief
-    gaps where the slot is between tokens — keeps polling for up to
-    `idle_giveup_s` consecutive idle samples before signalling done.
+    History: this used to poll llama-server ``/slots`` and correlate a slot to
+    the task by substring-matching the objective against the slot's ``prompt``
+    field, reading generated text from the slot's ``content`` field. As of the
+    2026-06-26 v6 llama.cpp cutover, ``/slots`` no longer exposes per-slot
+    ``prompt`` or ``content`` (upstream privacy change), so the matcher could
+    neither locate the serving slot nor read any tokens — the live token feed
+    went permanently silent. The structured tap already emits per-token
+    ``chunk`` events keyed by ``task_id`` and is the concurrency-safe attribution
+    source, so we tail it directly instead.
+
+    The first content frame carries ``reset: true`` so the client discards
+    whatever ``/dashboard/api/task`` rendered as the initial (response-so-far)
+    body and lets this stream become the single source of truth for the
+    streamed text — avoiding a double-render of the prefix. Tolerant of brief
+    gaps before the task appears in the tap; gives up after `IDLE_GIVEUP` idle
+    samples with no matching tap request.
     """
 
     async def event_gen():
-        last_content = ""
-        # Pre-fetch the task's objective for prompt matching
+        emitted = 0  # chars of response already streamed to the client
+        first_content_frame = True
         log_path = _todays_progress_log()
         events = _task_events(task_id, log_path)
-        objective = _objective_for_task(events)
-        # Quick exit: if the task already has a terminal event, signal done immediately.
+        # Quick exit: if the task already terminated, the initial GET already
+        # rendered its full captured response — don't re-stream (would duplicate).
         terminal_seen = any(
             e.get("event_type") in ("task_completed", "task_failed", "escalation_triggered")
             for e in events
@@ -3832,26 +4017,31 @@ async def task_stream(task_id: str, request: Request) -> StreamingResponse:
             return
 
         idle_ticks = 0
-        IDLE_GIVEUP = 60  # 60 ticks * 0.2s = 12s of no slot before signalling done
+        IDLE_GIVEUP = 60  # 60 ticks * 0.25s = 15s with no tap request before giving up
         while True:
             if await request.is_disconnected():
                 return
-            slot_port, slot = await _find_slot_by_objective(objective)
-            if slot is not None:
+            req = _find_structured_request_by_task_id(task_id)
+            if req is not None:
                 idle_ticks = 0
-                content = slot.get("content", "") or ""
-                if isinstance(content, list):
-                    content = " ".join(str(x) for x in content)
-                delta = content[len(last_content):]
-                last_content = content
-                payload = json.dumps({
-                    "delta": delta,
-                    "content_len": len(content),
-                    "tokens_decoded": slot.get("n_decoded"),
-                    "matched_port": slot_port,
-                    "done": False,
-                })
-                yield f"data: {payload}\n\n"
+                response = str(req.get("response") or "")
+                if len(response) > emitted:
+                    delta = response[emitted:]
+                    emitted = len(response)
+                    payload = json.dumps({
+                        "delta": delta,
+                        "content_len": len(response),
+                        "tokens_decoded": (req.get("timings_raw") or {}).get("tokens"),
+                        "matched_port": req.get("port"),
+                        "reset": first_content_frame,
+                        "done": False,
+                    })
+                    first_content_frame = False
+                    yield f"data: {payload}\n\n"
+                # A completed structured request (end/timings event) is authoritative.
+                if req.get("status") == "complete":
+                    yield "data: " + json.dumps({"delta": "", "done": True, "reason": "tap_complete"}) + "\n\n"
+                    return
             else:
                 idle_ticks += 1
                 # Re-check terminal state every few ticks
@@ -3867,9 +4057,17 @@ async def task_stream(task_id: str, request: Request) -> StreamingResponse:
                 # Heartbeat so the client knows we're still searching
                 if idle_ticks % 5 == 0:
                     yield "data: " + json.dumps({"delta": "", "searching": True, "idle_ticks": idle_ticks}) + "\n\n"
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(0.25)
 
-    return StreamingResponse(event_gen(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
