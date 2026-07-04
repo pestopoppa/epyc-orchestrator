@@ -123,6 +123,40 @@ def _journal_trial_id(entry: Any) -> int | None:
         return None
 
 
+def _normalize_strategy_trial_ids(raw_ids: Any) -> list[int]:
+    normalized: list[int] = []
+    seen: set[int] = set()
+    for item in raw_ids or []:
+        try:
+            trial_id = int(item)
+        except (TypeError, ValueError):
+            continue
+        if trial_id in seen:
+            continue
+        seen.add(trial_id)
+        normalized.append(trial_id)
+    return normalized
+
+
+def _journal_known_trial_ids(journal: Any) -> set[int] | None:
+    if journal is None:
+        return None
+    try:
+        entries = (
+            journal.entries_with_supersessions()
+            if hasattr(journal, "entries_with_supersessions")
+            else journal.all_entries()
+        )
+    except Exception:
+        return None
+    known: set[int] = set()
+    for entry in entries:
+        trial_id = _journal_trial_id(entry)
+        if trial_id is not None:
+            known.add(trial_id)
+    return known
+
+
 def _journal_entry_excludes_strategy_evidence(entry: Any) -> bool:
     """True when a journal row should quarantine strategy evidence it cites."""
     if getattr(entry, "bug_corrupted_by", ""):
@@ -743,6 +777,8 @@ class StrategyStore:
         title: str | None = None,
         generalized_content: str | None = None,
         entry_id: str | None = None,
+        journal: Any | None = None,
+        valid_evidence_trial_ids: set[int] | list[int] | tuple[int, ...] | None = None,
     ) -> str:
         """Store a strategy entry. Returns the UUID.
 
@@ -754,6 +790,11 @@ class StrategyStore:
         AP-32: new rows also carry normalized insight-format metadata:
         ``(title, description, generalized_content)`` plus specificity flags.
         The SQLite text columns remain backward-compatible retrieval fields.
+
+        R6: callers that can supply a folded journal, or an equivalent valid
+        trial-id set, get write-side evidence validation. Explicitly empty
+        evidence is stored as provenance-less metadata instead of silently
+        falling back to ``source_trial_id``.
         """
         entry_id = entry_id or str(uuid.uuid4())
         existing = self._conn.execute(
@@ -773,11 +814,40 @@ class StrategyStore:
         if generalized_content is not None:
             insight = format_meta["generalized_content"]
         context_hash = self.compute_context_hash()
-        if evidence_trial_ids is None:
-            evidence_trial_ids = [source_trial_id]
-        evidence_trial_ids_json = json.dumps(
-            [int(tid) for tid in evidence_trial_ids if tid is not None]
+        evidence_trial_ids_provided = evidence_trial_ids is not None
+        normalized_evidence_trial_ids = _normalize_strategy_trial_ids(
+            [source_trial_id] if evidence_trial_ids is None else evidence_trial_ids
         )
+        if not normalized_evidence_trial_ids and evidence_trial_ids_provided:
+            provenance_status = (
+                "operator_seeded"
+                if metadata.get("seeded_by") == "operator"
+                else "none"
+            )
+        else:
+            if valid_evidence_trial_ids is not None:
+                known_trial_ids = set(
+                    _normalize_strategy_trial_ids(valid_evidence_trial_ids)
+                )
+            elif journal is not None:
+                known_trial_ids = _journal_known_trial_ids(journal)
+                if known_trial_ids is None:
+                    raise ValueError("strategy evidence journal unavailable for validation")
+            else:
+                known_trial_ids = None
+            if known_trial_ids is not None:
+                missing = sorted(set(normalized_evidence_trial_ids) - known_trial_ids)
+                if missing:
+                    raise ValueError(
+                        "strategy evidence_trial_ids absent from journal: "
+                        + ", ".join(str(tid) for tid in missing)
+                    )
+                provenance_status = "journal_verified"
+            else:
+                provenance_status = "declared"
+        metadata["provenance_status"] = provenance_status
+        metadata["provenance_evidence_count"] = len(normalized_evidence_trial_ids)
+        evidence_trial_ids_json = json.dumps(normalized_evidence_trial_ids)
 
         # Embed description + insight for retrieval
         embed_text = f"{format_meta['title']} {description} {insight}"
@@ -846,6 +916,7 @@ class StrategyStore:
             },
             evidence_trial_ids=[trial_id],
             entry_id=_journal_frontier_strategy_id(trial_id),
+            valid_evidence_trial_ids={trial_id},
         )
 
     def frontier_journal_projection_report(self, journal: Any) -> dict[str, Any]:
@@ -1013,6 +1084,15 @@ class StrategyStore:
         if ids:
             return ids
         try:
+            metadata = json.loads(row["metadata_json"] or "{}")
+        except (IndexError, KeyError, TypeError, json.JSONDecodeError):
+            metadata = {}
+        if isinstance(metadata, dict) and metadata.get("provenance_status") in {
+            "none",
+            "operator_seeded",
+        }:
+            return []
+        try:
             source_trial_id = row["source_trial_id"]
         except (IndexError, KeyError):
             source_trial_id = None
@@ -1020,6 +1100,22 @@ class StrategyStore:
             return [int(source_trial_id)]
         except (TypeError, ValueError):
             return []
+
+    def _row_is_unprovenanced(
+        self,
+        row: sqlite3.Row,
+        metadata: dict[str, Any] | None = None,
+    ) -> bool:
+        if metadata is None:
+            try:
+                metadata = json.loads(row["metadata_json"] or "{}")
+            except (IndexError, KeyError, TypeError, json.JSONDecodeError):
+                metadata = {}
+        if not isinstance(metadata, dict):
+            return False
+        if metadata.get("seeded_by") == "operator":
+            return False
+        return metadata.get("provenance_status") in {"none", "invalid"}
 
     def strategy_rows_for_compression(
         self,
@@ -1039,14 +1135,17 @@ class StrategyStore:
             excluded.update(excluded_strategy_evidence_trial_ids(journal))
 
         rows = self._conn.execute(
-            "SELECT id, insight, source_trial_id, evidence_trial_ids "
+            "SELECT id, insight, source_trial_id, evidence_trial_ids, metadata_json "
             "FROM strategies ORDER BY source_trial_id DESC"
         ).fetchall()
-        if not excluded:
+        exclude_unprovenanced = journal is not None
+        if not excluded and not exclude_unprovenanced:
             return rows[:window_trials] if window_trials is not None else rows
 
         eligible: list[sqlite3.Row] = []
         for row in rows:
+            if exclude_unprovenanced and self._row_is_unprovenanced(row):
+                continue
             evidence_trial_ids = self._evidence_trial_ids_for_row(row)
             if excluded.intersection(evidence_trial_ids):
                 continue
@@ -1074,12 +1173,16 @@ class StrategyStore:
         rows = self._conn.execute(
             "SELECT id, metadata_json, source_trial_id, evidence_trial_ids FROM strategies"
         ).fetchall()
-        if not excluded:
+        exclude_unprovenanced = journal is not None
+        if not excluded and not exclude_unprovenanced:
             return rows
         return [
             row
             for row in rows
-            if not excluded.intersection(self._evidence_trial_ids_for_row(row))
+            if not (
+                (exclude_unprovenanced and self._row_is_unprovenanced(row))
+                or excluded.intersection(self._evidence_trial_ids_for_row(row))
+            )
         ]
 
     def strategy_entries_for_distillation(
@@ -1116,6 +1219,8 @@ class StrategyStore:
                 metadata = json.loads(row["metadata_json"] or "{}")
             except (TypeError, json.JSONDecodeError):
                 metadata = {}
+            if journal is not None and self._row_is_unprovenanced(row, metadata):
+                continue
             out.append(
                 {
                     "id": sid,
@@ -1139,6 +1244,7 @@ class StrategyStore:
         rrf_k: int = _RRF_K,
         stale_penalty: float = 0.5,
         excluded_trial_ids: set[int] | None = None,
+        exclude_unprovenanced: bool = False,
     ) -> list[StrategyEntry]:
         """Retrieve strategies via Reciprocal Rank Fusion of FAISS + BM25.
 
@@ -1206,6 +1312,8 @@ class StrategyStore:
                 meta = {}
             if not isinstance(meta, dict):
                 meta = {}
+            if exclude_unprovenanced and self._row_is_unprovenanced(row, meta):
+                continue
             evidence_trial_ids = self._evidence_trial_ids_for_row(row)
             if (
                 excluded_trial_ids
@@ -1286,6 +1394,7 @@ class StrategyStore:
             rrf_k=rrf_k,
             stale_penalty=stale_penalty,
             excluded_trial_ids=excluded_strategy_evidence_trial_ids(journal),
+            exclude_unprovenanced=True,
         )
 
     def retrieve_conventions(
@@ -1334,6 +1443,8 @@ class StrategyStore:
                 meta = {}
             if not isinstance(meta, dict):
                 meta = {}
+            if journal is not None and self._row_is_unprovenanced(row, meta):
+                continue
             evidence_trial_ids = self._evidence_trial_ids_for_row(row)
             if (
                 excluded
@@ -1411,6 +1522,8 @@ class StrategyStore:
         ).fetchall()
         findings: list[dict[str, Any]] = []
         for row in rows:
+            if journal is not None and self._row_is_unprovenanced(row):
+                continue
             if excluded.intersection(self._evidence_trial_ids_for_row(row)):
                 continue
             meta = json.loads(row["metadata_json"]) if row["metadata_json"] else {}

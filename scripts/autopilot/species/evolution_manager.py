@@ -223,6 +223,7 @@ class EvolutionManager:
                     species=insight.get("species", "all"),
                     metadata={"confidence": insight.get("confidence", "medium")},
                     evidence_trial_ids=evidence_trial_ids,
+                    valid_evidence_trial_ids=valid_evidence_trial_ids,
                 )
                 stored += 1
             except Exception as e:

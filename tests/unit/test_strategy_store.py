@@ -434,6 +434,123 @@ class TestStrategyStore:
 
         assert operator_id in {entry.id for entry in results}
 
+    def test_store_rejects_journal_absent_evidence_ids(self, store):
+        class FakeJournal:
+            def entries_with_supersessions(self):
+                return [
+                    SimpleNamespace(trial_id=1, bug_corrupted_by=""),
+                ]
+
+        with pytest.raises(ValueError, match="absent from journal"):
+            store.store(
+                "Fabricated evidence",
+                "Should not be persisted",
+                source_trial_id=99,
+                species="structural_lab",
+                evidence_trial_ids=[2],
+                journal=FakeJournal(),
+            )
+
+        assert store.count() == 0
+
+    def test_store_fails_closed_when_journal_validation_unavailable(self, store):
+        class BrokenJournal:
+            def entries_with_supersessions(self):
+                raise RuntimeError("journal unavailable")
+
+        with pytest.raises(ValueError, match="journal unavailable"):
+            store.store(
+                "Unvalidated evidence",
+                "Should not silently become declared provenance.",
+                source_trial_id=1,
+                species="structural_lab",
+                evidence_trial_ids=[1],
+                journal=BrokenJournal(),
+            )
+
+        assert store.count() == 0
+
+    def test_store_tags_explicit_empty_evidence_without_source_fallback(self, store):
+        sid = store.store(
+            "Ungrounded strategy",
+            "No evidence was supplied.",
+            source_trial_id=99,
+            species="structural_lab",
+            evidence_trial_ids=[],
+        )
+
+        row = store._conn.execute(
+            "SELECT evidence_trial_ids, metadata_json, source_trial_id FROM strategies WHERE id=?",
+            (sid,),
+        ).fetchone()
+        meta = json.loads(row["metadata_json"])
+
+        assert json.loads(row["evidence_trial_ids"]) == []
+        assert meta["provenance_status"] == "none"
+        assert meta["provenance_evidence_count"] == 0
+        assert store._evidence_trial_ids_for_row(row) == []
+
+    def test_retrieve_for_journal_filters_non_operator_provenance_none(self, store):
+        ungrounded_id = store.store(
+            "tool use sentinel lane",
+            "No evidence should keep this hidden from journal-aware planner reads.",
+            source_trial_id=99,
+            species="structural_lab",
+            entry_type="pattern",
+            evidence_trial_ids=[],
+        )
+        kept_id = store.store(
+            "tool use sentinel lane",
+            "Evidence-backed row remains planner-visible.",
+            source_trial_id=3,
+            species="structural_lab",
+            entry_type="pattern",
+            evidence_trial_ids=[3],
+        )
+
+        class FakeJournal:
+            def entries_with_supersessions(self):
+                return [
+                    SimpleNamespace(trial_id=3, bug_corrupted_by=""),
+                ]
+
+        results = store.retrieve_for_journal(
+            "tool use sentinel lane",
+            journal=FakeJournal(),
+            k=10,
+            species="structural_lab",
+        )
+
+        result_ids = {entry.id for entry in results}
+        assert ungrounded_id not in result_ids
+        assert kept_id in result_ids
+
+    def test_retrieve_for_journal_keeps_operator_seeded_provenance_none(self, store):
+        operator_id = store.store(
+            "operator tool-use hypothesis",
+            "Curated operator hypotheses stay visible as hypotheses.",
+            source_trial_id=1036,
+            species="structural_lab",
+            metadata={"seeded_by": "operator"},
+            entry_type="pattern",
+            evidence_trial_ids=[],
+        )
+
+        class FakeJournal:
+            def entries_with_supersessions(self):
+                return []
+
+        results = store.retrieve_for_journal(
+            "operator tool-use hypothesis",
+            journal=FakeJournal(),
+            k=10,
+            species="structural_lab",
+        )
+
+        assert operator_id in {entry.id for entry in results}
+        assert results[0].metadata["provenance_status"] == "operator_seeded"
+        assert results[0].evidence_trial_ids == []
+
     def test_retrieve_conventions_filters_species_plus_global(self, store):
         prompt_id = store.store(
             "PromptForge guardrail",
