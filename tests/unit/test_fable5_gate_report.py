@@ -166,6 +166,7 @@ xmas_routing:
         xmas_table_path=table,
         xmas_ab_root=ab_root,
         a9_collection_manifest=a9_manifest,
+        include_tool_use_activation=False,
     )
 
     assert report["ready"] is False
@@ -369,6 +370,112 @@ xmas_routing:
     assert a9_action["source_plan_decision"] == {"status": "expansion_plan_ready"}
     assert "collect_offline_reward_pairwise_expanded_gap.sh" in a9_action["command"]
     assert "offline_reward_pairwise_collection_status.py" in a9_action["follow_up"]
+
+
+def test_tool_use_activation_section_surfaces_missing_sentinel_env() -> None:
+    section = report_mod.tool_use_activation_section(
+        phase_report={"pid": 123},
+        journal_rows=[
+            {
+                "trial_id": 1106,
+                "eval_details": {
+                    "total_tool_calls": 0,
+                    "mean_tools_used": 0.0,
+                    "tool_use_rate": 0.0,
+                },
+            }
+        ],
+        autopilot_env={},
+        api_attest={
+            "pid": 456,
+            "flags": {
+                "tools": True,
+                "repl": True,
+                "structured_tool_output": True,
+            },
+        },
+        api_env={},
+    )
+
+    assert section.status == "attention"
+    assert section.blockers == []
+    assert section.details["activation_gaps"] == [
+        "autopilot_env_missing_AUTOPILOT_TOOL_SENTINELS",
+        "api_env_missing_AUTOPILOT_TOOL_SENTINELS",
+        "latest_eval_total_tool_calls_zero",
+    ]
+    assert section.details["latest_tool_metrics"]["trial_id"] == 1106
+
+
+def test_tool_use_next_action_requires_controlled_restart() -> None:
+    phase = report_mod.GateSection(
+        key="phase_health",
+        status="ready",
+        summary="active",
+        blockers=[],
+        details={"status": "active"},
+    )
+    tool_use = report_mod.GateSection(
+        key="tool_use_activation",
+        status="attention",
+        summary="not active",
+        blockers=[],
+        details={
+            "activation_gaps": [
+                "autopilot_env_missing_AUTOPILOT_TOOL_SENTINELS",
+                "api_env_missing_AUTOPILOT_TOOL_SENTINELS",
+            ],
+            "autopilot_tool_sentinels_enabled": False,
+            "api_tool_sentinels_enabled": False,
+            "api_tools_enabled": True,
+            "api_repl_enabled": True,
+            "latest_tool_metrics": {"trial_id": 1106, "total_tool_calls": 0},
+        },
+    )
+
+    actions = report_mod.build_next_actions([phase, tool_use])
+
+    assert actions == [
+        {
+            "key": "activate_tool_use_sentinel_lane",
+            "priority": "P0",
+            "status": "blocked",
+            "reason": (
+                "StrategyStore already exposes tool-use hints to the planner; "
+                "the remaining gap is activating the API and AutoPilot "
+                "tool-sentinel telemetry lane so tool use is measured."
+            ),
+            "requires": (
+                "coordinated API reload plus AutoPilot restart at a trial "
+                "boundary; this changes the active eval mix"
+            ),
+            "blocked_by": [
+                "active AutoPilot process; wait for a controlled trial boundary"
+            ],
+            "evidence": {
+                "activation_gaps": [
+                    "autopilot_env_missing_AUTOPILOT_TOOL_SENTINELS",
+                    "api_env_missing_AUTOPILOT_TOOL_SENTINELS",
+                ],
+                "autopilot_tool_sentinels_enabled": False,
+                "api_tool_sentinels_enabled": False,
+                "api_tools_enabled": True,
+                "api_repl_enabled": True,
+                "latest_tool_metrics": {
+                    "trial_id": 1106,
+                    "total_tool_calls": 0,
+                },
+            },
+            "command": (
+                "At a controlled trial boundary, reload the orchestrator API "
+                "with AUTOPILOT_TOOL_SENTINELS=1, restart AutoPilot with "
+                "AUTOPILOT_TOOL_SENTINELS=1 plus the existing W4/W6/planner "
+                "env, then run AUTOPILOT_TOOL_SENTINELS=1 uv run python "
+                "scripts/autopilot/gate3_tool_telemetry.py"
+            ),
+            "follow_up": report_mod.STRICT_FABLE5_GATE_COMMAND,
+        }
+    ]
 
 
 def test_phase_section_surfaces_eval_progress() -> None:

@@ -18,6 +18,8 @@ import socket
 import subprocess
 import sys
 from typing import Any
+import urllib.error
+import urllib.request
 
 import yaml
 
@@ -85,6 +87,8 @@ STRICT_FABLE5_GATE_COMMAND = (
     "uv run python scripts/autopilot/fable5_gate_report.py --json --strict"
 )
 REQUIRED_XMAS_AB_POLICY = "incumbent_constrained_cheapfirst_v2"
+TOOL_SENTINEL_ENV = "AUTOPILOT_TOOL_SENTINELS"
+DEFAULT_CONFIG_ATTEST_URL = "http://localhost:8000/config/attest"
 
 
 @dataclass(frozen=True)
@@ -110,6 +114,67 @@ def _load_yaml_mapping(path: Path) -> dict[str, Any]:
     if not isinstance(loaded, dict):
         raise ValueError(f"{path} must contain a YAML mapping")
     return loaded
+
+
+def _process_env(pid: Any) -> dict[str, str]:
+    """Read a live process environment from /proc without raising on races."""
+    try:
+        pid_int = int(pid)
+    except (TypeError, ValueError):
+        return {}
+    if pid_int <= 0:
+        return {}
+    try:
+        raw = Path("/proc") / str(pid_int) / "environ"
+        parts = raw.read_bytes().split(b"\0")
+    except OSError:
+        return {}
+    env: dict[str, str] = {}
+    for part in parts:
+        if not part or b"=" not in part:
+            continue
+        key, value = part.split(b"=", 1)
+        env[key.decode(errors="replace")] = value.decode(errors="replace")
+    return env
+
+
+def _config_attest(url: str = DEFAULT_CONFIG_ATTEST_URL) -> dict[str, Any]:
+    """Fetch live API feature/env attestation; failure is advisory only."""
+    try:
+        with urllib.request.urlopen(url, timeout=1.0) as response:
+            loaded = json.loads(response.read().decode("utf-8"))
+    except (OSError, TimeoutError, urllib.error.URLError, json.JSONDecodeError) as exc:
+        return {"error": str(exc)}
+    return loaded if isinstance(loaded, dict) else {"error": "attest response is not an object"}
+
+
+def _latest_tool_metrics(journal_rows: list[dict[str, Any]]) -> dict[str, Any]:
+    for row in reversed(journal_rows):
+        if not isinstance(row, dict):
+            continue
+        details = row.get("eval_details")
+        if not isinstance(details, dict):
+            continue
+        keys = {
+            "total_tool_calls",
+            "tool_name_counts",
+            "mean_tools_used",
+            "tool_use_rate",
+            "tool_helpfulness",
+            "per_suite_tool_helpfulness",
+        }
+        if not any(key in details for key in keys):
+            continue
+        return {
+            "trial_id": row.get("trial_id"),
+            "total_tool_calls": details.get("total_tool_calls"),
+            "tool_name_counts": details.get("tool_name_counts"),
+            "mean_tools_used": details.get("mean_tools_used"),
+            "tool_use_rate": details.get("tool_use_rate"),
+            "tool_helpfulness": details.get("tool_helpfulness"),
+            "per_suite_tool_helpfulness": details.get("per_suite_tool_helpfulness"),
+        }
+    return {}
 
 
 def phase_section(phase_report: dict[str, Any]) -> GateSection:
@@ -156,6 +221,83 @@ def phase_section(phase_report: dict[str, Any]) -> GateSection:
             "w6_audit_n": phase_report.get("w6_audit_n"),
             "w6_audit_every_n_trials": phase_report.get("w6_audit_every_n_trials"),
             "autopilot_planner_timeout": phase_report.get("autopilot_planner_timeout"),
+        },
+    )
+
+
+def tool_use_activation_section(
+    *,
+    phase_report: dict[str, Any],
+    journal_rows: list[dict[str, Any]],
+    api_attest: dict[str, Any] | None = None,
+    autopilot_env: dict[str, str] | None = None,
+    api_env: dict[str, str] | None = None,
+) -> GateSection:
+    """Report whether the planner-visible tool-use lane is actually active.
+
+    This is advisory, not a hard Fable5 blocker: it exposes when StrategyStore can
+    steer toward tool use but the measurement lane that proves tool execution is
+    not enabled in the live API/AutoPilot pair.
+    """
+    if autopilot_env is None:
+        autopilot_env = _process_env(phase_report.get("pid"))
+    if api_attest is None:
+        api_attest = _config_attest()
+    flags = api_attest.get("flags") if isinstance(api_attest, dict) else {}
+    if not isinstance(flags, dict):
+        flags = {}
+    api_pid = api_attest.get("pid") if isinstance(api_attest, dict) else None
+    if api_env is None:
+        api_env = _process_env(api_pid)
+
+    latest_metrics = _latest_tool_metrics(journal_rows)
+    autopilot_sentinel = autopilot_env.get(TOOL_SENTINEL_ENV) == "1"
+    api_sentinel = api_env.get(TOOL_SENTINEL_ENV) == "1"
+    api_tools_ready = bool(flags.get("tools")) and bool(flags.get("repl"))
+    structured_output_ready = bool(flags.get("structured_tool_output"))
+    latest_total_calls = latest_metrics.get("total_tool_calls")
+
+    gaps: list[str] = []
+    if not autopilot_sentinel:
+        gaps.append(f"autopilot_env_missing_{TOOL_SENTINEL_ENV}")
+    if not api_sentinel:
+        gaps.append(f"api_env_missing_{TOOL_SENTINEL_ENV}")
+    if flags and not api_tools_ready:
+        gaps.append("api_tools_or_repl_not_enabled")
+    if flags and not structured_output_ready:
+        gaps.append("api_structured_tool_output_not_enabled")
+    if latest_metrics and latest_total_calls == 0:
+        gaps.append("latest_eval_total_tool_calls_zero")
+    elif not latest_metrics:
+        gaps.append("latest_eval_tool_metrics_missing")
+    if isinstance(api_attest, dict) and api_attest.get("error"):
+        gaps.append("api_config_attest_unavailable")
+
+    status = "ready" if not gaps else "attention"
+    summary = (
+        "Tool-use planner hints are backed by active API/AutoPilot sentinel "
+        "telemetry."
+        if status == "ready"
+        else "Tool-use planner hints are visible, but the live sentinel/telemetry lane is not fully active."
+    )
+    return GateSection(
+        key="tool_use_activation",
+        status=status,
+        summary=summary,
+        blockers=[],
+        details={
+            "autopilot_pid": phase_report.get("pid"),
+            "api_pid": api_pid,
+            "autopilot_tool_sentinels_enabled": autopilot_sentinel,
+            "api_tool_sentinels_enabled": api_sentinel,
+            "api_tools_enabled": flags.get("tools"),
+            "api_repl_enabled": flags.get("repl"),
+            "api_structured_tool_output_enabled": flags.get("structured_tool_output"),
+            "activation_gaps": gaps,
+            "latest_tool_metrics": latest_metrics,
+            "config_attest_error": (
+                api_attest.get("error") if isinstance(api_attest, dict) else None
+            ),
         },
     )
 
@@ -678,6 +820,7 @@ def build_fable5_gate_report(
     xmas_table_path: Path = DEFAULT_XMAS_TABLE,
     xmas_ab_root: Path = DEFAULT_XMAS_AB_ROOT,
     a9_collection_manifest: Path = DEFAULT_A9_COLLECTION_MANIFEST,
+    include_tool_use_activation: bool = True,
 ) -> dict[str, Any]:
     sections = [
         phase_section(phase_report),
@@ -698,6 +841,13 @@ def build_fable5_gate_report(
             ab_root=xmas_ab_root,
         ),
     ]
+    if include_tool_use_activation:
+        sections.append(
+            tool_use_activation_section(
+                phase_report=phase_report,
+                journal_rows=journal_rows,
+            )
+        )
     blockers = [
         f"{section.key}: {blocker}"
         for section in sections
@@ -726,6 +876,7 @@ def build_report_summary(
     a9 = by_key.get("a9_pairwise_collection")
     xmas = by_key.get("xmas_production_path")
     phase = by_key.get("phase_health")
+    tool_use = by_key.get("tool_use_activation")
     return {
         "ready": not blockers,
         "blocker_count": len(blockers),
@@ -828,6 +979,19 @@ def build_report_summary(
         ),
         "xmas_latest_ab_decision_status": (
             xmas.details.get("latest_ab_decision_status") if xmas is not None else None
+        ),
+        "tool_use_activation_status": (
+            tool_use.status if tool_use is not None else None
+        ),
+        "tool_use_activation_gaps": (
+            tool_use.details.get("activation_gaps") if tool_use is not None else None
+        ),
+        "tool_use_latest_total_tool_calls": (
+            (tool_use.details.get("latest_tool_metrics") or {}).get(
+                "total_tool_calls"
+            )
+            if tool_use is not None
+            else None
         ),
     }
 
@@ -1029,6 +1193,51 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
                     "follow_up": STRICT_FABLE5_GATE_COMMAND,
                 }
             )
+
+    tool_use = by_key.get("tool_use_activation")
+    if tool_use and tool_use.status != "ready":
+        phase_active = bool(phase and phase.details.get("status") == "active")
+        actions.append(
+            {
+                "key": "activate_tool_use_sentinel_lane",
+                "priority": "P0",
+                "status": "blocked" if phase_active else "ready",
+                "reason": (
+                    "StrategyStore already exposes tool-use hints to the planner; "
+                    "the remaining gap is activating the API and AutoPilot "
+                    "tool-sentinel telemetry lane so tool use is measured."
+                ),
+                "requires": (
+                    "coordinated API reload plus AutoPilot restart at a trial "
+                    "boundary; this changes the active eval mix"
+                ),
+                "blocked_by": (
+                    ["active AutoPilot process; wait for a controlled trial boundary"]
+                    if phase_active
+                    else []
+                ),
+                "evidence": {
+                    "activation_gaps": tool_use.details.get("activation_gaps"),
+                    "autopilot_tool_sentinels_enabled": tool_use.details.get(
+                        "autopilot_tool_sentinels_enabled"
+                    ),
+                    "api_tool_sentinels_enabled": tool_use.details.get(
+                        "api_tool_sentinels_enabled"
+                    ),
+                    "api_tools_enabled": tool_use.details.get("api_tools_enabled"),
+                    "api_repl_enabled": tool_use.details.get("api_repl_enabled"),
+                    "latest_tool_metrics": tool_use.details.get("latest_tool_metrics"),
+                },
+                "command": (
+                    "At a controlled trial boundary, reload the orchestrator API "
+                    "with AUTOPILOT_TOOL_SENTINELS=1, restart AutoPilot with "
+                    "AUTOPILOT_TOOL_SENTINELS=1 plus the existing W4/W6/planner "
+                    "env, then run AUTOPILOT_TOOL_SENTINELS=1 uv run python "
+                    "scripts/autopilot/gate3_tool_telemetry.py"
+                ),
+                "follow_up": STRICT_FABLE5_GATE_COMMAND,
+            }
+        )
 
     ds_e1 = by_key.get("ds_e1_dynamic_stack")
     if ds_e1 and ds_e1.status != "ready":
