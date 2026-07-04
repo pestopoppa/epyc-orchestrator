@@ -13,6 +13,7 @@ Builds and executes llama.cpp commands for:
 This module is shared with the orchestrator project.
 """
 
+import importlib.util
 import json
 import os
 import shutil
@@ -32,25 +33,103 @@ except ImportError:
     from registry import ModelRegistry, load_registry
 
 # Binary path + registry-timeout helpers moved to executor_paths.py
-# (2026-05-22 Task-J refactor). Re-exported so existing imports keep working.
+# (2026-05-22 Task-J refactor). Keep local wrappers so legacy tests/callers that
+# patch scripts.lib.executor.load_registry or shutil.which still affect behavior.
 try:
-    from .executor_paths import (
-        _numa_prefix,
-        _read_registry_timeout,
-        get_binary,
-        get_binary_paths,
-        get_server_defaults,
-        validate_binaries,
-    )
+    from . import executor_paths as _executor_paths
 except ImportError:
-    from executor_paths import (
-        _numa_prefix,
-        _read_registry_timeout,
-        get_binary,
-        get_binary_paths,
-        get_server_defaults,
-        validate_binaries,
+    _executor_paths_spec = importlib.util.spec_from_file_location(
+        "executor_paths", Path(__file__).with_name("executor_paths.py")
     )
+    if _executor_paths_spec is None or _executor_paths_spec.loader is None:
+        raise
+    _executor_paths = importlib.util.module_from_spec(_executor_paths_spec)
+    _executor_paths_spec.loader.exec_module(_executor_paths)
+
+
+def _numa_prefix() -> list[str]:
+    """Return numactl interleave prefix if numactl is available, else empty list."""
+    if shutil.which("numactl"):
+        return ["numactl", "--interleave=all"]
+    return []
+
+
+def _read_registry_timeout(category: str, key: str, fallback: int) -> int:
+    """Read timeout from model_registry.yaml."""
+    try:
+        reg = load_registry()
+        if reg and reg._raw:
+            timeouts = reg._raw.get("runtime_defaults", {}).get("timeouts", {})
+            cat_data = timeouts.get(category, {})
+            return cat_data.get(key, timeouts.get("default", fallback))
+    except Exception:
+        pass
+    return fallback
+
+
+def get_binary_paths(registry: Optional["ModelRegistry"] = None) -> dict[str, str]:
+    """Get binary paths from registry, preserving executor.py's patch surface."""
+    if registry is None:
+        try:
+            registry = load_registry()
+        except Exception:
+            return {
+                "base_dir": "/mnt/raid0/llm/llama.cpp/build/bin",
+                "completion": "llama-completion",
+                "speculative": "llama-speculative",
+                "lookup": "llama-lookup",
+                "cli": "llama-cli",
+                "server": "llama-server",
+            }
+    return _executor_paths.get_binary_paths(registry)
+
+
+def get_binary(name: str, registry: Optional["ModelRegistry"] = None) -> str:
+    """Get full path to a specific binary."""
+    paths = get_binary_paths(registry)
+    base_dir = paths.get("base_dir", "/mnt/raid0/llm/llama.cpp/build/bin")
+    binary_name = paths.get(name, name)
+    return os.path.join(base_dir, binary_name)
+
+
+def get_server_defaults(registry: Optional["ModelRegistry"] = None) -> dict:
+    """Get server defaults from registry, preserving executor.py's patch surface."""
+    defaults = {
+        "port": 8080,
+        "context_length": 131072,
+        "startup_timeout": 600,
+        "request_timeout": 300,
+        "parallel_slots": 4,
+    }
+    if registry is None:
+        try:
+            registry = load_registry()
+        except Exception:
+            return defaults
+    if registry and hasattr(registry, "data"):
+        server_cfg = registry.data.get("runtime_defaults", {}).get("server_defaults", {})
+        if server_cfg:
+            defaults.update(server_cfg)
+    return defaults
+
+
+def validate_binaries(registry: Optional["ModelRegistry"] = None) -> dict[str, str]:
+    """Validate all required binaries exist."""
+    required = ["completion", "speculative", "lookup"]
+    paths = {}
+    missing = []
+    for name in required:
+        path = get_binary(name, registry)
+        paths[name] = path
+        if not os.path.exists(path):
+            missing.append(f"  {name}: {path}")
+    if missing:
+        raise FileNotFoundError(
+            "Missing llama.cpp binaries (check registry runtime_defaults.binaries):\n"
+            + "\n".join(missing)
+            + "\n\nRegistry location: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml"
+        )
+    return paths
 
 
 # Default inference parameters (fallbacks if registry unavailable)
@@ -64,6 +143,27 @@ DEFAULT_TIMEOUT = _read_registry_timeout("scripts", "executor_default", 180)
 # and spec decode with draft models is always faster for 32B+ models
 # Threshold: 20GB covers ~32B Q4_K_M and above
 LOOKUP_MAX_MODEL_SIZE_GB = 20
+
+
+def _same_real_model_path(left: str, right: str) -> bool:
+    return os.path.realpath(left) == os.path.realpath(right)
+
+
+def _append_spec_decode_args(
+    cmd: list[str],
+    *,
+    model_path: str,
+    draft_model_path: Optional[str],
+    draft_max: Optional[int],
+) -> None:
+    if not draft_model_path:
+        return
+    if _same_real_model_path(model_path, draft_model_path):
+        cmd.extend(["--spec-type", "draft-mtp"])
+    else:
+        cmd.extend(["-md", draft_model_path])
+    if draft_max:
+        cmd.extend(["--spec-draft-n-max", str(draft_max)])
 
 
 class ServerManager:
@@ -155,10 +255,12 @@ class ServerManager:
             cmd.extend(["--override-kv", moe_override])
         if no_mmap:
             cmd.append("--no-mmap")
-        if draft_model_path:
-            cmd.extend(["-md", draft_model_path])
-            if draft_max:
-                cmd.extend(["--draft-max", str(draft_max)])
+        _append_spec_decode_args(
+            cmd,
+            model_path=model_path,
+            draft_model_path=draft_model_path,
+            draft_max=draft_max,
+        )
         if mmproj_path:
             cmd.extend(["--mmproj", mmproj_path])
 
@@ -171,7 +273,10 @@ class ServerManager:
         if moe_override:
             print(f"      [DEBUG] Server cmd includes: --override-kv {moe_override}", flush=True)
         if draft_model_path:
-            print(f"      [DEBUG] Server cmd includes: -md {draft_model_path}", flush=True)
+            if _same_real_model_path(model_path, draft_model_path):
+                print("      [DEBUG] Server cmd includes: embedded draft-mtp self-draft", flush=True)
+            else:
+                print(f"      [DEBUG] Server cmd includes: -md {draft_model_path}", flush=True)
         if mmproj_path:
             print(f"      [DEBUG] Server cmd includes: --mmproj {mmproj_path}", flush=True)
         print(f"      [DEBUG] Server log: {self._stderr_file.name}", flush=True)
@@ -210,7 +315,7 @@ class ServerManager:
                                     if 'n_expert_used' in line:
                                         print(f"      [DEBUG] {line.strip()}", flush=True)
                                         break
-                        except Exception as e:
+                        except Exception:
                             pass
                     return True
             except requests.exceptions.RequestException:
@@ -225,10 +330,10 @@ class ServerManager:
                         with open(self._stderr_file.name, 'r') as f:
                             lines = f.readlines()
                             if lines:
-                                print(f"    [SERVER] Process died. Last 20 lines of stderr:", flush=True)
+                                print("    [SERVER] Process died. Last 20 lines of stderr:", flush=True)
                                 for line in lines[-20:]:
                                     print(f"      {line.rstrip()}", flush=True)
-                    except Exception as e:
+                    except Exception:
                         pass
                 return False
 
@@ -822,10 +927,12 @@ class Executor:
 
         # Add config-specific flags
         if config.config_type == "spec":
-            cmd.extend([
-                "-md", config.draft_model_path,
-                "--draft-max", str(config.spec_k),
-            ])
+            _append_spec_decode_args(
+                cmd,
+                model_path=model_path,
+                draft_model_path=config.draft_model_path,
+                draft_max=config.spec_k,
+            )
         elif config.config_type == "moe":
             cmd.extend([
                 "--override-kv", f"{config.moe_override_key}=int:{config.moe_experts}",
@@ -835,9 +942,13 @@ class Executor:
                 "--draft-max", str(config.lookup_ngram or 16),
             ])
         elif config.config_type == "moe_spec":
+            _append_spec_decode_args(
+                cmd,
+                model_path=model_path,
+                draft_model_path=config.draft_model_path,
+                draft_max=config.spec_k,
+            )
             cmd.extend([
-                "-md", config.draft_model_path,
-                "--draft-max", str(config.spec_k),
                 "--override-kv", f"{config.moe_override_key}=int:{config.moe_experts}",
             ])
         elif config.config_type == "moe_lookup":
@@ -995,9 +1106,6 @@ def run_inference(
 
 
 if __name__ == "__main__":
-    # Test the module
-    import sys
-
     print("=== Executor Test ===\n")
 
     registry = load_registry()

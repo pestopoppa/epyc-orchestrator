@@ -136,7 +136,31 @@ def test_executor_build_command_spec_uses_spec_binary_without_no_conversation():
     assert cmd[0] == "/bin/llama-speculative"
     assert "--no-conversation" not in cmd
     assert "-md" in cmd and "/models/draft.gguf" in cmd
-    assert "--draft-max" in cmd and "8" in cmd
+    assert "--spec-draft-n-max" in cmd and "8" in cmd
+
+
+def test_executor_build_command_spec_omits_same_file_md_for_embedded_nextn():
+    executor = Executor(registry=MagicMock(), validate=False)
+    cfg = Config.spec(4, "/models/qwen-mtp.gguf")
+
+    def _binary(name, registry=None):  # noqa: ANN001
+        mapping = {
+            "speculative": "/bin/llama-speculative",
+            "lookup": "/bin/llama-lookup",
+            "completion": "/bin/llama-completion",
+        }
+        return mapping[name]
+
+    with (
+        patch("scripts.lib.executor._numa_prefix", return_value=[]),
+        patch("scripts.lib.executor.get_binary", side_effect=_binary),
+    ):
+        cmd = executor.build_command("/models/qwen-mtp.gguf", cfg, "/tmp/prompt.txt")
+
+    assert cmd[0] == "/bin/llama-speculative"
+    assert "-md" not in cmd
+    assert cmd[cmd.index("--spec-type") + 1] == "draft-mtp"
+    assert cmd[cmd.index("--spec-draft-n-max") + 1] == "4"
 
 
 def test_executor_build_command_moe_lookup_includes_lookup_and_override_flags():
@@ -282,4 +306,5 @@ def test_build_command_completion_moe_and_moe_spec_flags():
     assert "--override-kv" in moe_cmd
     assert "qwen3moe.expert_used_count=int:4" in moe_cmd
     assert "-md" in moe_spec_cmd and "/models/draft.gguf" in moe_spec_cmd
+    assert "--spec-draft-n-max" in moe_spec_cmd
     assert "--override-kv" in moe_spec_cmd
