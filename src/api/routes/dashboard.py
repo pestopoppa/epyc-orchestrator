@@ -4074,8 +4074,6 @@ async def task_stream(task_id: str, request: Request) -> StreamingResponse:
 # GEPA progress
 # ---------------------------------------------------------------------------
 
-_AUTOPILOT_JOURNAL = ORCHESTRATOR_LOG_DIR.parent / "orchestration/autopilot_journal.jsonl"
-
 
 @router.get("/dashboard/api/gepa")
 async def gepa_status() -> JSONResponse:
@@ -4141,23 +4139,18 @@ async def gepa_status() -> JSONResponse:
                         sentinels_done += 1
     trial_state["sentinels_completed"] = sentinels_done
 
-    # Last 10 trials from autopilot_journal for trajectory
+    # Last 10 trials from autopilot_journal for trajectory. Read ALL journal
+    # shards (base + rotations) via the shard-aware helper — a raw byte-tail on
+    # the base file alone silently freezes at the last trial before a rotation
+    # (e.g. trial 999 in autopilot_journal.jsonl while the live run advances in
+    # autopilot_journal_1.jsonl). See _autopilot_journal_shards() for the full
+    # rationale; this is the same stale-panel bug the frontier/trial panels
+    # already fixed by routing through _read_autopilot_journal_rows().
     recent_trials: list[dict[str, Any]] = []
-    if _AUTOPILOT_JOURNAL.exists():
+    journal_rows = _read_autopilot_journal_rows()
+    if journal_rows:
         try:
-            with open(_AUTOPILOT_JOURNAL, "rb") as f:
-                size = _AUTOPILOT_JOURNAL.stat().st_size
-                if size > 128 * 1024:
-                    f.seek(-128 * 1024, 2)
-                    f.readline()  # discard partial line
-                journal_tail = f.read().decode("utf-8", errors="ignore")
-            rows = []
-            for line in journal_tail.splitlines()[-15:]:
-                try:
-                    rows.append(json.loads(line))
-                except Exception:
-                    pass
-            for j in _effective_journal_trial_rows(rows)[-15:]:
+            for j in _effective_journal_trial_rows(journal_rows)[-15:]:
                 if j.get("bug_corrupted_by"):
                     continue
                 recent_trials.append({
