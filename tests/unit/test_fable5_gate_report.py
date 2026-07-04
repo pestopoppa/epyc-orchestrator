@@ -405,6 +405,55 @@ def test_tool_use_activation_section_surfaces_missing_sentinel_env() -> None:
         "latest_eval_total_tool_calls_zero",
     ]
     assert section.details["latest_tool_metrics"]["trial_id"] == 1106
+    assert section.details["recent_tool_metrics"]["nonzero_rows"] == 0
+
+
+def test_tool_use_activation_accepts_recent_nonzero_tool_telemetry() -> None:
+    section = report_mod.tool_use_activation_section(
+        phase_report={"pid": 123},
+        journal_rows=[
+            {
+                "trial_id": 1115,
+                "eval_details": {
+                    "total_tool_calls": 8,
+                    "mean_tools_used": 0.08,
+                    "tool_use_rate": 0.074,
+                    "tool_name_counts": {"get_eval_secret": 8},
+                },
+            },
+            {
+                "trial_id": 1116,
+                "eval_details": {
+                    "total_tool_calls": 0,
+                    "mean_tools_used": 0.0,
+                    "tool_use_rate": 0.0,
+                    "tool_name_counts": {},
+                },
+            },
+        ],
+        autopilot_env={report_mod.TOOL_SENTINEL_ENV: "1"},
+        api_attest={
+            "pid": 456,
+            "flags": {
+                "tools": True,
+                "repl": True,
+                "structured_tool_output": True,
+            },
+        },
+        api_env={report_mod.TOOL_SENTINEL_ENV: "1"},
+    )
+
+    assert section.status == "ready"
+    assert section.details["activation_gaps"] == []
+    assert section.details["latest_tool_metrics"]["trial_id"] == 1116
+    assert section.details["latest_tool_metrics"]["total_tool_calls"] == 0
+    assert section.details["recent_tool_metrics"]["nonzero_rows"] == 1
+    assert (
+        section.details["recent_tool_metrics"]["latest_nonzero_tool_metrics"][
+            "trial_id"
+        ]
+        == 1115
+    )
 
 
 def test_tool_use_next_action_requires_controlled_restart() -> None:
@@ -465,6 +514,7 @@ def test_tool_use_next_action_requires_controlled_restart() -> None:
                     "trial_id": 1106,
                     "total_tool_calls": 0,
                 },
+                "recent_tool_metrics": None,
             },
             "command": (
                 "At a controlled trial boundary, reload the orchestrator API "
@@ -498,6 +548,7 @@ def test_tool_use_next_action_waits_for_journal_when_lane_active() -> None:
             "api_tools_enabled": True,
             "api_repl_enabled": True,
             "latest_tool_metrics": {"trial_id": 1107, "total_tool_calls": 0},
+            "recent_tool_metrics": None,
         },
     )
     ds_e1 = report_mod.GateSection(

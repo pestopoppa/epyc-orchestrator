@@ -148,33 +148,88 @@ def _config_attest(url: str = DEFAULT_CONFIG_ATTEST_URL) -> dict[str, Any]:
     return loaded if isinstance(loaded, dict) else {"error": "attest response is not an object"}
 
 
+_TOOL_METRIC_KEYS = {
+    "total_tool_calls",
+    "tool_name_counts",
+    "mean_tools_used",
+    "tool_use_rate",
+    "tool_helpfulness",
+    "per_suite_tool_helpfulness",
+}
+
+
+def _tool_metrics_from_row(row: dict[str, Any]) -> dict[str, Any]:
+    details = row.get("eval_details")
+    if not isinstance(details, dict):
+        return {}
+    if not any(key in details for key in _TOOL_METRIC_KEYS):
+        return {}
+    return {
+        "trial_id": row.get("trial_id"),
+        "total_tool_calls": details.get("total_tool_calls"),
+        "tool_name_counts": details.get("tool_name_counts"),
+        "mean_tools_used": details.get("mean_tools_used"),
+        "tool_use_rate": details.get("tool_use_rate"),
+        "tool_helpfulness": details.get("tool_helpfulness"),
+        "per_suite_tool_helpfulness": details.get("per_suite_tool_helpfulness"),
+    }
+
+
+def _tool_call_count(metrics: dict[str, Any]) -> int:
+    try:
+        return int(metrics.get("total_tool_calls") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _latest_tool_metrics(journal_rows: list[dict[str, Any]]) -> dict[str, Any]:
     for row in reversed(journal_rows):
         if not isinstance(row, dict):
             continue
-        details = row.get("eval_details")
-        if not isinstance(details, dict):
-            continue
-        keys = {
-            "total_tool_calls",
-            "tool_name_counts",
-            "mean_tools_used",
-            "tool_use_rate",
-            "tool_helpfulness",
-            "per_suite_tool_helpfulness",
-        }
-        if not any(key in details for key in keys):
-            continue
-        return {
-            "trial_id": row.get("trial_id"),
-            "total_tool_calls": details.get("total_tool_calls"),
-            "tool_name_counts": details.get("tool_name_counts"),
-            "mean_tools_used": details.get("mean_tools_used"),
-            "tool_use_rate": details.get("tool_use_rate"),
-            "tool_helpfulness": details.get("tool_helpfulness"),
-            "per_suite_tool_helpfulness": details.get("per_suite_tool_helpfulness"),
-        }
+        metrics = _tool_metrics_from_row(row)
+        if metrics:
+            return metrics
     return {}
+
+
+def _recent_tool_metrics_summary(
+    journal_rows: list[dict[str, Any]],
+    *,
+    window: int = 10,
+) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    for row in reversed(journal_rows):
+        if not isinstance(row, dict):
+            continue
+        metrics = _tool_metrics_from_row(row)
+        if not metrics:
+            continue
+        rows.append(metrics)
+        if len(rows) >= window:
+            break
+
+    newest_first = rows
+    chronological = list(reversed(newest_first))
+    latest_nonzero = next(
+        (metrics for metrics in newest_first if _tool_call_count(metrics) > 0),
+        {},
+    )
+    return {
+        "window": window,
+        "evaluated_rows": len(chronological),
+        "nonzero_rows": sum(
+            1 for metrics in chronological if _tool_call_count(metrics) > 0
+        ),
+        "total_tool_calls": sum(
+            _tool_call_count(metrics) for metrics in chronological
+        ),
+        "trial_ids": [
+            metrics.get("trial_id")
+            for metrics in chronological
+            if metrics.get("trial_id") is not None
+        ],
+        "latest_nonzero_tool_metrics": latest_nonzero,
+    }
 
 
 def phase_section(phase_report: dict[str, Any]) -> GateSection:
@@ -251,11 +306,13 @@ def tool_use_activation_section(
         api_env = _process_env(api_pid)
 
     latest_metrics = _latest_tool_metrics(journal_rows)
+    recent_metrics = _recent_tool_metrics_summary(journal_rows)
     autopilot_sentinel = autopilot_env.get(TOOL_SENTINEL_ENV) == "1"
     api_sentinel = api_env.get(TOOL_SENTINEL_ENV) == "1"
     api_tools_ready = bool(flags.get("tools")) and bool(flags.get("repl"))
     structured_output_ready = bool(flags.get("structured_tool_output"))
     latest_total_calls = latest_metrics.get("total_tool_calls")
+    recent_nonzero_tool_rows = int(recent_metrics.get("nonzero_rows") or 0)
 
     gaps: list[str] = []
     if not autopilot_sentinel:
@@ -266,7 +323,7 @@ def tool_use_activation_section(
         gaps.append("api_tools_or_repl_not_enabled")
     if flags and not structured_output_ready:
         gaps.append("api_structured_tool_output_not_enabled")
-    if latest_metrics and latest_total_calls == 0:
+    if latest_metrics and latest_total_calls == 0 and recent_nonzero_tool_rows == 0:
         gaps.append("latest_eval_total_tool_calls_zero")
     elif not latest_metrics:
         gaps.append("latest_eval_tool_metrics_missing")
@@ -295,6 +352,7 @@ def tool_use_activation_section(
             "api_structured_tool_output_enabled": flags.get("structured_tool_output"),
             "activation_gaps": gaps,
             "latest_tool_metrics": latest_metrics,
+            "recent_tool_metrics": recent_metrics,
             "config_attest_error": (
                 api_attest.get("error") if isinstance(api_attest, dict) else None
             ),
@@ -996,6 +1054,18 @@ def build_report_summary(
             if tool_use is not None
             else None
         ),
+        "tool_use_recent_nonzero_rows": (
+            (tool_use.details.get("recent_tool_metrics") or {}).get("nonzero_rows")
+            if tool_use is not None
+            else None
+        ),
+        "tool_use_recent_total_tool_calls": (
+            (tool_use.details.get("recent_tool_metrics") or {}).get(
+                "total_tool_calls"
+            )
+            if tool_use is not None
+            else None
+        ),
     }
 
 
@@ -1218,6 +1288,7 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
             "api_tools_enabled": tool_use.details.get("api_tools_enabled"),
             "api_repl_enabled": tool_use.details.get("api_repl_enabled"),
             "latest_tool_metrics": tool_use.details.get("latest_tool_metrics"),
+            "recent_tool_metrics": tool_use.details.get("recent_tool_metrics"),
         }
         if sentinels_active and activation_gaps and all(
             gap
