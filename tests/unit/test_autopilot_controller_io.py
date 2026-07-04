@@ -410,6 +410,19 @@ def test_invoke_controller_pins_planner_model_args(monkeypatch) -> None:
     controller_io.invoke_controller("prompt", timeout=1)
 
     assert captured["cmd"][:3] == ["claude", "-p", "prompt"]
+    assert "--permission-mode" in captured["cmd"]
+    assert captured["cmd"][captured["cmd"].index("--permission-mode") + 1] == "plan"
+    assert "--allowedTools" in captured["cmd"]
+    assert (
+        captured["cmd"][captured["cmd"].index("--allowedTools") + 1]
+        == "Read,Grep,Glob"
+    )
+    assert "--disallowedTools" in captured["cmd"]
+    disallowed = set(
+        captured["cmd"][captured["cmd"].index("--disallowedTools") + 1].split(",")
+    )
+    assert {"Bash", "Edit", "MultiEdit", "Task", "Write"}.issubset(disallowed)
+    assert disallowed.isdisjoint(controller_io.PLANNER_ALLOWED_TOOLS)
     assert "--model" in captured["cmd"]
     assert captured["cmd"][captured["cmd"].index("--model") + 1] == "opus"
     assert "--fallback-model" in captured["cmd"]

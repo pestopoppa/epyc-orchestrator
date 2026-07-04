@@ -53,6 +53,23 @@ PLANNER_SUBPROCESS_STATUS_PATH = Path(
 DEFAULT_CLAUDE_MODEL = "opus"
 DEFAULT_CLAUDE_FALLBACK_MODEL = "sonnet"
 PLANNER_ALLOWED_TOOLS = {"Read", "Grep", "Glob"}
+PLANNER_DISALLOWED_TOOLS = {
+    "Bash",
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "Edit",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "MultiEdit",
+    "NotebookEdit",
+    "Task",
+    "TodoWrite",
+    "WebFetch",
+    "WebSearch",
+    "Write",
+}
 
 _FALLBACK_NUMERIC_SURFACES = {"memrl_retrieval", "think_harder", "monitor", "escalation"}
 
@@ -336,7 +353,9 @@ def invoke_controller(
         "claude", "-p", prompt,
         "--output-format", "stream-json",
         "--verbose",  # required by claude CLI for stream-json output
+        "--permission-mode", "plan",
         "--allowedTools", "Read,Grep,Glob",
+        "--disallowedTools", ",".join(sorted(PLANNER_DISALLOWED_TOOLS)),
     ]
     planner_model = os.environ.get("AUTOPILOT_CLAUDE_MODEL", DEFAULT_CLAUDE_MODEL).strip()
     if planner_model:
