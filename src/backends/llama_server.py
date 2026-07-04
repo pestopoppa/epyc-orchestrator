@@ -1235,7 +1235,6 @@ class LlamaServerBackend(ModelBackend):
                 connect=self.config.connect_timeout,
                 read=_read_timeout, write=_overall, pool=_overall,
             )
-            http_start = time.perf_counter()
             logger.info(
                 "llama STREAM /v1/chat/completions start role=%s prompt_chars=%d max_tokens=%d",
                 role_config.name, len(user_content), payload["max_tokens"],
@@ -1281,11 +1280,15 @@ class LlamaServerBackend(ModelBackend):
                         role_config.name, len(chunks),
                     )
                     completion_reason = "read_timeout"
-            http_elapsed_ms = (time.perf_counter() - http_start) * 1000
 
             output = "".join(chunks)
             elapsed = time.time() - start_time
             tokens_generated = len(output) // 4 + len(chunks)  # rough estimate from chunks
+            if request.n_tokens > 0:
+                # The streaming OpenAI shim does not send final usage/timings.
+                # llama-server still enforces max_tokens, so keep telemetry from
+                # overstating capped generations on chunk-heavy text.
+                tokens_generated = min(tokens_generated, request.n_tokens)
             speed = tokens_generated / elapsed if elapsed > 0 else 0.0
             empty_generation = (
                 completion_reason != "read_timeout"

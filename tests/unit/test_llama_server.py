@@ -490,6 +490,40 @@ class TestLlamaServerBackend:
         assert captured_payload["stream"] is True
         assert captured_payload["chat_template_kwargs"] == {"enable_thinking": False}
 
+    def test_chat_completions_stream_token_estimate_respects_request_cap(self, role_config):
+        """Streaming chat-completions telemetry must not exceed max_tokens."""
+        config = ServerConfig(base_url="http://test:8080", use_chat_completions=True)
+        backend = LlamaServerBackend(config=config)
+        role_config.name = "frontdoor"
+        request = InferenceRequest(role="frontdoor", prompt="Hello", n_tokens=8)
+        chunk = "This streamed response is much longer than eight token estimate units."
+
+        class _StreamResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def raise_for_status(self):
+                return None
+
+            def iter_lines(self):
+                content = json.dumps(chunk)
+                yield f'data: {{"choices":[{{"delta":{{"content":{content}}}}}]}}'
+                yield 'data: {"choices":[{"delta":{},"finish_reason":"length"}]}'
+                yield "data: [DONE]"
+
+        with (
+            patch.object(backend.client, "stream", return_value=_StreamResponse()),
+            patch("src.backends.llama_server.time.time", side_effect=[100.0, 101.0]),
+        ):
+            result = backend.infer_stream_text(role_config, request)
+
+        assert result.output == chunk
+        assert result.completion_reason == "length"
+        assert result.tokens_generated == 8
+
     def test_health_check_success(self):
         """Test health check with healthy server."""
         backend = LlamaServerBackend(base_url="http://test:8080")
