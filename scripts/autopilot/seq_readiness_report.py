@@ -55,6 +55,7 @@ DEFAULT_MIN_SEQ_SHADOW_ROWS = 30
 DEFAULT_MIN_FLIP_RATE = 0.30
 DEFAULT_HOLD_FLIP_RATE = 0.10
 DEFAULT_MIN_SHARED_QIDS = 35
+DEFAULT_ALPHA_WEALTH_BUDGET = 1.0
 DEFAULT_STATE_PATH = ORCH_ROOT / "orchestration" / "autopilot_state.json"
 
 LEGACY_MAD_EXCLUSIONS = frozenset({"mad_noise", "reproduction_confirmed"})
@@ -94,6 +95,7 @@ def build_seq_readiness_report(
     min_flip_rate: float = DEFAULT_MIN_FLIP_RATE,
     hold_flip_rate: float = DEFAULT_HOLD_FLIP_RATE,
     min_shared_qids: int = DEFAULT_MIN_SHARED_QIDS,
+    alpha_wealth_budget: float = DEFAULT_ALPHA_WEALTH_BUDGET,
 ) -> dict[str, Any]:
     """Build a no-write readiness report from folded journal rows."""
     normalized = [dict(row) for row in rows if isinstance(row, Mapping)]
@@ -103,6 +105,10 @@ def build_seq_readiness_report(
     clusters = _candidate_clusters(trusted_rows)
     pairwise = _pairwise_replays(trusted_rows, min_shared_qids=min_shared_qids)
     shadow = _seq_shadow_disagreement(trusted_rows)
+    alpha_wealth = _alpha_multiplicity_diagnostic(
+        trusted_rows,
+        budget=alpha_wealth_budget,
+    )
     blockers = _cutover_blockers(
         trusted_vector_trials=len(trusted_rows),
         seq_shadow_rows=shadow["seq_shadow_rows"],
@@ -133,6 +139,7 @@ def build_seq_readiness_report(
         "candidate_clusters": [asdict(cluster) for cluster in clusters],
         "pairwise_replays": [asdict(replay) for replay in pairwise],
         "seq_shadow": shadow,
+        "alpha_wealth": alpha_wealth,
         "w8_promotion_evidence": _w8_promotion_evidence(state, normalized),
         "cutover_blockers": blockers,
         "recommendation": _recommendation(
@@ -165,6 +172,15 @@ def render_markdown(report: Mapping[str, Any]) -> str:
             f"{shadow['seq_shadow_rows']} "
             f"(disagreements={shadow['disagreements']}, "
             f"flip_rate={_fmt_rate(shadow['flip_rate'])})"
+        ),
+        (
+            "- Alpha wealth: "
+            f"fingerprints_tested={report.get('alpha_wealth', {}).get('fingerprints_tested')}, "
+            f"alpha_spent={report.get('alpha_wealth', {}).get('alpha_spent')}, "
+            f"expected_false_confirms="
+            f"{report.get('alpha_wealth', {}).get('expected_false_confirms')}, "
+            f"new_fingerprint_confirmations_allowed="
+            f"{report.get('alpha_wealth', {}).get('new_fingerprint_confirmations_allowed')}"
         ),
         (
             "- Thresholds: "
@@ -354,6 +370,43 @@ def _seq_shadow_disagreement(rows: list[Mapping[str, Any]]) -> dict[str, Any]:
                 if isinstance(row.get("seq"), Mapping)
             }
         ),
+    }
+
+
+def _alpha_multiplicity_diagnostic(
+    rows: list[Mapping[str, Any]],
+    *,
+    budget: float,
+) -> dict[str, Any]:
+    """Report global alpha spent by distinct seq candidate fingerprints."""
+    candidates = sorted(
+        {
+            str(seq.get("candidate"))
+            for row in rows
+            if isinstance((seq := row.get("seq")), Mapping)
+            and str(seq.get("candidate") or "").strip()
+        }
+    )
+    alpha = max(0.0, float(DEFAULT_POLICY.alpha))
+    budget = max(0.0, float(budget))
+    spent = len(candidates) * alpha
+    spent_with_new = (len(candidates) + 1) * alpha
+    return {
+        "policy_version": DEFAULT_POLICY.version,
+        "alpha": round(alpha, 6),
+        "budget": round(budget, 6),
+        "fingerprints_tested": len(candidates),
+        "fingerprints_sample": candidates[:10],
+        "alpha_spent": round(spent, 6),
+        "alpha_spent_with_next_new_fingerprint": round(spent_with_new, 6),
+        "expected_false_confirms": round(spent, 6),
+        "expected_false_confirms_with_next_new_fingerprint": round(spent_with_new, 6),
+        "budget_remaining": round(max(0.0, budget - spent), 6),
+        "budget_remaining_with_next_new_fingerprint": round(
+            max(0.0, budget - spent_with_new), 6
+        ),
+        "budget_exhausted": spent >= budget if budget > 0.0 else bool(candidates),
+        "new_fingerprint_confirmations_allowed": spent_with_new <= budget,
     }
 
 
@@ -668,6 +721,16 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--min-flip-rate", type=float, default=DEFAULT_MIN_FLIP_RATE)
     parser.add_argument("--hold-flip-rate", type=float, default=DEFAULT_HOLD_FLIP_RATE)
     parser.add_argument("--min-shared-qids", type=int, default=DEFAULT_MIN_SHARED_QIDS)
+    parser.add_argument(
+        "--alpha-wealth-budget",
+        type=float,
+        default=DEFAULT_ALPHA_WEALTH_BUDGET,
+        help=(
+            "Global expected-false-confirm alpha budget across distinct seq "
+            "candidate fingerprints. Reports whether the next new fingerprint "
+            "can be confirmation-eligible."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -688,6 +751,7 @@ def main(argv: list[str] | None = None) -> int:
         min_flip_rate=max(0.0, args.min_flip_rate),
         hold_flip_rate=max(0.0, args.hold_flip_rate),
         min_shared_qids=max(0, args.min_shared_qids),
+        alpha_wealth_budget=max(0.0, args.alpha_wealth_budget),
     )
     json_text = json.dumps(report, sort_keys=True, default=str)
     markdown_text = render_markdown(report)

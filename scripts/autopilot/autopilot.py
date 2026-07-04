@@ -109,7 +109,10 @@ from src.autopilot_core.planner_evidence import (
     DEFAULT_EVIDENCE_CORE_ID,
     format_planner_evidence_section,
 )
-from src.autopilot_core.sequential_verdict import baseline_profile_from_trials
+from src.autopilot_core.sequential_verdict import (
+    DEFAULT_POLICY as SEQ_DEFAULT_POLICY,
+    baseline_profile_from_trials,
+)
 from src.autopilot_core.tier_specs import (
     DEFAULT_FRONTIER_TIER,
     LEGACY_OBJECTIVE_POLICY,
@@ -198,6 +201,9 @@ SEQ_PROMOTION_FINAL_CONFIRM_E = float(
 )
 SEQ_PROMOTION_DELTA_CI_ALPHA = float(
     os.environ.get("AUTOPILOT_SEQ_PROMOTION_DELTA_CI_ALPHA", "0.05")
+)
+SEQ_ALPHA_WEALTH_BUDGET = float(
+    os.environ.get("AUTOPILOT_SEQ_ALPHA_WEALTH_BUDGET", "1.0")
 )
 SEQ_PROMOTION_FRESH_EVAL_TIER = int(
     os.environ.get("AUTOPILOT_SEQ_PROMOTION_FRESH_EVAL_TIER", "2")
@@ -1442,6 +1448,7 @@ def _update_seq_promotion_fresh_eval_state(
     is_fresh_eval: bool,
     finalized: bool | None,
     baseline_update: Any | None = None,
+    seq_alpha_wealth: dict[str, Any] | None = None,
 ) -> None:
     """Maintain the bounded pending fresh-eval state for seq baseline promotion."""
     if not isinstance(seq, dict):
@@ -1502,6 +1509,20 @@ def _update_seq_promotion_fresh_eval_state(
         return
     if not seq.get("confirmed"):
         return
+    alpha_wealth = seq_alpha_wealth or {}
+    if (
+        alpha_wealth.get("candidate_is_new")
+        and alpha_wealth.get("new_fingerprint_confirmations_allowed") is False
+    ):
+        state.pop("_seq_promotion_candidate_replay", None)
+        state.pop("seq_pending_promotion_fresh_eval", None)
+        state["seq_last_promotion_blocked"] = {
+            "trial_id": trial_counter,
+            "candidate": seq.get("candidate"),
+            "reason": "alpha-wealth-budget-exhausted",
+            "alpha_wealth": dict(alpha_wealth),
+        }
+        return
     state["seq_pending_promotion_fresh_eval"] = {
         "candidate": seq.get("candidate"),
         "core_id": seq.get("core_id") or DEFAULT_EVIDENCE_CORE_ID,
@@ -1511,6 +1532,55 @@ def _update_seq_promotion_fresh_eval_state(
         "combined_E": seq.get("baseline_promotion_combined_E"),
         "created_at": datetime.now(timezone.utc).isoformat(),
         "attempts": 0,
+    }
+
+
+def _seq_alpha_wealth_state(
+    candidates: Any,
+    *,
+    candidate: str,
+    budget: float = SEQ_ALPHA_WEALTH_BUDGET,
+    alpha: float = SEQ_DEFAULT_POLICY.alpha,
+) -> dict[str, Any]:
+    """Bound the free multiple-testing channel across seq candidate fingerprints."""
+    existing = {
+        str(item)
+        for item in (candidates or [])
+        if str(item or "").strip()
+    }
+    candidate = str(candidate or "").strip()
+    including_candidate = set(existing)
+    if candidate:
+        including_candidate.add(candidate)
+    candidate_is_new = bool(candidate and candidate not in existing)
+    alpha = max(0.0, float(alpha))
+    budget = max(0.0, float(budget))
+    alpha_spent = len(existing) * alpha
+    alpha_spent_including_candidate = len(including_candidate) * alpha
+    return {
+        "policy_version": SEQ_DEFAULT_POLICY.version,
+        "alpha": round(alpha, 6),
+        "budget": round(budget, 6),
+        "fingerprints_tested": len(existing),
+        "fingerprints_tested_including_candidate": len(including_candidate),
+        "candidate": candidate,
+        "candidate_is_new": candidate_is_new,
+        "alpha_spent": round(alpha_spent, 6),
+        "alpha_spent_including_candidate": round(
+            alpha_spent_including_candidate, 6
+        ),
+        "expected_false_confirms": round(alpha_spent, 6),
+        "expected_false_confirms_including_candidate": round(
+            alpha_spent_including_candidate, 6
+        ),
+        "budget_remaining": round(max(0.0, budget - alpha_spent), 6),
+        "budget_remaining_including_candidate": round(
+            max(0.0, budget - alpha_spent_including_candidate), 6
+        ),
+        "budget_exhausted": alpha_spent >= budget if budget > 0.0 else bool(existing),
+        "new_fingerprint_confirmations_allowed": (
+            not candidate_is_new or alpha_spent_including_candidate <= budget
+        ),
     }
 
 
@@ -1527,6 +1597,7 @@ def _seq_inputs_for_trial(
     prior_rate_obs: list[tuple[int | None, float]] = []
     baseline_trials: list[dict[str, bool]] = []
     baseline_task_rates: list[float] = []
+    seq_candidates: set[str] = set()
 
     for entry in reversed(journal.entries_with_supersessions()):
         if getattr(entry, "bug_corrupted_by", ""):
@@ -1558,9 +1629,12 @@ def _seq_inputs_for_trial(
         seq = getattr(entry, "seq", {}) or {}
         if not isinstance(seq, dict):
             continue
-        if str(seq.get("candidate") or "") != candidate:
-            continue
         if str(seq.get("core_id") or DEFAULT_EVIDENCE_CORE_ID) != DEFAULT_EVIDENCE_CORE_ID:
+            continue
+        seq_candidate = str(seq.get("candidate") or "")
+        if seq_candidate:
+            seq_candidates.add(seq_candidate)
+        if seq_candidate != candidate:
             continue
         if len(prior_quality_obs) < SEQ_PRIOR_OBS_LIMIT and "z" in seq:
             try:
@@ -1587,6 +1661,7 @@ def _seq_inputs_for_trial(
         "prior_quality_obs": list(reversed(prior_quality_obs)),
         "prior_rate_obs": list(reversed(prior_rate_obs)),
         "baseline_reference": _seq_baseline_reference_state(journal, tier=tier),
+        "alpha_wealth": _seq_alpha_wealth_state(seq_candidates, candidate=candidate),
     }
 
 
@@ -4864,6 +4939,8 @@ def _run_loop_inner(
                 candidate=seq_inputs["candidate"],
                 core_id=seq_inputs["core_id"],
             )
+            if isinstance(getattr(verdict, "seq", None), dict):
+                verdict.seq["alpha_wealth"] = seq_inputs.get("alpha_wealth")
             seq_finalized = _annotate_seq_promotion_finalization(
                 verdict.seq,
                 baseline_reference=seq_inputs.get("baseline_reference"),
@@ -5036,6 +5113,7 @@ def _run_loop_inner(
             is_fresh_eval=seq_fresh_eval_context is not None,
             finalized=seq_finalized if baseline_update is not None else False,
             baseline_update=baseline_update,
+            seq_alpha_wealth=seq_inputs.get("alpha_wealth") if not has_exo_unrecovered else None,
         )
 
         # Extract hypothesis and expected mechanism from action/controller

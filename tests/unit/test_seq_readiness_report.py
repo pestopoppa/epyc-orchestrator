@@ -153,6 +153,31 @@ def test_report_can_be_cutover_ready_with_sufficient_shadow_disagreement() -> No
     assert report["cutover_blockers"] == []
 
 
+def test_report_surfaces_alpha_wealth_across_candidate_fingerprints() -> None:
+    rows = [
+        _row(1, "fp-a", set(range(20)), seq_state="confirmed"),
+        _row(2, "fp-b", set(range(21)), seq_state="accumulating"),
+        _row(3, "fp-c", set(range(22)), seq_state="refuted"),
+    ]
+
+    report = seq_readiness_report.build_seq_readiness_report(
+        rows,
+        min_trusted_vector_trials=3,
+        min_seq_shadow_rows=0,
+        min_shared_qids=1,
+        alpha_wealth_budget=0.15,
+    )
+
+    alpha = report["alpha_wealth"]
+    assert alpha["fingerprints_tested"] == 3
+    assert alpha["alpha_spent"] == 0.15
+    assert alpha["expected_false_confirms"] == 0.15
+    assert alpha["new_fingerprint_confirmations_allowed"] is False
+    rendered = seq_readiness_report.render_markdown(report)
+    assert "Alpha wealth: fingerprints_tested=3" in rendered
+    assert "new_fingerprint_confirmations_allowed=False" in rendered
+
+
 def test_report_projects_w8_promotion_eval_state() -> None:
     state = {
         "seq_pending_promotion_fresh_eval": {

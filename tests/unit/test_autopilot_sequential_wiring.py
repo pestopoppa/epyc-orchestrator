@@ -901,6 +901,60 @@ def test_seq_promotion_state_queues_and_forces_one_fresh_eval() -> None:
     }
 
 
+def test_seq_promotion_blocks_new_candidate_when_alpha_wealth_exhausted() -> None:
+    state: dict = {}
+    action = {
+        "type": "numeric_trial",
+        "surface": "monitor",
+        "params": {"ORCHESTRATOR_MONITOR_THRESHOLD": 0.42},
+    }
+    eval_result = autopilot.EvalResult(
+        tier=2,
+        quality=3.0,
+        speed=10.0,
+        cost=0.1,
+        reliability=1.0,
+    )
+
+    autopilot._update_seq_promotion_fresh_eval_state(
+        state,
+        seq={
+            "candidate": "candidate-new",
+            "confirmed": True,
+            "baseline_reference_state": "fresh",
+            "baseline_promotion_combined_E": 25.0,
+        },
+        action=action,
+        eval_result=eval_result,
+        trial_counter=11,
+        is_fresh_eval=False,
+        finalized=False,
+        seq_alpha_wealth={
+            "candidate": "candidate-new",
+            "candidate_is_new": True,
+            "fingerprints_tested": 20,
+            "alpha_spent": 1.0,
+            "budget": 1.0,
+            "new_fingerprint_confirmations_allowed": False,
+        },
+    )
+
+    assert "seq_pending_promotion_fresh_eval" not in state
+    assert state["seq_last_promotion_blocked"] == {
+        "trial_id": 11,
+        "candidate": "candidate-new",
+        "reason": "alpha-wealth-budget-exhausted",
+        "alpha_wealth": {
+            "candidate": "candidate-new",
+            "candidate_is_new": True,
+            "fingerprints_tested": 20,
+            "alpha_spent": 1.0,
+            "budget": 1.0,
+            "new_fingerprint_confirmations_allowed": False,
+        },
+    }
+
+
 def test_seq_promotion_unreplayable_candidate_blocks_without_fresh_eval() -> None:
     state: dict = {}
     action = {"type": "numeric_trial", "surface": "monitor", "params": {}}
