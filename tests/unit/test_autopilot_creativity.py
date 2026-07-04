@@ -846,6 +846,47 @@ def test_higher_tier_pressure_preserves_same_tier_comparison() -> None:
     assert "deployment safety lane" in text
 
 
+def test_eval_coverage_pressure_reports_repeat_factor_and_pool_denominator() -> None:
+    tier3_entry = _entry(
+        2,
+        "deep_eval",
+        eval_details={
+            "question_results": [
+                {"suite": "coder", "qid": "a", "correct": True},
+                {"suite": "agentic", "qid": "c", "correct": False},
+            ]
+        },
+    )
+    tier3_entry.tier = 3
+    journal = SimpleNamespace(
+        entries_with_supersessions=lambda: [
+            _entry(
+                1,
+                "numeric_trial",
+                eval_details={
+                    "question_results": [
+                        {"suite": "coder", "qid": "a", "correct": True},
+                        {"suite": "coder", "qid": "b", "correct": False},
+                    ]
+                },
+            ),
+            tier3_entry,
+        ]
+    )
+
+    text = autopilot._build_eval_coverage_pressure(
+        journal,
+        pool_total_questions=100,
+    )
+
+    assert "3 distinct qids / 4 scored rows" in text
+    assert "repeat_factor=1.33x" in text
+    assert "pool_coverage<=3.00% of 100" in text
+    assert "eval trials by tier: T1=1, T3=1" in text
+    assert "under-covered suites" in text
+    assert "fixed authority-core evidence separate" in text
+
+
 def test_controller_prompt_uses_fresh_strategy_hints_section(monkeypatch) -> None:
     monkeypatch.setattr(autopilot, "_PLANNER_HINTS_ENABLED", True)
     rows: list[SimpleNamespace] = []
@@ -890,6 +931,7 @@ def test_controller_prompt_uses_fresh_strategy_hints_section(monkeypatch) -> Non
             action_availability="actions",
             fable_gate_advisory="fable-gate",
             higher_tier_pressure="higher-tier",
+            eval_coverage_pressure="coverage",
             planner_strategy_hints=planner_strategy_hints,
             repo_readiness_advisory="repo",
             budget="budget",

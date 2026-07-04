@@ -731,6 +731,99 @@ def _build_higher_tier_planner_pressure(
     return "\n".join(lines)
 
 
+def _pool_total_question_count() -> int | None:
+    """Cheaply read the question-pool metadata row without scanning the pool."""
+    candidates = (
+        ORCH_ROOT / "benchmarks" / "prompts" / "question_pool.jsonl",
+        Path("/mnt/raid0/llm/epyc-inference-research/benchmarks/prompts/question_pool.jsonl"),
+    )
+    for path in candidates:
+        if not path.exists():
+            continue
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                first = handle.readline().strip()
+            row = json.loads(first) if first else {}
+            if isinstance(row, dict) and row.get("__pool_metadata__"):
+                total = int(row.get("total_questions") or 0)
+                return total if total > 0 else None
+        except Exception:
+            continue
+    return None
+
+
+def _eval_question_results(entry: JournalEntry) -> list[dict[str, Any]]:
+    details = entry.eval_details if isinstance(entry.eval_details, dict) else {}
+    nested = details.get("details") if isinstance(details.get("details"), dict) else {}
+    for container in (details, nested):
+        for key in ("question_results", "per_question_results", "per_question"):
+            raw = container.get(key)
+            if isinstance(raw, list):
+                return [item for item in raw if isinstance(item, dict)]
+    return []
+
+
+def _build_eval_coverage_pressure(
+    journal: ExperimentJournal | None,
+    *,
+    pool_total_questions: int | None = None,
+) -> str:
+    """Summarize eval-task coverage so planner search does not overfit a narrow slice."""
+    if journal is None:
+        return "(unavailable: ExperimentJournal did not load)"
+
+    entries = journal.entries_with_supersessions()
+    question_rows = 0
+    distinct: set[tuple[str, str]] = set()
+    tier_trials: dict[int, int] = {}
+    for entry in entries:
+        results = _eval_question_results(entry)
+        if not results:
+            continue
+        tier_trials[int(entry.tier)] = tier_trials.get(int(entry.tier), 0) + 1
+        for result in results:
+            qid = str(
+                result.get("qid")
+                or result.get("question_id")
+                or result.get("id")
+                or ""
+            ).strip()
+            if not qid:
+                continue
+            suite = str(result.get("suite") or "unknown").strip() or "unknown"
+            question_rows += 1
+            distinct.add((suite, qid))
+
+    if question_rows <= 0:
+        return (
+            "No scored question-result rows are available yet; prefer seed_batch "
+            "or deep_eval before drawing planner-learning conclusions."
+        )
+
+    distinct_count = len(distinct)
+    repeat_factor = question_rows / max(1, distinct_count)
+    total = pool_total_questions if pool_total_questions is not None else _pool_total_question_count()
+    coverage_text = ""
+    if total:
+        coverage_text = f", pool_coverage<={distinct_count * 100.0 / total:.2f}% of {total}"
+    tier_text = ", ".join(
+        f"T{tier}={count}" for tier, count in sorted(tier_trials.items())
+    ) or "none"
+    lines = [
+        (
+            f"Eval coverage: {distinct_count} distinct qids / {question_rows} scored rows "
+            f"(repeat_factor={repeat_factor:.2f}x{coverage_text}); eval trials by tier: {tier_text}."
+        ),
+        (
+            "If repeat_factor is high or coverage is low, prefer actions that add "
+            "decision-grade diversity: seed_batch on under-covered suites, deep_eval tier 2/3, "
+            "or tool-use/agentic coverage probes. Keep fixed authority-core evidence separate "
+            "from planner-learning coverage."
+        ),
+    ]
+    return "\n".join(lines)
+
+
 _QUOTA_NUMERIC_SURFACES = _configured_numeric_surfaces()
 
 
@@ -2707,6 +2800,9 @@ briefly in reasoning and still emit the closest valid AutoPilot action block.
 ### Higher-Tier Objective Pressure (same-tier, non-authority)
 {higher_tier_pressure}
 
+### Eval Coverage Pressure (planner-learning, non-authority)
+{eval_coverage_pressure}
+
 ### StrategyStore Planner Hints (refreshed each planner turn)
 Planner tool boundary: StrategyStore rows mentioning tools, REPL, CALL, or
 tool-use refer to orchestrator/model execution inside AutoPilot actions and
@@ -4399,6 +4495,7 @@ def _run_loop_inner(
                 archive,
                 gate,
             )
+            eval_coverage_pressure_text = _build_eval_coverage_pressure(journal)
 
             prompt = CONTROLLER_PROMPT_TEMPLATE.format(
                 constitution=constitution_text,
@@ -4421,6 +4518,7 @@ def _run_loop_inner(
                 action_availability=action_availability_text,
                 fable_gate_advisory=_build_fable_gate_advisory(),
                 higher_tier_pressure=higher_tier_pressure_text,
+                eval_coverage_pressure=eval_coverage_pressure_text,
                 planner_strategy_hints=planner_strategy_hints_text,
                 repo_readiness_advisory=_build_repo_readiness_advisory(),
                 budget=json.dumps(meta.budget.as_dict(), indent=2),
