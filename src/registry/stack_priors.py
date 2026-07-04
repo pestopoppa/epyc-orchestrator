@@ -1016,10 +1016,9 @@ def _resolve_nextn_draft_path(
     """Resolve the NEXTN self-draft GGUF path for a draft-mtp role.
 
     2026-06-26 v6 cutover: NEXTN self-draft roles (frontdoor, architect_general)
-    embed the draft head in the base GGUF, so -md == -m. The launcher's
-    default-mode path takes -md ONLY from the compiled spec.draft_model_path, so
-    this must resolve to a non-empty absolute path or the launcher silently drops
-    speculation.
+    embed the draft head in the base GGUF. The compiled draft path intentionally
+    resolves to the model path; the launcher emits draft-mtp spec flags but
+    suppresses ``-md`` when both paths have the same realpath.
 
     Sources, in precedence order:
       1. requirements.draft_model_path (explicit full path, e.g. server_mode override)
@@ -1181,11 +1180,11 @@ def _launch_runtime_record(
         # emit a NON-NULL draft-mtp spec for any non-worker
         # role whose registry acceleration.spec_type == 'draft-mtp' (frontdoor
         # qwen36_q8_0, architect_general). These are NEXTN self-draft models — the
-        # draft head is embedded in the base GGUF, so the drafter file is the SAME
-        # file as -m (-md == -m). Resolve draft_model_path to the role's own model
-        # path when no explicit draft path is supplied. draft_max carries the n-max
-        # value from the registry (frontdoor=4, architect=4); the launcher renames
-        # the emitted flag to --spec-draft-n-max.
+        # draft head is embedded in the base GGUF, so the resolved drafter file is
+        # the same file as -m. Keep the compiled path explicit for provenance; the
+        # launcher suppresses -md for same-realpath drafts and preserves
+        # --spec-type/--spec-draft-n-max. draft_max carries the n-max value from
+        # the registry (frontdoor=4, architect=4).
         nextn_draft_path = _resolve_nextn_draft_path(
             requirements,
             acceleration,

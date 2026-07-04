@@ -642,10 +642,10 @@ def test_append_acceleration_args_moe_expert_reduction() -> None:
 def test_append_acceleration_args_architect_general_uses_nextn_self_draft() -> None:
     """2026-06-26 v6 cutover: architect_general now runs native NEXTN MTP (draft-mtp).
     It was removed from _NO_SPEC_DECODE (the M-RoPE assertion is resolved on v6), and
-    its draft is the NEXTN self-draft (draft_model == base, -md == -m) resolved by the
-    compiled stack_priors / _append_runtime_spec_args path — NOT via this helper's
-    draft_role branch. So with draft_role=None this helper emits no spec args (and must
-    not crash)."""
+    its draft is the NEXTN self-draft (draft_model == base) resolved by the compiled
+    stack_priors / _append_runtime_spec_args path, which later omits -md for
+    same-realpath drafts — NOT via this helper's draft_role branch. So with
+    draft_role=None this helper emits no spec args (and must not crash)."""
     accel = SimpleNamespace(
         type="speculative_decoding",
         draft_role=None,  # v6 NEXTN self-draft via draft_model; spec emitted from stack_priors

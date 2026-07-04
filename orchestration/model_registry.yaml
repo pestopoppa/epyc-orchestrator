@@ -1457,7 +1457,7 @@ roles:
       k: 4
       p_split: 0
       lookup: false
-      notes: '# 2026-06-26 v6 cutover: native draft-mtp on production-consolidated-v6, ik_llama deprecated. Architect MTP via NEXTN-embedded Qwen3.5-122B variant (draft = same GGUF as model). Dropped the
+      notes: '# 2026-06-26 v6 cutover: native draft-mtp on production-consolidated-v6, ik_llama deprecated. Architect MTP via NEXTN-embedded Qwen3.5-122B variant (draft = same GGUF as model; launcher omits -md for same-realpath drafts). Dropped the
         no-op moe expert_used_count override (8 == GGUF default == no reduction). moe8+spec historically = 12.6 t/s single-instance. Earlier _NO_SPEC_DECODE gate (M-RoPE rollback bug, pre-v6 build b8957)
         is superseded by v6 native MTP.
 
