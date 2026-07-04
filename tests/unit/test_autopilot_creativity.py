@@ -805,6 +805,47 @@ def test_controller_prompt_scopes_strategy_tool_hints_to_eval_tools() -> None:
     assert "let the orchestrator dispatch it" in template
 
 
+def test_controller_prompt_includes_higher_tier_pressure_section() -> None:
+    template = autopilot.CONTROLLER_PROMPT_TEMPLATE
+
+    assert "Higher-Tier Objective Pressure" in template
+    assert "{higher_tier_pressure}" in template
+    assert "T3 is the expert/hard workflow slice" in template
+
+
+def test_higher_tier_pressure_preserves_same_tier_comparison() -> None:
+    class FakeArchive:
+        def summary(self, *, tier):
+            if tier == 2:
+                return {
+                    "frontier_size": 2,
+                    "best_quality": 1.4,
+                    "best_speed": 18.5,
+                }
+            if tier == 3:
+                return {
+                    "frontier_size": 0,
+                    "best_quality": 0.0,
+                    "best_speed": 0.0,
+                }
+            raise AssertionError(f"unexpected tier {tier}")
+
+    class FakeBaseline:
+        def quality_for_tier(self, tier):
+            return {2: 1.1, 3: 0.2}[tier]
+
+    text = autopilot._build_higher_tier_planner_pressure(
+        FakeArchive(),
+        SimpleNamespace(baseline=FakeBaseline()),
+    )
+
+    assert "expert/hard workflow tasks" in text
+    assert "Never compare raw quality across tiers" in text
+    assert "T2: frontier=2, best_q=1.400, delta_vs_baseline=+0.300" in text
+    assert "T3: empty frontier; baseline_q=0.200" in text
+    assert "deployment safety lane" in text
+
+
 def test_controller_prompt_uses_fresh_strategy_hints_section(monkeypatch) -> None:
     monkeypatch.setattr(autopilot, "_PLANNER_HINTS_ENABLED", True)
     rows: list[SimpleNamespace] = []
@@ -848,6 +889,7 @@ def test_controller_prompt_uses_fresh_strategy_hints_section(monkeypatch) -> Non
             slot_memory="slots",
             action_availability="actions",
             fable_gate_advisory="fable-gate",
+            higher_tier_pressure="higher-tier",
             planner_strategy_hints=planner_strategy_hints,
             repo_readiness_advisory="repo",
             budget="budget",

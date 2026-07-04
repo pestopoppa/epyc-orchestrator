@@ -674,6 +674,63 @@ def _build_planner_strategy_hints(
     )
 
 
+def _build_higher_tier_planner_pressure(
+    archive: ParetoArchive | None,
+    gate: SafetyGate | None,
+    *,
+    tiers: tuple[int, ...] = (2, 3),
+) -> str:
+    """Summarize non-default eval tiers for planner pressure without cross-tier scoring."""
+    if archive is None:
+        return "(unavailable: Pareto archive did not load)"
+
+    lines = [
+        "Use higher-tier evidence as optimization pressure, not as cross-tier scores:",
+        "- T2/T3 are broader and harder slices of the real task pool; T3 includes expert/hard workflow tasks.",
+        "- Preserve T1 as the deployment safety lane; avoid T1 regressions.",
+        "- Prefer actions likely to improve T2/T3 same-tier frontier quality, then validate with deep_eval tier 2 or 3.",
+        "- Never compare raw quality across tiers; compare each tier only to its own baseline/frontier.",
+    ]
+    baseline = getattr(gate, "baseline", None) if gate is not None else None
+    for tier in tiers:
+        if tier <= DEFAULT_FRONTIER_TIER:
+            continue
+        try:
+            summary = archive.summary(tier=tier)
+        except Exception as exc:
+            lines.append(f"- T{tier}: unavailable ({exc})")
+            continue
+        frontier_size = int(summary.get("frontier_size") or 0)
+        best_quality = float(summary.get("best_quality") or 0.0)
+        try:
+            baseline_quality = (
+                float(baseline.quality_for_tier(tier))
+                if baseline is not None
+                else None
+            )
+        except Exception:
+            baseline_quality = None
+        if frontier_size <= 0:
+            baseline_text = (
+                f"; baseline_q={baseline_quality:.3f}"
+                if baseline_quality is not None
+                else ""
+            )
+            lines.append(
+                f"- T{tier}: empty frontier{baseline_text}; schedule deep_eval tier {tier} "
+                "when evidence budget allows."
+            )
+            continue
+        delta_text = ""
+        if baseline_quality is not None:
+            delta_text = f", delta_vs_baseline={best_quality - baseline_quality:+.3f}"
+        lines.append(
+            f"- T{tier}: frontier={frontier_size}, best_q={best_quality:.3f}{delta_text}, "
+            f"best_speed={float(summary.get('best_speed') or 0.0):.1f} t/s"
+        )
+    return "\n".join(lines)
+
+
 _QUOTA_NUMERIC_SURFACES = _configured_numeric_surfaces()
 
 
@@ -2647,6 +2704,9 @@ briefly in reasoning and still emit the closest valid AutoPilot action block.
 ### Fable 5 Gate Advisory (latest generated report, non-authority)
 {fable_gate_advisory}
 
+### Higher-Tier Objective Pressure (same-tier, non-authority)
+{higher_tier_pressure}
+
 ### StrategyStore Planner Hints (refreshed each planner turn)
 Planner tool boundary: StrategyStore rows mentioning tools, REPL, CALL, or
 tool-use refer to orchestrator/model execution inside AutoPilot actions and
@@ -2739,7 +2799,7 @@ Respond with EXACTLY ONE action in a ```json:autopilot_actions block:
 - Distill: {{"type": "distill_skillbank", "teacher": "claude", "categories": ["routing"]}}
 - Reset: {{"type": "reset_memories", "keep_seen": true, "keep_skills": true}}
 - Deep eval: {{"type": "deep_eval", "tier": 2}}
-  (Supported tiers: 0, 1, 2, or 3. T3 is a hard-only stress eval. Do NOT include target_trial, suites, baseline_recheck, or instrumentation fields.)
+  (Supported tiers: 0, 1, 2, or 3. T3 is the expert/hard workflow slice of the pool. Do NOT include target_trial, suites, baseline_recheck, or instrumentation fields.)
 - Rollback: {{"type": "rollback", "to_checkpoint": "production_best"}}
 - Distill: {{"type": "distill_knowledge", "last_n": 10}}
   (Run every ~5 trials to extract insights from recent outcomes into strategy memory)
@@ -4335,6 +4395,10 @@ def _run_loop_inner(
                 strategy_store,
                 journal,
             )
+            higher_tier_pressure_text = _build_higher_tier_planner_pressure(
+                archive,
+                gate,
+            )
 
             prompt = CONTROLLER_PROMPT_TEMPLATE.format(
                 constitution=constitution_text,
@@ -4356,6 +4420,7 @@ def _run_loop_inner(
                 slot_memory=slot_memory_text,
                 action_availability=action_availability_text,
                 fable_gate_advisory=_build_fable_gate_advisory(),
+                higher_tier_pressure=higher_tier_pressure_text,
                 planner_strategy_hints=planner_strategy_hints_text,
                 repo_readiness_advisory=_build_repo_readiness_advisory(),
                 budget=json.dumps(meta.budget.as_dict(), indent=2),
