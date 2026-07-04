@@ -93,6 +93,25 @@ def test_a9_collection_status_invalidates_missing_dry_run(
     ]
 
 
+def test_a9_collection_status_reports_no_runnable_batches(
+    tmp_path: Path, monkeypatch
+) -> None:
+    manifest = tmp_path / "manifest.json"
+    _write_manifest(manifest)
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["batch_count"] = 0
+    payload["batches"] = []
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(mod, "_active_processes", lambda pattern: [])
+
+    status = mod.build_status(manifest)
+
+    assert status["ready"] is False
+    assert status["status"] == "no_runnable_batches"
+    assert status["blockers"] == []
+    assert status["warnings"] == ["manifest has no runnable collection batches"]
+
+
 def test_a9_collection_status_main_uses_guard_exit_code(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:

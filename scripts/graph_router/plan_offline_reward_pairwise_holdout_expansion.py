@@ -68,6 +68,11 @@ DEFAULT_PRIORITY_STRATA = {
     ("source_family", "seeding_eval"): (0, "independent_holdout_source_family_blocker"),
     ("suite", "general"): (1, "independent_holdout_suite_blocker"),
 }
+REFERENCE_TOKEN_COVERAGE_UNSCORABLE_COLLECTION_SUITES = {
+    # The current IFEval adapter emits pass/fail rewards but no expected/reference
+    # text, so acquiring more of this suite cannot feed reference-token coverage.
+    "instruction_precision",
+}
 
 
 class PairwiseHoldoutExpansionError(ValueError):
@@ -231,7 +236,10 @@ def _target_requirement_key(target: dict[str, Any]) -> str:
 def _collection_requirements(
     collection_targets: list[dict[str, Any]],
     matched_collection_target_counts: Counter,
+    *,
+    unavailable_targets: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
+    unavailable_targets = unavailable_targets or {}
     requirements: list[dict[str, Any]] = []
     for target in collection_targets:
         key = _target_requirement_key(target)
@@ -242,15 +250,19 @@ def _collection_requirements(
         except (TypeError, ValueError):
             suggested_min_int = 20
         matched = int(matched_collection_target_counts.get(key, 0))
-        remaining = max(0, suggested_min_int - matched)
+        unavailable_reason = unavailable_targets.get(key)
+        remaining = 0 if unavailable_reason else max(0, suggested_min_int - matched)
         priority, priority_reason = DEFAULT_PRIORITY_STRATA.get(
             (str(target["stratum_field"]), str(target["stratum_value"])),
             (2, "direction_balance_cleanup"),
         )
+        status = "matched_existing_candidates" if matched else "needs_new_source_records"
+        if unavailable_reason:
+            status = "unavailable_with_current_oracle"
         requirements.append(
             {
                 "target": key,
-                "status": "matched_existing_candidates" if matched else "needs_new_source_records",
+                "status": status,
                 "stratum_field": target["stratum_field"],
                 "stratum_value": target["stratum_value"],
                 "action_pair": target["action_pair"],
@@ -269,6 +281,11 @@ def _collection_requirements(
                     "with role_results, rewards, suite, prompt, and expected fields"
                 ),
                 "runtime_gate_change_allowed": False,
+                **(
+                    {"collection_unavailable_reason": unavailable_reason}
+                    if unavailable_reason
+                    else {}
+                ),
             }
         )
     return requirements
@@ -669,7 +686,11 @@ def _scan_candidate_groups(
                 continue
             if not reference:
                 stats["skipped_missing_reference"] += 1
+                stats[f"skipped_missing_reference_suite:{suite}"] += 1
+                stats[f"skipped_missing_reference_source_family:{source_family}"] += 1
                 continue
+            stats[f"reference_available_suite:{suite}"] += 1
+            stats[f"reference_available_source_family:{source_family}"] += 1
             role_results = _role_results(record)
             if not role_results:
                 stats["skipped_missing_role_results"] += 1
@@ -840,9 +861,31 @@ def build_plan(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str
     unmatched_collection_targets = [
         key for key in expected_collection_target_keys if key not in matched_collection_target_counts
     ]
+    unavailable_collection_targets: dict[str, str] = {}
+    for target in collection_targets:
+        if target["stratum_field"] != "suite":
+            continue
+        suite = str(target["stratum_value"])
+        key = _target_requirement_key(target)
+        if matched_collection_target_counts.get(key, 0):
+            continue
+        if suite in REFERENCE_TOKEN_COVERAGE_UNSCORABLE_COLLECTION_SUITES:
+            unavailable_collection_targets[key] = (
+                "the current clean-window seeding suite emits no reference/expected text; "
+                "reference_token_coverage cannot score newly collected records"
+            )
+            continue
+        missing_reference_count = int(stats.get(f"skipped_missing_reference_suite:{suite}") or 0)
+        reference_available_count = int(stats.get(f"reference_available_suite:{suite}") or 0)
+        if missing_reference_count > 0 and reference_available_count == 0:
+            unavailable_collection_targets[key] = (
+                "source records for this suite have no reference/expected text; "
+                "reference_token_coverage cannot score them"
+            )
     source_record_requirements = _collection_requirements(
         collection_targets,
         matched_collection_target_counts,
+        unavailable_targets=unavailable_collection_targets,
     )
     collection_batches = _collection_batches(source_record_requirements)
 
@@ -869,6 +912,7 @@ def build_plan(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str
         "collection_target_count": len(collection_targets),
         "matched_collection_target_counts": dict(sorted(matched_collection_target_counts.items())),
         "unmatched_collection_targets": unmatched_collection_targets,
+        "unavailable_collection_targets": dict(sorted(unavailable_collection_targets.items())),
         "source_record_requirements": source_record_requirements,
         "collection_batches": collection_batches,
         "candidate_rows": len(selected_candidates),
@@ -947,6 +991,7 @@ def write_markdown(path: Path, summary: dict[str, Any]) -> None:
         f"- Collection targets: `{summary['collection_target_count']}`",
         f"- Matched collection targets: `{summary['matched_collection_target_counts']}`",
         f"- Unmatched collection targets: `{summary['unmatched_collection_targets']}`",
+        f"- Unavailable collection targets: `{summary['unavailable_collection_targets']}`",
         f"- Candidate action counts: `{summary['candidate_action_counts']}`",
         f"- Candidate source-family counts: `{summary['candidate_source_family_counts']}`",
         f"- Candidate suite counts: `{summary['candidate_suite_counts']}`",
@@ -961,7 +1006,7 @@ def write_markdown(path: Path, summary: dict[str, Any]) -> None:
         "",
     ]
     for requirement in summary["source_record_requirements"][:20]:
-        lines.append(
+        line = (
             f"- `{requirement['target']}`: `{requirement['status']}`, "
             f"priority `{requirement['collection_priority']}` "
             f"(`{requirement['collection_priority_reason']}`), "
@@ -970,6 +1015,10 @@ def write_markdown(path: Path, summary: dict[str, Any]) -> None:
             f"`{requirement['target_preferred_actions']}`; suggest "
             f"`{requirement['suggested_min_new_source_records']}` new records"
         )
+        reason = requirement.get("collection_unavailable_reason")
+        if reason:
+            line += f"; unavailable reason `{reason}`"
+        lines.append(line)
     if not summary["source_record_requirements"]:
         lines.append("- none")
     lines.extend(

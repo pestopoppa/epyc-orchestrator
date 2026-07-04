@@ -922,6 +922,62 @@ def test_a9_next_action_ready_when_collection_window_clear() -> None:
     assert "offline_reward_pairwise_collection_status.py" in action["follow_up"]
 
 
+def test_a9_section_marks_empty_manifest_attention(monkeypatch) -> None:
+    monkeypatch.setattr(
+        report_mod,
+        "build_a9_collection_status",
+        lambda path: {
+            "ready": False,
+            "status": "no_runnable_batches",
+            "manifest_path": "/tmp/a9_manifest.json",
+            "manifest_schema_version": "offline_reward_pairwise_collection_window.v1",
+            "source_plan_decision": {"status": "expansion_plan_ready"},
+            "batch_count": 0,
+            "post_collection_step_count": 7,
+            "autopilot_guard": {"refusal_exit_code": 75},
+            "blockers": [],
+            "warnings": ["manifest has no runnable collection batches"],
+        },
+    )
+
+    section = report_mod.a9_collection_section(Path("/tmp/a9_manifest.json"))
+
+    assert section.status == "attention"
+    assert section.blockers == []
+    assert section.details["status"] == "no_runnable_batches"
+    assert section.details["warnings"] == [
+        "manifest has no runnable collection batches"
+    ]
+
+
+def test_a9_next_action_switches_to_oracle_design_when_no_batches() -> None:
+    section = report_mod.GateSection(
+        key="a9_pairwise_collection",
+        status="attention",
+        summary="no batches",
+        blockers=[],
+        details={
+            "ready": False,
+            "status": "no_runnable_batches",
+            "manifest_path": "/tmp/a9_manifest.json",
+            "batch_count": 0,
+            "post_collection_step_count": 7,
+            "source_plan_decision": {"status": "expansion_plan_ready"},
+        },
+    )
+
+    actions = report_mod.build_next_actions([section])
+
+    assert len(actions) == 1
+    action = actions[0]
+    assert action["key"] == "revise_a9_reward_oracle_or_reference_source"
+    assert action["priority"] == "P1"
+    assert action["status"] == "active"
+    assert action["blocked_by"] == []
+    assert action["batch_count"] == 0
+    assert "current collection script" in action["follow_up"]
+
+
 def test_w8_next_action_when_restart_ready_without_promotion_finalization() -> None:
     sections = [
         report_mod.GateSection(

@@ -624,9 +624,12 @@ def a9_collection_section(
     blockers = list(status.get("blockers") or [])
     ready = bool(status.get("ready"))
     status_label = str(status.get("status") or "unknown")
+    section_status = "ready" if ready else "blocked"
+    if status_label == "no_runnable_batches":
+        section_status = "attention"
     return GateSection(
         key="a9_pairwise_collection",
-        status="ready" if ready else "blocked",
+        status=section_status,
         summary=(
             "A9 pairwise source-acquisition window "
             f"is {status_label} with {status.get('batch_count', 0)} batch(es)."
@@ -1436,34 +1439,64 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
 
     a9 = by_key.get("a9_pairwise_collection")
     if a9 is not None:
-        actions.append(
-            {
-                "key": "run_a9_pairwise_collection_window",
-                "priority": "P1",
-                "status": "ready" if a9.details.get("ready") else "blocked",
-                "reason": (
-                    "A9 offline reward-oracle pairwise holdouts need the "
-                    "guarded priority-0/1 collection window before another "
-                    "pairwise contract rebuild."
-                ),
-                "requires": "coordinated clean window; collection script refuses active AutoPilot",
-                "blocked_by": a9.blockers,
-                "manifest": a9.details.get("manifest_path"),
-                "batch_count": a9.details.get("batch_count"),
-                "post_collection_step_count": a9.details.get(
-                    "post_collection_step_count"
-                ),
-                "source_plan_decision": a9.details.get("source_plan_decision"),
-                "command": (
-                    "cd /mnt/raid0/llm/epyc-orchestrator && "
-                    f"{DEFAULT_A9_COLLECTION_SCRIPT.relative_to(ORCH_ROOT)}"
-                ),
-                "follow_up": (
-                    "cd /mnt/raid0/llm/epyc-orchestrator && "
-                    "uv run python scripts/graph_router/offline_reward_pairwise_collection_status.py"
-                ),
-            }
-        )
+        if a9.details.get("status") == "no_runnable_batches":
+            actions.append(
+                {
+                    "key": "revise_a9_reward_oracle_or_reference_source",
+                    "priority": "P1",
+                    "status": "active",
+                    "reason": (
+                        "A9 clean-window acquisition is exhausted for the "
+                        "current reference_token_coverage oracle; remaining "
+                        "instruction-precision targets have no reference text "
+                        "for that scorer."
+                    ),
+                    "requires": (
+                        "materially different scorer/feature design or a "
+                        "reference-bearing instruction-following source"
+                    ),
+                    "blocked_by": [],
+                    "manifest": a9.details.get("manifest_path"),
+                    "batch_count": a9.details.get("batch_count"),
+                    "post_collection_step_count": a9.details.get(
+                        "post_collection_step_count"
+                    ),
+                    "source_plan_decision": a9.details.get("source_plan_decision"),
+                    "follow_up": (
+                        "Do not rerun the current collection script; regenerate "
+                        "A9 only after the oracle/source contract changes."
+                    ),
+                }
+            )
+        else:
+            actions.append(
+                {
+                    "key": "run_a9_pairwise_collection_window",
+                    "priority": "P1",
+                    "status": "ready" if a9.details.get("ready") else "blocked",
+                    "reason": (
+                        "A9 offline reward-oracle pairwise holdouts need the "
+                        "guarded priority-0/1 collection window before another "
+                        "pairwise contract rebuild."
+                    ),
+                    "requires": "coordinated clean window; collection script refuses active AutoPilot",
+                    "blocked_by": a9.blockers,
+                    "manifest": a9.details.get("manifest_path"),
+                    "batch_count": a9.details.get("batch_count"),
+                    "post_collection_step_count": a9.details.get(
+                        "post_collection_step_count"
+                    ),
+                    "source_plan_decision": a9.details.get("source_plan_decision"),
+                    "command": (
+                        "cd /mnt/raid0/llm/epyc-orchestrator && "
+                        f"{DEFAULT_A9_COLLECTION_SCRIPT.relative_to(ORCH_ROOT)}"
+                    ),
+                    "follow_up": (
+                        "cd /mnt/raid0/llm/epyc-orchestrator && "
+                        "uv run python scripts/graph_router/offline_reward_pairwise_collection_status.py"
+                    ),
+                }
+            )
 
     return actions
 

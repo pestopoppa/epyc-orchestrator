@@ -531,6 +531,91 @@ def test_pairwise_holdout_plan_rejects_non_matching_audit_collection_targets(
     )
 
 
+def test_pairwise_holdout_plan_does_not_collect_reference_empty_suite(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "seeding_a9_suite_instruction_precision.json"
+    record = {
+        "question_id": "ifeval_1",
+        "suite": "instruction_precision",
+        "prompt": "Follow these instructions exactly",
+        "expected": "",
+        "role_results": {
+            "architect_general:direct": {
+                "answer": "Compliant response",
+                "passed": True,
+                "elapsed_seconds": 1.0,
+            },
+            "frontdoor:direct": {
+                "answer": "Different compliant response",
+                "passed": True,
+                "elapsed_seconds": 1.0,
+            },
+        },
+    }
+    source.write_text(json.dumps({"results": [record]}), encoding="utf-8")
+    manifest = tmp_path / "manifest.jsonl"
+    _write_jsonl(manifest, [])
+    pairwise = tmp_path / "pairs.jsonl"
+    _write_jsonl(pairwise, [])
+    audit = tmp_path / "audit.json"
+    audit.write_text(
+        json.dumps(
+            {
+                "collection_targets": [
+                    {
+                        "stratum_field": "suite",
+                        "stratum_value": "instruction_precision",
+                        "action_pair": "architect_general>frontdoor",
+                        "needs_direction": ["prefer architect_general"],
+                        "current_rows": 0,
+                        "suggested_min_rows": 20,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    args = mod.build_parser().parse_args(
+        [
+            "--input",
+            str(source),
+            "--existing-manifest",
+            str(manifest),
+            "--existing-pairwise-jsonl",
+            str(pairwise),
+            "--candidates-jsonl",
+            str(tmp_path / "candidates.jsonl"),
+            "--summary-json",
+            str(tmp_path / "summary.json"),
+            "--collection-targets-json",
+            str(audit),
+            "--target-source-families",
+            "",
+            "--target-suites",
+            "",
+            "--min-cross-action-candidate-groups",
+            "1",
+        ]
+    )
+
+    candidates, summary = mod.build_plan(args)
+
+    assert candidates == []
+    assert summary["unavailable_collection_targets"] == {
+        "suite:instruction_precision:architect_general>frontdoor": (
+            "the current clean-window seeding suite emits no reference/expected text; "
+            "reference_token_coverage cannot score newly collected records"
+        )
+    }
+    assert summary["source_record_requirements"][0]["status"] == (
+        "unavailable_with_current_oracle"
+    )
+    assert summary["source_record_requirements"][0]["suggested_min_new_source_records"] == 0
+    assert summary["collection_batches"] == []
+
+
 def test_pairwise_holdout_collection_batches_prioritize_source_family_blockers() -> None:
     suite_requirement = {
         "target": "suite:instruction_precision:architect_general>frontdoor",

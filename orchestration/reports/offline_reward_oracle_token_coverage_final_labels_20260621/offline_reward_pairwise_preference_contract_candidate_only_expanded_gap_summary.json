@@ -1,0 +1,249 @@
+{
+  "artifact_scope": {
+    "allow_protected_output_overwrite": false,
+    "candidate_only_manifest": true,
+    "mode": "candidate_only",
+    "protected_broad_output": false
+  },
+  "contract": {
+    "learning_target": "within_source_record_positive_over_negative_preference",
+    "material_difference_from_stopped_family": [
+      "uses pairwise preference labels instead of absolute binary labels",
+      "controls prompt and expected answer by pairing only within the same source task",
+      "keeps conflicting absolute model-input groups as contrastive evidence instead of dropping all conflicting rows",
+      "can expand beyond binary labels by ordering rows with distinct offline oracle scores",
+      "does not train a classifier or authorize a runtime gate"
+    ],
+    "min_score_delta": 0.0,
+    "name": "within_task_pairwise_preference_v1",
+    "pairing_mode": "binary_label",
+    "row_schema_version": "offline_reward_pairwise_preference.v1"
+  },
+  "coverage": {
+    "action_pair_counts": {
+      "architect_general>coder_escalation": 10,
+      "architect_general>frontdoor": 4,
+      "coder_escalation>architect_general": 2,
+      "frontdoor>architect_general": 8
+    },
+    "contrastive_groups": 24,
+    "cross_action_pair_rows": 24,
+    "pair_rows": 24,
+    "same_action_pair_rows": 0,
+    "skipped_no_contrast_groups": 256,
+    "source_family_pair_counts": {
+      "orchestrator_live_seed": 3,
+      "seeding_eval": 21
+    },
+    "source_record_groups": 280,
+    "suite_pair_counts": {
+      "debugbench": 2,
+      "gpqa": 6,
+      "hotpotqa": 2,
+      "simpleqa": 6,
+      "thinking": 8
+    },
+    "unique_action_pairs": 4
+  },
+  "decision": {
+    "min_cross_action_pairs": 50,
+    "min_pairs": 100,
+    "recommended_next": "collect_more_within_task_positive_negative_contrasts",
+    "runtime_gate_change_allowed": false,
+    "status": "insufficient_contrast"
+  },
+  "generated_at": "2026-07-04T07:35:02.885553+00:00",
+  "group_diagnostics": [
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_20260704_053533.jsonl|0|gpqa_Organic Chemistry_0093|b4ae2c1cec12d79d6c5c0ea2ebfa13c331a267da74d21b184e53043182792cd7|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "negative_rows": 1,
+      "pairs": 1,
+      "positive_rows": 1,
+      "rows": 2
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_20260704_053533.jsonl|10|hellaswag_44612|64864f4ac706b41345ff48716bbf8709197ea0ff3d254980531a4b8699f36b47|559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "negative_rows": 1,
+      "pairs": 1,
+      "positive_rows": 1,
+      "rows": 2
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_20260704_053533.jsonl|14|gpqa_Astrophysics_0361|6dfbdece7a1aac3ee0bff4064488036b7d53fd9900aa91d3430971717e73a1e7|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "negative_rows": 1,
+      "pairs": 1,
+      "positive_rows": 1,
+      "rows": 2
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_20260704_060525.jsonl|0|gpqa_High-energy particle physics_0032|66a0313fbc41b359d43c1c5f570c013177819ae0b5badf065b6a11f6b76e0baf|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "negative_rows": 1,
+      "pairs": 1,
+      "positive_rows": 1,
+      "rows": 2
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_20260704_060525.jsonl|3|debugbench_shortest-subarray-to-be-removed-to-make-array-sorted_cpp|844c1d9a0ebcf6c9ebc29ae5410fd61a697af5b53f4658febbf968fc34eef008|d31b0116c25542ff2048985fc9ff04486d9fd9c4736c70719ab65ea4be2abc4a",
+      "negative_rows": 1,
+      "pairs": 1,
+      "positive_rows": 1,
+      "rows": 2
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_20260704_062216.jsonl|11|hotpot_bridge_5a873b0d5542994775f607ad|212edab73d8e68477460068386cb5ed32ffbf1146f03258d86ff419edf863790|e7db0698fe7747a76b45e22548110ea403af61b744637a55a27d2716eaee0ba0",
+      "negative_rows": 1,
+      "pairs": 1,
+      "positive_rows": 1,
+      "rows": 2
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_20260704_065401.jsonl|12|simpleqa_general_00046|cffcaea23df4587119d3ecf36eefed04e97c7f5763f4bd1b94727d8d662853bb|a2289127318a8d00a983673add99cf4d3667eb03fe9bd2ec1ba2ca21e0464ac9",
+      "negative_rows": 1,
+      "pairs": 1,
+      "positive_rows": 1,
+      "rows": 2
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_20260704_065401.jsonl|15|simpleqa_general_03059|24f2ec800ed30db1de6f8ed3445778ce820aeed4f31ea93ef1c313e22887f172|48deb732e8de8fe7995bbc2816520798fcab815f62165af4d53bbc24434c963e",
+      "negative_rows": 1,
+      "pairs": 1,
+      "positive_rows": 1,
+      "rows": 2
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_20260704_065401.jsonl|6|simpleqa_general_01876|6b008e487e46137cfa02ea381ca0725b25a1e650985788a1d8fc1440bf02ee68|501883ce12ba20f1a0de68f06b8c84d3d148124f66ab52a38359317c78ab82b1",
+      "negative_rows": 1,
+      "pairs": 1,
+      "positive_rows": 1,
+      "rows": 2
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_20260704_065621.jsonl|15|hellaswag_04487|37a35a6cfaf3404893e9cd25da4abf7bc3abb31e9f109a94016d48be2b8e6101|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "negative_rows": 1,
+      "pairs": 1,
+      "positive_rows": 1,
+      "rows": 2
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_20260704_065621.jsonl|16|hellaswag_01204|d8e6303abaf1c9fc712092f4cce5865dbfc053c61a669514c8e9d5c750273849|3f39d5c348e5b79d06e842c114e6cc571583bbf44e4b0ebfda1a01ec05745d43",
+      "negative_rows": 1,
+      "pairs": 1,
+      "positive_rows": 1,
+      "rows": 2
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_20260704_065621.jsonl|17|hellaswag_08742|7b7ed2d32600d2bfd879a7aba1854cd3773eb6d9928961840dc2819944767f2f|3f39d5c348e5b79d06e842c114e6cc571583bbf44e4b0ebfda1a01ec05745d43",
+      "negative_rows": 1,
+      "pairs": 1,
+      "positive_rows": 1,
+      "rows": 2
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_architect_general_frontdoor_20260704T053533Z.json|0|gpqa_High-energy particle physics_0032|66a0313fbc41b359d43c1c5f570c013177819ae0b5badf065b6a11f6b76e0baf|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "negative_rows": 1,
+      "pairs": 1,
+      "positive_rows": 1,
+      "rows": 2
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_architect_general_frontdoor_20260704T053533Z.json|3|debugbench_shortest-subarray-to-be-removed-to-make-array-sorted_cpp|844c1d9a0ebcf6c9ebc29ae5410fd61a697af5b53f4658febbf968fc34eef008|d31b0116c25542ff2048985fc9ff04486d9fd9c4736c70719ab65ea4be2abc4a",
+      "negative_rows": 1,
+      "pairs": 1,
+      "positive_rows": 1,
+      "rows": 2
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_20260704T053533Z.json|11|hotpot_bridge_5a873b0d5542994775f607ad|212edab73d8e68477460068386cb5ed32ffbf1146f03258d86ff419edf863790|e7db0698fe7747a76b45e22548110ea403af61b744637a55a27d2716eaee0ba0",
+      "negative_rows": 1,
+      "pairs": 1,
+      "positive_rows": 1,
+      "rows": 2
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_20260704T053533Z.json|12|simpleqa_general_00046|cffcaea23df4587119d3ecf36eefed04e97c7f5763f4bd1b94727d8d662853bb|a2289127318a8d00a983673add99cf4d3667eb03fe9bd2ec1ba2ca21e0464ac9",
+      "negative_rows": 1,
+      "pairs": 1,
+      "positive_rows": 1,
+      "rows": 2
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_20260704T053533Z.json|15|simpleqa_general_03059|24f2ec800ed30db1de6f8ed3445778ce820aeed4f31ea93ef1c313e22887f172|48deb732e8de8fe7995bbc2816520798fcab815f62165af4d53bbc24434c963e",
+      "negative_rows": 1,
+      "pairs": 1,
+      "positive_rows": 1,
+      "rows": 2
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_20260704T053533Z.json|6|simpleqa_general_01876|6b008e487e46137cfa02ea381ca0725b25a1e650985788a1d8fc1440bf02ee68|501883ce12ba20f1a0de68f06b8c84d3d148124f66ab52a38359317c78ab82b1",
+      "negative_rows": 1,
+      "pairs": 1,
+      "positive_rows": 1,
+      "rows": 2
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_thinking_architect_general_coder_escalation_20260704T053533Z.json|15|hellaswag_04487|37a35a6cfaf3404893e9cd25da4abf7bc3abb31e9f109a94016d48be2b8e6101|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "negative_rows": 1,
+      "pairs": 1,
+      "positive_rows": 1,
+      "rows": 2
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_thinking_architect_general_coder_escalation_20260704T053533Z.json|16|hellaswag_01204|d8e6303abaf1c9fc712092f4cce5865dbfc053c61a669514c8e9d5c750273849|3f39d5c348e5b79d06e842c114e6cc571583bbf44e4b0ebfda1a01ec05745d43",
+      "negative_rows": 1,
+      "pairs": 1,
+      "positive_rows": 1,
+      "rows": 2
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_thinking_architect_general_coder_escalation_20260704T053533Z.json|17|hellaswag_08742|7b7ed2d32600d2bfd879a7aba1854cd3773eb6d9928961840dc2819944767f2f|3f39d5c348e5b79d06e842c114e6cc571583bbf44e4b0ebfda1a01ec05745d43",
+      "negative_rows": 1,
+      "pairs": 1,
+      "positive_rows": 1,
+      "rows": 2
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/orchestrator/seeding_live_a9_source_family_orchestrator_live_seed_architect_general_frontdoor_20260704T053533Z.json|0|gpqa_Organic Chemistry_0093|b4ae2c1cec12d79d6c5c0ea2ebfa13c331a267da74d21b184e53043182792cd7|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "negative_rows": 1,
+      "pairs": 1,
+      "positive_rows": 1,
+      "rows": 2
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/orchestrator/seeding_live_a9_source_family_orchestrator_live_seed_architect_general_frontdoor_20260704T053533Z.json|10|hellaswag_44612|64864f4ac706b41345ff48716bbf8709197ea0ff3d254980531a4b8699f36b47|559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "negative_rows": 1,
+      "pairs": 1,
+      "positive_rows": 1,
+      "rows": 2
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/orchestrator/seeding_live_a9_source_family_orchestrator_live_seed_architect_general_frontdoor_20260704T053533Z.json|14|gpqa_Astrophysics_0361|6dfbdece7a1aac3ee0bff4064488036b7d53fd9900aa91d3430971717e73a1e7|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "negative_rows": 1,
+      "pairs": 1,
+      "positive_rows": 1,
+      "rows": 2
+    }
+  ],
+  "inputs": {
+    "eligible_rows": 560,
+    "manifest_jsonl": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_feature_manifest_pairwise_expanded_gap.jsonl",
+    "manifest_rows": 560,
+    "skipped_unmapped_or_unlabeled_rows": 0
+  },
+  "outputs": {
+    "pairwise_jsonl": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_preference_contract_candidate_only_expanded_gap.jsonl",
+    "summary_json": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_preference_contract_candidate_only_expanded_gap_summary.json",
+    "summary_md": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_preference_contract_candidate_only_expanded_gap_summary.md"
+  },
+  "privacy": {
+    "commits_prompt_answer_expected_text": false,
+    "private_fields_excluded": [
+      "answer",
+      "expected",
+      "prompt",
+      "reference",
+      "response"
+    ],
+    "text_represented_by_sha256_lengths_and_deltas": true
+  },
+  "schema_version": "offline_reward_pairwise_contract_summary.v1"
+}

@@ -1,0 +1,1115 @@
+{
+  "aggregate": {
+    "criteria": {
+      "min_mean_accuracy": 0.6,
+      "min_mean_auc": 0.6
+    },
+    "decision": {
+      "best_family": "random_forest",
+      "blockers": [],
+      "recommended_next": "cross_validate_pairwise_ranker_on_expanded_contract",
+      "runtime_gate_change_allowed": false,
+      "status": "pairwise_ranker_signal"
+    },
+    "families": {
+      "hist_gradient_boosting": {
+        "acc_delta_vs_random": {
+          "max": 0.0,
+          "mean": 0.0,
+          "min": 0.0
+        },
+        "accuracy": {
+          "max": 0.5,
+          "mean": 0.5,
+          "min": 0.5
+        },
+        "auc": {
+          "max": 0.4166666666666667,
+          "mean": 0.4166666666666667,
+          "min": 0.4166666666666667
+        },
+        "brier": {
+          "max": 0.25,
+          "mean": 0.25,
+          "min": 0.25
+        },
+        "ece": {
+          "max": 0.0,
+          "mean": 0.0,
+          "min": 0.0
+        },
+        "meets_signal_gate": false,
+        "runs": 5
+      },
+      "logistic_l2": {
+        "acc_delta_vs_random": {
+          "max": 0.33333333333333337,
+          "mean": 0.13333333333333333,
+          "min": 0.0
+        },
+        "accuracy": {
+          "max": 0.8333333333333334,
+          "mean": 0.6333333333333333,
+          "min": 0.5
+        },
+        "auc": {
+          "max": 0.9166666666666666,
+          "mean": 0.7833333333333333,
+          "min": 0.6111111111111112
+        },
+        "brier": {
+          "max": 0.2905518710613251,
+          "mean": 0.23533231616020203,
+          "min": 0.12525689601898193
+        },
+        "ece": {
+          "max": 0.4170823221405347,
+          "mean": 0.29339407857817906,
+          "min": 0.1366122163987408
+        },
+        "meets_signal_gate": true,
+        "runs": 5
+      },
+      "random_forest": {
+        "acc_delta_vs_random": {
+          "max": 0.5,
+          "mean": 0.4333333333333334,
+          "min": 0.33333333333333337
+        },
+        "accuracy": {
+          "max": 1.0,
+          "mean": 0.9333333333333333,
+          "min": 0.8333333333333334
+        },
+        "auc": {
+          "max": 1.0,
+          "mean": 0.9888888888888889,
+          "min": 0.9722222222222222
+        },
+        "brier": {
+          "max": 0.140072301030159,
+          "mean": 0.10907973647117615,
+          "min": 0.09347060322761536
+        },
+        "ece": {
+          "max": 0.3085965805997451,
+          "mean": 0.267641531676054,
+          "min": 0.1744756270200014
+        },
+        "meets_signal_gate": true,
+        "runs": 5
+      }
+    }
+  },
+  "cross_validation": null,
+  "families_requested": [
+    "logistic_l2",
+    "hist_gradient_boosting",
+    "random_forest"
+  ],
+  "feature_contract": {
+    "feature_dim": 15,
+    "feature_names": [
+      "action_delta[architect_general]",
+      "action_delta[coder_escalation]",
+      "action_delta[frontdoor]",
+      "cross_action",
+      "same_action",
+      "source_family[orchestrator_live_seed]",
+      "source_family[seeding_eval]",
+      "suite[debugbench]",
+      "suite[gpqa]",
+      "suite[hotpotqa]",
+      "suite[simpleqa]",
+      "suite[thinking]",
+      "answer_chars_log_delta",
+      "elapsed_log_delta",
+      "error_present_delta"
+    ],
+    "name": "pairwise_action_response_delta_v1",
+    "symmetric_augmentation": true
+  },
+  "holdout_decision": {
+    "blockers": [],
+    "eligible_holdouts": 0,
+    "passing_holdouts": 0,
+    "recommended_next": "collect_more_non_overlapping_cross_action_preferences",
+    "runtime_gate_change_allowed": false,
+    "status": "no_eligible_holdouts"
+  },
+  "independent_holdout": {
+    "source_family": {
+      "eligible_holdout_values": [],
+      "results": {},
+      "skipped_values": [
+        "orchestrator_live_seed",
+        "seeding_eval"
+      ]
+    },
+    "suite": {
+      "eligible_holdout_values": [],
+      "results": {},
+      "skipped_values": [
+        "debugbench",
+        "gpqa",
+        "hotpotqa",
+        "simpleqa",
+        "thinking"
+      ]
+    }
+  },
+  "input": {
+    "action_pair_counts": {
+      "architect_general>coder_escalation": 10,
+      "architect_general>frontdoor": 4,
+      "coder_escalation>architect_general": 2,
+      "frontdoor>architect_general": 8
+    },
+    "cross_action_pair_rows": 24,
+    "group_count": 24,
+    "pair_rows": 24,
+    "pairing_mode_counts": {
+      "binary_label": 24
+    },
+    "same_action_pair_rows": 0,
+    "source_family_pair_counts": {
+      "orchestrator_live_seed": 3,
+      "seeding_eval": 21
+    },
+    "suite_pair_counts": {
+      "debugbench": 2,
+      "gpqa": 6,
+      "hotpotqa": 2,
+      "simpleqa": 6,
+      "thinking": 8
+    }
+  },
+  "leakage_policy": {
+    "private_fields_excluded": [
+      "answer",
+      "expected",
+      "prompt",
+      "reference",
+      "response"
+    ],
+    "runtime_gate_change_allowed": false,
+    "target_fields_excluded_from_features": [
+      "oracle_score_delta",
+      "preferred_oracle_score",
+      "rejected_oracle_score"
+    ],
+    "uses_prompt_answer_expected_text": false
+  },
+  "pairwise_jsonl": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_preference_contract_candidate_only_expanded_gap.jsonl",
+  "runs": [
+    {
+      "family": "logistic_l2",
+      "metrics": {
+        "acc": 0.6666666666666666,
+        "auc": 0.8888888888888888,
+        "brier": 0.2905518710613251,
+        "ece": 0.26297464966773987
+      },
+      "random_baseline": {
+        "acc": 0.5,
+        "auc": 0.5,
+        "brier": 0.25,
+        "ece": 0.0
+      },
+      "seed": 42,
+      "source_family_metrics": {
+        "seeding_eval": {
+          "metrics": {
+            "acc": 0.6666666666666666,
+            "auc": 0.8888888888888888,
+            "brier": 0.2905518710613251,
+            "ece": 0.26297464966773987
+          },
+          "negative_rows": 6,
+          "positive_rows": 6,
+          "rows": 12
+        }
+      },
+      "suite_metrics": {
+        "simpleqa": {
+          "metrics": null,
+          "negative_rows": 3,
+          "positive_rows": 3,
+          "rows": 6
+        },
+        "thinking": {
+          "metrics": null,
+          "negative_rows": 3,
+          "positive_rows": 3,
+          "rows": 6
+        }
+      },
+      "test_examples": 12,
+      "test_groups": 6,
+      "test_pair_rows": 6,
+      "train_examples": 36,
+      "train_groups": 18,
+      "train_pair_rows": 18
+    },
+    {
+      "family": "hist_gradient_boosting",
+      "metrics": {
+        "acc": 0.5,
+        "auc": 0.4166666666666667,
+        "brier": 0.25,
+        "ece": 0.0
+      },
+      "random_baseline": {
+        "acc": 0.5,
+        "auc": 0.5,
+        "brier": 0.25,
+        "ece": 0.0
+      },
+      "seed": 42,
+      "source_family_metrics": {
+        "seeding_eval": {
+          "metrics": {
+            "acc": 0.5,
+            "auc": 0.4166666666666667,
+            "brier": 0.25,
+            "ece": 0.0
+          },
+          "negative_rows": 6,
+          "positive_rows": 6,
+          "rows": 12
+        }
+      },
+      "suite_metrics": {
+        "simpleqa": {
+          "metrics": null,
+          "negative_rows": 3,
+          "positive_rows": 3,
+          "rows": 6
+        },
+        "thinking": {
+          "metrics": null,
+          "negative_rows": 3,
+          "positive_rows": 3,
+          "rows": 6
+        }
+      },
+      "test_examples": 12,
+      "test_groups": 6,
+      "test_pair_rows": 6,
+      "train_examples": 36,
+      "train_groups": 18,
+      "train_pair_rows": 18
+    },
+    {
+      "family": "random_forest",
+      "metrics": {
+        "acc": 1.0,
+        "auc": 1.0,
+        "brier": 0.10310903191566467,
+        "ece": 0.29250671217838925
+      },
+      "random_baseline": {
+        "acc": 0.5,
+        "auc": 0.5,
+        "brier": 0.25,
+        "ece": 0.0
+      },
+      "seed": 42,
+      "source_family_metrics": {
+        "seeding_eval": {
+          "metrics": {
+            "acc": 1.0,
+            "auc": 1.0,
+            "brier": 0.10310903191566467,
+            "ece": 0.29250671217838925
+          },
+          "negative_rows": 6,
+          "positive_rows": 6,
+          "rows": 12
+        }
+      },
+      "suite_metrics": {
+        "simpleqa": {
+          "metrics": null,
+          "negative_rows": 3,
+          "positive_rows": 3,
+          "rows": 6
+        },
+        "thinking": {
+          "metrics": null,
+          "negative_rows": 3,
+          "positive_rows": 3,
+          "rows": 6
+        }
+      },
+      "test_examples": 12,
+      "test_groups": 6,
+      "test_pair_rows": 6,
+      "train_examples": 36,
+      "train_groups": 18,
+      "train_pair_rows": 18
+    },
+    {
+      "family": "logistic_l2",
+      "metrics": {
+        "acc": 0.6666666666666666,
+        "auc": 0.6111111111111112,
+        "brier": 0.26441094279289246,
+        "ece": 0.4170823221405347
+      },
+      "random_baseline": {
+        "acc": 0.5,
+        "auc": 0.5,
+        "brier": 0.25,
+        "ece": 0.0
+      },
+      "seed": 7,
+      "source_family_metrics": {
+        "seeding_eval": {
+          "metrics": {
+            "acc": 0.6666666666666666,
+            "auc": 0.6111111111111112,
+            "brier": 0.26441094279289246,
+            "ece": 0.4170823221405347
+          },
+          "negative_rows": 6,
+          "positive_rows": 6,
+          "rows": 12
+        }
+      },
+      "suite_metrics": {
+        "debugbench": {
+          "metrics": null,
+          "negative_rows": 1,
+          "positive_rows": 1,
+          "rows": 2
+        },
+        "gpqa": {
+          "metrics": null,
+          "negative_rows": 2,
+          "positive_rows": 2,
+          "rows": 4
+        },
+        "hotpotqa": {
+          "metrics": null,
+          "negative_rows": 1,
+          "positive_rows": 1,
+          "rows": 2
+        },
+        "simpleqa": {
+          "metrics": null,
+          "negative_rows": 1,
+          "positive_rows": 1,
+          "rows": 2
+        },
+        "thinking": {
+          "metrics": null,
+          "negative_rows": 1,
+          "positive_rows": 1,
+          "rows": 2
+        }
+      },
+      "test_examples": 12,
+      "test_groups": 6,
+      "test_pair_rows": 6,
+      "train_examples": 36,
+      "train_groups": 18,
+      "train_pair_rows": 18
+    },
+    {
+      "family": "hist_gradient_boosting",
+      "metrics": {
+        "acc": 0.5,
+        "auc": 0.4166666666666667,
+        "brier": 0.25,
+        "ece": 0.0
+      },
+      "random_baseline": {
+        "acc": 0.5,
+        "auc": 0.5,
+        "brier": 0.25,
+        "ece": 0.0
+      },
+      "seed": 7,
+      "source_family_metrics": {
+        "seeding_eval": {
+          "metrics": {
+            "acc": 0.5,
+            "auc": 0.4166666666666667,
+            "brier": 0.25,
+            "ece": 0.0
+          },
+          "negative_rows": 6,
+          "positive_rows": 6,
+          "rows": 12
+        }
+      },
+      "suite_metrics": {
+        "debugbench": {
+          "metrics": null,
+          "negative_rows": 1,
+          "positive_rows": 1,
+          "rows": 2
+        },
+        "gpqa": {
+          "metrics": null,
+          "negative_rows": 2,
+          "positive_rows": 2,
+          "rows": 4
+        },
+        "hotpotqa": {
+          "metrics": null,
+          "negative_rows": 1,
+          "positive_rows": 1,
+          "rows": 2
+        },
+        "simpleqa": {
+          "metrics": null,
+          "negative_rows": 1,
+          "positive_rows": 1,
+          "rows": 2
+        },
+        "thinking": {
+          "metrics": null,
+          "negative_rows": 1,
+          "positive_rows": 1,
+          "rows": 2
+        }
+      },
+      "test_examples": 12,
+      "test_groups": 6,
+      "test_pair_rows": 6,
+      "train_examples": 36,
+      "train_groups": 18,
+      "train_pair_rows": 18
+    },
+    {
+      "family": "random_forest",
+      "metrics": {
+        "acc": 0.8333333333333334,
+        "auc": 0.9722222222222222,
+        "brier": 0.140072301030159,
+        "ece": 0.1744756270200014
+      },
+      "random_baseline": {
+        "acc": 0.5,
+        "auc": 0.5,
+        "brier": 0.25,
+        "ece": 0.0
+      },
+      "seed": 7,
+      "source_family_metrics": {
+        "seeding_eval": {
+          "metrics": {
+            "acc": 0.8333333333333334,
+            "auc": 0.9722222222222222,
+            "brier": 0.140072301030159,
+            "ece": 0.1744756270200014
+          },
+          "negative_rows": 6,
+          "positive_rows": 6,
+          "rows": 12
+        }
+      },
+      "suite_metrics": {
+        "debugbench": {
+          "metrics": null,
+          "negative_rows": 1,
+          "positive_rows": 1,
+          "rows": 2
+        },
+        "gpqa": {
+          "metrics": null,
+          "negative_rows": 2,
+          "positive_rows": 2,
+          "rows": 4
+        },
+        "hotpotqa": {
+          "metrics": null,
+          "negative_rows": 1,
+          "positive_rows": 1,
+          "rows": 2
+        },
+        "simpleqa": {
+          "metrics": null,
+          "negative_rows": 1,
+          "positive_rows": 1,
+          "rows": 2
+        },
+        "thinking": {
+          "metrics": null,
+          "negative_rows": 1,
+          "positive_rows": 1,
+          "rows": 2
+        }
+      },
+      "test_examples": 12,
+      "test_groups": 6,
+      "test_pair_rows": 6,
+      "train_examples": 36,
+      "train_groups": 18,
+      "train_pair_rows": 18
+    },
+    {
+      "family": "logistic_l2",
+      "metrics": {
+        "acc": 0.5,
+        "auc": 0.75,
+        "brier": 0.2548302710056305,
+        "ece": 0.4117223884289463
+      },
+      "random_baseline": {
+        "acc": 0.5,
+        "auc": 0.5,
+        "brier": 0.25,
+        "ece": 0.0
+      },
+      "seed": 13,
+      "source_family_metrics": {
+        "seeding_eval": {
+          "metrics": {
+            "acc": 0.5,
+            "auc": 0.75,
+            "brier": 0.2548302710056305,
+            "ece": 0.4117223884289463
+          },
+          "negative_rows": 6,
+          "positive_rows": 6,
+          "rows": 12
+        }
+      },
+      "suite_metrics": {
+        "gpqa": {
+          "metrics": null,
+          "negative_rows": 3,
+          "positive_rows": 3,
+          "rows": 6
+        },
+        "hotpotqa": {
+          "metrics": null,
+          "negative_rows": 1,
+          "positive_rows": 1,
+          "rows": 2
+        },
+        "simpleqa": {
+          "metrics": null,
+          "negative_rows": 1,
+          "positive_rows": 1,
+          "rows": 2
+        },
+        "thinking": {
+          "metrics": null,
+          "negative_rows": 1,
+          "positive_rows": 1,
+          "rows": 2
+        }
+      },
+      "test_examples": 12,
+      "test_groups": 6,
+      "test_pair_rows": 6,
+      "train_examples": 36,
+      "train_groups": 18,
+      "train_pair_rows": 18
+    },
+    {
+      "family": "hist_gradient_boosting",
+      "metrics": {
+        "acc": 0.5,
+        "auc": 0.4166666666666667,
+        "brier": 0.25,
+        "ece": 0.0
+      },
+      "random_baseline": {
+        "acc": 0.5,
+        "auc": 0.5,
+        "brier": 0.25,
+        "ece": 0.0
+      },
+      "seed": 13,
+      "source_family_metrics": {
+        "seeding_eval": {
+          "metrics": {
+            "acc": 0.5,
+            "auc": 0.4166666666666667,
+            "brier": 0.25,
+            "ece": 0.0
+          },
+          "negative_rows": 6,
+          "positive_rows": 6,
+          "rows": 12
+        }
+      },
+      "suite_metrics": {
+        "gpqa": {
+          "metrics": null,
+          "negative_rows": 3,
+          "positive_rows": 3,
+          "rows": 6
+        },
+        "hotpotqa": {
+          "metrics": null,
+          "negative_rows": 1,
+          "positive_rows": 1,
+          "rows": 2
+        },
+        "simpleqa": {
+          "metrics": null,
+          "negative_rows": 1,
+          "positive_rows": 1,
+          "rows": 2
+        },
+        "thinking": {
+          "metrics": null,
+          "negative_rows": 1,
+          "positive_rows": 1,
+          "rows": 2
+        }
+      },
+      "test_examples": 12,
+      "test_groups": 6,
+      "test_pair_rows": 6,
+      "train_examples": 36,
+      "train_groups": 18,
+      "train_pair_rows": 18
+    },
+    {
+      "family": "random_forest",
+      "metrics": {
+        "acc": 1.0,
+        "auc": 1.0,
+        "brier": 0.09347060322761536,
+        "ece": 0.27876556292176247
+      },
+      "random_baseline": {
+        "acc": 0.5,
+        "auc": 0.5,
+        "brier": 0.25,
+        "ece": 0.0
+      },
+      "seed": 13,
+      "source_family_metrics": {
+        "seeding_eval": {
+          "metrics": {
+            "acc": 1.0,
+            "auc": 1.0,
+            "brier": 0.09347060322761536,
+            "ece": 0.27876556292176247
+          },
+          "negative_rows": 6,
+          "positive_rows": 6,
+          "rows": 12
+        }
+      },
+      "suite_metrics": {
+        "gpqa": {
+          "metrics": null,
+          "negative_rows": 3,
+          "positive_rows": 3,
+          "rows": 6
+        },
+        "hotpotqa": {
+          "metrics": null,
+          "negative_rows": 1,
+          "positive_rows": 1,
+          "rows": 2
+        },
+        "simpleqa": {
+          "metrics": null,
+          "negative_rows": 1,
+          "positive_rows": 1,
+          "rows": 2
+        },
+        "thinking": {
+          "metrics": null,
+          "negative_rows": 1,
+          "positive_rows": 1,
+          "rows": 2
+        }
+      },
+      "test_examples": 12,
+      "test_groups": 6,
+      "test_pair_rows": 6,
+      "train_examples": 36,
+      "train_groups": 18,
+      "train_pair_rows": 18
+    },
+    {
+      "family": "logistic_l2",
+      "metrics": {
+        "acc": 0.8333333333333334,
+        "auc": 0.9166666666666666,
+        "brier": 0.12525689601898193,
+        "ece": 0.1366122163987408
+      },
+      "random_baseline": {
+        "acc": 0.5,
+        "auc": 0.5,
+        "brier": 0.25,
+        "ece": 0.0
+      },
+      "seed": 101,
+      "source_family_metrics": {
+        "orchestrator_live_seed": {
+          "metrics": null,
+          "negative_rows": 1,
+          "positive_rows": 1,
+          "rows": 2
+        },
+        "seeding_eval": {
+          "metrics": {
+            "acc": 0.8,
+            "auc": 0.88,
+            "brier": 0.15029609203338623,
+            "ece": 0.16237391219474376
+          },
+          "negative_rows": 5,
+          "positive_rows": 5,
+          "rows": 10
+        }
+      },
+      "suite_metrics": {
+        "debugbench": {
+          "metrics": null,
+          "negative_rows": 1,
+          "positive_rows": 1,
+          "rows": 2
+        },
+        "gpqa": {
+          "metrics": null,
+          "negative_rows": 3,
+          "positive_rows": 3,
+          "rows": 6
+        },
+        "simpleqa": {
+          "metrics": null,
+          "negative_rows": 1,
+          "positive_rows": 1,
+          "rows": 2
+        },
+        "thinking": {
+          "metrics": null,
+          "negative_rows": 1,
+          "positive_rows": 1,
+          "rows": 2
+        }
+      },
+      "test_examples": 12,
+      "test_groups": 6,
+      "test_pair_rows": 6,
+      "train_examples": 36,
+      "train_groups": 18,
+      "train_pair_rows": 18
+    },
+    {
+      "family": "hist_gradient_boosting",
+      "metrics": {
+        "acc": 0.5,
+        "auc": 0.4166666666666667,
+        "brier": 0.25,
+        "ece": 0.0
+      },
+      "random_baseline": {
+        "acc": 0.5,
+        "auc": 0.5,
+        "brier": 0.25,
+        "ece": 0.0
+      },
+      "seed": 101,
+      "source_family_metrics": {
+        "orchestrator_live_seed": {
+          "metrics": null,
+          "negative_rows": 1,
+          "positive_rows": 1,
+          "rows": 2
+        },
+        "seeding_eval": {
+          "metrics": {
+            "acc": 0.5,
+            "auc": 0.4,
+            "brier": 0.25,
+            "ece": 0.0
+          },
+          "negative_rows": 5,
+          "positive_rows": 5,
+          "rows": 10
+        }
+      },
+      "suite_metrics": {
+        "debugbench": {
+          "metrics": null,
+          "negative_rows": 1,
+          "positive_rows": 1,
+          "rows": 2
+        },
+        "gpqa": {
+          "metrics": null,
+          "negative_rows": 3,
+          "positive_rows": 3,
+          "rows": 6
+        },
+        "simpleqa": {
+          "metrics": null,
+          "negative_rows": 1,
+          "positive_rows": 1,
+          "rows": 2
+        },
+        "thinking": {
+          "metrics": null,
+          "negative_rows": 1,
+          "positive_rows": 1,
+          "rows": 2
+        }
+      },
+      "test_examples": 12,
+      "test_groups": 6,
+      "test_pair_rows": 6,
+      "train_examples": 36,
+      "train_groups": 18,
+      "train_pair_rows": 18
+    },
+    {
+      "family": "random_forest",
+      "metrics": {
+        "acc": 0.8333333333333334,
+        "auc": 0.9722222222222222,
+        "brier": 0.09672970324754715,
+        "ece": 0.2838631756603718
+      },
+      "random_baseline": {
+        "acc": 0.5,
+        "auc": 0.5,
+        "brier": 0.25,
+        "ece": 0.0
+      },
+      "seed": 101,
+      "source_family_metrics": {
+        "orchestrator_live_seed": {
+          "metrics": null,
+          "negative_rows": 1,
+          "positive_rows": 1,
+          "rows": 2
+        },
+        "seeding_eval": {
+          "metrics": {
+            "acc": 0.8,
+            "auc": 0.96,
+            "brier": 0.10655666887760162,
+            "ece": 0.2970304220914841
+          },
+          "negative_rows": 5,
+          "positive_rows": 5,
+          "rows": 10
+        }
+      },
+      "suite_metrics": {
+        "debugbench": {
+          "metrics": null,
+          "negative_rows": 1,
+          "positive_rows": 1,
+          "rows": 2
+        },
+        "gpqa": {
+          "metrics": null,
+          "negative_rows": 3,
+          "positive_rows": 3,
+          "rows": 6
+        },
+        "simpleqa": {
+          "metrics": null,
+          "negative_rows": 1,
+          "positive_rows": 1,
+          "rows": 2
+        },
+        "thinking": {
+          "metrics": null,
+          "negative_rows": 1,
+          "positive_rows": 1,
+          "rows": 2
+        }
+      },
+      "test_examples": 12,
+      "test_groups": 6,
+      "test_pair_rows": 6,
+      "train_examples": 36,
+      "train_groups": 18,
+      "train_pair_rows": 18
+    },
+    {
+      "family": "logistic_l2",
+      "metrics": {
+        "acc": 0.5,
+        "auc": 0.75,
+        "brier": 0.24161159992218018,
+        "ece": 0.23857881625493366
+      },
+      "random_baseline": {
+        "acc": 0.5,
+        "auc": 0.5,
+        "brier": 0.25,
+        "ece": 0.0
+      },
+      "seed": 2026,
+      "source_family_metrics": {
+        "seeding_eval": {
+          "metrics": {
+            "acc": 0.5,
+            "auc": 0.75,
+            "brier": 0.24161159992218018,
+            "ece": 0.23857881625493366
+          },
+          "negative_rows": 6,
+          "positive_rows": 6,
+          "rows": 12
+        }
+      },
+      "suite_metrics": {
+        "gpqa": {
+          "metrics": null,
+          "negative_rows": 2,
+          "positive_rows": 2,
+          "rows": 4
+        },
+        "simpleqa": {
+          "metrics": null,
+          "negative_rows": 1,
+          "positive_rows": 1,
+          "rows": 2
+        },
+        "thinking": {
+          "metrics": null,
+          "negative_rows": 3,
+          "positive_rows": 3,
+          "rows": 6
+        }
+      },
+      "test_examples": 12,
+      "test_groups": 6,
+      "test_pair_rows": 6,
+      "train_examples": 36,
+      "train_groups": 18,
+      "train_pair_rows": 18
+    },
+    {
+      "family": "hist_gradient_boosting",
+      "metrics": {
+        "acc": 0.5,
+        "auc": 0.4166666666666667,
+        "brier": 0.25,
+        "ece": 0.0
+      },
+      "random_baseline": {
+        "acc": 0.5,
+        "auc": 0.5,
+        "brier": 0.25,
+        "ece": 0.0
+      },
+      "seed": 2026,
+      "source_family_metrics": {
+        "seeding_eval": {
+          "metrics": {
+            "acc": 0.5,
+            "auc": 0.4166666666666667,
+            "brier": 0.25,
+            "ece": 0.0
+          },
+          "negative_rows": 6,
+          "positive_rows": 6,
+          "rows": 12
+        }
+      },
+      "suite_metrics": {
+        "gpqa": {
+          "metrics": null,
+          "negative_rows": 2,
+          "positive_rows": 2,
+          "rows": 4
+        },
+        "simpleqa": {
+          "metrics": null,
+          "negative_rows": 1,
+          "positive_rows": 1,
+          "rows": 2
+        },
+        "thinking": {
+          "metrics": null,
+          "negative_rows": 3,
+          "positive_rows": 3,
+          "rows": 6
+        }
+      },
+      "test_examples": 12,
+      "test_groups": 6,
+      "test_pair_rows": 6,
+      "train_examples": 36,
+      "train_groups": 18,
+      "train_pair_rows": 18
+    },
+    {
+      "family": "random_forest",
+      "metrics": {
+        "acc": 1.0,
+        "auc": 1.0,
+        "brier": 0.11201704293489456,
+        "ece": 0.3085965805997451
+      },
+      "random_baseline": {
+        "acc": 0.5,
+        "auc": 0.5,
+        "brier": 0.25,
+        "ece": 0.0
+      },
+      "seed": 2026,
+      "source_family_metrics": {
+        "seeding_eval": {
+          "metrics": {
+            "acc": 1.0,
+            "auc": 1.0,
+            "brier": 0.11201704293489456,
+            "ece": 0.3085965805997451
+          },
+          "negative_rows": 6,
+          "positive_rows": 6,
+          "rows": 12
+        }
+      },
+      "suite_metrics": {
+        "gpqa": {
+          "metrics": null,
+          "negative_rows": 2,
+          "positive_rows": 2,
+          "rows": 4
+        },
+        "simpleqa": {
+          "metrics": null,
+          "negative_rows": 1,
+          "positive_rows": 1,
+          "rows": 2
+        },
+        "thinking": {
+          "metrics": null,
+          "negative_rows": 3,
+          "positive_rows": 3,
+          "rows": 6
+        }
+      },
+      "test_examples": 12,
+      "test_groups": 6,
+      "test_pair_rows": 6,
+      "train_examples": 36,
+      "train_groups": 18,
+      "train_pair_rows": 18
+    }
+  ],
+  "schema_version": "offline_reward_pairwise_ranker_eval.v1",
+  "seeds": [
+    42,
+    7,
+    13,
+    101,
+    2026
+  ],
+  "split": {
+    "group_disjoint": true,
+    "test_split": 0.25
+  }
+}
