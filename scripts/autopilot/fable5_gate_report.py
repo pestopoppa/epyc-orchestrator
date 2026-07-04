@@ -63,6 +63,13 @@ DEFAULT_A9_CONTRACT_SUMMARY = (
     / "offline_reward_oracle_token_coverage_final_labels_20260621"
     / "offline_reward_pairwise_preference_contract_candidate_only_expanded_gap_summary.json"
 )
+DEFAULT_A9_SOURCE_REWARD_DIAGNOSTIC_SUMMARY = (
+    ORCH_ROOT
+    / "orchestration"
+    / "reports"
+    / "offline_reward_oracle_token_coverage_final_labels_20260621"
+    / "offline_reward_pairwise_source_reward_diagnostic_summary.json"
+)
 DEFAULT_DS_E1_KV_PORT = 8194
 DEFAULT_XMAS_HELDOUT_PROMPTS_ARG = (
     "benchmarks/results/runs/xmas_live_ab/20260618-heldout-resilient/prompts.jsonl"
@@ -759,6 +766,9 @@ def _compact_processes(lines: list[str], *, limit: int = 4) -> str:
 def a9_collection_section(
     manifest_path: Path = DEFAULT_A9_COLLECTION_MANIFEST,
     contract_summary_path: Path | None = DEFAULT_A9_CONTRACT_SUMMARY,
+    source_reward_diagnostic_summary_path: Path | None = (
+        DEFAULT_A9_SOURCE_REWARD_DIAGNOSTIC_SUMMARY
+    ),
 ) -> GateSection:
     """Surface the guarded A9 pairwise source-acquisition window."""
     status = build_a9_collection_status(manifest_path)
@@ -780,12 +790,37 @@ def a9_collection_section(
     contract_coverage = contract_summary.get("coverage")
     if not isinstance(contract_coverage, dict):
         contract_coverage = {}
+    source_reward_summary: dict[str, Any] = {}
+    if (
+        source_reward_diagnostic_summary_path is not None
+        and source_reward_diagnostic_summary_path.exists()
+    ):
+        try:
+            source_reward_summary = _load_json_object(
+                source_reward_diagnostic_summary_path
+            )
+        except Exception as exc:
+            source_reward_summary = {"load_error": str(exc)}
+    source_reward_decision = source_reward_summary.get("decision")
+    if not isinstance(source_reward_decision, dict):
+        source_reward_decision = {}
+    source_reward_coverage = source_reward_summary.get("coverage")
+    if not isinstance(source_reward_coverage, dict):
+        source_reward_coverage = {}
+    source_reward_diagnostic = source_reward_summary.get("diagnostic")
+    if not isinstance(source_reward_diagnostic, dict):
+        source_reward_diagnostic = {}
     summary_tail = ""
     if status_label == "no_runnable_batches" and contract_decision:
         summary_tail = (
             "; candidate-only contract decision is "
             f"{contract_decision.get('status', 'unknown')}"
         )
+        if source_reward_decision:
+            summary_tail += (
+                "; source-reward diagnostic is "
+                f"{source_reward_decision.get('status', 'unknown')}"
+            )
     return GateSection(
         key="a9_pairwise_collection",
         status=section_status,
@@ -808,6 +843,14 @@ def a9_collection_section(
             ),
             "candidate_contract_decision": contract_decision or None,
             "candidate_contract_coverage": contract_coverage or None,
+            "source_reward_diagnostic_summary_path": (
+                str(source_reward_diagnostic_summary_path)
+                if source_reward_diagnostic_summary_path is not None
+                else None
+            ),
+            "source_reward_diagnostic_decision": source_reward_decision or None,
+            "source_reward_diagnostic_coverage": source_reward_coverage or None,
+            "source_reward_diagnostic": source_reward_diagnostic or None,
             "autopilot_guard": status.get("autopilot_guard"),
             "blockers": blockers,
             "warnings": list(status.get("warnings") or []),
@@ -1662,23 +1705,52 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
         if a9.details.get("status") == "no_runnable_batches":
             contract_decision = a9.details.get("candidate_contract_decision") or {}
             contract_coverage = a9.details.get("candidate_contract_coverage") or {}
+            source_reward_decision = (
+                a9.details.get("source_reward_diagnostic_decision") or {}
+            )
+            source_reward_coverage = (
+                a9.details.get("source_reward_diagnostic_coverage") or {}
+            )
+            source_reward_diagnostic = (
+                a9.details.get("source_reward_diagnostic") or {}
+            )
             contract_status = str(contract_decision.get("status") or "unknown")
             contract_next = str(contract_decision.get("recommended_next") or "")
             if contract_status == "insufficient_contrast":
-                reason = (
-                    "A9 candidate scoring/rebuild is complete, but the "
-                    "candidate-only pairwise contract has insufficient "
-                    "within-source positive/negative contrasts "
-                    f"({contract_coverage.get('pair_rows', 0)} pair rows, "
-                    f"{contract_coverage.get('cross_action_pair_rows', 0)} "
-                    "cross-action rows). The current reference_token_coverage "
-                    "source/oracle contract is exhausted."
-                )
-                requires = (
-                    "materially different scorer/feature design or a "
-                    "reference-bearing source that yields enough within-task "
-                    "positive/negative contrasts"
-                )
+                if source_reward_decision.get("status") == "contract_ready":
+                    reason = (
+                        "A9 candidate scoring/rebuild is complete. The "
+                        "reference_token_coverage candidate-only contract is "
+                        "still insufficient "
+                        f"({contract_coverage.get('pair_rows', 0)} pair rows, "
+                        f"{contract_coverage.get('cross_action_pair_rows', 0)} "
+                        "cross-action rows), but the source-q-reward diagnostic "
+                        "shows the same rows contain enough reward contrast "
+                        f"({source_reward_coverage.get('pair_rows', 0)} pair rows, "
+                        f"{source_reward_coverage.get('cross_action_pair_rows', 0)} "
+                        "cross-action rows). The blocker is now oracle/source "
+                        "contract semantics, not collection volume."
+                    )
+                    requires = (
+                        "decide whether A9 should use source-q-reward pairwise "
+                        "labels as the training target or build a new independent "
+                        "scorer/source contract before ranker use"
+                    )
+                else:
+                    reason = (
+                        "A9 candidate scoring/rebuild is complete, but the "
+                        "candidate-only pairwise contract has insufficient "
+                        "within-source positive/negative contrasts "
+                        f"({contract_coverage.get('pair_rows', 0)} pair rows, "
+                        f"{contract_coverage.get('cross_action_pair_rows', 0)} "
+                        "cross-action rows). The current reference_token_coverage "
+                        "source/oracle contract is exhausted."
+                    )
+                    requires = (
+                        "materially different scorer/feature design or a "
+                        "reference-bearing source that yields enough within-task "
+                        "positive/negative contrasts"
+                    )
             else:
                 reason = (
                     "A9 clean-window acquisition is exhausted for the "
@@ -1710,6 +1782,16 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
                     "candidate_contract_decision": contract_decision or None,
                     "candidate_contract_coverage": contract_coverage or None,
                     "candidate_contract_recommended_next": contract_next or None,
+                    "source_reward_diagnostic_summary_path": a9.details.get(
+                        "source_reward_diagnostic_summary_path"
+                    ),
+                    "source_reward_diagnostic_decision": (
+                        source_reward_decision or None
+                    ),
+                    "source_reward_diagnostic_coverage": (
+                        source_reward_coverage or None
+                    ),
+                    "source_reward_diagnostic": source_reward_diagnostic or None,
                     "follow_up": (
                         "Do not rerun the current collection script; regenerate "
                         "A9 only after the oracle/source contract changes, then "

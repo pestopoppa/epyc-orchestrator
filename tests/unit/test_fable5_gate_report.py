@@ -1100,6 +1100,7 @@ def test_a9_section_marks_empty_manifest_attention(monkeypatch) -> None:
 
 def test_a9_section_surfaces_candidate_contract_decision(monkeypatch, tmp_path: Path) -> None:
     contract_summary = tmp_path / "candidate_contract_summary.json"
+    source_reward_summary = tmp_path / "source_reward_diagnostic_summary.json"
     contract_summary.write_text(
         """
 {
@@ -1113,6 +1114,29 @@ def test_a9_section_surfaces_candidate_contract_decision(monkeypatch, tmp_path: 
     "status": "insufficient_contrast",
     "recommended_next": "collect_more_within_task_positive_negative_contrasts",
     "runtime_gate_change_allowed": false
+  }
+}
+""",
+        encoding="utf-8",
+    )
+    source_reward_summary.write_text(
+        """
+{
+  "schema_version": "offline_reward_source_reward_diagnostic_summary.v1",
+  "coverage": {
+    "pair_rows": 180,
+    "cross_action_pair_rows": 180,
+    "source_record_groups": 302
+  },
+  "decision": {
+    "status": "contract_ready",
+    "recommended_next": "decide whether A9 should train on source-q-reward pairwise labels",
+    "runtime_gate_change_allowed": false
+  },
+  "diagnostic": {
+    "score_source": "source_q_reward_passthrough",
+    "independent_oracle": false,
+    "diagnostic_only": true
   }
 }
 """,
@@ -1138,20 +1162,29 @@ def test_a9_section_surfaces_candidate_contract_decision(monkeypatch, tmp_path: 
     section = report_mod.a9_collection_section(
         Path("/tmp/a9_manifest.json"),
         contract_summary_path=contract_summary,
+        source_reward_diagnostic_summary_path=source_reward_summary,
     )
     actions = report_mod.build_next_actions([section])
 
     assert section.status == "attention"
     assert "insufficient_contrast" in section.summary
+    assert "source-reward diagnostic is contract_ready" in section.summary
     assert section.details["candidate_contract_decision"]["status"] == (
         "insufficient_contrast"
     )
     assert section.details["candidate_contract_coverage"]["pair_rows"] == 32
+    assert section.details["source_reward_diagnostic_decision"]["status"] == (
+        "contract_ready"
+    )
+    assert section.details["source_reward_diagnostic_coverage"]["pair_rows"] == 180
     action = actions[0]
     assert action["key"] == "revise_a9_reward_oracle_or_reference_source"
     assert action["candidate_contract_decision"]["status"] == "insufficient_contrast"
     assert action["candidate_contract_coverage"]["cross_action_pair_rows"] == 32
-    assert "insufficient within-source positive/negative contrasts" in action["reason"]
+    assert action["source_reward_diagnostic_decision"]["status"] == "contract_ready"
+    assert action["source_reward_diagnostic_coverage"]["cross_action_pair_rows"] == 180
+    assert "source-q-reward diagnostic" in action["reason"]
+    assert "not collection volume" in action["reason"]
 
 
 def test_a9_next_action_switches_to_oracle_design_when_no_batches() -> None:
