@@ -1,0 +1,339 @@
+{
+  "blockers": [
+    "ri10_canary: RI-10 raw high-risk sample-count coverage exists, but configured canary_roles have insufficient current high-risk rows (only 20 current high-risk row(s) matched configured canary_roles; gate requires 50).",
+    "kv_size_measurements: No direct DS-E1 production KV-size measurement series was found."
+  ],
+  "generated_at": "2026-07-04T01:57:23Z",
+  "ready_for_profile_decision": false,
+  "scope": "dynamic-stack-concurrency DS-E1 evidence packet",
+  "sections": [
+    {
+      "details": {
+        "compiled_at": "2026-07-03T21:15:54Z",
+        "path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/derived/stack_priors.yaml",
+        "roles": [
+          {
+            "effective_context_tokens": 16384,
+            "endpoint": "http://localhost:8083",
+            "model_id": "qwen3.5-122b-a10b-q4_k_m",
+            "model_mem_gb": 69.0,
+            "ports": [
+              8083
+            ],
+            "role": "architect_general",
+            "throughput_tps": 12.19,
+            "tier": "hot"
+          },
+          {
+            "effective_context_tokens": 32768,
+            "endpoint": "http://localhost:8070",
+            "model_id": "qwen3.6-35b-a3b-mtp-q8_0",
+            "model_mem_gb": 37.0,
+            "ports": [
+              8070
+            ],
+            "role": "coder_escalation",
+            "throughput_tps": 24.3,
+            "tier": "hot"
+          },
+          {
+            "effective_context_tokens": 32768,
+            "endpoint": "http://localhost:8070",
+            "model_id": "qwen3.6-35b-a3b-mtp-q8_0",
+            "model_mem_gb": 37.0,
+            "ports": [
+              8070,
+              8080,
+              8180,
+              8280,
+              8380
+            ],
+            "role": "frontdoor",
+            "throughput_tps": 24.3,
+            "tier": "hot"
+          },
+          {
+            "effective_context_tokens": 32768,
+            "endpoint": "http://localhost:8085",
+            "model_id": "qwen3-next-80b-a3b-q4_k_m",
+            "model_mem_gb": 45.0,
+            "ports": [
+              8085,
+              8185,
+              8285,
+              8385,
+              8485
+            ],
+            "role": "ingest_long_context",
+            "throughput_tps": 20.8,
+            "tier": "hot"
+          },
+          {
+            "effective_context_tokens": 16384,
+            "endpoint": "http://localhost:8072",
+            "model_id": "gemma4-26b-a4b-it-orig-q4_k_m",
+            "model_mem_gb": 16.0,
+            "ports": [
+              8072,
+              8082
+            ],
+            "role": "toolrunner",
+            "throughput_tps": 60.7,
+            "tier": "hot"
+          },
+          {
+            "effective_context_tokens": 16384,
+            "endpoint": "http://localhost:8087",
+            "model_id": "qwen3-vl-30b-a3b-q4_k_m",
+            "model_mem_gb": 18.0,
+            "ports": [
+              8087,
+              8187,
+              8287,
+              8387,
+              8487
+            ],
+            "role": "vision_escalation",
+            "throughput_tps": 27.6,
+            "tier": "hot"
+          },
+          {
+            "effective_context_tokens": 16384,
+            "endpoint": "http://localhost:8072",
+            "model_id": "gemma4-26b-a4b-it-orig-q4_k_m",
+            "model_mem_gb": 16.0,
+            "ports": [
+              8072,
+              8082,
+              8182,
+              8282,
+              8382
+            ],
+            "role": "worker_general",
+            "throughput_tps": 60.7,
+            "tier": "hot"
+          },
+          {
+            "effective_context_tokens": 16384,
+            "endpoint": "http://localhost:8072",
+            "model_id": "gemma4-26b-a4b-it-orig-q4_k_m",
+            "model_mem_gb": 16.0,
+            "ports": [
+              8072,
+              8082
+            ],
+            "role": "worker_math",
+            "throughput_tps": 60.7,
+            "tier": "hot"
+          },
+          {
+            "effective_context_tokens": 32768,
+            "endpoint": "http://localhost:8070",
+            "model_id": "qwen3.6-35b-a3b-mtp-q8_0",
+            "model_mem_gb": 37.0,
+            "ports": [
+              8070
+            ],
+            "role": "worker_summarize",
+            "throughput_tps": 24.3,
+            "tier": "hot"
+          },
+          {
+            "effective_context_tokens": 8192,
+            "endpoint": "http://localhost:8086",
+            "model_id": "qwen2.5-vl-7b-q4_k_m",
+            "model_mem_gb": 4.4,
+            "ports": [
+              8086
+            ],
+            "role": "worker_vision",
+            "throughput_tps": 20.0,
+            "tier": "hot"
+          }
+        ],
+        "source_commit": "c526b215"
+      },
+      "key": "stack_roster",
+      "status": "ready",
+      "summary": "10 live stack-prior roles packaged from generated truth."
+    },
+    {
+      "details": {
+        "manifest_compiled_at": "2026-07-03T21:15:54Z",
+        "path": "/mnt/raid0/llm/epyc-inference-research/docs/MODEL_MANIFEST.md",
+        "stack_priors_compiled_at": "2026-07-03T21:15:54Z"
+      },
+      "key": "ds5_roster_manifest",
+      "status": "ready",
+      "summary": "Research model manifest exists for DS-5 roster context."
+    },
+    {
+      "details": {
+        "contention_topology_hash": "df373c79cc4af06f",
+        "excluded_auxiliary_roles": [
+          "eval_batch_frontdoor"
+        ],
+        "matrix_status": "ok",
+        "matrix_topology_hash": "df373c79cc4af06f",
+        "measured_roles": [
+          "architect_general",
+          "frontdoor",
+          "ingest_long_context",
+          "vision_escalation",
+          "worker_general",
+          "worker_vision"
+        ],
+        "path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/contention_matrix.yaml",
+        "topology_hash": "5d19b3e4edf6fc27"
+      },
+      "key": "contention_matrix",
+      "status": "ready",
+      "summary": "Contention matrix status is ready for topology 5d19b3e4."
+    },
+    {
+      "details": {
+        "canary_ratio": 0.25,
+        "canary_roles": [
+          "frontdoor",
+          "worker_general",
+          "worker_vision"
+        ],
+        "decision_gate": ">=50 high-risk samples",
+        "mode": "canary",
+        "path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/classifier_config.yaml",
+        "report_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/reports/ri10_canary_sample_report_all_roles_20260704T005332Z.json",
+        "report_summary": {
+          "canary_arm_balance_ready": false,
+          "canary_arm_counts_since_canary_start": {
+            "enforce_high_risk": 1,
+            "shadow_high_risk": 19
+          },
+          "canary_arm_counts_since_telemetry_health_start": {
+            "enforce_high_risk": 1,
+            "shadow_high_risk": 19
+          },
+          "canary_arm_sample_count_ready": false,
+          "canary_decision_ready": false,
+          "canary_role_factual_risk_modes_since_canary_start": {
+            "<missing>": 444,
+            "enforce": 1,
+            "shadow": 19
+          },
+          "canary_role_factual_risk_modes_since_telemetry_health_start": {
+            "enforce": 1,
+            "shadow": 19
+          },
+          "canary_role_high_risk_rows_since_canary_start": 464,
+          "canary_role_high_risk_rows_since_telemetry_health_start": 20,
+          "canary_role_missing_factual_risk_mode_high_risk_rows": 444,
+          "canary_role_missing_factual_risk_mode_high_risk_rows_since_telemetry_health_start": 0,
+          "canary_role_observable_factual_risk_mode_high_risk_rows": 20,
+          "canary_role_observable_factual_risk_mode_high_risk_rows_since_telemetry_health_start": 20,
+          "canary_start": "2026-04-06",
+          "decision_gate_high_risk_samples": 50,
+          "decision_reason": "only 20 high-risk rows have observable enforce/shadow canary arms; gate requires 50",
+          "evaluable_canary_arm_high_risk_rows": 20,
+          "evaluable_canary_arm_high_risk_rows_since_telemetry_health_start": 20,
+          "frontdoor_high_risk_rows_since_canary_start": 285,
+          "frontdoor_high_risk_rows_since_telemetry_health_start": 2,
+          "generated_at": "2026-07-04T00:53:41Z",
+          "high_risk_factual_risk_modes_since_canary_start": {
+            "<missing>": 444,
+            "enforce": 1,
+            "shadow": 19
+          },
+          "high_risk_factual_risk_modes_since_telemetry_health_start": {
+            "enforce": 1,
+            "shadow": 19
+          },
+          "high_risk_gate_actions_since_canary_start": {
+            "<missing>": 56,
+            "not_enforced:risk_control_disabled": 408
+          },
+          "high_risk_gate_actions_since_telemetry_health_start": {
+            "<missing>": 2,
+            "not_enforced:risk_control_disabled": 18
+          },
+          "high_risk_rows_since_canary_start": 464,
+          "high_risk_rows_since_telemetry_health_start": 20,
+          "memory_risk_gate_actions_since_canary_start": {
+            "<missing>": 56,
+            "not_enforced:risk_control_disabled": 408
+          },
+          "min_canary_arm_samples": 10,
+          "missing_factual_risk_mode_high_risk_rows_since_telemetry_health_start": 0,
+          "non_canary_role_high_risk_rows_since_canary_start": 0,
+          "non_canary_role_high_risk_rows_since_telemetry_health_start": 0,
+          "non_evaluable_high_risk_rows_since_canary_start": 444,
+          "observable_factual_risk_mode_high_risk_rows_since_telemetry_health_start": 20,
+          "risk_control_disabled_high_risk_rows_since_canary_start": 408,
+          "sample_count_ready": true,
+          "telemetry_canary_role_scope_starved": false,
+          "telemetry_collection_blocker": "canary_role_sample_count_insufficient",
+          "telemetry_collection_reason": "only 20 current high-risk row(s) matched configured canary_roles; gate requires 50",
+          "telemetry_health_start": "2026-06-20",
+          "telemetry_producer_currently_healthy": true
+        },
+        "telemetry_collection_blocker": "canary_role_sample_count_insufficient",
+        "telemetry_collection_reason": "only 20 current high-risk row(s) matched configured canary_roles; gate requires 50"
+      },
+      "key": "ri10_canary",
+      "status": "insufficient_data",
+      "summary": "RI-10 raw high-risk sample-count coverage exists, but configured canary_roles have insufficient current high-risk rows (only 20 current high-risk row(s) matched configured canary_roles; gate requires 50)."
+    },
+    {
+      "details": {
+        "expected_csv_columns": [
+          "role",
+          "model_id",
+          "model_path",
+          "context_length",
+          "max_context",
+          "status",
+          "rss_load_mb",
+          "rss_after_prefill_mb",
+          "server_kv_size_mb",
+          "prompt_tokens",
+          "prompt_tps",
+          "log_file",
+          "notes"
+        ],
+        "producer_command": "cd /mnt/raid0/llm/epyc-inference-research && scripts/benchmark/ds_e1_kv_measurements.sh --execute",
+        "required_contexts": [
+          "2K",
+          "8K",
+          "32K"
+        ],
+        "required_measurements": {
+          "architect_general": [
+            2048,
+            8192
+          ],
+          "frontdoor": [
+            2048,
+            8192,
+            32768
+          ],
+          "ingest_long_context": [
+            2048,
+            8192,
+            32768
+          ],
+          "worker_general": [
+            2048,
+            8192
+          ]
+        },
+        "searched_globs": [
+          "orchestration/reports/ds_e1*kv*",
+          "orchestration/reports/dynamic_stack*kv*",
+          "../epyc-inference-research/data/dynamic_stack/**/kv*",
+          "../epyc-inference-research/data/kv_measurements/**"
+        ]
+      },
+      "key": "kv_size_measurements",
+      "status": "missing",
+      "summary": "No direct DS-E1 production KV-size measurement series was found."
+    }
+  ]
+}

@@ -320,22 +320,50 @@ def ri10_canary_section(config_path: Path = DEFAULT_CLASSIFIER_CONFIG) -> Eviden
     status = "missing_data"
     summary = "RI-10 config is present, but no current canary sample-count artifact was found."
     if latest_report:
+        telemetry_blocker = str(latest_report.get("telemetry_collection_blocker") or "")
+        telemetry_reason = str(latest_report.get("telemetry_collection_reason") or "")
         if latest_report.get("canary_decision_ready") is True:
             status = "ready"
             summary = "RI-10 canary arm-attributed high-risk sample coverage is sufficient."
-        elif latest_report.get("telemetry_collection_blocker") == "canary_role_scope_starved":
+        elif telemetry_blocker == "no_recent_high_risk_rows":
+            status = "insufficient_data"
+            summary = (
+                "RI-10 telemetry is healthy enough to report status, but no current "
+                f"high-risk rows are available for canary decision evidence ({telemetry_reason})."
+            )
+        elif telemetry_blocker == "canary_role_scope_starved":
             status = "insufficient_data"
             summary = (
                 "RI-10 current factual-risk telemetry is populated, but configured "
-                "canary_roles are starving enforce/shadow arm samples."
+                f"canary_roles are starving enforce/shadow arm samples ({telemetry_reason})."
             )
-        elif latest_report.get("telemetry_producer_currently_healthy") is False and latest_report.get(
-            "high_risk_rows_since_telemetry_health_start", 0
+        elif telemetry_blocker == "canary_role_sample_count_insufficient":
+            status = "insufficient_data"
+            summary = (
+                "RI-10 raw high-risk sample-count coverage exists, but configured "
+                f"canary_roles have insufficient current high-risk rows ({telemetry_reason})."
+            )
+        elif telemetry_blocker == "canary_arm_volume_insufficient":
+            status = "insufficient_data"
+            summary = (
+                "RI-10 canary-role high-risk traffic exists, but enforce/shadow "
+                f"arm-attributed volume is insufficient ({telemetry_reason})."
+            )
+        elif telemetry_blocker == "canary_arm_balance_insufficient":
+            status = "insufficient_data"
+            summary = (
+                "RI-10 enforce/shadow arm-attributed volume exists, but the arm "
+                f"balance gate is not met ({telemetry_reason})."
+            )
+        elif (
+            telemetry_blocker == "current_missing_factual_risk_mode"
+            or latest_report.get("telemetry_producer_currently_healthy") is False
+            and latest_report.get("high_risk_rows_since_telemetry_health_start", 0)
         ):
             status = "insufficient_data"
             summary = (
                 "RI-10 current high-risk telemetry still has missing factual-risk "
-                "mode rows."
+                f"mode rows ({telemetry_reason})."
             )
         elif latest_report.get("sample_count_ready") is True:
             status = "insufficient_data"
@@ -404,6 +432,8 @@ def ri10_canary_section(config_path: Path = DEFAULT_CLASSIFIER_CONFIG) -> Eviden
             "canary_roles": canary_roles,
             "decision_gate": ">=50 high-risk samples",
             "report_path": str(latest_report_path) if latest_report_path else None,
+            "telemetry_collection_blocker": latest_report.get("telemetry_collection_blocker"),
+            "telemetry_collection_reason": latest_report.get("telemetry_collection_reason"),
             "report_summary": report_summary,
         },
     )
