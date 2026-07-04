@@ -131,7 +131,7 @@ def test_evaluate_question_text_path_alias_clone_and_escalation_injection():
                 {"answer": "4", "error": None, "tokens_generated": 5, "tools_used": 0, "tools_called": []},
                 {"answer": "3", "error": None, "tokens_generated": 4, "tools_used": 1, "tools_called": ["calc"]},
             ],
-        ),
+        ) as call_mock,
         patch.object(_MOD, "score_answer_deterministic", side_effect=[True, False]),
         patch.object(_MOD, "compute_comparative_rewards", return_value={"frontdoor:direct": 1.0, "worker_math:direct": 0.2}),
         patch.object(_MOD, "_inject_rewards_http", return_value=2),
@@ -153,9 +153,11 @@ def test_evaluate_question_text_path_alias_clone_and_escalation_injection():
             client=object(),
             dry_run=False,
             escalation_chains=True,
+            max_tokens=1024,
         )
 
     assert comp is not None
+    assert [call.kwargs["max_tokens"] for call in call_mock.call_args_list] == [1024, 1024]
     assert comp.rewards_injected == 3
     # Alias clone path
     assert comp.rewards["worker_explore:direct"] == 0.2

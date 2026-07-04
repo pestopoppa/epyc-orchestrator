@@ -176,6 +176,7 @@ def evaluate_question(
     cooldown: float = 0.0,
     dry_run: bool = False,
     escalation_chains: bool = False,
+    max_tokens: int | None = None,
 ) -> ComparativeResult | None:
     """Evaluate one question across all role x mode combos.
 
@@ -280,6 +281,7 @@ def evaluate_question(
             prompt, role, mode, url, role_timeout,
             image_path=image_path, cache_prompt=cache_prompt_val,
             client=client,
+            max_tokens=max_tokens,
         )
         q_elapsed = time.perf_counter() - q_start
 
@@ -456,6 +458,7 @@ def run_batch(
     escalation_chains: bool = False,
     use_pool: bool = True,
     debugger: Any = None,
+    max_tokens: int | None = None,
 ) -> list[ComparativeResult]:
     """Run one evaluation batch: sample, evaluate per-question, checkpoint.
 
@@ -544,6 +547,7 @@ def run_batch(
                 url, timeout, _client,
                 skip_cache=skip_cache, cooldown=cooldown, dry_run=dry_run,
                 escalation_chains=escalation_chains,
+                max_tokens=max_tokens,
             )
 
             if result is None:

@@ -13,11 +13,12 @@
       "checkpoint_note": "seed_specialist_routing.py also writes a seeding_*.jsonl checkpoint under benchmarks/results/eval; use the JSON path above when the target explicitly requires orchestrator_live_seed",
       "collection_priority": 0,
       "collection_priority_reason": "independent_holdout_source_family_blocker",
-      "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites all --roles architect_general frontdoor --modes direct --sample-size 2 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/orchestrator/seeding_live_a9_source_family_orchestrator_live_seed_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
+      "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites all --roles architect_general frontdoor --modes direct --sample-size 2 --max-tokens 1024 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/orchestrator/seeding_live_a9_source_family_orchestrator_live_seed_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
       "dry_run_semantics": "--dry-run still performs scoring/evaluation; it only prevents reward injection into runtime memory.",
       "durable_source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/orchestrator/seeding_live_a9_source_family_orchestrator_live_seed_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
       "estimated_new_source_records": 36,
       "expected_source_family": "orchestrator_live_seed",
+      "max_tokens": 1024,
       "modes_argument": [
         "direct"
       ],
@@ -37,11 +38,12 @@
       "checkpoint_note": "seed_specialist_routing.py also writes a seeding_*.jsonl checkpoint under benchmarks/results/eval; use the JSON path above when the target explicitly requires orchestrator_live_seed",
       "collection_priority": 0,
       "collection_priority_reason": "independent_holdout_source_family_blocker",
-      "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites all --roles architect_general coder_escalation --modes direct --sample-size 2 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
+      "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites all --roles architect_general coder_escalation --modes direct --sample-size 2 --max-tokens 1024 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
       "dry_run_semantics": "--dry-run still performs scoring/evaluation; it only prevents reward injection into runtime memory.",
       "durable_source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
       "estimated_new_source_records": 36,
       "expected_source_family": "seeding_eval",
+      "max_tokens": 1024,
       "modes_argument": [
         "direct"
       ],
@@ -61,11 +63,12 @@
       "checkpoint_note": "seed_specialist_routing.py also writes a seeding_*.jsonl checkpoint under benchmarks/results/eval; use the JSON path above when the target explicitly requires orchestrator_live_seed",
       "collection_priority": 0,
       "collection_priority_reason": "independent_holdout_source_family_blocker",
-      "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites all --roles architect_general frontdoor --modes direct --sample-size 2 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
+      "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites all --roles architect_general frontdoor --modes direct --sample-size 2 --max-tokens 1024 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
       "dry_run_semantics": "--dry-run still performs scoring/evaluation; it only prevents reward injection into runtime memory.",
       "durable_source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
       "estimated_new_source_records": 36,
       "expected_source_family": "seeding_eval",
+      "max_tokens": 1024,
       "modes_argument": [
         "direct"
       ],
@@ -85,11 +88,12 @@
       "checkpoint_note": "seed_specialist_routing.py also writes a seeding_*.jsonl checkpoint under benchmarks/results/eval; use the JSON path above when the target explicitly requires orchestrator_live_seed",
       "collection_priority": 1,
       "collection_priority_reason": "independent_holdout_suite_blocker",
-      "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites general --roles architect_general coder_escalation --modes direct --sample-size 20 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
+      "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites general --roles architect_general coder_escalation --modes direct --sample-size 20 --max-tokens 1024 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
       "dry_run_semantics": "--dry-run still performs scoring/evaluation; it only prevents reward injection into runtime memory.",
       "durable_source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
       "estimated_new_source_records": 20,
       "expected_source_family": "seeding_eval",
+      "max_tokens": 1024,
       "modes_argument": [
         "direct"
       ],
@@ -109,11 +113,12 @@
       "checkpoint_note": "seed_specialist_routing.py also writes a seeding_*.jsonl checkpoint under benchmarks/results/eval; use the JSON path above when the target explicitly requires orchestrator_live_seed",
       "collection_priority": 2,
       "collection_priority_reason": "direction_balance_cleanup",
-      "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites hotpotqa --roles architect_general frontdoor --modes direct --sample-size 20 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
+      "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites hotpotqa --roles architect_general frontdoor --modes direct --sample-size 20 --max-tokens 1024 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
       "dry_run_semantics": "--dry-run still performs scoring/evaluation; it only prevents reward injection into runtime memory.",
       "durable_source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
       "estimated_new_source_records": 20,
       "expected_source_family": "seeding_eval",
+      "max_tokens": 1024,
       "modes_argument": [
         "direct"
       ],
@@ -133,11 +138,12 @@
       "checkpoint_note": "seed_specialist_routing.py also writes a seeding_*.jsonl checkpoint under benchmarks/results/eval; use the JSON path above when the target explicitly requires orchestrator_live_seed",
       "collection_priority": 2,
       "collection_priority_reason": "direction_balance_cleanup",
-      "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites instruction_precision --roles architect_general coder_escalation --modes direct --sample-size 20 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_instruction_precision_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
+      "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites instruction_precision --roles architect_general coder_escalation --modes direct --sample-size 20 --max-tokens 1024 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_instruction_precision_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
       "dry_run_semantics": "--dry-run still performs scoring/evaluation; it only prevents reward injection into runtime memory.",
       "durable_source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_instruction_precision_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
       "estimated_new_source_records": 20,
       "expected_source_family": "seeding_eval",
+      "max_tokens": 1024,
       "modes_argument": [
         "direct"
       ],
@@ -157,11 +163,12 @@
       "checkpoint_note": "seed_specialist_routing.py also writes a seeding_*.jsonl checkpoint under benchmarks/results/eval; use the JSON path above when the target explicitly requires orchestrator_live_seed",
       "collection_priority": 2,
       "collection_priority_reason": "direction_balance_cleanup",
-      "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites instruction_precision --roles architect_general frontdoor --modes direct --sample-size 20 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_instruction_precision_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
+      "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites instruction_precision --roles architect_general frontdoor --modes direct --sample-size 20 --max-tokens 1024 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_instruction_precision_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
       "dry_run_semantics": "--dry-run still performs scoring/evaluation; it only prevents reward injection into runtime memory.",
       "durable_source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_instruction_precision_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
       "estimated_new_source_records": 20,
       "expected_source_family": "seeding_eval",
+      "max_tokens": 1024,
       "modes_argument": [
         "direct"
       ],
@@ -181,11 +188,12 @@
       "checkpoint_note": "seed_specialist_routing.py also writes a seeding_*.jsonl checkpoint under benchmarks/results/eval; use the JSON path above when the target explicitly requires orchestrator_live_seed",
       "collection_priority": 2,
       "collection_priority_reason": "direction_balance_cleanup",
-      "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites simpleqa --roles architect_general coder_escalation --modes direct --sample-size 20 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
+      "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites simpleqa --roles architect_general coder_escalation --modes direct --sample-size 20 --max-tokens 1024 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
       "dry_run_semantics": "--dry-run still performs scoring/evaluation; it only prevents reward injection into runtime memory.",
       "durable_source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
       "estimated_new_source_records": 20,
       "expected_source_family": "seeding_eval",
+      "max_tokens": 1024,
       "modes_argument": [
         "direct"
       ],
@@ -205,11 +213,12 @@
       "checkpoint_note": "seed_specialist_routing.py also writes a seeding_*.jsonl checkpoint under benchmarks/results/eval; use the JSON path above when the target explicitly requires orchestrator_live_seed",
       "collection_priority": 2,
       "collection_priority_reason": "direction_balance_cleanup",
-      "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites thinking --roles architect_general coder_escalation --modes direct --sample-size 20 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_thinking_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
+      "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites thinking --roles architect_general coder_escalation --modes direct --sample-size 20 --max-tokens 1024 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_thinking_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
       "dry_run_semantics": "--dry-run still performs scoring/evaluation; it only prevents reward injection into runtime memory.",
       "durable_source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_thinking_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
       "estimated_new_source_records": 20,
       "expected_source_family": "seeding_eval",
+      "max_tokens": 1024,
       "modes_argument": [
         "direct"
       ],
@@ -236,7 +245,7 @@
       "uv run python scripts/graph_router/build_offline_reward_pairwise_contract.py --manifest-jsonl /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_feature_manifest_pairwise_expanded_gap.jsonl --output-jsonl /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_preference_contract_candidate_only_expanded_gap.jsonl --summary-json /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_preference_contract_candidate_only_expanded_gap_summary.json --summary-md /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_preference_contract_candidate_only_expanded_gap_summary.md --artifact-scope candidate_only",
       "uv run python scripts/graph_router/evaluate_offline_reward_pairwise_ranker.py --pairwise-jsonl /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_preference_contract_candidate_only_expanded_gap.jsonl --summary-json /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_ranker_candidate_only_expanded_gap_summary.json --summary-md /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_ranker_candidate_only_expanded_gap_summary.md"
     ],
-    "seeding_eval_command_template": "uv run python scripts/benchmark/seed_specialist_routing.py --suites <suite> --roles <actions_to_evaluate_on_same_source_record> --modes direct --sample-size <n> --dry-run --output <benchmarks/results/eval/seeding_a9_*.json>",
+    "seeding_eval_command_template": "uv run python scripts/benchmark/seed_specialist_routing.py --suites <suite> --roles <actions_to_evaluate_on_same_source_record> --modes direct --sample-size <n> --max-tokens 1024 --dry-run --output <benchmarks/results/eval/seeding_a9_*.json>",
     "workspace": "/mnt/raid0/llm/epyc-orchestrator"
   },
   "collection_target_count": 9,

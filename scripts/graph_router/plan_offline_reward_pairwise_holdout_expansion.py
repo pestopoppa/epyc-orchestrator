@@ -49,6 +49,7 @@ SUMMARY_SCHEMA_VERSION = "offline_reward_pairwise_holdout_expansion_plan.v1"
 COLLECTION_MANIFEST_SCHEMA_VERSION = "offline_reward_pairwise_collection_window.v1"
 COLLECTION_TIMESTAMP_PLACEHOLDER = "<YYYYMMDDTHHMMSSZ>"
 DEFAULT_COLLECTION_WORKDIR = Path("/mnt/raid0/llm/epyc-orchestrator")
+DEFAULT_COLLECTION_MAX_TOKENS = 1024
 DEFAULT_RESULTS_ROOT = Path("/mnt/raid0/llm/epyc-inference-research/benchmarks/results")
 DEFAULT_REPORT_DIR = (
     PROJECT_ROOT
@@ -345,7 +346,8 @@ def _collection_batches(requirements: list[dict[str, Any]]) -> list[dict[str, An
         command = (
             "uv run python scripts/benchmark/seed_specialist_routing.py "
             f"--suites {suite} --roles {roles} --modes direct "
-            f"--sample-size {sample_size} --dry-run --output {output}"
+            f"--sample-size {sample_size} --max-tokens {DEFAULT_COLLECTION_MAX_TOKENS} "
+            f"--dry-run --output {output}"
         )
         batches.append(
             {
@@ -355,6 +357,7 @@ def _collection_batches(requirements: list[dict[str, Any]]) -> list[dict[str, An
                 "roles_argument": actions,
                 "modes_argument": ["direct"],
                 "sample_size": sample_size,
+                "max_tokens": DEFAULT_COLLECTION_MAX_TOKENS,
                 "requested_new_source_records": requested_records,
                 "estimated_new_source_records": estimated_records,
                 "sample_size_semantics": (
@@ -900,7 +903,8 @@ def build_plan(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str
             "seeding_eval_command_template": (
                 "uv run python scripts/benchmark/seed_specialist_routing.py "
                 "--suites <suite> --roles <actions_to_evaluate_on_same_source_record> "
-                "--modes direct --sample-size <n> --dry-run "
+                "--modes direct --sample-size <n> "
+                f"--max-tokens {DEFAULT_COLLECTION_MAX_TOKENS} --dry-run "
                 "--output <benchmarks/results/eval/seeding_a9_*.json>"
             ),
             "orchestrator_live_seed_note": (

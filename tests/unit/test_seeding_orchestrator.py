@@ -268,6 +268,7 @@ def test_call_orchestrator_forced_includes_optional_payload_fields():
             }
         ],
         tool_choice={"type": "function", "function": {"name": "web_search"}},
+        max_tokens=1024,
     )
 
     payload = client.post.call_args.kwargs["json"]
@@ -282,6 +283,7 @@ def test_call_orchestrator_forced_includes_optional_payload_fields():
     assert payload["batch_id"] == "evaltower-T1-123-43q"
     assert payload["tools"][0]["function"]["name"] == "web_search"
     assert payload["tool_choice"]["function"]["name"] == "web_search"
+    assert payload["max_tokens"] == 1024
 
 
 def test_call_orchestrator_forced_omits_native_tool_payload_by_default():

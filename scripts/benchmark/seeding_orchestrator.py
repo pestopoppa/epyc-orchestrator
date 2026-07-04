@@ -632,6 +632,7 @@ def call_orchestrator_forced(
     batch_id: int | str | None = None,
     tools: list[dict[str, Any]] | None = None,
     tool_choice: str | dict[str, Any] | None = None,
+    max_tokens: int | None = None,
     watcher: Any | None = None,
     llama_port: int | None = None,
 ) -> dict[str, Any]:
@@ -656,6 +657,8 @@ def call_orchestrator_forced(
         tools: Optional OpenAI-compatible function-tool schemas to forward to the
             orchestrator request. Omitted by default to preserve legacy eval traffic.
         tool_choice: Optional OpenAI-compatible tool choice policy for tools.
+        max_tokens: Optional response-token cap forwarded to `/chat`. Omitted
+            by default to preserve legacy payload shape.
         watcher: Optional OrchestratorWatcher (autopilot.scripts.autopilot.
             orchestrator_watch) — when supplied, exogenous reloads of the
             orchestrator API or the target llama-server are detected and
@@ -717,6 +720,8 @@ def call_orchestrator_forced(
         payload["tools"] = tools
     if tool_choice is not None:
         payload["tool_choice"] = tool_choice
+    if max_tokens is not None:
+        payload["max_tokens"] = max(1, int(max_tokens))
 
     # When no watcher: preserve the EXACT legacy code path. Critical for
     # the non-autopilot callers of this function (14 impacted symbols per

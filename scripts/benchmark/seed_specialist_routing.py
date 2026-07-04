@@ -776,6 +776,15 @@ Examples (legacy mode - DEPRECATED):
         help=f"Request timeout in seconds (default from profile; fallback {DEFAULT_TIMEOUT})",
     )
     parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=None,
+        help=(
+            "Optional response-token cap forwarded to orchestrator /chat. "
+            "Default preserves the role/orchestrator setting."
+        ),
+    )
+    parser.add_argument(
         "--dry-run", action="store_true",
         help="Score only, don't inject rewards",
     )
@@ -1384,6 +1393,7 @@ Examples (legacy mode - DEPRECATED):
                     no_dedup=args.no_dedup,
                     escalation_chains=not args.no_escalation_chains,
                     use_pool=not args.no_pool,
+                    max_tokens=args.max_tokens,
                 )
             except HealthCheckError:
                 logger.warning("API died during batch — will attempt recovery")
@@ -1424,6 +1434,7 @@ Examples (legacy mode - DEPRECATED):
             no_dedup=args.no_dedup,
             escalation_chains=not args.no_escalation_chains,
             use_pool=not args.no_pool,
+            max_tokens=args.max_tokens,
         )
 
         if results:
@@ -1446,6 +1457,7 @@ Examples (legacy mode - DEPRECATED):
                 "modes": args.modes,
                 "combos": [f"{r}:{m}" for r, m in all_combos],
                 "sample_size": args.sample_size,
+                "max_tokens": args.max_tokens,
                 "seed": base_seed,
                 "dry_run": args.dry_run,
                 "dedup": not args.no_dedup,
