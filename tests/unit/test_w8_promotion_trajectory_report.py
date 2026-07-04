@@ -157,6 +157,32 @@ def test_report_excludes_latest_reverted_candidate_from_active_replay() -> None:
     ]
 
 
+def test_report_counts_benign_seq_accumulating_exclusion_as_active_replay() -> None:
+    report = w8_promotion_trajectory_report.build_w8_trajectory_report(
+        [
+            _row(20, "candidate-a", combined=0.91, k=1),
+            _row(
+                21,
+                "candidate-a",
+                combined=0.92,
+                k=2,
+                keep_revert_decision="excluded",
+            ),
+        ],
+        stale_trials=5,
+    )
+
+    assert report["status"] == "progressing"
+    assert report["ok"] is True
+    assert report["recent_active_candidates"] == ["candidate-a"]
+    trajectory = report["trajectories"][0]
+    assert trajectory["status"] == "active_recent_replay"
+    assert trajectory["latest_keep_revert_decision"] == "excluded"
+    assert "no_recent_multi_observation_accumulating_candidate" not in report[
+        "open_requirements"
+    ]
+
+
 def test_report_classifies_refuted_and_finalized_candidates() -> None:
     report = w8_promotion_trajectory_report.build_w8_trajectory_report(
         [

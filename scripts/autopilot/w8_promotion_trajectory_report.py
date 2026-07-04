@@ -281,7 +281,7 @@ def _candidate_trajectory(
     capacity_remaining = (
         max(0, max_replay_attempts - latest.k) if latest.k is not None else None
     )
-    latest_ap24_ineligible = _ineligible_keep_revert(latest.keep_revert_decision)
+    latest_ap24_ineligible = _terminal_keep_revert_decision(latest)
     stale_accumulating = (
         latest.state == "accumulating"
         and not latest.confirmed
@@ -338,14 +338,14 @@ def _candidate_status(
     keep_revert = str(latest.keep_revert_decision or "").strip()
     if keep_revert == "revert":
         return "reverted"
-    if keep_revert == "excluded":
-        return "excluded"
     if latest.finalized:
         return "finalized"
     if latest.state == "refuted":
         return "refuted"
     if latest.confirmed:
         return "confirmed_waiting_fresh_eval"
+    if keep_revert == "excluded" and _terminal_keep_revert_decision(latest):
+        return "excluded"
     if stale_accumulating:
         return "stale_accumulating"
     if latest.k is not None and latest.k >= max_replay_attempts:
@@ -598,8 +598,15 @@ def _optional_str(value: Any) -> str | None:
     return text if text else None
 
 
-def _ineligible_keep_revert(decision: str | None) -> bool:
-    return str(decision or "").strip() in {"revert", "excluded"}
+def _terminal_keep_revert_decision(snapshot: W8Snapshot) -> bool:
+    decision = str(snapshot.keep_revert_decision or "").strip()
+    if decision == "revert":
+        return True
+    if decision != "excluded":
+        return False
+    if snapshot.state != "accumulating":
+        return True
+    return bool(snapshot.failure_first_violation)
 
 
 def _optional_float(value: Any) -> float | None:
