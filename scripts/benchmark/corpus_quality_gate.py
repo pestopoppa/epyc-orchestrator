@@ -5,11 +5,11 @@ Runs the same code generation prompts with and without corpus injection,
 then uses Claude to judge whether corpus injection degrades output quality.
 
 Usage:
-    python scripts/benchmark/corpus_quality_gate.py --models frontdoor worker_general
-    python scripts/benchmark/corpus_quality_gate.py --models frontdoor --preflight-only
-    python scripts/benchmark/corpus_quality_gate.py --models frontdoor --dry-run
-    python scripts/benchmark/corpus_quality_gate.py --models frontdoor worker_general --results-only
-    python scripts/benchmark/corpus_quality_gate.py --models frontdoor --mode rag --confirm-clean-window
+    python scripts/benchmark/corpus_quality_gate.py --models coder_escalation worker_general
+    python scripts/benchmark/corpus_quality_gate.py --models coder_escalation worker_general --preflight-only
+    python scripts/benchmark/corpus_quality_gate.py --models coder_escalation --dry-run
+    python scripts/benchmark/corpus_quality_gate.py --models coder_escalation worker_general --results-only
+    python scripts/benchmark/corpus_quality_gate.py --models coder_escalation --mode rag --confirm-clean-window
 
 Modes:
   speed (default): Inject snippets silently in ## Reference Code (Phase 2A)
@@ -47,14 +47,15 @@ from src.registry.stack_priors import (
 )
 from scripts.server.stack_manifest import HOT_ROLES, PORT_MAP
 STACK_PRIORS_PATH = PROJECT_ROOT / "orchestration" / "derived" / "stack_priors.yaml"
+CORPUS_AB_MODEL_ROLES = ("coder_escalation", "worker_general")
+FALLBACK_MODEL_ROLES = (*CORPUS_AB_MODEL_ROLES, "frontdoor", "architect_general")
 
 
 def _preferred_fallback_model_roles() -> tuple[str, ...]:
     """Return the preferred fallback model order when live models are absent."""
-    preferred = ("frontdoor", "worker_general", "architect_general")
     return tuple(
         role
-        for role in preferred
+        for role in FALLBACK_MODEL_ROLES
         if role in HOT_ROLES and isinstance(PORT_MAP.get(role), int)
     )
 
@@ -92,8 +93,73 @@ def _fallback_models() -> dict[str, dict]:
 
 
 def _default_model_keys(models: dict[str, dict]) -> list[str]:
-    preferred = _preferred_fallback_model_roles()
-    return [role for role in preferred if role in models] or list(models.keys())
+    preferred = [role for role in CORPUS_AB_MODEL_ROLES if role in models]
+    if preferred:
+        return preferred
+    fallback = [role for role in _preferred_fallback_model_roles() if role in models]
+    return fallback or list(models.keys())
+
+
+def _model_role(model_key: str, models: dict[str, dict] | None = None) -> str:
+    model_info = (models or MODELS).get(model_key, {})
+    return str(model_info.get("role") or model_key)
+
+
+def _role_corpus_retrieval_metadata(
+    model_keys: list[str],
+    *,
+    models: dict[str, dict] | None = None,
+    registry_loader_cls: Any | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Report production role corpus flags for a benchmark role set.
+
+    The benchmark corpus arm intentionally forces prompt injection to test
+    candidate roles such as ``worker_general`` without flipping production
+    registry flags. Record both facts so A/B artifacts cannot be mistaken for
+    live enablement evidence.
+    """
+    selected_models = models or MODELS
+    try:
+        if registry_loader_cls is None:
+            from src.registry.registry_loader import RegistryLoader
+
+            registry_loader_cls = RegistryLoader
+        registry = registry_loader_cls(validate_paths=False)
+        runtime_cfg = registry.get_corpus_config()
+    except Exception as exc:
+        return {
+            model_key: {
+                "role": _model_role(model_key, selected_models),
+                "production_runtime_enabled": None,
+                "production_role_enabled": None,
+                "benchmark_forces_prompt_injection": True,
+                "status": "registry_error",
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+            for model_key in model_keys
+        }
+
+    metadata: dict[str, dict[str, Any]] = {}
+    for model_key in model_keys:
+        role = _model_role(model_key, selected_models)
+        try:
+            role_cfg = registry.get_role(role)
+            role_enabled = bool(role_cfg.acceleration.corpus_retrieval)
+            status = "ok"
+            error = ""
+        except Exception as exc:
+            role_enabled = None
+            status = "role_error"
+            error = f"{type(exc).__name__}: {exc}"
+        metadata[model_key] = {
+            "role": role,
+            "production_runtime_enabled": bool(runtime_cfg.get("enabled", False)),
+            "production_role_enabled": role_enabled,
+            "benchmark_forces_prompt_injection": True,
+            "status": status,
+            "error": error,
+        }
+    return metadata
 
 
 MODELS = _load_live_models() or _fallback_models()
@@ -510,6 +576,7 @@ def run_corpus_preflight(
     *,
     mode: str,
     prompts: list[dict[str, Any]],
+    model_keys: list[str] | None = None,
 ) -> dict[str, Any]:
     """Build corpus prompts without inference and summarize injection readiness."""
     records: list[dict[str, Any]] = []
@@ -547,6 +614,11 @@ def run_corpus_preflight(
         "injected_count": injected_count,
         "failure_count": failure_count,
         "ready_for_ab": ready,
+        "selected_models": list(model_keys or []),
+        "production_role_corpus_retrieval": _role_corpus_retrieval_metadata(
+            list(model_keys or [])
+        ),
+        "benchmark_forces_prompt_injection": True,
         "records": records,
     }
 
@@ -706,6 +778,7 @@ def main():
             corpus_config,
             mode=args.mode,
             prompts=selected_prompts,
+            model_keys=list(args.models),
         )
         _write_json(args.output, preflight)
         log.info(
@@ -727,7 +800,20 @@ def main():
     # Gate threshold: speed mode tolerates slight degradation, RAG must improve
     gate_threshold = 0.0 if args.mode == "rag" else -0.5
 
-    all_results = {}
+    all_results = {
+        "_metadata": {
+            "schema_version": "corpus_quality_gate.v2",
+            "mode": args.mode,
+            "index_path": args.index_path,
+            "selected_models": list(args.models),
+            "production_role_corpus_retrieval": _role_corpus_retrieval_metadata(
+                list(args.models)
+            ),
+            "benchmark_forces_prompt_injection": True,
+            "clean_window_confirmed": bool(args.confirm_clean_window),
+            "active_autopilot_override": bool(args.allow_active_autopilot),
+        }
+    }
 
     if args.results_only:
         with open(args.results_only) as f:

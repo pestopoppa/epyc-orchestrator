@@ -113,26 +113,36 @@ def test_fallback_models_derive_ports_from_manifest(monkeypatch) -> None:
     monkeypatch.setattr(
         _MOD,
         "PORT_MAP",
-        {"frontdoor": 9001, "worker_general": 9002, "architect_general": 9003},
+        {
+            "coder_escalation": 9000,
+            "frontdoor": 9001,
+            "worker_general": 9002,
+            "architect_general": 9003,
+        },
     )
     monkeypatch.setattr(
         _MOD,
         "HOT_ROLES",
-        {"frontdoor", "worker_general", "architect_general"},
+        {"coder_escalation", "frontdoor", "worker_general", "architect_general"},
     )
 
     models = _MOD._fallback_models()
 
     assert models == {
-        "frontdoor": {
-            "port": 9001,
-            "name": "frontdoor (manifest fallback)",
-            "role": "frontdoor",
+        "coder_escalation": {
+            "port": 9000,
+            "name": "coder_escalation (manifest fallback)",
+            "role": "coder_escalation",
         },
         "worker_general": {
             "port": 9002,
             "name": "worker_general (manifest fallback)",
             "role": "worker_general",
+        },
+        "frontdoor": {
+            "port": 9001,
+            "name": "frontdoor (manifest fallback)",
+            "role": "frontdoor",
         },
         "architect_general": {
             "port": 9003,
@@ -146,27 +156,33 @@ def test_preferred_fallback_model_roles_filters_missing_manifest_entries(monkeyp
     monkeypatch.setattr(
         _MOD,
         "PORT_MAP",
-        {"frontdoor": 9001, "worker_general": 9002},
+        {"coder_escalation": 9000, "frontdoor": 9001, "worker_general": 9002},
     )
     monkeypatch.setattr(
         _MOD,
         "HOT_ROLES",
-        {"frontdoor", "worker_general"},
+        {"coder_escalation", "frontdoor", "worker_general"},
     )
 
-    assert _MOD._preferred_fallback_model_roles() == ("frontdoor", "worker_general")
+    assert _MOD._preferred_fallback_model_roles() == (
+        "coder_escalation",
+        "worker_general",
+        "frontdoor",
+    )
 
 
 def test_default_model_keys_are_valid_loaded_roles() -> None:
     models = {
+        "coder_escalation": {"port": 8070},
         "frontdoor": {"port": 8070},
         "worker_general": {"port": 8072},
+        "architect_general": {"port": 8073},
         "custom_role": {"port": 9000},
     }
 
     defaults = _MOD._default_model_keys(models)
 
-    assert defaults == ["frontdoor", "worker_general"]
+    assert defaults == ["coder_escalation", "worker_general"]
     assert set(defaults) <= set(models)
 
 
@@ -241,6 +257,84 @@ def test_run_corpus_preflight_marks_missing_snippets_not_ready(tmp_path: Path) -
     assert preflight["failure_count"] == 0
     assert preflight["ready_for_ab"] is False
     assert preflight["records"][0]["corpus"]["snippets_returned"] == 0
+
+
+def test_role_corpus_retrieval_metadata_records_forced_worker_arm() -> None:
+    class FakeRegistry:
+        def __init__(self, validate_paths: bool = True):
+            self.validate_paths = validate_paths
+
+        def get_corpus_config(self):
+            return {"enabled": True}
+
+        def get_role(self, role):
+            enabled = role == "coder_escalation"
+            return SimpleNamespace(
+                acceleration=SimpleNamespace(corpus_retrieval=enabled)
+            )
+
+    metadata = _MOD._role_corpus_retrieval_metadata(
+        ["coder_escalation", "worker_general"],
+        models={
+            "coder_escalation": {"role": "coder_escalation"},
+            "worker_general": {"role": "worker_general"},
+        },
+        registry_loader_cls=FakeRegistry,
+    )
+
+    assert metadata["coder_escalation"]["production_role_enabled"] is True
+    assert metadata["worker_general"]["production_role_enabled"] is False
+    assert metadata["worker_general"]["benchmark_forces_prompt_injection"] is True
+
+
+def test_run_corpus_preflight_records_selected_model_metadata(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    from src.services.corpus_retrieval import CorpusRetriever
+
+    prompt = "Implement alpha_beta gamma_delta helper with retry logic."
+    index_path = tmp_path / "corpus"
+    _write_v1_corpus(index_path, prompt)
+    CorpusRetriever.reset_instance()
+    monkeypatch.setattr(
+        _MOD,
+        "_role_corpus_retrieval_metadata",
+        lambda model_keys: {
+            key: {
+                "role": key,
+                "production_runtime_enabled": True,
+                "production_role_enabled": key != "worker_general",
+                "benchmark_forces_prompt_injection": True,
+                "status": "ok",
+                "error": "",
+            }
+            for key in model_keys
+        },
+    )
+
+    try:
+        preflight = _MOD.run_corpus_preflight(
+            {
+                "index_path": str(index_path),
+                "max_snippets": 1,
+                "max_chars": 1000,
+                "min_score": 0.5,
+            },
+            mode="speed",
+            prompts=[{"id": "alpha", "prompt": prompt, "language": "python"}],
+            model_keys=["coder_escalation", "worker_general"],
+        )
+    finally:
+        CorpusRetriever.reset_instance()
+
+    assert preflight["selected_models"] == ["coder_escalation", "worker_general"]
+    assert preflight["benchmark_forces_prompt_injection"] is True
+    assert (
+        preflight["production_role_corpus_retrieval"]["worker_general"][
+            "production_role_enabled"
+        ]
+        is False
+    )
 
 
 def _gate_args(**overrides):
