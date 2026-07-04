@@ -364,6 +364,7 @@ def invoke_controller(
         # when it wants to escalate, which wastes a planner turn and returns an
         # empty action. Keep the available tool surface explicitly read-only.
         "--permission-mode", "default",
+        "--safe-mode",
         "--tools", "Read,Grep,Glob",
         "--allowedTools", "Read,Grep,Glob",
         "--disallowedTools", ",".join(sorted(PLANNER_CLI_DISALLOWED_TOOLS)),
