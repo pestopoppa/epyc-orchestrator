@@ -712,7 +712,7 @@ def test_pairwise_holdout_writes_guarded_collection_manifest_and_script(
     assert payload["batch_count"] == 1
     batch = payload["batches"][0]
     assert batch["target"] == "source_family:orchestrator_live_seed:architect_general>frontdoor"
-    assert batch["command_workdir"] == "/mnt/raid0/llm/epyc-inference-research"
+    assert batch["command_workdir"] == "/mnt/raid0/llm/epyc-orchestrator"
     assert batch["collection_timestamp"] == "20260628T120000Z"
     assert "<YYYYMMDDTHHMMSSZ>" in batch["command_template"]
     assert "<YYYYMMDDTHHMMSSZ>" not in batch["command"]
@@ -721,7 +721,7 @@ def test_pairwise_holdout_writes_guarded_collection_manifest_and_script(
     script_text = collection_script.read_text(encoding="utf-8")
     assert "pgrep -af 'scripts/autopilot/autopilot.py start'" in script_text
     assert "exit 75" in script_text
-    assert "cd /mnt/raid0/llm/epyc-inference-research" in script_text
+    assert "cd /mnt/raid0/llm/epyc-orchestrator" in script_text
     assert "seeding_live_a9_source_family_orchestrator_live_seed" in script_text
     assert "20260628T120000Z" in script_text
     assert collection_script.stat().st_mode & 0o111

@@ -10,7 +10,7 @@ if pgrep -af 'scripts/autopilot/autopilot.py start' >/dev/null; then
   echo 'refusing A9 collection while AutoPilot is active' >&2
   exit 75
 fi
-cd /mnt/raid0/llm/epyc-inference-research
+cd /mnt/raid0/llm/epyc-orchestrator
 
 echo 'A9 collection batch 1/9: source_family:orchestrator_live_seed:architect_general>frontdoor'
 mkdir -p "$(dirname "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/orchestrator/seeding_live_a9_source_family_orchestrator_live_seed_architect_general_frontdoor_${RUN_TS}.json")"

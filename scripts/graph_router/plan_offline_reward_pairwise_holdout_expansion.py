@@ -47,7 +47,7 @@ from scripts.graph_router.plan_offline_reward_verifier_expansion import (  # noq
 SUMMARY_SCHEMA_VERSION = "offline_reward_pairwise_holdout_expansion_plan.v1"
 COLLECTION_MANIFEST_SCHEMA_VERSION = "offline_reward_pairwise_collection_window.v1"
 COLLECTION_TIMESTAMP_PLACEHOLDER = "<YYYYMMDDTHHMMSSZ>"
-DEFAULT_COLLECTION_WORKDIR = Path("/mnt/raid0/llm/epyc-inference-research")
+DEFAULT_COLLECTION_WORKDIR = Path("/mnt/raid0/llm/epyc-orchestrator")
 DEFAULT_RESULTS_ROOT = Path("/mnt/raid0/llm/epyc-inference-research/benchmarks/results")
 DEFAULT_REPORT_DIR = (
     PROJECT_ROOT
