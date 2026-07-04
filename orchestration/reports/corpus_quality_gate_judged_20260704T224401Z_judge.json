@@ -1,0 +1,188 @@
+{
+  "coder_escalation": {
+    "avg_baseline": 1.0,
+    "avg_corpus": 1.0,
+    "avg_delta": 0.0,
+    "gate_pass": true,
+    "per_prompt": [
+      {
+        "prompt_id": "async_retry",
+        "baseline": 1.0,
+        "corpus": 1.0,
+        "delta": 0.0,
+        "raw": {
+          "a_correctness": 1,
+          "a_completeness": 1,
+          "a_quality": 1,
+          "a_originality": 1,
+          "b_correctness": 1,
+          "b_completeness": 1,
+          "b_quality": 1,
+          "b_originality": 1,
+          "notes": "Both Output A and Output B are empty code blocks with no implementation whatsoever. Neither provides any HTTP client, retry logic, exponential backoff, circuit breaker, type hints, or usage example. There is nothing to distinguish them \u2014 both fail every criterion identically."
+        }
+      },
+      {
+        "prompt_id": "bst_iterator",
+        "baseline": 1.0,
+        "corpus": 1.0,
+        "delta": 0.0,
+        "raw": {
+          "a_correctness": 1,
+          "a_completeness": 1,
+          "a_quality": 1,
+          "a_originality": 1,
+          "b_correctness": 1,
+          "b_completeness": 1,
+          "b_quality": 1,
+          "b_originality": 1,
+          "notes": "Both Output A and Output B are empty \u2014 no code was provided in either. Neither implements a BST, iterator, insert, search, or delete. Nothing to distinguish them; both fail all criteria equally."
+        }
+      },
+      {
+        "prompt_id": "lru_cache",
+        "baseline": 1.0,
+        "corpus": 1.0,
+        "delta": 0.0,
+        "raw": {
+          "a_correctness": 1,
+          "a_completeness": 1,
+          "a_quality": 1,
+          "a_originality": 1,
+          "b_correctness": 1,
+          "b_completeness": 1,
+          "b_quality": 1,
+          "b_originality": 1,
+          "notes": "Both Output A and Output B are empty code blocks containing no implementation whatsoever. Neither addresses any part of the prompt (thread-safe LRU cache, doubly-linked list, dictionary, get/put/resize, locking, decorator). With no code present, both are equally non-functional and score the minimum on every criterion."
+        }
+      },
+      {
+        "prompt_id": "json_parser",
+        "baseline": 1.0,
+        "corpus": 1.0,
+        "delta": 0.0,
+        "raw": {
+          "a_correctness": 1,
+          "a_completeness": 1,
+          "a_quality": 1,
+          "a_originality": 1,
+          "b_correctness": 1,
+          "b_completeness": 1,
+          "b_quality": 1,
+          "b_originality": 1,
+          "notes": "Both Output A and Output B are empty \u2014 no code was provided in either. Neither implements any part of the requested recursive descent JSON parser (strings, escapes, numbers, booleans, null, arrays, objects). With no content to evaluate, both fail all criteria equally; no meaningful comparison is possible."
+        }
+      },
+      {
+        "prompt_id": "rate_limiter",
+        "baseline": 1.0,
+        "corpus": 1.0,
+        "delta": 0.0,
+        "raw": {
+          "a_correctness": 1,
+          "a_completeness": 1,
+          "a_quality": 1,
+          "a_originality": 1,
+          "b_correctness": 1,
+          "b_completeness": 1,
+          "b_quality": 1,
+          "b_originality": 1,
+          "notes": "Both Output A and Output B are empty code blocks containing no implementation whatsoever. Neither provides a token bucket rate limiter, per-key limits, burst capacity, refill logic, nor sync/async support. With nothing to evaluate, both receive the minimum score on every criterion; there is no basis to distinguish them."
+        }
+      }
+    ]
+  },
+  "worker_general": {
+    "avg_baseline": 5.85,
+    "avg_corpus": 5.3,
+    "avg_delta": -0.55,
+    "gate_pass": false,
+    "per_prompt": [
+      {
+        "prompt_id": "async_retry",
+        "baseline": 6.0,
+        "corpus": 3.75,
+        "delta": -2.25,
+        "raw": {
+          "a_correctness": 7,
+          "a_completeness": 3,
+          "a_quality": 8,
+          "a_originality": 6,
+          "b_correctness": 3,
+          "b_completeness": 3,
+          "b_quality": 5,
+          "b_originality": 4,
+          "notes": "Both outputs are truncated mid-implementation and neither includes the requested usage example, so completeness is low for both. A uses aiohttp with a clean, correct-so-far circuit breaker (proper Enum states, logged transitions, context-manager session, good type hints); its visible code has no bugs. B uses tornado and has real defects: it raises an undefined `CircuitBrekerOpenError` (typo vs the defined `CircuitBreakerOpenError`), an unnecessary `last_failure_perm()` indirection, `except (HTTPError, Exception)` which makes HTTPError redundant, and the final f-string contains a literal newline that is a syntax error. A is the stronger, more original implementation; B reads more like awkwardly adapted boilerplate around the referenced tornado client."
+        }
+      },
+      {
+        "prompt_id": "bst_iterator",
+        "baseline": 4.0,
+        "corpus": 8.25,
+        "delta": 4.25,
+        "raw": {
+          "a_correctness": 2,
+          "a_completeness": 6,
+          "a_quality": 3,
+          "a_originality": 5,
+          "b_correctness": 9,
+          "b_completeness": 9,
+          "b_quality": 8,
+          "b_originality": 7,
+          "notes": "Both use the same correct O(h) stack-based in-order iterator design. Output A is corrupted by injected garbage lines: a dead `node.append_left = Node(key)` (harmless, overwritten next line) and critically `return node.append_right = node.right` which is a hard SyntaxError \u2014 the module won't even parse, so delete on a single-child node is broken. Output B is clean, correct, uses iterative insert/search, proper delete with inorder-successor, good docstrings and naming, and no bugs. Both are truncated in the demo block by output limits, not a code defect."
+        }
+      },
+      {
+        "prompt_id": "lru_cache",
+        "baseline": 6.75,
+        "corpus": 5.25,
+        "delta": -1.5,
+        "raw": {
+          "a_correctness": 6,
+          "a_completeness": 5,
+          "a_quality": 5,
+          "a_originality": 5,
+          "b_correctness": 7,
+          "b_completeness": 6,
+          "b_quality": 8,
+          "b_originality": 6,
+          "notes": "Both share the same dummy-head/tail DLL core and correct RLock usage, and both truncate mid-decorator. A adds a pointless self.lookup_map() indirection in get(), omits functools.wraps, and is truncated earlier/more severely. B is cleaner: direct dict membership check, imports and applies @wraps, clearer comments, and gets further into the wrapper. B's put inserts-then-evicts vs A's evict-then-insert; both are functionally correct. B edges ahead on quality and completeness."
+        }
+      },
+      {
+        "prompt_id": "rate_limiter",
+        "baseline": 6.5,
+        "corpus": 5.0,
+        "delta": -1.5,
+        "raw": {
+          "a_correctness": 3,
+          "a_completeness": 6,
+          "a_quality": 5,
+          "a_originality": 6,
+          "b_correctness": 7,
+          "b_completeness": 7,
+          "b_quality": 6,
+          "b_originality": 6,
+          "notes": "A has a fatal syntax error ('if key not even in self._buckets') that prevents it from running, though its design (separate TokenBucket class with threading.Lock + async lock for creation) is more thorough on concurrency. B is syntactically valid and runs, with correct lazy-refill drift logic and both sync+async demos, but omits real locking (only notes where it'd go) and mutates the timestamp on failed consume. Both are truncated mid-explanation. B is the safer working solution; A shows more concurrency intent but is broken as written."
+        }
+      },
+      {
+        "prompt_id": "graph_shortest",
+        "baseline": 6.0,
+        "corpus": 4.25,
+        "delta": -1.75,
+        "raw": {
+          "a_correctness": 6,
+          "a_completeness": 7,
+          "a_quality": 6,
+          "a_originality": 5,
+          "b_correctness": 4,
+          "b_completeness": 4,
+          "b_quality": 4,
+          "b_originality": 5,
+          "notes": "Both share a Graph/heapq/reconstruct_path skeleton and both contain garbled tokens (A: float('iv('infinity'); B: float('arg('inf')', float('iter')). A's algorithms are logically complete and correct: Dijkstra returns (path, cost) with proper early-exit and stale-entry skip, and A* is fully written with correct g/f-score relaxation. B is weaker: its Dijkstra is self-contradictory (redundant distance re-inits, returns distances/came_from instead of a path, with inline notes admitting the logic is 'simplified/needs refining'), and its A* is truncated mid-relaxation so it never returns. A uses lazy-delete on the heap; B uses a visited set (also valid). Overall A is more complete, correct, and cleaner; B reads like a rougher draft cut off earlier."
+        }
+      }
+    ]
+  }
+}

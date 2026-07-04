@@ -1,0 +1,708 @@
+{
+  "_metadata": {
+    "schema_version": "corpus_quality_gate.v2",
+    "mode": "speed",
+    "index_path": "/mnt/raid0/llm/cache/corpus/v3_sharded",
+    "selected_models": [
+      "coder_escalation",
+      "worker_general"
+    ],
+    "production_role_corpus_retrieval": {
+      "coder_escalation": {
+        "role": "coder_escalation",
+        "production_runtime_enabled": true,
+        "production_role_enabled": true,
+        "benchmark_forces_prompt_injection": true,
+        "status": "ok",
+        "error": ""
+      },
+      "worker_general": {
+        "role": "worker_general",
+        "production_runtime_enabled": true,
+        "production_role_enabled": false,
+        "benchmark_forces_prompt_injection": true,
+        "status": "ok",
+        "error": ""
+      }
+    },
+    "benchmark_forces_prompt_injection": true,
+    "clean_window_confirmed": true,
+    "active_autopilot_override": false
+  },
+  "coder_escalation": [
+    {
+      "prompt_id": "async_retry",
+      "baseline": {
+        "output": "",
+        "speed": 28.910094518504916,
+        "tokens": 1024,
+        "draft_n": 1143,
+        "draft_accepted": 737,
+        "wall_time": 35.781671163014835
+      },
+      "corpus": {
+        "output": "",
+        "speed": 29.00025938806224,
+        "tokens": 1024,
+        "draft_n": 1116,
+        "draft_accepted": 743,
+        "wall_time": 38.77384990599239,
+        "retrieval": {
+          "mode": "speed",
+          "query": "python async http client with retry logic exponential backoff and circuit breaker pattern include type hints and usage example",
+          "injected": true,
+          "prompt_chars_added": 3025,
+          "snippets_returned": 3,
+          "snippet_sources": [
+            {
+              "file": "tly1980/async_keepalive_httpc:setup.py",
+              "start_line": 0,
+              "score": 0.0625,
+              "hash": "ac5cd3a4c5bf"
+            },
+            {
+              "file": "MiddleFork/nbviewer:nbviewer/providers/url/client.py",
+              "start_line": 0,
+              "score": 0.0625,
+              "hash": "6f3422038ad1"
+            },
+            {
+              "file": "agaviria/oxide:sentry/src/token.rs",
+              "start_line": 0,
+              "score": 0.0625,
+              "hash": "434e520fdcf4"
+            }
+          ],
+          "loaded": true,
+          "format": "sharded_sqlite",
+          "query_ngrams": 16,
+          "candidates_found": 4,
+          "retrieval_latency_ms": 389.733,
+          "failure_reason": "",
+          "failure_detail": "",
+          "shards_queried": 10,
+          "shards_failed": 0,
+          "shards_unavailable": 0
+        }
+      }
+    },
+    {
+      "prompt_id": "bst_iterator",
+      "baseline": {
+        "output": "",
+        "speed": 28.404300488762008,
+        "tokens": 1024,
+        "draft_n": 1158,
+        "draft_accepted": 733,
+        "wall_time": 36.522157483006595
+      },
+      "corpus": {
+        "output": "",
+        "speed": 28.070061557864292,
+        "tokens": 1024,
+        "draft_n": 1152,
+        "draft_accepted": 734,
+        "wall_time": 39.61203501702403,
+        "retrieval": {
+          "mode": "speed",
+          "query": "binary search tree in python with iterator uses memory where h is height of tree include insert search delete and iterator protocol __iter__ __next__",
+          "injected": true,
+          "prompt_chars_added": 2561,
+          "snippets_returned": 3,
+          "snippet_sources": [
+            {
+              "file": "Jatin-Shihora/LeetCode-Solutions:701-insert-into-a-binary-search-tree/701-insert-into-a-binary-search-tree.cpp",
+              "start_line": 0,
+              "score": 0.14285714285714285,
+              "hash": "19bfbb97775b"
+            },
+            {
+              "file": "Sanjeev911/Algorithms:data_structures/binary_search_tree.py",
+              "start_line": 0,
+              "score": 0.09523809523809523,
+              "hash": "3df15a0afeef"
+            },
+            {
+              "file": "DasAllFolks/PyAlgo:bst.py",
+              "start_line": 0,
+              "score": 0.09523809523809523,
+              "hash": "94ee47af8f8b"
+            }
+          ],
+          "loaded": true,
+          "format": "sharded_sqlite",
+          "query_ngrams": 21,
+          "candidates_found": 6,
+          "retrieval_latency_ms": 2.144,
+          "failure_reason": "",
+          "failure_detail": "",
+          "shards_queried": 10,
+          "shards_failed": 0,
+          "shards_unavailable": 0
+        }
+      }
+    },
+    {
+      "prompt_id": "lru_cache",
+      "baseline": {
+        "output": "",
+        "speed": 27.827113081316615,
+        "tokens": 1024,
+        "draft_n": 1185,
+        "draft_accepted": 726,
+        "wall_time": 37.22957333701197
+      },
+      "corpus": {
+        "output": "",
+        "speed": 27.94482817642094,
+        "tokens": 1024,
+        "draft_n": 1168,
+        "draft_accepted": 730,
+        "wall_time": 38.97443689999636,
+        "retrieval": {
+          "mode": "speed",
+          "query": "lru cache in python using list and dictionary support get put and resize operations include proper locking and decorator version",
+          "injected": true,
+          "prompt_chars_added": 1976,
+          "snippets_returned": 3,
+          "snippet_sources": [
+            {
+              "file": "RawRapter/python-vscode:ProgPracFol/BasicsProgramSet6.py",
+              "start_line": 0,
+              "score": 0.17647058823529413,
+              "hash": "7c325c9f09f5"
+            },
+            {
+              "file": "dangerstudios/OpenPype:openpype/lib/local_settings.py",
+              "start_line": 0,
+              "score": 0.058823529411764705,
+              "hash": "9079cd2498d5"
+            },
+            {
+              "file": "simonebarbieri/pype:igniter/user_settings.py",
+              "start_line": 0,
+              "score": 0.058823529411764705,
+              "hash": "b7f66f76995b"
+            }
+          ],
+          "loaded": true,
+          "format": "sharded_sqlite",
+          "query_ngrams": 17,
+          "candidates_found": 6,
+          "retrieval_latency_ms": 0.982,
+          "failure_reason": "",
+          "failure_detail": "",
+          "shards_queried": 12,
+          "shards_failed": 0,
+          "shards_unavailable": 0
+        }
+      }
+    },
+    {
+      "prompt_id": "json_parser",
+      "baseline": {
+        "output": "",
+        "speed": 30.03418030503934,
+        "tokens": 1024,
+        "draft_n": 1111,
+        "draft_accepted": 745,
+        "wall_time": 34.70295830699615
+      },
+      "corpus": {
+        "output": "",
+        "speed": 30.524636526549145,
+        "tokens": 1024,
+        "draft_n": 1092,
+        "draft_accepted": 750,
+        "wall_time": 36.47596084701945,
+        "retrieval": {
+          "mode": "speed",
+          "query": "recursive descent json parser in python from scratch no json handle strings with escapes numbers int and float booleans null arrays and objects return native python types",
+          "injected": true,
+          "prompt_chars_added": 1828,
+          "snippets_returned": 3,
+          "snippet_sources": [
+            {
+              "file": "KaloyanKaludov/Element:source/VirtualMachine.cpp",
+              "start_line": 0,
+              "score": 0.08333333333333333,
+              "hash": "84ce40075d8f"
+            },
+            {
+              "file": "eric-erki/datacube-core:datacube/utils/documents.py",
+              "start_line": 0,
+              "score": 0.041666666666666664,
+              "hash": "6476d7daddf9"
+            },
+            {
+              "file": "HyperEntangledQubit/Data_Structures_and_Algorithms_in_Python:DynamicArray/DynamicArray.py",
+              "start_line": 0,
+              "score": 0.041666666666666664,
+              "hash": "5e4f8e08842b"
+            }
+          ],
+          "loaded": true,
+          "format": "sharded_sqlite",
+          "query_ngrams": 24,
+          "candidates_found": 6,
+          "retrieval_latency_ms": 1.046,
+          "failure_reason": "",
+          "failure_detail": "",
+          "shards_queried": 14,
+          "shards_failed": 0,
+          "shards_unavailable": 0
+        }
+      }
+    },
+    {
+      "prompt_id": "rate_limiter",
+      "baseline": {
+        "output": "",
+        "speed": 23.580341943973064,
+        "tokens": 1024,
+        "draft_n": 1369,
+        "draft_accepted": 679,
+        "wall_time": 44.012809214997105
+      },
+      "corpus": {
+        "output": "",
+        "speed": 24.22348817283459,
+        "tokens": 1024,
+        "draft_n": 1350,
+        "draft_accepted": 685,
+        "wall_time": 45.658566348982276,
+        "retrieval": {
+          "mode": "speed",
+          "query": "token bucket rate limiter in python supports limits burst capacity and automatic refill it work both synchronously and with asyncio",
+          "injected": true,
+          "prompt_chars_added": 3032,
+          "snippets_returned": 3,
+          "snippet_sources": [
+            {
+              "file": "AllSeeingEyeTolledEweSew/tbucket:tbucket.py",
+              "start_line": 0,
+              "score": 0.11764705882352941,
+              "hash": "0c58caf4cabc"
+            },
+            {
+              "file": "MacWR/Click-changed-for-ParaGraph:include/click/tokenbucket.hh",
+              "start_line": 0,
+              "score": 0.11764705882352941,
+              "hash": "6afca5558aad"
+            },
+            {
+              "file": "p7g/dd-trace-py:ddtrace/internal/rate_limiter.py",
+              "start_line": 0,
+              "score": 0.058823529411764705,
+              "hash": "c7673597ef44"
+            }
+          ],
+          "loaded": true,
+          "format": "sharded_sqlite",
+          "query_ngrams": 17,
+          "candidates_found": 6,
+          "retrieval_latency_ms": 0.783,
+          "failure_reason": "",
+          "failure_detail": "",
+          "shards_queried": 11,
+          "shards_failed": 0,
+          "shards_unavailable": 0
+        }
+      }
+    },
+    {
+      "prompt_id": "graph_shortest",
+      "baseline": {
+        "output": "",
+        "speed": 29.898694521972285,
+        "tokens": 1024,
+        "draft_n": 1100,
+        "draft_accepted": 747,
+        "wall_time": 34.643794025003444
+      },
+      "corpus": {
+        "output": "",
+        "speed": 27.40352680713882,
+        "tokens": 1024,
+        "draft_n": 1194,
+        "draft_accepted": 723,
+        "wall_time": 39.39218137902208,
+        "retrieval": {
+          "mode": "speed",
+          "query": "algorithm and search in python support weighted directed graphs with adjacency list representation include priority queue implementation and path reconstruction",
+          "injected": true,
+          "prompt_chars_added": 1473,
+          "snippets_returned": 3,
+          "snippet_sources": [
+            {
+              "file": "KGene1901/Algorithms-Data-Structures-Yr1:Graphing.py",
+              "start_line": 0,
+              "score": 0.058823529411764705,
+              "hash": "c66c7996ac8b"
+            },
+            {
+              "file": "ANUBHAVNATANI/Data-Strucures:Data-Structures/Graph/graph.cpp",
+              "start_line": 0,
+              "score": 0.058823529411764705,
+              "hash": "1654ac456c2a"
+            },
+            {
+              "file": "dcyrus/ProAlgos-Cpp:2.DFS.cpp",
+              "start_line": 0,
+              "score": 0.058823529411764705,
+              "hash": "cc27a3668206"
+            }
+          ],
+          "loaded": true,
+          "format": "sharded_sqlite",
+          "query_ngrams": 17,
+          "candidates_found": 5,
+          "retrieval_latency_ms": 0.671,
+          "failure_reason": "",
+          "failure_detail": "",
+          "shards_queried": 10,
+          "shards_failed": 0,
+          "shards_unavailable": 0
+        }
+      }
+    }
+  ],
+  "worker_general": [
+    {
+      "prompt_id": "async_retry",
+      "baseline": {
+        "output": "To implement this, we will use `aiohttp` for the asynchronous HTTP requests. \n\nThe implementation below consists of three main components:\n1.  **Circuit Breaker**: Prevents the system from making requests to a failing service to allow it time to recover.\n2.  **Retry Logic**: Implements exponential backoff with jitter to prevent \"thundering herd\" problems.\n3.  **The Client**: Orchestrates the logic.\n\n```python\nimport asyncio\nimport random\nimport time\nimport logging\nfrom enum import Enum\nfrom typing import Any, Dict, Optional, Callable, Awaitable\n\nimport aiohttp\n\n# Configure logging\nlogging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')\nlogger = logging.getLogger(__name__)\n\nclass CircuitState(Enum):\n    CLOSED = \"CLOSED\"  # Normal operation: requests flow through\n    OPEN = \"OPEN\"      # Failure detected: requests are blocked\n    HALF_OPEN = \"HALF_OPEN\"  # Testing: allowing a single probe request\n\nclass CircuitBreakerError(Exception):\n    \"\"\"Raised when the circuit breaker is in the OPEN state.\"\"\"\n    pass\n\nclass CircuitBreaker:\n    def __init__(self, failure_threshold: int = 3, recovery_timeout: float = 10.0):\n        self.failure_threshold = failure_threshold\n        self.recovery_timeout = recovery_timeout\n        self.failure_count = 0\n        self.last_failure_time: Optional[float] = None\n        self.state = CircuitState.CLOSED\n\n    def record_failure(self) -> None:\n        self.failure_count += 1\n        self.last_failure_time = time.time()\n        if self.failure_count >= self.failure_threshold:\n            self._change_state(CircuitState.OPEN)\n            logger.error(\"Circuit Breaker: Threshold reached. Opening circuit.\")\n\n    def record_success(self) -> None:\n        self.failure_count = 0\n        self._change_state(CircuitState.CLOSED)\n\n    def _change_state(self, new_state: CircuitState) -> None:\n        if self.state != new_state:\n            logger.info(f\"Circuit Breaker: State transition {self.state.value} -> {new_state.value}\")\n            self.state = new_state\n\n    def can_execute(self) -> bool:\n        if self.state == CircuitState.OPEN:\n            # Check if recovery timeout has passed\n            if time.time() - (self.last_failure_time or 0) > self.recovery_timeout:\n                self._change_state(CircuitState.HALF_OPEN)\n                return True\n            return False\n        return True\n\nclass AsyncHttpClient:\n    def __init__(\n        self, \n        max_retries: int = 3, \n        base_delay: float = 1.0, \n        max_delay: float = 10.0,\n        circuit_breaker: Optional[CircuitBreaker] = None\n    ):\n        self.max_retries = max_retries\n        self.base_delay = base_delay\n        self.max_delay = max_delay\n        self.circuit_breaker = circuit_breaker or CircuitBreaker()\n        self._session: Optional[aiohttp.ClientSession] = None\n\n    async def __aenter__(self) -> 'AsyncHttpClient':\n        self._session = aiohttp.ClientSession()\n        return self\n\n    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:\n        if self._session:\n            await self._session.close()\n\n    async def request(self, method: str, url: str, **kwargs: Any) -> Dict[str, Any]:\n        if not self._session:\n            raise RuntimeError(\"Client must be used as an async context manager.\")\n\n        if not self.circuit_breaker.can_execute():\n            raise CircuitBreakerError(f\"Circuit is OPEN. Request to {url} aborted.\")\n\n        retries = 0\n        while True:\n            try:\n                async with self._session.request(method, url, **kwargs) as response:\n                    # Check for HTTP errors (4xx, 5xx)\n                    if response.status >= 500:\n                        response.raise_for_status()\n                    \n                    # If we reached here, it's a success (or a 4xx which we might not want to retry)\n                    ",
+        "speed": 37.92944353061484,
+        "tokens": 1024,
+        "draft_n": 748,
+        "draft_accepted": 648,
+        "wall_time": 27.20030655100709
+      },
+      "corpus": {
+        "output": "To implement a robust async HTTP client with the requested patterns, we can build upon the `tornado.curl_httpclient.CurlAsyncHTTPClient` (as seen in your reference code) and wrap it with logic for retries and circuit breaking.\n\nHere is a complete implementation using `asyncio`.\n\n```python\nimport asyncio\nimport logging\nimport time\nfrom typing import Any, Dict, Optional, Callable, TypeVar\n\nimport tornado.curl_httpclient\nfrom tornado.httpclient import HTTPRequest, HTTPResponse, HTTPError\n\n# Setup logging\nlogging.basicConfig(level=logging.INFO)\nlogger = logging.getLogger(\"AsyncHttpClient\")\n\nT = TypeVar(\"T\")\n\nclass CircuitBreakerOpenError(Exception):\n    \"\"\"Raised when the circuit breaker is in the OPEN state.\"\"\"\n    pass\n\nclass CircuitBreaker:\n    \"\"\"\n    Implements the Circuit Breaker pattern.\n    States: CLOSED (normal), OPEN (failing), HALF_OPEN (testing recovery)\n    \"\"\"\n    def __init__(self, failure_threshold: int = 3, recovery_timeout: float = 10.0):\n        self.failure_threshold = failure_threshold\n        self.recovery_timeout = recovery_timeout\n        self.failure_count = 0\n        self.last_failure_time: Optional[float] = None\n        self.state = \"CLOSED\"\n\n    def record_failure(self):\n        self.failure_count += 1\n        self.last_failure_time = time.time()\n        if self.failure_count >= self.failure_threshold:\n            self.state = \"OPEN\"\n            logger.error(\"Circuit Breaker tripped! State: OPEN\")\n\n    def record_success(self):\n        self.failure_count = 0\n        self.state = \"CLOSED\"\n\n    def can_execute(self) -> bool:\n        if self.state == \"OPEN\":\n            if time.time() - (self.last_failure_perm() or 0) > self.recovery_timeout:\n                self.state = \"HALF_OPEN\"\n                logger.info(\"Circuit Breaker entering HALF_OPEN state\")\n                return True\n            return False\n        return True\n\n    def last_failure_perm(self) -> Optional[float]:\n        return self.last_failure_time\n\n\nclass ResilientHttpClient:\n    \"\"\"\n    An async HTTP client featuring:\n    - Exponential Backoff Retries\n    - Circuit Breaker Pattern\n    - Type-hinted request/response handling\n    \"\"\"\n    def __init__(\n        self, \n        max_retries: int = 3, \n        base_delay: float = 1.0, \n        circuit_breaker: Optional[CircuitBreaker] = None\n    ):\n        self.client = tornado.curl_httpclient.CurlAsyncHTTPClient()\n        self.max_retries = max_retries\n        self.base_delay = base_delay\n        self.circuit_breaker = circuit_breaker or CircuitBreaker()\n\n    async def request(\n        self, \n        url: str, \n        method: str = \"GET\", \n        headers: Optional[Dict[str, str]] = None,\n        body: Optional[Any] = None\n    ) -> HTTPResponse:\n        \n        if not self.circuit_breaker.can_execute():\n            raise CircuitBrekerOpenError(f\"Circuit is OPEN. Request to {url} aborted.\")\n\n        request = HTTPRequest(url, method=method, headers=headers, body=body)\n        attempt = 0\n\n        while attempt <= self.max_retries:\n            try:\n                response = await self.client.fetch(request)\n                \n                # If successful, reset circuit breaker\n                self.circuit_breaker.record_success()\n                return response\n\n            except (HTTPError, Exception) as e:\n                attempt += 1\n                \n                # Check if error is a 4xx (client error) or 5xx (server error)\n                # We only retry on 5xx or network-level connection errors\n                is_retryable = False\n                if isinstance(e, HTTPError):\n                    if 500 <= e.code < 600:\n                        is_retryable = True\n                else:\n                    is_retryable = True # Network/Connection errors\n\n                if is_retryable and attempt <= self.max_retries:\n                    delay = self.base_delay * (2 ** (attempt - 1))\n                    logger.warning(f\"Attempt {attempt} failed for {url}.",
+        "speed": 34.30660110934281,
+        "tokens": 1024,
+        "draft_n": 754,
+        "draft_accepted": 646,
+        "wall_time": 31.781132709002122,
+        "retrieval": {
+          "mode": "speed",
+          "query": "python async http client with retry logic exponential backoff and circuit breaker pattern include type hints and usage example",
+          "injected": true,
+          "prompt_chars_added": 3025,
+          "snippets_returned": 3,
+          "snippet_sources": [
+            {
+              "file": "tly1980/async_keepalive_httpc:setup.py",
+              "start_line": 0,
+              "score": 0.0625,
+              "hash": "ac5cd3a4c5bf"
+            },
+            {
+              "file": "MiddleFork/nbviewer:nbviewer/providers/url/client.py",
+              "start_line": 0,
+              "score": 0.0625,
+              "hash": "6f3422038ad1"
+            },
+            {
+              "file": "agaviria/oxide:sentry/src/token.rs",
+              "start_line": 0,
+              "score": 0.0625,
+              "hash": "434e520fdcf4"
+            }
+          ],
+          "loaded": true,
+          "format": "sharded_sqlite",
+          "query_ngrams": 16,
+          "candidates_found": 4,
+          "retrieval_latency_ms": 0.418,
+          "failure_reason": "",
+          "failure_detail": "",
+          "shards_queried": 10,
+          "shards_failed": 0,
+          "shards_unavailable": 0
+        }
+      }
+    },
+    {
+      "prompt_id": "bst_iterator",
+      "baseline": {
+        "output": "To achieve $O(h)$ memory complexity for an in-order iterator, we must avoid flattening the tree into a list. Instead, we use a **stack** to keep track of the ancestors of the current node, simulating the recursion stack used in a standard recursive in-order traversal.\n\nHere is the complete implementation:\n\n```python\nclass Node:\n    def __init__(self, key):\n        self.key = key\n        self.left = None\n        self.right = None\n\nclass BinarySearchTree:\n    def __init__(self):\n        self.root = None\n\n    def insert(self, key):\n        \"\"\"Inserts a new key into the BST.\"\"\"\n        if self.root is None:\n            self.root = Node(key)\n        else:\n            self._insert_recursive(self.root, key)\n\n    def _insert_recursive(self, node, key):\n        if key < node.key:\n            if node.left is None:\n                node.append_left = Node(key) # Logic error fix:\n                node.left = Node(key)\n            else:\n                self._insert_recursive(node.left, key)\n        elif key > node.key:\n            if node.right is None:\n                node.right = Node(key)\n            else:\n                self._insert_recursive(node.right, key)\n        # If key == node.key, we do nothing (no duplicates)\n\n    def search(self, key):\n        \"\"\"Returns True if key exists in the BST, else False.\"\"\"\n        current = self.root\n        while current:\n            if key == current.key:\n                return True\n            elif key < current.key:\n                current = current.left\n            else:\n                current = current.right\n        return False\n\n    def delete(self, key):\n        \"\"\"Deletes a key from the BST.\"\"\"\n        self.root = self._delete_recursive(self.root, key)\n\n    def _delete_recursive(self, node, key):\n        if not node:\n            return None\n\n        if key < node.key:\n            node.left = self._delete_recursive(node.left, key)\n        elif key > node.key:\n            node.right = self._delete_recursive(node.right, key)\n        else:\n            # Node with only one child or no child\n            if not node.left:\n                return node.append_right = node.right # Logic fix:\n                return node.right\n            elif not node.right:\n                return node.left\n\n            # Node with two children: Get the inorder successor\n            # (smallest in the right subtree)\n            temp = self._min_value_node(node.right)\n            node.key = temp.key\n            node.right = self._delete_recursive(node.right, temp.key)\n        \n        return node\n\n    def _min_value_node(self, node):\n        current = node\n        while current.left:\n            current = current.left\n        return current\n\n    def __iter__(self):\n        \"\"\"Returns the iterator object.\"\"\"\n        return InOrderIterator(self.root)\n\n\nclass InOrderIterator:\n    \"\"\"\n    Iterator that performs in-order traversal using a stack.\n    Space Complexity: O(h) where h is the height of the tree.\n    Time Complexity: O(1) amortized per next() call.\n    \"\"\"\n    def __init__(self, root):\n        self.stack = []\n        self._push_left_path(root)\n\n    def _push_left_path(self, node):\n        \"\"\"Helper to push all left children of a node onto the stack.\"\"\"\n        while node:\n            self.stack.append(node)\n            node = node.left\n\n    def __iter__(self):\n        return self\n\n    def __next__(self):\n        if not self.stack:\n            raise StopIteration\n\n        # The top of the stack is the next node in in-order traversal\n        node = self.stack.pop()\n        \n        # If the node has a right child, we must process that child's \n        # left-most path before moving to the next node in the stack.\n        if node.right:\n            self._push_left_path(node.right)\n            \n        return node.key\n\n# --- Testing the Implementation ---\nif __name__ == \"__main__\":\n    bst = BinarySearchTree()\n    elements = [50, 30, 70, 2",
+        "speed": 38.438879966113724,
+        "tokens": 1024,
+        "draft_n": 750,
+        "draft_accepted": 647,
+        "wall_time": 26.900923876994057
+      },
+      "corpus": {
+        "output": "To implement a Binary Search Tree (BST) with an in-order iterator that uses $O(h)$ memory, we must avoid flattening the tree into a list. Instead, we use a **stack** to keep track of the ancestor nodes during traversal. This allows us to pause the traversal and resume it, satisfying the iterator protocol.\n\nHere is the complete implementation:\n\n```python\nclass TreeNode:\n    \"\"\"A node in the Binary Search Tree.\"\"\"\n    def __init__(self, value):\n        self.value = value\n        self.left = None\n        self.right = None\n\nclass BSTIterator:\n    \"\"\"\n    An iterator for in-order traversal of a BST.\n    Uses O(h) space to store the path from root to the current node.\n    \"\"\"\n    def __init__(self, root):\n        self.stack = []\n        self._push_left_path(root)\n\n    def _push_left_path(self, node):\n        \"\"\"Helper to push all left children of a node onto the stack.\"\"\"\n        while node:\n            self.stack.append(node)\n            node = node.left\n\n    def __iter__(self):\n        return self\n\n    def __next__(self):\n        if not self.stack:\n            raise StopIteration\n        \n        # The top of the stack is the next node in in-order traversal\n        node = self.stack.pop()\n        \n        # If the node has a right child, we must process that child's \n        # left-most path next\n        if node.right:\n            self._push_left_path(node.right)\n            \n        return node.value\n\nclass BST:\n    \"\"\"Implementation of a Binary Search Tree.\"\"\"\n    def __init__(self):\n        self.root = None\n\n    def insert(self, value):\n        \"\"\"Inserts a value into the BST. O(h) time.\"\"\"\n        if not self.root:\n            self.root = TreeNode(value)\n            return\n        \n        curr = self.root\n        while True:\n            if value < curr.value:\n                if curr.left is None:\n                    curr.left = TreeNode(value)\n                    break\n                curr = curr.left\n            elif value > curr.value:\n                if curr.right is None:\n                    curr.right = TreeNode(value)\n                    break\n                curr = curr.right\n            else:\n                return  # Value already exists (no duplicates)\n\n    def search(self, value):\n        \"\"\"Searches for a value in the BST. O(h) time.\"\"\"\n        curr = self.root\n        while curr:\n            if value == curr.value:\n                return True\n            elif value < curr.value:\n                curr = curr.left\n            else:\n                curr = curr.right\n        return False\n\n    def delete(self, value):\n        \"\"\"Deletes a value from the BST. O(h) time.\"\"\"\n        self.root = self._delete_recursive(self.root, value)\n\n    def _delete_recursive(self, node, value):\n        if not node:\n            return None\n\n        if value < node.value:\n            node.left = self._delete_recursive(node.left, value)\n        elif value > node.value:\n            node.right = self._delete_recursive(node.right, value)\n        else:\n            # Node with only one child or no child\n            if not node.left:\n                return node.right\n            elif not node.right:\n                return node.left\n\n            # Node with two children: Get the inorder successor \n            # (smallest in the right subtree)\n            temp = self._min_value_node(node.right)\n            node.value = temp.value\n            node.right = self._delete_recursive(node.right, temp.value)\n        \n        return node\n\n    def _min_value_node(self, node):\n        curr = node\n        while curr.left:\n            curr = curr.left\n        return curr\n\n    def __iter__(self):\n        \"\"\"Returns the in-order iterator.\"\"\"\n        return BSTIterator(self.root)\n\n# --- Example Usage ---\nif __name__ == \"__main__\":\n    bst = BST()\n    elements = [50, 30, 70, 20, 40, 60, 80]\n    for el in elements:\n        bst.insert(el)\n\n    print(\"In-order traversal via iterator:\")\n    # The iterator uses O(",
+        "speed": 34.751532987180006,
+        "tokens": 1024,
+        "draft_n": 731,
+        "draft_accepted": 657,
+        "wall_time": 31.176577642996563,
+        "retrieval": {
+          "mode": "speed",
+          "query": "binary search tree in python with iterator uses memory where h is height of tree include insert search delete and iterator protocol __iter__ __next__",
+          "injected": true,
+          "prompt_chars_added": 2561,
+          "snippets_returned": 3,
+          "snippet_sources": [
+            {
+              "file": "Jatin-Shihora/LeetCode-Solutions:701-insert-into-a-binary-search-tree/701-insert-into-a-binary-search-tree.cpp",
+              "start_line": 0,
+              "score": 0.14285714285714285,
+              "hash": "19bfbb97775b"
+            },
+            {
+              "file": "Sanjeev911/Algorithms:data_structures/binary_search_tree.py",
+              "start_line": 0,
+              "score": 0.09523809523809523,
+              "hash": "3df15a0afeef"
+            },
+            {
+              "file": "DasAllFolks/PyAlgo:bst.py",
+              "start_line": 0,
+              "score": 0.09523809523809523,
+              "hash": "94ee47af8f8b"
+            }
+          ],
+          "loaded": true,
+          "format": "sharded_sqlite",
+          "query_ngrams": 21,
+          "candidates_found": 6,
+          "retrieval_latency_ms": 0.879,
+          "failure_reason": "",
+          "failure_detail": "",
+          "shards_queried": 10,
+          "shards_failed": 0,
+          "shards_unavailable": 0
+        }
+      }
+    },
+    {
+      "prompt_id": "lru_cache",
+      "baseline": {
+        "output": "To implement a thread-safe LRU (Least Recently Used) cache, we need three components:\n1.  **A Doubly Linked List**: To maintain the order of usage (Head = Most Recent, Tail = Least Recent).\n2.  **A Dictionary**: To provide $O(1)$ access to the nodes in the list.\n3.  **A Reentrant Lock (`RLock`)**: To ensure that multiple threads can call `get`, `put`, and `resize` without corrupting the pointers or the dictionary.\n\nHere is the complete implementation.\n\n```python\nimport threading\nfrom functools import wraps\n\nclass Node:\n    \"\"\"A node in the doubly linked list.\"\"\"\n    def __init__(self, key=None, value=None):\n        self.key = key\n        self.value = value\n        self.prev = None\n        self.next = None\n\nclass LRUCache:\n    def __init__(self, capacity: int):\n        if capacity <= 0:\n            raise ValueError(\"Capacity must be greater than 0\")\n        self.capacity = capacity\n        self.cache = {}  # Maps key -> Node\n        self.lock = threading.RLock()  # Reentrant lock for thread safety\n        \n        # Dummy nodes to simplify boundary conditions (head/tail)\n        self.head = Node()\n        self.tail = Node()\n        self.head.next = self.tail\n        self.tail.prev = self.head\n\n    def _remove(self, node: Node):\n        \"\"\"Remove an existing node from the linked list.\"\"\"\n        prev_node = node.prev\n        next_node = node.next\n        prev_node.next = next_node\n        next_node.prev = prev_node\n\n    def _add_to_front(self, node: Node):\n        \"\"\"Add a new node right after the dummy head.\"\"\"\n        node.next = self.head.next\n        node.prev = self.head\n        self.head.next.prev = node\n        self.head.next = node\n\n    def get(self, key):\n        \"\"\"Retrieve value and move node to front.\"\"\"\n        with self.lock:\n            if key in self.cache:\n                node = self.cache[key]\n                self._remove(node)\n                self._add_to_front(node)\n                return node.value\n            return None\n\n    def put(self, key, value):\n        \"\"\"Insert or update value. Evict least recent if capacity exceeded.\"\"\"\n        with self.lock:\n            if key in self.cache:\n                # Update existing node\n                node = self.cache[key]\n                node.value = value\n                self._remove(node)\n                self._add_to_front(node)\n            else:\n                # Create new node\n                new_node = Node(key, value)\n                self.cache[key] = new_node\n                self._add_to_front(new_node)\n                \n                # Check capacity\n                if len(self.cache) > self.capacity:\n                    # Evict the tail (least recently used)\n                    lru_node = self.tail.prev\n                    self._remove(lru_node)\n                    del self.cache[lru_node.key]\n\n    def resize(self, new_capacity: int):\n        \"\"\"Dynamically change the capacity of the cache.\"\"\"\n        if new_capacity <= 0:\n            raise ValueError(\"Capacity must be greater than 0\")\n        \n        with self.lock:\n            self.capacity = new_capacity\n            # If shrinking, evict nodes until we meet new capacity\n            while len(self.cache) > self.capacity:\n                lru_node = self.tail.prev\n                self._remove(lru_node)\n                del self.cache[lru_node.key]\n\ndef lru_cache_decorator(capacity: int):\n    \"\"\"\n    A decorator version of the LRU cache.\n    Note: This wraps a function, effectively caching its return values.\n    \"\"\"\n    cache = LRUCache(capacity)\n\n    def decorator(func):\n        @wraps(func)\n        def wrapper(*args, **kwargs):\n            # Create a cache key from function arguments\n            # Note: args/kwargs must be hashable\n            key = str(args) + str(sorted(kwargs.items()))\n            \n            result = cache.get(key)\n            if result is None:\n                result = func(*args, **kwargs)\n                cache.put(key, result)",
+        "speed": 37.121664442629445,
+        "tokens": 1024,
+        "draft_n": 736,
+        "draft_accepted": 654,
+        "wall_time": 27.8321528499946
+      },
+      "corpus": {
+        "output": "To implement a thread-safe LRU (Least Recently Used) cache, we combine a `dict` for $O(1)$ lookups and a `doubly-linked list` for $O(1)$ updates to the access order. We use a `threading.RLock` (reentrant lock) to ensure that concurrent operations from multiple threads do not corrupt the pointers or the dictionary.\n\nHere is the complete implementation:\n\n```python\nimport threading\n\nclass Node:\n    \"\"\"A node in the doubly-linked list.\"\"\"\n    def __init__(self, key=None, value=None):\n        self.key = key\n        self.value = value\n        self.prev = None\n        self.next = None\n\nclass LRUCache:\n    def __init__(self, capacity: int):\n        if capacity <= 0:\n            raise ValueError(\"Capacity must be greater than 0\")\n        \n        self.capacity = capacity\n        self.cache = {}  # Maps key -> Node\n        self.lock = threading.RLock()\n        \n        # Dummy head and tail to simplify edge cases (insertion/deletion)\n        self.head = Node()\n        self.tail = Node()\n        self.head.next = self.tail\n        self.tail.prev = self.head\n\n    def _remove(self, node: Node):\n        \"\"\"Remove an existing node from the linked list.\"\"\"\n        prev_node = node.prev\n        next_node = node.next\n        prev_node.next = next_node\n        next_node.prev = prev_node\n\n    def _add_to_front(self, node: Node):\n        \"\"\"Add a new node right after the dummy head.\"\"\"\n        node.next = self.head.next\n        node.prev = self.head\n        self.head.next.prev = node\n        self.head.next = node\n\n    def get(self, key):\n        \"\"\"Retrieve value and move node to front (most recent).\"\"\"\n        with self.lock:\n            if key in self.lookup_map(): # Internal check\n                node = self.cache[key]\n                self._remove(node)\n                self._add_to_front(node)\n                return node.value\n            return None\n\n    def put(self, key, value):\n        \"\"\"Insert or update value. Evict least recent if capacity exceeded.\"\"\"\n        with self.lock:\n            if key in self.cache:\n                # Update existing\n                node = self.cache[key]\n                node.value = value\n                self._remove(node)\n                self._add_to_front(node)\n            else:\n                # Insert new\n                if len(self.cache) >= self.capacity:\n                    # Evict least recently used (node before dummy tail)\n                    lru_node = self.tail.prev\n                    self._remove(lru_node)\n                    del self.cache[lru_node.key]\n                \n                new_node = Node(key, value)\n                self.cache[key] = new_node\n                self._add_to_front(new_node)\n\n    def resize(self, new_capacity: int):\n        \"\"\"Resize the cache capacity dynamically.\"\"\"\n        if new_capacity <= 0:\n            raise ValueError(\"Capacity must be greater than 0\")\n        \n        with self.lock:\n            self.capacity = new_capacity\n            # If shrinking, evict nodes until we meet new capacity\n            while len(self.cache) > self.capacity:\n                lru_node = self.tail.prev\n                self._remove(lru_node)\n                del self.cache[lru_node.key]\n\n    def lookup_map(self):\n        \"\"\"Helper for internal logic.\"\"\"\n        return self.cache\n\n    def __len__(self):\n        with self.lock:\n            return len(self.cache)\n\ndef lru_cache_decorator(capacity: int):\n    \"\"\"Decorator version of the thread-safe LRU cache.\"\"\"\n    cache = LRUCache(capacity)\n\n    def decorator(func):\n        def wrapper(*args, **kwargs):\n            # Create a key from function arguments\n            # Note: args/kwargs must be hashable\n            key = str(args) + str(sorted(kwargs.items()))\n            \n            result = cache.get(key)\n            if result is not None:\n                return result\n            \n            result = func(*args, **kwargs)\n            cache.put(key, result)\n            return result\n        \n        # Attach the",
+        "speed": 33.41772178336805,
+        "tokens": 1024,
+        "draft_n": 762,
+        "draft_accepted": 641,
+        "wall_time": 31.90565239501302,
+        "retrieval": {
+          "mode": "speed",
+          "query": "lru cache in python using list and dictionary support get put and resize operations include proper locking and decorator version",
+          "injected": true,
+          "prompt_chars_added": 1976,
+          "snippets_returned": 3,
+          "snippet_sources": [
+            {
+              "file": "RawRapter/python-vscode:ProgPracFol/BasicsProgramSet6.py",
+              "start_line": 0,
+              "score": 0.17647058823529413,
+              "hash": "7c325c9f09f5"
+            },
+            {
+              "file": "dangerstudios/OpenPype:openpype/lib/local_settings.py",
+              "start_line": 0,
+              "score": 0.058823529411764705,
+              "hash": "9079cd2498d5"
+            },
+            {
+              "file": "simonebarbieri/pype:igniter/user_settings.py",
+              "start_line": 0,
+              "score": 0.058823529411764705,
+              "hash": "b7f66f76995b"
+            }
+          ],
+          "loaded": true,
+          "format": "sharded_sqlite",
+          "query_ngrams": 17,
+          "candidates_found": 6,
+          "retrieval_latency_ms": 0.434,
+          "failure_reason": "",
+          "failure_detail": "",
+          "shards_queried": 12,
+          "shards_failed": 0,
+          "shards_unavailable": 0
+        }
+      }
+    },
+    {
+      "prompt_id": "json_parser",
+      "baseline": {
+        "output": "To build a recursive descent parser, we need two main components:\n1.  **A Lexer (Tokenizer):** To break the raw string into meaningful tokens (e.g., `{`, `}`, `[`, `]`, `:`, `,`, strings, numbers).\n3.  **A Parser:** To consume those tokens according to the JSON grammar rules.\n\nHere is the complete implementation.\n\n```python\nimport re\n\nclass JSONParserError(Exception):\n    pass\n\nclass JSONParser:\n    def __init__(self, text):\n        self.text = text\n        self.pos = 0\n        self.tokens = self._tokenize(text)\n        self.current_token_idx = 0\n\n    def _tokenize(self, text):\n        \"\"\"\n        Converts the raw string into a list of tokens.\n        Tokens are tuples: (type, value)\n        \"\"\"\n        token_specification = [\n            ('STRING',   r'\"(?:[^\"\\\\]|\\\\.)*\"'),      # Double quoted strings\n            ('NUMBER',   r'-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?'), # Ints and Floats\n            ('BOOL',     r'true|false'),             # Booleans\n            ('NULL',     r'null'),                   # Null\n            ('LBRACE',   r'\\{'),                     # {\n            ('RBRACE',   r'\\}'),                     # }\n            ('LBRACKET', r'\\['),                     # [\n            ('RBRACKET', r'\\]'),                     # ]\n            ('COLON',    r':'),                      # :\n            ('COMMA',    r','),                      # ,\n            ('SKIP',     r'[ \\t\\n\\r]+'),             # Whitespace\n            ('MISMATCH', r'.'),                      # Any other character\n        ]\n        \n        tok_regex = '|'.join('(?P<%s>%s)' % pair for pair in token_specification)\n        tokens = []\n        \n        for mo in re.finditer(tok_regex, text):\n            kind = mo.lastgroup\n            value = mo.group()\n            if kind == 'STRING':\n                # Remove quotes and handle basic escapes\n                value = value[1:-1]\n                value = value.encode('utfbr').decode('unicode_escape')\n                tokens.append(('STRING', value))\n            elif kind == 'NUMBER':\n                value = float(value) if '.' in value or 'e' in value.lower() else int(value)\n                tokens.append(('NUMBER', value))\n            elif kind == 'BOOL':\n                tokens.append(('BOOL', value == 'true'))\n            elif kind == 'NULL':\n                tokens.append(('NULL', None))\n            elif kind in ('LBRACE', 'RBRACE', 'LBRACKET', 'RBRACKET', 'COLON', 'COMMA'):\n                tokens.append((kind, value))\n            elif kind == 'SKIP':\n                continue\n            elif kind == 'MISMATCH':\n                raise JSONParserError(f\"Unexpected character: {value} at position {mo.start()}\")\n        \n        tokens.append(('EOF', None))\n        return tokens\n\n    def _peek(self):\n        return self.tokens[self.current_token_idx]\n\n    def _consume(self, expected_type=None):\n        token_type, value = self._peek()\n        if expected_type and token_type != expected_type:\n            raise JSONParserError(f\"Expected {expected_type} but found {token_type}\")\n        self.current_token_idx += 1\n        return value\n\n    def parse(self):\n        \"\"\"Entry point for parsing.\"\"\"\n        result = self._parse_value()\n        if self._peek()[0] != 'EOF':\n            raise JSONParserError(\"Extra data after JSON document\")\n        return result\n\n    def _parse_value(self):\n        token_type, value = self._peek()\n\n        if token_type == 'STRING':\n            return self._consume('STRING')\n        elif token_type == 'NUMBER':\n            return self._consume('NUMBER')\n        elif token_type == 'BOOL':\n            return self._consume('BOOL')\n        elif token_type == 'NULL':\n            return self._consume('NULL')\n        elif token_type == 'LBRACKET':\n            return self._parse_array()\n        elif token_type == 'LBRACE':\n            return self._parse_object()\n        else:\n            raise JSONParserError(",
+        "speed": 36.79215125684539,
+        "tokens": 1024,
+        "draft_n": 750,
+        "draft_accepted": 648,
+        "wall_time": 28.086179687001277
+      },
+      "corpus": {
+        "output": "To implement a recursive descent JSON parser, we need to process a stream of characters, identifying tokens (like `{`, `[`, `\"`, or digits) and recursively building the corresponding Python data structures.\n\nBelow is a complete implementation.\n\n```python\nimport re\n\nclass JSONParser:\n    def __init__(self, text):\n        self.text = text\n        self.pos = 0\n        self.length = len(text)\n\n    def error(self, message):\n        raise ValueError(f\"JSON Error at position {self.pos}: {message}\")\n\n    def peek(self):\n        return self.text[self.pos] if self.pos < self.length else None\n\n    def consume(self, expected=None):\n        char = self.peek()\n        if expected and char != expected:\n            self.error(f\"Expected '{expected}', found '{char}'\")\n        self.pos += 1\n        return char\n\n    def skip_whitespace(self):\n        while self.pos < self.\u0c15\u0c3flength and self.text[self.pos] in ' \\t\\n\\r':\n            self.pos += 1\n\n    def parse(self):\n        self.skip_whitespace()\n        result = self._parse_value()\n        self.skip_whitespace()\n        if self.pos < self.length:\n            self.error(\"Extra data after JSON document\")\n        return result\n\n    def _parse_value(self):\n        char = self.peek()\n\n        if char == '{':\n            return self._parse_object()\n        elif char == '[':\n            return self._parse_array()\n        elif char * 1 == '\"':\n            return self._parse_string()\n        elif char in '-0123456789':\n            return self._parse_number()\n        elif self.text.startswith('true', self.pos):\n            self.pos += 4\n            return True\n        elif self.text.startswith('false', self.pos):\n            self.pos += 5\n            return False\n        elif self.text.startswith('null', self.pos):\n            self.pos += 4\n            return None\n        else:\n            self.error(f\"Unexpected character '{char}'\")\n\n    def _parse_string(self):\n        self.consume('\"')  # Skip opening quote\n        result = []\n        while self.pos < self.length:\n            char = self.consume()\n            if char == '\"':\n                return \"\".join(result)\n            elif char == '\\\\':  # Handle escapes\n                escape_char = self.consume()\n                escapes = {'n': '\\n', 'r': '\\rogram', 't': '\\t', 'b': '\\b', 'f': '\\f', '\"': '\"', '\\\\': '\\\\', '/': '/'}\n                if escape_char in escapes:\n                    result.append(escapes[escape_char])\n                elif escape_char == 'u':  # Unicode \\uXXXX\n                    hex_code = self.text[self.pos:self.pos+4]\n                    self.pos += 4\n                    result.append(chr(int(hex_code, 16)))\n                else:\n                    self.error(f\"Unknown escape sequence \\\\{escape_char}\")\n            elif char == '\\n': # JSON spec says literal newlines in strings are invalid\n                self.error(\"Literal newline in string\")\n            else:\n                result.append(char)\n        self.error(\"Unterminated string\")\n\n    def _parse_number(self):\n        # Use regex to capture the full number pattern\n        pattern = re.compile(r'-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?')\n        match = pattern.match(self.text, self.pos)\n        if not match:\n            self.error(\"Invalid number format\")\n        \n        num_str = match.group()\n        self.pos += len(num_str)\n        \n        if '.' in num_str or 'e' in num_str.lower():\n            return float(num_str)\n        return int(num_str)\n\n    def _parse_array(self):\n        self.consume('[')\n        arr = []\n        self.skip_whitespace()\n        if self.peek() == ']':\n            self.consume(']')\n            return arr\n\n        while True:\n            arr.append(self._parse_value())\n            self.skip_whitespace()\n            char",
+        "speed": 34.43142801220608,
+        "tokens": 1024,
+        "draft_n": 762,
+        "draft_accepted": 641,
+        "wall_time": 31.257454348989995,
+        "retrieval": {
+          "mode": "speed",
+          "query": "recursive descent json parser in python from scratch no json handle strings with escapes numbers int and float booleans null arrays and objects return native python types",
+          "injected": true,
+          "prompt_chars_added": 1828,
+          "snippets_returned": 3,
+          "snippet_sources": [
+            {
+              "file": "KaloyanKaludov/Element:source/VirtualMachine.cpp",
+              "start_line": 0,
+              "score": 0.08333333333333333,
+              "hash": "84ce40075d8f"
+            },
+            {
+              "file": "eric-erki/datacube-core:datacube/utils/documents.py",
+              "start_line": 0,
+              "score": 0.041666666666666664,
+              "hash": "6476d7daddf9"
+            },
+            {
+              "file": "HyperEntangledQubit/Data_Structures_and_Algorithms_in_Python:DynamicArray/DynamicArray.py",
+              "start_line": 0,
+              "score": 0.041666666666666664,
+              "hash": "5e4f8e08842b"
+            }
+          ],
+          "loaded": true,
+          "format": "sharded_sqlite",
+          "query_ngrams": 24,
+          "candidates_found": 6,
+          "retrieval_latency_ms": 0.524,
+          "failure_reason": "",
+          "failure_detail": "",
+          "shards_queried": 14,
+          "shards_failed": 0,
+          "shards_unavailable": 0
+        }
+      }
+    },
+    {
+      "prompt_id": "rate_limiter",
+      "baseline": {
+        "output": "To implement a rate limiter that works both synchronously and with `asyncio`, the key is to avoid using `time.sleep()` inside the logic. Instead, we calculate the \"drift\" (how many tokens should have been added since the last request) based on the current timestamp.\n\nHere is a robust implementation using a single class that handles both paradigms.\n\n```python\nimport time\nimport asyncio\nfrom typing import Dict, Optional\n\nclass TokenBucketLimiter:\n    def __init__(self, rate: float, capacity: float):\n        \"\"\"\n        :param rate: How many tokens are added per second.\n        :param capacity: The maximum number of tokens the bucket can hold (burst size).\n        \"\"\"\n        self.rate = rate\n        self.capacity = capacity\n        \n        # Stores state for each key: {key: (current_tokens, last_update_time)}\n        self.buckets: Dict[str, tuple[float, float]] = {}\n\n    def _refill(self, key: str) -> tuple[float, float]:\n        \"\"\"Internal method to calculate new token count based on elapsed time.\"\"\"\n        now = time.monotonic()\n        \n        if key not in self.buckets:\n            # First time seeing this key: start full\n            self.buckets[key] = (self.capacity, now)\n            return self.capacity, now\n\n        tokens, last_update = self.buckets[key]\n        \n        # Calculate how many tokens were earned since the last check\n        elapsed = now - last_update\n        new_tokens = tokens + (elapsed * self.rate)\n        \n        # Cap at capacity\n        new_tokens = min(new_tokens, self.capacity)\n        \n        return new_tokens, now\n\n    def consume(self, key: str, amount: float = 1.0) -> bool:\n        \"\"\"\n        Synchronous check. \n        Returns True if tokens were consumed, False if rate limit exceeded.\n        \"\"\"\n        # We use a simple lock-free approach here for the sync version.\n        # In a multi-threaded env, you'd wrap this in a threading.Lock.\n        new_tokens, now = self._refill(key)\n\n        if new_tokens >= amount:\n            self.buckets[key] = (new_tokens - amount, now)\n            return True\n        else:\n            # Update the timestamp anyway to prevent \"stale\" refills \n            # but keep the old token count\n            self.buckets[key] = (new_tokens, now)\n            return False\n\n    async def consume_async(self, key: str, amount: float = 1.0) -> bool:\n        \"\"\"\n        Asynchronous check. \n        Identical logic to consume, but allows integration into async loops.\n        \"\"\"\n        # In a real production async app, you might use an asyncio.Lock() \n        # if multiple tasks are modifying the same key.\n        return self.consume(key, amount)\n\n# --- Testing the Implementation ---\n\nasync def main():\n    # Limit: 2 tokens per second, Burst capacity: 5\n    limiter = TokenBucketLimiter(rate=2.0, capacity=5.0)\n    user_id = \"user_123\"\n\n    print(\"--- Phase 1: Bursting ---\")\n    for i in range(7):\n        allowed = await limiter.consume_async(user_id)\n        status = \"\u2705 Allowed\" if allowed else \"\u274c Rate Limited\"\n        print(f\"Request {i+1}: {status}\")\n\n    print(\"\\n--- Phase 2: Waiting for refill (2 seconds) ---\")\n    await asyncio.sleep(2)\n\n    print(\"--- Phase 3: Post-refill ---\")\n    for i in range(3):\n        allowed = await limiter.consume_async(user_id)\n        status = \"\u2705 Allowed\" if allowed else \"\u274c Rate Limited\"\n        print(f\"Request {i+1}: {status}\")\n\nif __name__ == \"__main__\":\n    # Test Sync\n    print(\"Testing Synchronous Logic:\")\n    sync_limiter = TokenBucketLimiter(rate=1, capacity=1)\n    print(f\"Sync 1: {sync_limiter.consume('a')}\") # True\n    print(f\"Sync 2: {sync_limiter.consume('a')}\") # False (rate is 1/sec)\n\n    print(\"\\nTesting Async Logic:\")\n    # Test Async\n    asyncio.run(main())\n```\n\n### Key Features of this Implementation:\n\n1",
+        "speed": 35.67631741247474,
+        "tokens": 1024,
+        "draft_n": 795,
+        "draft_accepted": 625,
+        "wall_time": 28.9315691080119
+      },
+      "corpus": {
+        "output": "To implement a robust, production-ready Token Bucket rate limiter that supports per-key limits, burst capacity, and both synchronous and asynchronous execution, we should use a \"Leaky Bucket\" style logic where the refill is calculated lazily upon access.\n\nThe following implementation uses `asyncio.Lock` for concurrency safety in async contexts and a standard `threading.Lock` for sync contexts.\n\n```python\nimport asyncio\nimport time\nimport threading\nfrom typing import Dict, Optional, Union\n\nclass TokenBucket:\n    def __init__(self, rate: float, capacity: float):\n        \"\"\"\n        :param rate: How many tokens are added per second.\n        :param capacity: The maximum number of tokens the bucket can hold (burst).\n        \"\"\"\n        self.rate = rate\n        self.capacity = capacity\n        self.tokens = capacity\n        self.last_update = time.monotonic()\n        self._lock = threading.Lock()\n\n    def consume(self, amount: float = 1.0) -> bool:\n        \"\"\"Synchronous consumption logic.\"\"\"\n        with self._lock:\n            self._refill()\n            if self.tokens >= amount:\n                self.tokens -= amount\n                return True\n            return False\n\n    def _refill(self):\n        now = time.monotonic()\n        delta = now - self.last_update\n        refill_amount = delta * self.rate\n        self.tokens = min(self.capacity, self.tokens + refill_amount)\n        self.last_update = now\n\nclass RateLimiter:\n    def __init__(self, rate: float, capacity: float):\n        \"\"\"\n        :param rate: Tokens per second.\n        :param capacity: Maximum burst capacity.\n        \"\"\"\n        self.rate = rate\n        self.capacity = capacity\n        self._buckets: Dict[str, TokenBucket] = {}\n        self._sync_lock = threading.Lock()\n        self._async_lock = asyncio.Lock()\n\n    def _get_bucket(self, key: str) -> TokenBucket:\n        # Double-checked locking pattern for thread safety\n        if key not in self._buckets:\n            with self._sync_lock:\n                if key not even in self._buckets:\n                    self._buckets[key] = TokenBucket(self.rate, self.capacity)\n        return self._buckets[key]\n\n    def allow_sync(self, key: str, amount: float = 1.0) -> bool:\n        \"\"\"\n        Synchronous check. Use this in standard threaded applications.\n        \"\"\"\n        bucket = self._get_bucket(key)\n        return bucket.consume(amount)\n\n    async def allow_async(self, key: str, amount: float = 1.0) -> bool:\n        \"\"\"\n        Asynchronous check. Use this in asyncio event loops.\n        \"\"\"\n        # We use an async lock to prevent race conditions during bucket creation\n        async with self._async_lock:\n            # In async, we can use the same bucket retrieval logic\n            # but we wrap the consumption in a thread-safe way if needed\n            bucket = self._get_bucket(key)\n            \n            # Since TokenBucket.consume uses a threading.Lock, \n            # it is safe to call from an async loop.\n            return bucket.consume(amount)\n\n# --- Example Usage ---\n\nasync def main():\n    # Limit: 2 tokens per second, max burst of 5\n    limiter = RateLimiter(rate=2.0, capacity=5.0)\n\n    async def simulate_request(user_id: str, request_id: int):\n        allowed = await limiter.allow_async(user_id, amount=1)\n        status = \"\u2705 Allowed\" if allowed else \"\u274c Rate Limited\"\n        print(f\"User {user_id} | Req {request_id} | {status}\")\n\n    print(\"--- Starting Burst Phase ---\")\n    # Rapid fire requests (should use up the burst capacity)\n    tasks = [simulate_request(\"user_1\", i) for i in range(7)]\n    await asyncio.gather(*tasks)\n\n    print(\"\\n--- Waiting for refill (1 second) ---\")\n    await asyncio.sleep(1)\n\n    print(\"--- Post-Refill Phase ---\")\n    tasks = [simulate_request(\"user_1\", i) for i in range(3)]\n    await asyncio.gather(*tasks)\n\nif __name__ == \"__main__\":\n    asyncio.run(main())\n```\n\n### Key Features of this Implementation:\n\n1.  **Per-",
+        "speed": 33.079954022740466,
+        "tokens": 1024,
+        "draft_n": 780,
+        "draft_accepted": 632,
+        "wall_time": 32.79127457799041,
+        "retrieval": {
+          "mode": "speed",
+          "query": "token bucket rate limiter in python supports limits burst capacity and automatic refill it work both synchronously and with asyncio",
+          "injected": true,
+          "prompt_chars_added": 3032,
+          "snippets_returned": 3,
+          "snippet_sources": [
+            {
+              "file": "AllSeeingEyeTolledEweSew/tbucket:tbucket.py",
+              "start_line": 0,
+              "score": 0.11764705882352941,
+              "hash": "0c58caf4cabc"
+            },
+            {
+              "file": "MacWR/Click-changed-for-ParaGraph:include/click/tokenbucket.hh",
+              "start_line": 0,
+              "score": 0.11764705882352941,
+              "hash": "6afca5558aad"
+            },
+            {
+              "file": "p7g/dd-trace-py:ddtrace/internal/rate_limiter.py",
+              "start_line": 0,
+              "score": 0.058823529411764705,
+              "hash": "c7673597ef44"
+            }
+          ],
+          "loaded": true,
+          "format": "sharded_sqlite",
+          "query_ngrams": 17,
+          "candidates_found": 6,
+          "retrieval_latency_ms": 0.468,
+          "failure_reason": "",
+          "failure_detail": "",
+          "shards_queried": 11,
+          "shards_failed": 0,
+          "shards_unavailable": 0
+        }
+      }
+    },
+    {
+      "prompt_id": "graph_shortest",
+      "baseline": {
+        "output": "To implement these algorithms, we will use a **Min-Priority Queue** (via Python's `heapq` module) to efficiently fetch the node with the lowest cost.\n\nThe following implementation uses an **Adjacency List** where each node maps to a list of `(neighbor, weight)` tuples.\n\n```python\nimport heapq\n\nclass Graph:\n    def __init__(self):\n        # Adjacency list: {node: [(neighbor, weight), ...]}\n        self.adj_list = {}\n\n    def add_edge(self, u, v, weight):\n        if u not in self.adj_list:\n            self.adj_list[u] = []\n        if v not in self.adj_list:\n            self.adj_list[v] = []\n        self.adj_list[u].append((v, weight))\n\n    def get_neighbors(self, u):\n        return self.adj_list.get(u, [])\n\ndef reconstruct_path(came_from, current):\n    \"\"\"Backtracks from the target node to the start node using the came_from map.\"\"\"\n    path = []\n    while current in came_from:\n        path.append(current)\n        current = came_from[current]\n    path.append(current)  # Add the start node\n    return path[::-1]\n\ndef dijkstra(graph, start, goal):\n    \"\"\"\n    Dijkstra's Algorithm: Finds the shortest path in a weighted graph.\n    Complexity: O((E + V) log V)\n    \"\"\"\n    # priority_queue stores (cumulative_cost, current_node)\n    pq = [(0, start)]\n    \n    # distances stores the minimum cost to reach each node\n    distances = {node: float('iv('infinity') for node in graph.adj_list}\n    distances[start] = 0\n    \n    # came_from stores the predecessor of each node for path reconstruction\n    came_from = {}\n\n    while pq:\n        current_dist, u = heapq.heappop(pq)\n\n        # If we reached the goal, we can stop early\n        if u == goal:\n            return reconstruct_path(came_from, goal), current_dist\n\n        # If we found a longer path to u already, skip it\n        if current_dist > distances[u]:\n            continue\n\n        for v, weight in graph.get_neighbors(u):\n            distance = current_dist + weight\n            \n            # Relaxation step\n            if distance < distances[v]:\n                distances[v] = distance\n                came_from[v] = u\n                heapq.heappush(pq, (distance, v))\n\n    return None, float('inf')\n\ndef a_star(graph, start, goal, heuristic_func):\n    \"\"\"\n    A* Search Algorithm: Dijkstra + Heuristic.\n    f(n) = g(n) + h(n)\n    where g(n) is cost from start, h(n) is estimated cost to goal.\n    \"\"\"\n    # pq stores (f_score, current_node)\n    pq = [(0 + heuristic_func(start, goal), start)]\n    \n    # g_score[u] is the cost of the cheapest path from start to u currently known\n    g_score = {node: float('inf') for node in graph.adj_list}\n    g_score[start] = 0\n    \n    came_from = {}\n\n    while pq:\n        # We pop the node with the lowest f_score\n        _, u = heapq.heappop(pq)\n\n        if u == goal:\n            return reconstruct_path(came_from, goal), g_score[goal]\n\n        for v, weight in graph.get_neighbors(u):\n            tentative_g_score = g_score[u] + weight\n            \n            if tentative_g_score < g_score[v]:\n                # This path to v is better than any previous one\n                came_from[v] = u\n                g_score[v] = tentative_g_score\n                f_score = tentative_g_score + heuristic_func(v, goal)\n                heapq.heappush(pq, (f_score, v))\n\n    return None, float('inf')\n\n# --- Testing the Implementation ---\n\nif __name__ == \"__main__\":\n    # Create a weighted directed graph\n    g = Graph()\n    g.add_edge('A', 'B', 1)\n    g.add_edge('A",
+        "speed": 37.02549335385163,
+        "tokens": 1024,
+        "draft_n": 757,
+        "draft_accepted": 644,
+        "wall_time": 27.887233276007464
+      },
+      "corpus": {
+        "output": "To implement Dijkstra's and A* algorithms, we need a graph structure that stores not just the neighbors, but also the weights of the edges. \n\nBelow is a complete implementation. I have used a `heapq` (Python's built-in priority queue) to ensure efficiency, as it provides $O(\\log n)$ push and pop operations.\n\n```python\nimport heapq\n\nclass Graph:\n    def __init__(self, directed=True):\n        # adjacency_list[u] = [(v, weight), (v2, weight2), ...]\n        self.adjacency_list = {}\n        self.directed = directed\n\n    def add_edge(self, u, v, weight):\n        if u not in self.adjacency_list:\n            self.adjacency_list[u] = []\n        if v not in self.adjacency_list:\n            self.adjacency_list[v] = []\n            \n        self.adjacency_list[u].append((v, weight))\n        \n        if not self.directed:\n            self.adjacency_list[v].append((u, weight))\n\n    def get_neighbors(self, u):\n        return self.adjacency_list.get(u, [])\n\ndef reconstruct_path(came_from, current):\n    \"\"\"Backtracks from the goal to the start using the came_from map.\"\"\"\n    path = []\n    while current in came_from:\n        path.append(current)\n        current = came_from[current]\n    path.append(current) # Add the start node\n    return path[::-1]\n\ndef dijkstra(graph, start, goal=None):\n    \"\"\"\n    Dijkstra's algorithm. \n    If goal is provided, it stops early once the goal is reached.\n    \"\"\"\n    # priority_queue stores (cumulative_distance, current_node)\n    pq = [(0, start)]\n    distances = {node: float('arg('inf')' if node != start else 0 for node in graph.adjacency_list}\n    # Using a simpler way to initialize distances for all known nodes\n    distances = {node: float('inf') for node in graph.adjacency_list}\n    distances[start] = 0\n    \n    came_from = {}\n    visited = set()\n\n    while pq:\n        current_distance, u = heapq.heappop(pq)\n\n        if u in visited:\n            continue\n        visited.add(u)\n\n        # Early exit if goal is reached\n        if goal and u == goal:\n            break\n\n        for v, weight in graph.get_neighbors(u):\n            distance = current_distance + weight\n            \n            if distance < distances[v]:\n                distances[v] = distance\n                came_from[v] = u\n                heapq.heappush(pq, (distance, v))\n\n    path = reconstruct_path(came_from, goal) if goal and goal in distances and distances[goal] != float('iter') else []\n    # Note: The logic above is simplified; if goal is unreachable, path is empty.\n    # Let's refine the path return for the final implementation.\n    \n    return distances, came_from\n\ndef a_star(graph, start, goal, heuristic_func):\n    \"\"\"\n    A* Search Algorithm.\n    heuristic_func: a function that takes (node, goal) and returns an estimate.\n    \"\"\"\n    # pq stores (priority, current_cost, current_node)\n    # priority = current_cost + heuristic(node, goal)\n    pq = [(0 + heuristic_func(start, goal), 0, start)]\n    \n    g_score = {node: float('inf') for node in graph.adjacency_list}\n    g_score[start] = 0\n    \n    came_from = {}\n    visited = set()\n\n    while pq:\n        _, current_cost, u = heapq.heappop(pq)\n\n        if u in visited:\n            continue\n        visited.add(u)\n\n        if u == goal:\n            return reconstruct_path(came_from, goal), g_score[goal]\n\n        for v, weight in graph.get_neighbors(u):\n            tentative_g_score = g_score[u] + weight\n            \n            if tentative_g_score < g_score[v]:\n                came_from[v] = u\n                g_score[v] = tentative_g_score\n                f_score = tentative_g_score + heuristic_func(v, goal)\n",
+        "speed": 34.383489263352544,
+        "tokens": 1024,
+        "draft_n": 766,
+        "draft_accepted": 640,
+        "wall_time": 30.894765757984715,
+        "retrieval": {
+          "mode": "speed",
+          "query": "algorithm and search in python support weighted directed graphs with adjacency list representation include priority queue implementation and path reconstruction",
+          "injected": true,
+          "prompt_chars_added": 1473,
+          "snippets_returned": 3,
+          "snippet_sources": [
+            {
+              "file": "KGene1901/Algorithms-Data-Structures-Yr1:Graphing.py",
+              "start_line": 0,
+              "score": 0.058823529411764705,
+              "hash": "c66c7996ac8b"
+            },
+            {
+              "file": "ANUBHAVNATANI/Data-Strucures:Data-Structures/Graph/graph.cpp",
+              "start_line": 0,
+              "score": 0.058823529411764705,
+              "hash": "1654ac456c2a"
+            },
+            {
+              "file": "dcyrus/ProAlgos-Cpp:2.DFS.cpp",
+              "start_line": 0,
+              "score": 0.058823529411764705,
+              "hash": "cc27a3668206"
+            }
+          ],
+          "loaded": true,
+          "format": "sharded_sqlite",
+          "query_ngrams": 17,
+          "candidates_found": 5,
+          "retrieval_latency_ms": 0.412,
+          "failure_reason": "",
+          "failure_detail": "",
+          "shards_queried": 10,
+          "shards_failed": 0,
+          "shards_unavailable": 0
+        }
+      }
+    }
+  ]
+}
