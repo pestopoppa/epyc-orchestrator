@@ -69,6 +69,7 @@ if TYPE_CHECKING:
 def _build_role_mode_combos(
     roles: list[str],
     modes: list[str],
+    strict_modes: bool = False,
 ) -> list[tuple[str, str]]:
     """Build (role, mode) combinations with two invariants:
 
@@ -83,9 +84,10 @@ def _build_role_mode_combos(
     time by doing useful light work in the gaps.
     """
     all_modes = list(modes)
-    for m in sorted(ARCHITECT_MODES):
-        if m not in all_modes:
-            all_modes.append(m)
+    if not strict_modes:
+        for m in sorted(ARCHITECT_MODES):
+            if m not in all_modes:
+                all_modes.append(m)
 
     light: list[tuple[str, str]] = []
     heavy: list[tuple[str, str]] = []
@@ -152,8 +154,14 @@ def _deduplicate_roles(
     return unique, aliases
 
 
-def _modes_for_role(role: str, modes: list[str]) -> list[str]:
+def _modes_for_role(
+    role: str,
+    modes: list[str],
+    strict_modes: bool = False,
+) -> list[str]:
     """Return the effective mode list for a role."""
+    if strict_modes:
+        return list(modes)
     if role in ARCHITECT_ROLES:
         return sorted(ARCHITECT_MODES)
     if role in VISION_ROLES:
@@ -177,6 +185,7 @@ def evaluate_question(
     dry_run: bool = False,
     escalation_chains: bool = False,
     max_tokens: int | None = None,
+    strict_modes: bool = False,
 ) -> ComparativeResult | None:
     """Evaluate one question across all role x mode combos.
 
@@ -383,7 +392,7 @@ def evaluate_question(
 
     # Clone rewards and results to aliased (deduplicated) roles
     for alias, canonical in alias_map.items():
-        for mode in _modes_for_role(alias, modes):
+        for mode in _modes_for_role(alias, modes, strict_modes=strict_modes):
             canonical_key = f"{canonical}:{mode}"
             alias_key = f"{alias}:{mode}"
             if canonical_key in rewards:
@@ -459,6 +468,7 @@ def run_batch(
     use_pool: bool = True,
     debugger: Any = None,
     max_tokens: int | None = None,
+    strict_modes: bool = False,
 ) -> list[ComparativeResult]:
     """Run one evaluation batch: sample, evaluate per-question, checkpoint.
 
@@ -490,7 +500,7 @@ def run_batch(
     else:
         roles_to_test = list(roles)
 
-    combos = _build_role_mode_combos(roles_to_test, modes)
+    combos = _build_role_mode_combos(roles_to_test, modes, strict_modes=strict_modes)
     combo_keys = [f"{r}:{m}" for r, m in combos]
 
     if not _check_server_health(url):
@@ -548,6 +558,7 @@ def run_batch(
                 skip_cache=skip_cache, cooldown=cooldown, dry_run=dry_run,
                 escalation_chains=escalation_chains,
                 max_tokens=max_tokens,
+                strict_modes=strict_modes,
             )
 
             if result is None:
@@ -584,10 +595,11 @@ def print_batch_summary(
     roles: list[str],
     modes: list[str],
     alias_map: dict[str, str] | None = None,
+    strict_modes: bool = False,
 ) -> None:
     """Print summary of results."""
     alias_map = alias_map or {}
-    combos = _build_role_mode_combos(roles, modes)
+    combos = _build_role_mode_combos(roles, modes, strict_modes=strict_modes)
     combo_keys = [f"{r}:{m}" for r, m in combos]
 
     key_stats: dict[str, dict[str, Any]] = {

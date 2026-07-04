@@ -785,6 +785,14 @@ Examples (legacy mode - DEPRECATED):
         ),
     )
     parser.add_argument(
+        "--strict-modes",
+        action="store_true",
+        help=(
+            "Evaluate only the modes explicitly listed by --modes. By default, "
+            "legacy comparative seeding still auto-adds architect modes."
+        ),
+    )
+    parser.add_argument(
         "--dry-run", action="store_true",
         help="Score only, don't inject rewards",
     )
@@ -1394,13 +1402,20 @@ Examples (legacy mode - DEPRECATED):
                     escalation_chains=not args.no_escalation_chains,
                     use_pool=not args.no_pool,
                     max_tokens=args.max_tokens,
+                    strict_modes=args.strict_modes,
                 )
             except HealthCheckError:
                 logger.warning("API died during batch — will attempt recovery")
                 continue
 
             if results:
-                print_batch_summary(results, args.roles, args.modes, alias_map=alias_map)
+                print_batch_summary(
+                    results,
+                    args.roles,
+                    args.modes,
+                    alias_map=alias_map,
+                    strict_modes=args.strict_modes,
+                )
 
             if state.shutdown:
                 break
@@ -1435,10 +1450,17 @@ Examples (legacy mode - DEPRECATED):
             escalation_chains=not args.no_escalation_chains,
             use_pool=not args.no_pool,
             max_tokens=args.max_tokens,
+            strict_modes=args.strict_modes,
         )
 
         if results:
-            print_batch_summary(results, args.roles, args.modes, alias_map=alias_map)
+            print_batch_summary(
+                results,
+                args.roles,
+                args.modes,
+                alias_map=alias_map,
+                strict_modes=args.strict_modes,
+            )
 
         # Save JSON output (legacy format for backwards compat)
         output_path = args.output
@@ -1449,7 +1471,11 @@ Examples (legacy mode - DEPRECATED):
                 / f"seeding_{ts}.json"
             )
 
-        all_combos = _build_role_mode_combos(args.roles, args.modes)
+        all_combos = _build_role_mode_combos(
+            args.roles,
+            args.modes,
+            strict_modes=args.strict_modes,
+        )
         output_data = {
             "config": {
                 "suites": args.suites,
@@ -1458,6 +1484,7 @@ Examples (legacy mode - DEPRECATED):
                 "combos": [f"{r}:{m}" for r, m in all_combos],
                 "sample_size": args.sample_size,
                 "max_tokens": args.max_tokens,
+                "strict_modes": args.strict_modes,
                 "seed": base_seed,
                 "dry_run": args.dry_run,
                 "dedup": not args.no_dedup,

@@ -77,6 +77,19 @@ def test_build_role_mode_combos_edge_cases_no_heavy_or_no_light():
     assert ("architect_general", "delegated") in heavy_only
 
 
+def test_build_role_mode_combos_strict_modes_keeps_explicit_modes_only():
+    combos = _MOD._build_role_mode_combos(
+        ["architect_general", "frontdoor"],
+        ["direct"],
+        strict_modes=True,
+    )
+
+    assert ("architect_general", "direct") in combos
+    assert ("frontdoor", "direct") in combos
+    assert ("architect_general", "delegated") not in combos
+    assert ("architect_general", "repl") not in combos
+
+
 def test_build_role_mode_combos_vision_branch_uses_vision_modes():
     vision_modes = sorted(_MOD.VISION_MODES.get("worker_vision", {"direct"}))
     with (
@@ -109,6 +122,14 @@ def test_modes_for_role_architect_vision_and_default():
         _MOD.VISION_MODES.get("worker_vision", {"direct"})
     )
     assert _MOD._modes_for_role("frontdoor", ["direct", "repl"]) == ["direct", "repl"]
+
+
+def test_modes_for_role_strict_modes_keeps_explicit_modes_for_aliases():
+    assert _MOD._modes_for_role(
+        "architect_general",
+        ["direct"],
+        strict_modes=True,
+    ) == ["direct"]
 
 
 def test_evaluate_question_text_path_alias_clone_and_escalation_injection():

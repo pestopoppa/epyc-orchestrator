@@ -48,6 +48,13 @@ _CODE_TASK_RE = re.compile(
 _CODE_MAX_TOKENS = 4096
 
 
+def _cap_direct_tokens(request: ChatRequest, default_tokens: int) -> int:
+    """Clamp direct-stage generation when a caller supplies a request cap."""
+    if request.max_tokens is None:
+        return default_tokens
+    return min(default_tokens, max(1, int(request.max_tokens)))
+
+
 def _restore_stripped_answer_stop(answer: str) -> str:
     """Restore answer close tag omitted when ``</answer>`` fires as a stop sequence."""
     if answer and "<answer>" in answer and "</answer>" not in answer:
@@ -96,6 +103,7 @@ def _execute_direct(
         default_tokens = _CODE_MAX_TOKENS
     else:
         default_tokens = 2048
+    default_tokens = _cap_direct_tokens(request, default_tokens)
 
     # Code tasks: prepend code-only instruction to prevent prose rambling
     if is_code_task and not is_mcq:
@@ -159,7 +167,10 @@ def _execute_direct(
             ),
         )
         try:
-            retry_tokens = _MCQ_MAX_TOKENS if is_mcq else 4096
+            retry_tokens = _cap_direct_tokens(
+                request,
+                _MCQ_MAX_TOKENS if is_mcq else 4096,
+            )
             answer = primitives.llm_call(
                 direct_prompt,
                 role=str(initial_role),

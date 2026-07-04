@@ -19,6 +19,15 @@ class ChatRequest(BaseModel):
         default=False, description="Enable real inference with RadixAttention caching"
     )
     max_turns: int = Field(default=15, ge=1, le=50, description="Maximum orchestration turns")
+    max_tokens: int | None = Field(
+        default=None,
+        ge=1,
+        le=32768,
+        description=(
+            "Optional response-token cap for direct chat execution. When set, "
+            "stage defaults such as MCQ/code budgets are clamped to this value."
+        ),
+    )
     role: str = Field(
         default="", description="Initial role to use (empty = auto-route via _classify_and_route)"
     )

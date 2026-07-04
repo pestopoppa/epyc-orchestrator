@@ -1360,6 +1360,45 @@ class TestExecuteDirect:
         assert call.kwargs["completion_meta"]["generation_ms"] == 200.0
         assert call.kwargs["completion_meta"]["http_overhead_ms"] == 10.0
 
+    def test_direct_call_clamps_default_token_budget(self, mock_primitives, mock_state):
+        """Request max_tokens caps direct-stage generation budgets."""
+        request = ChatRequest(
+            prompt="Direct question",
+            real_mode=True,
+            max_tokens=1024,
+        )
+        routing = RoutingResult(
+            task_id="direct-token-cap",
+            task_ir={},
+            use_mock=False,
+            routing_decision=["frontdoor"],
+            routing_strategy="deterministic",
+        )
+        start_time = time.perf_counter()
+
+        mock_primitives.llm_call.return_value = "Direct answer"
+
+        with patch("src.api.routes.chat_pipeline.direct_stage._truncate_looped_answer") as mock_trunc:
+            mock_trunc.return_value = "Direct answer"
+            with patch("src.api.routes.chat_pipeline.direct_stage._should_formalize") as mock_fmt:
+                mock_fmt.return_value = (False, None)
+                with patch("src.api.routes.chat_pipeline.stages.features") as mock_features:
+                    mock_features.return_value.generation_monitor = False
+                    with patch("src.api.routes.chat_pipeline.direct_stage._should_review") as mock_review:
+                        mock_review.return_value = False
+                        with patch("src.api.routes.chat_pipeline.direct_stage.score_completed_task"):
+                            result = _execute_direct(
+                                request,
+                                routing,
+                                mock_primitives,
+                                mock_state,
+                                start_time,
+                                initial_role="frontdoor",
+                            )
+
+        assert result.answer == "Direct answer"
+        assert mock_primitives.llm_call.call_args.kwargs["n_tokens"] == 1024
+
     def test_direct_with_context(self, mock_primitives, mock_state):
         """Direct call prepends context to prompt."""
         request = ChatRequest(

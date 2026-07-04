@@ -384,7 +384,7 @@ def test_pairwise_holdout_plan_filters_to_audit_collection_targets(tmp_path: Pat
         summary["collection_guidance"]["seeding_eval_command_template"]
         == "uv run python scripts/benchmark/seed_specialist_routing.py "
         "--suites <suite> --roles <actions_to_evaluate_on_same_source_record> "
-        "--modes direct --sample-size <n> --max-tokens 1024 --dry-run "
+        "--modes direct --sample-size <n> --max-tokens 1024 --strict-modes --dry-run "
         "--output <benchmarks/results/eval/seeding_a9_*.json>"
     )
     assert summary["collection_batches"] == [
@@ -396,6 +396,7 @@ def test_pairwise_holdout_plan_filters_to_audit_collection_targets(tmp_path: Pat
             "modes_argument": ["direct"],
             "sample_size": 2,
             "max_tokens": 1024,
+            "strict_modes": True,
             "requested_new_source_records": 19,
             "estimated_new_source_records": 36,
             "sample_size_semantics": (
@@ -422,7 +423,8 @@ def test_pairwise_holdout_plan_filters_to_audit_collection_targets(tmp_path: Pat
             "command": (
                 "uv run python scripts/benchmark/seed_specialist_routing.py "
                 "--suites all --roles coder_escalation frontdoor "
-                "--modes direct --sample-size 2 --max-tokens 1024 --dry-run --output "
+                "--modes direct --sample-size 2 --max-tokens 1024 --strict-modes "
+                "--dry-run --output "
                 "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/"
                 "eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_"
                 "<YYYYMMDDTHHMMSSZ>.json"
@@ -730,6 +732,7 @@ def test_pairwise_holdout_writes_guarded_collection_manifest_and_script(
     assert batch["collection_timestamp"] == "20260628T120000Z"
     assert batch["sample_size"] == 2
     assert batch["max_tokens"] == 1024
+    assert batch["strict_modes"] is True
     assert batch["requested_new_source_records"] == 20
     assert batch["estimated_new_source_records"] == 36
     assert "<YYYYMMDDTHHMMSSZ>" in batch["command_template"]

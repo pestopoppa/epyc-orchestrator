@@ -22,7 +22,8 @@ def _write_manifest(path: Path) -> None:
                 "command": (
                     "uv run python scripts/benchmark/seed_specialist_routing.py "
                     "--suites general --roles architect_general frontdoor "
-                    "--modes direct --sample-size 20 --max-tokens 1024 --dry-run "
+                    "--modes direct --sample-size 20 --max-tokens 1024 "
+                    "--strict-modes --dry-run "
                     "--output /tmp/a9_<YYYYMMDDTHHMMSSZ>.json"
                 ),
                 "durable_source_path": "/tmp/a9_<YYYYMMDDTHHMMSSZ>.json",

@@ -347,7 +347,7 @@ def _collection_batches(requirements: list[dict[str, Any]]) -> list[dict[str, An
             "uv run python scripts/benchmark/seed_specialist_routing.py "
             f"--suites {suite} --roles {roles} --modes direct "
             f"--sample-size {sample_size} --max-tokens {DEFAULT_COLLECTION_MAX_TOKENS} "
-            f"--dry-run --output {output}"
+            f"--strict-modes --dry-run --output {output}"
         )
         batches.append(
             {
@@ -358,6 +358,7 @@ def _collection_batches(requirements: list[dict[str, Any]]) -> list[dict[str, An
                 "modes_argument": ["direct"],
                 "sample_size": sample_size,
                 "max_tokens": DEFAULT_COLLECTION_MAX_TOKENS,
+                "strict_modes": True,
                 "requested_new_source_records": requested_records,
                 "estimated_new_source_records": estimated_records,
                 "sample_size_semantics": (
@@ -904,7 +905,7 @@ def build_plan(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str
                 "uv run python scripts/benchmark/seed_specialist_routing.py "
                 "--suites <suite> --roles <actions_to_evaluate_on_same_source_record> "
                 "--modes direct --sample-size <n> "
-                f"--max-tokens {DEFAULT_COLLECTION_MAX_TOKENS} --dry-run "
+                f"--max-tokens {DEFAULT_COLLECTION_MAX_TOKENS} --strict-modes --dry-run "
                 "--output <benchmarks/results/eval/seeding_a9_*.json>"
             ),
             "orchestrator_live_seed_note": (
