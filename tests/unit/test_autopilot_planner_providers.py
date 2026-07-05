@@ -177,6 +177,67 @@ def test_local_ingest_alias_selects_long_context_role() -> None:
     assert provider._payload("prompt")["x_orchestrator_role"] == "ingest_long_context"
 
 
+def test_local_chat_alias_posts_unforced_chat_payload(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            captured["raised"] = True
+
+        def json(self) -> dict[str, Any]:
+            return {"answer": "draft from answer"}
+
+    class FakeClient:
+        def __init__(self, *, timeout: int) -> None:
+            captured["timeout"] = timeout
+
+        def __enter__(self) -> "FakeClient":
+            return self
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+        def post(self, url: str, *, json: dict[str, Any]) -> FakeResponse:
+            captured["url"] = url
+            captured["payload"] = json
+            return FakeResponse()
+
+    def fake_archive(prompt, payload, result, response_data, *, url):
+        captured["archive"] = {
+            "prompt": prompt,
+            "payload": payload,
+            "provider": result.provider,
+            "response": response_data,
+            "url": url,
+        }
+
+    monkeypatch.setattr(planner_providers, "_open_planner_tap", lambda: None)
+    monkeypatch.setattr(planner_providers, "_archive_local_chat_call", fake_archive)
+    monkeypatch.setattr(planner_providers.httpx, "Client", FakeClient)
+    monkeypatch.setattr(planner_providers.uuid, "uuid4", lambda: type("U", (), {"hex": "0123456789abcdef"})())
+
+    provider = planner_providers.get_planner_provider("local_chat")
+    result = provider.invoke("planner prompt", role="draft", timeout=11)
+
+    assert provider.name == "local_chat"
+    assert result.ok is True
+    assert result.text == "draft from answer"
+    assert captured["timeout"] == 11
+    assert captured["url"] == "http://127.0.0.1:8000/chat"
+    assert captured["payload"] == {
+        "prompt": "planner prompt",
+        "mock_mode": False,
+        "real_mode": True,
+        "max_turns": 1,
+        "max_tokens": 2048,
+        "request_priority": "background",
+        "workload_class": "campaign",
+        "request_id": "planner-local-chat-01234567",
+    }
+    assert "force_role" not in captured["payload"]
+    assert captured["archive"]["url"] == "http://127.0.0.1:8000/chat"
+
+
 def test_codex_provider_uses_current_read_only_cli(monkeypatch, tmp_path) -> None:
     captured = {}
 

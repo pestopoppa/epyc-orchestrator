@@ -12,6 +12,7 @@ import logging
 import os
 import subprocess
 import time
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -427,6 +428,127 @@ class LocalPlannerProvider:
         return payload
 
 
+class LocalChatPlannerProvider:
+    """OpenAI-compatible local planner via the orchestrator ``/chat`` endpoint.
+
+    Unlike ``LocalPlannerProvider``, this path intentionally avoids forcing a
+    role so the orchestrator's normal router, delegation, and memory flow can
+    draft the plan.
+    """
+
+    name = "local_chat"
+    supports_resume = False
+
+    def __init__(
+        self,
+        *,
+        url: str | None = None,
+        max_tokens: int | None = None,
+        name: str | None = None,
+    ) -> None:
+        self._url = (
+            url
+            or os.environ.get("AUTOPILOT_LOCAL_CHAT_PLANNER_URL")
+            or "http://127.0.0.1:8000/chat"
+        )
+        self._max_tokens = (
+            int(max_tokens)
+            if max_tokens is not None
+            else _env_int("AUTOPILOT_LOCAL_PLANNER_MAX_TOKENS", 2048)
+        )
+        self.name = name or self.name
+
+    def invoke(
+        self,
+        prompt: str,
+        *,
+        role: str,
+        session_id: str | None = None,
+        timeout: int = 300,
+        cwd: Path | str | None = None,
+    ) -> PlannerProviderResult:
+        del session_id, cwd
+        start = time.time()
+        tap = _open_planner_tap()
+        payload = self._payload(prompt)
+
+        try:
+            if tap is not None:
+                _tap_write(
+                    tap,
+                    f"\n{'=' * 72}\n"
+                    f"[{datetime.now().isoformat(timespec='seconds')}] "
+                    f"PLANNER provider={self.name} role={role} start\n"
+                    f"url: {self._url}\n"
+                    f"request_id: {payload['request_id']}\n"
+                    f"prompt_chars: {len(prompt)}\n"
+                    f"{'-' * 72}\n",
+                )
+            with httpx.Client(timeout=timeout) as client:
+                response = client.post(self._url, json=payload)
+                response.raise_for_status()
+                data = response.json()
+            text = str(data.get("answer") or "")
+            ok = bool(text.strip())
+            error = "" if ok else "empty response"
+            if ok:
+                _tap_write(
+                    tap,
+                    f"[END provider={self.name} role={role}] "
+                    f"result_chars={len(text)}\n{'=' * 72}\n",
+                )
+            else:
+                _tap_write(
+                    tap,
+                    f"[FAIL provider={self.name} role={role}] {error}\n{'=' * 72}\n",
+                )
+            result = PlannerProviderResult(
+                provider=self.name,
+                role=role,
+                text=text,
+                ok=ok,
+                error=error,
+                duration_s=time.time() - start,
+                raw_events=[json.dumps(data, default=str)[:4000]],
+            )
+            _archive_local_chat_call(prompt, payload, result, data, url=self._url)
+            return result
+        except Exception as exc:
+            log.exception("Local chat planner provider failed")
+            result = PlannerProviderResult(
+                provider=self.name,
+                role=role,
+                ok=False,
+                error=str(exc),
+                duration_s=time.time() - start,
+                raw_events=[],
+            )
+            _tap_write(
+                tap,
+                f"[FAIL provider={self.name} role={role}] {str(exc)[:400]}\n{'=' * 72}\n",
+            )
+            _archive_local_chat_call(prompt, payload, result, None, url=self._url)
+            return result
+        finally:
+            if tap is not None:
+                try:
+                    tap.close()
+                except Exception:
+                    pass
+
+    def _payload(self, prompt: str) -> dict[str, Any]:
+        return {
+            "prompt": prompt,
+            "mock_mode": False,
+            "real_mode": True,
+            "max_turns": 1,
+            "max_tokens": self._max_tokens,
+            "request_priority": "background",
+            "workload_class": "campaign",
+            "request_id": f"planner-local-chat-{uuid.uuid4().hex[:8]}",
+        }
+
+
 def parse_codex_jsonl(output: str) -> str:
     """Extract assistant text from Codex ``--json`` JSONL output."""
     parts: list[str] = []
@@ -502,6 +624,8 @@ def get_planner_provider(name: str) -> PlannerProvider:
             model="ingest_long_context",
             name="local_ingest",
         )
+    if normalized in {"local_chat", "local_chat_planner", "chat_local"}:
+        return LocalChatPlannerProvider(name="local_chat")
     raise ValueError(f"Unknown planner provider: {name}")
 
 
@@ -612,6 +736,48 @@ def _archive_local_call(
                 "top_p": payload.get("top_p"),
                 "top_k": payload.get("top_k"),
                 "seed": payload.get("seed"),
+                "max_tokens": payload.get("max_tokens"),
+            },
+            "response_preview": (
+                json.dumps(response_data, default=str)[:1000]
+                if response_data is not None
+                else ""
+            ),
+        }
+    )
+
+
+def _archive_local_chat_call(
+    prompt: str,
+    payload: dict[str, Any],
+    result: PlannerProviderResult,
+    response_data: dict[str, Any] | None,
+    *,
+    url: str,
+) -> None:
+    import hashlib
+
+    _append_planner_archive(
+        {
+            "ts": time.time(),
+            "ts_iso": datetime.now().isoformat(timespec="seconds"),
+            "provider": result.provider,
+            "role": result.role,
+            "duration_s": result.duration_s,
+            "ok": result.ok,
+            "error": result.error,
+            "prompt_chars": len(prompt),
+            "prompt_sha256_16": hashlib.sha256(prompt.encode()).hexdigest()[:16],
+            "result_chars": len(result.text),
+            "result_preview": result.text[:500],
+            "local_chat_planner": {
+                "url": url,
+                "request_id": payload.get("request_id"),
+                "request_priority": payload.get("request_priority"),
+                "workload_class": payload.get("workload_class"),
+                "mock_mode": payload.get("mock_mode"),
+                "real_mode": payload.get("real_mode"),
+                "max_turns": payload.get("max_turns"),
                 "max_tokens": payload.get("max_tokens"),
             },
             "response_preview": (
