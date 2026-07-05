@@ -776,11 +776,15 @@ def _build_eval_coverage_pressure(
     question_rows = 0
     distinct: set[tuple[str, str]] = set()
     tier_trials: dict[int, int] = {}
+    tier_question_rows: dict[int, int] = {}
+    tier_distinct: dict[int, set[tuple[str, str]]] = {}
+    suite_distinct: dict[str, set[str]] = {}
     for entry in entries:
         results = _eval_question_results(entry)
         if not results:
             continue
-        tier_trials[int(entry.tier)] = tier_trials.get(int(entry.tier), 0) + 1
+        tier = int(entry.tier)
+        tier_trials[tier] = tier_trials.get(tier, 0) + 1
         for result in results:
             qid = str(
                 result.get("qid")
@@ -792,7 +796,12 @@ def _build_eval_coverage_pressure(
                 continue
             suite = str(result.get("suite") or "unknown").strip() or "unknown"
             question_rows += 1
-            distinct.add((suite, qid))
+            key = (suite, qid)
+            distinct.add(key)
+            tier_question_rows[tier] = tier_question_rows.get(tier, 0) + 1
+            tier_distinct.setdefault(tier, set()).add(key)
+            if not suite.startswith("sentinel_"):
+                suite_distinct.setdefault(suite, set()).add(qid)
 
     if question_rows <= 0:
         return (
@@ -809,11 +818,43 @@ def _build_eval_coverage_pressure(
     tier_text = ", ".join(
         f"T{tier}={count}" for tier, count in sorted(tier_trials.items())
     ) or "none"
+    tier_detail_text = ", ".join(
+        (
+            f"T{tier}:trials={tier_trials.get(tier, 0)},"
+            f"rows={tier_question_rows.get(tier, 0)},"
+            f"distinct={len(tier_distinct.get(tier, set()))}"
+        )
+        for tier in sorted(set(tier_trials) | set(tier_question_rows) | set(tier_distinct))
+    ) or "none"
+    under_sampled_higher_tiers = [
+        tier for tier in (2, 3) if tier_trials.get(tier, 0) < 5
+    ]
+    under_sampled_text = ""
+    if under_sampled_higher_tiers:
+        tier_list = ", ".join(
+            f"T{tier}={tier_trials.get(tier, 0)} trial(s)"
+            for tier in under_sampled_higher_tiers
+        )
+        under_sampled_text = (
+            f" Higher-tier coverage is thin ({tier_list}); when the Fable gate "
+            "does not require a specific W8/promotion action, prefer deep_eval on "
+            "the thinnest tier or seed_batch coverage probes that broaden task families."
+        )
+    least_covered_suites = sorted(
+        ((suite, len(qids)) for suite, qids in suite_distinct.items()),
+        key=lambda item: item[1],
+    )[:5]
+    suite_text = ""
+    if least_covered_suites:
+        suite_text = " Least-covered non-sentinel suites: " + ", ".join(
+            f"{suite}={count}" for suite, count in least_covered_suites
+        ) + "."
     lines = [
         (
             f"Eval coverage: {distinct_count} distinct qids / {question_rows} scored rows "
             f"(repeat_factor={repeat_factor:.2f}x{coverage_text}); eval trials by tier: {tier_text}."
         ),
+        f"Tier detail: {tier_detail_text}.{under_sampled_text}{suite_text}",
         (
             "If repeat_factor is high or coverage is low, prefer actions that add "
             "decision-grade diversity: seed_batch on under-covered suites, deep_eval tier 2/3, "

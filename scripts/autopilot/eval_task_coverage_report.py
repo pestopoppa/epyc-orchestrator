@@ -211,6 +211,7 @@ def load_pool(pool_path: Path | None) -> dict[str, Any]:
     stable_keys: set[tuple[str, str]] = set()
     raw_keys: set[tuple[str, str]] = set()
     suite_counts: Counter[str] = Counter()
+    tier_counts: Counter[str] = Counter()
     metadata_total_questions: int | None = None
     pool_rows = 0
 
@@ -232,8 +233,10 @@ def load_pool(pool_path: Path | None) -> dict[str, Any]:
                     metadata_total_questions = None
                 continue
             suite = str(row.get("suite") or "unknown").strip() or "unknown"
+            tier = str(row.get("tier") if row.get("tier") is not None else "unknown")
             pool_rows += 1
             suite_counts[suite] += 1
+            tier_counts[tier] += 1
             raw_id = str(row.get("id") or row.get("question_id") or "").strip()
             if raw_id:
                 raw_keys.add((suite, raw_id))
@@ -249,6 +252,7 @@ def load_pool(pool_path: Path | None) -> dict[str, Any]:
         "stable_question_keys": stable_keys,
         "raw_question_keys": raw_keys,
         "suite_counts": dict(sorted(suite_counts.items())),
+        "tier_counts": dict(sorted(tier_counts.items())),
     }
 
 
@@ -274,6 +278,8 @@ def build_report(
     suite_attempt_counts: Counter[str] = Counter()
     suite_distinct: dict[str, set[str]] = defaultdict(set)
     tier_counts: Counter[str] = Counter()
+    tier_question_counts: Counter[str] = Counter()
+    tier_distinct: dict[str, set[tuple[str, str]]] = defaultdict(set)
     core_counts: Counter[str] = Counter()
     action_counts: Counter[str] = Counter()
     config_fingerprints: set[str] = set()
@@ -301,6 +307,9 @@ def build_report(
             partition_counts[partition] += 1
             suite_attempt_counts[suite] += 1
             suite_distinct[suite].add(qid)
+            tier = _tier(row)
+            tier_question_counts[tier] += 1
+            tier_distinct[tier].add(key)
 
     pool_stable_keys: set[tuple[str, str]] = pool["stable_question_keys"]
     pool_raw_keys: set[tuple[str, str]] = pool["raw_question_keys"]
@@ -318,6 +327,31 @@ def build_report(
     suite_distinct_counts = {
         suite: len(qids) for suite, qids in sorted(suite_distinct.items())
     }
+    tier_distinct_counts = {
+        tier: len(keys) for tier, keys in sorted(tier_distinct.items())
+    }
+    pool_tier_counts = pool["tier_counts"]
+    tier_coverage = {}
+    for tier, distinct_count in tier_distinct_counts.items():
+        pool_count = int(pool_tier_counts.get(tier, 0) or 0)
+        tier_coverage[tier] = {
+            "eval_bearing_trials": int(tier_counts.get(tier, 0)),
+            "question_result_rows": int(tier_question_counts.get(tier, 0)),
+            "distinct_journal_question_keys": distinct_count,
+            "pool_question_keys": pool_count,
+            "distinct_vs_pool_pct": _safe_pct(distinct_count, pool_count),
+        }
+    for tier, pool_count in pool_tier_counts.items():
+        tier_coverage.setdefault(
+            tier,
+            {
+                "eval_bearing_trials": int(tier_counts.get(tier, 0)),
+                "question_result_rows": int(tier_question_counts.get(tier, 0)),
+                "distinct_journal_question_keys": 0,
+                "pool_question_keys": int(pool_count or 0),
+                "distinct_vs_pool_pct": 0.0,
+            },
+        )
 
     coverage = {
         "question_result_rows": question_rows,
@@ -360,6 +394,9 @@ def build_report(
             "partition_attempt_counts": dict(sorted(partition_counts.items())),
             "suite_attempt_counts": dict(sorted(suite_attempt_counts.items())),
             "suite_distinct_question_counts": suite_distinct_counts,
+            "tier_question_counts": dict(sorted(tier_question_counts.items())),
+            "tier_distinct_question_counts": tier_distinct_counts,
+            "tier_coverage": dict(sorted(tier_coverage.items())),
             "top_repeated_questions": top_repeated,
         },
         "planner_diversity": {
@@ -375,6 +412,7 @@ def build_report(
             "stable_question_keys": pool_stable_count,
             "raw_question_keys": len(pool_raw_keys),
             "suite_counts": pool["suite_counts"],
+            "tier_counts": pool_tier_counts,
         },
         "recommendation": {
             "do_not_change_mid_w8": True,
@@ -426,17 +464,51 @@ def render_markdown(report: Mapping[str, Any]) -> str:
         f"- Unique config fingerprints: `{planner['unique_config_fingerprints']}`",
         f"- Unique hypotheses: `{planner['unique_hypotheses']}`",
         "",
-        "## Pool",
+        "## Tier Coverage",
         "",
-        f"- Path: `{pool['path']}`",
-        f"- Rows: `{pool['rows']}`",
-        f"- Metadata total questions: `{pool['metadata_total_questions']}`",
-        "",
-        "## Top Repeated Questions",
-        "",
-        "| suite | qid | attempts |",
-        "|---|---:|---:|",
+        "| tier | eval trials | scored rows | distinct qids | pool qids | coverage |",
+        "|---:|---:|---:|---:|---:|---:|",
     ]
+    for tier, item in sorted(questions["tier_coverage"].items()):
+        lines.append(
+            f"| {tier} | {item['eval_bearing_trials']} | {item['question_result_rows']} | "
+            f"{item['distinct_journal_question_keys']} | {item['pool_question_keys']} | "
+            f"{item['distinct_vs_pool_pct']}% |"
+        )
+    non_sentinel_low = [
+        (suite, count)
+        for suite, count in sorted(
+            questions["suite_distinct_question_counts"].items(),
+            key=lambda item: item[1],
+        )
+        if not suite.startswith("sentinel_")
+    ][:10]
+    lines.extend(
+        [
+            "",
+            "## Least-Covered Non-Sentinel Suites",
+            "",
+            "| suite | distinct qids |",
+            "|---|---:|",
+        ]
+    )
+    for suite, count in non_sentinel_low:
+        lines.append(f"| {suite} | {count} |")
+    lines.extend(
+        [
+            "",
+            "## Pool",
+            "",
+            f"- Path: `{pool['path']}`",
+            f"- Rows: `{pool['rows']}`",
+            f"- Metadata total questions: `{pool['metadata_total_questions']}`",
+            "",
+            "## Top Repeated Questions",
+            "",
+            "| suite | qid | attempts |",
+            "|---|---:|---:|",
+        ]
+    )
     for item in questions["top_repeated_questions"][:10]:
         lines.append(f"| {item['suite']} | `{item['qid']}` | {item['attempts']} |")
     lines.extend(

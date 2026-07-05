@@ -883,6 +883,10 @@ def test_eval_coverage_pressure_reports_repeat_factor_and_pool_denominator() -> 
     assert "repeat_factor=1.33x" in text
     assert "pool_coverage<=3.00% of 100" in text
     assert "eval trials by tier: T1=1, T3=1" in text
+    assert "Tier detail:" in text
+    assert "T3:trials=1,rows=2,distinct=2" in text
+    assert "Higher-tier coverage is thin (T2=0 trial(s), T3=1 trial(s))" in text
+    assert "Least-covered non-sentinel suites: agentic=1, coder=2" in text
     assert "under-covered suites" in text
     assert "fixed authority-core evidence separate" in text
 
