@@ -97,9 +97,32 @@ def test_seq_rows_fold_by_candidate_and_skip_malformed_z() -> None:
     text = format_planner_evidence_section(rows)
 
     assert "seq_candidates=1" in text
+    assert "seed_batch candidates are observational and cannot satisfy W8 replay" in text
     assert "fp=candidate-a" in text
     assert "seq=accumulating k=2 E_quality=1.650" in text
     assert "trials=[20,21,22]" in text
+
+
+def test_seq_rows_explain_seed_batch_is_not_w8_replayable() -> None:
+    candidate = "candidate-seed"
+    rows = [
+        _row(
+            23,
+            config={"type": "seed_batch", "n_questions": 40},
+            seq={
+                "candidate": candidate,
+                "core_id": "core_v1",
+                "state": "accumulating",
+                "z": 1.0,
+            },
+        ),
+    ]
+
+    text = format_planner_evidence_section(rows)
+
+    assert "seq_candidates=1" in text
+    assert "replayable=no(unreplayable_action=seed_batch)" in text
+    assert "replayable=no" in text
 
 
 def test_seq_rows_mark_latest_reverted_candidate_not_replayable() -> None:

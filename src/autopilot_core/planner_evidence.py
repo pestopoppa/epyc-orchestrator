@@ -146,8 +146,9 @@ def _instrument_power_line(
         f"seq_candidates={len(seq_candidates)} median_questions={median_q} "
         f"quality_quantum~{quality_quantum:.3f}. "
         "Below-quantum deltas need paired/reproduced evidence before acting. "
-        "W8 confirmation needs repeated replayable numeric/structural candidates "
-        "with both E_quality and E_rate_noninf accumulating."
+        "W8 confirmation needs repeated replayable numeric_trial/structural_experiment "
+        "candidates with both E_quality and E_rate_noninf accumulating; seed_batch "
+        "candidates are observational and cannot satisfy W8 replay."
     )
 
 
@@ -308,7 +309,8 @@ def _seq_note(
     if ap24_blocker:
         replayable = f"no({ap24_blocker})"
     else:
-        replayable = "yes" if _replayable_config(latest.get("config_snapshot")) else "no"
+        config_blocker = _config_replay_blocker(latest.get("config_snapshot"))
+        replayable = f"no({config_blocker})" if config_blocker else "yes"
     return (
         f"seq={latest_seq.get('state') or view.state} k={view.quality_state.k} "
         f"E_quality={view.quality_state.wealth:.3f} "
@@ -332,14 +334,22 @@ def _ap24_replay_blocker(row: Mapping[str, Any], seq: Mapping[str, Any]) -> str:
 
 
 def _replayable_config(value: Any) -> bool:
+    return not _config_replay_blocker(value)
+
+
+def _config_replay_blocker(value: Any) -> str:
     if not isinstance(value, Mapping):
-        return False
+        return "missing_action"
     action_type = str(value.get("type") or "")
     if action_type == "numeric_trial":
-        return isinstance(value.get("params"), Mapping) and bool(value.get("params"))
+        if isinstance(value.get("params"), Mapping) and bool(value.get("params")):
+            return ""
+        return "numeric_trial_missing_params"
     if action_type == "structural_experiment":
-        return isinstance(value.get("flags"), Mapping) and bool(value.get("flags"))
-    return False
+        if isinstance(value.get("flags"), Mapping) and bool(value.get("flags")):
+            return ""
+        return "structural_experiment_missing_flags"
+    return f"unreplayable_action={action_type or 'unknown'}"
 
 
 def _latest_trial_id(row_or_rows: Mapping[str, Any] | list[dict[str, Any]]) -> int:
