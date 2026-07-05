@@ -127,6 +127,7 @@ def _trial_summary(row: Mapping[str, Any]) -> dict[str, Any] | None:
     audit_quality = _quality_0_3(audit_correct, audit_total)
     return {
         "trial_id": int(row["trial_id"]),
+        "candidate_key": _trial_candidate_key(row),
         "core_correct": core_correct,
         "core_total": core_total,
         "audit_correct": audit_correct,
@@ -135,6 +136,58 @@ def _trial_summary(row: Mapping[str, Any]) -> dict[str, Any] | None:
         "audit_quality_0_3": audit_quality,
         "delta_audit_minus_core": round(audit_quality - core_quality, 6),
     }
+
+
+def _trial_candidate_key(row: Mapping[str, Any]) -> str | None:
+    """Best-effort identity for the candidate/config tested by a trial."""
+    seq = row.get("seq")
+    if isinstance(seq, Mapping):
+        for key in ("candidate", "candidate_id", "config_fingerprint", "config_hash"):
+            value = _stable_component(seq.get(key))
+            if value is not None:
+                return f"seq:{key}:{value}"
+        alpha_wealth = seq.get("alpha_wealth")
+        if isinstance(alpha_wealth, Mapping):
+            value = _stable_component(alpha_wealth.get("candidate"))
+            if value is not None:
+                return f"seq:alpha_wealth.candidate:{value}"
+
+    for key in ("candidate_id", "candidate", "config_fingerprint", "config_hash"):
+        value = _stable_component(row.get(key))
+        if value is not None:
+            return f"row:{key}:{value}"
+
+    details = row.get("eval_details")
+    if isinstance(details, Mapping):
+        nested_details = details.get("details")
+        if isinstance(nested_details, Mapping):
+            value = _stable_component(nested_details.get("numeric_trial_applied_params"))
+            if value is not None:
+                return f"numeric_trial_applied_params:{value}"
+            flag_apply = nested_details.get("flag_apply_result")
+            if isinstance(flag_apply, Mapping):
+                value = _stable_component(flag_apply.get("expected"))
+                if value is not None:
+                    return f"flag_apply_expected:{value}"
+
+    return None
+
+
+def _stable_component(value: Any) -> str | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, str):
+        text = value.strip()
+        return text or None
+    if isinstance(value, Mapping):
+        if not value:
+            return None
+        return json.dumps(value, sort_keys=True, separators=(",", ":"))
+    if isinstance(value, list):
+        if not value:
+            return None
+        return json.dumps(value, sort_keys=True, separators=(",", ":"))
+    return str(value)
 
 
 def build_report(
@@ -411,22 +464,45 @@ def _gaming_events(trials: list[dict[str, Any]]) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
     prev = trials[0]
     for trial in trials[1:]:
+        if not _same_candidate_comparison(prev, trial):
+            prev = trial
+            continue
         core_delta = round(trial["core_quality_0_3"] - prev["core_quality_0_3"], 6)
         audit_delta = round(trial["audit_quality_0_3"] - prev["audit_quality_0_3"], 6)
         core_step = max(_quality_step(prev.get("core_total")), _quality_step(trial.get("core_total")))
         audit_step = max(_quality_step(prev.get("audit_total")), _quality_step(trial.get("audit_total")))
         if core_delta > core_step and audit_delta < -audit_step:
-            events.append(
-                {
-                    "trial_id": trial["trial_id"],
-                    "previous_trial_id": prev["trial_id"],
-                    "core_delta": core_delta,
-                    "audit_delta": audit_delta,
-                }
-            )
+            event = {
+                "trial_id": trial["trial_id"],
+                "previous_trial_id": prev["trial_id"],
+                "core_delta": core_delta,
+                "audit_delta": audit_delta,
+            }
+            if trial.get("candidate_key") is not None:
+                event["candidate_key"] = trial["candidate_key"]
+            events.append(event)
         prev = trial
 
     return events
+
+
+def _same_candidate_comparison(
+    previous: Mapping[str, Any],
+    current: Mapping[str, Any],
+) -> bool:
+    previous_key = previous.get("candidate_key")
+    current_key = current.get("candidate_key")
+    if previous_key is None and current_key is None:
+        return True
+    return previous_key is not None and previous_key == current_key
+
+
+def _same_candidate_span(trials: list[dict[str, Any]]) -> bool:
+    keys = [trial.get("candidate_key") for trial in trials]
+    if all(key is None for key in keys):
+        return True
+    first = keys[0]
+    return first is not None and all(key == first for key in keys)
 
 
 def _core_inflation_events(
@@ -436,6 +512,8 @@ def _core_inflation_events(
 ) -> list[dict[str, Any]]:
     """Warn when core rises across the window while audit stays resolution-flat."""
     if len(trials) < 3:
+        return []
+    if not _same_candidate_span(trials):
         return []
 
     first = trials[0]
