@@ -60,6 +60,7 @@ class TestFeaturesDefaults:
         assert f.approval_gates is False
         assert f.binding_routing is False
         assert f.eval_batch_serving is False
+        assert f.review_before_commit_consult is False
 
         # Explicitly True by default
         assert f.tools is True
@@ -173,6 +174,12 @@ class TestFeaturesValidate:
         f = Features(dcp_for_consult=True, dcp_pre_assembly=True)
         errors = f.validate()
         assert not any("dcp_for_consult" in e for e in errors)
+
+    def test_review_before_commit_consult_has_no_flag_dependency(self):
+        """The edit-transaction consult seam is independently default-off."""
+        f = Features(review_before_commit_consult=True)
+        errors = f.validate()
+        assert not any("review_before_commit_consult" in e for e in errors)
 
 
 # ---------------------------------------------------------------------------

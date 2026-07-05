@@ -818,8 +818,30 @@ async def _handle_chat(
                 _captured["resp"] = resp
                 return resp.answer or ""
 
+            review_enabled = bool(features().review_before_commit_consult)
+            review_before_commit = None
+            if review_enabled:
+                def _review_before_commit(review_context: str) -> tuple[dict, dict]:
+                    from src.orchestration.consultation import consult
+
+                    return consult(
+                        consultant_role="architect_general",
+                        requester_role=str(initial_role),
+                        skill="review_before_commit",
+                        context=review_context,
+                        primitives=primitives,
+                    )
+
+                review_before_commit = _review_before_commit
+
             edit_res, _raw = await asyncio.to_thread(
-                run_edit_transaction, _edit_llm_call, request.prompt, get_task_root(), None,
+                run_edit_transaction,
+                _edit_llm_call,
+                request.prompt,
+                get_task_root(),
+                None,
+                review_before_commit=review_before_commit,
+                enable_review_before_commit=review_enabled,
             )
             answer = (
                 edit_res.summary + (": " + ", ".join(edit_res.written) if edit_res.written else "")
@@ -827,7 +849,10 @@ async def _handle_chat(
             ) + (f"  (rejected unsafe paths: {edit_res.rejected})" if edit_res.rejected else "")
             base = _captured.get("resp")
             if base is not None:
-                upd = {"answer": answer, "mode": "edit"}
+                diagnostics = dict(getattr(base, "delegation_diagnostics", {}) or {})
+                if edit_res.consult_events:
+                    diagnostics["edit_transaction_consult_events"] = edit_res.consult_events
+                upd = {"answer": answer, "mode": "edit", "delegation_diagnostics": diagnostics}
                 base = (base.model_copy(update=upd)
                         if hasattr(base, "model_copy") else base.copy(update=upd))
                 return _finalize(base)
