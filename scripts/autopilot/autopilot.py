@@ -3138,10 +3138,20 @@ def _build_action_availability(
     slot_memory_text: str,
     blacklist: list[dict[str, Any]],
     suppressed_numeric_surfaces: set[str] | None = None,
+    w8_replay_pressure_text: str = "",
 ) -> tuple[str, list[str]]:
     """Return prompt text + viable tail-seed action types for the planner."""
     blocked: dict[str, str] = {}
     cautions: dict[str, str] = {}
+    priority: list[str] = []
+
+    if _w8_candidate_generation_pressure(w8_replay_pressure_text):
+        priority.append(
+            "W8 candidate generation is the active strict blocker: prefer an "
+            "explicit single-param numeric_trial or one-flag structural_experiment. "
+            "Treat seed_batch, deep_eval, structural_prune, and empty-params "
+            "numeric_trial as deferrals unless the rationale explains a direct W8 unblock."
+        )
 
     blocked.update(_type_only_blacklisted_actions(blacklist))
 
@@ -3222,6 +3232,10 @@ def _build_action_availability(
             )
 
     lines = []
+    if priority:
+        lines.append("Priority pressure:")
+        for item in priority:
+            lines.append(f"- {item}")
     if blocked:
         lines.append("Currently unavailable:")
         for action_type, reason in sorted(blocked.items()):
@@ -3246,6 +3260,21 @@ def _build_action_availability(
         and not (action_type == "train_routing_models" and not converged)
     ]
     return "\n".join(lines), viable_tail_actions
+
+
+def _w8_candidate_generation_pressure(text: str) -> bool:
+    """Return True when W8 has no replayable accumulating candidate."""
+    normalized = str(text or "").lower()
+    if "w8 replay pressure:" not in normalized:
+        return False
+    return (
+        "no accumulating candidate exists" in normalized
+        or (
+            "accumulating candidate" in normalized
+            and "0/" in normalized
+            and "are replayable" in normalized
+        )
+    )
 
 
 def _build_exploration_block(
@@ -4580,6 +4609,7 @@ def _run_loop_inner(
                     slot_memory_text=slot_memory_text,
                     blacklist=blacklist,
                     suppressed_numeric_surfaces=_PLANNER_SUPPRESSED_NUMERIC_SURFACES,
+                    w8_replay_pressure_text=planner_evidence_text,
                 )
                 exploration_block, stagnation_signal = _build_exploration_block(
                     journal=journal,

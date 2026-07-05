@@ -359,6 +359,37 @@ def test_action_availability_blocks_seed_batch_when_fallbacks_exhausted(
     assert "seed_batch" not in viable
 
 
+def test_action_availability_surfaces_w8_candidate_generation_priority(
+    tmp_path: Path,
+) -> None:
+    j = _fresh_journal(tmp_path)
+
+    availability, viable = autopilot._build_action_availability(
+        journal=j,
+        known_actions=KNOWN_ACTIONS,
+        memory_count=10_000,
+        converged=True,
+        slot_memory_text="  healthy queried ports with empty KV cache: frontdoor:8070",
+        blacklist=[],
+        w8_replay_pressure_text=(
+            "W8 replay pressure: 0/2 accumulating candidate(s) are replayable "
+            "(blocked=numeric_trial_missing_params:1,unreplayable_action=seed_batch:1)."
+        ),
+    )
+
+    assert "Priority pressure:" in availability
+    assert "W8 candidate generation is the active strict blocker" in availability
+    assert "explicit single-param numeric_trial or one-flag structural_experiment" in availability
+    assert "deep_eval" in viable
+    assert "seed_batch" in viable
+
+
+def test_w8_candidate_generation_pressure_ignores_replayable_candidates() -> None:
+    assert autopilot._w8_candidate_generation_pressure(
+        "W8 replay pressure: 1/1 accumulating candidate(s) are replayable"
+    ) is False
+
+
 def test_action_availability_surfaces_suppressed_numeric_surfaces(
     tmp_path: Path,
 ) -> None:
