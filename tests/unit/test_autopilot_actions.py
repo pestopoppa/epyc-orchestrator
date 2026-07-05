@@ -155,6 +155,41 @@ def test_structural_experiment_invalid_flags_returns_skip_outcome() -> None:
     assert species == "structural_lab"
 
 
+def test_dispatch_structural_experiment_dependency_skip_stops_before_eval() -> None:
+    class FakeLab:
+        def current_flags(self):
+            return {"memrl": True, "specialist_routing": False}
+
+        def propose_flag_experiment(self, flags):
+            return {
+                "status": "invalid",
+                "errors": ["graph_router feature requires specialist_routing feature"],
+                "proposed_flags": flags,
+            }
+
+    class FakeTower:
+        def hybrid_eval(self):  # pragma: no cover
+            raise AssertionError("dependency-blocked structural candidate must not eval")
+
+    result, species = actions.dispatch_action(
+        {"type": "structural_experiment", "flags": {"graph_router": True}},
+        seeder=None,
+        swarm=None,
+        forge=None,
+        lab=FakeLab(),
+        tower=FakeTower(),
+        gate=None,
+        archive=None,
+        journal=None,
+        state={},
+    )
+
+    assert isinstance(result, actions.SkipOutcome)
+    assert result.status == "invalid"
+    assert "specialist_routing" in result.reason
+    assert species == "structural_lab"
+
+
 def test_structural_experiment_error_status_is_skipped_not_invalid() -> None:
     """A transient validator 'error' (e.g. orchestrator unreachable) maps to a
     non-blacklisting 'skipped' SkipOutcome, never 'invalid' — so a blip cannot
@@ -276,6 +311,52 @@ def test_numeric_trial_convention_suppresses_live_bound_surface(
     result, species = actions._action_numeric_trial(
         {"type": "numeric_trial", "surface": "kv_compaction"},
         _ctx(swarm=FakeSwarm(), strategy_store=FakeStore()),
+    )
+
+    assert isinstance(result, actions.SkipOutcome)
+    assert result.status == "invalid"
+    assert "kv_compaction" in result.reason
+    assert species == "numeric_swarm"
+
+
+def test_dispatch_numeric_trial_convention_skip_stops_before_eval(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(actions, "_PLANNER_HINTS_ENABLED", True)
+
+    class FakeStore:
+        def retrieve_conventions(self, *, species, journal):
+            assert species == "numeric_swarm"
+            assert journal == "journal"
+            return [
+                SimpleNamespace(
+                    metadata={
+                        "bind_status": "live",
+                        "bind_identifiers": ["kv_compaction"],
+                    }
+                )
+            ]
+
+    class FakeSwarm:
+        def suggest_trial(self, _surface):  # pragma: no cover
+            raise AssertionError("suppressed surface must not reach NumericSwarm")
+
+    class FakeTower:
+        def hybrid_eval(self):  # pragma: no cover
+            raise AssertionError("suppressed numeric candidate must not eval")
+
+    result, species = actions.dispatch_action(
+        {"type": "numeric_trial", "surface": "kv_compaction", "params": {}},
+        seeder=None,
+        swarm=FakeSwarm(),
+        forge=None,
+        lab=None,
+        tower=FakeTower(),
+        gate=None,
+        archive=None,
+        journal="journal",
+        state={},
+        strategy_store=FakeStore(),
     )
 
     assert isinstance(result, actions.SkipOutcome)
