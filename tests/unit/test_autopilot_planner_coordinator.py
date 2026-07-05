@@ -512,6 +512,65 @@ def test_spend_breaker_replaces_cloud_critic_for_local_primary(
     assert state["_spend_breaker"]["previous_critic"] == "codex"
 
 
+def test_spend_breaker_preserves_configured_local_critic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from scripts.economics import ledger as ledger_mod
+
+    monkeypatch.setenv("AUTOPILOT_PLANNER_SPEND_BREAKER", "1")
+    monkeypatch.setattr(
+        ledger_mod,
+        "summarize_economics",
+        lambda *, days=7: _fake_economics_ledger(triggered=True),
+    )
+    local_ingest = FakeProvider(
+        "local_ingest",
+        [
+            PlannerProviderResult(
+                provider="local_ingest",
+                role="draft",
+                ok=True,
+                text=_action_text({"type": "numeric_trial", "surface": "repl_executor"}),
+            )
+        ],
+    )
+    local_frontdoor = FakeProvider(
+        "local_frontdoor",
+        [
+            PlannerProviderResult(
+                provider="local_frontdoor",
+                role="critique",
+                ok=True,
+                text=_critique_text({"decision": "approve", "confidence": 0.8}),
+            )
+        ],
+    )
+    state: dict[str, Any] = {}
+
+    decision = planner_coordinator.plan_with_providers(
+        "prompt",
+        session_id=None,
+        planner_state=state,
+        settings=PlannerSettings(
+            primary="claude",
+            critic="local_frontdoor",
+            mode="draft_critique",
+            critique_policy="always",
+        ),
+        provider_factory=_factory(
+            {
+                "local_ingest": local_ingest,
+                "local_frontdoor": local_frontdoor,
+            }
+        ),
+    )
+
+    assert decision.draft_provider == "local_ingest"
+    assert decision.critic_provider == "local_frontdoor"
+    assert state["_spend_breaker"]["local_critic"] == "local_frontdoor"
+    assert state["_spend_breaker"]["previous_critic"] == "local_frontdoor"
+
+
 def test_spend_breaker_keeps_config_when_under_threshold(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -844,6 +903,75 @@ def test_failed_critique_invoke_fails_closed_not_open() -> None:
     assert state.get("codex", {}).get("failures", 0) >= 1
     # HIGH-risk + critic unavailable => gate pauses (fails closed).
     assert planner_coordinator.uncritiqued_dispatch_block_reason(decision) == "critic_unavailable"
+
+
+def test_codex_critic_failure_falls_back_to_claude_for_local_draft() -> None:
+    original = {"type": "numeric_trial", "surface": "memrl_retrieval"}
+    local_ingest = FakeProvider(
+        "local_ingest",
+        [
+            PlannerProviderResult(
+                provider="local_ingest",
+                role="draft",
+                ok=True,
+                text=_action_text(original),
+            )
+        ],
+    )
+    codex = FakeProvider(
+        "codex",
+        [
+            PlannerProviderResult(
+                provider="codex",
+                role="critique",
+                ok=False,
+                text="",
+                error="quota exhausted",
+            )
+        ],
+    )
+    claude = FakeProvider(
+        "claude",
+        [
+            PlannerProviderResult(
+                provider="claude",
+                role="critique",
+                ok=True,
+                text=_critique_text({"decision": "approve", "confidence": 0.83}),
+            )
+        ],
+    )
+    state: dict[str, Any] = {}
+
+    decision = planner_coordinator.plan_with_providers(
+        "prompt",
+        session_id=None,
+        planner_state=state,
+        settings=PlannerSettings(
+            primary="local_ingest",
+            critic="codex",
+            mode="draft_critique",
+            critique_policy="always",
+        ),
+        provider_factory=_factory(
+            {
+                "local_ingest": local_ingest,
+                "codex": codex,
+                "claude": claude,
+            }
+        ),
+    )
+
+    assert decision.action == original
+    assert decision.draft_provider == "local_ingest"
+    assert decision.critic_provider == "claude"
+    assert decision.critique is not None
+    assert decision.critique.decision == "approve"
+    assert decision.degraded is False
+    assert state.get("codex", {}).get("failures") == 1
+    assert state.get("claude", {}).get("failures") == 0
+    assert [call["role"] for call in codex.calls] == ["critique"]
+    assert [call["role"] for call in claude.calls] == ["critique"]
 
 
 def test_unparseable_critique_shadow_mode_keeps_draft() -> None:
