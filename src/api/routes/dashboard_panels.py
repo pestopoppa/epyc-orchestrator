@@ -203,7 +203,7 @@ PANELS: tuple[PanelSpec, ...] = (
     ),
     PanelSpec(
         key="region_locks",
-        title="cpu region locks",
+        title="regions lock",
         endpoint="/dashboard/api/region_locks",
         mechanism="api",
         live=True,

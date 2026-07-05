@@ -323,3 +323,29 @@ def test_task_text_snapshot_uses_timezone_aware_utc(monkeypatch) -> None:
     # Header should still contain the "Z" suffix marker
     assert "@ " in out
     assert "Z ===" in out
+
+
+def test_dashboard_folds_devices_into_regions_lock_and_tap_panels() -> None:
+    """MI210/extern servers bypass the orchestrator pipeline; the Regions Lock
+    grid and the live tap panel must still surface their occupancy instead of
+    rendering an idle machine while a device is visibly working."""
+    html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    body = html_path.read_text()
+
+    # Panel renamed + device fold (operator request 2026-07-05).
+    assert "regions lock" in body
+    assert "cpu region locks" not in body
+    assert "function gpuDeviceRegionRows()" in body
+    assert body.count("rows.push(...gpuRows);") >= 2  # basic + rich renderers
+    assert "device occupancy from /slots, not a CPU region lock" in body
+
+    # Orphan (off-pipeline) inference cards in the live tap panel.
+    assert "function orphanDeviceSlots()" in body
+    assert "function orphanDeviceSlotCards()" in body
+    assert "orphan inference" in body
+    assert "no token tap — off-pipeline" in body
+    assert "!requests.length && !lockOnlyHolders.length && !orphanCards.length" in body
+
+    # A degraded contention matrix reads as an incident, not a status chip.
+    assert "admission gate degraded" in body
+    assert "contention-matrix-v6-quarter-refresh.md" in body

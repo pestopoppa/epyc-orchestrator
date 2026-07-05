@@ -890,8 +890,8 @@ body.insight-fullscreen-open { overflow: hidden; }
     <div class="panel">
       <h2>
         <span class="live-dot idle" id="region-locks-dot"></span>
-        cpu region locks
-        <span class="count-suffix" id="region-locks-status">— per-region cross-process lock state (Phase 5 / 2026-05-22)</span>
+        regions lock
+        <span class="count-suffix" id="region-locks-status">— CPU region locks + device occupancy</span>
       </h2>
       <div id="region-locks-grid" style="display:grid;grid-template-columns:160px repeat(7,1fr);gap:4px;font-size:11px;font-family:var(--font-mono,ui-monospace,monospace);align-items:center">
         <div style="grid-column:1/-1;color:var(--dim);font-size:11px">loading CPU region-lock matrix…</div>
@@ -2612,6 +2612,32 @@ function repaintRegionLocksFromStructuredTapFrame() {
     updateRegionLocks(_regionLocksRefreshSeq, _lastRegionLocksPayload);
 }
 
+// Device rows for the Regions Lock grid: GPU/extern servers aren't CPU
+// resources (no flock, no quarters), but the panel is the operator's "what is
+// holding compute right now" view — so devices fold in as one spanning row
+// showing slot occupancy from the coherent snapshot.
+function gpuDeviceRegionRows() {
+    const rows = [];
+    const snap = _latestSnapshot || {};
+    const nodes = (snap.topology && snap.topology.nodes) || [];
+    const activity = snap.activity || {};
+    for (const n of nodes) {
+        if (n.kind !== 'gpu-llama-server' && n.kind !== 'external-llama-server') continue;
+        const act = activity[String(n.port)] || activity[n.port] || {};
+        const nActive = act.n_active || 0;
+        const isGpu = n.kind === 'gpu-llama-server';
+        const deviceLabel = isGpu ? 'GPU device' : `extern :${n.port}`;
+        const color = isGpu ? '#f97316' : 'var(--muted)';
+        rows.push(`<div style="overflow:hidden;color:${color};font-size:11px;line-height:1.3" title="${escapeHTML(deviceLabel)}${n.model ? ' · ' + escapeHTML(n.model) : ''}">${escapeHTML(n.role)}</div>`);
+        if (nActive) {
+            rows.push(`<div class="rl-cell rl-active" style="grid-column:2/-1;text-align:left;padding:0 8px" title="${escapeHTML(n.role)} — device occupancy from /slots, not a CPU region lock">⚡ ${nActive} slot(s) decoding · ${escapeHTML(deviceLabel)} · off-pipeline${n.model ? ` · ${escapeHTML(n.model)}` : ''}</div>`);
+        } else {
+            rows.push(`<div class="rl-cell rl-ready" style="grid-column:2/-1;text-align:left;padding:0 8px" title="${escapeHTML(n.role)} — device occupancy from /slots, not a CPU region lock">✅ idle · ${escapeHTML(deviceLabel)}${n.model ? ` · ${escapeHTML(n.model)}` : ''}</div>`);
+        }
+    }
+    return rows;
+}
+
 function renderRegionLocksBasicGrid(grid, d, note = '') {
     if (!grid) return;
     grid.dataset.regionLocksPainted = '1';
@@ -2642,7 +2668,9 @@ function renderRegionLocksBasicGrid(grid, d, note = '') {
             }
         }
     }
-    if (!roleEntries.length) {
+    const gpuRows = gpuDeviceRegionRows();
+    rows.push(...gpuRows);
+    if (!roleEntries.length && !gpuRows.length) {
         rows.push(`<div style="grid-column:1/-1;color:var(--muted);font-size:11px">no CPU-region roles in region-lock payload</div>`);
     }
     const suffix = note
@@ -2749,13 +2777,53 @@ function renderLockOnlyTapHolderCard(holder, i) {
     </div>`;
 }
 
+// Direct-access servers (MI210 GPU testbed, extern_* ports) bypass the
+// orchestrator pipeline, so no structured-tap events exist for their traffic.
+// Their only live signal is slot occupancy from the coherent snapshot — the
+// panels surface that explicitly instead of showing nothing while a device is
+// visibly working. Returns [{node, slot}] for every active off-pipeline slot.
+function orphanDeviceSlots() {
+    const snap = _latestSnapshot || {};
+    const nodes = (snap.topology && snap.topology.nodes) || [];
+    const activity = snap.activity || {};
+    const out = [];
+    for (const n of nodes) {
+        if (n.kind !== 'gpu-llama-server' && n.kind !== 'external-llama-server') continue;
+        const act = activity[String(n.port)] || activity[n.port];
+        if (!act || !act.n_active) continue;
+        for (const s of (act.active_slots || [])) out.push({ node: n, slot: s });
+    }
+    return out;
+}
+
+function orphanDeviceSlotCards() {
+    return orphanDeviceSlots().map(({ node, slot }) => {
+        const color = node.color || '#f97316';
+        const kindLabel = node.kind === 'gpu-llama-server' ? 'GPU · direct access' : 'extern · direct access';
+        const tokens = [
+            slot.prompt_tokens != null ? `${slot.prompt_tokens} prompt tok` : null,
+            slot.tokens_decoded != null ? `${slot.tokens_decoded} decoded` : null,
+        ].filter(Boolean).join(' · ') || 'decoding';
+        return `<div class="task-card tap-derived live-tap-row" title="slot occupancy from /slots — this server's traffic bypasses the orchestrator pipeline, so there is no token-level tap for it until it is stack-routed">
+            <div class="role" style="color:${color}">
+                ${escapeHTML(node.role || '')}
+                <span class="live-tap-state" style="color:${color}">orphan inference</span>
+                <span class="tag" style="margin-left:6px;background:rgba(249,115,22,0.12);color:${color}">${escapeHTML(kindLabel)}</span>
+            </div>
+            <div class="meta">slot ${slot.slot_id != null ? slot.slot_id : '?'} · ${escapeHTML(tokens)}${node.model ? ` · ${escapeHTML(node.model)}` : ''}</div>
+            <div class="meta" style="color:var(--dim)">no token tap — off-pipeline (port ${node.port})</div>
+        </div>`;
+    });
+}
+
 function paintStructuredTap(container) {
     const allRequests = Array.isArray(_structuredTapRequests) ? _structuredTapRequests : [];
     const requests = openStructuredTapRequests();
     const lockOnlyHolders = lockOnlyStructuredTapHolders();
+    const orphanCards = orphanDeviceSlotCards();
     _lastStructuredTapRequests = requests;
     _lastLockOnlyTapHolders = lockOnlyHolders;
-    if (!requests.length && !lockOnlyHolders.length) {
+    if (!requests.length && !lockOnlyHolders.length && !orphanCards.length) {
         const msg = allRequests.length
             ? 'no live inference requests right now'
             : 'no structured tap events yet';
@@ -2795,7 +2863,7 @@ function paintStructuredTap(container) {
         </div>`;
     }).join('');
     const lockOnlyHtml = lockOnlyHolders.map(renderLockOnlyTapHolderCard).join('');
-    container.innerHTML = html + lockOnlyHtml;
+    container.innerHTML = html + lockOnlyHtml + orphanCards.join('');
 }
 
 function openStructuredTapDetail(idx) {
@@ -5987,6 +6055,18 @@ async function updateContentionGate(refreshSeq = _regionLocksRefreshSeq) {
                 `<span style="color:var(--dim)">· matrix</span> <span style="color:${msColor};font-weight:600">${ms}</span>` +
                 `</div>`
             );
+            // A non-OK matrix degrades ADMISSION DECISIONS (mispredicted pairs;
+            // unknown pairs block background) — that must read as an incident,
+            // not a status chip. 2026-07-05: a fingerprint-stale matrix sat
+            // unnoticed behind a small chip while the gate ran degraded.
+            if (ms === 'STALE' || ms === 'MISSING' || ms === 'INVALID') {
+                lines.push(
+                    `<div style="color:${msColor};font-weight:600;margin-bottom:3px">` +
+                    `⚠ contention matrix ${ms} — admission gate degraded ` +
+                    `<span style="color:var(--dim);font-weight:400">(topology fingerprint/age mismatch; re-bench via scripts/server/contention_matrix.py in a quiet window — see handoffs/active/contention-matrix-v6-quarter-refresh.md)</span>` +
+                    `</div>`
+                );
+            }
             // Admission counters.
             lines.push(
                 `<div>` +
@@ -6293,7 +6373,9 @@ async function updateRegionLocks(refreshSeq = _regionLocksRefreshSeq, regionLock
                     }
                 }
             }
-            if (!roleEntries.length) {
+            const gpuRows = gpuDeviceRegionRows();
+            rows.push(...gpuRows);
+            if (!roleEntries.length && !gpuRows.length) {
                 const reason = d.matrix_loaded === false
                     ? 'orchestration/contention_matrix.yaml not loadable — check that it exists and is valid YAML'
                     : 'no roles in same_role section of contention_matrix.yaml';
