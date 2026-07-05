@@ -105,7 +105,7 @@ def test_dashboard_topology_activity_stats_refresh_with_live_age_tick() -> None:
     assert "TOPOLOGY_ACTIVITY_AGE_TICK_MS = 1000" in body
     assert "topologyActivityAgeS" in body
     assert "renderTopologyActivity" in body
-    assert "topology_activity?window_s=${TOPOLOGY_ACTIVITY_WINDOW_S}&t=${Date.now()}" in body
+    assert "fetchJSON(`/dashboard/api/topology_activity?window_s=${TOPOLOGY_ACTIVITY_WINDOW_S}`)" in body
     assert "scheduleRegionLocksRefresh(true)" in body
     assert "snap.region_locks" in body
     assert "return updateRegionLocks(refreshSeq, snap.region_locks);" in body
@@ -168,8 +168,8 @@ def test_dashboard_live_panel_refreshes_ignore_stale_responses_where_possible() 
     assert "fetchJSON('/dashboard/api/snapshot'" in body
     assert "timeoutMs: _SNAPSHOT_POLL_TIMEOUT_MS" in body
     assert "setInterval(updateSnapshotPoll, 2500)" in body
-    assert "window_s=${TOPOLOGY_ACTIVITY_WINDOW_S}&t=${Date.now()}" in body
-    assert "fetch(`/dashboard/api/contention?t=${Date.now()}`, { cache: 'no-store' })" in body
+    assert "window_s=${TOPOLOGY_ACTIVITY_WINDOW_S}" in body
+    assert "fetchJSON('/dashboard/api/contention')" in body
     assert "if (refreshSeq !== _regionLocksRefreshSeq) return;" in body
 
 
