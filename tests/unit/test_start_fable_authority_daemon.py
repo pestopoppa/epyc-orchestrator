@@ -30,6 +30,34 @@ def test_authority_env_forces_required_flags() -> None:
     assert env["AUTOPILOT_PLANNER_TIMEOUT"] == "600"
 
 
+def test_authority_env_sets_latest_repo_readiness_pickup(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    older = tmp_path / "repo_readiness_autopilot_pickup_2026-07-03.json"
+    newer = tmp_path / "repo_readiness_autopilot_pickup_2026-07-05.json"
+    older.write_text("{}", encoding="utf-8")
+    newer.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(launcher, "DEFAULT_REPO_READINESS_DIRS", (tmp_path,))
+
+    env = launcher.authority_env({})
+
+    assert env["AUTOPILOT_REPO_READINESS_PICKUP"] == str(newer)
+
+
+def test_authority_env_preserves_explicit_repo_readiness_pickup(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    generated = tmp_path / "repo_readiness_autopilot_pickup_2026-07-05.json"
+    generated.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(launcher, "DEFAULT_REPO_READINESS_DIRS", (tmp_path,))
+
+    env = launcher.authority_env({"AUTOPILOT_REPO_READINESS_PICKUP": "/custom/pickup.json"})
+
+    assert env["AUTOPILOT_REPO_READINESS_PICKUP"] == "/custom/pickup.json"
+
+
 def test_build_command_uses_autopilot_start_and_default_trials(monkeypatch) -> None:
     monkeypatch.setattr(launcher, "python_executable", lambda: "/venv/bin/python3")
 

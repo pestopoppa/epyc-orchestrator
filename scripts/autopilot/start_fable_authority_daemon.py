@@ -24,6 +24,13 @@ ORCH_ROOT = SCRIPT_DIR.parents[1]
 DEFAULT_LOG_DIR = Path("/mnt/raid0/llm/tmp")
 LIVE_PROCESS_PATTERN = "scripts/autopilot/autopilot.py start"
 RUNNING_REFUSAL_EXIT = 75
+REPO_READINESS_PICKUP_ENV = "AUTOPILOT_REPO_READINESS_PICKUP"
+REPO_READINESS_DIR_ENV = "AUTOPILOT_REPO_READINESS_DIR"
+DEFAULT_REPO_READINESS_DIRS = (
+    Path("/mnt/raid0/llm/epyc-root/data/repo_readiness"),
+    Path("/workspace/repos/epyc-root/data/repo_readiness"),
+)
+REPO_READINESS_PICKUP_GLOB = "repo_readiness_autopilot_pickup_*.json"
 
 FABLE_AUTHORITY_ENV: dict[str, str] = {
     "AUTOPILOT_SEQ_VERDICT": "1",
@@ -42,7 +49,30 @@ def authority_env(base: dict[str, str] | None = None) -> dict[str, str]:
     """Return an environment with required Fable authority keys enforced."""
     env = dict(os.environ if base is None else base)
     env.update(FABLE_AUTHORITY_ENV)
+    if REPO_READINESS_PICKUP_ENV not in env:
+        pickup = latest_repo_readiness_pickup(env)
+        if pickup is not None:
+            env[REPO_READINESS_PICKUP_ENV] = str(pickup)
     return env
+
+
+def _repo_readiness_dirs(env: dict[str, str]) -> list[Path]:
+    raw_override = env.get(REPO_READINESS_DIR_ENV, "").strip()
+    if raw_override:
+        return [Path(raw_override).expanduser()]
+    return list(DEFAULT_REPO_READINESS_DIRS)
+
+
+def latest_repo_readiness_pickup(env: dict[str, str] | None = None) -> Path | None:
+    """Return the newest passive repo-readiness pickup artifact, if present."""
+    env = dict(os.environ if env is None else env)
+    candidates: list[Path] = []
+    for data_dir in _repo_readiness_dirs(env):
+        if data_dir.exists():
+            candidates.extend(data_dir.glob(REPO_READINESS_PICKUP_GLOB))
+    if not candidates:
+        return None
+    return sorted(candidates)[-1]
 
 
 def python_executable() -> str:
@@ -81,7 +111,9 @@ def _timestamp() -> str:
 
 
 def _env_subset(env: dict[str, str]) -> dict[str, str]:
-    return {key: env[key] for key in sorted(FABLE_AUTHORITY_ENV)}
+    keys = set(FABLE_AUTHORITY_ENV)
+    keys.add(REPO_READINESS_PICKUP_ENV)
+    return {key: env[key] for key in sorted(keys) if key in env}
 
 
 def _payload(
