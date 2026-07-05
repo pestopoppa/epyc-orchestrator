@@ -28,6 +28,7 @@ def test_authority_env_forces_required_flags() -> None:
     assert env["AUTOPILOT_SEQ_VERDICT"] == "1"
     assert env["AUTOPILOT_W6_AUDIT_BLOCK"] == "1"
     assert env["AUTOPILOT_PLANNER_TIMEOUT"] == "600"
+    assert env["AUTOPILOT_PLANNER_SPEND_BREAKER"] == "1"
 
 
 def test_authority_env_defaults_to_local_ingest_planner_without_overriding() -> None:

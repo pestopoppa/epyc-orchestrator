@@ -6,6 +6,7 @@ import importlib
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -26,6 +27,7 @@ PlannerSettings = planner_coordinator.PlannerSettings
 @pytest.fixture(autouse=True)
 def _no_planner_archive(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(planner_coordinator, "_append_planner_archive", lambda _record: None)
+    monkeypatch.setenv("AUTOPILOT_PLANNER_SPEND_BREAKER", "0")
 
 
 class FakeProvider:
@@ -374,6 +376,193 @@ def test_local_failure_codex_fallback_can_dispatch_without_external_critic() -> 
     assert planner_coordinator.uncritiqued_dispatch_block_reason(decision) == ""
     assert [call["role"] for call in local_ingest.calls] == ["draft"]
     assert [call["role"] for call in codex.calls] == ["draft"]
+
+
+def _fake_economics_ledger(*, triggered: bool) -> SimpleNamespace:
+    return SimpleNamespace(
+        days=7,
+        planner=SimpleNamespace(total_usd=124.5),
+        review=SimpleNamespace(
+            planner_spend_triggered=triggered,
+            projected_monthly_planner_spend_usd=541.49 if triggered else 100.0,
+        ),
+        rules=SimpleNamespace(planner_monthly_spend_threshold_usd=250.0),
+    )
+
+
+def test_spend_breaker_forces_cloud_primary_to_local_providers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from scripts.economics import ledger as ledger_mod
+
+    monkeypatch.setenv("AUTOPILOT_PLANNER_SPEND_BREAKER", "1")
+    monkeypatch.setattr(
+        ledger_mod,
+        "summarize_economics",
+        lambda *, days=7: _fake_economics_ledger(triggered=True),
+    )
+    local_ingest = FakeProvider(
+        "local_ingest",
+        [
+            PlannerProviderResult(
+                provider="local_ingest",
+                role="draft",
+                ok=True,
+                text=_action_text({"type": "numeric_trial", "surface": "repl_executor"}),
+            )
+        ],
+    )
+    local_worker = FakeProvider(
+        "local_worker",
+        [
+            PlannerProviderResult(
+                provider="local_worker",
+                role="critique",
+                ok=True,
+                text=_critique_text({"decision": "approve", "confidence": 0.8}),
+            )
+        ],
+    )
+    state: dict[str, Any] = {}
+
+    decision = planner_coordinator.plan_with_providers(
+        "prompt",
+        session_id=None,
+        planner_state=state,
+        settings=PlannerSettings(
+            primary="claude",
+            critic="codex",
+            mode="draft_critique",
+            critique_policy="always",
+        ),
+        provider_factory=_factory(
+            {
+                "local_ingest": local_ingest,
+                "local_worker": local_worker,
+            }
+        ),
+    )
+
+    assert decision.draft_provider == "local_ingest"
+    assert decision.critic_provider == "local_worker"
+    assert decision.action == {"type": "numeric_trial", "surface": "repl_executor"}
+    assert state["_spend_breaker"]["active"] is True
+    assert state["_spend_breaker"]["previous_primary"] == "claude"
+    assert state["_spend_breaker"]["previous_critic"] == "codex"
+    assert [call["role"] for call in local_ingest.calls] == ["draft"]
+    assert [call["role"] for call in local_worker.calls] == ["critique"]
+
+
+def test_spend_breaker_replaces_cloud_critic_for_local_primary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from scripts.economics import ledger as ledger_mod
+
+    monkeypatch.setenv("AUTOPILOT_PLANNER_SPEND_BREAKER", "1")
+    monkeypatch.setattr(
+        ledger_mod,
+        "summarize_economics",
+        lambda *, days=7: _fake_economics_ledger(triggered=True),
+    )
+    local_ingest = FakeProvider(
+        "local_ingest",
+        [
+            PlannerProviderResult(
+                provider="local_ingest",
+                role="draft",
+                ok=True,
+                text=_action_text({"type": "numeric_trial", "surface": "repl_executor"}),
+            )
+        ],
+    )
+    local_worker = FakeProvider(
+        "local_worker",
+        [
+            PlannerProviderResult(
+                provider="local_worker",
+                role="critique",
+                ok=True,
+                text=_critique_text({"decision": "approve", "confidence": 0.8}),
+            )
+        ],
+    )
+    state: dict[str, Any] = {}
+
+    decision = planner_coordinator.plan_with_providers(
+        "prompt",
+        session_id=None,
+        planner_state=state,
+        settings=PlannerSettings(
+            primary="local_ingest",
+            critic="codex",
+            mode="draft_critique",
+            critique_policy="always",
+        ),
+        provider_factory=_factory(
+            {
+                "local_ingest": local_ingest,
+                "local_worker": local_worker,
+            }
+        ),
+    )
+
+    assert decision.draft_provider == "local_ingest"
+    assert decision.critic_provider == "local_worker"
+    assert state["_spend_breaker"]["previous_primary"] == "local_ingest"
+    assert state["_spend_breaker"]["previous_critic"] == "codex"
+
+
+def test_spend_breaker_keeps_config_when_under_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from scripts.economics import ledger as ledger_mod
+
+    monkeypatch.setenv("AUTOPILOT_PLANNER_SPEND_BREAKER", "1")
+    monkeypatch.setattr(
+        ledger_mod,
+        "summarize_economics",
+        lambda *, days=7: _fake_economics_ledger(triggered=False),
+    )
+    claude = FakeProvider(
+        "claude",
+        [
+            PlannerProviderResult(
+                provider="claude",
+                role="draft",
+                ok=True,
+                text=_action_text({"type": "numeric_trial", "surface": "repl_executor"}),
+            )
+        ],
+    )
+    codex = FakeProvider(
+        "codex",
+        [
+            PlannerProviderResult(
+                provider="codex",
+                role="critique",
+                ok=True,
+                text=_critique_text({"decision": "approve", "confidence": 0.8}),
+            )
+        ],
+    )
+    state: dict[str, Any] = {}
+
+    decision = planner_coordinator.plan_with_providers(
+        "prompt",
+        session_id=None,
+        planner_state=state,
+        settings=PlannerSettings(
+            primary="claude",
+            critic="codex",
+            mode="draft_critique",
+            critique_policy="always",
+        ),
+        provider_factory=_factory({"claude": claude, "codex": codex}),
+    )
+
+    assert decision.draft_provider == "claude"
+    assert decision.critic_provider == "codex"
+    assert state["_spend_breaker"]["active"] is False
 
 
 def test_nonresumable_primary_clears_persisted_session_id() -> None:
