@@ -879,6 +879,7 @@ def test_eval_coverage_pressure_reports_repeat_factor_and_pool_denominator() -> 
     text = autopilot._build_eval_coverage_pressure(
         journal,
         pool_total_questions=100,
+        pool_tier_questions={1: 20, 2: 70, 3: 10},
     )
 
     assert "3 distinct qids / 4 scored rows" in text
@@ -886,7 +887,10 @@ def test_eval_coverage_pressure_reports_repeat_factor_and_pool_denominator() -> 
     assert "pool_coverage<=3.00% of 100" in text
     assert "eval trials by tier: T1=1, T3=1" in text
     assert "Tier detail:" in text
+    assert "T1:trials=1,rows=2,distinct=2,pool=20,coverage<=10.00%" in text
+    assert "T2:trials=0,rows=0,distinct=0,pool=70,coverage<=0.00%" in text
     assert "T3:trials=1,rows=2,distinct=2" in text
+    assert "pool=10,coverage<=20.00%" in text
     assert "Higher-tier coverage is thin (T2=0 trial(s), T3=1 trial(s))" in text
     assert "Least-covered non-sentinel suites: agentic=1, coder=2" in text
     assert "under-covered suites" in text

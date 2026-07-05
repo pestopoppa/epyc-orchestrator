@@ -40,7 +40,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, TYPE_CHECKING
+from typing import Any, Callable, Mapping, TYPE_CHECKING
 
 # Setup paths
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -732,8 +732,11 @@ def _build_higher_tier_planner_pressure(
     return "\n".join(lines)
 
 
-def _pool_total_question_count() -> int | None:
-    """Cheaply read the question-pool metadata row without scanning the pool."""
+_POOL_QUESTION_COUNT_CACHE: dict[str, Any] | None = None
+
+
+def _pool_question_count_summary() -> tuple[int | None, dict[int, int]]:
+    """Return total + per-tier pool counts, cached by question-pool file metadata."""
     candidates = (
         ORCH_ROOT / "benchmarks" / "prompts" / "question_pool.jsonl",
         Path("/mnt/raid0/llm/epyc-inference-research/benchmarks/prompts/question_pool.jsonl"),
@@ -742,15 +745,59 @@ def _pool_total_question_count() -> int | None:
         if not path.exists():
             continue
         try:
+            stat = path.stat()
+            cache_key = (str(path), int(stat.st_mtime_ns), int(stat.st_size))
+        except OSError:
+            continue
+        global _POOL_QUESTION_COUNT_CACHE
+        if (
+            _POOL_QUESTION_COUNT_CACHE
+            and _POOL_QUESTION_COUNT_CACHE.get("cache_key") == cache_key
+        ):
+            return (
+                _POOL_QUESTION_COUNT_CACHE.get("total"),
+                dict(_POOL_QUESTION_COUNT_CACHE.get("tier_counts") or {}),
+            )
+        total: int | None = None
+        tier_counts: dict[int, int] = {}
+        try:
             with path.open("r", encoding="utf-8") as handle:
-                first = handle.readline().strip()
-            row = json.loads(first) if first else {}
-            if isinstance(row, dict) and row.get("__pool_metadata__"):
-                total = int(row.get("total_questions") or 0)
-                return total if total > 0 else None
+                for raw in handle:
+                    text = raw.strip()
+                    if not text:
+                        continue
+                    row = json.loads(text)
+                    if not isinstance(row, dict):
+                        continue
+                    if row.get("__pool_metadata__"):
+                        try:
+                            metadata_total = int(row.get("total_questions") or 0)
+                            total = metadata_total if metadata_total > 0 else total
+                        except (TypeError, ValueError):
+                            pass
+                        continue
+                    try:
+                        tier = int(row.get("tier"))
+                    except (TypeError, ValueError):
+                        continue
+                    tier_counts[tier] = tier_counts.get(tier, 0) + 1
         except Exception:
             continue
-    return None
+        if total is None and tier_counts:
+            total = sum(tier_counts.values())
+        _POOL_QUESTION_COUNT_CACHE = {
+            "cache_key": cache_key,
+            "total": total,
+            "tier_counts": dict(tier_counts),
+        }
+        return total, tier_counts
+    return None, {}
+
+
+def _pool_total_question_count() -> int | None:
+    """Return the question-pool size from metadata or cached per-tier scan."""
+    total, _tier_counts = _pool_question_count_summary()
+    return total
 
 
 def _eval_question_results(entry: JournalEntry) -> list[dict[str, Any]]:
@@ -768,6 +815,7 @@ def _build_eval_coverage_pressure(
     journal: ExperimentJournal | None,
     *,
     pool_total_questions: int | None = None,
+    pool_tier_questions: Mapping[int | str, int] | None = None,
 ) -> str:
     """Summarize eval-task coverage so planner search does not overfit a narrow slice."""
     if journal is None:
@@ -812,21 +860,39 @@ def _build_eval_coverage_pressure(
 
     distinct_count = len(distinct)
     repeat_factor = question_rows / max(1, distinct_count)
-    total = pool_total_questions if pool_total_questions is not None else _pool_total_question_count()
+    tier_pool_counts: dict[int, int] = {}
+    if pool_tier_questions is not None:
+        for tier, count in pool_tier_questions.items():
+            try:
+                tier_pool_counts[int(tier)] = int(count)
+            except (TypeError, ValueError):
+                continue
+    if pool_total_questions is None and pool_tier_questions is None:
+        total, tier_pool_counts = _pool_question_count_summary()
+    else:
+        total = pool_total_questions
     coverage_text = ""
     if total:
         coverage_text = f", pool_coverage<={distinct_count * 100.0 / total:.2f}% of {total}"
     tier_text = ", ".join(
         f"T{tier}={count}" for tier, count in sorted(tier_trials.items())
     ) or "none"
-    tier_detail_text = ", ".join(
-        (
+    detail_tiers = sorted(
+        set(tier_trials) | set(tier_question_rows) | set(tier_distinct) | set(tier_pool_counts)
+    )
+    tier_detail_parts: list[str] = []
+    for tier in detail_tiers:
+        distinct_for_tier = len(tier_distinct.get(tier, set()))
+        part = (
             f"T{tier}:trials={tier_trials.get(tier, 0)},"
             f"rows={tier_question_rows.get(tier, 0)},"
-            f"distinct={len(tier_distinct.get(tier, set()))}"
+            f"distinct={distinct_for_tier}"
         )
-        for tier in sorted(set(tier_trials) | set(tier_question_rows) | set(tier_distinct))
-    ) or "none"
+        pool_count = tier_pool_counts.get(tier)
+        if pool_count:
+            part += f",pool={pool_count},coverage<={distinct_for_tier * 100.0 / pool_count:.2f}%"
+        tier_detail_parts.append(part)
+    tier_detail_text = ", ".join(tier_detail_parts) or "none"
     under_sampled_higher_tiers = [
         tier for tier in (2, 3) if tier_trials.get(tier, 0) < 5
     ]
