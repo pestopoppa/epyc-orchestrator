@@ -41,7 +41,6 @@ from src.api.routes.dashboard_freshness import Source, mtime
 from src.api.routes.dashboard_tap import (
     _INFERENCE_TAP_EVENTS_PATH,
     _INFERENCE_TAP_PATH,
-    _PROMPT_TAP_PATH,
     _REPL_TAP_PATH,
 )
 
@@ -236,9 +235,9 @@ PANELS: tuple[PanelSpec, ...] = (
             SourceSpec("inference_tap", _INFERENCE_TAP_PATH, 120, 600),
             SourceSpec("structured_tap", _INFERENCE_TAP_EVENTS_PATH, 120, 600,
                        mtime_fn=_latest_tap_events_mtime),
-            # Informational: secondary/legacy taps that are naturally old between
-            # uses — reported for context, never flip the badge.
-            SourceSpec("prompt_tap", _PROMPT_TAP_PATH, 90, 300, optional=True, gating=False),
+            # Informational: legacy REPL tap is naturally old between uses —
+            # reported for context, never flips the badge. (prompt_tap retired
+            # 2026-07-05: orphaned file, writer removed long ago.)
             SourceSpec("repl_tap", _REPL_TAP_PATH, 300, 1800, optional=True, gating=False),
         ),
     ),

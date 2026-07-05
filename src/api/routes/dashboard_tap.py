@@ -20,7 +20,6 @@ from typing import Any
 _INFERENCE_TAP_PATH = Path("/mnt/raid0/llm/tmp/inference_tap.log")
 _INFERENCE_TAP_EVENTS_PATH = Path("/mnt/raid0/llm/tmp/inference_tap_events.jsonl")
 _REPL_TAP_PATH = Path("/mnt/raid0/llm/tmp/repl_tap.log")
-_PROMPT_TAP_PATH = Path("/mnt/raid0/llm/tmp/autopilot_prompt_tap.txt")
 _TAP_SENTINEL_PATH = Path("/mnt/raid0/llm/tmp/.inference_tap_active")
 
 _SECTION_SEP = "=" * 72

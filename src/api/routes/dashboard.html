@@ -3480,25 +3480,10 @@ function renderInferenceTap(data) {
         ? (ageS != null ? `— ${ageS}s since last write` : '')
         : '— inactive';
     const sections = data.inference_sections || [];
-    // "current prompt" is only current if its tap file is actually recent —
-    // the prompt tap writer can go dormant for weeks (observed 45 days), and
-    // rendering its last write unlabeled made the whole panel read as stale.
-    const cur = data.current_prompt || '';
-    const promptAgeS = (data.current_prompt_mtime && data.now)
-        ? Math.max(0, data.now - data.current_prompt_mtime) : null;
-    const promptIsCurrent = promptAgeS != null && promptAgeS < 3600;
-    if (!sections.length && !(cur.trim() && promptIsCurrent)) {
+    if (!sections.length) {
         container.innerHTML = '<div style="color:var(--muted);font-size:11px">no inference activity in the tap file yet</div>';
         return;
     }
-    const promptAgeChip = promptAgeS != null
-        ? ` <span style="color:var(--dim);text-transform:none;letter-spacing:0">· ${formatShortDuration(promptAgeS)} ago</span>`
-        : '';
-    const liveBlock = (cur.trim() && promptIsCurrent) ? `
-        <div style="margin-bottom:8px">
-            <div style="color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.05em">current prompt${promptAgeChip}</div>
-            <div class="tap-content prompt-text" id="tap-current-prompt"></div>
-        </div>` : '';
     // Preserve per-section expand state across re-renders. renderInferenceTap
     // is called on every tap-stream tick and fully rebuilds innerHTML, so
     // without this any section the user opened/closed would snap back on the
@@ -3529,11 +3514,8 @@ function renderInferenceTap(data) {
                 </div>
             </details>`;
     }).join('');
-    container.innerHTML = liveBlock + sectionsHtml;
+    container.innerHTML = sectionsHtml;
     // Render markdown into each block
-    if (liveBlock) {
-        renderMarkdownInto(document.getElementById('tap-current-prompt'), cur);
-    }
     sections.forEach((s, i) => {
         const pEl = container.querySelector(`[data-md="prompt-${i}"]`);
         const rEl = container.querySelector(`[data-md="response-${i}"]`);

@@ -53,7 +53,6 @@ from src.api.routes.dashboard_panels import (
 from src.api.routes.dashboard_tap import (
     _INFERENCE_TAP_EVENTS_PATH,
     _INFERENCE_TAP_PATH,
-    _PROMPT_TAP_PATH,
     _REPL_TAP_PATH,
     _TAP_SENTINEL_PATH,
     _parse_inference_sections,
@@ -389,12 +388,6 @@ async def inference_tap_snapshot(max_sections: int = 20) -> JSONResponse:
         now_epoch=now_epoch,
     )
     structured_requests = _enrich_structured_tap_requests(structured_requests)
-    current_prompt = ""
-    if _PROMPT_TAP_PATH.exists():
-        try:
-            current_prompt = _PROMPT_TAP_PATH.read_text(errors="ignore")[-4000:]
-        except Exception:
-            pass
     repl_tail = _read_tail(_REPL_TAP_PATH, max_bytes=64 * 1024)
     # Just take the last ~3000 chars of REPL for compactness
     repl_tail = repl_tail[-3000:] if repl_tail else ""
@@ -408,8 +401,6 @@ async def inference_tap_snapshot(max_sections: int = 20) -> JSONResponse:
 
     return JSONResponse(_stamp({
         "tap_active": tap_active,
-        "current_prompt": current_prompt,
-        "current_prompt_mtime": mtime(_PROMPT_TAP_PATH),
         "inference_sections": sections,
         "structured_requests": structured_requests,
         "inference_tap_mtime": mtime(_INFERENCE_TAP_PATH),
@@ -1181,7 +1172,7 @@ async def inference_tap_stream(request: Request) -> StreamingResponse:
     """
 
     async def event_gen():
-        last_mtimes = {"inference": 0.0, "structured": 0.0, "prompt": 0.0, "repl": 0.0}
+        last_mtimes = {"inference": 0.0, "structured": 0.0, "repl": 0.0}
         while True:
             if await request.is_disconnected():
                 return
@@ -1192,21 +1183,18 @@ async def inference_tap_stream(request: Request) -> StreamingResponse:
                     if _INFERENCE_TAP_EVENTS_PATH.exists()
                     else 0.0
                 )
-                prm_m = _PROMPT_TAP_PATH.stat().st_mtime if _PROMPT_TAP_PATH.exists() else 0.0
                 rpl_m = _REPL_TAP_PATH.stat().st_mtime if _REPL_TAP_PATH.exists() else 0.0
             except Exception:
-                inf_m = structured_m = prm_m = rpl_m = 0.0
+                inf_m = structured_m = rpl_m = 0.0
             changed = (
                 inf_m > last_mtimes["inference"]
                 or structured_m > last_mtimes["structured"]
-                or prm_m > last_mtimes["prompt"]
                 or rpl_m > last_mtimes["repl"]
             )
             if changed:
                 last_mtimes = {
                     "inference": inf_m,
                     "structured": structured_m,
-                    "prompt": prm_m,
                     "repl": rpl_m,
                 }
                 # Build the payload — same shape as the snapshot endpoint
@@ -1214,12 +1202,6 @@ async def inference_tap_stream(request: Request) -> StreamingResponse:
                 sections = _parse_inference_sections(inference_tail, max_sections=10)
                 structured_tail = _read_tap_events_tail(_INFERENCE_TAP_EVENTS_PATH, max_bytes=1024 * 1024)
                 now_epoch = time.time()
-                current_prompt = ""
-                if _PROMPT_TAP_PATH.exists():
-                    try:
-                        current_prompt = _PROMPT_TAP_PATH.read_text(errors="ignore")[-4000:]
-                    except Exception:
-                        pass
                 structured_requests = _parse_structured_tap_requests(
                     structured_tail,
                     max_requests=10,
@@ -1227,12 +1209,10 @@ async def inference_tap_stream(request: Request) -> StreamingResponse:
                 )
                 payload = json.dumps({
                     "tap_active": _TAP_SENTINEL_PATH.exists(),
-                    "current_prompt": current_prompt,
                     "inference_sections": sections,
                     "structured_requests": _enrich_structured_tap_requests(structured_requests),
                     "inference_tap_mtime": inf_m,
                     "structured_tap_mtime": structured_m,
-                    "prompt_tap_mtime": prm_m,
                     "repl_tap_mtime": rpl_m,
                 })
                 yield f"data: {payload}\n\n"
