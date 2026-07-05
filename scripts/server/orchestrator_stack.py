@@ -260,6 +260,28 @@ def _same_real_model_path(left: str, right: str) -> bool:
     return os.path.realpath(left) == os.path.realpath(right)
 
 
+def _append_spec_decode_args(
+    cmd: list[str],
+    *,
+    model_path: str,
+    draft_model_path: str | None,
+    spec_type: str | None,
+    draft_max: str | None,
+    draft_p_min: str | None = None,
+    threads_draft: str | None = None,
+) -> None:
+    if draft_model_path and not _same_real_model_path(model_path, draft_model_path):
+        cmd.extend(["-md", draft_model_path])
+    if spec_type:
+        cmd.extend(["--spec-type", spec_type])
+    if draft_max:
+        cmd.extend(["--spec-draft-n-max", draft_max])
+    if draft_p_min is not None:
+        cmd.extend(["--draft-p-min", draft_p_min])
+    if threads_draft:
+        cmd.extend(["--threads-draft", threads_draft])
+
+
 def _append_runtime_kv_args(cmd: list[str], cache: dict[str, Any]) -> None:
     kv_type_k = cache.get("kv_type_k")
     kv_type_v = cache.get("kv_type_v")
@@ -278,25 +300,36 @@ def _append_runtime_spec_args(cmd: list[str], runtime: dict[str, Any], model_pat
     draft_model_path = spec.get("draft_model_path")
     if not isinstance(draft_model_path, str) or not draft_model_path:
         return
-    if not _same_real_model_path(model_path, draft_model_path):
-        cmd.extend(["-md", draft_model_path])
     spec_type = spec.get("type")
-    if isinstance(spec_type, str) and spec_type:
-        cmd.extend(["--spec-type", spec_type])
     draft_max = spec.get("draft_max")
-    if isinstance(draft_max, int) and not isinstance(draft_max, bool) and draft_max > 0:
-        # 2026-06-26 v6 cutover: --draft-max renamed to --spec-draft-n-max (same value)
-        cmd.extend(["--spec-draft-n-max", str(draft_max)])
     draft_p_min = spec.get("draft_p_min")
-    if isinstance(draft_p_min, (int, float)) and not isinstance(draft_p_min, bool):
-        cmd.extend(["--draft-p-min", str(float(draft_p_min))])
     threads_draft = spec.get("threads_draft")
-    if (
-        isinstance(threads_draft, int)
-        and not isinstance(threads_draft, bool)
-        and threads_draft > 0
-    ):
-        cmd.extend(["--threads-draft", str(threads_draft)])
+    _append_spec_decode_args(
+        cmd,
+        model_path=model_path,
+        draft_model_path=draft_model_path,
+        spec_type=spec_type if isinstance(spec_type, str) and spec_type else None,
+        # 2026-06-26 v6 cutover: --draft-max renamed to --spec-draft-n-max (same value)
+        draft_max=(
+            str(draft_max)
+            if isinstance(draft_max, int) and not isinstance(draft_max, bool) and draft_max > 0
+            else None
+        ),
+        draft_p_min=(
+            str(float(draft_p_min))
+            if isinstance(draft_p_min, (int, float)) and not isinstance(draft_p_min, bool)
+            else None
+        ),
+        threads_draft=(
+            str(threads_draft)
+            if isinstance(threads_draft, int)
+            and not isinstance(threads_draft, bool)
+            and threads_draft > 0
+            else None
+        ),
+    )
+
+
 # Path/binary constants moved to scripts/server/stack_paths.py (2026-05-22).
 # Manifest (PORT_MAP, ROLE_LAUNCH_META, model paths, classification helpers,
 # validate_model_paths, validate_against_registry, etc.) moved to
@@ -600,60 +633,87 @@ def _build_worker_general_command(
     # _resolve_thread_count ignored numa_instance — that bug is now fixed at
     # the source, so the workaround is no longer needed.
     numa_thread_count = int(_resolve_thread_count("worker_general", numa_instance))
-    return [
+    cmd = [
         binary,
         "-m",
         model_path,
-        "-md",
-        draft_model_path,  # MTP draft (gemma4 assistant Q8)
-        "--spec-type",
-        _runtime_string(spec, "type", str(_WORKER_GENERAL_DEGRADED_FALLBACK["spec_type"])),
-        # Without this, -md is treated as standard spec decode and
-        # MTP-arch draft tensors are loaded but never assigned to a
-        # backend buffer → "tensor buffer not set" assertion.
-        "--spec-draft-n-max",  # 2026-06-26 v6 cutover: renamed from --draft-max (same value)
-        _runtime_positive_int(spec, "draft_max", _WORKER_GENERAL_DEGRADED_FALLBACK["draft_max"]),
-        "--draft-p-min",
-        _runtime_number_string(spec, "draft_p_min", _WORKER_GENERAL_DEGRADED_FALLBACK["draft_p_min"]),
-        "--threads-draft",
-        _runtime_positive_int(spec, "threads_draft", _WORKER_GENERAL_DEGRADED_FALLBACK["threads_draft"]),
-        "-ub",
-        _runtime_positive_int(cache, "ubatch", _WORKER_GENERAL_DEGRADED_FALLBACK["ubatch"]),
-        *(["--no-mmap"] if cache.get("no_mmap", True) is True else []),  # canonical recipe: bulk-read on EPYC NUMA cold-cache decode
-        "--reasoning",
-        str(flags.get("reasoning") or "off"),  # disable gemma4 thinking-channel (output otherwise lands in
-        # reasoning_content not content; registry: gemma4_26b reasoning=off)
-        *(["--jinja"] if flags.get("jinja", True) is True else []),  # gemma4 ships a custom chat template embedded in the gguf;
-        # without --jinja, llama.cpp rejects /v1/chat/completions
-        # with "this custom template is not supported"
-        "--host",
-        "127.0.0.1",
-        "--port",
-        str(port),
-        # -np 1 (single slot): MTP shares state with the target across slots in a
-        # way that the ik_llama.cpp PR #1744 build asserts on with -np 2 ("tensor
-        # buffer not set" at ggml-backend.cpp:236 during inference). Single slot
-        # matches the working benchmark recipe. Pre-gemma4 worker_general used
-        # -np 2 because external-draft spec decode (Qwen3-Coder + 0.75B draft)
-        # had per-slot draft state; MTP fuses draft + target, hence -np 1.
-        "-np",
-        _runtime_positive_int(cache, "slots", 1),
-        "-c",
-        _runtime_positive_int(cache, "context_tokens", _WORKER_GENERAL_DEGRADED_FALLBACK["context_tokens"]),
-        # Per-instance thread count (full=96, quarters=48). Pre-2026-05-08 was
-        # hardcoded -t 24 (Qwen3-Coder tolerated it); gemma4 + MTP under
-        # ik_llama.cpp PR #1744 must match the bench recipe to avoid the
-        # "tensor buffer not set" MTP assertion.
-        "-t",
-        str(numa_thread_count),
-        # KV cache q8_0/q8_0 — registry-declared and required for stable MTP buffer
-        # allocation. f16 default left some MTP tensor buffers uninitialized.
-        "-ctk",
-        _runtime_string(cache, "kv_type_k", str(_WORKER_GENERAL_DEGRADED_FALLBACK["kv_type_k"])),
-        "-ctv",
-        _runtime_string(cache, "kv_type_v", str(_WORKER_GENERAL_DEGRADED_FALLBACK["kv_type_v"])),
-        *(["--flash-attn", "on"] if flags.get("flash_attn", True) is True else []),
     ]
+    _append_spec_decode_args(
+        cmd,
+        model_path=model_path,
+        draft_model_path=draft_model_path,
+        spec_type=_runtime_string(
+            spec, "type", str(_WORKER_GENERAL_DEGRADED_FALLBACK["spec_type"])
+        ),
+        draft_max=_runtime_positive_int(
+            spec,
+            "draft_max",
+            _WORKER_GENERAL_DEGRADED_FALLBACK["draft_max"],
+        ),
+        draft_p_min=_runtime_number_string(
+            spec,
+            "draft_p_min",
+            _WORKER_GENERAL_DEGRADED_FALLBACK["draft_p_min"],
+        ),
+        threads_draft=_runtime_positive_int(
+            spec,
+            "threads_draft",
+            _WORKER_GENERAL_DEGRADED_FALLBACK["threads_draft"],
+        ),
+    )
+    cmd.extend(
+        [
+            "-ub",
+            _runtime_positive_int(cache, "ubatch", _WORKER_GENERAL_DEGRADED_FALLBACK["ubatch"]),
+            *(
+                ["--no-mmap"] if cache.get("no_mmap", True) is True else []
+            ),  # canonical recipe: bulk-read on EPYC NUMA cold-cache decode
+            "--reasoning",
+            str(
+                flags.get("reasoning") or "off"
+            ),  # disable gemma4 thinking-channel (output otherwise lands in
+            # reasoning_content not content; registry: gemma4_26b reasoning=off)
+            *(
+                ["--jinja"] if flags.get("jinja", True) is True else []
+            ),  # gemma4 ships a custom chat template embedded in the gguf;
+            # without --jinja, llama.cpp rejects /v1/chat/completions
+            # with "this custom template is not supported"
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+            # -np 1 (single slot): MTP shares state with the target across slots in a
+            # way that the ik_llama.cpp PR #1744 build asserts on with -np 2 ("tensor
+            # buffer not set" at ggml-backend.cpp:236 during inference). Single slot
+            # matches the working benchmark recipe. Pre-gemma4 worker_general used
+            # -np 2 because external-draft spec decode (Qwen3-Coder + 0.75B draft)
+            # had per-slot draft state; MTP fuses draft + target, hence -np 1.
+            "-np",
+            _runtime_positive_int(cache, "slots", 1),
+            "-c",
+            _runtime_positive_int(
+                cache, "context_tokens", _WORKER_GENERAL_DEGRADED_FALLBACK["context_tokens"]
+            ),
+            # Per-instance thread count (full=96, quarters=48). Pre-2026-05-08 was
+            # hardcoded -t 24 (Qwen3-Coder tolerated it); gemma4 + MTP under
+            # ik_llama.cpp PR #1744 must match the bench recipe to avoid the
+            # "tensor buffer not set" MTP assertion.
+            "-t",
+            str(numa_thread_count),
+            # KV cache q8_0/q8_0 — registry-declared and required for stable MTP buffer
+            # allocation. f16 default left some MTP tensor buffers uninitialized.
+            "-ctk",
+            _runtime_string(
+                cache, "kv_type_k", str(_WORKER_GENERAL_DEGRADED_FALLBACK["kv_type_k"])
+            ),
+            "-ctv",
+            _runtime_string(
+                cache, "kv_type_v", str(_WORKER_GENERAL_DEGRADED_FALLBACK["kv_type_v"])
+            ),
+            *(["--flash-attn", "on"] if flags.get("flash_attn", True) is True else []),
+        ]
+    )
+    return cmd
 
 
 def _build_worker_explore_command(
@@ -755,8 +815,12 @@ _NO_SPEC_DECODE = NO_SPEC_DECODE_ROLES
 # q4_0 / q4_0 = 71% KV savings but 71% prefill regression on pure-attn. OK for hybrid (SSM amortizes).
 # --kv-hadamard: production binary rebuilt with Hadamard support (commit b51c905ec, 2026-03-28).
 _KV_CONTEXT_SIZES = {
-    "architect_general": str(LAUNCH_CONTEXT_TOKENS["architect_general"]),  # 122B MoE hybrid → ~16GB KV
-    "ingest_long_context": str(LAUNCH_CONTEXT_TOKENS["ingest_long_context"]),  # 80B SSM, needs long context (Stage 1 of three_stage_summarization)
+    "architect_general": str(
+        LAUNCH_CONTEXT_TOKENS["architect_general"]
+    ),  # 122B MoE hybrid → ~16GB KV
+    "ingest_long_context": str(
+        LAUNCH_CONTEXT_TOKENS["ingest_long_context"]
+    ),  # 80B SSM, needs long context (Stage 1 of three_stage_summarization)
 }
 _KV_QUANT_CONFIGS = LAUNCH_KV_QUANT_CONFIGS
 
@@ -1848,8 +1912,7 @@ def start_handoff_dashboard() -> ProcessInfo | None:
 
     with open(log_file, "w") as log:
         proc = subprocess.Popen(
-            [sys.executable, "-m", "dashboard.server", "--host", "0.0.0.0",
-             "--port", str(port)],
+            [sys.executable, "-m", "dashboard.server", "--host", "0.0.0.0", "--port", str(port)],
             cwd=str(repo),
             stdout=log,
             stderr=subprocess.STDOUT,
