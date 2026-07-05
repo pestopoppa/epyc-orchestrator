@@ -52,6 +52,7 @@ DCP_CONTEXT_MODE = "dcp_pack"
 KB_RAG_CONTEXT_MODE = "kb_rag"
 SOURCE_CONTEXT_MODE = "source_excerpt"
 DEFAULT_KB_RAG_TOP_K = 6
+DETERMINISTIC_COMMAND_MODE = "deterministic_command"
 
 
 class LabRunnerError(RuntimeError):
@@ -706,6 +707,57 @@ def call_chat_api(
     }
 
 
+def _deterministic_command(job: dict[str, Any]) -> list[str]:
+    execution = job.get("execution") or {}
+    if execution.get("mode") != DETERMINISTIC_COMMAND_MODE:
+        raise LabRunnerError(
+            f"job {job.get('job_id')} does not declare execution.mode={DETERMINISTIC_COMMAND_MODE}"
+        )
+    if job.get("risk") != "read_only":
+        raise LabRunnerError("deterministic command jobs must be risk=read_only")
+    command = execution.get("command")
+    if not isinstance(command, list) or not command:
+        raise LabRunnerError("execution.command must be a non-empty argv list")
+    argv = [str(part) for part in command]
+    if not argv[0]:
+        raise LabRunnerError("execution.command[0] must be non-empty")
+    return argv
+
+
+def run_deterministic_command(
+    *,
+    job: dict[str, Any],
+    repo_root: Path,
+    timeout_s: float,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Run a read-only deterministic command and parse its stdout JSON object."""
+    argv = _deterministic_command(job)
+    t0 = time.perf_counter()
+    try:
+        proc = subprocess.run(
+            argv,
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise LabRunnerError(f"deterministic command failed to run: {exc}") from exc
+    elapsed = time.perf_counter() - t0
+    meta = {
+        "command": argv,
+        "returncode": proc.returncode,
+        "elapsed_s": round(elapsed, 3),
+        "stderr_tail": proc.stderr[-4000:],
+    }
+    if proc.returncode != 0:
+        raise LabRunnerError(
+            f"deterministic command exited {proc.returncode}: {proc.stderr[-4000:]}"
+        )
+    return extract_json_object(proc.stdout), meta
+
+
 def _git_rev(path: Path, args: list[str]) -> str:
     try:
         result = subprocess.run(
@@ -868,8 +920,17 @@ def run_from_args(args: argparse.Namespace) -> RunnerResult:
             run_id=run_id,
             timeout_s=args.timeout_s,
         )
+    elif getattr(args, "execute_command", False):
+        invocation_mode = DETERMINISTIC_COMMAND_MODE
+        output, chat_meta = run_deterministic_command(
+            job=job,
+            repo_root=repo_root,
+            timeout_s=args.timeout_s,
+        )
     else:  # pragma: no cover - argparse enforces this
-        raise LabRunnerError("select --dry-run-stub, --response-fixture, or --execute-chat")
+        raise LabRunnerError(
+            "select --dry-run-stub, --response-fixture, --execute-chat, or --execute-command"
+        )
     validate_output(job, output)
     queue_dir = Path(args.queue_dir).expanduser() if args.queue_dir else DEFAULT_QUEUE
     if not queue_dir.is_absolute():
@@ -913,6 +974,7 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument("--dry-run-stub", action="store_true")
     mode.add_argument("--response-fixture")
     mode.add_argument("--execute-chat", action="store_true")
+    mode.add_argument("--execute-command", action="store_true")
     return parser
 
 

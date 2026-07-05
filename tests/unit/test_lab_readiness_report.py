@@ -44,6 +44,30 @@ def _write_jobs_file(path: Path) -> None:
     path.write_text(yaml.safe_dump(doc, sort_keys=False))
 
 
+def _append_active_safe_job(path: Path) -> None:
+    doc = yaml.safe_load(path.read_text())
+    doc["jobs"].append(
+        {
+            "job_id": "active_safe_watch",
+            "title": "Active-safe watch",
+            "stage": "shadow",
+            "enabled": True,
+            "risk": "read_only",
+            "runtime_class": "active_safe_deterministic",
+            "active_safe": True,
+            "schedule": {
+                "type": "nightly",
+                "cadence": "daily",
+                "runtime_class": "active_safe_deterministic",
+            },
+            "execution": {"mode": "deterministic_command", "command": ["true"]},
+            "input_spec": {"sources": []},
+            "output_contract": {"format": "json", "json_schema": {"type": "object"}},
+        }
+    )
+    path.write_text(yaml.safe_dump(doc, sort_keys=False))
+
+
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("".join(json.dumps(row) + "\n" for row in rows))
@@ -173,6 +197,35 @@ def test_report_separates_schedulable_from_ready_now(tmp_path: Path, monkeypatch
     assert report["quiet_window"]["ready"] is False
     assert report["quiet_window"]["blockers"] == ["active AutoPilot process count: 1"]
     assert report["quiet_window"]["active_autopilot_processes"][0]["pid"] == 123
+
+
+def test_report_keeps_active_safe_jobs_ready_when_autopilot_running(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    jobs_file = tmp_path / "lab_jobs.yaml"
+    _write_jobs_file(jobs_file)
+    _append_active_safe_job(jobs_file)
+
+    def fake_active_processes(marker: str) -> list[dict]:
+        if marker == readiness_report.AUTOPILOT_CMD_MARKER:
+            return [{"pid": 123, "cmd": "uv run python scripts/autopilot/autopilot.py start"}]
+        return []
+
+    monkeypatch.setattr(readiness_report, "_active_processes", fake_active_processes)
+
+    report = readiness_report.run_from_args(_args(tmp_path, jobs_file))
+
+    assert report["summary"]["nightly_runnable"] == 2
+    assert report["summary"]["nightly_active_safe_runnable"] == 1
+    assert report["summary"]["nightly_active_safe_ready_now"] == 1
+    assert report["summary"]["nightly_quiet_window_runnable"] == 1
+    assert report["summary"]["nightly_quiet_window_ready_now"] == 0
+    assert report["summary"]["nightly_ready_now"] == 1
+    active_safe = next(job for job in report["jobs"] if job["job_id"] == "active_safe_watch")
+    assert active_safe["active_safe"] is True
+    assert active_safe["requires_quiet_window"] is False
+    assert active_safe["execution_mode"] == "deterministic_command"
 
 
 def test_report_skip_process_check_leaves_ready_now_unknown(tmp_path: Path) -> None:

@@ -16,6 +16,7 @@ from scripts.lab import run_job
 
 DEFAULT_JOBS_FILE = "orchestration/lab_jobs.yaml"
 DEFAULT_MAX_JOBS = 2
+ACTIVE_SAFE_RUNTIME_CLASSES = frozenset({"active_safe", "active_safe_deterministic"})
 
 
 class ShadowBatchError(RuntimeError):
@@ -43,6 +44,25 @@ def _scheduled_for(job: dict[str, Any], schedule: str) -> bool:
     return False
 
 
+def execution_mode(job: dict[str, Any]) -> str:
+    execution = job.get("execution") or {}
+    return str(execution.get("mode") or "model_chat")
+
+
+def is_active_safe_job(job: dict[str, Any]) -> bool:
+    """Return true for read-only deterministic jobs safe during live inference."""
+    schedule = job.get("schedule") or {}
+    runtime_class = str(job.get("runtime_class") or schedule.get("runtime_class") or "")
+    marked_active_safe = (
+        job.get("active_safe") is True or runtime_class in ACTIVE_SAFE_RUNTIME_CLASSES
+    )
+    return (
+        marked_active_safe
+        and job.get("risk") == "read_only"
+        and execution_mode(job) == run_job.DETERMINISTIC_COMMAND_MODE
+    )
+
+
 def select_jobs(
     jobs_doc: dict[str, Any],
     *,
@@ -51,6 +71,7 @@ def select_jobs(
     include_disabled: bool,
     allow_gated: bool,
     max_jobs: int,
+    active_safe_only: bool = False,
 ) -> list[dict[str, Any]]:
     selected: list[dict[str, Any]] = []
     requested = set(job_ids)
@@ -67,6 +88,8 @@ def select_jobs(
         if job.get("gates") and not allow_gated:
             continue
         if not requested and not _scheduled_for(job, schedule):
+            continue
+        if active_safe_only and not is_active_safe_job(job):
             continue
         selected.append(job)
         if max_jobs and len(selected) >= max_jobs:
@@ -99,6 +122,7 @@ def _run_one(
         dry_run_stub=args.dry_run_stub,
         response_fixture=None,
         execute_chat=args.execute_chat,
+        execute_command=args.execute_command,
         api_url=args.api_url,
         timeout_s=args.timeout_s,
         print_output=False,
@@ -113,8 +137,8 @@ def run_from_args(args: argparse.Namespace) -> dict[str, Any]:
     if not jobs_file.is_absolute():
         jobs_file = repo_root / jobs_file
     jobs_file = jobs_file.resolve()
-    if not args.dry_run_stub and not args.execute_chat:
-        raise ShadowBatchError("select --dry-run-stub or --execute-chat")
+    if not args.dry_run_stub and not args.execute_chat and not args.execute_command:
+        raise ShadowBatchError("select --dry-run-stub, --execute-chat, or --execute-command")
     jobs_doc = _load_yaml(jobs_file)
     jobs = select_jobs(
         jobs_doc,
@@ -122,6 +146,7 @@ def run_from_args(args: argparse.Namespace) -> dict[str, Any]:
         job_ids=args.job_id,
         include_disabled=args.include_disabled,
         allow_gated=args.allow_gated,
+        active_safe_only=getattr(args, "active_safe_only", False),
         max_jobs=args.max_jobs,
     )
     rows: list[dict[str, Any]] = []
@@ -162,6 +187,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-context-chars", type=int)
     parser.add_argument("--dry-run-stub", action="store_true")
     parser.add_argument("--execute-chat", action="store_true")
+    parser.add_argument("--execute-command", action="store_true")
+    parser.add_argument(
+        "--active-safe-only",
+        action="store_true",
+        help="Select only read-only deterministic jobs marked active-safe.",
+    )
     parser.add_argument("--api-url", default=run_job.DEFAULT_API_URL)
     parser.add_argument("--timeout-s", type=float, default=300.0)
     parser.add_argument("--continue-on-error", action="store_true")

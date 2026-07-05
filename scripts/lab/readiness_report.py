@@ -225,6 +225,10 @@ def _job_readiness(
         "stage": job.get("stage"),
         "enabled": job.get("enabled") is not False,
         "risk": job.get("risk"),
+        "runtime_class": job.get("runtime_class") or (job.get("schedule") or {}).get("runtime_class"),
+        "execution_mode": run_shadow_jobs.execution_mode(job),
+        "active_safe": run_shadow_jobs.is_active_safe_job(job),
+        "requires_quiet_window": not run_shadow_jobs.is_active_safe_job(job),
         "gated": bool(job.get("gates")),
         "gates": list(job.get("gates") or []),
         "scheduled_manual": run_shadow_jobs._scheduled_for(job, "manual"),
@@ -275,6 +279,12 @@ def build_report(
         allow_gated=False,
         max_jobs=0,
     )
+    active_safe_nightly = [
+        job for job in runnable_nightly if run_shadow_jobs.is_active_safe_job(job)
+    ]
+    quiet_window_nightly = [
+        job for job in runnable_nightly if not run_shadow_jobs.is_active_safe_job(job)
+    ]
     rows = [
         _job_readiness(
             jobs_doc=jobs_doc,
@@ -317,7 +327,12 @@ def build_report(
             "enabled_jobs": sum(1 for job in jobs if job.get("enabled") is not False),
             "shadow_jobs": sum(1 for job in jobs if job.get("stage") == "shadow"),
             "nightly_runnable": len(runnable_nightly),
-            "nightly_ready_now": len(runnable_nightly) if quiet_ready else 0,
+            "nightly_active_safe_runnable": len(active_safe_nightly),
+            "nightly_active_safe_ready_now": len(active_safe_nightly),
+            "nightly_quiet_window_runnable": len(quiet_window_nightly),
+            "nightly_quiet_window_ready_now": len(quiet_window_nightly) if quiet_ready else 0,
+            "nightly_ready_now": len(active_safe_nightly)
+            + (len(quiet_window_nightly) if quiet_ready else 0),
             "manual_runnable": len(runnable_manual),
             "task_records": len(task_records),
             "verdicts": len(verdicts),
