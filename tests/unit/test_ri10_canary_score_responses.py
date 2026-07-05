@@ -57,6 +57,23 @@ def test_score_responses_summarizes_by_arm_and_role() -> None:
     ]
 
 
+def test_score_responses_accepts_exact_answer_inside_explanation() -> None:
+    scored, summary = scorer.score_responses(
+        answer_key_rows=[_answer_key("r1", expected="multiprocessing")],
+        response_rows=[
+            {
+                "request_id": "r1",
+                "response": "The package introduced by PEP 371 is multiprocessing.",
+            }
+        ],
+    )
+
+    assert summary["status"] == "ready"
+    assert summary["buckets"]["overall"]["accuracy"] == 1.0
+    assert scored[0]["binary_correct"] is True
+    assert scored[0]["outcome"] == "CORRECT"
+
+
 def test_score_responses_reports_missing_response() -> None:
     scored, summary = scorer.score_responses(
         answer_key_rows=[

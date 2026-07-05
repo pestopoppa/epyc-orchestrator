@@ -12,7 +12,6 @@ from typing import Any, Iterable
 
 from scripts.graph_router.reconstruct_answer_equivalence_targets import (
     equivalence_features,
-    proxy_label,
 )
 
 DEFAULT_F1_THRESHOLD = 0.8
@@ -109,7 +108,7 @@ def _score_one(
 
     response = _response_text(response_row)
     features = equivalence_features(expected, response)
-    binary = bool(proxy_label(features, f1_threshold=f1_threshold))
+    binary = _answer_matches(features, f1_threshold=f1_threshold)
     return {
         **base,
         "status": "scored",
@@ -132,6 +131,21 @@ def _score_one(
             }
         },
     }
+
+
+def _answer_matches(features: dict[str, Any], *, f1_threshold: float) -> bool:
+    """RI-10 exact-answer scoring for short factual canaries.
+
+    The shared A9 equivalence proxy is conservative about substring matches
+    because a one-token reference can appear in a long answer by accident. RI-10
+    uses curated exact-answer factual QA rows, so an exact normalized answer
+    appearing inside an explanatory sentence is the expected success shape.
+    """
+    return bool(
+        features["normalized_exact"]
+        or features["reference_in_response"]
+        or features["token_f1"] >= f1_threshold
+    )
 
 
 def _bucket_summary(rows: Iterable[dict[str, Any]]) -> dict[str, dict[str, Any]]:

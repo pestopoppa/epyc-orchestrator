@@ -1,0 +1,10 @@
+{
+  "api_url": "http://127.0.0.1:8000/chat",
+  "failed": 0,
+  "finished_at": "2026-07-05T18:53:30Z",
+  "requested": 60,
+  "schema_version": "ri10_canary_dispatch.v1",
+  "started_at": "2026-07-05T18:50:01Z",
+  "status": "ready",
+  "succeeded": 60
+}
