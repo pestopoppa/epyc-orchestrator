@@ -363,6 +363,27 @@ def _repo_readiness_summary(
     }
 
 
+def _structured_tap_active(structured_requests: list[dict[str, Any]]) -> bool:
+    """True only when structured tap evidence shows current live inference.
+
+    The sentinel file can outlive the request that created it, and tailed
+    structured records intentionally retain quiet/stalled history for diagnosis.
+    Treat only non-quiet running records as active so the dashboard does not
+    present old planner/eval requests as live work after AutoPilot stops.
+    """
+    for req in structured_requests:
+        if str(req.get("status") or "").lower() != "running":
+            continue
+        quiet_s = req.get("quiet_s")
+        try:
+            if quiet_s is not None and float(quiet_s) >= 15.0:
+                continue
+        except (TypeError, ValueError):
+            pass
+        return True
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Inference taps — live prompt + response stream written by autopilot's
 # seeding harness to /mnt/raid0/llm/tmp/*. These are the same files the
@@ -377,7 +398,6 @@ async def inference_tap_snapshot(max_sections: int = 20) -> JSONResponse:
     Source: /mnt/raid0/llm/tmp/{inference_tap.log, autopilot_prompt_tap.txt,
     repl_tap.log} — the same files autopilot_tui.py tails.
     """
-    tap_active = _TAP_SENTINEL_PATH.exists()
     inference_tail = _read_tail(_INFERENCE_TAP_PATH, max_bytes=512 * 1024)
     sections = _parse_inference_sections(inference_tail, max_sections=max_sections)
     structured_tail = _read_tap_events_tail(_INFERENCE_TAP_EVENTS_PATH, max_bytes=1024 * 1024)
@@ -388,6 +408,7 @@ async def inference_tap_snapshot(max_sections: int = 20) -> JSONResponse:
         now_epoch=now_epoch,
     )
     structured_requests = _enrich_structured_tap_requests(structured_requests)
+    tap_active = _structured_tap_active(structured_requests)
     repl_tail = _read_tail(_REPL_TAP_PATH, max_bytes=64 * 1024)
     # Just take the last ~3000 chars of REPL for compactness
     repl_tail = repl_tail[-3000:] if repl_tail else ""
@@ -401,6 +422,7 @@ async def inference_tap_snapshot(max_sections: int = 20) -> JSONResponse:
 
     return JSONResponse(_stamp({
         "tap_active": tap_active,
+        "tap_sentinel_active": _TAP_SENTINEL_PATH.exists(),
         "inference_sections": sections,
         "structured_requests": structured_requests,
         "inference_tap_mtime": mtime(_INFERENCE_TAP_PATH),
@@ -1016,9 +1038,11 @@ async def structured_tap_stream(request: Request) -> StreamingResponse:
                     max_requests=40,
                     now_epoch=now_epoch,
                 )
+                enriched_requests = _enrich_structured_tap_requests(structured_requests)
                 payload = json.dumps({
-                    "tap_active": _TAP_SENTINEL_PATH.exists(),
-                    "structured_requests": _enrich_structured_tap_requests(structured_requests),
+                    "tap_active": _structured_tap_active(enriched_requests),
+                    "tap_sentinel_active": _TAP_SENTINEL_PATH.exists(),
+                    "structured_requests": enriched_requests,
                     "structured_tap_mtime": mtime or None,
                     "now": now_epoch,
                 })
@@ -1207,10 +1231,12 @@ async def inference_tap_stream(request: Request) -> StreamingResponse:
                     max_requests=10,
                     now_epoch=now_epoch,
                 )
+                enriched_requests = _enrich_structured_tap_requests(structured_requests)
                 payload = json.dumps({
-                    "tap_active": _TAP_SENTINEL_PATH.exists(),
+                    "tap_active": _structured_tap_active(enriched_requests),
+                    "tap_sentinel_active": _TAP_SENTINEL_PATH.exists(),
                     "inference_sections": sections,
-                    "structured_requests": _enrich_structured_tap_requests(structured_requests),
+                    "structured_requests": enriched_requests,
                     "inference_tap_mtime": inf_m,
                     "structured_tap_mtime": structured_m,
                     "repl_tap_mtime": rpl_m,
@@ -4244,9 +4270,11 @@ async def _structured_tap_payloads():
             structured_requests = _parse_structured_tap_requests(
                 tail, max_requests=40, now_epoch=now_epoch,
             )
+            enriched_requests = _enrich_structured_tap_requests(structured_requests)
             yield json.dumps({
-                "tap_active": _TAP_SENTINEL_PATH.exists(),
-                "structured_requests": _enrich_structured_tap_requests(structured_requests),
+                "tap_active": _structured_tap_active(enriched_requests),
+                "tap_sentinel_active": _TAP_SENTINEL_PATH.exists(),
+                "structured_requests": enriched_requests,
                 "structured_tap_mtime": mtime or None,
                 "now": now_epoch,
             })

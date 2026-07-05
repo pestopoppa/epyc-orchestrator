@@ -368,6 +368,52 @@ def test_parse_structured_tap_requests_marks_quiet_open_request() -> None:
     assert "no tap output" in req["status_reason"]
 
 
+def test_structured_tap_active_ignores_stale_quiet_history() -> None:
+    assert dashboard._structured_tap_active(
+        [
+            {"status": "quiet", "quiet_s": 300.0},
+            {"status": "complete", "quiet_s": 0.0},
+        ]
+    ) is False
+    assert dashboard._structured_tap_active(
+        [{"status": "running", "quiet_s": 15.0}]
+    ) is False
+    assert dashboard._structured_tap_active(
+        [{"status": "running", "quiet_s": 2.0}]
+    ) is True
+
+
+def test_inference_tap_snapshot_marks_stale_sentinel_inactive(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    sentinel = tmp_path / "inference_tap_active"
+    sentinel.touch()
+    event_line = json.dumps(
+        {
+            "event": "start",
+            "request_id": "req-stale",
+            "role": "ingest_long_context",
+            "ts": "2026-05-22T10:00:00+00:00",
+            "ts_epoch": 100.0,
+            "prompt": "planner critique",
+        }
+    )
+
+    monkeypatch.setattr(dashboard, "_TAP_SENTINEL_PATH", sentinel)
+    monkeypatch.setattr(dashboard.time, "time", lambda: 130.0)
+    monkeypatch.setattr(dashboard, "_read_tail", lambda *a, **kw: "")
+    monkeypatch.setattr(dashboard, "_read_tap_events_tail", lambda *a, **kw: event_line)
+    monkeypatch.setattr(dashboard, "_latest_tap_events_mtime", lambda: 100.0)
+
+    response = asyncio.run(dashboard.inference_tap_snapshot())
+    payload = json.loads(response.body)
+
+    assert payload["tap_sentinel_active"] is True
+    assert payload["tap_active"] is False
+    assert payload["structured_requests"][0]["status"] == "quiet"
+
+
 def test_topology_activity_uses_structured_tap_not_legacy_sections(monkeypatch) -> None:
     now = 1_000.0
     structured_lines = [

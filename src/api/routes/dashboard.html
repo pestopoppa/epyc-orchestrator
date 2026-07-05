@@ -3639,6 +3639,22 @@ function _paintPlannerTap() {
     if (_plannerTapPinned) pre.scrollTop = pre.scrollHeight;
 }
 
+function _plannerTapStatusText(lines) {
+    const proc = _latestProcessStatus || {};
+    const ap = proc.autopilot || {};
+    const phase = proc.autopilot_phase || {};
+    const phaseName = String(phase.phase || '');
+    const age = proc.planner_tap_age_s;
+    const ageText = age != null ? ` · last event ${Math.round(age)}s ago` : '';
+    if (!ap.running) {
+        return `— planner history · autopilot stopped${ageText} · ${lines} lines`;
+    }
+    if (_phaseFocus(proc, ap) === 'planner') {
+        return `— planner active · ${phaseName || 'phase unknown'}${ageText} · ${lines} lines`;
+    }
+    return `— planner history${ageText} · ${lines} lines`;
+}
+
 function startPlannerTapStream() {
     if (_plannerTapStream) _plannerTapStream.close();
     // Buffer kept across reconnects; the new stream's `initial` frame replaces it.
@@ -3714,7 +3730,7 @@ function applyPlannerTapData(data) {
         }
     }
     const lines = _plannerTapBuffer ? _plannerTapBuffer.split('\n').filter(Boolean).length : 0;
-    if (status) status.textContent = `— planner tap stream connected · ${lines} lines`;
+    if (status) status.textContent = _plannerTapStatusText(lines);
     _paintPlannerTap();
 }
 
@@ -5561,6 +5577,11 @@ async function updateProcessStatus() {
         const tapDot  = document.getElementById('tap-live-dot');
         const planDot = document.getElementById('planner-live-dot');
         const apDot   = document.getElementById('autopilot-live-dot');
+        const plannerStatus = document.getElementById('planner-status');
+        if (plannerStatus && _plannerTapBuffer) {
+            const plannerLines = _plannerTapBuffer.split('\n').filter(Boolean).length;
+            plannerStatus.textContent = _plannerTapStatusText(plannerLines);
+        }
 
         // Live tap dot
         if (tapAge == null) {

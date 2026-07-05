@@ -95,6 +95,16 @@ def test_dashboard_autopilot_log_render_dedupes_adjacent_lines() -> None:
     assert "_dedupeAdjacentAutopilotLines(_autopilotLogBuffer.split('\\n'))" in body
 
 
+def test_dashboard_planner_status_distinguishes_history_from_active_stream() -> None:
+    html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    body = html_path.read_text()
+
+    assert "function _plannerTapStatusText(lines)" in body
+    assert "planner history · autopilot stopped" in body
+    assert "planner active" in body
+    assert "plannerStatus.textContent = _plannerTapStatusText(plannerLines);" in body
+
+
 def test_dashboard_topology_activity_stats_refresh_with_live_age_tick() -> None:
     """Topology activity text should not lag behind lock/tap freshness signals."""
     html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
