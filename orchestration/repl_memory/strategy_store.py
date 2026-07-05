@@ -746,15 +746,35 @@ class StrategyStore:
         # Hash fallback
         return self._hash_embed(text)
 
-    def _refresh_faiss_if_changed(self) -> None:
+    def _refresh_faiss_if_changed(self, *, force: bool = False) -> None:
         """Pick up StrategyStore vectors written by another live process."""
         reload_if_changed = getattr(self._faiss, "reload_if_changed", None)
         if not callable(reload_if_changed):
             return
         try:
-            reload_if_changed()
+            reload_if_changed(force=force)
         except Exception as exc:
             logger.warning("Could not refresh StrategyStore FAISS mirror: %s", exc)
+
+    def _persist_faiss_entry(self, entry_id: str, embedding: np.ndarray) -> None:
+        """Persist one StrategyStore vector without clobbering newer mirrors."""
+        from orchestration.repl_memory.faiss_store import StaleFAISSSaveError
+
+        self._refresh_faiss_if_changed()
+        self._faiss.add(entry_id, embedding)
+        try:
+            self._faiss.save()
+        except StaleFAISSSaveError:
+            # Another process or repair job wrote a newer StrategyStore mirror
+            # between our pre-write refresh and save. Discard our unsaved
+            # in-memory vector, reload the newer mirror, and retry once before
+            # committing the authoritative SQLite row below.
+            logger.warning(
+                "StrategyStore FAISS mirror changed during write; reloading and retrying once"
+            )
+            self._refresh_faiss_if_changed(force=True)
+            self._faiss.add(entry_id, embedding)
+            self._faiss.save()
 
     def _hash_embed(self, text: str) -> np.ndarray:
         """Deterministic hash-based pseudo-embedding (no semantic similarity)."""
@@ -853,9 +873,9 @@ class StrategyStore:
         embed_text = f"{format_meta['title']} {description} {insight}"
         embedding = self._embed(embed_text)
 
-        # FAISS
-        self._faiss.add(entry_id, embedding)
-        self._faiss.save()
+        # FAISS retrieval mirror. This is written before SQLite so a stale
+        # FAISS-save guard cannot leave an authoritative row without a vector.
+        self._persist_faiss_entry(entry_id, embedding)
 
         # SQLite
         self._conn.execute(

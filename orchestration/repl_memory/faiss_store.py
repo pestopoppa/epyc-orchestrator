@@ -19,6 +19,10 @@ logger = logging.getLogger(__name__)
 DEFAULT_FAISS_PATH = Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/sessions")
 
 
+class StaleFAISSSaveError(RuntimeError):
+    """Raised when a dirty FAISS store would overwrite newer disk files."""
+
+
 class EmbeddingStoreProtocol(Protocol):
     """Protocol for embedding storage backends (FAISS, NumPy, ChromaDB)."""
 
@@ -182,9 +186,9 @@ class FAISSEmbeddingStore:
 
         return idx
 
-    def reload_if_changed(self) -> bool:
+    def reload_if_changed(self, *, force: bool = False) -> bool:
         """Reload persisted FAISS files when another process updated them."""
-        if self._dirty:
+        if self._dirty and not force:
             return False
         current = self._current_disk_signature()
         if current == self._disk_signature:
@@ -258,6 +262,12 @@ class FAISSEmbeddingStore:
         """Persist index and id_map to disk."""
         if not self._dirty:
             return
+        current = self._current_disk_signature()
+        if current != self._disk_signature:
+            raise StaleFAISSSaveError(
+                "Refusing to save stale FAISS embedding store: persisted index/id_map "
+                "changed after this instance loaded them. Reload before writing."
+            )
         self._faiss.write_index(self.index, str(self.index_path))
         np.save(self.id_map_path, np.array(self.id_map, dtype=object))
         self._dirty = False

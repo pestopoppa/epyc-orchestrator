@@ -149,6 +149,55 @@ class TestStrategyStore:
         finally:
             reopened_store.close()
 
+    def test_stale_store_write_keeps_external_faiss_seed(self, tmp_path):
+        from orchestration.repl_memory.strategy_store import StrategyStore
+
+        strategy_path = tmp_path / "strategies"
+        stale_store = StrategyStore(
+            path=strategy_path,
+            embedding_dim=1024,
+            embedder=MockEmbedder(),
+        )
+        writer_store = StrategyStore(
+            path=strategy_path,
+            embedding_dim=1024,
+            embedder=MockEmbedder(),
+        )
+        try:
+            external_id = writer_store.store(
+                "external planner hint",
+                "newer StrategyStore writer must survive a stale writer",
+                source_trial_id=1106,
+                species="seeder",
+                entry_type="pattern",
+                evidence_trial_ids=[1106],
+            )
+            stale_id = stale_store.store(
+                "stale writer planner hint",
+                "stale StrategyStore instance reloads before adding its vector",
+                source_trial_id=1107,
+                species="seeder",
+                entry_type="pattern",
+                evidence_trial_ids=[1107],
+            )
+        finally:
+            writer_store.close()
+            stale_store.close()
+
+        reopened_store = StrategyStore(
+            path=strategy_path,
+            embedding_dim=1024,
+            embedder=MockEmbedder(),
+        )
+        try:
+            assert reopened_store._faiss.count == 2
+            results = reopened_store.retrieve("planner hint StrategyStore", k=10)
+            result_ids = {entry.id for entry in results}
+            assert external_id in result_ids
+            assert stale_id in result_ids
+        finally:
+            reopened_store.close()
+
     def test_retrieve_with_species_filter(self, store):
         store.store("Strategy A", "Insight A", source_trial_id=1, species="alpha")
         store.store("Strategy B", "Insight B", source_trial_id=2, species="beta")

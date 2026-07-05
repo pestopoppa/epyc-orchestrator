@@ -147,6 +147,25 @@ class TestFAISSEmbeddingStore:
         results = store2.search(embeddings[0], k=1)
         assert results[0][0] == "memory_0"
 
+    def test_stale_dirty_save_refuses_to_clobber_newer_disk_files(self, temp_dir):
+        from orchestration.repl_memory.faiss_store import (
+            FAISSEmbeddingStore,
+            StaleFAISSSaveError,
+        )
+
+        stale = FAISSEmbeddingStore(path=temp_dir, dim=128)
+        writer = FAISSEmbeddingStore(path=temp_dir, dim=128)
+
+        writer.add("external", np.random.randn(128).astype(np.float32))
+        writer.save()
+
+        stale.add("stale", np.random.randn(128).astype(np.float32))
+        with pytest.raises(StaleFAISSSaveError, match="Refusing to save stale FAISS"):
+            stale.save()
+
+        reopened = FAISSEmbeddingStore(path=temp_dir, dim=128)
+        assert reopened.id_map == ["external"]
+
     def test_get_embedding(self, store):
         """Test retrieving embedding by index."""
         original = np.array([1.0, 2.0] + [0.0] * 126, dtype=np.float32)
