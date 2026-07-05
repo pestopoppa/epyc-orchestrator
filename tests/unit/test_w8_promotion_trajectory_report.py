@@ -177,6 +177,38 @@ def test_report_rejects_empty_numeric_trial_params_as_unreplayable() -> None:
     assert "no_replay_eligible_accumulating_candidate" in report["open_requirements"]
 
 
+def test_report_does_not_treat_unreplayable_old_numeric_candidate_as_stale() -> None:
+    report = w8_promotion_trajectory_report.build_w8_trajectory_report(
+        [
+            _row(
+                1,
+                "old-unreplayable",
+                config_snapshot={
+                    "type": "numeric_trial",
+                    "surface": "monitor",
+                    "params": {},
+                },
+                combined=0.95,
+                k=1,
+            ),
+            _row(20, "current-replayable", combined=0.91, k=1),
+        ],
+        stale_trials=5,
+    )
+
+    assert report["status"] == "progressing"
+    assert report["ok"] is True
+    assert report["replay_eligible_candidates"] == ["current-replayable"]
+    assert report["recent_replay_eligible_candidates"] == ["current-replayable"]
+    assert report["stale_accumulating_candidates"] == []
+    assert "stale_accumulating_candidates_present" not in report["open_requirements"]
+    assert "replay_concentration_warning" not in report["open_requirements"]
+    assert report["replay_concentration"]["warning"] is False
+    assert report["replay_blockers"] == {
+        "old-unreplayable": "candidate numeric_trial lacks replayable applied params"
+    }
+
+
 def test_report_excludes_latest_reverted_candidate_from_active_replay() -> None:
     violation = (
         "VIOLATIONS:\n"

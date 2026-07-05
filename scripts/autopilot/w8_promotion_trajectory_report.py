@@ -321,6 +321,7 @@ def _candidate_trajectory(
         and not latest.confirmed
         and latest.finalized is not True
         and not latest_ap24_ineligible
+        and replay_eligible
         and not recent
         and (capacity_remaining is None or capacity_remaining > 0)
     )
