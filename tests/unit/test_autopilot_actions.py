@@ -2558,6 +2558,8 @@ def test_record_rejected_draft_counts_and_sets_feedback() -> None:
     assert blacklisted is False  # first occurrence
     sig = autopilot._action_signature(draft)
     assert state["invalid_signature_counts"][sig] == 1
+    assert state["critic_rejected_signatures"][sig]["trial_id"] == 10
+    assert state["critic_rejected_signatures"][sig]["action"] == draft
     assert state["last_invalid_status"] == "critic_rejected"
     assert state["last_invalid_action"] == draft
     assert "critic rejected" in state["last_invalid_reason"]
@@ -2651,6 +2653,43 @@ def test_record_rejected_draft_outboxes_operator_domain(monkeypatch) -> None:
     )
 
     assert calls == [(draft, 30)]
+
+
+def test_critic_rejected_signature_skip_blocks_exact_repeat() -> None:
+    draft = {"type": "numeric_trial", "surface": "think_harder", "params": {}}
+    sig = autopilot._action_signature(draft)
+    state = {
+        "critic_rejected_signatures": {
+            sig: {"trial_id": 44, "reason": "critic rejected: unsupported claim"}
+        }
+    }
+
+    result = autopilot._critic_rejected_signature_skip(draft, state)
+
+    assert isinstance(result, actions.SkipOutcome)
+    assert result.status == "invalid"
+    assert "trial 44" in result.reason
+    assert "change a material field" in result.reason
+    assert result.action_type == "numeric_trial"
+
+
+def test_critic_rejected_signature_skip_allows_material_change() -> None:
+    rejected = {"type": "numeric_trial", "surface": "think_harder", "params": {}}
+    retry = {
+        "type": "numeric_trial",
+        "surface": "think_harder",
+        "params": {"think_harder.min_expected_roi": 0.05},
+    }
+    state = {
+        "critic_rejected_signatures": {
+            autopilot._action_signature(rejected): {
+                "trial_id": 44,
+                "reason": "critic rejected",
+            }
+        }
+    }
+
+    assert autopilot._critic_rejected_signature_skip(retry, state) is None
 
 
 # ----- ActionContext bundle -----

@@ -3128,6 +3128,14 @@ def _record_rejected_draft(
     sig = _action_signature(draft_action)
     sig_counts = state.setdefault("invalid_signature_counts", {})
     sig_counts[sig] = int(sig_counts.get(sig, 0)) + 1
+    rejected_signatures = state.setdefault("critic_rejected_signatures", {})
+    rejected_signatures[sig] = {
+        "trial_id": trial_id,
+        "action": draft_action,
+        "reason": reason,
+        "count": sig_counts[sig],
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+    }
     state["last_invalid_action"] = draft_action
     state["last_invalid_reason"] = reason
     state["last_invalid_status"] = "critic_rejected"
@@ -3155,6 +3163,40 @@ def _record_rejected_draft(
         " — OPERATOR_OUTBOXED" if outboxed else "",
     )
     return blacklisted
+
+
+def _critic_rejected_signature_skip(
+    action: dict[str, Any],
+    state: dict[str, Any],
+) -> SkipOutcome | None:
+    """Reject exact repeats of a prior critic-rejected planner draft.
+
+    Prompt feedback is advisory; this is the dispatch-side shield. It is exact
+    signature keyed so a materially changed retry remains available, but the
+    planner cannot burn another evaluation by emitting the same already-rejected
+    action after a substituted fallback trial cleared last_invalid_action.
+    """
+    if not isinstance(action, dict):
+        return None
+    rejected = state.get("critic_rejected_signatures", {}) or {}
+    if not isinstance(rejected, dict):
+        return None
+    signature = _action_signature(action)
+    record = rejected.get(signature)
+    if not isinstance(record, dict):
+        return None
+    reason = str(record.get("reason", "critic rejected this exact action"))
+    trial = record.get("trial_id", "?")
+    return SkipOutcome(
+        status="invalid",
+        reason=(
+            "exact action signature was previously critic-rejected at "
+            f"trial {trial}: {reason[:220]}; change a material field or choose "
+            "a different action"
+        ),
+        action_type=str(action.get("type", "unknown")),
+    )
+
 
 def _force_metric_action_after_meta(
     action: dict[str, Any],
@@ -4771,6 +4813,7 @@ def _run_loop_inner(
         if tui is not None:
             tui.set_status("selecting next trial (controller)…")
         critic_fallback_skip: SkipOutcome | None = None
+        critic_repeat_skip: SkipOutcome | None = None
         planner_decision: Any | None = None
         seq_fresh_eval_context: dict[str, Any] | None = None
         seq_baseline_draw_reference: dict[str, Any] | None = None
@@ -5330,6 +5373,9 @@ def _run_loop_inner(
                 action = {"type": "seed_batch", "n_questions": SAFE_FALLBACK_SEED_N}
 
         if not seq_due_bypassed_planner:
+            critic_repeat_skip = _critic_rejected_signature_skip(action, state)
+
+        if not seq_due_bypassed_planner and critic_repeat_skip is None:
             # Meta actions are allowed as occasional bookkeeping, but a repeated
             # metric-free action means the planner is avoiding the experiment loop.
             action, rationale = _force_metric_action_after_meta(
@@ -5377,19 +5423,20 @@ def _run_loop_inner(
                     enabled=gate.use_sequential,
                 )
 
-        action, rationale = _maybe_force_frontier_rerun_action(
-            action,
-            state,
-            journal=journal,
-            archive=archive,
-            blacklist=blacklist,
-            rationale=rationale,
-            trial_counter=trial_counter,
-        )
+        if critic_repeat_skip is None:
+            action, rationale = _maybe_force_frontier_rerun_action(
+                action,
+                state,
+                journal=journal,
+                archive=archive,
+                blacklist=blacklist,
+                rationale=rationale,
+                trial_counter=trial_counter,
+            )
 
         # ── 3. Act ───────────────────────────────────────────────
         # B2: Check failure blacklist before dispatch
-        pre_dispatch_skip: SkipOutcome | None = critic_fallback_skip
+        pre_dispatch_skip: SkipOutcome | None = critic_fallback_skip or critic_repeat_skip
         if pre_dispatch_skip is not None:
             log.warning(
                 "Trial %d: %s",
