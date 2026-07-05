@@ -13,6 +13,7 @@ def _row(
     candidate: str,
     *,
     action_type: str = "numeric_trial",
+    config_snapshot: dict | None = None,
     combined: float = 0.95,
     e_quality: float = 1.1,
     state: str = "accumulating",
@@ -23,9 +24,21 @@ def _row(
     keep_revert_decision: str = "",
     failure_analysis: str = "",
 ) -> dict:
+    if config_snapshot is None:
+        if action_type == "numeric_trial":
+            config_snapshot = {
+                "type": "numeric_trial",
+                "surface": "monitor",
+                "params": {"temperature": 0.7},
+            }
+        elif action_type == "structural_experiment":
+            config_snapshot = {"type": "structural_experiment", "flags": {"x": True}}
+        else:
+            config_snapshot = {"type": action_type}
     return {
         "trial_id": trial_id,
         "action_type": action_type,
+        "config_snapshot": config_snapshot,
         "quality": 2.1,
         "keep_revert_decision": keep_revert_decision,
         "failure_analysis": failure_analysis,
@@ -136,6 +149,32 @@ def test_report_flags_active_recent_but_no_replay_eligible_candidates() -> None:
     assert "Replay eligibility" in markdown
     assert "E_quality_below_replay_floor" in markdown
     assert "unreplayable_action=seed_batch" in markdown
+
+
+def test_report_rejects_empty_numeric_trial_params_as_unreplayable() -> None:
+    report = w8_promotion_trajectory_report.build_w8_trajectory_report(
+        [
+            _row(
+                10,
+                "candidate-a",
+                config_snapshot={
+                    "type": "numeric_trial",
+                    "surface": "monitor",
+                    "params": {},
+                },
+                combined=0.95,
+                k=3,
+            )
+        ],
+        stale_trials=5,
+    )
+
+    assert report["status"] == "evidence_bound"
+    assert report["replay_eligible_candidates"] == []
+    assert report["replay_blockers"] == {
+        "candidate-a": "candidate numeric_trial lacks replayable applied params"
+    }
+    assert "no_replay_eligible_accumulating_candidate" in report["open_requirements"]
 
 
 def test_report_excludes_latest_reverted_candidate_from_active_replay() -> None:

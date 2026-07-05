@@ -939,6 +939,8 @@ def test_w8_trajectory_section_surfaces_concentration_warning() -> None:
             "status_counts": {"active_recent_replay": 1},
             "open_requirements": ["replay_concentration_warning"],
             "recent_active_candidates": ["abc"],
+            "replay_eligible_candidates": ["abc"],
+            "recent_replay_eligible_candidates": ["abc"],
             "stale_accumulating_candidates": ["def", "ghi"],
             "replay_concentration": {
                 "warning": True,
@@ -954,8 +956,40 @@ def test_w8_trajectory_section_surfaces_concentration_warning() -> None:
         "replay_concentration_warning: recent replay evidence is concentrated"
     ]
     assert section.details["candidate_generation_required"] is False
+    assert section.details["replay_eligible_candidates"] == ["abc"]
     assert section.details["stale_accumulating_candidate_count"] == 2
     assert section.details["replay_concentration"]["top_active_candidate"] == "abc"
+
+
+def test_w8_trajectory_section_blocks_when_no_replay_eligible_candidate() -> None:
+    section = report_mod.w8_trajectory_section(
+        {
+            "status": "stale_accumulating",
+            "ok": False,
+            "latest_trial_id": 1153,
+            "snapshot_count": 8,
+            "candidate_count": 2,
+            "status_counts": {"active_recent_replay": 1, "stale_accumulating": 1},
+            "open_requirements": [
+                "no_replay_eligible_accumulating_candidate",
+                "stale_accumulating_candidates_present",
+            ],
+            "recent_active_candidates": ["unreplayable-a"],
+            "replay_eligible_candidates": [],
+            "recent_replay_eligible_candidates": [],
+            "stale_accumulating_candidates": ["stale-b"],
+            "replay_concentration": {"warning": False},
+        }
+    )
+
+    assert section.status == "blocked"
+    assert section.summary == "W8 replay trajectory needs a replay-eligible candidate."
+    assert section.blockers == [
+        "w8_candidate_generation_required: no replay-eligible accumulating candidate"
+    ]
+    assert section.details["candidate_generation_required"] is True
+    assert section.details["recent_active_candidates"] == ["unreplayable-a"]
+    assert section.details["replay_eligible_candidates"] == []
 
 
 def test_ds_e1_clean_window_report_surfaces_measurement_port(
@@ -1674,6 +1708,8 @@ def test_w8_next_action_surfaces_candidate_generation_requirement() -> None:
                     "no_recent_multi_observation_accumulating_candidate"
                 ],
                 "recent_active_candidates": [],
+                "replay_eligible_candidates": [],
+                "recent_replay_eligible_candidates": [],
                 "stale_accumulating_candidates": [],
                 "replay_concentration": {"warning": False},
             }

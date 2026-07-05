@@ -535,12 +535,20 @@ def w8_trajectory_section(trajectory_report: dict[str, Any]) -> GateSection:
     terminal_reason_counts = trajectory_report.get("terminal_reason_counts") or {}
     dominant_terminal_reason = trajectory_report.get("dominant_terminal_reason") or {}
     recent_active_candidates = trajectory_report.get("recent_active_candidates") or []
+    replay_eligible_candidates = (
+        trajectory_report.get("replay_eligible_candidates") or []
+    )
+    recent_replay_eligible_candidates = (
+        trajectory_report.get("recent_replay_eligible_candidates") or []
+    )
     stale_accumulating_candidates = (
         trajectory_report.get("stale_accumulating_candidates") or []
     )
     candidate_generation_required = _w8_candidate_generation_required(
         status_counts=status_counts,
         recent_active_candidates=recent_active_candidates,
+        replay_eligible_candidates=replay_eligible_candidates,
+        recent_replay_eligible_candidates=recent_replay_eligible_candidates,
         stale_accumulating_candidates=stale_accumulating_candidates,
     )
     blockers: list[str] = []
@@ -550,14 +558,21 @@ def w8_trajectory_section(trajectory_report: dict[str, Any]) -> GateSection:
             "replay_concentration_warning"
             + (f": {warning_reason}" if warning_reason else "")
         )
+    if candidate_generation_required:
+        blockers.append(
+            "w8_candidate_generation_required: no replay-eligible accumulating candidate"
+        )
     status = "blocked" if blockers else "ready"
+    if concentration.get("warning"):
+        summary_status = "has concentration warnings"
+    elif candidate_generation_required:
+        summary_status = "needs a replay-eligible candidate"
+    else:
+        summary_status = "has no concentration warning"
     return GateSection(
         key="w8_promotion_trajectory",
         status=status,
-        summary=(
-            "W8 replay trajectory "
-            f"{'has concentration warnings' if blockers else 'has no concentration warning'}."
-        ),
+        summary=f"W8 replay trajectory {summary_status}.",
         blockers=blockers,
         details={
             "status": trajectory_report.get("status"),
@@ -571,6 +586,8 @@ def w8_trajectory_section(trajectory_report: dict[str, Any]) -> GateSection:
             "open_requirements": trajectory_report.get("open_requirements"),
             "candidate_generation_required": candidate_generation_required,
             "recent_active_candidates": recent_active_candidates,
+            "replay_eligible_candidates": replay_eligible_candidates,
+            "recent_replay_eligible_candidates": recent_replay_eligible_candidates,
             "stale_accumulating_candidate_count": len(stale_accumulating_candidates),
             "replay_concentration": concentration,
         },
@@ -677,19 +694,17 @@ def _w8_candidate_generation_required(
     *,
     status_counts: dict[str, Any],
     recent_active_candidates: list[Any],
+    replay_eligible_candidates: list[Any],
+    recent_replay_eligible_candidates: list[Any],
     stale_accumulating_candidates: list[Any],
 ) -> bool:
     """Return True when W8 has no replayable accumulating candidate surface."""
+    if replay_eligible_candidates or recent_replay_eligible_candidates:
+        return False
+    if int(status_counts.get("confirmed_waiting_fresh_eval") or 0) > 0:
+        return False
     if recent_active_candidates or stale_accumulating_candidates:
-        return False
-    replayable_statuses = {
-        "active_recent_replay",
-        "single_observation",
-        "stale_accumulating",
-        "confirmed_waiting_fresh_eval",
-    }
-    if any(int(status_counts.get(status) or 0) > 0 for status in replayable_statuses):
-        return False
+        return True
     terminal_statuses = {"reverted", "excluded", "refuted", "finalized"}
     return any(int(status_counts.get(status) or 0) > 0 for status in terminal_statuses)
 

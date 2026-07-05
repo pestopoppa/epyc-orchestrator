@@ -29,6 +29,11 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - direct script execution path
     from paired_stats import DEFAULT_JOURNAL_DIR, iter_journal_rows  # type: ignore[no-redef]
 
+try:
+    from scripts.autopilot import controller_io
+except ModuleNotFoundError:  # pragma: no cover - direct script execution path
+    import controller_io  # type: ignore[no-redef]
+
 
 DEFAULT_MAX_REPLAY_ATTEMPTS = 12
 DEFAULT_STALE_TRIALS = 12
@@ -39,6 +44,7 @@ class W8Snapshot:
     trial_id: int
     candidate: str
     action_type: str | None
+    config_snapshot: Mapping[str, Any] | None
     quality: float | None
     state: str | None
     confirmed: bool | None
@@ -133,7 +139,7 @@ def build_w8_trajectory_report(
     ]
     concentration = _replay_concentration(
         trajectories,
-        recent_active=recent_active,
+        recent_active=recent_replay_eligible,
         stale_accumulating=stale_accumulating,
     )
     blocked = _open_requirements(
@@ -557,6 +563,7 @@ def _snapshot_from_row(row: Mapping[str, Any]) -> W8Snapshot:
             trial_id=-1,
             candidate="",
             action_type=None,
+            config_snapshot=None,
             quality=None,
             state=None,
             confirmed=None,
@@ -583,6 +590,7 @@ def _snapshot_from_row(row: Mapping[str, Any]) -> W8Snapshot:
             trial_id=-1,
             candidate="",
             action_type=None,
+            config_snapshot=None,
             quality=None,
             state=None,
             confirmed=None,
@@ -600,10 +608,14 @@ def _snapshot_from_row(row: Mapping[str, Any]) -> W8Snapshot:
                 row.get("failure_analysis")
             ),
         )
+    config_snapshot = _config_snapshot(row.get("config_snapshot"))
     return W8Snapshot(
         trial_id=_int(row.get("trial_id"), default=-1),
         candidate=str(seq.get("candidate") or ""),
-        action_type=_optional_str(row.get("action_type")),
+        action_type=_optional_str(
+            row.get("action_type") or (config_snapshot or {}).get("type")
+        ),
+        config_snapshot=config_snapshot,
         quality=_optional_float(row.get("quality")),
         state=_optional_str(seq.get("state")),
         confirmed=_optional_bool(seq.get("confirmed")),
@@ -645,6 +657,34 @@ def _terminal_keep_revert_decision(snapshot: W8Snapshot) -> bool:
     return bool(snapshot.failure_first_violation)
 
 
+def _config_snapshot(value: Any) -> Mapping[str, Any] | None:
+    if not isinstance(value, Mapping):
+        return None
+    return dict(value)
+
+
+def _replay_action_blocker(snapshot: W8Snapshot) -> str | None:
+    action = _config_snapshot(snapshot.config_snapshot)
+    action_type = str((action or {}).get("type") or snapshot.action_type or "")
+    if action is None:
+        action = {"type": action_type} if action_type else {}
+    if action_type == "numeric_trial":
+        params = action.get("params")
+        if not isinstance(params, Mapping) or not params:
+            return "candidate numeric_trial lacks replayable applied params"
+    elif action_type == "structural_experiment":
+        flags = action.get("flags")
+        if not isinstance(flags, Mapping) or not flags:
+            return "candidate structural_experiment lacks replayable flags"
+    else:
+        return f"unreplayable_action={action_type or 'unknown'}"
+
+    scope_err = controller_io.validate_single_variable(dict(action))
+    if scope_err:
+        return f"candidate action violates AP-9: {scope_err}"
+    return None
+
+
 def _replay_blocker(
     snapshot: W8Snapshot,
     *,
@@ -657,8 +697,9 @@ def _replay_blocker(
         return "already_confirmed_waiting_fresh_eval"
     if _terminal_keep_revert_decision(snapshot):
         return f"AP-24={snapshot.keep_revert_decision or 'terminal'}"
-    if snapshot.action_type not in {"numeric_trial", "structural_experiment"}:
-        return f"unreplayable_action={snapshot.action_type or 'unknown'}"
+    action_blocker = _replay_action_blocker(snapshot)
+    if action_blocker:
+        return action_blocker
     if snapshot.combined_E is None:
         return "combined_E_unavailable"
     if snapshot.combined_E < 0.9:
