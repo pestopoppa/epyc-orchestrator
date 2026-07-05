@@ -868,7 +868,9 @@ body.insight-fullscreen-open { overflow: hidden; }
     <span style="font-weight:normal;color:var(--muted)" id="status">connecting…</span>
     <span style="font-weight:normal;color:var(--muted);margin-left:12px;font-size:11px" id="process-status"></span>
     <span style="font-weight:normal;font-size:10px;margin-left:12px" id="build-rev" title="git SHA + dashboard.html mtime; turns yellow when a hard-reload would pick up newer content"></span>
+    <a id="handoff-hub-link" href="/" style="font-weight:normal;font-size:11px;margin-left:12px;color:var(--accent,#60a5fa)" title="project-wide handoff progress board (epyc-root hub)">handoffs ↗</a>
 </h1>
+<script>try{document.getElementById('handoff-hub-link').href=location.protocol+'//'+location.hostname+':8100/';}catch(e){}</script>
 
 <div class="counters" id="counters"></div>
 

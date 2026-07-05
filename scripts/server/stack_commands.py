@@ -124,6 +124,10 @@ def start_whisper(*a, **kw):
     return _orchestrator_stack().start_whisper(*a, **kw)
 
 
+def start_handoff_dashboard(*a, **kw):
+    return _orchestrator_stack().start_handoff_dashboard(*a, **kw)
+
+
 def load_state(*a, **kw):
     return _orchestrator_stack().load_state(*a, **kw)
 
@@ -1208,6 +1212,29 @@ def cmd_start(args: argparse.Namespace) -> int:
 
         print()
 
+        # Start handoff dashboard hub (epyc-root, optional, non-fatal).
+        # Project-wide progress board; stdlib-only, owned by the governance repo.
+        if is_port_in_use(8100) and wait_for_health(8100, timeout=3, path="/health"):
+            print("[5c] Starting handoff dashboard (epyc-root hub)...")
+            print("  Already healthy, skipping")
+            preserved = _preserved_process_info(
+                "handoff_dashboard",
+                8100,
+                "epyc-root handoff progress hub",
+                str(LOG_DIR / "handoff_dashboard.log"),
+            )
+            if preserved:
+                state["handoff_dashboard"] = preserved
+        else:
+            print("[5c] Starting handoff dashboard (epyc-root hub)...")
+            info = start_handoff_dashboard()
+            if info:
+                state["handoff_dashboard"] = info
+            else:
+                print("  [!] handoff dashboard failed (non-fatal, continuing)")
+
+        print()
+
         # Start Docker services (NextPLAID retrieval + SearXNG metasearch)
         if _docker_available():
             print("[5.5] Starting Docker services (NextPLAID retrieval + SearXNG metasearch)...")
@@ -1421,6 +1448,23 @@ def cmd_reload(args: argparse.Namespace) -> int:
                 state["document_formalizer"] = info
             else:
                 print("  [!] Failed to restart document_formalizer")
+                return 1
+
+        elif component == "handoff_dashboard":
+            port = 8100
+
+            # Auxiliary service: a stdlib web server owned by epyc-root, not a
+            # llama-server registry role — do not route through start_server().
+            for pid in _pids_on_port(port):
+                kill_process(pid)
+            state.pop("handoff_dashboard", None)
+            time.sleep(1)
+
+            info = start_handoff_dashboard()
+            if info:
+                state["handoff_dashboard"] = info
+            else:
+                print("  [!] Failed to restart handoff_dashboard")
                 return 1
 
         elif component in PORT_MAP:

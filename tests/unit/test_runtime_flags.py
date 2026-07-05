@@ -96,6 +96,16 @@ def test_stack_production_feature_env_is_complete_and_wave_gated() -> None:
         assert f"ORCHESTRATOR_FEATURE_{spec.env_var}" in env
 
 
+def test_stack_production_feature_env_preserves_launch_override() -> None:
+    env = {"ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING": "1"}
+
+    orchestrator_stack._apply_production_feature_env(env)
+
+    assert env["ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING"] == "1"
+    assert env["ORCHESTRATOR_FEATURE_SPECIALIST_ROUTING"] == "1"
+    assert env["ORCHESTRATOR_FEATURE_PLAN_REVIEW"] == "0"
+
+
 def test_stack_live_langgraph_env_excludes_retired_architect_coding() -> None:
     assert "ORCHESTRATOR_LANGGRAPH_ARCHITECT" in (
         orchestrator_stack.LANGGRAPH_PHASE3_LIVE_ENV_VARS
