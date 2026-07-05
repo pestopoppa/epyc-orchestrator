@@ -810,7 +810,8 @@ def test_controller_prompt_includes_higher_tier_pressure_section() -> None:
 
     assert "Higher-Tier Objective Pressure" in template
     assert "{higher_tier_pressure}" in template
-    assert "T3 is the expert/hard workflow slice" in template
+    assert '{{"type": "deep_eval", "tier": 3}}' in template
+    assert "expert/hard workflow coverage or frontier evidence is thin" in template
 
 
 def test_higher_tier_pressure_preserves_same_tier_comparison() -> None:
@@ -840,6 +841,7 @@ def test_higher_tier_pressure_preserves_same_tier_comparison() -> None:
     )
 
     assert "expert/hard workflow tasks" in text
+    assert "prefer deep_eval tier 3 if T3 coverage/frontier is thin" in text
     assert "Never compare raw quality across tiers" in text
     assert "T2: frontier=2, best_q=1.400, delta_vs_baseline=+0.300" in text
     assert "T3: empty frontier; baseline_q=0.200" in text

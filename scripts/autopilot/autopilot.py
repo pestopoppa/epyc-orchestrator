@@ -689,6 +689,7 @@ def _build_higher_tier_planner_pressure(
         "- T2/T3 are broader and harder slices of the real task pool; T3 includes expert/hard workflow tasks.",
         "- Preserve T1 as the deployment safety lane; avoid T1 regressions.",
         "- Prefer actions likely to improve T2/T3 same-tier frontier quality, then validate with deep_eval tier 2 or 3.",
+        "- When W8 replay evidence is not asking for a specific promotion eval, prefer deep_eval tier 3 if T3 coverage/frontier is thin.",
         "- Never compare raw quality across tiers; compare each tier only to its own baseline/frontier.",
     ]
     baseline = getattr(gate, "baseline", None) if gate is not None else None
@@ -2935,8 +2936,8 @@ Respond with EXACTLY ONE action in a ```json:autopilot_actions block:
   memory_count — the validator REJECTS any value above 100000.)
 - Distill: {{"type": "distill_skillbank", "teacher": "claude", "categories": ["routing"]}}
 - Reset: {{"type": "reset_memories", "keep_seen": true, "keep_skills": true}}
-- Deep eval: {{"type": "deep_eval", "tier": 2}}
-  (Supported tiers: 0, 1, 2, or 3. T3 is the expert/hard workflow slice of the pool. Do NOT include target_trial, suites, baseline_recheck, or instrumentation fields.)
+- Deep eval: {{"type": "deep_eval", "tier": 3}}
+  (Choose tier 3 when expert/hard workflow coverage or frontier evidence is thin; choose tier 2 for comprehensive validation or W8 promotion-eval evidence. Supported tiers: 0, 1, 2, or 3. Do NOT include target_trial, suites, baseline_recheck, or instrumentation fields.)
 - Rollback: {{"type": "rollback", "to_checkpoint": "production_best"}}
 - Distill: {{"type": "distill_knowledge", "last_n": 10}}
   (Run every ~5 trials to extract insights from recent outcomes into strategy memory)
