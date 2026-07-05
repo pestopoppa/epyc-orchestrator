@@ -46,7 +46,7 @@ FABLE_AUTHORITY_ENV: dict[str, str] = {
 }
 
 LOCAL_PLANNER_DEFAULT_ENV: dict[str, str] = {
-    "AUTOPILOT_PLANNER_PRIMARY": "local_ingest",
+    "AUTOPILOT_PLANNER_PRIMARY": "local_chat",
     "AUTOPILOT_PLANNER_CRITIC": "codex",
     "AUTOPILOT_LOCAL_PLANNER_ROLE": "ingest_long_context",
     "AUTOPILOT_LOCAL_PLANNER_MODEL": "ingest_long_context",
