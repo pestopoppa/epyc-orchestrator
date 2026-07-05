@@ -164,6 +164,21 @@ def _manifest_compiled_at(text: str) -> str | None:
     return match.group(1) if match else None
 
 
+def _manifest_stack_priors_version(text: str) -> int | None:
+    match = re.search(r"stack_priors_version:\s*`?(\d+)`?", text)
+    if not match:
+        return None
+    return int(match.group(1))
+
+
+def _missing_manifest_live_roles(text: str, stack_priors: dict[str, Any]) -> list[str]:
+    return [
+        row["role"]
+        for row in _live_role_rows(stack_priors)
+        if f"`{row['role']}`" not in text
+    ]
+
+
 def ds5_manifest_section(
     manifest_path: Path = DEFAULT_RESEARCH_MANIFEST,
     stack_priors_path: Path = DEFAULT_STACK_PRIORS,
@@ -177,17 +192,39 @@ def ds5_manifest_section(
         )
     text = manifest_path.read_text(encoding="utf-8")
     manifest_compiled_at = _manifest_compiled_at(text)
+    manifest_version = _manifest_stack_priors_version(text)
+    stack_priors: dict[str, Any] = {}
     stack_compiled_at = None
+    stack_priors_version = None
+    missing_live_roles: list[str] = []
     if stack_priors_path.exists():
         try:
-            stack_compiled_at = _load_yaml(stack_priors_path).get("compiled_at")
+            stack_priors = _load_yaml(stack_priors_path)
+            stack_compiled_at = stack_priors.get("compiled_at")
+            stack_priors_version = stack_priors.get("stack_priors_version")
+            missing_live_roles = _missing_manifest_live_roles(text, stack_priors)
         except Exception:
             stack_compiled_at = None
     status = "ready"
     summary = "Research model manifest exists for DS-5 roster context."
-    if stack_compiled_at and manifest_compiled_at and manifest_compiled_at != stack_compiled_at:
+    timestamp_mismatch = (
+        bool(stack_compiled_at)
+        and bool(manifest_compiled_at)
+        and manifest_compiled_at != stack_compiled_at
+    )
+    version_matches = (
+        stack_priors_version is not None
+        and manifest_version is not None
+        and manifest_version == stack_priors_version
+    )
+    if timestamp_mismatch and (not version_matches or missing_live_roles):
         status = "stale"
         summary = "Research model manifest exists but references an older stack-prior compile."
+    elif timestamp_mismatch:
+        summary = (
+            "Research model manifest covers the current stack-prior contract; "
+            "compile timestamp differs only."
+        )
     return EvidenceSection(
         "ds5_roster_manifest",
         status,
@@ -195,7 +232,11 @@ def ds5_manifest_section(
         {
             "path": str(manifest_path),
             "manifest_compiled_at": manifest_compiled_at,
+            "manifest_stack_priors_version": manifest_version,
             "stack_priors_compiled_at": stack_compiled_at,
+            "stack_priors_version": stack_priors_version,
+            "timestamp_mismatch": timestamp_mismatch,
+            "missing_live_roles": missing_live_roles,
         },
     )
 

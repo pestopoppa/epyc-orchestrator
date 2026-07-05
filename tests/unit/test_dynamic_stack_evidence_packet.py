@@ -61,6 +61,49 @@ def test_ds5_manifest_section_flags_stale_compile(tmp_path: Path) -> None:
     assert section.status == "stale"
     assert section.details["manifest_compiled_at"] == "2026-06-14T00:00:00Z"
     assert section.details["stack_priors_compiled_at"] == "2026-06-20T00:00:00Z"
+    assert section.details["timestamp_mismatch"] is True
+
+
+def test_ds5_manifest_section_accepts_equivalent_recompile_timestamp(
+    tmp_path: Path,
+) -> None:
+    manifest = tmp_path / "MODEL_MANIFEST.md"
+    manifest.write_text(
+        "\n".join(
+            [
+                "compiled at `2026-06-14T00:00:00Z` with `stack_priors_version: 4`.",
+                "| Role | Model |",
+                "|------|-------|",
+                "| `frontdoor` | Qwen |",
+                "| `worker_general` | Gemma |",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    priors = tmp_path / "stack_priors.yaml"
+    priors.write_text(
+        """
+stack_priors_version: 4
+status: compiled
+compiled_at: "2026-06-20T00:00:00Z"
+roles:
+  frontdoor:
+    deployment_status: live_stack
+  worker_general:
+    deployment_status: live_stack
+""",
+        encoding="utf-8",
+    )
+
+    section = packet_mod.ds5_manifest_section(manifest, priors)
+
+    assert section.status == "ready"
+    assert "timestamp differs only" in section.summary
+    assert section.details["timestamp_mismatch"] is True
+    assert section.details["manifest_stack_priors_version"] == 4
+    assert section.details["stack_priors_version"] == 4
+    assert section.details["missing_live_roles"] == []
 
 
 def test_contention_section_ignores_unmeasured_auxiliary_topology(
