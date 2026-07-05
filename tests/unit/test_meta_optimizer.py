@@ -7,6 +7,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 AUTOPILOT_DIR = ROOT / "scripts" / "autopilot"
 sys.path.insert(0, str(ROOT))
@@ -26,8 +28,8 @@ def _entry(trial_id: int, species: str, **kw) -> JournalEntry:
         timestamp=datetime.now(timezone.utc).isoformat(),
         species=species,
         action_type="seed_batch",
-        tier=1,
-        quality=1.0,
+        tier=kw.pop("tier", 1),
+        quality=kw.pop("quality", 1.0),
         speed=10.0,
         cost=0.1,
         reliability=1.0,
@@ -72,6 +74,43 @@ def test_species_effectiveness_excludes_untrusted_surprise_from_budget_rate(
     assert stats["seeder"]["information_count"] == 1
     assert stats["seeder"]["information_rate"] == 0.9
     assert stats["seeder"]["budget_rate"] == 0.9
+
+
+def test_species_effectiveness_adds_clipped_higher_tier_quality_credit(
+    tmp_path: Path,
+) -> None:
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    journal.record(_entry(1, "structural_lab", tier=3, quality=2.4))
+    journal.record(_entry(2, "numeric_swarm", pareto_status="frontier"))
+
+    stats = journal.species_effectiveness()
+
+    assert stats["structural_lab"]["rate"] == 0.0
+    assert stats["structural_lab"]["higher_tier_quality_count"] == 1
+    assert stats["structural_lab"]["higher_tier_quality_rate"] == pytest.approx(0.8)
+    assert stats["structural_lab"]["budget_rate"] == pytest.approx(0.12)
+    assert stats["numeric_swarm"]["budget_rate"] == 1.0
+
+
+def test_species_effectiveness_excludes_failed_higher_tier_quality_credit(
+    tmp_path: Path,
+) -> None:
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    journal.record(
+        _entry(
+            1,
+            "seeder",
+            tier=3,
+            quality=2.4,
+            failure_analysis="Quality floor violation",
+        )
+    )
+
+    stats = journal.species_effectiveness()
+
+    assert stats["seeder"]["higher_tier_quality_count"] == 0
+    assert stats["seeder"]["higher_tier_quality_rate"] == 0.0
+    assert stats["seeder"]["budget_rate"] == 0.0
 
 
 def test_rebalance_uses_budget_rate_instead_of_frontier_rate() -> None:
