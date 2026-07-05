@@ -12,7 +12,9 @@ def _row(
     trial_id: int,
     candidate: str,
     *,
+    action_type: str = "numeric_trial",
     combined: float = 0.95,
+    e_quality: float = 1.1,
     state: str = "accumulating",
     k: int = 1,
     fresh_eval: bool = False,
@@ -23,7 +25,7 @@ def _row(
 ) -> dict:
     return {
         "trial_id": trial_id,
-        "action_type": "numeric_trial",
+        "action_type": action_type,
         "quality": 2.1,
         "keep_revert_decision": keep_revert_decision,
         "failure_analysis": failure_analysis,
@@ -36,7 +38,7 @@ def _row(
             "baseline_promotion_fresh_eval": fresh_eval,
             "baseline_promotion_finalized": finalized,
             "baseline_reference_state": "fresh",
-            "E_quality": 1.1,
+            "E_quality": e_quality,
             "E_rate_noninf": combined,
             "k": k,
             "r_eff": 30,
@@ -57,9 +59,13 @@ def test_report_identifies_recent_replay_progress() -> None:
     assert report["status"] == "progressing"
     assert report["ok"] is True
     assert report["recent_active_candidates"] == ["candidate-a"]
+    assert report["replay_eligible_candidates"] == ["candidate-a"]
+    assert report["recent_replay_eligible_candidates"] == ["candidate-a"]
     trajectory = report["trajectories"][0]
     assert trajectory["candidate"] == "candidate-a"
     assert trajectory["status"] == "active_recent_replay"
+    assert trajectory["replay_eligible"] is True
+    assert trajectory["replay_blocker"] is None
     assert trajectory["attempts"] == 2
     assert trajectory["combined_E_delta"] == 0.02
     assert report["replay_concentration"]["warning"] is False
@@ -78,6 +84,10 @@ def test_report_flags_stale_accumulating_candidates() -> None:
     assert report["ok"] is False
     assert report["stale_accumulating_candidates"] == ["candidate-a"]
     assert "stale_accumulating_candidates_present" in report["open_requirements"]
+    assert (
+        "no_recent_replay_eligible_accumulating_candidate"
+        in report["open_requirements"]
+    )
 
 
 def test_report_flags_concentrated_replay_attempts() -> None:
@@ -99,6 +109,33 @@ def test_report_flags_concentrated_replay_attempts() -> None:
     assert concentration["stale_accumulating_count"] == 1
     assert "replay_concentration_warning" in report["open_requirements"]
     assert "Replay Concentration" in w8_promotion_trajectory_report.render_markdown(report)
+
+
+def test_report_flags_active_recent_but_no_replay_eligible_candidates() -> None:
+    report = w8_promotion_trajectory_report.build_w8_trajectory_report(
+        [
+            _row(10, "candidate-a", combined=0.91, e_quality=0.99, k=1),
+            _row(12, "candidate-a", combined=0.93, e_quality=0.99, k=2),
+            _row(13, "candidate-b", action_type="seed_batch", combined=0.95, k=2),
+            _row(14, "candidate-b", action_type="seed_batch", combined=0.96, k=3),
+        ],
+        stale_trials=5,
+    )
+
+    assert report["status"] == "evidence_bound"
+    assert report["ok"] is False
+    assert report["recent_active_candidates"] == ["candidate-b", "candidate-a"]
+    assert report["replay_eligible_candidates"] == []
+    assert report["recent_replay_eligible_candidates"] == []
+    assert report["replay_blockers"] == {
+        "candidate-a": "E_quality_below_replay_floor",
+        "candidate-b": "unreplayable_action=seed_batch",
+    }
+    assert "no_replay_eligible_accumulating_candidate" in report["open_requirements"]
+    markdown = w8_promotion_trajectory_report.render_markdown(report)
+    assert "Replay eligibility" in markdown
+    assert "E_quality_below_replay_floor" in markdown
+    assert "unreplayable_action=seed_batch" in markdown
 
 
 def test_report_excludes_latest_reverted_candidate_from_active_replay() -> None:

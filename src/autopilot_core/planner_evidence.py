@@ -304,9 +304,9 @@ def _seq_note(
     latest_seq = latest.get("seq") if isinstance(latest.get("seq"), Mapping) else {}
     e_rate = _float(latest_seq.get("E_rate_noninf"))
     combined = min(view.quality_state.wealth, e_rate) if e_rate > 0.0 else 0.0
-    keep_revert = str(latest.get("keep_revert_decision") or "").strip()
-    if keep_revert in {"revert", "excluded"}:
-        replayable = f"no(AP-24={keep_revert})"
+    ap24_blocker = _ap24_replay_blocker(latest, latest_seq)
+    if ap24_blocker:
+        replayable = f"no({ap24_blocker})"
     else:
         replayable = "yes" if _replayable_config(latest.get("config_snapshot")) else "no"
     return (
@@ -315,6 +315,20 @@ def _seq_note(
         f"E_rate={e_rate:.3f} combined={combined:.3f} "
         f"replayable={replayable}"
     )
+
+
+def _ap24_replay_blocker(row: Mapping[str, Any], seq: Mapping[str, Any]) -> str:
+    """Return the AP-24 reason a latest seq row is terminal for replay."""
+    keep_revert = str(row.get("keep_revert_decision") or "").strip()
+    if keep_revert == "revert":
+        return "AP-24=revert"
+    if keep_revert != "excluded":
+        return ""
+    if str(seq.get("state") or "") != "accumulating":
+        return "AP-24=excluded"
+    if str(row.get("failure_analysis") or "").strip():
+        return "AP-24=excluded"
+    return ""
 
 
 def _replayable_config(value: Any) -> bool:

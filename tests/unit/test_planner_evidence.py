@@ -14,6 +14,7 @@ def _row(
     reliability: float = 0.98,
     corrupt: str = "",
     keep_revert_decision: str = "",
+    failure_analysis: str = "",
     question_count: int = 50,
     question_results: list[dict] | None = None,
 ) -> dict:
@@ -24,6 +25,7 @@ def _row(
         "reliability": reliability,
         "bug_corrupted_by": corrupt,
         "keep_revert_decision": keep_revert_decision,
+        "failure_analysis": failure_analysis,
         "config_snapshot": config or {"type": "seed_batch", "n_questions": 10},
         "eval_details": {
             "eval_wall_s": 600.0,
@@ -120,6 +122,59 @@ def test_seq_rows_mark_latest_reverted_candidate_not_replayable() -> None:
 
     assert "seq_candidates=1" in text
     assert "replayable=no(AP-24=revert)" in text
+    assert "replayable=yes" not in text
+
+
+def test_seq_rows_mark_benign_excluded_accumulating_candidate_replayable() -> None:
+    candidate = "candidate-a"
+    rows = [
+        _row(
+            20,
+            config={
+                "type": "structural_experiment",
+                "flags": {"model_fallback": False},
+            },
+            seq={
+                "candidate": candidate,
+                "core_id": "core_v1",
+                "state": "accumulating",
+                "z": 1.0,
+            },
+            keep_revert_decision="excluded",
+        ),
+    ]
+
+    text = format_planner_evidence_section(rows)
+
+    assert "seq_candidates=1" in text
+    assert "replayable=yes" in text
+    assert "replayable=no(AP-24=excluded)" not in text
+
+
+def test_seq_rows_mark_terminal_excluded_candidate_not_replayable() -> None:
+    candidate = "candidate-a"
+    rows = [
+        _row(
+            20,
+            config={
+                "type": "structural_experiment",
+                "flags": {"model_fallback": False},
+            },
+            seq={
+                "candidate": candidate,
+                "core_id": "core_v1",
+                "state": "accumulating",
+                "z": 1.0,
+            },
+            keep_revert_decision="excluded",
+            failure_analysis="VIOLATIONS:\n  - Suite 'tool_use' regression",
+        ),
+    ]
+
+    text = format_planner_evidence_section(rows)
+
+    assert "seq_candidates=1" in text
+    assert "replayable=no(AP-24=excluded)" in text
     assert "replayable=yes" not in text
 
 

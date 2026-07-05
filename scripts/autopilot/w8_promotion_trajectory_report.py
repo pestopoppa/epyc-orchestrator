@@ -79,6 +79,8 @@ class CandidateTrajectory:
     latest_failure_violation_details: dict[str, Any]
     recent: bool
     stale_accumulating: bool
+    replay_eligible: bool
+    replay_blocker: str | None
 
 
 def build_w8_trajectory_report(
@@ -124,6 +126,8 @@ def build_w8_trajectory_report(
     recent_active = [
         item for item in trajectories if item.status == "active_recent_replay"
     ]
+    replay_eligible = [item for item in trajectories if item.replay_eligible]
+    recent_replay_eligible = [item for item in replay_eligible if item.recent]
     stale_accumulating = [
         item for item in trajectories if item.status == "stale_accumulating"
     ]
@@ -135,12 +139,14 @@ def build_w8_trajectory_report(
     blocked = _open_requirements(
         trajectories,
         recent_active=recent_active,
+        replay_eligible=replay_eligible,
+        recent_replay_eligible=recent_replay_eligible,
         stale_accumulating=stale_accumulating,
         concentration=concentration,
     )
     if not snapshots:
         status = "no_w8_snapshots"
-    elif recent_active:
+    elif recent_replay_eligible:
         status = "progressing"
     elif stale_accumulating:
         status = "stale_accumulating"
@@ -161,6 +167,15 @@ def build_w8_trajectory_report(
         "replay_concentration": concentration,
         "open_requirements": blocked,
         "recent_active_candidates": [item.candidate for item in recent_active],
+        "replay_eligible_candidates": [item.candidate for item in replay_eligible],
+        "recent_replay_eligible_candidates": [
+            item.candidate for item in recent_replay_eligible
+        ],
+        "replay_blockers": {
+            item.candidate: item.replay_blocker
+            for item in trajectories
+            if item.replay_blocker
+        },
         "stale_accumulating_candidates": [item.candidate for item in stale_accumulating],
         "trajectories": [asdict(item) for item in trajectories],
     }
@@ -183,6 +198,12 @@ def render_markdown(report: Mapping[str, Any]) -> str:
             "- Replay policy: "
             f"max_attempts={report.get('max_replay_attempts')}, "
             f"stale_trials={report.get('stale_trials')}"
+        ),
+        (
+            "- Replay eligibility: "
+            f"eligible={report.get('replay_eligible_candidates') or []}, "
+            f"recent={report.get('recent_replay_eligible_candidates') or []}, "
+            f"blocked={len(report.get('replay_blockers') or {})}"
         ),
     ]
     concentration = dict(report.get("replay_concentration") or {})
@@ -240,13 +261,13 @@ def render_markdown(report: Mapping[str, Any]) -> str:
         return "\n".join(lines)
 
     lines.append(
-        "| Candidate | Status | Trials | latest E / required | latest state | k | fresh evals |"
+        "| Candidate | Status | Trials | latest E / required | latest state | k | fresh evals | Replay |"
     )
-    lines.append("|---|---:|---:|---:|---:|---:|---:|")
+    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|")
     for item in trajectories[:25]:
         lines.append(
             "| {candidate} | {status} | {trials} | {combined} / {required} | "
-            "{state} | {k} | {fresh} |".format(
+            "{state} | {k} | {fresh} | {replay} |".format(
                 candidate=item.get("candidate"),
                 status=item.get("status"),
                 trials=_compact_trials(list(item.get("trials") or [])),
@@ -255,6 +276,11 @@ def render_markdown(report: Mapping[str, Any]) -> str:
                 state=item.get("latest_state") or "none",
                 k=item.get("latest_k"),
                 fresh=item.get("fresh_eval_count"),
+                replay=(
+                    "eligible"
+                    if item.get("replay_eligible")
+                    else item.get("replay_blocker") or ""
+                ),
             )
         )
     if len(trajectories) > 25:
@@ -281,6 +307,8 @@ def _candidate_trajectory(
     capacity_remaining = (
         max(0, max_replay_attempts - latest.k) if latest.k is not None else None
     )
+    replay_blocker = _replay_blocker(latest, max_replay_attempts=max_replay_attempts)
+    replay_eligible = replay_blocker is None
     latest_ap24_ineligible = _terminal_keep_revert_decision(latest)
     stale_accumulating = (
         latest.state == "accumulating"
@@ -324,6 +352,8 @@ def _candidate_trajectory(
         ),
         recent=recent,
         stale_accumulating=stale_accumulating,
+        replay_eligible=replay_eligible,
+        replay_blocker=replay_blocker,
     )
 
 
@@ -361,6 +391,8 @@ def _open_requirements(
     trajectories: list[CandidateTrajectory],
     *,
     recent_active: list[CandidateTrajectory],
+    replay_eligible: list[CandidateTrajectory],
+    recent_replay_eligible: list[CandidateTrajectory],
     stale_accumulating: list[CandidateTrajectory],
     concentration: Mapping[str, Any],
 ) -> list[str]:
@@ -369,6 +401,10 @@ def _open_requirements(
     requirements = ["combined_E_below_required", "fresh_promotion_eval_required"]
     if not recent_active:
         requirements.append("no_recent_multi_observation_accumulating_candidate")
+    if not replay_eligible:
+        requirements.append("no_replay_eligible_accumulating_candidate")
+    elif not recent_replay_eligible:
+        requirements.append("no_recent_replay_eligible_accumulating_candidate")
     if stale_accumulating:
         requirements.append("stale_accumulating_candidates_present")
     if concentration.get("warning"):
@@ -607,6 +643,33 @@ def _terminal_keep_revert_decision(snapshot: W8Snapshot) -> bool:
     if snapshot.state != "accumulating":
         return True
     return bool(snapshot.failure_first_violation)
+
+
+def _replay_blocker(
+    snapshot: W8Snapshot,
+    *,
+    max_replay_attempts: int,
+) -> str | None:
+    """Return why the report-level W8 replay path cannot use this candidate."""
+    if snapshot.state != "accumulating":
+        return f"state={snapshot.state or 'none'}"
+    if snapshot.confirmed:
+        return "already_confirmed_waiting_fresh_eval"
+    if _terminal_keep_revert_decision(snapshot):
+        return f"AP-24={snapshot.keep_revert_decision or 'terminal'}"
+    if snapshot.action_type not in {"numeric_trial", "structural_experiment"}:
+        return f"unreplayable_action={snapshot.action_type or 'unknown'}"
+    if snapshot.combined_E is None:
+        return "combined_E_unavailable"
+    if snapshot.combined_E < 0.9:
+        return "combined_E_below_replay_floor"
+    if snapshot.E_quality is None:
+        return "E_quality_unavailable"
+    if snapshot.E_quality < 1.0:
+        return "E_quality_below_replay_floor"
+    if snapshot.k is not None and snapshot.k >= max_replay_attempts:
+        return "attempt_cap_reached"
+    return None
 
 
 def _optional_float(value: Any) -> float | None:
