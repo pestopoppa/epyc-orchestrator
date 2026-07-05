@@ -2234,3 +2234,49 @@ def test_poll_all_slots_empty_ports_meta() -> None:
         slots_by_port, meta = asyncio.run(dashboard._poll_all_slots())
     assert slots_by_port == {}
     assert meta == {"ports": 0, "answered": 0, "timed_out": 0, "duration_s": 0.0}
+
+
+# ----- region-locks cache + tap-enrich fail-open (serve-path decoupling) -----
+
+
+def test_region_locks_cached_ttl_and_fail_open(monkeypatch) -> None:
+    calls = {"n": 0}
+
+    def fake_payload():
+        calls["n"] += 1
+        if calls["n"] >= 3:
+            raise RuntimeError("proc scan exploded")
+        return {"entries": [{"role": "frontdoor"}], "by_role": {"frontdoor": {}}}
+
+    monkeypatch.setattr(dashboard, "_region_locks_payload", fake_payload)
+    monkeypatch.setitem(dashboard._REGION_LOCKS_CACHE, "ts", 0.0)
+    monkeypatch.setitem(dashboard._REGION_LOCKS_CACHE, "payload", None)
+
+    first = dashboard._region_locks_cached()
+    second = dashboard._region_locks_cached()  # inside TTL → no rebuild
+    assert calls["n"] == 1
+    assert first is second
+
+    # Expire the TTL twice: second rebuild succeeds, third raises → the cached
+    # payload is served marked stale instead of raising into the serve path.
+    dashboard._REGION_LOCKS_CACHE["ts"] = 0.0
+    dashboard._region_locks_cached()
+    assert calls["n"] == 2
+    dashboard._REGION_LOCKS_CACHE["ts"] = 0.0
+    failed = dashboard._region_locks_cached()
+    assert calls["n"] == 3
+    assert failed["stale_cache"] is True
+    assert "proc scan exploded" in failed["error"]
+    assert failed["entries"] == [{"role": "frontdoor"}]
+
+
+def test_enrich_structured_tap_requests_fails_open(monkeypatch) -> None:
+    """Tap content must render even when the locks/topology domain raises."""
+    def boom():
+        raise RuntimeError("locks domain down")
+
+    monkeypatch.setattr(dashboard, "_port_roles_cached", boom)
+    monkeypatch.setattr(dashboard, "_region_locks_cached", boom)
+    reqs = [{"request_id": "chat-1:aa", "role": "frontdoor", "port": 8070}]
+    out = dashboard._enrich_structured_tap_requests(reqs)
+    assert out == reqs

@@ -234,47 +234,53 @@ def _enrich_structured_tap_requests(
     """
     if not requests:
         return requests
-    port_roles = port_roles if port_roles is not None else _discover_llama_ports()
-    region_locks = region_locks if region_locks is not None else _region_locks_payload()
-    by_role = region_locks.get("by_role") if isinstance(region_locks, dict) else {}
-    by_role = by_role if isinstance(by_role, dict) else {}
-    alias_to_topology = _alias_to_topology_roles(port_roles)
-    enriched: list[dict[str, Any]] = []
-    for req in requests:
-        out = dict(req)
-        try:
-            port = int(out.get("port")) if out.get("port") not in (None, "") else None
-        except (TypeError, ValueError):
-            port = None
-        port_role, port_shape = _port_role_shape(port_roles.get(port, "")) if port is not None else ("", "")
-        logical_role = base_role(str(out.get("role") or ""))
-        topology_role = (
-            str(out.get("topology_role") or "")
-            or alias_to_topology.get(logical_role, "")
-            or port_role
-            or logical_role
-        )
-        lock_role = str(out.get("lock_role") or "") or topology_role
-        if topology_role and not out.get("topology_role"):
-            out["topology_role"] = topology_role
-        if lock_role and not out.get("lock_role"):
-            out["lock_role"] = lock_role
+    # Fail open: the enrichment pulls from the locks/topology domain, and the
+    # tap panel's CONTENT must keep rendering even when that domain is broken —
+    # tap requests without lock metadata beat an empty tap panel.
+    try:
+        port_roles = port_roles if port_roles is not None else _port_roles_cached()
+        region_locks = region_locks if region_locks is not None else _region_locks_cached()
+        by_role = region_locks.get("by_role") if isinstance(region_locks, dict) else {}
+        by_role = by_role if isinstance(by_role, dict) else {}
+        alias_to_topology = _alias_to_topology_roles(port_roles)
+        enriched: list[dict[str, Any]] = []
+        for req in requests:
+            out = dict(req)
+            try:
+                port = int(out.get("port")) if out.get("port") not in (None, "") else None
+            except (TypeError, ValueError):
+                port = None
+            port_role, port_shape = _port_role_shape(port_roles.get(port, "")) if port is not None else ("", "")
+            logical_role = base_role(str(out.get("role") or ""))
+            topology_role = (
+                str(out.get("topology_role") or "")
+                or alias_to_topology.get(logical_role, "")
+                or port_role
+                or logical_role
+            )
+            lock_role = str(out.get("lock_role") or "") or topology_role
+            if topology_role and not out.get("topology_role"):
+                out["topology_role"] = topology_role
+            if lock_role and not out.get("lock_role"):
+                out["lock_role"] = lock_role
 
-        role_info = by_role.get(lock_role) or by_role.get(topology_role)
-        inst = _instance_for_tap_request(
-            role_info,
-            instance_idx=out.get("instance_idx"),
-            instance_shape=out.get("instance_shape") or port_shape,
-        )
-        if inst is not None:
-            if out.get("instance_idx") in (None, "") and inst.get("idx") is not None:
-                out["instance_idx"] = inst.get("idx")
-            if not out.get("instance_shape") and inst.get("shape"):
-                out["instance_shape"] = inst.get("shape")
-            if not out.get("instance_regions") and inst.get("regions"):
-                out["instance_regions"] = list(inst.get("regions") or [])
-        enriched.append(out)
-    return enriched
+            role_info = by_role.get(lock_role) or by_role.get(topology_role)
+            inst = _instance_for_tap_request(
+                role_info,
+                instance_idx=out.get("instance_idx"),
+                instance_shape=out.get("instance_shape") or port_shape,
+            )
+            if inst is not None:
+                if out.get("instance_idx") in (None, "") and inst.get("idx") is not None:
+                    out["instance_idx"] = inst.get("idx")
+                if not out.get("instance_shape") and inst.get("shape"):
+                    out["instance_shape"] = inst.get("shape")
+                if not out.get("instance_regions") and inst.get("regions"):
+                    out["instance_regions"] = list(inst.get("regions") or [])
+            enriched.append(out)
+        return enriched
+    except Exception:
+        return requests
 
 
 def _latest_matching_file(root: Path, pattern: str) -> Path | None:
@@ -3594,6 +3600,50 @@ def _build_topology_nodes() -> list[dict[str, Any]]:
 _TOPOLOGY_NODES_CACHE: dict[str, Any] = {"ts": 0.0, "nodes": None}
 _TOPOLOGY_NODES_TTL_S = 3.0
 
+# Region locks + port discovery feed BOTH the 2 Hz snapshot tick and the
+# structured-tap producers (per SSE connection, per worker). Recomputing them
+# per call means one slow /proc pass or ps(1) scan stalls the topology,
+# region-locks AND live-tap panels together — the exact trio-staleness failure
+# domain. TTLs sit far below the client's 12s/30s badge escalation thresholds.
+_REGION_LOCKS_CACHE: dict[str, Any] = {"ts": 0.0, "payload": None}
+_REGION_LOCKS_TTL_S = 1.0
+_PORT_ROLES_CACHE: dict[str, Any] = {"ts": 0.0, "ports": None}
+_PORT_ROLES_TTL_S = 2.0
+
+
+def _region_locks_cached() -> dict[str, Any]:
+    """TTL-cached `_region_locks_payload()` that fails open to the last good
+    payload (marked `stale_cache` + `error`) instead of raising into the
+    serve path."""
+    now = time.time()
+    c = _REGION_LOCKS_CACHE
+    payload = c.get("payload")
+    if payload is not None and (now - c["ts"]) < _REGION_LOCKS_TTL_S:
+        return payload
+    try:
+        payload = _region_locks_payload()
+    except Exception as exc:
+        stale = c.get("payload")
+        if stale is None:
+            return {"error": str(exc), "entries": [], "by_role": {}}
+        return {**stale, "error": str(exc), "stale_cache": True}
+    c["ts"] = now
+    c["payload"] = payload
+    return payload
+
+
+def _port_roles_cached() -> dict[int, str]:
+    """TTL-cached `_discover_llama_ports()` (a ps(1) subprocess per call)."""
+    now = time.time()
+    c = _PORT_ROLES_CACHE
+    ports = c.get("ports")
+    if ports is not None and (now - c["ts"]) < _PORT_ROLES_TTL_S:
+        return ports
+    ports = _discover_llama_ports()
+    c["ts"] = now
+    c["ports"] = ports
+    return ports
+
 
 def _topology_nodes_cached() -> list[dict[str, Any]]:
     """Topology nodes with a short TTL.
@@ -3882,7 +3932,7 @@ async def snapshot() -> JSONResponse:
         "in_flight_tasks": in_flight_tasks,
         "recent_completed_tasks": recent_completed_tasks,
         "live_busy_by_role": role_busy,
-        "region_locks": _region_locks_payload(),
+        "region_locks": _region_locks_cached(),
         "recent_decisions": recent,
         "source_counts_rolling": rolling,
         "source_counts_cumulative": cumulative,
