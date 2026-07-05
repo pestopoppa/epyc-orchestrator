@@ -4,9 +4,9 @@ Mirrors `hle_metrics.py`: a pure helper that computes a diagnostic payload only.
 SafetyGate, ParetoArchive, routing, or baseline mutation. The autopilot's observe-only J11 run
 decides later whether the differential accept-test has enough signal to ever gate acceptance.
 
-Scope honesty (review 2026-05-27, finding #2): an autopilot trial's `EvalResult` is a *trial-level
-aggregate*. It exposes `routing_distribution`, `per_suite_quality`, cost/token stats and the HLE
-ids, but NOT per-request `tool_sequence` / `escalation_path` / answer traces. So the signature is
+Scope honesty (review 2026-05-27, finding #2): an autopilot trial's `EvalResult` is still a
+*trial-level aggregate*. It exposes `routing_distribution`, `per_suite_quality`, compact
+`question_results`, cost/token stats and the HLE ids, but NOT full answer traces. The signature is
 built from what is reliably present and tagged `signature_confidence="partial"`; `diff_signatures`
 then refuses to certify a partial comparison as BENIGN (bumps to WATCH), which is the correct
 conservative behaviour here.
@@ -14,9 +14,12 @@ conservative behaviour here.
 What the coarse signature captures + what the diff therefore flags:
   - route_path  = sorted roles, each tagged with a coarse weight quartile -> WATCH on a role-set
                   change OR a major weight shift across the same roles (finding #3)
+  - tool_sequence = coarse aggregate tool-call/rate/name buckets when present -> WATCH on tool drift
+  - escalation_path = compact per-question route aggregate when present      -> WATCH on path drift
   - sentinel_outcomes = per-question pass/fail when available, else per-suite proxy (>=2.0/3)
                                                                -> BLOCKING on prior pass->fail
-  - token_bucket = avg_prompt_tokens                         -> WATCH/BLOCKING on cost regression
+  - latency_bucket/token_bucket = mean request latency + avg prompt tokens  -> WATCH/BLOCKING on
+                                                                                cost regression
 """
 from __future__ import annotations
 
@@ -76,6 +79,163 @@ def _route_path(routing_distribution: dict[str, float] | None) -> list[str] | No
     return [f"{role}:{_weight_bucket(w)}" for role, w in items] or None
 
 
+def _count_bucket(n: float | int | None) -> str:
+    try:
+        value = float(n)
+    except (TypeError, ValueError):
+        return "n?"
+    if value <= 0:
+        return "n0"
+    if value <= 1:
+        return "n1"
+    if value <= 4:
+        return "n2-4"
+    if value <= 9:
+        return "n5-9"
+    if value <= 24:
+        return "n10-24"
+    return "n25+"
+
+
+def _float_or_none(value: Any) -> float | None:
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    return out
+
+
+def _details(eval_result: Any) -> dict[str, Any]:
+    details = getattr(eval_result, "details", {}) or {}
+    return details if isinstance(details, dict) else {}
+
+
+def _question_rows(eval_result: Any) -> list[dict[str, Any]]:
+    rows = getattr(eval_result, "question_results", None)
+    if not isinstance(rows, list):
+        return []
+    return [row for row in rows if isinstance(row, dict)]
+
+
+def _tool_sequence(eval_result: Any, question_results: list[dict[str, Any]]) -> tuple[list[str] | None, str]:
+    """Coarse, stable tool-use aggregate for the BSV tool sequence hash.
+
+    The observe path has per-question counts/names, not a globally ordered call trace. Hashing coarse
+    counts is intentional: it catches "tools disabled vs used" and large mix changes without making
+    every single-call wobble look like a distinct behavior class.
+    """
+    tool_name_counts: dict[str, int] = {}
+    total_tools = 0
+    tool_questions = 0
+    saw_signal = False
+
+    for row in question_results:
+        tools_used = row.get("tools_used")
+        if tools_used is not None:
+            saw_signal = True
+            try:
+                used = max(0, int(tools_used))
+            except (TypeError, ValueError):
+                used = 0
+            total_tools += used
+            if used > 0:
+                tool_questions += 1
+        tools_called = row.get("tools_called")
+        if isinstance(tools_called, list):
+            saw_signal = True
+            for name in tools_called:
+                label = str(name).strip()
+                if label:
+                    tool_name_counts[label] = tool_name_counts.get(label, 0) + 1
+
+    source = "question_results.tools_used"
+    details = _details(eval_result)
+    if not saw_signal:
+        raw_counts = details.get("tool_name_counts")
+        if isinstance(raw_counts, dict):
+            for name, count in raw_counts.items():
+                label = str(name).strip()
+                if not label:
+                    continue
+                try:
+                    tool_name_counts[label] = int(count)
+                except (TypeError, ValueError):
+                    continue
+            if tool_name_counts:
+                saw_signal = True
+                total_tools = sum(tool_name_counts.values())
+                source = "details.tool_name_counts"
+
+    if not saw_signal:
+        raw_total = getattr(eval_result, "total_tool_calls", None)
+        if raw_total is None:
+            raw_total = details.get("total_tool_calls")
+        if raw_total is not None:
+            saw_signal = True
+            try:
+                total_tools = max(0, int(raw_total))
+            except (TypeError, ValueError):
+                total_tools = 0
+            source = "eval_result.total_tool_calls"
+
+    if not saw_signal:
+        return None, "none"
+
+    raw_rate = _float_or_none(getattr(eval_result, "tool_use_rate", None))
+    if raw_rate is None:
+        raw_rate = _float_or_none(details.get("tool_use_rate"))
+    if raw_rate is None and question_results:
+        raw_rate = tool_questions / len(question_results)
+
+    seq = [f"tool_total:{_count_bucket(total_tools)}"]
+    if raw_rate is not None:
+        seq.append(f"tool_rate:{_weight_bucket(raw_rate)}")
+    for name, count in sorted(tool_name_counts.items()):
+        seq.append(f"tool:{name}:{_count_bucket(count)}")
+    return seq, source
+
+
+def _escalation_path(question_results: list[dict[str, Any]]) -> tuple[list[str] | None, str]:
+    route_counts: dict[str, int] = {}
+    for row in question_results:
+        route = str(row.get("route") or "").strip()
+        if route:
+            route_counts[route] = route_counts.get(route, 0) + 1
+    if not route_counts:
+        return None, "none"
+    return [f"route:{route}:{_count_bucket(count)}" for route, count in sorted(route_counts.items())], (
+        "question_results.route"
+    )
+
+
+def _latency_ms(eval_result: Any, question_results: list[dict[str, Any]]) -> tuple[float | None, str]:
+    latencies = [
+        value
+        for value in (_float_or_none(row.get("latency_ms")) for row in question_results)
+        if value is not None and value >= 0
+    ]
+    if latencies:
+        return sum(latencies) / len(latencies), "question_results.latency_ms_mean"
+
+    details = _details(eval_result)
+    sum_request_elapsed_s = _float_or_none(getattr(eval_result, "sum_request_elapsed_s", None))
+    if sum_request_elapsed_s is None:
+        sum_request_elapsed_s = _float_or_none(details.get("sum_request_elapsed_s"))
+    n_questions = _float_or_none(getattr(eval_result, "n_questions", None))
+    if not n_questions and question_results:
+        n_questions = float(len(question_results))
+    if sum_request_elapsed_s is not None and n_questions and n_questions > 0:
+        return (sum_request_elapsed_s / n_questions) * 1000.0, "eval_result.sum_request_elapsed_s_mean"
+
+    eval_wall_s = _float_or_none(getattr(eval_result, "eval_wall_s", None))
+    if eval_wall_s is None:
+        eval_wall_s = _float_or_none(details.get("eval_wall_s"))
+    if eval_wall_s is not None and eval_wall_s >= 0:
+        return eval_wall_s * 1000.0, "eval_result.eval_wall_s"
+
+    return None, "none"
+
+
 def compute_bsv_observe_payload(
     eval_result: Any,
     *,
@@ -98,7 +258,8 @@ def compute_bsv_observe_payload(
 
     routing = getattr(eval_result, "routing_distribution", {}) or {}
     per_suite = getattr(eval_result, "per_suite_quality", {}) or {}
-    question_outcomes = _question_outcomes(getattr(eval_result, "question_results", None))
+    question_rows = _question_rows(eval_result)
+    question_outcomes = _question_outcomes(question_rows)
     suite_outcomes = _suite_outcomes(per_suite)
     sentinel_outcomes = question_outcomes or suite_outcomes
     sentinel_outcome_source = (
@@ -110,12 +271,18 @@ def compute_bsv_observe_payload(
     )
     oracle = getattr(eval_result, "oracle_adequacy", {}) or {}
     avg_tokens = float(getattr(eval_result, "avg_prompt_tokens", 0.0) or 0.0)
+    tool_sequence, tool_sequence_source = _tool_sequence(eval_result, question_rows)
+    escalation_path, escalation_path_source = _escalation_path(question_rows)
+    latency_ms, latency_source = _latency_ms(eval_result, question_rows)
 
     sig = compute_behavior_signature(
         archive_member_id=str(archive_member_id or species_name or "?"),
         trial_id=trial_id,
         sentinel_outcomes=sentinel_outcomes,
         route_path=_route_path(routing),
+        tool_sequence=tool_sequence,
+        escalation_path=escalation_path,
+        latency_ms=latency_ms,
         total_tokens=avg_tokens or None,
         harness_metrics_id=None,        # no real trace-store ID yet (finding #2); see diagnostics below
         oracle_adequacy_version=None,   # len(oracle) is a count, not a version (finding #2)
@@ -139,6 +306,11 @@ def compute_bsv_observe_payload(
         "oracle_adequacy_count": len(oracle),
         "sentinel_outcome_source": sentinel_outcome_source,
         "sentinel_outcome_count": len(sentinel_outcomes),
+        "process_signal_sources": {
+            "tool_sequence": tool_sequence_source,
+            "escalation_path": escalation_path_source,
+            "latency_ms": latency_source,
+        },
     }
     if incumbent_signature is not None:
         severity, reasons = diff_signatures(incumbent_signature, sig_dict)
