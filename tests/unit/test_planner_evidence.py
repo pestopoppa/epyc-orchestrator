@@ -121,8 +121,61 @@ def test_seq_rows_explain_seed_batch_is_not_w8_replayable() -> None:
     text = format_planner_evidence_section(rows)
 
     assert "seq_candidates=1" in text
+    assert "W8 replay pressure: 0/1 accumulating candidate(s) are replayable" in text
+    assert "seed_batch, deep_eval, and empty-params numeric_trial cannot create replayable W8 evidence" in text
     assert "replayable=no(unreplayable_action=seed_batch)" in text
     assert "replayable=no" in text
+
+
+def test_w8_replay_pressure_counts_empty_numeric_params_as_blocked() -> None:
+    rows = [
+        _row(
+            23,
+            config={"type": "numeric_trial", "surface": "monitor", "params": {}},
+            seq={
+                "candidate": "candidate-empty-params",
+                "core_id": "core_v1",
+                "state": "accumulating",
+                "z": 1.0,
+            },
+        ),
+        _row(
+            24,
+            config={"type": "seed_batch", "n_questions": 40},
+            seq={
+                "candidate": "candidate-seed",
+                "core_id": "core_v1",
+                "state": "accumulating",
+                "z": 1.0,
+            },
+        ),
+    ]
+
+    text = format_planner_evidence_section(rows)
+
+    assert "W8 replay pressure: 0/2 accumulating candidate(s) are replayable" in text
+    assert "blocked=numeric_trial_missing_params:1,unreplayable_action=seed_batch:1" in text
+
+
+def test_w8_replay_pressure_enforces_quality_floor() -> None:
+    row = _row(
+        25,
+        config={"type": "structural_experiment", "flags": {"react_mode": False}},
+        seq={
+            "candidate": "candidate-low-quality",
+            "core_id": "core_v1",
+            "state": "accumulating",
+            "z": 1.0,
+            "E_quality": 0.99,
+            "E_rate_noninf": 0.95,
+            "k": 2,
+        },
+    )
+
+    text = format_planner_evidence_section([row])
+
+    assert "W8 replay pressure: 0/1 accumulating candidate(s) are replayable" in text
+    assert "blocked=E_quality_below_replay_floor:1" in text
 
 
 def test_seq_rows_mark_latest_reverted_candidate_not_replayable() -> None:
@@ -162,6 +215,9 @@ def test_seq_rows_mark_benign_excluded_accumulating_candidate_replayable() -> No
                 "core_id": "core_v1",
                 "state": "accumulating",
                 "z": 1.0,
+                "E_quality": 1.1,
+                "E_rate_noninf": 0.95,
+                "k": 1,
             },
             keep_revert_decision="excluded",
         ),
@@ -170,6 +226,7 @@ def test_seq_rows_mark_benign_excluded_accumulating_candidate_replayable() -> No
     text = format_planner_evidence_section(rows)
 
     assert "seq_candidates=1" in text
+    assert "W8 replay pressure: 1/1 accumulating candidate(s) are replayable" in text
     assert "replayable=yes" in text
     assert "replayable=no(AP-24=excluded)" not in text
 
