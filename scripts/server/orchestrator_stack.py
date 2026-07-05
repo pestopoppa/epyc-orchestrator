@@ -1965,7 +1965,7 @@ def main() -> int:
         "--repair-embeddings",
         action="store_true",
         help="If [0.7] embedding health check finds orphans, run repair before launch "
-        "(re-embeds via 8 parallel BGE servers, rebuilds FAISS index, ~5-15 min). "
+        "(re-embeds via the configured parallel BGE servers, rebuilds FAISS index, ~5-15 min). "
         "Default behavior is read-only — just print warning and continue. "
         "See scripts/maintenance/repair_episodic_embeddings.py for the manual workflow.",
     )

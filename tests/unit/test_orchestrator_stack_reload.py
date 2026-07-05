@@ -196,6 +196,44 @@ def test_cmd_start_defaults_missing_numa_mode_to_quarter(monkeypatch) -> None:
     assert saved
 
 
+def test_cmd_start_repair_embeddings_uses_configured_embedder_pool(monkeypatch) -> None:
+    from scripts.maintenance import repair_episodic_embeddings as repair
+
+    class FakeRegistryLoader:
+        pass
+
+    diagnose_reports = iter([Namespace(healthy=False), Namespace(healthy=True)])
+    repair_calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(stack_commands, "_run_stack_change_launch_gate", lambda _args: True)
+    monkeypatch.setattr(stack_commands, "RegistryLoader", FakeRegistryLoader)
+    monkeypatch.setattr(stack_commands, "apply_host_prerequisites", lambda **_kwargs: True)
+    monkeypatch.setattr(stack_commands, "check_free_memory", lambda: 999)
+    monkeypatch.setattr(stack_commands, "validate_model_paths", lambda: [])
+    monkeypatch.setattr(stack_commands, "validate_against_registry", lambda: [])
+    monkeypatch.setattr(stack_commands, "load_state", lambda: {})
+    monkeypatch.setattr(repair, "diagnose", lambda *_args, **_kwargs: next(diagnose_reports))
+    monkeypatch.setattr(repair, "print_report", lambda _report: None)
+    monkeypatch.setattr(repair, "run_repair", lambda **kwargs: repair_calls.append(kwargs))
+
+    args = _stack_gate_args(
+        dev=False,
+        only=["missing_role"],
+        include_warm=None,
+        skip_host_prereqs=True,
+        compile_registry=False,
+        compile_descriptors=False,
+        skip_stack_change_gate=True,
+        repair_embeddings=True,
+    )
+
+    assert stack_commands.cmd_start(args) == 1
+    assert repair_calls
+    assert repair_calls[0]["servers"] == repair.DEFAULT_EMBEDDER_SERVERS
+    assert repair_calls[0]["base_port"] == repair.DEFAULT_EMBEDDER_BASE_PORT
+    assert repair_calls[0]["max_db_growth"] == repair.DEFAULT_MAX_DB_GROWTH
+
+
 def test_stack_change_launch_gate_failure_blocks_launch(monkeypatch, capsys) -> None:
     def fake_run(cmd, **_kwargs):
         return subprocess.CompletedProcess(cmd, 1, stdout="summary: failed\n", stderr="boom\n")
@@ -818,6 +856,48 @@ def test_cmd_status_prints_model_attestation_warning(monkeypatch, capsys) -> Non
     assert "expected current.gguf" in out
     assert "live cmdline has stale.gguf" in out
     assert saved[-1] == {"frontdoor": info}
+
+
+def test_cmd_status_prints_episodic_embedding_health(monkeypatch, capsys) -> None:
+    from scripts.maintenance import repair_episodic_embeddings as repair
+
+    info = stack_commands.ProcessInfo(
+        role="frontdoor",
+        pid=123,
+        port=8070,
+        started_at="now",
+        model_path="/models/current.gguf",
+        log_file="frontdoor.log",
+    )
+
+    monkeypatch.setattr(stack_commands, "load_state", lambda: {"frontdoor": info})
+    monkeypatch.setattr(stack_commands, "save_state", lambda _state: None)
+    monkeypatch.setattr(stack_commands.os, "kill", lambda _pid, _signal: None)
+    monkeypatch.setattr(stack_commands, "wait_for_health", lambda *a, **kw: True)
+    monkeypatch.setattr(
+        stack_commands._stack_processes,
+        "process_cmdline",
+        lambda _pid: ["llama-server", "-m", "/models/current.gguf"],
+    )
+    monkeypatch.setattr(
+        repair,
+        "diagnose",
+        lambda *_args, **_kwargs: repair.HealthReport(
+            n_db_routing=100,
+            n_faiss_vectors=10,
+            n_reembedded=50,
+            overlap_live=0.5,
+            faiss_coverage=0.1,
+            healthy=False,
+            orphan_count=90,
+        ),
+    )
+
+    assert stack_commands.cmd_status(Namespace()) == 0
+    out = capsys.readouterr().out
+    assert "Episodic FAISS: ORPHANED" in out
+    assert "10/100 routing vectors" in out
+    assert "90 orphan(s)" in out
 
 
 def test_cmd_status_prints_mmproj_attestation_warning(monkeypatch, capsys) -> None:

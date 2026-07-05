@@ -576,6 +576,34 @@ def _launch_contract_for_process(
     return {}
 
 
+def _episodic_embedding_status_line() -> str:
+    """Return a concise read-only health line for the episodic FAISS mirror."""
+    try:
+        from scripts.maintenance.repair_episodic_embeddings import (
+            DEFAULT_DB_PATH,
+            DEFAULT_FAISS_PATH,
+            DEFAULT_REEMBEDDED_PATH,
+            diagnose as _diagnose_embeddings,
+        )
+
+        report = _diagnose_embeddings(
+            DEFAULT_DB_PATH,
+            DEFAULT_FAISS_PATH,
+            DEFAULT_REEMBEDDED_PATH,
+        )
+    except Exception as exc:  # noqa: BLE001 - status should be diagnostic-only
+        return f"Episodic FAISS: unknown ({exc})"
+
+    status = "healthy" if report.healthy else "ORPHANED"
+    return (
+        f"Episodic FAISS: {status} — "
+        f"{report.n_faiss_vectors:,}/{report.n_db_routing:,} routing vectors "
+        f"({report.faiss_coverage:.1%}), "
+        f"{report.orphan_count:,} orphan(s), "
+        f"reembedded overlap {report.overlap_live:.1%}"
+    )
+
+
 def runtime_attestation_warnings(
     state: dict[str, ProcessInfo] | None = None,
 ) -> list[str]:
@@ -890,8 +918,11 @@ def cmd_start(args: argparse.Namespace) -> int:
                 print_report as _print_embedding_report,
                 run_repair as _run_embedding_repair,
                 DEFAULT_DB_PATH,
+                DEFAULT_EMBEDDER_BASE_PORT,
+                DEFAULT_EMBEDDER_SERVERS,
                 DEFAULT_FAISS_PATH,
                 DEFAULT_ID_MAP_PATH,
+                DEFAULT_MAX_DB_GROWTH,
                 DEFAULT_REEMBEDDED_PATH,
             )
 
@@ -905,12 +936,19 @@ def cmd_start(args: argparse.Namespace) -> int:
             if not _report.healthy:
                 if getattr(args, "repair_embeddings", False):
                     print("\n[0.7] --repair-embeddings: starting bulk re-embed + FAISS rebuild...")
-                    print("      (launches 8 BGE servers; expected 5-15 min)")
+                    print(
+                        "      "
+                        f"(uses {DEFAULT_EMBEDDER_SERVERS} configured BGE server(s) "
+                        f"starting at port {DEFAULT_EMBEDDER_BASE_PORT}; expected 5-15 min)"
+                    )
                     _run_embedding_repair(
                         db_path=DEFAULT_DB_PATH,
                         faiss_path=DEFAULT_FAISS_PATH,
                         id_map_path=DEFAULT_ID_MAP_PATH,
                         reembedded_path=DEFAULT_REEMBEDDED_PATH,
+                        servers=DEFAULT_EMBEDDER_SERVERS,
+                        base_port=DEFAULT_EMBEDDER_BASE_PORT,
+                        max_db_growth=DEFAULT_MAX_DB_GROWTH,
                     )
                     print("[0.7] Re-running diagnostic post-repair:")
                     _report2 = _diagnose_embeddings(
@@ -1627,6 +1665,8 @@ def cmd_status(args: argparse.Namespace) -> int:
         for warning in attestation_warnings:
             print(f"  [!] {warning}")
         print()
+    print(_episodic_embedding_status_line())
+    print()
     print(f"State file: {STATE_FILE}")
     save_state(state)
     return 0
