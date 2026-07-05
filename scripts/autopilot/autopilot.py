@@ -3466,6 +3466,12 @@ def _critic_rejected_signature_skip(
     """
     if not isinstance(action, dict):
         return None
+    if action.get("type") == "numeric_trial" and not (action.get("params") or {}):
+        # Empty numeric params are an Optuna request, not the replay artifact.
+        # NumericSwarm samples concrete values at dispatch and actions.py mutates
+        # the action before journaling, so the apparent signature is not an exact
+        # repeat in the material sense that this guard is meant to block.
+        return None
     rejected = state.get("critic_rejected_signatures", {}) or {}
     if not isinstance(rejected, dict):
         return None

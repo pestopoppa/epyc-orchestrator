@@ -2806,8 +2806,12 @@ def test_record_rejected_draft_outboxes_operator_domain(monkeypatch) -> None:
     assert calls == [(draft, 30)]
 
 
-def test_critic_rejected_signature_skip_blocks_exact_repeat() -> None:
-    draft = {"type": "numeric_trial", "surface": "think_harder", "params": {}}
+def test_critic_rejected_signature_skip_blocks_exact_concrete_repeat() -> None:
+    draft = {
+        "type": "numeric_trial",
+        "surface": "think_harder",
+        "params": {"think_harder.min_expected_roi": 0.05},
+    }
     sig = autopilot._action_signature(draft)
     state = {
         "critic_rejected_signatures": {
@@ -2822,6 +2826,20 @@ def test_critic_rejected_signature_skip_blocks_exact_repeat() -> None:
     assert "trial 44" in result.reason
     assert "change a material field" in result.reason
     assert result.action_type == "numeric_trial"
+
+
+def test_critic_rejected_signature_skip_allows_empty_numeric_optuna_request() -> None:
+    draft = {"type": "numeric_trial", "surface": "think_harder", "params": {}}
+    state = {
+        "critic_rejected_signatures": {
+            autopilot._action_signature(draft): {
+                "trial_id": 44,
+                "reason": "critic rejected",
+            }
+        }
+    }
+
+    assert autopilot._critic_rejected_signature_skip(draft, state) is None
 
 
 def test_critic_rejected_signature_skip_allows_material_change() -> None:

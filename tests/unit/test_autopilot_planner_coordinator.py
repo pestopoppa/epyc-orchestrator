@@ -974,6 +974,21 @@ def test_codex_critic_failure_falls_back_to_claude_for_local_draft() -> None:
     assert [call["role"] for call in claude.calls] == ["critique"]
 
 
+def test_critique_prompt_allows_empty_numeric_optuna_request() -> None:
+    prompt = "### Evidence Power and Sequential Candidate Status\nW8 replay pressure"
+    text = planner_coordinator.build_critique_prompt(
+        prompt,
+        _action_text({"type": "numeric_trial", "surface": "think_harder", "params": {}}),
+        {"type": "numeric_trial", "surface": "think_harder", "params": {}},
+        {"falsifier": "x"},
+    )
+
+    assert 'Do NOT reject a `numeric_trial` solely because `"params": {}`' in text
+    assert "NumericSwarm/Optuna" in text
+    assert "Historical logged rows that stayed empty" in text
+    assert "are not replayable" in text
+
+
 def test_unparseable_critique_shadow_mode_keeps_draft() -> None:
     """In shadow_critique (non-binding) mode, an unparseable critique still must
     not crash or fabricate approval — the draft stands (shadow never revises),

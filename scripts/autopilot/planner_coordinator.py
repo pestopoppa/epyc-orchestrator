@@ -645,6 +645,12 @@ of the following — the relevant evidence is in the selected context below:
   - matches a "Blacklisted Configurations" entry.
   - cites below-MDE or single-trial evidence as decisive without a reproduction
     plan; use the "Evidence Power" section to reject unmeasurable proposals.
+Do NOT reject a `numeric_trial` solely because `"params": {{}}`. In the action
+schema, empty params means "ask NumericSwarm/Optuna for concrete values"; the
+dispatcher writes the applied params into the trial action and eval details
+before W8 replay/promotion accounting. Historical logged rows that stayed empty
+are not replayable, but a new empty-params numeric request is a valid way to
+produce a replayable candidate if the selected surface is otherwise allowed.
 Do NOT manufacture host-noise / contention narratives when System Health is
 nominal, and do NOT propose operator-domain actions (widening safety-gate
 thresholds, baseline refresh) — those are outside the autopilot action space.
