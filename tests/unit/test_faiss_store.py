@@ -166,6 +166,35 @@ class TestFAISSEmbeddingStore:
         reopened = FAISSEmbeddingStore(path=temp_dir, dim=128)
         assert reopened.id_map == ["external"]
 
+    def test_reload_if_changed_refreshes_external_writer(self, temp_dir):
+        from orchestration.repl_memory.faiss_store import FAISSEmbeddingStore
+
+        stale = FAISSEmbeddingStore(path=temp_dir, dim=128)
+        writer = FAISSEmbeddingStore(path=temp_dir, dim=128)
+
+        writer.add("external", np.random.randn(128).astype(np.float32))
+        writer.save()
+
+        assert stale.count == 0
+        assert stale.reload_if_changed() is True
+        assert stale.count == 1
+        assert stale.id_map == ["external"]
+        assert stale.reload_if_changed() is False
+
+    def test_reload_if_changed_force_discards_dirty_local_state(self, temp_dir):
+        from orchestration.repl_memory.faiss_store import FAISSEmbeddingStore
+
+        stale = FAISSEmbeddingStore(path=temp_dir, dim=128)
+        writer = FAISSEmbeddingStore(path=temp_dir, dim=128)
+
+        writer.add("external", np.random.randn(128).astype(np.float32))
+        writer.save()
+        stale.add("local-unsaved", np.random.randn(128).astype(np.float32))
+
+        assert stale.reload_if_changed() is False
+        assert stale.reload_if_changed(force=True) is True
+        assert stale.id_map == ["external"]
+
     def test_get_embedding(self, store):
         """Test retrieving embedding by index."""
         original = np.array([1.0, 2.0] + [0.0] * 126, dtype=np.float32)
@@ -323,6 +352,64 @@ class TestEpisodicStoreWithFAISS:
         finally:
             store1.close()
             store2.close()
+
+    def test_retrieve_refreshes_external_faiss_writer(self, temp_dir):
+        from orchestration.repl_memory import EpisodicStore
+
+        live_store = EpisodicStore(db_path=temp_dir, embedding_dim=128, use_faiss=True)
+        writer_store = EpisodicStore(db_path=temp_dir, embedding_dim=128, use_faiss=True)
+        embedding = np.random.randn(128).astype(np.float32)
+
+        try:
+            assert live_store.retrieve_by_similarity(embedding, k=1) == []
+            memory_id = writer_store.store(
+                embedding=embedding,
+                action="external_writer",
+                action_type="routing",
+                context={"writer": "external"},
+            )
+
+            results = live_store.retrieve_by_similarity(embedding, k=1)
+
+            assert [entry.id for entry in results] == [memory_id]
+            assert results[0].action == "external_writer"
+        finally:
+            writer_store.close()
+            live_store.close()
+
+    def test_faiss_flush_discards_stale_dirty_state_without_clobbering_disk(
+        self,
+        temp_dir,
+        caplog,
+    ):
+        from orchestration.repl_memory import EpisodicStore
+        from orchestration.repl_memory.faiss_store import FAISSEmbeddingStore
+
+        stale_store = EpisodicStore(db_path=temp_dir, embedding_dim=128, use_faiss=True)
+        writer_store = EpisodicStore(db_path=temp_dir, embedding_dim=128, use_faiss=True)
+
+        try:
+            writer_id = writer_store.store(
+                embedding=np.random.randn(128).astype(np.float32),
+                action="external_writer",
+                action_type="routing",
+                context={"writer": "external"},
+            )
+            stale_store._embedding_store.add(
+                "local-unsaved",
+                np.random.randn(128).astype(np.float32),
+            )
+            stale_store._dirty = True
+
+            stale_store.flush()
+
+            reopened = FAISSEmbeddingStore(path=temp_dir, dim=128)
+            assert reopened.id_map == [writer_id]
+            assert stale_store._dirty is False
+            assert "Discarding dirty FAISS-backed EpisodicStore" in caplog.text
+        finally:
+            writer_store.close()
+            stale_store.close()
 
     def test_retrieve_by_similarity(self, faiss_store):
         """Test similarity-based retrieval."""

@@ -611,6 +611,34 @@ def _build_planner_strategy_hints(
             if len(rows) >= max_rows:
                 return
 
+    try:
+        health_fn = getattr(strategy_store, "search_index_health", None)
+        if callable(health_fn):
+            health = health_fn()
+            if not health.get("healthy", True):
+                add_entries([
+                    {
+                        "id": "strategy-search-index-degraded",
+                        "species": "system",
+                        "entry_type": "warning",
+                        "title": "StrategyStore search index degraded",
+                        "generalized_content": (
+                            f"{health.get('summary', 'search mirror degraded')}; "
+                            f"repair={health.get('repair_hint', 'rebuild search indexes')}"
+                        ),
+                    }
+                ])
+    except Exception as exc:
+        rows.append(
+            {
+                "id": "strategy-search-index-health-error",
+                "species": "system",
+                "entry_type": "warning",
+                "title": "StrategyStore search index health unavailable",
+                "generalized_content": str(exc),
+            }
+        )
+
     add_entries(
         _operator_seed_planner_entries(
             strategy_store,
@@ -4173,7 +4201,23 @@ def _run_loop_inner(
     strategy_store: StrategyStore | None = None
     try:
         strategy_store = StrategyStore()
-        log.info("Strategy store loaded (%d entries)", strategy_store.count())
+        try:
+            strategy_health = strategy_store.search_index_health()
+        except Exception as health_exc:
+            strategy_health = {
+                "healthy": False,
+                "summary": f"health check unavailable: {health_exc}",
+            }
+        log.info(
+            "Strategy store loaded (%d entries; search indexes: %s)",
+            strategy_store.count(),
+            strategy_health.get("summary", "unknown"),
+        )
+        if not strategy_health.get("healthy", True):
+            log.warning(
+                "StrategyStore search indexes are degraded; planner retrieval may miss rows. %s",
+                strategy_health.get("repair_hint", "Run StrategyStore.rebuild_search_indexes()."),
+            )
     except Exception as e:
         log.warning("Strategy store unavailable: %s", e)
     _install_planner_convention_bindings(strategy_store, journal)

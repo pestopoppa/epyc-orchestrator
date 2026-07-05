@@ -692,6 +692,37 @@ def test_planner_strategy_hints_see_external_store_writes_without_restart(
         live_store.close()
 
 
+def test_planner_strategy_hints_surface_search_index_degradation(monkeypatch) -> None:
+    monkeypatch.setattr(autopilot, "_PLANNER_HINTS_ENABLED", True)
+
+    class FakeStore:
+        def search_index_health(self):
+            return {
+                "healthy": False,
+                "summary": (
+                    "degraded: sqlite=10, faiss=5, id_map=5, "
+                    "faiss_coverage=50.0%, missing_faiss=5"
+                ),
+                "repair_hint": "StrategyStore.rebuild_search_indexes()",
+            }
+
+        def retrieve_for_journal(self, *_args, **_kwargs):
+            return []
+
+        def retrieve_conventions(self, *_args, **_kwargs):
+            return []
+
+    text = autopilot._build_planner_strategy_hints(
+        FakeStore(),
+        object(),
+        max_rows=3,
+    )
+
+    assert "StrategyStore search index degraded" in text
+    assert "faiss_coverage=50.0%" in text
+    assert "StrategyStore.rebuild_search_indexes()" in text
+
+
 def test_planner_strategy_hints_refresh_store_rows_for_prompt(monkeypatch) -> None:
     monkeypatch.setattr(autopilot, "_PLANNER_HINTS_ENABLED", True)
     calls: list[tuple[str, str, object, int]] = []

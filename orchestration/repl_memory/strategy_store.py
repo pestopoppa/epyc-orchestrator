@@ -54,6 +54,7 @@ DEFAULT_CONTEXT_FILES: tuple[Path, ...] = (
 # Reciprocal Rank Fusion default constant (Cormack et al. 2009).
 _RRF_K = 60
 _TITLE_MAX_CHARS = 96
+_SEARCH_INDEX_MIN_COVERAGE = 0.99
 
 _SPECIFICITY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("absolute_path", re.compile(r"(?:/mnt/raid0|/workspace|/home/node)/[^\s,;:)]+")),
@@ -647,18 +648,120 @@ class StrategyStore:
             logger.info("FTS5 backfill: inserted %d rows", inserted)
         return inserted
 
-    def rebuild_search_indexes(self) -> dict[str, int]:
-        """Rebuild FTS5 and FAISS mirrors from authoritative SQLite rows.
+    def search_index_health(
+        self,
+        *,
+        min_coverage: float = _SEARCH_INDEX_MIN_COVERAGE,
+    ) -> dict[str, Any]:
+        """Return a read-only health report for StrategyStore retrieval mirrors.
 
-        Strategy rows live in SQLite. FTS5 and FAISS are retrieval mirrors, so
-        any destructive row purge must rebuild both mirrors rather than leaving
-        orphan vectors or keyword rows behind.
+        SQLite is authoritative; FAISS and FTS5 are serving mirrors. This report
+        catches stale/missing vectors, orphan vectors from failed writes, id-map
+        mismatches, and missing FTS rows before planner hints silently degrade.
         """
-        rows = self._conn.execute(
-            "SELECT id, description, insight, species, metadata_json FROM strategies "
-            "ORDER BY created_at ASC"
-        ).fetchall()
+        self._refresh_faiss_if_changed()
+        rows = self._conn.execute("SELECT id FROM strategies").fetchall()
+        sqlite_ids = {str(row["id"]) for row in rows}
+        sqlite_count = len(sqlite_ids)
 
+        faiss_count = int(getattr(self._faiss, "count", 0) or 0)
+        id_map = [str(item) for item in getattr(self._faiss, "id_map", [])]
+        id_map_ids = set(id_map)
+        duplicate_id_count = len(id_map) - len(id_map_ids)
+        missing_faiss_ids = sorted(sqlite_ids - id_map_ids)
+        extra_faiss_ids = sorted(id_map_ids - sqlite_ids)
+        faiss_live_count = len(sqlite_ids & id_map_ids)
+        faiss_coverage = (
+            faiss_live_count / max(sqlite_count, 1)
+            if sqlite_count
+            else 1.0
+        )
+        id_map_matches_faiss = len(id_map) == faiss_count
+
+        fts_enabled = bool(getattr(self, "_fts_enabled", False))
+        fts_count = 0
+        fts_coverage = 1.0
+        missing_fts_ids: list[str] = []
+        extra_fts_ids: list[str] = []
+        if fts_enabled:
+            try:
+                fts_rows = self._conn.execute("SELECT id FROM strategies_fts").fetchall()
+                fts_ids = {str(row[0]) for row in fts_rows}
+                fts_count = len(fts_ids)
+                missing_fts_ids = sorted(sqlite_ids - fts_ids)
+                extra_fts_ids = sorted(fts_ids - sqlite_ids)
+                fts_coverage = (
+                    len(sqlite_ids & fts_ids) / max(sqlite_count, 1)
+                    if sqlite_count
+                    else 1.0
+                )
+            except sqlite3.OperationalError as exc:
+                fts_coverage = 0.0 if sqlite_count else 1.0
+                missing_fts_ids = sorted(sqlite_ids)
+                extra_fts_ids = []
+                logger.warning("Could not inspect StrategyStore FTS mirror: %s", exc)
+
+        healthy = (
+            faiss_coverage >= min_coverage
+            and id_map_matches_faiss
+            and duplicate_id_count == 0
+            and not extra_faiss_ids
+            and (not fts_enabled or fts_coverage >= min_coverage)
+            and (not fts_enabled or not extra_fts_ids)
+        )
+        status = "healthy" if healthy else "degraded"
+        summary = (
+            f"{status}: sqlite={sqlite_count:,}, "
+            f"faiss={faiss_count:,}, id_map={len(id_map):,}, "
+            f"faiss_coverage={faiss_coverage:.1%}, "
+            f"missing_faiss={len(missing_faiss_ids):,}, "
+            f"extra_faiss={len(extra_faiss_ids):,}, "
+            f"duplicate_ids={duplicate_id_count:,}"
+        )
+        if fts_enabled:
+            summary += (
+                f", fts={fts_count:,}, fts_coverage={fts_coverage:.1%}, "
+                f"missing_fts={len(missing_fts_ids):,}, "
+                f"extra_fts={len(extra_fts_ids):,}"
+            )
+        return {
+            "healthy": healthy,
+            "status": status,
+            "summary": summary,
+            "sqlite_count": sqlite_count,
+            "faiss_count": faiss_count,
+            "id_map_count": len(id_map),
+            "id_map_matches_faiss": id_map_matches_faiss,
+            "duplicate_id_count": duplicate_id_count,
+            "faiss_live_count": faiss_live_count,
+            "faiss_coverage": faiss_coverage,
+            "missing_faiss_count": len(missing_faiss_ids),
+            "extra_faiss_count": len(extra_faiss_ids),
+            "missing_faiss_ids": missing_faiss_ids[:20],
+            "extra_faiss_ids": extra_faiss_ids[:20],
+            "fts_enabled": fts_enabled,
+            "fts_count": fts_count,
+            "fts_coverage": fts_coverage,
+            "missing_fts_count": len(missing_fts_ids),
+            "extra_fts_count": len(extra_fts_ids),
+            "missing_fts_ids": missing_fts_ids[:20],
+            "extra_fts_ids": extra_fts_ids[:20],
+            "min_coverage": min_coverage,
+            "repair_hint": "StrategyStore.rebuild_search_indexes()",
+        }
+
+    def _rows_for_search_index_rebuild(self) -> list[sqlite3.Row]:
+        return list(
+            self._conn.execute(
+                "SELECT id, description, insight, species, metadata_json FROM strategies "
+                "ORDER BY created_at ASC"
+            ).fetchall()
+        )
+
+    def _publish_search_indexes_from_rows(
+        self,
+        rows: list[sqlite3.Row],
+    ) -> dict[str, int]:
         if getattr(self, "_fts_enabled", False):
             self._conn.execute("DELETE FROM strategies_fts")
             for row in rows:
@@ -699,6 +802,28 @@ class StrategyStore:
             ),
             "faiss_count": self._faiss.count,
         }
+
+    def rebuild_search_indexes(self) -> dict[str, int]:
+        """Rebuild FTS5 and FAISS mirrors from authoritative SQLite rows.
+
+        Strategy rows live in SQLite. FTS5 and FAISS are retrieval mirrors, so
+        any destructive row purge must rebuild both mirrors rather than leaving
+        orphan vectors or keyword rows behind.
+        """
+        from orchestration.repl_memory.faiss_store import StaleFAISSSaveError
+
+        rows = self._rows_for_search_index_rebuild()
+        try:
+            return self._publish_search_indexes_from_rows(rows)
+        except StaleFAISSSaveError:
+            logger.warning(
+                "StrategyStore FAISS mirror changed during index rebuild; "
+                "rolling back FTS changes, refreshing, and retrying once"
+            )
+            self._conn.rollback()
+            self._refresh_faiss_if_changed(force=True)
+            rows = self._rows_for_search_index_rebuild()
+            return self._publish_search_indexes_from_rows(rows)
 
     def purge_strategy_campaign(self, campaign: str) -> dict[str, Any]:
         """Delete operator-seeded strategy rows for one campaign.
@@ -1280,7 +1405,10 @@ class StrategyStore:
         equivalent to the prior behaviour for those callers.
         """
         self._refresh_faiss_if_changed()
-        if self._faiss.count == 0:
+        health = self.search_index_health()
+        if not health["healthy"]:
+            logger.warning("StrategyStore search indexes degraded: %s", health["summary"])
+        if self._faiss.count == 0 and not getattr(self, "_fts_enabled", False):
             return []
 
         # Wider candidate pool to absorb species filtering, quarantine, and
@@ -1289,7 +1417,7 @@ class StrategyStore:
 
         # FAISS (vector similarity)
         embedding = self._embed(query_text)
-        faiss_results = self._faiss.search(embedding, k=fetch_k)
+        faiss_results = self._faiss.search(embedding, k=fetch_k) if self._faiss.count else []
         faiss_ranking: dict[str, int] = {}
         faiss_scores: dict[str, float] = {}
         for rank, (mid, score) in enumerate(faiss_results):

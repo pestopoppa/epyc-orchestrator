@@ -51,6 +51,38 @@ def test_diagnose_flags_stale_id_map_when_faiss_count_matches(
     assert not report.healthy
 
 
+def test_diagnose_requires_near_complete_live_coverage(
+    monkeypatch, tmp_path: Path
+) -> None:
+    db_path = tmp_path / "episodic.db"
+    faiss_path = tmp_path / "embeddings.faiss"
+    id_map_path = tmp_path / "id_map.npy"
+    reembedded_path = tmp_path / "reembedded.npz"
+    live_ids = [f"m{i}" for i in range(100)]
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE memories (id TEXT PRIMARY KEY, action_type TEXT)")
+        conn.executemany(
+            "INSERT INTO memories (id, action_type) VALUES (?, 'routing')",
+            [(memory_id,) for memory_id in live_ids],
+        )
+
+    faiss_path.touch()
+    monkeypatch.setitem(
+        sys.modules,
+        "faiss",
+        types.SimpleNamespace(read_index=lambda _path: types.SimpleNamespace(ntotal=94)),
+    )
+    np.save(id_map_path, np.array(live_ids[:94], dtype=object))
+
+    report = repair.diagnose(db_path, faiss_path, reembedded_path, id_map_path)
+
+    assert report.faiss_coverage == 0.94
+    assert report.id_map_overlap_live == 0.94
+    assert report.orphan_count == 6
+    assert not report.healthy
+
+
 def test_run_repair_refuses_stale_snapshot(monkeypatch, tmp_path: Path) -> None:
     reports = iter(
         [

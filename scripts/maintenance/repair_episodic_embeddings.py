@@ -18,8 +18,8 @@ Health definition:
     id_map_overlap     = |id_map_ids ∩ live_db_routing_ids| / n_db_routing
     overlap_live       = |reembedded_ids ∩ live_db_routing_ids| / n_db_routing
 
-A store is "orphaned" if n_faiss_vectors / n_db_routing < 0.5, id_map.npy
-does not match embeddings.faiss, id_map_overlap < 0.5, OR overlap_live < 0.5.
+A store is "orphaned" if n_faiss_vectors / n_db_routing < 0.99, id_map.npy
+does not match embeddings.faiss, id_map_overlap < 0.99, OR overlap_live < 0.99.
 These conditions fire if FAISS was reset, id_map.npy is stale/wrong, or
 reembedded.npz is stale relative to live db.
 
@@ -74,7 +74,10 @@ DEFAULT_REEMBEDDED_PATH = DEFAULT_SESSIONS_DIR / "reembedded.npz"
 DEFAULT_FAISS_LOCK_PATH = DEFAULT_SESSIONS_DIR / ".episodic_faiss.lock"
 REEMBED_SCRIPT = PROJECT_ROOT / "scripts/graph_router/reembed_episodic_store.py"
 
-HEALTH_THRESHOLD = 0.5  # n_faiss / n_db must be ≥ this to be considered healthy
+# Retrieval is materially degraded well before catastrophic 50% coverage loss.
+# Keep a small append-lag allowance for live writers, but require the mirror to
+# cover nearly all live routing rows before startup/status calls it healthy.
+HEALTH_THRESHOLD = 0.99
 MIN_ORPHANS_TO_REPAIR = 1000  # don't repair if delta is small (< this many orphans)
 DEFAULT_EMBEDDER_SERVERS = len(EMBEDDER_PORTS)
 DEFAULT_EMBEDDER_BASE_PORT = min(EMBEDDER_PORTS)
