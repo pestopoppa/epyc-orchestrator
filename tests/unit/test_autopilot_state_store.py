@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import json
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import yaml
@@ -105,6 +106,38 @@ def test_load_blacklist_filters_unscoped_numeric_surface_entries(tmp_path) -> No
     ]
 
 
+def test_load_blacklist_filters_expired_auto_entries(tmp_path) -> None:
+    f = tmp_path / "bl.yaml"
+    old_added = (datetime.now(timezone.utc) - timedelta(days=20)).isoformat()
+    f.write_text(yaml.dump({"blacklist": [
+        {
+            "pattern": {"type": "structural_experiment", "flags": {"x": True}},
+            "reason": "Auto-blacklisted: 2× critic-rejected — stale",
+            "added": old_added,
+            "source_trial": 10,
+        },
+        {
+            "pattern": {"type": "structural_experiment", "flags": {"y": True}},
+            "reason": "Auto-blacklisted: 2× critic-rejected — explicit stale",
+            "added": datetime.now(timezone.utc).isoformat(),
+            "expires_at": (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(),
+            "source_trial": 11,
+        },
+        {
+            "pattern": {"type": "prompt_mutation", "file": "frontdoor.md"},
+            "reason": "MANUAL FREEZE: corruption recovery",
+            "severity": "corruption",
+            "added": old_added,
+            "source_trial": -1,
+        },
+    ]}))
+
+    out = state_store.load_blacklist(f)
+    assert [entry["pattern"] for entry in out] == [
+        {"type": "prompt_mutation", "file": "frontdoor.md"},
+    ]
+
+
 def test_load_blacklist_handles_malformed_yaml(tmp_path) -> None:
     f = tmp_path / "bad.yaml"
     f.write_text("not: valid: yaml: {{{")
@@ -188,6 +221,22 @@ def test_check_blacklist_honors_numeric_param_pattern() -> None:
             "surface": "memrl_retrieval",
             "params": {"memrl_retrieval.semantic_k": 32},
         },
+        bl,
+    ) is None
+
+
+def test_check_blacklist_ignores_expired_auto_entries() -> None:
+    expired = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+    bl = [
+        {
+            "pattern": {"type": "structural_experiment", "flags": {"x": True}},
+            "reason": "Auto-blacklisted: 2× critic-rejected — stale",
+            "reason_class": "critic_rejected",
+            "expires_at": expired,
+        }
+    ]
+    assert state_store.check_blacklist(
+        {"type": "structural_experiment", "flags": {"x": True}},
         bl,
     ) is None
 
@@ -287,6 +336,23 @@ def test_append_blacklist_keeps_numeric_params_pattern(tmp_path) -> None:
         "surface": "memrl_retrieval",
         "params": {"memrl_retrieval.semantic_k": 28},
     }
+
+
+def test_append_blacklist_tags_auto_expiry_metadata(tmp_path) -> None:
+    bl_path = tmp_path / "bl.yaml"
+    state_store.append_blacklist(
+        {"type": "structural_experiment", "flags": {"graph_router": True}},
+        trial_id=1064,
+        reason="Auto-blacklisted: 2× critic-rejected — stale draft",
+        blacklist_path=bl_path,
+        reason_class="critic_rejected",
+    )
+    entry = yaml.safe_load(bl_path.read_text())["blacklist"][0]
+    assert entry["reason_class"] == "critic_rejected"
+    assert entry["ttl_days"] == 14
+    added = datetime.fromisoformat(entry["added"])
+    expires_at = datetime.fromisoformat(entry["expires_at"])
+    assert timedelta(days=13, hours=23) < expires_at - added < timedelta(days=14, minutes=1)
 
 
 def test_append_blacklist_skips_observational_deep_eval_tier(tmp_path) -> None:

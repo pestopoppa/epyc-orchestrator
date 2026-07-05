@@ -2569,7 +2569,7 @@ def test_record_rejected_draft_counts_and_sets_feedback() -> None:
 def test_record_rejected_draft_blacklists_on_repeat(monkeypatch) -> None:
     calls = []
     monkeypatch.setattr(autopilot, "append_blacklist",
-                        lambda action, tid, reason: calls.append((action, reason)))
+                        lambda action, tid, reason, **_: calls.append((action, reason)))
     state = {}
     draft = {"type": "structural_experiment", "flags": {"graph_router": True}}
     autopilot._record_rejected_draft(state, draft, _FakeCritique(), trial_id=1)

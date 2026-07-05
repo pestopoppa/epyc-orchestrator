@@ -14,7 +14,7 @@ import logging
 import os
 import re
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +25,12 @@ log = logging.getLogger("autopilot")
 LOW_RISK_TYPE_ONLY_BLACKLIST_DENYLIST = {"seed_batch", "deep_eval", "distill_knowledge"}
 OBSERVATIONAL_ACTION_BLACKLIST_DENYLIST = {"deep_eval"}
 NUMERIC_SURFACE_BLACKLIST_SCOPES = {"surface", "permanent_surface"}
+AUTO_BLACKLIST_TTL_DAYS_BY_REASON_CLASS = {
+    "critic_rejected": 14,
+    "invalid_repeat": 14,
+    "safety_failure": 30,
+}
+NON_EXPIRING_BLACKLIST_SEVERITIES = {"crash", "corruption"}
 
 
 # 2026-05-23 Phase 6a — exit code for "state file corrupt, refuse to start".
@@ -120,6 +126,7 @@ def load_blacklist(blacklist_path: Path) -> list[dict[str, Any]]:
             entry for entry in entries
             if not _is_observational_blacklist_pattern(entry.get("pattern", {}))
             and not _is_ignored_broad_numeric_surface_entry(entry)
+            and not _is_expired_blacklist_entry(entry)
         ]
     except (yaml.YAMLError, OSError) as e:
         log.warning("Could not load blacklist: %s", e)
@@ -352,6 +359,111 @@ def _is_ignored_broad_numeric_surface_entry(entry: dict[str, Any]) -> bool:
     )
 
 
+def _parse_blacklist_datetime(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    raw = value.strip()
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _auto_blacklist_reason_class(entry: dict[str, Any]) -> str | None:
+    explicit = entry.get("reason_class")
+    if isinstance(explicit, str) and explicit.strip():
+        return explicit.strip()
+    reason = entry.get("reason")
+    if not isinstance(reason, str):
+        return None
+    lowered = reason.lower()
+    if not lowered.startswith("auto-blacklisted:"):
+        return None
+    if "critic-rejected" in lowered:
+        return "critic_rejected"
+    if "invalid" in lowered:
+        return "invalid_repeat"
+    if "consecutive failures" in lowered:
+        return "safety_failure"
+    return None
+
+
+def _positive_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    if isinstance(value, str):
+        try:
+            parsed = int(value.strip())
+        except ValueError:
+            return None
+        return parsed if parsed > 0 else None
+    return None
+
+
+def _entry_is_non_expiring_blacklist(entry: dict[str, Any]) -> bool:
+    if entry.get("permanent") is True:
+        return True
+    if entry.get("scope") == "permanent_surface":
+        return True
+    if entry.get("source_trial") == -1:
+        return True
+    severity = entry.get("severity")
+    return isinstance(severity, str) and severity.lower() in NON_EXPIRING_BLACKLIST_SEVERITIES
+
+
+def _blacklist_ttl_days(entry: dict[str, Any]) -> int | None:
+    explicit = _positive_int(entry.get("ttl_days"))
+    if explicit is not None:
+        return explicit
+    reason_class = _auto_blacklist_reason_class(entry)
+    if reason_class is None:
+        return None
+    return AUTO_BLACKLIST_TTL_DAYS_BY_REASON_CLASS.get(reason_class)
+
+
+def _blacklist_expires_at(entry: dict[str, Any]) -> datetime | None:
+    explicit = _parse_blacklist_datetime(entry.get("expires_at"))
+    if explicit is not None:
+        return explicit
+    added = _parse_blacklist_datetime(entry.get("added"))
+    ttl_days = _blacklist_ttl_days(entry)
+    if added is None or ttl_days is None:
+        return None
+    return added + timedelta(days=ttl_days)
+
+
+def _is_expired_blacklist_entry(
+    entry: dict[str, Any],
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """Return true for elapsed auto-blacklist entries.
+
+    Manual crash/corruption/permanent entries are hard stops. Auto-generated
+    critic/invalid/safety-loop entries decay so stale exploration failures do
+    not permanently exhaust W8-capable action space across eras.
+    """
+    if not isinstance(entry, dict) or _entry_is_non_expiring_blacklist(entry):
+        return False
+    expires_at = _blacklist_expires_at(entry)
+    if expires_at is None:
+        return False
+    if now is None:
+        now = datetime.now(timezone.utc)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    else:
+        now = now.astimezone(timezone.utc)
+    return expires_at <= now
+
+
 def check_blacklist(
     action: dict[str, Any], blacklist: list[dict[str, Any]]
 ) -> str | None:
@@ -360,6 +472,8 @@ def check_blacklist(
         return None
     for entry in reversed(blacklist):
         if _is_ignored_broad_numeric_surface_entry(entry):
+            continue
+        if _is_expired_blacklist_entry(entry):
             continue
         pattern = entry.get("pattern", {})
         if not isinstance(pattern, dict):
@@ -370,7 +484,13 @@ def check_blacklist(
 
 
 def append_blacklist(
-    action: dict[str, Any], trial_id: int, reason: str, blacklist_path: Path,
+    action: dict[str, Any],
+    trial_id: int,
+    reason: str,
+    blacklist_path: Path,
+    *,
+    reason_class: str | None = None,
+    ttl_days: int | None = None,
 ) -> None:
     """Append a blacklist entry to `blacklist_path` after a rollback trigger.
 
@@ -411,12 +531,19 @@ def append_blacklist(
         )
         return
 
+    now = datetime.now(timezone.utc)
     entry = {
         "pattern": pattern,
         "reason": reason,
-        "added": datetime.now(timezone.utc).isoformat(),
+        "added": now.isoformat(),
         "source_trial": trial_id,
     }
+    if reason_class:
+        entry["reason_class"] = reason_class
+    ttl = ttl_days if ttl_days is not None else _blacklist_ttl_days(entry)
+    if ttl is not None and ttl > 0:
+        entry["ttl_days"] = ttl
+        entry["expires_at"] = (now + timedelta(days=ttl)).isoformat()
 
     data = {"blacklist": []}
     if blacklist_path.exists():

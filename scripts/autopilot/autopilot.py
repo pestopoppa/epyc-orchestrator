@@ -3227,6 +3227,7 @@ def _record_rejected_draft(
         append_blacklist(
             draft_action, trial_id,
             f"Auto-blacklisted: {sig_counts[sig]}× critic-rejected — {reason[:80]}",
+            reason_class="critic_rejected",
         )
         blacklisted = True
     outboxed = False
@@ -4406,9 +4407,23 @@ def load_model_signatures() -> dict[str, Any]:
     return _load_model_signatures_impl(_MODEL_SIGNATURES_PATH, _MODEL_DESCRIPTORS_PATH)
 
 
-def append_blacklist(action: dict[str, Any], trial_id: int, reason: str) -> None:
+def append_blacklist(
+    action: dict[str, Any],
+    trial_id: int,
+    reason: str,
+    *,
+    reason_class: str | None = None,
+    ttl_days: int | None = None,
+) -> None:
     """Auto-append a blacklist entry after rollback trigger."""
-    _append_blacklist_impl(action, trial_id, reason, BLACKLIST_PATH)
+    _append_blacklist_impl(
+        action,
+        trial_id,
+        reason,
+        BLACKLIST_PATH,
+        reason_class=reason_class,
+        ttl_days=ttl_days,
+    )
 
 
 # ── Slot Memory Visibility (AM KV Compaction) ──────────────────
@@ -5725,6 +5740,7 @@ def _run_loop_inner(
                 append_blacklist(
                     action, trial_counter,
                     f"Auto-blacklisted: {sig_counts[sig]}× invalid — {skip_reason[:80]}",
+                    reason_class="invalid_repeat",
                 )
                 blacklist = load_blacklist()
 
@@ -5842,6 +5858,7 @@ def _run_loop_inner(
                     append_blacklist(
                         action, trial_counter,
                         f"Auto-blacklisted: 3 consecutive failures ending at trial {trial_counter}",
+                        reason_class="safety_failure",
                     )
                     blacklist = load_blacklist()  # Reload after append
                     if strategy_store is not None:
