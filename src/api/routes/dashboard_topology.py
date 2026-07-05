@@ -118,6 +118,7 @@ def _port_hint(port: int) -> str:
 
 # Per-role display colors (CSS hex).
 _ROLE_COLORS: dict[str, str] = {
+    "mi210_gpu": "#f97316",
     "frontdoor": "#3b82f6",
     "worker_general": "#10b981",
     "worker_math": "#10b981",
@@ -207,7 +208,6 @@ def _discover_llama_ports() -> dict[int, str]:
     except Exception:
         out = ""
     pid_port_re = re.compile(r"--port\s+(\d+)")
-    pid_model_re = re.compile(r"-m\s+(\S+)")
     for line in out.splitlines():
         if "llama-server" not in line:
             continue
@@ -216,12 +216,13 @@ def _discover_llama_ports() -> dict[int, str]:
             continue
         port = int(port_m.group(1))
         role = _port_hint(port)
-        # If the cmd has -m, prefer a model-derived label as a fallback role hint
         if role == f"port_{port}":
-            model_m = pid_model_re.search(line)
-            if model_m:
-                stem = Path(model_m.group(1)).stem[:24]
-                role = f"port_{port}({stem})"
+            # Unmapped port: name it by what it IS. Mangling the model stem
+            # into the role (`port_8802(Qwen3.6-…)`) leaked garbled keys into
+            # live_busy_by_role and made the activity view unreadable.
+            # MI210 HIP builds are the GPU testbed — operator-decided
+            # (2026-07-05) to render first-class ahead of stack integration.
+            role = "mi210_gpu" if "mi210" in line.lower() else f"extern_{port}"
         ports[port] = role
     return ports
 

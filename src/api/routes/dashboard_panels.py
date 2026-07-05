@@ -141,6 +141,23 @@ def _latest_tap_events_mtime() -> float | None:
     return best
 
 
+REPO_READINESS_DIR = Path("/mnt/raid0/llm/epyc-root/data/repo_readiness")
+
+
+def _latest_repo_readiness_mtime() -> float | None:
+    """Newest mtime across the scorer's timestamped repo_readiness reports."""
+    best: float | None = None
+    try:
+        candidates = list(REPO_READINESS_DIR.glob("repo_readiness_[0-9]*.json"))
+    except OSError:
+        candidates = []
+    for p in candidates:
+        m = mtime(p)
+        if m is not None and (best is None or m > best):
+            best = m
+    return best
+
+
 @dataclass(frozen=True)
 class PanelSpec:
     key: str
@@ -260,6 +277,59 @@ PANELS: tuple[PanelSpec, ...] = (
         title="live snapshot (topology + locks + activity)",
         endpoint="/dashboard/api/snapshot",
         mechanism="snapshot",
+        live=True,
+    ),
+    # Previously-unregistered rendered panels (2026-07-05 audit): every panel
+    # the page draws must be visible to /dashboard/api/health, or its producer
+    # dies silently — the anti-whack-a-mole rule this registry exists for.
+    PanelSpec(
+        key="pareto",
+        title="pareto frontier",
+        endpoint="/dashboard/api/pareto",
+        mechanism="api",
+        sources=(
+            SourceSpec("autopilot_journal", AUTOPILOT_JOURNAL_PATH, 600, 3600,
+                       mtime_fn=_latest_journal_mtime),
+        ),
+    ),
+    PanelSpec(
+        key="repo_readiness",
+        title="repo readiness queue",
+        endpoint="/dashboard/api/repo_readiness",
+        mechanism="api",
+        sources=(
+            # Advisory artifacts refresh on scorer/checkpoint runs (~daily);
+            # age is context for the operator, never a health gate.
+            SourceSpec("repo_readiness_report", REPO_READINESS_DIR, 3 * 86400, 14 * 86400,
+                       optional=True, gating=False,
+                       mtime_fn=_latest_repo_readiness_mtime),
+        ),
+    ),
+    PanelSpec(
+        key="optimization_brief",
+        title="optimization brief",
+        endpoint="/dashboard/api/optimization_brief",
+        mechanism="api",
+        sources=(
+            # Synthesized from journal + strategy store; journal recency is
+            # context (the endpoint already fails soft), not a gate.
+            SourceSpec("autopilot_journal", AUTOPILOT_JOURNAL_PATH, 600, 3600,
+                       optional=True, gating=False,
+                       mtime_fn=_latest_journal_mtime),
+        ),
+    ),
+    PanelSpec(
+        key="insight_graph",
+        title="insight graph",
+        endpoint="/dashboard/api/insight_graph",
+        mechanism="api",
+        live=True,
+    ),
+    PanelSpec(
+        key="build_rev",
+        title="build revision",
+        endpoint="/dashboard/api/version",
+        mechanism="api",
         live=True,
     ),
 )

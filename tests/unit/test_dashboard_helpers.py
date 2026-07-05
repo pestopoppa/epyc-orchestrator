@@ -230,6 +230,7 @@ def test_discover_llama_ports_parses_ps_output(monkeypatch) -> None:
     fake_ps = (
         "1234 /opt/llama-server --port 8070 -m /m/frontdoor.gguf\n"
         "5678 /opt/llama-server --port 9999 -m /m/mystery.gguf\n"
+        "4242 /mnt/raid0/llm/llama.cpp-mi210-hip/build-hip/bin/llama-server --port 8802 -m /m/Qwen.gguf\n"
         "9999 some-other-process --port 1234\n"
     )
     monkeypatch.setattr(
@@ -238,8 +239,11 @@ def test_discover_llama_ports_parses_ps_output(monkeypatch) -> None:
     )
     ports = dashboard_topology._discover_llama_ports()
     assert ports[8070] == "frontdoor"
-    # 9999 not in _PORT_HINTS → falls back to "port_9999(mystery)"
-    assert ports[9999].startswith("port_9999(")
+    # Unmapped ports get an honest role, never a model-mangled one — the old
+    # "port_9999(mystery)" fallback leaked garbled keys into live_busy_by_role.
+    assert ports[9999] == "extern_9999"
+    # MI210 HIP builds are the GPU testbed (operator-decided first-class role).
+    assert ports[8802] == "mi210_gpu"
     assert 1234 not in ports  # filtered out (no llama-server in cmd)
 
 

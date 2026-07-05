@@ -1242,6 +1242,17 @@ function renderTopologyStrip() {
             aliasChip = ` <span style="color:var(--dim);font-size:9px;margin-left:6px;font-style:italic"`
                       + ` title="this server also routes traffic for: ${aliasStr}">+ ${aliasStr}</span>`;
         }
+        // Non-stack servers get an honest origin chip instead of a garbled
+        // role. The MI210 testbed is first-class ahead of stack integration:
+        // slot activity shows, token-level tap only once its traffic routes
+        // through the orchestrator pipeline.
+        if (g.kind === 'gpu-llama-server') {
+            aliasChip += ` <span style="color:#f97316;font-size:9px;margin-left:6px;border:1px solid #f97316;border-radius:3px;padding:0 3px"`
+                       + ` title="direct-access GPU testbed — traffic bypasses the orchestrator pipeline; slot-level activity only until stack-routed">GPU</span>`;
+        } else if (g.kind === 'external-llama-server') {
+            aliasChip += ` <span style="color:var(--dim);font-size:9px;margin-left:6px;border:1px solid var(--dim);border-radius:3px;padding:0 3px"`
+                       + ` title="llama-server on an unmapped port — not part of the managed stack">extern</span>`;
+        }
         // Backing model + quant. For grouped roles every instance shares one
         // GGUF, so take the parent's (or first instance carrying a model field).
         const modelName = (parent.model || (g.instances.find(i => i.model) || {}).model || '').trim();
@@ -1565,9 +1576,8 @@ async function openNodeDetail(port, label) {
                 <span class="ev">slot ${s.id}</span>
                 ${s.is_processing ? '<span class="tag accept" style="margin-left:6px">processing</span>' : '<span class="tag" style="margin-left:6px">idle</span>'}
                 <div style="font-size:10px;color:var(--muted);margin-top:2px">
-                    n_decoded=${s.n_decoded ?? '-'} · prompt_tokens=${s.n_prompt_tokens ?? '-'} · content=${s.content_len}c
+                    n_decoded=${s.n_decoded ?? '-'} · prompt_tokens=${s.n_prompt_tokens ?? '-'}
                 </div>
-                ${s.prompt_preview ? `<div style="font-size:11px;margin-top:2px">prompt: ${escapeHTML(s.prompt_preview)}</div>` : ''}
             </div>
         `).join('') || '<div style="color:var(--muted)">no slot data</div>';
         const routedRows = (d.recent_routed || []).slice().reverse().map(r => `
@@ -3350,7 +3360,7 @@ function startRawTapStream() {
     const es = new EventSource('/dashboard/events/raw_tap');
     _rawTapStream = es;
     es.onmessage = (e) => {
-        try { applyRawTapData(JSON.parse(e.data)); } catch {}
+        try { applyRawTapData(JSON.parse(e.data)); } catch (err) { renderPanelErrorChip('raw_tap', err); }
     };
     es.onerror = () => {
         if (es._reconnectScheduled) return;
@@ -3399,7 +3409,7 @@ function startStructuredTapStream() {
     const es = new EventSource('/dashboard/events/structured_tap');
     _structuredTapStream = es;
     es.onmessage = (e) => {
-        try { applyStructuredTapData(JSON.parse(e.data)); } catch {}
+        try { applyStructuredTapData(JSON.parse(e.data)); } catch (err) { renderPanelErrorChip('structured_tap', err); }
     };
     es.onerror = () => {
         if (es._reconnectScheduled) return;
@@ -3664,10 +3674,10 @@ function startMultiplexStream() {
     es.addEventListener('snapshot', (e) => {
         try { applyDashboardSnapshot(JSON.parse(e.data), 'stream'); } catch (err) { console.error(err); }
     });
-    es.addEventListener('structured_tap', (e) => { try { applyStructuredTapData(JSON.parse(e.data)); } catch {} });
-    es.addEventListener('raw_tap', (e) => { try { applyRawTapData(JSON.parse(e.data)); } catch {} });
-    es.addEventListener('autopilot_log', (e) => { try { applyAutopilotLogData(JSON.parse(e.data)); } catch {} });
-    es.addEventListener('planner_tap', (e) => { try { applyPlannerTapData(JSON.parse(e.data)); } catch {} });
+    es.addEventListener('structured_tap', (e) => { try { applyStructuredTapData(JSON.parse(e.data)); } catch (err) { renderPanelErrorChip('structured_tap', err); } });
+    es.addEventListener('raw_tap', (e) => { try { applyRawTapData(JSON.parse(e.data)); } catch (err) { renderPanelErrorChip('raw_tap', err); } });
+    es.addEventListener('autopilot_log', (e) => { try { applyAutopilotLogData(JSON.parse(e.data)); } catch (err) { renderPanelErrorChip('autopilot_log', err); } });
+    es.addEventListener('planner_tap', (e) => { try { applyPlannerTapData(JSON.parse(e.data)); } catch (err) { renderPanelErrorChip('planner_tap', err); } });
     es.onerror = () => {
         if (snapStatus) snapStatus.textContent = 'reconnecting…';
         // One reconnect drives all five panels; guard against stacking timers.
@@ -3932,7 +3942,7 @@ async function updateGepa() {
         }
         const all = header + trialsTable + recentLines;
         el.innerHTML = all || '<div style="color:var(--muted)">no recent GEPA activity</div>';
-    } catch (e) {}
+    } catch (e) { renderPanelErrorChip('gepa', e); }
 }
 
 // ── Pareto frontier visualization ────────────────────────────────────
@@ -4013,7 +4023,7 @@ async function updatePareto() {
         }
         renderParetoScatter(d);
         renderHypervolumeTimeline(d);
-    } catch (e) {}
+    } catch (e) { renderPanelErrorChip('pareto', e); }
 }
 
 // Per-tier color palette for the segregated Pareto frontiers (quality is never
@@ -5029,26 +5039,40 @@ function dashboardSnapshotFrameTs(snap) {
     return ts;
 }
 
+// Maps updatePanelSafely names to the freshness-badge key whose chip should
+// show the error. Badge text is overwritten by the next healthy tick, so the
+// chip self-clears when the panel recovers — errors are loud but not sticky.
+const _PANEL_ERROR_BADGE_KEYS = {
+    topology: 'topology',
+    topology_struct: 'topology',
+    region_locks: 'region_locks',
+    gepa: 'gepa',
+    pareto: 'pareto',
+};
+
+function renderPanelErrorChip(name, err) {
+    window.__dashboardLastPanelError = {
+        name,
+        message: err && err.message ? err.message : String(err),
+        at: new Date().toISOString(),
+    };
+    console.error(`[dashboard:${name}]`, err);
+    const key = _PANEL_ERROR_BADGE_KEYS[name];
+    const el = key ? document.getElementById('fresh-' + key) : null;
+    if (!el) return;
+    el.className = 'freshness-badge stale';
+    el.textContent = '⚠ render error';
+    el.title = `${name}: ${window.__dashboardLastPanelError.message}`;
+}
+
 function updatePanelSafely(name, fn) {
     try {
         const result = fn();
         if (result && typeof result.catch === 'function') {
-            result.catch((err) => {
-                window.__dashboardLastPanelError = {
-                    name,
-                    message: err && err.message ? err.message : String(err),
-                    at: new Date().toISOString(),
-                };
-                console.error(`[dashboard:${name}]`, err);
-            });
+            result.catch((err) => renderPanelErrorChip(name, err));
         }
     } catch (err) {
-        window.__dashboardLastPanelError = {
-            name,
-            message: err && err.message ? err.message : String(err),
-            at: new Date().toISOString(),
-        };
-        console.error(`[dashboard:${name}]`, err);
+        renderPanelErrorChip(name, err);
     }
 }
 
@@ -5119,6 +5143,8 @@ const _FRESHNESS_ANCHORS = {
     region_locks: 'region-locks-status',
     inference_tap: 'tap-status',
     autopilot: 'autopilot-status',
+    gepa: 'pareto-summary',
+    pareto: 'pareto-era-note',
 };
 const _panelFreshnessStore = {};
 const _FRESH_SEVERITY = { fresh: 0, aging: 1, stale: 2, dead: 3 };

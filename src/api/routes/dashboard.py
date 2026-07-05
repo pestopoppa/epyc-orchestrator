@@ -1310,7 +1310,10 @@ async def repo_readiness() -> JSONResponse:
     planning input only. It is not an AutoPilot authority gate and does not
     mutate queue state.
     """
-    return JSONResponse(_repo_readiness_summary(), headers=_NO_STORE_HEADERS)
+    return JSONResponse(
+        _stamp(_repo_readiness_summary(), "repo_readiness"),
+        headers=_NO_STORE_HEADERS,
+    )
 
 
 _INSIGHT_GRAPH_DEFAULT_LIMIT = 120
@@ -1326,7 +1329,7 @@ async def insight_graph(
 ) -> JSONResponse:
     """Return a bounded, read-only graph of StrategyStore and journal insights."""
     payload = _insight_graph_payload(focus=focus, depth=depth, limit=limit)
-    return JSONResponse(payload, headers=_NO_STORE_HEADERS)
+    return JSONResponse(_stamp(payload, "insight_graph"), headers=_NO_STORE_HEADERS)
 
 
 @router.get("/dashboard/api/optimization_brief")
@@ -1345,7 +1348,7 @@ async def optimization_brief() -> JSONResponse:
         payload = build_optimization_brief()
     except Exception as exc:  # noqa: BLE001 — synthesis must not break the page
         payload = {"read_only": True, "error": str(exc)}
-    return JSONResponse(payload, headers=_NO_STORE_HEADERS)
+    return JSONResponse(_stamp(payload, "optimization_brief"), headers=_NO_STORE_HEADERS)
 
 
 # ---------------------------------------------------------------------------
@@ -3168,13 +3171,13 @@ async def pareto(max_dominated: int = 600, scope: str = "current") -> JSONRespon
         source = "state_archive"
         source_reason = "journal unavailable or no trusted current-run entries"
     else:
-        return JSONResponse({
+        return JSONResponse(_stamp({
             "available": False,
             "reason": state_error or "autopilot_state.json and autopilot_journal.jsonl not found",
             "frontier": [],
             "dominated": [],
             "hypervolume_history": [],
-        })
+        }, "pareto"))
 
     legacy_state_archive_warning = None
     if source == "state_archive":
@@ -3268,7 +3271,7 @@ async def pareto(max_dominated: int = 600, scope: str = "current") -> JSONRespon
             for region in era_regions
         ]
 
-    return JSONResponse({
+    return JSONResponse(_stamp({
         "available": True,
         "source": source,
         "source_reason": source_reason,
@@ -3312,7 +3315,7 @@ async def pareto(max_dominated: int = 600, scope: str = "current") -> JSONRespon
             {"key": "neg_cost", "index": 2, "direction": "max", "label": "-cost"},
             {"key": "reliability", "index": 3, "direction": "max", "label": "reliability"},
         ],
-    })
+    }, "pareto"))
 
 
 @router.get("/dashboard/api/version")
@@ -3338,13 +3341,13 @@ async def version() -> JSONResponse:
         except Exception:
             return None
 
-    return JSONResponse({
+    return JSONResponse(_stamp({
         "git_sha": _read_git_short_sha(),
         "dashboard_html_mtime": mtime(_DASHBOARD_HTML_FOR_VERSION),
         "dashboard_py_mtime": mtime(_DASHBOARD_PY_FOR_VERSION),
         "server_started_at": _SERVER_STARTED_AT,
         "server_launch_git_sha": _SERVER_LAUNCH_GIT_SHA,
-    })
+    }, "build_rev"))
 
 
 @router.get("/dashboard/api/llama_fleet_ids")
@@ -3596,13 +3599,23 @@ def _build_topology_nodes() -> list[dict[str, Any]]:
             continue
         expected = expected_by_port.get(port, {})
         seen_ports.add(port)
+        if role.startswith("mi210_"):
+            # Direct-access GPU testbed: first-class node ahead of stack
+            # integration (operator-decided 2026-07-05). Its traffic bypasses
+            # the orchestrator pipeline, so slot activity is visible but the
+            # structured tap won't carry its tokens until it's stack-routed.
+            node_kind = "gpu-llama-server"
+        elif role.startswith("extern_"):
+            node_kind = "external-llama-server"
+        else:
+            node_kind = "llama-server"
         nodes.append({
             "id": f"port_{port}",
             "label": role,
             "role": role,
             "port": port,
             "color": _role_color(role),
-            "kind": "llama-server",
+            "kind": node_kind,
             # Model actually loaded by this llama-server (-m GGUF basename,
             # vendor-prefix + shard-suffix stripped). Surfaced so the topology
             # strip can label each role with its backing model + quant.
@@ -3984,18 +3997,12 @@ async def _snapshot_impl() -> JSONResponse:
         for s in slots:
             if not s.get("is_processing"):
                 continue
-            prompt = s.get("prompt", "") or ""
-            if isinstance(prompt, list):
-                prompt = " ".join(str(x) for x in prompt)
-            content = s.get("content", "") or ""
-            if isinstance(content, list):
-                content = " ".join(str(x) for x in content)
+            # v6 /slots dropped prompt/content — those fields are permanently
+            # empty. Token text lives in the structured tap; slots carry only
+            # occupancy + token counts.
             active_slots.append({
                 "slot_id": s.get("id"),
                 "task_id": s.get("id_task") if s.get("id_task", -1) >= 0 else None,
-                "prompt_preview": prompt[:160],
-                "content_preview": content[:200],
-                "content_len": len(content),
                 "tokens_decoded": s.get("n_decoded"),
                 "prompt_tokens": s.get("n_prompt_tokens"),
                 "next_token": s.get("next_token"),
@@ -4298,42 +4305,14 @@ async def task_text(task_id: str) -> Any:
     return PlainTextResponse(text)
 
 
-async def _find_slot_by_objective(
-    objective: str, slots_by_port: dict[int, list[dict[str, Any]]] | None = None,
-) -> tuple[int | None, dict | None]:
-    """Find a slot whose prompt contains the task's objective text.
-
-    Orchestrator chat-XXX task_ids do NOT appear in llama-server /slots state
-    (slot.id_task is llama-server's internal numeric counter). So we correlate
-    by prompt content: the task's objective will appear inside the slot's
-    `prompt` field if that slot is currently serving the task.
-    """
-    if not objective or len(objective) < 8:
-        return None, None
-    needle = objective[:120].strip()
-    if slots_by_port is None:
-        slots_by_port, _ = await _poll_all_slots()
-    for port, slots in slots_by_port.items():
-        for s in slots:
-            if not s.get("is_processing"):
-                continue
-            prompt = s.get("prompt", "") or ""
-            if isinstance(prompt, list):
-                prompt = " ".join(str(x) for x in prompt)
-            if needle and needle in prompt:
-                return port, s
-    return None, None
-
-
 @router.get("/dashboard/api/task/{task_id}")
 async def task_detail(task_id: str) -> JSONResponse:
-    """Return all events for a task_id + active slot + tap fallback.
+    """Return all events for a task_id + tap section with the response text.
 
-    Matches active slots by prompt content (orchestrator chat-XXX ids do not
-    correspond to llama-server's internal numeric id_task). For completed
-    tasks where the slot is gone, falls back to searching the inference_tap.log
-    for a section whose prompt matches — letting the UI show the historical
-    response text instead of "(empty)".
+    Task text comes exclusively from the structured tap: v6 /slots carries no
+    prompt/content, so the old match-a-live-slot-by-prompt-substring path
+    (_find_slot_by_objective) could never match again and was removed. The
+    slot fields are kept as nulls for response-shape compatibility.
     """
     log_path = _todays_progress_log()
     events = _task_events(task_id, log_path)
@@ -4350,42 +4329,39 @@ async def task_detail(task_id: str) -> JSONResponse:
         })
 
     objective = _objective_for_task(events)
-    slots_by_port, _slots_meta = await _poll_all_slots()
-    slot_port, active_slot = await _find_slot_by_objective(objective, slots_by_port)
 
-    # Fallback when no live slot. Prefer the structured event stream by
-    # task_id (deterministic mapping by request metadata) over the plaintext
-    # substring matcher, which is vulnerable to interleaved per-append writes
-    # (chat-83123001/chat-c7bf9580 cross-contamination, 2026-05-30). If the
-    # structured stream has nothing for this task id, fall back to plaintext;
-    # producer_role from task_completed constrains the role-filtered pass and
-    # also blocks the unsafe global fallback in _find_section_by_objective.
+    # Prefer the structured event stream by task_id (deterministic mapping by
+    # request metadata) over the plaintext substring matcher, which is
+    # vulnerable to interleaved per-append writes (chat-83123001/chat-c7bf9580
+    # cross-contamination, 2026-05-30). If the structured stream has nothing
+    # for this task id, fall back to plaintext; producer_role from
+    # task_completed constrains the role-filtered pass and also blocks the
+    # unsafe global fallback in _find_section_by_objective.
     tap_section = None
-    if active_slot is None:
-        if not task_id.startswith("tap_"):
-            tap_section = _find_structured_request_by_task_id(task_id)
-        if tap_section is None:
-            producer_role = None
-            for ev in reversed(events):  # task_completed is usually near the end
-                if ev.get("event_type") == "task_completed":
-                    producer_role = (ev.get("data") or {}).get("producer_role")
+    if not task_id.startswith("tap_"):
+        tap_section = _find_structured_request_by_task_id(task_id)
+    if tap_section is None:
+        producer_role = None
+        for ev in reversed(events):  # task_completed is usually near the end
+            if ev.get("event_type") == "task_completed":
+                producer_role = (ev.get("data") or {}).get("producer_role")
+                break
+        if not producer_role:
+            for ev in events:
+                if ev.get("event_type") == "routing_decision":
+                    producer_role = (ev.get("data") or {}).get("chosen_action")
                     break
-            if not producer_role:
-                for ev in events:
-                    if ev.get("event_type") == "routing_decision":
-                        producer_role = (ev.get("data") or {}).get("chosen_action")
-                        break
-            tap_section = _find_section_by_objective(
-                objective, expected_role=producer_role
-            )
+        tap_section = _find_section_by_objective(
+            objective, expected_role=producer_role
+        )
 
     return JSONResponse({
         "task_id": task_id,
         "objective": objective,
         "events": events,
-        "active_slot_port": slot_port,
-        "active_slot_id": active_slot.get("id") if active_slot else None,
-        "slot": active_slot,
+        "active_slot_port": None,
+        "active_slot_id": None,
+        "slot": None,
         "tap_section": tap_section,
     })
 
