@@ -1938,10 +1938,12 @@ function updateTasks(snap) {
     }
     const explainer = document.getElementById('inflight-explainer');
     if (explainer) {
-        // Show the explainer when the gap is non-trivial (slots > chat or no
-        // chat tasks at all with slots busy).
-        explainer.style.display = (slotsActive > inflight.length || (slotsActive > 0 && inflight.length === 0))
-            ? 'block' : 'none';
+        // Always show the legend. Keying visibility on a same-instant compare
+        // of slotsActive vs inflight.length made it flicker: the two counts
+        // come from different sources updating at different cadences, so the
+        // predicate thrashed true/false across polls and blinked the paragraph
+        // in and out. It's a static 10px dim legend — cheap to leave visible.
+        explainer.style.display = 'block';
     }
     const cpEl = document.getElementById('completed-tasks');
     const cpCount = document.getElementById('completed-count');
