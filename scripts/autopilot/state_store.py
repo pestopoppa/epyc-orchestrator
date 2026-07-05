@@ -23,6 +23,7 @@ import yaml
 log = logging.getLogger("autopilot")
 
 LOW_RISK_TYPE_ONLY_BLACKLIST_DENYLIST = {"seed_batch", "deep_eval", "distill_knowledge"}
+OBSERVATIONAL_ACTION_BLACKLIST_DENYLIST = {"deep_eval"}
 
 
 # 2026-05-23 Phase 6a — exit code for "state file corrupt, refuse to start".
@@ -111,7 +112,13 @@ def load_blacklist(blacklist_path: Path) -> list[dict[str, Any]]:
         return []
     try:
         data = yaml.safe_load(blacklist_path.read_text()) or {}
-        return data.get("blacklist", [])
+        entries = data.get("blacklist", [])
+        if not isinstance(entries, list):
+            return []
+        return [
+            entry for entry in entries
+            if not _is_observational_blacklist_pattern(entry.get("pattern", {}))
+        ]
     except (yaml.YAMLError, OSError) as e:
         log.warning("Could not load blacklist: %s", e)
         return []
@@ -299,6 +306,14 @@ def format_model_signatures(signatures: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _is_observational_blacklist_pattern(pattern: dict[str, Any]) -> bool:
+    """Return true for validation-only actions that must remain schedulable."""
+    return bool(
+        isinstance(pattern, dict)
+        and pattern.get("type") in OBSERVATIONAL_ACTION_BLACKLIST_DENYLIST
+    )
+
+
 def check_blacklist(
     action: dict[str, Any], blacklist: list[dict[str, Any]]
 ) -> str | None:
@@ -343,6 +358,9 @@ def append_blacklist(
         and pattern["type"] in LOW_RISK_TYPE_ONLY_BLACKLIST_DENYLIST
     ):
         log.info("Skipping broad low-risk blacklist pattern: %s", pattern)
+        return
+    if _is_observational_blacklist_pattern(pattern):
+        log.info("Skipping observational action blacklist pattern: %s", pattern)
         return
 
     entry = {

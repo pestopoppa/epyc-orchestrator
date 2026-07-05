@@ -57,6 +57,18 @@ def test_load_blacklist_parses_yaml(tmp_path) -> None:
     assert out[0]["reason"] == "regression"
 
 
+def test_load_blacklist_filters_observational_deep_eval_entries(tmp_path) -> None:
+    f = tmp_path / "bl.yaml"
+    f.write_text(yaml.dump({"blacklist": [
+        {"pattern": {"type": "deep_eval", "tier": 3}, "reason": "hard tier failed"},
+        {"pattern": {"type": "seed_batch", "n_questions": 24}, "reason": "bad n"},
+    ]}))
+    out = state_store.load_blacklist(f)
+    assert [entry["pattern"] for entry in out] == [
+        {"type": "seed_batch", "n_questions": 24},
+    ]
+
+
 def test_load_blacklist_handles_malformed_yaml(tmp_path) -> None:
     f = tmp_path / "bad.yaml"
     f.write_text("not: valid: yaml: {{{")
@@ -145,14 +157,26 @@ def test_append_blacklist_skips_type_only_low_risk_action(tmp_path) -> None:
     assert not bl_path.exists()
 
 
-def test_append_blacklist_keeps_specific_low_risk_pattern(tmp_path) -> None:
+def test_append_blacklist_keeps_specific_seed_pattern(tmp_path) -> None:
+    bl_path = tmp_path / "bl.yaml"
+    state_store.append_blacklist(
+        {"type": "seed_batch", "n_questions": 24}, trial_id=2, reason="second",
+        blacklist_path=bl_path,
+    )
+    data = yaml.safe_load(bl_path.read_text())
+    assert data["blacklist"][0]["pattern"] == {
+        "type": "seed_batch",
+        "n_questions": 24,
+    }
+
+
+def test_append_blacklist_skips_observational_deep_eval_tier(tmp_path) -> None:
     bl_path = tmp_path / "bl.yaml"
     state_store.append_blacklist(
         {"type": "deep_eval", "tier": 2}, trial_id=2, reason="second",
         blacklist_path=bl_path,
     )
-    data = yaml.safe_load(bl_path.read_text())
-    assert data["blacklist"][0]["pattern"] == {"type": "deep_eval", "tier": 2}
+    assert not bl_path.exists()
 
 
 def test_append_blacklist_keeps_specific_distill_knowledge_window(tmp_path) -> None:
