@@ -537,8 +537,9 @@ details.tap-section .tap-box-label.response-label { margin-top: 10px; }
     overflow-x: auto;
     font-family: var(--font-mono);
     font-size: 12px;
-    white-space: pre;
-    word-wrap: normal;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    overflow-wrap: anywhere;
     margin: 8px 0;
 }
 .prompt-text code, .stream-text code, .tap-content code {
