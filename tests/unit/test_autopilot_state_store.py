@@ -69,6 +69,42 @@ def test_load_blacklist_filters_observational_deep_eval_entries(tmp_path) -> Non
     ]
 
 
+def test_load_blacklist_filters_unscoped_numeric_surface_entries(tmp_path) -> None:
+    f = tmp_path / "bl.yaml"
+    f.write_text(yaml.dump({"blacklist": [
+        {
+            "pattern": {"type": "numeric_trial", "surface": "memrl_retrieval"},
+            "reason": "legacy broad ban",
+        },
+        {
+            "pattern": {
+                "type": "numeric_trial",
+                "surface": "chat_pipeline",
+                "params": {},
+            },
+            "reason": "empty sampler ban",
+        },
+        {
+            "pattern": {
+                "type": "numeric_trial",
+                "surface": "repl_executor",
+                "params": {"repl.turn_token_cap": 768},
+            },
+            "reason": "exact params failed",
+        },
+        {
+            "pattern": {"type": "numeric_trial", "surface": "monitor"},
+            "reason": "operator surface ban",
+            "scope": "surface",
+        },
+    ]}))
+    out = state_store.load_blacklist(f)
+    assert [entry["reason"] for entry in out] == [
+        "exact params failed",
+        "operator surface ban",
+    ]
+
+
 def test_load_blacklist_handles_malformed_yaml(tmp_path) -> None:
     f = tmp_path / "bad.yaml"
     f.write_text("not: valid: yaml: {{{")
@@ -102,6 +138,58 @@ def test_check_blacklist_skips_empty_pattern() -> None:
 
 def test_check_blacklist_non_dict_action_returns_none() -> None:
     assert state_store.check_blacklist(None, [{"pattern": {"type": "x"}, "reason": "no"}]) is None
+
+
+def test_check_blacklist_ignores_unscoped_numeric_surface_entry() -> None:
+    bl = [
+        {
+            "pattern": {"type": "numeric_trial", "surface": "memrl_retrieval"},
+            "reason": "legacy broad ban",
+        }
+    ]
+    action = {"type": "numeric_trial", "surface": "memrl_retrieval", "params": {}}
+    assert state_store.check_blacklist(action, bl) is None
+
+
+def test_check_blacklist_honors_explicit_numeric_surface_scope() -> None:
+    bl = [
+        {
+            "pattern": {"type": "numeric_trial", "surface": "memrl_retrieval"},
+            "reason": "operator surface ban",
+            "scope": "surface",
+        }
+    ]
+    action = {"type": "numeric_trial", "surface": "memrl_retrieval", "params": {}}
+    assert state_store.check_blacklist(action, bl) == "operator surface ban"
+
+
+def test_check_blacklist_honors_numeric_param_pattern() -> None:
+    bl = [
+        {
+            "pattern": {
+                "type": "numeric_trial",
+                "surface": "memrl_retrieval",
+                "params": {"memrl_retrieval.semantic_k": 28},
+            },
+            "reason": "exact params failed",
+        }
+    ]
+    assert state_store.check_blacklist(
+        {
+            "type": "numeric_trial",
+            "surface": "memrl_retrieval",
+            "params": {"memrl_retrieval.semantic_k": 28},
+        },
+        bl,
+    ) == "exact params failed"
+    assert state_store.check_blacklist(
+        {
+            "type": "numeric_trial",
+            "surface": "memrl_retrieval",
+            "params": {"memrl_retrieval.semantic_k": 32},
+        },
+        bl,
+    ) is None
 
 
 def test_append_blacklist_creates_new_file(tmp_path) -> None:
@@ -167,6 +255,37 @@ def test_append_blacklist_keeps_specific_seed_pattern(tmp_path) -> None:
     assert data["blacklist"][0]["pattern"] == {
         "type": "seed_batch",
         "n_questions": 24,
+    }
+
+
+def test_append_blacklist_skips_broad_numeric_surface_pattern(tmp_path) -> None:
+    bl_path = tmp_path / "bl.yaml"
+    state_store.append_blacklist(
+        {"type": "numeric_trial", "surface": "memrl_retrieval"},
+        trial_id=1100,
+        reason="critic loop",
+        blacklist_path=bl_path,
+    )
+    assert not bl_path.exists()
+
+
+def test_append_blacklist_keeps_numeric_params_pattern(tmp_path) -> None:
+    bl_path = tmp_path / "bl.yaml"
+    state_store.append_blacklist(
+        {
+            "type": "numeric_trial",
+            "surface": "memrl_retrieval",
+            "params": {"memrl_retrieval.semantic_k": 28},
+        },
+        trial_id=1060,
+        reason="safety revert",
+        blacklist_path=bl_path,
+    )
+    data = yaml.safe_load(bl_path.read_text())
+    assert data["blacklist"][0]["pattern"] == {
+        "type": "numeric_trial",
+        "surface": "memrl_retrieval",
+        "params": {"memrl_retrieval.semantic_k": 28},
     }
 
 

@@ -1592,6 +1592,7 @@ def test_exhausted_critic_seed_fallback_pauses_when_numeric_exhausted(
             "params": {},
         },
         "reason": "numeric blocked",
+        "scope": "surface",
     })
 
     action, rationale, skip = autopilot._replace_exhausted_critic_seed_fallback(
@@ -1609,6 +1610,46 @@ def test_exhausted_critic_seed_fallback_pauses_when_numeric_exhausted(
     assert skip is not None
     assert "critic fallback seed_batch unavailable" in skip.reason
     assert "numeric fallback unavailable" in skip.reason
+
+
+def test_exhausted_critic_seed_fallback_uses_numeric_when_surface_ban_is_legacy(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        autopilot,
+        "_configured_numeric_surfaces",
+        lambda: ("memrl_retrieval",),
+    )
+    blacklist = [
+        {
+            "pattern": {"type": "seed_batch", "n_questions": n_questions},
+            "reason": f"blocked {n_questions}",
+        }
+        for n_questions in autopilot.FALLBACK_SEED_CANDIDATES
+    ]
+    blacklist.append({
+        "pattern": {
+            "type": "numeric_trial",
+            "surface": "memrl_retrieval",
+            "params": {},
+        },
+        "reason": "legacy numeric blocked",
+    })
+
+    action, rationale, skip = autopilot._replace_exhausted_critic_seed_fallback(
+        {"type": "seed_batch", "n_questions": autopilot.SAFE_FALLBACK_SEED_N},
+        blacklist,
+        {"falsifier": "noop"},
+        trial_counter=0,
+    )
+
+    assert action == {
+        "type": "numeric_trial",
+        "surface": "memrl_retrieval",
+        "params": {},
+    }
+    assert rationale["critic_seed_fallback_replaced"] is True
+    assert skip is None
 
 
 def test_first_meta_action_is_allowed() -> None:
@@ -1676,11 +1717,38 @@ def test_quota_skips_blacklisted_numeric_surface() -> None:
                     "params": {},
                 },
                 "reason": f"blocked {blocked_surface}",
+                "scope": "surface",
             }
         ],
     )
 
     assert action == {"type": "numeric_trial", "surface": expected_surface, "params": {}}
+    assert rationale["experiment_quota_forced"] is True
+    assert state["consecutive_passive_actions"] == 0
+
+
+def test_quota_ignores_legacy_unscoped_numeric_surface_blacklist() -> None:
+    state = {"consecutive_passive_actions": autopilot.MAX_CONSECUTIVE_PASSIVE}
+    first_surface = autopilot._QUOTA_NUMERIC_SURFACES[0]
+    action, rationale = autopilot._enforce_experiment_quota(
+        {"type": "seed_batch", "n_questions": 10},
+        state,
+        memory_count=autopilot.QUOTA_MEMORY_THRESHOLD + 1,
+        rationale={"falsifier": "x"},
+        trial_counter=0,
+        blacklist=[
+            {
+                "pattern": {
+                    "type": "numeric_trial",
+                    "surface": first_surface,
+                    "params": {},
+                },
+                "reason": f"legacy broad ban {first_surface}",
+            }
+        ],
+    )
+
+    assert action == {"type": "numeric_trial", "surface": first_surface, "params": {}}
     assert rationale["experiment_quota_forced"] is True
     assert state["consecutive_passive_actions"] == 0
 
@@ -1702,6 +1770,7 @@ def test_quota_records_block_when_all_numeric_surfaces_blacklisted() -> None:
                     "params": {},
                 },
                 "reason": f"blocked {surface}",
+                "scope": "surface",
             }
             for surface in autopilot._QUOTA_NUMERIC_SURFACES
         ],
@@ -1929,6 +1998,7 @@ def test_frontier_rerun_records_block_when_all_numeric_surfaces_blacklisted() ->
                     "params": {},
                 },
                 "reason": f"blocked {surface}",
+                "scope": "surface",
             }
             for surface in autopilot._QUOTA_NUMERIC_SURFACES
         ],
