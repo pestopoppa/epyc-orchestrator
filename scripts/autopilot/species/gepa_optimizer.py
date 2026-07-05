@@ -18,7 +18,6 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 import httpx
@@ -85,7 +84,11 @@ class OrchestratorGEPAAdapter:
         """Evaluate a candidate prompt on a batch of sentinel questions."""
         from gepa.core.adapter import EvaluationBatch
 
-        # Write candidate prompt to disk (orchestrator reads from disk)
+        # The orchestrator currently reads prompts from the canonical prompt
+        # tree. Keep that mutation window bounded to this evaluation call so an
+        # exception inside GEPA cannot leave a candidate prompt installed until
+        # the outer optimization exits.
+        original_prompt = self.forge.read_prompt(self.target_file)
         prompt_text = candidate[self.component_name]
         self.forge.write_prompt(self.target_file, prompt_text)
 
@@ -93,31 +96,34 @@ class OrchestratorGEPAAdapter:
         outputs: list[dict[str, Any]] = []
         traces: list[dict[str, Any]] | None = [] if capture_traces else None
 
-        # Fan-out across frontdoor quarters via EvalTower._eval_batch
-        # (AUTOPILOT_EVAL_CONCURRENCY, default 4). Results preserve input
-        # order, so the zip with `batch` for trace building is correct.
-        with httpx.Client(timeout=self.tower.timeout) as client:
-            results = self.tower._eval_batch(list(batch), client, label="GEPA")
+        try:
+            # Fan-out across frontdoor quarters via EvalTower._eval_batch
+            # (AUTOPILOT_EVAL_CONCURRENCY, default 4). Results preserve input
+            # order, so the zip with `batch` for trace building is correct.
+            with httpx.Client(timeout=self.tower.timeout) as client:
+                results = self.tower._eval_batch(list(batch), client, label="GEPA")
 
-        for q, r in zip(batch, results):
-            score = 1.0 if r.correct else 0.0
-            scores.append(score)
-            outputs.append({
-                "answer": r.answer,
-                "route": r.route_used,
-                "correct": r.correct,
-            })
-            if traces is not None:
-                traces.append({
-                    "question": q.get("prompt", ""),
-                    "expected": q.get("expected", ""),
-                    "suite": q.get("suite", "unknown"),
+            for q, r in zip(batch, results):
+                score = 1.0 if r.correct else 0.0
+                scores.append(score)
+                outputs.append({
                     "answer": r.answer,
                     "route": r.route_used,
                     "correct": r.correct,
-                    "error": r.error,
-                    "elapsed_s": r.elapsed_s,
                 })
+                if traces is not None:
+                    traces.append({
+                        "question": q.get("prompt", ""),
+                        "expected": q.get("expected", ""),
+                        "suite": q.get("suite", "unknown"),
+                        "answer": r.answer,
+                        "route": r.route_used,
+                        "correct": r.correct,
+                        "error": r.error,
+                        "elapsed_s": r.elapsed_s,
+                    })
+        finally:
+            self.forge.write_prompt(self.target_file, original_prompt)
 
         return EvaluationBatch(
             outputs=outputs,

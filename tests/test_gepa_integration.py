@@ -105,6 +105,7 @@ def test_adapter_evaluate_returns_evaluation_batch():
     mock_tower._eval_batch.side_effect = lambda batch, client, **kw: [mock_result] * len(batch)
 
     mock_forge = MagicMock()
+    mock_forge.read_prompt.return_value = "original frontdoor prompt"
 
     adapter = OrchestratorGEPAAdapter(
         eval_tower=mock_tower,
@@ -126,9 +127,14 @@ def test_adapter_evaluate_returns_evaluation_batch():
     assert len(result.trajectories) == 1
     assert result.trajectories[0]["correct"] is True
 
-    # Verify prompt was written to disk
-    mock_forge.write_prompt.assert_called_once_with(
-        "frontdoor.md", "You are a helpful routing assistant."
+    # Verify candidate prompt writes are bounded to the evaluation call.
+    assert mock_forge.write_prompt.call_args_list[0].args == (
+        "frontdoor.md",
+        "You are a helpful routing assistant.",
+    )
+    assert mock_forge.write_prompt.call_args_list[-1].args == (
+        "frontdoor.md",
+        "original frontdoor prompt",
     )
 
 
@@ -158,6 +164,39 @@ def test_adapter_evaluate_wrong_answer():
 
     result = adapter.evaluate(batch, candidate)
     assert result.scores[0] == 0.0
+
+
+def test_adapter_evaluate_restores_prompt_on_eval_error():
+    """Adapter restores the original prompt if GEPA evaluation raises."""
+    from species.gepa_optimizer import OrchestratorGEPAAdapter
+
+    mock_tower = MagicMock()
+    mock_tower.timeout = 30
+    mock_tower._eval_batch.side_effect = RuntimeError("eval exploded")
+
+    mock_forge = MagicMock()
+    mock_forge.read_prompt.return_value = "original prompt"
+
+    adapter = OrchestratorGEPAAdapter(
+        eval_tower=mock_tower,
+        prompt_forge=mock_forge,
+        target_file="frontdoor.md",
+    )
+
+    with pytest.raises(RuntimeError, match="eval exploded"):
+        adapter.evaluate(
+            [{"prompt": "Capital?", "expected": "Canberra", "suite": "general"}],
+            {"prompt": "candidate prompt"},
+        )
+
+    assert mock_forge.write_prompt.call_args_list[0].args == (
+        "frontdoor.md",
+        "candidate prompt",
+    )
+    assert mock_forge.write_prompt.call_args_list[-1].args == (
+        "frontdoor.md",
+        "original prompt",
+    )
 
 
 def test_adapter_reflective_dataset():
