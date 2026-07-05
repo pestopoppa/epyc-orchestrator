@@ -259,8 +259,8 @@ def test_numeric_trial_convention_suppresses_live_bound_surface(
 
 def test_numeric_trial_records_applied_optuna_params(monkeypatch) -> None:
     monkeypatch.setattr(
-        autopilot,
-        "apply_params",
+        actions,
+        "_apply_params",
         lambda params: {"status": "ok", "applied": dict(params)},
     )
 
@@ -297,6 +297,41 @@ def test_numeric_trial_records_applied_optuna_params(monkeypatch) -> None:
     assert action["params"] == {"ORCHESTRATOR_MONITOR_THRESHOLD": 0.42}
     assert result.details["numeric_trial_applied_params"] == action["params"]
     assert swarm.reported == ("monitor", 7, result.objectives)
+
+
+def test_numeric_trial_normalizes_short_explicit_surface_param(monkeypatch) -> None:
+    applied: list[dict] = []
+
+    def fake_apply_params(params):
+        applied.append(dict(params))
+        return {"status": "ok", "applied": dict(params)}
+
+    monkeypatch.setattr(actions, "_apply_params", fake_apply_params)
+
+    class FakeTower:
+        def hybrid_eval(self):
+            return actions.EvalResult(
+                tier=1,
+                quality=2.0,
+                speed=10.0,
+                cost=0.1,
+                reliability=1.0,
+            )
+
+    action = {
+        "type": "numeric_trial",
+        "surface": "kv_compaction",
+        "params": {"keep_ratio": 0.5},
+    }
+    result, species = actions._action_numeric_trial(
+        action,
+        _ctx(tower=FakeTower(), state={}),
+    )
+
+    assert species == "numeric_swarm"
+    assert applied == [{"kv.keep_ratio": 0.5}]
+    assert action["params"] == {"kv.keep_ratio": 0.5}
+    assert result.details["numeric_trial_applied_params"] == action["params"]
 
 
 def test_dispatcher_routes_to_correct_handler(monkeypatch) -> None:
@@ -479,7 +514,7 @@ def test_deep_eval_replays_seq_promotion_numeric_candidate(monkeypatch) -> None:
         applied.append(dict(params))
         return {"status": "ok", "applied": dict(params)}
 
-    monkeypatch.setattr(autopilot, "apply_params", fake_apply_params)
+    monkeypatch.setattr(actions, "_apply_params", fake_apply_params)
 
     class FakeTower:
         def __init__(self):

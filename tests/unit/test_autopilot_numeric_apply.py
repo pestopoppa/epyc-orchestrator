@@ -60,7 +60,9 @@ def test_suggested_numeric_trial_marks_failed_and_skips_eval(
         state={},
     )
 
-    assert result is None
+    assert isinstance(result, autopilot.SkipOutcome)
+    assert result.status == "skipped"
+    assert "env_restart: reload failed" in result.reason
     assert species == "numeric_swarm"
     assert swarm.failed == ("think_harder", 7, "env_restart: reload failed")
 
@@ -89,5 +91,7 @@ def test_explicit_numeric_trial_failure_skips_eval(monkeypatch: pytest.MonkeyPat
         state={},
     )
 
-    assert result is None
+    assert isinstance(result, autopilot.SkipOutcome)
+    assert result.status == "invalid"
+    assert "unknown_params: x" in result.reason
     assert species == "numeric_swarm"

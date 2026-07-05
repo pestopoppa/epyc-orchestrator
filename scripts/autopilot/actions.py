@@ -55,6 +55,72 @@ def _apply_params(*args, **kwargs):
     from config_applicator import apply_params as _ap
     return _ap(*args, **kwargs)
 
+
+def _normalize_numeric_trial_params(
+    surface: str,
+    params: dict[str, Any],
+) -> dict[str, Any]:
+    """Accept controller-friendly short param names for a numeric surface.
+
+    NumericSwarm's internal/applicator names are fully qualified
+    (``kv.keep_ratio``), but the controller often emits the user-facing knob
+    name from the action schema (``keep_ratio``). Normalize when the short name
+    is unambiguous within the selected surface and leave unknown keys untouched
+    so the applicator can report an actionable error.
+    """
+    if not params:
+        return {}
+    try:
+        from species.numeric_swarm import SURFACES
+    except Exception:
+        log.debug("Could not import NumericSwarm surfaces for param normalization", exc_info=True)
+        return dict(params)
+
+    specs = SURFACES.get(surface, [])
+    full_names = {spec.name for spec in specs}
+    short_to_full: dict[str, str] = {}
+    for spec in specs:
+        if "." not in spec.name:
+            continue
+        short = spec.name.split(".", 1)[1]
+        if short in short_to_full:
+            short_to_full.pop(short, None)
+        else:
+            short_to_full[short] = spec.name
+
+    normalized: dict[str, Any] = {}
+    for key, value in params.items():
+        key_s = str(key)
+        if key_s in full_names:
+            normalized[key_s] = value
+        elif key_s in short_to_full:
+            normalized[short_to_full[key_s]] = value
+        else:
+            normalized[key_s] = value
+    return normalized
+
+
+def _numeric_apply_error_skip(
+    *,
+    surface: str,
+    params: dict[str, Any],
+    apply_result: dict[str, Any],
+) -> SkipOutcome:
+    errors = apply_result.get("errors") or []
+    if isinstance(errors, str):
+        errors = [errors]
+    reason = "; ".join(str(error) for error in errors) or str(apply_result)
+    unknown = apply_result.get("unknown_params") or []
+    status = "invalid" if unknown or "unknown_params:" in reason else "skipped"
+    return SkipOutcome(
+        status,
+        (
+            f"numeric_trial params failed to apply for surface {surface}: {reason}; "
+            f"params={dict(params)}"
+        ),
+        "numeric_trial",
+    )
+
 if TYPE_CHECKING:
     from experiment_journal import ExperimentJournal
     from pareto_archive import ParetoArchive
@@ -378,7 +444,7 @@ def _action_seed_batch(action: dict[str, Any], ctx: _ActionContext):
 
 def _action_numeric_trial(action: dict[str, Any], ctx: _ActionContext):
     surface = action.get("surface", "memrl_retrieval")
-    explicit_params = action.get("params", {})
+    explicit_params = _normalize_numeric_trial_params(surface, action.get("params", {}) or {})
     suppressed_surfaces = _planner_convention_bindings(ctx, species="numeric_swarm")
     if surface in suppressed_surfaces:
         return (
@@ -398,7 +464,14 @@ def _action_numeric_trial(action: dict[str, Any], ctx: _ActionContext):
                 "Skipping numeric trial eval; explicit params were not applied: %s",
                 apply_result.get("errors") or apply_result,
             )
-            return None, "numeric_swarm"
+            return (
+                _numeric_apply_error_skip(
+                    surface=surface,
+                    params=explicit_params,
+                    apply_result=apply_result,
+                ),
+                "numeric_swarm",
+            )
         action["params"] = dict(explicit_params)
     else:
         # Let Optuna suggest
@@ -411,7 +484,14 @@ def _action_numeric_trial(action: dict[str, Any], ctx: _ActionContext):
                 "Skipping numeric trial eval; suggested params were not applied: %s",
                 reason,
             )
-            return None, "numeric_swarm"
+            return (
+                _numeric_apply_error_skip(
+                    surface=surface,
+                    params=dict(trial["params"]),
+                    apply_result=apply_result,
+                ),
+                "numeric_swarm",
+            )
         action["params"] = dict(trial["params"])
         ctx.state["_current_optuna_trial"] = {
             "surface": surface,
