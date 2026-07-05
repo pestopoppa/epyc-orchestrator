@@ -5725,6 +5725,14 @@ function startDashboard() {
             } else {
                 metaBits.push(`expected ~${fmt(d.expected_s)}`);
             }
+            const promotions = d.baseline_promotions || {};
+            if (promotions.count != null) {
+                metaBits.push(`baseline promotions ${promotions.count}`);
+                if (promotions.trials_since_promotion != null) {
+                    const n = promotions.trials_since_promotion;
+                    metaBits.push(`${n} trial${n === 1 ? '' : 's'} since promotion`);
+                }
+            }
             if (!d.autopilot_alive) metaBits.push('⚠ autopilot process not running');
             meta.textContent = metaBits.join(' · ');
         } catch (e) {

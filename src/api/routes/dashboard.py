@@ -2487,15 +2487,33 @@ def _baseline_promotion_summary(
     selected_rows = list(rows or [])
     if current_run_only:
         selected_rows, _meta = _latest_journal_run_rows(selected_rows)
+    latest_trial_id = None
+    for row in selected_rows:
+        try:
+            trial_id = int(row.get("trial_id"))
+        except (TypeError, ValueError):
+            continue
+        if latest_trial_id is None or trial_id > latest_trial_id:
+            latest_trial_id = trial_id
     events = [
         row for row in selected_rows
         if row.get("type") == _BASELINE_PROMOTION_EVENT_TYPE
     ]
     events.sort(key=lambda row: _parse_journal_ts(row.get("timestamp")) or 0)
     recent = [_shape_baseline_promotion_event(row) for row in events[-limit:]]
+    latest_promotion_trial_id = recent[-1].get("source_trial_id") if recent else None
+    trials_since_promotion = None
+    try:
+        if latest_trial_id is not None and latest_promotion_trial_id is not None:
+            trials_since_promotion = max(0, int(latest_trial_id) - int(latest_promotion_trial_id))
+    except (TypeError, ValueError):
+        trials_since_promotion = None
     return {
         "count": len(events),
         "recent": recent,
+        "latest_trial_id": latest_trial_id,
+        "latest_promotion_trial_id": latest_promotion_trial_id,
+        "trials_since_promotion": trials_since_promotion,
     }
 
 
@@ -2631,6 +2649,13 @@ async def autopilot_progress() -> JSONResponse:
         "percent_source": None,            # "log_tail" | "action_p50" | "aggregate_p50" | "fallback"
         "n_action_type_samples": None,
         "log_tail_progress": None,         # {"completed": X, "total": Y} when percent_source=log_tail
+        "baseline_promotions": {
+            "count": 0,
+            "recent": [],
+            "latest_trial_id": None,
+            "latest_promotion_trial_id": None,
+            "trials_since_promotion": None,
+        },
     }
     # Is autopilot alive? Quick pgrep-equivalent
     try:
@@ -2670,17 +2695,14 @@ async def autopilot_progress() -> JSONResponse:
     # approximates the runtime of entry[i] modulo ~seconds of dispatch overhead).
     by_action: dict[str, list[float]] = {}
     all_durations: list[float] = []
-    if _AUTOPILOT_JOURNAL_PATH.exists():
+    raw_entries = _read_autopilot_journal_rows()
+    if raw_entries:
         try:
-            with open(_AUTOPILOT_JOURNAL_PATH) as f:
-                # Read the whole file (~1 MB at typical scale; cheap). For
-                # multi-MB futures, switch to a tail-bytes seek.
-                entries = []
-                for raw in f:
-                    try:
-                        entries.append(json.loads(raw))
-                    except Exception:
-                        continue
+            entries = list(raw_entries)
+            baseline_promotions = _baseline_promotion_summary(
+                raw_entries,
+                current_run_only=True,
+            )
             entries = _effective_journal_trial_rows(entries)
             # Sort by timestamp ascending so deltas make sense even if the
             # journal was rewritten out-of-order (shouldn't happen, but cheap).
@@ -2702,6 +2724,7 @@ async def autopilot_progress() -> JSONResponse:
                 at = entries[i].get("action_type") or "unknown"
                 by_action.setdefault(at, []).append(dt)
                 all_durations.append(dt)
+            out["baseline_promotions"] = baseline_promotions
         except Exception:
             pass
 

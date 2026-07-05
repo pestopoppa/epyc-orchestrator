@@ -1499,6 +1499,9 @@ def test_dashboard_baseline_promotion_summary_scopes_to_current_run() -> None:
     summary = dashboard._baseline_promotion_summary(rows, current_run_only=True)
 
     assert summary["count"] == 1
+    assert summary["latest_trial_id"] == 1
+    assert summary["latest_promotion_trial_id"] == 1
+    assert summary["trials_since_promotion"] == 0
     event = summary["recent"][0]
     assert event["source_trial_id"] == 1
     assert round(event["quality_delta"], 3) == 0.3
@@ -1589,6 +1592,68 @@ def test_autopilot_progress_surfaces_eval_label_from_log_tail(
     assert payload["percent_source"] == "log_tail"
     assert payload["eval_label"] == "T3"
     assert payload["log_tail_progress"] == {"completed": 40, "total": 160}
+
+
+def test_autopilot_progress_surfaces_baseline_promotion_summary(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    state_path = tmp_path / "autopilot_state.json"
+    journal_path = tmp_path / "autopilot_journal.jsonl"
+    journal_shard_path = tmp_path / "autopilot_journal_1.jsonl"
+    started_at = datetime.now(timezone.utc).timestamp() - 90
+    state_path.write_text(json.dumps({
+        "in_flight_trial": {
+            "trial_id": 4,
+            "started_at": started_at,
+            "action": {"type": "seed_batch"},
+        }
+    }))
+    rows = [
+        {
+            "trial_id": 0,
+            "timestamp": "2026-07-05T00:00:00+00:00",
+            "action_type": "seed_batch",
+        },
+        {
+            "trial_id": 1,
+            "timestamp": "2026-07-05T00:01:00+00:00",
+            "action_type": "seed_batch",
+        },
+        {
+            "type": "baseline_promotion",
+            "source_trial_id": 1,
+            "tier": 1,
+            "previous_quality": 1.0,
+            "new_quality": 1.2,
+            "timestamp": "2026-07-05T00:01:30+00:00",
+            "reason": "kept",
+        },
+        {
+            "trial_id": 2,
+            "timestamp": "2026-07-05T00:02:00+00:00",
+            "action_type": "seed_batch",
+        },
+    ]
+    shard_rows = [
+        {
+            "trial_id": 4,
+            "timestamp": "2026-07-05T00:03:00+00:00",
+            "action_type": "seed_batch",
+        },
+    ]
+    journal_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+    journal_shard_path.write_text("\n".join(json.dumps(row) for row in shard_rows) + "\n")
+    monkeypatch.setattr(dashboard, "_AUTOPILOT_STATE_PATH", state_path)
+    monkeypatch.setattr(dashboard, "_AUTOPILOT_JOURNAL_PATH", journal_path)
+
+    response = asyncio.run(dashboard.autopilot_progress())
+    payload = json.loads(response.body)
+
+    assert payload["baseline_promotions"]["count"] == 1
+    assert payload["baseline_promotions"]["latest_trial_id"] == 4
+    assert payload["baseline_promotions"]["latest_promotion_trial_id"] == 1
+    assert payload["baseline_promotions"]["trials_since_promotion"] == 3
 
 
 def test_autopilot_progress_prefers_active_autopilot_log_over_stale_restart_log(
