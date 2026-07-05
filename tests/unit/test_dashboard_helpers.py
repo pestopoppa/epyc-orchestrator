@@ -1640,6 +1640,74 @@ def test_gepa_status_recent_trials_carry_tier(tmp_path: Path, monkeypatch) -> No
     assert tier_by_trial == {30: 1, 31: 3}
 
 
+def test_gepa_status_recent_trials_carry_real_suite_metric(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Real-suite rows should be visible in the GEPA trajectory panel."""
+    log_path = tmp_path / "autopilot.log"
+    journal_path = tmp_path / "autopilot_journal.jsonl"
+    log_path.write_text("2026-07-05 00:00:00,000 Trial 40 complete\n")
+    rows = [
+        {
+            "trial_id": 40,
+            "tier": 3,
+            "timestamp": "2026-07-05T00:00:00+00:00",
+            "species": "structural_lab",
+            "quality": 1.2,
+            "speed": 45.0,
+            "cost": 0.5,
+            "reliability": 1.0,
+            "pareto_status": "dominated",
+            "eval_details": {
+                "per_suite_quality": {"real_suite_v1": 1.5},
+                "details": {"per_suite_counts": {"real_suite_v1": 4}},
+                "question_results": [
+                    {"suite": "real_suite_v1", "qid": "a", "correct": True},
+                    {"suite": "real_suite_v1", "qid": "b", "correct": False},
+                ],
+            },
+        }
+    ]
+    journal_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+    monkeypatch.setattr(dashboard, "AUTOPILOT_LOG", log_path)
+    monkeypatch.setattr(dashboard, "_AUTOPILOT_JOURNAL_PATH", journal_path)
+
+    response = asyncio.run(dashboard.gepa_status())
+    payload = json.loads(response.body)
+
+    metric = payload["recent_trials"][0]["real_suite_v1"]
+    assert metric == {
+        "suite": "real_suite_v1",
+        "quality": 1.5,
+        "count": 4,
+        "correct": 1,
+    }
+
+
+def test_shape_pareto_entry_carries_real_suite_metric() -> None:
+    shaped = dashboard._shape_pareto_entry(
+        {
+            "trial_id": 50,
+            "objectives": [1.0, 20.0, -0.2, 1.0],
+            "eval_details": {
+                "details": {"per_suite_counts": {"real_suite_v1": 2}},
+                "question_results": [
+                    {"suite": "real_suite_v1", "correct": True},
+                    {"suite": "real_suite_v1", "correct": True},
+                ],
+            },
+        }
+    )
+
+    assert shaped["real_suite_v1"] == {
+        "suite": "real_suite_v1",
+        "quality": 3.0,
+        "count": 2,
+        "correct": 2,
+    }
+
+
 def test_pareto_endpoint_prefers_current_journal_run_over_old_rows_and_state(
     tmp_path: Path, monkeypatch
 ) -> None:

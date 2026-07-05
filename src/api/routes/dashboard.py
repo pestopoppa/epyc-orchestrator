@@ -1502,12 +1502,71 @@ def _pareto_hypervolume(points: list[list[float]]) -> float:
     return _pareto_hypervolume_impl(points)
 
 
+def _suite_metric_for_dashboard(
+    entry: dict[str, Any],
+    suite: str,
+) -> dict[str, Any] | None:
+    """Return compact suite-specific eval metrics for dashboard display."""
+    details = entry.get("eval_details")
+    if not isinstance(details, dict):
+        return None
+    nested_details = details.get("details")
+    if not isinstance(nested_details, dict):
+        nested_details = {}
+
+    per_suite_quality = details.get("per_suite_quality")
+    if not isinstance(per_suite_quality, dict):
+        per_suite_quality = nested_details.get("per_suite_quality")
+    if not isinstance(per_suite_quality, dict):
+        per_suite_quality = {}
+
+    per_suite_counts = details.get("per_suite_counts")
+    if not isinstance(per_suite_counts, dict):
+        per_suite_counts = nested_details.get("per_suite_counts")
+    if not isinstance(per_suite_counts, dict):
+        per_suite_counts = {}
+
+    question_results = details.get("question_results")
+    if not isinstance(question_results, list):
+        question_results = []
+
+    suite_rows = [
+        row
+        for row in question_results
+        if isinstance(row, dict) and str(row.get("suite") or "") == suite
+    ]
+    quality = per_suite_quality.get(suite)
+    count = per_suite_counts.get(suite)
+    correct = sum(1 for row in suite_rows if row.get("correct") is True)
+    if count is None and suite_rows:
+        count = len(suite_rows)
+    if quality is None and suite_rows:
+        quality = 3.0 * correct / max(1, len(suite_rows))
+    if quality is None and count is None:
+        return None
+    try:
+        quality_value = float(quality) if quality is not None else None
+    except (TypeError, ValueError):
+        quality_value = None
+    try:
+        count_value = int(count) if count is not None else None
+    except (TypeError, ValueError):
+        count_value = None
+    return {
+        "suite": suite,
+        "quality": quality_value,
+        "count": count_value,
+        "correct": correct if suite_rows else None,
+    }
+
+
 def _shape_pareto_entry(entry: dict[str, Any]) -> dict[str, Any]:
     # Strip heavy config_snapshot for transport — plotted points only need
     # objectives + identity metadata. Caller can drill via trial_id if needed.
     obj = entry.get("objectives") or [0.0, 0.0, 0.0, 0.0]
     if len(obj) < 4:
         obj = list(obj) + [0.0] * (4 - len(obj))
+    real_suite = _suite_metric_for_dashboard(entry, "real_suite_v1")
     return {
         "trial_id": entry.get("trial_id"),
         "objectives": list(obj[:4]),
@@ -1518,6 +1577,7 @@ def _shape_pareto_entry(entry: dict[str, Any]) -> dict[str, Any]:
         "reasoning": (entry.get("reasoning") or "")[:200],
         "eval_tier": entry.get("eval_tier", entry.get("tier", DEFAULT_FRONTIER_TIER)),
         "speed_deinflated": bool(entry.get("speed_deinflated", False)),
+        "real_suite_v1": real_suite,
     }
 
 
@@ -4176,6 +4236,7 @@ async def gepa_status() -> JSONResponse:
                     "cost": j.get("cost"),
                     "reliability": j.get("reliability"),
                     "pareto_status": j.get("pareto_status"),
+                    "real_suite_v1": _suite_metric_for_dashboard(j, "real_suite_v1"),
                     # Non-empty when the trial was killed mid-flight or otherwise
                     # quarantined; the client renders these muted + tagged.
                     "bug_corrupted_by": j.get("bug_corrupted_by") or None,

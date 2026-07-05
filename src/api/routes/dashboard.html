@@ -3724,6 +3724,17 @@ function updateDecisions(snap) {
     `;
 }
 
+function realSuiteBadge(metric) {
+    if (!metric || metric.quality == null) return '<span style="color:var(--dim)">-</span>';
+    const q = Number(metric.quality);
+    const count = metric.count != null ? Number(metric.count) : null;
+    const correct = metric.correct != null ? Number(metric.correct) : null;
+    const countText = Number.isFinite(count) ? `/${count}` : '';
+    const correctText = Number.isFinite(correct) ? ` · ${correct} correct` : '';
+    const title = `real_suite_v1 · q=${Number.isFinite(q) ? q.toFixed(3) : '?'}${countText}${correctText}`;
+    return `<span style="color:#34d399;font-weight:600" title="${escapeHTML(title)}">rs ${Number.isFinite(q) ? q.toFixed(2) : '?'}</span>`;
+}
+
 async function updateGepa() {
     try {
         const r = await fetch('/dashboard/api/gepa');
@@ -3752,8 +3763,9 @@ async function updateGepa() {
             // trajectory table tags each row with its tier (color-matched to the
             // Pareto/HV series) — otherwise a by-design-low T3 hard-only row reads
             // as a quality regression next to T1 rows.
-            trialsTable += '<div style="display:grid;grid-template-columns:48px 34px 74px 60px 70px 60px 60px 1fr;gap:6px;color:var(--muted);padding:2px 0;border-bottom:1px solid var(--border)">' +
-                '<div>trial</div><div>tier</div><div>species</div><div>quality</div><div>speed</div><div>cost</div><div>pareto</div><div>desc</div></div>';
+            const gepaCols = '48px 32px 50px 70px 58px 66px 52px 56px 1fr';
+            trialsTable += `<div style="display:grid;grid-template-columns:${gepaCols};gap:6px;color:var(--muted);padding:2px 0;border-bottom:1px solid var(--border)">` +
+                '<div>trial</div><div>tier</div><div>real</div><div>species</div><div>quality</div><div>speed</div><div>cost</div><div>pareto</div><div>desc</div></div>';
             d.recent_trials.slice(-10).reverse().forEach(t => {
                 // Killed / bug-corrupted placeholders: muted row + a status tag in
                 // the pareto column so a mid-trial kill is visible instead of the
@@ -3767,9 +3779,10 @@ async function updateGepa() {
                     : (t.pareto_status||'').replace('pareto_','');
                 const tierColor = (t.tier != null && !paretoIsAuditTier(t.tier)) ? paretoTierColor(t.tier) : '#64748b';
                 const rowStyle = killed ? 'opacity:0.5' : '';
-                trialsTable += `<div style="display:grid;grid-template-columns:48px 34px 74px 60px 70px 60px 60px 1fr;gap:6px;padding:1px 0;${rowStyle}">
+                trialsTable += `<div style="display:grid;grid-template-columns:${gepaCols};gap:6px;padding:1px 0;${rowStyle}">
                     <div>${t.trial_id||'-'}</div>
                     <div style="color:${tierColor};font-weight:600">${t.tier!=null?('T'+t.tier):'-'}</div>
+                    <div>${realSuiteBadge(t.real_suite_v1)}</div>
                     <div>${(t.species||'').slice(0,12)}</div>
                     <div>${(!killed && t.quality!=null)?t.quality.toFixed(2):'-'}</div>
                     <div>${(!killed && t.speed!=null)?t.speed.toFixed(1):'-'}</div>
@@ -4030,6 +4043,13 @@ function renderParetoScatter(d) {
     const eraFillOf = p => paretoEraColor(p.era_index ?? (eraCount - 1));
     const eraAlphaOf = p => paretoEraAlpha(p.era_index ?? (eraCount - 1), eraCount);
     const eraTip = p => (eraMode && p.era ? ` · ${p.era}` : '') + (p.speed_deinflated ? ' · sp×0.5' : '');
+    const suiteTip = p => {
+        const rs = p.real_suite_v1;
+        if (!rs || rs.quality == null) return '';
+        const q = Number(rs.quality);
+        const count = Number(rs.count);
+        return ` · real_suite_v1 q=${Number.isFinite(q) ? q.toFixed(2) : '?'}${Number.isFinite(count) ? '/' + count : ''}`;
+    };
     const VB = { w: 400, h: 280 };
     // Left/bottom pads sized so tick numbers and the rotated axis TITLE get
     // their own lanes instead of fusing (title ~10px lane, ticks ~14px lane).
@@ -4127,7 +4147,7 @@ function renderParetoScatter(d) {
     t0pts.forEach(p => {
         const x = sx(p.objectives[0]), y = sy(p.objectives[1]);
         const onFront = t0frontSet.has(p);
-        const tip = `T${p.eval_tier ?? 0} audit${onFront ? ' · frontier' : ''} · trial ${p.trial_id} · ${p.species || ''} · q=${p.objectives[0].toFixed(2)} sp=${p.objectives[1].toFixed(1)}${eraTip(p)}`;
+        const tip = `T${p.eval_tier ?? 0} audit${onFront ? ' · frontier' : ''} · trial ${p.trial_id} · ${p.species || ''} · q=${p.objectives[0].toFixed(2)} sp=${p.objectives[1].toFixed(1)}${suiteTip(p)}${eraTip(p)}`;
         parts.push(paretoMarker(p.eval_tier ?? 0, x, y, onFront ? 3.5 : 3, `fill="${PARETO_AUDIT_FILL}" opacity="${onFront ? 0.85 : 0.4}"`, tip));
     });
     // Dominated points: colored by their own tier (dimmed via opacity), shaped
@@ -4135,7 +4155,7 @@ function renderParetoScatter(d) {
     (d.dominated || []).forEach(p => {
         const x = sx(p.objectives[0]), y = sy(p.objectives[1]);
         const tier = p.eval_tier ?? d.canonical_tier ?? 1;
-        const tip = `T${tier} trial ${p.trial_id} · ${p.species || ''} · q=${p.objectives[0].toFixed(2)} sp=${p.objectives[1].toFixed(1)}${eraTip(p)}`;
+        const tip = `T${tier} trial ${p.trial_id} · ${p.species || ''} · q=${p.objectives[0].toFixed(2)} sp=${p.objectives[1].toFixed(1)}${suiteTip(p)}${eraTip(p)}`;
         const fill = eraMode ? eraFillOf(p) : paretoTierFill(tier);
         const op = eraMode ? Math.max(0.22, 0.5 * eraAlphaOf(p)).toFixed(2) : '0.4';
         parts.push(paretoMarker(tier, x, y, 2.5, `fill="${fill}" opacity="${op}"`, tip));
@@ -4172,7 +4192,7 @@ function renderParetoScatter(d) {
         sorted.forEach(p => {
             const x = sx(p.objectives[0]), y = sy(p.objectives[1]);
             const prod = p.is_production_best;
-            const tip = `T${tier} trial ${p.trial_id} · ${p.species || ''} · q=${p.objectives[0].toFixed(2)} sp=${p.objectives[1].toFixed(1)}${eraTip(p)}${prod ? ' · PRODUCTION' : ''}`;
+            const tip = `T${tier} trial ${p.trial_id} · ${p.species || ''} · q=${p.objectives[0].toFixed(2)} sp=${p.objectives[1].toFixed(1)}${suiteTip(p)}${eraTip(p)}${prod ? ' · PRODUCTION' : ''}`;
             const ring = prod ? ' stroke="var(--good)" stroke-width="1.5"' : '';
             const fill = eraMode ? eraFillOf(p) : color;
             const op = eraMode ? ` opacity="${eraAlphaOf(p).toFixed(2)}"` : '';

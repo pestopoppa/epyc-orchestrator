@@ -193,6 +193,18 @@ def test_dashboard_pareto_plot_uses_journal_sources_and_nonnegative_axes() -> No
     assert "paretoEraLegend(eras, PAD.l + 6, PAD.t + 12)" in body
 
 
+def test_dashboard_gepa_and_pareto_surface_real_suite_metrics() -> None:
+    html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    body = html_path.read_text()
+
+    assert "function realSuiteBadge(metric)" in body
+    assert "real_suite_v1 · q=" in body
+    assert "realSuiteBadge(t.real_suite_v1)" in body
+    assert "const suiteTip = p =>" in body
+    assert "p.real_suite_v1" in body
+    assert "real_suite_v1 q=" in body
+
+
 def test_dashboard_repo_readiness_panel_is_advisory_only() -> None:
     """Repo-readiness queue can render in the dashboard without becoming a gate."""
     html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
