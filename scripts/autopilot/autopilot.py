@@ -206,6 +206,9 @@ SEQ_PRIOR_OBS_LIMIT = int(os.environ.get("AUTOPILOT_SEQ_PRIOR_OBS_LIMIT", "120")
 SEQ_BASELINE_REFRESH_CADENCE = int(
     os.environ.get("AUTOPILOT_SEQ_BASELINE_REFRESH_CADENCE", "10")
 )
+SEQ_BASELINE_BLOCK_RETRY_CADENCE = int(
+    os.environ.get("AUTOPILOT_SEQ_BASELINE_BLOCK_RETRY_CADENCE", "5")
+)
 SEQ_BASELINE_REFERENCE_STALE_AFTER_S = float(
     os.environ.get("AUTOPILOT_SEQ_BASELINE_REFERENCE_STALE_AFTER_S", str(48 * 3600))
 )
@@ -1535,6 +1538,20 @@ def _seq_baseline_reference_block_key(reference: dict[str, Any]) -> str:
     return f"tier={reference.get('tier')}:reference={ref_token}"
 
 
+def _seq_baseline_block_retry_due(
+    blocked_state: dict[str, Any],
+    *,
+    trial_counter: int,
+) -> bool:
+    if SEQ_BASELINE_BLOCK_RETRY_CADENCE <= 0:
+        return True
+    try:
+        blocked_trial = int(blocked_state.get("trial_id"))
+    except (TypeError, ValueError):
+        return True
+    return trial_counter - blocked_trial >= SEQ_BASELINE_BLOCK_RETRY_CADENCE
+
+
 def _maybe_force_seq_baseline_draw(
     action: dict[str, Any],
     *,
@@ -1561,7 +1578,11 @@ def _maybe_force_seq_baseline_draw(
         and blocked_state.get("reference_key") == reference_key
         and blocked_state.get("action") == forced
     ):
-        return action, rationale, None
+        if not _seq_baseline_block_retry_due(
+            blocked_state,
+            trial_counter=trial_counter,
+        ):
+            return action, rationale, None
     blocked_reason = check_blacklist(forced, blacklist)
     if blocked_reason:
         fallback, fallback_reason = _first_unblacklisted_seed_action(

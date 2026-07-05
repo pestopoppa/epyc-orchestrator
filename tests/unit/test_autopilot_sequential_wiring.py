@@ -848,6 +848,82 @@ def test_maybe_force_seq_baseline_draw_uses_alternate_when_default_blacklisted(
     assert state["seq_baseline_draw_forced"]["action"] == forced
 
 
+def test_maybe_force_seq_baseline_draw_suppresses_recent_blocked_latch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(autopilot, "SEQ_BASELINE_BLOCK_RETRY_CADENCE", 5)
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    action = {"type": "noop"}
+    forced_default = {"type": "seed_batch", "n_questions": 14}
+    state: dict = {
+        "seq_baseline_draw_blocked": {
+            "trial_id": 9,
+            "action": forced_default,
+            "reference_key": "tier=1:reference=none",
+            "reason": "all seed fallbacks were blacklisted",
+        }
+    }
+
+    forced, rationale, reference = autopilot._maybe_force_seq_baseline_draw(
+        action,
+        state=state,
+        journal=journal,
+        tier=1,
+        blacklist=[
+            {"pattern": forced_default, "reason": "default still blocked"}
+        ],
+        rationale={"planner": "kept"},
+        trial_counter=12,
+        enabled=True,
+    )
+
+    assert forced == action
+    assert rationale == {"planner": "kept"}
+    assert reference is None
+    assert state["seq_baseline_draw_blocked"]["trial_id"] == 9
+
+
+def test_maybe_force_seq_baseline_draw_retries_old_blocked_latch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(autopilot, "SEQ_BASELINE_BLOCK_RETRY_CADENCE", 5)
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    action = {"type": "noop"}
+    forced_default = {"type": "seed_batch", "n_questions": 14}
+    state: dict = {
+        "seq_baseline_draw_blocked": {
+            "trial_id": 9,
+            "action": forced_default,
+            "reference_key": "tier=1:reference=none",
+            "reason": "all seed fallbacks were blacklisted",
+        }
+    }
+
+    forced, rationale, reference = autopilot._maybe_force_seq_baseline_draw(
+        action,
+        state=state,
+        journal=journal,
+        tier=1,
+        blacklist=[
+            {"pattern": forced_default, "reason": "default still blocked"}
+        ],
+        rationale=None,
+        trial_counter=14,
+        enabled=True,
+    )
+
+    assert forced == {"type": "seed_batch", "n_questions": 16}
+    assert rationale == {
+        "seq_baseline_reference_draw": True,
+        "seq_baseline_reference_reason": "no marked seq baseline-reference draw",
+    }
+    assert reference is not None
+    assert state["seq_baseline_draw_blocked"] is None
+    assert state["seq_baseline_draw_forced"]["action"] == forced
+
+
 def test_maybe_force_seq_baseline_draw_records_block_when_all_fallbacks_blacklisted(
     tmp_path: Path,
 ) -> None:
