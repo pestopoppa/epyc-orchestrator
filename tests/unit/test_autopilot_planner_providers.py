@@ -438,6 +438,19 @@ def test_local_ingest_alias_selects_long_context_role() -> None:
     assert provider._payload("prompt")["x_orchestrator_role"] == "ingest_long_context"
 
 
+def test_local_frontdoor_alias_ignores_ingest_env(monkeypatch) -> None:
+    monkeypatch.setenv("AUTOPILOT_LOCAL_PLANNER_ROLE", "ingest_long_context")
+    monkeypatch.setenv("AUTOPILOT_LOCAL_PLANNER_MODEL", "ingest_long_context")
+
+    provider = planner_providers.get_planner_provider("local_frontdoor")
+    payload = provider._payload("prompt", planner_role="critique")
+
+    assert provider.name == "local_frontdoor"
+    assert payload["x_orchestrator_role"] == "frontdoor"
+    assert payload["model"] == "frontdoor"
+    assert payload["messages"][0]["content"] == "prompt"
+
+
 def test_local_chat_alias_posts_draft_chat_payload_with_force_role(monkeypatch) -> None:
     captured: dict[str, Any] = {}
 

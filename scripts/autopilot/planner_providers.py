@@ -651,8 +651,14 @@ def get_planner_provider(name: str) -> PlannerProvider:
         return CodexPlannerProvider()
     if normalized in {"codex_critic", "codex-critic", "codex_reviewer", "codex-reviewer"}:
         return CodexPlannerProvider(name="codex_critic")
-    if normalized in {"local", "local_frontdoor", "frontdoor_local"}:
+    if normalized == "local":
         return LocalPlannerProvider(name="local")
+    if normalized in {"local_frontdoor", "frontdoor_local"}:
+        return LocalPlannerProvider(
+            role="frontdoor",
+            model="frontdoor",
+            name="local_frontdoor",
+        )
     if normalized in {"local_worker", "local_worker_general", "worker_general_local"}:
         return LocalPlannerProvider(
             role="worker_general",
