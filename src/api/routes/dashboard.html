@@ -2244,7 +2244,21 @@ function topologyRoleShapeFromLabel(label) {
 
 function inferStructuredTapLockIdentity(req, byRole = null) {
     if (!req) return null;
-    const directRole = String(req.lock_role || req.topology_role || (req.role ? clientBaseRole(req.role) : '') || req.role || '');
+    const port = req.port != null ? Number(req.port) : null;
+    const topoNode = (topology && Number.isFinite(port))
+        ? (topology.nodes || []).find(n => Number(n.port) === port)
+        : null;
+    const topo = topoNode ? topologyRoleShapeFromLabel(topoNode.label || topoNode.role || '') : { base: '', shape: '' };
+    const roleCandidates = [
+        req.lock_role,
+        req.topology_role,
+        topo.base,
+        req.role ? clientBaseRole(req.role) : '',
+        req.role,
+    ].filter(Boolean).map(String);
+    const directRole = byRole
+        ? (roleCandidates.find(r => byRole[r]) || roleCandidates[0] || '')
+        : (roleCandidates[0] || '');
     const directIdx = req.instance_idx != null ? Number(req.instance_idx) : null;
     const directRegions = (req.instance_regions || []).map(String).filter(Boolean);
     if (directRole && directIdx != null && Number.isFinite(directIdx) && directRegions.length) {
@@ -2256,12 +2270,7 @@ function inferStructuredTapLockIdentity(req, byRole = null) {
         };
     }
 
-    const port = req.port != null ? Number(req.port) : null;
-    const topoNode = (topology && Number.isFinite(port))
-        ? (topology.nodes || []).find(n => Number(n.port) === port)
-        : null;
-    const topo = topoNode ? topologyRoleShapeFromLabel(topoNode.label || topoNode.role || '') : { base: '', shape: '' };
-    const role = topo.base || directRole;
+    const role = directRole || topo.base;
     const roleInfo = byRole && role ? byRole[role] : null;
     const insts = roleInfo && Array.isArray(roleInfo.instances) ? roleInfo.instances : [];
     let inst = null;
