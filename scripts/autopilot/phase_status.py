@@ -29,9 +29,19 @@ RESEARCH_ROOT = ORCH_ROOT.parent / "epyc-inference-research"
 PHASE_PATH = Path("/mnt/raid0/llm/tmp/autopilot_phase.json")
 PHASE_EVENTS_PATH = Path("/mnt/raid0/llm/tmp/autopilot_phase.jsonl")
 DEFAULT_AUTOPILOT_LOG_PATH = ORCH_ROOT / "logs" / "autopilot.log"
+DEFAULT_JOURNAL_DIR = ORCH_ROOT / "orchestration"
 DEFAULT_TMP_AUTOPILOT_LOG_DIR = Path("/mnt/raid0/llm/tmp")
 DEFAULT_TMP_AUTOPILOT_LOG_PATTERN = "autopilot*.log"
 DEFAULT_STALE_AFTER_S = 900.0
+DEFAULT_OUTCOME_STALL_FRONTIER_TRIALS = int(
+    os.environ.get("AUTOPILOT_OUTCOME_STALL_FRONTIER_TRIALS", "150")
+)
+DEFAULT_OUTCOME_STALL_PROMOTION_TRIALS = int(
+    os.environ.get("AUTOPILOT_OUTCOME_STALL_PROMOTION_TRIALS", "300")
+)
+DEFAULT_OUTCOME_RECENT_WINDOW_TRIALS = int(
+    os.environ.get("AUTOPILOT_OUTCOME_RECENT_WINDOW_TRIALS", "120")
+)
 LOG_TAIL_BYTES = 65536
 LOG_TAIL_CANDIDATE_LIMIT = 8
 EVAL_PROGRESS_FIELDS = (
@@ -358,12 +368,224 @@ def _env_enabled(value: str | None) -> bool | None:
     return value.strip().lower() not in {"", "0", "false", "no", "off"}
 
 
+def _journal_shards(journal_dir: Path) -> list[Path]:
+    try:
+        return sorted(path for path in journal_dir.glob("autopilot_journal*.jsonl") if path.is_file())
+    except OSError:
+        return []
+
+
+def _read_journal_rows(journal_dir: Path) -> list[dict[str, Any]] | None:
+    rows: list[dict[str, Any]] = []
+    shards = _journal_shards(journal_dir)
+    if not shards:
+        return None
+    for shard in shards:
+        try:
+            with shard.open(encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(row, dict):
+                        rows.append(row)
+        except OSError:
+            continue
+    return rows
+
+
+def _row_trial_id(row: dict[str, Any]) -> int | None:
+    try:
+        return int(row.get("trial_id"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _trial_rows(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        if row.get("type"):
+            continue
+        if _row_trial_id(row) is None:
+            continue
+        out.append(row)
+    return out
+
+
+def _rate(count: int, total: int) -> float | None:
+    if total <= 0:
+        return None
+    return round(count / total, 3)
+
+
+def _outcome_rates(
+    rows: list[dict[str, Any]],
+    *,
+    latest_trial_id: int | None,
+    recent_window_trials: int,
+) -> dict[str, Any]:
+    recent_floor = None
+    if latest_trial_id is not None and recent_window_trials > 0:
+        recent_floor = latest_trial_id - recent_window_trials
+    keep_revert_total = 0
+    keepable_count = 0
+    wasted_eval_count = 0
+    learning_excluded_count = 0
+    for row in rows:
+        trial_id = _row_trial_id(row)
+        if recent_floor is not None and trial_id is not None and trial_id <= recent_floor:
+            continue
+        bug = str(row.get("bug_corrupted_by") or "").strip()
+        if bug and bug != "mad_noise":
+            continue
+        decision = str(row.get("keep_revert_decision") or "").strip()
+        eval_details = row.get("eval_details")
+        learning_exclusion_by = ""
+        if isinstance(eval_details, dict):
+            learning_exclusion = eval_details.get("learning_exclusion")
+            if isinstance(learning_exclusion, dict):
+                learning_exclusion_by = str(learning_exclusion.get("by") or "").strip()
+        is_learning_excluded = bool(learning_exclusion_by) or decision == "excluded"
+        if decision in {"keep", "revert", "excluded", "unchanged"}:
+            keep_revert_total += 1
+            if decision == "keep":
+                keepable_count += 1
+            elif decision == "revert":
+                wasted_eval_count += 1
+        if is_learning_excluded:
+            learning_excluded_count += 1
+    return {
+        "recent_window_trials": recent_window_trials,
+        "keepable_rate": {
+            "count": keepable_count,
+            "total": keep_revert_total,
+            "rate": _rate(keepable_count, keep_revert_total),
+        },
+        "wasted_eval_rate": {
+            "count": wasted_eval_count,
+            "total": keep_revert_total,
+            "rate": _rate(wasted_eval_count, keep_revert_total),
+        },
+        "learning_excluded_rate": {
+            "count": learning_excluded_count,
+            "total": keep_revert_total,
+            "rate": _rate(learning_excluded_count, keep_revert_total),
+        },
+    }
+
+
+def _build_outcome_progress_report(
+    *,
+    journal_dir: Path | None,
+    max_trials_since_frontier: int,
+    max_trials_since_promotion: int,
+    recent_window_trials: int,
+) -> dict[str, Any]:
+    if journal_dir is None:
+        return {"status": "disabled", "blockers": []}
+    rows = _read_journal_rows(journal_dir)
+    if not rows:
+        return {
+            "status": "unknown",
+            "journal_dir": str(journal_dir),
+            "blockers": ["journal shards missing or unreadable"],
+        }
+
+    trials = _trial_rows(rows)
+    trial_ids = [tid for row in trials if (tid := _row_trial_id(row)) is not None]
+    latest_trial_id = max(trial_ids) if trial_ids else None
+    frontier_ids = [
+        tid
+        for row in trials
+        if str(row.get("pareto_status") or "") == "frontier"
+        if (tid := _row_trial_id(row)) is not None
+    ]
+    latest_frontier_trial_id = max(frontier_ids) if frontier_ids else None
+    promotion_ids = [
+        tid
+        for row in rows
+        if str(row.get("type") or "") == "baseline_promotion"
+        if (tid := _row_trial_id({"trial_id": row.get("source_trial_id")})) is not None
+    ]
+    latest_promotion_trial_id = max(promotion_ids) if promotion_ids else None
+
+    def _delta_since(value: int | None) -> int | None:
+        if latest_trial_id is None or value is None:
+            return None
+        return max(0, latest_trial_id - value)
+
+    trials_since_frontier = _delta_since(latest_frontier_trial_id)
+    trials_since_promotion = _delta_since(latest_promotion_trial_id)
+    blockers: list[str] = []
+    if latest_trial_id is not None:
+        if latest_frontier_trial_id is None and latest_trial_id >= max_trials_since_frontier:
+            blockers.append(
+                "no frontier admission observed across "
+                f"{latest_trial_id} trial(s)"
+            )
+        elif (
+            trials_since_frontier is not None
+            and max_trials_since_frontier >= 0
+            and trials_since_frontier > max_trials_since_frontier
+        ):
+            blockers.append(
+                "frontier admission stale: "
+                f"{trials_since_frontier} trial(s) since frontier "
+                f"> {max_trials_since_frontier}"
+            )
+        if latest_promotion_trial_id is None and latest_trial_id >= max_trials_since_promotion:
+            blockers.append(
+                "no baseline promotion observed across "
+                f"{latest_trial_id} trial(s)"
+            )
+        elif (
+            trials_since_promotion is not None
+            and max_trials_since_promotion >= 0
+            and trials_since_promotion > max_trials_since_promotion
+        ):
+            blockers.append(
+                "baseline promotion stale: "
+                f"{trials_since_promotion} trial(s) since promotion "
+                f"> {max_trials_since_promotion}"
+            )
+
+    return {
+        "status": "attention" if blockers else "ok",
+        "journal_dir": str(journal_dir),
+        "latest_trial_id": latest_trial_id,
+        "trial_rows": len(trials),
+        "frontier_admissions": len(frontier_ids),
+        "latest_frontier_trial_id": latest_frontier_trial_id,
+        "trials_since_frontier": trials_since_frontier,
+        "max_trials_since_frontier": max_trials_since_frontier,
+        "baseline_promotions": len(promotion_ids),
+        "latest_promotion_trial_id": latest_promotion_trial_id,
+        "trials_since_promotion": trials_since_promotion,
+        "max_trials_since_promotion": max_trials_since_promotion,
+        "rates": _outcome_rates(
+            trials,
+            latest_trial_id=latest_trial_id,
+            recent_window_trials=recent_window_trials,
+        ),
+        "blockers": blockers,
+    }
+
+
 def build_phase_health_report(
     *,
     path: Path = PHASE_PATH,
     log_path: Path | None = None,
     source_paths: Iterable[Path] | None = None,
+    journal_dir: Path | None = DEFAULT_JOURNAL_DIR,
     require_current_code: bool = False,
+    require_outcome_progress: bool = False,
+    max_trials_since_frontier: int = DEFAULT_OUTCOME_STALL_FRONTIER_TRIALS,
+    max_trials_since_promotion: int = DEFAULT_OUTCOME_STALL_PROMOTION_TRIALS,
+    recent_window_trials: int = DEFAULT_OUTCOME_RECENT_WINDOW_TRIALS,
     now: float | None = None,
     stale_after_s: float = DEFAULT_STALE_AFTER_S,
 ) -> dict[str, Any]:
@@ -402,6 +624,12 @@ def build_phase_health_report(
         process_started_at_s=process_started_at_s,
         source_paths=source_paths,
     )
+    outcome_progress = _build_outcome_progress_report(
+        journal_dir=journal_dir,
+        max_trials_since_frontier=max_trials_since_frontier,
+        max_trials_since_promotion=max_trials_since_promotion,
+        recent_window_trials=recent_window_trials,
+    )
     phase_name = payload.get("phase")
     terminal_stopped = phase_name == "stopped"
     stale = heartbeat_age_s is None or heartbeat_age_s > stale_after_s
@@ -419,6 +647,9 @@ def build_phase_health_report(
             "autopilot process predates runtime source changes: "
             + ", ".join(Path(item["path"]).name for item in stale_sources[:5])
         )
+    outcome_blockers = list(outcome_progress.get("blockers") or [])
+    if require_outcome_progress and outcome_blockers and not terminal_stopped:
+        blockers.extend(f"outcome progress stalled: {blocker}" for blocker in outcome_blockers)
     status = "stopped" if terminal_stopped else "active"
     if blockers:
         if stale and not terminal_stopped:
@@ -427,6 +658,8 @@ def build_phase_health_report(
             status = "pid_dead"
         elif require_current_code and stale_sources and not terminal_stopped:
             status = "code_stale"
+        elif require_outcome_progress and outcome_blockers and not terminal_stopped:
+            status = "outcome_stalled"
         else:
             status = "blocked"
     report = {
@@ -442,6 +675,8 @@ def build_phase_health_report(
         "code_stale": bool(stale_sources),
         "code_stale_paths": stale_sources,
         "require_current_code": require_current_code,
+        "require_outcome_progress": require_outcome_progress,
+        "outcome_progress": outcome_progress,
         "phase": phase_name,
         "phase_started_at": payload.get("phase_started_at"),
         "phase_age_s_recorded": payload.get("phase_age_s"),
@@ -523,6 +758,7 @@ def format_phase_health_report(report: dict[str, Any]) -> list[str]:
         f"- PID: {report.get('pid')} (alive={report.get('pid_alive')})",
         f"- Process started at: {report.get('process_started_at_s')}",
         f"- Runtime source stale: {report.get('code_stale')}",
+        f"- Outcome progress status: {(report.get('outcome_progress') or {}).get('status')}",
         f"- Planner hints env: {report.get('planner_hints_enabled')}",
         f"- Seq verdict env: {report.get('seq_verdict_enabled')}",
         (
@@ -539,6 +775,38 @@ def format_phase_health_report(report: dict[str, Any]) -> list[str]:
     ]
     if eval_progress:
         lines.append(f"- Eval progress: {eval_progress}")
+    outcome_progress = report.get("outcome_progress")
+    if isinstance(outcome_progress, dict) and outcome_progress.get("status") not in {
+        None,
+        "disabled",
+    }:
+        lines.extend(["", "## Outcome Progress", ""])
+        lines.append(f"- Latest trial: {outcome_progress.get('latest_trial_id')}")
+        lines.append(
+            "- Frontier: "
+            f"{outcome_progress.get('frontier_admissions')} admission(s), "
+            f"latest={outcome_progress.get('latest_frontier_trial_id')}, "
+            f"trials_since={outcome_progress.get('trials_since_frontier')}"
+        )
+        lines.append(
+            "- Baseline promotions: "
+            f"{outcome_progress.get('baseline_promotions')}, "
+            f"latest={outcome_progress.get('latest_promotion_trial_id')}, "
+            f"trials_since={outcome_progress.get('trials_since_promotion')}"
+        )
+        rates = outcome_progress.get("rates") or {}
+        if isinstance(rates, dict):
+            keepable = (rates.get("keepable_rate") or {}).get("rate")
+            wasted = (rates.get("wasted_eval_rate") or {}).get("rate")
+            excluded = (rates.get("learning_excluded_rate") or {}).get("rate")
+            lines.append(
+                "- Recent rates: "
+                f"keepable={keepable}, wasted_eval={wasted}, "
+                f"learning_excluded={excluded}"
+            )
+        if outcome_progress.get("blockers"):
+            lines.extend(["", "## Outcome Progress Signals", ""])
+            lines.extend(f"- {blocker}" for blocker in outcome_progress["blockers"])
     if report.get("code_stale_paths"):
         lines.extend(["", "## Runtime Source Drift", ""])
         for item in report["code_stale_paths"]:
