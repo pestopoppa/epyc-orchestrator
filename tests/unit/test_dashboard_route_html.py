@@ -165,11 +165,50 @@ def test_dashboard_live_panel_refreshes_ignore_stale_responses_where_possible() 
     assert "return updateRegionLocks(refreshSeq, snap.region_locks);" in body
     assert "let _lastRegionLocksPayload = null;" in body
     assert "rich overlay failed" in body
-    assert "fetch(`/dashboard/api/snapshot?t=${Date.now()}`, { cache: 'no-store' })" in body
+    assert "fetchJSON('/dashboard/api/snapshot'" in body
+    assert "timeoutMs: _SNAPSHOT_POLL_TIMEOUT_MS" in body
     assert "setInterval(updateSnapshotPoll, 2500)" in body
     assert "window_s=${TOPOLOGY_ACTIVITY_WINDOW_S}&t=${Date.now()}" in body
     assert "fetch(`/dashboard/api/contention?t=${Date.now()}`, { cache: 'no-store' })" in body
     assert "if (refreshSeq !== _regionLocksRefreshSeq) return;" in body
+
+
+def test_dashboard_transport_self_heals_without_page_reload() -> None:
+    """Wedge-killers + watchdog: a dead stream, hung fetch, or poisoned frame
+    watermark must recover on its own — the trio of stream-fed panels
+    (topology / region locks / live tap) froze permanently on these before."""
+    html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    body = html_path.read_text()
+
+    # B1: timeout-bounded snapshot poll with a self-expiring in-flight guard.
+    assert "async function fetchJSON(url, { timeoutMs = _FETCH_JSON_TIMEOUT_MS } = {})" in body
+    assert "let _snapshotPollInFlightSince = 0;" in body
+    assert "_snapshotPollInFlightSince &&" in body
+    assert "now - _snapshotPollInFlightSince < _SNAPSHOT_POLL_TIMEOUT_MS + 2000" in body
+    assert "_snapshotPollInFlight = false" not in body  # old permanent-wedge boolean
+
+    # B2: no client-clock fallback for the frame watermark; null frames apply
+    # but never advance it; watermark resets on every (re)connect.
+    assert "if (!Number.isFinite(ts)) return null;" in body
+    assert "Date.now() / 1000 + 120" in body
+    assert body.count("_latestSnapshotFrameTs = 0;") >= 3  # decl init + both stream starters + watchdog
+    assert "if (frameTs !== null) {" in body
+
+    # B3: universal watchdog rebuilds the stream + fires a poll when snapshots
+    # stop applying; hooks cover sleep/wake and network flaps.
+    assert "function snapshotTransportWatchdog()" in body
+    assert "setInterval(snapshotTransportWatchdog, 5000)" in body
+    assert "document.addEventListener('visibilitychange'" in body
+    assert "window.addEventListener('online', snapshotTransportWatchdog)" in body
+    assert "let _lastSnapshotAppliedAt = Date.now();" in body
+
+    # B7: every legacy EventSource reconnect is guarded (no stampedes) and
+    # identity-checked (no stale-closure restarts).
+    assert body.count("es._reconnectScheduled = true;") >= 5
+    assert "if (_autopilotLogStream === es) startAutopilotLogStream();" in body
+    assert "if (_rawTapStream === es) startRawTapStream();" in body
+    assert "if (_structuredTapStream === es) startStructuredTapStream();" in body
+    assert "if (_plannerTapStream === es) startPlannerTapStream();" in body
 
 
 def test_dashboard_pareto_plot_uses_journal_sources_and_nonnegative_axes() -> None:

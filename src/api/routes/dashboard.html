@@ -1096,7 +1096,17 @@ let _roleAliasToBase = {};
 let _insightGraphFocus = '';
 let _insightGraphData = null;
 let _latestSnapshotFrameTs = 0;
-let _snapshotPollInFlight = false;
+// Timestamp (ms) of the in-flight snapshot poll, 0 when idle. A timestamp —
+// not a boolean — so the guard self-expires: a fetch that never settles (kernel
+// half-open socket across an API restart) can wedge a boolean forever, and this
+// poll is the fallback that keeps topology/region-lock badges alive.
+let _snapshotPollInFlightSince = 0;
+const _SNAPSHOT_POLL_TIMEOUT_MS = 8000;
+const _FETCH_JSON_TIMEOUT_MS = 5000;
+// Initialized to page-load time: "no snapshot applied within 15s of load" is
+// itself a stall the watchdog should recover from.
+let _lastSnapshotAppliedAt = Date.now();
+let _lastWatchdogRecoveryAt = 0;
 
 // Signature of the strip's *structure* — the fields renderTopologyStrip lays
 // out (role labels, ports, backing models, kind). Live activity (dots, tps,
@@ -3199,6 +3209,23 @@ let _autopilotLogBuffer = "";
 const _AUTOPILOT_LOG_MAX_CHARS = 40000;
 let _autopilotLogPinned = true;
 
+// Timeout-bounded JSON fetch for all dashboard pollers. Every poll interval in
+// this file must go through here: a plain fetch() has NO timeout, so one hung
+// request (typical during the per-trial API restarts) silently kills a poller.
+async function fetchJSON(url, { timeoutMs = _FETCH_JSON_TIMEOUT_MS } = {}) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        const resp = await fetch(`${url}${url.includes('?') ? '&' : '?'}t=${Date.now()}`, {
+            cache: 'no-store',
+            signal: controller.signal,
+        });
+        return await resp.json();
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
 async function fetchInitialSsePayload(url) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 2500);
@@ -3275,22 +3302,26 @@ function _dedupeAdjacentAutopilotLines(lines) {
 
 function startAutopilotLogStream() {
     if (_autopilotLogStream) _autopilotLogStream.close();
-    _autopilotLogBuffer = "";
+    // Keep the buffer across reconnects: the new stream's `initial` frame
+    // replaces it; wiping here blanks the panel if the reconnect fails.
     const status = document.getElementById('autopilot-status');
     if (status) status.textContent = '— connecting to autopilot.log stream';
-    _autopilotLogStream = new EventSource('/dashboard/events/autopilot_log');
-    _autopilotLogStream.onopen = () => {
+    const es = new EventSource('/dashboard/events/autopilot_log');
+    _autopilotLogStream = es;
+    es.onopen = () => {
         if (status) status.textContent = '— autopilot.log stream connected';
     };
-    _autopilotLogStream.onmessage = (e) => {
+    es.onmessage = (e) => {
         try { applyAutopilotLogData(JSON.parse(e.data)); }
         catch (err) {
             if (status) status.textContent = `— autopilot.log render error: ${err && err.message ? err.message : err}`;
         }
     };
-    _autopilotLogStream.onerror = () => {
+    es.onerror = () => {
         if (status) status.textContent = '— autopilot.log stream reconnecting';
-        setTimeout(startAutopilotLogStream, 2000);
+        if (es._reconnectScheduled) return;
+        es._reconnectScheduled = true;
+        setTimeout(() => { if (_autopilotLogStream === es) startAutopilotLogStream(); }, 2000);
     };
     setTimeout(async () => {
         if (_autopilotLogBuffer) return;
@@ -3312,13 +3343,18 @@ function startAutopilotLogStream() {
 
 function startRawTapStream() {
     if (_rawTapStream) _rawTapStream.close();
-    _rawTapBuffer = "";
-    _rawTapStream = new EventSource('/dashboard/events/raw_tap');
-    _rawTapStream.onmessage = (e) => {
+    // Keep _rawTapBuffer across reconnects — the new stream's `initial` frame
+    // replaces it (applyRawTapData); wiping here loses the tail on a failed
+    // reconnect.
+    const es = new EventSource('/dashboard/events/raw_tap');
+    _rawTapStream = es;
+    es.onmessage = (e) => {
         try { applyRawTapData(JSON.parse(e.data)); } catch {}
     };
-    _rawTapStream.onerror = () => {
-        setTimeout(startRawTapStream, 2000);
+    es.onerror = () => {
+        if (es._reconnectScheduled) return;
+        es._reconnectScheduled = true;
+        setTimeout(() => { if (_rawTapStream === es) startRawTapStream(); }, 2000);
     };
 }
 
@@ -3359,13 +3395,15 @@ function applyRawTapData(data) {
 
 function startStructuredTapStream() {
     if (_structuredTapStream) _structuredTapStream.close();
-    _structuredTapRequests = [];
-    _structuredTapStream = new EventSource('/dashboard/events/structured_tap');
-    _structuredTapStream.onmessage = (e) => {
+    const es = new EventSource('/dashboard/events/structured_tap');
+    _structuredTapStream = es;
+    es.onmessage = (e) => {
         try { applyStructuredTapData(JSON.parse(e.data)); } catch {}
     };
-    _structuredTapStream.onerror = () => {
-        setTimeout(startStructuredTapStream, 2000);
+    es.onerror = () => {
+        if (es._reconnectScheduled) return;
+        es._reconnectScheduled = true;
+        setTimeout(() => { if (_structuredTapStream === es) startStructuredTapStream(); }, 2000);
     };
 }
 
@@ -3490,22 +3528,25 @@ function _paintPlannerTap() {
 
 function startPlannerTapStream() {
     if (_plannerTapStream) _plannerTapStream.close();
-    _plannerTapBuffer = "";
+    // Buffer kept across reconnects; the new stream's `initial` frame replaces it.
     const status = document.getElementById('planner-status');
     if (status) status.textContent = '— connecting to planner tap stream';
-    _plannerTapStream = new EventSource('/dashboard/events/planner_tap');
-    _plannerTapStream.onopen = () => {
+    const es = new EventSource('/dashboard/events/planner_tap');
+    _plannerTapStream = es;
+    es.onopen = () => {
         if (status) status.textContent = '— planner tap stream connected';
     };
-    _plannerTapStream.onmessage = (e) => {
+    es.onmessage = (e) => {
         try { applyPlannerTapData(JSON.parse(e.data)); }
         catch (err) {
             if (status) status.textContent = `— planner tap render error: ${err && err.message ? err.message : err}`;
         }
     };
-    _plannerTapStream.onerror = () => {
+    es.onerror = () => {
         if (status) status.textContent = '— planner tap stream reconnecting';
-        setTimeout(startPlannerTapStream, 2000);
+        if (es._reconnectScheduled) return;
+        es._reconnectScheduled = true;
+        setTimeout(() => { if (_plannerTapStream === es) startPlannerTapStream(); }, 2000);
     };
     setTimeout(async () => {
         if (_plannerTapBuffer) return;
@@ -3576,6 +3617,9 @@ function sseMultiplexEnabled() {
 
 function startMultiplexStream() {
     if (_multiplexStream) _multiplexStream.close();
+    // Fresh connection = fresh frame ordering; a watermark carried across
+    // reconnects can strand the tab if the server was restarted underneath it.
+    _latestSnapshotFrameTs = 0;
     const snapStatus = document.getElementById('status');
     if (snapStatus) snapStatus.textContent = 'connecting…';
     const es = new EventSource('/dashboard/events/multiplex');
@@ -4943,8 +4987,14 @@ function closeDetail() {
 }
 
 function dashboardSnapshotFrameTs(snap) {
+    // null = frame time unknown: the caller applies the payload but must NOT
+    // advance the monotonic watermark. Never fall back to the client clock —
+    // one malformed payload with the client clock ahead of the server poisons
+    // _latestSnapshotFrameTs and every later snapshot is silently dropped.
     const ts = Number(snap && snap.generated_at);
-    return Number.isFinite(ts) ? ts : Date.now() / 1000;
+    if (!Number.isFinite(ts)) return null;
+    if (ts > Date.now() / 1000 + 120) return null;
+    return ts;
 }
 
 function updatePanelSafely(name, fn) {
@@ -4976,8 +5026,11 @@ function applyDashboardSnapshot(snap, source) {
         return;
     }
     const frameTs = dashboardSnapshotFrameTs(snap);
-    if (frameTs + 0.001 < _latestSnapshotFrameTs) return;
-    _latestSnapshotFrameTs = frameTs;
+    if (frameTs !== null) {
+        if (frameTs + 0.001 < _latestSnapshotFrameTs) return;
+        _latestSnapshotFrameTs = frameTs;
+    }
+    _lastSnapshotAppliedAt = Date.now();
     _latestSnapshot = snap || {};
     const refreshSeq = ++_regionLocksRefreshSeq;
     // Keystone coherence: drive the topology strip STRUCTURE from the SAME
@@ -5009,16 +5062,18 @@ function applyDashboardSnapshot(snap, source) {
 }
 
 async function updateSnapshotPoll() {
-    if (_snapshotPollInFlight) return;
-    _snapshotPollInFlight = true;
+    const now = Date.now();
+    if (_snapshotPollInFlightSince &&
+        now - _snapshotPollInFlightSince < _SNAPSHOT_POLL_TIMEOUT_MS + 2000) return;
+    _snapshotPollInFlightSince = now;
     try {
-        const r = await fetch(`/dashboard/api/snapshot?t=${Date.now()}`, { cache: 'no-store' });
-        const snap = await r.json();
+        const snap = await fetchJSON('/dashboard/api/snapshot',
+            { timeoutMs: _SNAPSHOT_POLL_TIMEOUT_MS });
         applyDashboardSnapshot(snap, 'poll');
     } catch (err) {
         console.error('[dashboard:snapshot_poll]', err);
     } finally {
-        _snapshotPollInFlight = false;
+        _snapshotPollInFlightSince = 0;
     }
 }
 
@@ -5104,6 +5159,26 @@ function tickFreshnessBadges() {
     }
 }
 
+// Universal transport self-heal. If no snapshot has been APPLIED — via any
+// transport — in >15s, the stream and/or poll are wedged in a way their own
+// error handlers didn't catch (fatally-closed EventSource, half-open socket
+// across an API restart, laptop sleep/wake, poisoned frame watermark). Reset
+// the watermark, rebuild the live connection, fire an immediate poll. AutoPilot
+// restarts this API at every trial boundary, so this path is routine, not rare.
+const _SNAPSHOT_WATCHDOG_STALL_MS = 15000;
+const _SNAPSHOT_WATCHDOG_MIN_GAP_MS = 10000;
+function snapshotTransportWatchdog() {
+    const now = Date.now();
+    if (now - _lastSnapshotAppliedAt <= _SNAPSHOT_WATCHDOG_STALL_MS) return;
+    if (now - _lastWatchdogRecoveryAt < _SNAPSHOT_WATCHDOG_MIN_GAP_MS) return;
+    _lastWatchdogRecoveryAt = now;
+    const status = document.getElementById('status');
+    if (status) status.textContent = 'recovering…';
+    _latestSnapshotFrameTs = 0;
+    try { startStream(); } catch (e) { console.error('[dashboard:watchdog]', e); }
+    updateSnapshotPoll();
+}
+
 function startStream() {
     // With the multiplex enabled, the snapshot arrives as the `snapshot` event
     // on the single multiplexed connection — open that instead of a dedicated
@@ -5114,6 +5189,7 @@ function startStream() {
         return;
     }
     if (activeStream) activeStream.close();
+    _latestSnapshotFrameTs = 0;
     activeStream = new EventSource('/dashboard/events/stream');
     document.getElementById('status').textContent = 'connecting…';
     activeStream.onopen = () => { document.getElementById('status').textContent = 'live'; };
@@ -6261,6 +6337,9 @@ async function updateRegionLocks(refreshSeq = _regionLocksRefreshSeq, regionLock
         setInterval(updateBuildRev, 30000);  // build-drift poll
         startPanelSafely('snapshot-poll', updateSnapshotPoll);
         setInterval(updateSnapshotPoll, 2500);  // fallback for stream stalls + per-panel render isolation
+        setInterval(snapshotTransportWatchdog, 5000);  // universal self-heal: rebuild stream + poll when snapshots stop applying
+        document.addEventListener('visibilitychange', () => { if (!document.hidden) snapshotTransportWatchdog(); });
+        window.addEventListener('online', snapshotTransportWatchdog);
         setTimeout(ensureRegionLocksPanelPainted, 750);
         setInterval(() => scheduleRegionLocksRefresh(true), 1500);  // shared live-inference refresh for locks + topology activity
         setInterval(() => startPanelSafely('topology-refresh', loadTopology), 5000);  // rebuild strip when stack topology shifts (reboot/reload) — no-op when unchanged
