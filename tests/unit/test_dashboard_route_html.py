@@ -215,6 +215,12 @@ def test_dashboard_autopilot_progress_includes_eval_label() -> None:
     assert "${escapeHTML(String(evalLabel)) || 'T?'} tower ${prog.log_tail_progress.completed}/${prog.log_tail_progress.total}" in body
     assert "const promotions = d.baseline_promotions || {};" in body
     assert "baseline promotions ${promotions.count}" in body
+    assert "const outcome = d.outcome_kpis || {};" in body
+    assert "keepable ${fmtRate(keepable)}" in body
+    assert "wasted-eval ${fmtRate(wasted)}" in body
+    assert "learning-excluded ${fmtRate(excluded)}" in body
+    assert "_currentCodeHealthLabel(d.current_code_health)" in body
+    assert "current code ${health.status}" in body
 
 
 def test_dashboard_repo_readiness_panel_is_advisory_only() -> None:

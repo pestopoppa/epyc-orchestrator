@@ -1656,6 +1656,142 @@ def test_autopilot_progress_surfaces_baseline_promotion_summary(
     assert payload["baseline_promotions"]["trials_since_promotion"] == 3
 
 
+def test_autopilot_progress_surfaces_outcome_kpis_and_current_code_health(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    state_path = tmp_path / "autopilot_state.json"
+    journal_path = tmp_path / "autopilot_journal.jsonl"
+    started_at = datetime.now(timezone.utc).timestamp() - 90
+    state_path.write_text(json.dumps({
+        "in_flight_trial": {
+            "trial_id": 4,
+            "started_at": started_at,
+            "action": {"type": "seed_batch"},
+        }
+    }))
+    rows = [
+        {
+            "trial_id": 1,
+            "timestamp": "2026-07-05T00:00:00+00:00",
+            "action_type": "seed_batch",
+            "keep_revert_decision": "keep",
+        },
+        {
+            "trial_id": 2,
+            "timestamp": "2026-07-05T00:01:00+00:00",
+            "action_type": "seed_batch",
+            "keep_revert_decision": "revert",
+        },
+        {
+            "trial_id": 3,
+            "timestamp": "2026-07-05T00:02:00+00:00",
+            "action_type": "seed_batch",
+            "keep_revert_decision": "excluded",
+            "eval_details": {
+                "learning_exclusion": {"by": "mad_noise"},
+            },
+        },
+        {
+            "type": "baseline_promotion",
+            "source_trial_id": 1,
+            "tier": 1,
+            "previous_quality": 1.0,
+            "new_quality": 1.2,
+            "timestamp": "2026-07-05T00:02:30+00:00",
+            "reason": "kept",
+        },
+        {
+            "trial_id": 4,
+            "timestamp": "2026-07-05T00:03:00+00:00",
+            "action_type": "seed_batch",
+        },
+    ]
+    journal_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+    monkeypatch.setattr(dashboard, "_AUTOPILOT_STATE_PATH", state_path)
+    monkeypatch.setattr(dashboard, "_AUTOPILOT_JOURNAL_PATH", journal_path)
+    monkeypatch.setattr(
+        dashboard,
+        "_autopilot_current_code_health",
+        lambda: {
+            "ok": True,
+            "status": "active",
+            "code_stale": False,
+            "require_current_code": True,
+        },
+    )
+
+    response = asyncio.run(dashboard.autopilot_progress())
+    payload = json.loads(response.body)
+
+    assert payload["baseline_promotions"]["count"] == 1
+    assert payload["outcome_kpis"]["keepable_rate"] == {
+        "count": 1,
+        "total": 3,
+        "rate": 0.333,
+    }
+    assert payload["outcome_kpis"]["wasted_eval_rate"] == {
+        "count": 1,
+        "total": 3,
+        "rate": 0.333,
+    }
+    assert payload["outcome_kpis"]["learning_excluded_rate"] == {
+        "count": 1,
+        "total": 3,
+        "rate": 0.333,
+    }
+    assert payload["current_code_health"] == {
+        "ok": True,
+        "status": "active",
+        "code_stale": False,
+        "require_current_code": True,
+    }
+
+
+def test_autopilot_progress_leaves_outcome_kpis_unknown_without_source_data(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    state_path = tmp_path / "autopilot_state.json"
+    journal_path = tmp_path / "autopilot_journal.jsonl"
+    started_at = datetime.now(timezone.utc).timestamp() - 45
+    state_path.write_text(json.dumps({
+        "in_flight_trial": {
+            "trial_id": 8,
+            "started_at": started_at,
+            "action": {"type": "seed_batch"},
+        }
+    }))
+    journal_path.write_text("\n".join(json.dumps({
+        "trial_id": trial_id,
+        "timestamp": f"2026-07-05T00:0{trial_id}:00+00:00",
+        "action_type": "seed_batch",
+    }) for trial_id in [1, 2, 3]) + "\n")
+    monkeypatch.setattr(dashboard, "_AUTOPILOT_STATE_PATH", state_path)
+    monkeypatch.setattr(dashboard, "_AUTOPILOT_JOURNAL_PATH", journal_path)
+    monkeypatch.setattr(dashboard, "_autopilot_current_code_health", lambda: None)
+
+    response = asyncio.run(dashboard.autopilot_progress())
+    payload = json.loads(response.body)
+
+    assert payload["outcome_kpis"]["keepable_rate"] == {
+        "count": 0,
+        "total": 0,
+        "rate": None,
+    }
+    assert payload["outcome_kpis"]["wasted_eval_rate"] == {
+        "count": 0,
+        "total": 0,
+        "rate": None,
+    }
+    assert payload["outcome_kpis"]["learning_excluded_rate"] == {
+        "count": 0,
+        "total": 0,
+        "rate": None,
+    }
+    assert payload["current_code_health"] is None
+
+
 def test_autopilot_progress_prefers_active_autopilot_log_over_stale_restart_log(
     tmp_path: Path,
     monkeypatch,

@@ -2517,6 +2517,86 @@ def _baseline_promotion_summary(
     }
 
 
+def _trial_outcome_summary(
+    rows: list[dict[str, Any]] | None,
+    *,
+    current_run_only: bool = True,
+) -> dict[str, Any]:
+    """Summarize keep/revert and learning-exclusion outcomes from journal rows.
+
+    The dashboard only reports rates that can be derived from existing journal
+    fields. If a category is absent, its rate stays ``None`` rather than being
+    inferred from another bucket.
+    """
+    selected_rows = list(rows or [])
+    if current_run_only:
+        selected_rows, _meta = _latest_journal_run_rows(selected_rows)
+    selected_rows = _effective_journal_trial_rows(selected_rows)
+
+    keep_revert_total = 0
+    keepable_count = 0
+    wasted_eval_count = 0
+    learning_excluded_count = 0
+
+    for row in selected_rows:
+        bug = str(row.get("bug_corrupted_by") or "").strip()
+        if bug and bug != "mad_noise":
+            continue
+        decision = str(row.get("keep_revert_decision") or "").strip()
+        eval_details = row.get("eval_details")
+        learning_exclusion_by = ""
+        if isinstance(eval_details, dict):
+            learning_exclusion = eval_details.get("learning_exclusion")
+            if isinstance(learning_exclusion, dict):
+                learning_exclusion_by = str(learning_exclusion.get("by") or "").strip()
+        is_learning_excluded = bool(learning_exclusion_by) or decision == "excluded"
+        if decision in {"keep", "revert", "excluded", "unchanged"}:
+            keep_revert_total += 1
+            if decision == "keep":
+                keepable_count += 1
+            elif decision == "revert":
+                wasted_eval_count += 1
+        if is_learning_excluded:
+            learning_excluded_count += 1
+
+    def _rate(count: int, total: int) -> float | None:
+        if total <= 0:
+            return None
+        return round(count / total, 3)
+
+    return {
+        "keepable_rate": {
+            "count": keepable_count,
+            "total": keep_revert_total,
+            "rate": _rate(keepable_count, keep_revert_total),
+        },
+        "wasted_eval_rate": {
+            "count": wasted_eval_count,
+            "total": keep_revert_total,
+            "rate": _rate(wasted_eval_count, keep_revert_total),
+        },
+        "learning_excluded_rate": {
+            "count": learning_excluded_count,
+            "total": keep_revert_total,
+            "rate": _rate(learning_excluded_count, keep_revert_total),
+        },
+    }
+
+
+def _autopilot_current_code_health() -> dict[str, Any] | None:
+    """Return the current-code health report when the phase snapshot exists."""
+    try:
+        report = build_phase_health_report(
+            path=AUTOPILOT_PHASE_PATH,
+            require_current_code=True,
+        )
+        if str(report.get("status") or "") in {"missing", "unavailable"}:
+            return None
+        return report
+    except Exception:
+        return None
+
+
 def _pareto_from_journal(
     session_start_ts: float | None,
     *,
@@ -2656,7 +2736,26 @@ async def autopilot_progress() -> JSONResponse:
             "latest_promotion_trial_id": None,
             "trials_since_promotion": None,
         },
+        "outcome_kpis": {
+            "keepable_rate": {
+                "count": 0,
+                "total": 0,
+                "rate": None,
+            },
+            "wasted_eval_rate": {
+                "count": 0,
+                "total": 0,
+                "rate": None,
+            },
+            "learning_excluded_rate": {
+                "count": 0,
+                "total": 0,
+                "rate": None,
+            },
+        },
+        "current_code_health": None,
     }
+    current_code_health = _autopilot_current_code_health()
     # Is autopilot alive? Quick pgrep-equivalent
     try:
         for p in Path("/proc").iterdir():
@@ -2703,6 +2802,10 @@ async def autopilot_progress() -> JSONResponse:
                 raw_entries,
                 current_run_only=True,
             )
+            outcome_kpis = _trial_outcome_summary(
+                raw_entries,
+                current_run_only=True,
+            )
             entries = _effective_journal_trial_rows(entries)
             # Sort by timestamp ascending so deltas make sense even if the
             # journal was rewritten out-of-order (shouldn't happen, but cheap).
@@ -2725,8 +2828,11 @@ async def autopilot_progress() -> JSONResponse:
                 by_action.setdefault(at, []).append(dt)
                 all_durations.append(dt)
             out["baseline_promotions"] = baseline_promotions
+            out["outcome_kpis"] = outcome_kpis
         except Exception:
             pass
+    if current_code_health is not None:
+        out["current_code_health"] = current_code_health
 
     def _stats(durs: list[float]) -> dict[str, float] | None:
         if not durs:
