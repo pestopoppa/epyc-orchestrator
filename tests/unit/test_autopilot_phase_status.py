@@ -165,6 +165,7 @@ def test_phase_health_default_runtime_sources_include_planner_and_seeding_module
     assert "controller_io.py" in checked
     assert "planner_coordinator.py" in checked
     assert "planner_providers.py" in checked
+    assert "state_store.py" in checked
     assert "seeder.py" in checked
     assert "seeding_eval.py" in checked
     assert "seeding_scoring.py" in checked

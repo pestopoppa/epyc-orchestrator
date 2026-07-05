@@ -58,6 +58,7 @@ AUTOPILOT_RUNTIME_SOURCE_PATHS = (
     ORCH_ROOT / "scripts" / "autopilot" / "eval_tower.py",
     ORCH_ROOT / "scripts" / "autopilot" / "planner_coordinator.py",
     ORCH_ROOT / "scripts" / "autopilot" / "planner_providers.py",
+    ORCH_ROOT / "scripts" / "autopilot" / "state_store.py",
     ORCH_ROOT / "scripts" / "autopilot" / "species" / "seeder.py",
     ORCH_ROOT / "scripts" / "benchmark" / "seeding_eval.py",
     ORCH_ROOT / "scripts" / "benchmark" / "seeding_scoring.py",
