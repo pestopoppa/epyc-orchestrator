@@ -379,7 +379,7 @@ def test_action_availability_surfaces_w8_candidate_generation_priority(
 
     assert "Priority pressure:" in availability
     assert "W8 candidate generation is the active strict blocker" in availability
-    assert "explicit single-param numeric_trial or one-flag structural_experiment" in availability
+    assert "Optuna-suggested numeric_trial that journals applied params" in availability
     assert "deep_eval" in viable
     assert "seed_batch" in viable
 
@@ -388,6 +388,42 @@ def test_w8_candidate_generation_pressure_ignores_replayable_candidates() -> Non
     assert autopilot._w8_candidate_generation_pressure(
         "W8 replay pressure: 1/1 accumulating candidate(s) are replayable"
     ) is False
+
+
+def test_w8_candidate_generation_replaces_deferral_with_numeric(monkeypatch) -> None:
+    monkeypatch.setattr(autopilot, "_configured_numeric_surfaces", lambda: ("monitor",))
+
+    action, rationale = autopilot._replace_w8_candidate_generation_deferral(
+        {"type": "seed_batch", "n_questions": 40},
+        [],
+        {"falsifier": "original"},
+        trial_counter=123,
+        w8_replay_pressure_text=(
+            "W8 replay pressure: 0/1 accumulating candidate(s) are replayable "
+            "(blocked=unreplayable_action=seed_batch:1)."
+        ),
+    )
+
+    assert action == {"type": "numeric_trial", "surface": "monitor", "params": {}}
+    assert rationale["w8_candidate_generation_replaced"] is True
+    assert rationale["w8_candidate_generation_reason"] == "unreplayable_action=seed_batch"
+    assert rationale["falsifier"] == "original"
+
+
+def test_w8_candidate_generation_keeps_numeric_optuna_request() -> None:
+    action, rationale = autopilot._replace_w8_candidate_generation_deferral(
+        {"type": "numeric_trial", "surface": "monitor", "params": {}},
+        [],
+        {"falsifier": "keep"},
+        trial_counter=123,
+        w8_replay_pressure_text=(
+            "W8 replay pressure: 0/1 accumulating candidate(s) are replayable "
+            "(blocked=numeric_trial_missing_params:1)."
+        ),
+    )
+
+    assert action == {"type": "numeric_trial", "surface": "monitor", "params": {}}
+    assert rationale == {"falsifier": "keep"}
 
 
 def test_action_availability_surfaces_suppressed_numeric_surfaces(

@@ -264,10 +264,12 @@ def _w8_replay_pressure_line(seq_rows: list[dict[str, Any]]) -> str:
         blocker_text = _format_counts(blockers, limit=3)
         return (
             f"W8 replay pressure: 0/{open_accumulating} accumulating candidate(s) are "
-            f"replayable (blocked={blocker_text}). Prefer an explicit single-param "
-            "numeric_trial or one-flag structural_experiment; seed_batch, deep_eval, "
-            "structural_prune, and empty-params numeric_trial cannot create replayable "
-            "W8 evidence."
+            f"replayable (blocked={blocker_text}). Prefer a numeric_trial that will "
+            "journal non-empty applied params, or a one-flag structural_experiment; "
+            "seed_batch, deep_eval, and structural_prune cannot create replayable W8 "
+            "evidence. Historical empty-params numeric rows are not replayable as "
+            "logged, but a new Optuna-suggested numeric_trial is acceptable if the "
+            "dispatcher records its applied params."
         )
     return (
         f"W8 replay pressure: {replayable}/{open_accumulating} accumulating candidate(s) "

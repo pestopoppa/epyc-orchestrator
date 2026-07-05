@@ -3685,9 +3685,9 @@ def _build_action_availability(
     if _w8_candidate_generation_pressure(w8_replay_pressure_text):
         priority.append(
             "W8 candidate generation is the active strict blocker: prefer an "
-            "explicit single-param numeric_trial or one-flag structural_experiment. "
-            "Treat seed_batch, deep_eval, structural_prune, and empty-params "
-            "numeric_trial as deferrals unless the rationale explains a direct W8 unblock."
+            "explicit or Optuna-suggested numeric_trial that journals applied params, "
+            "or a one-flag structural_experiment. Treat seed_batch, deep_eval, and "
+            "structural_prune as deferrals unless a seq due action is forcing them."
         )
 
     blocked.update(_type_only_blacklisted_actions(blacklist))
@@ -3812,6 +3812,67 @@ def _w8_candidate_generation_pressure(text: str) -> bool:
             and "are replayable" in normalized
         )
     )
+
+
+def _w8_candidate_generation_deferral_reason(action: dict[str, Any]) -> str | None:
+    """Return why an action cannot create replayable W8 candidate evidence."""
+    action_type = str(action.get("type") or "")
+    if action_type == "numeric_trial":
+        # Empty params are acceptable at dispatch time: NumericSwarm fills Optuna
+        # params and actions.py journals the applied params before W8 recording.
+        return None
+    if action_type == "structural_experiment":
+        flags = action.get("flags")
+        if isinstance(flags, dict) and flags:
+            return None
+        return "structural_experiment_missing_flags"
+    return f"unreplayable_action={action_type or 'unknown'}"
+
+
+def _replace_w8_candidate_generation_deferral(
+    action: dict[str, Any],
+    blacklist: list[dict[str, Any]],
+    rationale: dict[str, Any] | None,
+    *,
+    trial_counter: int,
+    w8_replay_pressure_text: str,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Convert W8-blocked deferral actions into replayable candidate generation."""
+    if not _w8_candidate_generation_pressure(w8_replay_pressure_text):
+        return action, rationale
+    reason = _w8_candidate_generation_deferral_reason(action)
+    if reason is None:
+        return action, rationale
+    replacement, fallback_reason = _first_unblacklisted_numeric_trial_action(
+        blacklist,
+        trial_counter=trial_counter,
+    )
+    if replacement is None:
+        log.warning(
+            "W8 candidate generation pressure is active but %s cannot be replaced: %s",
+            reason,
+            fallback_reason,
+        )
+        return action, rationale
+    next_rationale = {
+        **(rationale or {}),
+        "w8_candidate_generation_replaced": True,
+        "w8_candidate_generation_original": dict(action),
+        "w8_candidate_generation_reason": reason,
+        "w8_candidate_generation_replacement": dict(replacement),
+        "falsifier": (
+            (rationale or {}).get("falsifier")
+            or "W8 candidate generation replacement fails to produce replayable seq evidence"
+        ),
+    }
+    log.warning(
+        "W8 candidate generation pressure replaced %s action %s with numeric_trial "
+        "fallback %s.",
+        reason,
+        json.dumps(action, default=str),
+        json.dumps(replacement, default=str),
+    )
+    return replacement, next_rationale
 
 
 def _build_exploration_block(
@@ -4937,6 +4998,7 @@ def _run_loop_inner(
         seq_baseline_draw_reference: dict[str, Any] | None = None
         seq_candidate_replay_context: dict[str, Any] | None = None
         seq_due_bypassed_planner = False
+        planner_evidence_text = ""
         action, rationale, seq_fresh_eval_context, seq_baseline_draw_reference, seq_candidate_replay_context = _maybe_force_seq_due_action(
             state=state,
             journal=journal,
@@ -5541,6 +5603,18 @@ def _run_loop_inner(
                     rationale=rationale,
                     trial_counter=trial_counter,
                     enabled=gate.use_sequential,
+                )
+            if (
+                seq_fresh_eval_context is None
+                and seq_baseline_draw_reference is None
+                and seq_candidate_replay_context is None
+            ):
+                action, rationale = _replace_w8_candidate_generation_deferral(
+                    action,
+                    blacklist,
+                    rationale,
+                    trial_counter=trial_counter,
+                    w8_replay_pressure_text=planner_evidence_text,
                 )
 
         if critic_repeat_skip is None:
