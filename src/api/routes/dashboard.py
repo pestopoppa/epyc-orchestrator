@@ -3224,6 +3224,7 @@ async def topology_activity(window_s: float = 600.0) -> JSONResponse:
             "n_completed": 0,
             "last_activity_age_s": None,
             "_tps_samples": [],
+            "_live_tps_samples": [],
             "_duration_samples": [],
             "expected": True,
             "expected_ports": [],
@@ -3246,6 +3247,7 @@ async def topology_activity(window_s: float = 600.0) -> JSONResponse:
             "n_completed": 0,
             "last_activity_age_s": None,
             "_tps_samples": [],
+            "_live_tps_samples": [],
             "_duration_samples": [],
             "expected_ports": [],
             "running_ports": [],
@@ -3288,6 +3290,13 @@ async def topology_activity(window_s: float = 600.0) -> JSONResponse:
                 if port_int in live_ports and port_int not in bucket["running_ports"]:
                     bucket["running_ports"].append(port_int)
                     bucket["running"] = True
+        # Live decode rate for an in-flight request (from chunk-timestamp span).
+        # An open tap request proves the role is actively serving, so mark it
+        # running even when its dispatched port didn't intersect the /proc scan.
+        tps_live = req.get("tps_live")
+        if isinstance(tps_live, (int, float)) and tps_live > 0 and req.get("status") == "running":
+            bucket["_live_tps_samples"].append(float(tps_live))
+            bucket["running"] = True
 
     # Augment from recent_completed_tasks (gives chat-XXX-tracked durations).
     log_path = _todays_progress_log()
@@ -3307,6 +3316,7 @@ async def topology_activity(window_s: float = 600.0) -> JSONResponse:
             "n_completed": 0,
             "last_activity_age_s": None,
             "_tps_samples": [],
+            "_live_tps_samples": [],
             "_duration_samples": [],
             "expected_ports": [],
             "running_ports": [],
@@ -3316,17 +3326,29 @@ async def topology_activity(window_s: float = 600.0) -> JSONResponse:
         dur = t.get("duration_s")
         if isinstance(dur, (int, float)) and dur > 0:
             bucket["_duration_samples"].append(float(dur))
+        # Per-task decode t/s (from progress-JSONL completion telemetry) so the
+        # completed-request per-role average has data even when the structured
+        # tap window held no `timings` event for the role.
+        tps = t.get("tps")
+        if isinstance(tps, (int, float)) and tps > 0:
+            bucket["_tps_samples"].append(float(tps))
 
     # Collapse internal sample lists to aggregates.
     out: dict[str, dict[str, Any]] = {}
     for role, b in per_role.items():
         tps_samples = b.pop("_tps_samples")
+        live_tps_samples = b.pop("_live_tps_samples", [])
         dur_samples = b.pop("_duration_samples")
         b["expected_ports"] = sorted(b.get("expected_ports") or [])
         b["running_ports"] = sorted(b.get("running_ports") or [])
         b["expected_instance_count"] = len(b["expected_ports"])
         b["running_instance_count"] = len(b["running_ports"])
         b["avg_tps_recent"] = (sum(tps_samples) / len(tps_samples)) if tps_samples else None
+        # Live in-flight decode rate (mean of running instances' estimates),
+        # kept distinct from avg_tps_recent (completed-request average) so the
+        # strip can show a real-time number mid-generation instead of blank.
+        b["live_tps"] = (sum(live_tps_samples) / len(live_tps_samples)) if live_tps_samples else None
+        b["live_tps_n"] = len(live_tps_samples)
         b["avg_duration_s"] = (sum(dur_samples) / len(dur_samples)) if dur_samples else None
         out[role] = b
     return JSONResponse(_stamp({"per_role": out, "window_s": window_s, "now": now}, "topology_activity", now=now))
@@ -4099,10 +4121,19 @@ async def task_stream(task_id: str, request: Request) -> StreamingResponse:
 
         idle_ticks = 0
         IDLE_GIVEUP = 60  # 60 ticks * 0.25s = 15s with no tap request before giving up
+        # Live-tap popup rows key by `tap_<request_id>` (no orchestrator task_id).
+        # Resolve those by request_id (reverse-grep recovers the full, growing
+        # response from anywhere in the multi-GB tap); chat-* ids keep resolving
+        # by their task_id field.
+        is_tap = task_id.startswith("tap_")
         while True:
             if await request.is_disconnected():
                 return
-            req = _find_structured_request_by_task_id(task_id)
+            req = (
+                _find_structured_request_by_id(task_id)
+                if is_tap
+                else _find_structured_request_by_task_id(task_id)
+            )
             if req is not None:
                 idle_ticks = 0
                 response = str(req.get("response") or "")
