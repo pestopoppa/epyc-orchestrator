@@ -117,7 +117,12 @@ def _assert_db_growth_within_bound(
 ) -> None:
     if max_db_growth < 0:
         return
-    current_routing_count = diagnose(db_path, faiss_path, reembedded_path).n_db_routing
+    current_routing_count = diagnose(
+        db_path,
+        faiss_path,
+        reembedded_path,
+        use_lock=False,
+    ).n_db_routing
     db_growth = current_routing_count - start_routing_count
     if db_growth > max_db_growth:
         raise SystemExit(
@@ -133,7 +138,20 @@ def diagnose(
     faiss_path: Path = DEFAULT_FAISS_PATH,
     reembedded_path: Path = DEFAULT_REEMBEDDED_PATH,
     id_map_path: Path = DEFAULT_ID_MAP_PATH,
+    *,
+    use_lock: bool = True,
+    lock_path: Path | None = None,
 ) -> HealthReport:
+    if use_lock:
+        with _exclusive_file_lock(lock_path or faiss_path.parent / ".episodic_faiss.lock"):
+            return diagnose(
+                db_path,
+                faiss_path,
+                reembedded_path,
+                id_map_path,
+                use_lock=False,
+            )
+
     # ── Count routing memories in live db ──
     if not db_path.exists():
         logger.warning("No episodic db at %s — store is empty, no repair needed", db_path)
