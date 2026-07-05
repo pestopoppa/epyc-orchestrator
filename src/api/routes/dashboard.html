@@ -1123,8 +1123,7 @@ function _computeTopologySig(topo) {
 }
 
 async function loadTopology() {
-    const r = await fetch(`/dashboard/api/topology?t=${Date.now()}`, { cache: 'no-store' });
-    applyTopologyPayload(await r.json());
+    applyTopologyPayload(await fetchJSON('/dashboard/api/topology'));
 }
 
 function applyTopologyPayload(topo) {
@@ -3475,14 +3474,23 @@ function renderInferenceTap(data) {
         ? (ageS != null ? `— ${ageS}s since last write` : '')
         : '— inactive';
     const sections = data.inference_sections || [];
-    if (!sections.length && !(data.current_prompt && data.current_prompt.trim())) {
+    // "current prompt" is only current if its tap file is actually recent —
+    // the prompt tap writer can go dormant for weeks (observed 45 days), and
+    // rendering its last write unlabeled made the whole panel read as stale.
+    const cur = data.current_prompt || '';
+    const promptAgeS = (data.current_prompt_mtime && data.now)
+        ? Math.max(0, data.now - data.current_prompt_mtime) : null;
+    const promptIsCurrent = promptAgeS != null && promptAgeS < 3600;
+    if (!sections.length && !(cur.trim() && promptIsCurrent)) {
         container.innerHTML = '<div style="color:var(--muted);font-size:11px">no inference activity in the tap file yet</div>';
         return;
     }
-    const cur = data.current_prompt || '';
-    const liveBlock = cur.trim() ? `
+    const promptAgeChip = promptAgeS != null
+        ? ` <span style="color:var(--dim);text-transform:none;letter-spacing:0">· ${formatShortDuration(promptAgeS)} ago</span>`
+        : '';
+    const liveBlock = (cur.trim() && promptIsCurrent) ? `
         <div style="margin-bottom:8px">
-            <div style="color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.05em">current prompt</div>
+            <div style="color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.05em">current prompt${promptAgeChip}</div>
             <div class="tap-content prompt-text" id="tap-current-prompt"></div>
         </div>` : '';
     // Preserve per-section expand state across re-renders. renderInferenceTap
@@ -3517,7 +3525,7 @@ function renderInferenceTap(data) {
     }).join('');
     container.innerHTML = liveBlock + sectionsHtml;
     // Render markdown into each block
-    if (cur.trim()) {
+    if (liveBlock) {
         renderMarkdownInto(document.getElementById('tap-current-prompt'), cur);
     }
     sections.forEach((s, i) => {
@@ -3876,8 +3884,7 @@ function realSuiteBadge(metric) {
 
 async function updateGepa() {
     try {
-        const r = await fetch('/dashboard/api/gepa');
-        const d = await r.json();
+        const d = await fetchJSON('/dashboard/api/gepa');
         const el = document.getElementById('gepa-lines');
         const st = d.state || {};
         let header = '';
@@ -3977,8 +3984,7 @@ async function updatePareto() {
         // the full historical cloud, and the journal is bounded (~1k rows).
         const url = '/dashboard/api/pareto?scope=' + encodeURIComponent(paretoScope)
             + (paretoScope === 'all_eras' ? '&max_dominated=5000' : '');
-        const r = await fetch(url);
-        const d = await r.json();
+        const d = await fetchJSON(url);
         const noteEl = document.getElementById('pareto-era-note');
         if (noteEl) {
             if (d.available && Array.isArray(d.eras) && d.eras.length) {
@@ -4624,8 +4630,7 @@ function renderOptimizationBrief(b) {
 
 async function updateOptimizationBrief() {
     try {
-        const r = await fetch('/dashboard/api/optimization_brief?t=' + Date.now(), { cache: 'no-store' });
-        renderOptimizationBrief(await r.json());
+        renderOptimizationBrief(await fetchJSON('/dashboard/api/optimization_brief'));
     } catch (err) {
         const el = document.getElementById('optimization-brief');
         if (el) el.innerHTML = `<div style="color:var(--bad)">brief fetch failed: ${escapeHTML(err && err.message ? err.message : String(err))}</div>`;
@@ -4737,8 +4742,7 @@ async function updateInsightGraph(focusOverride) {
         params.set('depth', '1');
         params.set('limit', '120');
         params.set('t', String(Date.now()));
-        const r = await fetch(`/dashboard/api/insight_graph?${params.toString()}`, { cache: 'no-store' });
-        const data = await r.json();
+        const data = await fetchJSON(`/dashboard/api/insight_graph?${params.toString()}`);
         renderInsightGraph(data);
     } catch (err) {
         const status = document.getElementById('insight-graph-status');
@@ -5385,8 +5389,7 @@ function _renderAutopilotPhase(d, ap) {
 async function updateProcessStatus() {
     const requestSeq = ++_processStatusFetchSeq;
     try {
-        const r = await fetch(`/dashboard/api/process_status?t=${Date.now()}`, { cache: 'no-store' });
-        const d = await r.json();
+        const d = await fetchJSON('/dashboard/api/process_status');
         if (requestSeq !== _processStatusFetchSeq) return;
         _latestProcessStatus = d;
         // File-backed panel badge: autopilot health (phase/log) from the
@@ -5627,8 +5630,7 @@ async function updateTopologyActivity(refreshSeq = ++_topologyActivityRefreshSeq
     }
     _topologyActivityFetchInFlight = true;
     try {
-        const r = await fetch(`/dashboard/api/topology_activity?window_s=${TOPOLOGY_ACTIVITY_WINDOW_S}&t=${Date.now()}`, { cache: 'no-store' });
-        const d = await r.json();
+        const d = await fetchJSON(`/dashboard/api/topology_activity?window_s=${TOPOLOGY_ACTIVITY_WINDOW_S}`);
         if (refreshSeq !== _topologyActivityRefreshSeq) return;
         _latestTopologyActivity = {
             perRole: d.per_role || {},
@@ -5649,8 +5651,7 @@ async function updateTopologyActivity(refreshSeq = ++_topologyActivityRefreshSeq
 
 async function updateBuildRev() {
     try {
-        const r = await fetch('/dashboard/api/version');
-        const v = await r.json();
+        const v = await fetchJSON('/dashboard/api/version');
         if (_buildRevLoaded === null) {
             _buildRevLoaded = v;
         }
@@ -5734,8 +5735,7 @@ function renderRepoReadiness(data) {
 
 async function updateRepoReadiness() {
     try {
-        const r = await fetch(`/dashboard/api/repo_readiness?t=${Date.now()}`, { cache: 'no-store' });
-        const data = await r.json();
+        const data = await fetchJSON('/dashboard/api/repo_readiness');
         renderRepoReadiness(data);
     } catch (err) {
         const status = document.getElementById('repo-readiness-status');
@@ -5778,8 +5778,7 @@ function startDashboard() {
     checkRenderLibs();
     async function updateAutopilotProgress() {
         try {
-            const r = await fetch(`/dashboard/api/autopilot_progress?t=${Date.now()}`, { cache: 'no-store' });
-            const d = await r.json();
+            const d = await fetchJSON('/dashboard/api/autopilot_progress');
             _latestAutopilotProgress = d;
             renderAutopilotRunStrip();
             if (_latestProcessStatus) {
@@ -5918,8 +5917,7 @@ async function updateContentionGate(refreshSeq = _regionLocksRefreshSeq) {
         const el = document.getElementById('contention-gate-compact');
         if (!el) return;
         try {
-            const r = await fetch(`/dashboard/api/contention?t=${Date.now()}`, { cache: 'no-store' });
-            const d = await r.json();
+            const d = await fetchJSON('/dashboard/api/contention');
             if (refreshSeq !== _regionLocksRefreshSeq) return;
             const ms = (d.matrix_status || 'unavailable').toUpperCase();
             const msColor = {
@@ -5986,10 +5984,7 @@ async function updateContentionGate(refreshSeq = _regionLocksRefreshSeq) {
     }
 async function updateRegionLocks(refreshSeq = _regionLocksRefreshSeq, regionLocks = null) {
         try {
-            const d = regionLocks || await (async () => {
-                const r = await fetch(`/dashboard/api/region_locks?t=${Date.now()}`, { cache: 'no-store' });
-                return r.json();
-            })();
+            const d = regionLocks || await fetchJSON('/dashboard/api/region_locks');
             if (!regionLocks && refreshSeq !== _regionLocksRefreshSeq) return;
             const status = document.getElementById('region-locks-status');
             const grid = document.getElementById('region-locks-grid');
@@ -6301,8 +6296,7 @@ async function updateRegionLocks(refreshSeq = _regionLocksRefreshSeq, regionLock
             status.style.color = 'var(--muted)';
         }
         try {
-            const r = await fetch(`/dashboard/api/region_locks?t=${Date.now()}`, { cache: 'no-store' });
-            const d = await r.json();
+            const d = await fetchJSON('/dashboard/api/region_locks');
             _lastRegionLocksPayload = d;
             renderRegionLocksBasicGrid(grid, d, 'basic matrix fallback; rich overlay still initializing');
             await updateRegionLocks(++_regionLocksRefreshSeq, d);
