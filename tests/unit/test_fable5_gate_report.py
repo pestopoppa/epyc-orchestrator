@@ -215,6 +215,8 @@ xmas_routing:
         xmas_table_path=table,
         xmas_ab_root=ab_root,
         a9_collection_manifest=a9_manifest,
+        a9_audit_target_ranker_summary_path=None,
+        a9_audit_target_direction_audit_path=None,
         include_tool_use_activation=False,
     )
 
@@ -1259,6 +1261,8 @@ def test_a9_section_marks_empty_manifest_attention(monkeypatch) -> None:
     section = report_mod.a9_collection_section(
         Path("/tmp/a9_manifest.json"),
         contract_summary_path=contract_summary,
+        audit_target_ranker_summary_path=None,
+        audit_target_direction_audit_path=None,
     )
 
     assert section.status == "attention"
@@ -1335,6 +1339,8 @@ def test_a9_section_surfaces_candidate_contract_decision(monkeypatch, tmp_path: 
         contract_summary_path=contract_summary,
         source_reward_diagnostic_summary_path=source_reward_summary,
         source_reward_ranker_summary_path=None,
+        audit_target_ranker_summary_path=None,
+        audit_target_direction_audit_path=None,
     )
     actions = report_mod.build_next_actions([section])
 
@@ -1454,6 +1460,8 @@ def test_a9_next_action_preregisters_source_reward_target_when_ranker_ready(
         source_reward_diagnostic_summary_path=source_reward_summary,
         source_reward_ranker_summary_path=source_ranker_summary,
         source_reward_target_contract_path=None,
+        audit_target_ranker_summary_path=None,
+        audit_target_direction_audit_path=None,
     )
     actions = report_mod.build_next_actions([section])
 
@@ -1551,6 +1559,8 @@ def test_a9_preregistered_source_reward_target_suppresses_next_action(
         source_reward_diagnostic_summary_path=source_reward_summary,
         source_reward_ranker_summary_path=source_ranker_summary,
         source_reward_target_contract_path=source_target_contract,
+        audit_target_ranker_summary_path=None,
+        audit_target_direction_audit_path=None,
     )
 
     assert "source-reward target contract is preregistered_offline_training_target" in (
@@ -1564,6 +1574,138 @@ def test_a9_preregistered_source_reward_target_suppresses_next_action(
         "preregistered_offline_training_target"
     )
     assert report_mod.build_next_actions([section]) == []
+
+
+def test_a9_audit_target_holdout_gap_surfaces_after_source_target_preregistered(
+    monkeypatch, tmp_path: Path
+) -> None:
+    contract_summary = tmp_path / "candidate_contract_summary.json"
+    source_reward_summary = tmp_path / "source_reward_diagnostic_summary.json"
+    source_ranker_summary = tmp_path / "source_reward_ranker_summary.json"
+    source_target_contract = tmp_path / "source_reward_target_contract.json"
+    audit_target_ranker = tmp_path / "audit_target_ranker_summary.json"
+    audit_target_direction = tmp_path / "audit_target_direction_audit.json"
+    contract_summary.write_text(
+        """
+{
+  "coverage": {"pair_rows": 32, "cross_action_pair_rows": 32},
+  "decision": {"status": "insufficient_contrast", "runtime_gate_change_allowed": false}
+}
+""",
+        encoding="utf-8",
+    )
+    source_reward_summary.write_text(
+        """
+{
+  "coverage": {"pair_rows": 180, "cross_action_pair_rows": 180},
+  "decision": {"status": "contract_ready", "runtime_gate_change_allowed": false},
+  "diagnostic": {"score_source": "source_q_reward_passthrough", "independent_oracle": false}
+}
+""",
+        encoding="utf-8",
+    )
+    source_ranker_summary.write_text(
+        """
+{
+  "input": {"pair_rows": 180, "cross_action_pair_rows": 180},
+  "aggregate": {"decision": {"status": "pairwise_ranker_signal", "runtime_gate_change_allowed": false}},
+  "cross_validation": {"decision": {"status": "pairwise_ranker_signal", "runtime_gate_change_allowed": false}},
+  "holdout_decision": {"status": "holdout_signal_consistent", "runtime_gate_change_allowed": false}
+}
+""",
+        encoding="utf-8",
+    )
+    source_target_contract.write_text(
+        """
+{
+  "schema_version": "offline_reward_source_reward_pairwise_target_contract.v1",
+  "status": "preregistered_offline_training_target",
+  "target": {"runtime_gate_change_allowed": false}
+}
+""",
+        encoding="utf-8",
+    )
+    audit_target_ranker.write_text(
+        """
+{
+  "input": {"pair_rows": 6192, "cross_action_pair_rows": 4296},
+  "aggregate": {"decision": {"status": "pairwise_ranker_signal", "runtime_gate_change_allowed": false}},
+  "holdout_decision": {
+    "status": "mixed_holdout_signal",
+    "eligible_holdouts": 16,
+    "passing_holdouts": 13,
+    "blockers": [
+      "source_family:seeding_eval:insufficient_pairwise_signal",
+      "suite:general:insufficient_pairwise_signal"
+    ],
+    "runtime_gate_change_allowed": false
+  }
+}
+""",
+        encoding="utf-8",
+    )
+    audit_target_direction.write_text(
+        """
+{
+  "decision": {
+    "status": "preference_coverage_gaps_found",
+    "runtime_gate_change_allowed": false
+  },
+  "collection_targets": [
+    {"stratum_field": "source_family", "stratum_value": "seeding_eval"}
+  ]
+}
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        report_mod,
+        "build_a9_collection_status",
+        lambda path: {
+            "ready": False,
+            "status": "no_runnable_batches",
+            "manifest_path": "/tmp/a9_manifest.json",
+            "manifest_schema_version": "offline_reward_pairwise_collection_window.v1",
+            "source_plan_decision": {"status": "expansion_plan_ready"},
+            "batch_count": 0,
+            "post_collection_step_count": 7,
+            "autopilot_guard": {"refusal_exit_code": 75},
+            "blockers": [],
+            "warnings": [],
+        },
+    )
+
+    section = report_mod.a9_collection_section(
+        Path("/tmp/a9_manifest.json"),
+        contract_summary_path=contract_summary,
+        source_reward_diagnostic_summary_path=source_reward_summary,
+        source_reward_ranker_summary_path=source_ranker_summary,
+        source_reward_target_contract_path=source_target_contract,
+        audit_target_ranker_summary_path=audit_target_ranker,
+        audit_target_direction_audit_path=audit_target_direction,
+    )
+    actions = report_mod.build_next_actions([section])
+
+    assert section.status == "ready"
+    assert "audit-target ranker holdout is mixed_holdout_signal (13/16 passing)" in (
+        section.summary
+    )
+    assert section.details["audit_target_ranker_holdout_decision"]["status"] == (
+        "mixed_holdout_signal"
+    )
+    assert section.details["audit_target_collection_targets"] == [
+        {"stratum_field": "source_family", "stratum_value": "seeding_eval"}
+    ]
+    assert [action["key"] for action in actions] == [
+        "collect_a9_audit_target_pairwise_preferences"
+    ]
+    action = actions[0]
+    assert action["priority"] == "P1"
+    assert action["runtime_gate_change_allowed"] is False
+    assert "source_family:seeding_eval:insufficient_pairwise_signal" in action["reason"]
+    assert action["audit_target_collection_targets"] == [
+        {"stratum_field": "source_family", "stratum_value": "seeding_eval"}
+    ]
 
 
 def test_a9_next_action_switches_to_oracle_design_when_no_batches() -> None:

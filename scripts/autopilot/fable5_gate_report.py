@@ -90,6 +90,20 @@ DEFAULT_A9_SOURCE_REWARD_TARGET_CONTRACT = (
     / "offline_reward_oracle_token_coverage_final_labels_20260621"
     / "offline_reward_source_reward_pairwise_target_contract.json"
 )
+DEFAULT_A9_AUDIT_TARGET_RANKER_SUMMARY = (
+    ORCH_ROOT
+    / "orchestration"
+    / "reports"
+    / "offline_reward_oracle_token_coverage_final_labels_20260621"
+    / "offline_reward_pairwise_ranker_score_ordered_audit_target_expanded_summary.json"
+)
+DEFAULT_A9_AUDIT_TARGET_DIRECTION_AUDIT = (
+    ORCH_ROOT
+    / "orchestration"
+    / "reports"
+    / "offline_reward_oracle_token_coverage_final_labels_20260621"
+    / "offline_reward_pairwise_audit_target_direction_audit.json"
+)
 DEFAULT_DS_E1_KV_PORT = 8194
 DEFAULT_XMAS_HELDOUT_PROMPTS_ARG = (
     "benchmarks/results/runs/xmas_live_ab/20260618-heldout-resilient/prompts.jsonl"
@@ -929,6 +943,12 @@ def a9_collection_section(
     source_reward_target_contract_path: Path | None = (
         DEFAULT_A9_SOURCE_REWARD_TARGET_CONTRACT
     ),
+    audit_target_ranker_summary_path: Path | None = (
+        DEFAULT_A9_AUDIT_TARGET_RANKER_SUMMARY
+    ),
+    audit_target_direction_audit_path: Path | None = (
+        DEFAULT_A9_AUDIT_TARGET_DIRECTION_AUDIT
+    ),
 ) -> GateSection:
     """Surface the guarded A9 pairwise source-acquisition window."""
     status = build_a9_collection_status(manifest_path)
@@ -1024,6 +1044,52 @@ def a9_collection_section(
         source_reward_target_contract.get("status")
         == "preregistered_offline_training_target"
     )
+    audit_target_ranker_summary: dict[str, Any] = {}
+    if (
+        audit_target_ranker_summary_path is not None
+        and audit_target_ranker_summary_path.exists()
+    ):
+        try:
+            audit_target_ranker_summary = _load_json_object(
+                audit_target_ranker_summary_path
+            )
+        except Exception as exc:
+            audit_target_ranker_summary = {"load_error": str(exc)}
+    audit_target_ranker_input = audit_target_ranker_summary.get("input")
+    if not isinstance(audit_target_ranker_input, dict):
+        audit_target_ranker_input = {}
+    audit_target_ranker_aggregate = audit_target_ranker_summary.get("aggregate")
+    if not isinstance(audit_target_ranker_aggregate, dict):
+        audit_target_ranker_aggregate = {}
+    audit_target_ranker_aggregate_decision = audit_target_ranker_aggregate.get(
+        "decision"
+    )
+    if not isinstance(audit_target_ranker_aggregate_decision, dict):
+        audit_target_ranker_aggregate_decision = {}
+    audit_target_ranker_holdout_decision = audit_target_ranker_summary.get(
+        "holdout_decision"
+    )
+    if not isinstance(audit_target_ranker_holdout_decision, dict):
+        audit_target_ranker_holdout_decision = {}
+    audit_target_direction_audit: dict[str, Any] = {}
+    if (
+        audit_target_direction_audit_path is not None
+        and audit_target_direction_audit_path.exists()
+    ):
+        try:
+            audit_target_direction_audit = _load_json_object(
+                audit_target_direction_audit_path
+            )
+        except Exception as exc:
+            audit_target_direction_audit = {"load_error": str(exc)}
+    audit_target_direction_decision = audit_target_direction_audit.get("decision")
+    if not isinstance(audit_target_direction_decision, dict):
+        audit_target_direction_decision = {}
+    audit_target_collection_targets = audit_target_direction_audit.get(
+        "collection_targets"
+    )
+    if not isinstance(audit_target_collection_targets, list):
+        audit_target_collection_targets = []
     candidate_contract_exhausted = (
         contract_decision.get("status") == "insufficient_contrast"
     )
@@ -1059,6 +1125,16 @@ def a9_collection_section(
                 "; source-reward target contract is "
                 f"{source_reward_target_contract.get('status', 'unknown')}"
             )
+        if audit_target_ranker_holdout_decision:
+            summary_tail += (
+                "; audit-target ranker holdout is "
+                f"{audit_target_ranker_holdout_decision.get('status', 'unknown')}"
+            )
+            if audit_target_ranker_holdout_decision.get("eligible_holdouts"):
+                summary_tail += (
+                    f" ({audit_target_ranker_holdout_decision.get('passing_holdouts', 0)}/"
+                    f"{audit_target_ranker_holdout_decision.get('eligible_holdouts')} passing)"
+                )
     return GateSection(
         key="a9_pairwise_collection",
         status=section_status,
@@ -1117,6 +1193,27 @@ def a9_collection_section(
             "source_reward_target_preregistered": (
                 source_reward_target_preregistered
             ),
+            "audit_target_ranker_summary_path": (
+                str(audit_target_ranker_summary_path)
+                if audit_target_ranker_summary_path is not None
+                else None
+            ),
+            "audit_target_ranker_input": audit_target_ranker_input or None,
+            "audit_target_ranker_aggregate_decision": (
+                audit_target_ranker_aggregate_decision or None
+            ),
+            "audit_target_ranker_holdout_decision": (
+                audit_target_ranker_holdout_decision or None
+            ),
+            "audit_target_direction_audit_path": (
+                str(audit_target_direction_audit_path)
+                if audit_target_direction_audit_path is not None
+                else None
+            ),
+            "audit_target_direction_decision": (
+                audit_target_direction_decision or None
+            ),
+            "audit_target_collection_targets": audit_target_collection_targets,
             "autopilot_guard": status.get("autopilot_guard"),
             "blockers": blockers,
             "warnings": list(status.get("warnings") or []),
@@ -1297,6 +1394,12 @@ def build_fable5_gate_report(
     xmas_table_path: Path = DEFAULT_XMAS_TABLE,
     xmas_ab_root: Path = DEFAULT_XMAS_AB_ROOT,
     a9_collection_manifest: Path = DEFAULT_A9_COLLECTION_MANIFEST,
+    a9_audit_target_ranker_summary_path: Path | None = (
+        DEFAULT_A9_AUDIT_TARGET_RANKER_SUMMARY
+    ),
+    a9_audit_target_direction_audit_path: Path | None = (
+        DEFAULT_A9_AUDIT_TARGET_DIRECTION_AUDIT
+    ),
     include_tool_use_activation: bool = True,
     include_eval_task_coverage: bool = True,
     eval_task_coverage_report: dict[str, Any] | None = None,
@@ -1314,7 +1417,11 @@ def build_fable5_gate_report(
         ),
         w8_trajectory_section(build_w8_trajectory_report(journal_rows)),
         ds_e1_section(ds_e1_packet),
-        a9_collection_section(a9_collection_manifest),
+        a9_collection_section(
+            a9_collection_manifest,
+            audit_target_ranker_summary_path=a9_audit_target_ranker_summary_path,
+            audit_target_direction_audit_path=a9_audit_target_direction_audit_path,
+        ),
         xmas_section(
             config_path=config_path,
             candidate_table_path=xmas_table_path,
@@ -2250,6 +2357,65 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
                     "follow_up": (
                         "cd /mnt/raid0/llm/epyc-orchestrator && "
                         "uv run python scripts/graph_router/offline_reward_pairwise_collection_status.py"
+                    ),
+                }
+            )
+        audit_target_holdout_decision = (
+            a9.details.get("audit_target_ranker_holdout_decision") or {}
+        )
+        audit_target_direction_decision = (
+            a9.details.get("audit_target_direction_decision") or {}
+        )
+        if audit_target_holdout_decision.get("status") == "mixed_holdout_signal":
+            actions.append(
+                {
+                    "key": "collect_a9_audit_target_pairwise_preferences",
+                    "priority": "P1",
+                    "status": "active",
+                    "reason": (
+                        "The source-q-reward A9 training target is preregistered "
+                        "offline-only, but the broader audit-target-expanded "
+                        "pairwise ranker still has mixed independent-holdout "
+                        "signal. Remaining blockers are "
+                        f"{', '.join(audit_target_holdout_decision.get('blockers') or [])}."
+                    ),
+                    "requires": (
+                        "collect non-overlapping cross-action preference rows for "
+                        "the current audit-target direction gaps, then rebuild the "
+                        "score-ordered pairwise contract and rerun independent "
+                        "holdouts; do not retune the absolute verifier family"
+                    ),
+                    "blocked_by": [],
+                    "runtime_gate_change_allowed": False,
+                    "audit_target_ranker_summary_path": a9.details.get(
+                        "audit_target_ranker_summary_path"
+                    ),
+                    "audit_target_ranker_holdout_decision": (
+                        audit_target_holdout_decision or None
+                    ),
+                    "audit_target_ranker_input": a9.details.get(
+                        "audit_target_ranker_input"
+                    ),
+                    "audit_target_direction_audit_path": a9.details.get(
+                        "audit_target_direction_audit_path"
+                    ),
+                    "audit_target_direction_decision": (
+                        audit_target_direction_decision or None
+                    ),
+                    "audit_target_collection_targets": a9.details.get(
+                        "audit_target_collection_targets"
+                    ),
+                    "command": (
+                        "Use offline_reward_pairwise_audit_target_direction_audit.{json,md} "
+                        "as the current collection target list; after collection, "
+                        "rerun plan_offline_reward_pairwise_holdout_expansion.py, "
+                        "build_offline_reward_pairwise_contract.py, and "
+                        "evaluate_offline_reward_pairwise_ranker.py against the "
+                        "audit-target-expanded contract."
+                    ),
+                    "follow_up": (
+                        "uv run python scripts/autopilot/fable5_gate_report.py "
+                        "--json --strict --require-current-code"
                     ),
                 }
             )

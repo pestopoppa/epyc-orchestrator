@@ -1,0 +1,1077 @@
+{
+  "collection_targets": [
+    {
+      "action_pair": "architect_general>frontdoor",
+      "current_direction_balance": 0.0,
+      "current_rows": 6,
+      "needs_direction": [
+        "prefer other-side of architect_general>frontdoor"
+      ],
+      "prefer_hi": 0,
+      "prefer_lo": 6,
+      "stratum_field": "source_family",
+      "stratum_value": "orchestrator_live_seed",
+      "suggested_min_rows": 20
+    },
+    {
+      "action_pair": "architect_general>coder_escalation",
+      "current_direction_balance": 0.0,
+      "current_rows": 2,
+      "needs_direction": [
+        "prefer other-side of architect_general>coder_escalation"
+      ],
+      "prefer_hi": 0,
+      "prefer_lo": 2,
+      "stratum_field": "source_family",
+      "stratum_value": "seeding_eval",
+      "suggested_min_rows": 20
+    },
+    {
+      "action_pair": "architect_general>frontdoor",
+      "current_direction_balance": 0.0,
+      "current_rows": 2,
+      "needs_direction": [
+        "prefer other-side of architect_general>frontdoor"
+      ],
+      "prefer_hi": 0,
+      "prefer_lo": 2,
+      "stratum_field": "source_family",
+      "stratum_value": "seeding_eval",
+      "suggested_min_rows": 20
+    },
+    {
+      "action_pair": "architect_general>coder_escalation",
+      "current_direction_balance": 0.0,
+      "current_rows": 1,
+      "needs_direction": [
+        "prefer architect_general"
+      ],
+      "prefer_hi": 1,
+      "prefer_lo": 0,
+      "stratum_field": "suite",
+      "stratum_value": "general",
+      "suggested_min_rows": 20
+    },
+    {
+      "action_pair": "architect_general>frontdoor",
+      "current_direction_balance": 0.056,
+      "current_rows": 910,
+      "needs_direction": [
+        "balance both directions"
+      ],
+      "prefer_hi": 859,
+      "prefer_lo": 51,
+      "stratum_field": "suite",
+      "stratum_value": "hotpotqa",
+      "suggested_min_rows": 20
+    },
+    {
+      "action_pair": "architect_general>coder_escalation",
+      "current_direction_balance": 0.1667,
+      "current_rows": 6,
+      "needs_direction": [
+        "balance both directions"
+      ],
+      "prefer_hi": 1,
+      "prefer_lo": 5,
+      "stratum_field": "suite",
+      "stratum_value": "instruction_precision",
+      "suggested_min_rows": 20
+    },
+    {
+      "action_pair": "architect_general>frontdoor",
+      "current_direction_balance": 0.0,
+      "current_rows": 3,
+      "needs_direction": [
+        "prefer other-side of architect_general>frontdoor"
+      ],
+      "prefer_hi": 0,
+      "prefer_lo": 3,
+      "stratum_field": "suite",
+      "stratum_value": "instruction_precision",
+      "suggested_min_rows": 20
+    },
+    {
+      "action_pair": "architect_general>coder_escalation",
+      "current_direction_balance": 0.0,
+      "current_rows": 2,
+      "needs_direction": [
+        "prefer other-side of architect_general>coder_escalation"
+      ],
+      "prefer_hi": 0,
+      "prefer_lo": 2,
+      "stratum_field": "suite",
+      "stratum_value": "simpleqa",
+      "suggested_min_rows": 20
+    },
+    {
+      "action_pair": "architect_general>coder_escalation",
+      "current_direction_balance": 0.1667,
+      "current_rows": 6,
+      "needs_direction": [
+        "balance both directions"
+      ],
+      "prefer_hi": 1,
+      "prefer_lo": 5,
+      "stratum_field": "suite",
+      "stratum_value": "thinking",
+      "suggested_min_rows": 20
+    }
+  ],
+  "decision": {
+    "recommended_next": "collect non-overlapping cross-action preference rows for the listed collection_targets (balance both directions); re-run evaluate_offline_reward_pairwise_ranker.py holdouts after collection. Do NOT retune the absolute MLP/calibrator/pairwise family.",
+    "runtime_gate_change_allowed": false,
+    "status": "preference_coverage_gaps_found",
+    "weak_strata": [
+      "source_family:orchestrator_live_seed",
+      "source_family:seeding_eval",
+      "suite:agentic",
+      "suite:general",
+      "suite:hotpotqa",
+      "suite:instruction_precision",
+      "suite:simpleqa",
+      "suite:thinking"
+    ]
+  },
+  "input": {
+    "action_pair_counts": {
+      "architect_general>architect_general": 735,
+      "architect_general>coder_escalation": 15,
+      "architect_general>frontdoor": 4237,
+      "coder_escalation>coder_escalation": 35,
+      "coder_escalation>frontdoor": 44,
+      "frontdoor>frontdoor": 1126
+    },
+    "cross_action_pair_rows": 4296,
+    "group_count": 1937,
+    "pair_rows": 6192,
+    "same_action_pair_rows": 1896,
+    "source_family_pair_counts": {
+      "orchestrator_live_seed": 101,
+      "seeding_eval": 156,
+      "three_way_eval": 5935
+    },
+    "suite_pair_counts": {
+      "agentic": 10,
+      "coder": 543,
+      "debugbench": 656,
+      "general": 535,
+      "gpqa": 955,
+      "hotpotqa": 1106,
+      "instruction_precision": 50,
+      "livecodebench": 616,
+      "long_context": 197,
+      "math": 23,
+      "mode_advantage": 134,
+      "mode_advantage_hard": 501,
+      "simpleqa": 456,
+      "thinking": 410
+    }
+  },
+  "overall_action_pair_directions": {
+    "architect_general>architect_general": {
+      "cross_action": false,
+      "direction_balance": 0.0,
+      "lo_action": "architect_general",
+      "one_sided": false,
+      "prefer_hi": 0,
+      "prefer_lo": 735,
+      "rows": 735
+    },
+    "architect_general>coder_escalation": {
+      "cross_action": true,
+      "direction_balance": 0.2,
+      "lo_action": "architect_general",
+      "one_sided": false,
+      "prefer_hi": 3,
+      "prefer_lo": 12,
+      "rows": 15
+    },
+    "architect_general>frontdoor": {
+      "cross_action": true,
+      "direction_balance": 0.3566,
+      "lo_action": "architect_general",
+      "one_sided": false,
+      "prefer_hi": 2726,
+      "prefer_lo": 1511,
+      "rows": 4237
+    },
+    "coder_escalation>coder_escalation": {
+      "cross_action": false,
+      "direction_balance": 0.0,
+      "lo_action": "coder_escalation",
+      "one_sided": false,
+      "prefer_hi": 0,
+      "prefer_lo": 35,
+      "rows": 35
+    },
+    "coder_escalation>frontdoor": {
+      "cross_action": true,
+      "direction_balance": 0.4318,
+      "lo_action": "coder_escalation",
+      "one_sided": false,
+      "prefer_hi": 19,
+      "prefer_lo": 25,
+      "rows": 44
+    },
+    "frontdoor>frontdoor": {
+      "cross_action": false,
+      "direction_balance": 0.0,
+      "lo_action": "frontdoor",
+      "one_sided": false,
+      "prefer_hi": 0,
+      "prefer_lo": 1126,
+      "rows": 1126
+    }
+  },
+  "schema_version": "offline_reward_pairwise_preference_direction_audit.v1",
+  "strata": {
+    "source_family": {
+      "orchestrator_live_seed": {
+        "action_pair_directions": {
+          "architect_general>coder_escalation": {
+            "cross_action": true,
+            "direction_balance": 0.2308,
+            "lo_action": "architect_general",
+            "one_sided": false,
+            "prefer_hi": 3,
+            "prefer_lo": 10,
+            "rows": 13
+          },
+          "architect_general>frontdoor": {
+            "cross_action": true,
+            "direction_balance": 0.0,
+            "lo_action": "architect_general",
+            "one_sided": true,
+            "prefer_hi": 0,
+            "prefer_lo": 6,
+            "rows": 6
+          },
+          "coder_escalation>coder_escalation": {
+            "cross_action": false,
+            "direction_balance": 0.0,
+            "lo_action": "coder_escalation",
+            "one_sided": false,
+            "prefer_hi": 0,
+            "prefer_lo": 35,
+            "rows": 35
+          },
+          "coder_escalation>frontdoor": {
+            "cross_action": true,
+            "direction_balance": 0.4318,
+            "lo_action": "coder_escalation",
+            "one_sided": false,
+            "prefer_hi": 19,
+            "prefer_lo": 25,
+            "rows": 44
+          },
+          "frontdoor>frontdoor": {
+            "cross_action": false,
+            "direction_balance": 0.0,
+            "lo_action": "frontdoor",
+            "one_sided": false,
+            "prefer_hi": 0,
+            "prefer_lo": 3,
+            "rows": 3
+          }
+        },
+        "cross_action_rows": 63,
+        "distinct_action_pairs": 3,
+        "one_sided_cross_action_pairs": [
+          "architect_general>frontdoor"
+        ],
+        "rows": 101,
+        "same_action_rows": 38,
+        "thin_cross_action_pairs": [
+          "architect_general>frontdoor"
+        ],
+        "untrained_in_complement_pairs": [
+          "architect_general>coder_escalation",
+          "coder_escalation>frontdoor"
+        ],
+        "weak_reasons": [
+          "one_sided_directions"
+        ]
+      },
+      "seeding_eval": {
+        "action_pair_directions": {
+          "architect_general>architect_general": {
+            "cross_action": false,
+            "direction_balance": 0.0,
+            "lo_action": "architect_general",
+            "one_sided": false,
+            "prefer_hi": 0,
+            "prefer_lo": 1,
+            "rows": 1
+          },
+          "architect_general>coder_escalation": {
+            "cross_action": true,
+            "direction_balance": 0.0,
+            "lo_action": "architect_general",
+            "one_sided": true,
+            "prefer_hi": 0,
+            "prefer_lo": 2,
+            "rows": 2
+          },
+          "architect_general>frontdoor": {
+            "cross_action": true,
+            "direction_balance": 0.0,
+            "lo_action": "architect_general",
+            "one_sided": true,
+            "prefer_hi": 0,
+            "prefer_lo": 2,
+            "rows": 2
+          },
+          "frontdoor>frontdoor": {
+            "cross_action": false,
+            "direction_balance": 0.0,
+            "lo_action": "frontdoor",
+            "one_sided": false,
+            "prefer_hi": 0,
+            "prefer_lo": 151,
+            "rows": 151
+          }
+        },
+        "cross_action_rows": 4,
+        "distinct_action_pairs": 2,
+        "one_sided_cross_action_pairs": [
+          "architect_general>coder_escalation",
+          "architect_general>frontdoor"
+        ],
+        "rows": 156,
+        "same_action_rows": 152,
+        "thin_cross_action_pairs": [
+          "architect_general>coder_escalation",
+          "architect_general>frontdoor"
+        ],
+        "untrained_in_complement_pairs": [],
+        "weak_reasons": [
+          "one_sided_directions"
+        ]
+      },
+      "three_way_eval": {
+        "action_pair_directions": {
+          "architect_general>architect_general": {
+            "cross_action": false,
+            "direction_balance": 0.0,
+            "lo_action": "architect_general",
+            "one_sided": false,
+            "prefer_hi": 0,
+            "prefer_lo": 734,
+            "rows": 734
+          },
+          "architect_general>frontdoor": {
+            "cross_action": true,
+            "direction_balance": 0.3554,
+            "lo_action": "architect_general",
+            "one_sided": false,
+            "prefer_hi": 2726,
+            "prefer_lo": 1503,
+            "rows": 4229
+          },
+          "frontdoor>frontdoor": {
+            "cross_action": false,
+            "direction_balance": 0.0,
+            "lo_action": "frontdoor",
+            "one_sided": false,
+            "prefer_hi": 0,
+            "prefer_lo": 972,
+            "rows": 972
+          }
+        },
+        "cross_action_rows": 4229,
+        "distinct_action_pairs": 1,
+        "one_sided_cross_action_pairs": [],
+        "rows": 5935,
+        "same_action_rows": 1706,
+        "thin_cross_action_pairs": [],
+        "untrained_in_complement_pairs": [
+          "architect_general>frontdoor"
+        ],
+        "weak_reasons": []
+      }
+    },
+    "suite": {
+      "agentic": {
+        "action_pair_directions": {
+          "architect_general>architect_general": {
+            "cross_action": false,
+            "direction_balance": 0.0,
+            "lo_action": "architect_general",
+            "one_sided": false,
+            "prefer_hi": 0,
+            "prefer_lo": 1,
+            "rows": 1
+          },
+          "architect_general>frontdoor": {
+            "cross_action": true,
+            "direction_balance": 0.25,
+            "lo_action": "architect_general",
+            "one_sided": false,
+            "prefer_hi": 2,
+            "prefer_lo": 6,
+            "rows": 8
+          },
+          "frontdoor>frontdoor": {
+            "cross_action": false,
+            "direction_balance": 0.0,
+            "lo_action": "frontdoor",
+            "one_sided": false,
+            "prefer_hi": 0,
+            "prefer_lo": 1,
+            "rows": 1
+          }
+        },
+        "cross_action_rows": 8,
+        "distinct_action_pairs": 1,
+        "one_sided_cross_action_pairs": [],
+        "rows": 10,
+        "same_action_rows": 2,
+        "thin_cross_action_pairs": [],
+        "untrained_in_complement_pairs": [],
+        "weak_reasons": [
+          "thin_stratum"
+        ]
+      },
+      "coder": {
+        "action_pair_directions": {
+          "architect_general>architect_general": {
+            "cross_action": false,
+            "direction_balance": 0.0,
+            "lo_action": "architect_general",
+            "one_sided": false,
+            "prefer_hi": 0,
+            "prefer_lo": 61,
+            "rows": 61
+          },
+          "architect_general>frontdoor": {
+            "cross_action": true,
+            "direction_balance": 0.4824,
+            "lo_action": "architect_general",
+            "one_sided": false,
+            "prefer_hi": 178,
+            "prefer_lo": 191,
+            "rows": 369
+          },
+          "frontdoor>frontdoor": {
+            "cross_action": false,
+            "direction_balance": 0.0,
+            "lo_action": "frontdoor",
+            "one_sided": false,
+            "prefer_hi": 0,
+            "prefer_lo": 113,
+            "rows": 113
+          }
+        },
+        "cross_action_rows": 369,
+        "distinct_action_pairs": 1,
+        "one_sided_cross_action_pairs": [],
+        "rows": 543,
+        "same_action_rows": 174,
+        "thin_cross_action_pairs": [],
+        "untrained_in_complement_pairs": [],
+        "weak_reasons": []
+      },
+      "debugbench": {
+        "action_pair_directions": {
+          "architect_general>architect_general": {
+            "cross_action": false,
+            "direction_balance": 0.0,
+            "lo_action": "architect_general",
+            "one_sided": false,
+            "prefer_hi": 0,
+            "prefer_lo": 77,
+            "rows": 77
+          },
+          "architect_general>frontdoor": {
+            "cross_action": true,
+            "direction_balance": 0.438,
+            "lo_action": "architect_general",
+            "one_sided": false,
+            "prefer_hi": 180,
+            "prefer_lo": 231,
+            "rows": 411
+          },
+          "frontdoor>frontdoor": {
+            "cross_action": false,
+            "direction_balance": 0.0,
+            "lo_action": "frontdoor",
+            "one_sided": false,
+            "prefer_hi": 0,
+            "prefer_lo": 168,
+            "rows": 168
+          }
+        },
+        "cross_action_rows": 411,
+        "distinct_action_pairs": 1,
+        "one_sided_cross_action_pairs": [],
+        "rows": 656,
+        "same_action_rows": 245,
+        "thin_cross_action_pairs": [],
+        "untrained_in_complement_pairs": [],
+        "weak_reasons": []
+      },
+      "general": {
+        "action_pair_directions": {
+          "architect_general>architect_general": {
+            "cross_action": false,
+            "direction_balance": 0.0,
+            "lo_action": "architect_general",
+            "one_sided": false,
+            "prefer_hi": 0,
+            "prefer_lo": 83,
+            "rows": 83
+          },
+          "architect_general>coder_escalation": {
+            "cross_action": true,
+            "direction_balance": 0.0,
+            "lo_action": "architect_general",
+            "one_sided": true,
+            "prefer_hi": 1,
+            "prefer_lo": 0,
+            "rows": 1
+          },
+          "architect_general>frontdoor": {
+            "cross_action": true,
+            "direction_balance": 0.4794,
+            "lo_action": "architect_general",
+            "one_sided": false,
+            "prefer_hi": 163,
+            "prefer_lo": 177,
+            "rows": 340
+          },
+          "coder_escalation>coder_escalation": {
+            "cross_action": false,
+            "direction_balance": 0.0,
+            "lo_action": "coder_escalation",
+            "one_sided": false,
+            "prefer_hi": 0,
+            "prefer_lo": 7,
+            "rows": 7
+          },
+          "coder_escalation>frontdoor": {
+            "cross_action": true,
+            "direction_balance": 0.4444,
+            "lo_action": "coder_escalation",
+            "one_sided": false,
+            "prefer_hi": 4,
+            "prefer_lo": 5,
+            "rows": 9
+          },
+          "frontdoor>frontdoor": {
+            "cross_action": false,
+            "direction_balance": 0.0,
+            "lo_action": "frontdoor",
+            "one_sided": false,
+            "prefer_hi": 0,
+            "prefer_lo": 95,
+            "rows": 95
+          }
+        },
+        "cross_action_rows": 350,
+        "distinct_action_pairs": 3,
+        "one_sided_cross_action_pairs": [
+          "architect_general>coder_escalation"
+        ],
+        "rows": 535,
+        "same_action_rows": 185,
+        "thin_cross_action_pairs": [
+          "architect_general>coder_escalation"
+        ],
+        "untrained_in_complement_pairs": [],
+        "weak_reasons": [
+          "one_sided_directions"
+        ]
+      },
+      "gpqa": {
+        "action_pair_directions": {
+          "architect_general>architect_general": {
+            "cross_action": false,
+            "direction_balance": 0.0,
+            "lo_action": "architect_general",
+            "one_sided": false,
+            "prefer_hi": 0,
+            "prefer_lo": 141,
+            "rows": 141
+          },
+          "architect_general>frontdoor": {
+            "cross_action": true,
+            "direction_balance": 0.3777,
+            "lo_action": "architect_general",
+            "one_sided": false,
+            "prefer_hi": 402,
+            "prefer_lo": 244,
+            "rows": 646
+          },
+          "frontdoor>frontdoor": {
+            "cross_action": false,
+            "direction_balance": 0.0,
+            "lo_action": "frontdoor",
+            "one_sided": false,
+            "prefer_hi": 0,
+            "prefer_lo": 168,
+            "rows": 168
+          }
+        },
+        "cross_action_rows": 646,
+        "distinct_action_pairs": 1,
+        "one_sided_cross_action_pairs": [],
+        "rows": 955,
+        "same_action_rows": 309,
+        "thin_cross_action_pairs": [],
+        "untrained_in_complement_pairs": [],
+        "weak_reasons": []
+      },
+      "hotpotqa": {
+        "action_pair_directions": {
+          "architect_general>architect_general": {
+            "cross_action": false,
+            "direction_balance": 0.0,
+            "lo_action": "architect_general",
+            "one_sided": false,
+            "prefer_hi": 0,
+            "prefer_lo": 94,
+            "rows": 94
+          },
+          "architect_general>frontdoor": {
+            "cross_action": true,
+            "direction_balance": 0.056,
+            "lo_action": "architect_general",
+            "one_sided": false,
+            "prefer_hi": 859,
+            "prefer_lo": 51,
+            "rows": 910
+          },
+          "frontdoor>frontdoor": {
+            "cross_action": false,
+            "direction_balance": 0.0,
+            "lo_action": "frontdoor",
+            "one_sided": false,
+            "prefer_hi": 0,
+            "prefer_lo": 102,
+            "rows": 102
+          }
+        },
+        "cross_action_rows": 910,
+        "distinct_action_pairs": 1,
+        "one_sided_cross_action_pairs": [
+          "architect_general>frontdoor"
+        ],
+        "rows": 1106,
+        "same_action_rows": 196,
+        "thin_cross_action_pairs": [],
+        "untrained_in_complement_pairs": [],
+        "weak_reasons": [
+          "one_sided_directions"
+        ]
+      },
+      "instruction_precision": {
+        "action_pair_directions": {
+          "architect_general>coder_escalation": {
+            "cross_action": true,
+            "direction_balance": 0.1667,
+            "lo_action": "architect_general",
+            "one_sided": false,
+            "prefer_hi": 1,
+            "prefer_lo": 5,
+            "rows": 6
+          },
+          "architect_general>frontdoor": {
+            "cross_action": true,
+            "direction_balance": 0.0,
+            "lo_action": "architect_general",
+            "one_sided": true,
+            "prefer_hi": 0,
+            "prefer_lo": 3,
+            "rows": 3
+          },
+          "coder_escalation>coder_escalation": {
+            "cross_action": false,
+            "direction_balance": 0.0,
+            "lo_action": "coder_escalation",
+            "one_sided": false,
+            "prefer_hi": 0,
+            "prefer_lo": 19,
+            "rows": 19
+          },
+          "coder_escalation>frontdoor": {
+            "cross_action": true,
+            "direction_balance": 0.4737,
+            "lo_action": "coder_escalation",
+            "one_sided": false,
+            "prefer_hi": 10,
+            "prefer_lo": 9,
+            "rows": 19
+          },
+          "frontdoor>frontdoor": {
+            "cross_action": false,
+            "direction_balance": 0.0,
+            "lo_action": "frontdoor",
+            "one_sided": false,
+            "prefer_hi": 0,
+            "prefer_lo": 3,
+            "rows": 3
+          }
+        },
+        "cross_action_rows": 28,
+        "distinct_action_pairs": 3,
+        "one_sided_cross_action_pairs": [
+          "architect_general>coder_escalation",
+          "architect_general>frontdoor"
+        ],
+        "rows": 50,
+        "same_action_rows": 22,
+        "thin_cross_action_pairs": [
+          "architect_general>coder_escalation",
+          "architect_general>frontdoor"
+        ],
+        "untrained_in_complement_pairs": [
+          "architect_general>coder_escalation"
+        ],
+        "weak_reasons": [
+          "one_sided_directions"
+        ]
+      },
+      "livecodebench": {
+        "action_pair_directions": {
+          "architect_general>architect_general": {
+            "cross_action": false,
+            "direction_balance": 0.0,
+            "lo_action": "architect_general",
+            "one_sided": false,
+            "prefer_hi": 0,
+            "prefer_lo": 51,
+            "rows": 51
+          },
+          "architect_general>frontdoor": {
+            "cross_action": true,
+            "direction_balance": 0.4507,
+            "lo_action": "architect_general",
+            "one_sided": false,
+            "prefer_hi": 169,
+            "prefer_lo": 206,
+            "rows": 375
+          },
+          "frontdoor>frontdoor": {
+            "cross_action": false,
+            "direction_balance": 0.0,
+            "lo_action": "frontdoor",
+            "one_sided": false,
+            "prefer_hi": 0,
+            "prefer_lo": 190,
+            "rows": 190
+          }
+        },
+        "cross_action_rows": 375,
+        "distinct_action_pairs": 1,
+        "one_sided_cross_action_pairs": [],
+        "rows": 616,
+        "same_action_rows": 241,
+        "thin_cross_action_pairs": [],
+        "untrained_in_complement_pairs": [],
+        "weak_reasons": []
+      },
+      "long_context": {
+        "action_pair_directions": {
+          "architect_general>architect_general": {
+            "cross_action": false,
+            "direction_balance": 0.0,
+            "lo_action": "architect_general",
+            "one_sided": false,
+            "prefer_hi": 0,
+            "prefer_lo": 18,
+            "rows": 18
+          },
+          "architect_general>frontdoor": {
+            "cross_action": true,
+            "direction_balance": 0.3896,
+            "lo_action": "architect_general",
+            "one_sided": false,
+            "prefer_hi": 94,
+            "prefer_lo": 60,
+            "rows": 154
+          },
+          "frontdoor>frontdoor": {
+            "cross_action": false,
+            "direction_balance": 0.0,
+            "lo_action": "frontdoor",
+            "one_sided": false,
+            "prefer_hi": 0,
+            "prefer_lo": 25,
+            "rows": 25
+          }
+        },
+        "cross_action_rows": 154,
+        "distinct_action_pairs": 1,
+        "one_sided_cross_action_pairs": [],
+        "rows": 197,
+        "same_action_rows": 43,
+        "thin_cross_action_pairs": [],
+        "untrained_in_complement_pairs": [],
+        "weak_reasons": []
+      },
+      "math": {
+        "action_pair_directions": {
+          "architect_general>architect_general": {
+            "cross_action": false,
+            "direction_balance": 0.0,
+            "lo_action": "architect_general",
+            "one_sided": false,
+            "prefer_hi": 0,
+            "prefer_lo": 2,
+            "rows": 2
+          },
+          "architect_general>frontdoor": {
+            "cross_action": true,
+            "direction_balance": 0.4,
+            "lo_action": "architect_general",
+            "one_sided": false,
+            "prefer_hi": 6,
+            "prefer_lo": 4,
+            "rows": 10
+          },
+          "coder_escalation>coder_escalation": {
+            "cross_action": false,
+            "direction_balance": 0.0,
+            "lo_action": "coder_escalation",
+            "one_sided": false,
+            "prefer_hi": 0,
+            "prefer_lo": 5,
+            "rows": 5
+          },
+          "coder_escalation>frontdoor": {
+            "cross_action": true,
+            "direction_balance": 0.5,
+            "lo_action": "coder_escalation",
+            "one_sided": false,
+            "prefer_hi": 3,
+            "prefer_lo": 3,
+            "rows": 6
+          }
+        },
+        "cross_action_rows": 16,
+        "distinct_action_pairs": 2,
+        "one_sided_cross_action_pairs": [],
+        "rows": 23,
+        "same_action_rows": 7,
+        "thin_cross_action_pairs": [
+          "coder_escalation>frontdoor"
+        ],
+        "untrained_in_complement_pairs": [],
+        "weak_reasons": []
+      },
+      "mode_advantage": {
+        "action_pair_directions": {
+          "architect_general>architect_general": {
+            "cross_action": false,
+            "direction_balance": 0.0,
+            "lo_action": "architect_general",
+            "one_sided": false,
+            "prefer_hi": 0,
+            "prefer_lo": 15,
+            "rows": 15
+          },
+          "architect_general>frontdoor": {
+            "cross_action": true,
+            "direction_balance": 0.2427,
+            "lo_action": "architect_general",
+            "one_sided": false,
+            "prefer_hi": 78,
+            "prefer_lo": 25,
+            "rows": 103
+          },
+          "frontdoor>frontdoor": {
+            "cross_action": false,
+            "direction_balance": 0.0,
+            "lo_action": "frontdoor",
+            "one_sided": false,
+            "prefer_hi": 0,
+            "prefer_lo": 16,
+            "rows": 16
+          }
+        },
+        "cross_action_rows": 103,
+        "distinct_action_pairs": 1,
+        "one_sided_cross_action_pairs": [],
+        "rows": 134,
+        "same_action_rows": 31,
+        "thin_cross_action_pairs": [],
+        "untrained_in_complement_pairs": [],
+        "weak_reasons": []
+      },
+      "mode_advantage_hard": {
+        "action_pair_directions": {
+          "architect_general>architect_general": {
+            "cross_action": false,
+            "direction_balance": 0.0,
+            "lo_action": "architect_general",
+            "one_sided": false,
+            "prefer_hi": 0,
+            "prefer_lo": 71,
+            "rows": 71
+          },
+          "architect_general>frontdoor": {
+            "cross_action": true,
+            "direction_balance": 0.3401,
+            "lo_action": "architect_general",
+            "one_sided": false,
+            "prefer_hi": 227,
+            "prefer_lo": 117,
+            "rows": 344
+          },
+          "frontdoor>frontdoor": {
+            "cross_action": false,
+            "direction_balance": 0.0,
+            "lo_action": "frontdoor",
+            "one_sided": false,
+            "prefer_hi": 0,
+            "prefer_lo": 86,
+            "rows": 86
+          }
+        },
+        "cross_action_rows": 344,
+        "distinct_action_pairs": 1,
+        "one_sided_cross_action_pairs": [],
+        "rows": 501,
+        "same_action_rows": 157,
+        "thin_cross_action_pairs": [],
+        "untrained_in_complement_pairs": [],
+        "weak_reasons": []
+      },
+      "simpleqa": {
+        "action_pair_directions": {
+          "architect_general>architect_general": {
+            "cross_action": false,
+            "direction_balance": 0.0,
+            "lo_action": "architect_general",
+            "one_sided": false,
+            "prefer_hi": 0,
+            "prefer_lo": 48,
+            "rows": 48
+          },
+          "architect_general>coder_escalation": {
+            "cross_action": true,
+            "direction_balance": 0.0,
+            "lo_action": "architect_general",
+            "one_sided": true,
+            "prefer_hi": 0,
+            "prefer_lo": 2,
+            "rows": 2
+          },
+          "architect_general>frontdoor": {
+            "cross_action": true,
+            "direction_balance": 0.32,
+            "lo_action": "architect_general",
+            "one_sided": false,
+            "prefer_hi": 204,
+            "prefer_lo": 96,
+            "rows": 300
+          },
+          "frontdoor>frontdoor": {
+            "cross_action": false,
+            "direction_balance": 0.0,
+            "lo_action": "frontdoor",
+            "one_sided": false,
+            "prefer_hi": 0,
+            "prefer_lo": 106,
+            "rows": 106
+          }
+        },
+        "cross_action_rows": 302,
+        "distinct_action_pairs": 2,
+        "one_sided_cross_action_pairs": [
+          "architect_general>coder_escalation"
+        ],
+        "rows": 456,
+        "same_action_rows": 154,
+        "thin_cross_action_pairs": [
+          "architect_general>coder_escalation"
+        ],
+        "untrained_in_complement_pairs": [],
+        "weak_reasons": [
+          "one_sided_directions"
+        ]
+      },
+      "thinking": {
+        "action_pair_directions": {
+          "architect_general>architect_general": {
+            "cross_action": false,
+            "direction_balance": 0.0,
+            "lo_action": "architect_general",
+            "one_sided": false,
+            "prefer_hi": 0,
+            "prefer_lo": 73,
+            "rows": 73
+          },
+          "architect_general>coder_escalation": {
+            "cross_action": true,
+            "direction_balance": 0.1667,
+            "lo_action": "architect_general",
+            "one_sided": false,
+            "prefer_hi": 1,
+            "prefer_lo": 5,
+            "rows": 6
+          },
+          "architect_general>frontdoor": {
+            "cross_action": true,
+            "direction_balance": 0.3788,
+            "lo_action": "architect_general",
+            "one_sided": false,
+            "prefer_hi": 164,
+            "prefer_lo": 100,
+            "rows": 264
+          },
+          "coder_escalation>coder_escalation": {
+            "cross_action": false,
+            "direction_balance": 0.0,
+            "lo_action": "coder_escalation",
+            "one_sided": false,
+            "prefer_hi": 0,
+            "prefer_lo": 4,
+            "rows": 4
+          },
+          "coder_escalation>frontdoor": {
+            "cross_action": true,
+            "direction_balance": 0.2,
+            "lo_action": "coder_escalation",
+            "one_sided": false,
+            "prefer_hi": 2,
+            "prefer_lo": 8,
+            "rows": 10
+          },
+          "frontdoor>frontdoor": {
+            "cross_action": false,
+            "direction_balance": 0.0,
+            "lo_action": "frontdoor",
+            "one_sided": false,
+            "prefer_hi": 0,
+            "prefer_lo": 53,
+            "rows": 53
+          }
+        },
+        "cross_action_rows": 280,
+        "distinct_action_pairs": 3,
+        "one_sided_cross_action_pairs": [
+          "architect_general>coder_escalation"
+        ],
+        "rows": 410,
+        "same_action_rows": 130,
+        "thin_cross_action_pairs": [
+          "architect_general>coder_escalation"
+        ],
+        "untrained_in_complement_pairs": [
+          "architect_general>coder_escalation"
+        ],
+        "weak_reasons": [
+          "one_sided_directions"
+        ]
+      }
+    }
+  },
+  "thresholds": {
+    "direction_balance_warn": 0.2,
+    "min_action_pair_rows": 8,
+    "min_stratum_rows": 20,
+    "min_train_rows": 10
+  }
+}
