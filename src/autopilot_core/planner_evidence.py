@@ -153,7 +153,7 @@ def _instrument_power_line(
         "Below-quantum deltas need paired/reproduced evidence before acting. "
         "W8 confirmation needs repeated replayable numeric_trial/structural_experiment "
         "candidates with both E_quality and E_rate_noninf accumulating; seed_batch "
-        "candidates are observational and cannot satisfy W8 replay."
+        "and structural_prune candidates are not replayable and cannot satisfy W8 replay."
     )
 
 
@@ -258,7 +258,7 @@ def _w8_replay_pressure_line(seq_rows: list[dict[str, Any]]) -> str:
         return (
             "W8 replay pressure: no accumulating candidate exists; generate a "
             "keepable replayable numeric_trial or structural_experiment candidate "
-            "before expecting W8 promotion evidence."
+            "before expecting W8 promotion evidence; structural_prune is not replayable."
         )
     if replayable == 0:
         blocker_text = _format_counts(blockers, limit=3)
@@ -266,7 +266,8 @@ def _w8_replay_pressure_line(seq_rows: list[dict[str, Any]]) -> str:
             f"W8 replay pressure: 0/{open_accumulating} accumulating candidate(s) are "
             f"replayable (blocked={blocker_text}). Prefer an explicit single-param "
             "numeric_trial or one-flag structural_experiment; seed_batch, deep_eval, "
-            "and empty-params numeric_trial cannot create replayable W8 evidence."
+            "structural_prune, and empty-params numeric_trial cannot create replayable "
+            "W8 evidence."
         )
     return (
         f"W8 replay pressure: {replayable}/{open_accumulating} accumulating candidate(s) "
