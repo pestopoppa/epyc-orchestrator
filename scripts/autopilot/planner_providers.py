@@ -452,9 +452,8 @@ class LocalPlannerProvider:
 class LocalChatPlannerProvider:
     """OpenAI-compatible local planner via the orchestrator ``/chat`` endpoint.
 
-    Unlike ``LocalPlannerProvider``, this path intentionally avoids forcing a
-    role so the orchestrator's normal router, delegation, and memory flow can
-    draft the plan.
+    Draft calls can force the ingest lane to keep controller prompts out of the
+    chat router while preserving the regular /chat transport.
     """
 
     name = "local_chat"
@@ -477,6 +476,10 @@ class LocalChatPlannerProvider:
             if max_tokens is not None
             else _env_int("AUTOPILOT_LOCAL_PLANNER_MAX_TOKENS", 2048)
         )
+        self._force_role = _env_optional_force_role(
+            "AUTOPILOT_LOCAL_CHAT_PLANNER_FORCE_ROLE",
+            default="ingest_long_context",
+        )
         self.name = name or self.name
 
     def invoke(
@@ -491,7 +494,7 @@ class LocalChatPlannerProvider:
         del session_id, cwd
         start = time.time()
         tap = _open_planner_tap()
-        payload = self._payload(prompt)
+        payload = self._payload(prompt, planner_role=role)
 
         try:
             if tap is not None:
@@ -563,8 +566,8 @@ class LocalChatPlannerProvider:
                 except Exception:
                     pass
 
-    def _payload(self, prompt: str) -> dict[str, Any]:
-        return {
+    def _payload(self, prompt: str, *, planner_role: str | None = None) -> dict[str, Any]:
+        payload: dict[str, Any] = {
             "prompt": prompt,
             "mock_mode": False,
             "real_mode": True,
@@ -574,6 +577,9 @@ class LocalChatPlannerProvider:
             "workload_class": "campaign",
             "request_id": f"planner-local-chat-{uuid.uuid4().hex[:8]}",
         }
+        if planner_role == "draft" and self._force_role:
+            payload["force_role"] = self._force_role
+        return payload
 
 
 def parse_codex_jsonl(output: str) -> str:
@@ -953,3 +959,13 @@ def _env_optional_float(name: str) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _env_optional_force_role(name: str, *, default: str) -> str | None:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    normalized = value.strip()
+    if not normalized or normalized.lower() in {"0", "false", "off"}:
+        return None
+    return normalized
