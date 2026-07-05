@@ -401,11 +401,11 @@ def test_spend_breaker_forces_cloud_primary_to_local_providers(
         "summarize_economics",
         lambda *, days=7: _fake_economics_ledger(triggered=True),
     )
-    local_worker = FakeProvider(
-        "local_worker",
+    local_ingest = FakeProvider(
+        "local_ingest",
         [
             PlannerProviderResult(
-                provider="local_worker",
+                provider="local_ingest",
                 role="draft",
                 ok=True,
                 text=_action_text({"type": "numeric_trial", "surface": "repl_executor"}),
@@ -437,19 +437,19 @@ def test_spend_breaker_forces_cloud_primary_to_local_providers(
         ),
         provider_factory=_factory(
             {
-                "local_worker": local_worker,
+                "local_ingest": local_ingest,
                 "codex_critic": codex_critic,
             }
         ),
     )
 
-    assert decision.draft_provider == "local_worker"
+    assert decision.draft_provider == "local_ingest"
     assert decision.critic_provider == "codex_critic"
     assert decision.action == {"type": "numeric_trial", "surface": "repl_executor"}
     assert state["_spend_breaker"]["active"] is True
     assert state["_spend_breaker"]["previous_primary"] == "claude"
     assert state["_spend_breaker"]["previous_critic"] == "codex"
-    assert [call["role"] for call in local_worker.calls] == ["draft"]
+    assert [call["role"] for call in local_ingest.calls] == ["draft"]
     assert [call["role"] for call in codex_critic.calls] == ["critique"]
 
 
@@ -464,11 +464,11 @@ def test_spend_breaker_replaces_cloud_critic_for_local_primary(
         "summarize_economics",
         lambda *, days=7: _fake_economics_ledger(triggered=True),
     )
-    local_worker = FakeProvider(
-        "local_worker",
+    local_ingest = FakeProvider(
+        "local_ingest",
         [
             PlannerProviderResult(
-                provider="local_worker",
+                provider="local_ingest",
                 role="draft",
                 ok=True,
                 text=_action_text({"type": "numeric_trial", "surface": "repl_executor"}),
@@ -500,13 +500,13 @@ def test_spend_breaker_replaces_cloud_critic_for_local_primary(
         ),
         provider_factory=_factory(
             {
-                "local_worker": local_worker,
+                "local_ingest": local_ingest,
                 "codex_critic": codex_critic,
             }
         ),
     )
 
-    assert decision.draft_provider == "local_worker"
+    assert decision.draft_provider == "local_ingest"
     assert decision.critic_provider == "codex_critic"
     assert state["_spend_breaker"]["previous_primary"] == "local_chat"
     assert state["_spend_breaker"]["previous_critic"] == "codex"

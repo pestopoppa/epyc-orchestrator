@@ -715,6 +715,8 @@ def _post_local_json_with_retries(
             payload_error = _local_planner_payload_error(data)
             if not payload_error:
                 return data
+            if not _local_planner_payload_error_retryable(payload_error):
+                raise RuntimeError(payload_error)
             if attempt >= attempts:
                 raise RuntimeError(payload_error)
             sleep_s = min(max_sleep_s, base_sleep_s * attempt)
@@ -768,6 +770,21 @@ def _local_planner_payload_error(data: dict[str, Any]) -> str:
     if stripped.startswith("[MOCK]"):
         return stripped
     return ""
+
+
+def _local_planner_payload_error_retryable(error: str) -> bool:
+    """Return whether a local planner error payload can clear by waiting.
+
+    Admission pressure and mock-mode races are transient. Backend 400s from the
+    role server are deterministic for the same prompt/role pair, so retrying
+    only burns the planner window before falling back.
+    """
+    lowered = str(error or "").lower()
+    if "400 bad request" in lowered:
+        return False
+    if "context" in lowered and ("exceed" in lowered or "too long" in lowered):
+        return False
+    return True
 
 
 def _archive_codex_call(

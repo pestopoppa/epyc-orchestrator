@@ -76,7 +76,7 @@ _CRITIQUE_SECTION_CHAR_LIMIT = 1600
 # critic_unavailable pause that stalled the run, e.g. @711). Give generous
 # headroom; operator-tunable via AUTOPILOT_PLANNER_TIMEOUT. (2026-06-09)
 DEFAULT_PLANNER_TIMEOUT = int(os.environ.get("AUTOPILOT_PLANNER_TIMEOUT", "600"))
-DEFAULT_SPEND_BREAKER_LOCAL_PRIMARY = "local_worker"
+DEFAULT_SPEND_BREAKER_LOCAL_PRIMARY = "local_ingest"
 DEFAULT_SPEND_BREAKER_LOCAL_CRITIC = "codex_critic"
 
 

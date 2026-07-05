@@ -286,6 +286,67 @@ def test_local_planner_retries_error_payload(monkeypatch) -> None:
     assert captured["sleeps"] == [2.0]
 
 
+def test_local_planner_does_not_retry_deterministic_bad_request_payload(monkeypatch) -> None:
+    captured: dict[str, Any] = {"calls": 0, "sleeps": []}
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> dict[str, Any]:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": (
+                                "[ERROR: Inference failed: chat_completions stream failed: "
+                                "Client error '400 Bad Request' for url "
+                                "'http://localhost:8072/v1/chat/completions']"
+                            )
+                        }
+                    }
+                ]
+            }
+
+    class FakeClient:
+        def __init__(self, *, timeout: int) -> None:
+            captured["timeout"] = timeout
+
+        def __enter__(self) -> "FakeClient":
+            return self
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+        def post(self, url: str, *, json: dict[str, Any]) -> FakeResponse:
+            captured["url"] = url
+            captured["payload"] = json
+            captured["calls"] += 1
+            return FakeResponse()
+
+    monkeypatch.setenv("AUTOPILOT_LOCAL_PLANNER_HTTP_ATTEMPTS", "4")
+    monkeypatch.setattr(planner_providers, "_open_planner_tap", lambda: None)
+    monkeypatch.setattr(planner_providers, "_archive_local_call", lambda *args, **kwargs: None)
+    monkeypatch.setattr(planner_providers.httpx, "Client", FakeClient)
+    monkeypatch.setattr(
+        planner_providers.time,
+        "sleep",
+        lambda seconds: captured["sleeps"].append(seconds),
+    )
+
+    provider = planner_providers.LocalPlannerProvider(
+        url="http://127.0.0.1:8000/v1/chat/completions",
+        role="worker_general",
+        model="worker_general",
+    )
+    result = provider.invoke("planner prompt", role="draft", timeout=9)
+
+    assert result.ok is False
+    assert "400 Bad Request" in result.error
+    assert captured["calls"] == 1
+    assert captured["sleeps"] == []
+
+
 def test_local_planner_retries_mock_payload(monkeypatch) -> None:
     captured: dict[str, Any] = {"calls": 0, "sleeps": []}
 
