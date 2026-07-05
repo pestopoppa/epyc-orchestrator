@@ -174,6 +174,7 @@ def test_phase_health_default_runtime_sources_include_planner_and_seeding_module
     assert "strategy_store.py" in checked
     assert "knowledge_distiller.py" in checked
     assert "evolution_manager.py" in checked
+    assert "planner_evidence.py" in checked
 
 
 def test_phase_health_report_exposes_allowlisted_autopilot_env_flags(tmp_path, monkeypatch):
