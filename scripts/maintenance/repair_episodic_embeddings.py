@@ -52,7 +52,7 @@ import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Callable, NamedTuple
+from typing import Callable, NamedTuple, Sequence
 
 import numpy as np
 
@@ -74,6 +74,7 @@ DEFAULT_ID_MAP_PATH = DEFAULT_SESSIONS_DIR / "id_map.npy"
 DEFAULT_REEMBEDDED_PATH = DEFAULT_SESSIONS_DIR / "reembedded.npz"
 DEFAULT_FAISS_LOCK_PATH = DEFAULT_SESSIONS_DIR / ".episodic_faiss.lock"
 REEMBED_SCRIPT = PROJECT_ROOT / "scripts/graph_router/reembed_episodic_store.py"
+INDEXED_ACTION_TYPES = ("routing", "escalation")
 
 # Retrieval is materially degraded well before catastrophic 50% coverage loss.
 # Keep a small append-lag allowance for live writers, but require the mirror to
@@ -267,6 +268,236 @@ def print_report(report: HealthReport) -> None:
     print("=" * 72)
 
 
+def _load_npy_ids(path: Path) -> list[str]:
+    if not path.exists():
+        return []
+    arr = np.load(path, allow_pickle=True)
+    return [str(item) for item in arr.tolist()]
+
+
+def _load_reembedded_ids(path: Path) -> list[str]:
+    if not path.exists():
+        return []
+    data = np.load(path, allow_pickle=True)
+    if "ids" not in data.files:
+        return []
+    return [str(item) for item in data["ids"].tolist()]
+
+
+def _live_memory_ids(db_path: Path, action_types: Sequence[str]) -> set[str]:
+    if not db_path.exists():
+        return set()
+    placeholders = ",".join("?" for _ in action_types)
+    with sqlite3.connect(str(db_path)) as conn:
+        return {
+            str(row[0])
+            for row in conn.execute(
+                f"SELECT id FROM memories WHERE action_type IN ({placeholders})",
+                tuple(action_types),
+            ).fetchall()
+        }
+
+
+def _write_ids_file(path: Path, ids: Sequence[str]) -> None:
+    path.write_text("\n".join(ids) + "\n")
+
+
+def _invoke_reembed(
+    *,
+    db_path: Path,
+    output_path: Path,
+    servers: int,
+    batch_size: int,
+    base_port: int,
+    only_ids_file: Path | None = None,
+) -> None:
+    if not REEMBED_SCRIPT.exists():
+        raise SystemExit(f"reembed_episodic_store.py not found at {REEMBED_SCRIPT}")
+    cmd = [
+        sys.executable,
+        str(REEMBED_SCRIPT),
+        "--db",
+        str(db_path),
+        "--output",
+        str(output_path),
+        "--base-port",
+        str(base_port),
+        "--servers",
+        str(servers),
+        "--batch-size",
+        str(batch_size),
+    ]
+    if only_ids_file is not None:
+        cmd.extend(["--only-ids-file", str(only_ids_file)])
+    logger.info("Invoking reembed_episodic_store.py: %s", " ".join(cmd))
+    rc = subprocess.call(cmd)
+    if rc != 0:
+        raise SystemExit(f"reembed_episodic_store.py failed (rc={rc})")
+    logger.info("reembed_episodic_store.py completed OK")
+
+
+def _write_faiss_and_id_map_atomic(
+    *,
+    index,
+    ids: Sequence[str],
+    faiss_path: Path,
+    id_map_path: Path,
+) -> tuple[Path, Path]:
+    import faiss
+
+    ts = int(time.time())
+    faiss_backup = faiss_path.with_suffix(f".pre-repair-{ts}")
+    id_map_backup = id_map_path.with_suffix(f".pre-repair-{ts}")
+    if faiss_path.exists():
+        shutil.copy2(faiss_path, faiss_backup)
+        logger.info("Backed up old FAISS index → %s (%d bytes)", faiss_backup, faiss_backup.stat().st_size)
+    if id_map_path.exists():
+        shutil.copy2(id_map_path, id_map_backup)
+        logger.info("Backed up old id_map → %s (%d bytes)", id_map_backup, id_map_backup.stat().st_size)
+
+    faiss_new = faiss_path.with_name(faiss_path.name + ".new")
+    id_map_new = id_map_path.with_name(id_map_path.name + ".new")
+    faiss.write_index(index, str(faiss_new))
+    with open(id_map_new, "wb") as f:
+        np.save(f, np.array(list(ids), dtype=object), allow_pickle=True)
+    if not faiss_new.exists():
+        raise SystemExit(f"FAISS .new file did not materialize at {faiss_new}")
+    if not id_map_new.exists():
+        raise SystemExit(f"id_map .new file did not materialize at {id_map_new}")
+    faiss_new.rename(faiss_path)
+    id_map_new.rename(id_map_path)
+    return faiss_backup, id_map_backup
+
+
+def append_missing_faiss_vectors(
+    *,
+    incremental_path: Path,
+    ids_to_append: set[str],
+    faiss_path: Path,
+    id_map_path: Path,
+    lock_path: Path = DEFAULT_FAISS_LOCK_PATH,
+    pre_swap_check: Callable[[], None] | None = None,
+) -> int:
+    """Append missing vectors to a structurally consistent FAISS/id_map mirror."""
+    if not ids_to_append:
+        logger.info("No FAISS/id_map IDs missing; append step is a no-op")
+        return 0
+
+    import faiss
+
+    data = np.load(incremental_path, allow_pickle=True)
+    incremental_ids = [str(item) for item in data["ids"].tolist()]
+    positions = [idx for idx, memory_id in enumerate(incremental_ids) if memory_id in ids_to_append]
+    found_ids = {incremental_ids[idx] for idx in positions}
+    missing = ids_to_append - found_ids
+    if missing:
+        raise SystemExit(
+            f"Incremental embedding output is missing {len(missing)} FAISS append ID(s); "
+            f"first missing: {sorted(missing)[:5]}"
+        )
+
+    embs = data["embeddings"][positions].astype(np.float32)
+    if embs.ndim == 3:
+        embs = embs.squeeze(axis=1)
+    norms = np.linalg.norm(embs, axis=1, keepdims=True)
+    norms[norms == 0] = 1.0
+    append_ids = [incremental_ids[idx] for idx in positions]
+
+    with _exclusive_file_lock(lock_path):
+        if pre_swap_check is not None:
+            pre_swap_check()
+        current_ids = _load_npy_ids(id_map_path)
+        current_id_set = set(current_ids)
+        filtered = [
+            (memory_id, emb)
+            for memory_id, emb in zip(append_ids, embs / norms, strict=True)
+            if memory_id not in current_id_set
+        ]
+        if not filtered:
+            logger.info("All requested FAISS append IDs are already present")
+            return 0
+
+        index = faiss.read_index(str(faiss_path))
+        if index.ntotal != len(current_ids):
+            raise SystemExit(
+                f"Cannot incrementally repair inconsistent mirror: FAISS ntotal={index.ntotal}, "
+                f"id_map ids={len(current_ids)}"
+            )
+        final_append_ids = [memory_id for memory_id, _ in filtered]
+        final_embs = np.stack([emb for _, emb in filtered]).astype(np.float32)
+        index.add(final_embs)
+        final_ids = [*current_ids, *final_append_ids]
+        faiss_backup, id_map_backup = _write_faiss_and_id_map_atomic(
+            index=index,
+            ids=final_ids,
+            faiss_path=faiss_path,
+            id_map_path=id_map_path,
+        )
+        verify = faiss.read_index(str(faiss_path))
+        if verify.ntotal != len(final_ids):
+            raise SystemExit(
+                f"FAISS append validation failed: id_map={len(final_ids)}, ntotal={verify.ntotal}"
+            )
+        logger.info(
+            "Incremental FAISS repair appended %d vectors. Backups: %s, %s",
+            len(final_append_ids),
+            faiss_backup.name,
+            id_map_backup.name,
+        )
+        return len(final_append_ids)
+
+
+def merge_reembedded_npz(
+    *,
+    reembedded_path: Path,
+    incremental_path: Path,
+) -> int:
+    """Merge incremental embeddings into reembedded.npz for future rebuilds."""
+    inc = np.load(incremental_path, allow_pickle=True)
+    inc_ids = [str(item) for item in inc["ids"].tolist()]
+    if not reembedded_path.exists():
+        tmp = reembedded_path.with_name(reembedded_path.name + ".new")
+        with open(tmp, "wb") as f:
+            np.savez_compressed(
+                f,
+                ids=inc["ids"],
+                embeddings=inc["embeddings"],
+                actions=inc["actions"],
+                q_values=inc["q_values"],
+                contexts=inc["contexts"],
+            )
+        tmp.rename(reembedded_path)
+        return len(inc_ids)
+
+    old = np.load(reembedded_path, allow_pickle=True)
+    old_ids = [str(item) for item in old["ids"].tolist()]
+    old_id_set = set(old_ids)
+    append_positions = [idx for idx, memory_id in enumerate(inc_ids) if memory_id not in old_id_set]
+    if not append_positions:
+        logger.info("reembedded.npz already contains all incremental IDs")
+        return 0
+
+    tmp = reembedded_path.with_name(reembedded_path.name + ".new")
+    backup = reembedded_path.with_suffix(f".pre-repair-{int(time.time())}")
+    shutil.copy2(reembedded_path, backup)
+    with open(tmp, "wb") as f:
+        np.savez_compressed(
+            f,
+            ids=np.concatenate([old["ids"], inc["ids"][append_positions]]),
+            embeddings=np.concatenate([old["embeddings"], inc["embeddings"][append_positions]]),
+            actions=np.concatenate([old["actions"], inc["actions"][append_positions]]),
+            q_values=np.concatenate([old["q_values"], inc["q_values"][append_positions]]),
+            contexts=np.concatenate([old["contexts"], inc["contexts"][append_positions]]),
+        )
+    tmp.rename(reembedded_path)
+    logger.info(
+        "Merged %d embeddings into reembedded.npz (backup: %s)",
+        len(append_positions),
+        backup.name,
+    )
+    return len(append_positions)
+
+
 def rebuild_faiss(
     reembedded_path: Path,
     faiss_path: Path,
@@ -365,24 +596,86 @@ def run_repair(
     base_port: int = DEFAULT_EMBEDDER_BASE_PORT,
     skip_reembed: bool = False,
     max_db_growth: int = DEFAULT_MAX_DB_GROWTH,
+    incremental: bool = True,
 ) -> int:
     start_routing_count = diagnose(db_path, faiss_path, reembedded_path).n_db_routing
+    if incremental and not skip_reembed and faiss_path.exists() and id_map_path.exists():
+        start_report = diagnose(db_path, faiss_path, reembedded_path)
+        if start_report.id_map_matches_faiss:
+            live_indexed_ids = _live_memory_ids(db_path, INDEXED_ACTION_TYPES)
+            id_map_ids = set(_load_npy_ids(id_map_path))
+            reembedded_ids = set(_load_reembedded_ids(reembedded_path))
+            ids_missing_faiss = live_indexed_ids - id_map_ids
+            ids_missing_reembedded = live_indexed_ids - reembedded_ids
+            ids_to_embed = sorted(ids_missing_faiss | ids_missing_reembedded)
+            if ids_to_embed:
+                ts = int(time.time())
+                ids_file = reembedded_path.with_name(f"reembedded.incremental-{ts}.ids")
+                incremental_path = reembedded_path.with_name(f"reembedded.incremental-{ts}.npz")
+                _write_ids_file(ids_file, ids_to_embed)
+                logger.info(
+                    "Incremental repair selected %d ID(s): %d missing FAISS/id_map, "
+                    "%d missing reembedded.npz",
+                    len(ids_to_embed),
+                    len(ids_missing_faiss),
+                    len(ids_missing_reembedded),
+                )
+                _invoke_reembed(
+                    db_path=db_path,
+                    output_path=incremental_path,
+                    servers=servers,
+                    batch_size=batch_size,
+                    base_port=base_port,
+                    only_ids_file=ids_file,
+                )
+                _assert_db_growth_within_bound(
+                    db_path,
+                    faiss_path,
+                    reembedded_path,
+                    start_routing_count=start_routing_count,
+                    max_db_growth=max_db_growth,
+                    phase="post-incremental-reembed",
+                )
+                appended = append_missing_faiss_vectors(
+                    incremental_path=incremental_path,
+                    ids_to_append=ids_missing_faiss,
+                    faiss_path=faiss_path,
+                    id_map_path=id_map_path,
+                    pre_swap_check=lambda: _assert_db_growth_within_bound(
+                        db_path,
+                        faiss_path,
+                        reembedded_path,
+                        start_routing_count=start_routing_count,
+                        max_db_growth=max_db_growth,
+                        phase="pre-incremental-swap",
+                    ),
+                )
+                merged = merge_reembedded_npz(
+                    reembedded_path=reembedded_path,
+                    incremental_path=incremental_path,
+                )
+                logger.info(
+                    "Incremental repair complete: appended %d FAISS vector(s), "
+                    "merged %d reembedded row(s)",
+                    appended,
+                    merged,
+                )
+                return appended
+            logger.info("Incremental repair found no missing IDs; falling through to verification")
+            return 0
+        logger.warning(
+            "Cannot use incremental repair because id_map does not match FAISS; "
+            "falling back to full rebuild."
+        )
+
     if not skip_reembed:
-        if not REEMBED_SCRIPT.exists():
-            raise SystemExit(f"reembed_episodic_store.py not found at {REEMBED_SCRIPT}")
-        cmd = [
-            sys.executable, str(REEMBED_SCRIPT),
-            "--db", str(db_path),  # reembed_episodic_store expects the .db file path
-            "--output", str(reembedded_path),
-            "--base-port", str(base_port),
-            "--servers", str(servers),
-            "--batch-size", str(batch_size),
-        ]
-        logger.info("Invoking reembed_episodic_store.py: %s", " ".join(cmd))
-        rc = subprocess.call(cmd)
-        if rc != 0:
-            raise SystemExit(f"reembed_episodic_store.py failed (rc={rc})")
-        logger.info("reembed_episodic_store.py completed OK")
+        _invoke_reembed(
+            db_path=db_path,
+            output_path=reembedded_path,
+            servers=servers,
+            batch_size=batch_size,
+            base_port=base_port,
+        )
 
     _assert_db_growth_within_bound(
         db_path,
@@ -429,6 +722,10 @@ def main() -> int:
     parser.add_argument(
         "--skip-reembed", action="store_true",
         help="With --repair: skip BGE re-embed, only rebuild FAISS from existing reembedded.npz",
+    )
+    parser.add_argument(
+        "--full-rebuild", action="store_true",
+        help="With --repair: rebuild the full FAISS/id_map mirror instead of appending missing IDs.",
     )
     parser.add_argument("--db", type=str, default=str(DEFAULT_DB_PATH))
     parser.add_argument("--faiss", type=str, default=str(DEFAULT_FAISS_PATH))
@@ -487,6 +784,7 @@ def main() -> int:
         base_port=args.base_port,
         skip_reembed=args.skip_reembed,
         max_db_growth=args.max_db_growth,
+        incremental=not args.full_rebuild,
     )
     print("\nRepair complete. Re-running diagnostic to verify:")
     report2 = diagnose(db_path, faiss_path, reembedded_path)

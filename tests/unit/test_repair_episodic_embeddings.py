@@ -207,3 +207,71 @@ def test_run_repair_rechecks_growth_at_pre_swap(monkeypatch, tmp_path: Path) -> 
             id_map_path=tmp_path / "id_map.npy",
             reembedded_path=tmp_path / "reembedded.npz",
         )
+
+
+def test_run_repair_prefers_incremental_missing_id_append(monkeypatch, tmp_path: Path) -> None:
+    db_path = tmp_path / "episodic.db"
+    faiss_path = tmp_path / "embeddings.faiss"
+    id_map_path = tmp_path / "id_map.npy"
+    reembedded_path = tmp_path / "reembedded.npz"
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE memories (id TEXT PRIMARY KEY, action_type TEXT)")
+        conn.executemany(
+            "INSERT INTO memories (id, action_type) VALUES (?, ?)",
+            [("m1", "routing"), ("m2", "routing"), ("m3", "escalation")],
+        )
+    faiss_path.touch()
+    np.save(id_map_path, np.array(["m1"], dtype=object), allow_pickle=True)
+    np.savez(
+        reembedded_path,
+        ids=np.array(["m1", "m3"], dtype=object),
+        embeddings=np.ones((2, 1024), dtype=np.float32),
+        actions=np.array(["worker_general", "frontdoor"], dtype=object),
+        q_values=np.array([0.5, 0.6], dtype=np.float32),
+        contexts=np.array(["{}", "{}"], dtype=object),
+    )
+
+    monkeypatch.setattr(
+        repair,
+        "diagnose",
+        lambda *_args, **_kwargs: repair.HealthReport(
+            n_db_routing=2,
+            n_faiss_vectors=1,
+            n_reembedded=2,
+            overlap_live=0.5,
+            faiss_coverage=0.5,
+            healthy=False,
+            orphan_count=1,
+            n_id_map=1,
+            id_map_overlap_live=0.5,
+            id_map_matches_faiss=True,
+        ),
+    )
+    invoked: dict[str, object] = {}
+
+    def fake_invoke_reembed(**kwargs):
+        invoked["ids_file"] = kwargs["only_ids_file"]
+        invoked["output_path"] = kwargs["output_path"]
+        np.savez(
+            kwargs["output_path"],
+            ids=np.array(["m2", "m3"], dtype=object),
+            embeddings=np.ones((2, 1024), dtype=np.float32),
+            actions=np.array(["worker_general", "frontdoor"], dtype=object),
+            q_values=np.array([0.9, 0.8], dtype=np.float32),
+            contexts=np.array(["{}", "{}"], dtype=object),
+        )
+
+    appended: dict[str, object] = {}
+
+    def fake_append_missing_faiss_vectors(**kwargs):
+        appended["ids_to_append"] = kwargs["ids_to_append"]
+        return len(kwargs["ids_to_append"])
+
+    monkeypatch.setattr(repair, "_invoke_reembed", fake_invoke_reembed)
+    monkeypatch.setattr(repair, "append_missing_faiss_vectors", fake_append_missing_faiss_vectors)
+    monkeypatch.setattr(repair, "merge_reembedded_npz", lambda **_kwargs: 1)
+
+    assert repair.run_repair(db_path, faiss_path, id_map_path, reembedded_path) == 2
+    assert appended["ids_to_append"] == {"m2", "m3"}
+    assert Path(invoked["ids_file"]).read_text().splitlines() == ["m2", "m3"]

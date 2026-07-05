@@ -144,6 +144,16 @@ def rows_for_embedding(
     return valid_rows, skipped
 
 
+def load_only_ids(path: Path | None) -> set[str] | None:
+    """Load an optional newline-delimited ID allowlist."""
+    if path is None:
+        return None
+    ids = {line.strip() for line in path.read_text().splitlines() if line.strip()}
+    if not ids:
+        raise SystemExit(f"--only-ids-file {path} did not contain any IDs")
+    return ids
+
+
 def probe_existing_server(port: int, timeout: float = 1.0) -> bool:
     """Return True if a healthy embedding server is already running on `port`.
 
@@ -252,11 +262,18 @@ def main():
     parser.add_argument("--servers", type=int, default=8)
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--threads-per-server", type=int, default=4)
+    parser.add_argument(
+        "--only-ids-file",
+        type=str,
+        default=None,
+        help="Optional newline-delimited memory IDs to re-embed instead of all rows.",
+    )
     args = parser.parse_args()
 
     db_path = Path(args.db)
     output_path = Path(args.output)
     ports = list(range(args.base_port, args.base_port + args.servers))
+    only_ids = load_only_ids(Path(args.only_ids_file) if args.only_ids_file else None)
 
     # ── Extract memories from SQLite ──
     logger.info("Reading memories from %s", db_path)
@@ -268,6 +285,16 @@ def main():
         ORDER BY created_at
     """).fetchall()
     conn.close()
+    if only_ids is not None:
+        before = len(rows)
+        rows = [row for row in rows if row[0] in only_ids]
+        logger.info("Filtered to %d / %d requested memory IDs", len(rows), before)
+        missing = only_ids - {row[0] for row in rows}
+        if missing:
+            raise SystemExit(
+                f"{len(missing)} requested ID(s) were not found in the episodic DB; "
+                f"first missing: {sorted(missing)[:5]}"
+            )
     logger.info("Loaded %d memories", len(rows))
 
     valid_rows, skipped = rows_for_embedding(rows)

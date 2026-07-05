@@ -102,3 +102,10 @@ def test_rows_for_embedding_falls_back_to_metadata_when_text_fields_missing() ->
     assert "action=worker_general" in valid_rows[0][3]
     assert "task_type=math" in valid_rows[0][3]
     assert "question_id=q-1" in valid_rows[0][3]
+
+
+def test_load_only_ids_reads_newline_allowlist(tmp_path) -> None:
+    ids_path = tmp_path / "ids.txt"
+    ids_path.write_text("m1\n\nm2\n")
+
+    assert reembed.load_only_ids(ids_path) == {"m1", "m2"}
