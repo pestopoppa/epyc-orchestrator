@@ -47,7 +47,8 @@ FABLE_AUTHORITY_ENV: dict[str, str] = {
 
 LOCAL_PLANNER_DEFAULT_ENV: dict[str, str] = {
     "AUTOPILOT_PLANNER_PRIMARY": "local_ingest",
-    "AUTOPILOT_PLANNER_CRITIC": "codex",
+    "AUTOPILOT_PLANNER_CRITIC": "local_frontdoor",
+    "AUTOPILOT_PLANNER_CRITIC_FALLBACK": "claude",
     "AUTOPILOT_LOCAL_PLANNER_ROLE": "ingest_long_context",
     "AUTOPILOT_LOCAL_PLANNER_MODEL": "ingest_long_context",
     "AUTOPILOT_LOCAL_PLANNER_TEMPERATURE": "0",
@@ -149,7 +150,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Start AutoPilot with the Fable authority/tool-sentinel env."
     )
-    parser.add_argument("--max-trials", type=int, default=2000)
+    parser.add_argument("--max-trials", type=int, default=3000)
     parser.add_argument("--log-dir", type=Path, default=DEFAULT_LOG_DIR)
     parser.add_argument(
         "--allow-existing",

@@ -41,7 +41,8 @@ def test_authority_env_defaults_to_local_ingest_planner_without_overriding() -> 
     )
 
     assert env["AUTOPILOT_PLANNER_PRIMARY"] == "claude"
-    assert env["AUTOPILOT_PLANNER_CRITIC"] == "codex"
+    assert env["AUTOPILOT_PLANNER_CRITIC"] == "local_frontdoor"
+    assert env["AUTOPILOT_PLANNER_CRITIC_FALLBACK"] == "claude"
     assert env["AUTOPILOT_LOCAL_PLANNER_ROLE"] == "ingest_long_context"
     assert env["AUTOPILOT_LOCAL_PLANNER_MODEL"] == "ingest_long_context"
     assert env["AUTOPILOT_LOCAL_PLANNER_TEMPERATURE"] == "0"
@@ -49,6 +50,7 @@ def test_authority_env_defaults_to_local_ingest_planner_without_overriding() -> 
 
     default_env = launcher.authority_env({})
     assert default_env["AUTOPILOT_PLANNER_PRIMARY"] == "local_ingest"
+    assert default_env["AUTOPILOT_PLANNER_CRITIC"] == "local_frontdoor"
 
 
 def test_authority_env_sets_latest_repo_readiness_pickup(
@@ -82,14 +84,14 @@ def test_authority_env_preserves_explicit_repo_readiness_pickup(
 def test_build_command_uses_autopilot_start_and_default_trials(monkeypatch) -> None:
     monkeypatch.setattr(launcher, "python_executable", lambda: "/venv/bin/python3")
 
-    command = launcher.build_command(2000)
+    command = launcher.build_command(3000)
 
     assert command == [
         "/venv/bin/python3",
         "scripts/autopilot/autopilot.py",
         "start",
         "--max-trials",
-        "2000",
+        "3000",
     ]
 
 

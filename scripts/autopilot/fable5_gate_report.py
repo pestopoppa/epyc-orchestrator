@@ -1995,7 +1995,7 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
                         "At a controlled trial boundary, reload the orchestrator API "
                         "with AUTOPILOT_TOOL_SENTINELS=1, restart AutoPilot with "
                         "uv run python scripts/autopilot/"
-                        "start_fable_authority_daemon.py --max-trials 2000, "
+                        "start_fable_authority_daemon.py --max-trials 3000, "
                         "then run AUTOPILOT_TOOL_SENTINELS=1 uv run python "
                         "scripts/autopilot/gate3_tool_telemetry.py"
                     ),
