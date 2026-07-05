@@ -44,11 +44,22 @@ FABLE_AUTHORITY_ENV: dict[str, str] = {
     "AUTOPILOT_STEPPING_STONES": "1",
 }
 
+LOCAL_PLANNER_DEFAULT_ENV: dict[str, str] = {
+    "AUTOPILOT_PLANNER_PRIMARY": "local_ingest",
+    "AUTOPILOT_PLANNER_CRITIC": "codex",
+    "AUTOPILOT_LOCAL_PLANNER_ROLE": "ingest_long_context",
+    "AUTOPILOT_LOCAL_PLANNER_MODEL": "ingest_long_context",
+    "AUTOPILOT_LOCAL_PLANNER_TEMPERATURE": "0",
+    "AUTOPILOT_LOCAL_PLANNER_MAX_TOKENS": "2048",
+}
+
 
 def authority_env(base: dict[str, str] | None = None) -> dict[str, str]:
     """Return an environment with required Fable authority keys enforced."""
     env = dict(os.environ if base is None else base)
     env.update(FABLE_AUTHORITY_ENV)
+    for key, value in LOCAL_PLANNER_DEFAULT_ENV.items():
+        env.setdefault(key, value)
     if REPO_READINESS_PICKUP_ENV not in env:
         pickup = latest_repo_readiness_pickup(env)
         if pickup is not None:
@@ -112,6 +123,7 @@ def _timestamp() -> str:
 
 def _env_subset(env: dict[str, str]) -> dict[str, str]:
     keys = set(FABLE_AUTHORITY_ENV)
+    keys.update(LOCAL_PLANNER_DEFAULT_ENV)
     keys.add(REPO_READINESS_PICKUP_ENV)
     return {key: env[key] for key in sorted(keys) if key in env}
 

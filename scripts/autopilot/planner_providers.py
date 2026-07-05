@@ -17,6 +17,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
 
+import httpx
+
 from controller_io import (
     _append_planner_archive,
     _open_planner_tap,
@@ -270,6 +272,161 @@ class CodexPlannerProvider:
                     pass
 
 
+class LocalPlannerProvider:
+    """OpenAI-compatible local planner drafter.
+
+    This is intended for routine draft generation against the live local stack
+    while the coordinator keeps a cloud critic as the binding reviewer. It calls
+    the orchestrator's OpenAI-compatible endpoint with REPL disabled so planner
+    drafting remains a text-only inference request, not an execution surface.
+    """
+
+    name = "local"
+    supports_resume = False
+
+    def __init__(
+        self,
+        *,
+        url: str | None = None,
+        role: str | None = None,
+        model: str | None = None,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        top_k: int | None = None,
+        seed: int | None = None,
+        max_tokens: int | None = None,
+        name: str | None = None,
+    ) -> None:
+        self._url = (
+            url
+            or os.environ.get("AUTOPILOT_LOCAL_PLANNER_URL")
+            or "http://localhost:8000/v1/chat/completions"
+        )
+        self._role = role or os.environ.get("AUTOPILOT_LOCAL_PLANNER_ROLE") or "frontdoor"
+        self._model = model or os.environ.get("AUTOPILOT_LOCAL_PLANNER_MODEL") or self._role
+        self._temperature = (
+            float(temperature)
+            if temperature is not None
+            else _env_float("AUTOPILOT_LOCAL_PLANNER_TEMPERATURE", 0.0)
+        )
+        self._top_p = (
+            float(top_p)
+            if top_p is not None
+            else _env_optional_float("AUTOPILOT_LOCAL_PLANNER_TOP_P")
+        )
+        self._top_k = (
+            int(top_k)
+            if top_k is not None
+            else _env_optional_int("AUTOPILOT_LOCAL_PLANNER_TOP_K")
+        )
+        self._seed = (
+            int(seed)
+            if seed is not None
+            else _env_optional_int("AUTOPILOT_LOCAL_PLANNER_SEED")
+        )
+        self._max_tokens = (
+            int(max_tokens)
+            if max_tokens is not None
+            else _env_int("AUTOPILOT_LOCAL_PLANNER_MAX_TOKENS", 2048)
+        )
+        self.name = name or self.name
+
+    def invoke(
+        self,
+        prompt: str,
+        *,
+        role: str,
+        session_id: str | None = None,
+        timeout: int = 300,
+        cwd: Path | str | None = None,
+    ) -> PlannerProviderResult:
+        del session_id, cwd
+        start = time.time()
+        tap = _open_planner_tap()
+        payload = self._payload(prompt)
+        try:
+            if tap is not None:
+                _tap_write(
+                    tap,
+                    f"\n{'=' * 72}\n"
+                    f"[{datetime.now().isoformat(timespec='seconds')}] "
+                    f"PLANNER provider={self.name} role={role} start\n"
+                    f"url: {self._url}\n"
+                    f"local_role: {self._role}\n"
+                    f"prompt_chars: {len(prompt)}\n"
+                    f"{'-' * 72}\n",
+                )
+            with httpx.Client(timeout=timeout) as client:
+                response = client.post(self._url, json=payload)
+                response.raise_for_status()
+                data = response.json()
+            text = parse_openai_chat_response(data)
+            ok = bool(text.strip())
+            error = "" if ok else "empty response"
+            if ok:
+                _tap_write(
+                    tap,
+                    f"[END provider={self.name} role={role}] "
+                    f"result_chars={len(text)}\n{'=' * 72}\n",
+                )
+            else:
+                _tap_write(
+                    tap,
+                    f"[FAIL provider={self.name} role={role}] {error}\n{'=' * 72}\n",
+                )
+            result = PlannerProviderResult(
+                provider=self.name,
+                role=role,
+                text=text,
+                ok=ok,
+                error=error,
+                duration_s=time.time() - start,
+                raw_events=[json.dumps(data, default=str)[:4000]],
+            )
+            _archive_local_call(prompt, payload, result, data, url=self._url)
+            return result
+        except Exception as exc:
+            log.exception("Local planner provider failed")
+            result = PlannerProviderResult(
+                provider=self.name,
+                role=role,
+                ok=False,
+                error=str(exc),
+                duration_s=time.time() - start,
+                raw_events=[],
+            )
+            _tap_write(
+                tap,
+                f"[FAIL provider={self.name} role={role}] {str(exc)[:400]}\n{'=' * 72}\n",
+            )
+            _archive_local_call(prompt, payload, result, None, url=self._url)
+            return result
+        finally:
+            if tap is not None:
+                try:
+                    tap.close()
+                except Exception:
+                    pass
+
+    def _payload(self, prompt: str) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "model": self._model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": self._temperature,
+            "max_tokens": self._max_tokens,
+            "stream": False,
+            "x_orchestrator_role": self._role,
+            "x_disable_repl": True,
+        }
+        if self._top_p is not None:
+            payload["top_p"] = self._top_p
+        if self._top_k is not None:
+            payload["top_k"] = self._top_k
+        if self._seed is not None:
+            payload["seed"] = self._seed
+        return payload
+
+
 def parse_codex_jsonl(output: str) -> str:
     """Extract assistant text from Codex ``--json`` JSONL output."""
     parts: list[str] = []
@@ -294,6 +451,35 @@ def parse_codex_jsonl(output: str) -> str:
     return "".join(parts) if parts else output
 
 
+def parse_openai_chat_response(data: dict[str, Any]) -> str:
+    """Extract assistant text from an OpenAI-compatible chat response."""
+    choices = data.get("choices")
+    if isinstance(choices, list):
+        parts: list[str] = []
+        for choice in choices:
+            if not isinstance(choice, dict):
+                continue
+            message = choice.get("message")
+            if isinstance(message, dict):
+                content = message.get("content")
+                if isinstance(content, str):
+                    parts.append(content)
+                    continue
+                parts.extend(_message_text_parts(message))
+            delta = choice.get("delta")
+            if isinstance(delta, dict):
+                content = delta.get("content")
+                if isinstance(content, str):
+                    parts.append(content)
+        if parts:
+            return "".join(parts)
+    for key in ("content", "text", "output_text", "response"):
+        value = data.get(key)
+        if isinstance(value, str):
+            return value
+    return ""
+
+
 def get_planner_provider(name: str) -> PlannerProvider:
     normalized = (name or "").strip().lower()
     if normalized == "claude":
@@ -302,6 +488,20 @@ def get_planner_provider(name: str) -> PlannerProvider:
         return CodexPlannerProvider()
     if normalized in {"codex_critic", "codex-critic", "codex_reviewer", "codex-reviewer"}:
         return CodexPlannerProvider(name="codex_critic")
+    if normalized in {"local", "local_frontdoor", "frontdoor_local"}:
+        return LocalPlannerProvider(name="local")
+    if normalized in {"local_worker", "local_worker_general", "worker_general_local"}:
+        return LocalPlannerProvider(
+            role="worker_general",
+            model="worker_general",
+            name="local_worker",
+        )
+    if normalized in {"local_ingest", "local_ingest_long_context", "ingest_local"}:
+        return LocalPlannerProvider(
+            role="ingest_long_context",
+            model="ingest_long_context",
+            name="local_ingest",
+        )
     raise ValueError(f"Unknown planner provider: {name}")
 
 
@@ -378,3 +578,80 @@ def _archive_codex_call(
             "events": raw_events[-200:],
         }
     )
+
+
+def _archive_local_call(
+    prompt: str,
+    payload: dict[str, Any],
+    result: PlannerProviderResult,
+    response_data: dict[str, Any] | None,
+    *,
+    url: str,
+) -> None:
+    import hashlib
+
+    _append_planner_archive(
+        {
+            "ts": time.time(),
+            "ts_iso": datetime.now().isoformat(timespec="seconds"),
+            "provider": result.provider,
+            "role": result.role,
+            "duration_s": result.duration_s,
+            "ok": result.ok,
+            "error": result.error,
+            "prompt_chars": len(prompt),
+            "prompt_sha256_16": hashlib.sha256(prompt.encode()).hexdigest()[:16],
+            "result_chars": len(result.text),
+            "result_preview": result.text[:500],
+            "local_planner": {
+                "url": url,
+                "model": payload.get("model"),
+                "x_orchestrator_role": payload.get("x_orchestrator_role"),
+                "x_disable_repl": payload.get("x_disable_repl"),
+                "temperature": payload.get("temperature"),
+                "top_p": payload.get("top_p"),
+                "top_k": payload.get("top_k"),
+                "seed": payload.get("seed"),
+                "max_tokens": payload.get("max_tokens"),
+            },
+            "response_preview": (
+                json.dumps(response_data, default=str)[:1000]
+                if response_data is not None
+                else ""
+            ),
+        }
+    )
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_optional_int(name: str) -> int | None:
+    value = os.environ.get(name)
+    if value is None or not value.strip():
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _env_optional_float(name: str) -> float | None:
+    value = os.environ.get(name)
+    if value is None or not value.strip():
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None

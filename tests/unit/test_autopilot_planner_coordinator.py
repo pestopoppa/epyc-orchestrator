@@ -327,6 +327,55 @@ def test_fallback_draft_pauses_when_independent_primary_critique_fails() -> None
     assert planner_coordinator.uncritiqued_dispatch_block_reason(decision) == "critic_unavailable"
 
 
+def test_local_failure_codex_fallback_can_dispatch_without_external_critic() -> None:
+    local_ingest = FakeProvider(
+        "local_ingest",
+        [
+            PlannerProviderResult(
+                provider="local_ingest",
+                role="draft",
+                ok=False,
+                text="",
+                error="local stack unavailable",
+            )
+        ],
+    )
+    codex = FakeProvider(
+        "codex",
+        [
+            PlannerProviderResult(
+                provider="codex",
+                role="draft",
+                ok=True,
+                text=_action_text({"type": "numeric_trial", "surface": "memrl_retrieval"}),
+            )
+        ],
+    )
+
+    decision = planner_coordinator.plan_with_providers(
+        "prompt",
+        session_id=None,
+        planner_state={},
+        settings=PlannerSettings(
+            primary="local_ingest",
+            critic="codex",
+            mode="draft_critique",
+            critique_policy="always",
+        ),
+        provider_factory=_factory({"local_ingest": local_ingest, "codex": codex}),
+    )
+
+    assert decision.draft_provider == "codex"
+    assert decision.critic_provider == ""
+    assert decision.critique is None
+    assert decision.degraded is True
+    assert "local_ingest draft failed" in decision.fallback_reason
+    assert planner_coordinator._model_of("local_ingest") == "local"
+    assert planner_coordinator.uncritiqued_dispatch_block_reason(decision) == ""
+    assert [call["role"] for call in local_ingest.calls] == ["draft"]
+    assert [call["role"] for call in codex.calls] == ["draft"]
+
+
 def test_nonresumable_primary_clears_persisted_session_id() -> None:
     action = {"type": "seed_batch", "n_questions": 10}
     claude = FakeProvider(

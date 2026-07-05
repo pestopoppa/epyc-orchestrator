@@ -296,7 +296,7 @@ def plan_with_providers(
                 and primary_name != draft.provider
                 and not primary_circuit_open_before_draft
             )
-            if allow_primary_fallback_critique:
+            if allow_primary_fallback_critique and _model_of(primary_name) != "local":
                 critique_provider_name = primary_name
             else:
                 degraded = True
@@ -440,6 +440,11 @@ def uncritiqued_dispatch_block_reason(
     crit = decision.critique
     # Case A — no trusted primary draft (no critique object).
     if crit is None:
+        if decision.fallback_reason and _model_of(decision.draft_provider) == "codex":
+            # Operator-approved rollout mode: if the local drafter fails but Codex
+            # produces a schema-valid fallback draft, dispatch it and learn from
+            # the visible provider/fallback telemetry instead of pausing the loop.
+            return ""
         if action.get("type") in OBSERVATIONAL_ACTIONS:
             return ""
         return "critic_unavailable"
@@ -827,6 +832,17 @@ def _other_provider(name: str) -> str:
 # the dispatch set in planner_providers.get_planner_provider: codex_critic /
 # codex-critic / codex_reviewer / codex-reviewer all launch the codex binary.
 _CODEX_ROLE_NAMES = {"codex", "codex_critic", "codex-critic", "codex_reviewer", "codex-reviewer"}
+_LOCAL_ROLE_NAMES = {
+    "local",
+    "local_frontdoor",
+    "frontdoor_local",
+    "local_worker",
+    "local_worker_general",
+    "worker_general_local",
+    "local_ingest",
+    "local_ingest_long_context",
+    "ingest_local",
+}
 
 
 def _model_of(name: str) -> str:
@@ -841,6 +857,8 @@ def _model_of(name: str) -> str:
         return "claude"
     if normalized in _CODEX_ROLE_NAMES:
         return "codex"
+    if normalized in _LOCAL_ROLE_NAMES:
+        return "local"
     return normalized
 
 

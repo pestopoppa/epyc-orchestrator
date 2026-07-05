@@ -30,6 +30,22 @@ def test_authority_env_forces_required_flags() -> None:
     assert env["AUTOPILOT_PLANNER_TIMEOUT"] == "600"
 
 
+def test_authority_env_defaults_to_local_ingest_planner_without_overriding() -> None:
+    env = launcher.authority_env(
+        {
+            "AUTOPILOT_PLANNER_PRIMARY": "claude",
+            "AUTOPILOT_LOCAL_PLANNER_MAX_TOKENS": "4096",
+        }
+    )
+
+    assert env["AUTOPILOT_PLANNER_PRIMARY"] == "claude"
+    assert env["AUTOPILOT_PLANNER_CRITIC"] == "codex"
+    assert env["AUTOPILOT_LOCAL_PLANNER_ROLE"] == "ingest_long_context"
+    assert env["AUTOPILOT_LOCAL_PLANNER_MODEL"] == "ingest_long_context"
+    assert env["AUTOPILOT_LOCAL_PLANNER_TEMPERATURE"] == "0"
+    assert env["AUTOPILOT_LOCAL_PLANNER_MAX_TOKENS"] == "4096"
+
+
 def test_authority_env_sets_latest_repo_readiness_pickup(
     monkeypatch,
     tmp_path,
