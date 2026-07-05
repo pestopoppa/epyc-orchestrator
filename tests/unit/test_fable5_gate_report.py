@@ -1386,6 +1386,10 @@ def test_a9_preregistered_source_reward_target_suppresses_next_action(
     assert "source-reward target contract is preregistered_offline_training_target" in (
         section.summary
     )
+    assert section.status == "ready"
+    assert "A9 pairwise source-acquisition window is closed" in section.summary
+    assert section.details["source_reward_ranker_ready"] is True
+    assert section.details["source_reward_target_preregistered"] is True
     assert section.details["source_reward_target_contract"]["status"] == (
         "preregistered_offline_training_target"
     )

@@ -592,6 +592,25 @@ def _w8_candidate_generation_required(
     return any(int(status_counts.get(status) or 0) > 0 for status in terminal_statuses)
 
 
+def _a9_source_reward_ranker_ready(
+    *,
+    source_reward_decision: dict[str, Any],
+    source_reward_ranker_aggregate_decision: dict[str, Any],
+    source_reward_ranker_cv_decision: dict[str, Any],
+    source_reward_ranker_holdout_decision: dict[str, Any],
+) -> bool:
+    """Return True when the offline source-reward A9 target has full ranker evidence."""
+    return (
+        source_reward_decision.get("status") == "contract_ready"
+        and source_reward_ranker_aggregate_decision.get("status")
+        == "pairwise_ranker_signal"
+        and source_reward_ranker_cv_decision.get("status")
+        == "pairwise_ranker_signal"
+        and source_reward_ranker_holdout_decision.get("status")
+        == "holdout_signal_consistent"
+    )
+
+
 def ds_e1_section(
     packet: dict[str, Any],
     *,
@@ -800,8 +819,6 @@ def a9_collection_section(
     ready = bool(status.get("ready"))
     status_label = str(status.get("status") or "unknown")
     section_status = "ready" if ready else "blocked"
-    if status_label == "no_runnable_batches":
-        section_status = "attention"
     contract_summary: dict[str, Any] = {}
     if contract_summary_path is not None and contract_summary_path.exists():
         try:
@@ -878,6 +895,32 @@ def a9_collection_section(
             )
         except Exception as exc:
             source_reward_target_contract = {"load_error": str(exc)}
+    source_reward_ranker_ready = _a9_source_reward_ranker_ready(
+        source_reward_decision=source_reward_decision,
+        source_reward_ranker_aggregate_decision=(
+            source_reward_ranker_aggregate_decision
+        ),
+        source_reward_ranker_cv_decision=source_reward_ranker_cv_decision,
+        source_reward_ranker_holdout_decision=source_reward_ranker_holdout_decision,
+    )
+    source_reward_target_preregistered = (
+        source_reward_target_contract.get("status")
+        == "preregistered_offline_training_target"
+    )
+    candidate_contract_exhausted = (
+        contract_decision.get("status") == "insufficient_contrast"
+    )
+    status_phrase = status_label
+    if status_label == "no_runnable_batches":
+        if (
+            candidate_contract_exhausted
+            and source_reward_ranker_ready
+            and source_reward_target_preregistered
+        ):
+            section_status = "ready"
+            status_phrase = "closed"
+        else:
+            section_status = "attention"
     summary_tail = ""
     if status_label == "no_runnable_batches" and contract_decision:
         summary_tail = (
@@ -904,7 +947,7 @@ def a9_collection_section(
         status=section_status,
         summary=(
             "A9 pairwise source-acquisition window "
-            f"is {status_label} with {status.get('batch_count', 0)} batch(es)"
+            f"is {status_phrase} with {status.get('batch_count', 0)} batch(es)"
             f"{summary_tail}."
         ),
         blockers=blockers,
@@ -921,6 +964,7 @@ def a9_collection_section(
             ),
             "candidate_contract_decision": contract_decision or None,
             "candidate_contract_coverage": contract_coverage or None,
+            "candidate_contract_exhausted": candidate_contract_exhausted,
             "source_reward_diagnostic_summary_path": (
                 str(source_reward_diagnostic_summary_path)
                 if source_reward_diagnostic_summary_path is not None
@@ -944,6 +988,7 @@ def a9_collection_section(
             "source_reward_ranker_holdout_decision": (
                 source_reward_ranker_holdout_decision or None
             ),
+            "source_reward_ranker_ready": source_reward_ranker_ready,
             "source_reward_target_contract_path": (
                 str(source_reward_target_contract_path)
                 if source_reward_target_contract_path is not None
@@ -951,6 +996,9 @@ def a9_collection_section(
             ),
             "source_reward_target_contract": (
                 source_reward_target_contract or None
+            ),
+            "source_reward_target_preregistered": (
+                source_reward_target_preregistered
             ),
             "autopilot_guard": status.get("autopilot_guard"),
             "blockers": blockers,
@@ -1858,14 +1906,17 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
             contract_next = str(contract_decision.get("recommended_next") or "")
             source_reward_ranker_ready = False
             if contract_status == "insufficient_contrast":
-                source_reward_ranker_ready = (
-                    source_reward_decision.get("status") == "contract_ready"
-                    and source_reward_ranker_aggregate_decision.get("status")
-                    == "pairwise_ranker_signal"
-                    and source_reward_ranker_cv_decision.get("status")
-                    == "pairwise_ranker_signal"
-                    and source_reward_ranker_holdout_decision.get("status")
-                    == "holdout_signal_consistent"
+                source_reward_ranker_ready = _a9_source_reward_ranker_ready(
+                    source_reward_decision=source_reward_decision,
+                    source_reward_ranker_aggregate_decision=(
+                        source_reward_ranker_aggregate_decision
+                    ),
+                    source_reward_ranker_cv_decision=(
+                        source_reward_ranker_cv_decision
+                    ),
+                    source_reward_ranker_holdout_decision=(
+                        source_reward_ranker_holdout_decision
+                    ),
                 )
                 if source_reward_ranker_ready:
                     if (
