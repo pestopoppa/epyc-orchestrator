@@ -1226,6 +1226,8 @@ def _run_loop_inner_seq_harness(
     verdict_seq: dict[str, Any],
     force_fresh_eval_context: dict[str, Any] | None = None,
     learning_exclusion: tuple[str | None, str, Any] = (None, "", None),
+    use_controller: bool = False,
+    planner_should_not_run: bool = False,
 ) -> tuple[dict[str, Any], list[tuple[bool, int]]]:
     baseline_update_calls: list[tuple[bool, int]] = []
 
@@ -1607,11 +1609,17 @@ def _run_loop_inner_seq_harness(
         lambda *args, **kwargs: {},
     )
     monkeypatch.setattr(autopilot, "get_preflight_diagnostics", None)
+    if planner_should_not_run:
+
+        def fail_plan_with_providers(*args: Any, **kwargs: Any) -> Any:
+            raise AssertionError("planner should be bypassed for forced seq action")
+
+        monkeypatch.setattr(autopilot, "plan_with_providers", fail_plan_with_providers)
 
     autopilot._run_loop_inner(
         max_trials=1,
         dry_run=False,
-        use_controller=False,
+        use_controller=use_controller,
         tui=None,
     )
 
@@ -1667,6 +1675,46 @@ def test_run_loop_inner_forwards_finalized_seq_to_gate_and_clears_pending(
         },
     }
     assert "seq_pending_promotion_fresh_eval" not in returned_state
+
+
+def test_run_loop_inner_forced_seq_fresh_eval_bypasses_controller_planner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state: dict[str, Any] = {
+        "trial_counter": 0,
+        "paused": False,
+        "td_errors": [],
+        "seeder_state": {},
+        "consecutive_failures": 0,
+        "quality_history": [],
+        "quality_history_by_tier": {},
+        "baseline_state": {},
+    }
+
+    returned_state, baseline_update_calls = _run_loop_inner_seq_harness(
+        monkeypatch,
+        state=state,
+        verdict_seq={
+            "candidate": "candidate-controller",
+            "confirmed": True,
+            "E_quality": 120.0,
+            "E_rate_noninf": 120.0,
+            "z": 0.2,
+            "r_eff": 200,
+        },
+        force_fresh_eval_context={
+            "candidate": "candidate-controller",
+            "source_trial_id": 17,
+        },
+        use_controller=True,
+        planner_should_not_run=True,
+    )
+
+    assert baseline_update_calls == [(True, 0)]
+    assert returned_state["seq_last_promotion_finalized"]["candidate"] == (
+        "candidate-controller"
+    )
+    assert "session_id" not in returned_state
 
 
 def test_run_loop_inner_nonfinalized_seq_does_not_promote_and_leaves_pending(

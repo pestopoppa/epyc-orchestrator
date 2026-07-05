@@ -1762,6 +1762,71 @@ def _maybe_force_seq_candidate_replay(
     return forced, next_rationale, dict(payload)
 
 
+def _maybe_force_seq_due_action(
+    *,
+    state: dict[str, Any],
+    journal: ExperimentJournal,
+    tier: int,
+    blacklist: list[dict[str, Any]],
+    trial_counter: int,
+    enabled: bool,
+) -> tuple[
+    dict[str, Any] | None,
+    dict[str, Any] | None,
+    dict[str, Any] | None,
+    dict[str, Any] | None,
+    dict[str, Any] | None,
+]:
+    """Return a forced sequential action before spending a planner turn.
+
+    These due-checks consume only journal/state/blacklist data. Running them
+    after the controller meant AutoPilot could pay for a full draft+critique and
+    then discard it for an obligatory seq replay/fresh-eval. Keep the same
+    priority order as the historical post-planner override.
+    """
+    placeholder_action = {"type": "seed_batch", "n_questions": SAFE_FALLBACK_SEED_N}
+    placeholder_rationale: dict[str, Any] = {}
+
+    action, rationale, fresh_eval_context = _maybe_force_seq_promotion_fresh_eval(
+        placeholder_action,
+        state=state,
+        blacklist=blacklist,
+        rationale=placeholder_rationale,
+        trial_counter=trial_counter,
+        enabled=enabled,
+    )
+    if fresh_eval_context is not None:
+        return action, rationale, fresh_eval_context, None, None
+
+    action, rationale, baseline_reference = _maybe_force_seq_baseline_draw(
+        placeholder_action,
+        state=state,
+        journal=journal,
+        tier=tier,
+        blacklist=blacklist,
+        rationale=placeholder_rationale,
+        trial_counter=trial_counter,
+        enabled=enabled,
+    )
+    if baseline_reference is not None:
+        return action, rationale, None, baseline_reference, None
+
+    action, rationale, replay_context = _maybe_force_seq_candidate_replay(
+        placeholder_action,
+        state=state,
+        journal=journal,
+        tier=tier,
+        blacklist=blacklist,
+        rationale=placeholder_rationale,
+        trial_counter=trial_counter,
+        enabled=enabled,
+    )
+    if replay_context is not None:
+        return action, rationale, None, None, replay_context
+
+    return None, None, None, None, None
+
+
 def _update_seq_promotion_fresh_eval_state(
     state: dict[str, Any],
     *,
@@ -4433,7 +4498,20 @@ def _run_loop_inner(
         if tui is not None:
             tui.set_status("selecting next trial (controller)…")
         critic_fallback_skip: SkipOutcome | None = None
-        if use_controller:
+        planner_decision: Any | None = None
+        seq_fresh_eval_context: dict[str, Any] | None = None
+        seq_baseline_draw_reference: dict[str, Any] | None = None
+        seq_candidate_replay_context: dict[str, Any] | None = None
+        seq_due_bypassed_planner = False
+        action, rationale, seq_fresh_eval_context, seq_baseline_draw_reference, seq_candidate_replay_context = _maybe_force_seq_due_action(
+            state=state,
+            journal=journal,
+            tier=DEFAULT_FRONTIER_TIER,
+            blacklist=blacklist,
+            trial_counter=trial_counter,
+            enabled=gate.use_sequential,
+        )
+        if use_controller and action is None:
             phase.set(
                 "planner_prompt_build",
                 trial_id=trial_counter,
@@ -4903,7 +4981,7 @@ def _run_loop_inner(
             else:
                 # Draft accepted (approve / not critiqued / no substitution).
                 state["consecutive_rejected_drafts"] = 0
-        else:
+        elif not use_controller:
             # Autonomous mode: species selection by budget
             phase.set("autonomous_select", trial_id=trial_counter)
             species = meta.select_species()
@@ -4916,6 +4994,20 @@ def _run_loop_inner(
                 action,
                 blacklist,
                 rationale,
+            )
+        else:
+            predicted_objectives = {}
+            rationale = rationale or {}
+            stagnation_signal = ""
+            state["consecutive_rejected_drafts"] = 0
+            seq_due_bypassed_planner = True
+            phase.set(
+                "planner_bypassed_seq_due",
+                trial_id=trial_counter,
+                action_type=action.get("type", ""),
+                seq_promotion_fresh_eval=seq_fresh_eval_context is not None,
+                seq_baseline_draw=seq_baseline_draw_reference is not None,
+                seq_candidate_replay=seq_candidate_replay_context is not None,
             )
 
         if not action:
@@ -4963,55 +5055,53 @@ def _run_loop_inner(
                 log.warning("No action proposed, defaulting to seed_batch")
                 action = {"type": "seed_batch", "n_questions": SAFE_FALLBACK_SEED_N}
 
-        # Meta actions are allowed as occasional bookkeeping, but a repeated
-        # metric-free action means the planner is avoiding the experiment loop.
-        action, rationale = _force_metric_action_after_meta(
-            action,
-            state,
-            rationale,
-            blacklist,
-        )
+        if not seq_due_bypassed_planner:
+            # Meta actions are allowed as occasional bookkeeping, but a repeated
+            # metric-free action means the planner is avoiding the experiment loop.
+            action, rationale = _force_metric_action_after_meta(
+                action,
+                state,
+                rationale,
+                blacklist,
+            )
 
-        # Experiment quota: once memory is large, cap consecutive passive
-        # (seed/distill) actions so the planner cannot rationalize no-op work
-        # forever — force a frontier-moving experiment instead.
-        action, rationale = _enforce_experiment_quota(
-            action, state, memory_count, rationale, trial_counter, blacklist,
-        )
+            # Experiment quota: once memory is large, cap consecutive passive
+            # (seed/distill) actions so the planner cannot rationalize no-op work
+            # forever — force a frontier-moving experiment instead.
+            action, rationale = _enforce_experiment_quota(
+                action, state, memory_count, rationale, trial_counter, blacklist,
+            )
 
-        seq_fresh_eval_context: dict[str, Any] | None = None
-        action, rationale, seq_fresh_eval_context = _maybe_force_seq_promotion_fresh_eval(
-            action,
-            state=state,
-            blacklist=blacklist,
-            rationale=rationale,
-            trial_counter=trial_counter,
-            enabled=gate.use_sequential,
-        )
-        seq_baseline_draw_reference: dict[str, Any] | None = None
-        seq_candidate_replay_context: dict[str, Any] | None = None
-        if seq_fresh_eval_context is None:
-            action, rationale, seq_baseline_draw_reference = _maybe_force_seq_baseline_draw(
+            action, rationale, seq_fresh_eval_context = _maybe_force_seq_promotion_fresh_eval(
                 action,
                 state=state,
-                journal=journal,
-                tier=DEFAULT_FRONTIER_TIER,
                 blacklist=blacklist,
                 rationale=rationale,
                 trial_counter=trial_counter,
                 enabled=gate.use_sequential,
             )
-        if seq_fresh_eval_context is None and seq_baseline_draw_reference is None:
-            action, rationale, seq_candidate_replay_context = _maybe_force_seq_candidate_replay(
-                action,
-                state=state,
-                journal=journal,
-                tier=DEFAULT_FRONTIER_TIER,
-                blacklist=blacklist,
-                rationale=rationale,
-                trial_counter=trial_counter,
-                enabled=gate.use_sequential,
-            )
+            if seq_fresh_eval_context is None:
+                action, rationale, seq_baseline_draw_reference = _maybe_force_seq_baseline_draw(
+                    action,
+                    state=state,
+                    journal=journal,
+                    tier=DEFAULT_FRONTIER_TIER,
+                    blacklist=blacklist,
+                    rationale=rationale,
+                    trial_counter=trial_counter,
+                    enabled=gate.use_sequential,
+                )
+            if seq_fresh_eval_context is None and seq_baseline_draw_reference is None:
+                action, rationale, seq_candidate_replay_context = _maybe_force_seq_candidate_replay(
+                    action,
+                    state=state,
+                    journal=journal,
+                    tier=DEFAULT_FRONTIER_TIER,
+                    blacklist=blacklist,
+                    rationale=rationale,
+                    trial_counter=trial_counter,
+                    enabled=gate.use_sequential,
+                )
 
         action, rationale = _maybe_force_frontier_rerun_action(
             action,
