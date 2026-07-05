@@ -1861,6 +1861,47 @@ def test_exhausted_critic_seed_fallback_uses_numeric_when_surface_ban_is_legacy(
     assert skip is None
 
 
+def test_critic_reject_seed_fallback_repairs_to_w8_candidate(monkeypatch) -> None:
+    monkeypatch.setattr(
+        autopilot,
+        "_configured_numeric_surfaces",
+        lambda: ("repl_budget",),
+    )
+
+    action, rationale, skip, repaired = autopilot._repair_critic_reject_fallback_for_w8(
+        {"type": "seed_batch", "n_questions": autopilot.SAFE_FALLBACK_SEED_N},
+        [],
+        {"falsifier": "original"},
+        trial_counter=0,
+        w8_replay_pressure_text=(
+            "W8 replay pressure: 0/1 accumulating candidate(s) are replayable "
+            "(blocked=unreplayable_action=seed_batch:1)."
+        ),
+    )
+
+    assert skip is None
+    assert repaired is True
+    assert action == {"type": "numeric_trial", "surface": "repl_budget", "params": {}}
+    assert rationale["w8_candidate_generation_replaced"] is True
+    assert rationale["critic_reject_loop_repaired_by_w8_candidate"] is True
+    assert rationale["falsifier"] == "original"
+
+
+def test_critic_reject_fallback_not_repaired_without_w8_pressure() -> None:
+    action, rationale, skip, repaired = autopilot._repair_critic_reject_fallback_for_w8(
+        {"type": "seed_batch", "n_questions": autopilot.SAFE_FALLBACK_SEED_N},
+        [],
+        {"falsifier": "original"},
+        trial_counter=0,
+        w8_replay_pressure_text="W8 replay pressure: 1/1 accumulating candidate(s) are replayable.",
+    )
+
+    assert skip is None
+    assert repaired is False
+    assert action == {"type": "seed_batch", "n_questions": autopilot.SAFE_FALLBACK_SEED_N}
+    assert rationale == {"falsifier": "original"}
+
+
 def test_first_meta_action_is_allowed() -> None:
     action, rationale = autopilot._force_metric_action_after_meta(
         {"type": "distill_knowledge", "last_n": 10},

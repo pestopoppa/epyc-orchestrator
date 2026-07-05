@@ -380,8 +380,9 @@ def test_action_availability_surfaces_w8_candidate_generation_priority(
     assert "Priority pressure:" in availability
     assert "W8 candidate generation is the active strict blocker" in availability
     assert "Optuna-suggested numeric_trial that journals applied params" in availability
-    assert "deep_eval" in viable
-    assert "seed_batch" in viable
+    assert "deep_eval" not in viable
+    assert "seed_batch" not in viable
+    assert "structural_prune" not in viable
 
 
 def test_w8_candidate_generation_pressure_ignores_replayable_candidates() -> None:

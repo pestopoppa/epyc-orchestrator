@@ -3881,12 +3881,27 @@ def _build_action_availability(
     cautions: dict[str, str] = {}
     priority: list[str] = []
 
-    if _w8_candidate_generation_pressure(w8_replay_pressure_text):
+    w8_candidate_generation_active = _w8_candidate_generation_pressure(
+        w8_replay_pressure_text
+    )
+    if w8_candidate_generation_active:
         priority.append(
             "W8 candidate generation is the active strict blocker: prefer an "
             "explicit or Optuna-suggested numeric_trial that journals applied params, "
             "or a one-flag structural_experiment. Treat seed_batch, deep_eval, and "
             "structural_prune as deferrals unless a seq due action is forcing them."
+        )
+        blocked["seed_batch"] = (
+            "W8 candidate generation is active; seed_batch cannot create replayable "
+            "W8 candidate evidence"
+        )
+        blocked["deep_eval"] = (
+            "W8 candidate generation is active; deep_eval validates candidates but "
+            "does not create a replayable candidate"
+        )
+        blocked["structural_prune"] = (
+            "W8 candidate generation is active; structural_prune is not replayable "
+            "W8 candidate evidence"
         )
 
     blocked.update(_type_only_blacklisted_actions(blacklist))
@@ -3921,7 +3936,7 @@ def _build_action_availability(
         )
 
     seed_exhaustion = _seed_fallback_exhaustion_reason(blacklist)
-    if seed_exhaustion:
+    if seed_exhaustion and "seed_batch" not in blocked:
         blocked["seed_batch"] = (
             "all configured measured seed fallback candidates are blacklisted; "
             f"last reason: {seed_exhaustion}"
@@ -3973,7 +3988,7 @@ def _build_action_availability(
         for item in priority:
             lines.append(f"- {item}")
     if blocked:
-        lines.append("Currently unavailable:")
+        lines.append("Currently unavailable for active constraints:")
         for action_type, reason in sorted(blocked.items()):
             lines.append(f"- `{action_type}`: {reason}")
     if cautions:
@@ -4072,6 +4087,43 @@ def _replace_w8_candidate_generation_deferral(
         json.dumps(replacement, default=str),
     )
     return replacement, next_rationale
+
+
+def _repair_critic_reject_fallback_for_w8(
+    action: dict[str, Any],
+    blacklist: list[dict[str, Any]],
+    rationale: dict[str, Any] | None,
+    *,
+    trial_counter: int,
+    w8_replay_pressure_text: str,
+) -> tuple[dict[str, Any], dict[str, Any] | None, SkipOutcome | None, bool]:
+    """Keep critic fallback paths aligned with the active W8 replayability gate."""
+    action, rationale, seed_skip = _replace_exhausted_critic_seed_fallback(
+        action,
+        blacklist,
+        rationale,
+        trial_counter=trial_counter,
+    )
+    if seed_skip is not None:
+        return action, rationale, seed_skip, False
+
+    action, rationale = _replace_w8_candidate_generation_deferral(
+        action,
+        blacklist,
+        rationale,
+        trial_counter=trial_counter,
+        w8_replay_pressure_text=w8_replay_pressure_text,
+    )
+    repaired = (
+        _w8_candidate_generation_pressure(w8_replay_pressure_text)
+        and _w8_candidate_generation_deferral_reason(action) is None
+    )
+    if repaired:
+        rationale = {
+            **(rationale or {}),
+            "critic_reject_loop_repaired_by_w8_candidate": True,
+        }
+    return action, rationale, None, repaired
 
 
 def _build_exploration_block(
@@ -5634,12 +5686,13 @@ def _run_loop_inner(
             ):
                 _record_rejected_draft(state, draft_action, crit, trial_counter)
                 blacklist = load_blacklist()  # may have grown
-                action, rationale, critic_fallback_skip = (
-                    _replace_exhausted_critic_seed_fallback(
+                action, rationale, critic_fallback_skip, critic_rejection_repaired = (
+                    _repair_critic_reject_fallback_for_w8(
                         action,
                         blacklist,
                         rationale,
                         trial_counter=trial_counter,
+                        w8_replay_pressure_text=planner_evidence_text,
                     )
                 )
                 if critic_fallback_skip is not None:
@@ -5660,6 +5713,8 @@ def _run_loop_inner(
                         trial_id=trial_counter,
                     )
                     break
+                if critic_rejection_repaired:
+                    state["consecutive_rejected_drafts"] = 0
                 if (
                     int(state.get("consecutive_rejected_drafts", 0))
                     >= MAX_CONSECUTIVE_REJECTED_DRAFTS
