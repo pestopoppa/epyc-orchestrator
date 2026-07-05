@@ -90,6 +90,42 @@ def test_select_jobs_active_safe_only_requires_read_only_deterministic() -> None
     assert [job["job_id"] for job in selected] == ["active_safe"]
 
 
+def test_select_jobs_quiet_window_only_excludes_active_safe_jobs() -> None:
+    jobs_doc = {
+        "jobs": [
+            _job("model_chat"),
+            _job("active_safe", active_safe=True),
+            _job("second_model_chat"),
+        ]
+    }
+
+    selected = run_shadow_jobs.select_jobs(
+        jobs_doc,
+        schedule="nightly",
+        job_ids=[],
+        include_disabled=False,
+        allow_gated=False,
+        quiet_window_only=True,
+        max_jobs=0,
+    )
+
+    assert [job["job_id"] for job in selected] == ["model_chat", "second_model_chat"]
+
+
+def test_select_jobs_rejects_conflicting_runtime_filters() -> None:
+    with pytest.raises(run_shadow_jobs.ShadowBatchError, match="at most one"):
+        run_shadow_jobs.select_jobs(
+            {"jobs": [_job("active_safe", active_safe=True)]},
+            schedule="nightly",
+            job_ids=[],
+            include_disabled=False,
+            allow_gated=False,
+            active_safe_only=True,
+            quiet_window_only=True,
+            max_jobs=0,
+        )
+
+
 def test_requested_unrunnable_job_fails() -> None:
     jobs_doc = {"jobs": [_job("disabled", enabled=False)]}
 

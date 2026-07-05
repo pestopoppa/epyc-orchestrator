@@ -72,7 +72,10 @@ def select_jobs(
     allow_gated: bool,
     max_jobs: int,
     active_safe_only: bool = False,
+    quiet_window_only: bool = False,
 ) -> list[dict[str, Any]]:
+    if active_safe_only and quiet_window_only:
+        raise ShadowBatchError("select at most one of active_safe_only or quiet_window_only")
     selected: list[dict[str, Any]] = []
     requested = set(job_ids)
     for job in jobs_doc.get("jobs", []) or []:
@@ -89,7 +92,10 @@ def select_jobs(
             continue
         if not requested and not _scheduled_for(job, schedule):
             continue
-        if active_safe_only and not is_active_safe_job(job):
+        active_safe = is_active_safe_job(job)
+        if active_safe_only and not active_safe:
+            continue
+        if quiet_window_only and active_safe:
             continue
         selected.append(job)
         if max_jobs and len(selected) >= max_jobs:
@@ -147,6 +153,7 @@ def run_from_args(args: argparse.Namespace) -> dict[str, Any]:
         include_disabled=args.include_disabled,
         allow_gated=args.allow_gated,
         active_safe_only=getattr(args, "active_safe_only", False),
+        quiet_window_only=getattr(args, "quiet_window_only", False),
         max_jobs=args.max_jobs,
     )
     rows: list[dict[str, Any]] = []
@@ -192,6 +199,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--active-safe-only",
         action="store_true",
         help="Select only read-only deterministic jobs marked active-safe.",
+    )
+    parser.add_argument(
+        "--quiet-window-only",
+        action="store_true",
+        help="Select only jobs that still require a quiet inference window.",
     )
     parser.add_argument("--api-url", default=run_job.DEFAULT_API_URL)
     parser.add_argument("--timeout-s", type=float, default=300.0)
