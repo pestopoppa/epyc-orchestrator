@@ -79,7 +79,15 @@ from species.prompt_forge import CODE_MUTATION_ALLOWLIST
 from digest import generate_digest, should_generate_today
 from short_term_memory import ShortTermMemory
 from self_criticism import SelfCriticism, generate_self_criticism
-from phase_status import AsyncTaskRunner, PhaseTracker
+from phase_status import (
+    AsyncTaskRunner,
+    PhaseTracker,
+    DEFAULT_JOURNAL_DIR as PHASE_DEFAULT_JOURNAL_DIR,
+    DEFAULT_OUTCOME_RECENT_WINDOW_TRIALS,
+    DEFAULT_OUTCOME_STALL_FRONTIER_TRIALS,
+    DEFAULT_OUTCOME_STALL_PROMOTION_TRIALS,
+    _build_outcome_progress_report as _phase_outcome_progress_report,
+)
 
 # 2026-05-22 Tranche-5 refactor — extracted modules. Public names re-imported below.
 import controller_io
@@ -987,6 +995,77 @@ def _build_eval_coverage_pressure(
             "authority-core evidence separate from planner-learning coverage."
         ),
     ]
+    return "\n".join(lines)
+
+
+def _format_outcome_rate(metric: Mapping[str, Any]) -> str:
+    count = metric.get("count", 0)
+    total = metric.get("total", 0)
+    rate = metric.get("rate")
+    rate_text = "n/a" if rate is None else f"{float(rate):.1%}"
+    return f"{count}/{total} ({rate_text})"
+
+
+def _build_outcome_progress_pressure(
+    journal_dir: Path | None = None,
+    *,
+    max_trials_since_frontier: int = DEFAULT_OUTCOME_STALL_FRONTIER_TRIALS,
+    max_trials_since_promotion: int = DEFAULT_OUTCOME_STALL_PROMOTION_TRIALS,
+    recent_window_trials: int = DEFAULT_OUTCOME_RECENT_WINDOW_TRIALS,
+) -> str:
+    """Render outcome-yield pressure for the controller prompt.
+
+    This is advisory planner context only. It reuses the phase-health outcome
+    progress fold but does not change health, safety, archive, or promotion
+    decisions.
+    """
+    try:
+        report = _phase_outcome_progress_report(
+            journal_dir=journal_dir or PHASE_DEFAULT_JOURNAL_DIR,
+            max_trials_since_frontier=max(0, int(max_trials_since_frontier)),
+            max_trials_since_promotion=max(0, int(max_trials_since_promotion)),
+            recent_window_trials=max(0, int(recent_window_trials)),
+        )
+    except Exception as exc:  # noqa: BLE001 - prompt advisory must not block planning
+        return f"(outcome progress pressure unavailable: {exc})"
+
+    status = str(report.get("status") or "unknown")
+    rates = report.get("rates") if isinstance(report.get("rates"), Mapping) else {}
+    keepable = _format_outcome_rate(rates.get("keepable_rate") or {})
+    wasted = _format_outcome_rate(rates.get("wasted_eval_rate") or {})
+    excluded = _format_outcome_rate(rates.get("learning_excluded_rate") or {})
+    blockers = [str(item) for item in report.get("blockers") or [] if str(item)]
+    lines = [
+        (
+            "Outcome progress: "
+            f"status={status}, latest_trial={report.get('latest_trial_id')}, "
+            f"frontier_admissions={report.get('frontier_admissions')}, "
+            f"latest_frontier={report.get('latest_frontier_trial_id')}, "
+            f"trials_since_frontier={report.get('trials_since_frontier')}/"
+            f"{report.get('max_trials_since_frontier')}, "
+            f"baseline_promotions={report.get('baseline_promotions')}, "
+            f"latest_promotion={report.get('latest_promotion_trial_id')}, "
+            f"trials_since_promotion={report.get('trials_since_promotion')}/"
+            f"{report.get('max_trials_since_promotion')}."
+        ),
+        (
+            f"Recent outcome rates over {recent_window_trials} trials: "
+            f"keepable={keepable}, wasted_eval={wasted}, "
+            f"learning_excluded={excluded}."
+        ),
+    ]
+    if blockers:
+        lines.append("Outcome blockers: " + "; ".join(blockers))
+        lines.append(
+            "Planner pressure: choose actions with a credible path to keepable "
+            "frontier or promotion evidence; avoid no-op, already-refuted, or "
+            "seed-only churn unless another explicit evidence lane requires it."
+        )
+    else:
+        lines.append(
+            "Planner pressure: outcome flow is not currently stalled; continue "
+            "highest-information actions while preserving W8/W6 evidence gates."
+        )
     return "\n".join(lines)
 
 
@@ -3341,6 +3420,9 @@ briefly in reasoning and still emit the closest valid AutoPilot action block.
 ### Eval Coverage Pressure (planner-learning, non-authority)
 {eval_coverage_pressure}
 
+### Outcome Progress Pressure (planner-learning, non-authority)
+{outcome_progress_pressure}
+
 ### StrategyStore Planner Hints (refreshed each planner turn)
 Planner tool boundary: StrategyStore rows mentioning tools, REPL, CALL, or
 tool-use refer to orchestrator/model execution inside AutoPilot actions and
@@ -5097,6 +5179,7 @@ def _run_loop_inner(
                 gate,
             )
             eval_coverage_pressure_text = _build_eval_coverage_pressure(journal)
+            outcome_progress_pressure_text = _build_outcome_progress_pressure()
 
             prompt = CONTROLLER_PROMPT_TEMPLATE.format(
                 constitution=constitution_text,
@@ -5120,6 +5203,7 @@ def _run_loop_inner(
                 fable_gate_advisory=_build_fable_gate_advisory(),
                 higher_tier_pressure=higher_tier_pressure_text,
                 eval_coverage_pressure=eval_coverage_pressure_text,
+                outcome_progress_pressure=outcome_progress_pressure_text,
                 planner_strategy_hints=planner_strategy_hints_text,
                 repo_readiness_advisory=_build_repo_readiness_advisory(),
                 budget=json.dumps(meta.budget.as_dict(), indent=2),

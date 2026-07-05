@@ -876,6 +876,14 @@ def test_controller_prompt_includes_higher_tier_pressure_section() -> None:
     assert "expert/hard workflow coverage or frontier evidence is thin" in template
 
 
+def test_controller_prompt_includes_outcome_progress_pressure_section() -> None:
+    template = autopilot.CONTROLLER_PROMPT_TEMPLATE
+
+    assert "Outcome Progress Pressure" in template
+    assert "{outcome_progress_pressure}" in template
+    assert "planner-learning, non-authority" in template
+
+
 def test_higher_tier_pressure_preserves_same_tier_comparison() -> None:
     class FakeArchive:
         def summary(self, *, tier):
@@ -974,6 +982,53 @@ def test_eval_coverage_pressure_reports_repeat_factor_and_pool_denominator() -> 
     assert "fixed authority-core evidence separate" in text
 
 
+def test_outcome_progress_pressure_reports_stall_and_rates(monkeypatch) -> None:
+    def fake_outcome_progress_report(**kwargs):
+        assert kwargs["max_trials_since_frontier"] == 5
+        assert kwargs["max_trials_since_promotion"] == 10
+        assert kwargs["recent_window_trials"] == 20
+        return {
+            "status": "attention",
+            "latest_trial_id": 1180,
+            "frontier_admissions": 84,
+            "latest_frontier_trial_id": 1005,
+            "trials_since_frontier": 175,
+            "max_trials_since_frontier": 5,
+            "baseline_promotions": 1,
+            "latest_promotion_trial_id": 969,
+            "trials_since_promotion": 211,
+            "max_trials_since_promotion": 10,
+            "rates": {
+                "keepable_rate": {"count": 1, "total": 20, "rate": 0.05},
+                "wasted_eval_rate": {"count": 15, "total": 20, "rate": 0.75},
+                "learning_excluded_rate": {"count": 4, "total": 20, "rate": 0.2},
+            },
+            "blockers": ["frontier admission stale"],
+        }
+
+    monkeypatch.setattr(
+        autopilot,
+        "_phase_outcome_progress_report",
+        fake_outcome_progress_report,
+    )
+
+    text = autopilot._build_outcome_progress_pressure(
+        max_trials_since_frontier=5,
+        max_trials_since_promotion=10,
+        recent_window_trials=20,
+    )
+
+    assert "status=attention" in text
+    assert "trials_since_frontier=175/5" in text
+    assert "trials_since_promotion=211/10" in text
+    assert "keepable=1/20 (5.0%)" in text
+    assert "wasted_eval=15/20 (75.0%)" in text
+    assert "learning_excluded=4/20 (20.0%)" in text
+    assert "Outcome blockers: frontier admission stale" in text
+    assert "credible path to keepable frontier or promotion evidence" in text
+    assert "seed-only churn" in text
+
+
 def test_controller_prompt_uses_fresh_strategy_hints_section(monkeypatch) -> None:
     monkeypatch.setattr(autopilot, "_PLANNER_HINTS_ENABLED", True)
     rows: list[SimpleNamespace] = []
@@ -1019,6 +1074,7 @@ def test_controller_prompt_uses_fresh_strategy_hints_section(monkeypatch) -> Non
             fable_gate_advisory="fable-gate",
             higher_tier_pressure="higher-tier",
             eval_coverage_pressure="coverage",
+            outcome_progress_pressure="outcome-progress",
             planner_strategy_hints=planner_strategy_hints,
             repo_readiness_advisory="repo",
             budget="budget",
