@@ -2577,6 +2577,82 @@ def test_record_rejected_draft_blacklists_on_repeat(monkeypatch) -> None:
     assert state["consecutive_rejected_drafts"] == 2
 
 
+def test_operator_domain_critique_detection() -> None:
+    assert autopilot._is_operator_domain_critique(
+        _FakeCritique(issues=["baseline refresh is operator-domain"])
+    )
+    assert autopilot._is_operator_domain_critique(
+        _FakeCritique(issues=["measurement trust boundary requires an era row"])
+    )
+    assert not autopilot._is_operator_domain_critique(
+        _FakeCritique(issues=["graph_router dependency is missing"])
+    )
+
+
+def test_append_operator_outbox_item_dedupes_open_signature(tmp_path) -> None:
+    path = tmp_path / "operator_outbox.jsonl"
+    draft = {"type": "deep_eval", "tier": 3}
+    critique = _FakeCritique(issues=["operator-domain T3 policy amendment"])
+
+    assert autopilot._append_operator_outbox_item(
+        draft,
+        critique,
+        trial_id=12,
+        path=path,
+    )
+    assert not autopilot._append_operator_outbox_item(
+        draft,
+        critique,
+        trial_id=13,
+        path=path,
+    )
+
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    assert len(rows) == 1
+    assert rows[0]["kind"] == "critic_rejected_operator_domain"
+    assert rows[0]["source_trial"] == 12
+    assert rows[0]["action"] == draft
+    assert rows[0]["status"] == "open"
+
+
+def test_operator_outbox_feedback_renders_open_items(tmp_path) -> None:
+    path = tmp_path / "operator_outbox.jsonl"
+    draft = {"type": "numeric_trial", "surface": "think_harder"}
+    autopilot._append_operator_outbox_item(
+        draft,
+        _FakeCritique(issues=["baseline refresh is operator-domain"]),
+        trial_id=21,
+        path=path,
+    )
+
+    text = autopilot._build_operator_outbox_feedback(path, limit=2)
+
+    assert "Open operator-domain items" in text
+    assert "trial 21" in text
+    assert "think_harder" in text
+    assert "Do NOT re-propose" in text
+
+
+def test_record_rejected_draft_outboxes_operator_domain(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(
+        autopilot,
+        "_append_operator_outbox_item",
+        lambda action, critique, trial_id: calls.append((action, trial_id)) or True,
+    )
+    state = {}
+    draft = {"type": "deep_eval", "tier": 3}
+
+    autopilot._record_rejected_draft(
+        state,
+        draft,
+        _FakeCritique(issues=["operator-domain tier policy requires approval"]),
+        trial_id=30,
+    )
+
+    assert calls == [(draft, 30)]
+
+
 # ----- ActionContext bundle -----
 
 

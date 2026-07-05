@@ -172,11 +172,15 @@ _config_fingerprint = config_fingerprint
 STATE_PATH = ORCH_ROOT / "orchestration" / "autopilot_state.json"
 LOCK_PATH = ORCH_ROOT / "orchestration" / ".autopilot.lock"
 BLACKLIST_PATH = SCRIPT_DIR / "failure_blacklist.yaml"
+OPERATOR_OUTBOX_PATH = ORCH_ROOT / "orchestration" / "autopilot_operator_outbox.jsonl"
 # Prompt-budget cap (2026-06-10): only the most-recent N blacklist entries are
 # RENDERED into the planner prompt (the full list is always enforced at dispatch
 # by check_blacklist()). Keeps the unbounded-growth blacklist from dominating the
 # ~80KB prompt. Operator-tunable.
 BLACKLIST_RENDER_CAP = int(os.environ.get("AUTOPILOT_BLACKLIST_RENDER_CAP", "18"))
+OPERATOR_OUTBOX_RENDER_CAP = int(
+    os.environ.get("AUTOPILOT_OPERATOR_OUTBOX_RENDER_CAP", "5")
+)
 PRIOR_DECISION_DIGEST_CAP = int(
     os.environ.get("AUTOPILOT_PRIOR_DECISION_DIGEST_CAP", "4")
 )
@@ -2649,6 +2653,154 @@ def _build_last_invalid_feedback(state: dict[str, Any]) -> str:
     return _repeated_block(lines)
 
 
+_OPERATOR_DOMAIN_CRITIQUE_MARKERS = (
+    "operator-domain",
+    "operator domain",
+    "operator-facing",
+    "operator owned",
+    "operator-owned",
+    "operator approval",
+    "human-owned",
+    "human owned",
+    "measurement trust boundary",
+    "trust boundary",
+    "outside the autopilot action space",
+    "widening safety-gate",
+    "safety-gate threshold",
+    "baseline refresh",
+    "instrument era",
+    "instrument-era",
+    "era row",
+)
+
+
+def _critique_issues(critique: Any) -> list[str]:
+    try:
+        return [str(issue) for issue in (getattr(critique, "issues", []) or [])]
+    except Exception:
+        return []
+
+
+def _is_operator_domain_critique(critique: Any) -> bool:
+    """Return true when the critic rejected work that belongs in operator review.
+
+    The controller should not keep redrafting measurement-trust-boundary or
+    operator-consent actions as ordinary AutoPilot actions. Persisting them in
+    a separate outbox preserves the useful hypothesis without converting it into
+    an eval-wasting invalid-action loop.
+    """
+    text = " ".join(
+        [
+            str(getattr(critique, "decision", "")),
+            *_critique_issues(critique),
+        ]
+    ).lower()
+    return any(marker in text for marker in _OPERATOR_DOMAIN_CRITIQUE_MARKERS)
+
+
+def _append_operator_outbox_item(
+    draft_action: dict[str, Any],
+    critique: Any,
+    trial_id: int,
+    *,
+    path: Path = OPERATOR_OUTBOX_PATH,
+) -> bool:
+    """Append one open operator-review item, deduped by action signature."""
+    signature = _action_signature(draft_action)
+    if path.exists():
+        try:
+            with open(path) as fh:
+                for line in fh:
+                    if not line.strip():
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if (
+                        row.get("status", "open") == "open"
+                        and row.get("action_signature") == signature
+                    ):
+                        return False
+        except OSError as exc:
+            log.warning("Could not read operator outbox %s: %s", path, exc)
+
+    issues = _critique_issues(critique)
+    row = {
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "status": "open",
+        "kind": "critic_rejected_operator_domain",
+        "source_trial": trial_id,
+        "action": draft_action,
+        "action_signature": signature,
+        "critic_decision": str(getattr(critique, "decision", "reject")),
+        "critic_issues": issues,
+        "operator_prompt": (
+            "Review whether this operator-domain hypothesis warrants a "
+            "measurement-policy amendment, era row, or explicit runbook action. "
+            "AutoPilot must not re-propose it as an autonomous action."
+        ),
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a") as fh:
+            fh.write(json.dumps(row, sort_keys=True, default=str) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        return True
+    except OSError as exc:
+        log.warning("Could not append operator outbox %s: %s", path, exc)
+        return False
+
+
+def _build_operator_outbox_feedback(
+    path: Path = OPERATOR_OUTBOX_PATH,
+    *,
+    limit: int = OPERATOR_OUTBOX_RENDER_CAP,
+) -> str:
+    """Render open operator-domain items into the planner prompt."""
+    if limit <= 0:
+        return "  (disabled by AUTOPILOT_OPERATOR_OUTBOX_RENDER_CAP)"
+    if not path.exists():
+        return "  (none)"
+
+    rows: deque[dict[str, Any]] = deque(maxlen=limit)
+    try:
+        with open(path) as fh:
+            for line in fh:
+                if not line.strip():
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if row.get("status", "open") == "open":
+                    rows.append(row)
+    except OSError as exc:
+        return f"  (operator outbox unavailable: {exc})"
+
+    if not rows:
+        return "  (none)"
+
+    lines = [
+        "  Open operator-domain items from critic-rejected drafts "
+        "(planner context only; NOT an action gate):"
+    ]
+    for row in rows:
+        issue = "; ".join(str(x) for x in (row.get("critic_issues") or [])[:2])
+        action_text = json.dumps(row.get("action", {}), sort_keys=True, default=str)
+        lines.append(
+            f"  - trial {row.get('source_trial', '?')}: {action_text[:180]}"
+        )
+        if issue:
+            lines.append(f"    critic: {issue[:220]}")
+    lines.append(
+        "  Do NOT re-propose these as autonomous actions; choose a schedulable "
+        "AutoPilot action unless an operator has closed the outbox item."
+    )
+    return "\n".join(lines)
+
+
 def _build_prior_planner_decision_digest(
     archive_path: Path = PLANNER_ARCHIVE_PATH,
     *,
@@ -2970,11 +3122,7 @@ def _record_rejected_draft(
     the substituted action runs and is journaled instead); this only records the
     feedback residue so the rejected draft cannot bypass the loop.
     """
-    issues = []
-    try:
-        issues = list(getattr(critique, "issues", []) or [])
-    except Exception:
-        issues = []
+    issues = _critique_issues(critique)
     reason = "critic rejected: " + ("; ".join(issues) if issues else
                                     getattr(critique, "decision", "rejected"))
     sig = _action_signature(draft_action)
@@ -2994,13 +3142,17 @@ def _record_rejected_draft(
             f"Auto-blacklisted: {sig_counts[sig]}× critic-rejected — {reason[:80]}",
         )
         blacklisted = True
+    outboxed = False
+    if _is_operator_domain_critique(critique):
+        outboxed = _append_operator_outbox_item(draft_action, critique, trial_id)
     log.warning(
         "Critic %s the draft %s (substituted); recorded as feedback "
-        "[signature seen %d×, consecutive rejected drafts=%d]%s",
+        "[signature seen %d×, consecutive rejected drafts=%d]%s%s",
         getattr(critique, "decision", "rejected"),
         json.dumps(draft_action, default=str),
         sig_counts[sig], state["consecutive_rejected_drafts"],
         " — BLACKLISTED" if blacklisted else "",
+        " — OPERATOR_OUTBOXED" if outboxed else "",
     )
     return blacklisted
 
@@ -3190,6 +3342,9 @@ Stagnation signal: {stagnation_signal}
 
 ### Blacklisted Configurations
 {blacklist_text}
+
+### Operator Outbox (critic-rejected operator-domain hypotheses)
+{operator_outbox_feedback}
 
 ### Feature Flags (live state + dependency rules — read before any structural_experiment)
 {feature_flags_block}
@@ -4934,6 +5089,7 @@ def _run_loop_inner(
                 last_criticism=last_criticism_text,  # AP-23
                 model_signatures=model_signatures_text,
                 blacklist_text=blacklist_text,
+                operator_outbox_feedback=_build_operator_outbox_feedback(),
                 feature_flags_block=_build_feature_flags_block(
                     lab,
                     denylisted_flags=_PLANNER_DENYLISTED_FEATURE_FLAGS,

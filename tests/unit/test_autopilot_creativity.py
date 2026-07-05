@@ -1031,6 +1031,7 @@ def test_controller_prompt_uses_fresh_strategy_hints_section(monkeypatch) -> Non
             last_criticism="criticism",
             model_signatures="models",
             blacklist_text="blacklist",
+            operator_outbox_feedback="outbox",
             feature_flags_block="flags",
             last_invalid_feedback="invalid",
             plot_paths="plots",
