@@ -298,6 +298,23 @@ QUOTA_MEMORY_THRESHOLD = int(
 MAX_CONSECUTIVE_PASSIVE = int(
     os.environ.get("AUTOPILOT_MAX_CONSECUTIVE_PASSIVE", "3")
 )
+HIGHER_TIER_PROBE_GUARD = os.environ.get(
+    "AUTOPILOT_HIGHER_TIER_PROBE_GUARD", "1"
+).strip().lower() not in {"0", "false", "no", "off"}
+HIGHER_TIER_PROBE_TIERS = tuple(
+    int(part)
+    for part in os.environ.get("AUTOPILOT_HIGHER_TIER_PROBE_TIERS", "2,3").split(",")
+    if part.strip().isdigit() and int(part) > DEFAULT_FRONTIER_TIER
+) or (2, 3)
+HIGHER_TIER_PROBE_MIN_GAP_TRIALS = int(
+    os.environ.get("AUTOPILOT_HIGHER_TIER_PROBE_MIN_GAP_TRIALS", "12")
+)
+HIGHER_TIER_PROBE_STALE_TRIALS = int(
+    os.environ.get("AUTOPILOT_HIGHER_TIER_PROBE_STALE_TRIALS", "24")
+)
+HIGHER_TIER_PROBE_MIN_TRIALS_PER_TIER = int(
+    os.environ.get("AUTOPILOT_HIGHER_TIER_PROBE_MIN_TRIALS_PER_TIER", "3")
+)
 # numeric_trial with empty params is the safest self-configuring frontier action
 # (Optuna suggests the values; no file/flag dependency to get wrong).
 _FALLBACK_NUMERIC_SURFACES = ("think_harder", "escalation", "monitor", "memrl_retrieval")
@@ -2382,6 +2399,176 @@ def _enforce_experiment_quota(
 
     state["consecutive_passive_actions"] = streak + 1
     return action, rationale
+
+
+def _entry_action_tier(entry: Any) -> int | None:
+    try:
+        return int(getattr(entry, "tier"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _iter_journal_entries(journal: ExperimentJournal | None) -> list[Any]:
+    if journal is None:
+        return []
+    try:
+        if hasattr(journal, "entries_with_supersessions"):
+            return list(journal.entries_with_supersessions())
+        return list(journal.all_entries())
+    except Exception:
+        return []
+
+
+def _higher_tier_trial_stats(
+    journal: ExperimentJournal | None,
+    *,
+    tiers: tuple[int, ...] = HIGHER_TIER_PROBE_TIERS,
+) -> dict[int, dict[str, int | None]]:
+    stats: dict[int, dict[str, int | None]] = {
+        tier: {"count": 0, "last_trial_id": None} for tier in tiers
+    }
+    for entry in _iter_journal_entries(journal):
+        if getattr(entry, "bug_corrupted_by", ""):
+            continue
+        tier = _entry_action_tier(entry)
+        if tier not in stats:
+            continue
+        current = stats[tier]
+        current["count"] = int(current.get("count") or 0) + 1
+        try:
+            trial_id = int(getattr(entry, "trial_id"))
+        except (TypeError, ValueError):
+            continue
+        last = current.get("last_trial_id")
+        if last is None or trial_id > int(last):
+            current["last_trial_id"] = trial_id
+    return stats
+
+
+def _archive_frontier_size(archive: ParetoArchive | None, tier: int) -> int | None:
+    if archive is None:
+        return None
+    try:
+        summary = archive.summary(tier=tier)
+    except Exception:
+        return None
+    try:
+        return int(summary.get("frontier_size") or 0)
+    except (TypeError, ValueError):
+        return None
+
+
+def _maybe_force_higher_tier_probe(
+    action: dict[str, Any],
+    state: dict[str, Any],
+    *,
+    journal: ExperimentJournal | None = None,
+    archive: ParetoArchive | None = None,
+    blacklist: list[dict[str, Any]] | None = None,
+    rationale: dict[str, Any] | None = None,
+    trial_counter: int = 0,
+    w8_replay_pressure_text: str = "",
+    tiers: tuple[int, ...] = HIGHER_TIER_PROBE_TIERS,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Bound T1-only exploitation by forcing occasional T2/T3 eval probes.
+
+    The default frontier and promotion logic remain T1-scoped. This guard only
+    prevents higher-tier evidence from going stale while the planner repeatedly
+    exploits T1; each tier is still compared to its own baseline/frontier.
+    """
+    if not HIGHER_TIER_PROBE_GUARD:
+        return action, rationale
+    if _w8_candidate_generation_pressure(w8_replay_pressure_text):
+        return action, rationale
+
+    try:
+        selected_tier = int(action.get("tier", DEFAULT_FRONTIER_TIER))
+    except (TypeError, ValueError):
+        selected_tier = DEFAULT_FRONTIER_TIER
+    if action.get("type") == "deep_eval" and selected_tier in tiers:
+        return (
+            action,
+            {
+                **(rationale or {}),
+                "higher_tier_probe_satisfied_by_selected_action": True,
+                "higher_tier_probe_tier": selected_tier,
+            },
+        )
+
+    guard_state = state.get("higher_tier_probe_guard")
+    if isinstance(guard_state, dict):
+        try:
+            last_forced = int(guard_state.get("last_forced_trial_id"))
+        except (TypeError, ValueError):
+            last_forced = None
+        if (
+            last_forced is not None
+            and trial_counter - last_forced < HIGHER_TIER_PROBE_MIN_GAP_TRIALS
+        ):
+            return action, rationale
+
+    stats = _higher_tier_trial_stats(journal, tiers=tiers)
+    candidates: list[tuple[tuple[int, int, int, int, int], int, str]] = []
+    for tier in tiers:
+        count = int(stats.get(tier, {}).get("count") or 0)
+        last_trial_id = stats.get(tier, {}).get("last_trial_id")
+        gap = (
+            HIGHER_TIER_PROBE_STALE_TRIALS + 1
+            if last_trial_id is None
+            else max(0, trial_counter - int(last_trial_id))
+        )
+        frontier_size = _archive_frontier_size(archive, tier)
+        no_frontier = frontier_size == 0
+        deficit = max(0, HIGHER_TIER_PROBE_MIN_TRIALS_PER_TIER - count)
+        stale = last_trial_id is None or gap >= HIGHER_TIER_PROBE_STALE_TRIALS
+        if not (deficit or stale or no_frontier):
+            continue
+        forced = {"type": "deep_eval", "tier": tier}
+        blocked = check_blacklist(forced, blacklist or [])
+        if blocked:
+            continue
+        reason = (
+            f"T{tier} higher-tier probe due: count={count}, "
+            f"last_trial={last_trial_id if last_trial_id is not None else 'never'}, "
+            f"gap={gap}, frontier={frontier_size if frontier_size is not None else 'unknown'}"
+        )
+        score = (
+            1 if last_trial_id is None else 0,
+            1 if no_frontier else 0,
+            deficit,
+            gap,
+            -tier,
+        )
+        candidates.append((score, tier, reason))
+
+    if not candidates:
+        return action, rationale
+
+    _score, tier, reason = max(candidates, key=lambda item: item[0])
+    forced = {"type": "deep_eval", "tier": tier}
+    state["higher_tier_probe_guard"] = {
+        "last_forced_trial_id": trial_counter,
+        "last_forced_tier": tier,
+        "last_forced_reason": reason,
+        "original_action": dict(action),
+        "forced_action": dict(forced),
+    }
+    log.warning(
+        "Higher-tier probe guard forcing deep_eval(tier=%d) instead of %s: %s",
+        tier,
+        json.dumps(action, default=str),
+        reason,
+    )
+    return (
+        forced,
+        {
+            **(rationale or {}),
+            "higher_tier_probe_forced": True,
+            "higher_tier_probe_tier": tier,
+            "higher_tier_probe_reason": reason,
+            "higher_tier_probe_original": dict(action),
+        },
+    )
 
 
 def _maybe_force_frontier_rerun_action(
@@ -5613,6 +5800,21 @@ def _run_loop_inner(
                     action,
                     blacklist,
                     rationale,
+                    trial_counter=trial_counter,
+                    w8_replay_pressure_text=planner_evidence_text,
+                )
+            if (
+                seq_fresh_eval_context is None
+                and seq_baseline_draw_reference is None
+                and seq_candidate_replay_context is None
+            ):
+                action, rationale = _maybe_force_higher_tier_probe(
+                    action,
+                    state,
+                    journal=journal,
+                    archive=archive,
+                    blacklist=blacklist,
+                    rationale=rationale,
                     trial_counter=trial_counter,
                     w8_replay_pressure_text=planner_evidence_text,
                 )

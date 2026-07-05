@@ -2001,6 +2001,116 @@ def test_quota_resets_counter_on_nonpassive_action() -> None:
     assert state["consecutive_passive_actions"] == 0
 
 
+def test_higher_tier_probe_forces_t2_when_empty() -> None:
+    state = {}
+    journal = SimpleNamespace(entries_with_supersessions=lambda: [])
+    archive = SimpleNamespace(summary=lambda tier: {"frontier_size": 0})
+
+    action, rationale = autopilot._maybe_force_higher_tier_probe(
+        {"type": "numeric_trial", "surface": "think_harder"},
+        state,
+        journal=journal,
+        archive=archive,
+        rationale={"falsifier": "x"},
+        trial_counter=100,
+    )
+
+    assert action == {"type": "deep_eval", "tier": 2}
+    assert rationale["higher_tier_probe_forced"] is True
+    assert rationale["higher_tier_probe_tier"] == 2
+    assert state["higher_tier_probe_guard"]["last_forced_tier"] == 2
+
+
+def test_higher_tier_probe_selects_staler_t3_after_t2_has_rows() -> None:
+    state = {}
+    journal = SimpleNamespace(
+        entries_with_supersessions=lambda: [
+            SimpleNamespace(
+                bug_corrupted_by="",
+                tier=2,
+                trial_id=95,
+            )
+            for _ in range(3)
+        ]
+    )
+    archive = SimpleNamespace(
+        summary=lambda tier: {"frontier_size": 1 if tier == 2 else 0}
+    )
+
+    action, rationale = autopilot._maybe_force_higher_tier_probe(
+        {"type": "structural_experiment", "flags": {"tool_use": True}},
+        state,
+        journal=journal,
+        archive=archive,
+        rationale={},
+        trial_counter=100,
+    )
+
+    assert action == {"type": "deep_eval", "tier": 3}
+    assert rationale["higher_tier_probe_tier"] == 3
+
+
+def test_higher_tier_probe_respects_cooldown() -> None:
+    state = {
+        "higher_tier_probe_guard": {
+            "last_forced_trial_id": 95,
+            "last_forced_tier": 2,
+        }
+    }
+    requested = {"type": "numeric_trial", "surface": "monitor"}
+
+    action, rationale = autopilot._maybe_force_higher_tier_probe(
+        requested,
+        state,
+        journal=SimpleNamespace(entries_with_supersessions=lambda: []),
+        archive=SimpleNamespace(summary=lambda tier: {"frontier_size": 0}),
+        rationale={},
+        trial_counter=100,
+    )
+
+    assert action == requested
+    assert rationale == {}
+
+
+def test_higher_tier_probe_skips_when_w8_candidate_generation_is_strict() -> None:
+    state = {}
+    requested = {"type": "seed_batch", "n_questions": 14}
+
+    action, rationale = autopilot._maybe_force_higher_tier_probe(
+        requested,
+        state,
+        journal=SimpleNamespace(entries_with_supersessions=lambda: []),
+        archive=SimpleNamespace(summary=lambda tier: {"frontier_size": 0}),
+        rationale={},
+        trial_counter=100,
+        w8_replay_pressure_text=(
+            "W8 replay pressure: no accumulating candidate exists; "
+            "0/3 are replayable"
+        ),
+    )
+
+    assert action == requested
+    assert rationale == {}
+    assert "higher_tier_probe_guard" not in state
+
+
+def test_higher_tier_probe_accepts_selected_t3_deep_eval() -> None:
+    selected = {"type": "deep_eval", "tier": 3}
+
+    action, rationale = autopilot._maybe_force_higher_tier_probe(
+        selected,
+        {},
+        journal=SimpleNamespace(entries_with_supersessions=lambda: []),
+        archive=SimpleNamespace(summary=lambda tier: {"frontier_size": 0}),
+        rationale={},
+        trial_counter=100,
+    )
+
+    assert action == selected
+    assert rationale["higher_tier_probe_satisfied_by_selected_action"] is True
+    assert rationale["higher_tier_probe_tier"] == 3
+
+
 def test_frontier_rerun_forces_numeric_trial() -> None:
     state = {
         "frontier_rerun_required": {
