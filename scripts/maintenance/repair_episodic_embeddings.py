@@ -12,16 +12,19 @@ Runs in two modes:
 Health definition:
 
     n_db_routing       = COUNT(*) FROM memories WHERE action_type='routing'
+    n_db_indexed       = COUNT(*) FROM memories WHERE action_type IN indexed types
     n_faiss_vectors    = embeddings.faiss IndexFlatIP ntotal (read-only check)
     n_id_map           = number of IDs in id_map.npy
     n_reembedded_npz   = number of IDs in reembedded.npz (if present)
-    id_map_overlap     = |id_map_ids ∩ live_db_routing_ids| / n_db_routing
-    overlap_live       = |reembedded_ids ∩ live_db_routing_ids| / n_db_routing
+    id_map_overlap     = |id_map_ids ∩ live_indexed_ids| / n_db_indexed
+    overlap_live       = |reembedded_ids ∩ live_indexed_ids| / n_db_indexed
 
-A store is "orphaned" if n_faiss_vectors / n_db_routing < 0.99, id_map.npy
-does not match embeddings.faiss, id_map_overlap < 0.99, OR overlap_live < 0.99.
-These conditions fire if FAISS was reset, id_map.npy is stale/wrong, or
-reembedded.npz is stale relative to live db.
+A store is "orphaned" if n_faiss_vectors / n_db_indexed < 0.99,
+id_map.npy does not match embeddings.faiss, id_map lacks any live indexed IDs,
+id_map has stale/duplicate IDs, OR reembedded.npz falls materially behind live db.
+These conditions fire if FAISS was reset, id_map.npy is stale/wrong,
+reembedded.npz is stale relative to live db, or an indexed action type falls
+outside the headline routing count.
 
 Usage:
     python3 scripts/maintenance/repair_episodic_embeddings.py --diagnose-only
@@ -97,6 +100,11 @@ class HealthReport(NamedTuple):
     n_id_map: int = 0
     id_map_overlap_live: float = 1.0
     id_map_matches_faiss: bool = True
+    n_db_indexed: int = 0
+    missing_id_count: int = 0
+    stale_id_count: int = 0
+    reembedded_missing_count: int = 0
+    reembedded_stale_count: int = 0
 
 
 @contextmanager
@@ -116,23 +124,19 @@ def _assert_db_growth_within_bound(
     faiss_path: Path,
     reembedded_path: Path,
     *,
-    start_routing_count: int,
+    start_indexed_count: int,
     max_db_growth: int,
     phase: str,
 ) -> None:
     if max_db_growth < 0:
         return
-    current_routing_count = diagnose(
-        db_path,
-        faiss_path,
-        reembedded_path,
-        use_lock=False,
-    ).n_db_routing
-    db_growth = current_routing_count - start_routing_count
+    del faiss_path, reembedded_path
+    current_indexed_count = _live_memory_count(db_path, INDEXED_ACTION_TYPES)
+    db_growth = current_indexed_count - start_indexed_count
     if db_growth > max_db_growth:
         raise SystemExit(
             "Episodic DB advanced by "
-            f"{db_growth:,} routing row(s) during repair "
+            f"{db_growth:,} indexed memory row(s) during repair "
             f"(limit {max_db_growth:,}, phase={phase}); refusing to swap a stale FAISS snapshot. "
             "Pause writers or rerun with --max-db-growth set to an accepted bound."
         )
@@ -157,7 +161,7 @@ def diagnose(
                 use_lock=False,
             )
 
-    # ── Count routing memories in live db ──
+    # ── Count indexed memories in live db ──
     if not db_path.exists():
         logger.warning("No episodic db at %s — store is empty, no repair needed", db_path)
         return HealthReport(0, 0, 0, 1.0, 1.0, True, 0)
@@ -165,11 +169,18 @@ def diagnose(
     n_db_routing = conn.execute(
         "SELECT COUNT(*) FROM memories WHERE action_type='routing'"
     ).fetchone()[0]
-    live_routing_ids: set[str] = set()
-    if n_db_routing > 0:
-        live_routing_ids = {
-            r[0] for r in conn.execute(
-                "SELECT id FROM memories WHERE action_type='routing'"
+    indexed_placeholders = ",".join("?" for _ in INDEXED_ACTION_TYPES)
+    n_db_indexed = conn.execute(
+        f"SELECT COUNT(*) FROM memories WHERE action_type IN ({indexed_placeholders})",
+        tuple(INDEXED_ACTION_TYPES),
+    ).fetchone()[0]
+    live_indexed_ids: set[str] = set()
+    if n_db_indexed > 0:
+        live_indexed_ids = {
+            str(r[0])
+            for r in conn.execute(
+                f"SELECT id FROM memories WHERE action_type IN ({indexed_placeholders})",
+                tuple(INDEXED_ACTION_TYPES),
             ).fetchall()
         }
     conn.close()
@@ -192,16 +203,23 @@ def diagnose(
     # vector positions back to live SQLite memory ids. A high ntotal with a
     # stale id_map silently degrades retrieval, so diagnose it explicitly.
     n_id_map = 0
-    id_map_overlap_live = 1.0 if not live_routing_ids else 0.0
-    id_map_live_count = 0
+    id_map_overlap_live = 1.0 if not live_indexed_ids else 0.0
+    missing_id_count = len(live_indexed_ids)
+    stale_id_count = 0
     if id_map_path.exists():
         try:
             id_map_arr = np.load(id_map_path, allow_pickle=True)
             id_map_ids = {str(item) for item in id_map_arr.tolist()}
             n_id_map = len(id_map_arr)
-            if live_routing_ids:
-                id_map_live_count = len(id_map_ids & live_routing_ids)
-                id_map_overlap_live = id_map_live_count / max(len(live_routing_ids), 1)
+            if live_indexed_ids:
+                id_map_overlap_live = len(id_map_ids & live_indexed_ids) / max(
+                    len(live_indexed_ids), 1
+                )
+                missing_id_count = len(live_indexed_ids - id_map_ids)
+                stale_id_count = len(id_map_ids - live_indexed_ids) + (n_id_map - len(id_map_ids))
+            else:
+                missing_id_count = 0
+                stale_id_count = len(id_map_ids) + (n_id_map - len(id_map_ids))
         except Exception as e:
             logger.warning("Cannot read id_map.npy at %s: %s", id_map_path, e)
     else:
@@ -211,31 +229,56 @@ def diagnose(
     # ── Inspect reembedded.npz ──
     n_reembedded = 0
     overlap_live = 0.0
+    reembedded_missing_count = len(live_indexed_ids)
+    reembedded_stale_count = 0
     if reembedded_path.exists():
         try:
             d = np.load(reembedded_path, allow_pickle=True)
             if "ids" in d.files:
-                reembedded_ids = set(d["ids"].tolist())
-                n_reembedded = len(reembedded_ids)
-                if live_routing_ids:
-                    overlap = len(reembedded_ids & live_routing_ids)
-                    overlap_live = overlap / max(len(live_routing_ids), 1)
+                reembedded_list = [str(item) for item in d["ids"].tolist()]
+                reembedded_ids = set(reembedded_list)
+                n_reembedded = len(reembedded_list)
+                if live_indexed_ids:
+                    overlap = len(reembedded_ids & live_indexed_ids)
+                    overlap_live = overlap / max(len(live_indexed_ids), 1)
+                    reembedded_missing_count = len(live_indexed_ids - reembedded_ids)
+                    reembedded_stale_count = (
+                        len(reembedded_ids - live_indexed_ids)
+                        + (n_reembedded - len(reembedded_ids))
+                    )
+                else:
+                    overlap_live = 1.0 if n_reembedded == 0 else 0.0
+                    reembedded_missing_count = 0
+                    reembedded_stale_count = len(reembedded_ids) + (n_reembedded - len(reembedded_ids))
         except Exception as e:
             logger.warning("Cannot read reembedded.npz at %s: %s", reembedded_path, e)
     else:
         logger.warning("No reembedded.npz at %s", reembedded_path)
+        reembedded_missing_count = 0
 
-    faiss_coverage = n_faiss_vectors / max(n_db_routing, 1) if n_db_routing else 1.0
+    if n_db_indexed:
+        faiss_coverage = n_faiss_vectors / max(n_db_indexed, 1)
+    else:
+        faiss_coverage = 1.0 if n_faiss_vectors == 0 else 0.0
 
     healthy = (
         (faiss_coverage >= HEALTH_THRESHOLD)
         and id_map_matches_faiss
         and (id_map_overlap_live >= HEALTH_THRESHOLD)
+        and missing_id_count == 0
+        and stale_id_count == 0
         and (n_reembedded == 0 or overlap_live >= HEALTH_THRESHOLD)
+        and reembedded_stale_count == 0
     )
-    faiss_orphan_count = max(0, n_db_routing - n_faiss_vectors)
-    id_map_orphan_count = max(0, n_db_routing - id_map_live_count) if n_db_routing else 0
-    orphan_count = max(faiss_orphan_count, id_map_orphan_count)
+    faiss_orphan_count = max(0, n_db_indexed - n_faiss_vectors)
+    id_map_orphan_count = missing_id_count if n_db_indexed else stale_id_count
+    orphan_count = max(
+        faiss_orphan_count,
+        id_map_orphan_count,
+        stale_id_count,
+        reembedded_missing_count if n_reembedded else 0,
+        reembedded_stale_count,
+    )
 
     return HealthReport(
         n_db_routing=n_db_routing,
@@ -248,6 +291,11 @@ def diagnose(
         n_id_map=n_id_map,
         id_map_overlap_live=id_map_overlap_live,
         id_map_matches_faiss=id_map_matches_faiss,
+        n_db_indexed=n_db_indexed,
+        missing_id_count=missing_id_count,
+        stale_id_count=stale_id_count,
+        reembedded_missing_count=reembedded_missing_count if n_reembedded else 0,
+        reembedded_stale_count=reembedded_stale_count,
     )
 
 
@@ -256,14 +304,19 @@ def print_report(report: HealthReport) -> None:
     print("Episodic Embedding Health Report")
     print("=" * 72)
     print(f"  Routing memories in db:      {report.n_db_routing:>10,}")
+    print(f"  Indexed memories in db:      {report.n_db_indexed:>10,}")
     print(f"  Vectors in FAISS index:      {report.n_faiss_vectors:>10,}")
     print(f"  IDs in id_map.npy:           {report.n_id_map:>10,}")
     print(f"  IDs in reembedded.npz:       {report.n_reembedded:>10,}")
     print(f"  FAISS coverage:              {report.faiss_coverage:>10.1%}  (threshold ≥ {HEALTH_THRESHOLD:.0%})")
     print(f"  id_map matches FAISS:        {str(report.id_map_matches_faiss):>10}")
     print(f"  id_map ⋂ live db:            {report.id_map_overlap_live:>10.1%}  (threshold ≥ {HEALTH_THRESHOLD:.0%})")
+    print(f"  id_map missing live IDs:     {report.missing_id_count:>10,}")
+    print(f"  id_map stale/duplicate IDs:  {report.stale_id_count:>10,}")
     print(f"  reembedded ⋂ live db:        {report.overlap_live:>10.1%}  (threshold ≥ {HEALTH_THRESHOLD:.0%})")
-    print(f"  Orphan count (live − id_map):{report.orphan_count:>10,}")
+    print(f"  reembedded missing live IDs: {report.reembedded_missing_count:>10,}")
+    print(f"  reembedded stale/duplicates: {report.reembedded_stale_count:>10,}")
+    print(f"  Repairable lag/stale count:  {report.orphan_count:>10,}")
     print(f"  Status:                      {'HEALTHY' if report.healthy else 'ORPHANED — repair recommended'}")
     print("=" * 72)
 
@@ -296,6 +349,19 @@ def _live_memory_ids(db_path: Path, action_types: Sequence[str]) -> set[str]:
                 tuple(action_types),
             ).fetchall()
         }
+
+
+def _live_memory_count(db_path: Path, action_types: Sequence[str]) -> int:
+    if not db_path.exists():
+        return 0
+    placeholders = ",".join("?" for _ in action_types)
+    with sqlite3.connect(str(db_path)) as conn:
+        return int(
+            conn.execute(
+                f"SELECT COUNT(*) FROM memories WHERE action_type IN ({placeholders})",
+                tuple(action_types),
+            ).fetchone()[0]
+        )
 
 
 def _write_ids_file(path: Path, ids: Sequence[str]) -> None:
@@ -598,9 +664,9 @@ def run_repair(
     max_db_growth: int = DEFAULT_MAX_DB_GROWTH,
     incremental: bool = True,
 ) -> int:
-    start_routing_count = diagnose(db_path, faiss_path, reembedded_path).n_db_routing
+    start_report = diagnose(db_path, faiss_path, reembedded_path)
+    start_indexed_count = start_report.n_db_indexed or start_report.n_db_routing
     if incremental and not skip_reembed and faiss_path.exists() and id_map_path.exists():
-        start_report = diagnose(db_path, faiss_path, reembedded_path)
         if start_report.id_map_matches_faiss:
             live_indexed_ids = _live_memory_ids(db_path, INDEXED_ACTION_TYPES)
             id_map_ids = set(_load_npy_ids(id_map_path))
@@ -632,7 +698,7 @@ def run_repair(
                     db_path,
                     faiss_path,
                     reembedded_path,
-                    start_routing_count=start_routing_count,
+                    start_indexed_count=start_indexed_count,
                     max_db_growth=max_db_growth,
                     phase="post-incremental-reembed",
                 )
@@ -645,7 +711,7 @@ def run_repair(
                         db_path,
                         faiss_path,
                         reembedded_path,
-                        start_routing_count=start_routing_count,
+                        start_indexed_count=start_indexed_count,
                         max_db_growth=max_db_growth,
                         phase="pre-incremental-swap",
                     ),
@@ -681,7 +747,7 @@ def run_repair(
         db_path,
         faiss_path,
         reembedded_path,
-        start_routing_count=start_routing_count,
+        start_indexed_count=start_indexed_count,
         max_db_growth=max_db_growth,
         phase="post-reembed",
     )
@@ -694,7 +760,7 @@ def run_repair(
             db_path,
             faiss_path,
             reembedded_path,
-            start_routing_count=start_routing_count,
+            start_indexed_count=start_indexed_count,
             max_db_growth=max_db_growth,
             phase="pre-swap",
         ),
@@ -739,7 +805,7 @@ def main() -> int:
         type=int,
         default=DEFAULT_MAX_DB_GROWTH,
         help=(
-            "Refuse the final FAISS swap if live routing-memory rows grow by more "
+            "Refuse the final FAISS swap if live indexed-memory rows grow by more "
             "than this during re-embed; negative disables the guard "
             "(default %(default)s)."
         ),
@@ -762,7 +828,7 @@ def main() -> int:
         return 0 if report.healthy else 1
 
     # --repair path
-    if report.healthy:
+    if report.healthy and report.orphan_count == 0:
         print("\nStore is healthy — no repair needed. Exiting.")
         return 0
     if report.orphan_count < args.min_orphans:

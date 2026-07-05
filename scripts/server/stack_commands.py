@@ -595,12 +595,15 @@ def _episodic_embedding_status_line() -> str:
         return f"Episodic FAISS: unknown ({exc})"
 
     status = "healthy" if report.healthy else "ORPHANED"
+    indexed_count = getattr(report, "n_db_indexed", 0) or report.n_db_routing
     return (
         f"Episodic FAISS: {status} — "
-        f"{report.n_faiss_vectors:,}/{report.n_db_routing:,} routing vectors "
+        f"{report.n_faiss_vectors:,}/{indexed_count:,} indexed vectors "
         f"({report.faiss_coverage:.1%}), "
-        f"id_map {report.n_id_map:,} ids / overlap {report.id_map_overlap_live:.1%}, "
-        f"{report.orphan_count:,} orphan(s), "
+        f"id_map {report.n_id_map:,} ids / overlap {report.id_map_overlap_live:.1%} "
+        f"missing {getattr(report, 'missing_id_count', 0):,} "
+        f"stale {getattr(report, 'stale_id_count', 0):,}, "
+        f"{report.orphan_count:,} repairable lag/stale, "
         f"reembedded overlap {report.overlap_live:.1%}"
     )
 

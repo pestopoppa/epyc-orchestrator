@@ -896,8 +896,8 @@ def test_cmd_status_prints_episodic_embedding_health(monkeypatch, capsys) -> Non
     assert stack_commands.cmd_status(Namespace()) == 0
     out = capsys.readouterr().out
     assert "Episodic FAISS: ORPHANED" in out
-    assert "10/100 routing vectors" in out
-    assert "90 orphan(s)" in out
+    assert "10/100 indexed vectors" in out
+    assert "90 repairable lag/stale" in out
 
 
 def test_cmd_status_prints_mmproj_attestation_warning(monkeypatch, capsys) -> None:
