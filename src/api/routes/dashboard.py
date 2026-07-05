@@ -7,9 +7,11 @@ Routes:
     GET  /dashboard/events/stream           — 1Hz SSE: snapshot + recent decisions
     GET  /dashboard/api/task/{task_id}      — full task detail (prompt + REPL history)
     GET  /dashboard/events/task/{task_id}   — 5Hz SSE: live token stream for one task
+    POST /dashboard/api/autopilot_control   — operator pause/resume latch
 
-Read-only observer. Polls existing llama-server /slots endpoints and tails the
-progress JSONL log; never modifies routing or inference state.
+Mostly read-only observer. Polls existing llama-server /slots endpoints and tails
+the progress JSONL log; the only mutating endpoint is the explicit operator
+pause/resume latch for AutoPilot dispatch.
 
 SSH access: from your laptop, `ssh -L 8000:localhost:8000 daniele@<host>` then
 open http://localhost:8000/dashboard.
@@ -25,7 +27,7 @@ import re
 import time
 import sqlite3
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -1296,10 +1298,38 @@ async def process_status() -> JSONResponse:
         "autopilot_recent_lines": recent_lines,
         "autopilot_phase": phase,
         "autopilot_phase_health": phase_health,
+        "autopilot_state": _autopilot_state_summary(),
         "autopilot_phase_age_s": phase_age_s,
         "inference_tap_age_s": _age_s(_INFERENCE_TAP_PATH),
         "planner_tap_age_s": _age_s(Path("/mnt/raid0/llm/tmp/planner_tap.log")),
     }, "process_status"), headers=_NO_STORE_HEADERS)
+
+
+@router.post("/dashboard/api/autopilot_control")
+async def autopilot_control(request: Request) -> JSONResponse:
+    """Operator-owned AutoPilot pause/resume latch.
+
+    This endpoint writes only the existing ``autopilot_state.json`` control
+    fields consumed by ``scripts/autopilot/autopilot.py``. It does not kill
+    processes, rewrite journals, or apply measurement decisions.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    try:
+        result = _apply_autopilot_control_action(
+            action=str(body.get("action") or ""),
+            note=str(body.get("note") or ""),
+        )
+    except ValueError as exc:
+        return JSONResponse({"status": "error", "error": str(exc)}, status_code=400)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("dashboard autopilot control failed")
+        return JSONResponse({"status": "error", "error": str(exc)}, status_code=500)
+    return JSONResponse(result, headers=_NO_STORE_HEADERS)
 
 
 @router.get("/dashboard/api/repo_readiness")
@@ -1542,9 +1572,114 @@ _AUTOPILOT_JOURNAL_PATH = Path(__file__).resolve().parents[3] / "orchestration" 
 _STRATEGY_STORE_PATH = Path(__file__).resolve().parents[3] / "orchestration" / "repl_memory" / "strategies"
 _PLANNER_HINT_SEEDS_PATH = Path(__file__).resolve().parents[3] / "scripts" / "autopilot" / "operator_seed_strategies.yaml"
 _AUTOPILOT_LOG_DIR = Path(__file__).resolve().parents[3] / "logs"
+_AUTOPILOT_CONTROL_AUDIT_PATH = _AUTOPILOT_LOG_DIR / "autopilot_operator_control.jsonl"
 _EPHEMERAL_ACTION_KEYS = EPHEMERAL_ACTION_KEYS
 _WITHIN_NOISE_EXCL = WITHIN_NOISE_EXCLUSIONS
 _BASELINE_PROMOTION_EVENT_TYPE = "baseline_promotion"
+
+
+def _utc_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _read_json_object(path: Path) -> dict[str, Any]:
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    if not isinstance(loaded, dict):
+        raise ValueError(f"{path} did not contain a JSON object")
+    return loaded
+
+
+def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp.{os.getpid()}.{time.time_ns()}")
+    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    tmp.replace(path)
+
+
+def _append_jsonl(path: Path, row: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(row, sort_keys=True) + "\n")
+
+
+def _autopilot_state_summary(
+    *,
+    state_path: Path = _AUTOPILOT_STATE_PATH,
+) -> dict[str, Any]:
+    try:
+        state = _read_json_object(state_path)
+    except Exception as exc:
+        return {
+            "exists": state_path.exists(),
+            "error": str(exc),
+            "paused": None,
+        }
+    return {
+        "exists": state_path.exists(),
+        "paused": bool(state.get("paused", False)),
+        "pause_reason": state.get("pause_reason"),
+        "dispatch_deficiency": state.get("_dispatch_deficiency"),
+        "trial_counter": state.get("trial_counter"),
+    }
+
+
+def _apply_autopilot_control_action(
+    *,
+    action: str,
+    note: str = "",
+    state_path: Path = _AUTOPILOT_STATE_PATH,
+    audit_path: Path = _AUTOPILOT_CONTROL_AUDIT_PATH,
+) -> dict[str, Any]:
+    action = str(action or "").strip().lower()
+    if action not in {"pause", "resume"}:
+        raise ValueError("action must be 'pause' or 'resume'")
+    note = str(note or "").strip()[:240]
+    state = _read_json_object(state_path)
+    paused_pre = bool(state.get("paused", False))
+    reason_pre = state.get("pause_reason")
+
+    if action == "pause":
+        state["paused"] = True
+        state["pause_reason"] = note or "dashboard operator pause"
+    else:
+        state["paused"] = False
+        state.pop("pause_reason", None)
+        if state.get("_dispatch_deficiency") == "skip_action_loop":
+            state["consecutive_skip_actions"] = 0
+            state["last_invalid_action"] = None
+            state["last_invalid_reason"] = None
+            state["last_invalid_status"] = None
+        state.pop("_dispatch_deficiency", None)
+        state.pop("_meta_halt_reason", None)
+        state["consecutive_meta_actions"] = 0
+
+    _atomic_write_json(state_path, state)
+    row = {
+        "ts": _utc_iso(),
+        "source": "dashboard",
+        "action": action,
+        "note": note,
+        "state_path": str(state_path),
+        "paused_pre": paused_pre,
+        "paused_post": bool(state.get("paused", False)),
+        "pause_reason_pre": reason_pre,
+        "pause_reason_post": state.get("pause_reason"),
+        "trial_counter": state.get("trial_counter"),
+    }
+    _append_jsonl(audit_path, row)
+    return {
+        "status": "ok",
+        "action": action,
+        "state_path": str(state_path),
+        "audit_path": str(audit_path),
+        "paused_pre": paused_pre,
+        "paused": bool(state.get("paused", False)),
+        "pause_reason": state.get("pause_reason"),
+        "trial_counter": state.get("trial_counter"),
+    }
 
 
 def _parse_journal_ts(value: Any) -> float | None:

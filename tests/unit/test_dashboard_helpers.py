@@ -1754,6 +1754,70 @@ def test_autopilot_progress_surfaces_outcome_kpis_and_current_code_health(
     }
 
 
+def test_autopilot_control_pause_and_resume_updates_state_latch(tmp_path: Path) -> None:
+    state_path = tmp_path / "autopilot_state.json"
+    audit_path = tmp_path / "autopilot_operator_control.jsonl"
+    state_path.write_text(
+        json.dumps(
+            {
+                "paused": False,
+                "trial_counter": 12,
+                "_dispatch_deficiency": "skip_action_loop",
+                "consecutive_skip_actions": 3,
+                "last_invalid_action": {"type": "skip"},
+                "last_invalid_reason": "loop",
+                "last_invalid_status": "rejected",
+                "consecutive_meta_actions": 2,
+                "_meta_halt_reason": "operator review",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    paused = dashboard._apply_autopilot_control_action(
+        action="pause",
+        note="operator pause",
+        state_path=state_path,
+        audit_path=audit_path,
+    )
+
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert paused["status"] == "ok"
+    assert paused["paused_pre"] is False
+    assert paused["paused"] is True
+    assert state["paused"] is True
+    assert state["pause_reason"] == "operator pause"
+
+    resumed = dashboard._apply_autopilot_control_action(
+        action="resume",
+        note="operator resume",
+        state_path=state_path,
+        audit_path=audit_path,
+    )
+
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert resumed["status"] == "ok"
+    assert resumed["paused_pre"] is True
+    assert resumed["paused"] is False
+    assert state["paused"] is False
+    assert "pause_reason" not in state
+    assert "_dispatch_deficiency" not in state
+    assert "_meta_halt_reason" not in state
+    assert state["consecutive_skip_actions"] == 0
+    assert state["last_invalid_action"] is None
+    assert state["last_invalid_reason"] is None
+    assert state["last_invalid_status"] is None
+    assert state["consecutive_meta_actions"] == 0
+
+    audit_rows = [
+        json.loads(line)
+        for line in audit_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert [row["action"] for row in audit_rows] == ["pause", "resume"]
+    assert [row["paused_post"] for row in audit_rows] == [True, False]
+
+
 def test_autopilot_progress_leaves_outcome_kpis_unknown_without_source_data(
     tmp_path: Path,
     monkeypatch,

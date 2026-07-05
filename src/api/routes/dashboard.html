@@ -944,6 +944,12 @@ body.insight-fullscreen-open { overflow: hidden; }
            style="margin:0 0 10px;padding:7px 9px;border:1px solid var(--border);border-radius:6px;background:rgba(0,0,0,0.22);font-family:var(--font-mono);font-size:11px;color:var(--muted)">
         phase: —
       </div>
+      <div id="autopilot-control"
+           style="display:flex;gap:8px;align-items:center;margin:0 0 10px;font-size:11px;font-family:var(--font-mono)">
+        <button type="button" id="autopilot-pause-btn" onclick="controlAutopilotDispatch('pause')">pause dispatch</button>
+        <button type="button" id="autopilot-resume-btn" onclick="controlAutopilotDispatch('resume')">resume dispatch</button>
+        <span id="autopilot-control-status" style="color:var(--muted)"></span>
+      </div>
       <!-- Current-trial progress bar.
            Distribution modes (action_p50 / aggregate_p50): bar fills to p90
            with p25/p50/p75 ticks. Slow tail (elapsed > p90) shifts color.
@@ -5386,6 +5392,63 @@ function _renderAutopilotPhase(d, ap) {
     `;
 }
 
+function _renderAutopilotControls(d) {
+    const state = d.autopilot_state || {};
+    const pauseBtn = document.getElementById('autopilot-pause-btn');
+    const resumeBtn = document.getElementById('autopilot-resume-btn');
+    const status = document.getElementById('autopilot-control-status');
+    if (!pauseBtn || !resumeBtn || !status) return;
+    const paused = state.paused === true;
+    const errored = Boolean(state.error);
+    pauseBtn.disabled = errored || paused;
+    resumeBtn.disabled = errored || !paused;
+    if (errored) {
+        status.textContent = `control unavailable: ${String(state.error).slice(0, 120)}`;
+        status.style.color = 'var(--bad)';
+    } else if (paused) {
+        const reason = state.pause_reason ? ` · ${state.pause_reason}` : '';
+        status.textContent = `paused${reason}`;
+        status.style.color = 'var(--warn)';
+    } else {
+        status.textContent = 'dispatch enabled';
+        status.style.color = 'var(--muted)';
+    }
+}
+
+async function controlAutopilotDispatch(action) {
+    const status = document.getElementById('autopilot-control-status');
+    const pauseBtn = document.getElementById('autopilot-pause-btn');
+    const resumeBtn = document.getElementById('autopilot-resume-btn');
+    if (pauseBtn) pauseBtn.disabled = true;
+    if (resumeBtn) resumeBtn.disabled = true;
+    if (status) {
+        status.textContent = `${action} requested…`;
+        status.style.color = 'var(--muted)';
+    }
+    try {
+        const response = await fetch('/dashboard/api/autopilot_control', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({action, note: `dashboard ${action}`}),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || data.status === 'error') {
+            throw new Error(data.error || `HTTP ${response.status}`);
+        }
+        if (status) {
+            status.textContent = `${action} ok`;
+            status.style.color = 'var(--good)';
+        }
+        await updateProcessStatus();
+    } catch (err) {
+        if (status) {
+            status.textContent = `${action} failed: ${err && err.message ? err.message : err}`;
+            status.style.color = 'var(--bad)';
+        }
+        setTimeout(() => updateProcessStatus(), 500);
+    }
+}
+
 async function updateProcessStatus() {
     const requestSeq = ++_processStatusFetchSeq;
     try {
@@ -5401,6 +5464,7 @@ async function updateProcessStatus() {
         const ap = d.autopilot || {};
         const el = document.getElementById('process-status');
         _renderAutopilotPhase(d, ap);
+        _renderAutopilotControls(d);
         if (ap.running) {
             const workers = d.gepa_worker_count ? ` · ${d.gepa_worker_count} gepa workers` : '';
             const ageLabel = d.last_autopilot_log_age_s != null
