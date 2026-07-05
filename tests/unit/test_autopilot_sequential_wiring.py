@@ -173,6 +173,84 @@ def test_seq_inputs_use_trusted_same_tier_prior_rows(tmp_path: Path) -> None:
     assert inputs["baseline_reference"]["due"] is True
 
 
+def test_seq_paired_baseline_diagnostics_compares_latest_reference(
+    tmp_path: Path,
+) -> None:
+    action = {"type": "seed_batch", "n_questions": 10}
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    journal.record(
+        _entry(
+            1,
+            action,
+            eval_details_extra={
+                "seq_baseline_reference_draw": True,
+                "question_results": [
+                    {"qid": "q1", "suite": "math", "correct": False},
+                ],
+            },
+        )
+    )
+    journal.record(
+        _entry(
+            2,
+            action,
+            eval_details_extra={
+                "seq_baseline_reference_draw": True,
+                "seq_baseline_reference_reason": "cadence",
+                "question_results": [
+                    {"qid": "q1", "suite": "math", "correct": True},
+                    {"qid": "q2", "suite": "math", "correct": False},
+                    {"qid": "q3", "suite": "math", "correct": False},
+                ],
+            },
+        )
+    )
+
+    diag = autopilot._seq_paired_baseline_diagnostics(
+        journal=journal,
+        tier=1,
+        candidate="candidate-a",
+        candidate_trial_id=20,
+        question_results=[
+            {"qid": "q1", "suite": "math", "correct": True},
+            {"qid": "q2", "suite": "math", "correct": True},
+            {"qid": "q4", "suite": "math", "correct": False},
+        ],
+    )
+
+    assert diag["status"] == "ok"
+    assert diag["used_for_gating"] is False
+    assert diag["baseline_reference_trial_id"] == 2
+    assert diag["baseline_reference_reason"] == "cadence"
+    assert diag["candidate_trial_id"] == 20
+    assert diag["shared_qids"] == 2
+    assert diag["same_correct"] == 1
+    assert diag["a_wrong_b_correct"] == 1
+    assert diag["delta_b_minus_a"] == pytest.approx(0.5)
+
+
+def test_seq_paired_baseline_diagnostics_reports_missing_reference(
+    tmp_path: Path,
+) -> None:
+    journal = ExperimentJournal(journal_dir=tmp_path)
+
+    diag = autopilot._seq_paired_baseline_diagnostics(
+        journal=journal,
+        tier=1,
+        candidate="candidate-a",
+        candidate_trial_id=20,
+        question_results=[{"qid": "q1", "suite": "math", "correct": True}],
+    )
+
+    assert diag == {
+        "status": "no_baseline_reference_vector",
+        "candidate": "candidate-a",
+        "candidate_trial_id": 20,
+        "candidate_vector_qids": 1,
+        "used_for_gating": False,
+    }
+
+
 def test_seq_baseline_reference_state_tracks_cadence_and_staleness(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

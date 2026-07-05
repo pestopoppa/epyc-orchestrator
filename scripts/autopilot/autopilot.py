@@ -95,6 +95,7 @@ from state_store import (
     save_state as _save_state_impl,
 )
 from actions import dispatch_action, SkipOutcome
+from paired_stats import QuestionOutcome, mcnemar_from_vectors
 from src.autopilot_core.action_identity import (
     EPHEMERAL_ACTION_KEYS,
     action_signature,
@@ -1007,6 +1008,123 @@ def _question_outcome_map(question_results: Any) -> dict[str, bool]:
             continue
         outcomes[qid] = bool(item.get("correct"))
     return outcomes
+
+
+def _question_outcome_vector(
+    question_results: Any,
+    *,
+    trial_id: int | None,
+) -> dict[str, QuestionOutcome]:
+    """Normalize compact question result rows for paired diagnostics."""
+    if not isinstance(question_results, list):
+        return {}
+    vector: dict[str, QuestionOutcome] = {}
+    try:
+        tid = int(trial_id) if trial_id is not None else -1
+    except (TypeError, ValueError):
+        tid = -1
+    for item in question_results:
+        if not isinstance(item, dict):
+            continue
+        qid = str(item.get("qid") or item.get("question_id") or "").strip()
+        if not qid:
+            continue
+        vector[qid] = QuestionOutcome(
+            qid=qid,
+            suite=str(item.get("suite") or "").strip(),
+            correct=bool(item.get("correct")),
+            trial_id=tid,
+        )
+    return vector
+
+
+def _latest_seq_baseline_reference_vector(
+    journal: ExperimentJournal,
+    *,
+    tier: int,
+) -> dict[str, Any] | None:
+    """Return the latest trusted marked baseline-reference vector for a tier."""
+    for entry in reversed(journal.entries_with_supersessions()):
+        if getattr(entry, "bug_corrupted_by", ""):
+            continue
+        if getattr(entry, "outcome_status", "ok") in {"invalid", "skipped"}:
+            continue
+        try:
+            if int(getattr(entry, "tier", -1)) != int(tier):
+                continue
+        except (TypeError, ValueError):
+            continue
+        eval_details = getattr(entry, "eval_details", {}) or {}
+        if not isinstance(eval_details, dict):
+            continue
+        if not eval_details.get("seq_baseline_reference_draw"):
+            continue
+        vector = _question_outcome_vector(
+            eval_details.get("question_results"),
+            trial_id=getattr(entry, "trial_id", None),
+        )
+        if vector:
+            return {
+                "trial_id": getattr(entry, "trial_id", None),
+                "timestamp": getattr(entry, "timestamp", ""),
+                "reason": eval_details.get("seq_baseline_reference_reason", ""),
+                "vector": vector,
+            }
+    return None
+
+
+def _seq_paired_baseline_diagnostics(
+    *,
+    journal: ExperimentJournal,
+    tier: int,
+    candidate: str,
+    candidate_trial_id: int,
+    question_results: Any,
+) -> dict[str, Any]:
+    """Observation-only same-qid baseline/candidate paired evidence."""
+    candidate_vector = _question_outcome_vector(
+        question_results,
+        trial_id=candidate_trial_id,
+    )
+    if not candidate_vector:
+        return {
+            "status": "no_candidate_vector",
+            "candidate": candidate,
+            "candidate_trial_id": candidate_trial_id,
+            "used_for_gating": False,
+        }
+    baseline = _latest_seq_baseline_reference_vector(journal, tier=tier)
+    if baseline is None:
+        return {
+            "status": "no_baseline_reference_vector",
+            "candidate": candidate,
+            "candidate_trial_id": candidate_trial_id,
+            "candidate_vector_qids": len(candidate_vector),
+            "used_for_gating": False,
+        }
+    result = mcnemar_from_vectors(
+        baseline["vector"],
+        candidate_vector,
+        label_a=f"baseline_reference:{baseline['trial_id']}",
+        label_b=f"candidate:{candidate_trial_id}",
+    )
+    payload = asdict(result)
+    payload.update(
+        {
+            "status": "ok" if result.shared_qids > 0 else "no_shared_qids",
+            "candidate": candidate,
+            "candidate_trial_id": candidate_trial_id,
+            "candidate_vector_qids": len(candidate_vector),
+            "baseline_reference_trial_id": baseline.get("trial_id"),
+            "baseline_reference_timestamp": baseline.get("timestamp", ""),
+            "baseline_reference_reason": baseline.get("reason", ""),
+            "baseline_reference_vector_qids": len(baseline["vector"]),
+            "comparison": "latest_seq_baseline_reference_vs_candidate",
+            "method": "exact_mcnemar_sign_test",
+            "used_for_gating": False,
+        }
+    )
+    return payload
 
 
 def _parse_journal_timestamp(timestamp: Any) -> float | None:
@@ -5373,6 +5491,7 @@ def _run_loop_inner(
             getattr(eval_result, "n_exogenous_recovered", 0) > 0
         )
         seq_finalized = False
+        seq_inputs: dict[str, Any] | None = None
 
         if has_exo_unrecovered:
             # Bypass safety gate + archive update. Trial is journaled below
@@ -5735,6 +5854,27 @@ def _run_loop_inner(
             except Exception as _bsv_err:  # observe-only must never disrupt the trial loop
                 log.debug("BSV observe skipped (trial %s): %s", trial_counter, _bsv_err)
 
+        # W8 paired evidence observability: compare this trial's same-qid
+        # outcomes with the latest marked baseline-reference draw. This is
+        # journal-only and deliberately computed after gate/archive/baseline
+        # decisions so it cannot affect current keep/revert or promotion.
+        seq_paired_baseline_payload: dict[str, Any] = {}
+        if seq_inputs is not None:
+            try:
+                seq_paired_baseline_payload = _seq_paired_baseline_diagnostics(
+                    journal=journal,
+                    tier=eval_result.tier,
+                    candidate=str(seq_inputs.get("candidate") or ""),
+                    candidate_trial_id=trial_counter,
+                    question_results=list(getattr(eval_result, "question_results", []) or []),
+                )
+            except Exception as _paired_err:  # observe-only must never disrupt the loop
+                log.debug(
+                    "Seq paired-baseline diagnostics skipped (trial %s): %s",
+                    trial_counter,
+                    _paired_err,
+                )
+
         # Git tag
         phase.set("post_trial_artifacts", trial_id=trial_counter, species=species_name)
         git_tag = ""
@@ -5816,6 +5956,8 @@ def _run_loop_inner(
             "tool_helpfulness": getattr(eval_result, "tool_helpfulness", float("nan")),
             "per_suite_tool_helpfulness": getattr(eval_result, "per_suite_tool_helpfulness", {}),
         }
+        if seq_paired_baseline_payload:
+            eval_details_dict["seq_paired_baseline"] = seq_paired_baseline_payload
         if learning_excluded_by:
             deficiency_category = exclusion_def_cat
             eval_details_dict["learning_exclusion"] = {
