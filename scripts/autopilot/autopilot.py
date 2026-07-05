@@ -3564,6 +3564,18 @@ FABLE_GATE_ADVISORY_MAX_AGE_S = int(
     os.environ.get("AUTOPILOT_FABLE_GATE_ADVISORY_MAX_AGE_S", "14400")
 )
 
+
+def _format_deep_eval_tier_options() -> str:
+    tiers = [str(tier) for tier in sorted(controller_io.DEEP_EVAL_TIERS)]
+    if not tiers:
+        return "(none)"
+    if len(tiers) == 1:
+        return tiers[0]
+    if len(tiers) == 2:
+        return " or ".join(tiers)
+    return f"{', '.join(tiers[:-1])}, or {tiers[-1]}"
+
+
 CONTROLLER_PROMPT_TEMPLATE = """\
 You are the AutoPilot meta-reasoning controller for an LLM orchestration stack.
 Your job: analyze current system state and propose the SINGLE best next action.
@@ -3727,7 +3739,7 @@ Respond with EXACTLY ONE action in a ```json:autopilot_actions block:
 - Distill: {{"type": "distill_skillbank", "teacher": "claude", "categories": ["routing"]}}
 - Reset: {{"type": "reset_memories", "keep_seen": true, "keep_skills": true}}
 - Deep eval: {{"type": "deep_eval", "tier": 3}}
-  (Choose tier 3 when expert/hard workflow coverage or frontier evidence is thin; choose tier 2 for comprehensive validation or W8 promotion-eval evidence. Supported tiers: 0, 1, 2, or 3. Do NOT include target_trial, suites, baseline_recheck, or instrumentation fields.)
+  (Choose tier 3 when expert/hard workflow coverage or frontier evidence is thin; choose tier 2 for comprehensive validation or W8 promotion-eval evidence. Supported tiers: {deep_eval_tier_options}. Do NOT include target_trial, suites, baseline_recheck, or instrumentation fields.)
 - Rollback: {{"type": "rollback", "to_checkpoint": "production_best"}}
 - Distill: {{"type": "distill_knowledge", "last_n": 10}}
   (Run every ~5 trials to extract insights from recent outcomes into strategy memory)
@@ -5508,6 +5520,7 @@ def _run_loop_inner(
                 ),
                 last_invalid_feedback=_build_last_invalid_feedback(state),
                 numeric_surface_options="|".join(_configured_numeric_surfaces()),
+                deep_eval_tier_options=_format_deep_eval_tier_options(),
                 code_targets=", ".join(CODE_MUTATION_ALLOWLIST),
                 plot_paths="\n".join(f"  - {p}" for p in plot_paths) or "  (none yet)",
             ) + peaf.peaf_prompt_addendum()

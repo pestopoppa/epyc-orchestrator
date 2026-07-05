@@ -100,6 +100,7 @@ _NUMERIC_SURFACES = set(_RAW_NUMERIC_SURFACES)
 _PROMPT_MUTATIONS = {"targeted_fix", "compress", "few_shot_evolution"}
 _CODE_MUTATIONS = {"targeted_fix"}
 _SLOT_SCORERS = {"expected_attention", "knorm"}
+DEEP_EVAL_TIERS = (0, 1, 2, 3)
 
 
 def set_suppressed_numeric_surfaces(surfaces: set[str] | list[str] | tuple[str, ...]) -> None:
@@ -206,7 +207,7 @@ _ACTION_SCHEMAS: dict[str, dict[str, Any]] = {
     "deep_eval": {
         "allowed": {"type", "tier"},
         "required": {"tier"},
-        "enums": {"tier": {0, 1, 2, 3}},
+        "enums": {"tier": set(DEEP_EVAL_TIERS)},
     },
     "rollback": {
         "allowed": {"type", "to_checkpoint"},

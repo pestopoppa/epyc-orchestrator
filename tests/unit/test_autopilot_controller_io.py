@@ -306,6 +306,8 @@ def test_validate_deep_eval_rejects_ignored_schema_fields() -> None:
 
 
 def test_validate_deep_eval_requires_valid_tier() -> None:
+    assert tuple(controller_io.DEEP_EVAL_TIERS) == (0, 1, 2, 3)
+    assert controller_io._ACTION_SCHEMAS["deep_eval"]["enums"]["tier"] == {0, 1, 2, 3}
     assert controller_io.validate_single_variable(
         {"type": "deep_eval", "tier": 2}
     ) is None

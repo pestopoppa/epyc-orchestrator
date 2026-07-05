@@ -912,6 +912,15 @@ def test_controller_prompt_includes_higher_tier_pressure_section() -> None:
     assert "expert/hard workflow coverage or frontier evidence is thin" in template
 
 
+def test_controller_prompt_deep_eval_tiers_match_validator_contract() -> None:
+    template = autopilot.CONTROLLER_PROMPT_TEMPLATE
+
+    assert "Supported tiers: {deep_eval_tier_options}" in template
+    assert autopilot._format_deep_eval_tier_options() == "0, 1, 2, or 3"
+    assert "Only tier is supported" not in template
+    assert "Supported tiers: 0, 1, or 2" not in template
+
+
 def test_controller_prompt_includes_outcome_progress_pressure_section() -> None:
     template = autopilot.CONTROLLER_PROMPT_TEMPLATE
 
@@ -1128,6 +1137,7 @@ def test_controller_prompt_uses_fresh_strategy_hints_section(monkeypatch) -> Non
             last_invalid_feedback="invalid",
             plot_paths="plots",
             numeric_surface_options="numeric",
+            deep_eval_tier_options=autopilot._format_deep_eval_tier_options(),
             code_targets="targets",
         )
 
