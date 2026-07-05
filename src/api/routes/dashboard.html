@@ -2610,8 +2610,12 @@ function scheduleRegionLocksRefresh(force = false) {
 }
 
 function repaintRegionLocksFromStructuredTapFrame() {
-    if (!_lastRegionLocksPayload) return;
-    updateRegionLocks(_regionLocksRefreshSeq, _lastRegionLocksPayload);
+    // Structured tap updates can change the live-holder story before the next
+    // periodic lock poll lands. Force a fresh lock fetch so the grid repaints
+    // from current /dashboard/api/region_locks data instead of reusing the last
+    // cached payload, which can leave the panel visually stuck on an older
+    // holder.
+    scheduleRegionLocksRefresh(true);
 }
 
 // Device rows for the Regions Lock grid: GPU/extern servers aren't CPU

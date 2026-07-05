@@ -163,6 +163,8 @@ def test_dashboard_live_panel_refreshes_ignore_stale_responses_where_possible() 
     assert "const result = fn();" in body
     assert "result.catch((err) =>" in body
     assert "return updateRegionLocks(refreshSeq, snap.region_locks);" in body
+    assert "function repaintRegionLocksFromStructuredTapFrame()" in body
+    assert "scheduleRegionLocksRefresh(true);" in body
     assert "let _lastRegionLocksPayload = null;" in body
     assert "rich overlay failed" in body
     assert "fetchJSON('/dashboard/api/snapshot'" in body
