@@ -1,0 +1,263 @@
+{
+  "collection_targets": [
+    {
+      "action_pair": "architect_general>coder_escalation",
+      "current_direction_balance": 0.0,
+      "current_rows": 2,
+      "needs_direction": [
+        "prefer other-side of architect_general>coder_escalation"
+      ],
+      "prefer_hi": 0,
+      "prefer_lo": 2,
+      "stratum_field": "source_family",
+      "stratum_value": "seeding_eval",
+      "suggested_min_rows": 20
+    },
+    {
+      "action_pair": "coder_escalation>frontdoor",
+      "current_direction_balance": 0.0,
+      "current_rows": 1,
+      "needs_direction": [
+        "prefer other-side of coder_escalation>frontdoor"
+      ],
+      "prefer_hi": 0,
+      "prefer_lo": 1,
+      "stratum_field": "source_family",
+      "stratum_value": "seeding_eval",
+      "suggested_min_rows": 20
+    },
+    {
+      "action_pair": "coder_escalation>frontdoor",
+      "current_direction_balance": 0.0,
+      "current_rows": 1,
+      "needs_direction": [
+        "prefer other-side of coder_escalation>frontdoor"
+      ],
+      "prefer_hi": 0,
+      "prefer_lo": 1,
+      "stratum_field": "suite",
+      "stratum_value": "debugbench",
+      "suggested_min_rows": 20
+    },
+    {
+      "action_pair": "architect_general>coder_escalation",
+      "current_direction_balance": 0.0,
+      "current_rows": 1,
+      "needs_direction": [
+        "prefer other-side of architect_general>coder_escalation"
+      ],
+      "prefer_hi": 0,
+      "prefer_lo": 1,
+      "stratum_field": "suite",
+      "stratum_value": "general",
+      "suggested_min_rows": 20
+    },
+    {
+      "action_pair": "architect_general>coder_escalation",
+      "current_direction_balance": 0.0,
+      "current_rows": 1,
+      "needs_direction": [
+        "prefer other-side of architect_general>coder_escalation"
+      ],
+      "prefer_hi": 0,
+      "prefer_lo": 1,
+      "stratum_field": "suite",
+      "stratum_value": "simpleqa",
+      "suggested_min_rows": 20
+    }
+  ],
+  "decision": {
+    "recommended_next": "collect non-overlapping cross-action preference rows for the listed collection_targets (balance both directions); re-run evaluate_offline_reward_pairwise_ranker.py holdouts after collection. Do NOT retune the absolute MLP/calibrator/pairwise family.",
+    "runtime_gate_change_allowed": false,
+    "status": "preference_coverage_gaps_found",
+    "weak_strata": [
+      "source_family:seeding_eval",
+      "suite:debugbench",
+      "suite:general",
+      "suite:simpleqa"
+    ]
+  },
+  "input": {
+    "action_pair_counts": {
+      "architect_general>coder_escalation": 2,
+      "coder_escalation>frontdoor": 1
+    },
+    "cross_action_pair_rows": 3,
+    "group_count": 3,
+    "pair_rows": 3,
+    "same_action_pair_rows": 0,
+    "source_family_pair_counts": {
+      "seeding_eval": 3
+    },
+    "suite_pair_counts": {
+      "debugbench": 1,
+      "general": 1,
+      "simpleqa": 1
+    }
+  },
+  "overall_action_pair_directions": {
+    "architect_general>coder_escalation": {
+      "cross_action": true,
+      "direction_balance": 0.0,
+      "lo_action": "architect_general",
+      "one_sided": true,
+      "prefer_hi": 0,
+      "prefer_lo": 2,
+      "rows": 2
+    },
+    "coder_escalation>frontdoor": {
+      "cross_action": true,
+      "direction_balance": 0.0,
+      "lo_action": "coder_escalation",
+      "one_sided": true,
+      "prefer_hi": 0,
+      "prefer_lo": 1,
+      "rows": 1
+    }
+  },
+  "schema_version": "offline_reward_pairwise_preference_direction_audit.v1",
+  "strata": {
+    "source_family": {
+      "seeding_eval": {
+        "action_pair_directions": {
+          "architect_general>coder_escalation": {
+            "cross_action": true,
+            "direction_balance": 0.0,
+            "lo_action": "architect_general",
+            "one_sided": true,
+            "prefer_hi": 0,
+            "prefer_lo": 2,
+            "rows": 2
+          },
+          "coder_escalation>frontdoor": {
+            "cross_action": true,
+            "direction_balance": 0.0,
+            "lo_action": "coder_escalation",
+            "one_sided": true,
+            "prefer_hi": 0,
+            "prefer_lo": 1,
+            "rows": 1
+          }
+        },
+        "cross_action_rows": 3,
+        "distinct_action_pairs": 2,
+        "one_sided_cross_action_pairs": [
+          "architect_general>coder_escalation",
+          "coder_escalation>frontdoor"
+        ],
+        "rows": 3,
+        "same_action_rows": 0,
+        "thin_cross_action_pairs": [
+          "architect_general>coder_escalation",
+          "coder_escalation>frontdoor"
+        ],
+        "untrained_in_complement_pairs": [
+          "architect_general>coder_escalation",
+          "coder_escalation>frontdoor"
+        ],
+        "weak_reasons": [
+          "thin_stratum",
+          "one_sided_directions"
+        ]
+      }
+    },
+    "suite": {
+      "debugbench": {
+        "action_pair_directions": {
+          "coder_escalation>frontdoor": {
+            "cross_action": true,
+            "direction_balance": 0.0,
+            "lo_action": "coder_escalation",
+            "one_sided": true,
+            "prefer_hi": 0,
+            "prefer_lo": 1,
+            "rows": 1
+          }
+        },
+        "cross_action_rows": 1,
+        "distinct_action_pairs": 1,
+        "one_sided_cross_action_pairs": [
+          "coder_escalation>frontdoor"
+        ],
+        "rows": 1,
+        "same_action_rows": 0,
+        "thin_cross_action_pairs": [
+          "coder_escalation>frontdoor"
+        ],
+        "untrained_in_complement_pairs": [
+          "coder_escalation>frontdoor"
+        ],
+        "weak_reasons": [
+          "thin_stratum",
+          "one_sided_directions"
+        ]
+      },
+      "general": {
+        "action_pair_directions": {
+          "architect_general>coder_escalation": {
+            "cross_action": true,
+            "direction_balance": 0.0,
+            "lo_action": "architect_general",
+            "one_sided": true,
+            "prefer_hi": 0,
+            "prefer_lo": 1,
+            "rows": 1
+          }
+        },
+        "cross_action_rows": 1,
+        "distinct_action_pairs": 1,
+        "one_sided_cross_action_pairs": [
+          "architect_general>coder_escalation"
+        ],
+        "rows": 1,
+        "same_action_rows": 0,
+        "thin_cross_action_pairs": [
+          "architect_general>coder_escalation"
+        ],
+        "untrained_in_complement_pairs": [
+          "architect_general>coder_escalation"
+        ],
+        "weak_reasons": [
+          "thin_stratum",
+          "one_sided_directions"
+        ]
+      },
+      "simpleqa": {
+        "action_pair_directions": {
+          "architect_general>coder_escalation": {
+            "cross_action": true,
+            "direction_balance": 0.0,
+            "lo_action": "architect_general",
+            "one_sided": true,
+            "prefer_hi": 0,
+            "prefer_lo": 1,
+            "rows": 1
+          }
+        },
+        "cross_action_rows": 1,
+        "distinct_action_pairs": 1,
+        "one_sided_cross_action_pairs": [
+          "architect_general>coder_escalation"
+        ],
+        "rows": 1,
+        "same_action_rows": 0,
+        "thin_cross_action_pairs": [
+          "architect_general>coder_escalation"
+        ],
+        "untrained_in_complement_pairs": [
+          "architect_general>coder_escalation"
+        ],
+        "weak_reasons": [
+          "thin_stratum",
+          "one_sided_directions"
+        ]
+      }
+    }
+  },
+  "thresholds": {
+    "direction_balance_warn": 0.2,
+    "min_action_pair_rows": 8,
+    "min_stratum_rows": 20,
+    "min_train_rows": 10
+  }
+}
