@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import time
 import sqlite3
@@ -831,8 +832,40 @@ _HEALTH_SEVERITY = {"fresh": 0, "aging": 1, "stale": 2, "dead": 3}
 _HEALTH_STATUS = {"fresh": "ok", "aging": "ok", "stale": "degraded", "dead": "degraded"}
 
 
+def _serve_path_health(now: float) -> dict[str, Any]:
+    """Classify the snapshot serve path from this worker's build vitals.
+
+    Stale when a build attempt is outstanding past the stall threshold (hang)
+    or the newest attempt errored (crash loop). A worker with no recent demand
+    (no open tab / SSE) has last_attempt == last_success and stays fresh —
+    idle is not degraded. Per-worker stats: with 6 uvicorn workers one health
+    call samples one worker; repeat curls sample the pool.
+    """
+    s = dict(_SNAPSHOT_BUILD_STATS)
+    s["pid"] = os.getpid()
+    attempt, success, err_ts = s["last_attempt_ts"], s["last_success_ts"], s["last_error_ts"]
+    cls = "fresh"
+    reason = ""
+    if err_ts is not None and (success is None or err_ts > success):
+        cls = "stale"
+        reason = f"snapshot serve path erroring (worker {s['pid']}): {s['last_error']}"
+    elif (
+        attempt is not None
+        and (success is None or attempt > success)
+        and now - attempt > _SNAPSHOT_SERVE_PATH_STALL_S
+    ):
+        cls = "stale"
+        reason = (
+            f"snapshot serve path stalled (worker {s['pid']}): build started "
+            f"{round(now - attempt)}s ago, no result"
+        )
+    s["staleness_class"] = cls
+    s["reason"] = reason
+    return s
+
+
 @router.get("/dashboard/api/health")
-async def dashboard_health() -> JSONResponse:
+async def dashboard_health(probe: str | None = None) -> JSONResponse:
     """Fold every registered panel's freshness into one dashboard-data health view.
 
     This is the anti-whack-a-mole guard. Each prior "dashboard panel stale"
@@ -840,7 +873,10 @@ async def dashboard_health() -> JSONResponse:
     producer stops advancing, this endpoint reports ``degraded`` naming the
     offending panel + source, so breakage is caught loudly by curl/monitor
     instead of by eyeballing a panel. Live panels (recomputed per request) are
-    fresh by construction and never drag the verdict down on their own.
+    fresh by construction and never drag the verdict down on their own — their
+    failure mode is the SERVE PATH, covered by the serve_path block below and
+    the on-demand ``?probe=snapshot`` real-build check (the one probe a hang
+    cannot hide from).
     """
     now = time.time()
     panels_out: list[dict[str, Any]] = []
@@ -861,14 +897,39 @@ async def dashboard_health() -> JSONResponse:
             "reason": env["reason"],
             "sources": env["sources"],
         })
-    return JSONResponse({
+
+    serve_path = _serve_path_health(now)
+    if _HEALTH_SEVERITY[serve_path["staleness_class"]] > _HEALTH_SEVERITY[worst]:
+        worst = serve_path["staleness_class"]
+
+    probe_result: dict[str, Any] | None = None
+    if probe == "snapshot":
+        t0 = time.time()
+        try:
+            await asyncio.wait_for(snapshot(), timeout=10.0)
+            probe_result = {"ok": True, "duration_s": round(time.time() - t0, 3)}
+        except asyncio.TimeoutError:
+            probe_result = {"ok": False, "timeout_s": 10.0}
+        except Exception as exc:
+            probe_result = {
+                "ok": False, "error": str(exc),
+                "duration_s": round(time.time() - t0, 3),
+            }
+        if not probe_result.get("ok") and _HEALTH_SEVERITY["stale"] > _HEALTH_SEVERITY[worst]:
+            worst = "stale"
+
+    body: dict[str, Any] = {
         "status": _HEALTH_STATUS[worst],
         "worst_class": worst,
         "generated_at": now,
         "panel_count": len(panels_out),
         "degraded_panels": [p["key"] for p in panels_out if p["staleness_class"] in ("stale", "dead")],
+        "serve_path": serve_path,
         "panels": panels_out,
-    })
+    }
+    if probe_result is not None:
+        body["probe"] = probe_result
+    return JSONResponse(body)
 
 
 @router.get("/dashboard/events/raw_tap")
@@ -3851,9 +3912,41 @@ def _count_log_events(
     return _count_log_events_impl(path, patterns, window_s=window_s)
 
 
+# Per-worker serve-path vitals for /dashboard/api/health. The health endpoint
+# otherwise only stats producer FILES, so a hang or exception inside the
+# snapshot serve path (the topology/region-locks/live-tap failure domain) was
+# invisible to it — panels froze while health stayed green.
+_SNAPSHOT_BUILD_STATS: dict[str, Any] = {
+    "last_attempt_ts": None,
+    "last_success_ts": None,
+    "last_duration_s": None,
+    "last_error": None,
+    "last_error_ts": None,
+    "build_count": 0,
+}
+_SNAPSHOT_SERVE_PATH_STALL_S = 30.0
+
+
 @router.get("/dashboard/api/snapshot")
 async def snapshot() -> JSONResponse:
     """Point-in-time state: all slots + recent decisions + counters."""
+    stats = _SNAPSHOT_BUILD_STATS
+    started = time.time()
+    stats["last_attempt_ts"] = started
+    try:
+        resp = await _snapshot_impl()
+    except Exception as exc:
+        stats["last_error"] = str(exc)
+        stats["last_error_ts"] = time.time()
+        raise
+    done = time.time()
+    stats["last_success_ts"] = done
+    stats["last_duration_s"] = round(done - started, 3)
+    stats["build_count"] += 1
+    return resp
+
+
+async def _snapshot_impl() -> JSONResponse:
     slots_by_port, slots_poll_meta = await _poll_all_slots()
     progress_log = _todays_progress_log()
     recent, rolling, cumulative = _scan_recent_decisions(progress_log)

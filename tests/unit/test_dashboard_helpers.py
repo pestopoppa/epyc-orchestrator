@@ -2304,3 +2304,99 @@ def test_read_tap_events_tail_stitches_rotation_window(tmp_path) -> None:
     base.write_text('{"seq":4}\n' * 200)
     out = dashboard_tap._read_tap_events_tail(base, max_bytes=1024)
     assert '{"seq":2}' not in out
+
+
+# ----- health serve-path coverage (hang/crash visibility) ---------------------
+
+
+def _reset_snapshot_stats(monkeypatch, **overrides) -> None:
+    fresh = {
+        "last_attempt_ts": None, "last_success_ts": None, "last_duration_s": None,
+        "last_error": None, "last_error_ts": None, "build_count": 0,
+    }
+    fresh.update(overrides)
+    for k, v in fresh.items():
+        monkeypatch.setitem(dashboard._SNAPSHOT_BUILD_STATS, k, v)
+
+
+def test_serve_path_health_idle_worker_is_fresh(monkeypatch) -> None:
+    now = 1_000_000.0
+    _reset_snapshot_stats(monkeypatch)  # never built: idle, not degraded
+    assert dashboard._serve_path_health(now)["staleness_class"] == "fresh"
+    _reset_snapshot_stats(  # built long ago, no demand since: still fresh
+        monkeypatch, last_attempt_ts=now - 5000, last_success_ts=now - 5000,
+        last_duration_s=0.9, build_count=42,
+    )
+    assert dashboard._serve_path_health(now)["staleness_class"] == "fresh"
+
+
+def test_serve_path_health_flags_hang_and_crash(monkeypatch) -> None:
+    now = 1_000_000.0
+    # Hang: attempt outstanding past the stall threshold, no success since.
+    _reset_snapshot_stats(
+        monkeypatch, last_attempt_ts=now - 45, last_success_ts=now - 300,
+        build_count=10,
+    )
+    out = dashboard._serve_path_health(now)
+    assert out["staleness_class"] == "stale"
+    assert "stalled" in out["reason"]
+    # In-flight but young: not yet a hang.
+    _reset_snapshot_stats(
+        monkeypatch, last_attempt_ts=now - 5, last_success_ts=now - 300,
+        build_count=10,
+    )
+    assert dashboard._serve_path_health(now)["staleness_class"] == "fresh"
+    # Crash loop: newest attempt errored.
+    _reset_snapshot_stats(
+        monkeypatch, last_attempt_ts=now - 1, last_success_ts=now - 60,
+        last_error="boom", last_error_ts=now - 1, build_count=10,
+    )
+    out = dashboard._serve_path_health(now)
+    assert out["staleness_class"] == "stale"
+    assert "erroring" in out["reason"]
+    assert "boom" in out["reason"]
+
+
+def test_health_folds_serve_path_and_probe(monkeypatch) -> None:
+    now_ref = time.time()
+    # Healthy stats → health ok, serve_path present.
+    _reset_snapshot_stats(
+        monkeypatch, last_attempt_ts=now_ref, last_success_ts=now_ref,
+        last_duration_s=0.5, build_count=3,
+    )
+    resp = asyncio.run(dashboard.dashboard_health())
+    payload = json.loads(resp.body)
+    assert payload["serve_path"]["staleness_class"] == "fresh"
+    assert "probe" not in payload
+
+    # Stalled stats must degrade the folded verdict.
+    _reset_snapshot_stats(
+        monkeypatch, last_attempt_ts=now_ref - 120, last_success_ts=now_ref - 600,
+        build_count=3,
+    )
+    resp = asyncio.run(dashboard.dashboard_health())
+    payload = json.loads(resp.body)
+    assert payload["serve_path"]["staleness_class"] == "stale"
+    assert payload["status"] == "degraded"
+
+
+def test_health_probe_reports_timeout_and_error(monkeypatch) -> None:
+    async def timing_out_snapshot():
+        raise asyncio.TimeoutError()
+
+    monkeypatch.setattr(dashboard, "snapshot", timing_out_snapshot)
+    resp = asyncio.run(dashboard.dashboard_health(probe="snapshot"))
+    payload = json.loads(resp.body)
+    assert payload["probe"]["ok"] is False
+    assert "timeout_s" in payload["probe"]
+    assert payload["status"] == "degraded"
+
+    async def crashing_snapshot():
+        raise RuntimeError("serve path exploded")
+
+    monkeypatch.setattr(dashboard, "snapshot", crashing_snapshot)
+    resp = asyncio.run(dashboard.dashboard_health(probe="snapshot"))
+    payload = json.loads(resp.body)
+    assert payload["probe"]["ok"] is False
+    assert "serve path exploded" in payload["probe"]["error"]
+    assert payload["status"] == "degraded"
