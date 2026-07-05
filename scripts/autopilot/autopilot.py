@@ -5438,7 +5438,26 @@ def _run_loop_inner(
                         f"Auto-blacklisted: 3 consecutive failures ending at trial {trial_counter}",
                     )
                     blacklist = load_blacklist()  # Reload after append
-                    lab.restore_checkpoint()
+                    if strategy_store is not None:
+                        try:
+                            strategy_store.close()
+                        except Exception as exc:
+                            log.warning("StrategyStore close before rollback restore failed: %s", exc)
+                    restore_result = lab.restore_checkpoint()
+                    memory = ShortTermMemory()
+                    try:
+                        strategy_store = StrategyStore()
+                        _install_planner_convention_bindings(strategy_store, journal)
+                    except Exception as exc:
+                        strategy_store = None
+                        log.warning(
+                            "StrategyStore reload after rollback restore failed: %s",
+                            exc,
+                        )
+                    log.info(
+                        "Rollback restore complete; AP-22 and StrategyStore handles reloaded: %s",
+                        restore_result,
+                    )
                     gate.reset_failures()
 
         # ── 4b. Self-Criticism (AP-23/AP-24) ────────────────────
@@ -6401,6 +6420,10 @@ def cmd_restore(args: argparse.Namespace) -> None:
     path = Path(args.checkpoint) if args.checkpoint else None
     result = lab.restore_checkpoint(path)
     print(f"Restore result: {result}")
+    print(
+        "Restore rewinds AP-22 short-term memory and StrategyStore on disk; "
+        "restart any running AutoPilot daemon to reload in-memory handles."
+    )
 
 
 def cmd_digest(args: argparse.Namespace) -> None:

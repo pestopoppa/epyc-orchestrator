@@ -25,6 +25,9 @@ MEMORY_DIR = ORCH_ROOT / "orchestration" / "repl_memory" / "sessions"
 SKILLS_DIR = ORCH_ROOT / "orchestration" / "repl_memory"
 PROMPTS_DIR = ORCH_ROOT / "orchestration" / "prompts"
 CLASSIFIER_CONFIG = ORCH_ROOT / "orchestration" / "classifier_config.yaml"
+AP22_MEMORY = ORCH_ROOT / "orchestration" / "autopilot_short_term_memory.md"
+STRATEGY_STORE_DIR = SKILLS_DIR / "strategies"
+STRATEGY_STORE_CHECKPOINT = "strategy_store"
 
 AUTOPILOT_STATE = ORCH_ROOT / "orchestration" / "autopilot_state.json"
 EPISODIC_DB = MEMORY_DIR / "episodic.db"
@@ -97,6 +100,21 @@ class StructuralLab:
             shutil.copy2(CLASSIFIER_CONFIG, cp_dir / "classifier_config.yaml")
             copied.append("classifier_config.yaml")
 
+        # AP-22 + StrategyStore are planner memory. A checkpoint/restore must
+        # snapshot them with the frontier/config files or a rewind leaves stale
+        # hypotheses active after restoring older routing state.
+        if AP22_MEMORY.exists():
+            shutil.copy2(AP22_MEMORY, cp_dir / AP22_MEMORY.name)
+            copied.append(AP22_MEMORY.name)
+
+        if STRATEGY_STORE_DIR.exists():
+            shutil.copytree(
+                STRATEGY_STORE_DIR,
+                cp_dir / STRATEGY_STORE_CHECKPOINT,
+                dirs_exist_ok=True,
+            )
+            copied.append(f"{STRATEGY_STORE_CHECKPOINT}/")
+
         # Memory count
         memory_count = self._get_memory_count()
 
@@ -161,6 +179,30 @@ class StructuralLab:
         if cc.exists():
             shutil.copy2(cc, CLASSIFIER_CONFIG)
             restored.append("classifier_config.yaml")
+
+        # Restore or clear planner memory explicitly. Older checkpoints did not
+        # carry these artifacts; clearing is safer than keeping post-checkpoint
+        # hypotheses attached to pre-checkpoint routing state.
+        ap22_src = checkpoint_path / AP22_MEMORY.name
+        if ap22_src.exists():
+            AP22_MEMORY.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(ap22_src, AP22_MEMORY)
+            restored.append(AP22_MEMORY.name)
+        elif AP22_MEMORY.exists():
+            AP22_MEMORY.unlink()
+            restored.append(f"{AP22_MEMORY.name}:cleared")
+
+        strategy_src = checkpoint_path / STRATEGY_STORE_CHECKPOINT
+        if STRATEGY_STORE_DIR.exists():
+            if STRATEGY_STORE_DIR.is_dir():
+                shutil.rmtree(STRATEGY_STORE_DIR)
+            else:
+                STRATEGY_STORE_DIR.unlink()
+        if strategy_src.exists():
+            shutil.copytree(strategy_src, STRATEGY_STORE_DIR)
+            restored.append(f"{STRATEGY_STORE_CHECKPOINT}/")
+        else:
+            restored.append(f"{STRATEGY_STORE_CHECKPOINT}/:cleared")
 
         log.info("Restored %d files from %s", len(restored), checkpoint_path.name)
         return {"status": "ok", "restored": restored, "from": str(checkpoint_path)}
