@@ -121,6 +121,36 @@ def _numeric_apply_error_skip(
         "numeric_trial",
     )
 
+
+def _numeric_apply_no_changes(apply_result: dict[str, Any]) -> bool:
+    if apply_result.get("status") == "no_changes":
+        return True
+    nested_results = [
+        apply_result.get("hot_swap_result"),
+        apply_result.get("env_result"),
+        apply_result.get("kv_compact_result"),
+    ]
+    present = [result for result in nested_results if isinstance(result, dict)]
+    return bool(present) and all(
+        result.get("status") == "no_changes" for result in present
+    )
+
+
+def _numeric_no_change_skip(
+    *,
+    surface: str,
+    params: dict[str, Any],
+) -> SkipOutcome:
+    return SkipOutcome(
+        "skipped",
+        (
+            f"numeric_trial params produced no live config changes for surface "
+            f"{surface}; params={dict(params)}"
+        ),
+        "numeric_trial",
+    )
+
+
 if TYPE_CHECKING:
     from experiment_journal import ExperimentJournal
     from pareto_archive import ParetoArchive
@@ -459,6 +489,11 @@ def _action_numeric_trial(action: dict[str, Any], ctx: _ActionContext):
     if explicit_params:
         # Apply explicit params
         apply_result = _apply_params(explicit_params)
+        if _numeric_apply_no_changes(apply_result):
+            return (
+                _numeric_no_change_skip(surface=surface, params=explicit_params),
+                "numeric_swarm",
+            )
         if apply_result.get("status") == "error":
             log.warning(
                 "Skipping numeric trial eval; explicit params were not applied: %s",
@@ -477,6 +512,13 @@ def _action_numeric_trial(action: dict[str, Any], ctx: _ActionContext):
         # Let Optuna suggest
         trial = ctx.swarm.suggest_trial(surface)
         apply_result = _apply_params(trial["params"])
+        if _numeric_apply_no_changes(apply_result):
+            reason = "suggested params produced no live config changes"
+            ctx.swarm.mark_failed(surface, trial["trial_number"], reason)
+            return (
+                _numeric_no_change_skip(surface=surface, params=dict(trial["params"])),
+                "numeric_swarm",
+            )
         if apply_result.get("status") == "error":
             reason = "; ".join(apply_result.get("errors", [])) or str(apply_result)
             ctx.swarm.mark_failed(surface, trial["trial_number"], reason)
@@ -1148,6 +1190,13 @@ def _action_structural_experiment(action: dict[str, Any], ctx: _ActionContext):
             "structural_lab",
         )
 
+    noop_reason = _structural_noop_reason(flags, ctx.lab)
+    if noop_reason:
+        return (
+            SkipOutcome("skipped", noop_reason, "structural_experiment"),
+            "structural_lab",
+        )
+
     validation = ctx.lab.propose_flag_experiment(flags)
     status = validation.get("status")
     if status != "valid":
@@ -1184,6 +1233,44 @@ def _action_structural_experiment(action: dict[str, Any], ctx: _ActionContext):
         ctx.swarm.mark_epoch(f"structural_experiment:{flags}")
 
     return eval_result, "structural_lab"
+
+
+def _structural_noop_reason(flags: dict[str, Any], lab: Any) -> str | None:
+    if not flags or lab is None or not hasattr(lab, "current_flags"):
+        return None
+    try:
+        current = lab.current_flags()
+    except Exception:
+        return None
+    if not isinstance(current, dict) or not current:
+        return None
+
+    requested: dict[str, bool] = {}
+    for name, value in flags.items():
+        desired = _coerce_bool(value)
+        actual = _coerce_bool(current.get(name))
+        if desired is None or actual is None:
+            return None
+        requested[str(name)] = desired
+        if actual != desired:
+            return None
+
+    rendered = ", ".join(
+        f"{name}={str(value).lower()}" for name, value in sorted(requested.items())
+    )
+    return f"structural_experiment would not change live flag state: {rendered}"
+
+
+def _coerce_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"true", "1", "yes", "on"}:
+            return True
+        if text in {"false", "0", "no", "off"}:
+            return False
+    return None
 
 
 def _action_structural_prune(action: dict[str, Any], ctx: _ActionContext):

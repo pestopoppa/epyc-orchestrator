@@ -173,6 +173,33 @@ def test_structural_experiment_error_status_is_skipped_not_invalid() -> None:
     assert species == "structural_lab"
 
 
+def test_structural_experiment_noop_skips_before_validation_or_eval() -> None:
+    class FakeLab:
+        def current_flags(self):
+            return {"graph_router": False, "specialist_routing": True}
+
+        def propose_flag_experiment(self, _flags):  # pragma: no cover
+            raise AssertionError("no-op structural candidate must not validate")
+
+        def apply_flag_experiment(self, _flags):  # pragma: no cover
+            raise AssertionError("no-op structural candidate must not apply")
+
+    class FakeTower:
+        def hybrid_eval(self):  # pragma: no cover
+            raise AssertionError("no-op structural candidate must not eval")
+
+    result, species = actions._action_structural_experiment(
+        {"type": "structural_experiment", "flags": {"graph_router": False}},
+        _ctx(lab=FakeLab(), tower=FakeTower()),
+    )
+
+    assert isinstance(result, actions.SkipOutcome)
+    assert result.status == "skipped"
+    assert "would not change live flag state" in result.reason
+    assert "graph_router=false" in result.reason
+    assert species == "structural_lab"
+
+
 def test_planner_convention_bindings_are_default_off(monkeypatch) -> None:
     monkeypatch.setattr(actions, "_PLANNER_HINTS_ENABLED", False)
 
@@ -297,6 +324,72 @@ def test_numeric_trial_records_applied_optuna_params(monkeypatch) -> None:
     assert action["params"] == {"ORCHESTRATOR_MONITOR_THRESHOLD": 0.42}
     assert result.details["numeric_trial_applied_params"] == action["params"]
     assert swarm.reported == ("monitor", 7, result.objectives)
+
+
+def test_numeric_trial_explicit_no_changes_skips_eval(monkeypatch) -> None:
+    monkeypatch.setattr(
+        actions,
+        "_apply_params",
+        lambda _params: {"status": "no_changes"},
+    )
+
+    class FakeTower:
+        def hybrid_eval(self):  # pragma: no cover
+            raise AssertionError("no-change numeric candidate must not eval")
+
+    result, species = actions._action_numeric_trial(
+        {
+            "type": "numeric_trial",
+            "surface": "monitor",
+            "params": {"monitor.entropy_threshold": 0.42},
+        },
+        _ctx(tower=FakeTower(), state={}),
+    )
+
+    assert isinstance(result, actions.SkipOutcome)
+    assert result.status == "skipped"
+    assert "no live config changes" in result.reason
+    assert species == "numeric_swarm"
+
+
+def test_numeric_trial_suggested_no_changes_marks_failed_and_skips_eval(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        actions,
+        "_apply_params",
+        lambda _params: {"env_result": {"status": "no_changes"}},
+    )
+
+    class FakeSwarm:
+        def suggest_trial(self, surface):
+            return {
+                "trial_number": 17,
+                "surface": surface,
+                "params": {"monitor.entropy_threshold": 0.42},
+            }
+
+        def mark_failed(self, surface, trial_number, reason):
+            self.failed = (surface, trial_number, reason)
+
+    class FakeTower:
+        def hybrid_eval(self):  # pragma: no cover
+            raise AssertionError("no-change numeric candidate must not eval")
+
+    swarm = FakeSwarm()
+    result, species = actions._action_numeric_trial(
+        {"type": "numeric_trial", "surface": "monitor", "params": {}},
+        _ctx(swarm=swarm, tower=FakeTower(), state={}),
+    )
+
+    assert isinstance(result, actions.SkipOutcome)
+    assert result.status == "skipped"
+    assert swarm.failed == (
+        "monitor",
+        17,
+        "suggested params produced no live config changes",
+    )
+    assert species == "numeric_swarm"
 
 
 def test_numeric_trial_normalizes_short_explicit_surface_param(monkeypatch) -> None:
