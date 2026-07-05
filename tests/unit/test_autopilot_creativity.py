@@ -848,17 +848,26 @@ def test_controller_prompt_includes_higher_tier_pressure_section() -> None:
 def test_higher_tier_pressure_preserves_same_tier_comparison() -> None:
     class FakeArchive:
         def summary(self, *, tier):
+            if tier == 1:
+                return {
+                    "frontier_size": 4,
+                    "best_quality": 2.0,
+                    "best_speed": 42.0,
+                    "hv_slope_50": 0.0002,
+                }
             if tier == 2:
                 return {
                     "frontier_size": 2,
                     "best_quality": 1.4,
                     "best_speed": 18.5,
+                    "hv_slope_50": 0.0001,
                 }
             if tier == 3:
                 return {
                     "frontier_size": 0,
                     "best_quality": 0.0,
                     "best_speed": 0.0,
+                    "hv_slope_50": 0.0,
                 }
             raise AssertionError(f"unexpected tier {tier}")
 
@@ -874,6 +883,10 @@ def test_higher_tier_pressure_preserves_same_tier_comparison() -> None:
     assert "expert/hard workflow tasks" in text
     assert "prefer deep_eval tier 3 if T3 coverage/frontier is thin" in text
     assert "Never compare raw quality across tiers" in text
+    assert "T1 gains that never lift T2/T3 are overfit risk" in text
+    assert "T3 hard-workflow probes should favor technical tool-use, REPL" in text
+    assert "Plateau signal: T1 hv_slope_50=+0.000200, T2 hv_slope_50=+0.000100" in text
+    assert "until the next instrument/kernel era resets frontier-speed evidence" in text
     assert "T2: frontier=2, best_q=1.400, delta_vs_baseline=+0.300" in text
     assert "T3: empty frontier; baseline_q=0.200" in text
     assert "deployment safety lane" in text
@@ -923,8 +936,10 @@ def test_eval_coverage_pressure_reports_repeat_factor_and_pool_denominator() -> 
     assert "T3:trials=1,rows=2,distinct=2" in text
     assert "pool=10,coverage<=20.00%" in text
     assert "Higher-tier coverage is thin (T2=0 trial(s), T3=1 trial(s))" in text
+    assert "hard workflow, tool-use, REPL, and multi-turn task coverage" in text
     assert "Least-covered non-sentinel suites: agentic=1, coder=2" in text
     assert "under-covered suites" in text
+    assert "T1-only gains are overfit risk" in text
     assert "fixed authority-core evidence separate" in text
 
 

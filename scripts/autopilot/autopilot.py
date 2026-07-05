@@ -687,12 +687,34 @@ def _build_higher_tier_planner_pressure(
     lines = [
         "Use higher-tier evidence as optimization pressure, not as cross-tier scores:",
         "- T2/T3 are broader and harder slices of the real task pool; T3 includes expert/hard workflow tasks.",
-        "- Preserve T1 as the deployment safety lane; avoid T1 regressions.",
+        "- Preserve T1 as the deployment safety lane, but expect durable wins to generalize: T1 gains that never lift T2/T3 are overfit risk.",
         "- Prefer actions likely to improve T2/T3 same-tier frontier quality, then validate with deep_eval tier 2 or 3.",
+        "- If T1/T2 hypervolume is plateauing, use the current kernel era for T3 hard-workflow exploration instead of repeated local T1 exploitation.",
+        "- T3 hard-workflow probes should favor technical tool-use, REPL, and multi-turn agentic hypotheses when W8 is not requesting promotion evidence.",
         "- When W8 replay evidence is not asking for a specific promotion eval, prefer deep_eval tier 3 if T3 coverage/frontier is thin.",
         "- Never compare raw quality across tiers; compare each tier only to its own baseline/frontier.",
     ]
     baseline = getattr(gate, "baseline", None) if gate is not None else None
+    plateau_parts: list[str] = []
+    for tier in (DEFAULT_FRONTIER_TIER, 2):
+        try:
+            summary = archive.summary(tier=tier)
+        except Exception:
+            continue
+        try:
+            frontier_size = int(summary.get("frontier_size") or 0)
+            hv_slope = float(summary.get("hv_slope_50"))
+        except (TypeError, ValueError):
+            continue
+        if frontier_size > 0 and abs(hv_slope) < STAGNATION_HV_EPS:
+            plateau_parts.append(f"T{tier} hv_slope_50={hv_slope:+.6f}")
+    if plateau_parts:
+        lines.append(
+            "- Plateau signal: "
+            + ", ".join(plateau_parts)
+            + "; prioritize hard-workflow generalization pressure (especially T3) "
+            "until the next instrument/kernel era resets frontier-speed evidence."
+        )
     for tier in tiers:
         if tier <= DEFAULT_FRONTIER_TIER:
             continue
@@ -905,7 +927,9 @@ def _build_eval_coverage_pressure(
         under_sampled_text = (
             f" Higher-tier coverage is thin ({tier_list}); when the Fable gate "
             "does not require a specific W8/promotion action, prefer deep_eval on "
-            "the thinnest tier or seed_batch coverage probes that broaden task families."
+            "the thinnest tier or seed_batch coverage probes that broaden task families. "
+            "If T3 is thin, treat hard workflow, tool-use, REPL, and multi-turn task "
+            "coverage as high-value exploration."
         )
     least_covered_suites = sorted(
         ((suite, len(qids)) for suite, qids in suite_distinct.items()),
@@ -925,8 +949,9 @@ def _build_eval_coverage_pressure(
         (
             "If repeat_factor is high or coverage is low, prefer actions that add "
             "decision-grade diversity: seed_batch on under-covered suites, deep_eval tier 2/3, "
-            "or tool-use/agentic coverage probes. Keep fixed authority-core evidence separate "
-            "from planner-learning coverage."
+            "or tool-use/REPL/agentic coverage probes. Healthy optimization should eventually "
+            "lift same-tier T2/T3 frontier quality; T1-only gains are overfit risk. Keep fixed "
+            "authority-core evidence separate from planner-learning coverage."
         ),
     ]
     return "\n".join(lines)
