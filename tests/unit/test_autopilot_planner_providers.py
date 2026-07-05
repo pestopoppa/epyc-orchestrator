@@ -170,6 +170,173 @@ def test_local_planner_provider_posts_role_scoped_payload(monkeypatch) -> None:
     assert captured["archive"]["url"] == "http://local/v1/chat/completions"
 
 
+def test_local_planner_default_url_uses_ipv4_loopback(monkeypatch) -> None:
+    monkeypatch.delenv("AUTOPILOT_LOCAL_PLANNER_URL", raising=False)
+
+    provider = planner_providers.LocalPlannerProvider()
+
+    assert provider._url == "http://127.0.0.1:8000/v1/chat/completions"
+
+
+def test_local_planner_retries_transient_api_reload_failure(monkeypatch) -> None:
+    captured: dict[str, Any] = {"calls": 0, "sleeps": []}
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> dict[str, Any]:
+            return {"choices": [{"message": {"content": "draft after retry"}}]}
+
+    class FakeClient:
+        def __init__(self, *, timeout: int) -> None:
+            captured["timeout"] = timeout
+
+        def __enter__(self) -> "FakeClient":
+            return self
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+        def post(self, url: str, *, json: dict[str, Any]) -> FakeResponse:
+            captured["url"] = url
+            captured["payload"] = json
+            captured["calls"] += 1
+            if captured["calls"] == 1:
+                raise planner_providers.httpx.ConnectError("api reload gap")
+            return FakeResponse()
+
+    monkeypatch.setenv("AUTOPILOT_LOCAL_PLANNER_HTTP_ATTEMPTS", "2")
+    monkeypatch.setattr(planner_providers, "_open_planner_tap", lambda: None)
+    monkeypatch.setattr(planner_providers, "_archive_local_call", lambda *args, **kwargs: None)
+    monkeypatch.setattr(planner_providers.httpx, "Client", FakeClient)
+    monkeypatch.setattr(
+        planner_providers.time, "sleep", lambda seconds: captured["sleeps"].append(seconds)
+    )
+
+    provider = planner_providers.LocalPlannerProvider(
+        url="http://127.0.0.1:8000/v1/chat/completions",
+        role="worker_general",
+        model="worker_general",
+    )
+    result = provider.invoke("planner prompt", role="draft", timeout=9)
+
+    assert result.ok is True
+    assert result.text == "draft after retry"
+    assert captured["calls"] == 2
+    assert captured["sleeps"] == [2.0]
+
+
+def test_local_planner_retries_error_payload(monkeypatch) -> None:
+    captured: dict[str, Any] = {"calls": 0, "sleeps": []}
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> dict[str, Any]:
+            if captured["calls"] == 1:
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": "[ERROR: admission] Backend queue full for http://localhost:8072"
+                            }
+                        }
+                    ]
+                }
+            return {"choices": [{"message": {"content": "draft after queue clears"}}]}
+
+    class FakeClient:
+        def __init__(self, *, timeout: int) -> None:
+            captured["timeout"] = timeout
+
+        def __enter__(self) -> "FakeClient":
+            return self
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+        def post(self, url: str, *, json: dict[str, Any]) -> FakeResponse:
+            captured["url"] = url
+            captured["payload"] = json
+            captured["calls"] += 1
+            return FakeResponse()
+
+    monkeypatch.setenv("AUTOPILOT_LOCAL_PLANNER_HTTP_ATTEMPTS", "2")
+    monkeypatch.setattr(planner_providers, "_open_planner_tap", lambda: None)
+    monkeypatch.setattr(planner_providers, "_archive_local_call", lambda *args, **kwargs: None)
+    monkeypatch.setattr(planner_providers.httpx, "Client", FakeClient)
+    monkeypatch.setattr(
+        planner_providers.time,
+        "sleep",
+        lambda seconds: captured["sleeps"].append(seconds),
+    )
+
+    provider = planner_providers.LocalPlannerProvider(
+        url="http://127.0.0.1:8000/v1/chat/completions",
+        role="worker_general",
+        model="worker_general",
+    )
+    result = provider.invoke("planner prompt", role="draft", timeout=9)
+
+    assert result.ok is True
+    assert result.text == "draft after queue clears"
+    assert captured["calls"] == 2
+    assert captured["sleeps"] == [2.0]
+
+
+def test_local_planner_retries_mock_payload(monkeypatch) -> None:
+    captured: dict[str, Any] = {"calls": 0, "sleeps": []}
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> dict[str, Any]:
+            if captured["calls"] == 1:
+                return {"choices": [{"message": {"content": "[MOCK] Processed via worker"}}]}
+            return {"choices": [{"message": {"content": "real draft after worker ready"}}]}
+
+    class FakeClient:
+        def __init__(self, *, timeout: int) -> None:
+            captured["timeout"] = timeout
+
+        def __enter__(self) -> "FakeClient":
+            return self
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+        def post(self, url: str, *, json: dict[str, Any]) -> FakeResponse:
+            captured["url"] = url
+            captured["payload"] = json
+            captured["calls"] += 1
+            return FakeResponse()
+
+    monkeypatch.setenv("AUTOPILOT_LOCAL_PLANNER_HTTP_ATTEMPTS", "2")
+    monkeypatch.setattr(planner_providers, "_open_planner_tap", lambda: None)
+    monkeypatch.setattr(planner_providers, "_archive_local_call", lambda *args, **kwargs: None)
+    monkeypatch.setattr(planner_providers.httpx, "Client", FakeClient)
+    monkeypatch.setattr(
+        planner_providers.time,
+        "sleep",
+        lambda seconds: captured["sleeps"].append(seconds),
+    )
+
+    provider = planner_providers.LocalPlannerProvider(
+        url="http://127.0.0.1:8000/v1/chat/completions",
+        role="worker_general",
+        model="worker_general",
+    )
+    result = provider.invoke("planner prompt", role="draft", timeout=9)
+
+    assert result.ok is True
+    assert result.text == "real draft after worker ready"
+    assert captured["calls"] == 2
+    assert captured["sleeps"] == [2.0]
+
+
 def test_local_ingest_alias_selects_long_context_role() -> None:
     provider = planner_providers.get_planner_provider("local_ingest")
 
@@ -214,7 +381,9 @@ def test_local_chat_alias_posts_unforced_chat_payload(monkeypatch) -> None:
     monkeypatch.setattr(planner_providers, "_open_planner_tap", lambda: None)
     monkeypatch.setattr(planner_providers, "_archive_local_chat_call", fake_archive)
     monkeypatch.setattr(planner_providers.httpx, "Client", FakeClient)
-    monkeypatch.setattr(planner_providers.uuid, "uuid4", lambda: type("U", (), {"hex": "0123456789abcdef"})())
+    monkeypatch.setattr(
+        planner_providers.uuid, "uuid4", lambda: type("U", (), {"hex": "0123456789abcdef"})()
+    )
 
     provider = planner_providers.get_planner_provider("local_chat")
     result = provider.invoke("planner prompt", role="draft", timeout=11)
@@ -236,6 +405,58 @@ def test_local_chat_alias_posts_unforced_chat_payload(monkeypatch) -> None:
     }
     assert "force_role" not in captured["payload"]
     assert captured["archive"]["url"] == "http://127.0.0.1:8000/chat"
+
+
+def test_local_chat_retries_server_disconnect(monkeypatch) -> None:
+    captured: dict[str, Any] = {"calls": 0, "sleeps": []}
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> dict[str, Any]:
+            return {"answer": "chat draft after retry"}
+
+    class FakeClient:
+        def __init__(self, *, timeout: int) -> None:
+            captured["timeout"] = timeout
+
+        def __enter__(self) -> "FakeClient":
+            return self
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+        def post(self, url: str, *, json: dict[str, Any]) -> FakeResponse:
+            captured["url"] = url
+            captured["payload"] = json
+            captured["calls"] += 1
+            if captured["calls"] == 1:
+                raise planner_providers.httpx.RemoteProtocolError(
+                    "server disconnected without response"
+                )
+            return FakeResponse()
+
+    monkeypatch.setenv("AUTOPILOT_LOCAL_PLANNER_HTTP_ATTEMPTS", "2")
+    monkeypatch.setattr(planner_providers, "_open_planner_tap", lambda: None)
+    monkeypatch.setattr(planner_providers, "_archive_local_chat_call", lambda *args, **kwargs: None)
+    monkeypatch.setattr(planner_providers.httpx, "Client", FakeClient)
+    monkeypatch.setattr(
+        planner_providers.time, "sleep", lambda seconds: captured["sleeps"].append(seconds)
+    )
+    monkeypatch.setattr(
+        planner_providers.uuid,
+        "uuid4",
+        lambda: type("U", (), {"hex": "0123456789abcdef"})(),
+    )
+
+    provider = planner_providers.get_planner_provider("local_chat")
+    result = provider.invoke("planner prompt", role="draft", timeout=11)
+
+    assert result.ok is True
+    assert result.text == "chat draft after retry"
+    assert captured["calls"] == 2
+    assert captured["sleeps"] == [2.0]
 
 
 def test_codex_provider_uses_current_read_only_cli(monkeypatch, tmp_path) -> None:
@@ -335,9 +556,7 @@ def test_codex_provider_uses_configured_default_model_when_unspecified(
     assert captured["timeout"] == 7
 
 
-def test_codex_critic_alias_uses_codex_with_distinct_provider_name(
-    monkeypatch, tmp_path
-) -> None:
+def test_codex_critic_alias_uses_codex_with_distinct_provider_name(monkeypatch, tmp_path) -> None:
     captured = {}
 
     class FakeProcess:

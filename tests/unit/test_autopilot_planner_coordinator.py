@@ -401,22 +401,22 @@ def test_spend_breaker_forces_cloud_primary_to_local_providers(
         "summarize_economics",
         lambda *, days=7: _fake_economics_ledger(triggered=True),
     )
-    local_chat = FakeProvider(
-        "local_chat",
+    local_worker = FakeProvider(
+        "local_worker",
         [
             PlannerProviderResult(
-                provider="local_chat",
+                provider="local_worker",
                 role="draft",
                 ok=True,
                 text=_action_text({"type": "numeric_trial", "surface": "repl_executor"}),
             )
         ],
     )
-    local_worker = FakeProvider(
-        "local_worker",
+    codex_critic = FakeProvider(
+        "codex_critic",
         [
             PlannerProviderResult(
-                provider="local_worker",
+                provider="codex_critic",
                 role="critique",
                 ok=True,
                 text=_critique_text({"decision": "approve", "confidence": 0.8}),
@@ -437,20 +437,20 @@ def test_spend_breaker_forces_cloud_primary_to_local_providers(
         ),
         provider_factory=_factory(
             {
-                "local_chat": local_chat,
                 "local_worker": local_worker,
+                "codex_critic": codex_critic,
             }
         ),
     )
 
-    assert decision.draft_provider == "local_chat"
-    assert decision.critic_provider == "local_worker"
+    assert decision.draft_provider == "local_worker"
+    assert decision.critic_provider == "codex_critic"
     assert decision.action == {"type": "numeric_trial", "surface": "repl_executor"}
     assert state["_spend_breaker"]["active"] is True
     assert state["_spend_breaker"]["previous_primary"] == "claude"
     assert state["_spend_breaker"]["previous_critic"] == "codex"
-    assert [call["role"] for call in local_chat.calls] == ["draft"]
-    assert [call["role"] for call in local_worker.calls] == ["critique"]
+    assert [call["role"] for call in local_worker.calls] == ["draft"]
+    assert [call["role"] for call in codex_critic.calls] == ["critique"]
 
 
 def test_spend_breaker_replaces_cloud_critic_for_local_primary(
@@ -464,22 +464,22 @@ def test_spend_breaker_replaces_cloud_critic_for_local_primary(
         "summarize_economics",
         lambda *, days=7: _fake_economics_ledger(triggered=True),
     )
-    local_chat = FakeProvider(
-        "local_chat",
+    local_worker = FakeProvider(
+        "local_worker",
         [
             PlannerProviderResult(
-                provider="local_chat",
+                provider="local_worker",
                 role="draft",
                 ok=True,
                 text=_action_text({"type": "numeric_trial", "surface": "repl_executor"}),
             )
         ],
     )
-    local_worker = FakeProvider(
-        "local_worker",
+    codex_critic = FakeProvider(
+        "codex_critic",
         [
             PlannerProviderResult(
-                provider="local_worker",
+                provider="codex_critic",
                 role="critique",
                 ok=True,
                 text=_critique_text({"decision": "approve", "confidence": 0.8}),
@@ -500,14 +500,14 @@ def test_spend_breaker_replaces_cloud_critic_for_local_primary(
         ),
         provider_factory=_factory(
             {
-                "local_chat": local_chat,
                 "local_worker": local_worker,
+                "codex_critic": codex_critic,
             }
         ),
     )
 
-    assert decision.draft_provider == "local_chat"
-    assert decision.critic_provider == "local_worker"
+    assert decision.draft_provider == "local_worker"
+    assert decision.critic_provider == "codex_critic"
     assert state["_spend_breaker"]["previous_primary"] == "local_chat"
     assert state["_spend_breaker"]["previous_critic"] == "codex"
 
@@ -791,10 +791,7 @@ def test_unparseable_critique_fails_closed_not_open() -> None:
     assert state.get("codex", {}).get("failures", 0) >= 1
     # Fail-closed for HIGH-risk: the unsafe uncritiqued draft is NOT admitted —
     # the dispatch gate pauses for operator review.
-    assert (
-        planner_coordinator.uncritiqued_dispatch_block_reason(decision)
-        == "critic_unavailable"
-    )
+    assert planner_coordinator.uncritiqued_dispatch_block_reason(decision) == "critic_unavailable"
 
 
 def test_failed_critique_invoke_fails_closed_not_open() -> None:
@@ -846,10 +843,7 @@ def test_failed_critique_invoke_fails_closed_not_open() -> None:
     assert decision.degraded is True
     assert state.get("codex", {}).get("failures", 0) >= 1
     # HIGH-risk + critic unavailable => gate pauses (fails closed).
-    assert (
-        planner_coordinator.uncritiqued_dispatch_block_reason(decision)
-        == "critic_unavailable"
-    )
+    assert planner_coordinator.uncritiqued_dispatch_block_reason(decision) == "critic_unavailable"
 
 
 def test_unparseable_critique_shadow_mode_keeps_draft() -> None:
@@ -859,12 +853,20 @@ def test_unparseable_critique_shadow_mode_keeps_draft() -> None:
     original = {"type": "seed_batch", "n_questions": 10}
     claude = FakeProvider(
         "claude",
-        [PlannerProviderResult(provider="claude", role="draft", ok=True, text=_action_text(original))],
+        [
+            PlannerProviderResult(
+                provider="claude", role="draft", ok=True, text=_action_text(original)
+            )
+        ],
         supports_resume=True,
     )
     codex = FakeProvider(
         "codex",
-        [PlannerProviderResult(provider="codex", role="critique", ok=True, text="garbage not-json")],
+        [
+            PlannerProviderResult(
+                provider="codex", role="critique", ok=True, text="garbage not-json"
+            )
+        ],
     )
     state: dict[str, Any] = {}
     decision = planner_coordinator.plan_with_providers(
@@ -883,6 +885,7 @@ def test_default_planner_mode_is_active_draft_critique() -> None:
     """The shipped default must be the BINDING critic (the shadow→active flip)."""
     assert planner_coordinator.PlannerSettings().mode == "draft_critique"
     import os as _os
+
     saved = _os.environ.pop("AUTOPILOT_PLANNER_MODE", None)
     try:
         assert planner_coordinator.load_planner_settings_from_env().mode == "draft_critique"
@@ -915,8 +918,11 @@ def test_reconcile_active_approve_is_passthrough() -> None:
 def test_reconcile_active_revise_applies_valid_revision() -> None:
     action = {"type": "structural_experiment", "flags": {"a": True}}
     revised = {"type": "seed_batch", "n_questions": 12}
-    crit = PlannerCritique(decision="revise", revised_action=revised,
-                           revised_rationale={"falsifier": "y", "rubric_scores": {}})
+    crit = PlannerCritique(
+        decision="revise",
+        revised_action=revised,
+        revised_rationale={"falsifier": "y", "rubric_scores": {}},
+    )
     out_action, out_rat, out_text = _reconcile(action, {}, "draft", crit, active=True)
     assert out_action == revised
     assert out_rat == {"falsifier": "y", "rubric_scores": {}}
@@ -947,21 +953,33 @@ def test_decision_carries_original_draft_action_after_substitution() -> None:
     original = {"type": "structural_experiment", "flags": {"graph_router": True}}
     claude = FakeProvider(
         "claude",
-        [PlannerProviderResult(provider="claude", role="draft", ok=True, text=_action_text(original))],
+        [
+            PlannerProviderResult(
+                provider="claude", role="draft", ok=True, text=_action_text(original)
+            )
+        ],
         supports_resume=True,
     )
     codex = FakeProvider(
         "codex",
-        [PlannerProviderResult(provider="codex", role="critique", ok=True,
-                               text=_critique_text({"decision": "reject", "issues": ["deps unmet"]}))],
+        [
+            PlannerProviderResult(
+                provider="codex",
+                role="critique",
+                ok=True,
+                text=_critique_text({"decision": "reject", "issues": ["deps unmet"]}),
+            )
+        ],
     )
     decision = planner_coordinator.plan_with_providers(
-        "prompt", session_id=None, planner_state={},
+        "prompt",
+        session_id=None,
+        planner_state={},
         settings=PlannerSettings(mode="draft_critique", critique_policy="always"),
         provider_factory=_factory({"claude": claude, "codex": codex}),
     )
-    assert decision.action["type"] == "seed_batch"          # substituted
-    assert decision.draft_action == original                # original preserved
+    assert decision.action["type"] == "seed_batch"  # substituted
+    assert decision.draft_action == original  # original preserved
 
 
 def test_critique_prompt_surfaces_flag_and_feedback_context() -> None:
@@ -984,8 +1002,10 @@ def test_critique_prompt_surfaces_flag_and_feedback_context() -> None:
         "  SHOULD_NOT_REACH_CRITIC\n"
     )
     out = planner_coordinator.build_critique_prompt(
-        planner_prompt, "draft text",
-        {"type": "structural_experiment", "flags": {"graph_router": True}}, {},
+        planner_prompt,
+        "draft text",
+        {"type": "structural_experiment", "flags": {"graph_router": True}},
+        {},
     )
     # Selected context embedded:
     assert "Selected Measurement and Constraint Context" in out
@@ -1011,13 +1031,12 @@ def test_critique_prompt_surfaces_flag_and_feedback_context() -> None:
 
 def test_critique_prompt_caps_selected_sections() -> None:
     long_feature_section = "x" * 2000
-    planner_prompt = (
-        "### Feature Flags\n"
-        f"{long_feature_section}\n"
-        "TAIL_MARKER_AFTER_LIMIT\n"
-    )
+    planner_prompt = f"### Feature Flags\n{long_feature_section}\nTAIL_MARKER_AFTER_LIMIT\n"
     out = planner_coordinator.build_critique_prompt(
-        planner_prompt, "draft text", {"type": "seed_batch"}, {},
+        planner_prompt,
+        "draft text",
+        {"type": "seed_batch"},
+        {},
     )
     assert "... [truncated for critic context]" in out
     assert "TAIL_MARKER_AFTER_LIMIT" not in out
@@ -1067,12 +1086,24 @@ def test_open_primary_circuit_routes_directly_to_fallback() -> None:
     assert len(codex.calls) == 1
 
 
-def _uncritiqued_decision(action: Any, *, degraded: bool, critique: Any,
-                          rationale: Any = None, mode: str = "draft_critique"):
+def _uncritiqued_decision(
+    action: Any,
+    *,
+    degraded: bool,
+    critique: Any,
+    rationale: Any = None,
+    mode: str = "draft_critique",
+):
     return planner_coordinator.PlannerDecision(
-        action=action, rationale=rationale or {}, session_id=None, canonical_text="",
-        draft_text="", draft_provider="codex", mode=mode,
-        degraded=degraded, critique=critique,
+        action=action,
+        rationale=rationale or {},
+        session_id=None,
+        canonical_text="",
+        draft_text="",
+        draft_provider="codex",
+        mode=mode,
+        degraded=degraded,
+        critique=critique,
     )
 
 
@@ -1080,22 +1111,42 @@ def test_uncritiqued_degraded_nonobservational_action_pauses() -> None:
     """Degraded with NO critic verdict + non-observational action => critic_unavailable.
     seed_batch is explicitly NOT safe (the @708 critic_reject_loop failure mode)."""
     ubr = planner_coordinator.uncritiqued_dispatch_block_reason
-    assert ubr(_uncritiqued_decision({"type": "seed_batch", "n_questions": 12},
-               degraded=True, critique=None)) == "critic_unavailable"
+    assert (
+        ubr(
+            _uncritiqued_decision(
+                {"type": "seed_batch", "n_questions": 12}, degraded=True, critique=None
+            )
+        )
+        == "critic_unavailable"
+    )
     # OBSERVATIONAL_ACTIONS is empty => every non-observational action blocks.
-    assert ubr(_uncritiqued_decision({"type": "structural_experiment"},
-               degraded=True, critique=None)) == "critic_unavailable"
+    assert (
+        ubr(_uncritiqued_decision({"type": "structural_experiment"}, degraded=True, critique=None))
+        == "critic_unavailable"
+    )
 
 
 def test_uncritiqued_gate_allows_when_critiqued_or_not_degraded() -> None:
     ubr = planner_coordinator.uncritiqued_dispatch_block_reason
     crit = planner_coordinator.PlannerCritique(decision="approve", provider="codex")
     # real critic verdict => not uncritiqued => no pause
-    assert ubr(_uncritiqued_decision({"type": "seed_batch", "n_questions": 12},
-               degraded=True, critique=crit)) == ""
+    assert (
+        ubr(
+            _uncritiqued_decision(
+                {"type": "seed_batch", "n_questions": 12}, degraded=True, critique=crit
+            )
+        )
+        == ""
+    )
     # not degraded => no pause
-    assert ubr(_uncritiqued_decision({"type": "seed_batch", "n_questions": 12},
-               degraded=False, critique=None)) == ""
+    assert (
+        ubr(
+            _uncritiqued_decision(
+                {"type": "seed_batch", "n_questions": 12}, degraded=False, critique=None
+            )
+        )
+        == ""
+    )
     # no dict action => handled by the separate no-action path => no pause
     assert ubr(_uncritiqued_decision(None, degraded=True, critique=None)) == ""
 
@@ -1109,18 +1160,18 @@ def test_draft_validation_error_is_surfaced_not_opaque() -> None:
     good = {"type": "train_routing_models", "min_memories": 500}
     codex = FakeProvider(
         "codex",
-        [PlannerProviderResult(provider="codex", role="draft", ok=True,
-                               text=_action_text(bad))],
+        [PlannerProviderResult(provider="codex", role="draft", ok=True, text=_action_text(bad))],
     )
     claude = FakeProvider(
         "claude",
-        [PlannerProviderResult(provider="claude", role="draft", ok=True,
-                               text=_action_text(good))],
+        [PlannerProviderResult(provider="claude", role="draft", ok=True, text=_action_text(good))],
         supports_resume=True,
     )
     state: dict[str, Any] = {}
     decision = planner_coordinator.plan_with_providers(
-        "prompt", session_id=None, planner_state=state,
+        "prompt",
+        session_id=None,
+        planner_state=state,
         settings=PlannerSettings(primary="codex", critic="claude", mode="fallback"),
         provider_factory=_factory({"codex": codex, "claude": claude}),
     )
@@ -1147,34 +1198,94 @@ def test_uncritiqued_unavailable_dispatch_rule() -> None:
     falsifier = {"falsifier": "tps drops >5% if X regresses"}
 
     # HIGH risk => pause
-    assert ubr(_uncritiqued_decision({"type": "structural_experiment"},
-               degraded=True, critique=unavail, rationale=falsifier)) == "critic_unavailable"
+    assert (
+        ubr(
+            _uncritiqued_decision(
+                {"type": "structural_experiment"},
+                degraded=True,
+                critique=unavail,
+                rationale=falsifier,
+            )
+        )
+        == "critic_unavailable"
+    )
     # seed_batch (loop-prone low-risk) => pause even with a falsifier
-    assert ubr(_uncritiqued_decision({"type": "seed_batch", "n_questions": 12},
-               degraded=True, critique=unavail, rationale=falsifier)) == "critic_unavailable"
+    assert (
+        ubr(
+            _uncritiqued_decision(
+                {"type": "seed_batch", "n_questions": 12},
+                degraded=True,
+                critique=unavail,
+                rationale=falsifier,
+            )
+        )
+        == "critic_unavailable"
+    )
     # passive low-risk (deep_eval) => pause (not in OBSERVATIONAL_ACTIONS)
-    assert ubr(_uncritiqued_decision({"type": "deep_eval", "tier": 2},
-               degraded=True, critique=unavail, rationale=falsifier)) == "critic_unavailable"
+    assert (
+        ubr(
+            _uncritiqued_decision(
+                {"type": "deep_eval", "tier": 2},
+                degraded=True,
+                critique=unavail,
+                rationale=falsifier,
+            )
+        )
+        == "critic_unavailable"
+    )
 
     # MEDIUM experiment, novel + falsifier => PROCEED
-    assert ubr(_uncritiqued_decision({"type": "numeric_trial"},
-               degraded=True, critique=unavail, rationale=falsifier)) == ""
+    assert (
+        ubr(
+            _uncritiqued_decision(
+                {"type": "numeric_trial"}, degraded=True, critique=unavail, rationale=falsifier
+            )
+        )
+        == ""
+    )
     # MEDIUM but no falsifier (loop-keeping) => pause
-    assert ubr(_uncritiqued_decision({"type": "numeric_trial"},
-               degraded=True, critique=unavail, rationale={})) == "critic_unavailable"
+    assert (
+        ubr(
+            _uncritiqued_decision(
+                {"type": "numeric_trial"}, degraded=True, critique=unavail, rationale={}
+            )
+        )
+        == "critic_unavailable"
+    )
     # MEDIUM + blacklisted => pause
-    assert ubr(_uncritiqued_decision({"type": "numeric_trial"},
-               degraded=True, critique=unavail, rationale=falsifier),
-               is_blacklisted=True) == "critic_unavailable"
+    assert (
+        ubr(
+            _uncritiqued_decision(
+                {"type": "numeric_trial"}, degraded=True, critique=unavail, rationale=falsifier
+            ),
+            is_blacklisted=True,
+        )
+        == "critic_unavailable"
+    )
     # MEDIUM + repeated (recurring invalid signature) => pause
-    assert ubr(_uncritiqued_decision({"type": "numeric_trial"},
-               degraded=True, critique=unavail, rationale=falsifier),
-               is_repeated=True) == "critic_unavailable"
+    assert (
+        ubr(
+            _uncritiqued_decision(
+                {"type": "numeric_trial"}, degraded=True, critique=unavail, rationale=falsifier
+            ),
+            is_repeated=True,
+        )
+        == "critic_unavailable"
+    )
 
     # shadow (non-binding) mode never blocks, even for HIGH risk
-    assert ubr(_uncritiqued_decision({"type": "structural_experiment"},
-               degraded=True, critique=unavail, rationale=falsifier,
-               mode="shadow_critique")) == ""
+    assert (
+        ubr(
+            _uncritiqued_decision(
+                {"type": "structural_experiment"},
+                degraded=True,
+                critique=unavail,
+                rationale=falsifier,
+                mode="shadow_critique",
+            )
+        )
+        == ""
+    )
 
 
 def test_failed_critique_keeps_draft_seed_batch_still_pauses() -> None:
@@ -1185,18 +1296,26 @@ def test_failed_critique_keeps_draft_seed_batch_still_pauses() -> None:
     original = {"type": "seed_batch", "n_questions": 12}  # loop-prone low-risk
     claude = FakeProvider(
         "claude",
-        [PlannerProviderResult(provider="claude", role="draft", ok=True,
-                               text=_action_text(original))],
+        [
+            PlannerProviderResult(
+                provider="claude", role="draft", ok=True, text=_action_text(original)
+            )
+        ],
         supports_resume=True,
     )
     codex = FakeProvider(
         "codex",
-        [PlannerProviderResult(provider="codex", role="critique", ok=False,
-                               text="", error="timeout after 600s")],
+        [
+            PlannerProviderResult(
+                provider="codex", role="critique", ok=False, text="", error="timeout after 600s"
+            )
+        ],
     )
     state: dict[str, Any] = {}
     decision = planner_coordinator.plan_with_providers(
-        "prompt", session_id=None, planner_state=state,
+        "prompt",
+        session_id=None,
+        planner_state=state,
         settings=PlannerSettings(mode="draft_critique", critique_policy="always"),
         provider_factory=_factory({"claude": claude, "codex": codex}),
     )
@@ -1207,10 +1326,7 @@ def test_failed_critique_keeps_draft_seed_batch_still_pauses() -> None:
     assert decision.degraded is True
     assert state.get("codex", {}).get("failures", 0) >= 1
     # seed_batch is loop-prone => the gate pauses for operator review.
-    assert (
-        planner_coordinator.uncritiqued_dispatch_block_reason(decision)
-        == "critic_unavailable"
-    )
+    assert planner_coordinator.uncritiqued_dispatch_block_reason(decision) == "critic_unavailable"
 
 
 def test_cross_model_failover_codex_offline_crosses_to_claude() -> None:
@@ -1219,15 +1335,22 @@ def test_cross_model_failover_codex_offline_crosses_to_claude() -> None:
     # not re-hit codex. (cross-model failover, 2026-06-12)
     codex = FakeProvider(
         "codex",
-        [PlannerProviderResult(provider="codex", role="draft", ok=False,
-                               text="", error="timeout after 600s")],
+        [
+            PlannerProviderResult(
+                provider="codex", role="draft", ok=False, text="", error="timeout after 600s"
+            )
+        ],
     )
     claude = FakeProvider(
         "claude",
-        [PlannerProviderResult(
-            provider="claude", role="draft", ok=True,
-            text=_action_text({"type": "seed_batch", "n_questions": 10}),
-        )],
+        [
+            PlannerProviderResult(
+                provider="claude",
+                role="draft",
+                ok=True,
+                text=_action_text({"type": "seed_batch", "n_questions": 10}),
+            )
+        ],
     )
 
     def factory(name: str) -> FakeProvider:
@@ -1237,9 +1360,10 @@ def test_cross_model_failover_codex_offline_crosses_to_claude() -> None:
         return claude
 
     decision = planner_coordinator.plan_with_providers(
-        "prompt", session_id=None, planner_state={},
-        settings=PlannerSettings(primary="codex", critic="codex_critic",
-                                 mode="draft_critique"),
+        "prompt",
+        session_id=None,
+        planner_state={},
+        settings=PlannerSettings(primary="codex", critic="codex_critic", mode="draft_critique"),
         provider_factory=factory,
     )
 
@@ -1251,13 +1375,15 @@ def test_cross_model_failover_codex_offline_crosses_to_claude() -> None:
 def test_both_models_unavailable_sets_providers_unavailable() -> None:
     codex = FakeProvider(
         "codex",
-        [PlannerProviderResult(provider="codex", role="draft", ok=False,
-                               text="", error="timeout")],
+        [PlannerProviderResult(provider="codex", role="draft", ok=False, text="", error="timeout")],
     )
     claude = FakeProvider(
         "claude",
-        [PlannerProviderResult(provider="claude", role="draft", ok=False,
-                               text="", error="empty response")],
+        [
+            PlannerProviderResult(
+                provider="claude", role="draft", ok=False, text="", error="empty response"
+            )
+        ],
     )
 
     def factory(name: str) -> FakeProvider:
@@ -1266,9 +1392,10 @@ def test_both_models_unavailable_sets_providers_unavailable() -> None:
         return claude
 
     decision = planner_coordinator.plan_with_providers(
-        "prompt", session_id=None, planner_state={},
-        settings=PlannerSettings(primary="codex", critic="codex_critic",
-                                 mode="draft_critique"),
+        "prompt",
+        session_id=None,
+        planner_state={},
+        settings=PlannerSettings(primary="codex", critic="codex_critic", mode="draft_critique"),
         provider_factory=factory,
     )
 
@@ -1282,13 +1409,11 @@ def test_content_failure_is_not_providers_unavailable() -> None:
     # CONTENT failure, not an availability failure → providers_unavailable False.
     codex = FakeProvider(
         "codex",
-        [PlannerProviderResult(provider="codex", role="draft", ok=True,
-                               text="no json")],
+        [PlannerProviderResult(provider="codex", role="draft", ok=True, text="no json")],
     )
     claude = FakeProvider(
         "claude",
-        [PlannerProviderResult(provider="claude", role="draft", ok=True,
-                               text="also no json")],
+        [PlannerProviderResult(provider="claude", role="draft", ok=True, text="also no json")],
     )
 
     def factory(name: str) -> FakeProvider:
@@ -1297,9 +1422,10 @@ def test_content_failure_is_not_providers_unavailable() -> None:
         return claude
 
     decision = planner_coordinator.plan_with_providers(
-        "prompt", session_id=None, planner_state={},
-        settings=PlannerSettings(primary="codex", critic="codex_critic",
-                                 mode="draft_critique"),
+        "prompt",
+        session_id=None,
+        planner_state={},
+        settings=PlannerSettings(primary="codex", critic="codex_critic", mode="draft_critique"),
         provider_factory=factory,
     )
 
@@ -1314,10 +1440,14 @@ def test_open_primary_circuit_routes_to_other_model() -> None:
 
     claude = FakeProvider(
         "claude",
-        [PlannerProviderResult(
-            provider="claude", role="draft", ok=True,
-            text=_action_text({"type": "seed_batch", "n_questions": 10}),
-        )],
+        [
+            PlannerProviderResult(
+                provider="claude",
+                role="draft",
+                ok=True,
+                text=_action_text({"type": "seed_batch", "n_questions": 10}),
+            )
+        ],
     )
     codex = FakeProvider("codex", [])  # must NOT be invoked
 
@@ -1328,9 +1458,10 @@ def test_open_primary_circuit_routes_to_other_model() -> None:
 
     state = {"codex": {"circuit_open_until": _time.time() + 600.0, "failures": 2}}
     decision = planner_coordinator.plan_with_providers(
-        "prompt", session_id=None, planner_state=state,
-        settings=PlannerSettings(primary="codex", critic="codex_critic",
-                                 mode="draft_critique"),
+        "prompt",
+        session_id=None,
+        planner_state=state,
+        settings=PlannerSettings(primary="codex", critic="codex_critic", mode="draft_critique"),
         provider_factory=factory,
     )
 

@@ -76,8 +76,8 @@ _CRITIQUE_SECTION_CHAR_LIMIT = 1600
 # critic_unavailable pause that stalled the run, e.g. @711). Give generous
 # headroom; operator-tunable via AUTOPILOT_PLANNER_TIMEOUT. (2026-06-09)
 DEFAULT_PLANNER_TIMEOUT = int(os.environ.get("AUTOPILOT_PLANNER_TIMEOUT", "600"))
-DEFAULT_SPEND_BREAKER_LOCAL_PRIMARY = "local_chat"
-DEFAULT_SPEND_BREAKER_LOCAL_CRITIC = "local_worker"
+DEFAULT_SPEND_BREAKER_LOCAL_PRIMARY = "local_worker"
+DEFAULT_SPEND_BREAKER_LOCAL_CRITIC = "codex_critic"
 
 
 @dataclass
@@ -306,12 +306,9 @@ def plan_with_providers(
             any_response_ok = any_response_ok or bool(fallback.ok)
             fallback_action = extract_action(fallback.text)
             if _draft_is_usable(fallback, fallback_action):
-                session_update = (
-                    fallback.session_id if fallback_provider.supports_resume else None
-                )
+                session_update = fallback.session_id if fallback_provider.supports_resume else None
                 fallback_reason = (
-                    fallback_reason
-                    or f"{draft.provider} draft failed: {draft_unusable}"
+                    fallback_reason or f"{draft.provider} draft failed: {draft_unusable}"
                 )
                 _mark_success(planner_state, fallback.provider)
                 draft = fallback
@@ -634,7 +631,9 @@ def _selected_critique_context(planner_prompt: str) -> str:
         if (section := _extract_markdown_section(planner_prompt, heading))
     ]
     if not sections:
-        return "(selected planner context unavailable; critique only the parsed draft and rationale)"
+        return (
+            "(selected planner context unavailable; critique only the parsed draft and rationale)"
+        )
     return "\n\n".join(sections)
 
 
@@ -643,12 +642,14 @@ def _extract_markdown_section(text: str, heading: str) -> str:
     if start < 0:
         return ""
     tail = text[start:]
-    next_heading = re.search(r"\n#{2,3}\s+", tail[len(heading):])
+    next_heading = re.search(r"\n#{2,3}\s+", tail[len(heading) :])
     end = len(heading) + next_heading.start() if next_heading else len(tail)
     section = tail[:end].strip()
     if len(section) <= _CRITIQUE_SECTION_CHAR_LIMIT:
         return section
-    return section[:_CRITIQUE_SECTION_CHAR_LIMIT].rstrip() + "\n  ... [truncated for critic context]"
+    return (
+        section[:_CRITIQUE_SECTION_CHAR_LIMIT].rstrip() + "\n  ... [truncated for critic context]"
+    )
 
 
 def extract_critique(text: str) -> PlannerCritique:
@@ -915,6 +916,9 @@ _LOCAL_ROLE_NAMES = {
     "local",
     "local_frontdoor",
     "frontdoor_local",
+    "local_chat",
+    "local_chat_planner",
+    "chat_local",
     "local_worker",
     "local_worker_general",
     "worker_general_local",

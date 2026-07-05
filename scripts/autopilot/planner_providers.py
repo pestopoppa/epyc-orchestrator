@@ -28,6 +28,15 @@ from controller_io import (
 
 log = logging.getLogger("autopilot")
 
+_LOCAL_TRANSIENT_HTTP_ERRORS = (
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.PoolTimeout,
+    httpx.ReadError,
+    httpx.ReadTimeout,
+    httpx.RemoteProtocolError,
+)
+
 
 @dataclass
 class PlannerProviderResult:
@@ -301,7 +310,7 @@ class LocalPlannerProvider:
         self._url = (
             url
             or os.environ.get("AUTOPILOT_LOCAL_PLANNER_URL")
-            or "http://localhost:8000/v1/chat/completions"
+            or "http://127.0.0.1:8000/v1/chat/completions"
         )
         self._role = role or os.environ.get("AUTOPILOT_LOCAL_PLANNER_ROLE") or "frontdoor"
         self._model = model or os.environ.get("AUTOPILOT_LOCAL_PLANNER_MODEL") or self._role
@@ -316,14 +325,10 @@ class LocalPlannerProvider:
             else _env_optional_float("AUTOPILOT_LOCAL_PLANNER_TOP_P")
         )
         self._top_k = (
-            int(top_k)
-            if top_k is not None
-            else _env_optional_int("AUTOPILOT_LOCAL_PLANNER_TOP_K")
+            int(top_k) if top_k is not None else _env_optional_int("AUTOPILOT_LOCAL_PLANNER_TOP_K")
         )
         self._seed = (
-            int(seed)
-            if seed is not None
-            else _env_optional_int("AUTOPILOT_LOCAL_PLANNER_SEED")
+            int(seed) if seed is not None else _env_optional_int("AUTOPILOT_LOCAL_PLANNER_SEED")
         )
         self._max_tokens = (
             int(max_tokens)
@@ -358,9 +363,14 @@ class LocalPlannerProvider:
                     f"{'-' * 72}\n",
                 )
             with httpx.Client(timeout=timeout) as client:
-                response = client.post(self._url, json=payload)
-                response.raise_for_status()
-                data = response.json()
+                data = _post_local_json_with_retries(
+                    client,
+                    self._url,
+                    payload,
+                    provider=self.name,
+                    role=role,
+                    tap=tap,
+                )
             text = parse_openai_chat_response(data)
             ok = bool(text.strip())
             error = "" if ok else "empty response"
@@ -485,9 +495,14 @@ class LocalChatPlannerProvider:
                     f"{'-' * 72}\n",
                 )
             with httpx.Client(timeout=timeout) as client:
-                response = client.post(self._url, json=payload)
-                response.raise_for_status()
-                data = response.json()
+                data = _post_local_json_with_retries(
+                    client,
+                    self._url,
+                    payload,
+                    provider=self.name,
+                    role=role,
+                    tap=tap,
+                )
             text = str(data.get("answer") or "")
             ok = bool(text.strip())
             error = "" if ok else "empty response"
@@ -678,6 +693,83 @@ def _tap_write(tap: Any, text: str) -> None:
         pass
 
 
+def _post_local_json_with_retries(
+    client: httpx.Client,
+    url: str,
+    payload: dict[str, Any],
+    *,
+    provider: str,
+    role: str,
+    tap: Any,
+) -> dict[str, Any]:
+    attempts = max(1, _env_int("AUTOPILOT_LOCAL_PLANNER_HTTP_ATTEMPTS", 4))
+    base_sleep_s = max(0.0, _env_float("AUTOPILOT_LOCAL_PLANNER_RETRY_SLEEP_S", 2.0))
+    max_sleep_s = max(base_sleep_s, _env_float("AUTOPILOT_LOCAL_PLANNER_RETRY_MAX_SLEEP_S", 8.0))
+    last_exc: Exception | None = None
+
+    for attempt in range(1, attempts + 1):
+        try:
+            response = client.post(url, json=payload)
+            response.raise_for_status()
+            data = response.json()
+            payload_error = _local_planner_payload_error(data)
+            if not payload_error:
+                return data
+            if attempt >= attempts:
+                raise RuntimeError(payload_error)
+            sleep_s = min(max_sleep_s, base_sleep_s * attempt)
+            _tap_write(
+                tap,
+                f"[RETRY provider={provider} role={role}] "
+                f"attempt={attempt}/{attempts} local_error={payload_error[:180]}; "
+                f"sleep={sleep_s:.1f}s\n",
+            )
+            if sleep_s > 0:
+                time.sleep(sleep_s)
+        except _LOCAL_TRANSIENT_HTTP_ERRORS as exc:
+            last_exc = exc
+            if attempt >= attempts:
+                raise
+            sleep_s = min(max_sleep_s, base_sleep_s * attempt)
+            _tap_write(
+                tap,
+                f"[RETRY provider={provider} role={role}] "
+                f"attempt={attempt}/{attempts} transient={type(exc).__name__}: "
+                f"{str(exc)[:180]}; sleep={sleep_s:.1f}s\n",
+            )
+            if sleep_s > 0:
+                time.sleep(sleep_s)
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            if status not in {502, 503, 504} or attempt >= attempts:
+                raise
+            last_exc = exc
+            sleep_s = min(max_sleep_s, base_sleep_s * attempt)
+            _tap_write(
+                tap,
+                f"[RETRY provider={provider} role={role}] "
+                f"attempt={attempt}/{attempts} status={status}; sleep={sleep_s:.1f}s\n",
+            )
+            if sleep_s > 0:
+                time.sleep(sleep_s)
+
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("local planner HTTP retry loop exited without response")
+
+
+def _local_planner_payload_error(data: dict[str, Any]) -> str:
+    text = parse_openai_chat_response(data)
+    if not text and isinstance(data.get("answer"), str):
+        text = str(data["answer"])
+    stripped = text.strip()
+    if stripped.startswith("[ERROR"):
+        return stripped
+    if stripped.startswith("[MOCK]"):
+        return stripped
+    return ""
+
+
 def _archive_codex_call(
     prompt: str,
     result: PlannerProviderResult,
@@ -739,9 +831,7 @@ def _archive_local_call(
                 "max_tokens": payload.get("max_tokens"),
             },
             "response_preview": (
-                json.dumps(response_data, default=str)[:1000]
-                if response_data is not None
-                else ""
+                json.dumps(response_data, default=str)[:1000] if response_data is not None else ""
             ),
         }
     )
@@ -781,9 +871,7 @@ def _archive_local_chat_call(
                 "max_tokens": payload.get("max_tokens"),
             },
             "response_preview": (
-                json.dumps(response_data, default=str)[:1000]
-                if response_data is not None
-                else ""
+                json.dumps(response_data, default=str)[:1000] if response_data is not None else ""
             ),
         }
     )
