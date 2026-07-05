@@ -29,7 +29,8 @@ Usage:
 
 The repair step:
     1. Calls reembed_episodic_store.py to produce a fresh reembedded.npz
-       (uses existing parallel-BGE primitive — same configured-server pattern).
+       for routing/escalation rows (uses existing parallel-BGE primitive —
+       same configured-server pattern).
     2. Builds a new IndexFlatIP from the fresh embeddings.
     3. Atomically swaps embeddings.faiss + id_map.npy into place (writes to .new,
        then renames). Originals are backed up to .pre-repair-<timestamp>.
@@ -261,7 +262,7 @@ def print_report(report: HealthReport) -> None:
     print(f"  id_map matches FAISS:        {str(report.id_map_matches_faiss):>10}")
     print(f"  id_map ⋂ live db:            {report.id_map_overlap_live:>10.1%}  (threshold ≥ {HEALTH_THRESHOLD:.0%})")
     print(f"  reembedded ⋂ live db:        {report.overlap_live:>10.1%}  (threshold ≥ {HEALTH_THRESHOLD:.0%})")
-    print(f"  Orphan count (db − FAISS):   {report.orphan_count:>10,}")
+    print(f"  Orphan count (live − id_map):{report.orphan_count:>10,}")
     print(f"  Status:                      {'HEALTHY' if report.healthy else 'ORPHANED — repair recommended'}")
     print("=" * 72)
 
