@@ -21,6 +21,7 @@ import os
 import threading
 import time
 import uuid
+from pathlib import Path
 from typing import TYPE_CHECKING, AsyncGenerator
 
 log = logging.getLogger(__name__)
@@ -44,6 +45,7 @@ from src.prompt_builders import (
     build_escalation_prompt,
 )
 from src.prompt_builders.builder import build_corpus_context
+from src.prompt_builders.resolver import prompt_dir_override
 from src.api.services.memrl import (
     ensure_memrl_initialized,
     score_completed_task,
@@ -107,6 +109,39 @@ from src.api.routes.chat_pipeline import (
 from src.api.routes.chat_pipeline.vision_stage import _vision_roles
 from src.api.routes.chat_pipeline.script_interceptor import try_intercept
 from src.api.routes.chat_pipeline.telemetry import llm_completion_meta
+
+
+_PROMPT_OVERRIDE_BASE = (
+    Path(__file__).resolve().parents[3] / "tmp" / "gepa_prompt_roots"
+)
+
+
+def _validated_prompt_dir_override(value: str | None) -> Path | None:
+    if not value:
+        return None
+    try:
+        root = Path(value).expanduser().resolve(strict=True)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"x_orchestrator_prompt_root does not exist: {value}",
+        ) from exc
+    if not root.is_dir():
+        raise HTTPException(
+            status_code=400,
+            detail=f"x_orchestrator_prompt_root is not a directory: {root}",
+        )
+    base_value = os.environ.get("ORCHESTRATOR_PROMPT_ROOT_OVERRIDE_BASE")
+    base = Path(base_value).expanduser() if base_value else _PROMPT_OVERRIDE_BASE
+    base = base.resolve(strict=False)
+    try:
+        root.relative_to(base)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"x_orchestrator_prompt_root must be under {base}",
+        ) from exc
+    return root
 
 # Factual question prefixes that the coding cheap-first model handles poorly.
 # Prompts starting with these are routed past cheap-first to frontdoor/REPL
@@ -172,8 +207,10 @@ async def chat(
         request.real_mode and "PYTEST_CURRENT_TEST" not in os.environ
     )
     watcher = asyncio.create_task(_watch_disconnect()) if use_disconnect_watcher else None
+    prompt_dir = _validated_prompt_dir_override(request.x_orchestrator_prompt_root)
     try:
-        response = await _handle_chat(request, state, cancel_event=cancel_event)
+        with prompt_dir_override(prompt_dir):
+            response = await _handle_chat(request, state, cancel_event=cancel_event)
         # Return appropriate HTTP status instead of silent 200 OK on failure
         if response.error_code:
             headers = {}

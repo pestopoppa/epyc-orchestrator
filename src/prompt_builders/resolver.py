@@ -25,6 +25,9 @@ from __future__ import annotations
 import logging
 import os
 import re
+import contextlib
+import contextvars
+from collections.abc import Iterator
 from pathlib import Path
 
 from src.roles import Role
@@ -32,6 +35,31 @@ from src.roles import Role
 _log = logging.getLogger(__name__)
 
 PROMPT_DIR = Path(__file__).resolve().parent.parent.parent / "orchestration" / "prompts"
+_PROMPT_DIR_OVERRIDE: contextvars.ContextVar[Path | None] = contextvars.ContextVar(
+    "orchestrator_prompt_dir_override",
+    default=None,
+)
+
+
+@contextlib.contextmanager
+def prompt_dir_override(prompt_dir: str | Path | None) -> Iterator[None]:
+    """Temporarily resolve prompts from a request-local prompt tree."""
+    if prompt_dir is None:
+        yield
+        return
+    resolved = Path(prompt_dir).resolve(strict=True)
+    if not resolved.is_dir():
+        raise ValueError(f"prompt_dir override is not a directory: {resolved}")
+    token = _PROMPT_DIR_OVERRIDE.set(resolved)
+    try:
+        yield
+    finally:
+        _PROMPT_DIR_OVERRIDE.reset(token)
+
+
+def current_prompt_dir() -> Path:
+    """Return the active prompt root for this request/context."""
+    return _PROMPT_DIR_OVERRIDE.get() or PROMPT_DIR
 
 
 class _SafeDict(dict):
@@ -126,7 +154,8 @@ def resolve_prompt(
     Returns:
         Resolved and interpolated prompt string.
     """
-    base_dir = PROMPT_DIR / subdir if subdir else PROMPT_DIR
+    prompt_dir = current_prompt_dir()
+    base_dir = prompt_dir / subdir if subdir else prompt_dir
 
     # Determine variant
     effective_variant = variant or _get_variant(name)

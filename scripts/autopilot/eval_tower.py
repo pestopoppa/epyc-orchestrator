@@ -1056,6 +1056,9 @@ class EvalTower:
                 call_kwargs["tools"] = q.get("tools")
             if "tool_choice" in q:
                 call_kwargs["tool_choice"] = q.get("tool_choice")
+            prompt_root = str(q.get("_prompt_root") or "").strip()
+            if prompt_root:
+                call_kwargs["prompt_root"] = prompt_root
             resp = call_orchestrator_forced(**call_kwargs)
             elapsed = time.time() - start
             answer = resp.get("answer", "")

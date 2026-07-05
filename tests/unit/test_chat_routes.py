@@ -25,6 +25,7 @@ from src.api.models import ChatRequest, ChatResponse, RewardRequest
 from src.api.routes.chat import _handle_chat, _try_cheap_first, chat, chat_stream, inject_reward, router
 from src.api.routes.chat_utils import RoutingResult
 from src.api.state import AppState
+from src.prompt_builders.resolver import current_prompt_dir, resolve_prompt
 
 
 # ── Fixtures ────────────────────────────────────────────────────────────────
@@ -525,6 +526,34 @@ class TestChatEndpoint:
             await chat(ChatRequest(prompt="test"), _FakeRequest(), mock_state)
             mock_state.increment_active.assert_called_once()
             mock_state.decrement_active.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_chat_prompt_root_override_is_request_scoped(
+        self, tmp_path, monkeypatch, mock_state
+    ):
+        """Internal GEPA prompt roots redirect prompt resolution only during handling."""
+        scratch = tmp_path / "gepa" / "candidate"
+        scratch.mkdir(parents=True)
+        (scratch / "unit_prompt.md").write_text("scratch prompt")
+        monkeypatch.setenv("ORCHESTRATOR_PROMPT_ROOT_OVERRIDE_BASE", str(tmp_path / "gepa"))
+
+        class _FakeRequest:
+            async def is_disconnected(self) -> bool:
+                return False
+
+        async def fake_handle_chat(*_args, **_kwargs):
+            assert current_prompt_dir() == scratch.resolve()
+            assert resolve_prompt("unit_prompt", "fallback") == "scratch prompt"
+            return ChatResponse(answer="ok", turns=1, elapsed_seconds=0.01, mock_mode=True)
+
+        with patch("src.api.routes.chat._handle_chat", new=fake_handle_chat):
+            response = await chat(
+                ChatRequest(prompt="test", x_orchestrator_prompt_root=str(scratch)),
+                _FakeRequest(),
+                mock_state,
+            )
+        assert response.answer == "ok"
+        assert current_prompt_dir() != scratch.resolve()
 
 
 # ── /chat/reward endpoint tests ─────────────────────────────────────────────

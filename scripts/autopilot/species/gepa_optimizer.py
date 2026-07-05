@@ -15,14 +15,19 @@ Usage within autopilot:
 
 from __future__ import annotations
 
+import contextlib
 import logging
+import shutil
+import tempfile
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import httpx
 
 log = logging.getLogger("autopilot.gepa")
+DEFAULT_SCRATCH_BASE = Path(__file__).resolve().parents[3] / "tmp" / "gepa_prompt_roots"
 
 
 @dataclass
@@ -62,10 +67,12 @@ class OrchestratorGEPAAdapter:
     """GEPAAdapter that evaluates candidate prompts through the orchestrator API.
 
     Each evaluation:
-    1. Writes candidate prompt text to the target .md file
-    2. Runs sentinel questions through the orchestrator API
-    3. Scores responses deterministically
-    4. Returns scores + execution traces for GEPA's reflective mutation
+    1. Copies the prompt tree into a scratch prompt root
+    2. Writes candidate prompt text only inside that scratch root
+    3. Runs sentinel questions through the orchestrator API with that root
+       attached to each eval request
+    4. Scores responses deterministically
+    5. Returns scores + execution traces for GEPA's reflective mutation
     """
 
     def __init__(
@@ -74,36 +81,59 @@ class OrchestratorGEPAAdapter:
         prompt_forge,
         target_file: str = "frontdoor.md",
         component_name: str = "prompt",
+        scratch_base: str | Path | None = None,
     ):
         self.tower = eval_tower
         self.forge = prompt_forge
         self.target_file = target_file
         self.component_name = component_name
+        self.scratch_base = Path(scratch_base) if scratch_base is not None else DEFAULT_SCRATCH_BASE
+
+    @contextlib.contextmanager
+    def _candidate_prompt_root(self, prompt_text: str):
+        source_root = Path(self.forge.prompts_dir).resolve(strict=True)
+        self.scratch_base.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="gepa-", dir=self.scratch_base) as temp_dir:
+            scratch_root = Path(temp_dir).resolve(strict=True)
+            shutil.copytree(
+                source_root,
+                scratch_root,
+                dirs_exist_ok=True,
+                symlinks=False,
+                ignore_dangling_symlinks=True,
+            )
+            from .prompt_forge import PromptForge
+
+            scratch_forge = PromptForge(
+                prompts_dir=scratch_root,
+                timeout=getattr(self.forge, "timeout", 300),
+                auto_commit=False,
+            )
+            scratch_forge.write_prompt(self.target_file, prompt_text)
+            yield scratch_root
 
     def evaluate(self, batch, candidate, capture_traces=False):
         """Evaluate a candidate prompt on a batch of sentinel questions."""
         from gepa.core.adapter import EvaluationBatch
 
-        # The orchestrator currently reads prompts from the canonical prompt
-        # tree. Keep that mutation window bounded to this evaluation call so an
-        # exception inside GEPA cannot leave a candidate prompt installed until
-        # the outer optimization exits.
-        original_prompt = self.forge.read_prompt(self.target_file)
         prompt_text = candidate[self.component_name]
-        self.forge.write_prompt(self.target_file, prompt_text)
 
         scores: list[float] = []
         outputs: list[dict[str, Any]] = []
         traces: list[dict[str, Any]] | None = [] if capture_traces else None
 
-        try:
+        with self._candidate_prompt_root(prompt_text) as prompt_root:
             # Fan-out across frontdoor quarters via EvalTower._eval_batch
             # (AUTOPILOT_EVAL_CONCURRENCY, default 4). Results preserve input
             # order, so the zip with `batch` for trace building is correct.
+            isolated_batch = [
+                {**q, "_prompt_root": str(prompt_root)}
+                for q in batch
+            ]
             with httpx.Client(timeout=self.tower.timeout) as client:
-                results = self.tower._eval_batch(list(batch), client, label="GEPA")
+                results = self.tower._eval_batch(isolated_batch, client, label="GEPA")
 
-            for q, r in zip(batch, results):
+            for q, r in zip(isolated_batch, results):
                 score = 1.0 if r.correct else 0.0
                 scores.append(score)
                 outputs.append({
@@ -122,8 +152,6 @@ class OrchestratorGEPAAdapter:
                         "error": r.error,
                         "elapsed_s": r.elapsed_s,
                     })
-        finally:
-            self.forge.write_prompt(self.target_file, original_prompt)
 
         return EvaluationBatch(
             outputs=outputs,
@@ -254,12 +282,7 @@ class GEPAPromptOptimizer:
         except Exception as e:
             elapsed = time.time() - start
             log.error("GEPA optimization failed after %.0fs: %s", elapsed, e)
-            # Restore original prompt
-            self.forge.write_prompt(target_file, original_content)
             return None
-
-        # Restore original prompt (GEPA may have left a candidate in place)
-        self.forge.write_prompt(target_file, original_content)
 
         if result is None:
             log.warning("GEPA returned None result")
