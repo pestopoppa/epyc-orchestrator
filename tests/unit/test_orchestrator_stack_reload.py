@@ -80,6 +80,7 @@ def test_start_parser_compiles_registry_by_default(monkeypatch) -> None:
 
     def fake_cmd_start(args: Namespace) -> int:
         captured["compile_registry"] = args.compile_registry
+        captured["numa_mode"] = args.numa_mode
         return 0
 
     monkeypatch.setattr(stack_commands, "cmd_start", fake_cmd_start)
@@ -87,6 +88,21 @@ def test_start_parser_compiles_registry_by_default(monkeypatch) -> None:
 
     assert stack.main() == 0
     assert captured["compile_registry"] is True
+    assert captured["numa_mode"] == "quarter"
+
+
+def test_start_parser_accepts_explicit_numa_mode_both(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_cmd_start(args: Namespace) -> int:
+        captured["numa_mode"] = args.numa_mode
+        return 0
+
+    monkeypatch.setattr(stack_commands, "cmd_start", fake_cmd_start)
+    monkeypatch.setattr(sys, "argv", ["orchestrator_stack.py", "start", "--numa-mode", "both"])
+
+    assert stack.main() == 0
+    assert captured["numa_mode"] == "both"
 
 
 def test_start_parser_accepts_no_compile_registry(monkeypatch) -> None:
@@ -129,6 +145,55 @@ def test_cmd_start_compiles_registry_by_default_arg_absence(monkeypatch) -> None
     assert len(calls) == 1
     assert calls[0]["output_path"].name == "model_registry.yaml"
     assert calls[0]["cache_key_path"].name == ".lean_cache_key"
+
+
+def test_cmd_start_defaults_missing_numa_mode_to_quarter(monkeypatch) -> None:
+    modes: list[str] = []
+
+    class FakeRegistryLoader:
+        pass
+
+    def fake_filter(servers, mode):
+        modes.append(mode)
+        return servers
+
+    monkeypatch.setattr(stack_commands, "RegistryLoader", FakeRegistryLoader)
+    monkeypatch.setattr(stack_commands, "apply_host_prerequisites", lambda **_kwargs: True)
+    monkeypatch.setattr(stack_commands, "check_free_memory", lambda: 999)
+    monkeypatch.setattr(stack_commands, "load_state", lambda: {})
+    monkeypatch.setattr(stack_commands, "_filter_by_numa_mode", fake_filter)
+    monkeypatch.setattr(stack_commands, "_prewarm_all", lambda *a, **k: None)
+    monkeypatch.setattr(stack_commands, "is_port_in_use", lambda _port: False)
+    monkeypatch.setattr(
+        stack_commands,
+        "start_server",
+        lambda port, roles, *a, **k: stack_commands.ProcessInfo(
+            role=roles[0],
+            pid=123,
+            port=port,
+            started_at="now",
+            model_path="dev",
+            log_file="dev.log",
+        ),
+    )
+    saved: list[dict[str, stack_commands.ProcessInfo]] = []
+    monkeypatch.setattr(stack_commands, "save_state", lambda state: saved.append(dict(state)))
+
+    args = _stack_gate_args(
+        dev=True,
+        only=None,
+        include_warm=None,
+        skip_host_prereqs=True,
+        compile_registry=False,
+        compile_descriptors=False,
+        skip_stack_change_gate=True,
+        repair_embeddings=False,
+    )
+
+    assert not hasattr(args, "numa_mode")
+    assert stack_commands.cmd_start(args) == 0
+    assert modes == ["quarter"]
+    assert saved
 
 
 def test_stack_change_launch_gate_failure_blocks_launch(monkeypatch, capsys) -> None:

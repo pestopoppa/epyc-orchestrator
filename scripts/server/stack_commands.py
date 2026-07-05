@@ -972,11 +972,11 @@ def cmd_start(args: argparse.Namespace) -> int:
                         print(f"  Including WARM server: port {warm_server['port']} ({role})")
                         break
 
-    # Apply --numa-mode filter (default 'both' for back-compat — pre-2026-05-08 default).
+    # Apply --numa-mode filter (default 'quarter' to avoid full+quarter CPU overlap).
     # Picks full XOR quarters for any role with full_instance_idx + multiple instances
     # (currently frontdoor + coder_escalation + worker_general); single-instance roles
     # pass through. See launcher-numa-mode-gating handoff.
-    numa_mode = getattr(args, "numa_mode", "both")
+    numa_mode = getattr(args, "numa_mode", "quarter")
     if numa_mode == "both":
         # Light advisory only — 'both' has been working for frontdoor/coder_escalation since
         # 2026-03 (Qwen3.6-35B Q8 quarters tuned to coexist with the full instance). The
@@ -985,7 +985,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         if any("worker_general" in s.get("roles", []) for s in servers_to_start):
             print(
                 "  [advisory] worker_general (gemma4-MTP) runs at -t 96; if its full + 4 quarters "
-                "are all kept (default 'both'), expect 1.5x CPU oversubscription. "
+                "are all kept (--numa-mode both), expect 1.5x CPU oversubscription. "
                 "Use '--numa-mode full' (single instance) or '--numa-mode quarter' (4 concurrent) "
                 "for that role specifically. See launcher-numa-mode-gating.md."
             )
