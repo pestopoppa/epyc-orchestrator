@@ -1,0 +1,2691 @@
+{
+  "candidate_action_counts": {
+    "architect_general": 60,
+    "coder_escalation": 61,
+    "frontdoor": 41
+  },
+  "candidate_contrast_groups": 2,
+  "candidate_group_source_family_counts": {
+    "seeding_eval": 81
+  },
+  "candidate_group_suite_counts": {
+    "coder": 2,
+    "debugbench": 2,
+    "general": 22,
+    "gpqa": 2,
+    "hotpotqa": 22,
+    "livecodebench": 2,
+    "long_context": 2,
+    "math": 2,
+    "mode_advantage": 1,
+    "simpleqa": 22,
+    "thinking": 2
+  },
+  "candidate_groups": 81,
+  "candidate_presence_collection_target_counts": {
+    "source_family:seeding_eval:coder_escalation>frontdoor": 21,
+    "suite:general:architect_general>coder_escalation": 20,
+    "suite:hotpotqa:architect_general>frontdoor": 20,
+    "suite:simpleqa:architect_general>coder_escalation": 20
+  },
+  "candidate_rows": 162,
+  "candidate_schema_version": "offline_reward_verifier_expansion_candidate.v1",
+  "candidate_source_family_counts": {
+    "seeding_eval": 162
+  },
+  "candidate_suite_counts": {
+    "coder": 4,
+    "debugbench": 4,
+    "general": 44,
+    "gpqa": 4,
+    "hotpotqa": 44,
+    "livecodebench": 4,
+    "long_context": 4,
+    "math": 4,
+    "mode_advantage": 2,
+    "simpleqa": 44,
+    "thinking": 4
+  },
+  "collection_batches": [
+    {
+      "can_run_during_active_autopilot": false,
+      "checkpoint_note": "seed_specialist_routing.py also writes a seeding_*.jsonl checkpoint under benchmarks/results/eval; use the JSON path above when the target explicitly requires orchestrator_live_seed",
+      "collection_priority": 0,
+      "collection_priority_reason": "independent_holdout_source_family_blocker",
+      "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites all --roles coder_escalation frontdoor --modes direct --sample-size 2 --max-tokens 1024 --strict-modes --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
+      "dry_run_semantics": "--dry-run still performs scoring/evaluation; it only prevents reward injection into runtime memory.",
+      "durable_source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
+      "estimated_new_source_records": 36,
+      "expected_source_family": "seeding_eval",
+      "max_tokens": 1024,
+      "modes_argument": [
+        "direct"
+      ],
+      "question_source": "auto",
+      "reason": "Consumes live model slots and should be run in a coordinated measurement window so A9 evidence is not mixed with W6/T2 accrual.",
+      "requested_new_source_records": 19,
+      "roles_argument": [
+        "coder_escalation",
+        "frontdoor"
+      ],
+      "sample_size": 2,
+      "sample_size_semantics": "seed_specialist_routing.py interprets --sample-size as questions per suite; source-family targets with --suites all are downscaled to approximate the requested total.",
+      "strict_modes": true,
+      "suite_argument": "all",
+      "target": "source_family:seeding_eval:coder_escalation>frontdoor",
+      "targets": [
+        "source_family:seeding_eval:coder_escalation>frontdoor"
+      ]
+    },
+    {
+      "can_run_during_active_autopilot": false,
+      "checkpoint_note": "seed_specialist_routing.py also writes a seeding_*.jsonl checkpoint under benchmarks/results/eval; use the JSON path above when the target explicitly requires orchestrator_live_seed",
+      "collection_priority": 1,
+      "collection_priority_reason": "independent_holdout_suite_blocker",
+      "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites general --roles architect_general coder_escalation --modes direct --sample-size 19 --max-tokens 1024 --strict-modes --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
+      "dry_run_semantics": "--dry-run still performs scoring/evaluation; it only prevents reward injection into runtime memory.",
+      "durable_source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
+      "estimated_new_source_records": 19,
+      "expected_source_family": "seeding_eval",
+      "max_tokens": 1024,
+      "modes_argument": [
+        "direct"
+      ],
+      "question_source": "auto",
+      "reason": "Consumes live model slots and should be run in a coordinated measurement window so A9 evidence is not mixed with W6/T2 accrual.",
+      "requested_new_source_records": 19,
+      "roles_argument": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "sample_size": 19,
+      "sample_size_semantics": "seed_specialist_routing.py interprets --sample-size as questions per suite; source-family targets with --suites all are downscaled to approximate the requested total.",
+      "strict_modes": true,
+      "suite_argument": "general",
+      "target": "suite:general:architect_general>coder_escalation",
+      "targets": [
+        "suite:general:architect_general>coder_escalation"
+      ]
+    },
+    {
+      "can_run_during_active_autopilot": false,
+      "checkpoint_note": "seed_specialist_routing.py also writes a seeding_*.jsonl checkpoint under benchmarks/results/eval; use the JSON path above when the target explicitly requires orchestrator_live_seed",
+      "collection_priority": 2,
+      "collection_priority_reason": "direction_balance_cleanup",
+      "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites hotpotqa --roles architect_general frontdoor --modes direct --sample-size 20 --max-tokens 1024 --strict-modes --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
+      "dry_run_semantics": "--dry-run still performs scoring/evaluation; it only prevents reward injection into runtime memory.",
+      "durable_source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
+      "estimated_new_source_records": 20,
+      "expected_source_family": "seeding_eval",
+      "max_tokens": 1024,
+      "modes_argument": [
+        "direct"
+      ],
+      "question_source": "auto",
+      "reason": "Consumes live model slots and should be run in a coordinated measurement window so A9 evidence is not mixed with W6/T2 accrual.",
+      "requested_new_source_records": 20,
+      "roles_argument": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "sample_size": 20,
+      "sample_size_semantics": "seed_specialist_routing.py interprets --sample-size as questions per suite; source-family targets with --suites all are downscaled to approximate the requested total.",
+      "strict_modes": true,
+      "suite_argument": "hotpotqa",
+      "target": "suite:hotpotqa:architect_general>frontdoor",
+      "targets": [
+        "suite:hotpotqa:architect_general>frontdoor"
+      ]
+    },
+    {
+      "can_run_during_active_autopilot": false,
+      "checkpoint_note": "seed_specialist_routing.py also writes a seeding_*.jsonl checkpoint under benchmarks/results/eval; use the JSON path above when the target explicitly requires orchestrator_live_seed",
+      "collection_priority": 2,
+      "collection_priority_reason": "direction_balance_cleanup",
+      "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites simpleqa --roles architect_general coder_escalation --modes direct --sample-size 20 --max-tokens 1024 --strict-modes --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
+      "dry_run_semantics": "--dry-run still performs scoring/evaluation; it only prevents reward injection into runtime memory.",
+      "durable_source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
+      "estimated_new_source_records": 20,
+      "expected_source_family": "seeding_eval",
+      "max_tokens": 1024,
+      "modes_argument": [
+        "direct"
+      ],
+      "question_source": "auto",
+      "reason": "Consumes live model slots and should be run in a coordinated measurement window so A9 evidence is not mixed with W6/T2 accrual.",
+      "requested_new_source_records": 20,
+      "roles_argument": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "sample_size": 20,
+      "sample_size_semantics": "seed_specialist_routing.py interprets --sample-size as questions per suite; source-family targets with --suites all are downscaled to approximate the requested total.",
+      "strict_modes": true,
+      "suite_argument": "simpleqa",
+      "target": "suite:simpleqa:architect_general>coder_escalation",
+      "targets": [
+        "suite:simpleqa:architect_general>coder_escalation"
+      ]
+    }
+  ],
+  "collection_guidance": {
+    "orchestrator_live_seed_note": "add records under benchmarks/results/orchestrator/seeding_live*.json or an equivalent orchestrator source path so source_family resolves to orchestrator_live_seed",
+    "post_collection_pipeline": [
+      "uv run python scripts/graph_router/plan_offline_reward_pairwise_holdout_expansion.py --input /mnt/raid0/llm/epyc-inference-research/benchmarks/results --existing-manifest /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_feature_manifest_with_pairwise_audit_target_expansions.jsonl --existing-pairwise-jsonl /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_preference_contract_score_ordered_audit_target_expanded.jsonl --collection-targets-json /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_direction_audit.json --candidates-jsonl /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_candidates.jsonl --summary-json /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_plan_summary.json --summary-md /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_plan_summary.md --target-source-families '' --target-suites ''",
+      "uv run python scripts/graph_router/build_offline_reward_oracle_rows.py --input <new_collection_json_or_jsonl> --candidate-manifest-jsonl /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_candidates.jsonl --output-jsonl /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_oracle_rows.jsonl --summary-json /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_rows_summary.json",
+      "uv run python scripts/graph_router/score_offline_reward_oracle_token_coverage.py --input-jsonl /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_oracle_rows.jsonl --output-jsonl /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_scored_rows.jsonl --summary-json /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_score_summary.json --summary-md /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_score_summary.md",
+      "uv run python scripts/graph_router/export_offline_reward_expansion_labels.py --manifest-json /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/adoption_manifest.json --scored-rows-jsonl /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_scored_rows.jsonl --candidates-jsonl /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_candidates.jsonl --labels-jsonl /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_labels.jsonl --summary-json /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_labels_summary.json --summary-md /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_labels_summary.md",
+      "uv run python scripts/graph_router/build_offline_reward_feature_manifest.py --labels-jsonl /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_labels.jsonl --manifest-jsonl /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_feature_manifest_pairwise_expanded_gap.jsonl --summary-json /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_feature_manifest_pairwise_expanded_gap_summary.json --summary-md /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_feature_manifest_pairwise_expanded_gap_summary.md",
+      "uv run python scripts/graph_router/build_offline_reward_pairwise_contract.py --manifest-jsonl /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_feature_manifest_pairwise_expanded_gap.jsonl --output-jsonl /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_preference_contract_candidate_only_expanded_gap.jsonl --summary-json /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_preference_contract_candidate_only_expanded_gap_summary.json --summary-md /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_preference_contract_candidate_only_expanded_gap_summary.md --artifact-scope candidate_only",
+      "uv run python scripts/graph_router/evaluate_offline_reward_pairwise_ranker.py --pairwise-jsonl /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_preference_contract_candidate_only_expanded_gap.jsonl --summary-json /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_ranker_candidate_only_expanded_gap_summary.json --summary-md /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_ranker_candidate_only_expanded_gap_summary.md"
+    ],
+    "reference_backed_suite_sources": {
+      "instruction_precision": "/mnt/raid0/llm/epyc-inference-research/benchmarks/prompts/v1"
+    },
+    "seeding_eval_command_template": "uv run python scripts/benchmark/seed_specialist_routing.py --suites <suite> --roles <actions_to_evaluate_on_same_source_record> --modes direct --sample-size <n> --max-tokens 1024 --strict-modes --dry-run --output <benchmarks/results/eval/seeding_a9_*.json>",
+    "workspace": "/mnt/raid0/llm/epyc-orchestrator"
+  },
+  "collection_target_count": 4,
+  "collection_target_match_metric": "source_binary_reward_directional_contrast",
+  "collection_targets_json": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_audit_target_direction_audit.json",
+  "decision": {
+    "recommended_next": "add_more_source_records_for_failed_pairwise_holdout_strata",
+    "runtime_gate_change_allowed": false,
+    "status": "insufficient_non_overlapping_cross_action_candidates"
+  },
+  "existing_manifest": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_feature_manifest_with_pairwise_audit_target_expansions.jsonl",
+  "existing_manifest_source_family_counts": {
+    "orchestrator_live_seed": 181,
+    "seeding_eval": 883,
+    "three_way_eval": 11244
+  },
+  "existing_manifest_suite_counts": {
+    "agentic": 15,
+    "coder": 1247,
+    "debugbench": 852,
+    "general": 1554,
+    "gpqa": 1680,
+    "hotpotqa": 1358,
+    "instruction_precision": 108,
+    "livecodebench": 946,
+    "long_context": 593,
+    "math": 83,
+    "mode_advantage": 208,
+    "mode_advantage_hard": 812,
+    "simpleqa": 1331,
+    "thinking": 1521
+  },
+  "existing_pairwise_group_count": 1981,
+  "existing_pairwise_jsonl": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_preference_contract_score_ordered_audit_target_expanded.jsonl",
+  "inputs": [
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_20260705T185704Z.json",
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_20260705T185704Z.json",
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_20260705T185704Z.json",
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_20260705T185704Z.json"
+  ],
+  "matched_collection_target_counts": {
+    "source_family:seeding_eval:coder_escalation>frontdoor": 1,
+    "suite:general:architect_general>coder_escalation": 1
+  },
+  "min_cross_action_candidate_groups": 20,
+  "privacy": {
+    "commits_prompt_reference_response_text": false,
+    "private_fields_excluded": [
+      "answer",
+      "expected",
+      "prompt",
+      "reference",
+      "response"
+    ],
+    "text_represented_by_sha256_and_lengths": true
+  },
+  "schema_version": "offline_reward_pairwise_holdout_expansion_plan.v1",
+  "selected_groups": [
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "coder_escalation",
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_20260705T185704Z.json|0|gpqa_Astrophysics_0368|c9515b9822a43a31ad3d7e6b71bd121c1fc233fed34721fed571991df9f76c63|559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "matched_collection_targets": [
+        {
+          "action_pair": "coder_escalation>frontdoor",
+          "stratum_field": "source_family",
+          "stratum_value": "seeding_eval"
+        }
+      ],
+      "potential_action_pairs": [
+        "coder_escalation>frontdoor"
+      ],
+      "potential_actions": [
+        "coder_escalation",
+        "frontdoor"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_20260705T185704Z.json",
+      "source_record_offset": 0,
+      "suite": "gpqa"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "coder_escalation",
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_20260705T185704Z.json|10|hellaswag_21289|84dfb8aeafce997c5ce1a0a70c6f049ef945b1fbe773778d6741c9f2bf072e01|3f39d5c348e5b79d06e842c114e6cc571583bbf44e4b0ebfda1a01ec05745d43",
+      "matched_collection_targets": [
+        {
+          "action_pair": "coder_escalation>frontdoor",
+          "stratum_field": "source_family",
+          "stratum_value": "seeding_eval"
+        }
+      ],
+      "potential_action_pairs": [
+        "coder_escalation>frontdoor"
+      ],
+      "potential_actions": [
+        "coder_escalation",
+        "frontdoor"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_20260705T185704Z.json",
+      "source_record_offset": 10,
+      "suite": "thinking"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "coder_escalation",
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_20260705T185704Z.json|11|mmlu_high_school_statistics_05484|3c9fe4f0d735683982f17cbc2c7a96cb8f16aac8983e006136f234250aa992cb|3f39d5c348e5b79d06e842c114e6cc571583bbf44e4b0ebfda1a01ec05745d43",
+      "matched_collection_targets": [
+        {
+          "action_pair": "coder_escalation>frontdoor",
+          "stratum_field": "source_family",
+          "stratum_value": "seeding_eval"
+        }
+      ],
+      "potential_action_pairs": [
+        "coder_escalation>frontdoor"
+      ],
+      "potential_actions": [
+        "coder_escalation",
+        "frontdoor"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_20260705T185704Z.json",
+      "source_record_offset": 11,
+      "suite": "general"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "coder_escalation",
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_20260705T185704Z.json|14|gpqa_Molecular Biology_0026|4f396ee3482d29cf46a6cf1185399208986867817b30f8d1f32fb986b675d5eb|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "matched_collection_targets": [
+        {
+          "action_pair": "coder_escalation>frontdoor",
+          "stratum_field": "source_family",
+          "stratum_value": "seeding_eval"
+        }
+      ],
+      "potential_action_pairs": [
+        "coder_escalation>frontdoor"
+      ],
+      "potential_actions": [
+        "coder_escalation",
+        "frontdoor"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_20260705T185704Z.json",
+      "source_record_offset": 14,
+      "suite": "gpqa"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "coder_escalation",
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_20260705T185704Z.json|16|leetcode_minimum-cost-to-move-chips-to-the-same-position|dbcd3ec5c27109fa39a5d9f93596a10d27ffe11716d831cc2d811e8ed308f19d|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "matched_collection_targets": [
+        {
+          "action_pair": "coder_escalation>frontdoor",
+          "stratum_field": "source_family",
+          "stratum_value": "seeding_eval"
+        }
+      ],
+      "potential_action_pairs": [
+        "coder_escalation>frontdoor"
+      ],
+      "potential_actions": [
+        "coder_escalation",
+        "frontdoor"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_20260705T185704Z.json",
+      "source_record_offset": 16,
+      "suite": "livecodebench"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "coder_escalation",
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_20260705T185704Z.json|17|debugbench_find-the-middle-index-in-array_python|15fa588e60abc8be8ddf1460f3b87101f913162239bf61baf20c67cb1c28e94d|0471c791ef2d61d12ffb63bcaf1d66fea692ea2f2edba722d190b7efedcd7443",
+      "matched_collection_targets": [
+        {
+          "action_pair": "coder_escalation>frontdoor",
+          "stratum_field": "source_family",
+          "stratum_value": "seeding_eval"
+        }
+      ],
+      "potential_action_pairs": [
+        "coder_escalation>frontdoor"
+      ],
+      "potential_actions": [
+        "coder_escalation",
+        "frontdoor"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_20260705T185704Z.json",
+      "source_record_offset": 17,
+      "suite": "debugbench"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "coder_escalation",
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_20260705T185704Z.json|18|gsm8k_01196|79fa8b143b90a44c98ae791c2797d991faaa8301bd50433b088e2be467fdf679|f369cb89fc627e668987007d121ed1eacdc01db9e28f8bb26f358b7d8c4f08ac",
+      "matched_collection_targets": [
+        {
+          "action_pair": "coder_escalation>frontdoor",
+          "stratum_field": "source_family",
+          "stratum_value": "seeding_eval"
+        }
+      ],
+      "potential_action_pairs": [
+        "coder_escalation>frontdoor"
+      ],
+      "potential_actions": [
+        "coder_escalation",
+        "frontdoor"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_20260705T185704Z.json",
+      "source_record_offset": 18,
+      "suite": "math"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "coder_escalation",
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_20260705T185704Z.json|19|hotpot_bridge_5ac02edb554299294b218f41|ed64f77939c650e20248f9b6222b8473f42b76fb160863b3cf837e14a006335a|fd395a64fac2181fafd6a3346ba7f7616a9dfd3ace3b78c3f8aeb4945a3a17e5",
+      "matched_collection_targets": [
+        {
+          "action_pair": "coder_escalation>frontdoor",
+          "stratum_field": "source_family",
+          "stratum_value": "seeding_eval"
+        }
+      ],
+      "potential_action_pairs": [
+        "coder_escalation>frontdoor"
+      ],
+      "potential_actions": [
+        "coder_escalation",
+        "frontdoor"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_20260705T185704Z.json",
+      "source_record_offset": 19,
+      "suite": "hotpotqa"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "coder_escalation",
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_20260705T185704Z.json|20|simpleqa_general_04177|d0d11baa4a64303e908a78bd8b89a56de219c89e9d79ed10bad35dfa72a41a74|c2a71f055803ab75fe102c570044f736c6efcd4e6ada149b4f511f31cd388535",
+      "matched_collection_targets": [
+        {
+          "action_pair": "coder_escalation>frontdoor",
+          "stratum_field": "source_family",
+          "stratum_value": "seeding_eval"
+        }
+      ],
+      "potential_action_pairs": [
+        "coder_escalation>frontdoor"
+      ],
+      "potential_actions": [
+        "coder_escalation",
+        "frontdoor"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_20260705T185704Z.json",
+      "source_record_offset": 20,
+      "suite": "simpleqa"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "coder_escalation",
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_20260705T185704Z.json|21|mbpp_0206|dc1c649fe774b4f3fe4de1b52bb05fa40946f582cc6bea9f1d5b0c27aab940a8|08b2e8ec9f710e3bf05cb0d25d012f98a363456b510d12e65285b827745ae655",
+      "matched_collection_targets": [
+        {
+          "action_pair": "coder_escalation>frontdoor",
+          "stratum_field": "source_family",
+          "stratum_value": "seeding_eval"
+        }
+      ],
+      "potential_action_pairs": [
+        "coder_escalation>frontdoor"
+      ],
+      "potential_actions": [
+        "coder_escalation",
+        "frontdoor"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_20260705T185704Z.json",
+      "source_record_offset": 21,
+      "suite": "coder"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "coder_escalation",
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_20260705T185704Z.json|22|needle_001|cf9eabbede57dfbc78c902f77432fcc35da319c1df42c724634ecfd643566420|c2798ad20755c4b6184f67ab14468155c923bbb59cde2d876483579160534579",
+      "matched_collection_targets": [
+        {
+          "action_pair": "coder_escalation>frontdoor",
+          "stratum_field": "source_family",
+          "stratum_value": "seeding_eval"
+        }
+      ],
+      "potential_action_pairs": [
+        "coder_escalation>frontdoor"
+      ],
+      "potential_actions": [
+        "coder_escalation",
+        "frontdoor"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_20260705T185704Z.json",
+      "source_record_offset": 22,
+      "suite": "long_context"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "coder_escalation",
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_20260705T185704Z.json|23|ma_comp_007|b1c7c0de705c9a0af99a23f5c4ce5d307ecc0760d10c2250a42ed6d5628240a9|08490295488a1189099751ebeddb5992313dd2a831e07a92e66d196ddc261777",
+      "matched_collection_targets": [
+        {
+          "action_pair": "coder_escalation>frontdoor",
+          "stratum_field": "source_family",
+          "stratum_value": "seeding_eval"
+        }
+      ],
+      "potential_action_pairs": [
+        "coder_escalation>frontdoor"
+      ],
+      "potential_actions": [
+        "coder_escalation",
+        "frontdoor"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_20260705T185704Z.json",
+      "source_record_offset": 23,
+      "suite": "mode_advantage"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "coder_escalation",
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_20260705T185704Z.json|24|hellaswag_12295|2720ae03ccc02edc1f17c8aac7d01ef2c5d292062a5e0f144c22449e2854602a|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "matched_collection_targets": [
+        {
+          "action_pair": "coder_escalation>frontdoor",
+          "stratum_field": "source_family",
+          "stratum_value": "seeding_eval"
+        }
+      ],
+      "potential_action_pairs": [
+        "coder_escalation>frontdoor"
+      ],
+      "potential_actions": [
+        "coder_escalation",
+        "frontdoor"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_20260705T185704Z.json",
+      "source_record_offset": 24,
+      "suite": "thinking"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "coder_escalation",
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_20260705T185704Z.json|25|mmlu_professional_law_10952|c83f9753f4a0e468fab489ae095348a69768d6f94f743b0866dd4a4b0171d6e9|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "matched_collection_targets": [
+        {
+          "action_pair": "coder_escalation>frontdoor",
+          "stratum_field": "source_family",
+          "stratum_value": "seeding_eval"
+        }
+      ],
+      "potential_action_pairs": [
+        "coder_escalation>frontdoor"
+      ],
+      "potential_actions": [
+        "coder_escalation",
+        "frontdoor"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_20260705T185704Z.json",
+      "source_record_offset": 25,
+      "suite": "general"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "coder_escalation",
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_20260705T185704Z.json|2|leetcode_sign-of-the-product-of-an-array|7ab112f50d096fd388b66a2dd75a88e2cae306a22ba08330e7e60ae1af52aaeb|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "matched_collection_targets": [
+        {
+          "action_pair": "coder_escalation>frontdoor",
+          "stratum_field": "source_family",
+          "stratum_value": "seeding_eval"
+        }
+      ],
+      "potential_action_pairs": [
+        "coder_escalation>frontdoor"
+      ],
+      "potential_actions": [
+        "coder_escalation",
+        "frontdoor"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_20260705T185704Z.json",
+      "source_record_offset": 2,
+      "suite": "livecodebench"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [
+        {
+          "action_pair": "coder_escalation>frontdoor",
+          "contrast_metric": "source_binary_reward",
+          "preferred_action": "coder_escalation",
+          "rejected_action": "frontdoor",
+          "stratum_field": "source_family",
+          "stratum_value": "seeding_eval",
+          "target": "source_family:seeding_eval:coder_escalation>frontdoor"
+        }
+      ],
+      "candidate_actions": [
+        "coder_escalation",
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_20260705T185704Z.json|3|debugbench_subarray-product-less-than-k_java|61e2d7ca7792a564e94b12ab5871d13ea5a5fbfa129b9d212d547e35fb776322|2a3dfe5654b98017158f420f77f37c55568ab16e2170d668fd455edc6b272d7e",
+      "matched_collection_targets": [
+        {
+          "action_pair": "coder_escalation>frontdoor",
+          "stratum_field": "source_family",
+          "stratum_value": "seeding_eval"
+        }
+      ],
+      "potential_action_pairs": [
+        "coder_escalation>frontdoor"
+      ],
+      "potential_actions": [
+        "coder_escalation",
+        "frontdoor"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_20260705T185704Z.json",
+      "source_record_offset": 3,
+      "suite": "debugbench"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "coder_escalation",
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_20260705T185704Z.json|4|gsm8k_00193|70d72bf5fd4828592d41c66155171f868d53ffa575c39446dbcd5bf852eb431c|c2356069e9d1e79ca924378153cfbbfb4d4416b1f99d41a2940bfdb66c5319db",
+      "matched_collection_targets": [
+        {
+          "action_pair": "coder_escalation>frontdoor",
+          "stratum_field": "source_family",
+          "stratum_value": "seeding_eval"
+        }
+      ],
+      "potential_action_pairs": [
+        "coder_escalation>frontdoor"
+      ],
+      "potential_actions": [
+        "coder_escalation",
+        "frontdoor"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_20260705T185704Z.json",
+      "source_record_offset": 4,
+      "suite": "math"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "coder_escalation",
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_20260705T185704Z.json|5|hotpot_bridge_5a7914e155429974737f7973|551d038b34e499c2757821f2e374342e090905906aa6ce0ce0c3a31f89f2e24b|0e9cde42432e88daec66b3d987bb57f81ca9c994870ab67eaa71491ee893c83a",
+      "matched_collection_targets": [
+        {
+          "action_pair": "coder_escalation>frontdoor",
+          "stratum_field": "source_family",
+          "stratum_value": "seeding_eval"
+        }
+      ],
+      "potential_action_pairs": [
+        "coder_escalation>frontdoor"
+      ],
+      "potential_actions": [
+        "coder_escalation",
+        "frontdoor"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_20260705T185704Z.json",
+      "source_record_offset": 5,
+      "suite": "hotpotqa"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "coder_escalation",
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_20260705T185704Z.json|6|simpleqa_general_02692|1bda038c437004ccdafdedb73f722872c11efcd06605ceb60cbe428f5ded88b4|b77739b156e858b4ca4a3bb6489f28e9620ded8a5b61b967b65d774c9ad479fb",
+      "matched_collection_targets": [
+        {
+          "action_pair": "coder_escalation>frontdoor",
+          "stratum_field": "source_family",
+          "stratum_value": "seeding_eval"
+        }
+      ],
+      "potential_action_pairs": [
+        "coder_escalation>frontdoor"
+      ],
+      "potential_actions": [
+        "coder_escalation",
+        "frontdoor"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_20260705T185704Z.json",
+      "source_record_offset": 6,
+      "suite": "simpleqa"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "coder_escalation",
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_20260705T185704Z.json|7|mbpp_0197|e83012968913bc09db86f4bd994c7beeea2a80a8353be92ca1b6045de563866f|e60ab4d85fee7f2db7a101f5fccc26fa8fd65af22edc018634c77ef9a6549eeb",
+      "matched_collection_targets": [
+        {
+          "action_pair": "coder_escalation>frontdoor",
+          "stratum_field": "source_family",
+          "stratum_value": "seeding_eval"
+        }
+      ],
+      "potential_action_pairs": [
+        "coder_escalation>frontdoor"
+      ],
+      "potential_actions": [
+        "coder_escalation",
+        "frontdoor"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_20260705T185704Z.json",
+      "source_record_offset": 7,
+      "suite": "coder"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "coder_escalation",
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_20260705T185704Z.json|8|needle_013|9bc10ad678bdfbb38c6335beaa9168d0981e99960d38e9a6c836450f84ef1400|c81a04f275d375185cf21b04b9fa4df461c1176a442ceb3cf26e5f7924d53942",
+      "matched_collection_targets": [
+        {
+          "action_pair": "coder_escalation>frontdoor",
+          "stratum_field": "source_family",
+          "stratum_value": "seeding_eval"
+        }
+      ],
+      "potential_action_pairs": [
+        "coder_escalation>frontdoor"
+      ],
+      "potential_actions": [
+        "coder_escalation",
+        "frontdoor"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_20260705T185704Z.json",
+      "source_record_offset": 8,
+      "suite": "long_context"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_20260705T185704Z.json|0|mmlu_college_biology_00773|060bcc3c2aa7dc2eaf48886652136ddb290d80d58f5aac95c02ccb0b7f3c21e8|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>coder_escalation",
+          "stratum_field": "suite",
+          "stratum_value": "general"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>coder_escalation"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_20260705T185704Z.json",
+      "source_record_offset": 0,
+      "suite": "general"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_20260705T185704Z.json|10|mmlu_moral_disputes_08402|7b9e4c1b0367a4100ec717c569ee66ba3fca903475d14556bb460da48791d553|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>coder_escalation",
+          "stratum_field": "suite",
+          "stratum_value": "general"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>coder_escalation"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_20260705T185704Z.json",
+      "source_record_offset": 10,
+      "suite": "general"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_20260705T185704Z.json|11|mmlu_high_school_computer_science_03273|346d662b5af3bc804663be3cfbfa441669e1f42f10b22370bdcf290fa1506b44|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>coder_escalation",
+          "stratum_field": "suite",
+          "stratum_value": "general"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>coder_escalation"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_20260705T185704Z.json",
+      "source_record_offset": 11,
+      "suite": "general"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_20260705T185704Z.json|12|mmlu_college_chemistry_00915|efd483cfd3707b8c23ad33659cb57d3235c1268bd700f1fbb5502d67ac5d3963|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>coder_escalation",
+          "stratum_field": "suite",
+          "stratum_value": "general"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>coder_escalation"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_20260705T185704Z.json",
+      "source_record_offset": 12,
+      "suite": "general"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_20260705T185704Z.json|13|mmlu_security_studies_13251|2f0eda71c8880117dd8de7b16d364a18578ed32e1e7ba546a4a53f271e41ef92|559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>coder_escalation",
+          "stratum_field": "suite",
+          "stratum_value": "general"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>coder_escalation"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_20260705T185704Z.json",
+      "source_record_offset": 13,
+      "suite": "general"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_20260705T185704Z.json|14|mmlu_sociology_13446|011275f4dca8a87ac449b0f69d80d1c3ac843e119c9cb82d79ef98ff88472490|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>coder_escalation",
+          "stratum_field": "suite",
+          "stratum_value": "general"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>coder_escalation"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_20260705T185704Z.json",
+      "source_record_offset": 14,
+      "suite": "general"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_20260705T185704Z.json|15|mmlu_professional_law_12150|3664d61f9da38eb435ef210a6fb7baacf54f34277b239f09c19bc182e5916fba|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>coder_escalation",
+          "stratum_field": "suite",
+          "stratum_value": "general"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>coder_escalation"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_20260705T185704Z.json",
+      "source_record_offset": 15,
+      "suite": "general"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_20260705T185704Z.json|16|mmlu_high_school_us_history_05712|1675a78fc1dad99d461fc70cc4f516ae18d31fbfca1d1200f3bd04a727936612|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>coder_escalation",
+          "stratum_field": "suite",
+          "stratum_value": "general"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>coder_escalation"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_20260705T185704Z.json",
+      "source_record_offset": 16,
+      "suite": "general"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_20260705T185704Z.json|17|mmlu_management_06993|bd6bceb3c355de4f799506fa0d0530d71c65ffaf53d411ea808e3d9c4a6c9662|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>coder_escalation",
+          "stratum_field": "suite",
+          "stratum_value": "general"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>coder_escalation"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_20260705T185704Z.json",
+      "source_record_offset": 17,
+      "suite": "general"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [
+        {
+          "action_pair": "architect_general>coder_escalation",
+          "contrast_metric": "source_binary_reward",
+          "preferred_action": "architect_general",
+          "rejected_action": "coder_escalation",
+          "stratum_field": "suite",
+          "stratum_value": "general",
+          "target": "suite:general:architect_general>coder_escalation"
+        }
+      ],
+      "candidate_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_20260705T185704Z.json|18|mmlu_elementary_mathematics_02137|def5888d2f05d27f5f476e00773139279ed4cd2da6010289c9fbcf118311615e|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>coder_escalation",
+          "stratum_field": "suite",
+          "stratum_value": "general"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>coder_escalation"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_20260705T185704Z.json",
+      "source_record_offset": 18,
+      "suite": "general"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_20260705T185704Z.json|19|mmlu_prehistory_10259|bbf85bc078ac9b174fba168faa292608788ab399179b058fef9cea62bc2997e0|559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>coder_escalation",
+          "stratum_field": "suite",
+          "stratum_value": "general"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>coder_escalation"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_20260705T185704Z.json",
+      "source_record_offset": 19,
+      "suite": "general"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_20260705T185704Z.json|1|mmlu_high_school_psychology_05271|a5b95cd8df005e6af91992c9dd3cbbe0e18ef11c7245d87ad4ec7bd5235ff200|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>coder_escalation",
+          "stratum_field": "suite",
+          "stratum_value": "general"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>coder_escalation"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_20260705T185704Z.json",
+      "source_record_offset": 1,
+      "suite": "general"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_20260705T185704Z.json|2|mmlu_management_07039|c996286c68c2cad2aa4261e06a14a3598d41609e9097c6dd6cea0af8a6a195da|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>coder_escalation",
+          "stratum_field": "suite",
+          "stratum_value": "general"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>coder_escalation"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_20260705T185704Z.json",
+      "source_record_offset": 2,
+      "suite": "general"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_20260705T185704Z.json|3|mmlu_professional_accounting_10624|1a1952ea37b1c4f55433b4a559cfbd50b39907b2abad6210d5f2a1d0e67a9376|559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>coder_escalation",
+          "stratum_field": "suite",
+          "stratum_value": "general"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>coder_escalation"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_20260705T185704Z.json",
+      "source_record_offset": 3,
+      "suite": "general"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_20260705T185704Z.json|4|mmlu_high_school_psychology_05197|b47f2763aa93bade442c60e0034c52268b299d883a113d55d805fa59f731314e|559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>coder_escalation",
+          "stratum_field": "suite",
+          "stratum_value": "general"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>coder_escalation"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_20260705T185704Z.json",
+      "source_record_offset": 4,
+      "suite": "general"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_20260705T185704Z.json|5|mmlu_high_school_psychology_05354|b7c5eed6b9e6065af2f9aead6a1727e77a4042d9a5f1e2484ff8c016df4047a0|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>coder_escalation",
+          "stratum_field": "suite",
+          "stratum_value": "general"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>coder_escalation"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_20260705T185704Z.json",
+      "source_record_offset": 5,
+      "suite": "general"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_20260705T185704Z.json|6|mmlu_high_school_macroeconomics_04224|edf32e8ac32a1bb15135f43a6e0bb044ec6ed24abc19571689405bcc3f6b8263|3f39d5c348e5b79d06e842c114e6cc571583bbf44e4b0ebfda1a01ec05745d43",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>coder_escalation",
+          "stratum_field": "suite",
+          "stratum_value": "general"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>coder_escalation"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_20260705T185704Z.json",
+      "source_record_offset": 6,
+      "suite": "general"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_20260705T185704Z.json|7|mmlu_moral_disputes_08422|941a65e02ed942bdb16bd12b70b3d5fc31e624ec888c0f1b9a01689ec99c043b|559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>coder_escalation",
+          "stratum_field": "suite",
+          "stratum_value": "general"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>coder_escalation"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_20260705T185704Z.json",
+      "source_record_offset": 7,
+      "suite": "general"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_20260705T185704Z.json|8|mmlu_conceptual_physics_01640|15503fd00d34b60b4a9634c35e305cbd004a3411a6fa97a6eb06ca24942ca3b5|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>coder_escalation",
+          "stratum_field": "suite",
+          "stratum_value": "general"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>coder_escalation"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_20260705T185704Z.json",
+      "source_record_offset": 8,
+      "suite": "general"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_20260705T185704Z.json|9|mmlu_professional_psychology_12829|9308156d90a563bdac39c1b10dbc9dd2bbc1fc22de5cc7e2bce18d4864288b94|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>coder_escalation",
+          "stratum_field": "suite",
+          "stratum_value": "general"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>coder_escalation"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_20260705T185704Z.json",
+      "source_record_offset": 9,
+      "suite": "general"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_20260705T185704Z.json|0|hotpot_bridge_5ae1d1a55542997f29b3c138|bcf11b652c808557cbb3a48118b2e94c9649c99913113f39099fd27813cc718a|39bbae31fc0cd09264a7cc2928bc9f7c9692d7c5699988e09f6f84b1c973ddf8",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "hotpotqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_20260705T185704Z.json",
+      "source_record_offset": 0,
+      "suite": "hotpotqa"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_20260705T185704Z.json|10|hotpot_bridge_5ab3952e5542992ade7c6de8|c8c9bd352785bf6fdb78dd1c487a06051c362816d11beeafd150acf251207f02|873fef760e5d001ba0a843bf1846713fd92538699f323ef00d51f97a2ad2756c",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "hotpotqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_20260705T185704Z.json",
+      "source_record_offset": 10,
+      "suite": "hotpotqa"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_20260705T185704Z.json|11|hotpot_bridge_5a8a2d2155429930ff3c0cdc|1599cf86efb0e32c06d9b713dd95f8c4ade8d58576f82202f276a5360836052f|bfbbca107241523b5c6713d27f3b940d1ee66a78c27d04f6fff06cd6cfefcdbc",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "hotpotqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_20260705T185704Z.json",
+      "source_record_offset": 11,
+      "suite": "hotpotqa"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_20260705T185704Z.json|12|hotpot_bridge_5ae608f2554299546bf83026|f1ed832df32bd2f801c036941b3db0937cca35ed0340b066fc5e405062eab8c3|2e9a3a6fc9aaaf84955c6c52399f8b1ef5f305567fcf9c1eb2e6e77f6204420e",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "hotpotqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_20260705T185704Z.json",
+      "source_record_offset": 12,
+      "suite": "hotpotqa"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_20260705T185704Z.json|13|hotpot_comparison_5a7647505542992d0ec06089|c20dbb8d5b196a05763b63507ea7a56fa30edd6ae8a1a72a8ef8a1a54b932754|b630b64d20f21a0bcbbea3771e54e1249fb2faaea4199848008b6e74f457a27f",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "hotpotqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_20260705T185704Z.json",
+      "source_record_offset": 13,
+      "suite": "hotpotqa"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_20260705T185704Z.json|14|hotpot_bridge_5a88982155429938390d3f81|1ce178531cec4487aefae75291a40836318fd692ea5f5a65600de0596323f278|9113b98df80f877c7a2ee5d865a04c9514b4e9bf25a49d315b0b15f115d2f0d2",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "hotpotqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_20260705T185704Z.json",
+      "source_record_offset": 14,
+      "suite": "hotpotqa"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_20260705T185704Z.json|15|hotpot_bridge_5ae09d6155429945ae9593d4|2f3a3f512b9065efdafcbc313a4cc3e318713fe010f3b742d362f5c5cf262fec|7f61cffc6d59485570112e9ed95a0fffcb9c06a591e50da2379ed3d00413ba6a",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "hotpotqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_20260705T185704Z.json",
+      "source_record_offset": 15,
+      "suite": "hotpotqa"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_20260705T185704Z.json|16|hotpot_bridge_5a8a07725542992d82986e5b|72341c6abe26257017b33756af6bcc96874e71fd6dc8ffc4ae4747df74aa11b8|496dd0a27d316170fe0f58ebe298fdeb19cdeccc3161918a9e165692e3bc30a6",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "hotpotqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_20260705T185704Z.json",
+      "source_record_offset": 16,
+      "suite": "hotpotqa"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_20260705T185704Z.json|17|hotpot_bridge_5adcc3ed5542994d58a2f6c4|d852f337c6a2957724b32ca1fcbb131525f1062ad77933e6c4adb3c4dde82695|bd554e54276bb6a4d8dd7b41d90a2c125f51043f2b1cfceea61750cd835cffdb",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "hotpotqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_20260705T185704Z.json",
+      "source_record_offset": 17,
+      "suite": "hotpotqa"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_20260705T185704Z.json|18|hotpot_comparison_5a8b2ccf55429971feec4665|f80307fb1802040ea3afa5303946adeb14cbcac2fb04c118322db8a0872ee5c3|8c8a073883a2e4137c27ecf7b513daf6fe2e9d43782942e977991e08f3ee9f98",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "hotpotqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_20260705T185704Z.json",
+      "source_record_offset": 18,
+      "suite": "hotpotqa"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_20260705T185704Z.json|19|hotpot_bridge_5a83dd2c554299334474609e|6ce8cfd0e1bd194ffebf36c3c0ac361201a2d22279272500395266d3a5fa6a79|c0b04fc54c6b854d074f6258546b391c14b4cad0c258a9c790754de42686133f",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "hotpotqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_20260705T185704Z.json",
+      "source_record_offset": 19,
+      "suite": "hotpotqa"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_20260705T185704Z.json|1|hotpot_comparison_5a78eea555429970f5fffddf|fe55d6f1ee42bbcaf9a188196e8aa3783c4832c3fa47ef21ed88a4fe597e246b|674c555541e0e34b26c0b14878c5c84484f3e28ea75e92cf90ee62f693ebe157",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "hotpotqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_20260705T185704Z.json",
+      "source_record_offset": 1,
+      "suite": "hotpotqa"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_20260705T185704Z.json|2|hotpot_comparison_5add3a605542990dbb2f7ddb|62d700b158f4a6910a9b65a121ed48975e3358b380852a3457308465a4005832|9390298f3fb0c5b160498935d79cb139aef28e1c47358b4bbba61862b9c26e59",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "hotpotqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_20260705T185704Z.json",
+      "source_record_offset": 2,
+      "suite": "hotpotqa"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_20260705T185704Z.json|3|hotpot_bridge_5abd05e655429965836004f1|c834d7de25d9342da351468c8717086133282cf9e727065ff80c5ca21b2f1c87|255b2590195510b9886c9f0c870455adeb5aa9d433d729151cc9c032bb5fa396",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "hotpotqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_20260705T185704Z.json",
+      "source_record_offset": 3,
+      "suite": "hotpotqa"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_20260705T185704Z.json|4|hotpot_bridge_5ab859a955429934fafe6d7b|4860fa6bab0d8ee8de59bafcb0860ecdae0377696139a1506ca814d1f1c2cd46|f01344c761b5ab5a390160d558720dc1e14d76bcc6185165b95c37095fc2f401",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "hotpotqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_20260705T185704Z.json",
+      "source_record_offset": 4,
+      "suite": "hotpotqa"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_20260705T185704Z.json|5|hotpot_bridge_5a7b6e1d5542997c3ec9716e|21f7892ba3e1bcf51b4068bea2a88044a264d8a36e01ce4c6faf4a0477e13fa9|0eb045301ef38da83508dc5d4f10042473506daf7ffb7267188ebd5bd20e47f5",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "hotpotqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_20260705T185704Z.json",
+      "source_record_offset": 5,
+      "suite": "hotpotqa"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_20260705T185704Z.json|6|hotpot_bridge_5ab67f4c55429953192ad2d9|f6d6b2479b29ea7efcee31eaa04d93221949d771a57b34cb70483270a961ea00|c7eceb476b3d6bc306ca16bf99b1d0e04ca37e3299ef89758dda2091c151fb0d",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "hotpotqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_20260705T185704Z.json",
+      "source_record_offset": 6,
+      "suite": "hotpotqa"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_20260705T185704Z.json|7|hotpot_bridge_5ae4a1ef55429970de88d9e7|77e9744e811841fbd0cb4f81864f0b86b3c0a3acbaea9af3a11a3599ab12a67a|b6a093f768a103dea5f58c04eae8ea2e2cf24ffc3c351874015ba13e1c6c669c",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "hotpotqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_20260705T185704Z.json",
+      "source_record_offset": 7,
+      "suite": "hotpotqa"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_20260705T185704Z.json|8|hotpot_bridge_5ab67cf455429954757d3302|61715842c6ed291ab7c2f3d18f3ac0f956b62d145b9f3c2675e8bb41ebbe80ee|69b33a685a75c56ca81167e770f370cc38c88376829bde861fb589a4c7a043ba",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "hotpotqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_20260705T185704Z.json",
+      "source_record_offset": 8,
+      "suite": "hotpotqa"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_20260705T185704Z.json|9|hotpot_bridge_5ae1faf15542997f29b3c1e3|23b121f15e39cfde4fe70789912025f75c71337ae248200dd31fbd49d383c875|274dfec6e079fb08d6b5771537c54d3f0bd36c64c3d8ed0a4e6d2f201b489274",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>frontdoor",
+          "stratum_field": "suite",
+          "stratum_value": "hotpotqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>frontdoor"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_20260705T185704Z.json",
+      "source_record_offset": 9,
+      "suite": "hotpotqa"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_20260705T185704Z.json|0|simpleqa_general_03546|2f65f61e08b230d971aa1bfe2f6cb4510fd7b1707e99958a210bd3b22ec7c0b4|af14badf8eb11812f2176ce030a0b4d6434d708cb880cef47c634a7388cb11ae",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>coder_escalation",
+          "stratum_field": "suite",
+          "stratum_value": "simpleqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>coder_escalation"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_20260705T185704Z.json",
+      "source_record_offset": 0,
+      "suite": "simpleqa"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_20260705T185704Z.json|10|simpleqa_general_00576|417d34486a3d9652cba64cd599d7abd8d50d5b4652f038569b035597e12107f4|9ac3cc0df19bf244253d3a03be4e40e3642d7ae90914a0e1044ebfa90e009254",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>coder_escalation",
+          "stratum_field": "suite",
+          "stratum_value": "simpleqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>coder_escalation"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_20260705T185704Z.json",
+      "source_record_offset": 10,
+      "suite": "simpleqa"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_20260705T185704Z.json|11|simpleqa_general_00546|bd711d5eab5f45550740959f3a8cd3cc4d2be712467bce2e9c62a079c606d908|dc86a7a8b6ce77ec364bff09aabb912daa1575ed4ae8cbab788cd3800eee8e95",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>coder_escalation",
+          "stratum_field": "suite",
+          "stratum_value": "simpleqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>coder_escalation"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_20260705T185704Z.json",
+      "source_record_offset": 11,
+      "suite": "simpleqa"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_20260705T185704Z.json|12|simpleqa_general_02457|82b9ce8dcd63704ba4761b6ed75bf310b144bc933d5fa5569cf09cf45440c629|e032737257574289536bd176e894125020e61887bfb3a36558adf4081e0258c2",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>coder_escalation",
+          "stratum_field": "suite",
+          "stratum_value": "simpleqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>coder_escalation"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_20260705T185704Z.json",
+      "source_record_offset": 12,
+      "suite": "simpleqa"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_20260705T185704Z.json|13|simpleqa_general_02922|41dccf3d75b38623db1d859e0eca91d1bff21a027a1fe1ae7af971ccf2fd1bea|f4de2c9edfe9ce6cc70e16096e655fb0359545362f50285396b34b6be3635937",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>coder_escalation",
+          "stratum_field": "suite",
+          "stratum_value": "simpleqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>coder_escalation"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_20260705T185704Z.json",
+      "source_record_offset": 13,
+      "suite": "simpleqa"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_20260705T185704Z.json|14|simpleqa_general_00124|42cf1a7440c7d387de87fd05fe057e530d6d90910a9257259d0d123bf4bf6223|25b377ea3119d01a801337d589b0a29ae08b8a05e169f38e1fe1e452a7438b06",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>coder_escalation",
+          "stratum_field": "suite",
+          "stratum_value": "simpleqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>coder_escalation"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_20260705T185704Z.json",
+      "source_record_offset": 14,
+      "suite": "simpleqa"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_20260705T185704Z.json|15|simpleqa_general_01930|1524ba9a575a205ad3354e3a07bebd5acc7e6cac801554508ceddf39bc30495c|46ffc4418d693e8b180be079da7ff296df18228fe6cc79cdb5cf5198504593b9",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>coder_escalation",
+          "stratum_field": "suite",
+          "stratum_value": "simpleqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>coder_escalation"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_20260705T185704Z.json",
+      "source_record_offset": 15,
+      "suite": "simpleqa"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_20260705T185704Z.json|16|simpleqa_general_02792|31065db44510760dadabc7a37b85104af4a1639d178f6f9846ac1f2a315c27a9|d6b77924771df9d49b7b07e10a951d6c73748c19e248ace272e3584874bd945d",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>coder_escalation",
+          "stratum_field": "suite",
+          "stratum_value": "simpleqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>coder_escalation"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_20260705T185704Z.json",
+      "source_record_offset": 16,
+      "suite": "simpleqa"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_20260705T185704Z.json|17|simpleqa_general_02001|7dbaf30a92de36f6635f0a9d3dc9ee416e5f30d2f68fcd1099d65169aa01b138|149aa4c8d80552c78096cc1b1e31b7a72ff36bc09a8f30e859cc0c49b69b4ad8",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>coder_escalation",
+          "stratum_field": "suite",
+          "stratum_value": "simpleqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>coder_escalation"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_20260705T185704Z.json",
+      "source_record_offset": 17,
+      "suite": "simpleqa"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_20260705T185704Z.json|18|simpleqa_general_04262|6ba4ebdb60c68ed0e0a3e77c1ae215370f9a57299739313b48024efeb63a3a47|2abaca4911e68fa9bfbf3482ee797fd5b9045b841fdff7253557c5fe15de6477",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>coder_escalation",
+          "stratum_field": "suite",
+          "stratum_value": "simpleqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>coder_escalation"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_20260705T185704Z.json",
+      "source_record_offset": 18,
+      "suite": "simpleqa"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_20260705T185704Z.json|19|simpleqa_general_03716|e422d72350c8e63b50f37c1113a8edaa3b08992986bfceb508a555c07db740a7|c3afe66ce26a49ce8d11bea73f357554cf0154d9fdf5df66702c695645663c24",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>coder_escalation",
+          "stratum_field": "suite",
+          "stratum_value": "simpleqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>coder_escalation"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_20260705T185704Z.json",
+      "source_record_offset": 19,
+      "suite": "simpleqa"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_20260705T185704Z.json|1|simpleqa_general_03465|447fc6d7ca8300cad73b61895f6e20baaeeab0695d00bf10c819d1225f0ec415|c4e29b962ea1f6b964637cbb81cba5aa84590f565a65276a534d4c3a3727bd4e",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>coder_escalation",
+          "stratum_field": "suite",
+          "stratum_value": "simpleqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>coder_escalation"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_20260705T185704Z.json",
+      "source_record_offset": 1,
+      "suite": "simpleqa"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_20260705T185704Z.json|2|simpleqa_general_03724|67f21149baad253029f0d81f85c853cc7bc00d54d4ad2fda481679b030ed35db|8e71b24534e9f3fb3a71263359fed2b7ffb008265e0d34383e319f1b6f5c08f2",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>coder_escalation",
+          "stratum_field": "suite",
+          "stratum_value": "simpleqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>coder_escalation"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_20260705T185704Z.json",
+      "source_record_offset": 2,
+      "suite": "simpleqa"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_20260705T185704Z.json|3|simpleqa_general_02450|cd51bf1cc8026a26ab1f3517a608c033705b8878d47f68700ec995f8e515f001|8e71b24534e9f3fb3a71263359fed2b7ffb008265e0d34383e319f1b6f5c08f2",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>coder_escalation",
+          "stratum_field": "suite",
+          "stratum_value": "simpleqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>coder_escalation"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_20260705T185704Z.json",
+      "source_record_offset": 3,
+      "suite": "simpleqa"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_20260705T185704Z.json|4|simpleqa_general_01232|c4f6b032dcfe01a3f4d12e77369925ad6f427e9ad125baf5ae962b782dce98ae|314f04b30f62e0056bd059354a5536fb2e302107eed143b5fa2aa0bbba07f608",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>coder_escalation",
+          "stratum_field": "suite",
+          "stratum_value": "simpleqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>coder_escalation"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_20260705T185704Z.json",
+      "source_record_offset": 4,
+      "suite": "simpleqa"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_20260705T185704Z.json|5|simpleqa_general_02295|46a18161d4136b0a4b9717ee1c02203e760fb3ea8c04e73736b28fa085c37852|82887006d04d939ffca870bc268a940df6cf01dbdf12e228ccf476d07d7c9424",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>coder_escalation",
+          "stratum_field": "suite",
+          "stratum_value": "simpleqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>coder_escalation"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_20260705T185704Z.json",
+      "source_record_offset": 5,
+      "suite": "simpleqa"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_20260705T185704Z.json|6|simpleqa_general_01530|5216021e6bcbe690f001808cb6460e366745230a4cfd6899e9f118bde9995a3f|02d20bbd7e394ad5999a4cebabac9619732c343a4cac99470c03e23ba2bdc2bc",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>coder_escalation",
+          "stratum_field": "suite",
+          "stratum_value": "simpleqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>coder_escalation"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_20260705T185704Z.json",
+      "source_record_offset": 6,
+      "suite": "simpleqa"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_20260705T185704Z.json|7|simpleqa_general_02482|9667c5da23028a45793c3aefd94053513dbc904776b1eaf981c2646b5d2ac1e3|b1ab1e892617f210425f658cf1d361b5489028c8771b56d845fe1c62c1fbc8b0",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>coder_escalation",
+          "stratum_field": "suite",
+          "stratum_value": "simpleqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>coder_escalation"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_20260705T185704Z.json",
+      "source_record_offset": 7,
+      "suite": "simpleqa"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_20260705T185704Z.json|8|simpleqa_general_00011|087776c0b1a5f528d1b4694b4ee02993af55e88ee2e09404830620d9525b38e6|6c94e35ccc352d4e9ef0b99562cff995a5741ce8de8ad11b568892934daee366",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>coder_escalation",
+          "stratum_field": "suite",
+          "stratum_value": "simpleqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>coder_escalation"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_20260705T185704Z.json",
+      "source_record_offset": 8,
+      "suite": "simpleqa"
+    },
+    {
+      "binary_reward_contrast_collection_targets": [],
+      "candidate_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_20260705T185704Z.json|9|simpleqa_general_03653|217e06d3ec8cf0af4b716a74fa3eeffd5a6947b26de4ae6b2b99bcc94725645a|c1bc5cfdeaca6c291d7edf9ce8d7ac4c530f759feffdb98bab236b741a59fa04",
+      "matched_collection_targets": [
+        {
+          "action_pair": "architect_general>coder_escalation",
+          "stratum_field": "suite",
+          "stratum_value": "simpleqa"
+        }
+      ],
+      "potential_action_pairs": [
+        "architect_general>coder_escalation"
+      ],
+      "potential_actions": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "source_family": "seeding_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_20260705T185704Z.json",
+      "source_record_offset": 9,
+      "suite": "simpleqa"
+    }
+  ],
+  "skipped_no_collection_target_pair_groups": 0,
+  "skipped_no_cross_action_groups": 2,
+  "skipped_pairwise_overlap_groups": 0,
+  "source_record_requirements": [
+    {
+      "action_pair": "coder_escalation>frontdoor",
+      "actions_to_evaluate_on_same_source_record": [
+        "coder_escalation",
+        "frontdoor"
+      ],
+      "collection_priority": 0,
+      "collection_priority_reason": "independent_holdout_source_family_blocker",
+      "current_direction_balance": 0.0,
+      "current_rows": 2,
+      "matched_candidate_group_metric": "source_binary_reward_directional_contrast",
+      "matched_candidate_groups": 1,
+      "needs_direction": [
+        "prefer coder_escalation"
+      ],
+      "presence_candidate_groups": 21,
+      "runtime_gate_change_allowed": false,
+      "source_record_shape": "one prompt/reference evaluated by every action in action_pair with role_results, rewards, suite, prompt, and expected fields",
+      "status": "needs_new_source_records",
+      "stratum_field": "source_family",
+      "stratum_value": "seeding_eval",
+      "suggested_min_new_source_records": 19,
+      "suggested_min_rows": 20,
+      "target": "source_family:seeding_eval:coder_escalation>frontdoor",
+      "target_preferred_actions": [
+        "coder_escalation"
+      ]
+    },
+    {
+      "action_pair": "architect_general>coder_escalation",
+      "actions_to_evaluate_on_same_source_record": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "collection_priority": 1,
+      "collection_priority_reason": "independent_holdout_suite_blocker",
+      "current_direction_balance": 0.0,
+      "current_rows": 1,
+      "matched_candidate_group_metric": "source_binary_reward_directional_contrast",
+      "matched_candidate_groups": 1,
+      "needs_direction": [
+        "prefer architect_general"
+      ],
+      "presence_candidate_groups": 20,
+      "runtime_gate_change_allowed": false,
+      "source_record_shape": "one prompt/reference evaluated by every action in action_pair with role_results, rewards, suite, prompt, and expected fields",
+      "status": "needs_new_source_records",
+      "stratum_field": "suite",
+      "stratum_value": "general",
+      "suggested_min_new_source_records": 19,
+      "suggested_min_rows": 20,
+      "target": "suite:general:architect_general>coder_escalation",
+      "target_preferred_actions": [
+        "architect_general"
+      ]
+    },
+    {
+      "action_pair": "architect_general>frontdoor",
+      "actions_to_evaluate_on_same_source_record": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "collection_priority": 2,
+      "collection_priority_reason": "direction_balance_cleanup",
+      "current_direction_balance": 0.0577,
+      "current_rows": 918,
+      "matched_candidate_group_metric": "source_binary_reward_directional_contrast",
+      "matched_candidate_groups": 0,
+      "needs_direction": [
+        "balance both directions"
+      ],
+      "presence_candidate_groups": 20,
+      "runtime_gate_change_allowed": false,
+      "source_record_shape": "one prompt/reference evaluated by every action in action_pair with role_results, rewards, suite, prompt, and expected fields",
+      "status": "needs_new_source_records",
+      "stratum_field": "suite",
+      "stratum_value": "hotpotqa",
+      "suggested_min_new_source_records": 20,
+      "suggested_min_rows": 20,
+      "target": "suite:hotpotqa:architect_general>frontdoor",
+      "target_preferred_actions": [
+        "architect_general"
+      ]
+    },
+    {
+      "action_pair": "architect_general>coder_escalation",
+      "actions_to_evaluate_on_same_source_record": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "collection_priority": 2,
+      "collection_priority_reason": "direction_balance_cleanup",
+      "current_direction_balance": 0.1429,
+      "current_rows": 14,
+      "matched_candidate_group_metric": "source_binary_reward_directional_contrast",
+      "matched_candidate_groups": 0,
+      "needs_direction": [
+        "balance both directions"
+      ],
+      "presence_candidate_groups": 20,
+      "runtime_gate_change_allowed": false,
+      "source_record_shape": "one prompt/reference evaluated by every action in action_pair with role_results, rewards, suite, prompt, and expected fields",
+      "status": "needs_new_source_records",
+      "stratum_field": "suite",
+      "stratum_value": "simpleqa",
+      "suggested_min_new_source_records": 20,
+      "suggested_min_rows": 20,
+      "target": "suite:simpleqa:architect_general>coder_escalation",
+      "target_preferred_actions": [
+        "coder_escalation"
+      ]
+    }
+  ],
+  "stats": {
+    "candidate_rows": 164,
+    "files_scanned": 4,
+    "reference_available_source_family:seeding_eval": 83,
+    "reference_available_suite:coder": 2,
+    "reference_available_suite:debugbench": 2,
+    "reference_available_suite:general": 22,
+    "reference_available_suite:gpqa": 2,
+    "reference_available_suite:hotpotqa": 22,
+    "reference_available_suite:livecodebench": 2,
+    "reference_available_suite:long_context": 2,
+    "reference_available_suite:math": 2,
+    "reference_available_suite:mode_advantage": 1,
+    "reference_available_suite:simpleqa": 22,
+    "reference_available_suite:thinking": 2,
+    "reference_available_suite:vl": 2,
+    "skipped_missing_reference": 5,
+    "skipped_missing_reference_source_family:seeding_eval": 5,
+    "skipped_missing_reference_suite:instruction_precision": 2,
+    "skipped_missing_reference_suite:mode_advantage": 1,
+    "skipped_missing_reference_suite:usaco": 2
+  },
+  "target_actions": [
+    "architect_general",
+    "coder_escalation",
+    "frontdoor"
+  ],
+  "target_match_mode": "any",
+  "target_source_families": [
+    "seeding_eval"
+  ],
+  "target_suites": [
+    "general",
+    "hotpotqa",
+    "simpleqa"
+  ],
+  "unavailable_collection_targets": {},
+  "unmatched_collection_targets": [
+    "suite:hotpotqa:architect_general>frontdoor",
+    "suite:simpleqa:architect_general>coder_escalation"
+  ]
+}

@@ -217,6 +217,15 @@ def _preferred_actions_for_target(target: dict[str, Any]) -> list[str]:
     if explicit:
         return sorted(explicit)
     if any("balance both directions" in need for need in needs):
+        try:
+            prefer_hi = int(target.get("prefer_hi") or 0)
+            prefer_lo = int(target.get("prefer_lo") or 0)
+        except (TypeError, ValueError):
+            return [action_a, action_b]
+        if prefer_lo < prefer_hi:
+            return [action_a]
+        if prefer_hi < prefer_lo:
+            return [action_b]
         return [action_a, action_b]
     if any("prefer other-side" in need for need in needs):
         try:
@@ -235,12 +244,81 @@ def _target_requirement_key(target: dict[str, Any]) -> str:
     )
 
 
+def _collection_target_lookup(
+    collection_targets: list[dict[str, Any]],
+) -> dict[tuple[str, str, str], list[dict[str, Any]]]:
+    lookup: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    for target in collection_targets:
+        lookup[
+            (
+                str(target["stratum_field"]),
+                str(target["stratum_value"]),
+                str(target["action_pair"]),
+            )
+        ].append(target)
+    return lookup
+
+
+def _float_or_none(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _binary_reward_contrast_targets(
+    candidates: list[dict[str, Any]],
+    collection_targets_by_key: dict[tuple[str, str, str], list[dict[str, Any]]],
+    *,
+    source_family: str,
+    suite: str,
+) -> list[dict[str, Any]]:
+    matches: list[dict[str, Any]] = []
+    if not collection_targets_by_key:
+        return matches
+
+    for left, right in combinations(candidates, 2):
+        left_action = str(left.get("canonical_action") or "")
+        right_action = str(right.get("canonical_action") or "")
+        if not left_action or not right_action or left_action == right_action:
+            continue
+        left_value = _float_or_none(left.get("binary_reward"))
+        right_value = _float_or_none(right.get("binary_reward"))
+        if left_value is None or right_value is None or left_value == right_value:
+            continue
+        preferred_action = left_action if left_value > right_value else right_action
+        rejected_action = right_action if left_value > right_value else left_action
+        pair = _canonical_action_pair([left_action, right_action])
+
+        for field, value in (("source_family", source_family), ("suite", suite)):
+            for target in collection_targets_by_key.get((field, value, pair), []):
+                preferred_actions = _preferred_actions_for_target(target)
+                if preferred_actions and preferred_action not in preferred_actions:
+                    continue
+                matches.append(
+                    {
+                        "target": _target_requirement_key(target),
+                        "stratum_field": field,
+                        "stratum_value": value,
+                        "action_pair": pair,
+                        "preferred_action": preferred_action,
+                        "rejected_action": rejected_action,
+                        "contrast_metric": "source_binary_reward",
+                    }
+                )
+    return matches
+
+
 def _collection_requirements(
     collection_targets: list[dict[str, Any]],
-    matched_collection_target_counts: Counter,
+    contrast_collection_target_counts: Counter,
     *,
+    presence_collection_target_counts: Counter | None = None,
     unavailable_targets: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
+    presence_collection_target_counts = presence_collection_target_counts or Counter()
     unavailable_targets = unavailable_targets or {}
     requirements: list[dict[str, Any]] = []
     for target in collection_targets:
@@ -251,14 +329,15 @@ def _collection_requirements(
             suggested_min_int = int(suggested_min)
         except (TypeError, ValueError):
             suggested_min_int = 20
-        matched = int(matched_collection_target_counts.get(key, 0))
+        matched = int(contrast_collection_target_counts.get(key, 0))
+        presence_matched = int(presence_collection_target_counts.get(key, 0))
         unavailable_reason = unavailable_targets.get(key)
         remaining = 0 if unavailable_reason else max(0, suggested_min_int - matched)
         priority, priority_reason = DEFAULT_PRIORITY_STRATA.get(
             (str(target["stratum_field"]), str(target["stratum_value"])),
             (2, "direction_balance_cleanup"),
         )
-        status = "matched_existing_candidates" if matched else "needs_new_source_records"
+        status = "matched_contrast_candidates" if remaining == 0 else "needs_new_source_records"
         if unavailable_reason:
             status = "unavailable_with_current_oracle"
         requirements.append(
@@ -274,6 +353,8 @@ def _collection_requirements(
                 "current_rows": current_rows,
                 "current_direction_balance": target.get("current_direction_balance"),
                 "matched_candidate_groups": matched,
+                "presence_candidate_groups": presence_matched,
+                "matched_candidate_group_metric": "source_binary_reward_directional_contrast",
                 "suggested_min_rows": suggested_min,
                 "suggested_min_new_source_records": remaining,
                 "collection_priority": priority,
@@ -879,6 +960,7 @@ def build_plan(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str
     target_suites = set(_parse_csv(args.target_suites))
     collection_targets = _load_collection_targets(args.collection_targets_json)
     collection_target_pairs: dict[tuple[str, str], set[str]] = defaultdict(set)
+    collection_targets_by_key = _collection_target_lookup(collection_targets)
     for target in collection_targets:
         key = (str(target["stratum_field"]), str(target["stratum_value"]))
         collection_target_pairs[key].add(str(target["action_pair"]))
@@ -941,6 +1023,12 @@ def build_plan(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str
             if not matched_collection_targets:
                 skipped_no_collection_target_pair += 1
                 continue
+        binary_reward_contrast_targets = _binary_reward_contrast_targets(
+            candidates,
+            collection_targets_by_key,
+            source_family=source_family,
+            suite=suite,
+        )
         selected_groups.append(
             {
                 "group_key": group_key,
@@ -950,6 +1038,7 @@ def build_plan(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str
                 "potential_actions": sorted(potential_actions),
                 "potential_action_pairs": sorted(group_pair_keys),
                 "matched_collection_targets": matched_collection_targets,
+                "binary_reward_contrast_collection_targets": binary_reward_contrast_targets,
                 "source_family": source_family,
                 "suite": suite,
                 "source_path": str(candidates[0]["source_path"]),
@@ -969,17 +1058,22 @@ def build_plan(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str
     action_counts = Counter(str(row["canonical_action"]) for row in selected_candidates)
     group_source_family_counts = Counter(str(row["source_family"]) for row in selected_groups)
     group_suite_counts = Counter(str(row["suite"]) for row in selected_groups)
-    matched_collection_target_counts = Counter(
+    presence_collection_target_counts = Counter(
         f"{target['stratum_field']}:{target['stratum_value']}:{target['action_pair']}"
         for group in selected_groups
         for target in group["matched_collection_targets"]
+    )
+    contrast_collection_target_counts = Counter(
+        str(target["target"])
+        for group in selected_groups
+        for target in group["binary_reward_contrast_collection_targets"]
     )
     expected_collection_target_keys = sorted(
         f"{target['stratum_field']}:{target['stratum_value']}:{target['action_pair']}"
         for target in collection_targets
     )
     unmatched_collection_targets = [
-        key for key in expected_collection_target_keys if key not in matched_collection_target_counts
+        key for key in expected_collection_target_keys if key not in contrast_collection_target_counts
     ]
     unavailable_collection_targets: dict[str, str] = {}
     for target in collection_targets:
@@ -987,7 +1081,7 @@ def build_plan(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str
             continue
         suite = str(target["stratum_value"])
         key = _target_requirement_key(target)
-        if matched_collection_target_counts.get(key, 0):
+        if presence_collection_target_counts.get(key, 0):
             continue
         missing_reference_count = int(stats.get(f"skipped_missing_reference_suite:{suite}") or 0)
         reference_available_count = int(stats.get(f"reference_available_suite:{suite}") or 0)
@@ -1002,14 +1096,31 @@ def build_plan(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str
             )
     source_record_requirements = _collection_requirements(
         collection_targets,
-        matched_collection_target_counts,
+        contrast_collection_target_counts,
+        presence_collection_target_counts=presence_collection_target_counts,
         unavailable_targets=unavailable_collection_targets,
     )
     collection_batches = _collection_batches(source_record_requirements)
+    contrast_candidate_groups = sum(
+        1 for group in selected_groups
+        if group["binary_reward_contrast_collection_targets"]
+    )
 
     status = (
         "expansion_plan_ready"
-        if selected_candidates and len(selected_groups) >= args.min_cross_action_candidate_groups
+        if (
+            selected_candidates
+            and (
+                (
+                    not collection_targets
+                    and len(selected_groups) >= args.min_cross_action_candidate_groups
+                )
+                or (
+                    collection_targets
+                    and contrast_candidate_groups >= args.min_cross_action_candidate_groups
+                )
+            )
+        )
         else "insufficient_non_overlapping_cross_action_candidates"
     )
     summary = {
@@ -1028,13 +1139,18 @@ def build_plan(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str
             str(args.collection_targets_json) if args.collection_targets_json else None
         ),
         "collection_target_count": len(collection_targets),
-        "matched_collection_target_counts": dict(sorted(matched_collection_target_counts.items())),
+        "matched_collection_target_counts": dict(sorted(contrast_collection_target_counts.items())),
+        "candidate_presence_collection_target_counts": dict(
+            sorted(presence_collection_target_counts.items())
+        ),
+        "collection_target_match_metric": "source_binary_reward_directional_contrast",
         "unmatched_collection_targets": unmatched_collection_targets,
         "unavailable_collection_targets": dict(sorted(unavailable_collection_targets.items())),
         "source_record_requirements": source_record_requirements,
         "collection_batches": collection_batches,
         "candidate_rows": len(selected_candidates),
         "candidate_groups": len(selected_groups),
+        "candidate_contrast_groups": contrast_candidate_groups,
         "candidate_action_counts": dict(sorted(action_counts.items())),
         "candidate_source_family_counts": dict(sorted(source_family_counts.items())),
         "candidate_suite_counts": dict(sorted(suite_counts.items())),
@@ -1111,9 +1227,12 @@ def write_markdown(path: Path, summary: dict[str, Any]) -> None:
         f"- Target match mode: `{summary['target_match_mode']}`",
         f"- Target actions: `{summary['target_actions']}`",
         f"- Collection targets: `{summary['collection_target_count']}`",
+        f"- Collection target match metric: `{summary['collection_target_match_metric']}`",
         f"- Matched collection targets: `{summary['matched_collection_target_counts']}`",
+        f"- Candidate-presence collection targets: `{summary['candidate_presence_collection_target_counts']}`",
         f"- Unmatched collection targets: `{summary['unmatched_collection_targets']}`",
         f"- Unavailable collection targets: `{summary['unavailable_collection_targets']}`",
+        f"- Candidate contrast groups: `{summary['candidate_contrast_groups']}`",
         f"- Candidate action counts: `{summary['candidate_action_counts']}`",
         f"- Candidate source-family counts: `{summary['candidate_source_family_counts']}`",
         f"- Candidate suite counts: `{summary['candidate_suite_counts']}`",
