@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+import sys
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -110,3 +111,42 @@ def test_dry_run_prints_authority_payload(monkeypatch, tmp_path, capsys) -> None
     assert payload["env"]["AUTOPILOT_TOOL_SENTINELS"] == "1"
     assert payload["env"]["AUTOPILOT_SEQ_VERDICT"] == "1"
     assert payload["pid"] is None
+
+
+def test_preflight_prints_restart_advice_without_starting(monkeypatch, tmp_path, capsys) -> None:
+    monkeypatch.setattr(
+        launcher,
+        "build_command",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not build")),
+    )
+
+    class FakeAdvisor:
+        @staticmethod
+        def build_restart_advice(report, *, max_trials):
+            return {
+                "advisor_version": "autopilot_restart_advisor.v1",
+                "ok": True,
+                "status": "restart_recommended",
+                "restart_needed": True,
+                "safe_to_restart_now": True,
+                "reason": "unit",
+                "blockers": [],
+                "phase": report["phase"],
+                "max_trials": max_trials,
+            }
+
+    class FakePhase:
+        @staticmethod
+        def build_phase_health_report(**kwargs):
+            return {"phase": "loop_start", "require_current_code": kwargs["require_current_code"]}
+
+    monkeypatch.setitem(sys.modules, "autopilot_restart_advisor", FakeAdvisor)
+    monkeypatch.setitem(sys.modules, "phase_status", FakePhase)
+
+    rc = launcher.main(["--preflight", "--log-dir", str(tmp_path), "--max-trials", "1234"])
+
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "restart_recommended"
+    assert payload["phase"] == "loop_start"
+    assert payload["max_trials"] == 1234

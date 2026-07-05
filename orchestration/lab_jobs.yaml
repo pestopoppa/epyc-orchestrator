@@ -251,6 +251,87 @@ jobs:
           w6_audit_accrual_enabled:
             type: [boolean, "null"]
 
+  - job_id: autopilot_restart_advisor
+    title: AutoPilot stale-daemon restart advisor
+    stage: shadow
+    enabled: true
+    risk: read_only
+    runtime_class: active_safe_deterministic
+    active_safe: true
+    schedule:
+      type: manual_or_nightly
+      cadence: daily
+      window: active_ok
+      runtime_class: active_safe_deterministic
+      max_runtime_s: 60
+    reference_skill: none
+    execution:
+      mode: deterministic_command
+      command:
+        - python3
+        - scripts/autopilot/autopilot_restart_advisor.py
+        - --json
+    input_spec:
+      sources:
+        - repo: epyc-orchestrator
+          path: scripts/autopilot/autopilot_restart_advisor.py
+        - repo: epyc-orchestrator
+          path: scripts/autopilot/phase_status.py
+        - repo: epyc-orchestrator
+          path: scripts/autopilot/start_fable_authority_daemon.py
+      context_budget_tokens: 4000
+      forbidden_actions:
+        - stop_autopilot
+        - restart_services
+        - edit_journal
+        - update_baseline
+    output_contract:
+      format: json
+      json_schema:
+        type: object
+        additionalProperties: true
+        required:
+          - advisor_version
+          - ok
+          - status
+          - restart_needed
+          - safe_to_restart_now
+          - reason
+          - blockers
+        properties:
+          advisor_version:
+            const: autopilot_restart_advisor.v1
+          ok:
+            type: boolean
+          status:
+            enum:
+              - no_action
+              - restart_recommended
+              - wait_for_boundary
+              - manual_attention
+          restart_needed:
+            type: boolean
+          safe_to_restart_now:
+            type: boolean
+          reason:
+            type: string
+          blockers:
+            type: array
+            items:
+              type: string
+          phase:
+            type: [string, "null"]
+          pid:
+            type: [integer, "null"]
+          pid_alive:
+            type: [boolean, "null"]
+          trial_id:
+            type: [integer, string, "null"]
+          action_type:
+            type: [string, "null"]
+          code_stale:
+            type: boolean
+
   - job_id: daily_digest_skeleton
     title: Daily digest skeleton
     stage: shadow

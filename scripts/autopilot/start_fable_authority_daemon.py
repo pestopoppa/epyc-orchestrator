@@ -162,6 +162,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Print the command/env payload without starting a process.",
     )
     parser.add_argument(
+        "--preflight",
+        action="store_true",
+        help="Print read-only stale-daemon restart advice and exit without starting.",
+    )
+    parser.add_argument(
         "autopilot_args",
         nargs=argparse.REMAINDER,
         help="Additional args appended after 'autopilot.py start --max-trials N'.",
@@ -171,6 +176,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    if args.preflight:
+        from autopilot_restart_advisor import (  # type: ignore
+            build_restart_advice,
+        )
+        from phase_status import build_phase_health_report  # type: ignore
+
+        advice = build_restart_advice(
+            build_phase_health_report(require_current_code=True),
+            max_trials=args.max_trials,
+        )
+        print(json.dumps(advice, indent=2, sort_keys=True))
+        return 0
+
     env = authority_env()
     extra_args = list(args.autopilot_args or [])
     if extra_args and extra_args[0] == "--":
@@ -181,8 +199,7 @@ def main(argv: list[str] | None = None) -> int:
     live = live_autopilot_processes()
     if live and not args.allow_existing and not args.dry_run:
         print(
-            "Refusing to start another AutoPilot; live process(es):\n"
-            + "\n".join(live),
+            "Refusing to start another AutoPilot; live process(es):\n" + "\n".join(live),
             file=sys.stderr,
         )
         return RUNNING_REFUSAL_EXIT
