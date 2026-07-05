@@ -1591,6 +1591,46 @@ def test_autopilot_progress_surfaces_eval_label_from_log_tail(
     assert payload["log_tail_progress"] == {"completed": 40, "total": 160}
 
 
+def test_autopilot_progress_prefers_active_autopilot_log_over_stale_restart_log(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    state_path = tmp_path / "autopilot_state.json"
+    log_dir = tmp_path / "logs"
+    restart_log = log_dir / "autopilot_restart_1.log"
+    active_log = log_dir / "autopilot.log"
+    started_at = datetime.now(timezone.utc).timestamp() - 90
+    state_path.write_text(json.dumps({
+        "in_flight_trial": {
+            "trial_id": 1156,
+            "started_at": started_at,
+            "action": {"type": "deep_eval", "tier": 3},
+        }
+    }))
+    log_dir.mkdir()
+    restart_log.write_text("\n".join([
+        "2026-07-05 06:24:34 [autopilot.eval] INFO: T1 progress: 30/38 (67% correct)",
+    ]) + "\n")
+    active_log.write_text("\n".join([
+        "2026-07-05 06:45:34 [autopilot] INFO: Trial 1156: {\"type\": \"deep_eval\", \"tier\": 3}",
+        "2026-07-05 07:25:24 [autopilot.eval] INFO: T3 progress: 100/160 (57% correct)",
+    ]) + "\n")
+    now = datetime.now(timezone.utc).timestamp()
+    os.utime(restart_log, (now - 100, now - 100))
+    os.utime(active_log, (now, now))
+    monkeypatch.setattr(dashboard, "_AUTOPILOT_STATE_PATH", state_path)
+    monkeypatch.setattr(dashboard, "_AUTOPILOT_LOG_DIR", log_dir)
+    monkeypatch.setattr(dashboard, "AUTOPILOT_LOG", active_log)
+    monkeypatch.setattr(dashboard, "_AUTOPILOT_JOURNAL_PATH", tmp_path / "missing.jsonl")
+
+    response = asyncio.run(dashboard.autopilot_progress())
+    payload = json.loads(response.body)
+
+    assert payload["percent_source"] == "log_tail"
+    assert payload["eval_label"] == "T3"
+    assert payload["log_tail_progress"] == {"completed": 100, "total": 160}
+
+
 def test_gepa_status_uses_superseded_journal_rows(
     tmp_path: Path,
     monkeypatch,

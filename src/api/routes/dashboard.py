@@ -2529,8 +2529,14 @@ def _pareto_from_journal(
 def _newest_autopilot_log() -> Path | None:
     """Return the most-recently-modified autopilot stdout log, if any."""
     try:
+        candidates = []
+        if AUTOPILOT_LOG.exists():
+            candidates.append(AUTOPILOT_LOG)
+        candidates.extend(_AUTOPILOT_LOG_DIR.glob("autopilot_restart_*.log"))
+        candidates.extend(Path("/mnt/raid0/llm/tmp").glob("autopilot_restart_*.log"))
+        candidates.extend(Path("/mnt/raid0/llm/tmp").glob("autopilot_fable_authority_*.log"))
         candidates = sorted(
-            _AUTOPILOT_LOG_DIR.glob("autopilot_restart_*.log"),
+            (p for p in candidates if p.exists()),
             key=lambda p: p.stat().st_mtime,
             reverse=True,
         )
