@@ -13,11 +13,15 @@ Health definition:
 
     n_db_routing       = COUNT(*) FROM memories WHERE action_type='routing'
     n_faiss_vectors    = embeddings.faiss IndexFlatIP ntotal (read-only check)
+    n_id_map           = number of IDs in id_map.npy
     n_reembedded_npz   = number of IDs in reembedded.npz (if present)
+    id_map_overlap     = |id_map_ids ∩ live_db_routing_ids| / n_db_routing
     overlap_live       = |reembedded_ids ∩ live_db_routing_ids| / n_db_routing
 
-A store is "orphaned" if n_faiss_vectors / n_db_routing < 0.5 OR overlap_live < 0.5.
-Both conditions fire if FAISS was reset or reembedded.npz is stale relative to live db.
+A store is "orphaned" if n_faiss_vectors / n_db_routing < 0.5, id_map.npy
+does not match embeddings.faiss, id_map_overlap < 0.5, OR overlap_live < 0.5.
+These conditions fire if FAISS was reset, id_map.npy is stale/wrong, or
+reembedded.npz is stale relative to live db.
 
 Usage:
     python3 scripts/maintenance/repair_episodic_embeddings.py --diagnose-only
@@ -85,6 +89,9 @@ class HealthReport(NamedTuple):
     faiss_coverage: float
     healthy: bool
     orphan_count: int
+    n_id_map: int = 0
+    id_map_overlap_live: float = 1.0
+    id_map_matches_faiss: bool = True
 
 
 @contextmanager
@@ -125,6 +132,7 @@ def diagnose(
     db_path: Path = DEFAULT_DB_PATH,
     faiss_path: Path = DEFAULT_FAISS_PATH,
     reembedded_path: Path = DEFAULT_REEMBEDDED_PATH,
+    id_map_path: Path = DEFAULT_ID_MAP_PATH,
 ) -> HealthReport:
     # ── Count routing memories in live db ──
     if not db_path.exists():
@@ -156,6 +164,27 @@ def diagnose(
     else:
         logger.warning("No FAISS index at %s", faiss_path)
 
+    # ── Inspect id_map.npy ──
+    # FAISS only stores vectors; retrieval depends on id_map.npy to translate
+    # vector positions back to live SQLite memory ids. A high ntotal with a
+    # stale id_map silently degrades retrieval, so diagnose it explicitly.
+    n_id_map = 0
+    id_map_overlap_live = 1.0 if not live_routing_ids else 0.0
+    id_map_live_count = 0
+    if id_map_path.exists():
+        try:
+            id_map_arr = np.load(id_map_path, allow_pickle=True)
+            id_map_ids = {str(item) for item in id_map_arr.tolist()}
+            n_id_map = len(id_map_arr)
+            if live_routing_ids:
+                id_map_live_count = len(id_map_ids & live_routing_ids)
+                id_map_overlap_live = id_map_live_count / max(len(live_routing_ids), 1)
+        except Exception as e:
+            logger.warning("Cannot read id_map.npy at %s: %s", id_map_path, e)
+    else:
+        logger.warning("No id_map.npy at %s", id_map_path)
+    id_map_matches_faiss = n_id_map == n_faiss_vectors
+
     # ── Inspect reembedded.npz ──
     n_reembedded = 0
     overlap_live = 0.0
@@ -175,10 +204,15 @@ def diagnose(
 
     faiss_coverage = n_faiss_vectors / max(n_db_routing, 1) if n_db_routing else 1.0
 
-    healthy = (faiss_coverage >= HEALTH_THRESHOLD) and (
-        n_reembedded == 0 or overlap_live >= HEALTH_THRESHOLD
+    healthy = (
+        (faiss_coverage >= HEALTH_THRESHOLD)
+        and id_map_matches_faiss
+        and (id_map_overlap_live >= HEALTH_THRESHOLD)
+        and (n_reembedded == 0 or overlap_live >= HEALTH_THRESHOLD)
     )
-    orphan_count = max(0, n_db_routing - n_faiss_vectors)
+    faiss_orphan_count = max(0, n_db_routing - n_faiss_vectors)
+    id_map_orphan_count = max(0, n_db_routing - id_map_live_count) if n_db_routing else 0
+    orphan_count = max(faiss_orphan_count, id_map_orphan_count)
 
     return HealthReport(
         n_db_routing=n_db_routing,
@@ -188,6 +222,9 @@ def diagnose(
         faiss_coverage=faiss_coverage,
         healthy=healthy,
         orphan_count=orphan_count,
+        n_id_map=n_id_map,
+        id_map_overlap_live=id_map_overlap_live,
+        id_map_matches_faiss=id_map_matches_faiss,
     )
 
 
@@ -197,8 +234,11 @@ def print_report(report: HealthReport) -> None:
     print("=" * 72)
     print(f"  Routing memories in db:      {report.n_db_routing:>10,}")
     print(f"  Vectors in FAISS index:      {report.n_faiss_vectors:>10,}")
+    print(f"  IDs in id_map.npy:           {report.n_id_map:>10,}")
     print(f"  IDs in reembedded.npz:       {report.n_reembedded:>10,}")
     print(f"  FAISS coverage:              {report.faiss_coverage:>10.1%}  (threshold ≥ {HEALTH_THRESHOLD:.0%})")
+    print(f"  id_map matches FAISS:        {str(report.id_map_matches_faiss):>10}")
+    print(f"  id_map ⋂ live db:            {report.id_map_overlap_live:>10.1%}  (threshold ≥ {HEALTH_THRESHOLD:.0%})")
     print(f"  reembedded ⋂ live db:        {report.overlap_live:>10.1%}  (threshold ≥ {HEALTH_THRESHOLD:.0%})")
     print(f"  Orphan count (db − FAISS):   {report.orphan_count:>10,}")
     print(f"  Status:                      {'HEALTHY' if report.healthy else 'ORPHANED — repair recommended'}")

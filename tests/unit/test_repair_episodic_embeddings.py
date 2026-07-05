@@ -1,10 +1,54 @@
 from __future__ import annotations
 
+import sqlite3
+import sys
+import types
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from scripts.maintenance import repair_episodic_embeddings as repair
+
+
+def test_diagnose_flags_stale_id_map_when_faiss_count_matches(
+    monkeypatch, tmp_path: Path
+) -> None:
+    db_path = tmp_path / "episodic.db"
+    faiss_path = tmp_path / "embeddings.faiss"
+    id_map_path = tmp_path / "id_map.npy"
+    reembedded_path = tmp_path / "reembedded.npz"
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE memories (id TEXT PRIMARY KEY, action_type TEXT)")
+        conn.executemany(
+            "INSERT INTO memories (id, action_type) VALUES (?, 'routing')",
+            [("m1",), ("m2",), ("m3",)],
+        )
+
+    faiss_path.touch()
+    monkeypatch.setitem(
+        sys.modules,
+        "faiss",
+        types.SimpleNamespace(read_index=lambda _path: types.SimpleNamespace(ntotal=3)),
+    )
+    np.save(id_map_path, np.array(["old-1", "old-2", "old-3"], dtype=object))
+    np.savez(
+        reembedded_path,
+        ids=np.array(["m1", "m2", "m3"], dtype=object),
+        embeddings=np.ones((3, 1024), dtype=np.float32),
+    )
+
+    report = repair.diagnose(db_path, faiss_path, reembedded_path, id_map_path)
+
+    assert report.n_faiss_vectors == 3
+    assert report.n_id_map == 3
+    assert report.faiss_coverage == 1.0
+    assert report.overlap_live == 1.0
+    assert report.id_map_matches_faiss
+    assert report.id_map_overlap_live == 0.0
+    assert report.orphan_count == 3
+    assert not report.healthy
 
 
 def test_run_repair_refuses_stale_snapshot(monkeypatch, tmp_path: Path) -> None:

@@ -599,6 +599,7 @@ def _episodic_embedding_status_line() -> str:
         f"Episodic FAISS: {status} — "
         f"{report.n_faiss_vectors:,}/{report.n_db_routing:,} routing vectors "
         f"({report.faiss_coverage:.1%}), "
+        f"id_map {report.n_id_map:,} ids / overlap {report.id_map_overlap_live:.1%}, "
         f"{report.orphan_count:,} orphan(s), "
         f"reembedded overlap {report.overlap_live:.1%}"
     )
