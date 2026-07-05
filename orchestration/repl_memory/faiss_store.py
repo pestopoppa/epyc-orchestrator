@@ -8,6 +8,7 @@ Provides ~70x faster retrieval at scale (500K entries: 70ms -> ~1ms).
 from __future__ import annotations
 
 import logging
+import uuid
 from pathlib import Path
 from typing import Protocol
 
@@ -268,8 +269,33 @@ class FAISSEmbeddingStore:
                 "Refusing to save stale FAISS embedding store: persisted index/id_map "
                 "changed after this instance loaded them. Reload before writing."
             )
-        self._faiss.write_index(self.index, str(self.index_path))
-        np.save(self.id_map_path, np.array(self.id_map, dtype=object))
+        token = uuid.uuid4().hex
+        index_tmp = self.index_path.with_name(f".{self.index_path.name}.{token}.tmp")
+        id_map_tmp = self.id_map_path.with_name(f".{self.id_map_path.name}.{token}.tmp")
+        id_map_tmp_alt = id_map_tmp.with_name(id_map_tmp.name + ".npy")
+        try:
+            self._faiss.write_index(self.index, str(index_tmp))
+            np.save(str(id_map_tmp), np.array(self.id_map, dtype=object), allow_pickle=True)
+            if not id_map_tmp.exists() and id_map_tmp_alt.exists():
+                id_map_tmp_alt.rename(id_map_tmp)
+            if not index_tmp.exists():
+                raise RuntimeError(f"FAISS temp index did not materialize at {index_tmp}")
+            if not id_map_tmp.exists():
+                raise RuntimeError(f"FAISS temp id_map did not materialize at {id_map_tmp}")
+            current = self._current_disk_signature()
+            if current != self._disk_signature:
+                raise StaleFAISSSaveError(
+                    "Refusing to publish stale FAISS embedding store: persisted index/id_map "
+                    "changed while temp files were being written. Reload before retrying."
+                )
+            index_tmp.replace(self.index_path)
+            id_map_tmp.replace(self.id_map_path)
+        finally:
+            for tmp in (index_tmp, id_map_tmp, id_map_tmp_alt):
+                try:
+                    tmp.unlink(missing_ok=True)
+                except OSError:
+                    logger.warning("Could not remove temporary FAISS file %s", tmp)
         self._dirty = False
         self._disk_signature = self._current_disk_signature()
         logger.debug("Saved FAISS index with %d embeddings", self.index.ntotal)
