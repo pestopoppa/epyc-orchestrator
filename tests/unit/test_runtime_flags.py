@@ -37,7 +37,11 @@ def test_runtime_flag_file_overrides_env(monkeypatch, tmp_path) -> None:
     assert payload["flags"]["specialist_routing"]["set_by"] == "unit-test"
 
 
-def test_feature_namespace_env_avoids_legacy_settings_collision(monkeypatch) -> None:
+def test_feature_namespace_env_avoids_legacy_settings_collision(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv(
+        "ORCHESTRATOR_RUNTIME_FLAGS_PATH",
+        str(tmp_path / "missing-runtime-flags.json"),
+    )
     monkeypatch.setenv("ORCHESTRATOR_FEATURE_REPL", "0")
     monkeypatch.delenv("ORCHESTRATOR_REPL", raising=False)
     reset_features()

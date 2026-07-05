@@ -117,6 +117,8 @@ def test_flags_exist_and_default_off() -> None:
     f = get_features()
     assert hasattr(f, "ure_uncertainty_shadow_log")
     assert hasattr(f, "batch_edit_mode")
+    assert hasattr(f, "dcp_for_consult")
     # both default OFF in prod + test
     assert f.ure_uncertainty_shadow_log is False
     assert f.batch_edit_mode is False
+    assert f.dcp_for_consult is False

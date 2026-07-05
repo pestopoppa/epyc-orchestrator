@@ -198,6 +198,7 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     FeatureSpec("batch_edit_mode", False, False, "BATCH_EDIT_MODE", "BEP-1: coder emits one structured patch set after reasoning instead of interleaved REPL (J8)"),
     FeatureSpec("interleaved_edit_rider", False, False, "INTERLEAVED_EDIT_RIDER", "BEP-2 baseline: per-turn rider instructing coder/architect to apply interleaved file edits (vs answering in prose); experiment-only, default-off"),
     FeatureSpec("dcp_pre_assembly", False, False, "DCP_PRE_ASSEMBLY", "DCP-4 (J7): advisory delegation context pre-assembly — seed the specialist with a budget-bounded code bundle; reactive discovery stays on; default-off"),
+    FeatureSpec("dcp_for_consult", False, False, "DCP_FOR_CONSULT", "Internal consults may reuse DCP pre-assembled context; requires dcp_pre_assembly", ("dcp_pre_assembly",)),
     # intake-614/615 DAR-6 scaffolding (default-off in BOTH test and prod; no production routing until DAR-6.5 A/B clears)
     FeatureSpec("swarm_fanout", False, False, "SWARM_FANOUT", "DAR-6.1: fan high-injection-risk prompts to N>=2 concurrent serves + BT-aggregate (J14). Scaffolding only — default-off until the DAR-6.5 injection-suite A/B clears (handoffs/active/decision-aware-routing.md § DAR-6.5)."),
     # P21.A test-time compute: DeepConf offline confidence-filtered self-consistency (intake-603)
@@ -532,6 +533,7 @@ class Features:
     batch_edit_mode: bool = False  # BEP-1 (J8): coder emits one structured patch set after reasoning
     interleaved_edit_rider: bool = False  # BEP-2 baseline: per-turn interleaved-edit rider (experiment-only)
     dcp_pre_assembly: bool = False  # DCP-4 (J7): advisory delegation context pre-assembly (seed bundle)
+    dcp_for_consult: bool = False  # P2 consult may reuse DCP seed context; requires dcp_pre_assembly
 
     # intake-614/615 DAR-6 (default-off; scaffolding only — no production routing until DAR-6.5 A/B clears)
     swarm_fanout: bool = False  # DAR-6.1: fan high-injection-risk prompts to N≥2 concurrent serves + BT-aggregate (J14)
@@ -590,6 +592,8 @@ class Features:
         # User modeling requires injection scanning for write safety
         if self.user_modeling and not self.injection_scanning:
             errors.append("user_modeling feature requires injection_scanning feature")
+        if self.dcp_for_consult and not self.dcp_pre_assembly:
+            errors.append("dcp_for_consult feature requires dcp_pre_assembly feature")
 
         # RestrictedPython requires the library
         if self.restricted_python:
