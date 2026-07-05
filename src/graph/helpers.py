@@ -375,6 +375,31 @@ def _is_comment_only(code: str) -> bool:
     return True
 
 
+def _no_executable_code_nudge(state: TaskState, *, comment_ratio: float | None = None) -> str:
+    if state.tool_required:
+        prefix = (
+            f"Your code is {int(comment_ratio * 100)}% comments — "
+            if comment_ratio is not None
+            else "Your output was all comments — no executable code ran. "
+        )
+        return (
+            prefix
+            + "This turn requires a tool call. Write executable Python now, call the required tool "
+            'with TOOL("get_eval_secret", name="...") using the name from the prompt, and then '
+            "call FINAL(secret). Do not explain or re-derive."
+        )
+    if comment_ratio is not None:
+        return (
+            f"Your code is {int(comment_ratio * 100)}% comments — you already reasoned through the problem. "
+            'STOP re-deriving. Call FINAL now with the value you reached — e.g. FINAL("B") or FINAL(42). '
+            "Do NOT start over. Do NOT re-explain."
+        )
+    return (
+        "Your output was all comments — no executable code ran. "
+        'You already reasoned through the problem. Call FINAL now with the actual value — e.g. FINAL("B") or FINAL(42).'
+    )
+
+
 def _log_state_snapshot(ctx: Ctx, role: str) -> None:
     """Persist a full state snapshot for the current turn (LangGraph pre-migration)."""
     try:
@@ -1047,10 +1072,7 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
             # Fall through to execute FINAL()
         else:
             log.info("Comment-only code detected (turn %d), nudging model", state.turns)
-            nudge = (
-                "Your output was all comments — no executable code ran. "
-                "You already reasoned through the problem. Call FINAL now with the actual value — e.g. FINAL(\"B\") or FINAL(42)."
-            )
+            nudge = _no_executable_code_nudge(state)
             _record_session_turn(state, role=str(role), code=code, nudge=nudge)
             return "", None, False, {"_nudge": nudge}
 
@@ -1080,11 +1102,7 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
                     "High comment ratio (%.0f%%, turn %d), nudging to commit",
                     ratio * 100, state.turns,
                 )
-                nudge = (
-                    f"Your code is {int(ratio*100)}% comments — you already reasoned through the problem. "
-                    "STOP re-deriving. Call FINAL now with the value you reached — e.g. FINAL(\"B\") or FINAL(42). "
-                    "Do NOT start over. Do NOT re-explain."
-                )
+                nudge = _no_executable_code_nudge(state, comment_ratio=ratio)
                 _record_session_turn(state, role=str(role), code=code, nudge=nudge)
                 return "", None, False, {"_nudge": nudge}
 

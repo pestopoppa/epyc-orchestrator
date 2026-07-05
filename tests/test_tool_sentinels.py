@@ -57,6 +57,32 @@ def test_nonempty_repl_substring():
             assert n.lower() in SECRET_NAMES, f"{q['id']}: name {n!r} not in SECRET_NAMES"
 
 
+def test_repl_prompts_require_executable_tool_code():
+    """REPL-pinned sentinels must ask for executable tool code, not prose.
+
+    force_mode="repl" sends the answer through the Python REPL. Asking for
+    "no code" or plain-text output traps models in comment/prose-only turns and
+    hides the actual tool-use signal behind a nudge failure.
+    """
+    forbidden = (
+        "do not include any code",
+        "no code",
+        "do not output code",
+        "plain text",
+        "<answer>",
+    )
+    for q in _load():
+        prompt = q["prompt"]
+        lower = prompt.lower()
+        assert "executable python" in lower, f"{q['id']}: prompt must demand executable Python"
+        assert 'TOOL("get_eval_secret"' in prompt or 'CALL("get_eval_secret"' in prompt, (
+            f"{q['id']}: prompt must show an executable get_eval_secret call"
+        )
+        assert "FINAL(" in prompt, f"{q['id']}: prompt must show FINAL(secret)"
+        for phrase in forbidden:
+            assert phrase not in lower, f"{q['id']}: prompt still contains prose-only phrase {phrase!r}"
+
+
 def test_no_secret_values_in_source():
     """Secrets must be runtime-only: empty at import, and the source must not
     contain a baked-in secret literal (the `EVS-<hex>` shape)."""
