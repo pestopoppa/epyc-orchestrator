@@ -19,6 +19,7 @@ only when the result is `ok`.
 
 from __future__ import annotations
 
+import subprocess
 import shutil
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
@@ -93,13 +94,61 @@ def compute_current_shas(ps: PatchSet, repo_root: Path | str) -> dict[str, str]:
     return shas
 
 
-def stage_sandbox(ps: PatchSet, repo_root: Path | str) -> Path:
+def _copy_repo_snapshot(root: Path, sandbox: Path) -> None:
+    """Copy a lightweight working-tree snapshot for whole-repo verification.
+
+    Prefer tracked files from git so local virtualenvs, GitNexus indexes, logs, and
+    generated reports are not copied into the verifier sandbox.
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(root), "ls-files", "-z"],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        for raw_rel in proc.stdout.split(b"\0"):
+            if not raw_rel:
+                continue
+            rel = raw_rel.decode("utf-8", errors="surrogateescape")
+            src = root / rel
+            if not src.exists() or not src.is_file():
+                continue
+            dst = sandbox / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst, follow_symlinks=False)
+        return
+    except (OSError, subprocess.CalledProcessError):
+        pass
+
+    ignore = shutil.ignore_patterns(
+        ".git",
+        ".gitnexus*",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".venv",
+        ".venv-*",
+        "__pycache__",
+        "logs",
+        "tmp",
+    )
+    shutil.copytree(root, sandbox, dirs_exist_ok=True, ignore=ignore)
+
+
+def stage_sandbox(ps: PatchSet, repo_root: Path | str, *, full_tree: bool = False) -> Path:
     """Copy each touched file (that exists) into a fresh temp sandbox, preserving rel paths.
+
+    When `full_tree=True`, copy a lightweight repo snapshot first so verifier commands
+    can observe cross-file effects. Deterministic apply still uses the same patch path,
+    and live promotion remains a separate explicit step.
 
     Returns the sandbox root. Caller is responsible for cleanup (or promote+cleanup).
     """
     root = Path(repo_root)
     sandbox = Path(tempfile.mkdtemp(prefix="bep4-sandbox-"))
+    if full_tree:
+        _copy_repo_snapshot(root, sandbox)
     for fp in ps.files:
         src = root / fp.path
         if src.exists():
@@ -266,6 +315,7 @@ def apply_patchset_sandboxed(
     repo_root: Path | str,
     verify_fn: Callable[[Path], bool] | None = None,
     current_shas: dict[str, str] | None = None,
+    full_tree: bool = False,
 ) -> ApplyResult:
     """Stage → apply → verify, all in a sandbox. Never promotes. Returns the result + sandbox path.
 
@@ -275,7 +325,7 @@ def apply_patchset_sandboxed(
     """
     if current_shas is None:
         current_shas = compute_current_shas(ps, repo_root)
-    sandbox = stage_sandbox(ps, repo_root)
+    sandbox = stage_sandbox(ps, repo_root, full_tree=full_tree)
     result = apply_patchset_to_dir(ps, sandbox, current_shas)
     result.sandbox_path = str(sandbox)
     if not result.failed and result.applied and verify_fn is not None:

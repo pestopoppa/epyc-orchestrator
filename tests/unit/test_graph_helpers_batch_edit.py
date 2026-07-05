@@ -138,14 +138,47 @@ async def test_verify_failure_does_not_promote(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_verify_command_uses_full_tree_sandbox(monkeypatch, tmp_path):
+    _set_flag(monkeypatch, True)
+    _point_repo(monkeypatch, tmp_path)
+    (tmp_path / "untouched.py").write_text("KEEP = 1\n")
+    monkeypatch.setenv(
+        "ORCHESTRATOR_BATCH_EDIT_VERIFY_CMD",
+        "test -f added.py && test -f untouched.py",
+    )
+    body = '{"files": [{"path": "added.py", "operation": "create", "new_content": "VALUE = 7\\n"}]}'
+
+    result = await _run(_wrap(body))
+
+    assert result is not None
+    assert result[2] is True
+    assert (tmp_path / "added.py").read_text() == "VALUE = 7\n"
+
+
+@pytest.mark.asyncio
+async def test_verify_command_failure_does_not_promote(monkeypatch, tmp_path):
+    _set_flag(monkeypatch, True)
+    _point_repo(monkeypatch, tmp_path)
+    monkeypatch.setenv("ORCHESTRATOR_BATCH_EDIT_VERIFY_CMD", "exit 7")
+    body = '{"files": [{"path": "added.py", "operation": "create", "new_content": "VALUE = 7\\n"}]}'
+
+    result = await _run(_wrap(body))
+
+    assert result is not None
+    assert result[2] is False
+    assert not (tmp_path / "added.py").exists()
+
+
+@pytest.mark.asyncio
 async def test_stale_base_does_not_promote(monkeypatch, tmp_path):
     _set_flag(monkeypatch, True)
     _point_repo(monkeypatch, tmp_path)
     (tmp_path / "f.py").write_text("real = 1\n")
+    stale_sha = sha256_text("STALE\n")
     # base_content_sha256 references different content → stale-base rejection
     body = (
         '{"files": [{"path": "f.py", "operation": "modify", '
-        f'"base_content_sha256": "{sha256_text("STALE\\n")}", '
+        f'"base_content_sha256": "{stale_sha}", '
         '"hunks": [{"start_line": 1, "end_line": 1, "replacement": "hacked = 1\\n"}]}]}'
     )
     result = await _run(_wrap(body))
