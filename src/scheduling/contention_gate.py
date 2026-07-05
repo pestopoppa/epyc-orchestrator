@@ -96,20 +96,6 @@ class GateMetrics:
     active_instances_by_role: dict[str, list[int]] = field(default_factory=dict)
 
 
-def _matrix_measured_roles(matrix: ContentionMatrix | None) -> set[str]:
-    """Return roles whose placement topology is represented by the matrix."""
-    if matrix is None:
-        return set()
-    roles: set[str] = set(matrix.same_role)
-    for pair in matrix.pairs:
-        roles.update(pair)
-    for pair in matrix.unknown_pairs:
-        roles.update(pair)
-    for roles_key in matrix.n_way:
-        roles.update(roles_key)
-    return roles
-
-
 class ContentionGate:
     """Singleton-ish gate. Use `get_gate()` to access the process instance."""
 
@@ -159,18 +145,12 @@ class ContentionGate:
         if self._live_topo_hash_cache is None:
             try:
                 from scripts.server.stack_numa import NUMA_CONFIG  # type: ignore[import-not-found]
-                from src.scheduling.contention import topology_fingerprint
+                from src.scheduling.contention import topology_fingerprint_for_matrix
 
-                matrix = self._get_matrix()
-                measured_roles = _matrix_measured_roles(matrix)
-                if measured_roles and measured_roles.issubset(NUMA_CONFIG):
-                    topo_config = {
-                        role: NUMA_CONFIG[role]
-                        for role in sorted(measured_roles)
-                    }
-                else:
-                    topo_config = NUMA_CONFIG
-                self._live_topo_hash_cache = topology_fingerprint(topo_config)
+                self._live_topo_hash_cache = topology_fingerprint_for_matrix(
+                    NUMA_CONFIG,
+                    self._get_matrix(),
+                )
             except Exception:  # noqa: BLE001
                 self._live_topo_hash_cache = ""
         return self._live_topo_hash_cache or None

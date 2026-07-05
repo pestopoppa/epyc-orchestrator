@@ -331,6 +331,38 @@ def test_topology_fingerprint_ignores_metadata() -> None:
     assert contention.topology_fingerprint(a) == contention.topology_fingerprint(b)
 
 
+def test_topology_fingerprint_for_matrix_excludes_unmeasured_auxiliary_role() -> None:
+    measured = {
+        "frontdoor": {"instances": [("0-1", 8070, 2)]},
+        "worker_general": {"instances": [("2-3", 8072, 2)]},
+    }
+    live = {
+        **measured,
+        "eval_batch_frontdoor": {"instances": [("0-1", 18070, 2)]},
+    }
+    matrix = contention.ContentionMatrix(
+        version=1,
+        measured_at="",
+        host="",
+        topology_hash=contention.topology_fingerprint(measured),
+        default_floor=0.85,
+        pairs={
+            ("frontdoor", "worker_general"): contention.Pair(
+                roles=("frontdoor", "worker_general"),
+                ratio=1.0,
+                verdict="allow",
+            )
+        },
+    )
+
+    assert contention.topology_fingerprint_for_matrix(live, matrix) == (
+        contention.topology_fingerprint(measured)
+    )
+    assert contention.topology_fingerprint_for_matrix(live, matrix) != (
+        contention.topology_fingerprint(live)
+    )
+
+
 def test_real_matrix_against_live_numa_config() -> None:
     """Smoke: the committed matrix should at least parse alongside the live NUMA_CONFIG.
     Topology hashes don't have to match (matrix uses a placeholder), but

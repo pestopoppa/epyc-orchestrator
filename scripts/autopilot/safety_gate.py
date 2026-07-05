@@ -1181,8 +1181,14 @@ class SafetyGate:
             return False, f"unrecognized speed_metric_mode={proof['speed_metric_mode']!r}", proof
         try:
             from scripts.server.stack_numa import NUMA_CONFIG  # type: ignore[import-not-found]
-            from src.scheduling.contention import topology_fingerprint, matrix_status, MatrixStatus
-            live = topology_fingerprint(NUMA_CONFIG)
+            from src.scheduling.contention import (
+                load_contention_matrix,
+                matrix_status,
+                MatrixStatus,
+                topology_fingerprint_for_matrix,
+            )
+            matrix = load_contention_matrix()
+            live = topology_fingerprint_for_matrix(NUMA_CONFIG, matrix)
             status = matrix_status(current_topology_hash=live)
             proof["topology_hash"] = live
             proof["matrix_status"] = status.value

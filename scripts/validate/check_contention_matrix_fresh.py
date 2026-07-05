@@ -45,15 +45,29 @@ def main() -> int:
     try:
         from stack_numa import NUMA_CONFIG
         from src.scheduling.contention import (
+            load_contention_matrix,
             matrix_status,
             topology_fingerprint,
+            topology_fingerprint_for_matrix,
             MatrixStatus,
         )
     except Exception as exc:
         print(f"ERROR: failed to import scheduling modules: {exc}", file=sys.stderr)
         return 3
 
-    current_hash = topology_fingerprint(NUMA_CONFIG)
+    matrix = None
+    try:
+        matrix = load_contention_matrix(args.matrix_path)
+    except FileNotFoundError:
+        pass
+    except Exception:
+        # Let matrix_status classify invalid YAML while keeping the message path.
+        pass
+    current_hash = (
+        topology_fingerprint_for_matrix(NUMA_CONFIG, matrix)
+        if matrix is not None
+        else topology_fingerprint(NUMA_CONFIG)
+    )
     status = matrix_status(
         args.matrix_path,
         current_topology_hash=current_hash,

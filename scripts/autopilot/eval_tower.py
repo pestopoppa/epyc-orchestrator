@@ -422,13 +422,13 @@ def _same_role_matrix_allows_eval_fanout(role: str) -> bool:
             load_contention_matrix,
             matrix_status,
             pair_policy,
-            topology_fingerprint,
+            topology_fingerprint_for_matrix,
         )
 
-        current_hash = topology_fingerprint(NUMA_CONFIG)
+        matrix = load_contention_matrix()
+        current_hash = topology_fingerprint_for_matrix(NUMA_CONFIG, matrix)
         if matrix_status(current_topology_hash=current_hash) != MatrixStatus.OK:
             return False
-        matrix = load_contention_matrix()
         return (
             pair_policy(role, role, TrafficClass.BACKGROUND, matrix=matrix)
             == PairDecision.ALLOW
