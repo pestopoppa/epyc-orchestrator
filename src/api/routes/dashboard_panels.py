@@ -117,6 +117,30 @@ def _latest_journal_mtime() -> float | None:
     return best
 
 
+def _latest_tap_events_mtime() -> float | None:
+    """Newest mtime across ``inference_tap_events.jsonl`` + its ``.<n>`` rotations.
+
+    The tap writer rotates base → ``.1`` at 512 MB and only recreates the base
+    on the NEXT append — so between rotation and the next event the base file
+    does not exist and a plain mtime() would flip the panel to "dead" mid-write.
+    Same bug class as the journal-rotation freeze; dot-suffix naming here.
+    """
+    base = _INFERENCE_TAP_EVENTS_PATH
+    shard_re = re.compile(rf"{re.escape(base.name)}\.(\d+)$")
+    best: float | None = None
+    try:
+        candidates = list(base.parent.glob(f"{base.name}*"))
+    except OSError:
+        candidates = []
+    for p in candidates:
+        if p.name != base.name and not shard_re.match(p.name):
+            continue
+        m = mtime(p)
+        if m is not None and (best is None or m > best):
+            best = m
+    return best
+
+
 @dataclass(frozen=True)
 class PanelSpec:
     key: str
@@ -193,7 +217,8 @@ PANELS: tuple[PanelSpec, ...] = (
             # past the stale threshold while a trial should be running, the panel
             # is genuinely stale (producer died / wedged).
             SourceSpec("inference_tap", _INFERENCE_TAP_PATH, 120, 600),
-            SourceSpec("structured_tap", _INFERENCE_TAP_EVENTS_PATH, 120, 600),
+            SourceSpec("structured_tap", _INFERENCE_TAP_EVENTS_PATH, 120, 600,
+                       mtime_fn=_latest_tap_events_mtime),
             # Informational: secondary/legacy taps that are naturally old between
             # uses — reported for context, never flip the badge.
             SourceSpec("prompt_tap", _PROMPT_TAP_PATH, 90, 300, optional=True, gating=False),

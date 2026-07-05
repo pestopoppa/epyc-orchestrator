@@ -90,6 +90,7 @@ def test_topology_emits_expected_unloaded_stack_servers(monkeypatch) -> None:
 
 def test_topology_activity_initializes_expected_embedder_bucket(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(dashboard, "_read_tail", lambda *a, **kw: "")
+    monkeypatch.setattr(dashboard, "_read_tap_events_tail", lambda *a, **kw: "")
     monkeypatch.setattr(dashboard, "_parse_inference_sections", lambda *a, **kw: [])
     monkeypatch.setattr(dashboard, "_todays_progress_log", lambda: tmp_path / "missing.jsonl")
     monkeypatch.setattr(
@@ -406,6 +407,7 @@ def test_topology_activity_uses_structured_tap_not_legacy_sections(monkeypatch) 
         return ""
 
     monkeypatch.setattr(dashboard, "_read_tail", fake_read_tail)
+    monkeypatch.setattr(dashboard, "_read_tap_events_tail", fake_read_tail)
     monkeypatch.setattr(
         dashboard,
         "_discover_llama_ports",
@@ -2280,3 +2282,25 @@ def test_enrich_structured_tap_requests_fails_open(monkeypatch) -> None:
     reqs = [{"request_id": "chat-1:aa", "role": "frontdoor", "port": 8070}]
     out = dashboard._enrich_structured_tap_requests(reqs)
     assert out == reqs
+
+
+def test_read_tap_events_tail_stitches_rotation_window(tmp_path) -> None:
+    """Right after a rotation the base is missing/tiny; the tail must include
+    the rotated shard so parsers keep a full window (empty-panel bug)."""
+    base = tmp_path / "inference_tap_events.jsonl"
+    rotated = tmp_path / "inference_tap_events.jsonl.1"
+    rotated.write_text('{"seq":1}\n{"seq":2}\n')
+
+    # Base absent entirely (rotation happened, no append yet).
+    out = dashboard_tap._read_tap_events_tail(base, max_bytes=1024)
+    assert '{"seq":2}' in out
+
+    # Base tiny: stitched = rotated tail + base, in order.
+    base.write_text('{"seq":3}\n')
+    out = dashboard_tap._read_tap_events_tail(base, max_bytes=1024)
+    assert out.index('{"seq":2}') < out.index('{"seq":3}')
+
+    # Base large enough (>= half budget): no stitching, base only.
+    base.write_text('{"seq":4}\n' * 200)
+    out = dashboard_tap._read_tap_events_tail(base, max_bytes=1024)
+    assert '{"seq":2}' not in out

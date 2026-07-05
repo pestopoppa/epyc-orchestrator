@@ -1107,6 +1107,7 @@ const _FETCH_JSON_TIMEOUT_MS = 5000;
 // itself a stall the watchdog should recover from.
 let _lastSnapshotAppliedAt = Date.now();
 let _lastWatchdogRecoveryAt = 0;
+let _lastStructuredTapAppliedAt = Date.now();
 
 // Signature of the strip's *structure* — the fields renderTopologyStrip lays
 // out (role labels, ports, backing models, kind). Live activity (dots, tps,
@@ -3412,12 +3413,43 @@ function startStructuredTapStream() {
 // both transports behave identically.
 function applyStructuredTapData(data) {
     _structuredTapRequests = data.structured_requests || [];
+    _lastStructuredTapAppliedAt = Date.now();
+    // The badge ages from the SAME frames as the content (either transport):
+    // structured_tap_mtime is shard-aware server-side, `now` is server clock.
+    // Feeding it from a different endpoint let badge and content disagree.
+    if (data.now != null) {
+        const tapMtime = data.structured_tap_mtime;
+        const age = (tapMtime != null) ? Math.max(0, data.now - tapMtime) : null;
+        setPanelFreshness('inference_tap', freshnessFromAge(age, 120, 600, 'structured tap'));
+    }
     if (_rawTapRenderMode === 'structured') paintRawTap();
     renderAutopilotRunStrip();
     refreshLiveDotsFromStructuredTap();
     repaintRegionLocksFromStructuredTapFrame();
     scheduleRegionLocksRefresh();
     refreshOpenStructuredTapDetail();
+}
+
+// Tap-content fetch fallback: the tap panel's content is otherwise stream-only,
+// so a silent SSE (dead multiplex, restart window) froze it with no recovery
+// path. When no structured_tap frame has applied for >6s, pull the same shape
+// from the fetch endpoint and feed it through the shared handler.
+const _TAP_STREAM_SILENT_MS = 6000;
+let _tapFallbackInFlight = false;
+async function structuredTapFetchFallback() {
+    if (Date.now() - _lastStructuredTapAppliedAt < _TAP_STREAM_SILENT_MS) return;
+    if (_tapFallbackInFlight) return;
+    _tapFallbackInFlight = true;
+    try {
+        const d = await fetchJSON('/dashboard/api/inference_tap');
+        // A stream frame may have landed while the fetch ran; it wins.
+        if (Date.now() - _lastStructuredTapAppliedAt < _TAP_STREAM_SILENT_MS) return;
+        applyStructuredTapData(d);
+    } catch (err) {
+        console.error('[dashboard:tap_fallback]', err);
+    } finally {
+        _tapFallbackInFlight = false;
+    }
 }
 
 function renderInferenceTap(data) {
@@ -5331,10 +5363,10 @@ async function updateProcessStatus() {
         const d = await r.json();
         if (requestSeq !== _processStatusFetchSeq) return;
         _latestProcessStatus = d;
-        // File-backed panel badges: autopilot health (phase/log) from the
-        // process_status envelope; live-inference from the tap age it reports.
+        // File-backed panel badge: autopilot health (phase/log) from the
+        // process_status envelope. The inference_tap badge is fed by
+        // applyStructuredTapData so badge and content age from the same frames.
         setPanelFreshness('autopilot', d._freshness);
-        setPanelFreshness('inference_tap', freshnessFromAge(d.inference_tap_age_s, 120, 600, 'inference tap'));
         if (_rawTapRenderMode === 'structured') paintRawTap();
         renderAutopilotRunStrip();
         const ap = d.autopilot || {};
@@ -6338,6 +6370,7 @@ async function updateRegionLocks(refreshSeq = _regionLocksRefreshSeq, regionLock
         startPanelSafely('snapshot-poll', updateSnapshotPoll);
         setInterval(updateSnapshotPoll, 2500);  // fallback for stream stalls + per-panel render isolation
         setInterval(snapshotTransportWatchdog, 5000);  // universal self-heal: rebuild stream + poll when snapshots stop applying
+        setInterval(structuredTapFetchFallback, 5000);  // tap content survives a silent SSE via the fetch endpoint
         document.addEventListener('visibilitychange', () => { if (!document.hidden) snapshotTransportWatchdog(); });
         window.addEventListener('online', snapshotTransportWatchdog);
         setTimeout(ensureRegionLocksPanelPainted, 750);

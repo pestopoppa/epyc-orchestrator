@@ -42,7 +42,11 @@ from src.api.routes.dashboard_snapshot import (
     todays_progress_log as _todays_progress_log_impl,
 )
 from src.api.routes.dashboard_freshness import envelope as _freshness_envelope
-from src.api.routes.dashboard_panels import PANELS as _PANELS, PANELS_BY_KEY as _PANELS_BY_KEY
+from src.api.routes.dashboard_panels import (
+    PANELS as _PANELS,
+    PANELS_BY_KEY as _PANELS_BY_KEY,
+    _latest_tap_events_mtime,
+)
 from src.api.routes.dashboard_tap import (
     _INFERENCE_TAP_EVENTS_PATH,
     _INFERENCE_TAP_PATH,
@@ -53,6 +57,7 @@ from src.api.routes.dashboard_tap import (
     _parse_structured_tap_requests,
     _parse_trial_state,
     _read_tail,
+    _read_tap_events_tail,
 )
 from src.api.routes.dashboard_tasks import (
     _find_section_by_objective,
@@ -373,7 +378,7 @@ async def inference_tap_snapshot(max_sections: int = 20) -> JSONResponse:
     tap_active = _TAP_SENTINEL_PATH.exists()
     inference_tail = _read_tail(_INFERENCE_TAP_PATH, max_bytes=512 * 1024)
     sections = _parse_inference_sections(inference_tail, max_sections=max_sections)
-    structured_tail = _read_tail(_INFERENCE_TAP_EVENTS_PATH, max_bytes=1024 * 1024)
+    structured_tail = _read_tap_events_tail(_INFERENCE_TAP_EVENTS_PATH, max_bytes=1024 * 1024)
     now_epoch = time.time()
     structured_requests = _parse_structured_tap_requests(
         structured_tail,
@@ -405,7 +410,9 @@ async def inference_tap_snapshot(max_sections: int = 20) -> JSONResponse:
         "inference_sections": sections,
         "structured_requests": structured_requests,
         "inference_tap_mtime": mtime(_INFERENCE_TAP_PATH),
-        "structured_tap_mtime": mtime(_INFERENCE_TAP_EVENTS_PATH),
+        # Shard-aware: right after a 512MB rotation the base file is missing
+        # until the next append; the newest shard's mtime is the truth.
+        "structured_tap_mtime": _latest_tap_events_mtime(),
         "repl_tail": repl_tail,
         "repl_tap_mtime": mtime(_REPL_TAP_PATH),
         "now": now_epoch,
@@ -949,7 +956,7 @@ async def structured_tap_stream(request: Request) -> StreamingResponse:
             if mtime != last_mtime or (now_epoch - last_emit) >= 2.0:
                 last_mtime = mtime
                 last_emit = now_epoch
-                tail = _read_tail(_INFERENCE_TAP_EVENTS_PATH, max_bytes=1024 * 1024)
+                tail = _read_tap_events_tail(_INFERENCE_TAP_EVENTS_PATH, max_bytes=1024 * 1024)
                 structured_requests = _parse_structured_tap_requests(
                     tail,
                     max_requests=40,
@@ -1142,7 +1149,7 @@ async def inference_tap_stream(request: Request) -> StreamingResponse:
                 # Build the payload — same shape as the snapshot endpoint
                 inference_tail = _read_tail(_INFERENCE_TAP_PATH, max_bytes=256 * 1024)
                 sections = _parse_inference_sections(inference_tail, max_sections=10)
-                structured_tail = _read_tail(_INFERENCE_TAP_EVENTS_PATH, max_bytes=1024 * 1024)
+                structured_tail = _read_tap_events_tail(_INFERENCE_TAP_EVENTS_PATH, max_bytes=1024 * 1024)
                 now_epoch = time.time()
                 current_prompt = ""
                 if _PROMPT_TAP_PATH.exists():
@@ -3338,7 +3345,7 @@ async def topology_activity(window_s: float = 600.0) -> JSONResponse:
     this panel: plaintext tap writes are not cross-process atomic and can
     interleave prompt/response sections during concurrent eval traffic.
     """
-    structured_tail = _read_tail(_INFERENCE_TAP_EVENTS_PATH, max_bytes=1024 * 1024)
+    structured_tail = _read_tap_events_tail(_INFERENCE_TAP_EVENTS_PATH, max_bytes=1024 * 1024)
     now = time.time()
     structured_requests = _parse_structured_tap_requests(
         structured_tail,
@@ -4009,18 +4016,16 @@ async def _structured_tap_payloads():
     last_emit = 0.0
     while True:
         try:
-            mtime = (
-                _INFERENCE_TAP_EVENTS_PATH.stat().st_mtime
-                if _INFERENCE_TAP_EVENTS_PATH.exists()
-                else 0.0
-            )
+            # Shard-aware: the base file is missing between rotation and the
+            # next append; tracking it alone would stall change detection.
+            mtime = _latest_tap_events_mtime() or 0.0
         except Exception:
             mtime = 0.0
         now_epoch = time.time()
         if mtime != last_mtime or (now_epoch - last_emit) >= 2.0:
             last_mtime = mtime
             last_emit = now_epoch
-            tail = _read_tail(_INFERENCE_TAP_EVENTS_PATH, max_bytes=1024 * 1024)
+            tail = _read_tap_events_tail(_INFERENCE_TAP_EVENTS_PATH, max_bytes=1024 * 1024)
             structured_requests = _parse_structured_tap_requests(
                 tail, max_requests=40, now_epoch=now_epoch,
             )
