@@ -14,6 +14,12 @@ from src.autopilot_core.tier_specs import DEFAULT_FRONTIER_TIER
 log = logging.getLogger("autopilot.plots")
 
 PLOTS_DIR = Path(__file__).resolve().parents[2] / "orchestration" / "autopilot_plots"
+TIER_COLORS = {
+    1: "#2196F3",
+    2: "#FF9800",
+    3: "#9C27B0",
+    4: "#4CAF50",
+}
 
 
 def ensure_matplotlib():
@@ -24,23 +30,54 @@ def ensure_matplotlib():
     return plt
 
 
+def _tier_color(tier: int) -> str:
+    return TIER_COLORS.get(int(tier), "#607D8B")
+
+
+def _normalise_tier_history(
+    history: list[tuple[int, float]] | dict[int | str, list[tuple[int, float]]],
+) -> dict[int, list[tuple[int, float]]]:
+    if isinstance(history, dict):
+        out: dict[int, list[tuple[int, float]]] = {}
+        for tier, rows in history.items():
+            try:
+                tier_int = int(tier)
+            except (TypeError, ValueError):
+                continue
+            out[tier_int] = [
+                (int(trial_id), float(hv))
+                for trial_id, hv in rows
+            ]
+        return out
+    return {DEFAULT_FRONTIER_TIER: list(history)}
+
+
 def plot_hypervolume_trend(
-    history: list[tuple[int, float]], output_dir: Path | None = None
+    history: list[tuple[int, float]] | dict[int | str, list[tuple[int, float]]],
+    output_dir: Path | None = None,
 ) -> Path:
-    """Line chart: hypervolume over trial number."""
+    """Line chart: hypervolume over trial number, segregated by eval tier."""
     plt = ensure_matplotlib()
     output_dir = output_dir or PLOTS_DIR
     output_dir.mkdir(parents=True, exist_ok=True)
 
     fig, ax = plt.subplots(figsize=(10, 5))
-    if history:
-        trials, hvs = zip(*history)
-        ax.plot(trials, hvs, "b-", linewidth=2)
-        ax.fill_between(trials, hvs, alpha=0.1)
+    histories = _normalise_tier_history(history)
+    rendered = 0
+    for tier, rows in sorted(histories.items()):
+        if not rows:
+            continue
+        trials, hvs = zip(*rows)
+        color = _tier_color(tier)
+        ax.plot(trials, hvs, color=color, linewidth=2, label=f"T{tier}")
+        ax.fill_between(trials, hvs, color=color, alpha=0.08)
+        rendered += 1
     ax.set_xlabel("Trial")
     ax.set_ylabel("Hypervolume")
-    ax.set_title("AutoPilot: Hypervolume Trend")
+    ax.set_title("AutoPilot: Hypervolume Trend by Eval Tier")
     ax.grid(True, alpha=0.3)
+    if rendered > 1:
+        ax.legend(loc="lower right")
 
     path = output_dir / "hypervolume_trend.png"
     fig.savefig(path, dpi=100, bbox_inches="tight")
@@ -77,52 +114,88 @@ def _frontier_envelope_2d(points: list[dict]) -> list[tuple[float, float]]:
 
 
 def plot_pareto_frontier_2d(
-    frontier: list[dict], dominated: list[dict], output_dir: Path | None = None
+    frontier: list[dict],
+    dominated: list[dict],
+    output_dir: Path | None = None,
+    *,
+    frontiers_by_tier: dict[int | str, list[dict]] | None = None,
+    dominated_by_tier: dict[int | str, list[dict]] | None = None,
 ) -> Path:
-    """Scatter: Quality vs Speed, colored by species."""
+    """Scatter: Quality vs Speed, segregated by eval tier."""
     plt = ensure_matplotlib()
     output_dir = output_dir or PLOTS_DIR
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    species_colors = {
-        "seeder": "#2196F3",
-        "numeric_swarm": "#FF9800",
-        "prompt_forge": "#4CAF50",
-        "structural_lab": "#9C27B0",
-    }
+    if frontiers_by_tier is None:
+        frontiers_by_tier = {DEFAULT_FRONTIER_TIER: frontier}
+    if dominated_by_tier is None:
+        dominated_by_tier = {DEFAULT_FRONTIER_TIER: dominated}
+
+    tier_keys = sorted(
+        {
+            int(tier)
+            for tier, pts in {
+                **frontiers_by_tier,
+                **dominated_by_tier,
+            }.items()
+            if pts
+        }
+    )
 
     fig, ax = plt.subplots(figsize=(10, 7))
 
-    # Dominated points in grey
-    if dominated:
-        d_q = [p["objectives"][0] for p in dominated]
-        d_s = [p["objectives"][1] for p in dominated]
-        ax.scatter(d_s, d_q, c="lightgrey", s=20, alpha=0.4, label="Dominated")
+    for tier in tier_keys:
+        color = _tier_color(tier)
+        tier_frontier = frontiers_by_tier.get(tier) or frontiers_by_tier.get(str(tier)) or []
+        tier_dominated = dominated_by_tier.get(tier) or dominated_by_tier.get(str(tier)) or []
 
-    # The actual Pareto frontier line: connect the frontier's 2D speed×quality
-    # envelope so the trade-off curve is visible, not just a point cloud. Drawn
-    # under the species markers (zorder=1). Historically this plot was scatter-
-    # only, which read as "no frontier" to operators.
-    envelope = _frontier_envelope_2d(frontier)
-    if len(envelope) >= 2:
-        ex = [s for s, _ in envelope]
-        ey = [q for _, q in envelope]
-        ax.plot(
-            ex, ey, "--", color="#37474F", linewidth=1.6, alpha=0.75,
-            zorder=1, label="Pareto frontier",
-        )
+        if tier_dominated:
+            d_q = [p["objectives"][0] for p in tier_dominated]
+            d_s = [p["objectives"][1] for p in tier_dominated]
+            ax.scatter(
+                d_s,
+                d_q,
+                c=color,
+                s=20,
+                alpha=0.22,
+                marker="x",
+                label=f"T{tier} dominated",
+            )
 
-    # Frontier points colored by species
-    for species, color in species_colors.items():
-        pts = [p for p in frontier if p.get("species") == species]
-        if pts:
-            q = [p["objectives"][0] for p in pts]
-            s = [p["objectives"][1] for p in pts]
-            ax.scatter(s, q, c=color, s=80, label=species, edgecolors="black", linewidth=0.5)
+        # Draw each tier's 2D quality/speed envelope over all shown rows for
+        # that tier. This mirrors the live dashboard: quality is never compared
+        # across tiers, but each tier gets its own visible trade-off curve.
+        envelope = _frontier_envelope_2d([*tier_frontier, *tier_dominated])
+        if len(envelope) >= 2:
+            ex = [s for s, _ in envelope]
+            ey = [q for _, q in envelope]
+            ax.plot(
+                ex,
+                ey,
+                "--",
+                color=color,
+                linewidth=1.6,
+                alpha=0.8,
+                zorder=1,
+                label=f"T{tier} frontier envelope",
+            )
+
+        if tier_frontier:
+            q = [p["objectives"][0] for p in tier_frontier]
+            s = [p["objectives"][1] for p in tier_frontier]
+            ax.scatter(
+                s,
+                q,
+                c=color,
+                s=80,
+                label=f"T{tier} frontier",
+                edgecolors="black",
+                linewidth=0.5,
+            )
 
     ax.set_xlabel("Speed (tokens/s)")
     ax.set_ylabel("Quality (0-3)")
-    ax.set_title("Pareto Frontier: Quality vs Speed")
+    ax.set_title("Pareto Frontier: Quality vs Speed by Eval Tier")
     ax.legend(loc="lower right")
     ax.grid(True, alpha=0.3)
 
@@ -322,6 +395,38 @@ def _current_archive_trial_ids(archive: Any) -> set[int]:
     return ids
 
 
+def _archive_eval_tiers(archive: Any) -> list[int]:
+    """Eval tiers present in the current archive, excluding sentinel/audit tiers."""
+    tiers: set[int] = set()
+    frontiers = getattr(archive, "_frontiers", None)
+    if isinstance(frontiers, dict):
+        for tier in frontiers:
+            try:
+                tier_int = int(tier)
+            except (TypeError, ValueError):
+                continue
+            if tier_int > 0:
+                tiers.add(tier_int)
+
+    entries = getattr(archive, "_all_entries", None) or []
+    is_eligible = getattr(archive, "is_frontier_eligible", None)
+    for entry in entries:
+        if callable(is_eligible):
+            try:
+                if not is_eligible(entry):
+                    continue
+            except Exception:
+                pass
+        try:
+            tier_int = int(getattr(entry, "eval_tier"))
+        except (TypeError, ValueError):
+            continue
+        if tier_int > 0:
+            tiers.add(tier_int)
+
+    return sorted(tiers or {DEFAULT_FRONTIER_TIER})
+
+
 def _species_effectiveness_from_entries(entries: list[Any]) -> dict[str, dict[str, float]]:
     stats: dict[str, dict[str, float]] = {}
     for entry in entries:
@@ -370,28 +475,43 @@ def generate_all_plots(
             and (not current_archive_ids or e.trial_id in current_archive_ids)
         ]
 
-        # 1. Hypervolume trend (canonical production tier)
+        tiers = _archive_eval_tiers(archive)
+
+        # 1. Hypervolume trend by tier. T1 remains the canonical deployment
+        # tier, while T2/T3 are validation/workflow lanes with separate HV lines.
+        histories_by_tier = {
+            tier: archive.hypervolume_trend(tier=tier)
+            for tier in tiers
+        }
+        paths.append(plot_hypervolume_trend(histories_by_tier, output_dir))
+
+        # 2. Pareto frontier 2D by tier. Harder tiers get their own frontiers
+        # and must not dominate the T1 deployment tier visually or numerically.
+        frontiers_by_tier: dict[int, list[dict]] = {}
+        dominated_by_tier: dict[int, list[dict]] = {}
+        archive_entries = getattr(archive, "_all_entries", None) or []
+        for tier in tiers:
+            frontier_entries = archive.frontier(tier=tier)
+            frontier_ids = {e.trial_id for e in frontier_entries}
+            frontiers_by_tier[tier] = [e.to_dict() for e in frontier_entries]
+            dominated_by_tier[tier] = [
+                e.to_dict()
+                for e in archive_entries
+                if (
+                    archive.is_frontier_eligible(e)
+                    and int(e.eval_tier) == tier
+                    and e.trial_id not in frontier_ids
+                )
+            ]
         paths.append(
-            plot_hypervolume_trend(
-                archive.hypervolume_trend(tier=DEFAULT_FRONTIER_TIER), output_dir
+            plot_pareto_frontier_2d(
+                frontiers_by_tier.get(DEFAULT_FRONTIER_TIER, []),
+                dominated_by_tier.get(DEFAULT_FRONTIER_TIER, []),
+                output_dir,
+                frontiers_by_tier=frontiers_by_tier,
+                dominated_by_tier=dominated_by_tier,
             )
         )
-
-        # 2. Pareto frontier 2D (canonical production tier only; harder tiers
-        # have their own frontiers and must not dominate T1 visually).
-        frontier_entries = archive.frontier(tier=DEFAULT_FRONTIER_TIER)
-        frontier_ids = {e.trial_id for e in frontier_entries}
-        frontier = [e.to_dict() for e in frontier_entries]
-        dominated = [
-            e.to_dict()
-            for e in archive._all_entries
-            if (
-                archive.is_frontier_eligible(e)
-                and int(e.eval_tier) == DEFAULT_FRONTIER_TIER
-                and e.trial_id not in frontier_ids
-            )
-        ]
-        paths.append(plot_pareto_frontier_2d(frontier, dominated, output_dir))
 
         # 3. Species effectiveness
         eff = _species_effectiveness_from_entries(trustworthy_tiered_entries)

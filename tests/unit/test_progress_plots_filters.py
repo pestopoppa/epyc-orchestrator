@@ -56,12 +56,15 @@ class _Archive:
         ]
 
     def hypervolume_trend(self, tier=None):
-        assert tier == DEFAULT_FRONTIER_TIER
-        return [(2, 1.0)]
+        assert tier in {DEFAULT_FRONTIER_TIER, 2}
+        return {
+            DEFAULT_FRONTIER_TIER: [(2, 1.0)],
+            2: [(4, 2.0)],
+        }[tier]
 
     def frontier(self, tier=None):
-        assert tier == DEFAULT_FRONTIER_TIER
-        return list(self._frontiers[DEFAULT_FRONTIER_TIER])
+        assert tier in {DEFAULT_FRONTIER_TIER, 2}
+        return list(self._frontiers[tier])
 
     def is_frontier_eligible(self, entry) -> bool:
         return entry.eval_tier > 0
@@ -119,9 +122,18 @@ def test_generate_all_plots_filters_t0_and_bug_corrupted_points(
         lambda history, output_dir=None: captured.setdefault("hv", history) or tmp_path / "hv.png",
     )
 
-    def _frontier(frontier, dominated, output_dir=None):
+    def _frontier(
+        frontier,
+        dominated,
+        output_dir=None,
+        *,
+        frontiers_by_tier=None,
+        dominated_by_tier=None,
+    ):
         captured["frontier"] = frontier
         captured["dominated"] = dominated
+        captured["frontiers_by_tier"] = frontiers_by_tier
+        captured["dominated_by_tier"] = dominated_by_tier
         return tmp_path / "frontier.png"
 
     monkeypatch.setattr(progress_plots, "plot_pareto_frontier_2d", _frontier)
@@ -152,8 +164,17 @@ def test_generate_all_plots_filters_t0_and_bug_corrupted_points(
 
     progress_plots.generate_all_plots(_Archive(), _Journal(), output_dir=tmp_path)
 
+    assert captured["hv"] == {1: [(2, 1.0)], 2: [(4, 2.0)]}
     assert [p["trial_id"] for p in captured["frontier"]] == [2]
     assert [p["trial_id"] for p in captured["dominated"]] == [3]
+    assert {
+        tier: [p["trial_id"] for p in pts]
+        for tier, pts in captured["frontiers_by_tier"].items()
+    } == {1: [2], 2: [4]}
+    assert {
+        tier: [p["trial_id"] for p in pts]
+        for tier, pts in captured["dominated_by_tier"].items()
+    } == {1: [3], 2: []}
     assert captured["species"] == {"seeder": {"total": 1, "pareto": 1, "rate": 1.0}}
     assert [p["trial_id"] for p in captured["suite_data"]] == [2]
     assert [p["trial_id"] for p in captured["timeline"]] == [2]
