@@ -1708,6 +1708,117 @@ def test_a9_audit_target_holdout_gap_surfaces_after_source_target_preregistered(
     ]
 
 
+def test_a9_audit_target_action_surfaces_guarded_collection_manifest(
+    monkeypatch, tmp_path: Path
+) -> None:
+    contract_summary = tmp_path / "candidate_contract_summary.json"
+    source_reward_summary = tmp_path / "source_reward_diagnostic_summary.json"
+    source_ranker_summary = tmp_path / "source_reward_ranker_summary.json"
+    source_target_contract = tmp_path / "source_reward_target_contract.json"
+    audit_target_ranker = tmp_path / "audit_target_ranker_summary.json"
+    audit_target_direction = tmp_path / "audit_target_direction_audit.json"
+    primary_manifest = tmp_path / "expanded_gap_manifest.json"
+    audit_manifest = tmp_path / "audit_target_manifest.json"
+    contract_summary.write_text(
+        '{"coverage": {}, "decision": {"status": "insufficient_contrast"}}',
+        encoding="utf-8",
+    )
+    source_reward_summary.write_text(
+        '{"coverage": {}, "decision": {"status": "contract_ready"}}',
+        encoding="utf-8",
+    )
+    source_ranker_summary.write_text(
+        """
+{
+  "aggregate": {"decision": {"status": "pairwise_ranker_signal"}},
+  "cross_validation": {"decision": {"status": "pairwise_ranker_signal"}},
+  "holdout_decision": {"status": "holdout_signal_consistent"}
+}
+""",
+        encoding="utf-8",
+    )
+    source_target_contract.write_text(
+        '{"status": "preregistered_offline_training_target"}',
+        encoding="utf-8",
+    )
+    audit_target_ranker.write_text(
+        """
+{
+  "aggregate": {"decision": {"status": "pairwise_ranker_signal"}},
+  "holdout_decision": {
+    "status": "mixed_holdout_signal",
+    "eligible_holdouts": 16,
+    "passing_holdouts": 13,
+    "blockers": ["suite:general:insufficient_pairwise_signal"]
+  }
+}
+""",
+        encoding="utf-8",
+    )
+    audit_target_direction.write_text(
+        """
+{
+  "decision": {"status": "preference_coverage_gaps_found"},
+  "collection_targets": [
+    {"stratum_field": "suite", "stratum_value": "general"}
+  ]
+}
+""",
+        encoding="utf-8",
+    )
+    audit_manifest.write_text("{}", encoding="utf-8")
+
+    def fake_status(path: Path) -> dict:
+        if path == audit_manifest:
+            return {
+                "ready": False,
+                "status": "blocked",
+                "manifest_path": str(path),
+                "manifest_schema_version": "offline_reward_pairwise_collection_window.v1",
+                "source_plan_decision": {"status": "insufficient_non_overlapping_cross_action_candidates"},
+                "batch_count": 4,
+                "post_collection_step_count": 7,
+                "autopilot_guard": {"refusal_exit_code": 75},
+                "blockers": ["active AutoPilot process(es): 123 autopilot"],
+                "warnings": [],
+            }
+        return {
+            "ready": False,
+            "status": "no_runnable_batches",
+            "manifest_path": str(path),
+            "manifest_schema_version": "offline_reward_pairwise_collection_window.v1",
+            "source_plan_decision": {"status": "expansion_plan_ready"},
+            "batch_count": 0,
+            "post_collection_step_count": 7,
+            "autopilot_guard": {"refusal_exit_code": 75},
+            "blockers": [],
+            "warnings": [],
+        }
+
+    monkeypatch.setattr(report_mod, "build_a9_collection_status", fake_status)
+
+    section = report_mod.a9_collection_section(
+        primary_manifest,
+        contract_summary_path=contract_summary,
+        source_reward_diagnostic_summary_path=source_reward_summary,
+        source_reward_ranker_summary_path=source_ranker_summary,
+        source_reward_target_contract_path=source_target_contract,
+        audit_target_ranker_summary_path=audit_target_ranker,
+        audit_target_direction_audit_path=audit_target_direction,
+        audit_target_collection_manifest_path=audit_manifest,
+    )
+    actions = report_mod.build_next_actions([section])
+
+    assert "audit-target collection window is blocked with 4 batch(es)" in section.summary
+    assert section.details["audit_target_collection_status"]["batch_count"] == 4
+    action = actions[0]
+    assert action["key"] == "collect_a9_audit_target_pairwise_preferences"
+    assert action["status"] == "blocked"
+    assert action["audit_target_collection_batch_count"] == 4
+    assert action["blocked_by"] == ["active AutoPilot process(es): 123 autopilot"]
+    assert "collect_offline_reward_pairwise_audit_target.sh" in action["command"]
+
+
 def test_a9_next_action_switches_to_oracle_design_when_no_batches() -> None:
     section = report_mod.GateSection(
         key="a9_pairwise_collection",

@@ -62,6 +62,20 @@ DEFAULT_A9_COLLECTION_SCRIPT = (
     / "offline_reward_oracle_token_coverage_final_labels_20260621"
     / "collect_offline_reward_pairwise_expanded_gap.sh"
 )
+DEFAULT_A9_AUDIT_TARGET_COLLECTION_MANIFEST = (
+    ORCH_ROOT
+    / "orchestration"
+    / "reports"
+    / "offline_reward_oracle_token_coverage_final_labels_20260621"
+    / "offline_reward_pairwise_audit_target_collection_manifest.json"
+)
+DEFAULT_A9_AUDIT_TARGET_COLLECTION_SCRIPT = (
+    ORCH_ROOT
+    / "orchestration"
+    / "reports"
+    / "offline_reward_oracle_token_coverage_final_labels_20260621"
+    / "collect_offline_reward_pairwise_audit_target.sh"
+)
 DEFAULT_A9_CONTRACT_SUMMARY = (
     ORCH_ROOT
     / "orchestration"
@@ -949,6 +963,9 @@ def a9_collection_section(
     audit_target_direction_audit_path: Path | None = (
         DEFAULT_A9_AUDIT_TARGET_DIRECTION_AUDIT
     ),
+    audit_target_collection_manifest_path: Path | None = (
+        DEFAULT_A9_AUDIT_TARGET_COLLECTION_MANIFEST
+    ),
 ) -> GateSection:
     """Surface the guarded A9 pairwise source-acquisition window."""
     status = build_a9_collection_status(manifest_path)
@@ -1090,6 +1107,14 @@ def a9_collection_section(
     )
     if not isinstance(audit_target_collection_targets, list):
         audit_target_collection_targets = []
+    audit_target_collection_status: dict[str, Any] = {}
+    if (
+        audit_target_collection_manifest_path is not None
+        and audit_target_collection_manifest_path.exists()
+    ):
+        audit_target_collection_status = build_a9_collection_status(
+            audit_target_collection_manifest_path
+        )
     candidate_contract_exhausted = (
         contract_decision.get("status") == "insufficient_contrast"
     )
@@ -1135,6 +1160,12 @@ def a9_collection_section(
                     f" ({audit_target_ranker_holdout_decision.get('passing_holdouts', 0)}/"
                     f"{audit_target_ranker_holdout_decision.get('eligible_holdouts')} passing)"
                 )
+        if audit_target_collection_status:
+            summary_tail += (
+                "; audit-target collection window is "
+                f"{audit_target_collection_status.get('status', 'unknown')} "
+                f"with {audit_target_collection_status.get('batch_count', 0)} batch(es)"
+            )
     return GateSection(
         key="a9_pairwise_collection",
         status=section_status,
@@ -1214,6 +1245,12 @@ def a9_collection_section(
                 audit_target_direction_decision or None
             ),
             "audit_target_collection_targets": audit_target_collection_targets,
+            "audit_target_collection_manifest_path": (
+                str(audit_target_collection_manifest_path)
+                if audit_target_collection_manifest_path is not None
+                else None
+            ),
+            "audit_target_collection_status": audit_target_collection_status or None,
             "autopilot_guard": status.get("autopilot_guard"),
             "blockers": blockers,
             "warnings": list(status.get("warnings") or []),
@@ -2367,11 +2404,40 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
             a9.details.get("audit_target_direction_decision") or {}
         )
         if audit_target_holdout_decision.get("status") == "mixed_holdout_signal":
+            audit_target_collection_status = (
+                a9.details.get("audit_target_collection_status") or {}
+            )
+            audit_target_collection_batches = int(
+                audit_target_collection_status.get("batch_count") or 0
+            )
+            audit_target_collection_blockers = list(
+                audit_target_collection_status.get("blockers") or []
+            )
+            if audit_target_collection_batches > 0:
+                audit_target_action_status = (
+                    "ready"
+                    if audit_target_collection_status.get("ready")
+                    else "blocked"
+                )
+                audit_target_command = (
+                    "cd /mnt/raid0/llm/epyc-orchestrator && "
+                    f"{DEFAULT_A9_AUDIT_TARGET_COLLECTION_SCRIPT.relative_to(ORCH_ROOT)}"
+                )
+            else:
+                audit_target_action_status = "active"
+                audit_target_command = (
+                    "Use offline_reward_pairwise_audit_target_direction_audit.{json,md} "
+                    "as the current collection target list; after collection, "
+                    "rerun plan_offline_reward_pairwise_holdout_expansion.py, "
+                    "build_offline_reward_pairwise_contract.py, and "
+                    "evaluate_offline_reward_pairwise_ranker.py against the "
+                    "audit-target-expanded contract."
+                )
             actions.append(
                 {
                     "key": "collect_a9_audit_target_pairwise_preferences",
                     "priority": "P1",
-                    "status": "active",
+                    "status": audit_target_action_status,
                     "reason": (
                         "The source-q-reward A9 training target is preregistered "
                         "offline-only, but the broader audit-target-expanded "
@@ -2385,7 +2451,7 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
                         "score-ordered pairwise contract and rerun independent "
                         "holdouts; do not retune the absolute verifier family"
                     ),
-                    "blocked_by": [],
+                    "blocked_by": audit_target_collection_blockers,
                     "runtime_gate_change_allowed": False,
                     "audit_target_ranker_summary_path": a9.details.get(
                         "audit_target_ranker_summary_path"
@@ -2405,14 +2471,16 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
                     "audit_target_collection_targets": a9.details.get(
                         "audit_target_collection_targets"
                     ),
-                    "command": (
-                        "Use offline_reward_pairwise_audit_target_direction_audit.{json,md} "
-                        "as the current collection target list; after collection, "
-                        "rerun plan_offline_reward_pairwise_holdout_expansion.py, "
-                        "build_offline_reward_pairwise_contract.py, and "
-                        "evaluate_offline_reward_pairwise_ranker.py against the "
-                        "audit-target-expanded contract."
+                    "audit_target_collection_status": (
+                        audit_target_collection_status or None
                     ),
+                    "audit_target_collection_manifest_path": a9.details.get(
+                        "audit_target_collection_manifest_path"
+                    ),
+                    "audit_target_collection_batch_count": (
+                        audit_target_collection_batches
+                    ),
+                    "command": audit_target_command,
                     "follow_up": (
                         "uv run python scripts/autopilot/fable5_gate_report.py "
                         "--json --strict --require-current-code"

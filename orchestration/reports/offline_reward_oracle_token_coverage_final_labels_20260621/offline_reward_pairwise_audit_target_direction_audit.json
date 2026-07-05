@@ -1,40 +1,14 @@
 {
   "collection_targets": [
     {
-      "action_pair": "architect_general>frontdoor",
-      "current_direction_balance": 0.0,
-      "current_rows": 6,
-      "needs_direction": [
-        "prefer other-side of architect_general>frontdoor"
-      ],
-      "prefer_hi": 0,
-      "prefer_lo": 6,
-      "stratum_field": "source_family",
-      "stratum_value": "orchestrator_live_seed",
-      "suggested_min_rows": 20
-    },
-    {
-      "action_pair": "architect_general>coder_escalation",
+      "action_pair": "coder_escalation>frontdoor",
       "current_direction_balance": 0.0,
       "current_rows": 2,
       "needs_direction": [
-        "prefer other-side of architect_general>coder_escalation"
+        "prefer coder_escalation"
       ],
-      "prefer_hi": 0,
-      "prefer_lo": 2,
-      "stratum_field": "source_family",
-      "stratum_value": "seeding_eval",
-      "suggested_min_rows": 20
-    },
-    {
-      "action_pair": "architect_general>frontdoor",
-      "current_direction_balance": 0.0,
-      "current_rows": 2,
-      "needs_direction": [
-        "prefer other-side of architect_general>frontdoor"
-      ],
-      "prefer_hi": 0,
-      "prefer_lo": 2,
+      "prefer_hi": 2,
+      "prefer_lo": 0,
       "stratum_field": "source_family",
       "stratum_value": "seeding_eval",
       "suggested_min_rows": 20
@@ -54,67 +28,28 @@
     },
     {
       "action_pair": "architect_general>frontdoor",
-      "current_direction_balance": 0.056,
-      "current_rows": 910,
+      "current_direction_balance": 0.0577,
+      "current_rows": 918,
       "needs_direction": [
         "balance both directions"
       ],
-      "prefer_hi": 859,
-      "prefer_lo": 51,
+      "prefer_hi": 865,
+      "prefer_lo": 53,
       "stratum_field": "suite",
       "stratum_value": "hotpotqa",
       "suggested_min_rows": 20
     },
     {
       "action_pair": "architect_general>coder_escalation",
-      "current_direction_balance": 0.1667,
-      "current_rows": 6,
+      "current_direction_balance": 0.1429,
+      "current_rows": 14,
       "needs_direction": [
         "balance both directions"
       ],
-      "prefer_hi": 1,
-      "prefer_lo": 5,
-      "stratum_field": "suite",
-      "stratum_value": "instruction_precision",
-      "suggested_min_rows": 20
-    },
-    {
-      "action_pair": "architect_general>frontdoor",
-      "current_direction_balance": 0.0,
-      "current_rows": 3,
-      "needs_direction": [
-        "prefer other-side of architect_general>frontdoor"
-      ],
-      "prefer_hi": 0,
-      "prefer_lo": 3,
-      "stratum_field": "suite",
-      "stratum_value": "instruction_precision",
-      "suggested_min_rows": 20
-    },
-    {
-      "action_pair": "architect_general>coder_escalation",
-      "current_direction_balance": 0.0,
-      "current_rows": 2,
-      "needs_direction": [
-        "prefer other-side of architect_general>coder_escalation"
-      ],
-      "prefer_hi": 0,
-      "prefer_lo": 2,
+      "prefer_hi": 2,
+      "prefer_lo": 12,
       "stratum_field": "suite",
       "stratum_value": "simpleqa",
-      "suggested_min_rows": 20
-    },
-    {
-      "action_pair": "architect_general>coder_escalation",
-      "current_direction_balance": 0.1667,
-      "current_rows": 6,
-      "needs_direction": [
-        "balance both directions"
-      ],
-      "prefer_hi": 1,
-      "prefer_lo": 5,
-      "stratum_field": "suite",
-      "stratum_value": "thinking",
       "suggested_min_rows": 20
     }
   ],
@@ -123,49 +58,46 @@
     "runtime_gate_change_allowed": false,
     "status": "preference_coverage_gaps_found",
     "weak_strata": [
-      "source_family:orchestrator_live_seed",
       "source_family:seeding_eval",
       "suite:agentic",
       "suite:general",
       "suite:hotpotqa",
-      "suite:instruction_precision",
-      "suite:simpleqa",
-      "suite:thinking"
+      "suite:simpleqa"
     ]
   },
   "input": {
     "action_pair_counts": {
       "architect_general>architect_general": 735,
-      "architect_general>coder_escalation": 15,
-      "architect_general>frontdoor": 4237,
+      "architect_general>coder_escalation": 39,
+      "architect_general>frontdoor": 4263,
       "coder_escalation>coder_escalation": 35,
-      "coder_escalation>frontdoor": 44,
+      "coder_escalation>frontdoor": 46,
       "frontdoor>frontdoor": 1126
     },
-    "cross_action_pair_rows": 4296,
-    "group_count": 1937,
-    "pair_rows": 6192,
+    "cross_action_pair_rows": 4348,
+    "group_count": 1981,
+    "pair_rows": 6244,
     "same_action_pair_rows": 1896,
     "source_family_pair_counts": {
-      "orchestrator_live_seed": 101,
-      "seeding_eval": 156,
+      "orchestrator_live_seed": 104,
+      "seeding_eval": 205,
       "three_way_eval": 5935
     },
     "suite_pair_counts": {
       "agentic": 10,
       "coder": 543,
-      "debugbench": 656,
+      "debugbench": 658,
       "general": 535,
-      "gpqa": 955,
-      "hotpotqa": 1106,
-      "instruction_precision": 50,
+      "gpqa": 961,
+      "hotpotqa": 1114,
+      "instruction_precision": 64,
       "livecodebench": 616,
       "long_context": 197,
       "math": 23,
       "mode_advantage": 134,
       "mode_advantage_hard": 501,
-      "simpleqa": 456,
-      "thinking": 410
+      "simpleqa": 470,
+      "thinking": 418
     }
   },
   "overall_action_pair_directions": {
@@ -180,21 +112,21 @@
     },
     "architect_general>coder_escalation": {
       "cross_action": true,
-      "direction_balance": 0.2,
+      "direction_balance": 0.2308,
       "lo_action": "architect_general",
       "one_sided": false,
-      "prefer_hi": 3,
-      "prefer_lo": 12,
-      "rows": 15
+      "prefer_hi": 9,
+      "prefer_lo": 30,
+      "rows": 39
     },
     "architect_general>frontdoor": {
       "cross_action": true,
-      "direction_balance": 0.3566,
+      "direction_balance": 0.3573,
       "lo_action": "architect_general",
       "one_sided": false,
-      "prefer_hi": 2726,
-      "prefer_lo": 1511,
-      "rows": 4237
+      "prefer_hi": 2740,
+      "prefer_lo": 1523,
+      "rows": 4263
     },
     "coder_escalation>coder_escalation": {
       "cross_action": false,
@@ -207,12 +139,12 @@
     },
     "coder_escalation>frontdoor": {
       "cross_action": true,
-      "direction_balance": 0.4318,
+      "direction_balance": 0.4565,
       "lo_action": "coder_escalation",
       "one_sided": false,
-      "prefer_hi": 19,
+      "prefer_hi": 21,
       "prefer_lo": 25,
-      "rows": 44
+      "rows": 46
     },
     "frontdoor>frontdoor": {
       "cross_action": false,
@@ -240,12 +172,12 @@
           },
           "architect_general>frontdoor": {
             "cross_action": true,
-            "direction_balance": 0.0,
+            "direction_balance": 0.2222,
             "lo_action": "architect_general",
-            "one_sided": true,
-            "prefer_hi": 0,
-            "prefer_lo": 6,
-            "rows": 6
+            "one_sided": false,
+            "prefer_hi": 2,
+            "prefer_lo": 7,
+            "rows": 9
           },
           "coder_escalation>coder_escalation": {
             "cross_action": false,
@@ -275,23 +207,16 @@
             "rows": 3
           }
         },
-        "cross_action_rows": 63,
+        "cross_action_rows": 66,
         "distinct_action_pairs": 3,
-        "one_sided_cross_action_pairs": [
-          "architect_general>frontdoor"
-        ],
-        "rows": 101,
+        "one_sided_cross_action_pairs": [],
+        "rows": 104,
         "same_action_rows": 38,
-        "thin_cross_action_pairs": [
-          "architect_general>frontdoor"
-        ],
+        "thin_cross_action_pairs": [],
         "untrained_in_complement_pairs": [
-          "architect_general>coder_escalation",
           "coder_escalation>frontdoor"
         ],
-        "weak_reasons": [
-          "one_sided_directions"
-        ]
+        "weak_reasons": []
       },
       "seeding_eval": {
         "action_pair_directions": {
@@ -306,20 +231,29 @@
           },
           "architect_general>coder_escalation": {
             "cross_action": true,
-            "direction_balance": 0.0,
+            "direction_balance": 0.2308,
             "lo_action": "architect_general",
-            "one_sided": true,
-            "prefer_hi": 0,
-            "prefer_lo": 2,
-            "rows": 2
+            "one_sided": false,
+            "prefer_hi": 6,
+            "prefer_lo": 20,
+            "rows": 26
           },
           "architect_general>frontdoor": {
             "cross_action": true,
-            "direction_balance": 0.0,
+            "direction_balance": 0.48,
             "lo_action": "architect_general",
+            "one_sided": false,
+            "prefer_hi": 12,
+            "prefer_lo": 13,
+            "rows": 25
+          },
+          "coder_escalation>frontdoor": {
+            "cross_action": true,
+            "direction_balance": 0.0,
+            "lo_action": "coder_escalation",
             "one_sided": true,
-            "prefer_hi": 0,
-            "prefer_lo": 2,
+            "prefer_hi": 2,
+            "prefer_lo": 0,
             "rows": 2
           },
           "frontdoor>frontdoor": {
@@ -332,17 +266,15 @@
             "rows": 151
           }
         },
-        "cross_action_rows": 4,
-        "distinct_action_pairs": 2,
+        "cross_action_rows": 53,
+        "distinct_action_pairs": 3,
         "one_sided_cross_action_pairs": [
-          "architect_general>coder_escalation",
-          "architect_general>frontdoor"
+          "coder_escalation>frontdoor"
         ],
-        "rows": 156,
+        "rows": 205,
         "same_action_rows": 152,
         "thin_cross_action_pairs": [
-          "architect_general>coder_escalation",
-          "architect_general>frontdoor"
+          "coder_escalation>frontdoor"
         ],
         "untrained_in_complement_pairs": [],
         "weak_reasons": [
@@ -385,9 +317,7 @@
         "rows": 5935,
         "same_action_rows": 1706,
         "thin_cross_action_pairs": [],
-        "untrained_in_complement_pairs": [
-          "architect_general>frontdoor"
-        ],
+        "untrained_in_complement_pairs": [],
         "weak_reasons": []
       }
     },
@@ -485,12 +415,12 @@
           },
           "architect_general>frontdoor": {
             "cross_action": true,
-            "direction_balance": 0.438,
+            "direction_balance": 0.4407,
             "lo_action": "architect_general",
             "one_sided": false,
-            "prefer_hi": 180,
+            "prefer_hi": 182,
             "prefer_lo": 231,
-            "rows": 411
+            "rows": 413
           },
           "frontdoor>frontdoor": {
             "cross_action": false,
@@ -502,10 +432,10 @@
             "rows": 168
           }
         },
-        "cross_action_rows": 411,
+        "cross_action_rows": 413,
         "distinct_action_pairs": 1,
         "one_sided_cross_action_pairs": [],
-        "rows": 656,
+        "rows": 658,
         "same_action_rows": 245,
         "thin_cross_action_pairs": [],
         "untrained_in_complement_pairs": [],
@@ -596,12 +526,12 @@
           },
           "architect_general>frontdoor": {
             "cross_action": true,
-            "direction_balance": 0.3777,
+            "direction_balance": 0.3773,
             "lo_action": "architect_general",
             "one_sided": false,
-            "prefer_hi": 402,
-            "prefer_lo": 244,
-            "rows": 646
+            "prefer_hi": 406,
+            "prefer_lo": 246,
+            "rows": 652
           },
           "frontdoor>frontdoor": {
             "cross_action": false,
@@ -613,10 +543,10 @@
             "rows": 168
           }
         },
-        "cross_action_rows": 646,
+        "cross_action_rows": 652,
         "distinct_action_pairs": 1,
         "one_sided_cross_action_pairs": [],
-        "rows": 955,
+        "rows": 961,
         "same_action_rows": 309,
         "thin_cross_action_pairs": [],
         "untrained_in_complement_pairs": [],
@@ -635,12 +565,12 @@
           },
           "architect_general>frontdoor": {
             "cross_action": true,
-            "direction_balance": 0.056,
+            "direction_balance": 0.0577,
             "lo_action": "architect_general",
             "one_sided": false,
-            "prefer_hi": 859,
-            "prefer_lo": 51,
-            "rows": 910
+            "prefer_hi": 865,
+            "prefer_lo": 53,
+            "rows": 918
           },
           "frontdoor>frontdoor": {
             "cross_action": false,
@@ -652,12 +582,12 @@
             "rows": 102
           }
         },
-        "cross_action_rows": 910,
+        "cross_action_rows": 918,
         "distinct_action_pairs": 1,
         "one_sided_cross_action_pairs": [
           "architect_general>frontdoor"
         ],
-        "rows": 1106,
+        "rows": 1114,
         "same_action_rows": 196,
         "thin_cross_action_pairs": [],
         "untrained_in_complement_pairs": [],
@@ -669,21 +599,21 @@
         "action_pair_directions": {
           "architect_general>coder_escalation": {
             "cross_action": true,
-            "direction_balance": 0.1667,
+            "direction_balance": 0.25,
             "lo_action": "architect_general",
             "one_sided": false,
-            "prefer_hi": 1,
-            "prefer_lo": 5,
-            "rows": 6
+            "prefer_hi": 3,
+            "prefer_lo": 9,
+            "rows": 12
           },
           "architect_general>frontdoor": {
             "cross_action": true,
-            "direction_balance": 0.0,
+            "direction_balance": 0.2222,
             "lo_action": "architect_general",
-            "one_sided": true,
-            "prefer_hi": 0,
-            "prefer_lo": 3,
-            "rows": 3
+            "one_sided": false,
+            "prefer_hi": 2,
+            "prefer_lo": 7,
+            "rows": 9
           },
           "coder_escalation>coder_escalation": {
             "cross_action": false,
@@ -696,12 +626,12 @@
           },
           "coder_escalation>frontdoor": {
             "cross_action": true,
-            "direction_balance": 0.4737,
+            "direction_balance": 0.4286,
             "lo_action": "coder_escalation",
             "one_sided": false,
-            "prefer_hi": 10,
+            "prefer_hi": 12,
             "prefer_lo": 9,
-            "rows": 19
+            "rows": 21
           },
           "frontdoor>frontdoor": {
             "cross_action": false,
@@ -713,24 +643,14 @@
             "rows": 3
           }
         },
-        "cross_action_rows": 28,
+        "cross_action_rows": 42,
         "distinct_action_pairs": 3,
-        "one_sided_cross_action_pairs": [
-          "architect_general>coder_escalation",
-          "architect_general>frontdoor"
-        ],
-        "rows": 50,
+        "one_sided_cross_action_pairs": [],
+        "rows": 64,
         "same_action_rows": 22,
-        "thin_cross_action_pairs": [
-          "architect_general>coder_escalation",
-          "architect_general>frontdoor"
-        ],
-        "untrained_in_complement_pairs": [
-          "architect_general>coder_escalation"
-        ],
-        "weak_reasons": [
-          "one_sided_directions"
-        ]
+        "thin_cross_action_pairs": [],
+        "untrained_in_complement_pairs": [],
+        "weak_reasons": []
       },
       "livecodebench": {
         "action_pair_directions": {
@@ -951,21 +871,21 @@
           },
           "architect_general>coder_escalation": {
             "cross_action": true,
-            "direction_balance": 0.0,
+            "direction_balance": 0.1429,
             "lo_action": "architect_general",
-            "one_sided": true,
-            "prefer_hi": 0,
-            "prefer_lo": 2,
-            "rows": 2
+            "one_sided": false,
+            "prefer_hi": 2,
+            "prefer_lo": 12,
+            "rows": 14
           },
           "architect_general>frontdoor": {
             "cross_action": true,
-            "direction_balance": 0.32,
+            "direction_balance": 0.3245,
             "lo_action": "architect_general",
             "one_sided": false,
             "prefer_hi": 204,
-            "prefer_lo": 96,
-            "rows": 300
+            "prefer_lo": 98,
+            "rows": 302
           },
           "frontdoor>frontdoor": {
             "cross_action": false,
@@ -977,16 +897,14 @@
             "rows": 106
           }
         },
-        "cross_action_rows": 302,
+        "cross_action_rows": 316,
         "distinct_action_pairs": 2,
         "one_sided_cross_action_pairs": [
           "architect_general>coder_escalation"
         ],
-        "rows": 456,
+        "rows": 470,
         "same_action_rows": 154,
-        "thin_cross_action_pairs": [
-          "architect_general>coder_escalation"
-        ],
+        "thin_cross_action_pairs": [],
         "untrained_in_complement_pairs": [],
         "weak_reasons": [
           "one_sided_directions"
@@ -1005,21 +923,21 @@
           },
           "architect_general>coder_escalation": {
             "cross_action": true,
-            "direction_balance": 0.1667,
+            "direction_balance": 0.25,
             "lo_action": "architect_general",
             "one_sided": false,
-            "prefer_hi": 1,
-            "prefer_lo": 5,
-            "rows": 6
+            "prefer_hi": 3,
+            "prefer_lo": 9,
+            "rows": 12
           },
           "architect_general>frontdoor": {
             "cross_action": true,
-            "direction_balance": 0.3788,
+            "direction_balance": 0.3835,
             "lo_action": "architect_general",
             "one_sided": false,
             "prefer_hi": 164,
-            "prefer_lo": 100,
-            "rows": 264
+            "prefer_lo": 102,
+            "rows": 266
           },
           "coder_escalation>coder_escalation": {
             "cross_action": false,
@@ -1049,22 +967,14 @@
             "rows": 53
           }
         },
-        "cross_action_rows": 280,
+        "cross_action_rows": 288,
         "distinct_action_pairs": 3,
-        "one_sided_cross_action_pairs": [
-          "architect_general>coder_escalation"
-        ],
-        "rows": 410,
+        "one_sided_cross_action_pairs": [],
+        "rows": 418,
         "same_action_rows": 130,
-        "thin_cross_action_pairs": [
-          "architect_general>coder_escalation"
-        ],
-        "untrained_in_complement_pairs": [
-          "architect_general>coder_escalation"
-        ],
-        "weak_reasons": [
-          "one_sided_directions"
-        ]
+        "thin_cross_action_pairs": [],
+        "untrained_in_complement_pairs": [],
+        "weak_reasons": []
       }
     }
   },

@@ -1,4 +1,10 @@
 {
+  "artifact_scope": {
+    "allow_protected_output_overwrite": false,
+    "candidate_only_manifest": false,
+    "mode": "canonical",
+    "protected_broad_output": true
+  },
   "contract": {
     "learning_target": "within_source_record_score_ordered_preference",
     "material_difference_from_stopped_family": [
@@ -8,7 +14,7 @@
       "can expand beyond binary labels by ordering rows with distinct offline oracle scores",
       "does not train a classifier or authorize a runtime gate"
     ],
-    "min_score_delta": 0.01,
+    "min_score_delta": 0.0,
     "name": "within_task_pairwise_preference_v1",
     "pairing_mode": "score_ordered",
     "row_schema_version": "offline_reward_pairwise_preference.v1"
@@ -16,41 +22,41 @@
   "coverage": {
     "action_pair_counts": {
       "architect_general>architect_general": 735,
-      "architect_general>coder_escalation": 12,
-      "architect_general>frontdoor": 1511,
-      "coder_escalation>architect_general": 3,
+      "architect_general>coder_escalation": 30,
+      "architect_general>frontdoor": 1523,
+      "coder_escalation>architect_general": 9,
       "coder_escalation>coder_escalation": 35,
       "coder_escalation>frontdoor": 25,
-      "frontdoor>architect_general": 2726,
-      "frontdoor>coder_escalation": 19,
+      "frontdoor>architect_general": 2740,
+      "frontdoor>coder_escalation": 21,
       "frontdoor>frontdoor": 1126
     },
-    "contrastive_groups": 1937,
-    "cross_action_pair_rows": 4296,
-    "pair_rows": 6192,
+    "contrastive_groups": 1981,
+    "cross_action_pair_rows": 4348,
+    "pair_rows": 6244,
     "same_action_pair_rows": 1896,
-    "skipped_no_contrast_groups": 1288,
+    "skipped_no_contrast_groups": 1546,
     "source_family_pair_counts": {
-      "orchestrator_live_seed": 101,
-      "seeding_eval": 156,
+      "orchestrator_live_seed": 104,
+      "seeding_eval": 205,
       "three_way_eval": 5935
     },
-    "source_record_groups": 3225,
+    "source_record_groups": 3527,
     "suite_pair_counts": {
       "agentic": 10,
       "coder": 543,
-      "debugbench": 656,
+      "debugbench": 658,
       "general": 535,
-      "gpqa": 955,
-      "hotpotqa": 1106,
-      "instruction_precision": 50,
+      "gpqa": 961,
+      "hotpotqa": 1114,
+      "instruction_precision": 64,
       "livecodebench": 616,
       "long_context": 197,
       "math": 23,
       "mode_advantage": 134,
       "mode_advantage_hard": 501,
-      "simpleqa": 456,
-      "thinking": 410
+      "simpleqa": 470,
+      "thinking": 418
     },
     "unique_action_pairs": 9
   },
@@ -61,7 +67,7 @@
     "runtime_gate_change_allowed": false,
     "status": "contract_ready"
   },
-  "generated_at": "2026-06-27T15:15:14.589189+00:00",
+  "generated_at": "2026-07-05T12:06:23.347206+00:00",
   "group_diagnostics": [
     {
       "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_023815.jsonl|0|gpqa_Organic Chemistry_0116|1cb0200558e9e6dfa09becb6705398cfc7f4199c0a1d48e0fd5ecf7c52dff78c|3f39d5c348e5b79d06e842c114e6cc571583bbf44e4b0ebfda1a01ec05745d43",
@@ -415,9 +421,9 @@
     }
   ],
   "inputs": {
-    "eligible_rows": 11682,
+    "eligible_rows": 12308,
     "manifest_jsonl": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_feature_manifest_with_pairwise_audit_target_expansions.jsonl",
-    "manifest_rows": 11682,
+    "manifest_rows": 12308,
     "skipped_unmapped_or_unlabeled_rows": 0
   },
   "outputs": {

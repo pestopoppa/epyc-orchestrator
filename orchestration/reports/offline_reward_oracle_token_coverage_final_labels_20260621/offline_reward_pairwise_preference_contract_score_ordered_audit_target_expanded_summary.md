@@ -1,15 +1,15 @@
 # Offline Reward Pairwise Contract
 
-- Generated at: `2026-06-27T15:15:14.589189+00:00`
+- Generated at: `2026-07-05T12:06:23.347206+00:00`
 - Contract: `within_task_pairwise_preference_v1`
 - Pairing mode: `score_ordered`
-- Minimum score delta: `0.01`
+- Minimum score delta: `0.0`
 - Decision: `contract_ready`
 - Runtime gate change allowed: `False`
-- Pair rows: `6192`
-- Cross-action pair rows: `4296`
+- Pair rows: `6244`
+- Cross-action pair rows: `4348`
 - Same-action pair rows: `1896`
-- Contrastive source-record groups: `1937`
+- Contrastive source-record groups: `1981`
 - Unique action pairs: `9`
 - Recommended next: `train_pairwise_reward_ranker_offline`
 
@@ -23,15 +23,15 @@
 
 ## Top Action Pairs
 
-- `frontdoor>architect_general`: `2726`
-- `architect_general>frontdoor`: `1511`
+- `frontdoor>architect_general`: `2740`
+- `architect_general>frontdoor`: `1523`
 - `frontdoor>frontdoor`: `1126`
 - `architect_general>architect_general`: `735`
 - `coder_escalation>coder_escalation`: `35`
+- `architect_general>coder_escalation`: `30`
 - `coder_escalation>frontdoor`: `25`
-- `frontdoor>coder_escalation`: `19`
-- `architect_general>coder_escalation`: `12`
-- `coder_escalation>architect_general`: `3`
+- `frontdoor>coder_escalation`: `21`
+- `coder_escalation>architect_general`: `9`
 
 ## Privacy
 

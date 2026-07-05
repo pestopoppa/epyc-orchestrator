@@ -1,0 +1,35 @@
+{
+  "candidate_filter": {
+    "candidate_rows": 626,
+    "enabled": true,
+    "matched_candidate_rows": 626,
+    "missing_candidate_rows": 0
+  },
+  "oracle_score_mode": "omit",
+  "role_counts": {
+    "architect_general:direct": 302,
+    "coder_escalation:direct": 182,
+    "frontdoor:direct": 142
+  },
+  "rows": 626,
+  "schema_version": "offline_reward_oracle_rows.v1",
+  "stats": {
+    "rows": 626,
+    "skipped_missing_reference": 36,
+    "skipped_missing_role_results": 4,
+    "skipped_not_candidate": 8
+  },
+  "suite_counts": {
+    "coder": 24,
+    "debugbench": 24,
+    "general": 104,
+    "gpqa": 24,
+    "hotpotqa": 104,
+    "instruction_precision": 66,
+    "livecodebench": 24,
+    "long_context": 24,
+    "math": 24,
+    "simpleqa": 104,
+    "thinking": 104
+  }
+}

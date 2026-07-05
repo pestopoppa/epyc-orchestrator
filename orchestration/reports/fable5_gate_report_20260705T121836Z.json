@@ -1,0 +1,1344 @@
+{
+  "blockers": [
+    "w8_promotion_trajectory: w8_candidate_generation_required: no replay-eligible accumulating candidate"
+  ],
+  "next_actions": [
+    {
+      "command": "cd /mnt/raid0/llm/epyc-orchestrator && uv run python scripts/autopilot/w8_promotion_trajectory_report.py --journal orchestration",
+      "evidence": {
+        "baseline_reference_blocked_reason": "Auto-blacklisted: 3 consecutive failures ending at trial 1117",
+        "baseline_reference_last_forced_reason": "10 trusted profile trials since baseline reference draw",
+        "baseline_reference_last_forced_trial_id": 1107,
+        "candidate_generation_required": true,
+        "candidate_status_counts": {
+          "refuted": 3,
+          "reverted": 46,
+          "single_observation": 1,
+          "stale_accumulating": 5
+        },
+        "dominant_terminal_reason": {
+          "baseline_sample_warning": true,
+          "candidate": "7c5026202c4aa284",
+          "count": 26,
+          "details": {
+            "delta": -1.8,
+            "kind": "suite_regression",
+            "n_baseline": 2,
+            "n_result": 5,
+            "suite": "general",
+            "threshold": -1.5
+          },
+          "latest_trial_id": 1131,
+          "reason": "Suite 'general' regression: -1.800 (threshold: -1.500; n_result=5, n_baseline=2)",
+          "status": "reverted"
+        },
+        "last_blocked_candidate": null,
+        "last_blocked_reason": null,
+        "last_blocked_trial_id": null,
+        "latest_baseline_reference_state": "fresh",
+        "latest_candidate": "b738287be98c3372",
+        "latest_combined_E": 0.627218,
+        "latest_confirmed": false,
+        "latest_fresh_eval": false,
+        "latest_required_E": 100.0,
+        "latest_seq_state": "accumulating",
+        "latest_seq_trial_id": 1159,
+        "open_requirements": [
+          "combined_E_below_required",
+          "fresh_promotion_eval_required",
+          "seq_confirmation_required"
+        ],
+        "pending_attempts": null,
+        "pending_candidate": null,
+        "pending_source_trial_id": null,
+        "recent_active_candidates": [],
+        "replay_concentration_reason": null,
+        "replay_concentration_warning": false,
+        "replay_stale_accumulating_count": 5,
+        "replay_top_active_attempt_share": null,
+        "replay_top_active_candidate": null,
+        "terminal_reason_counts": {
+          "Quality floor violation: 0.000 < 1.0 (tier 1)": 1,
+          "Quality floor violation: 0.055 < 1.0 (tier 1)": 1,
+          "Quality floor violation: 0.240 < 1.0 (tier 1)": 1,
+          "Quality floor violation: 0.273 < 1.0 (tier 1)": 1,
+          "Quality floor violation: 0.390 < 1.0 (tier 1)": 1,
+          "Quality floor violation: 0.900 < 1.0 (tier 1)": 1,
+          "Quality regression: 1.081 vs baseline 1.524 (-29.1%, threshold: -5%)": 1,
+          "Quality regression: 1.440 vs baseline 1.814 (-20.6%, threshold: -5%)": 1,
+          "Suite 'debugbench' regression: -2.250 (threshold: -1.500; n_result=4, n_baseline=2)": 1,
+          "Suite 'general' regression: -1.800 (threshold: -1.500; n_result=5, n_baseline=2)": 26,
+          "Suite 'hotpotqa' regression: -2.000 (threshold: -1.500; n_result=3, n_baseline=2)": 8,
+          "Suite 'tool_use' regression: -3.000 (threshold: -0.600; n_result=5, n_baseline=5)": 3,
+          "candidate status refuted": 3
+        },
+        "w8_promotion_status": "none"
+      },
+      "follow_up": "uv run python scripts/autopilot/fable5_gate_report.py --json --strict",
+      "key": "collect_w8_promotion_eval_evidence",
+      "priority": "P0",
+      "reason": "W4/W6 authority is restart-ready; W8 needs a new keepable candidate before replay/promotion evidence can accrue. Dominant terminal blocker: 26 candidate(s) ended at Suite 'general' regression: -1.800 (threshold: -1.500; n_result=5, n_baseline=2).",
+      "status": "active"
+    },
+    {
+      "audit_target_collection_batch_count": 4,
+      "audit_target_collection_manifest_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_audit_target_collection_manifest.json",
+      "audit_target_collection_status": {
+        "autopilot_guard": {
+          "active_processes": [
+            "2112296 /mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/autopilot/autopilot.py start --max-trials 2000"
+          ],
+          "process_pattern": "scripts/autopilot/autopilot.py start",
+          "refusal_exit_code": 75
+        },
+        "batch_count": 4,
+        "blockers": [
+          "active AutoPilot process(es): 2112296 /mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/autopilot/autopilot.py start --max-trials 2000"
+        ],
+        "manifest_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_audit_target_collection_manifest.json",
+        "manifest_schema_version": "offline_reward_pairwise_collection_window.v1",
+        "post_collection_step_count": 7,
+        "ready": false,
+        "schema_version": "offline_reward_pairwise_collection_status.v1",
+        "source_plan_decision": {
+          "recommended_next": "add_more_source_records_for_failed_pairwise_holdout_strata",
+          "runtime_gate_change_allowed": false,
+          "status": "insufficient_non_overlapping_cross_action_candidates"
+        },
+        "status": "blocked",
+        "warnings": []
+      },
+      "audit_target_collection_targets": [
+        {
+          "action_pair": "coder_escalation>frontdoor",
+          "current_direction_balance": 0.0,
+          "current_rows": 2,
+          "needs_direction": [
+            "prefer coder_escalation"
+          ],
+          "prefer_hi": 2,
+          "prefer_lo": 0,
+          "stratum_field": "source_family",
+          "stratum_value": "seeding_eval",
+          "suggested_min_rows": 20
+        },
+        {
+          "action_pair": "architect_general>coder_escalation",
+          "current_direction_balance": 0.0,
+          "current_rows": 1,
+          "needs_direction": [
+            "prefer architect_general"
+          ],
+          "prefer_hi": 1,
+          "prefer_lo": 0,
+          "stratum_field": "suite",
+          "stratum_value": "general",
+          "suggested_min_rows": 20
+        },
+        {
+          "action_pair": "architect_general>frontdoor",
+          "current_direction_balance": 0.0577,
+          "current_rows": 918,
+          "needs_direction": [
+            "balance both directions"
+          ],
+          "prefer_hi": 865,
+          "prefer_lo": 53,
+          "stratum_field": "suite",
+          "stratum_value": "hotpotqa",
+          "suggested_min_rows": 20
+        },
+        {
+          "action_pair": "architect_general>coder_escalation",
+          "current_direction_balance": 0.1429,
+          "current_rows": 14,
+          "needs_direction": [
+            "balance both directions"
+          ],
+          "prefer_hi": 2,
+          "prefer_lo": 12,
+          "stratum_field": "suite",
+          "stratum_value": "simpleqa",
+          "suggested_min_rows": 20
+        }
+      ],
+      "audit_target_direction_audit_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_audit_target_direction_audit.json",
+      "audit_target_direction_decision": {
+        "recommended_next": "collect non-overlapping cross-action preference rows for the listed collection_targets (balance both directions); re-run evaluate_offline_reward_pairwise_ranker.py holdouts after collection. Do NOT retune the absolute MLP/calibrator/pairwise family.",
+        "runtime_gate_change_allowed": false,
+        "status": "preference_coverage_gaps_found",
+        "weak_strata": [
+          "source_family:seeding_eval",
+          "suite:agentic",
+          "suite:general",
+          "suite:hotpotqa",
+          "suite:simpleqa"
+        ]
+      },
+      "audit_target_ranker_holdout_decision": {
+        "blockers": [
+          "source_family:orchestrator_live_seed:insufficient_pairwise_signal",
+          "source_family:seeding_eval:insufficient_pairwise_signal",
+          "suite:general:insufficient_pairwise_signal"
+        ],
+        "eligible_holdouts": 16,
+        "passing_holdouts": 13,
+        "recommended_next": "collect_more_non_overlapping_cross_action_preferences",
+        "runtime_gate_change_allowed": false,
+        "status": "mixed_holdout_signal"
+      },
+      "audit_target_ranker_input": {
+        "action_pair_counts": {
+          "architect_general>architect_general": 735,
+          "architect_general>coder_escalation": 30,
+          "architect_general>frontdoor": 1523,
+          "coder_escalation>architect_general": 9,
+          "coder_escalation>coder_escalation": 35,
+          "coder_escalation>frontdoor": 25,
+          "frontdoor>architect_general": 2740,
+          "frontdoor>coder_escalation": 21,
+          "frontdoor>frontdoor": 1126
+        },
+        "cross_action_pair_rows": 4348,
+        "group_count": 1981,
+        "pair_rows": 6244,
+        "pairing_mode_counts": {
+          "score_ordered": 6244
+        },
+        "same_action_pair_rows": 1896,
+        "source_family_pair_counts": {
+          "orchestrator_live_seed": 104,
+          "seeding_eval": 205,
+          "three_way_eval": 5935
+        },
+        "suite_pair_counts": {
+          "agentic": 10,
+          "coder": 543,
+          "debugbench": 658,
+          "general": 535,
+          "gpqa": 961,
+          "hotpotqa": 1114,
+          "instruction_precision": 64,
+          "livecodebench": 616,
+          "long_context": 197,
+          "math": 23,
+          "mode_advantage": 134,
+          "mode_advantage_hard": 501,
+          "simpleqa": 470,
+          "thinking": 418
+        }
+      },
+      "audit_target_ranker_summary_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_ranker_score_ordered_audit_target_expanded_summary.json",
+      "blocked_by": [
+        "active AutoPilot process(es): 2112296 /mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/autopilot/autopilot.py start --max-trials 2000"
+      ],
+      "command": "cd /mnt/raid0/llm/epyc-orchestrator && orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/collect_offline_reward_pairwise_audit_target.sh",
+      "follow_up": "uv run python scripts/autopilot/fable5_gate_report.py --json --strict --require-current-code",
+      "key": "collect_a9_audit_target_pairwise_preferences",
+      "priority": "P1",
+      "reason": "The source-q-reward A9 training target is preregistered offline-only, but the broader audit-target-expanded pairwise ranker still has mixed independent-holdout signal. Remaining blockers are source_family:orchestrator_live_seed:insufficient_pairwise_signal, source_family:seeding_eval:insufficient_pairwise_signal, suite:general:insufficient_pairwise_signal.",
+      "requires": "collect non-overlapping cross-action preference rows for the current audit-target direction gaps, then rebuild the score-ordered pairwise contract and rerun independent holdouts; do not retune the absolute verifier family",
+      "runtime_gate_change_allowed": false,
+      "status": "blocked"
+    }
+  ],
+  "ready": false,
+  "sections": [
+    {
+      "blockers": [],
+      "details": {
+        "action_type": "structural_experiment",
+        "autopilot_planner_timeout": "600",
+        "code_stale": false,
+        "code_stale_paths": [],
+        "eval_completed_questions": 60,
+        "eval_concurrency": null,
+        "eval_correct_pct": 70.0,
+        "eval_correct_questions": null,
+        "eval_label": "T1",
+        "eval_total_questions": 65,
+        "heartbeat_age_s": 7.736948490142822,
+        "ok": true,
+        "phase": "dispatch_action",
+        "pid": 2112296,
+        "pid_alive": true,
+        "planner_hints_enabled": true,
+        "process_started_at_s": 1783251992.52,
+        "require_current_code": true,
+        "seq_verdict_enabled": true,
+        "status": "active",
+        "trial_id": 1163,
+        "w6_audit_accrual_enabled": true,
+        "w6_audit_every_n_trials": "1",
+        "w6_audit_n": "10",
+        "w6_audit_shadow_only": true
+      },
+      "key": "phase_health",
+      "status": "ready",
+      "summary": "AutoPilot phase heartbeat is active at trial 1163 / dispatch_action (T1 60/65)."
+    },
+    {
+      "blockers": [],
+      "details": {
+        "archive_source_surface_count": 6,
+        "archive_source_surface_failed_count": 0,
+        "archive_source_surface_ok": true,
+        "baseline_seed_append_expect_journal_max_trial_id": null,
+        "baseline_seed_append_expect_trial_counter": null,
+        "baseline_seed_append_ready": false,
+        "baseline_seed_append_required": false,
+        "cutover_horizon_blocker": null,
+        "cutover_horizon_clean_trials_remaining": 0,
+        "cutover_horizon_components": {
+          "seq_shadow_rows": 0,
+          "seq_trusted_vectors": 0,
+          "w6_alarm_clearance": 0,
+          "w6_audited_trials": 0
+        },
+        "durable_journal_max_trial_id": 1162,
+        "restart_ready": true,
+        "seq_cutover_ready": true,
+        "seq_min_shadow_rows": 30,
+        "seq_min_trusted_vector_trials": 120,
+        "seq_shadow_rows": 200,
+        "seq_shadow_rows_remaining": 0,
+        "seq_trusted_vector_trials": 278,
+        "seq_trusted_vector_trials_remaining": 0,
+        "snapshot_payload_journal_max_trial_id": 1162,
+        "snapshot_restart_readiness": "tail_fold_ready",
+        "state_trial_counter": 1163,
+        "w6_alarm_clearance_clean_trials_required": 0,
+        "w6_audit_cutover_ready": true,
+        "w6_audited_trial_count": 112,
+        "w6_audited_trial_count_remaining": 0,
+        "w6_core_inflation_warning": false,
+        "w6_era_excluded_gaming_event_count": 0,
+        "w6_fence_governance_blockers": [],
+        "w6_fence_governance_status": "no_excluded_gaming_events",
+        "w6_gaming_alarm": false,
+        "w6_min_audited_trials": 30,
+        "w6_potential_overfit_divergences": 0,
+        "w6_raw_audited_trial_count": 112,
+        "w6_trusted_audited_trial_count": 112,
+        "w6_untrusted_audited_trial_count": 0,
+        "w6_untrusted_audited_trial_ids": [],
+        "w8_baseline_reference_blocked_reason": "Auto-blacklisted: 3 consecutive failures ending at trial 1117",
+        "w8_baseline_reference_blocked_trial_id": 1124,
+        "w8_baseline_reference_last_forced_reason": "10 trusted profile trials since baseline reference draw",
+        "w8_baseline_reference_last_forced_stale": false,
+        "w8_baseline_reference_last_forced_trial_id": 1107,
+        "w8_last_blocked_candidate": null,
+        "w8_last_blocked_reason": null,
+        "w8_last_blocked_trial_id": null,
+        "w8_last_finalized_candidate": null,
+        "w8_last_finalized_combined_E": null,
+        "w8_last_finalized_delta_excludes_regression": null,
+        "w8_last_finalized_trial_id": null,
+        "w8_latest_baseline_reference_state": "fresh",
+        "w8_latest_candidate": "b738287be98c3372",
+        "w8_latest_combined_E": 0.627218,
+        "w8_latest_confirmed": false,
+        "w8_latest_fresh_eval": false,
+        "w8_latest_required_E": 100.0,
+        "w8_latest_seq_state": "accumulating",
+        "w8_latest_seq_trial_id": 1159,
+        "w8_open_requirements": [
+          "combined_E_below_required",
+          "fresh_promotion_eval_required",
+          "seq_confirmation_required"
+        ],
+        "w8_pending_attempts": null,
+        "w8_pending_candidate": null,
+        "w8_pending_source_trial_id": null,
+        "w8_promotion_status": "none"
+      },
+      "key": "w4_w6_restart_cutover",
+      "status": "ready",
+      "summary": "W4/W6 strict restart cutover is ready."
+    },
+    {
+      "blockers": [
+        "w8_candidate_generation_required: no replay-eligible accumulating candidate"
+      ],
+      "details": {
+        "candidate_count": 55,
+        "candidate_generation_required": true,
+        "dominant_terminal_reason": {
+          "baseline_sample_warning": true,
+          "candidate": "7c5026202c4aa284",
+          "count": 26,
+          "details": {
+            "delta": -1.8,
+            "kind": "suite_regression",
+            "n_baseline": 2,
+            "n_result": 5,
+            "suite": "general",
+            "threshold": -1.5
+          },
+          "latest_trial_id": 1131,
+          "reason": "Suite 'general' regression: -1.800 (threshold: -1.500; n_result=5, n_baseline=2)",
+          "status": "reverted"
+        },
+        "latest_trial_id": 1159,
+        "ok": false,
+        "open_requirements": [
+          "combined_E_below_required",
+          "fresh_promotion_eval_required",
+          "no_recent_multi_observation_accumulating_candidate",
+          "no_replay_eligible_accumulating_candidate",
+          "stale_accumulating_candidates_present",
+          "seq_confirmation_required"
+        ],
+        "recent_active_candidates": [],
+        "recent_replay_eligible_candidates": [],
+        "replay_concentration": {
+          "active_recent_attempts": {},
+          "active_recent_candidate_count": 0,
+          "single_observation_count": 1,
+          "stale_accumulating_count": 5,
+          "top_active_attempt_share": null,
+          "top_active_attempts": 0,
+          "top_active_candidate": null,
+          "total_active_recent_attempts": 0,
+          "warning": false,
+          "warning_reason": null
+        },
+        "replay_eligible_candidates": [],
+        "snapshot_count": 198,
+        "stale_accumulating_candidate_count": 5,
+        "status": "stale_accumulating",
+        "status_counts": {
+          "refuted": 3,
+          "reverted": 46,
+          "single_observation": 1,
+          "stale_accumulating": 5
+        },
+        "terminal_reason_counts": {
+          "Quality floor violation: 0.000 < 1.0 (tier 1)": 1,
+          "Quality floor violation: 0.055 < 1.0 (tier 1)": 1,
+          "Quality floor violation: 0.240 < 1.0 (tier 1)": 1,
+          "Quality floor violation: 0.273 < 1.0 (tier 1)": 1,
+          "Quality floor violation: 0.390 < 1.0 (tier 1)": 1,
+          "Quality floor violation: 0.900 < 1.0 (tier 1)": 1,
+          "Quality regression: 1.081 vs baseline 1.524 (-29.1%, threshold: -5%)": 1,
+          "Quality regression: 1.440 vs baseline 1.814 (-20.6%, threshold: -5%)": 1,
+          "Suite 'debugbench' regression: -2.250 (threshold: -1.500; n_result=4, n_baseline=2)": 1,
+          "Suite 'general' regression: -1.800 (threshold: -1.500; n_result=5, n_baseline=2)": 26,
+          "Suite 'hotpotqa' regression: -2.000 (threshold: -1.500; n_result=3, n_baseline=2)": 8,
+          "Suite 'tool_use' regression: -3.000 (threshold: -0.600; n_result=5, n_baseline=5)": 3,
+          "candidate status refuted": 3
+        }
+      },
+      "key": "w8_promotion_trajectory",
+      "status": "blocked",
+      "summary": "W8 replay trajectory needs a replay-eligible candidate."
+    },
+    {
+      "blockers": [],
+      "details": {
+        "clean_window_blockers": [
+          "active AutoPilot process(es): 2112296 /mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/autopilot/autopilot.py start --max-trials 2000",
+          "live llama-server process(es): 1870477 /mnt/raid0/llm/llama.cpp/build/bin/llama-server -m /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf --host 127.0.0.1 --port 8080 -np 1 -c 32768 -t 48 -ub 8192 --flash-attn on --jinja -ctk q8_0 -ctv q8_0 --mlock --spec-type draft-mtp --spec-draft-n-max 4 --slot-save-path /mnt/raid0/llm/cache/kv_slots/frontdoor; 1870837 /mnt/raid0/llm/llama.cpp/build/bin/llama-server -m /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf --host 127.0.0.1 --port 8180 -np 1 -c 32768 -t 48 -ub 8192 --flash-attn on --jinja -ctk q8_0 -ctv q8_0 --mlock --spec-type draft-mtp --spec-draft-n-max 4 --slot-save-path /mnt/raid0/llm/cache/kv_slots/frontdoor; 1871111 /mnt/raid0/llm/llama.cpp/build/bin/llama-server -m /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf --host 127.0.0.1 --port 8280 -np 1 -c 32768 -t 48 -ub 8192 --flash-attn on --jinja -ctk q8_0 -ctv q8_0 --mlock --spec-type draft-mtp --spec-draft-n-max 4 --slot-save-path /mnt/raid0/llm/cache/kv_slots/frontdoor; 1871389 /mnt/raid0/llm/llama.cpp/build/bin/llama-server -m /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf --host 127.0.0.1 --port 8380 -np 1 -c 32768 -t 48 -ub 8192 --flash-attn on --jinja -ctk q8_0 -ctv q8_0 --mlock --spec-type draft-mtp --spec-draft-n-max 4 --slot-save-path /mnt/raid0/llm/cache/kv_slots/frontdoor; ... +24 more"
+        ],
+        "clean_window_ready": false,
+        "generated_at": "2026-07-05T12:18:43Z",
+        "kv_candidate_paths": [
+          "/mnt/raid0/llm/epyc-inference-research/data/dynamic_stack/ds_e1_kv_measurements_20260704T163852Z/kv_measurements.csv"
+        ],
+        "kv_expected_csv_columns": null,
+        "kv_missing_measurements": null,
+        "kv_observed_measurements": {
+          "architect_general": [
+            2048,
+            8192
+          ],
+          "frontdoor": [
+            2048,
+            8192,
+            32768
+          ],
+          "ingest_long_context": [
+            2048,
+            8192,
+            32768
+          ],
+          "worker_general": [
+            2048,
+            8192
+          ]
+        },
+        "kv_required_measurements": {
+          "architect_general": [
+            2048,
+            8192
+          ],
+          "frontdoor": [
+            2048,
+            8192,
+            32768
+          ],
+          "ingest_long_context": [
+            2048,
+            8192,
+            32768
+          ],
+          "worker_general": [
+            2048,
+            8192
+          ]
+        },
+        "kv_searched_globs": [
+          "orchestration/reports/ds_e1*kv*",
+          "orchestration/reports/dynamic_stack*kv*",
+          "../epyc-inference-research/data/dynamic_stack/**/kv*",
+          "../epyc-inference-research/data/kv_measurements/**"
+        ],
+        "ready_for_profile_decision": true,
+        "ri10_canary_arm_balance_deficits": {
+          "enforce_high_risk": 0,
+          "shadow_high_risk": 0
+        },
+        "ri10_canary_arm_counts_by_role_current": {
+          "frontdoor": {
+            "enforce_high_risk": 11,
+            "shadow_high_risk": 11
+          },
+          "worker_general": {
+            "enforce_high_risk": 10,
+            "shadow_high_risk": 23
+          },
+          "worker_vision": {
+            "enforce_high_risk": 10,
+            "shadow_high_risk": 16
+          }
+        },
+        "ri10_canary_arm_counts_current": {
+          "enforce_high_risk": 31,
+          "shadow_high_risk": 50
+        },
+        "ri10_canary_arm_volume_deficit": 0,
+        "ri10_canary_role_high_risk_by_role_current": {
+          "frontdoor": 22,
+          "worker_general": 33,
+          "worker_vision": 26
+        },
+        "ri10_canary_role_sample_deficit": 0,
+        "ri10_high_risk_by_role_current": {
+          "frontdoor": 22,
+          "worker_general": 33,
+          "worker_vision": 26
+        },
+        "ri10_telemetry_collection_blocker": "decision_ready",
+        "ri10_telemetry_collection_reason": "current high-risk telemetry has decision-grade canary arm coverage",
+        "section_statuses": {
+          "contention_matrix": "ready",
+          "ds5_roster_manifest": "ready",
+          "kv_size_measurements": "ready",
+          "ri10_canary": "ready",
+          "stack_roster": "ready"
+        }
+      },
+      "key": "ds_e1_dynamic_stack",
+      "status": "ready",
+      "summary": "DS-E1 dynamic-stack packet is decision-ready."
+    },
+    {
+      "blockers": [],
+      "details": {
+        "audit_target_collection_manifest_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_audit_target_collection_manifest.json",
+        "audit_target_collection_status": {
+          "autopilot_guard": {
+            "active_processes": [
+              "2112296 /mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/autopilot/autopilot.py start --max-trials 2000"
+            ],
+            "process_pattern": "scripts/autopilot/autopilot.py start",
+            "refusal_exit_code": 75
+          },
+          "batch_count": 4,
+          "blockers": [
+            "active AutoPilot process(es): 2112296 /mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/autopilot/autopilot.py start --max-trials 2000"
+          ],
+          "manifest_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_audit_target_collection_manifest.json",
+          "manifest_schema_version": "offline_reward_pairwise_collection_window.v1",
+          "post_collection_step_count": 7,
+          "ready": false,
+          "schema_version": "offline_reward_pairwise_collection_status.v1",
+          "source_plan_decision": {
+            "recommended_next": "add_more_source_records_for_failed_pairwise_holdout_strata",
+            "runtime_gate_change_allowed": false,
+            "status": "insufficient_non_overlapping_cross_action_candidates"
+          },
+          "status": "blocked",
+          "warnings": []
+        },
+        "audit_target_collection_targets": [
+          {
+            "action_pair": "coder_escalation>frontdoor",
+            "current_direction_balance": 0.0,
+            "current_rows": 2,
+            "needs_direction": [
+              "prefer coder_escalation"
+            ],
+            "prefer_hi": 2,
+            "prefer_lo": 0,
+            "stratum_field": "source_family",
+            "stratum_value": "seeding_eval",
+            "suggested_min_rows": 20
+          },
+          {
+            "action_pair": "architect_general>coder_escalation",
+            "current_direction_balance": 0.0,
+            "current_rows": 1,
+            "needs_direction": [
+              "prefer architect_general"
+            ],
+            "prefer_hi": 1,
+            "prefer_lo": 0,
+            "stratum_field": "suite",
+            "stratum_value": "general",
+            "suggested_min_rows": 20
+          },
+          {
+            "action_pair": "architect_general>frontdoor",
+            "current_direction_balance": 0.0577,
+            "current_rows": 918,
+            "needs_direction": [
+              "balance both directions"
+            ],
+            "prefer_hi": 865,
+            "prefer_lo": 53,
+            "stratum_field": "suite",
+            "stratum_value": "hotpotqa",
+            "suggested_min_rows": 20
+          },
+          {
+            "action_pair": "architect_general>coder_escalation",
+            "current_direction_balance": 0.1429,
+            "current_rows": 14,
+            "needs_direction": [
+              "balance both directions"
+            ],
+            "prefer_hi": 2,
+            "prefer_lo": 12,
+            "stratum_field": "suite",
+            "stratum_value": "simpleqa",
+            "suggested_min_rows": 20
+          }
+        ],
+        "audit_target_direction_audit_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_audit_target_direction_audit.json",
+        "audit_target_direction_decision": {
+          "recommended_next": "collect non-overlapping cross-action preference rows for the listed collection_targets (balance both directions); re-run evaluate_offline_reward_pairwise_ranker.py holdouts after collection. Do NOT retune the absolute MLP/calibrator/pairwise family.",
+          "runtime_gate_change_allowed": false,
+          "status": "preference_coverage_gaps_found",
+          "weak_strata": [
+            "source_family:seeding_eval",
+            "suite:agentic",
+            "suite:general",
+            "suite:hotpotqa",
+            "suite:simpleqa"
+          ]
+        },
+        "audit_target_ranker_aggregate_decision": {
+          "best_family": "hist_gradient_boosting",
+          "blockers": [],
+          "recommended_next": "cross_validate_pairwise_ranker_on_expanded_contract",
+          "runtime_gate_change_allowed": false,
+          "status": "pairwise_ranker_signal"
+        },
+        "audit_target_ranker_holdout_decision": {
+          "blockers": [
+            "source_family:orchestrator_live_seed:insufficient_pairwise_signal",
+            "source_family:seeding_eval:insufficient_pairwise_signal",
+            "suite:general:insufficient_pairwise_signal"
+          ],
+          "eligible_holdouts": 16,
+          "passing_holdouts": 13,
+          "recommended_next": "collect_more_non_overlapping_cross_action_preferences",
+          "runtime_gate_change_allowed": false,
+          "status": "mixed_holdout_signal"
+        },
+        "audit_target_ranker_input": {
+          "action_pair_counts": {
+            "architect_general>architect_general": 735,
+            "architect_general>coder_escalation": 30,
+            "architect_general>frontdoor": 1523,
+            "coder_escalation>architect_general": 9,
+            "coder_escalation>coder_escalation": 35,
+            "coder_escalation>frontdoor": 25,
+            "frontdoor>architect_general": 2740,
+            "frontdoor>coder_escalation": 21,
+            "frontdoor>frontdoor": 1126
+          },
+          "cross_action_pair_rows": 4348,
+          "group_count": 1981,
+          "pair_rows": 6244,
+          "pairing_mode_counts": {
+            "score_ordered": 6244
+          },
+          "same_action_pair_rows": 1896,
+          "source_family_pair_counts": {
+            "orchestrator_live_seed": 104,
+            "seeding_eval": 205,
+            "three_way_eval": 5935
+          },
+          "suite_pair_counts": {
+            "agentic": 10,
+            "coder": 543,
+            "debugbench": 658,
+            "general": 535,
+            "gpqa": 961,
+            "hotpotqa": 1114,
+            "instruction_precision": 64,
+            "livecodebench": 616,
+            "long_context": 197,
+            "math": 23,
+            "mode_advantage": 134,
+            "mode_advantage_hard": 501,
+            "simpleqa": 470,
+            "thinking": 418
+          }
+        },
+        "audit_target_ranker_summary_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_ranker_score_ordered_audit_target_expanded_summary.json",
+        "autopilot_guard": {
+          "active_processes": [
+            "2112296 /mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/autopilot/autopilot.py start --max-trials 2000"
+          ],
+          "process_pattern": "scripts/autopilot/autopilot.py start",
+          "refusal_exit_code": 75
+        },
+        "batch_count": 0,
+        "blockers": [],
+        "candidate_contract_coverage": {
+          "action_pair_counts": {
+            "architect_general>coder_escalation": 14,
+            "architect_general>frontdoor": 8,
+            "coder_escalation>architect_general": 2,
+            "frontdoor>architect_general": 8
+          },
+          "contrastive_groups": 28,
+          "cross_action_pair_rows": 32,
+          "pair_rows": 32,
+          "same_action_pair_rows": 0,
+          "skipped_no_contrast_groups": 274,
+          "source_family_pair_counts": {
+            "orchestrator_live_seed": 3,
+            "seeding_eval": 29
+          },
+          "source_record_groups": 302,
+          "suite_pair_counts": {
+            "debugbench": 2,
+            "gpqa": 6,
+            "hotpotqa": 2,
+            "instruction_precision": 8,
+            "simpleqa": 6,
+            "thinking": 8
+          },
+          "unique_action_pairs": 4
+        },
+        "candidate_contract_decision": {
+          "min_cross_action_pairs": 50,
+          "min_pairs": 100,
+          "recommended_next": "collect_more_within_task_positive_negative_contrasts",
+          "runtime_gate_change_allowed": false,
+          "status": "insufficient_contrast"
+        },
+        "candidate_contract_exhausted": true,
+        "candidate_contract_summary_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_preference_contract_candidate_only_expanded_gap_summary.json",
+        "manifest_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_collection_manifest.json",
+        "manifest_schema_version": "offline_reward_pairwise_collection_window.v1",
+        "post_collection_step_count": 7,
+        "ready": false,
+        "source_plan_decision": {
+          "recommended_next": "score_selected_candidates_and_rebuild_pairwise_contract",
+          "runtime_gate_change_allowed": false,
+          "status": "expansion_plan_ready"
+        },
+        "source_reward_diagnostic": {
+          "binary_threshold": 0.5,
+          "diagnostic_only": true,
+          "independent_oracle": false,
+          "interpretation": "Use this to test whether the candidate set contains enough within-task source-reward contrast. It is not an adopted independent reward oracle.",
+          "label_status": "diagnostic_source_reward_passthrough",
+          "recommended_next": "decide whether A9 should train on source-q-reward pairwise labels or build a new independent scorer/source contract before ranker use",
+          "runtime_gate_change_allowed": false,
+          "score_source": "source_q_reward_passthrough",
+          "score_value_counts": {
+            "-0.3": 60,
+            "-0.5": 8,
+            "0.0": 154,
+            "0.1": 56,
+            "0.363842889264226": 2,
+            "0.5": 30,
+            "1.0": 316
+          },
+          "source_reward_passthrough": true
+        },
+        "source_reward_diagnostic_coverage": {
+          "action_pair_counts": {
+            "architect_general>coder_escalation": 14,
+            "architect_general>frontdoor": 8,
+            "coder_escalation>architect_general": 2,
+            "frontdoor>architect_general": 134,
+            "frontdoor>coder_escalation": 22
+          },
+          "contrastive_groups": 158,
+          "cross_action_pair_rows": 180,
+          "pair_rows": 180,
+          "same_action_pair_rows": 0,
+          "skipped_no_contrast_groups": 144,
+          "source_family_pair_counts": {
+            "orchestrator_live_seed": 20,
+            "seeding_eval": 160
+          },
+          "source_record_groups": 302,
+          "suite_pair_counts": {
+            "coder": 8,
+            "debugbench": 8,
+            "general": 8,
+            "gpqa": 8,
+            "hotpotqa": 48,
+            "instruction_precision": 44,
+            "livecodebench": 8,
+            "long_context": 8,
+            "math": 8,
+            "simpleqa": 18,
+            "thinking": 14
+          },
+          "unique_action_pairs": 5
+        },
+        "source_reward_diagnostic_decision": {
+          "min_cross_action_pairs": 50,
+          "min_pairs": 100,
+          "recommended_next": "decide whether A9 should train on source-q-reward pairwise labels or build a new independent scorer/source contract before ranker use",
+          "runtime_gate_change_allowed": false,
+          "status": "contract_ready"
+        },
+        "source_reward_diagnostic_summary_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_source_reward_diagnostic_summary.json",
+        "source_reward_ranker_aggregate_decision": {
+          "best_family": "hist_gradient_boosting",
+          "blockers": [],
+          "recommended_next": "cross_validate_pairwise_ranker_on_expanded_contract",
+          "runtime_gate_change_allowed": false,
+          "status": "pairwise_ranker_signal"
+        },
+        "source_reward_ranker_cv_decision": {
+          "best_family": "hist_gradient_boosting",
+          "blockers": [],
+          "recommended_next": "resolve_independent_holdout_blockers_before_runtime_use",
+          "runtime_gate_change_allowed": false,
+          "status": "pairwise_ranker_signal"
+        },
+        "source_reward_ranker_holdout_decision": {
+          "blockers": [],
+          "eligible_holdouts": 3,
+          "passing_holdouts": 3,
+          "recommended_next": "preregister_downstream_pairwise_reward_use",
+          "runtime_gate_change_allowed": false,
+          "status": "holdout_signal_consistent"
+        },
+        "source_reward_ranker_input": {
+          "action_pair_counts": {
+            "architect_general>coder_escalation": 14,
+            "architect_general>frontdoor": 8,
+            "coder_escalation>architect_general": 2,
+            "frontdoor>architect_general": 134,
+            "frontdoor>coder_escalation": 22
+          },
+          "cross_action_pair_rows": 180,
+          "group_count": 158,
+          "pair_rows": 180,
+          "pairing_mode_counts": {
+            "score_ordered": 180
+          },
+          "same_action_pair_rows": 0,
+          "source_family_pair_counts": {
+            "orchestrator_live_seed": 20,
+            "seeding_eval": 160
+          },
+          "suite_pair_counts": {
+            "coder": 8,
+            "debugbench": 8,
+            "general": 8,
+            "gpqa": 8,
+            "hotpotqa": 48,
+            "instruction_precision": 44,
+            "livecodebench": 8,
+            "long_context": 8,
+            "math": 8,
+            "simpleqa": 18,
+            "thinking": 14
+          }
+        },
+        "source_reward_ranker_ready": true,
+        "source_reward_ranker_summary_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_ranker_source_reward_diagnostic_summary.json",
+        "source_reward_target_contract": {
+          "acceptance_constraints": {
+            "min_cross_action_pair_rows": 50,
+            "min_pair_rows": 100,
+            "required_aggregate_status": "pairwise_ranker_signal",
+            "required_cv_status": "pairwise_ranker_signal",
+            "required_holdout_status": "holdout_signal_consistent",
+            "runtime_gate_change_allowed": false
+          },
+          "allowed_use": [
+            "offline ranker/reward-model training experiments",
+            "offline feature-target validation and ablation",
+            "handoff planning for a future independent oracle/source contract"
+          ],
+          "evidence": {
+            "aggregate_decision": {
+              "best_family": "hist_gradient_boosting",
+              "blockers": [],
+              "recommended_next": "cross_validate_pairwise_ranker_on_expanded_contract",
+              "runtime_gate_change_allowed": false,
+              "status": "pairwise_ranker_signal"
+            },
+            "coverage": {
+              "action_pair_counts": {
+                "architect_general>coder_escalation": 14,
+                "architect_general>frontdoor": 8,
+                "coder_escalation>architect_general": 2,
+                "frontdoor>architect_general": 134,
+                "frontdoor>coder_escalation": 22
+              },
+              "contrastive_groups": 158,
+              "cross_action_pair_rows": 180,
+              "pair_rows": 180,
+              "same_action_pair_rows": 0,
+              "skipped_no_contrast_groups": 144,
+              "source_family_pair_counts": {
+                "orchestrator_live_seed": 20,
+                "seeding_eval": 160
+              },
+              "source_record_groups": 302,
+              "suite_pair_counts": {
+                "coder": 8,
+                "debugbench": 8,
+                "general": 8,
+                "gpqa": 8,
+                "hotpotqa": 48,
+                "instruction_precision": 44,
+                "livecodebench": 8,
+                "long_context": 8,
+                "math": 8,
+                "simpleqa": 18,
+                "thinking": 14
+              },
+              "unique_action_pairs": 5
+            },
+            "cross_validation_decision": {
+              "best_family": "hist_gradient_boosting",
+              "blockers": [],
+              "recommended_next": "resolve_independent_holdout_blockers_before_runtime_use",
+              "runtime_gate_change_allowed": false,
+              "status": "pairwise_ranker_signal"
+            },
+            "cv_folds": 5,
+            "diagnostic_boundary": {
+              "binary_threshold": 0.5,
+              "diagnostic_only": true,
+              "independent_oracle": false,
+              "interpretation": "Use this to test whether the candidate set contains enough within-task source-reward contrast. It is not an adopted independent reward oracle.",
+              "label_status": "diagnostic_source_reward_passthrough",
+              "recommended_next": "decide whether A9 should train on source-q-reward pairwise labels or build a new independent scorer/source contract before ranker use",
+              "runtime_gate_change_allowed": false,
+              "score_source": "source_q_reward_passthrough",
+              "score_value_counts": {
+                "-0.3": 60,
+                "-0.5": 8,
+                "0.0": 154,
+                "0.1": 56,
+                "0.363842889264226": 2,
+                "0.5": 30,
+                "1.0": 316
+              },
+              "source_reward_passthrough": true
+            },
+            "diagnostic_decision": {
+              "min_cross_action_pairs": 50,
+              "min_pairs": 100,
+              "recommended_next": "decide whether A9 should train on source-q-reward pairwise labels or build a new independent scorer/source contract before ranker use",
+              "runtime_gate_change_allowed": false,
+              "status": "contract_ready"
+            },
+            "families_requested": [
+              "logistic_l2",
+              "hist_gradient_boosting",
+              "random_forest"
+            ],
+            "holdout_decision": {
+              "blockers": [],
+              "eligible_holdouts": 3,
+              "passing_holdouts": 3,
+              "recommended_next": "preregister_downstream_pairwise_reward_use",
+              "runtime_gate_change_allowed": false,
+              "status": "holdout_signal_consistent"
+            },
+            "ranker_input": {
+              "action_pair_counts": {
+                "architect_general>coder_escalation": 14,
+                "architect_general>frontdoor": 8,
+                "coder_escalation>architect_general": 2,
+                "frontdoor>architect_general": 134,
+                "frontdoor>coder_escalation": 22
+              },
+              "cross_action_pair_rows": 180,
+              "group_count": 158,
+              "pair_rows": 180,
+              "pairing_mode_counts": {
+                "score_ordered": 180
+              },
+              "same_action_pair_rows": 0,
+              "source_family_pair_counts": {
+                "orchestrator_live_seed": 20,
+                "seeding_eval": 160
+              },
+              "suite_pair_counts": {
+                "coder": 8,
+                "debugbench": 8,
+                "general": 8,
+                "gpqa": 8,
+                "hotpotqa": 48,
+                "instruction_precision": 44,
+                "livecodebench": 8,
+                "long_context": 8,
+                "math": 8,
+                "simpleqa": 18,
+                "thinking": 14
+              }
+            },
+            "seeds": [
+              42,
+              7,
+              13,
+              101,
+              2026
+            ],
+            "source_reward_diagnostic_summary": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_source_reward_diagnostic_summary.json",
+            "source_reward_ranker_summary": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_ranker_source_reward_diagnostic_summary.json",
+            "split": {
+              "group_disjoint": true,
+              "test_split": 0.25
+            }
+          },
+          "forbidden_use": [
+            "live routing decisions",
+            "serve-time request gating",
+            "online reward updates",
+            "claiming independent oracle evidence",
+            "production promotion without a separate deployment gate"
+          ],
+          "generated_at": "2026-07-04T18:19:55.911523+00:00",
+          "next_step": "Use this only as an offline A9 training target candidate; any live use requires a separate independent deployment gate.",
+          "schema_version": "offline_reward_source_reward_pairwise_target_contract.v1",
+          "status": "preregistered_offline_training_target",
+          "target": {
+            "diagnostic_only": false,
+            "independent_oracle": false,
+            "learning_target": "within_source_record_score_ordered_preference_from_source_q_reward",
+            "name": "a9_source_q_reward_pairwise_training_target_v1",
+            "pairwise_jsonl": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_source_reward_diagnostic.jsonl",
+            "prompt_free": true,
+            "runtime_gate_change_allowed": false,
+            "score_source": "source_q_reward_passthrough",
+            "source_reward_passthrough": true
+          }
+        },
+        "source_reward_target_contract_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_source_reward_pairwise_target_contract.json",
+        "source_reward_target_preregistered": true,
+        "status": "no_runnable_batches",
+        "warnings": [
+          "manifest has no runnable collection batches"
+        ]
+      },
+      "key": "a9_pairwise_collection",
+      "status": "ready",
+      "summary": "A9 pairwise source-acquisition window is closed with 0 batch(es); candidate-only contract decision is insufficient_contrast; source-reward diagnostic is contract_ready; source-reward ranker is pairwise_ranker_signal; source-reward target contract is preregistered_offline_training_target; audit-target ranker holdout is mixed_holdout_signal (13/16 passing); audit-target collection window is blocked with 4 batch(es)."
+    },
+    {
+      "blockers": [],
+      "details": {
+        "candidate_table_errors": [],
+        "candidate_table_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/xmas_winner_table.yaml",
+        "candidate_table_ready": true,
+        "config_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/classifier_config.yaml",
+        "config_validation_errors": [],
+        "latest_ab_blockers": [],
+        "latest_ab_decision_status": "promote_candidate",
+        "latest_ab_latency_ratio": 0.9383678904318052,
+        "latest_ab_policy": "incumbent_constrained_cheapfirst_v2",
+        "latest_ab_ready": true,
+        "latest_ab_results_path": "/mnt/raid0/llm/epyc-orchestrator/benchmarks/results/runs/xmas_live_ab/20260703T213541Z-constrained-policy-v2/results.jsonl",
+        "latest_ab_score_delta": 0.09999999999999998,
+        "latest_ab_summary_path": "/mnt/raid0/llm/epyc-orchestrator/benchmarks/results/runs/xmas_live_ab/20260703T213541Z-constrained-policy-v2/summary.json",
+        "mode": "enforce",
+        "quiet_window_blockers": [
+          "active AutoPilot process(es): 2112296 /mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/autopilot/autopilot.py start --max-trials 2000"
+        ],
+        "quiet_window_ready": false,
+        "require_complete_table": true,
+        "required_ab_policy": "incumbent_constrained_cheapfirst_v2",
+        "winner_table_path": "orchestration/xmas_winner_table.yaml"
+      },
+      "key": "xmas_production_path",
+      "status": "ready",
+      "summary": "X-MAS production routing is enforce-ready."
+    },
+    {
+      "blockers": [],
+      "details": {
+        "coverage_status": "low_coverage",
+        "distinct_journal_question_keys": 2515,
+        "distinct_vs_pool_stable_upper_bound_pct": 4.8171,
+        "eval_bearing_trials": 287,
+        "interpretation": "Fixed authority-core repetition is acceptable for paired safety evidence; planner-learning coverage is narrow if this is the dominant optimization signal.",
+        "least_covered_non_sentinel_suites": [
+          {
+            "distinct_qids": 5,
+            "suite": "tool_use"
+          },
+          {
+            "distinct_qids": 36,
+            "suite": "agentic"
+          },
+          {
+            "distinct_qids": 36,
+            "suite": "skill_transfer"
+          },
+          {
+            "distinct_qids": 44,
+            "suite": "long_context"
+          },
+          {
+            "distinct_qids": 49,
+            "suite": "real_suite_v1"
+          },
+          {
+            "distinct_qids": 56,
+            "suite": "mode_advantage_hard"
+          },
+          {
+            "distinct_qids": 81,
+            "suite": "mode_advantage"
+          },
+          {
+            "distinct_qids": 121,
+            "suite": "coder"
+          },
+          {
+            "distinct_qids": 138,
+            "suite": "bigcodebench"
+          },
+          {
+            "distinct_qids": 146,
+            "suite": "cruxeval"
+          }
+        ],
+        "matched_pool_stable_pct": 4.7884,
+        "pool_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/prompts/question_pool.jsonl",
+        "pool_stable_question_keys": 52210,
+        "question_result_rows": 25525,
+        "recommendation": {
+          "do_not_change_mid_w8": true,
+          "lane_split": [
+            "authority_core: fixed paired core for W4/W6/W8 promotion evidence",
+            "exploration_coverage: rotating/advisory pool for planner learning",
+            "promotion_holdout: fresh held-out T2 acceptance evidence"
+          ],
+          "next_step": "Use this report as a guardrail before changing sampling policy; introduce any rotation behind a new instrument-era label."
+        },
+        "repeat_factor": 10.1491,
+        "tier_coverage": {
+          "0": {
+            "distinct_journal_question_keys": 10,
+            "distinct_vs_pool_pct": 0.0,
+            "eval_bearing_trials": 1,
+            "pool_question_keys": 0,
+            "question_result_rows": 10
+          },
+          "1": {
+            "distinct_journal_question_keys": 1834,
+            "distinct_vs_pool_pct": 8.6784,
+            "eval_bearing_trials": 265,
+            "pool_question_keys": 21133,
+            "question_result_rows": 15685
+          },
+          "2": {
+            "distinct_journal_question_keys": 843,
+            "distinct_vs_pool_pct": 3.1612,
+            "eval_bearing_trials": 19,
+            "pool_question_keys": 26667,
+            "question_result_rows": 9510
+          },
+          "3": {
+            "distinct_journal_question_keys": 160,
+            "distinct_vs_pool_pct": 2.9461,
+            "eval_bearing_trials": 2,
+            "pool_question_keys": 5431,
+            "question_result_rows": 320
+          }
+        },
+        "trial_id_max": 1163,
+        "trial_id_min": 0
+      },
+      "key": "eval_task_coverage",
+      "status": "attention",
+      "summary": "Eval-task coverage low_coverage: 2515/52210 stable qids (4.8171%), repeat_factor=10.1491x."
+    },
+    {
+      "blockers": [],
+      "details": {
+        "activation_gaps": [],
+        "api_pid": 2003616,
+        "api_repl_enabled": true,
+        "api_structured_tool_output_enabled": true,
+        "api_tool_sentinels_enabled": true,
+        "api_tools_enabled": true,
+        "autopilot_pid": 2112296,
+        "autopilot_tool_sentinels_enabled": true,
+        "config_attest_error": null,
+        "latest_tool_metrics": {
+          "mean_tools_used": 0.0,
+          "per_suite_tool_helpfulness": {},
+          "tool_helpfulness": NaN,
+          "tool_name_counts": null,
+          "tool_use_rate": 0.0,
+          "total_tool_calls": 0,
+          "trial_id": 1159
+        },
+        "recent_tool_metrics": {
+          "evaluated_rows": 10,
+          "latest_nonzero_tool_metrics": {
+            "mean_tools_used": 0.14545454545454545,
+            "per_suite_tool_helpfulness": {},
+            "tool_helpfulness": NaN,
+            "tool_name_counts": null,
+            "tool_use_rate": 0.09090909090909091,
+            "total_tool_calls": 8,
+            "trial_id": 1157
+          },
+          "nonzero_rows": 6,
+          "total_tool_calls": 41,
+          "trial_ids": [
+            1150,
+            1151,
+            1152,
+            1153,
+            1154,
+            1155,
+            1156,
+            1157,
+            1158,
+            1159
+          ],
+          "window": 10
+        }
+      },
+      "key": "tool_use_activation",
+      "status": "ready",
+      "summary": "Tool-use planner hints are backed by active API/AutoPilot sentinel telemetry."
+    }
+  ],
+  "summary": {
+    "a9_collection_batch_count": 0,
+    "a9_collection_blockers": [],
+    "a9_collection_ready": false,
+    "a9_collection_status": "no_runnable_batches",
+    "active_next_action_keys": [
+      "collect_w8_promotion_eval_evidence"
+    ],
+    "blocked_next_action_keys": [
+      "collect_a9_audit_target_pairwise_preferences"
+    ],
+    "blocked_sections": [
+      "w8_promotion_trajectory"
+    ],
+    "blocker_count": 1,
+    "ds_e1_clean_window_blockers": [
+      "active AutoPilot process(es): 2112296 /mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/autopilot/autopilot.py start --max-trials 2000",
+      "live llama-server process(es): 1870477 /mnt/raid0/llm/llama.cpp/build/bin/llama-server -m /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf --host 127.0.0.1 --port 8080 -np 1 -c 32768 -t 48 -ub 8192 --flash-attn on --jinja -ctk q8_0 -ctv q8_0 --mlock --spec-type draft-mtp --spec-draft-n-max 4 --slot-save-path /mnt/raid0/llm/cache/kv_slots/frontdoor; 1870837 /mnt/raid0/llm/llama.cpp/build/bin/llama-server -m /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf --host 127.0.0.1 --port 8180 -np 1 -c 32768 -t 48 -ub 8192 --flash-attn on --jinja -ctk q8_0 -ctv q8_0 --mlock --spec-type draft-mtp --spec-draft-n-max 4 --slot-save-path /mnt/raid0/llm/cache/kv_slots/frontdoor; 1871111 /mnt/raid0/llm/llama.cpp/build/bin/llama-server -m /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf --host 127.0.0.1 --port 8280 -np 1 -c 32768 -t 48 -ub 8192 --flash-attn on --jinja -ctk q8_0 -ctv q8_0 --mlock --spec-type draft-mtp --spec-draft-n-max 4 --slot-save-path /mnt/raid0/llm/cache/kv_slots/frontdoor; 1871389 /mnt/raid0/llm/llama.cpp/build/bin/llama-server -m /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf --host 127.0.0.1 --port 8380 -np 1 -c 32768 -t 48 -ub 8192 --flash-attn on --jinja -ctk q8_0 -ctv q8_0 --mlock --spec-type draft-mtp --spec-draft-n-max 4 --slot-save-path /mnt/raid0/llm/cache/kv_slots/frontdoor; ... +24 more"
+    ],
+    "ds_e1_clean_window_ready": false,
+    "ds_e1_ready_for_profile_decision": true,
+    "eval_task_coverage_pct": 4.8171,
+    "eval_task_coverage_status": "low_coverage",
+    "eval_task_repeat_factor": 10.1491,
+    "eval_task_tier_coverage": {
+      "0": {
+        "distinct_journal_question_keys": 10,
+        "distinct_vs_pool_pct": 0.0,
+        "eval_bearing_trials": 1,
+        "pool_question_keys": 0,
+        "question_result_rows": 10
+      },
+      "1": {
+        "distinct_journal_question_keys": 1834,
+        "distinct_vs_pool_pct": 8.6784,
+        "eval_bearing_trials": 265,
+        "pool_question_keys": 21133,
+        "question_result_rows": 15685
+      },
+      "2": {
+        "distinct_journal_question_keys": 843,
+        "distinct_vs_pool_pct": 3.1612,
+        "eval_bearing_trials": 19,
+        "pool_question_keys": 26667,
+        "question_result_rows": 9510
+      },
+      "3": {
+        "distinct_journal_question_keys": 160,
+        "distinct_vs_pool_pct": 2.9461,
+        "eval_bearing_trials": 2,
+        "pool_question_keys": 5431,
+        "question_result_rows": 320
+      }
+    },
+    "next_action_keys": [
+      "collect_w8_promotion_eval_evidence",
+      "collect_a9_audit_target_pairwise_preferences"
+    ],
+    "next_action_statuses": {
+      "collect_a9_audit_target_pairwise_preferences": "blocked",
+      "collect_w8_promotion_eval_evidence": "active"
+    },
+    "phase_action_type": "structural_experiment",
+    "phase_status": "active",
+    "phase_trial_id": 1163,
+    "ready": false,
+    "ready_next_action_keys": [],
+    "restart_ready": true,
+    "section_statuses": {
+      "a9_pairwise_collection": "ready",
+      "ds_e1_dynamic_stack": "ready",
+      "eval_task_coverage": "attention",
+      "phase_health": "ready",
+      "tool_use_activation": "ready",
+      "w4_w6_restart_cutover": "ready",
+      "w8_promotion_trajectory": "blocked",
+      "xmas_production_path": "ready"
+    },
+    "tool_use_activation_gaps": [],
+    "tool_use_activation_status": "ready",
+    "tool_use_latest_total_tool_calls": 0,
+    "tool_use_recent_nonzero_rows": 6,
+    "tool_use_recent_total_tool_calls": 41,
+    "w8_latest_combined_E": 0.627218,
+    "w8_latest_fresh_eval": false,
+    "w8_latest_required_E": 100.0,
+    "w8_latest_seq_state": "accumulating",
+    "w8_latest_seq_trial_id": 1159,
+    "w8_open_requirements": [
+      "combined_E_below_required",
+      "fresh_promotion_eval_required",
+      "seq_confirmation_required"
+    ],
+    "w8_promotion_status": "none",
+    "w8_replay_concentration_warning": false,
+    "w8_replay_stale_accumulating_count": 5,
+    "w8_replay_top_active_candidate": null,
+    "xmas_latest_ab_decision_status": "promote_candidate",
+    "xmas_latest_ab_policy": "incumbent_constrained_cheapfirst_v2",
+    "xmas_mode": "enforce",
+    "xmas_quiet_window_ready": false
+  }
+}
