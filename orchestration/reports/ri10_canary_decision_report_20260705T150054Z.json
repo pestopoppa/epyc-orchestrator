@@ -1,0 +1,134 @@
+{
+  "arms": {
+    "enforce": {
+      "completed": 31,
+      "escalation_event_count": 0,
+      "escalation_task_count": 0,
+      "escalation_task_rate": 0.0,
+      "estimated_cost_count": 31,
+      "estimated_cost_mean": 0.000324516,
+      "estimated_cost_sum": 0.01006,
+      "failed": 0,
+      "latency_count": 31,
+      "latency_mean_s": 2.229,
+      "latency_p50_s": 1.675,
+      "latency_p95_s": 2.583,
+      "missing_outcome": 0,
+      "operational_error_or_missing": 0,
+      "operational_error_or_missing_rate": 0.0,
+      "plan_review_decisions": {},
+      "plan_review_event_count": 0,
+      "plan_review_task_count": 0,
+      "plan_review_task_rate": 0.0,
+      "quality_count": 0,
+      "quality_mean": null,
+      "risk_gate_actions": {
+        "<missing>": 31
+      },
+      "roles": {
+        "frontdoor": 11,
+        "worker_general": 10,
+        "worker_vision": 10
+      },
+      "rows": 31,
+      "success": 31,
+      "unique_tasks": 31
+    },
+    "shadow": {
+      "completed": 49,
+      "escalation_event_count": 0,
+      "escalation_task_count": 0,
+      "escalation_task_rate": 0.0,
+      "estimated_cost_count": 50,
+      "estimated_cost_mean": 0.00084774,
+      "estimated_cost_sum": 0.042387,
+      "failed": 1,
+      "latency_count": 50,
+      "latency_mean_s": 8.471,
+      "latency_p50_s": 1.669,
+      "latency_p95_s": 32.26,
+      "missing_outcome": 0,
+      "operational_error_or_missing": 1,
+      "operational_error_or_missing_rate": 0.02,
+      "plan_review_decisions": {},
+      "plan_review_event_count": 0,
+      "plan_review_task_count": 0,
+      "plan_review_task_rate": 0.0,
+      "quality_count": 0,
+      "quality_mean": null,
+      "risk_gate_actions": {
+        "<missing>": 31,
+        "not_enforced": 19
+      },
+      "roles": {
+        "frontdoor": 11,
+        "worker_general": 23,
+        "worker_vision": 16
+      },
+      "rows": 50,
+      "success": 49,
+      "unique_tasks": 50
+    }
+  },
+  "canary_roles": [
+    "frontdoor",
+    "worker_general",
+    "worker_vision"
+  ],
+  "canary_start": "2026-04-06",
+  "comparison": {
+    "escalation_task_rate_ratio_enforce_over_shadow": null,
+    "estimated_cost_mean_ratio_enforce_over_shadow": 0.382801,
+    "latency_mean_ratio_enforce_over_shadow": 0.263133,
+    "latency_p95_ratio_enforce_over_shadow": 0.080068,
+    "operational_error_rate_delta": -0.02,
+    "plan_review_task_rate_ratio_enforce_over_shadow": null,
+    "quality_mean_delta_enforce_minus_shadow": null
+  },
+  "decision": {
+    "blockers": [
+      "factuality_not_scored"
+    ],
+    "notes": [
+      "Progress logs contain operational outcomes, but no scored factuality/accuracy field for both RI-10 arms; success/failure is not a factuality substitute."
+    ],
+    "status": "hold_quality_unscored",
+    "thresholds": {
+      "max_escalation_or_review_rate_ratio": 1.2,
+      "max_estimated_cost_mean_ratio": 1.05,
+      "max_p95_latency_ratio": 1.1
+    }
+  },
+  "decision_gate_high_risk_samples": 50,
+  "generated_at": "2026-07-05T15:01:12Z",
+  "measurement_notes": [
+    "This is an observational live-traffic canary comparison, not paired prompt A/B.",
+    "Operational task success is reported separately from factuality/accuracy; it does not satisfy RI-10 factuality evidence."
+  ],
+  "min_canary_arm_samples": 10,
+  "sample_coverage": {
+    "canary_arm_counts_by_role_since_telemetry_health_start": {
+      "frontdoor": {
+        "enforce_high_risk": 11,
+        "shadow_high_risk": 11
+      },
+      "worker_general": {
+        "enforce_high_risk": 10,
+        "shadow_high_risk": 23
+      },
+      "worker_vision": {
+        "enforce_high_risk": 10,
+        "shadow_high_risk": 16
+      }
+    },
+    "canary_arm_counts_since_telemetry_health_start": {
+      "enforce_high_risk": 31,
+      "shadow_high_risk": 50
+    },
+    "canary_decision_ready": true,
+    "telemetry_collection_blocker": "decision_ready",
+    "telemetry_collection_reason": "current high-risk telemetry has decision-grade canary arm coverage"
+  },
+  "source_glob": "/mnt/raid0/llm/epyc-orchestrator/logs/progress/*.jsonl",
+  "telemetry_health_start": "2026-06-20"
+}
