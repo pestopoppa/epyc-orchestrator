@@ -155,9 +155,15 @@ def test_local_planner_provider_posts_role_scoped_payload(monkeypatch) -> None:
     assert result.text == "draft text"
     assert captured["timeout"] == 9
     assert captured["url"] == "http://local/v1/chat/completions"
+    content = captured["payload"]["messages"][0]["content"]
+    assert content.startswith("CRITICAL OUTPUT CONTRACT FOR THIS LOCAL AUTOPILOT DRAFT:")
+    assert content.endswith(
+        "- If no high-confidence action is justified, emit the safest valid fallback action from the prompt.\n"
+    )
+    assert "\nplanner prompt\n" in content
     assert captured["payload"] == {
         "model": "ingest_long_context",
-        "messages": [{"role": "user", "content": "planner prompt"}],
+        "messages": [{"role": "user", "content": content}],
         "temperature": 0.1,
         "max_tokens": 777,
         "stream": False,
@@ -168,6 +174,33 @@ def test_local_planner_provider_posts_role_scoped_payload(monkeypatch) -> None:
         "seed": 123,
     }
     assert captured["archive"]["url"] == "http://local/v1/chat/completions"
+
+
+def test_local_planner_contract_is_draft_only(monkeypatch) -> None:
+    monkeypatch.delenv("AUTOPILOT_LOCAL_PLANNER_ACTION_CONTRACT", raising=False)
+
+    provider = planner_providers.LocalPlannerProvider()
+
+    draft_content = provider._payload("planner prompt", planner_role="draft")["messages"][0][
+        "content"
+    ]
+    critique_content = provider._payload("planner prompt", planner_role="critique")["messages"][0][
+        "content"
+    ]
+
+    assert draft_content.startswith("CRITICAL OUTPUT CONTRACT")
+    assert "\nplanner prompt\n" in draft_content
+    assert critique_content == "planner prompt"
+
+
+def test_local_planner_contract_can_be_disabled(monkeypatch) -> None:
+    monkeypatch.setenv("AUTOPILOT_LOCAL_PLANNER_ACTION_CONTRACT", "0")
+
+    provider = planner_providers.LocalPlannerProvider()
+
+    content = provider._payload("planner prompt", planner_role="draft")["messages"][0]["content"]
+
+    assert content == "planner prompt"
 
 
 def test_local_planner_default_url_uses_ipv4_loopback(monkeypatch) -> None:

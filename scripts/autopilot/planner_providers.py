@@ -37,6 +37,15 @@ _LOCAL_TRANSIENT_HTTP_ERRORS = (
     httpx.RemoteProtocolError,
 )
 
+_LOCAL_ACTION_OUTPUT_CONTRACT = """\
+CRITICAL OUTPUT CONTRACT FOR THIS LOCAL AUTOPILOT DRAFT:
+- Return exactly one fenced ```json:autopilot_actions block followed by one fenced ```json:autopilot_rationale block.
+- Do not write analysis, caveats, summaries, or prose before the first fence.
+- Use only action types and fields explicitly allowed in the prompt.
+- Do not invent flags, surfaces, suites, dependencies, or evidence.
+- If no high-confidence action is justified, emit the safest valid fallback action from the prompt.
+"""
+
 
 @dataclass
 class PlannerProviderResult:
@@ -349,7 +358,7 @@ class LocalPlannerProvider:
         del session_id, cwd
         start = time.time()
         tap = _open_planner_tap()
-        payload = self._payload(prompt)
+        payload = self._payload(prompt, planner_role=role)
         try:
             if tap is not None:
                 _tap_write(
@@ -377,6 +386,7 @@ class LocalPlannerProvider:
             if ok:
                 _tap_write(
                     tap,
+                    f"[local:result:{self.name}:{role}] {text[:4000]}\n"
                     f"[END provider={self.name} role={role}] "
                     f"result_chars={len(text)}\n{'=' * 72}\n",
                 )
@@ -419,10 +429,11 @@ class LocalPlannerProvider:
                 except Exception:
                     pass
 
-    def _payload(self, prompt: str) -> dict[str, Any]:
+    def _payload(self, prompt: str, *, planner_role: str | None = None) -> dict[str, Any]:
+        content = _local_planner_prompt(prompt, planner_role=planner_role)
         payload: dict[str, Any] = {
             "model": self._model,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": [{"role": "user", "content": content}],
             "temperature": self._temperature,
             "max_tokens": self._max_tokens,
             "stream": False,
@@ -509,6 +520,7 @@ class LocalChatPlannerProvider:
             if ok:
                 _tap_write(
                     tap,
+                    f"[local:result:{self.name}:{role}] {text[:4000]}\n"
                     f"[END provider={self.name} role={role}] "
                     f"result_chars={len(text)}\n{'=' * 72}\n",
                 )
@@ -615,6 +627,14 @@ def parse_openai_chat_response(data: dict[str, Any]) -> str:
         if isinstance(value, str):
             return value
     return ""
+
+
+def _local_planner_prompt(prompt: str, *, planner_role: str | None = None) -> str:
+    if planner_role != "draft":
+        return prompt
+    if not _env_bool("AUTOPILOT_LOCAL_PLANNER_ACTION_CONTRACT", True):
+        return prompt
+    return f"{_LOCAL_ACTION_OUTPUT_CONTRACT}\n{prompt}\n\n{_LOCAL_ACTION_OUTPUT_CONTRACT}"
 
 
 def get_planner_provider(name: str) -> PlannerProvider:
@@ -906,6 +926,13 @@ def _env_float(name: str, default: float) -> float:
         return float(os.environ.get(name, str(default)))
     except (TypeError, ValueError):
         return default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off", ""}
 
 
 def _env_optional_int(name: str) -> int | None:
