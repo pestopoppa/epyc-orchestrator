@@ -2190,3 +2190,47 @@ def test_pareto_endpoint_marks_legacy_state_archive_fallback(
         "state_error": None,
         "using_legacy_state_archive": True,
     }
+
+
+# ----- _poll_all_slots fan-out deadline -----
+
+
+def test_poll_all_slots_deadline_bounds_hung_ports(monkeypatch) -> None:
+    """A hung /slots endpoint must cost at most the fan-out deadline, not its
+    own per-request budget times the port count — the snapshot serve path
+    feeds the topology/region-locks/live-tap panels."""
+    monkeypatch.setattr(
+        dashboard, "_discover_llama_ports",
+        lambda: {8070: "frontdoor", 8071: "hung_a", 8072: "hung_b"},
+    )
+
+    async def fake_poll(client, port):
+        if port == 8070:
+            return [{"id": 0, "is_processing": False}]
+        await asyncio.sleep(30)
+        return [{"id": 99}]
+
+    monkeypatch.setattr(dashboard, "_poll_slot", fake_poll)
+    monkeypatch.setattr(dashboard, "_SLOTS_FANOUT_DEADLINE_S", 0.3)
+
+    started = time.time()
+    slots_by_port, meta = asyncio.run(dashboard._poll_all_slots())
+    elapsed = time.time() - started
+
+    assert elapsed < 2.0
+    assert slots_by_port[8070] == [{"id": 0, "is_processing": False}]
+    assert slots_by_port[8071] == []
+    assert slots_by_port[8072] == []
+    assert meta["ports"] == 3
+    assert meta["answered"] == 1
+    assert meta["timed_out"] == 2
+    assert meta["duration_s"] >= 0.3
+
+
+def test_poll_all_slots_empty_ports_meta() -> None:
+    from unittest.mock import patch
+
+    with patch.object(dashboard, "_discover_llama_ports", lambda: {}):
+        slots_by_port, meta = asyncio.run(dashboard._poll_all_slots())
+    assert slots_by_port == {}
+    assert meta == {"ports": 0, "answered": 0, "timed_out": 0, "duration_s": 0.0}

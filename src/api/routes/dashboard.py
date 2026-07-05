@@ -3640,7 +3640,12 @@ async def topology() -> JSONResponse:
 async def _poll_slot(client: httpx.AsyncClient, port: int) -> list[dict[str, Any]]:
     """Fetch /slots from a single llama-server. Returns empty on failure."""
     try:
-        resp = await client.get(f"http://127.0.0.1:{port}/slots", timeout=1.5)
+        # Split connect budget out of the 1.5s total: a SYN-blackholed port
+        # must not consume the whole per-request budget before first byte.
+        resp = await client.get(
+            f"http://127.0.0.1:{port}/slots",
+            timeout=httpx.Timeout(1.5, connect=0.5),
+        )
         if resp.status_code != 200:
             return []
         data = resp.json()
@@ -3651,22 +3656,46 @@ async def _poll_slot(client: httpx.AsyncClient, port: int) -> list[dict[str, Any
         return []
 
 
-async def _poll_all_slots() -> dict[int, list[dict[str, Any]]]:
-    """Concurrently poll /slots on every llama-server port we discovered."""
+# Overall wall-clock budget for the ~29-port fan-out. Per-request timeouts do
+# not bound the aggregate under load; snapshot() sits on the serve path of the
+# topology / region-locks / live-tap panels, so an unbounded fan-out stales all
+# three at once. Ports that miss the deadline report [] and are counted in
+# slots_poll_meta rather than dropped silently.
+_SLOTS_FANOUT_DEADLINE_S = 2.5
+
+
+async def _poll_all_slots() -> tuple[dict[int, list[dict[str, Any]]], dict[str, Any]]:
+    """Concurrently poll /slots on every discovered llama-server port.
+
+    Returns (slots_by_port, slots_poll_meta). Every discovered port is present
+    in slots_by_port; ports that errored or missed the fan-out deadline map to
+    [] and are tallied in the meta.
+    """
     ports = list(_discover_llama_ports().keys())
     out: dict[int, list[dict[str, Any]]] = {}
+    started = time.time()
     if not ports:
-        return out
+        return out, {"ports": 0, "answered": 0, "timed_out": 0, "duration_s": 0.0}
     async with httpx.AsyncClient() as client:
-        results = await asyncio.gather(
-            *[_poll_slot(client, p) for p in ports], return_exceptions=True,
-        )
-    for port, result in zip(ports, results):
-        if isinstance(result, Exception):
-            out[port] = []
-        else:
-            out[port] = result
-    return out
+        tasks = {
+            port: asyncio.ensure_future(_poll_slot(client, port)) for port in ports
+        }
+        await asyncio.wait(tasks.values(), timeout=_SLOTS_FANOUT_DEADLINE_S)
+        answered = 0
+        for port, task in tasks.items():
+            if task.done() and not task.cancelled() and task.exception() is None:
+                out[port] = task.result()
+                answered += 1
+            else:
+                task.cancel()
+                out[port] = []
+    meta = {
+        "ports": len(ports),
+        "answered": answered,
+        "timed_out": len(ports) - answered,
+        "duration_s": round(time.time() - started, 3),
+    }
+    return out, meta
 
 
 # Snapshot scanners moved to dashboard_snapshot.py — wrappers preserve in-file API
@@ -3768,7 +3797,7 @@ def _count_log_events(
 @router.get("/dashboard/api/snapshot")
 async def snapshot() -> JSONResponse:
     """Point-in-time state: all slots + recent decisions + counters."""
-    slots_by_port = await _poll_all_slots()
+    slots_by_port, slots_poll_meta = await _poll_all_slots()
     progress_log = _todays_progress_log()
     recent, rolling, cumulative = _scan_recent_decisions(progress_log)
     orch_log = ORCHESTRATOR_LOG_DIR / "orchestrator.log"
@@ -3847,6 +3876,9 @@ async def snapshot() -> JSONResponse:
         # active inference beside a 'no locks held' grid" inconsistency.
         "topology": {"nodes": _topology_nodes_cached()},
         "activity": activity,
+        # Fan-out degradation is data, not a silent gap: timed_out > 0 means
+        # some ports' slots are missing from `activity` this frame.
+        "slots_poll_meta": slots_poll_meta,
         "in_flight_tasks": in_flight_tasks,
         "recent_completed_tasks": recent_completed_tasks,
         "live_busy_by_role": role_busy,
@@ -4078,7 +4110,7 @@ async def task_text(task_id: str) -> Any:
         from fastapi.responses import PlainTextResponse
         return PlainTextResponse(text)
 
-    slots_by_port = await _poll_all_slots()
+    slots_by_port, _slots_meta = await _poll_all_slots()
     found_slot = None
     for port, slots in slots_by_port.items():
         for s in slots:
@@ -4132,7 +4164,7 @@ async def _find_slot_by_objective(
         return None, None
     needle = objective[:120].strip()
     if slots_by_port is None:
-        slots_by_port = await _poll_all_slots()
+        slots_by_port, _ = await _poll_all_slots()
     for port, slots in slots_by_port.items():
         for s in slots:
             if not s.get("is_processing"):
@@ -4170,7 +4202,7 @@ async def task_detail(task_id: str) -> JSONResponse:
         })
 
     objective = _objective_for_task(events)
-    slots_by_port = await _poll_all_slots()
+    slots_by_port, _slots_meta = await _poll_all_slots()
     slot_port, active_slot = await _find_slot_by_objective(objective, slots_by_port)
 
     # Fallback when no live slot. Prefer the structured event stream by
