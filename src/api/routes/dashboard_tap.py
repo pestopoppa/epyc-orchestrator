@@ -305,6 +305,15 @@ def _parse_structured_tap_requests(
         elif event_type == "chunk":
             rec["response"] += str(event.get("text") or "")
             rec["chunk_count"] += 1
+            # Track the span of chunk timestamps so the dashboard can estimate a
+            # live decode rate for in-flight requests. chunk events carry no
+            # per-token timing (only the terminal `timings` event does), so the
+            # rate is derived from chunk-to-chunk spacing below.
+            chunk_epoch = event.get("ts_epoch")
+            if chunk_epoch:
+                if rec.get("_first_chunk_epoch") is None:
+                    rec["_first_chunk_epoch"] = chunk_epoch
+                rec["_last_chunk_epoch"] = chunk_epoch
         elif event_type == "response":
             rec["response"] += str(event.get("text") or "")
         elif event_type == "timings":
@@ -346,6 +355,17 @@ def _parse_structured_tap_requests(
                         "pre/post-model, non-streaming, or orphaned"
                     )
         public["is_live"] = public.get("status") != "complete"
+        # Live decode-rate estimate for in-flight requests. Uses the span of
+        # visible chunk timestamps — (chunks-1)/(last_chunk-first_chunk) —
+        # which excludes prefill and self-corrects if the `start` event was
+        # truncated out of a tailed read (the span is chunk-to-chunk, not
+        # start-to-now). Each streamed chunk ~= one token for llama.cpp SSE.
+        public["tps_live"] = None
+        if public.get("status") == "running" and public.get("chunk_count", 0) >= 2:
+            first_chunk = rec.get("_first_chunk_epoch")
+            last_chunk = rec.get("_last_chunk_epoch")
+            if first_chunk and last_chunk and last_chunk > first_chunk:
+                public["tps_live"] = (public["chunk_count"] - 1) / (last_chunk - first_chunk)
         out.append(public)
     out.sort(
         key=lambda r: (

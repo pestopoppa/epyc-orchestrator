@@ -204,6 +204,12 @@ def scan_orchestrator_tasks(
                         "ended_at": ts,
                         "age_s": now - ts,
                         "final_role": data.get("final_answer_role") or data.get("producer_role"),
+                        # Decode telemetry (chat_pipeline llm_completion_meta) —
+                        # carried through so the dashboard can show tok/s per
+                        # completed task instead of only wall-clock duration.
+                        "tokens_generated": data.get("tokens_generated"),
+                        "generation_ms": data.get("generation_ms"),
+                        "prompt_eval_ms": data.get("prompt_eval_ms"),
                     }
     except Exception as exc:
         logger.debug("scan_orchestrator_tasks failed: %s", exc)
@@ -228,6 +234,16 @@ def scan_orchestrator_tasks(
             s["outcome"] = t["event_type"]
             s["duration_s"] = round(t["ended_at"] - s["started_at"], 2)
             s["final_role"] = t.get("final_role")
+            # Decode t/s = generated tokens / generation time. Guard missing
+            # fields (e.g. failure completions with no completion_meta) so the
+            # `tps` key is simply absent — downstream must null-check.
+            tok = t.get("tokens_generated")
+            gen_ms = t.get("generation_ms")
+            if isinstance(tok, (int, float)) and isinstance(gen_ms, (int, float)) and tok > 0 and gen_ms > 0:
+                s["tokens_generated"] = int(tok)
+                s["generation_ms"] = float(gen_ms)
+                s["prompt_eval_ms"] = t.get("prompt_eval_ms")
+                s["tps"] = round(tok / (gen_ms / 1000.0), 1)
             # Completed tasks group by producer role, falling back to the route.
             s["role"] = base_role(s.get("final_role") or s.get("chosen_action") or "")
             recent_completed.append(s)

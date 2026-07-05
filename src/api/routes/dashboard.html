@@ -1084,6 +1084,12 @@ let topology = null;
 let _topologySig = null;
 let activeStream = null;
 let detailStream = null;
+// True while a per-token tap-request stream owns the #stream-text body. The
+// 0.5s structured_tap poll (refreshOpenStructuredTapDetail) must NOT re-render
+// the body from its 1MB-truncated req.response while — or after — the stream is
+// authoritative; it would clobber the full streamed text and the export
+// accumulator. Reset on any panel open/close transition.
+let _tapDetailStreamOwned = false;
 let _roleAliasToBase = {};
 let _insightGraphFocus = '';
 let _insightGraphData = null;
@@ -1530,6 +1536,7 @@ function hideNodeTooltip() {
 
 async function openNodeDetail(port, label) {
     _openStructuredTapRequestId = null;
+    _tapDetailStreamOwned = false;
     const panel = document.getElementById('detail-panel');
     const content = document.getElementById('detail-content');
     document.getElementById('detail-title').textContent = `node ${label} (port ${port})`;
@@ -1850,7 +1857,8 @@ function renderTaskCard(t, kind) {
     let outcome = '';
     if (kind === 'completed') {
         const okIcon = t.outcome === 'task_completed' ? '✅' : t.outcome === 'task_failed' ? '❌' : '↗';
-        outcome = `<span style="float:right;color:var(--muted);font-size:10px">${okIcon} ${t.duration_s}s</span>`;
+        const tpsStr = (t.tps != null) ? ` · ${t.tps} t/s` : '';
+        outcome = `<span style="float:right;color:var(--muted);font-size:10px">${okIcon} ${t.duration_s}s${tpsStr}</span>`;
     } else {
         const liveState = t.live_state || 'decoding';
         const stateColor = liveState === 'decoding' ? 'var(--good)' : '#fbbf24';
@@ -2755,6 +2763,8 @@ function openLockOnlyTapDetail(idx) {
     const holder = _lastLockOnlyTapHolders[idx];
     if (!holder) return;
     _openStructuredTapRequestId = null;
+    _tapDetailStreamOwned = false;
+    if (detailStream) { detailStream.close(); detailStream = null; }
     const panel = document.getElementById('detail-panel');
     const content = document.getElementById('detail-content');
     const title = document.getElementById('detail-title');
@@ -2828,6 +2838,19 @@ function openStructuredTapRequest(req) {
     renderMarkdownInto(responseEl, req.response || '*(no response captured)*');
     if (responseEl) responseEl.scrollTop = responseEl.scrollHeight;
     panel.classList.add('open');
+    // Stream this tap request token-by-token in real time. The id is
+    // `tap_<request_id>`; the server resolves it by request_id (reverse-grep
+    // recovers the full, growing response from the multi-GB tap) rather than
+    // rebuilding from the 1MB-truncated structured_tap poll. Mark the body as
+    // stream-owned so the 0.5s poll (refreshOpenStructuredTapDetail) updates
+    // only the title/meta and never clobbers the streamed text.
+    _tapDetailStreamOwned = true;
+    if (req.request_id) {
+        startDetailTokenStream('tap_' + req.request_id);
+    } else if (detailStream) {
+        detailStream.close();
+        detailStream = null;
+    }
     refreshOpenStructuredTapDetail();
 }
 
@@ -2845,26 +2868,39 @@ function refreshOpenStructuredTapDetail() {
     }
     const meta = document.getElementById('structured-tap-detail-meta');
     if (meta) {
-        meta.innerHTML = `${escapeHTML(structuredTapMeta(req))}${req.timings ? ' · ' + escapeHTML(req.timings) : ''}`;
+        const liveTps = (req.tps_live != null && req.status === 'running' && Number(req.tps_live) > 0)
+            ? ` · <span style="color:var(--good)">${Number(req.tps_live).toFixed(1)} t/s live</span>`
+            : '';
+        meta.innerHTML = `${escapeHTML(structuredTapMeta(req))}${req.timings ? ' · ' + escapeHTML(req.timings) : ''}${liveTps}`;
     }
-    _currentTaskRawText = {
-        taskId: `tap_${req.request_id || ''}`,
-        prompt: req.prompt || '',
-        stream: req.response || '',
-        repl: [],
-    };
+    // The prompt is static (never streams), so refresh it unconditionally.
     const promptEl = document.getElementById('prompt-text');
-    const responseEl = document.getElementById('stream-text');
-    const promptTop = promptEl ? promptEl.scrollTop : 0;
-    const responsePinned = responseEl ? tapScrollPinned(responseEl) : true;
-    const responseTop = responseEl ? responseEl.scrollTop : 0;
     if (promptEl) {
+        const promptTop = promptEl.scrollTop;
         renderMarkdownInto(promptEl, req.prompt || '*(no prompt captured)*');
         promptEl.scrollTop = promptTop;
     }
-    if (responseEl) {
-        renderMarkdownInto(responseEl, req.response || '*(no response captured)*');
-        responseEl.scrollTop = responsePinned ? responseEl.scrollHeight : responseTop;
+    if (!_tapDetailStreamOwned) {
+        // Legacy fallback: no per-token stream owns this panel, so rebuild the
+        // body from the (possibly truncated) poll response.
+        _currentTaskRawText = {
+            taskId: `tap_${req.request_id || ''}`,
+            prompt: req.prompt || '',
+            stream: req.response || '',
+            repl: [],
+        };
+        const responseEl = document.getElementById('stream-text');
+        if (responseEl) {
+            const responsePinned = tapScrollPinned(responseEl);
+            const responseTop = responseEl.scrollTop;
+            renderMarkdownInto(responseEl, req.response || '*(no response captured)*');
+            responseEl.scrollTop = responsePinned ? responseEl.scrollHeight : responseTop;
+        }
+    } else {
+        // Stream owns the body/accumulator — keep only its metadata current so
+        // exports carry the right ids without clobbering the streamed text.
+        _currentTaskRawText.taskId = `tap_${req.request_id || ''}`;
+        if (req.prompt) _currentTaskRawText.prompt = req.prompt;
     }
 }
 
@@ -4694,10 +4730,50 @@ async function downloadSnapshot() {
     URL.revokeObjectURL(url);
 }
 
+// Open the per-token SSE for a detail panel and stream deltas into #stream-text.
+// Shared by openDetail (chat/completed cards, taskId = chat-XXX) and
+// openStructuredTapRequest (live-tap rows, taskId = tap_<request_id>). The
+// server resolves either id shape and emits per-token deltas; the first content
+// frame carries reset:true so we discard the initial GET/placeholder render and
+// rebuild the body from the stream itself (single source of truth).
+function startDetailTokenStream(taskId) {
+    if (detailStream) { detailStream.close(); detailStream = null; }
+    detailStream = new EventSource(`/dashboard/events/task/${encodeURIComponent(taskId)}`);
+    detailStream.onmessage = (e) => {
+        const u = JSON.parse(e.data);
+        const sel = document.getElementById('stream-text');
+        if (!sel) return;
+        if (u.done) {
+            sel.classList.remove('live');
+            if (detailStream) { detailStream.close(); detailStream = null; }
+            return;
+        }
+        if (u.delta) {
+            if (u.reset) _currentTaskRawText.stream = '';
+            _currentTaskRawText.stream += u.delta;
+            // Scroll preservation: a full-buffer re-render through marked +
+            // KaTeX rebuilds innerHTML and resets scrollTop to 0. Capture the
+            // at-bottom state BEFORE re-render, then restore scrollTop (or snap
+            // to bottom if the user was following) so mid-stream reading isn't
+            // yanked back to the top on every chunk.
+            const atBottom = tapScrollPinned(sel);
+            const savedTop = sel.scrollTop;
+            renderMarkdownInto(sel, _currentTaskRawText.stream);
+            sel.classList.add('live');
+            if (atBottom) {
+                sel.scrollTop = sel.scrollHeight;
+            } else {
+                sel.scrollTop = savedTop;  // user is reading mid-stream — don't yank
+            }
+        }
+    };
+}
+
 async function openDetail(taskId, port, slotId) {
     if (taskId === null || taskId === 'null' || taskId === undefined) {
         return;
     }
+    _tapDetailStreamOwned = false;
     _openStructuredTapRequestId = null;
     const panel = document.getElementById('detail-panel');
     const content = document.getElementById('detail-content');
@@ -4749,6 +4825,24 @@ async function openDetail(taskId, port, slotId) {
             stream: initialContent,
             repl: events,
         };
+        // Decode t/s for the expanded detail. Prefer the task_completed event
+        // (same source as the completed card, so card and detail agree) and
+        // fall back to the structured tap's own timings for records with no
+        // completion telemetry.
+        let dTps = null, dTok = null, dGen = null;
+        const doneEv = events.find(e => e.event_type === 'task_completed');
+        if (doneEv && doneEv.data) {
+            dTok = Number(doneEv.data.tokens_generated) || 0;
+            dGen = Number(doneEv.data.generation_ms) || 0;
+            if (dTok > 0 && dGen > 0) dTps = dTok / (dGen / 1000);
+        }
+        if (dTps == null && d.tap_section && d.tap_section.timings_raw && Number(d.tap_section.timings_raw.tps) > 0) {
+            dTps = Number(d.tap_section.timings_raw.tps);
+            dTok = Number(d.tap_section.timings_raw.tokens) || dTok;
+        }
+        const decodeLine = dTps != null
+            ? `<div style="color:var(--muted);font-size:10px;margin-bottom:6px">decode: <span style="color:var(--good)">${dTps.toFixed(1)} t/s</span>${dTok ? ` · ${dTok} tok` : ''}${dGen ? ` · gen ${dGen.toFixed(0)}ms` : ''}</div>`
+            : '';
         content.innerHTML = `
             <div class="detail-actions">
                 <button onclick="copySnapshotToClipboard()">📋 copy snapshot</button>
@@ -4757,6 +4851,7 @@ async function openDetail(taskId, port, slotId) {
                 <span id="copy-feedback" class="copy-feedback"></span>
             </div>
             <div style="color:var(--muted);font-size:10px;margin-bottom:6px">source: ${escapeHTML(dataSource)}</div>
+            ${decodeLine}
             <div class="detail-box-label">prompt</div>
             <div class="prompt-text" id="prompt-text"></div>
             <div class="detail-box-label response-label">${d.slot ? 'live inference' : (d.tap_section ? 'inference (from tap)' : 'inference')}</div>
@@ -4779,46 +4874,8 @@ async function openDetail(taskId, port, slotId) {
                 <span>${escapeHTML(JSON.stringify(ev.data).slice(0, 180))}</span>
             </div>
         `).join('');
-        // Start live stream
-        if (detailStream) { detailStream.close(); detailStream = null; }
-        detailStream = new EventSource(`/dashboard/events/task/${encodeURIComponent(taskId)}`);
-        detailStream.onmessage = (e) => {
-            const u = JSON.parse(e.data);
-            const sel = document.getElementById('stream-text');
-            if (!sel) return;
-            if (u.done) {
-                sel.classList.remove('live');
-                detailStream.close();
-                detailStream = null;
-                return;
-            }
-            if (u.delta) {
-                // The task stream is sourced from the structured tap and is the
-                // single source of truth for the streamed body. Its first content
-                // frame carries reset:true because the initial GET already
-                // rendered the response-so-far — clear it so we don't double the
-                // prefix, then rebuild from the stream's own deltas.
-                if (u.reset) _currentTaskRawText.stream = '';
-                _currentTaskRawText.stream += u.delta;
-                // Scroll preservation: full-buffer re-render through marked +
-                // KaTeX rebuilds innerHTML, which resets scrollTop to 0. If the
-                // user was reading mid-stream (scrolled up), the auto-reset
-                // makes the panel feel "unscrollable" — every chunk yanks
-                // them back to the top.
-                // Strategy: capture at-bottom state BEFORE re-render. After
-                // re-render, restore scrollTop (or snap to bottom if user was
-                // following). Same pattern as the raw-tap autoscroll tracker.
-                const atBottom = tapScrollPinned(sel);
-                const savedTop = sel.scrollTop;
-                renderMarkdownInto(sel, _currentTaskRawText.stream);
-                sel.classList.add('live');
-                if (atBottom) {
-                    sel.scrollTop = sel.scrollHeight;
-                } else {
-                    sel.scrollTop = savedTop;  // user is reading mid-stream — don't yank
-                }
-            }
-        };
+        // Start live token stream (chat/completed tasks resolve by task_id).
+        startDetailTokenStream(taskId);
     } catch (e) {
         content.innerHTML = `<div style="color:var(--bad)">error: ${e.message}</div>`;
     }
@@ -4826,6 +4883,7 @@ async function openDetail(taskId, port, slotId) {
 
 function closeDetail() {
     _openStructuredTapRequestId = null;
+    _tapDetailStreamOwned = false;
     document.getElementById('detail-panel').classList.remove('open');
     if (detailStream) { detailStream.close(); detailStream = null; }
 }
@@ -5284,6 +5342,11 @@ function renderTopologyActivity() {
     document.querySelectorAll('[id^="activity_"]').forEach(el => {
         const base = el.id.substring('activity_'.length);
         const stats = perRole[base];
+        // Live in-flight decode rate (estimated from chunk-timestamp spacing),
+        // preferred over avg_tps_recent (completed-request average) so the strip
+        // shows a real-time number DURING generation, not only after a trial ends.
+        const liveTps = (stats && stats.live_tps != null && Number(stats.live_tps) > 0)
+            ? Number(stats.live_tps) : null;
         const age = topologyActivityAgeS(stats);
         const nReq = stats ? (stats.n_recent || stats.n_completed || 0) : 0;
         const lockInfo = (typeof _latestRegionLocksByRole === 'object' && _latestRegionLocksByRole)
@@ -5295,7 +5358,9 @@ function renderTopologyActivity() {
         if (liveActiveCount > 0) {
             const parts = [`<span class="stat-fresh">${liveActiveCount}</span> active`];
             if (nReq) parts.push(`<span class="stat-fresh">${nReq}</span> req`);
-            if (stats && stats.avg_tps_recent != null && stats.avg_tps_recent > 0) {
+            if (liveTps != null) {
+                parts.push(`<span class="stat-fresh">${liveTps.toFixed(1)}</span> t/s live`);
+            } else if (stats && stats.avg_tps_recent != null && stats.avg_tps_recent > 0) {
                 parts.push(`<span class="stat-fresh">${stats.avg_tps_recent.toFixed(1)}</span> t/s`);
             }
             if (age != null) parts.push(`<span class="stat-fresh">${formatTopologyActivityAge(age)} ago</span>`);
@@ -5305,11 +5370,16 @@ function renderTopologyActivity() {
         }
         if (!stats || !nReq || !stillInsideWindow) {
             if (stats && stats.running) {
-                const running = Number(stats.running_instance_count || 0);
+                // Fall back to the live-tap instance count when no /proc port
+                // matched (a tap-serving role is running even if its dispatched
+                // port didn't intersect the process scan).
+                const running = Number(stats.running_instance_count || 0) || Number(stats.live_tps_n || 0);
                 const expected = Number(stats.expected_instance_count || 0);
-                const suffix = expected > 1 ? ` ${running}/${expected}` : '';
+                const suffix = expected > 1 && running > 0 ? ` ${running}/${expected}` : '';
                 const parts = [`<span class="stat-fresh">up${suffix}</span>`];
-                if (stats.avg_tps_recent != null && stats.avg_tps_recent > 0) {
+                if (liveTps != null) {
+                    parts.push(`<span class="stat-fresh">${liveTps.toFixed(1)}</span> t/s live`);
+                } else if (stats.avg_tps_recent != null && stats.avg_tps_recent > 0) {
                     parts.push(`<span class="stat-fresh">${stats.avg_tps_recent.toFixed(1)}</span> t/s`);
                 }
                 el.innerHTML = parts.join('<span class="stat-sep">·</span>');
@@ -5327,7 +5397,9 @@ function renderTopologyActivity() {
         }
         const parts = [];
         parts.push(`<span class="stat-fresh">${nReq}</span> req`);
-        if (stats.avg_tps_recent != null && stats.avg_tps_recent > 0) {
+        if (liveTps != null) {
+            parts.push(`<span class="stat-fresh">${liveTps.toFixed(1)}</span> t/s live`);
+        } else if (stats.avg_tps_recent != null && stats.avg_tps_recent > 0) {
             parts.push(`<span class="stat-fresh">${stats.avg_tps_recent.toFixed(1)}</span> t/s`);
         } else if (stats.avg_duration_s != null && stats.avg_duration_s > 0) {
             parts.push(`<span class="stat-fresh">${stats.avg_duration_s.toFixed(1)}</span>s avg`);
@@ -5339,6 +5411,7 @@ function renderTopologyActivity() {
         el.innerHTML = parts.join('<span class="stat-sep">·</span>');
         const tooltipBits = [
             `${nReq} req in last ${Math.round(windowS)}s`,
+            liveTps != null ? `live ${liveTps.toFixed(2)} t/s (in-flight)` : null,
             stats.avg_tps_recent != null ? `avg ${stats.avg_tps_recent.toFixed(2)} t/s` : null,
             stats.avg_duration_s != null ? `avg ${stats.avg_duration_s.toFixed(2)}s/task` : null,
             age != null ? `last activity ${age.toFixed(1)}s ago` : null,
