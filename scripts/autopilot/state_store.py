@@ -14,7 +14,7 @@ import logging
 import os
 import re
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +23,14 @@ import yaml
 log = logging.getLogger("autopilot")
 
 LOW_RISK_TYPE_ONLY_BLACKLIST_DENYLIST = {"seed_batch", "deep_eval", "distill_knowledge"}
+OBSERVATIONAL_ACTION_BLACKLIST_DENYLIST = {"deep_eval"}
+NUMERIC_SURFACE_BLACKLIST_SCOPES = {"surface", "permanent_surface"}
+AUTO_BLACKLIST_TTL_DAYS_BY_REASON_CLASS = {
+    "critic_rejected": 14,
+    "invalid_repeat": 14,
+    "safety_failure": 30,
+}
+NON_EXPIRING_BLACKLIST_SEVERITIES = {"crash", "corruption"}
 
 
 # 2026-05-23 Phase 6a — exit code for "state file corrupt, refuse to start".
@@ -111,7 +119,15 @@ def load_blacklist(blacklist_path: Path) -> list[dict[str, Any]]:
         return []
     try:
         data = yaml.safe_load(blacklist_path.read_text()) or {}
-        return data.get("blacklist", [])
+        entries = data.get("blacklist", [])
+        if not isinstance(entries, list):
+            return []
+        return [
+            entry for entry in entries
+            if not _is_observational_blacklist_pattern(entry.get("pattern", {}))
+            and not _is_ignored_broad_numeric_surface_entry(entry)
+            and not _is_expired_blacklist_entry(entry)
+        ]
     except (yaml.YAMLError, OSError) as e:
         log.warning("Could not load blacklist: %s", e)
         return []
@@ -299,6 +315,155 @@ def format_model_signatures(signatures: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _is_observational_blacklist_pattern(pattern: dict[str, Any]) -> bool:
+    """Return true for validation-only actions that must remain schedulable."""
+    return bool(
+        isinstance(pattern, dict)
+        and pattern.get("type") in OBSERVATIONAL_ACTION_BLACKLIST_DENYLIST
+    )
+
+
+def _is_broad_numeric_surface_pattern(pattern: dict[str, Any]) -> bool:
+    """Return true for a numeric blacklist that would ban an entire surface.
+
+    Empty-params numeric trials are sampler requests, not a concrete numeric
+    configuration. Treating them as permanent surface bans exhausts W8-capable
+    search after a few noisy or critic-rejected attempts.
+    """
+    if not isinstance(pattern, dict):
+        return False
+    if pattern.get("type") != "numeric_trial" or "surface" not in pattern:
+        return False
+    if not set(pattern).issubset({"type", "surface", "params"}):
+        return False
+    params = pattern.get("params")
+    return not isinstance(params, dict) or not params
+
+
+def _entry_allows_broad_numeric_surface(entry: dict[str, Any]) -> bool:
+    return bool(
+        isinstance(entry, dict)
+        and (
+            entry.get("scope") in NUMERIC_SURFACE_BLACKLIST_SCOPES
+            or entry.get("permanent") is True
+        )
+    )
+
+
+def _is_ignored_broad_numeric_surface_entry(entry: dict[str, Any]) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    return (
+        _is_broad_numeric_surface_pattern(entry.get("pattern", {}))
+        and not _entry_allows_broad_numeric_surface(entry)
+    )
+
+
+def _parse_blacklist_datetime(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    raw = value.strip()
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _auto_blacklist_reason_class(entry: dict[str, Any]) -> str | None:
+    explicit = entry.get("reason_class")
+    if isinstance(explicit, str) and explicit.strip():
+        return explicit.strip()
+    reason = entry.get("reason")
+    if not isinstance(reason, str):
+        return None
+    lowered = reason.lower()
+    if not lowered.startswith("auto-blacklisted:"):
+        return None
+    if "critic-rejected" in lowered:
+        return "critic_rejected"
+    if "invalid" in lowered:
+        return "invalid_repeat"
+    if "consecutive failures" in lowered:
+        return "safety_failure"
+    return None
+
+
+def _positive_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    if isinstance(value, str):
+        try:
+            parsed = int(value.strip())
+        except ValueError:
+            return None
+        return parsed if parsed > 0 else None
+    return None
+
+
+def _entry_is_non_expiring_blacklist(entry: dict[str, Any]) -> bool:
+    if entry.get("permanent") is True:
+        return True
+    if entry.get("scope") == "permanent_surface":
+        return True
+    if entry.get("source_trial") == -1:
+        return True
+    severity = entry.get("severity")
+    return isinstance(severity, str) and severity.lower() in NON_EXPIRING_BLACKLIST_SEVERITIES
+
+
+def _blacklist_ttl_days(entry: dict[str, Any]) -> int | None:
+    explicit = _positive_int(entry.get("ttl_days"))
+    if explicit is not None:
+        return explicit
+    reason_class = _auto_blacklist_reason_class(entry)
+    if reason_class is None:
+        return None
+    return AUTO_BLACKLIST_TTL_DAYS_BY_REASON_CLASS.get(reason_class)
+
+
+def _blacklist_expires_at(entry: dict[str, Any]) -> datetime | None:
+    explicit = _parse_blacklist_datetime(entry.get("expires_at"))
+    if explicit is not None:
+        return explicit
+    added = _parse_blacklist_datetime(entry.get("added"))
+    ttl_days = _blacklist_ttl_days(entry)
+    if added is None or ttl_days is None:
+        return None
+    return added + timedelta(days=ttl_days)
+
+
+def _is_expired_blacklist_entry(
+    entry: dict[str, Any],
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """Return true for elapsed auto-blacklist entries.
+
+    Manual crash/corruption/permanent entries are hard stops. Auto-generated
+    critic/invalid/safety-loop entries decay so stale exploration failures do
+    not permanently exhaust W8-capable action space across eras.
+    """
+    if not isinstance(entry, dict) or _entry_is_non_expiring_blacklist(entry):
+        return False
+    expires_at = _blacklist_expires_at(entry)
+    if expires_at is None:
+        return False
+    if now is None:
+        now = datetime.now(timezone.utc)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    else:
+        now = now.astimezone(timezone.utc)
+    return expires_at <= now
+
+
 def check_blacklist(
     action: dict[str, Any], blacklist: list[dict[str, Any]]
 ) -> str | None:
@@ -306,6 +471,10 @@ def check_blacklist(
     if not isinstance(action, dict):
         return None
     for entry in reversed(blacklist):
+        if _is_ignored_broad_numeric_surface_entry(entry):
+            continue
+        if _is_expired_blacklist_entry(entry):
+            continue
         pattern = entry.get("pattern", {})
         if not isinstance(pattern, dict):
             continue
@@ -315,7 +484,13 @@ def check_blacklist(
 
 
 def append_blacklist(
-    action: dict[str, Any], trial_id: int, reason: str, blacklist_path: Path,
+    action: dict[str, Any],
+    trial_id: int,
+    reason: str,
+    blacklist_path: Path,
+    *,
+    reason_class: str | None = None,
+    ttl_days: int | None = None,
 ) -> None:
     """Append a blacklist entry to `blacklist_path` after a rollback trigger.
 
@@ -329,6 +504,7 @@ def append_blacklist(
         "file",
         "mutation",
         "flags",
+        "params",
         "tier",
         "last_n",
         "n_questions",
@@ -344,13 +520,30 @@ def append_blacklist(
     ):
         log.info("Skipping broad low-risk blacklist pattern: %s", pattern)
         return
+    if _is_observational_blacklist_pattern(pattern):
+        log.info("Skipping observational action blacklist pattern: %s", pattern)
+        return
+    if _is_broad_numeric_surface_pattern(pattern):
+        log.info(
+            "Skipping broad numeric surface blacklist pattern: %s; "
+            "automatic numeric bans require concrete params",
+            pattern,
+        )
+        return
 
+    now = datetime.now(timezone.utc)
     entry = {
         "pattern": pattern,
         "reason": reason,
-        "added": datetime.now(timezone.utc).isoformat(),
+        "added": now.isoformat(),
         "source_trial": trial_id,
     }
+    if reason_class:
+        entry["reason_class"] = reason_class
+    ttl = ttl_days if ttl_days is not None else _blacklist_ttl_days(entry)
+    if ttl is not None and ttl > 0:
+        entry["ttl_days"] = ttl
+        entry["expires_at"] = (now + timedelta(days=ttl)).isoformat()
 
     data = {"blacklist": []}
     if blacklist_path.exists():

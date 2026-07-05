@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from argparse import Namespace
 from pathlib import Path
+import sys
 
 import pytest
 import yaml
@@ -68,6 +69,53 @@ def _write_kb_jobs_file(path: Path) -> None:
     doc["jobs"][0]["input_spec"]["context_modes"] = ["kb_rag", "source_excerpt"]
     doc["jobs"][0]["input_spec"]["kb_queries"] = ["freshness lint handoff"]
     doc["jobs"][0]["input_spec"]["kb_top_k"] = 2
+    path.write_text(yaml.safe_dump(doc, sort_keys=False))
+
+
+def _write_command_jobs_file(path: Path, *, risk: str = "read_only") -> None:
+    job = {
+        "job_id": "command_shadow",
+        "title": "Command shadow job",
+        "stage": "shadow",
+        "enabled": True,
+        "risk": risk,
+        "runtime_class": "active_safe_deterministic",
+        "active_safe": True,
+        "execution": {
+            "mode": "deterministic_command",
+            "command": [
+                sys.executable,
+                "-c",
+                (
+                    "import json; "
+                    "print(json.dumps({'job_id': 'command_shadow', 'status': 'ok'}))"
+                ),
+            ],
+        },
+        "input_spec": {"sources": []},
+        "output_contract": {
+            "format": "json",
+            "json_schema": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["job_id", "status"],
+                "properties": {
+                    "job_id": {"const": "command_shadow"},
+                    "status": {"const": "ok"},
+                },
+            },
+        },
+    }
+    doc = {
+        "version": 1,
+        "schema_version": "lab_jobs.v1",
+        "policy": {
+            "review_queue": "orchestration/lab_review_queue/",
+            "direct_repo_writes_allowed": False,
+            "default_stage": "shadow",
+        },
+        "jobs": [job],
+    }
     path.write_text(yaml.safe_dump(doc, sort_keys=False))
 
 
@@ -252,3 +300,44 @@ def test_kb_rag_context_mode_falls_back_to_sources_on_empty_results(
     assert manifest["missing_sources"] == [
         {"repo": "kb-rag", "path": "freshness lint handoff", "reason": "kb_rag_no_results"}
     ]
+
+
+def test_deterministic_command_writes_review_artifacts(tmp_path: Path) -> None:
+    jobs_file = tmp_path / "lab_jobs.yaml"
+    _write_command_jobs_file(jobs_file)
+
+    result = run_job.run_from_args(
+        _args(
+            tmp_path,
+            jobs_file,
+            job_id="command_shadow",
+            allow_disabled=False,
+            dry_run_stub=False,
+            execute_command=True,
+        )
+    )
+
+    output = json.loads(result.output_path.read_text())
+    assert output == {"job_id": "command_shadow", "status": "ok"}
+    task_record = json.loads(result.task_record_path.read_text())
+    assert task_record["invocation_mode"] == run_job.DETERMINISTIC_COMMAND_MODE
+    assert task_record["risk"] == "read_only"
+    assert task_record["chat_meta"]["returncode"] == 0
+    assert task_record["chat_meta"]["command"][0] == sys.executable
+
+
+def test_deterministic_command_requires_read_only_job(tmp_path: Path) -> None:
+    jobs_file = tmp_path / "lab_jobs.yaml"
+    _write_command_jobs_file(jobs_file, risk="write_reviewed")
+
+    with pytest.raises(run_job.LabRunnerError, match="risk=read_only"):
+        run_job.run_from_args(
+            _args(
+                tmp_path,
+                jobs_file,
+                job_id="command_shadow",
+                allow_disabled=False,
+                dry_run_stub=False,
+                execute_command=True,
+            )
+        )

@@ -90,6 +90,7 @@ def test_topology_emits_expected_unloaded_stack_servers(monkeypatch) -> None:
 
 def test_topology_activity_initializes_expected_embedder_bucket(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(dashboard, "_read_tail", lambda *a, **kw: "")
+    monkeypatch.setattr(dashboard, "_read_tap_events_tail", lambda *a, **kw: "")
     monkeypatch.setattr(dashboard, "_parse_inference_sections", lambda *a, **kw: [])
     monkeypatch.setattr(dashboard, "_todays_progress_log", lambda: tmp_path / "missing.jsonl")
     monkeypatch.setattr(
@@ -229,6 +230,7 @@ def test_discover_llama_ports_parses_ps_output(monkeypatch) -> None:
     fake_ps = (
         "1234 /opt/llama-server --port 8070 -m /m/frontdoor.gguf\n"
         "5678 /opt/llama-server --port 9999 -m /m/mystery.gguf\n"
+        "4242 /mnt/raid0/llm/llama.cpp-mi210-hip/build-hip/bin/llama-server --port 8802 -m /m/Qwen.gguf\n"
         "9999 some-other-process --port 1234\n"
     )
     monkeypatch.setattr(
@@ -237,8 +239,11 @@ def test_discover_llama_ports_parses_ps_output(monkeypatch) -> None:
     )
     ports = dashboard_topology._discover_llama_ports()
     assert ports[8070] == "frontdoor"
-    # 9999 not in _PORT_HINTS → falls back to "port_9999(mystery)"
-    assert ports[9999].startswith("port_9999(")
+    # Unmapped ports get an honest role, never a model-mangled one — the old
+    # "port_9999(mystery)" fallback leaked garbled keys into live_busy_by_role.
+    assert ports[9999] == "extern_9999"
+    # MI210 HIP builds are the GPU testbed (operator-decided first-class role).
+    assert ports[8802] == "mi210_gpu"
     assert 1234 not in ports  # filtered out (no llama-server in cmd)
 
 
@@ -406,6 +411,7 @@ def test_topology_activity_uses_structured_tap_not_legacy_sections(monkeypatch) 
         return ""
 
     monkeypatch.setattr(dashboard, "_read_tail", fake_read_tail)
+    monkeypatch.setattr(dashboard, "_read_tap_events_tail", fake_read_tail)
     monkeypatch.setattr(
         dashboard,
         "_discover_llama_ports",
@@ -1499,6 +1505,9 @@ def test_dashboard_baseline_promotion_summary_scopes_to_current_run() -> None:
     summary = dashboard._baseline_promotion_summary(rows, current_run_only=True)
 
     assert summary["count"] == 1
+    assert summary["latest_trial_id"] == 1
+    assert summary["latest_promotion_trial_id"] == 1
+    assert summary["trials_since_promotion"] == 0
     event = summary["recent"][0]
     assert event["source_trial_id"] == 1
     assert round(event["quality_delta"], 3) == 0.3
@@ -1559,6 +1568,340 @@ def test_autopilot_progress_uses_superseded_journal_rows(
     assert payload["n_action_type_samples"] == 2
 
 
+def test_autopilot_progress_surfaces_eval_label_from_log_tail(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    state_path = tmp_path / "autopilot_state.json"
+    log_dir = tmp_path / "logs"
+    log_path = log_dir / "autopilot_restart_1.log"
+    started_at = datetime.now(timezone.utc).timestamp() - 90
+    state_path.write_text(json.dumps({
+        "in_flight_trial": {
+            "trial_id": 9,
+            "started_at": started_at,
+            "action": {"type": "deep_eval"},
+        }
+    }))
+    log_dir.mkdir()
+    log_path.write_text("\n".join([
+        "2026-07-04 19:14:09 [autopilot] INFO: Trial 9: {\"type\": \"deep_eval\"}",
+        "2026-07-04 21:43:41 [autopilot.eval] INFO: T3 progress: 40/160 (58% correct)",
+    ]) + "\n")
+    monkeypatch.setattr(dashboard, "_AUTOPILOT_STATE_PATH", state_path)
+    monkeypatch.setattr(dashboard, "_AUTOPILOT_LOG_DIR", log_dir)
+    monkeypatch.setattr(dashboard, "_AUTOPILOT_JOURNAL_PATH", tmp_path / "missing.jsonl")
+
+    response = asyncio.run(dashboard.autopilot_progress())
+    payload = json.loads(response.body)
+
+    assert payload["percent_source"] == "log_tail"
+    assert payload["eval_label"] == "T3"
+    assert payload["log_tail_progress"] == {"completed": 40, "total": 160}
+
+
+def test_autopilot_progress_surfaces_baseline_promotion_summary(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    state_path = tmp_path / "autopilot_state.json"
+    journal_path = tmp_path / "autopilot_journal.jsonl"
+    journal_shard_path = tmp_path / "autopilot_journal_1.jsonl"
+    started_at = datetime.now(timezone.utc).timestamp() - 90
+    state_path.write_text(json.dumps({
+        "in_flight_trial": {
+            "trial_id": 4,
+            "started_at": started_at,
+            "action": {"type": "seed_batch"},
+        }
+    }))
+    rows = [
+        {
+            "trial_id": 0,
+            "timestamp": "2026-07-05T00:00:00+00:00",
+            "action_type": "seed_batch",
+        },
+        {
+            "trial_id": 1,
+            "timestamp": "2026-07-05T00:01:00+00:00",
+            "action_type": "seed_batch",
+        },
+        {
+            "type": "baseline_promotion",
+            "source_trial_id": 1,
+            "tier": 1,
+            "previous_quality": 1.0,
+            "new_quality": 1.2,
+            "timestamp": "2026-07-05T00:01:30+00:00",
+            "reason": "kept",
+        },
+        {
+            "trial_id": 2,
+            "timestamp": "2026-07-05T00:02:00+00:00",
+            "action_type": "seed_batch",
+        },
+    ]
+    shard_rows = [
+        {
+            "trial_id": 4,
+            "timestamp": "2026-07-05T00:03:00+00:00",
+            "action_type": "seed_batch",
+        },
+    ]
+    journal_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+    journal_shard_path.write_text("\n".join(json.dumps(row) for row in shard_rows) + "\n")
+    monkeypatch.setattr(dashboard, "_AUTOPILOT_STATE_PATH", state_path)
+    monkeypatch.setattr(dashboard, "_AUTOPILOT_JOURNAL_PATH", journal_path)
+
+    response = asyncio.run(dashboard.autopilot_progress())
+    payload = json.loads(response.body)
+
+    assert payload["baseline_promotions"]["count"] == 1
+    assert payload["baseline_promotions"]["latest_trial_id"] == 4
+    assert payload["baseline_promotions"]["latest_promotion_trial_id"] == 1
+    assert payload["baseline_promotions"]["trials_since_promotion"] == 3
+
+
+def test_autopilot_progress_surfaces_outcome_kpis_and_current_code_health(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    state_path = tmp_path / "autopilot_state.json"
+    journal_path = tmp_path / "autopilot_journal.jsonl"
+    started_at = datetime.now(timezone.utc).timestamp() - 90
+    state_path.write_text(json.dumps({
+        "in_flight_trial": {
+            "trial_id": 4,
+            "started_at": started_at,
+            "action": {"type": "seed_batch"},
+        }
+    }))
+    rows = [
+        {
+            "trial_id": 1,
+            "timestamp": "2026-07-05T00:00:00+00:00",
+            "action_type": "seed_batch",
+            "keep_revert_decision": "keep",
+        },
+        {
+            "trial_id": 2,
+            "timestamp": "2026-07-05T00:01:00+00:00",
+            "action_type": "seed_batch",
+            "keep_revert_decision": "revert",
+        },
+        {
+            "trial_id": 3,
+            "timestamp": "2026-07-05T00:02:00+00:00",
+            "action_type": "seed_batch",
+            "keep_revert_decision": "excluded",
+            "eval_details": {
+                "learning_exclusion": {"by": "mad_noise"},
+            },
+        },
+        {
+            "type": "baseline_promotion",
+            "source_trial_id": 1,
+            "tier": 1,
+            "previous_quality": 1.0,
+            "new_quality": 1.2,
+            "timestamp": "2026-07-05T00:02:30+00:00",
+            "reason": "kept",
+        },
+        {
+            "trial_id": 4,
+            "timestamp": "2026-07-05T00:03:00+00:00",
+            "action_type": "seed_batch",
+        },
+    ]
+    journal_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+    monkeypatch.setattr(dashboard, "_AUTOPILOT_STATE_PATH", state_path)
+    monkeypatch.setattr(dashboard, "_AUTOPILOT_JOURNAL_PATH", journal_path)
+    monkeypatch.setattr(
+        dashboard,
+        "_autopilot_current_code_health",
+        lambda: {
+            "ok": True,
+            "status": "active",
+            "code_stale": False,
+            "require_current_code": True,
+        },
+    )
+
+    response = asyncio.run(dashboard.autopilot_progress())
+    payload = json.loads(response.body)
+
+    assert payload["baseline_promotions"]["count"] == 1
+    assert payload["outcome_kpis"]["keepable_rate"] == {
+        "count": 1,
+        "total": 3,
+        "rate": 0.333,
+    }
+    assert payload["outcome_kpis"]["wasted_eval_rate"] == {
+        "count": 1,
+        "total": 3,
+        "rate": 0.333,
+    }
+    assert payload["outcome_kpis"]["learning_excluded_rate"] == {
+        "count": 1,
+        "total": 3,
+        "rate": 0.333,
+    }
+    assert payload["current_code_health"] == {
+        "ok": True,
+        "status": "active",
+        "code_stale": False,
+        "require_current_code": True,
+    }
+
+
+def test_autopilot_control_pause_and_resume_updates_state_latch(tmp_path: Path) -> None:
+    state_path = tmp_path / "autopilot_state.json"
+    audit_path = tmp_path / "autopilot_operator_control.jsonl"
+    state_path.write_text(
+        json.dumps(
+            {
+                "paused": False,
+                "trial_counter": 12,
+                "_dispatch_deficiency": "skip_action_loop",
+                "consecutive_skip_actions": 3,
+                "last_invalid_action": {"type": "skip"},
+                "last_invalid_reason": "loop",
+                "last_invalid_status": "rejected",
+                "consecutive_meta_actions": 2,
+                "_meta_halt_reason": "operator review",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    paused = dashboard._apply_autopilot_control_action(
+        action="pause",
+        note="operator pause",
+        state_path=state_path,
+        audit_path=audit_path,
+    )
+
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert paused["status"] == "ok"
+    assert paused["paused_pre"] is False
+    assert paused["paused"] is True
+    assert state["paused"] is True
+    assert state["pause_reason"] == "operator pause"
+
+    resumed = dashboard._apply_autopilot_control_action(
+        action="resume",
+        note="operator resume",
+        state_path=state_path,
+        audit_path=audit_path,
+    )
+
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert resumed["status"] == "ok"
+    assert resumed["paused_pre"] is True
+    assert resumed["paused"] is False
+    assert state["paused"] is False
+    assert "pause_reason" not in state
+    assert "_dispatch_deficiency" not in state
+    assert "_meta_halt_reason" not in state
+    assert state["consecutive_skip_actions"] == 0
+    assert state["last_invalid_action"] is None
+    assert state["last_invalid_reason"] is None
+    assert state["last_invalid_status"] is None
+    assert state["consecutive_meta_actions"] == 0
+
+    audit_rows = [
+        json.loads(line)
+        for line in audit_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert [row["action"] for row in audit_rows] == ["pause", "resume"]
+    assert [row["paused_post"] for row in audit_rows] == [True, False]
+
+
+def test_autopilot_progress_leaves_outcome_kpis_unknown_without_source_data(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    state_path = tmp_path / "autopilot_state.json"
+    journal_path = tmp_path / "autopilot_journal.jsonl"
+    started_at = datetime.now(timezone.utc).timestamp() - 45
+    state_path.write_text(json.dumps({
+        "in_flight_trial": {
+            "trial_id": 8,
+            "started_at": started_at,
+            "action": {"type": "seed_batch"},
+        }
+    }))
+    journal_path.write_text("\n".join(json.dumps({
+        "trial_id": trial_id,
+        "timestamp": f"2026-07-05T00:0{trial_id}:00+00:00",
+        "action_type": "seed_batch",
+    }) for trial_id in [1, 2, 3]) + "\n")
+    monkeypatch.setattr(dashboard, "_AUTOPILOT_STATE_PATH", state_path)
+    monkeypatch.setattr(dashboard, "_AUTOPILOT_JOURNAL_PATH", journal_path)
+    monkeypatch.setattr(dashboard, "_autopilot_current_code_health", lambda: None)
+
+    response = asyncio.run(dashboard.autopilot_progress())
+    payload = json.loads(response.body)
+
+    assert payload["outcome_kpis"]["keepable_rate"] == {
+        "count": 0,
+        "total": 0,
+        "rate": None,
+    }
+    assert payload["outcome_kpis"]["wasted_eval_rate"] == {
+        "count": 0,
+        "total": 0,
+        "rate": None,
+    }
+    assert payload["outcome_kpis"]["learning_excluded_rate"] == {
+        "count": 0,
+        "total": 0,
+        "rate": None,
+    }
+    assert payload["current_code_health"] is None
+
+
+def test_autopilot_progress_prefers_active_autopilot_log_over_stale_restart_log(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    state_path = tmp_path / "autopilot_state.json"
+    log_dir = tmp_path / "logs"
+    restart_log = log_dir / "autopilot_restart_1.log"
+    active_log = log_dir / "autopilot.log"
+    started_at = datetime.now(timezone.utc).timestamp() - 90
+    state_path.write_text(json.dumps({
+        "in_flight_trial": {
+            "trial_id": 1156,
+            "started_at": started_at,
+            "action": {"type": "deep_eval", "tier": 3},
+        }
+    }))
+    log_dir.mkdir()
+    restart_log.write_text("\n".join([
+        "2026-07-05 06:24:34 [autopilot.eval] INFO: T1 progress: 30/38 (67% correct)",
+    ]) + "\n")
+    active_log.write_text("\n".join([
+        "2026-07-05 06:45:34 [autopilot] INFO: Trial 1156: {\"type\": \"deep_eval\", \"tier\": 3}",
+        "2026-07-05 07:25:24 [autopilot.eval] INFO: T3 progress: 100/160 (57% correct)",
+    ]) + "\n")
+    now = datetime.now(timezone.utc).timestamp()
+    os.utime(restart_log, (now - 100, now - 100))
+    os.utime(active_log, (now, now))
+    monkeypatch.setattr(dashboard, "_AUTOPILOT_STATE_PATH", state_path)
+    monkeypatch.setattr(dashboard, "_AUTOPILOT_LOG_DIR", log_dir)
+    monkeypatch.setattr(dashboard, "AUTOPILOT_LOG", active_log)
+    monkeypatch.setattr(dashboard, "_AUTOPILOT_JOURNAL_PATH", tmp_path / "missing.jsonl")
+
+    response = asyncio.run(dashboard.autopilot_progress())
+    payload = json.loads(response.body)
+
+    assert payload["percent_source"] == "log_tail"
+    assert payload["eval_label"] == "T3"
+    assert payload["log_tail_progress"] == {"completed": 100, "total": 160}
+
+
 def test_gepa_status_uses_superseded_journal_rows(
     tmp_path: Path,
     monkeypatch,
@@ -1596,12 +1939,116 @@ def test_gepa_status_uses_superseded_journal_rows(
     ]
     journal_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
     monkeypatch.setattr(dashboard, "AUTOPILOT_LOG", log_path)
-    monkeypatch.setattr(dashboard, "_AUTOPILOT_JOURNAL", journal_path)
+    monkeypatch.setattr(dashboard, "_AUTOPILOT_JOURNAL_PATH", journal_path)
 
     response = asyncio.run(dashboard.gepa_status())
     payload = json.loads(response.body)
 
-    assert [trial["trial_id"] for trial in payload["recent_trials"]] == [1]
+    # Superseded/corrupted trials are no longer dropped from the trajectory list —
+    # they ride along tagged so a mid-trial kill stays visible. The supersession
+    # fold must still be APPLIED, so trial 2 carries the corruption tag while the
+    # clean trial 1 does not.
+    by_trial = {t["trial_id"]: t for t in payload["recent_trials"]}
+    assert set(by_trial) == {1, 2}
+    assert by_trial[1]["bug_corrupted_by"] is None
+    assert by_trial[2]["bug_corrupted_by"] == "resource_contention"
+
+
+def test_gepa_status_recent_trials_carry_tier(tmp_path: Path, monkeypatch) -> None:
+    """Trajectory rows must expose `tier` so the dashboard can label per-tier
+    quality (a by-design-low T3 row must not read as a T1 regression)."""
+    log_path = tmp_path / "autopilot.log"
+    journal_path = tmp_path / "autopilot_journal.jsonl"
+    log_path.write_text("2026-07-04 00:00:00,000 GEPA: Trial active\n")
+    rows = [
+        {
+            "trial_id": 30, "tier": 1, "timestamp": "2026-07-04T00:00:00+00:00",
+            "species": "prompt_forge", "quality": 1.8, "speed": 30.0,
+            "cost": 0.5, "reliability": 1.0, "pareto_status": "frontier",
+        },
+        {
+            "trial_id": 31, "tier": 3, "timestamp": "2026-07-04T00:01:00+00:00",
+            "species": "prompt_forge", "quality": 1.2, "speed": 45.0,
+            "cost": 0.5, "reliability": 1.0, "pareto_status": "frontier",
+        },
+    ]
+    journal_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+    monkeypatch.setattr(dashboard, "AUTOPILOT_LOG", log_path)
+    monkeypatch.setattr(dashboard, "_AUTOPILOT_JOURNAL_PATH", journal_path)
+
+    response = asyncio.run(dashboard.gepa_status())
+    payload = json.loads(response.body)
+
+    tier_by_trial = {t["trial_id"]: t["tier"] for t in payload["recent_trials"]}
+    assert tier_by_trial == {30: 1, 31: 3}
+
+
+def test_gepa_status_recent_trials_carry_real_suite_metric(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Real-suite rows should be visible in the GEPA trajectory panel."""
+    log_path = tmp_path / "autopilot.log"
+    journal_path = tmp_path / "autopilot_journal.jsonl"
+    log_path.write_text("2026-07-05 00:00:00,000 Trial 40 complete\n")
+    rows = [
+        {
+            "trial_id": 40,
+            "tier": 3,
+            "timestamp": "2026-07-05T00:00:00+00:00",
+            "species": "structural_lab",
+            "quality": 1.2,
+            "speed": 45.0,
+            "cost": 0.5,
+            "reliability": 1.0,
+            "pareto_status": "dominated",
+            "eval_details": {
+                "per_suite_quality": {"real_suite_v1": 1.5},
+                "details": {"per_suite_counts": {"real_suite_v1": 4}},
+                "question_results": [
+                    {"suite": "real_suite_v1", "qid": "a", "correct": True},
+                    {"suite": "real_suite_v1", "qid": "b", "correct": False},
+                ],
+            },
+        }
+    ]
+    journal_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+    monkeypatch.setattr(dashboard, "AUTOPILOT_LOG", log_path)
+    monkeypatch.setattr(dashboard, "_AUTOPILOT_JOURNAL_PATH", journal_path)
+
+    response = asyncio.run(dashboard.gepa_status())
+    payload = json.loads(response.body)
+
+    metric = payload["recent_trials"][0]["real_suite_v1"]
+    assert metric == {
+        "suite": "real_suite_v1",
+        "quality": 1.5,
+        "count": 4,
+        "correct": 1,
+    }
+
+
+def test_shape_pareto_entry_carries_real_suite_metric() -> None:
+    shaped = dashboard._shape_pareto_entry(
+        {
+            "trial_id": 50,
+            "objectives": [1.0, 20.0, -0.2, 1.0],
+            "eval_details": {
+                "details": {"per_suite_counts": {"real_suite_v1": 2}},
+                "question_results": [
+                    {"suite": "real_suite_v1", "correct": True},
+                    {"suite": "real_suite_v1", "correct": True},
+                ],
+            },
+        }
+    )
+
+    assert shaped["real_suite_v1"] == {
+        "suite": "real_suite_v1",
+        "quality": 3.0,
+        "count": 2,
+        "correct": 2,
+    }
 
 
 def test_pareto_endpoint_prefers_current_journal_run_over_old_rows_and_state(
@@ -1813,3 +2260,211 @@ def test_pareto_endpoint_marks_legacy_state_archive_fallback(
         "state_error": None,
         "using_legacy_state_archive": True,
     }
+
+
+# ----- _poll_all_slots fan-out deadline -----
+
+
+def test_poll_all_slots_deadline_bounds_hung_ports(monkeypatch) -> None:
+    """A hung /slots endpoint must cost at most the fan-out deadline, not its
+    own per-request budget times the port count — the snapshot serve path
+    feeds the topology/region-locks/live-tap panels."""
+    monkeypatch.setattr(
+        dashboard, "_discover_llama_ports",
+        lambda: {8070: "frontdoor", 8071: "hung_a", 8072: "hung_b"},
+    )
+
+    async def fake_poll(client, port):
+        if port == 8070:
+            return [{"id": 0, "is_processing": False}]
+        await asyncio.sleep(30)
+        return [{"id": 99}]
+
+    monkeypatch.setattr(dashboard, "_poll_slot", fake_poll)
+    monkeypatch.setattr(dashboard, "_SLOTS_FANOUT_DEADLINE_S", 0.3)
+
+    started = time.time()
+    slots_by_port, meta = asyncio.run(dashboard._poll_all_slots())
+    elapsed = time.time() - started
+
+    assert elapsed < 2.0
+    assert slots_by_port[8070] == [{"id": 0, "is_processing": False}]
+    assert slots_by_port[8071] == []
+    assert slots_by_port[8072] == []
+    assert meta["ports"] == 3
+    assert meta["answered"] == 1
+    assert meta["timed_out"] == 2
+    assert meta["duration_s"] >= 0.3
+
+
+def test_poll_all_slots_empty_ports_meta() -> None:
+    from unittest.mock import patch
+
+    with patch.object(dashboard, "_discover_llama_ports", lambda: {}):
+        slots_by_port, meta = asyncio.run(dashboard._poll_all_slots())
+    assert slots_by_port == {}
+    assert meta == {"ports": 0, "answered": 0, "timed_out": 0, "duration_s": 0.0}
+
+
+# ----- region-locks cache + tap-enrich fail-open (serve-path decoupling) -----
+
+
+def test_region_locks_cached_ttl_and_fail_open(monkeypatch) -> None:
+    calls = {"n": 0}
+
+    def fake_payload():
+        calls["n"] += 1
+        if calls["n"] >= 3:
+            raise RuntimeError("proc scan exploded")
+        return {"entries": [{"role": "frontdoor"}], "by_role": {"frontdoor": {}}}
+
+    monkeypatch.setattr(dashboard, "_region_locks_payload", fake_payload)
+    monkeypatch.setitem(dashboard._REGION_LOCKS_CACHE, "ts", 0.0)
+    monkeypatch.setitem(dashboard._REGION_LOCKS_CACHE, "payload", None)
+
+    first = dashboard._region_locks_cached()
+    second = dashboard._region_locks_cached()  # inside TTL → no rebuild
+    assert calls["n"] == 1
+    assert first is second
+
+    # Expire the TTL twice: second rebuild succeeds, third raises → the cached
+    # payload is served marked stale instead of raising into the serve path.
+    dashboard._REGION_LOCKS_CACHE["ts"] = 0.0
+    dashboard._region_locks_cached()
+    assert calls["n"] == 2
+    dashboard._REGION_LOCKS_CACHE["ts"] = 0.0
+    failed = dashboard._region_locks_cached()
+    assert calls["n"] == 3
+    assert failed["stale_cache"] is True
+    assert "proc scan exploded" in failed["error"]
+    assert failed["entries"] == [{"role": "frontdoor"}]
+
+
+def test_enrich_structured_tap_requests_fails_open(monkeypatch) -> None:
+    """Tap content must render even when the locks/topology domain raises."""
+    def boom():
+        raise RuntimeError("locks domain down")
+
+    monkeypatch.setattr(dashboard, "_port_roles_cached", boom)
+    monkeypatch.setattr(dashboard, "_region_locks_cached", boom)
+    reqs = [{"request_id": "chat-1:aa", "role": "frontdoor", "port": 8070}]
+    out = dashboard._enrich_structured_tap_requests(reqs)
+    assert out == reqs
+
+
+def test_read_tap_events_tail_stitches_rotation_window(tmp_path) -> None:
+    """Right after a rotation the base is missing/tiny; the tail must include
+    the rotated shard so parsers keep a full window (empty-panel bug)."""
+    base = tmp_path / "inference_tap_events.jsonl"
+    rotated = tmp_path / "inference_tap_events.jsonl.1"
+    rotated.write_text('{"seq":1}\n{"seq":2}\n')
+
+    # Base absent entirely (rotation happened, no append yet).
+    out = dashboard_tap._read_tap_events_tail(base, max_bytes=1024)
+    assert '{"seq":2}' in out
+
+    # Base tiny: stitched = rotated tail + base, in order.
+    base.write_text('{"seq":3}\n')
+    out = dashboard_tap._read_tap_events_tail(base, max_bytes=1024)
+    assert out.index('{"seq":2}') < out.index('{"seq":3}')
+
+    # Base large enough (>= half budget): no stitching, base only.
+    base.write_text('{"seq":4}\n' * 200)
+    out = dashboard_tap._read_tap_events_tail(base, max_bytes=1024)
+    assert '{"seq":2}' not in out
+
+
+# ----- health serve-path coverage (hang/crash visibility) ---------------------
+
+
+def _reset_snapshot_stats(monkeypatch, **overrides) -> None:
+    fresh = {
+        "last_attempt_ts": None, "last_success_ts": None, "last_duration_s": None,
+        "last_error": None, "last_error_ts": None, "build_count": 0,
+    }
+    fresh.update(overrides)
+    for k, v in fresh.items():
+        monkeypatch.setitem(dashboard._SNAPSHOT_BUILD_STATS, k, v)
+
+
+def test_serve_path_health_idle_worker_is_fresh(monkeypatch) -> None:
+    now = 1_000_000.0
+    _reset_snapshot_stats(monkeypatch)  # never built: idle, not degraded
+    assert dashboard._serve_path_health(now)["staleness_class"] == "fresh"
+    _reset_snapshot_stats(  # built long ago, no demand since: still fresh
+        monkeypatch, last_attempt_ts=now - 5000, last_success_ts=now - 5000,
+        last_duration_s=0.9, build_count=42,
+    )
+    assert dashboard._serve_path_health(now)["staleness_class"] == "fresh"
+
+
+def test_serve_path_health_flags_hang_and_crash(monkeypatch) -> None:
+    now = 1_000_000.0
+    # Hang: attempt outstanding past the stall threshold, no success since.
+    _reset_snapshot_stats(
+        monkeypatch, last_attempt_ts=now - 45, last_success_ts=now - 300,
+        build_count=10,
+    )
+    out = dashboard._serve_path_health(now)
+    assert out["staleness_class"] == "stale"
+    assert "stalled" in out["reason"]
+    # In-flight but young: not yet a hang.
+    _reset_snapshot_stats(
+        monkeypatch, last_attempt_ts=now - 5, last_success_ts=now - 300,
+        build_count=10,
+    )
+    assert dashboard._serve_path_health(now)["staleness_class"] == "fresh"
+    # Crash loop: newest attempt errored.
+    _reset_snapshot_stats(
+        monkeypatch, last_attempt_ts=now - 1, last_success_ts=now - 60,
+        last_error="boom", last_error_ts=now - 1, build_count=10,
+    )
+    out = dashboard._serve_path_health(now)
+    assert out["staleness_class"] == "stale"
+    assert "erroring" in out["reason"]
+    assert "boom" in out["reason"]
+
+
+def test_health_folds_serve_path_and_probe(monkeypatch) -> None:
+    now_ref = time.time()
+    # Healthy stats → health ok, serve_path present.
+    _reset_snapshot_stats(
+        monkeypatch, last_attempt_ts=now_ref, last_success_ts=now_ref,
+        last_duration_s=0.5, build_count=3,
+    )
+    resp = asyncio.run(dashboard.dashboard_health())
+    payload = json.loads(resp.body)
+    assert payload["serve_path"]["staleness_class"] == "fresh"
+    assert "probe" not in payload
+
+    # Stalled stats must degrade the folded verdict.
+    _reset_snapshot_stats(
+        monkeypatch, last_attempt_ts=now_ref - 120, last_success_ts=now_ref - 600,
+        build_count=3,
+    )
+    resp = asyncio.run(dashboard.dashboard_health())
+    payload = json.loads(resp.body)
+    assert payload["serve_path"]["staleness_class"] == "stale"
+    assert payload["status"] == "degraded"
+
+
+def test_health_probe_reports_timeout_and_error(monkeypatch) -> None:
+    async def timing_out_snapshot():
+        raise asyncio.TimeoutError()
+
+    monkeypatch.setattr(dashboard, "snapshot", timing_out_snapshot)
+    resp = asyncio.run(dashboard.dashboard_health(probe="snapshot"))
+    payload = json.loads(resp.body)
+    assert payload["probe"]["ok"] is False
+    assert "timeout_s" in payload["probe"]
+    assert payload["status"] == "degraded"
+
+    async def crashing_snapshot():
+        raise RuntimeError("serve path exploded")
+
+    monkeypatch.setattr(dashboard, "snapshot", crashing_snapshot)
+    resp = asyncio.run(dashboard.dashboard_health(probe="snapshot"))
+    payload = json.loads(resp.body)
+    assert payload["probe"]["ok"] is False
+    assert "serve path exploded" in payload["probe"]["error"]
+    assert payload["status"] == "degraded"

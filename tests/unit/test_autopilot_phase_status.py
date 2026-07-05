@@ -159,12 +159,142 @@ def test_phase_health_report_can_block_on_runtime_source_drift(tmp_path, monkeyp
     ]
 
 
+def test_phase_health_report_surfaces_outcome_stall_without_blocking_by_default(
+    tmp_path,
+    monkeypatch,
+):
+    snapshot = tmp_path / "phase.json"
+    journal_dir = tmp_path / "journal"
+    journal_dir.mkdir()
+    (journal_dir / "autopilot_journal.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "trial_id": 1,
+                        "timestamp": "2026-07-05T00:00:00+00:00",
+                        "action_type": "numeric_trial",
+                        "pareto_status": "frontier",
+                        "keep_revert_decision": "keep",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "trial_id": 20,
+                        "timestamp": "2026-07-05T01:00:00+00:00",
+                        "action_type": "numeric_trial",
+                        "pareto_status": "dominated",
+                        "keep_revert_decision": "revert",
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    snapshot.write_text(
+        json.dumps(
+            {
+                "phase": "dispatch_action",
+                "pid": 123,
+                "trial_id": 21,
+                "action_type": "numeric_trial",
+                "updated_at": 100.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("phase_status._process_exists", lambda pid: True)
+
+    report = build_phase_health_report(
+        path=snapshot,
+        journal_dir=journal_dir,
+        max_trials_since_frontier=10,
+        max_trials_since_promotion=10,
+        now=120.0,
+        stale_after_s=60.0,
+    )
+
+    assert report["ok"] is True
+    assert report["status"] == "active"
+    assert report["blockers"] == []
+    assert report["outcome_progress"]["status"] == "attention"
+    assert report["outcome_progress"]["latest_trial_id"] == 20
+    assert report["outcome_progress"]["trials_since_frontier"] == 19
+    assert report["outcome_progress"]["trials_since_promotion"] is None
+    assert report["outcome_progress"]["rates"]["keepable_rate"] == {
+        "count": 1,
+        "total": 2,
+        "rate": 0.5,
+    }
+    formatted = "\n".join(format_phase_health_report(report))
+    assert "Outcome progress status: attention" in formatted
+    assert "frontier admission stale" in formatted
+
+
+def test_phase_health_report_can_block_on_outcome_stall(tmp_path, monkeypatch):
+    snapshot = tmp_path / "phase.json"
+    journal_dir = tmp_path / "journal"
+    journal_dir.mkdir()
+    (journal_dir / "autopilot_journal.jsonl").write_text(
+        "\n".join(
+            json.dumps(
+                {
+                    "trial_id": trial_id,
+                    "timestamp": f"2026-07-05T00:{trial_id:02d}:00+00:00",
+                    "action_type": "numeric_trial",
+                    "pareto_status": "frontier" if trial_id == 1 else "dominated",
+                    "keep_revert_decision": "revert",
+                }
+            )
+            for trial_id in range(1, 13)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    snapshot.write_text(
+        json.dumps(
+            {
+                "phase": "dispatch_action",
+                "pid": 123,
+                "trial_id": 13,
+                "action_type": "numeric_trial",
+                "updated_at": 100.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("phase_status._process_exists", lambda pid: True)
+
+    report = build_phase_health_report(
+        path=snapshot,
+        journal_dir=journal_dir,
+        require_outcome_progress=True,
+        max_trials_since_frontier=5,
+        max_trials_since_promotion=5,
+        now=120.0,
+        stale_after_s=60.0,
+    )
+
+    assert report["ok"] is False
+    assert report["status"] == "outcome_stalled"
+    assert report["require_outcome_progress"] is True
+    assert report["blockers"] == [
+        "outcome progress stalled: frontier admission stale: "
+        "11 trial(s) since frontier > 5",
+        "outcome progress stalled: no baseline promotion observed across "
+        "12 trial(s)",
+    ]
+
+
 def test_phase_health_default_runtime_sources_include_planner_and_seeding_modules():
     checked = {path.name for path in phase_status.AUTOPILOT_RUNTIME_SOURCE_PATHS}
 
     assert "controller_io.py" in checked
     assert "planner_coordinator.py" in checked
     assert "planner_providers.py" in checked
+    assert "experiment_journal.py" in checked
+    assert "state_store.py" in checked
     assert "seeder.py" in checked
     assert "seeding_eval.py" in checked
     assert "seeding_scoring.py" in checked
@@ -172,6 +302,7 @@ def test_phase_health_default_runtime_sources_include_planner_and_seeding_module
     assert "strategy_store.py" in checked
     assert "knowledge_distiller.py" in checked
     assert "evolution_manager.py" in checked
+    assert "planner_evidence.py" in checked
 
 
 def test_phase_health_report_exposes_allowlisted_autopilot_env_flags(tmp_path, monkeypatch):
@@ -273,6 +404,51 @@ def test_phase_health_report_tails_eval_progress_when_heartbeat_lacks_counters(
     assert report["eval_progress_source"] == "log_tail"
     formatted = "\n".join(format_phase_health_report(report))
     assert "Eval progress: 400/500 (70% correct)" in formatted
+
+
+def test_phase_health_report_tails_t3_eval_progress(tmp_path, monkeypatch):
+    """The T3 expert/hard lane emits `T3 progress:` lines — the tail parser must
+    pick them up (regression guard for the old `T[12]` hardcode)."""
+    snapshot = tmp_path / "phase.json"
+    snapshot.write_text(
+        json.dumps(
+            {
+                "phase": "dispatch_action",
+                "pid": 123,
+                "trial_id": 903,
+                "action_type": "deep_eval",
+                "updated_at": 100.0,
+                "updated_at_iso": "2026-07-04T12:13:13+00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+    log_path = tmp_path / "autopilot.log"
+    log_path.write_text(
+        "\n".join(
+            [
+                '2026-07-04 19:14:09 [autopilot] INFO: Trial 903: {"type": "deep_eval"}',
+                "2026-07-04 19:29:11 [autopilot.eval] INFO: T3 progress: 40/160 (55% correct)",
+                "2026-07-04 21:43:41 [autopilot.eval] INFO: T3 progress: 120/160 (58% correct)",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("phase_status._process_exists", lambda pid: True)
+
+    report = build_phase_health_report(
+        path=snapshot,
+        log_path=log_path,
+        now=120.0,
+        stale_after_s=60.0,
+    )
+
+    assert report["ok"] is True
+    assert report["eval_label"] == "T3"
+    assert report["eval_completed_questions"] == 120
+    assert report["eval_total_questions"] == 160
+    assert report["eval_correct_pct"] == 58.0
+    assert report["eval_progress_source"] == "log_tail"
 
 
 def test_phase_health_report_tails_numeric_trial_progress_from_recent_tmp_log(

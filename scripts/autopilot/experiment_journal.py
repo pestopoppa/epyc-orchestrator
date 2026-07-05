@@ -16,6 +16,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from src.autopilot_core.tier_specs import DEFAULT_FRONTIER_TIER
+
 
 class DeficiencyCategory(str, Enum):
     """Structured failure classification for safety gate violations (AP-14).
@@ -73,6 +75,7 @@ _LEGACY_SCALE_FAILURE_SUMMARY = (
     "legacy-scale failure_analysis omitted: references impossible 0-3 quality "
     "baseline/per-suite regression; use recorded q/s/r fields instead"
 )
+_HIGHER_TIER_BUDGET_CREDIT_WEIGHT = 0.15
 
 TSV_COLUMNS = [
     "trial_id",
@@ -1069,8 +1072,10 @@ class ExperimentJournal:
         ``rate`` remains the legacy Pareto-frontier rate for reports.  Budget
         rebalancing should prefer ``budget_rate``: PEAF surprise-derived
         realized information gain when present, otherwise the legacy frontier
-        rate.  This lets informative non-frontier trials earn exploration
-        budget without changing old consumers that display Pareto counts.
+        rate, plus a small clipped credit for successful higher-tier workflow
+        eval rows.  This lets informative non-frontier trials and T2/T3
+        validation successes earn exploration budget without changing old
+        consumers that display Pareto counts or any production-promotion gate.
         """
         entries = self._entries[-window:] if window else self._entries
         stats: dict[str, dict[str, float]] = {}
@@ -1083,15 +1088,22 @@ class ExperimentJournal:
                     "information_gain": 0.0,
                     "information_count": 0,
                     "information_rate": 0.0,
+                    "higher_tier_quality_gain": 0.0,
+                    "higher_tier_quality_count": 0,
+                    "higher_tier_quality_rate": 0.0,
                     "budget_rate": 0.0,
                 }
             stats[e.species]["total"] += 1
             if e.pareto_status == "frontier":
                 stats[e.species]["pareto"] += 1
+            trusted_ok = (
+                not e.bug_corrupted_by
+                and e.outcome_status == "ok"
+                and not e.failure_analysis
+            )
             if (
                 e.surprise_score is not None
-                and not e.bug_corrupted_by
-                and e.outcome_status == "ok"
+                and trusted_ok
             ):
                 # PEAF surprise is already normalized objective-space distance.
                 # Cap per-trial credit so one wild forecast miss cannot dominate
@@ -1099,6 +1111,14 @@ class ExperimentJournal:
                 info_gain = min(max(float(e.surprise_score), 0.0), 1.0)
                 stats[e.species]["information_gain"] += info_gain
                 stats[e.species]["information_count"] += 1
+            if int(e.tier) > DEFAULT_FRONTIER_TIER and trusted_ok:
+                # Tier quality is same-tier only and never compared against T1.
+                # Credit is normalized within the 0-3 scale, then clipped by the
+                # final blend below so validation lanes can steer exploration
+                # without becoming deployment authority.
+                quality_gain = min(max(float(e.quality) / 3.0, 0.0), 1.0)
+                stats[e.species]["higher_tier_quality_gain"] += quality_gain
+                stats[e.species]["higher_tier_quality_count"] += 1
         for sp in stats:
             total = stats[sp]["total"]
             stats[sp]["rate"] = stats[sp]["pareto"] / total if total > 0 else 0.0
@@ -1110,4 +1130,15 @@ class ExperimentJournal:
                 stats[sp]["budget_rate"] = stats[sp]["information_rate"]
             else:
                 stats[sp]["budget_rate"] = stats[sp]["rate"]
+            higher_count = stats[sp]["higher_tier_quality_count"]
+            if higher_count > 0:
+                stats[sp]["higher_tier_quality_rate"] = (
+                    stats[sp]["higher_tier_quality_gain"] / higher_count
+                )
+                stats[sp]["budget_rate"] = min(
+                    1.0,
+                    stats[sp]["budget_rate"]
+                    + _HIGHER_TIER_BUDGET_CREDIT_WEIGHT
+                    * stats[sp]["higher_tier_quality_rate"],
+                )
         return stats

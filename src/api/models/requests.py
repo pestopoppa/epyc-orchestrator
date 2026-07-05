@@ -121,6 +121,13 @@ class ChatRequest(BaseModel):
         "'interactive', 'eval_batch', or 'campaign'. When unset, the server "
         "infers it from existing request metadata without changing admission priority.",
     )
+    x_orchestrator_prompt_root: str | None = Field(
+        default=None,
+        description=(
+            "Internal AutoPilot/GEPA override for resolving prompt files from "
+            "a scratch prompt tree. Accepted only from configured scratch roots."
+        ),
+    )
     routing_preferences: dict[str, float] | None = Field(
         default=None,
         description=(

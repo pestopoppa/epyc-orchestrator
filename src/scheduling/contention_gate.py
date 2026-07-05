@@ -145,8 +145,12 @@ class ContentionGate:
         if self._live_topo_hash_cache is None:
             try:
                 from scripts.server.stack_numa import NUMA_CONFIG  # type: ignore[import-not-found]
-                from src.scheduling.contention import topology_fingerprint
-                self._live_topo_hash_cache = topology_fingerprint(NUMA_CONFIG)
+                from src.scheduling.contention import topology_fingerprint_for_matrix
+
+                self._live_topo_hash_cache = topology_fingerprint_for_matrix(
+                    NUMA_CONFIG,
+                    self._get_matrix(),
+                )
             except Exception:  # noqa: BLE001
                 self._live_topo_hash_cache = ""
         return self._live_topo_hash_cache or None

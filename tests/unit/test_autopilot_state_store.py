@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import json
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import yaml
@@ -57,6 +58,86 @@ def test_load_blacklist_parses_yaml(tmp_path) -> None:
     assert out[0]["reason"] == "regression"
 
 
+def test_load_blacklist_filters_observational_deep_eval_entries(tmp_path) -> None:
+    f = tmp_path / "bl.yaml"
+    f.write_text(yaml.dump({"blacklist": [
+        {"pattern": {"type": "deep_eval", "tier": 3}, "reason": "hard tier failed"},
+        {"pattern": {"type": "seed_batch", "n_questions": 24}, "reason": "bad n"},
+    ]}))
+    out = state_store.load_blacklist(f)
+    assert [entry["pattern"] for entry in out] == [
+        {"type": "seed_batch", "n_questions": 24},
+    ]
+
+
+def test_load_blacklist_filters_unscoped_numeric_surface_entries(tmp_path) -> None:
+    f = tmp_path / "bl.yaml"
+    f.write_text(yaml.dump({"blacklist": [
+        {
+            "pattern": {"type": "numeric_trial", "surface": "memrl_retrieval"},
+            "reason": "legacy broad ban",
+        },
+        {
+            "pattern": {
+                "type": "numeric_trial",
+                "surface": "chat_pipeline",
+                "params": {},
+            },
+            "reason": "empty sampler ban",
+        },
+        {
+            "pattern": {
+                "type": "numeric_trial",
+                "surface": "repl_executor",
+                "params": {"repl.turn_token_cap": 768},
+            },
+            "reason": "exact params failed",
+        },
+        {
+            "pattern": {"type": "numeric_trial", "surface": "monitor"},
+            "reason": "operator surface ban",
+            "scope": "surface",
+        },
+    ]}))
+    out = state_store.load_blacklist(f)
+    assert [entry["reason"] for entry in out] == [
+        "exact params failed",
+        "operator surface ban",
+    ]
+
+
+def test_load_blacklist_filters_expired_auto_entries(tmp_path) -> None:
+    f = tmp_path / "bl.yaml"
+    old_added = (datetime.now(timezone.utc) - timedelta(days=20)).isoformat()
+    f.write_text(yaml.dump({"blacklist": [
+        {
+            "pattern": {"type": "structural_experiment", "flags": {"x": True}},
+            "reason": "Auto-blacklisted: 2× critic-rejected — stale",
+            "added": old_added,
+            "source_trial": 10,
+        },
+        {
+            "pattern": {"type": "structural_experiment", "flags": {"y": True}},
+            "reason": "Auto-blacklisted: 2× critic-rejected — explicit stale",
+            "added": datetime.now(timezone.utc).isoformat(),
+            "expires_at": (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(),
+            "source_trial": 11,
+        },
+        {
+            "pattern": {"type": "prompt_mutation", "file": "frontdoor.md"},
+            "reason": "MANUAL FREEZE: corruption recovery",
+            "severity": "corruption",
+            "added": old_added,
+            "source_trial": -1,
+        },
+    ]}))
+
+    out = state_store.load_blacklist(f)
+    assert [entry["pattern"] for entry in out] == [
+        {"type": "prompt_mutation", "file": "frontdoor.md"},
+    ]
+
+
 def test_load_blacklist_handles_malformed_yaml(tmp_path) -> None:
     f = tmp_path / "bad.yaml"
     f.write_text("not: valid: yaml: {{{")
@@ -90,6 +171,74 @@ def test_check_blacklist_skips_empty_pattern() -> None:
 
 def test_check_blacklist_non_dict_action_returns_none() -> None:
     assert state_store.check_blacklist(None, [{"pattern": {"type": "x"}, "reason": "no"}]) is None
+
+
+def test_check_blacklist_ignores_unscoped_numeric_surface_entry() -> None:
+    bl = [
+        {
+            "pattern": {"type": "numeric_trial", "surface": "memrl_retrieval"},
+            "reason": "legacy broad ban",
+        }
+    ]
+    action = {"type": "numeric_trial", "surface": "memrl_retrieval", "params": {}}
+    assert state_store.check_blacklist(action, bl) is None
+
+
+def test_check_blacklist_honors_explicit_numeric_surface_scope() -> None:
+    bl = [
+        {
+            "pattern": {"type": "numeric_trial", "surface": "memrl_retrieval"},
+            "reason": "operator surface ban",
+            "scope": "surface",
+        }
+    ]
+    action = {"type": "numeric_trial", "surface": "memrl_retrieval", "params": {}}
+    assert state_store.check_blacklist(action, bl) == "operator surface ban"
+
+
+def test_check_blacklist_honors_numeric_param_pattern() -> None:
+    bl = [
+        {
+            "pattern": {
+                "type": "numeric_trial",
+                "surface": "memrl_retrieval",
+                "params": {"memrl_retrieval.semantic_k": 28},
+            },
+            "reason": "exact params failed",
+        }
+    ]
+    assert state_store.check_blacklist(
+        {
+            "type": "numeric_trial",
+            "surface": "memrl_retrieval",
+            "params": {"memrl_retrieval.semantic_k": 28},
+        },
+        bl,
+    ) == "exact params failed"
+    assert state_store.check_blacklist(
+        {
+            "type": "numeric_trial",
+            "surface": "memrl_retrieval",
+            "params": {"memrl_retrieval.semantic_k": 32},
+        },
+        bl,
+    ) is None
+
+
+def test_check_blacklist_ignores_expired_auto_entries() -> None:
+    expired = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+    bl = [
+        {
+            "pattern": {"type": "structural_experiment", "flags": {"x": True}},
+            "reason": "Auto-blacklisted: 2× critic-rejected — stale",
+            "reason_class": "critic_rejected",
+            "expires_at": expired,
+        }
+    ]
+    assert state_store.check_blacklist(
+        {"type": "structural_experiment", "flags": {"x": True}},
+        bl,
+    ) is None
 
 
 def test_append_blacklist_creates_new_file(tmp_path) -> None:
@@ -145,14 +294,74 @@ def test_append_blacklist_skips_type_only_low_risk_action(tmp_path) -> None:
     assert not bl_path.exists()
 
 
-def test_append_blacklist_keeps_specific_low_risk_pattern(tmp_path) -> None:
+def test_append_blacklist_keeps_specific_seed_pattern(tmp_path) -> None:
+    bl_path = tmp_path / "bl.yaml"
+    state_store.append_blacklist(
+        {"type": "seed_batch", "n_questions": 24}, trial_id=2, reason="second",
+        blacklist_path=bl_path,
+    )
+    data = yaml.safe_load(bl_path.read_text())
+    assert data["blacklist"][0]["pattern"] == {
+        "type": "seed_batch",
+        "n_questions": 24,
+    }
+
+
+def test_append_blacklist_skips_broad_numeric_surface_pattern(tmp_path) -> None:
+    bl_path = tmp_path / "bl.yaml"
+    state_store.append_blacklist(
+        {"type": "numeric_trial", "surface": "memrl_retrieval"},
+        trial_id=1100,
+        reason="critic loop",
+        blacklist_path=bl_path,
+    )
+    assert not bl_path.exists()
+
+
+def test_append_blacklist_keeps_numeric_params_pattern(tmp_path) -> None:
+    bl_path = tmp_path / "bl.yaml"
+    state_store.append_blacklist(
+        {
+            "type": "numeric_trial",
+            "surface": "memrl_retrieval",
+            "params": {"memrl_retrieval.semantic_k": 28},
+        },
+        trial_id=1060,
+        reason="safety revert",
+        blacklist_path=bl_path,
+    )
+    data = yaml.safe_load(bl_path.read_text())
+    assert data["blacklist"][0]["pattern"] == {
+        "type": "numeric_trial",
+        "surface": "memrl_retrieval",
+        "params": {"memrl_retrieval.semantic_k": 28},
+    }
+
+
+def test_append_blacklist_tags_auto_expiry_metadata(tmp_path) -> None:
+    bl_path = tmp_path / "bl.yaml"
+    state_store.append_blacklist(
+        {"type": "structural_experiment", "flags": {"graph_router": True}},
+        trial_id=1064,
+        reason="Auto-blacklisted: 2× critic-rejected — stale draft",
+        blacklist_path=bl_path,
+        reason_class="critic_rejected",
+    )
+    entry = yaml.safe_load(bl_path.read_text())["blacklist"][0]
+    assert entry["reason_class"] == "critic_rejected"
+    assert entry["ttl_days"] == 14
+    added = datetime.fromisoformat(entry["added"])
+    expires_at = datetime.fromisoformat(entry["expires_at"])
+    assert timedelta(days=13, hours=23) < expires_at - added < timedelta(days=14, minutes=1)
+
+
+def test_append_blacklist_skips_observational_deep_eval_tier(tmp_path) -> None:
     bl_path = tmp_path / "bl.yaml"
     state_store.append_blacklist(
         {"type": "deep_eval", "tier": 2}, trial_id=2, reason="second",
         blacklist_path=bl_path,
     )
-    data = yaml.safe_load(bl_path.read_text())
-    assert data["blacklist"][0]["pattern"] == {"type": "deep_eval", "tier": 2}
+    assert not bl_path.exists()
 
 
 def test_append_blacklist_keeps_specific_distill_knowledge_window(tmp_path) -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -10,6 +11,7 @@ from src.orchestration.consultation import (
     ConsultationDenied,
     build_consult_prompt,
     consult,
+    _maybe_dcp_consult_context,
     load_interaction_skill,
 )
 from src.scheduling.contention_gate import ContentionDenied as GateContentionDenied
@@ -133,3 +135,83 @@ def test_consult_translates_contention_to_consultation_denied() -> None:
         )
 
     assert exc_info.value.reason == "contention_skip"
+
+
+def test_dcp_consult_context_is_default_inert(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "src.features.features",
+        lambda: SimpleNamespace(dcp_for_consult=False, dcp_pre_assembly=True),
+    )
+
+    out = _maybe_dcp_consult_context("base", code_search_fn=lambda _q: ["x.py"])
+
+    assert out == "base"
+
+
+def test_dcp_consult_context_requires_dcp_pre_assembly(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "src.features.features",
+        lambda: SimpleNamespace(dcp_for_consult=True, dcp_pre_assembly=False),
+    )
+
+    out = _maybe_dcp_consult_context("base", code_search_fn=lambda _q: ["x.py"])
+
+    assert out == "base"
+
+
+def test_dcp_consult_context_reuses_seed_helper(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "src.features.features",
+        lambda: SimpleNamespace(dcp_for_consult=True, dcp_pre_assembly=True),
+    )
+    calls: list[dict] = []
+
+    def fake_seed_context(query, *, code_search_fn, base_ctx, budget):
+        calls.append(
+            {
+                "query": query,
+                "code_search_fn": code_search_fn,
+                "base_ctx": base_ctx,
+                "budget": budget,
+            }
+        )
+        return f"{base_ctx}\n[DCP] seeded"
+
+    monkeypatch.setattr(
+        "src.api.routes.chat_delegation._maybe_dcp_seed_context",
+        fake_seed_context,
+    )
+    def search(_query: str) -> list[str]:
+        return ["x.py"]
+
+    out = _maybe_dcp_consult_context("base", code_search_fn=search, budget=123)
+
+    assert out == "base\n[DCP] seeded"
+    assert calls == [
+        {
+            "query": "base",
+            "code_search_fn": search,
+            "base_ctx": "base",
+            "budget": 123,
+        }
+    ]
+
+
+def test_consult_injects_dcp_augmented_context(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "src.orchestration.consultation._maybe_dcp_consult_context",
+        lambda context, *, code_search_fn, budget: f"{context}\n[DCP] seeded",
+    )
+    primitives = _FakePrimitives()
+
+    consult(
+        "architect_general",
+        "coder_escalation",
+        "review_before_commit",
+        "draft context",
+        primitives,
+        code_search_fn=lambda _q: ["x.py"],
+        dcp_budget=321,
+    )
+
+    assert "[DCP] seeded" in primitives.calls[0]["prompt"]

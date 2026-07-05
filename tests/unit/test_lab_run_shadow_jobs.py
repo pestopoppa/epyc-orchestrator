@@ -7,15 +7,27 @@ import pytest
 from scripts.lab import run_shadow_jobs
 
 
-def _job(job_id: str, *, enabled: bool = True, gated: bool = False) -> dict:
+def _job(
+    job_id: str,
+    *,
+    enabled: bool = True,
+    gated: bool = False,
+    active_safe: bool = False,
+    risk: str = "read_only",
+) -> dict:
     job = {
         "job_id": job_id,
         "stage": "shadow",
         "enabled": enabled,
+        "risk": risk,
         "schedule": {"type": "nightly", "cadence": "daily"},
     }
     if gated:
         job["gates"] = ["frontier-f5-intake-injection-hardening"]
+    if active_safe:
+        job["active_safe"] = True
+        job["runtime_class"] = "active_safe_deterministic"
+        job["execution"] = {"mode": "deterministic_command", "command": ["true"]}
     return job
 
 
@@ -56,6 +68,64 @@ def test_select_jobs_can_include_disabled_and_gated_when_explicit() -> None:
     assert [job["job_id"] for job in selected] == ["disabled", "gated"]
 
 
+def test_select_jobs_active_safe_only_requires_read_only_deterministic() -> None:
+    jobs_doc = {
+        "jobs": [
+            _job("model_chat"),
+            _job("active_safe", active_safe=True),
+            _job("write_reviewed", active_safe=True, risk="write_reviewed"),
+        ]
+    }
+
+    selected = run_shadow_jobs.select_jobs(
+        jobs_doc,
+        schedule="nightly",
+        job_ids=[],
+        include_disabled=False,
+        allow_gated=False,
+        active_safe_only=True,
+        max_jobs=0,
+    )
+
+    assert [job["job_id"] for job in selected] == ["active_safe"]
+
+
+def test_select_jobs_quiet_window_only_excludes_active_safe_jobs() -> None:
+    jobs_doc = {
+        "jobs": [
+            _job("model_chat"),
+            _job("active_safe", active_safe=True),
+            _job("second_model_chat"),
+        ]
+    }
+
+    selected = run_shadow_jobs.select_jobs(
+        jobs_doc,
+        schedule="nightly",
+        job_ids=[],
+        include_disabled=False,
+        allow_gated=False,
+        quiet_window_only=True,
+        max_jobs=0,
+    )
+
+    assert [job["job_id"] for job in selected] == ["model_chat", "second_model_chat"]
+
+
+def test_select_jobs_rejects_conflicting_runtime_filters() -> None:
+    with pytest.raises(run_shadow_jobs.ShadowBatchError, match="at most one"):
+        run_shadow_jobs.select_jobs(
+            {"jobs": [_job("active_safe", active_safe=True)]},
+            schedule="nightly",
+            job_ids=[],
+            include_disabled=False,
+            allow_gated=False,
+            active_safe_only=True,
+            quiet_window_only=True,
+            max_jobs=0,
+        )
+
+
 def test_requested_unrunnable_job_fails() -> None:
     jobs_doc = {"jobs": [_job("disabled", enabled=False)]}
 
@@ -78,7 +148,8 @@ def test_run_from_args_requires_execution_mode(tmp_path, monkeypatch) -> None:
         jobs_file=str(jobs_file),
         dry_run_stub=False,
         execute_chat=False,
+        execute_command=False,
     )
 
-    with pytest.raises(run_shadow_jobs.ShadowBatchError, match="dry-run-stub"):
+    with pytest.raises(run_shadow_jobs.ShadowBatchError, match="execute-command"):
         run_shadow_jobs.run_from_args(args)

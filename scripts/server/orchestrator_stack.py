@@ -41,7 +41,7 @@ import time
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, MutableMapping
 
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
@@ -1474,6 +1474,12 @@ def _production_feature_env() -> dict[str, str]:
     return block
 
 
+def _apply_production_feature_env(env: MutableMapping[str, str]) -> None:
+    """Fill stack-managed production feature defaults without clobbering overrides."""
+    for key, value in _production_feature_env().items():
+        env.setdefault(key, value)
+
+
 def start_orchestrator(profile: str | None = None) -> ProcessInfo | None:
     """Start the orchestrator API."""
     log_file = LOG_DIR / "orchestrator.log"
@@ -1491,9 +1497,8 @@ def start_orchestrator(profile: str | None = None) -> ProcessInfo | None:
     env["HF_HOME"] = str(_PATHS["cache_dir"] / "huggingface")
     env["TMPDIR"] = str(_PATHS["tmp_dir"])
     # Feature flags: make every registry flag explicit in /proc/<pid>/environ.
-    # Later targeted env assignments preserve existing operational launch intent
-    # for rollout flags that are not part of routing-truth wave gating.
-    env.update(_production_feature_env())
+    # Explicit launch-time env values are activation intent and must survive.
+    _apply_production_feature_env(env)
     # 2026-05-22 Phase 5: per-CPU-region cross-process locks enabled by
     # default. Replaces the single global heavy_model.lock with
     # per-(role, atomic-region) fcntl locks so frontdoor full (0-47)
@@ -1817,6 +1822,63 @@ def start_whisper() -> ProcessInfo | None:
         return None
 
 
+def start_handoff_dashboard() -> ProcessInfo | None:
+    """Start the epyc-root handoff progress dashboard hub (port 8100).
+
+    Project-wide, file/artifact-backed progress board owned by the governance
+    repo (epyc-root). It is deliberately dependency-free (Python stdlib only),
+    so it runs under any interpreter — the orchestrator venv is not required.
+    The autopilot dashboard stays on the orchestrator (:8000/dashboard) because
+    it needs live in-process state; this hub links to it and vice-versa.
+    Stack-managed per feedback_stack_managed_services.
+    """
+    log_file = LOG_DIR / "handoff_dashboard.log"
+    port = 8100
+    repo = Path("/mnt/raid0/llm/epyc-root")
+    server = repo / "dashboard" / "server.py"
+
+    print(f"  Starting handoff_dashboard (epyc-root hub) on port {port}")
+
+    if not server.exists():
+        print(f"    [FAIL] hub server not found: {server}")
+        return None
+
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(repo) + os.pathsep + env.get("PYTHONPATH", "")
+
+    with open(log_file, "w") as log:
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "dashboard.server", "--host", "0.0.0.0",
+             "--port", str(port)],
+            cwd=str(repo),
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+            close_fds=True,
+        )
+
+    print(f"    PID: {proc.pid}")
+    print(f"    Waiting for health (path=/health, timeout=30s)...")
+
+    if wait_for_health(port, timeout=30, path="/health"):
+        print(f"    [OK] handoff dashboard ready")
+        return ProcessInfo(
+            role="handoff_dashboard",
+            pid=proc.pid,
+            port=port,
+            started_at=datetime.now().isoformat(),
+            model_path="epyc-root handoff progress hub (stdlib)",
+            log_file=str(log_file),
+        )
+    else:
+        print(f"    [FAIL] handoff dashboard did not start")
+        print(f"    Check log: {log_file}")
+        kill_process(proc.pid)
+        return None
+
+
 # =============================================================================
 # Commands
 # =============================================================================
@@ -1862,14 +1924,14 @@ def main() -> int:
     start_parser.add_argument(
         "--numa-mode",
         choices=["full", "quarter", "both"],
-        default="both",
+        default="quarter",
         help=(
             "For roles with both a full-NUMA-node instance and quarter-instance siblings "
             "(currently frontdoor + coder_escalation + worker_general — see "
             "NUMA_CONFIG[role]['full_instance_idx']), pick one mode. "
             "'full' = single full instance (max single-stream tps; recommended for single-user "
-            "workloads). 'quarter' = 4 concurrent quarters (max aggregate under multi-request "
-            "load). 'both' = default, preserves pre-2026-05-08 behavior with all 5 — viable "
+            "workloads). 'quarter' = default, 4 concurrent quarters (max aggregate under "
+            "multi-request load). 'both' = compatibility mode with all 5 — viable "
             "when the role's -t is small enough to avoid CPU oversubscription (Qwen3-Coder -t 24 "
             "and Qwen3.6-35B Q8 quarter-tuned were OK; gemma4-MTP -t 96 will hit load 420 → "
             "9 t/s with 'both', so use --numa-mode full for that role specifically). "
@@ -1903,7 +1965,7 @@ def main() -> int:
         "--repair-embeddings",
         action="store_true",
         help="If [0.7] embedding health check finds orphans, run repair before launch "
-        "(re-embeds via 8 parallel BGE servers, rebuilds FAISS index, ~5-15 min). "
+        "(re-embeds via the configured parallel BGE servers, rebuilds FAISS index, ~5-15 min). "
         "Default behavior is read-only — just print warning and continue. "
         "See scripts/maintenance/repair_episodic_embeddings.py for the manual workflow.",
     )

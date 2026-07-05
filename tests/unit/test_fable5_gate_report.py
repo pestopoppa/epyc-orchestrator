@@ -215,6 +215,8 @@ xmas_routing:
         xmas_table_path=table,
         xmas_ab_root=ab_root,
         a9_collection_manifest=a9_manifest,
+        a9_audit_target_ranker_summary_path=None,
+        a9_audit_target_direction_audit_path=None,
         include_tool_use_activation=False,
     )
 
@@ -548,6 +550,142 @@ def test_tool_use_activation_accepts_recent_nonzero_tool_telemetry() -> None:
     )
 
 
+def test_eval_task_coverage_section_is_advisory_attention() -> None:
+    section = report_mod.eval_task_coverage_section(
+        {
+            "coverage": {
+                "status": "low_coverage",
+                "question_result_rows": 200,
+                "distinct_journal_question_keys": 20,
+                "pool_stable_question_keys": 1000,
+                "distinct_vs_pool_stable_upper_bound_pct": 2.0,
+                "matched_pool_stable_pct": 1.5,
+                "repeat_factor": 10.0,
+                "interpretation": "planner coverage is narrow",
+            },
+            "journal": {
+                "eval_bearing_trials": 5,
+                "trial_id_min": 1,
+                "trial_id_max": 10,
+            },
+            "questions": {
+                "tier_coverage": {
+                    "1": {
+                        "eval_bearing_trials": 4,
+                        "question_result_rows": 180,
+                        "distinct_journal_question_keys": 18,
+                        "pool_question_keys": 900,
+                        "distinct_vs_pool_pct": 2.0,
+                    }
+                },
+                "suite_distinct_question_counts": {
+                    "sentinel_tool_use": 1,
+                    "agentic": 2,
+                    "coder": 5,
+                },
+            },
+            "pool": {"path": "question_pool.jsonl"},
+            "recommendation": {"do_not_change_mid_w8": True},
+        }
+    )
+
+    assert section.key == "eval_task_coverage"
+    assert section.status == "attention"
+    assert section.blockers == []
+    assert "20/1000" in section.summary
+    assert section.details["coverage_status"] == "low_coverage"
+    assert section.details["least_covered_non_sentinel_suites"] == [
+        {"suite": "agentic", "distinct_qids": 2},
+        {"suite": "coder", "distinct_qids": 5},
+    ]
+
+
+def test_eval_task_coverage_does_not_block_fable_readiness(monkeypatch, tmp_path: Path) -> None:
+    config = tmp_path / "classifier_config.yaml"
+    config.write_text(
+        """
+xmas_routing:
+  mode: "enforce"
+  winner_table_path: "orchestration/xmas_winner_table.yaml"
+  require_complete_table: true
+""",
+        encoding="utf-8",
+    )
+    table = tmp_path / "xmas_winner_table.yaml"
+    table.write_text("placeholder: true\n", encoding="utf-8")
+    ab_root = tmp_path / "xmas_live_ab"
+    run = ab_root / "run1"
+    run.mkdir(parents=True)
+    (run / "summary.json").write_text(
+        """
+{
+  "decision": {"status": "promote_candidate", "blockers": []},
+  "xmas_policy": "incumbent_constrained_cheapfirst_v2"
+}
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(report_mod, "validate_xmas_config", lambda path: [])
+    monkeypatch.setattr(report_mod, "validate_xmas_table", lambda path, **kwargs: [])
+    monkeypatch.setattr(
+        report_mod,
+        "build_restart_readiness_report",
+        lambda state, rows, **kwargs: {
+            "restart_ready": True,
+            "blockers": [],
+            "archive_authority": {},
+            "snapshot_replay": {},
+            "summary": {"w8_promotion_status": "finalized"},
+        },
+    )
+    monkeypatch.setattr(
+        report_mod,
+        "build_w8_trajectory_report",
+        lambda rows: {
+            "status": "ok",
+            "ok": True,
+            "replay_concentration": {"warning": False},
+        },
+    )
+    monkeypatch.setattr(
+        report_mod,
+        "build_a9_collection_status",
+        lambda path: {"ready": True, "status": "ready", "blockers": []},
+    )
+
+    report = report_mod.build_fable5_gate_report(
+        state={},
+        journal_rows=[],
+        phase_report={
+            "ok": True,
+            "status": "active",
+            "pid": 123,
+            "pid_alive": True,
+            "trial_id": 1,
+        },
+        ds_e1_packet={"ready_for_profile_decision": True, "blockers": []},
+        config_path=config,
+        xmas_table_path=table,
+        xmas_ab_root=ab_root,
+        eval_task_coverage_report={
+            "coverage": {
+                "status": "low_coverage",
+                "distinct_journal_question_keys": 20,
+                "pool_stable_question_keys": 1000,
+                "distinct_vs_pool_stable_upper_bound_pct": 2.0,
+                "repeat_factor": 10.0,
+            },
+            "questions": {"suite_distinct_question_counts": {}},
+        },
+        include_tool_use_activation=False,
+    )
+
+    assert report["ready"] is True
+    assert report["blockers"] == []
+    assert report["summary"]["section_statuses"]["eval_task_coverage"] == "attention"
+    assert report["summary"]["eval_task_coverage_status"] == "low_coverage"
+
+
 def test_tool_use_next_action_requires_controlled_restart() -> None:
     phase = report_mod.GateSection(
         key="phase_health",
@@ -803,6 +941,8 @@ def test_w8_trajectory_section_surfaces_concentration_warning() -> None:
             "status_counts": {"active_recent_replay": 1},
             "open_requirements": ["replay_concentration_warning"],
             "recent_active_candidates": ["abc"],
+            "replay_eligible_candidates": ["abc"],
+            "recent_replay_eligible_candidates": ["abc"],
             "stale_accumulating_candidates": ["def", "ghi"],
             "replay_concentration": {
                 "warning": True,
@@ -818,8 +958,40 @@ def test_w8_trajectory_section_surfaces_concentration_warning() -> None:
         "replay_concentration_warning: recent replay evidence is concentrated"
     ]
     assert section.details["candidate_generation_required"] is False
+    assert section.details["replay_eligible_candidates"] == ["abc"]
     assert section.details["stale_accumulating_candidate_count"] == 2
     assert section.details["replay_concentration"]["top_active_candidate"] == "abc"
+
+
+def test_w8_trajectory_section_blocks_when_no_replay_eligible_candidate() -> None:
+    section = report_mod.w8_trajectory_section(
+        {
+            "status": "stale_accumulating",
+            "ok": False,
+            "latest_trial_id": 1153,
+            "snapshot_count": 8,
+            "candidate_count": 2,
+            "status_counts": {"active_recent_replay": 1, "stale_accumulating": 1},
+            "open_requirements": [
+                "no_replay_eligible_accumulating_candidate",
+                "stale_accumulating_candidates_present",
+            ],
+            "recent_active_candidates": ["unreplayable-a"],
+            "replay_eligible_candidates": [],
+            "recent_replay_eligible_candidates": [],
+            "stale_accumulating_candidates": ["stale-b"],
+            "replay_concentration": {"warning": False},
+        }
+    )
+
+    assert section.status == "blocked"
+    assert section.summary == "W8 replay trajectory needs a replay-eligible candidate."
+    assert section.blockers == [
+        "w8_candidate_generation_required: no replay-eligible accumulating candidate"
+    ]
+    assert section.details["candidate_generation_required"] is True
+    assert section.details["recent_active_candidates"] == ["unreplayable-a"]
+    assert section.details["replay_eligible_candidates"] == []
 
 
 def test_ds_e1_clean_window_report_surfaces_measurement_port(
@@ -1089,6 +1261,8 @@ def test_a9_section_marks_empty_manifest_attention(monkeypatch) -> None:
     section = report_mod.a9_collection_section(
         Path("/tmp/a9_manifest.json"),
         contract_summary_path=contract_summary,
+        audit_target_ranker_summary_path=None,
+        audit_target_direction_audit_path=None,
     )
 
     assert section.status == "attention"
@@ -1165,6 +1339,8 @@ def test_a9_section_surfaces_candidate_contract_decision(monkeypatch, tmp_path: 
         contract_summary_path=contract_summary,
         source_reward_diagnostic_summary_path=source_reward_summary,
         source_reward_ranker_summary_path=None,
+        audit_target_ranker_summary_path=None,
+        audit_target_direction_audit_path=None,
     )
     actions = report_mod.build_next_actions([section])
 
@@ -1284,6 +1460,8 @@ def test_a9_next_action_preregisters_source_reward_target_when_ranker_ready(
         source_reward_diagnostic_summary_path=source_reward_summary,
         source_reward_ranker_summary_path=source_ranker_summary,
         source_reward_target_contract_path=None,
+        audit_target_ranker_summary_path=None,
+        audit_target_direction_audit_path=None,
     )
     actions = report_mod.build_next_actions([section])
 
@@ -1381,15 +1559,264 @@ def test_a9_preregistered_source_reward_target_suppresses_next_action(
         source_reward_diagnostic_summary_path=source_reward_summary,
         source_reward_ranker_summary_path=source_ranker_summary,
         source_reward_target_contract_path=source_target_contract,
+        audit_target_ranker_summary_path=None,
+        audit_target_direction_audit_path=None,
     )
 
     assert "source-reward target contract is preregistered_offline_training_target" in (
         section.summary
     )
+    assert section.status == "ready"
+    assert "A9 pairwise source-acquisition window is closed" in section.summary
+    assert section.details["source_reward_ranker_ready"] is True
+    assert section.details["source_reward_target_preregistered"] is True
     assert section.details["source_reward_target_contract"]["status"] == (
         "preregistered_offline_training_target"
     )
     assert report_mod.build_next_actions([section]) == []
+
+
+def test_a9_audit_target_holdout_gap_surfaces_after_source_target_preregistered(
+    monkeypatch, tmp_path: Path
+) -> None:
+    contract_summary = tmp_path / "candidate_contract_summary.json"
+    source_reward_summary = tmp_path / "source_reward_diagnostic_summary.json"
+    source_ranker_summary = tmp_path / "source_reward_ranker_summary.json"
+    source_target_contract = tmp_path / "source_reward_target_contract.json"
+    audit_target_ranker = tmp_path / "audit_target_ranker_summary.json"
+    audit_target_direction = tmp_path / "audit_target_direction_audit.json"
+    contract_summary.write_text(
+        """
+{
+  "coverage": {"pair_rows": 32, "cross_action_pair_rows": 32},
+  "decision": {"status": "insufficient_contrast", "runtime_gate_change_allowed": false}
+}
+""",
+        encoding="utf-8",
+    )
+    source_reward_summary.write_text(
+        """
+{
+  "coverage": {"pair_rows": 180, "cross_action_pair_rows": 180},
+  "decision": {"status": "contract_ready", "runtime_gate_change_allowed": false},
+  "diagnostic": {"score_source": "source_q_reward_passthrough", "independent_oracle": false}
+}
+""",
+        encoding="utf-8",
+    )
+    source_ranker_summary.write_text(
+        """
+{
+  "input": {"pair_rows": 180, "cross_action_pair_rows": 180},
+  "aggregate": {"decision": {"status": "pairwise_ranker_signal", "runtime_gate_change_allowed": false}},
+  "cross_validation": {"decision": {"status": "pairwise_ranker_signal", "runtime_gate_change_allowed": false}},
+  "holdout_decision": {"status": "holdout_signal_consistent", "runtime_gate_change_allowed": false}
+}
+""",
+        encoding="utf-8",
+    )
+    source_target_contract.write_text(
+        """
+{
+  "schema_version": "offline_reward_source_reward_pairwise_target_contract.v1",
+  "status": "preregistered_offline_training_target",
+  "target": {"runtime_gate_change_allowed": false}
+}
+""",
+        encoding="utf-8",
+    )
+    audit_target_ranker.write_text(
+        """
+{
+  "input": {"pair_rows": 6192, "cross_action_pair_rows": 4296},
+  "aggregate": {"decision": {"status": "pairwise_ranker_signal", "runtime_gate_change_allowed": false}},
+  "holdout_decision": {
+    "status": "mixed_holdout_signal",
+    "eligible_holdouts": 16,
+    "passing_holdouts": 13,
+    "blockers": [
+      "source_family:seeding_eval:insufficient_pairwise_signal",
+      "suite:general:insufficient_pairwise_signal"
+    ],
+    "runtime_gate_change_allowed": false
+  }
+}
+""",
+        encoding="utf-8",
+    )
+    audit_target_direction.write_text(
+        """
+{
+  "decision": {
+    "status": "preference_coverage_gaps_found",
+    "runtime_gate_change_allowed": false
+  },
+  "collection_targets": [
+    {"stratum_field": "source_family", "stratum_value": "seeding_eval"}
+  ]
+}
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        report_mod,
+        "build_a9_collection_status",
+        lambda path: {
+            "ready": False,
+            "status": "no_runnable_batches",
+            "manifest_path": "/tmp/a9_manifest.json",
+            "manifest_schema_version": "offline_reward_pairwise_collection_window.v1",
+            "source_plan_decision": {"status": "expansion_plan_ready"},
+            "batch_count": 0,
+            "post_collection_step_count": 7,
+            "autopilot_guard": {"refusal_exit_code": 75},
+            "blockers": [],
+            "warnings": [],
+        },
+    )
+
+    section = report_mod.a9_collection_section(
+        Path("/tmp/a9_manifest.json"),
+        contract_summary_path=contract_summary,
+        source_reward_diagnostic_summary_path=source_reward_summary,
+        source_reward_ranker_summary_path=source_ranker_summary,
+        source_reward_target_contract_path=source_target_contract,
+        audit_target_ranker_summary_path=audit_target_ranker,
+        audit_target_direction_audit_path=audit_target_direction,
+    )
+    actions = report_mod.build_next_actions([section])
+
+    assert section.status == "ready"
+    assert "audit-target ranker holdout is mixed_holdout_signal (13/16 passing)" in (
+        section.summary
+    )
+    assert section.details["audit_target_ranker_holdout_decision"]["status"] == (
+        "mixed_holdout_signal"
+    )
+    assert section.details["audit_target_collection_targets"] == [
+        {"stratum_field": "source_family", "stratum_value": "seeding_eval"}
+    ]
+    assert [action["key"] for action in actions] == [
+        "collect_a9_audit_target_pairwise_preferences"
+    ]
+    action = actions[0]
+    assert action["priority"] == "P1"
+    assert action["runtime_gate_change_allowed"] is False
+    assert "source_family:seeding_eval:insufficient_pairwise_signal" in action["reason"]
+    assert action["audit_target_collection_targets"] == [
+        {"stratum_field": "source_family", "stratum_value": "seeding_eval"}
+    ]
+
+
+def test_a9_audit_target_action_surfaces_guarded_collection_manifest(
+    monkeypatch, tmp_path: Path
+) -> None:
+    contract_summary = tmp_path / "candidate_contract_summary.json"
+    source_reward_summary = tmp_path / "source_reward_diagnostic_summary.json"
+    source_ranker_summary = tmp_path / "source_reward_ranker_summary.json"
+    source_target_contract = tmp_path / "source_reward_target_contract.json"
+    audit_target_ranker = tmp_path / "audit_target_ranker_summary.json"
+    audit_target_direction = tmp_path / "audit_target_direction_audit.json"
+    primary_manifest = tmp_path / "expanded_gap_manifest.json"
+    audit_manifest = tmp_path / "audit_target_manifest.json"
+    contract_summary.write_text(
+        '{"coverage": {}, "decision": {"status": "insufficient_contrast"}}',
+        encoding="utf-8",
+    )
+    source_reward_summary.write_text(
+        '{"coverage": {}, "decision": {"status": "contract_ready"}}',
+        encoding="utf-8",
+    )
+    source_ranker_summary.write_text(
+        """
+{
+  "aggregate": {"decision": {"status": "pairwise_ranker_signal"}},
+  "cross_validation": {"decision": {"status": "pairwise_ranker_signal"}},
+  "holdout_decision": {"status": "holdout_signal_consistent"}
+}
+""",
+        encoding="utf-8",
+    )
+    source_target_contract.write_text(
+        '{"status": "preregistered_offline_training_target"}',
+        encoding="utf-8",
+    )
+    audit_target_ranker.write_text(
+        """
+{
+  "aggregate": {"decision": {"status": "pairwise_ranker_signal"}},
+  "holdout_decision": {
+    "status": "mixed_holdout_signal",
+    "eligible_holdouts": 16,
+    "passing_holdouts": 13,
+    "blockers": ["suite:general:insufficient_pairwise_signal"]
+  }
+}
+""",
+        encoding="utf-8",
+    )
+    audit_target_direction.write_text(
+        """
+{
+  "decision": {"status": "preference_coverage_gaps_found"},
+  "collection_targets": [
+    {"stratum_field": "suite", "stratum_value": "general"}
+  ]
+}
+""",
+        encoding="utf-8",
+    )
+    audit_manifest.write_text("{}", encoding="utf-8")
+
+    def fake_status(path: Path) -> dict:
+        if path == audit_manifest:
+            return {
+                "ready": False,
+                "status": "blocked",
+                "manifest_path": str(path),
+                "manifest_schema_version": "offline_reward_pairwise_collection_window.v1",
+                "source_plan_decision": {"status": "insufficient_non_overlapping_cross_action_candidates"},
+                "batch_count": 4,
+                "post_collection_step_count": 7,
+                "autopilot_guard": {"refusal_exit_code": 75},
+                "blockers": ["active AutoPilot process(es): 123 autopilot"],
+                "warnings": [],
+            }
+        return {
+            "ready": False,
+            "status": "no_runnable_batches",
+            "manifest_path": str(path),
+            "manifest_schema_version": "offline_reward_pairwise_collection_window.v1",
+            "source_plan_decision": {"status": "expansion_plan_ready"},
+            "batch_count": 0,
+            "post_collection_step_count": 7,
+            "autopilot_guard": {"refusal_exit_code": 75},
+            "blockers": [],
+            "warnings": [],
+        }
+
+    monkeypatch.setattr(report_mod, "build_a9_collection_status", fake_status)
+
+    section = report_mod.a9_collection_section(
+        primary_manifest,
+        contract_summary_path=contract_summary,
+        source_reward_diagnostic_summary_path=source_reward_summary,
+        source_reward_ranker_summary_path=source_ranker_summary,
+        source_reward_target_contract_path=source_target_contract,
+        audit_target_ranker_summary_path=audit_target_ranker,
+        audit_target_direction_audit_path=audit_target_direction,
+        audit_target_collection_manifest_path=audit_manifest,
+    )
+    actions = report_mod.build_next_actions([section])
+
+    assert "audit-target collection window is blocked with 4 batch(es)" in section.summary
+    assert section.details["audit_target_collection_status"]["batch_count"] == 4
+    action = actions[0]
+    assert action["key"] == "collect_a9_audit_target_pairwise_preferences"
+    assert action["status"] == "blocked"
+    assert action["audit_target_collection_batch_count"] == 4
+    assert action["blocked_by"] == ["active AutoPilot process(es): 123 autopilot"]
+    assert "collect_offline_reward_pairwise_audit_target.sh" in action["command"]
 
 
 def test_a9_next_action_switches_to_oracle_design_when_no_batches() -> None:
@@ -1534,6 +1961,8 @@ def test_w8_next_action_surfaces_candidate_generation_requirement() -> None:
                     "no_recent_multi_observation_accumulating_candidate"
                 ],
                 "recent_active_candidates": [],
+                "replay_eligible_candidates": [],
+                "recent_replay_eligible_candidates": [],
                 "stale_accumulating_candidates": [],
                 "replay_concentration": {"warning": False},
             }

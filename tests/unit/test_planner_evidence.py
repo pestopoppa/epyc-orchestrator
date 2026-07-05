@@ -14,6 +14,7 @@ def _row(
     reliability: float = 0.98,
     corrupt: str = "",
     keep_revert_decision: str = "",
+    failure_analysis: str = "",
     question_count: int = 50,
     question_results: list[dict] | None = None,
 ) -> dict:
@@ -24,6 +25,7 @@ def _row(
         "reliability": reliability,
         "bug_corrupted_by": corrupt,
         "keep_revert_decision": keep_revert_decision,
+        "failure_analysis": failure_analysis,
         "config_snapshot": config or {"type": "seed_batch", "n_questions": 10},
         "eval_details": {
             "eval_wall_s": 600.0,
@@ -95,9 +97,115 @@ def test_seq_rows_fold_by_candidate_and_skip_malformed_z() -> None:
     text = format_planner_evidence_section(rows)
 
     assert "seq_candidates=1" in text
+    assert (
+        "seed_batch and structural_prune candidates are not replayable "
+        "and cannot satisfy W8 replay"
+    ) in text
     assert "fp=candidate-a" in text
     assert "seq=accumulating k=2 E_quality=1.650" in text
     assert "trials=[20,21,22]" in text
+
+
+def test_seq_rows_explain_seed_batch_is_not_w8_replayable() -> None:
+    candidate = "candidate-seed"
+    rows = [
+        _row(
+            23,
+            config={"type": "seed_batch", "n_questions": 40},
+            seq={
+                "candidate": candidate,
+                "core_id": "core_v1",
+                "state": "accumulating",
+                "z": 1.0,
+            },
+        ),
+    ]
+
+    text = format_planner_evidence_section(rows)
+
+    assert "seq_candidates=1" in text
+    assert "W8 replay pressure: 0/1 accumulating candidate(s) are replayable" in text
+    assert (
+        "seed_batch, deep_eval, structural_prune, and empty-params numeric_trial "
+        "cannot create replayable W8 evidence"
+    ) in text
+    assert "replayable=no(unreplayable_action=seed_batch)" in text
+    assert "replayable=no" in text
+
+
+def test_w8_replay_pressure_counts_empty_numeric_params_as_blocked() -> None:
+    rows = [
+        _row(
+            23,
+            config={"type": "numeric_trial", "surface": "monitor", "params": {}},
+            seq={
+                "candidate": "candidate-empty-params",
+                "core_id": "core_v1",
+                "state": "accumulating",
+                "z": 1.0,
+            },
+        ),
+        _row(
+            24,
+            config={"type": "seed_batch", "n_questions": 40},
+            seq={
+                "candidate": "candidate-seed",
+                "core_id": "core_v1",
+                "state": "accumulating",
+                "z": 1.0,
+            },
+        ),
+    ]
+
+    text = format_planner_evidence_section(rows)
+
+    assert "W8 replay pressure: 0/2 accumulating candidate(s) are replayable" in text
+    assert "blocked=numeric_trial_missing_params:1,unreplayable_action=seed_batch:1" in text
+
+
+def test_w8_replay_pressure_names_structural_prune_as_unreplayable() -> None:
+    row = _row(
+        24,
+        config={
+            "type": "structural_prune",
+            "file": "debugger_system.md",
+            "block": "### Legacy format",
+        },
+        seq={
+            "candidate": "candidate-prune",
+            "core_id": "core_v1",
+            "state": "accumulating",
+            "z": 1.0,
+        },
+    )
+
+    text = format_planner_evidence_section([row])
+
+    assert "W8 replay pressure: 0/1 accumulating candidate(s) are replayable" in text
+    assert "blocked=unreplayable_action=structural_prune:1" in text
+    assert "structural_prune, and empty-params numeric_trial cannot create replayable W8 evidence" in text
+    assert "replayable=no(unreplayable_action=structural_prune)" in text
+
+
+def test_w8_replay_pressure_enforces_quality_floor() -> None:
+    row = _row(
+        25,
+        config={"type": "structural_experiment", "flags": {"react_mode": False}},
+        seq={
+            "candidate": "candidate-low-quality",
+            "core_id": "core_v1",
+            "state": "accumulating",
+            "z": 1.0,
+            "E_quality": 0.99,
+            "E_rate_noninf": 0.95,
+            "k": 2,
+        },
+    )
+
+    text = format_planner_evidence_section([row])
+
+    assert "W8 replay pressure: 0/1 accumulating candidate(s) are replayable" in text
+    assert "blocked=E_quality_below_replay_floor:1" in text
 
 
 def test_seq_rows_mark_latest_reverted_candidate_not_replayable() -> None:
@@ -120,6 +228,63 @@ def test_seq_rows_mark_latest_reverted_candidate_not_replayable() -> None:
 
     assert "seq_candidates=1" in text
     assert "replayable=no(AP-24=revert)" in text
+    assert "replayable=yes" not in text
+
+
+def test_seq_rows_mark_benign_excluded_accumulating_candidate_replayable() -> None:
+    candidate = "candidate-a"
+    rows = [
+        _row(
+            20,
+            config={
+                "type": "structural_experiment",
+                "flags": {"model_fallback": False},
+            },
+            seq={
+                "candidate": candidate,
+                "core_id": "core_v1",
+                "state": "accumulating",
+                "z": 1.0,
+                "E_quality": 1.1,
+                "E_rate_noninf": 0.95,
+                "k": 1,
+            },
+            keep_revert_decision="excluded",
+        ),
+    ]
+
+    text = format_planner_evidence_section(rows)
+
+    assert "seq_candidates=1" in text
+    assert "W8 replay pressure: 1/1 accumulating candidate(s) are replayable" in text
+    assert "replayable=yes" in text
+    assert "replayable=no(AP-24=excluded)" not in text
+
+
+def test_seq_rows_mark_terminal_excluded_candidate_not_replayable() -> None:
+    candidate = "candidate-a"
+    rows = [
+        _row(
+            20,
+            config={
+                "type": "structural_experiment",
+                "flags": {"model_fallback": False},
+            },
+            seq={
+                "candidate": candidate,
+                "core_id": "core_v1",
+                "state": "accumulating",
+                "z": 1.0,
+            },
+            keep_revert_decision="excluded",
+            failure_analysis="VIOLATIONS:\n  - Suite 'tool_use' regression",
+        ),
+    ]
+
+    text = format_planner_evidence_section(rows)
+
+    assert "seq_candidates=1" in text
+    assert "replayable=no(AP-24=excluded)" in text
     assert "replayable=yes" not in text
 
 

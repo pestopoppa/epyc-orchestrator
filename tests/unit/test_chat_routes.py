@@ -25,6 +25,7 @@ from src.api.models import ChatRequest, ChatResponse, RewardRequest
 from src.api.routes.chat import _handle_chat, _try_cheap_first, chat, chat_stream, inject_reward, router
 from src.api.routes.chat_utils import RoutingResult
 from src.api.state import AppState
+from src.prompt_builders.resolver import current_prompt_dir, resolve_prompt
 
 
 # ── Fixtures ────────────────────────────────────────────────────────────────
@@ -526,6 +527,34 @@ class TestChatEndpoint:
             mock_state.increment_active.assert_called_once()
             mock_state.decrement_active.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_chat_prompt_root_override_is_request_scoped(
+        self, tmp_path, monkeypatch, mock_state
+    ):
+        """Internal GEPA prompt roots redirect prompt resolution only during handling."""
+        scratch = tmp_path / "gepa" / "candidate"
+        scratch.mkdir(parents=True)
+        (scratch / "unit_prompt.md").write_text("scratch prompt")
+        monkeypatch.setenv("ORCHESTRATOR_PROMPT_ROOT_OVERRIDE_BASE", str(tmp_path / "gepa"))
+
+        class _FakeRequest:
+            async def is_disconnected(self) -> bool:
+                return False
+
+        async def fake_handle_chat(*_args, **_kwargs):
+            assert current_prompt_dir() == scratch.resolve()
+            assert resolve_prompt("unit_prompt", "fallback") == "scratch prompt"
+            return ChatResponse(answer="ok", turns=1, elapsed_seconds=0.01, mock_mode=True)
+
+        with patch("src.api.routes.chat._handle_chat", new=fake_handle_chat):
+            response = await chat(
+                ChatRequest(prompt="test", x_orchestrator_prompt_root=str(scratch)),
+                _FakeRequest(),
+                mock_state,
+            )
+        assert response.answer == "ok"
+        assert current_prompt_dir() != scratch.resolve()
+
 
 # ── /chat/reward endpoint tests ─────────────────────────────────────────────
 
@@ -837,6 +866,92 @@ class TestEditModeFailClosed:
         assert result.mode == "edit"
         assert result.answer.startswith("edit transaction applied: 1 write(s), 0 delete(s)")
         assert target_file.read_text() == "VALUE = 2"
+
+    @pytest.mark.asyncio
+    async def test_force_mode_edit_runs_review_consult_when_feature_enabled(
+        self, mock_state, mock_primitives, base_routing, monkeypatch, tmp_path
+    ):
+        from contextlib import nullcontext
+        from unittest.mock import AsyncMock
+
+        from src.api.models import ChatResponse
+        from src.features import reset_features
+
+        edit_root = tmp_path / "task-root"
+        edit_root.mkdir()
+        target_file = edit_root / "calc.py"
+        target_file.write_text("VALUE = 1\n")
+
+        monkeypatch.setenv("ORCHESTRATOR_EDIT_TRANSACTION", "1")
+        monkeypatch.setenv("ORCHESTRATOR_EDIT_ROOT", str(edit_root))
+        monkeypatch.setenv("ORCHESTRATOR_FEATURE_REVIEW_BEFORE_COMMIT_CONSULT", "1")
+        monkeypatch.setenv("ORCHESTRATOR_RUNTIME_FLAGS_PATH", str(tmp_path / "runtime_flags.json"))
+        reset_features()
+        mock_primitives.request_context = MagicMock(return_value=nullcontext())
+
+        req = ChatRequest(
+            prompt="update calc.py",
+            mock_mode=False,
+            real_mode=True,
+            force_mode="edit",
+            force_role="coder_escalation",
+        )
+        base_routing.routing_decision = ["coder_escalation"]
+        drafts = [
+            "<<<FILE: calc.py>>>\nVALUE = 2\n<<<END>>>",
+            "<<<FILE: calc.py>>>\nVALUE = 3\n<<<END>>>",
+        ]
+
+        def _fake_execute_direct(request, routing, primitives, state, start_time, initial_role):
+            assert "Current file contents:" in request.prompt
+            return ChatResponse(
+                answer=drafts.pop(0),
+                turns=1,
+                elapsed_seconds=0.01,
+                mock_mode=False,
+                real_mode=True,
+                routed_to=str(initial_role),
+                role_history=[str(initial_role)],
+                routing_strategy=routing.routing_strategy,
+                mode="edit",
+            )
+
+        def _fake_consult(**kwargs):
+            assert kwargs["consultant_role"] == "architect_general"
+            assert kwargs["requester_role"] == "coder_escalation"
+            assert kwargs["skill"] == "review_before_commit"
+            assert "VALUE = 2" in kwargs["context"]
+            return {
+                "risks": ["wrong requested value"],
+                "blocking_issues": ["final value must be 3"],
+                "confidence": 0.9,
+                "recommended_delta": "write VALUE = 3",
+            }, {"schema_hash": "schema123"}
+
+        try:
+            with patch("src.api.routes.chat._route_request", return_value=base_routing), \
+                 patch("src.api.routes.chat._preprocess", return_value=None), \
+                 patch("src.api.routes.chat._init_primitives", return_value=mock_primitives), \
+                 patch("src.api.routes.chat._plan_review_gate", return_value=None), \
+                 patch("src.api.routes.chat._execute_vision", new=AsyncMock(return_value=None)), \
+                 patch("src.api.routes.chat._execute_vision_multimodal", new=AsyncMock(return_value=None)), \
+                 patch("src.api.routes.chat._execute_proactive", new=AsyncMock(return_value=None)), \
+                 patch("src.api.routes.chat._try_cheap_first", new=AsyncMock(return_value=None)), \
+                 patch("src.api.routes.chat._execute_direct", side_effect=_fake_execute_direct) as mock_execute_direct, \
+                 patch("src.orchestration.consultation.consult", side_effect=_fake_consult) as mock_consult:
+                result = await _handle_chat(req, mock_state)
+        finally:
+            reset_features()
+
+        assert mock_execute_direct.call_count == 2
+        assert mock_consult.call_count == 1
+        assert result.mode == "edit"
+        assert result.answer.startswith("edit transaction applied: 1 write(s), 0 delete(s)")
+        assert target_file.read_text() == "VALUE = 3"
+        events = result.delegation_diagnostics["edit_transaction_consult_events"]
+        assert events[0]["success"] is True
+        assert events[0]["rerun_requested"] is True
+        assert events[0]["schema_hash"] == "schema123"
 
 
 class TestHandleChatXmasCheapFirst:

@@ -211,6 +211,25 @@ async def test_comment_only_code_nudges(graph_ctx):
 
 
 @pytest.mark.asyncio
+async def test_tool_required_comment_only_nudge_requests_executable_tool_code(graph_ctx):
+    """Tool-required comment-only turns must be nudged toward TOOL(), not bare FINAL()."""
+    code = "# I need to fetch the secret\n# It is only available from the tool"
+    state, deps = graph_ctx(responses=[code])
+    state.tool_required = True
+    ctx = _make_ctx(state, deps)
+
+    output, error, is_final, artifacts = await _execute_turn(ctx, Role.FRONTDOOR)
+
+    assert output == ""
+    assert error is None
+    assert is_final is False
+    assert "_nudge" in artifacts
+    assert "executable Python" in artifacts["_nudge"]
+    assert 'TOOL("get_eval_secret"' in artifacts["_nudge"]
+    assert "FINAL(secret)" in artifacts["_nudge"]
+
+
+@pytest.mark.asyncio
 async def test_silent_execution_nudges(graph_ctx):
     """Code runs but produces no output, error, or FINAL — nudge."""
     code = "```python\nx = 42\ny = x * 2\nz = y + 1\n```"

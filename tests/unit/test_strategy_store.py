@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
 import sys
 from types import SimpleNamespace
 
@@ -146,6 +147,55 @@ class TestStrategyStore:
                 species="seeder",
             )
             assert seeded_id in {entry.id for entry in results}
+        finally:
+            reopened_store.close()
+
+    def test_stale_store_write_keeps_external_faiss_seed(self, tmp_path):
+        from orchestration.repl_memory.strategy_store import StrategyStore
+
+        strategy_path = tmp_path / "strategies"
+        stale_store = StrategyStore(
+            path=strategy_path,
+            embedding_dim=1024,
+            embedder=MockEmbedder(),
+        )
+        writer_store = StrategyStore(
+            path=strategy_path,
+            embedding_dim=1024,
+            embedder=MockEmbedder(),
+        )
+        try:
+            external_id = writer_store.store(
+                "external planner hint",
+                "newer StrategyStore writer must survive a stale writer",
+                source_trial_id=1106,
+                species="seeder",
+                entry_type="pattern",
+                evidence_trial_ids=[1106],
+            )
+            stale_id = stale_store.store(
+                "stale writer planner hint",
+                "stale StrategyStore instance reloads before adding its vector",
+                source_trial_id=1107,
+                species="seeder",
+                entry_type="pattern",
+                evidence_trial_ids=[1107],
+            )
+        finally:
+            writer_store.close()
+            stale_store.close()
+
+        reopened_store = StrategyStore(
+            path=strategy_path,
+            embedding_dim=1024,
+            embedder=MockEmbedder(),
+        )
+        try:
+            assert reopened_store._faiss.count == 2
+            results = reopened_store.retrieve("planner hint StrategyStore", k=10)
+            result_ids = {entry.id for entry in results}
+            assert external_id in result_ids
+            assert stale_id in result_ids
         finally:
             reopened_store.close()
 
@@ -1145,6 +1195,157 @@ class TestAP28HybridRetrieval:
             include_quarantined=True,
         )
         assert all(result.id != deleted_id for result in results)
+
+    def test_search_index_health_detects_sqlite_rows_missing_from_mirrors(self, store):
+        store.store("kept", "kept insight", source_trial_id=1, species="alpha")
+        store._conn.execute(
+            "INSERT INTO strategies(id, description, insight, source_trial_id, species, "
+            "created_at, metadata_json, entry_type, context_hash, evidence_trial_ids) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "sqlite-only",
+                "sqlite only strategy",
+                "missing from mirrors",
+                2,
+                "alpha",
+                "now",
+                "{}",
+                "raw",
+                "",
+                "[2]",
+            ),
+        )
+        store._conn.commit()
+
+        health = store.search_index_health()
+
+        assert not health["healthy"]
+        assert health["sqlite_count"] == 2
+        assert health["faiss_count"] == 1
+        assert health["missing_faiss_count"] == 1
+        assert health["missing_faiss_ids"] == ["sqlite-only"]
+        if health["fts_enabled"]:
+            assert health["missing_fts_count"] == 1
+
+        rebuilt = store.rebuild_search_indexes()
+        assert rebuilt["sqlite_count"] == 2
+        assert rebuilt["faiss_count"] == 2
+        assert store.search_index_health()["healthy"]
+
+    def test_search_index_health_refreshes_external_faiss_writer(self, tmp_path):
+        from orchestration.repl_memory.strategy_store import StrategyStore
+
+        strategy_path = tmp_path / "strategies"
+        live_store = StrategyStore(
+            path=strategy_path,
+            embedding_dim=1024,
+            embedder=MockEmbedder(),
+        )
+        writer_store = StrategyStore(
+            path=strategy_path,
+            embedding_dim=1024,
+            embedder=MockEmbedder(),
+        )
+        try:
+            writer_store.store(
+                "external search health row",
+                "live store should refresh before reporting health",
+                source_trial_id=4,
+                species="alpha",
+            )
+
+            health = live_store.search_index_health()
+
+            assert health["healthy"]
+            assert health["sqlite_count"] == 1
+            assert health["faiss_count"] == 1
+            assert live_store._faiss.id_map
+        finally:
+            writer_store.close()
+            live_store.close()
+
+    def test_rebuild_search_indexes_retries_after_stale_save_and_rereads_sqlite(
+        self,
+        monkeypatch,
+        store,
+    ):
+        from orchestration.repl_memory.faiss_store import StaleFAISSSaveError
+
+        store.store("initial", "initial insight", source_trial_id=1, species="alpha")
+        original_publish = store._publish_search_indexes_from_rows
+        snapshots: list[list[str]] = []
+
+        def fake_publish(rows):
+            snapshots.append([str(row["id"]) for row in rows])
+            if len(snapshots) == 1:
+                with sqlite3.connect(store._db_path) as conn:
+                    conn.execute(
+                        "INSERT INTO strategies(id, description, insight, source_trial_id, "
+                        "species, created_at, metadata_json, entry_type, context_hash, "
+                        "evidence_trial_ids) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            "late-external",
+                            "late external",
+                            "must survive rebuild retry",
+                            2,
+                            "alpha",
+                            "later",
+                            "{}",
+                            "raw",
+                            "",
+                            "[2]",
+                        ),
+                    )
+                    conn.commit()
+                raise StaleFAISSSaveError("simulated stale save")
+            return original_publish(rows)
+
+        monkeypatch.setattr(store, "_publish_search_indexes_from_rows", fake_publish)
+
+        report = store.rebuild_search_indexes()
+
+        assert len(snapshots) == 2
+        assert "late-external" not in snapshots[0]
+        assert "late-external" in snapshots[1]
+        assert report["sqlite_count"] == 2
+        assert report["faiss_count"] == 2
+        assert store.search_index_health()["healthy"]
+
+    def test_retrieve_falls_back_to_fts_when_faiss_mirror_is_empty(self, store):
+        if not getattr(store, "_fts_enabled", False):
+            pytest.skip("FTS5 unavailable")
+        store._conn.execute(
+            "INSERT INTO strategies(id, description, insight, source_trial_id, species, "
+            "created_at, metadata_json, entry_type, context_hash, evidence_trial_ids) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "fts-only",
+                "unique bm25 fallback strategy",
+                "served even when FAISS is empty",
+                3,
+                "alpha",
+                "now",
+                "{}",
+                "raw",
+                "",
+                "[3]",
+            ),
+        )
+        store._conn.execute(
+            "INSERT INTO strategies_fts(id, description, insight, species) "
+            "VALUES (?, ?, ?, ?)",
+            (
+                "fts-only",
+                "unique bm25 fallback strategy",
+                "served even when FAISS is empty",
+                "alpha",
+            ),
+        )
+        store._conn.commit()
+
+        results = store.retrieve("unique bm25 fallback", k=1, species="alpha")
+
+        assert [entry.id for entry in results] == ["fts-only"]
 
     def test_backfill_fts_idempotent(self, store):
         # Insert directly into ``strategies`` bypassing the store() FTS path,

@@ -345,6 +345,100 @@ def test_structural_lab_memory_count_reads_sqlite_without_episodic_store_import(
     assert lab.summary()["memory_count"] == 2
 
 
+def test_checkpoint_state_snapshots_ap22_and_strategy_store(tmp_path, monkeypatch):
+    from scripts.autopilot.species import structural_lab as sl_mod
+
+    checkpoint_dir = tmp_path / "checkpoints"
+    ap22_memory = tmp_path / "orchestration" / "autopilot_short_term_memory.md"
+    strategy_dir = tmp_path / "orchestration" / "repl_memory" / "strategies"
+    ap22_memory.parent.mkdir(parents=True, exist_ok=True)
+    strategy_dir.mkdir(parents=True, exist_ok=True)
+    ap22_memory.write_text("checkpoint memory")
+    (strategy_dir / "strategies.db").write_text("checkpoint strategy db")
+
+    monkeypatch.setattr(sl_mod, "CHECKPOINT_DIR", checkpoint_dir)
+    monkeypatch.setattr(sl_mod, "CHECKPOINT_FILES", {})
+    monkeypatch.setattr(sl_mod, "PROMPTS_DIR", tmp_path / "missing-prompts")
+    monkeypatch.setattr(sl_mod, "CLASSIFIER_CONFIG", tmp_path / "missing.yaml")
+    monkeypatch.setattr(sl_mod, "AP22_MEMORY", ap22_memory)
+    monkeypatch.setattr(sl_mod, "STRATEGY_STORE_DIR", strategy_dir)
+
+    lab = sl_mod.StructuralLab(orchestrator_url="http://unused-test:0")
+    monkeypatch.setattr(lab, "_get_memory_count", lambda: 0)
+
+    checkpoint = lab.checkpoint_state(trial_id=123)
+
+    assert (checkpoint / "autopilot_short_term_memory.md").read_text() == "checkpoint memory"
+    assert (checkpoint / "strategy_store" / "strategies.db").read_text() == (
+        "checkpoint strategy db"
+    )
+
+
+def test_restore_checkpoint_rewinds_ap22_and_strategy_store(tmp_path, monkeypatch):
+    from scripts.autopilot.species import structural_lab as sl_mod
+
+    checkpoint = tmp_path / "checkpoints" / "cp1"
+    checkpoint.mkdir(parents=True)
+    (checkpoint / "autopilot_short_term_memory.md").write_text("restored memory")
+    strategy_cp = checkpoint / "strategy_store"
+    strategy_cp.mkdir()
+    (strategy_cp / "strategies.db").write_text("restored strategy db")
+
+    ap22_memory = tmp_path / "orchestration" / "autopilot_short_term_memory.md"
+    strategy_dir = tmp_path / "orchestration" / "repl_memory" / "strategies"
+    ap22_memory.parent.mkdir(parents=True, exist_ok=True)
+    strategy_dir.mkdir(parents=True, exist_ok=True)
+    ap22_memory.write_text("stale memory")
+    (strategy_dir / "strategies.db").write_text("stale strategy db")
+    (strategy_dir / "stale.faiss").write_text("must be removed")
+
+    monkeypatch.setattr(sl_mod, "CHECKPOINT_FILES", {})
+    monkeypatch.setattr(sl_mod, "PROMPTS_DIR", tmp_path / "missing-prompts")
+    monkeypatch.setattr(sl_mod, "CLASSIFIER_CONFIG", tmp_path / "missing.yaml")
+    monkeypatch.setattr(sl_mod, "AP22_MEMORY", ap22_memory)
+    monkeypatch.setattr(sl_mod, "STRATEGY_STORE_DIR", strategy_dir)
+
+    lab = sl_mod.StructuralLab(orchestrator_url="http://unused-test:0")
+    result = lab.restore_checkpoint(checkpoint)
+
+    assert result["status"] == "ok"
+    assert ap22_memory.read_text() == "restored memory"
+    assert (strategy_dir / "strategies.db").read_text() == "restored strategy db"
+    assert not (strategy_dir / "stale.faiss").exists()
+    assert "autopilot_short_term_memory.md" in result["restored"]
+    assert "strategy_store/" in result["restored"]
+
+
+def test_restore_old_checkpoint_clears_uncheckpointed_planner_memory(
+    tmp_path, monkeypatch
+):
+    from scripts.autopilot.species import structural_lab as sl_mod
+
+    checkpoint = tmp_path / "checkpoints" / "old"
+    checkpoint.mkdir(parents=True)
+    ap22_memory = tmp_path / "orchestration" / "autopilot_short_term_memory.md"
+    strategy_dir = tmp_path / "orchestration" / "repl_memory" / "strategies"
+    ap22_memory.parent.mkdir(parents=True, exist_ok=True)
+    strategy_dir.mkdir(parents=True, exist_ok=True)
+    ap22_memory.write_text("post-checkpoint memory")
+    (strategy_dir / "strategies.db").write_text("post-checkpoint strategy db")
+
+    monkeypatch.setattr(sl_mod, "CHECKPOINT_FILES", {})
+    monkeypatch.setattr(sl_mod, "PROMPTS_DIR", tmp_path / "missing-prompts")
+    monkeypatch.setattr(sl_mod, "CLASSIFIER_CONFIG", tmp_path / "missing.yaml")
+    monkeypatch.setattr(sl_mod, "AP22_MEMORY", ap22_memory)
+    monkeypatch.setattr(sl_mod, "STRATEGY_STORE_DIR", strategy_dir)
+
+    lab = sl_mod.StructuralLab(orchestrator_url="http://unused-test:0")
+    result = lab.restore_checkpoint(checkpoint)
+
+    assert result["status"] == "ok"
+    assert not ap22_memory.exists()
+    assert not strategy_dir.exists()
+    assert "autopilot_short_term_memory.md:cleared" in result["restored"]
+    assert "strategy_store/:cleared" in result["restored"]
+
+
 def _lab_with_flags(monkeypatch, current):
     from scripts.autopilot.species import structural_lab as sl_mod
     lab = sl_mod.StructuralLab(orchestrator_url="http://unused-test:0")

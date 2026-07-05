@@ -355,3 +355,44 @@ def test_gate_fails_closed_on_stale_matrix(real_matrix_path) -> None:
     assert "fail-closed" in bg.reason
     fg = gate.evaluate("frontdoor", contention.TrafficClass.FOREGROUND_INTERACTIVE)
     assert fg.admitted and fg.decision == contention.PairDecision.DEGRADED_ALLOW
+
+
+def test_matrix_health_hash_ignores_auxiliary_unmeasured_roles(monkeypatch) -> None:
+    measured_config = {
+        "frontdoor": {"instances": [("0-1", 8070, 2)]},
+        "worker_general": {"instances": [("2-3", 8072, 2)]},
+    }
+    live_config = {
+        **measured_config,
+        "eval_batch_frontdoor": {"instances": [("0-1", 18070, 2)]},
+    }
+    matrix = contention.ContentionMatrix(
+        version=1,
+        measured_at="",
+        host="",
+        topology_hash=contention.topology_fingerprint(measured_config),
+        default_floor=0.85,
+        pairs={
+            ("frontdoor", "worker_general"): contention.Pair(
+                roles=("frontdoor", "worker_general"),
+                ratio=1.0,
+                verdict="allow",
+            )
+        },
+    )
+    import scripts.server.stack_numa as stack_numa
+
+    captured: dict[str, str | None] = {}
+
+    def fake_matrix_status(*, current_topology_hash=None):
+        captured["hash"] = current_topology_hash
+        return contention.MatrixStatus.OK
+
+    monkeypatch.setattr(stack_numa, "NUMA_CONFIG", live_config)
+    monkeypatch.setattr(gate_mod, "matrix_status", fake_matrix_status)
+
+    gate = gate_mod.ContentionGate(matrix=matrix)
+
+    assert gate.matrix_health() == contention.MatrixStatus.OK
+    assert captured["hash"] == contention.topology_fingerprint(measured_config)
+    assert captured["hash"] != contention.topology_fingerprint(live_config)

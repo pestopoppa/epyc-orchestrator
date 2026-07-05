@@ -1,0 +1,360 @@
+{
+  "candidate_action_counts": {},
+  "candidate_group_source_family_counts": {},
+  "candidate_group_suite_counts": {},
+  "candidate_groups": 0,
+  "candidate_rows": 0,
+  "candidate_schema_version": "offline_reward_verifier_expansion_candidate.v1",
+  "candidate_source_family_counts": {},
+  "candidate_suite_counts": {},
+  "collection_batches": [
+    {
+      "can_run_during_active_autopilot": false,
+      "checkpoint_note": "seed_specialist_routing.py also writes a seeding_*.jsonl checkpoint under benchmarks/results/eval; use the JSON path above when the target explicitly requires orchestrator_live_seed",
+      "collection_priority": 0,
+      "collection_priority_reason": "independent_holdout_source_family_blocker",
+      "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites all --roles coder_escalation frontdoor --modes direct --sample-size 2 --max-tokens 1024 --strict-modes --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
+      "dry_run_semantics": "--dry-run still performs scoring/evaluation; it only prevents reward injection into runtime memory.",
+      "durable_source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
+      "estimated_new_source_records": 36,
+      "expected_source_family": "seeding_eval",
+      "max_tokens": 1024,
+      "modes_argument": [
+        "direct"
+      ],
+      "question_source": "auto",
+      "reason": "Consumes live model slots and should be run in a coordinated measurement window so A9 evidence is not mixed with W6/T2 accrual.",
+      "requested_new_source_records": 20,
+      "roles_argument": [
+        "coder_escalation",
+        "frontdoor"
+      ],
+      "sample_size": 2,
+      "sample_size_semantics": "seed_specialist_routing.py interprets --sample-size as questions per suite; source-family targets with --suites all are downscaled to approximate the requested total.",
+      "strict_modes": true,
+      "suite_argument": "all",
+      "target": "source_family:seeding_eval:coder_escalation>frontdoor",
+      "targets": [
+        "source_family:seeding_eval:coder_escalation>frontdoor"
+      ]
+    },
+    {
+      "can_run_during_active_autopilot": false,
+      "checkpoint_note": "seed_specialist_routing.py also writes a seeding_*.jsonl checkpoint under benchmarks/results/eval; use the JSON path above when the target explicitly requires orchestrator_live_seed",
+      "collection_priority": 1,
+      "collection_priority_reason": "independent_holdout_suite_blocker",
+      "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites general --roles architect_general coder_escalation --modes direct --sample-size 20 --max-tokens 1024 --strict-modes --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
+      "dry_run_semantics": "--dry-run still performs scoring/evaluation; it only prevents reward injection into runtime memory.",
+      "durable_source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
+      "estimated_new_source_records": 20,
+      "expected_source_family": "seeding_eval",
+      "max_tokens": 1024,
+      "modes_argument": [
+        "direct"
+      ],
+      "question_source": "auto",
+      "reason": "Consumes live model slots and should be run in a coordinated measurement window so A9 evidence is not mixed with W6/T2 accrual.",
+      "requested_new_source_records": 20,
+      "roles_argument": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "sample_size": 20,
+      "sample_size_semantics": "seed_specialist_routing.py interprets --sample-size as questions per suite; source-family targets with --suites all are downscaled to approximate the requested total.",
+      "strict_modes": true,
+      "suite_argument": "general",
+      "target": "suite:general:architect_general>coder_escalation",
+      "targets": [
+        "suite:general:architect_general>coder_escalation"
+      ]
+    },
+    {
+      "can_run_during_active_autopilot": false,
+      "checkpoint_note": "seed_specialist_routing.py also writes a seeding_*.jsonl checkpoint under benchmarks/results/eval; use the JSON path above when the target explicitly requires orchestrator_live_seed",
+      "collection_priority": 2,
+      "collection_priority_reason": "direction_balance_cleanup",
+      "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites hotpotqa --roles architect_general frontdoor --modes direct --sample-size 20 --max-tokens 1024 --strict-modes --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
+      "dry_run_semantics": "--dry-run still performs scoring/evaluation; it only prevents reward injection into runtime memory.",
+      "durable_source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
+      "estimated_new_source_records": 20,
+      "expected_source_family": "seeding_eval",
+      "max_tokens": 1024,
+      "modes_argument": [
+        "direct"
+      ],
+      "question_source": "auto",
+      "reason": "Consumes live model slots and should be run in a coordinated measurement window so A9 evidence is not mixed with W6/T2 accrual.",
+      "requested_new_source_records": 20,
+      "roles_argument": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "sample_size": 20,
+      "sample_size_semantics": "seed_specialist_routing.py interprets --sample-size as questions per suite; source-family targets with --suites all are downscaled to approximate the requested total.",
+      "strict_modes": true,
+      "suite_argument": "hotpotqa",
+      "target": "suite:hotpotqa:architect_general>frontdoor",
+      "targets": [
+        "suite:hotpotqa:architect_general>frontdoor"
+      ]
+    },
+    {
+      "can_run_during_active_autopilot": false,
+      "checkpoint_note": "seed_specialist_routing.py also writes a seeding_*.jsonl checkpoint under benchmarks/results/eval; use the JSON path above when the target explicitly requires orchestrator_live_seed",
+      "collection_priority": 2,
+      "collection_priority_reason": "direction_balance_cleanup",
+      "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites simpleqa --roles architect_general coder_escalation --modes direct --sample-size 20 --max-tokens 1024 --strict-modes --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
+      "dry_run_semantics": "--dry-run still performs scoring/evaluation; it only prevents reward injection into runtime memory.",
+      "durable_source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
+      "estimated_new_source_records": 20,
+      "expected_source_family": "seeding_eval",
+      "max_tokens": 1024,
+      "modes_argument": [
+        "direct"
+      ],
+      "question_source": "auto",
+      "reason": "Consumes live model slots and should be run in a coordinated measurement window so A9 evidence is not mixed with W6/T2 accrual.",
+      "requested_new_source_records": 20,
+      "roles_argument": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "sample_size": 20,
+      "sample_size_semantics": "seed_specialist_routing.py interprets --sample-size as questions per suite; source-family targets with --suites all are downscaled to approximate the requested total.",
+      "strict_modes": true,
+      "suite_argument": "simpleqa",
+      "target": "suite:simpleqa:architect_general>coder_escalation",
+      "targets": [
+        "suite:simpleqa:architect_general>coder_escalation"
+      ]
+    }
+  ],
+  "collection_guidance": {
+    "orchestrator_live_seed_note": "add records under benchmarks/results/orchestrator/seeding_live*.json or an equivalent orchestrator source path so source_family resolves to orchestrator_live_seed",
+    "post_collection_pipeline": [
+      "uv run python scripts/graph_router/plan_offline_reward_pairwise_holdout_expansion.py --input /mnt/raid0/llm/epyc-inference-research/benchmarks/results --existing-manifest /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_feature_manifest_with_pairwise_audit_target_expansions.jsonl --existing-pairwise-jsonl /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_preference_contract_score_ordered_audit_target_expanded.jsonl --collection-targets-json /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_direction_audit.json --candidates-jsonl /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_candidates.jsonl --summary-json /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_plan_summary.json --summary-md /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_plan_summary.md --target-source-families '' --target-suites ''",
+      "uv run python scripts/graph_router/build_offline_reward_oracle_rows.py --input <new_collection_json_or_jsonl> --candidate-manifest-jsonl /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_candidates.jsonl --output-jsonl /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_oracle_rows.jsonl --summary-json /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_rows_summary.json",
+      "uv run python scripts/graph_router/score_offline_reward_oracle_token_coverage.py --input-jsonl /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_oracle_rows.jsonl --output-jsonl /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_scored_rows.jsonl --summary-json /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_score_summary.json --summary-md /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_score_summary.md",
+      "uv run python scripts/graph_router/export_offline_reward_expansion_labels.py --manifest-json /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/adoption_manifest.json --scored-rows-jsonl /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_scored_rows.jsonl --candidates-jsonl /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_candidates.jsonl --labels-jsonl /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_labels.jsonl --summary-json /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_labels_summary.json --summary-md /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_labels_summary.md",
+      "uv run python scripts/graph_router/build_offline_reward_feature_manifest.py --labels-jsonl /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_labels.jsonl --manifest-jsonl /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_feature_manifest_pairwise_expanded_gap.jsonl --summary-json /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_feature_manifest_pairwise_expanded_gap_summary.json --summary-md /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_feature_manifest_pairwise_expanded_gap_summary.md",
+      "uv run python scripts/graph_router/build_offline_reward_pairwise_contract.py --manifest-jsonl /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_feature_manifest_pairwise_expanded_gap.jsonl --output-jsonl /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_preference_contract_candidate_only_expanded_gap.jsonl --summary-json /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_preference_contract_candidate_only_expanded_gap_summary.json --summary-md /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_preference_contract_candidate_only_expanded_gap_summary.md --artifact-scope candidate_only",
+      "uv run python scripts/graph_router/evaluate_offline_reward_pairwise_ranker.py --pairwise-jsonl /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_preference_contract_candidate_only_expanded_gap.jsonl --summary-json /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_ranker_candidate_only_expanded_gap_summary.json --summary-md /mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_ranker_candidate_only_expanded_gap_summary.md"
+    ],
+    "reference_backed_suite_sources": {
+      "instruction_precision": "/mnt/raid0/llm/epyc-inference-research/benchmarks/prompts/v1"
+    },
+    "seeding_eval_command_template": "uv run python scripts/benchmark/seed_specialist_routing.py --suites <suite> --roles <actions_to_evaluate_on_same_source_record> --modes direct --sample-size <n> --max-tokens 1024 --strict-modes --dry-run --output <benchmarks/results/eval/seeding_a9_*.json>",
+    "workspace": "/mnt/raid0/llm/epyc-orchestrator"
+  },
+  "collection_target_count": 4,
+  "collection_targets_json": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_audit_target_direction_audit.json",
+  "decision": {
+    "recommended_next": "add_more_source_records_for_failed_pairwise_holdout_strata",
+    "runtime_gate_change_allowed": false,
+    "status": "insufficient_non_overlapping_cross_action_candidates"
+  },
+  "existing_manifest": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_feature_manifest_with_pairwise_audit_target_expansions.jsonl",
+  "existing_manifest_source_family_counts": {
+    "orchestrator_live_seed": 181,
+    "seeding_eval": 883,
+    "three_way_eval": 11244
+  },
+  "existing_manifest_suite_counts": {
+    "agentic": 15,
+    "coder": 1247,
+    "debugbench": 852,
+    "general": 1554,
+    "gpqa": 1680,
+    "hotpotqa": 1358,
+    "instruction_precision": 108,
+    "livecodebench": 946,
+    "long_context": 593,
+    "math": 83,
+    "mode_advantage": 208,
+    "mode_advantage_hard": 812,
+    "simpleqa": 1331,
+    "thinking": 1521
+  },
+  "existing_pairwise_group_count": 1981,
+  "existing_pairwise_jsonl": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_preference_contract_score_ordered_audit_target_expanded.jsonl",
+  "inputs": [
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results"
+  ],
+  "matched_collection_target_counts": {},
+  "min_cross_action_candidate_groups": 20,
+  "privacy": {
+    "commits_prompt_reference_response_text": false,
+    "private_fields_excluded": [
+      "answer",
+      "expected",
+      "prompt",
+      "reference",
+      "response"
+    ],
+    "text_represented_by_sha256_and_lengths": true
+  },
+  "schema_version": "offline_reward_pairwise_holdout_expansion_plan.v1",
+  "selected_groups": [],
+  "skipped_no_collection_target_pair_groups": 0,
+  "skipped_no_cross_action_groups": 338,
+  "skipped_pairwise_overlap_groups": 5,
+  "source_record_requirements": [
+    {
+      "action_pair": "coder_escalation>frontdoor",
+      "actions_to_evaluate_on_same_source_record": [
+        "coder_escalation",
+        "frontdoor"
+      ],
+      "collection_priority": 0,
+      "collection_priority_reason": "independent_holdout_source_family_blocker",
+      "current_direction_balance": 0.0,
+      "current_rows": 2,
+      "matched_candidate_groups": 0,
+      "needs_direction": [
+        "prefer coder_escalation"
+      ],
+      "runtime_gate_change_allowed": false,
+      "source_record_shape": "one prompt/reference evaluated by every action in action_pair with role_results, rewards, suite, prompt, and expected fields",
+      "status": "needs_new_source_records",
+      "stratum_field": "source_family",
+      "stratum_value": "seeding_eval",
+      "suggested_min_new_source_records": 20,
+      "suggested_min_rows": 20,
+      "target": "source_family:seeding_eval:coder_escalation>frontdoor",
+      "target_preferred_actions": [
+        "coder_escalation"
+      ]
+    },
+    {
+      "action_pair": "architect_general>coder_escalation",
+      "actions_to_evaluate_on_same_source_record": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "collection_priority": 1,
+      "collection_priority_reason": "independent_holdout_suite_blocker",
+      "current_direction_balance": 0.0,
+      "current_rows": 1,
+      "matched_candidate_groups": 0,
+      "needs_direction": [
+        "prefer architect_general"
+      ],
+      "runtime_gate_change_allowed": false,
+      "source_record_shape": "one prompt/reference evaluated by every action in action_pair with role_results, rewards, suite, prompt, and expected fields",
+      "status": "needs_new_source_records",
+      "stratum_field": "suite",
+      "stratum_value": "general",
+      "suggested_min_new_source_records": 20,
+      "suggested_min_rows": 20,
+      "target": "suite:general:architect_general>coder_escalation",
+      "target_preferred_actions": [
+        "architect_general"
+      ]
+    },
+    {
+      "action_pair": "architect_general>frontdoor",
+      "actions_to_evaluate_on_same_source_record": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "collection_priority": 2,
+      "collection_priority_reason": "direction_balance_cleanup",
+      "current_direction_balance": 0.0577,
+      "current_rows": 918,
+      "matched_candidate_groups": 0,
+      "needs_direction": [
+        "balance both directions"
+      ],
+      "runtime_gate_change_allowed": false,
+      "source_record_shape": "one prompt/reference evaluated by every action in action_pair with role_results, rewards, suite, prompt, and expected fields",
+      "status": "needs_new_source_records",
+      "stratum_field": "suite",
+      "stratum_value": "hotpotqa",
+      "suggested_min_new_source_records": 20,
+      "suggested_min_rows": 20,
+      "target": "suite:hotpotqa:architect_general>frontdoor",
+      "target_preferred_actions": [
+        "architect_general",
+        "frontdoor"
+      ]
+    },
+    {
+      "action_pair": "architect_general>coder_escalation",
+      "actions_to_evaluate_on_same_source_record": [
+        "architect_general",
+        "coder_escalation"
+      ],
+      "collection_priority": 2,
+      "collection_priority_reason": "direction_balance_cleanup",
+      "current_direction_balance": 0.1429,
+      "current_rows": 14,
+      "matched_candidate_groups": 0,
+      "needs_direction": [
+        "balance both directions"
+      ],
+      "runtime_gate_change_allowed": false,
+      "source_record_shape": "one prompt/reference evaluated by every action in action_pair with role_results, rewards, suite, prompt, and expected fields",
+      "status": "needs_new_source_records",
+      "stratum_field": "suite",
+      "stratum_value": "simpleqa",
+      "suggested_min_new_source_records": 20,
+      "suggested_min_rows": 20,
+      "target": "suite:simpleqa:architect_general>coder_escalation",
+      "target_preferred_actions": [
+        "architect_general",
+        "coder_escalation"
+      ]
+    }
+  ],
+  "stats": {
+    "candidate_rows": 361,
+    "files_scanned": 2590,
+    "reference_available_source_family:orchestrator_live_seed": 16,
+    "reference_available_source_family:seeding_eval": 760,
+    "reference_available_source_family:three_way_eval": 1090,
+    "reference_available_suite:coder": 10,
+    "reference_available_suite:debugbench": 179,
+    "reference_available_suite:general": 455,
+    "reference_available_suite:gpqa": 60,
+    "reference_available_suite:hotpotqa": 399,
+    "reference_available_suite:instruction_precision": 22,
+    "reference_available_suite:livecodebench": 147,
+    "reference_available_suite:long_context": 10,
+    "reference_available_suite:math": 10,
+    "reference_available_suite:simpleqa": 478,
+    "reference_available_suite:skill_transfer": 36,
+    "reference_available_suite:thinking": 50,
+    "reference_available_suite:vl": 10,
+    "skipped_existing_row": 4663,
+    "skipped_missing_prompt": 1231,
+    "skipped_missing_reference": 276,
+    "skipped_missing_reference_source_family:seeding_eval": 276,
+    "skipped_missing_reference_suite:instruction_precision": 256,
+    "skipped_missing_reference_suite:mode_advantage": 10,
+    "skipped_missing_reference_suite:usaco": 10,
+    "skipped_missing_response": 496,
+    "skipped_missing_role_results": 4,
+    "skipped_non_target_suite_record": 36869
+  },
+  "target_actions": [
+    "architect_general",
+    "coder_escalation",
+    "frontdoor"
+  ],
+  "target_match_mode": "any",
+  "target_source_families": [
+    "seeding_eval"
+  ],
+  "target_suites": [
+    "general",
+    "hotpotqa",
+    "simpleqa"
+  ],
+  "unavailable_collection_targets": {},
+  "unmatched_collection_targets": [
+    "source_family:seeding_eval:coder_escalation>frontdoor",
+    "suite:general:architect_general>coder_escalation",
+    "suite:hotpotqa:architect_general>frontdoor",
+    "suite:simpleqa:architect_general>coder_escalation"
+  ]
+}

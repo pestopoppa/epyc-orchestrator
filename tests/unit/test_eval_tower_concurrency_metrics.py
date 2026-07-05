@@ -648,6 +648,31 @@ def test_eval_question_stamps_eval_batch_request_metadata(monkeypatch) -> None:
     assert calls[0]["batch_id"] == "evaltower-T1-123-1q"
 
 
+def test_eval_question_forwards_prompt_root_when_present(monkeypatch) -> None:
+    tower = EvalTower()
+    calls: list[dict] = []
+
+    def _fake_call(**kwargs):  # noqa: ANN001
+        calls.append(kwargs)
+        return {"answer": "ok", "tokens_generated": 1}
+
+    monkeypatch.setattr(eval_tower, "call_orchestrator_forced", _fake_call)
+
+    with eval_tower.httpx.Client(timeout=1) as client:
+        tower._eval_question(
+            {
+                "id": "gepa",
+                "suite": "general",
+                "prompt": "Say ok.",
+                "expected": "ok",
+                "_prompt_root": "/tmp/gepa-prompt-root",
+            },
+            client,
+        )
+
+    assert calls[0]["prompt_root"] == "/tmp/gepa-prompt-root"
+
+
 def test_eval_question_omits_native_tool_schema_by_default(monkeypatch) -> None:
     tower = EvalTower()
     calls: list[dict] = []

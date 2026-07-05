@@ -164,6 +164,21 @@ def test_readonly_archive_refuses_mutation_methods() -> None:
             raise AssertionError("read-only archive mutation unexpectedly succeeded")
 
 
+def test_production_best_refuses_non_default_tier_frontier(tmp_path: Path) -> None:
+    archive = ParetoArchive(state_path=tmp_path / "state.json")
+
+    assert archive.update(_entry(20, tier=2, q=1.2)) == "frontier"
+    assert archive.update(_entry(30, tier=3, q=0.4)) == "frontier"
+
+    assert archive.mark_production_best(20) is False
+    assert archive.mark_production_best(30) is False
+    assert archive.production_best() is None
+
+    assert archive.update(_entry(10, tier=1, q=1.8)) == "frontier"
+    assert archive.mark_production_best(10) is True
+    assert archive.production_best().trial_id == 10
+
+
 def test_generic_raw_payload_loader_is_not_public_api() -> None:
     assert not hasattr(ParetoArchive, "load_archive_payload")
 

@@ -28,11 +28,14 @@ def _row(
     seq_state: str | None = None,
     seq_extra: dict | None = None,
     corrupt: str | None = None,
+    paired_baseline: dict | None = None,
 ) -> dict:
     eval_details: dict = {
         "config_fingerprint": fingerprint,
         "question_results": _question_results(correct_qids),
     }
+    if paired_baseline is not None:
+        eval_details["seq_paired_baseline"] = paired_baseline
     if learning_exclusion:
         eval_details["learning_exclusion"] = {"by": learning_exclusion, "reason": "fixture"}
     row: dict = {
@@ -237,6 +240,68 @@ def test_report_projects_w8_promotion_eval_state() -> None:
     )
     assert "latest_combined_E=32.0" in seq_readiness_report.render_markdown(report)
     assert "open_requirements=" in seq_readiness_report.render_markdown(report)
+
+
+def test_report_surfaces_paired_baseline_screening_diagnostics() -> None:
+    rows = [
+        _row(
+            1,
+            "fp-a",
+            set(range(20)),
+            paired_baseline={
+                "status": "ok",
+                "candidate": "fp-a",
+                "candidate_trial_id": 1,
+                "used_for_gating": False,
+                "shared_qids": 40,
+                "a_correct_b_wrong": 3,
+                "a_wrong_b_correct": 5,
+                "delta_b_minus_a": 0.05,
+                "p_value_two_sided": 0.72,
+                "baseline_reference_trial_id": 900,
+                "baseline_reference_reason": "cadence",
+                "baseline_reference_vector_qids": 50,
+                "candidate_vector_qids": 50,
+            },
+        ),
+        _row(
+            2,
+            "fp-b",
+            set(range(22)),
+            paired_baseline={
+                "status": "no_baseline_reference_vector",
+                "candidate": "fp-b",
+                "candidate_trial_id": 2,
+                "used_for_gating": False,
+                "candidate_vector_qids": 50,
+            },
+        ),
+    ]
+
+    report = seq_readiness_report.build_seq_readiness_report(
+        rows,
+        min_trusted_vector_trials=1,
+        min_seq_shadow_rows=0,
+        min_shared_qids=35,
+    )
+
+    screening = report["paired_baseline_screening"]
+    assert screening["status"] == "observed"
+    assert screening["used_for_gating"] is False
+    assert screening["observation_only"] is True
+    assert screening["diagnostic_rows"] == 2
+    assert screening["ok_rows"] == 1
+    assert screening["sufficient_shared_qid_rows"] == 1
+    assert screening["status_counts"] == {
+        "no_baseline_reference_vector": 1,
+        "ok": 1,
+    }
+    assert screening["latest_trial_id"] == 2
+    assert screening["recent"][1]["baseline_reference_trial_id"] == 900
+    assert screening["recent"][1]["discordant_pairs"] == 8
+    rendered = seq_readiness_report.render_markdown(report)
+    assert "Paired baseline screening: status=observed" in rendered
+    assert "observation_only=True" in rendered
 
 
 def test_main_strict_returns_nonzero_when_blocked(tmp_path: Path, capsys) -> None:

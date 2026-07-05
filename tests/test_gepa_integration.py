@@ -85,10 +85,14 @@ def test_gepa_opt_result_no_improvement():
 # ── OrchestratorGEPAAdapter tests ────────────────────────────────
 
 
-def test_adapter_evaluate_returns_evaluation_batch():
+def test_adapter_evaluate_returns_evaluation_batch(tmp_path):
     """Adapter.evaluate() returns properly structured EvaluationBatch."""
     from gepa.core.adapter import EvaluationBatch
     from species.gepa_optimizer import OrchestratorGEPAAdapter
+
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    (prompts_dir / "frontdoor.md").write_text("original frontdoor prompt")
 
     # Mock eval_tower and prompt_forge
     mock_tower = MagicMock()
@@ -102,14 +106,30 @@ def test_adapter_evaluate_returns_evaluation_batch():
     mock_result.route_used = "frontdoor"
     mock_result.error = None
     mock_result.elapsed_s = 1.5
-    mock_tower._eval_batch.side_effect = lambda batch, client, **kw: [mock_result] * len(batch)
+
+    seen_roots: list[Path] = []
+
+    def _eval_batch(batch, client, **kw):
+        for item in batch:
+            prompt_root = Path(item["_prompt_root"])
+            seen_roots.append(prompt_root)
+            assert prompt_root != prompts_dir
+            assert (prompt_root / "frontdoor.md").read_text() == (
+                "You are a helpful routing assistant."
+            )
+        return [mock_result] * len(batch)
+
+    mock_tower._eval_batch.side_effect = _eval_batch
 
     mock_forge = MagicMock()
+    mock_forge.prompts_dir = prompts_dir
+    mock_forge.timeout = 30
 
     adapter = OrchestratorGEPAAdapter(
         eval_tower=mock_tower,
         prompt_forge=mock_forge,
         target_file="frontdoor.md",
+        scratch_base=tmp_path / "scratch",
     )
 
     batch = [
@@ -126,15 +146,19 @@ def test_adapter_evaluate_returns_evaluation_batch():
     assert len(result.trajectories) == 1
     assert result.trajectories[0]["correct"] is True
 
-    # Verify prompt was written to disk
-    mock_forge.write_prompt.assert_called_once_with(
-        "frontdoor.md", "You are a helpful routing assistant."
-    )
+    assert seen_roots
+    assert all(not root.exists() for root in seen_roots)
+    assert (prompts_dir / "frontdoor.md").read_text() == "original frontdoor prompt"
+    mock_forge.write_prompt.assert_not_called()
 
 
-def test_adapter_evaluate_wrong_answer():
+def test_adapter_evaluate_wrong_answer(tmp_path):
     """Adapter scores 0.0 for incorrect answers."""
     from species.gepa_optimizer import OrchestratorGEPAAdapter
+
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    (prompts_dir / "frontdoor.md").write_text("original")
 
     mock_tower = MagicMock()
     mock_tower.timeout = 30
@@ -147,10 +171,13 @@ def test_adapter_evaluate_wrong_answer():
     mock_tower._eval_batch.side_effect = lambda batch, client, **kw: [mock_result] * len(batch)
 
     mock_forge = MagicMock()
+    mock_forge.prompts_dir = prompts_dir
+    mock_forge.timeout = 30
 
     adapter = OrchestratorGEPAAdapter(
         eval_tower=mock_tower,
         prompt_forge=mock_forge,
+        scratch_base=tmp_path / "scratch",
     )
 
     batch = [{"prompt": "Capital?", "expected": "Canberra", "suite": "general"}]
@@ -158,6 +185,39 @@ def test_adapter_evaluate_wrong_answer():
 
     result = adapter.evaluate(batch, candidate)
     assert result.scores[0] == 0.0
+
+
+def test_adapter_evaluate_does_not_touch_canonical_prompt_on_eval_error(tmp_path):
+    """Adapter keeps the canonical prompt untouched if GEPA evaluation raises."""
+    from species.gepa_optimizer import OrchestratorGEPAAdapter
+
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    (prompts_dir / "frontdoor.md").write_text("original prompt")
+
+    mock_tower = MagicMock()
+    mock_tower.timeout = 30
+    mock_tower._eval_batch.side_effect = RuntimeError("eval exploded")
+
+    mock_forge = MagicMock()
+    mock_forge.prompts_dir = prompts_dir
+    mock_forge.timeout = 30
+
+    adapter = OrchestratorGEPAAdapter(
+        eval_tower=mock_tower,
+        prompt_forge=mock_forge,
+        target_file="frontdoor.md",
+        scratch_base=tmp_path / "scratch",
+    )
+
+    with pytest.raises(RuntimeError, match="eval exploded"):
+        adapter.evaluate(
+            [{"prompt": "Capital?", "expected": "Canberra", "suite": "general"}],
+            {"prompt": "candidate prompt"},
+        )
+
+    assert (prompts_dir / "frontdoor.md").read_text() == "original prompt"
+    mock_forge.write_prompt.assert_not_called()
 
 
 def test_adapter_reflective_dataset():

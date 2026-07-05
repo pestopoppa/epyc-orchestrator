@@ -37,7 +37,11 @@ def test_runtime_flag_file_overrides_env(monkeypatch, tmp_path) -> None:
     assert payload["flags"]["specialist_routing"]["set_by"] == "unit-test"
 
 
-def test_feature_namespace_env_avoids_legacy_settings_collision(monkeypatch) -> None:
+def test_feature_namespace_env_avoids_legacy_settings_collision(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv(
+        "ORCHESTRATOR_RUNTIME_FLAGS_PATH",
+        str(tmp_path / "missing-runtime-flags.json"),
+    )
     monkeypatch.setenv("ORCHESTRATOR_FEATURE_REPL", "0")
     monkeypatch.delenv("ORCHESTRATOR_REPL", raising=False)
     reset_features()
@@ -94,6 +98,16 @@ def test_stack_production_feature_env_is_complete_and_wave_gated() -> None:
     assert "ORCHESTRATOR_LANGGRAPH_ARCHITECT_CODING" not in env
     for spec in feature_module._FEATURE_REGISTRY:
         assert f"ORCHESTRATOR_FEATURE_{spec.env_var}" in env
+
+
+def test_stack_production_feature_env_preserves_launch_override() -> None:
+    env = {"ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING": "1"}
+
+    orchestrator_stack._apply_production_feature_env(env)
+
+    assert env["ORCHESTRATOR_FEATURE_EVAL_BATCH_SERVING"] == "1"
+    assert env["ORCHESTRATOR_FEATURE_SPECIALIST_ROUTING"] == "1"
+    assert env["ORCHESTRATOR_FEATURE_PLAN_REVIEW"] == "0"
 
 
 def test_stack_live_langgraph_env_excludes_retired_architect_coding() -> None:

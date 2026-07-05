@@ -20,7 +20,6 @@ from typing import Any
 _INFERENCE_TAP_PATH = Path("/mnt/raid0/llm/tmp/inference_tap.log")
 _INFERENCE_TAP_EVENTS_PATH = Path("/mnt/raid0/llm/tmp/inference_tap_events.jsonl")
 _REPL_TAP_PATH = Path("/mnt/raid0/llm/tmp/repl_tap.log")
-_PROMPT_TAP_PATH = Path("/mnt/raid0/llm/tmp/autopilot_prompt_tap.txt")
 _TAP_SENTINEL_PATH = Path("/mnt/raid0/llm/tmp/.inference_tap_active")
 
 _SECTION_SEP = "=" * 72
@@ -41,6 +40,27 @@ def _read_tail(path: Path, max_bytes: int = 256 * 1024) -> str:
             return f.read().decode("utf-8", errors="ignore")
     except Exception:
         return ""
+
+
+def _read_tap_events_tail(path: Path, max_bytes: int = 1024 * 1024) -> str:
+    """Tail of the structured tap events, stitched across the rotation window.
+
+    The tap writer rotates base → ``.1`` at 512 MB and only recreates the base
+    on the NEXT append, so right after rotation the base is missing or tiny and
+    a plain tail would hand parsers an empty window (panel looks dead while the
+    producer is fine). When the base tail is under half the budget, prepend the
+    tail of ``.1`` — both tails are line-aligned, so concatenation is safe.
+    """
+    tail = _read_tail(path, max_bytes=max_bytes)
+    if len(tail) >= max_bytes // 2:
+        return tail
+    rotated = path.with_name(path.name + ".1")
+    if not rotated.exists():
+        return tail
+    prev = _read_tail(rotated, max_bytes=max_bytes - len(tail))
+    if not prev:
+        return tail
+    return prev + tail
 
 
 def _grep_lines_reverse(

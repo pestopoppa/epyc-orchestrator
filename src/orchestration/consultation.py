@@ -13,7 +13,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
-from typing import Any
+from typing import Any, Callable
 
 import jsonschema
 import yaml
@@ -159,6 +159,41 @@ def build_consult_prompt(
     )
 
 
+def _maybe_dcp_consult_context(
+    context: str,
+    *,
+    code_search_fn: Callable[[str], list[Any]] | None = None,
+    budget: int = 2000,
+) -> str:
+    """Optionally reuse DCP's advisory seed bundle for consult context.
+
+    P2-4 deliberately reuses `chat_delegation._maybe_dcp_seed_context()` instead
+    of creating a second packer. This stays inert unless both `dcp_for_consult`
+    and `dcp_pre_assembly` are enabled and a caller supplies a code-search hook.
+    """
+    if code_search_fn is None:
+        return context
+    try:
+        from src.features import features as _get_features
+
+        flags = _get_features()
+        if not (
+            getattr(flags, "dcp_for_consult", False)
+            and getattr(flags, "dcp_pre_assembly", False)
+        ):
+            return context
+        from src.api.routes.chat_delegation import _maybe_dcp_seed_context
+
+        return _maybe_dcp_seed_context(
+            context,
+            code_search_fn=code_search_fn,
+            base_ctx=context,
+            budget=budget,
+        )
+    except Exception:
+        return context
+
+
 def _request_context(primitives: Any, scheduler_defaults: dict[str, Any], override_priority: str | None):
     request_context = getattr(primitives, "request_context", None)
     if not callable(request_context):
@@ -187,6 +222,8 @@ def consult(
     override_max_tokens: int | None = None,
     override_priority: str | None = None,
     skills_path: Path = DEFAULT_SKILLS_PATH,
+    code_search_fn: Callable[[str], list[Any]] | None = None,
+    dcp_budget: int = 2000,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Run one bounded advisory consult and return ``(advisory, stats)``.
 
@@ -194,6 +231,11 @@ def consult(
     and continue without advisory unless they explicitly choose otherwise.
     """
     spec = load_interaction_skill(consultant_role, skill, path=skills_path)
+    context = _maybe_dcp_consult_context(
+        context,
+        code_search_fn=code_search_fn,
+        budget=dcp_budget,
+    )
     prompt = build_consult_prompt(
         requester_role=requester_role,
         consultant_role=consultant_role,

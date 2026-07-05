@@ -69,8 +69,8 @@ def test_action_fingerprint_ignores_narrative_keys() -> None:
     })
 
 
-def test_tier_registry_includes_hard_only_stress_lane() -> None:
-    assert TIER_SPECS[3].label == "T3 (hard-only stress eval)"
+def test_tier_registry_includes_expert_workflow_lane() -> None:
+    assert TIER_SPECS[3].label == "T3 (expert/hard workflow eval)"
 
 
 def test_task_rate_shadow_objectives_from_eval_result() -> None:

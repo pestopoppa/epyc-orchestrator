@@ -144,6 +144,90 @@ def test_routing_change_flags_at_least_watch():
     assert any("route_path_hash" in r for r in p["reasons"])
 
 
+def test_question_result_process_signals_are_signed():
+    p = compute_bsv_observe_payload(
+        _er(
+            question_results=[
+                {
+                    "qid": "q1",
+                    "correct": True,
+                    "latency_ms": 1250,
+                    "tools_used": 2,
+                    "tools_called": ["python", "python"],
+                    "route": "frontdoor->worker_general",
+                },
+                {
+                    "qid": "q2",
+                    "correct": True,
+                    "latency_ms": 2500,
+                    "tools_used": 0,
+                    "route": "frontdoor",
+                },
+            ],
+            tool_use_rate=0.5,
+        ),
+        species_name="s",
+        trial_id=1,
+        incumbent_signature=None,
+    )
+    signature = p["signature"]
+    assert signature["tool_sequence_hash"]
+    assert signature["escalation_path_hash"]
+    assert signature["latency_bucket"] == "1-5s"
+    assert p["process_signal_sources"] == {
+        "tool_sequence": "question_results.tools_used",
+        "escalation_path": "question_results.route",
+        "latency_ms": "question_results.latency_ms_mean",
+    }
+
+
+def test_tool_and_latency_drift_flags_watch_or_blocking():
+    incumbent = compute_bsv_observe_payload(
+        _er(
+            question_results=[
+                {"qid": "q1", "correct": True, "latency_ms": 1000, "tools_used": 0},
+                {"qid": "q2", "correct": True, "latency_ms": 1000, "tools_used": 0},
+            ]
+        ),
+        species_name="s",
+        trial_id=1,
+        incumbent_signature=None,
+    )["signature"]
+    p = compute_bsv_observe_payload(
+        _er(
+            question_results=[
+                {
+                    "qid": "q1",
+                    "correct": True,
+                    "latency_ms": 2000,
+                    "tools_used": 1,
+                    "tools_called": ["python"],
+                },
+                {"qid": "q2", "correct": True, "latency_ms": 2000, "tools_used": 0},
+            ],
+            tool_use_rate=0.5,
+        ),
+        species_name="s",
+        trial_id=2,
+        incumbent_signature=incumbent,
+    )
+    assert p["severity"] in ("watch", "blocking")
+    assert any("tool_sequence_hash" in reason for reason in p["reasons"])
+
+
+def test_legacy_tool_name_counts_are_signed_when_question_rows_absent():
+    p = compute_bsv_observe_payload(
+        _er(details={"tool_name_counts": {"python": 3, "read_file": 1}, "eval_wall_s": 8.0}),
+        species_name="s",
+        trial_id=1,
+        incumbent_signature=None,
+    )
+    assert p["signature"]["tool_sequence_hash"]
+    assert p["signature"]["latency_bucket"] == "5-30s"
+    assert p["process_signal_sources"]["tool_sequence"] == "details.tool_name_counts"
+    assert p["process_signal_sources"]["latency_ms"] == "eval_result.eval_wall_s"
+
+
 def test_graceful_on_empty_eval_result():
     # Missing fields must not raise — observe-only must never disrupt the trial loop.
     p = compute_bsv_observe_payload(SimpleNamespace(), species_name="", trial_id=0, incumbent_signature=None)

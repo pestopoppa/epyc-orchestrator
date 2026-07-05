@@ -8,7 +8,9 @@ from src.prompt_builders.resolver import (
     PROMPT_DIR,
     _get_variant,
     _safe_format,
+    current_prompt_dir,
     get_direct_answer_prefix,
+    prompt_dir_override,
     resolve_prompt,
 )
 
@@ -218,6 +220,31 @@ class TestResolvePrompt:
         """PROMPT_DIR should point to orchestration/prompts/."""
         assert PROMPT_DIR.name == "prompts"
         assert PROMPT_DIR.parent.name == "orchestration"
+
+    def test_prompt_dir_override_is_request_scoped(self, tmp_path, monkeypatch):
+        """prompt_dir_override temporarily redirects prompt resolution."""
+        canonical = tmp_path / "canonical"
+        scratch = tmp_path / "scratch"
+        canonical.mkdir()
+        scratch.mkdir()
+        (canonical / "frontdoor.md").write_text("canonical")
+        (scratch / "frontdoor.md").write_text("scratch")
+        monkeypatch.setattr("src.prompt_builders.resolver.PROMPT_DIR", canonical)
+        monkeypatch.delenv("PROMPT_VARIANT", raising=False)
+
+        assert current_prompt_dir() == canonical
+        assert resolve_prompt("frontdoor", "fallback") == "canonical"
+        with prompt_dir_override(scratch):
+            assert current_prompt_dir() == scratch.resolve()
+            assert resolve_prompt("frontdoor", "fallback") == "scratch"
+        assert current_prompt_dir() == canonical
+        assert resolve_prompt("frontdoor", "fallback") == "canonical"
+
+    def test_prompt_dir_override_rejects_missing_root(self, tmp_path):
+        """Missing scratch roots fail before prompt resolution."""
+        with pytest.raises(FileNotFoundError):
+            with prompt_dir_override(tmp_path / "missing"):
+                pass
 
 
 class TestDirectAnswerPrefix:

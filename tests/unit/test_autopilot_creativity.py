@@ -359,6 +359,37 @@ def test_action_availability_blocks_seed_batch_when_fallbacks_exhausted(
     assert "seed_batch" not in viable
 
 
+def test_action_availability_surfaces_w8_candidate_generation_priority(
+    tmp_path: Path,
+) -> None:
+    j = _fresh_journal(tmp_path)
+
+    availability, viable = autopilot._build_action_availability(
+        journal=j,
+        known_actions=KNOWN_ACTIONS,
+        memory_count=10_000,
+        converged=True,
+        slot_memory_text="  healthy queried ports with empty KV cache: frontdoor:8070",
+        blacklist=[],
+        w8_replay_pressure_text=(
+            "W8 replay pressure: 0/2 accumulating candidate(s) are replayable "
+            "(blocked=numeric_trial_missing_params:1,unreplayable_action=seed_batch:1)."
+        ),
+    )
+
+    assert "Priority pressure:" in availability
+    assert "W8 candidate generation is the active strict blocker" in availability
+    assert "explicit single-param numeric_trial or one-flag structural_experiment" in availability
+    assert "deep_eval" in viable
+    assert "seed_batch" in viable
+
+
+def test_w8_candidate_generation_pressure_ignores_replayable_candidates() -> None:
+    assert autopilot._w8_candidate_generation_pressure(
+        "W8 replay pressure: 1/1 accumulating candidate(s) are replayable"
+    ) is False
+
+
 def test_action_availability_surfaces_suppressed_numeric_surfaces(
     tmp_path: Path,
 ) -> None:
@@ -661,6 +692,37 @@ def test_planner_strategy_hints_see_external_store_writes_without_restart(
         live_store.close()
 
 
+def test_planner_strategy_hints_surface_search_index_degradation(monkeypatch) -> None:
+    monkeypatch.setattr(autopilot, "_PLANNER_HINTS_ENABLED", True)
+
+    class FakeStore:
+        def search_index_health(self):
+            return {
+                "healthy": False,
+                "summary": (
+                    "degraded: sqlite=10, faiss=5, id_map=5, "
+                    "faiss_coverage=50.0%, missing_faiss=5"
+                ),
+                "repair_hint": "StrategyStore.rebuild_search_indexes()",
+            }
+
+        def retrieve_for_journal(self, *_args, **_kwargs):
+            return []
+
+        def retrieve_conventions(self, *_args, **_kwargs):
+            return []
+
+    text = autopilot._build_planner_strategy_hints(
+        FakeStore(),
+        object(),
+        max_rows=3,
+    )
+
+    assert "StrategyStore search index degraded" in text
+    assert "faiss_coverage=50.0%" in text
+    assert "StrategyStore.rebuild_search_indexes()" in text
+
+
 def test_planner_strategy_hints_refresh_store_rows_for_prompt(monkeypatch) -> None:
     monkeypatch.setattr(autopilot, "_PLANNER_HINTS_ENABLED", True)
     calls: list[tuple[str, str, object, int]] = []
@@ -805,6 +867,168 @@ def test_controller_prompt_scopes_strategy_tool_hints_to_eval_tools() -> None:
     assert "let the orchestrator dispatch it" in template
 
 
+def test_controller_prompt_includes_higher_tier_pressure_section() -> None:
+    template = autopilot.CONTROLLER_PROMPT_TEMPLATE
+
+    assert "Higher-Tier Objective Pressure" in template
+    assert "{higher_tier_pressure}" in template
+    assert '{{"type": "deep_eval", "tier": 3}}' in template
+    assert "expert/hard workflow coverage or frontier evidence is thin" in template
+
+
+def test_controller_prompt_includes_outcome_progress_pressure_section() -> None:
+    template = autopilot.CONTROLLER_PROMPT_TEMPLATE
+
+    assert "Outcome Progress Pressure" in template
+    assert "{outcome_progress_pressure}" in template
+    assert "planner-learning, non-authority" in template
+
+
+def test_higher_tier_pressure_preserves_same_tier_comparison() -> None:
+    class FakeArchive:
+        def summary(self, *, tier):
+            if tier == 1:
+                return {
+                    "frontier_size": 4,
+                    "best_quality": 2.0,
+                    "best_speed": 42.0,
+                    "hv_slope_50": 0.0002,
+                }
+            if tier == 2:
+                return {
+                    "frontier_size": 2,
+                    "best_quality": 1.4,
+                    "best_speed": 18.5,
+                    "hv_slope_50": 0.0001,
+                }
+            if tier == 3:
+                return {
+                    "frontier_size": 0,
+                    "best_quality": 0.0,
+                    "best_speed": 0.0,
+                    "hv_slope_50": 0.0,
+                }
+            raise AssertionError(f"unexpected tier {tier}")
+
+    class FakeBaseline:
+        def quality_for_tier(self, tier):
+            return {2: 1.1, 3: 0.2}[tier]
+
+    text = autopilot._build_higher_tier_planner_pressure(
+        FakeArchive(),
+        SimpleNamespace(baseline=FakeBaseline()),
+    )
+
+    assert "expert/hard workflow tasks" in text
+    assert "prefer deep_eval tier 3 if T3 coverage/frontier is thin" in text
+    assert "Never compare raw quality across tiers" in text
+    assert "T1 gains that never lift T2/T3 are overfit risk" in text
+    assert "T3 hard-workflow probes should favor technical tool-use, REPL" in text
+    assert "Plateau signal: T1 hv_slope_50=+0.000200, T2 hv_slope_50=+0.000100" in text
+    assert "until the next instrument/kernel era resets frontier-speed evidence" in text
+    assert "T2: frontier=2, best_q=1.400, delta_vs_baseline=+0.300" in text
+    assert "T3: empty frontier; baseline_q=0.200" in text
+    assert "deployment safety lane" in text
+
+
+def test_eval_coverage_pressure_reports_repeat_factor_and_pool_denominator() -> None:
+    tier3_entry = _entry(
+        2,
+        "deep_eval",
+        eval_details={
+            "question_results": [
+                {"suite": "coder", "qid": "a", "correct": True},
+                {"suite": "agentic", "qid": "c", "correct": False},
+            ]
+        },
+    )
+    tier3_entry.tier = 3
+    journal = SimpleNamespace(
+        entries_with_supersessions=lambda: [
+            _entry(
+                1,
+                "numeric_trial",
+                eval_details={
+                    "question_results": [
+                        {"suite": "coder", "qid": "a", "correct": True},
+                        {"suite": "coder", "qid": "b", "correct": False},
+                    ]
+                },
+            ),
+            tier3_entry,
+        ]
+    )
+
+    text = autopilot._build_eval_coverage_pressure(
+        journal,
+        pool_total_questions=100,
+        pool_tier_questions={1: 20, 2: 70, 3: 10},
+    )
+
+    assert "3 distinct qids / 4 scored rows" in text
+    assert "repeat_factor=1.33x" in text
+    assert "pool_coverage<=3.00% of 100" in text
+    assert "eval trials by tier: T1=1, T3=1" in text
+    assert "Tier detail:" in text
+    assert "T1:trials=1,rows=2,distinct=2,pool=20,coverage<=10.00%" in text
+    assert "T2:trials=0,rows=0,distinct=0,pool=70,coverage<=0.00%" in text
+    assert "T3:trials=1,rows=2,distinct=2" in text
+    assert "pool=10,coverage<=20.00%" in text
+    assert "Higher-tier coverage is thin (T2=0 trial(s), T3=1 trial(s))" in text
+    assert "hard workflow, tool-use, REPL, and multi-turn task coverage" in text
+    assert "Least-covered non-sentinel suites: agentic=1, coder=2" in text
+    assert "under-covered suites" in text
+    assert "T1-only gains are overfit risk" in text
+    assert "fixed authority-core evidence separate" in text
+
+
+def test_outcome_progress_pressure_reports_stall_and_rates(monkeypatch) -> None:
+    def fake_outcome_progress_report(**kwargs):
+        assert kwargs["max_trials_since_frontier"] == 5
+        assert kwargs["max_trials_since_promotion"] == 10
+        assert kwargs["recent_window_trials"] == 20
+        return {
+            "status": "attention",
+            "latest_trial_id": 1180,
+            "frontier_admissions": 84,
+            "latest_frontier_trial_id": 1005,
+            "trials_since_frontier": 175,
+            "max_trials_since_frontier": 5,
+            "baseline_promotions": 1,
+            "latest_promotion_trial_id": 969,
+            "trials_since_promotion": 211,
+            "max_trials_since_promotion": 10,
+            "rates": {
+                "keepable_rate": {"count": 1, "total": 20, "rate": 0.05},
+                "wasted_eval_rate": {"count": 15, "total": 20, "rate": 0.75},
+                "learning_excluded_rate": {"count": 4, "total": 20, "rate": 0.2},
+            },
+            "blockers": ["frontier admission stale"],
+        }
+
+    monkeypatch.setattr(
+        autopilot,
+        "_phase_outcome_progress_report",
+        fake_outcome_progress_report,
+    )
+
+    text = autopilot._build_outcome_progress_pressure(
+        max_trials_since_frontier=5,
+        max_trials_since_promotion=10,
+        recent_window_trials=20,
+    )
+
+    assert "status=attention" in text
+    assert "trials_since_frontier=175/5" in text
+    assert "trials_since_promotion=211/10" in text
+    assert "keepable=1/20 (5.0%)" in text
+    assert "wasted_eval=15/20 (75.0%)" in text
+    assert "learning_excluded=4/20 (20.0%)" in text
+    assert "Outcome blockers: frontier admission stale" in text
+    assert "credible path to keepable frontier or promotion evidence" in text
+    assert "seed-only churn" in text
+
+
 def test_controller_prompt_uses_fresh_strategy_hints_section(monkeypatch) -> None:
     monkeypatch.setattr(autopilot, "_PLANNER_HINTS_ENABLED", True)
     rows: list[SimpleNamespace] = []
@@ -848,6 +1072,9 @@ def test_controller_prompt_uses_fresh_strategy_hints_section(monkeypatch) -> Non
             slot_memory="slots",
             action_availability="actions",
             fable_gate_advisory="fable-gate",
+            higher_tier_pressure="higher-tier",
+            eval_coverage_pressure="coverage",
+            outcome_progress_pressure="outcome-progress",
             planner_strategy_hints=planner_strategy_hints,
             repo_readiness_advisory="repo",
             budget="budget",
@@ -860,6 +1087,7 @@ def test_controller_prompt_uses_fresh_strategy_hints_section(monkeypatch) -> Non
             last_criticism="criticism",
             model_signatures="models",
             blacklist_text="blacklist",
+            operator_outbox_feedback="outbox",
             feature_flags_block="flags",
             last_invalid_feedback="invalid",
             plot_paths="plots",

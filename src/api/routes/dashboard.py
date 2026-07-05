@@ -7,9 +7,11 @@ Routes:
     GET  /dashboard/events/stream           — 1Hz SSE: snapshot + recent decisions
     GET  /dashboard/api/task/{task_id}      — full task detail (prompt + REPL history)
     GET  /dashboard/events/task/{task_id}   — 5Hz SSE: live token stream for one task
+    POST /dashboard/api/autopilot_control   — operator pause/resume latch
 
-Read-only observer. Polls existing llama-server /slots endpoints and tails the
-progress JSONL log; never modifies routing or inference state.
+Mostly read-only observer. Polls existing llama-server /slots endpoints and tails
+the progress JSONL log; the only mutating endpoint is the explicit operator
+pause/resume latch for AutoPilot dispatch.
 
 SSH access: from your laptop, `ssh -L 8000:localhost:8000 daniele@<host>` then
 open http://localhost:8000/dashboard.
@@ -20,11 +22,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import time
 import sqlite3
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -42,17 +45,21 @@ from src.api.routes.dashboard_snapshot import (
     todays_progress_log as _todays_progress_log_impl,
 )
 from src.api.routes.dashboard_freshness import envelope as _freshness_envelope
-from src.api.routes.dashboard_panels import PANELS as _PANELS, PANELS_BY_KEY as _PANELS_BY_KEY
+from src.api.routes.dashboard_panels import (
+    PANELS as _PANELS,
+    PANELS_BY_KEY as _PANELS_BY_KEY,
+    _latest_tap_events_mtime,
+)
 from src.api.routes.dashboard_tap import (
     _INFERENCE_TAP_EVENTS_PATH,
     _INFERENCE_TAP_PATH,
-    _PROMPT_TAP_PATH,
     _REPL_TAP_PATH,
     _TAP_SENTINEL_PATH,
     _parse_inference_sections,
     _parse_structured_tap_requests,
     _parse_trial_state,
     _read_tail,
+    _read_tap_events_tail,
 )
 from src.api.routes.dashboard_tasks import (
     _find_section_by_objective,
@@ -234,47 +241,53 @@ def _enrich_structured_tap_requests(
     """
     if not requests:
         return requests
-    port_roles = port_roles if port_roles is not None else _discover_llama_ports()
-    region_locks = region_locks if region_locks is not None else _region_locks_payload()
-    by_role = region_locks.get("by_role") if isinstance(region_locks, dict) else {}
-    by_role = by_role if isinstance(by_role, dict) else {}
-    alias_to_topology = _alias_to_topology_roles(port_roles)
-    enriched: list[dict[str, Any]] = []
-    for req in requests:
-        out = dict(req)
-        try:
-            port = int(out.get("port")) if out.get("port") not in (None, "") else None
-        except (TypeError, ValueError):
-            port = None
-        port_role, port_shape = _port_role_shape(port_roles.get(port, "")) if port is not None else ("", "")
-        logical_role = base_role(str(out.get("role") or ""))
-        topology_role = (
-            str(out.get("topology_role") or "")
-            or alias_to_topology.get(logical_role, "")
-            or port_role
-            or logical_role
-        )
-        lock_role = str(out.get("lock_role") or "") or topology_role
-        if topology_role and not out.get("topology_role"):
-            out["topology_role"] = topology_role
-        if lock_role and not out.get("lock_role"):
-            out["lock_role"] = lock_role
+    # Fail open: the enrichment pulls from the locks/topology domain, and the
+    # tap panel's CONTENT must keep rendering even when that domain is broken —
+    # tap requests without lock metadata beat an empty tap panel.
+    try:
+        port_roles = port_roles if port_roles is not None else _port_roles_cached()
+        region_locks = region_locks if region_locks is not None else _region_locks_cached()
+        by_role = region_locks.get("by_role") if isinstance(region_locks, dict) else {}
+        by_role = by_role if isinstance(by_role, dict) else {}
+        alias_to_topology = _alias_to_topology_roles(port_roles)
+        enriched: list[dict[str, Any]] = []
+        for req in requests:
+            out = dict(req)
+            try:
+                port = int(out.get("port")) if out.get("port") not in (None, "") else None
+            except (TypeError, ValueError):
+                port = None
+            port_role, port_shape = _port_role_shape(port_roles.get(port, "")) if port is not None else ("", "")
+            logical_role = base_role(str(out.get("role") or ""))
+            topology_role = (
+                str(out.get("topology_role") or "")
+                or alias_to_topology.get(logical_role, "")
+                or port_role
+                or logical_role
+            )
+            lock_role = str(out.get("lock_role") or "") or topology_role
+            if topology_role and not out.get("topology_role"):
+                out["topology_role"] = topology_role
+            if lock_role and not out.get("lock_role"):
+                out["lock_role"] = lock_role
 
-        role_info = by_role.get(lock_role) or by_role.get(topology_role)
-        inst = _instance_for_tap_request(
-            role_info,
-            instance_idx=out.get("instance_idx"),
-            instance_shape=out.get("instance_shape") or port_shape,
-        )
-        if inst is not None:
-            if out.get("instance_idx") in (None, "") and inst.get("idx") is not None:
-                out["instance_idx"] = inst.get("idx")
-            if not out.get("instance_shape") and inst.get("shape"):
-                out["instance_shape"] = inst.get("shape")
-            if not out.get("instance_regions") and inst.get("regions"):
-                out["instance_regions"] = list(inst.get("regions") or [])
-        enriched.append(out)
-    return enriched
+            role_info = by_role.get(lock_role) or by_role.get(topology_role)
+            inst = _instance_for_tap_request(
+                role_info,
+                instance_idx=out.get("instance_idx"),
+                instance_shape=out.get("instance_shape") or port_shape,
+            )
+            if inst is not None:
+                if out.get("instance_idx") in (None, "") and inst.get("idx") is not None:
+                    out["instance_idx"] = inst.get("idx")
+                if not out.get("instance_shape") and inst.get("shape"):
+                    out["instance_shape"] = inst.get("shape")
+                if not out.get("instance_regions") and inst.get("regions"):
+                    out["instance_regions"] = list(inst.get("regions") or [])
+            enriched.append(out)
+        return enriched
+    except Exception:
+        return requests
 
 
 def _latest_matching_file(root: Path, pattern: str) -> Path | None:
@@ -367,7 +380,7 @@ async def inference_tap_snapshot(max_sections: int = 20) -> JSONResponse:
     tap_active = _TAP_SENTINEL_PATH.exists()
     inference_tail = _read_tail(_INFERENCE_TAP_PATH, max_bytes=512 * 1024)
     sections = _parse_inference_sections(inference_tail, max_sections=max_sections)
-    structured_tail = _read_tail(_INFERENCE_TAP_EVENTS_PATH, max_bytes=1024 * 1024)
+    structured_tail = _read_tap_events_tail(_INFERENCE_TAP_EVENTS_PATH, max_bytes=1024 * 1024)
     now_epoch = time.time()
     structured_requests = _parse_structured_tap_requests(
         structured_tail,
@@ -375,12 +388,6 @@ async def inference_tap_snapshot(max_sections: int = 20) -> JSONResponse:
         now_epoch=now_epoch,
     )
     structured_requests = _enrich_structured_tap_requests(structured_requests)
-    current_prompt = ""
-    if _PROMPT_TAP_PATH.exists():
-        try:
-            current_prompt = _PROMPT_TAP_PATH.read_text(errors="ignore")[-4000:]
-        except Exception:
-            pass
     repl_tail = _read_tail(_REPL_TAP_PATH, max_bytes=64 * 1024)
     # Just take the last ~3000 chars of REPL for compactness
     repl_tail = repl_tail[-3000:] if repl_tail else ""
@@ -394,12 +401,12 @@ async def inference_tap_snapshot(max_sections: int = 20) -> JSONResponse:
 
     return JSONResponse(_stamp({
         "tap_active": tap_active,
-        "current_prompt": current_prompt,
-        "current_prompt_mtime": mtime(_PROMPT_TAP_PATH),
         "inference_sections": sections,
         "structured_requests": structured_requests,
         "inference_tap_mtime": mtime(_INFERENCE_TAP_PATH),
-        "structured_tap_mtime": mtime(_INFERENCE_TAP_EVENTS_PATH),
+        # Shard-aware: right after a 512MB rotation the base file is missing
+        # until the next append; the newest shard's mtime is the truth.
+        "structured_tap_mtime": _latest_tap_events_mtime(),
         "repl_tail": repl_tail,
         "repl_tap_mtime": mtime(_REPL_TAP_PATH),
         "now": now_epoch,
@@ -818,8 +825,40 @@ _HEALTH_SEVERITY = {"fresh": 0, "aging": 1, "stale": 2, "dead": 3}
 _HEALTH_STATUS = {"fresh": "ok", "aging": "ok", "stale": "degraded", "dead": "degraded"}
 
 
+def _serve_path_health(now: float) -> dict[str, Any]:
+    """Classify the snapshot serve path from this worker's build vitals.
+
+    Stale when a build attempt is outstanding past the stall threshold (hang)
+    or the newest attempt errored (crash loop). A worker with no recent demand
+    (no open tab / SSE) has last_attempt == last_success and stays fresh —
+    idle is not degraded. Per-worker stats: with 6 uvicorn workers one health
+    call samples one worker; repeat curls sample the pool.
+    """
+    s = dict(_SNAPSHOT_BUILD_STATS)
+    s["pid"] = os.getpid()
+    attempt, success, err_ts = s["last_attempt_ts"], s["last_success_ts"], s["last_error_ts"]
+    cls = "fresh"
+    reason = ""
+    if err_ts is not None and (success is None or err_ts > success):
+        cls = "stale"
+        reason = f"snapshot serve path erroring (worker {s['pid']}): {s['last_error']}"
+    elif (
+        attempt is not None
+        and (success is None or attempt > success)
+        and now - attempt > _SNAPSHOT_SERVE_PATH_STALL_S
+    ):
+        cls = "stale"
+        reason = (
+            f"snapshot serve path stalled (worker {s['pid']}): build started "
+            f"{round(now - attempt)}s ago, no result"
+        )
+    s["staleness_class"] = cls
+    s["reason"] = reason
+    return s
+
+
 @router.get("/dashboard/api/health")
-async def dashboard_health() -> JSONResponse:
+async def dashboard_health(probe: str | None = None) -> JSONResponse:
     """Fold every registered panel's freshness into one dashboard-data health view.
 
     This is the anti-whack-a-mole guard. Each prior "dashboard panel stale"
@@ -827,7 +866,10 @@ async def dashboard_health() -> JSONResponse:
     producer stops advancing, this endpoint reports ``degraded`` naming the
     offending panel + source, so breakage is caught loudly by curl/monitor
     instead of by eyeballing a panel. Live panels (recomputed per request) are
-    fresh by construction and never drag the verdict down on their own.
+    fresh by construction and never drag the verdict down on their own — their
+    failure mode is the SERVE PATH, covered by the serve_path block below and
+    the on-demand ``?probe=snapshot`` real-build check (the one probe a hang
+    cannot hide from).
     """
     now = time.time()
     panels_out: list[dict[str, Any]] = []
@@ -848,14 +890,39 @@ async def dashboard_health() -> JSONResponse:
             "reason": env["reason"],
             "sources": env["sources"],
         })
-    return JSONResponse({
+
+    serve_path = _serve_path_health(now)
+    if _HEALTH_SEVERITY[serve_path["staleness_class"]] > _HEALTH_SEVERITY[worst]:
+        worst = serve_path["staleness_class"]
+
+    probe_result: dict[str, Any] | None = None
+    if probe == "snapshot":
+        t0 = time.time()
+        try:
+            await asyncio.wait_for(snapshot(), timeout=10.0)
+            probe_result = {"ok": True, "duration_s": round(time.time() - t0, 3)}
+        except asyncio.TimeoutError:
+            probe_result = {"ok": False, "timeout_s": 10.0}
+        except Exception as exc:
+            probe_result = {
+                "ok": False, "error": str(exc),
+                "duration_s": round(time.time() - t0, 3),
+            }
+        if not probe_result.get("ok") and _HEALTH_SEVERITY["stale"] > _HEALTH_SEVERITY[worst]:
+            worst = "stale"
+
+    body: dict[str, Any] = {
         "status": _HEALTH_STATUS[worst],
         "worst_class": worst,
         "generated_at": now,
         "panel_count": len(panels_out),
         "degraded_panels": [p["key"] for p in panels_out if p["staleness_class"] in ("stale", "dead")],
+        "serve_path": serve_path,
         "panels": panels_out,
-    })
+    }
+    if probe_result is not None:
+        body["probe"] = probe_result
+    return JSONResponse(body)
 
 
 @router.get("/dashboard/events/raw_tap")
@@ -943,7 +1010,7 @@ async def structured_tap_stream(request: Request) -> StreamingResponse:
             if mtime != last_mtime or (now_epoch - last_emit) >= 2.0:
                 last_mtime = mtime
                 last_emit = now_epoch
-                tail = _read_tail(_INFERENCE_TAP_EVENTS_PATH, max_bytes=1024 * 1024)
+                tail = _read_tap_events_tail(_INFERENCE_TAP_EVENTS_PATH, max_bytes=1024 * 1024)
                 structured_requests = _parse_structured_tap_requests(
                     tail,
                     max_requests=40,
@@ -1105,7 +1172,7 @@ async def inference_tap_stream(request: Request) -> StreamingResponse:
     """
 
     async def event_gen():
-        last_mtimes = {"inference": 0.0, "structured": 0.0, "prompt": 0.0, "repl": 0.0}
+        last_mtimes = {"inference": 0.0, "structured": 0.0, "repl": 0.0}
         while True:
             if await request.is_disconnected():
                 return
@@ -1116,34 +1183,25 @@ async def inference_tap_stream(request: Request) -> StreamingResponse:
                     if _INFERENCE_TAP_EVENTS_PATH.exists()
                     else 0.0
                 )
-                prm_m = _PROMPT_TAP_PATH.stat().st_mtime if _PROMPT_TAP_PATH.exists() else 0.0
                 rpl_m = _REPL_TAP_PATH.stat().st_mtime if _REPL_TAP_PATH.exists() else 0.0
             except Exception:
-                inf_m = structured_m = prm_m = rpl_m = 0.0
+                inf_m = structured_m = rpl_m = 0.0
             changed = (
                 inf_m > last_mtimes["inference"]
                 or structured_m > last_mtimes["structured"]
-                or prm_m > last_mtimes["prompt"]
                 or rpl_m > last_mtimes["repl"]
             )
             if changed:
                 last_mtimes = {
                     "inference": inf_m,
                     "structured": structured_m,
-                    "prompt": prm_m,
                     "repl": rpl_m,
                 }
                 # Build the payload — same shape as the snapshot endpoint
                 inference_tail = _read_tail(_INFERENCE_TAP_PATH, max_bytes=256 * 1024)
                 sections = _parse_inference_sections(inference_tail, max_sections=10)
-                structured_tail = _read_tail(_INFERENCE_TAP_EVENTS_PATH, max_bytes=1024 * 1024)
+                structured_tail = _read_tap_events_tail(_INFERENCE_TAP_EVENTS_PATH, max_bytes=1024 * 1024)
                 now_epoch = time.time()
-                current_prompt = ""
-                if _PROMPT_TAP_PATH.exists():
-                    try:
-                        current_prompt = _PROMPT_TAP_PATH.read_text(errors="ignore")[-4000:]
-                    except Exception:
-                        pass
                 structured_requests = _parse_structured_tap_requests(
                     structured_tail,
                     max_requests=10,
@@ -1151,12 +1209,10 @@ async def inference_tap_stream(request: Request) -> StreamingResponse:
                 )
                 payload = json.dumps({
                     "tap_active": _TAP_SENTINEL_PATH.exists(),
-                    "current_prompt": current_prompt,
                     "inference_sections": sections,
                     "structured_requests": _enrich_structured_tap_requests(structured_requests),
                     "inference_tap_mtime": inf_m,
                     "structured_tap_mtime": structured_m,
-                    "prompt_tap_mtime": prm_m,
                     "repl_tap_mtime": rpl_m,
                 })
                 yield f"data: {payload}\n\n"
@@ -1222,10 +1278,38 @@ async def process_status() -> JSONResponse:
         "autopilot_recent_lines": recent_lines,
         "autopilot_phase": phase,
         "autopilot_phase_health": phase_health,
+        "autopilot_state": _autopilot_state_summary(),
         "autopilot_phase_age_s": phase_age_s,
         "inference_tap_age_s": _age_s(_INFERENCE_TAP_PATH),
         "planner_tap_age_s": _age_s(Path("/mnt/raid0/llm/tmp/planner_tap.log")),
     }, "process_status"), headers=_NO_STORE_HEADERS)
+
+
+@router.post("/dashboard/api/autopilot_control")
+async def autopilot_control(request: Request) -> JSONResponse:
+    """Operator-owned AutoPilot pause/resume latch.
+
+    This endpoint writes only the existing ``autopilot_state.json`` control
+    fields consumed by ``scripts/autopilot/autopilot.py``. It does not kill
+    processes, rewrite journals, or apply measurement decisions.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    try:
+        result = _apply_autopilot_control_action(
+            action=str(body.get("action") or ""),
+            note=str(body.get("note") or ""),
+        )
+    except ValueError as exc:
+        return JSONResponse({"status": "error", "error": str(exc)}, status_code=400)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("dashboard autopilot control failed")
+        return JSONResponse({"status": "error", "error": str(exc)}, status_code=500)
+    return JSONResponse(result, headers=_NO_STORE_HEADERS)
 
 
 @router.get("/dashboard/api/repo_readiness")
@@ -1236,7 +1320,10 @@ async def repo_readiness() -> JSONResponse:
     planning input only. It is not an AutoPilot authority gate and does not
     mutate queue state.
     """
-    return JSONResponse(_repo_readiness_summary(), headers=_NO_STORE_HEADERS)
+    return JSONResponse(
+        _stamp(_repo_readiness_summary(), "repo_readiness"),
+        headers=_NO_STORE_HEADERS,
+    )
 
 
 _INSIGHT_GRAPH_DEFAULT_LIMIT = 120
@@ -1252,7 +1339,7 @@ async def insight_graph(
 ) -> JSONResponse:
     """Return a bounded, read-only graph of StrategyStore and journal insights."""
     payload = _insight_graph_payload(focus=focus, depth=depth, limit=limit)
-    return JSONResponse(payload, headers=_NO_STORE_HEADERS)
+    return JSONResponse(_stamp(payload, "insight_graph"), headers=_NO_STORE_HEADERS)
 
 
 @router.get("/dashboard/api/optimization_brief")
@@ -1271,7 +1358,7 @@ async def optimization_brief() -> JSONResponse:
         payload = build_optimization_brief()
     except Exception as exc:  # noqa: BLE001 — synthesis must not break the page
         payload = {"read_only": True, "error": str(exc)}
-    return JSONResponse(payload, headers=_NO_STORE_HEADERS)
+    return JSONResponse(_stamp(payload, "optimization_brief"), headers=_NO_STORE_HEADERS)
 
 
 # ---------------------------------------------------------------------------
@@ -1465,9 +1552,114 @@ _AUTOPILOT_JOURNAL_PATH = Path(__file__).resolve().parents[3] / "orchestration" 
 _STRATEGY_STORE_PATH = Path(__file__).resolve().parents[3] / "orchestration" / "repl_memory" / "strategies"
 _PLANNER_HINT_SEEDS_PATH = Path(__file__).resolve().parents[3] / "scripts" / "autopilot" / "operator_seed_strategies.yaml"
 _AUTOPILOT_LOG_DIR = Path(__file__).resolve().parents[3] / "logs"
+_AUTOPILOT_CONTROL_AUDIT_PATH = _AUTOPILOT_LOG_DIR / "autopilot_operator_control.jsonl"
 _EPHEMERAL_ACTION_KEYS = EPHEMERAL_ACTION_KEYS
 _WITHIN_NOISE_EXCL = WITHIN_NOISE_EXCLUSIONS
 _BASELINE_PROMOTION_EVENT_TYPE = "baseline_promotion"
+
+
+def _utc_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _read_json_object(path: Path) -> dict[str, Any]:
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    if not isinstance(loaded, dict):
+        raise ValueError(f"{path} did not contain a JSON object")
+    return loaded
+
+
+def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp.{os.getpid()}.{time.time_ns()}")
+    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    tmp.replace(path)
+
+
+def _append_jsonl(path: Path, row: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(row, sort_keys=True) + "\n")
+
+
+def _autopilot_state_summary(
+    *,
+    state_path: Path = _AUTOPILOT_STATE_PATH,
+) -> dict[str, Any]:
+    try:
+        state = _read_json_object(state_path)
+    except Exception as exc:
+        return {
+            "exists": state_path.exists(),
+            "error": str(exc),
+            "paused": None,
+        }
+    return {
+        "exists": state_path.exists(),
+        "paused": bool(state.get("paused", False)),
+        "pause_reason": state.get("pause_reason"),
+        "dispatch_deficiency": state.get("_dispatch_deficiency"),
+        "trial_counter": state.get("trial_counter"),
+    }
+
+
+def _apply_autopilot_control_action(
+    *,
+    action: str,
+    note: str = "",
+    state_path: Path = _AUTOPILOT_STATE_PATH,
+    audit_path: Path = _AUTOPILOT_CONTROL_AUDIT_PATH,
+) -> dict[str, Any]:
+    action = str(action or "").strip().lower()
+    if action not in {"pause", "resume"}:
+        raise ValueError("action must be 'pause' or 'resume'")
+    note = str(note or "").strip()[:240]
+    state = _read_json_object(state_path)
+    paused_pre = bool(state.get("paused", False))
+    reason_pre = state.get("pause_reason")
+
+    if action == "pause":
+        state["paused"] = True
+        state["pause_reason"] = note or "dashboard operator pause"
+    else:
+        state["paused"] = False
+        state.pop("pause_reason", None)
+        if state.get("_dispatch_deficiency") == "skip_action_loop":
+            state["consecutive_skip_actions"] = 0
+            state["last_invalid_action"] = None
+            state["last_invalid_reason"] = None
+            state["last_invalid_status"] = None
+        state.pop("_dispatch_deficiency", None)
+        state.pop("_meta_halt_reason", None)
+        state["consecutive_meta_actions"] = 0
+
+    _atomic_write_json(state_path, state)
+    row = {
+        "ts": _utc_iso(),
+        "source": "dashboard",
+        "action": action,
+        "note": note,
+        "state_path": str(state_path),
+        "paused_pre": paused_pre,
+        "paused_post": bool(state.get("paused", False)),
+        "pause_reason_pre": reason_pre,
+        "pause_reason_post": state.get("pause_reason"),
+        "trial_counter": state.get("trial_counter"),
+    }
+    _append_jsonl(audit_path, row)
+    return {
+        "status": "ok",
+        "action": action,
+        "state_path": str(state_path),
+        "audit_path": str(audit_path),
+        "paused_pre": paused_pre,
+        "paused": bool(state.get("paused", False)),
+        "pause_reason": state.get("pause_reason"),
+        "trial_counter": state.get("trial_counter"),
+    }
 
 
 def _parse_journal_ts(value: Any) -> float | None:
@@ -1502,12 +1694,71 @@ def _pareto_hypervolume(points: list[list[float]]) -> float:
     return _pareto_hypervolume_impl(points)
 
 
+def _suite_metric_for_dashboard(
+    entry: dict[str, Any],
+    suite: str,
+) -> dict[str, Any] | None:
+    """Return compact suite-specific eval metrics for dashboard display."""
+    details = entry.get("eval_details")
+    if not isinstance(details, dict):
+        return None
+    nested_details = details.get("details")
+    if not isinstance(nested_details, dict):
+        nested_details = {}
+
+    per_suite_quality = details.get("per_suite_quality")
+    if not isinstance(per_suite_quality, dict):
+        per_suite_quality = nested_details.get("per_suite_quality")
+    if not isinstance(per_suite_quality, dict):
+        per_suite_quality = {}
+
+    per_suite_counts = details.get("per_suite_counts")
+    if not isinstance(per_suite_counts, dict):
+        per_suite_counts = nested_details.get("per_suite_counts")
+    if not isinstance(per_suite_counts, dict):
+        per_suite_counts = {}
+
+    question_results = details.get("question_results")
+    if not isinstance(question_results, list):
+        question_results = []
+
+    suite_rows = [
+        row
+        for row in question_results
+        if isinstance(row, dict) and str(row.get("suite") or "") == suite
+    ]
+    quality = per_suite_quality.get(suite)
+    count = per_suite_counts.get(suite)
+    correct = sum(1 for row in suite_rows if row.get("correct") is True)
+    if count is None and suite_rows:
+        count = len(suite_rows)
+    if quality is None and suite_rows:
+        quality = 3.0 * correct / max(1, len(suite_rows))
+    if quality is None and count is None:
+        return None
+    try:
+        quality_value = float(quality) if quality is not None else None
+    except (TypeError, ValueError):
+        quality_value = None
+    try:
+        count_value = int(count) if count is not None else None
+    except (TypeError, ValueError):
+        count_value = None
+    return {
+        "suite": suite,
+        "quality": quality_value,
+        "count": count_value,
+        "correct": correct if suite_rows else None,
+    }
+
+
 def _shape_pareto_entry(entry: dict[str, Any]) -> dict[str, Any]:
     # Strip heavy config_snapshot for transport — plotted points only need
     # objectives + identity metadata. Caller can drill via trial_id if needed.
     obj = entry.get("objectives") or [0.0, 0.0, 0.0, 0.0]
     if len(obj) < 4:
         obj = list(obj) + [0.0] * (4 - len(obj))
+    real_suite = _suite_metric_for_dashboard(entry, "real_suite_v1")
     return {
         "trial_id": entry.get("trial_id"),
         "objectives": list(obj[:4]),
@@ -1518,6 +1769,7 @@ def _shape_pareto_entry(entry: dict[str, Any]) -> dict[str, Any]:
         "reasoning": (entry.get("reasoning") or "")[:200],
         "eval_tier": entry.get("eval_tier", entry.get("tier", DEFAULT_FRONTIER_TIER)),
         "speed_deinflated": bool(entry.get("speed_deinflated", False)),
+        "real_suite_v1": real_suite,
     }
 
 
@@ -2427,16 +2679,114 @@ def _baseline_promotion_summary(
     selected_rows = list(rows or [])
     if current_run_only:
         selected_rows, _meta = _latest_journal_run_rows(selected_rows)
+    latest_trial_id = None
+    for row in selected_rows:
+        try:
+            trial_id = int(row.get("trial_id"))
+        except (TypeError, ValueError):
+            continue
+        if latest_trial_id is None or trial_id > latest_trial_id:
+            latest_trial_id = trial_id
     events = [
         row for row in selected_rows
         if row.get("type") == _BASELINE_PROMOTION_EVENT_TYPE
     ]
     events.sort(key=lambda row: _parse_journal_ts(row.get("timestamp")) or 0)
     recent = [_shape_baseline_promotion_event(row) for row in events[-limit:]]
+    latest_promotion_trial_id = recent[-1].get("source_trial_id") if recent else None
+    trials_since_promotion = None
+    try:
+        if latest_trial_id is not None and latest_promotion_trial_id is not None:
+            trials_since_promotion = max(0, int(latest_trial_id) - int(latest_promotion_trial_id))
+    except (TypeError, ValueError):
+        trials_since_promotion = None
     return {
         "count": len(events),
         "recent": recent,
+        "latest_trial_id": latest_trial_id,
+        "latest_promotion_trial_id": latest_promotion_trial_id,
+        "trials_since_promotion": trials_since_promotion,
     }
+
+
+def _trial_outcome_summary(
+    rows: list[dict[str, Any]] | None,
+    *,
+    current_run_only: bool = True,
+) -> dict[str, Any]:
+    """Summarize keep/revert and learning-exclusion outcomes from journal rows.
+
+    The dashboard only reports rates that can be derived from existing journal
+    fields. If a category is absent, its rate stays ``None`` rather than being
+    inferred from another bucket.
+    """
+    selected_rows = list(rows or [])
+    if current_run_only:
+        selected_rows, _meta = _latest_journal_run_rows(selected_rows)
+    selected_rows = _effective_journal_trial_rows(selected_rows)
+
+    keep_revert_total = 0
+    keepable_count = 0
+    wasted_eval_count = 0
+    learning_excluded_count = 0
+
+    for row in selected_rows:
+        bug = str(row.get("bug_corrupted_by") or "").strip()
+        if bug and bug != "mad_noise":
+            continue
+        decision = str(row.get("keep_revert_decision") or "").strip()
+        eval_details = row.get("eval_details")
+        learning_exclusion_by = ""
+        if isinstance(eval_details, dict):
+            learning_exclusion = eval_details.get("learning_exclusion")
+            if isinstance(learning_exclusion, dict):
+                learning_exclusion_by = str(learning_exclusion.get("by") or "").strip()
+        is_learning_excluded = bool(learning_exclusion_by) or decision == "excluded"
+        if decision in {"keep", "revert", "excluded", "unchanged"}:
+            keep_revert_total += 1
+            if decision == "keep":
+                keepable_count += 1
+            elif decision == "revert":
+                wasted_eval_count += 1
+        if is_learning_excluded:
+            learning_excluded_count += 1
+
+    def _rate(count: int, total: int) -> float | None:
+        if total <= 0:
+            return None
+        return round(count / total, 3)
+
+    return {
+        "keepable_rate": {
+            "count": keepable_count,
+            "total": keep_revert_total,
+            "rate": _rate(keepable_count, keep_revert_total),
+        },
+        "wasted_eval_rate": {
+            "count": wasted_eval_count,
+            "total": keep_revert_total,
+            "rate": _rate(wasted_eval_count, keep_revert_total),
+        },
+        "learning_excluded_rate": {
+            "count": learning_excluded_count,
+            "total": keep_revert_total,
+            "rate": _rate(learning_excluded_count, keep_revert_total),
+        },
+    }
+
+
+def _autopilot_current_code_health() -> dict[str, Any] | None:
+    """Return the current-code health report when the phase snapshot exists."""
+    try:
+        report = build_phase_health_report(
+            path=AUTOPILOT_PHASE_PATH,
+            require_current_code=True,
+        )
+        if str(report.get("status") or "") in {"missing", "unavailable"}:
+            return None
+        return report
+    except Exception:
+        return None
 
 
 def _pareto_from_journal(
@@ -2469,8 +2819,14 @@ def _pareto_from_journal(
 def _newest_autopilot_log() -> Path | None:
     """Return the most-recently-modified autopilot stdout log, if any."""
     try:
+        candidates = []
+        if AUTOPILOT_LOG.exists():
+            candidates.append(AUTOPILOT_LOG)
+        candidates.extend(_AUTOPILOT_LOG_DIR.glob("autopilot_restart_*.log"))
+        candidates.extend(Path("/mnt/raid0/llm/tmp").glob("autopilot_restart_*.log"))
+        candidates.extend(Path("/mnt/raid0/llm/tmp").glob("autopilot_fable_authority_*.log"))
         candidates = sorted(
-            _AUTOPILOT_LOG_DIR.glob("autopilot_restart_*.log"),
+            (p for p in candidates if p.exists()),
             key=lambda p: p.stat().st_mtime,
             reverse=True,
         )
@@ -2479,16 +2835,23 @@ def _newest_autopilot_log() -> Path | None:
         return None
 
 
-def _tail_deep_eval_progress(log_path: Path) -> tuple[int, int] | None:
-    """Scan the autopilot log for the most-recent `T2 progress: X/Y` line.
+def _tail_deep_eval_progress(log_path: Path) -> dict[str, int | str] | None:
+    """Scan the autopilot log for the most-recent `T<n> progress: X/Y` line.
 
     The eval tower emits these lines as each question completes, so this gives
     the *true* completion fraction for a deep_eval trial — far more accurate
-    than the historical-median estimate. Returns (completed, total) or None.
+    than the historical-median estimate. Returns a dict with `eval_label`,
+    `completed`, and `total`, or None.
+
+    Matches any tier digit (`T0`..`T3` and future tiers) — the label tracks the
+    eval tier, so a hardcoded `T[12]` silently dropped the T3 expert/hard lane back
+    to the p90 estimate. `\\d+` keeps this generic as new tiers land, and the
+    matched tier label is surfaced so the dashboard can display `T3 400/500`
+    instead of a generic tower fraction.
     """
     if not log_path.exists():
         return None
-    pat = re.compile(r"T[12] progress: (\d+)/(\d+)")
+    pat = re.compile(r"(T\d+) progress: (\d+)/(\d+)")
     try:
         # Tail-read: tier-2 evals can run hours and the log can be large; read
         # only the last 64 KB to find the most recent progress marker.
@@ -2501,7 +2864,11 @@ def _tail_deep_eval_progress(log_path: Path) -> tuple[int, int] | None:
         for m in pat.finditer(chunk):
             last_match = m
         if last_match:
-            return int(last_match.group(1)), int(last_match.group(2))
+            return {
+                "eval_label": last_match.group(1),
+                "completed": int(last_match.group(2)),
+                "total": int(last_match.group(3)),
+            }
     except Exception:
         pass
     return None
@@ -2513,8 +2880,9 @@ async def autopilot_progress() -> JSONResponse:
 
     Sources, in priority order:
       1. For deep_eval/structural_experiment: tails the autopilot stdout log
-         for `T2 progress: X/Y` lines — these are the authoritative per-question
-         completion markers, so percent = X/Y exactly (no estimation).
+         for `Tn progress: X/Y` lines — these are the authoritative per-question
+         completion markers, so percent = X/Y exactly (no estimation) and the
+         tier label is surfaced as `eval_label`.
       2. Otherwise: full quantile distribution (p25/p50/p75/p90) of historical
          durations for the same `action_type`, derived from successive
          `timestamp` deltas in the journal (autopilot runs trials serially,
@@ -2538,6 +2906,7 @@ async def autopilot_progress() -> JSONResponse:
         "autopilot_alive": False,
         "trial_id": None,
         "action_type": None,
+        "eval_label": None,
         "started_at": None,
         "elapsed_s": None,
         "expected_s": None,                # log_tail: extrapolated projected total; others: p50 (legacy meta label)
@@ -2552,7 +2921,33 @@ async def autopilot_progress() -> JSONResponse:
         "percent_source": None,            # "log_tail" | "action_p50" | "aggregate_p50" | "fallback"
         "n_action_type_samples": None,
         "log_tail_progress": None,         # {"completed": X, "total": Y} when percent_source=log_tail
+        "baseline_promotions": {
+            "count": 0,
+            "recent": [],
+            "latest_trial_id": None,
+            "latest_promotion_trial_id": None,
+            "trials_since_promotion": None,
+        },
+        "outcome_kpis": {
+            "keepable_rate": {
+                "count": 0,
+                "total": 0,
+                "rate": None,
+            },
+            "wasted_eval_rate": {
+                "count": 0,
+                "total": 0,
+                "rate": None,
+            },
+            "learning_excluded_rate": {
+                "count": 0,
+                "total": 0,
+                "rate": None,
+            },
+        },
+        "current_code_health": None,
     }
+    current_code_health = _autopilot_current_code_health()
     # Is autopilot alive? Quick pgrep-equivalent
     try:
         for p in Path("/proc").iterdir():
@@ -2591,17 +2986,18 @@ async def autopilot_progress() -> JSONResponse:
     # approximates the runtime of entry[i] modulo ~seconds of dispatch overhead).
     by_action: dict[str, list[float]] = {}
     all_durations: list[float] = []
-    if _AUTOPILOT_JOURNAL_PATH.exists():
+    raw_entries = _read_autopilot_journal_rows()
+    if raw_entries:
         try:
-            with open(_AUTOPILOT_JOURNAL_PATH) as f:
-                # Read the whole file (~1 MB at typical scale; cheap). For
-                # multi-MB futures, switch to a tail-bytes seek.
-                entries = []
-                for raw in f:
-                    try:
-                        entries.append(json.loads(raw))
-                    except Exception:
-                        continue
+            entries = list(raw_entries)
+            baseline_promotions = _baseline_promotion_summary(
+                raw_entries,
+                current_run_only=True,
+            )
+            outcome_kpis = _trial_outcome_summary(
+                raw_entries,
+                current_run_only=True,
+            )
             entries = _effective_journal_trial_rows(entries)
             # Sort by timestamp ascending so deltas make sense even if the
             # journal was rewritten out-of-order (shouldn't happen, but cheap).
@@ -2623,8 +3019,12 @@ async def autopilot_progress() -> JSONResponse:
                 at = entries[i].get("action_type") or "unknown"
                 by_action.setdefault(at, []).append(dt)
                 all_durations.append(dt)
+            out["baseline_promotions"] = baseline_promotions
+            out["outcome_kpis"] = outcome_kpis
         except Exception:
             pass
+    if current_code_health is not None:
+        out["current_code_health"] = current_code_health
 
     def _stats(durs: list[float]) -> dict[str, float] | None:
         if not durs:
@@ -2652,11 +3052,13 @@ async def autopilot_progress() -> JSONResponse:
         if log:
             progress = _tail_deep_eval_progress(log)
             if progress:
-                completed, total = progress
+                completed = progress["completed"]
+                total = progress["total"]
                 if total > 0:
                     pct = (completed / total) * 100.0
                     out["percent"] = round(min(99.0, max(0.0, pct)), 1)
                     out["percent_source"] = "log_tail"
+                    out["eval_label"] = progress["eval_label"]
                     out["log_tail_progress"] = {"completed": completed, "total": total}
                     # Also extrapolate an expected_s for the meta line:
                     # if X/Y done in elapsed_s, projected total ≈ elapsed_s × Y/X
@@ -2884,13 +3286,13 @@ async def pareto(max_dominated: int = 600, scope: str = "current") -> JSONRespon
         source = "state_archive"
         source_reason = "journal unavailable or no trusted current-run entries"
     else:
-        return JSONResponse({
+        return JSONResponse(_stamp({
             "available": False,
             "reason": state_error or "autopilot_state.json and autopilot_journal.jsonl not found",
             "frontier": [],
             "dominated": [],
             "hypervolume_history": [],
-        })
+        }, "pareto"))
 
     legacy_state_archive_warning = None
     if source == "state_archive":
@@ -2984,7 +3386,7 @@ async def pareto(max_dominated: int = 600, scope: str = "current") -> JSONRespon
             for region in era_regions
         ]
 
-    return JSONResponse({
+    return JSONResponse(_stamp({
         "available": True,
         "source": source,
         "source_reason": source_reason,
@@ -3028,7 +3430,7 @@ async def pareto(max_dominated: int = 600, scope: str = "current") -> JSONRespon
             {"key": "neg_cost", "index": 2, "direction": "max", "label": "-cost"},
             {"key": "reliability", "index": 3, "direction": "max", "label": "reliability"},
         ],
-    })
+    }, "pareto"))
 
 
 @router.get("/dashboard/api/version")
@@ -3054,13 +3456,13 @@ async def version() -> JSONResponse:
         except Exception:
             return None
 
-    return JSONResponse({
+    return JSONResponse(_stamp({
         "git_sha": _read_git_short_sha(),
         "dashboard_html_mtime": mtime(_DASHBOARD_HTML_FOR_VERSION),
         "dashboard_py_mtime": mtime(_DASHBOARD_PY_FOR_VERSION),
         "server_started_at": _SERVER_STARTED_AT,
         "server_launch_git_sha": _SERVER_LAUNCH_GIT_SHA,
-    })
+    }, "build_rev"))
 
 
 @router.get("/dashboard/api/llama_fleet_ids")
@@ -3122,7 +3524,7 @@ async def topology_activity(window_s: float = 600.0) -> JSONResponse:
     this panel: plaintext tap writes are not cross-process atomic and can
     interleave prompt/response sections during concurrent eval traffic.
     """
-    structured_tail = _read_tail(_INFERENCE_TAP_EVENTS_PATH, max_bytes=1024 * 1024)
+    structured_tail = _read_tap_events_tail(_INFERENCE_TAP_EVENTS_PATH, max_bytes=1024 * 1024)
     now = time.time()
     structured_requests = _parse_structured_tap_requests(
         structured_tail,
@@ -3312,13 +3714,23 @@ def _build_topology_nodes() -> list[dict[str, Any]]:
             continue
         expected = expected_by_port.get(port, {})
         seen_ports.add(port)
+        if role.startswith("mi210_"):
+            # Direct-access GPU testbed: first-class node ahead of stack
+            # integration (operator-decided 2026-07-05). Its traffic bypasses
+            # the orchestrator pipeline, so slot activity is visible but the
+            # structured tap won't carry its tokens until it's stack-routed.
+            node_kind = "gpu-llama-server"
+        elif role.startswith("extern_"):
+            node_kind = "external-llama-server"
+        else:
+            node_kind = "llama-server"
         nodes.append({
             "id": f"port_{port}",
             "label": role,
             "role": role,
             "port": port,
             "color": _role_color(role),
-            "kind": "llama-server",
+            "kind": node_kind,
             # Model actually loaded by this llama-server (-m GGUF basename,
             # vendor-prefix + shard-suffix stripped). Surfaced so the topology
             # strip can label each role with its backing model + quant.
@@ -3384,6 +3796,50 @@ def _build_topology_nodes() -> list[dict[str, Any]]:
 _TOPOLOGY_NODES_CACHE: dict[str, Any] = {"ts": 0.0, "nodes": None}
 _TOPOLOGY_NODES_TTL_S = 3.0
 
+# Region locks + port discovery feed BOTH the 2 Hz snapshot tick and the
+# structured-tap producers (per SSE connection, per worker). Recomputing them
+# per call means one slow /proc pass or ps(1) scan stalls the topology,
+# region-locks AND live-tap panels together — the exact trio-staleness failure
+# domain. TTLs sit far below the client's 12s/30s badge escalation thresholds.
+_REGION_LOCKS_CACHE: dict[str, Any] = {"ts": 0.0, "payload": None}
+_REGION_LOCKS_TTL_S = 1.0
+_PORT_ROLES_CACHE: dict[str, Any] = {"ts": 0.0, "ports": None}
+_PORT_ROLES_TTL_S = 2.0
+
+
+def _region_locks_cached() -> dict[str, Any]:
+    """TTL-cached `_region_locks_payload()` that fails open to the last good
+    payload (marked `stale_cache` + `error`) instead of raising into the
+    serve path."""
+    now = time.time()
+    c = _REGION_LOCKS_CACHE
+    payload = c.get("payload")
+    if payload is not None and (now - c["ts"]) < _REGION_LOCKS_TTL_S:
+        return payload
+    try:
+        payload = _region_locks_payload()
+    except Exception as exc:
+        stale = c.get("payload")
+        if stale is None:
+            return {"error": str(exc), "entries": [], "by_role": {}}
+        return {**stale, "error": str(exc), "stale_cache": True}
+    c["ts"] = now
+    c["payload"] = payload
+    return payload
+
+
+def _port_roles_cached() -> dict[int, str]:
+    """TTL-cached `_discover_llama_ports()` (a ps(1) subprocess per call)."""
+    now = time.time()
+    c = _PORT_ROLES_CACHE
+    ports = c.get("ports")
+    if ports is not None and (now - c["ts"]) < _PORT_ROLES_TTL_S:
+        return ports
+    ports = _discover_llama_ports()
+    c["ts"] = now
+    c["ports"] = ports
+    return ports
+
 
 def _topology_nodes_cached() -> list[dict[str, Any]]:
     """Topology nodes with a short TTL.
@@ -3430,7 +3886,12 @@ async def topology() -> JSONResponse:
 async def _poll_slot(client: httpx.AsyncClient, port: int) -> list[dict[str, Any]]:
     """Fetch /slots from a single llama-server. Returns empty on failure."""
     try:
-        resp = await client.get(f"http://127.0.0.1:{port}/slots", timeout=1.5)
+        # Split connect budget out of the 1.5s total: a SYN-blackholed port
+        # must not consume the whole per-request budget before first byte.
+        resp = await client.get(
+            f"http://127.0.0.1:{port}/slots",
+            timeout=httpx.Timeout(1.5, connect=0.5),
+        )
         if resp.status_code != 200:
             return []
         data = resp.json()
@@ -3441,22 +3902,46 @@ async def _poll_slot(client: httpx.AsyncClient, port: int) -> list[dict[str, Any
         return []
 
 
-async def _poll_all_slots() -> dict[int, list[dict[str, Any]]]:
-    """Concurrently poll /slots on every llama-server port we discovered."""
+# Overall wall-clock budget for the ~29-port fan-out. Per-request timeouts do
+# not bound the aggregate under load; snapshot() sits on the serve path of the
+# topology / region-locks / live-tap panels, so an unbounded fan-out stales all
+# three at once. Ports that miss the deadline report [] and are counted in
+# slots_poll_meta rather than dropped silently.
+_SLOTS_FANOUT_DEADLINE_S = 2.5
+
+
+async def _poll_all_slots() -> tuple[dict[int, list[dict[str, Any]]], dict[str, Any]]:
+    """Concurrently poll /slots on every discovered llama-server port.
+
+    Returns (slots_by_port, slots_poll_meta). Every discovered port is present
+    in slots_by_port; ports that errored or missed the fan-out deadline map to
+    [] and are tallied in the meta.
+    """
     ports = list(_discover_llama_ports().keys())
     out: dict[int, list[dict[str, Any]]] = {}
+    started = time.time()
     if not ports:
-        return out
+        return out, {"ports": 0, "answered": 0, "timed_out": 0, "duration_s": 0.0}
     async with httpx.AsyncClient() as client:
-        results = await asyncio.gather(
-            *[_poll_slot(client, p) for p in ports], return_exceptions=True,
-        )
-    for port, result in zip(ports, results):
-        if isinstance(result, Exception):
-            out[port] = []
-        else:
-            out[port] = result
-    return out
+        tasks = {
+            port: asyncio.ensure_future(_poll_slot(client, port)) for port in ports
+        }
+        await asyncio.wait(tasks.values(), timeout=_SLOTS_FANOUT_DEADLINE_S)
+        answered = 0
+        for port, task in tasks.items():
+            if task.done() and not task.cancelled() and task.exception() is None:
+                out[port] = task.result()
+                answered += 1
+            else:
+                task.cancel()
+                out[port] = []
+    meta = {
+        "ports": len(ports),
+        "answered": answered,
+        "timed_out": len(ports) - answered,
+        "duration_s": round(time.time() - started, 3),
+    }
+    return out, meta
 
 
 # Snapshot scanners moved to dashboard_snapshot.py — wrappers preserve in-file API
@@ -3555,10 +4040,42 @@ def _count_log_events(
     return _count_log_events_impl(path, patterns, window_s=window_s)
 
 
+# Per-worker serve-path vitals for /dashboard/api/health. The health endpoint
+# otherwise only stats producer FILES, so a hang or exception inside the
+# snapshot serve path (the topology/region-locks/live-tap failure domain) was
+# invisible to it — panels froze while health stayed green.
+_SNAPSHOT_BUILD_STATS: dict[str, Any] = {
+    "last_attempt_ts": None,
+    "last_success_ts": None,
+    "last_duration_s": None,
+    "last_error": None,
+    "last_error_ts": None,
+    "build_count": 0,
+}
+_SNAPSHOT_SERVE_PATH_STALL_S = 30.0
+
+
 @router.get("/dashboard/api/snapshot")
 async def snapshot() -> JSONResponse:
     """Point-in-time state: all slots + recent decisions + counters."""
-    slots_by_port = await _poll_all_slots()
+    stats = _SNAPSHOT_BUILD_STATS
+    started = time.time()
+    stats["last_attempt_ts"] = started
+    try:
+        resp = await _snapshot_impl()
+    except Exception as exc:
+        stats["last_error"] = str(exc)
+        stats["last_error_ts"] = time.time()
+        raise
+    done = time.time()
+    stats["last_success_ts"] = done
+    stats["last_duration_s"] = round(done - started, 3)
+    stats["build_count"] += 1
+    return resp
+
+
+async def _snapshot_impl() -> JSONResponse:
+    slots_by_port, slots_poll_meta = await _poll_all_slots()
     progress_log = _todays_progress_log()
     recent, rolling, cumulative = _scan_recent_decisions(progress_log)
     orch_log = ORCHESTRATOR_LOG_DIR / "orchestrator.log"
@@ -3595,18 +4112,12 @@ async def snapshot() -> JSONResponse:
         for s in slots:
             if not s.get("is_processing"):
                 continue
-            prompt = s.get("prompt", "") or ""
-            if isinstance(prompt, list):
-                prompt = " ".join(str(x) for x in prompt)
-            content = s.get("content", "") or ""
-            if isinstance(content, list):
-                content = " ".join(str(x) for x in content)
+            # v6 /slots dropped prompt/content — those fields are permanently
+            # empty. Token text lives in the structured tap; slots carry only
+            # occupancy + token counts.
             active_slots.append({
                 "slot_id": s.get("id"),
                 "task_id": s.get("id_task") if s.get("id_task", -1) >= 0 else None,
-                "prompt_preview": prompt[:160],
-                "content_preview": content[:200],
-                "content_len": len(content),
                 "tokens_decoded": s.get("n_decoded"),
                 "prompt_tokens": s.get("n_prompt_tokens"),
                 "next_token": s.get("next_token"),
@@ -3637,10 +4148,13 @@ async def snapshot() -> JSONResponse:
         # active inference beside a 'no locks held' grid" inconsistency.
         "topology": {"nodes": _topology_nodes_cached()},
         "activity": activity,
+        # Fan-out degradation is data, not a silent gap: timed_out > 0 means
+        # some ports' slots are missing from `activity` this frame.
+        "slots_poll_meta": slots_poll_meta,
         "in_flight_tasks": in_flight_tasks,
         "recent_completed_tasks": recent_completed_tasks,
         "live_busy_by_role": role_busy,
-        "region_locks": _region_locks_payload(),
+        "region_locks": _region_locks_cached(),
         "recent_decisions": recent,
         "source_counts_rolling": rolling,
         "source_counts_cumulative": cumulative,
@@ -3717,18 +4231,16 @@ async def _structured_tap_payloads():
     last_emit = 0.0
     while True:
         try:
-            mtime = (
-                _INFERENCE_TAP_EVENTS_PATH.stat().st_mtime
-                if _INFERENCE_TAP_EVENTS_PATH.exists()
-                else 0.0
-            )
+            # Shard-aware: the base file is missing between rotation and the
+            # next append; tracking it alone would stall change detection.
+            mtime = _latest_tap_events_mtime() or 0.0
         except Exception:
             mtime = 0.0
         now_epoch = time.time()
         if mtime != last_mtime or (now_epoch - last_emit) >= 2.0:
             last_mtime = mtime
             last_emit = now_epoch
-            tail = _read_tail(_INFERENCE_TAP_EVENTS_PATH, max_bytes=1024 * 1024)
+            tail = _read_tap_events_tail(_INFERENCE_TAP_EVENTS_PATH, max_bytes=1024 * 1024)
             structured_requests = _parse_structured_tap_requests(
                 tail, max_requests=40, now_epoch=now_epoch,
             )
@@ -3868,7 +4380,7 @@ async def task_text(task_id: str) -> Any:
         from fastapi.responses import PlainTextResponse
         return PlainTextResponse(text)
 
-    slots_by_port = await _poll_all_slots()
+    slots_by_port, _slots_meta = await _poll_all_slots()
     found_slot = None
     for port, slots in slots_by_port.items():
         for s in slots:
@@ -3908,42 +4420,14 @@ async def task_text(task_id: str) -> Any:
     return PlainTextResponse(text)
 
 
-async def _find_slot_by_objective(
-    objective: str, slots_by_port: dict[int, list[dict[str, Any]]] | None = None,
-) -> tuple[int | None, dict | None]:
-    """Find a slot whose prompt contains the task's objective text.
-
-    Orchestrator chat-XXX task_ids do NOT appear in llama-server /slots state
-    (slot.id_task is llama-server's internal numeric counter). So we correlate
-    by prompt content: the task's objective will appear inside the slot's
-    `prompt` field if that slot is currently serving the task.
-    """
-    if not objective or len(objective) < 8:
-        return None, None
-    needle = objective[:120].strip()
-    if slots_by_port is None:
-        slots_by_port = await _poll_all_slots()
-    for port, slots in slots_by_port.items():
-        for s in slots:
-            if not s.get("is_processing"):
-                continue
-            prompt = s.get("prompt", "") or ""
-            if isinstance(prompt, list):
-                prompt = " ".join(str(x) for x in prompt)
-            if needle and needle in prompt:
-                return port, s
-    return None, None
-
-
 @router.get("/dashboard/api/task/{task_id}")
 async def task_detail(task_id: str) -> JSONResponse:
-    """Return all events for a task_id + active slot + tap fallback.
+    """Return all events for a task_id + tap section with the response text.
 
-    Matches active slots by prompt content (orchestrator chat-XXX ids do not
-    correspond to llama-server's internal numeric id_task). For completed
-    tasks where the slot is gone, falls back to searching the inference_tap.log
-    for a section whose prompt matches — letting the UI show the historical
-    response text instead of "(empty)".
+    Task text comes exclusively from the structured tap: v6 /slots carries no
+    prompt/content, so the old match-a-live-slot-by-prompt-substring path
+    (_find_slot_by_objective) could never match again and was removed. The
+    slot fields are kept as nulls for response-shape compatibility.
     """
     log_path = _todays_progress_log()
     events = _task_events(task_id, log_path)
@@ -3960,42 +4444,39 @@ async def task_detail(task_id: str) -> JSONResponse:
         })
 
     objective = _objective_for_task(events)
-    slots_by_port = await _poll_all_slots()
-    slot_port, active_slot = await _find_slot_by_objective(objective, slots_by_port)
 
-    # Fallback when no live slot. Prefer the structured event stream by
-    # task_id (deterministic mapping by request metadata) over the plaintext
-    # substring matcher, which is vulnerable to interleaved per-append writes
-    # (chat-83123001/chat-c7bf9580 cross-contamination, 2026-05-30). If the
-    # structured stream has nothing for this task id, fall back to plaintext;
-    # producer_role from task_completed constrains the role-filtered pass and
-    # also blocks the unsafe global fallback in _find_section_by_objective.
+    # Prefer the structured event stream by task_id (deterministic mapping by
+    # request metadata) over the plaintext substring matcher, which is
+    # vulnerable to interleaved per-append writes (chat-83123001/chat-c7bf9580
+    # cross-contamination, 2026-05-30). If the structured stream has nothing
+    # for this task id, fall back to plaintext; producer_role from
+    # task_completed constrains the role-filtered pass and also blocks the
+    # unsafe global fallback in _find_section_by_objective.
     tap_section = None
-    if active_slot is None:
-        if not task_id.startswith("tap_"):
-            tap_section = _find_structured_request_by_task_id(task_id)
-        if tap_section is None:
-            producer_role = None
-            for ev in reversed(events):  # task_completed is usually near the end
-                if ev.get("event_type") == "task_completed":
-                    producer_role = (ev.get("data") or {}).get("producer_role")
+    if not task_id.startswith("tap_"):
+        tap_section = _find_structured_request_by_task_id(task_id)
+    if tap_section is None:
+        producer_role = None
+        for ev in reversed(events):  # task_completed is usually near the end
+            if ev.get("event_type") == "task_completed":
+                producer_role = (ev.get("data") or {}).get("producer_role")
+                break
+        if not producer_role:
+            for ev in events:
+                if ev.get("event_type") == "routing_decision":
+                    producer_role = (ev.get("data") or {}).get("chosen_action")
                     break
-            if not producer_role:
-                for ev in events:
-                    if ev.get("event_type") == "routing_decision":
-                        producer_role = (ev.get("data") or {}).get("chosen_action")
-                        break
-            tap_section = _find_section_by_objective(
-                objective, expected_role=producer_role
-            )
+        tap_section = _find_section_by_objective(
+            objective, expected_role=producer_role
+        )
 
     return JSONResponse({
         "task_id": task_id,
         "objective": objective,
         "events": events,
-        "active_slot_port": slot_port,
-        "active_slot_id": active_slot.get("id") if active_slot else None,
-        "slot": active_slot,
+        "active_slot_port": None,
+        "active_slot_id": None,
+        "slot": None,
         "tap_section": tap_section,
     })
 
@@ -4181,18 +4662,32 @@ async def gepa_status() -> JSONResponse:
     journal_rows = _read_autopilot_journal_rows()
     if journal_rows:
         try:
+            # Include killed/bug-corrupted placeholders here (tagged, not dropped).
+            # They are still excluded from every FRONTIER/HV computation upstream,
+            # but silently filtering them from the trajectory list made the panel
+            # look frozen after a mid-trial kill/restart — the operator's newest
+            # trial simply vanished with no signal it had died. The client greys +
+            # tags these rows so recent activity is always visible.
             for j in _effective_journal_trial_rows(journal_rows)[-15:]:
-                if j.get("bug_corrupted_by"):
-                    continue
                 recent_trials.append({
                     "trial_id": j.get("trial_id"),
                     "timestamp": j.get("timestamp", ""),
                     "species": j.get("species"),
+                    # Tier is REQUIRED context here: quality is scored per-tier and
+                    # is NOT comparable across tiers (T3 expert/hard rows sit well
+                    # below T1 by design), so a tier-less trajectory row reads a
+                    # healthy T3 eval as a quality regression. Default to the
+                    # canonical tier when absent (legacy rows predate the field).
+                    "tier": j.get("tier", DEFAULT_FRONTIER_TIER),
                     "quality": j.get("quality"),
                     "speed": j.get("speed"),
                     "cost": j.get("cost"),
                     "reliability": j.get("reliability"),
                     "pareto_status": j.get("pareto_status"),
+                    "real_suite_v1": _suite_metric_for_dashboard(j, "real_suite_v1"),
+                    # Non-empty when the trial was killed mid-flight or otherwise
+                    # quarantined; the client renders these muted + tagged.
+                    "bug_corrupted_by": j.get("bug_corrupted_by") or None,
                     "description": (j.get("config_snapshot", {}).get("description") or "")[:140],
                 })
         except Exception:

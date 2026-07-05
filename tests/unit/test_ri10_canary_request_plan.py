@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -28,6 +29,13 @@ factual_risk:
     factual_keyword_ratio: 0.20
     uncertainty_markers: 0.15
 """,
+        encoding="utf-8",
+    )
+
+
+def _write_dataset(path: Path, rows: list[dict[str, object]]) -> None:
+    path.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n",
         encoding="utf-8",
     )
 
@@ -63,6 +71,131 @@ def test_build_plan_balances_expected_canary_arms(tmp_path: Path) -> None:
                 sample_key=item["request_id"],
             )
             == item["expected_factual_risk_mode"]
+        )
+
+
+def test_build_plan_uses_scored_dataset_without_leaking_answers_to_payload(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "classifier_config.yaml"
+    _write_config(config)
+    dataset = tmp_path / "scored.jsonl"
+    _write_dataset(
+        dataset,
+        [
+            {
+                "prompt": "Which exact package name did PEP 371 introduce?",
+                "expected_answer": "multiprocessing",
+                "domain": "Software Engineering",
+                "label_source": "aa_omniscience",
+                "label_4class": "NOT_ATTEMPTED",
+                "prompt_hash": "pep371",
+                "risk_band_v1": "high",
+                "risk_score_computed": 0.15,
+            }
+        ],
+    )
+
+    out = plan.build_plan(
+        config_path=config,
+        roles=["worker_general"],
+        per_role_per_arm=2,
+        scored_dataset_path=dataset,
+        max_candidates=10_000,
+    )
+
+    assert out["request_count"] == 4
+    assert out["scored_dataset"]["selected_high_risk_rows_by_role"] == {
+        "worker_general": 1
+    }
+    for item in out["requests"]:
+        assert item["scored_factuality"]["expected_answer"] == "multiprocessing"
+        assert item["scored_factuality"]["prompt_hash"] == "pep371"
+        assert "multiprocessing" not in item["payload"]["prompt"]
+
+    payload_rows = [
+        json.loads(line) for line in plan._render_jsonl(out).splitlines() if line
+    ]
+    assert payload_rows
+    assert all("multiprocessing" not in json.dumps(row) for row in payload_rows)
+
+    answer_key_rows = [
+        json.loads(line)
+        for line in plan._render_answer_key_jsonl(out).splitlines()
+        if line
+    ]
+    assert {row["expected_answer"] for row in answer_key_rows} == {"multiprocessing"}
+    assert {row["expected_factual_risk_mode"] for row in answer_key_rows} == {
+        "enforce",
+        "shadow",
+    }
+
+
+def test_build_plan_rejects_scored_dataset_without_high_risk_rows(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "classifier_config.yaml"
+    _write_config(config)
+    dataset = tmp_path / "scored.jsonl"
+    _write_dataset(
+        dataset,
+        [
+            {
+                "prompt": "hello",
+                "expected_answer": "world",
+                "prompt_hash": "low",
+            }
+        ],
+    )
+
+    with pytest.raises(ValueError, match="no high-risk rows"):
+        plan.build_plan(
+            config_path=config,
+            roles=["worker_general"],
+            scored_dataset_path=dataset,
+            scored_prompt_template="{prompt}",
+        )
+
+
+def test_build_plan_filters_scored_rows_that_include_expected_answer(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "classifier_config.yaml"
+    _write_config(config)
+    dataset = tmp_path / "scored.jsonl"
+    _write_dataset(
+        dataset,
+        [
+            {
+                "prompt": "Which exact package name did PEP 371 introduce? Answer: multiprocessing",
+                "expected_answer": "multiprocessing",
+                "prompt_hash": "leaky",
+            }
+        ],
+    )
+
+    with pytest.raises(ValueError, match="had no rows with expected_answer"):
+        plan.build_plan(
+            config_path=config,
+            roles=["worker_general"],
+            scored_dataset_path=dataset,
+        )
+
+
+def test_build_plan_rejects_scored_template_without_prompt_placeholder(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "classifier_config.yaml"
+    _write_config(config)
+    dataset = tmp_path / "scored.jsonl"
+    _write_dataset(dataset, [{"prompt": "Question?", "expected_answer": "Answer"}])
+
+    with pytest.raises(ValueError, match="must contain"):
+        plan.build_plan(
+            config_path=config,
+            roles=["worker_general"],
+            scored_dataset_path=dataset,
+            scored_prompt_template="missing placeholder",
         )
 
 

@@ -15,6 +15,10 @@ sys.path.insert(0, str(ORCH_ROOT))
 
 from phase_status import (  # noqa: E402
     DEFAULT_AUTOPILOT_LOG_PATH,
+    DEFAULT_JOURNAL_DIR,
+    DEFAULT_OUTCOME_STALL_FRONTIER_TRIALS,
+    DEFAULT_OUTCOME_STALL_PROMOTION_TRIALS,
+    DEFAULT_OUTCOME_RECENT_WINDOW_TRIALS,
     DEFAULT_STALE_AFTER_S,
     PHASE_PATH,
     build_phase_health_report,
@@ -61,6 +65,44 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "runtime AutoPilot source changes."
         ),
     )
+    parser.add_argument(
+        "--journal-dir",
+        type=Path,
+        default=DEFAULT_JOURNAL_DIR,
+        help=f"AutoPilot journal shard directory (default: {DEFAULT_JOURNAL_DIR})",
+    )
+    parser.add_argument(
+        "--require-outcome-progress",
+        action="store_true",
+        help=(
+            "Also fail strict checks when journal-derived frontier/baseline "
+            "promotion progress is stale."
+        ),
+    )
+    parser.add_argument(
+        "--max-trials-since-frontier",
+        type=int,
+        default=DEFAULT_OUTCOME_STALL_FRONTIER_TRIALS,
+        help=(
+            "Outcome-progress threshold for trials since the latest frontier "
+            "admission."
+        ),
+    )
+    parser.add_argument(
+        "--max-trials-since-promotion",
+        type=int,
+        default=DEFAULT_OUTCOME_STALL_PROMOTION_TRIALS,
+        help=(
+            "Outcome-progress threshold for trials since the latest baseline "
+            "promotion."
+        ),
+    )
+    parser.add_argument(
+        "--recent-window-trials",
+        type=int,
+        default=DEFAULT_OUTCOME_RECENT_WINDOW_TRIALS,
+        help="Recent trial window for keepable/wasted-eval/learning-excluded rates.",
+    )
     return parser.parse_args(argv)
 
 
@@ -71,7 +113,12 @@ def main(argv: list[str] | None = None) -> int:
         report = build_phase_health_report(
             path=args.phase_path.expanduser().resolve(),
             log_path=log_path,
+            journal_dir=args.journal_dir.expanduser().resolve(),
             require_current_code=args.require_current_code,
+            require_outcome_progress=args.require_outcome_progress,
+            max_trials_since_frontier=args.max_trials_since_frontier,
+            max_trials_since_promotion=args.max_trials_since_promotion,
+            recent_window_trials=args.recent_window_trials,
             stale_after_s=args.stale_after_s,
         )
     except ValueError as exc:

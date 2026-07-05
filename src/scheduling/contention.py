@@ -765,3 +765,35 @@ def topology_fingerprint(numa_config: dict[str, Any]) -> str:
         fingerprint_input.append((role, instance_tuples))
     canonical = json.dumps(fingerprint_input, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+
+def matrix_measured_roles(matrix: ContentionMatrix | None) -> set[str]:
+    """Return NUMA roles whose topology is represented by a contention matrix."""
+    if matrix is None:
+        return set()
+    roles: set[str] = set(matrix.same_role)
+    for pair in matrix.pairs:
+        roles.update(pair)
+    for pair in matrix.unknown_pairs:
+        roles.update(pair)
+    for roles_key in matrix.n_way:
+        roles.update(roles_key)
+    return roles
+
+
+def topology_fingerprint_for_matrix(
+    numa_config: dict[str, Any],
+    matrix: ContentionMatrix | None,
+) -> str:
+    """Fingerprint the live topology subset comparable to ``matrix``.
+
+    Explicit-only auxiliary roles can live in NUMA_CONFIG without being part of
+    the production contention matrix. If the matrix clearly represents a role
+    subset, compare only that subset. If the matrix is unavailable or references
+    missing roles, fall back to the full topology so stale detection remains
+    conservative.
+    """
+    roles = matrix_measured_roles(matrix)
+    if roles and roles.issubset(numa_config):
+        return topology_fingerprint({role: numa_config[role] for role in sorted(roles)})
+    return topology_fingerprint(numa_config)

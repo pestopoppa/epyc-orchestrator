@@ -60,6 +60,7 @@ class TestFeaturesDefaults:
         assert f.approval_gates is False
         assert f.binding_routing is False
         assert f.eval_batch_serving is False
+        assert f.review_before_commit_consult is False
 
         # Explicitly True by default
         assert f.tools is True
@@ -162,6 +163,24 @@ class TestFeaturesValidate:
         errors = f.validate()
         assert any("skillbank" in e and "memrl" in e for e in errors)
 
+    def test_dcp_for_consult_requires_dcp_pre_assembly(self):
+        """consult DCP reuse requires the base DCP pre-assembly flag."""
+        f = Features(dcp_for_consult=True, dcp_pre_assembly=False)
+        errors = f.validate()
+        assert any("dcp_for_consult" in e and "dcp_pre_assembly" in e for e in errors)
+
+    def test_dcp_for_consult_dependency_satisfied(self):
+        """dcp_for_consult is valid when dcp_pre_assembly is also enabled."""
+        f = Features(dcp_for_consult=True, dcp_pre_assembly=True)
+        errors = f.validate()
+        assert not any("dcp_for_consult" in e for e in errors)
+
+    def test_review_before_commit_consult_has_no_flag_dependency(self):
+        """The edit-transaction consult seam is independently default-off."""
+        f = Features(review_before_commit_consult=True)
+        errors = f.validate()
+        assert not any("review_before_commit_consult" in e for e in errors)
+
 
 # ---------------------------------------------------------------------------
 # 7. Features.summary()
@@ -212,11 +231,12 @@ class TestEnabledFeatures:
 # 9-10. get_features() test-mode vs production defaults
 # ---------------------------------------------------------------------------
 class TestGetFeatures:
-    def test_test_mode_defaults(self, monkeypatch):
+    def test_test_mode_defaults(self, monkeypatch, tmp_path):
         """get_features() in test mode: mock_mode=True, repl=True, tools=False."""
-        # Clear any env vars that might interfere
-        for key in list(monkeypatch._patches if hasattr(monkeypatch, '_patches') else []):
-            pass  # monkeypatch handles cleanup automatically
+        monkeypatch.setenv(
+            "ORCHESTRATOR_RUNTIME_FLAGS_PATH",
+            str(tmp_path / "missing-runtime-flags.json"),
+        )
         f = get_features(production=False)
         assert f.mock_mode is True
         assert f.repl is True

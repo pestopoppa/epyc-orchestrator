@@ -183,6 +183,74 @@ jobs:
             items:
               type: string
 
+  - job_id: autopilot_authority_watch
+    title: AutoPilot authority and phase health watch
+    stage: shadow
+    enabled: true
+    risk: read_only
+    runtime_class: active_safe_deterministic
+    active_safe: true
+    schedule:
+      type: manual_or_nightly
+      cadence: daily
+      window: active_ok
+      runtime_class: active_safe_deterministic
+      max_runtime_s: 60
+    reference_skill: none
+    execution:
+      mode: deterministic_command
+      command:
+        - python3
+        - scripts/autopilot/phase_health_report.py
+        - --json
+        - --require-current-code
+    input_spec:
+      sources:
+        - repo: epyc-orchestrator
+          path: scripts/autopilot/phase_health_report.py
+        - repo: epyc-orchestrator
+          path: scripts/autopilot/phase_status.py
+      context_budget_tokens: 4000
+      forbidden_actions:
+        - stop_autopilot
+        - restart_services
+        - edit_journal
+        - update_baseline
+    output_contract:
+      format: json
+      json_schema:
+        type: object
+        additionalProperties: true
+        required:
+          - ok
+          - status
+          - blockers
+        properties:
+          ok:
+            type: boolean
+          status:
+            type: string
+          blockers:
+            type: array
+            items:
+              type: string
+          phase:
+            type: [string, "null"]
+          pid:
+            type: [integer, "null"]
+          pid_alive:
+            type: [boolean, "null"]
+          trial_id:
+            type: [integer, string, "null"]
+          code_stale:
+            type: boolean
+          planner_hints_enabled:
+            type: [boolean, "null"]
+          seq_verdict_enabled:
+            type: [boolean, "null"]
+          w6_audit_accrual_enabled:
+            type: [boolean, "null"]
+
   - job_id: daily_digest_skeleton
     title: Daily digest skeleton
     stage: shadow

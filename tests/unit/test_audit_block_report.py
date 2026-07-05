@@ -19,6 +19,7 @@ def _trial(
     outcome_status: str = "ok",
     tier: int = 1,
     timestamp: str | None = None,
+    candidate: str | None = None,
 ) -> dict:
     question_results = []
     for idx in range(core_total):
@@ -47,6 +48,8 @@ def _trial(
         row["timestamp"] = timestamp
     if corrupt:
         row["bug_corrupted_by"] = corrupt
+    if candidate:
+        row["seq"] = {"candidate": candidate}
     return row
 
 
@@ -473,6 +476,97 @@ def test_gaming_alarm_detects_beyond_resolution_divergence(tmp_path: Path) -> No
     assert report["cumulative_gaming_events"] == report["gaming_events"]
     assert report["gaming_alarm_clearance_clean_trials_required"] is None
     assert report["transfer_diagnostic"]["clearance_clean_trials_required"] is None
+
+
+def test_gaming_alarm_ignores_cross_candidate_divergence(tmp_path: Path) -> None:
+    journal = tmp_path / "autopilot_journal.jsonl"
+    _write_journal(
+        journal,
+        [
+            _trial(
+                1,
+                core_correct=1,
+                core_total=4,
+                audit_correct=3,
+                audit_total=4,
+                candidate="candidate-a",
+            ),
+            _trial(
+                2,
+                core_correct=3,
+                core_total=4,
+                audit_correct=1,
+                audit_total=4,
+                candidate="candidate-b",
+            ),
+            _trial(
+                3,
+                core_correct=3,
+                core_total=4,
+                audit_correct=3,
+                audit_total=4,
+                candidate="candidate-b",
+            ),
+        ],
+    )
+
+    report = audit_block_report.build_report(audit_block_report.load_journal_rows([journal]))
+
+    assert report["gaming_alarm"] is False
+    assert report["gaming_events"] == []
+    assert report["cumulative_gaming_alarm"] is False
+    assert report["transfer_diagnostic"]["potential_overfit_divergences"] == 0
+    assert [trial["candidate_key"] for trial in report["trials"]] == [
+        "seq:candidate:candidate-a",
+        "seq:candidate:candidate-b",
+        "seq:candidate:candidate-b",
+    ]
+
+
+def test_gaming_alarm_keeps_same_candidate_divergence(tmp_path: Path) -> None:
+    journal = tmp_path / "autopilot_journal.jsonl"
+    _write_journal(
+        journal,
+        [
+            _trial(
+                1,
+                core_correct=1,
+                core_total=4,
+                audit_correct=3,
+                audit_total=4,
+                candidate="candidate-a",
+            ),
+            _trial(
+                2,
+                core_correct=3,
+                core_total=4,
+                audit_correct=1,
+                audit_total=4,
+                candidate="candidate-a",
+            ),
+            _trial(
+                3,
+                core_correct=3,
+                core_total=4,
+                audit_correct=3,
+                audit_total=4,
+                candidate="candidate-a",
+            ),
+        ],
+    )
+
+    report = audit_block_report.build_report(audit_block_report.load_journal_rows([journal]))
+
+    assert report["gaming_alarm"] is True
+    assert report["gaming_events"] == [
+        {
+            "trial_id": 2,
+            "previous_trial_id": 1,
+            "core_delta": 1.5,
+            "audit_delta": -1.5,
+            "candidate_key": "seq:candidate:candidate-a",
+        }
+    ]
 
 
 def test_alarm_window_can_clear_after_historical_divergence(tmp_path: Path) -> None:

@@ -155,6 +155,41 @@ def test_structural_experiment_invalid_flags_returns_skip_outcome() -> None:
     assert species == "structural_lab"
 
 
+def test_dispatch_structural_experiment_dependency_skip_stops_before_eval() -> None:
+    class FakeLab:
+        def current_flags(self):
+            return {"memrl": True, "specialist_routing": False}
+
+        def propose_flag_experiment(self, flags):
+            return {
+                "status": "invalid",
+                "errors": ["graph_router feature requires specialist_routing feature"],
+                "proposed_flags": flags,
+            }
+
+    class FakeTower:
+        def hybrid_eval(self):  # pragma: no cover
+            raise AssertionError("dependency-blocked structural candidate must not eval")
+
+    result, species = actions.dispatch_action(
+        {"type": "structural_experiment", "flags": {"graph_router": True}},
+        seeder=None,
+        swarm=None,
+        forge=None,
+        lab=FakeLab(),
+        tower=FakeTower(),
+        gate=None,
+        archive=None,
+        journal=None,
+        state={},
+    )
+
+    assert isinstance(result, actions.SkipOutcome)
+    assert result.status == "invalid"
+    assert "specialist_routing" in result.reason
+    assert species == "structural_lab"
+
+
 def test_structural_experiment_error_status_is_skipped_not_invalid() -> None:
     """A transient validator 'error' (e.g. orchestrator unreachable) maps to a
     non-blacklisting 'skipped' SkipOutcome, never 'invalid' — so a blip cannot
@@ -170,6 +205,33 @@ def test_structural_experiment_error_status_is_skipped_not_invalid() -> None:
     assert isinstance(result, actions.SkipOutcome)
     assert result.status == "skipped"
     assert "unavailable" in result.reason
+    assert species == "structural_lab"
+
+
+def test_structural_experiment_noop_skips_before_validation_or_eval() -> None:
+    class FakeLab:
+        def current_flags(self):
+            return {"graph_router": False, "specialist_routing": True}
+
+        def propose_flag_experiment(self, _flags):  # pragma: no cover
+            raise AssertionError("no-op structural candidate must not validate")
+
+        def apply_flag_experiment(self, _flags):  # pragma: no cover
+            raise AssertionError("no-op structural candidate must not apply")
+
+    class FakeTower:
+        def hybrid_eval(self):  # pragma: no cover
+            raise AssertionError("no-op structural candidate must not eval")
+
+    result, species = actions._action_structural_experiment(
+        {"type": "structural_experiment", "flags": {"graph_router": False}},
+        _ctx(lab=FakeLab(), tower=FakeTower()),
+    )
+
+    assert isinstance(result, actions.SkipOutcome)
+    assert result.status == "skipped"
+    assert "would not change live flag state" in result.reason
+    assert "graph_router=false" in result.reason
     assert species == "structural_lab"
 
 
@@ -257,10 +319,56 @@ def test_numeric_trial_convention_suppresses_live_bound_surface(
     assert species == "numeric_swarm"
 
 
+def test_dispatch_numeric_trial_convention_skip_stops_before_eval(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(actions, "_PLANNER_HINTS_ENABLED", True)
+
+    class FakeStore:
+        def retrieve_conventions(self, *, species, journal):
+            assert species == "numeric_swarm"
+            assert journal == "journal"
+            return [
+                SimpleNamespace(
+                    metadata={
+                        "bind_status": "live",
+                        "bind_identifiers": ["kv_compaction"],
+                    }
+                )
+            ]
+
+    class FakeSwarm:
+        def suggest_trial(self, _surface):  # pragma: no cover
+            raise AssertionError("suppressed surface must not reach NumericSwarm")
+
+    class FakeTower:
+        def hybrid_eval(self):  # pragma: no cover
+            raise AssertionError("suppressed numeric candidate must not eval")
+
+    result, species = actions.dispatch_action(
+        {"type": "numeric_trial", "surface": "kv_compaction", "params": {}},
+        seeder=None,
+        swarm=FakeSwarm(),
+        forge=None,
+        lab=None,
+        tower=FakeTower(),
+        gate=None,
+        archive=None,
+        journal="journal",
+        state={},
+        strategy_store=FakeStore(),
+    )
+
+    assert isinstance(result, actions.SkipOutcome)
+    assert result.status == "invalid"
+    assert "kv_compaction" in result.reason
+    assert species == "numeric_swarm"
+
+
 def test_numeric_trial_records_applied_optuna_params(monkeypatch) -> None:
     monkeypatch.setattr(
-        autopilot,
-        "apply_params",
+        actions,
+        "_apply_params",
         lambda params: {"status": "ok", "applied": dict(params)},
     )
 
@@ -297,6 +405,107 @@ def test_numeric_trial_records_applied_optuna_params(monkeypatch) -> None:
     assert action["params"] == {"ORCHESTRATOR_MONITOR_THRESHOLD": 0.42}
     assert result.details["numeric_trial_applied_params"] == action["params"]
     assert swarm.reported == ("monitor", 7, result.objectives)
+
+
+def test_numeric_trial_explicit_no_changes_skips_eval(monkeypatch) -> None:
+    monkeypatch.setattr(
+        actions,
+        "_apply_params",
+        lambda _params: {"status": "no_changes"},
+    )
+
+    class FakeTower:
+        def hybrid_eval(self):  # pragma: no cover
+            raise AssertionError("no-change numeric candidate must not eval")
+
+    result, species = actions._action_numeric_trial(
+        {
+            "type": "numeric_trial",
+            "surface": "monitor",
+            "params": {"monitor.entropy_threshold": 0.42},
+        },
+        _ctx(tower=FakeTower(), state={}),
+    )
+
+    assert isinstance(result, actions.SkipOutcome)
+    assert result.status == "skipped"
+    assert "no live config changes" in result.reason
+    assert species == "numeric_swarm"
+
+
+def test_numeric_trial_suggested_no_changes_marks_failed_and_skips_eval(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        actions,
+        "_apply_params",
+        lambda _params: {"env_result": {"status": "no_changes"}},
+    )
+
+    class FakeSwarm:
+        def suggest_trial(self, surface):
+            return {
+                "trial_number": 17,
+                "surface": surface,
+                "params": {"monitor.entropy_threshold": 0.42},
+            }
+
+        def mark_failed(self, surface, trial_number, reason):
+            self.failed = (surface, trial_number, reason)
+
+    class FakeTower:
+        def hybrid_eval(self):  # pragma: no cover
+            raise AssertionError("no-change numeric candidate must not eval")
+
+    swarm = FakeSwarm()
+    result, species = actions._action_numeric_trial(
+        {"type": "numeric_trial", "surface": "monitor", "params": {}},
+        _ctx(swarm=swarm, tower=FakeTower(), state={}),
+    )
+
+    assert isinstance(result, actions.SkipOutcome)
+    assert result.status == "skipped"
+    assert swarm.failed == (
+        "monitor",
+        17,
+        "suggested params produced no live config changes",
+    )
+    assert species == "numeric_swarm"
+
+
+def test_numeric_trial_normalizes_short_explicit_surface_param(monkeypatch) -> None:
+    applied: list[dict] = []
+
+    def fake_apply_params(params):
+        applied.append(dict(params))
+        return {"status": "ok", "applied": dict(params)}
+
+    monkeypatch.setattr(actions, "_apply_params", fake_apply_params)
+
+    class FakeTower:
+        def hybrid_eval(self):
+            return actions.EvalResult(
+                tier=1,
+                quality=2.0,
+                speed=10.0,
+                cost=0.1,
+                reliability=1.0,
+            )
+
+    action = {
+        "type": "numeric_trial",
+        "surface": "kv_compaction",
+        "params": {"keep_ratio": 0.5},
+    }
+    result, species = actions._action_numeric_trial(
+        action,
+        _ctx(tower=FakeTower(), state={}),
+    )
+
+    assert species == "numeric_swarm"
+    assert applied == [{"kv.keep_ratio": 0.5}]
+    assert action["params"] == {"kv.keep_ratio": 0.5}
+    assert result.details["numeric_trial_applied_params"] == action["params"]
 
 
 def test_dispatcher_routes_to_correct_handler(monkeypatch) -> None:
@@ -479,7 +688,7 @@ def test_deep_eval_replays_seq_promotion_numeric_candidate(monkeypatch) -> None:
         applied.append(dict(params))
         return {"status": "ok", "applied": dict(params)}
 
-    monkeypatch.setattr(autopilot, "apply_params", fake_apply_params)
+    monkeypatch.setattr(actions, "_apply_params", fake_apply_params)
 
     class FakeTower:
         def __init__(self):
@@ -1592,6 +1801,7 @@ def test_exhausted_critic_seed_fallback_pauses_when_numeric_exhausted(
             "params": {},
         },
         "reason": "numeric blocked",
+        "scope": "surface",
     })
 
     action, rationale, skip = autopilot._replace_exhausted_critic_seed_fallback(
@@ -1609,6 +1819,46 @@ def test_exhausted_critic_seed_fallback_pauses_when_numeric_exhausted(
     assert skip is not None
     assert "critic fallback seed_batch unavailable" in skip.reason
     assert "numeric fallback unavailable" in skip.reason
+
+
+def test_exhausted_critic_seed_fallback_uses_numeric_when_surface_ban_is_legacy(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        autopilot,
+        "_configured_numeric_surfaces",
+        lambda: ("memrl_retrieval",),
+    )
+    blacklist = [
+        {
+            "pattern": {"type": "seed_batch", "n_questions": n_questions},
+            "reason": f"blocked {n_questions}",
+        }
+        for n_questions in autopilot.FALLBACK_SEED_CANDIDATES
+    ]
+    blacklist.append({
+        "pattern": {
+            "type": "numeric_trial",
+            "surface": "memrl_retrieval",
+            "params": {},
+        },
+        "reason": "legacy numeric blocked",
+    })
+
+    action, rationale, skip = autopilot._replace_exhausted_critic_seed_fallback(
+        {"type": "seed_batch", "n_questions": autopilot.SAFE_FALLBACK_SEED_N},
+        blacklist,
+        {"falsifier": "noop"},
+        trial_counter=0,
+    )
+
+    assert action == {
+        "type": "numeric_trial",
+        "surface": "memrl_retrieval",
+        "params": {},
+    }
+    assert rationale["critic_seed_fallback_replaced"] is True
+    assert skip is None
 
 
 def test_first_meta_action_is_allowed() -> None:
@@ -1676,11 +1926,38 @@ def test_quota_skips_blacklisted_numeric_surface() -> None:
                     "params": {},
                 },
                 "reason": f"blocked {blocked_surface}",
+                "scope": "surface",
             }
         ],
     )
 
     assert action == {"type": "numeric_trial", "surface": expected_surface, "params": {}}
+    assert rationale["experiment_quota_forced"] is True
+    assert state["consecutive_passive_actions"] == 0
+
+
+def test_quota_ignores_legacy_unscoped_numeric_surface_blacklist() -> None:
+    state = {"consecutive_passive_actions": autopilot.MAX_CONSECUTIVE_PASSIVE}
+    first_surface = autopilot._QUOTA_NUMERIC_SURFACES[0]
+    action, rationale = autopilot._enforce_experiment_quota(
+        {"type": "seed_batch", "n_questions": 10},
+        state,
+        memory_count=autopilot.QUOTA_MEMORY_THRESHOLD + 1,
+        rationale={"falsifier": "x"},
+        trial_counter=0,
+        blacklist=[
+            {
+                "pattern": {
+                    "type": "numeric_trial",
+                    "surface": first_surface,
+                    "params": {},
+                },
+                "reason": f"legacy broad ban {first_surface}",
+            }
+        ],
+    )
+
+    assert action == {"type": "numeric_trial", "surface": first_surface, "params": {}}
     assert rationale["experiment_quota_forced"] is True
     assert state["consecutive_passive_actions"] == 0
 
@@ -1702,6 +1979,7 @@ def test_quota_records_block_when_all_numeric_surfaces_blacklisted() -> None:
                     "params": {},
                 },
                 "reason": f"blocked {surface}",
+                "scope": "surface",
             }
             for surface in autopilot._QUOTA_NUMERIC_SURFACES
         ],
@@ -1929,6 +2207,7 @@ def test_frontier_rerun_records_block_when_all_numeric_surfaces_blacklisted() ->
                     "params": {},
                 },
                 "reason": f"blocked {surface}",
+                "scope": "surface",
             }
             for surface in autopilot._QUOTA_NUMERIC_SURFACES
         ],
@@ -2279,6 +2558,8 @@ def test_record_rejected_draft_counts_and_sets_feedback() -> None:
     assert blacklisted is False  # first occurrence
     sig = autopilot._action_signature(draft)
     assert state["invalid_signature_counts"][sig] == 1
+    assert state["critic_rejected_signatures"][sig]["trial_id"] == 10
+    assert state["critic_rejected_signatures"][sig]["action"] == draft
     assert state["last_invalid_status"] == "critic_rejected"
     assert state["last_invalid_action"] == draft
     assert "critic rejected" in state["last_invalid_reason"]
@@ -2288,7 +2569,7 @@ def test_record_rejected_draft_counts_and_sets_feedback() -> None:
 def test_record_rejected_draft_blacklists_on_repeat(monkeypatch) -> None:
     calls = []
     monkeypatch.setattr(autopilot, "append_blacklist",
-                        lambda action, tid, reason: calls.append((action, reason)))
+                        lambda action, tid, reason, **_: calls.append((action, reason)))
     state = {}
     draft = {"type": "structural_experiment", "flags": {"graph_router": True}}
     autopilot._record_rejected_draft(state, draft, _FakeCritique(), trial_id=1)
@@ -2296,6 +2577,119 @@ def test_record_rejected_draft_blacklists_on_repeat(monkeypatch) -> None:
     assert blacklisted is True
     assert len(calls) == 1  # blacklisted exactly once, at the threshold (2x)
     assert state["consecutive_rejected_drafts"] == 2
+
+
+def test_operator_domain_critique_detection() -> None:
+    assert autopilot._is_operator_domain_critique(
+        _FakeCritique(issues=["baseline refresh is operator-domain"])
+    )
+    assert autopilot._is_operator_domain_critique(
+        _FakeCritique(issues=["measurement trust boundary requires an era row"])
+    )
+    assert not autopilot._is_operator_domain_critique(
+        _FakeCritique(issues=["graph_router dependency is missing"])
+    )
+
+
+def test_append_operator_outbox_item_dedupes_open_signature(tmp_path) -> None:
+    path = tmp_path / "operator_outbox.jsonl"
+    draft = {"type": "deep_eval", "tier": 3}
+    critique = _FakeCritique(issues=["operator-domain T3 policy amendment"])
+
+    assert autopilot._append_operator_outbox_item(
+        draft,
+        critique,
+        trial_id=12,
+        path=path,
+    )
+    assert not autopilot._append_operator_outbox_item(
+        draft,
+        critique,
+        trial_id=13,
+        path=path,
+    )
+
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    assert len(rows) == 1
+    assert rows[0]["kind"] == "critic_rejected_operator_domain"
+    assert rows[0]["source_trial"] == 12
+    assert rows[0]["action"] == draft
+    assert rows[0]["status"] == "open"
+
+
+def test_operator_outbox_feedback_renders_open_items(tmp_path) -> None:
+    path = tmp_path / "operator_outbox.jsonl"
+    draft = {"type": "numeric_trial", "surface": "think_harder"}
+    autopilot._append_operator_outbox_item(
+        draft,
+        _FakeCritique(issues=["baseline refresh is operator-domain"]),
+        trial_id=21,
+        path=path,
+    )
+
+    text = autopilot._build_operator_outbox_feedback(path, limit=2)
+
+    assert "Open operator-domain items" in text
+    assert "trial 21" in text
+    assert "think_harder" in text
+    assert "Do NOT re-propose" in text
+
+
+def test_record_rejected_draft_outboxes_operator_domain(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(
+        autopilot,
+        "_append_operator_outbox_item",
+        lambda action, critique, trial_id: calls.append((action, trial_id)) or True,
+    )
+    state = {}
+    draft = {"type": "deep_eval", "tier": 3}
+
+    autopilot._record_rejected_draft(
+        state,
+        draft,
+        _FakeCritique(issues=["operator-domain tier policy requires approval"]),
+        trial_id=30,
+    )
+
+    assert calls == [(draft, 30)]
+
+
+def test_critic_rejected_signature_skip_blocks_exact_repeat() -> None:
+    draft = {"type": "numeric_trial", "surface": "think_harder", "params": {}}
+    sig = autopilot._action_signature(draft)
+    state = {
+        "critic_rejected_signatures": {
+            sig: {"trial_id": 44, "reason": "critic rejected: unsupported claim"}
+        }
+    }
+
+    result = autopilot._critic_rejected_signature_skip(draft, state)
+
+    assert isinstance(result, actions.SkipOutcome)
+    assert result.status == "invalid"
+    assert "trial 44" in result.reason
+    assert "change a material field" in result.reason
+    assert result.action_type == "numeric_trial"
+
+
+def test_critic_rejected_signature_skip_allows_material_change() -> None:
+    rejected = {"type": "numeric_trial", "surface": "think_harder", "params": {}}
+    retry = {
+        "type": "numeric_trial",
+        "surface": "think_harder",
+        "params": {"think_harder.min_expected_roi": 0.05},
+    }
+    state = {
+        "critic_rejected_signatures": {
+            autopilot._action_signature(rejected): {
+                "trial_id": 44,
+                "reason": "critic rejected",
+            }
+        }
+    }
+
+    assert autopilot._critic_rejected_signature_skip(retry, state) is None
 
 
 # ----- ActionContext bundle -----

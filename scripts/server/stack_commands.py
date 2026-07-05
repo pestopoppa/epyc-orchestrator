@@ -124,6 +124,10 @@ def start_whisper(*a, **kw):
     return _orchestrator_stack().start_whisper(*a, **kw)
 
 
+def start_handoff_dashboard(*a, **kw):
+    return _orchestrator_stack().start_handoff_dashboard(*a, **kw)
+
+
 def load_state(*a, **kw):
     return _orchestrator_stack().load_state(*a, **kw)
 
@@ -572,6 +576,38 @@ def _launch_contract_for_process(
     return {}
 
 
+def _episodic_embedding_status_line() -> str:
+    """Return a concise read-only health line for the episodic FAISS mirror."""
+    try:
+        from scripts.maintenance.repair_episodic_embeddings import (
+            DEFAULT_DB_PATH,
+            DEFAULT_FAISS_PATH,
+            DEFAULT_REEMBEDDED_PATH,
+            diagnose as _diagnose_embeddings,
+        )
+
+        report = _diagnose_embeddings(
+            DEFAULT_DB_PATH,
+            DEFAULT_FAISS_PATH,
+            DEFAULT_REEMBEDDED_PATH,
+        )
+    except Exception as exc:  # noqa: BLE001 - status should be diagnostic-only
+        return f"Episodic FAISS: unknown ({exc})"
+
+    status = "healthy" if report.healthy else "ORPHANED"
+    indexed_count = getattr(report, "n_db_indexed", 0) or report.n_db_routing
+    return (
+        f"Episodic FAISS: {status} — "
+        f"{report.n_faiss_vectors:,}/{indexed_count:,} indexed vectors "
+        f"({report.faiss_coverage:.1%}), "
+        f"id_map {report.n_id_map:,} ids / overlap {report.id_map_overlap_live:.1%} "
+        f"missing {getattr(report, 'missing_id_count', 0):,} "
+        f"stale {getattr(report, 'stale_id_count', 0):,}, "
+        f"{report.orphan_count:,} repairable lag/stale, "
+        f"reembedded overlap {report.overlap_live:.1%}"
+    )
+
+
 def runtime_attestation_warnings(
     state: dict[str, ProcessInfo] | None = None,
 ) -> list[str]:
@@ -886,8 +922,11 @@ def cmd_start(args: argparse.Namespace) -> int:
                 print_report as _print_embedding_report,
                 run_repair as _run_embedding_repair,
                 DEFAULT_DB_PATH,
+                DEFAULT_EMBEDDER_BASE_PORT,
+                DEFAULT_EMBEDDER_SERVERS,
                 DEFAULT_FAISS_PATH,
                 DEFAULT_ID_MAP_PATH,
+                DEFAULT_MAX_DB_GROWTH,
                 DEFAULT_REEMBEDDED_PATH,
             )
 
@@ -901,12 +940,19 @@ def cmd_start(args: argparse.Namespace) -> int:
             if not _report.healthy:
                 if getattr(args, "repair_embeddings", False):
                     print("\n[0.7] --repair-embeddings: starting bulk re-embed + FAISS rebuild...")
-                    print("      (launches 8 BGE servers; expected 5-15 min)")
+                    print(
+                        "      "
+                        f"(uses {DEFAULT_EMBEDDER_SERVERS} configured BGE server(s) "
+                        f"starting at port {DEFAULT_EMBEDDER_BASE_PORT}; expected 5-15 min)"
+                    )
                     _run_embedding_repair(
                         db_path=DEFAULT_DB_PATH,
                         faiss_path=DEFAULT_FAISS_PATH,
                         id_map_path=DEFAULT_ID_MAP_PATH,
                         reembedded_path=DEFAULT_REEMBEDDED_PATH,
+                        servers=DEFAULT_EMBEDDER_SERVERS,
+                        base_port=DEFAULT_EMBEDDER_BASE_PORT,
+                        max_db_growth=DEFAULT_MAX_DB_GROWTH,
                     )
                     print("[0.7] Re-running diagnostic post-repair:")
                     _report2 = _diagnose_embeddings(
@@ -968,11 +1014,11 @@ def cmd_start(args: argparse.Namespace) -> int:
                         print(f"  Including WARM server: port {warm_server['port']} ({role})")
                         break
 
-    # Apply --numa-mode filter (default 'both' for back-compat — pre-2026-05-08 default).
+    # Apply --numa-mode filter (default 'quarter' to avoid full+quarter CPU overlap).
     # Picks full XOR quarters for any role with full_instance_idx + multiple instances
     # (currently frontdoor + coder_escalation + worker_general); single-instance roles
     # pass through. See launcher-numa-mode-gating handoff.
-    numa_mode = getattr(args, "numa_mode", "both")
+    numa_mode = getattr(args, "numa_mode", "quarter")
     if numa_mode == "both":
         # Light advisory only — 'both' has been working for frontdoor/coder_escalation since
         # 2026-03 (Qwen3.6-35B Q8 quarters tuned to coexist with the full instance). The
@@ -981,7 +1027,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         if any("worker_general" in s.get("roles", []) for s in servers_to_start):
             print(
                 "  [advisory] worker_general (gemma4-MTP) runs at -t 96; if its full + 4 quarters "
-                "are all kept (default 'both'), expect 1.5x CPU oversubscription. "
+                "are all kept (--numa-mode both), expect 1.5x CPU oversubscription. "
                 "Use '--numa-mode full' (single instance) or '--numa-mode quarter' (4 concurrent) "
                 "for that role specifically. See launcher-numa-mode-gating.md."
             )
@@ -1208,6 +1254,29 @@ def cmd_start(args: argparse.Namespace) -> int:
 
         print()
 
+        # Start handoff dashboard hub (epyc-root, optional, non-fatal).
+        # Project-wide progress board; stdlib-only, owned by the governance repo.
+        if is_port_in_use(8100) and wait_for_health(8100, timeout=3, path="/health"):
+            print("[5c] Starting handoff dashboard (epyc-root hub)...")
+            print("  Already healthy, skipping")
+            preserved = _preserved_process_info(
+                "handoff_dashboard",
+                8100,
+                "epyc-root handoff progress hub",
+                str(LOG_DIR / "handoff_dashboard.log"),
+            )
+            if preserved:
+                state["handoff_dashboard"] = preserved
+        else:
+            print("[5c] Starting handoff dashboard (epyc-root hub)...")
+            info = start_handoff_dashboard()
+            if info:
+                state["handoff_dashboard"] = info
+            else:
+                print("  [!] handoff dashboard failed (non-fatal, continuing)")
+
+        print()
+
         # Start Docker services (NextPLAID retrieval + SearXNG metasearch)
         if _docker_available():
             print("[5.5] Starting Docker services (NextPLAID retrieval + SearXNG metasearch)...")
@@ -1423,6 +1492,23 @@ def cmd_reload(args: argparse.Namespace) -> int:
                 print("  [!] Failed to restart document_formalizer")
                 return 1
 
+        elif component == "handoff_dashboard":
+            port = 8100
+
+            # Auxiliary service: a stdlib web server owned by epyc-root, not a
+            # llama-server registry role — do not route through start_server().
+            for pid in _pids_on_port(port):
+                kill_process(pid)
+            state.pop("handoff_dashboard", None)
+            time.sleep(1)
+
+            info = start_handoff_dashboard()
+            if info:
+                state["handoff_dashboard"] = info
+            else:
+                print("  [!] Failed to restart handoff_dashboard")
+                return 1
+
         elif component in PORT_MAP:
             port = PORT_MAP[component]
             key = f"server_{port}"
@@ -1583,6 +1669,8 @@ def cmd_status(args: argparse.Namespace) -> int:
         for warning in attestation_warnings:
             print(f"  [!] {warning}")
         print()
+    print(_episodic_embedding_status_line())
+    print()
     print(f"State file: {STATE_FILE}")
     save_state(state)
     return 0

@@ -105,7 +105,7 @@ def test_dashboard_topology_activity_stats_refresh_with_live_age_tick() -> None:
     assert "TOPOLOGY_ACTIVITY_AGE_TICK_MS = 1000" in body
     assert "topologyActivityAgeS" in body
     assert "renderTopologyActivity" in body
-    assert "topology_activity?window_s=${TOPOLOGY_ACTIVITY_WINDOW_S}&t=${Date.now()}" in body
+    assert "fetchJSON(`/dashboard/api/topology_activity?window_s=${TOPOLOGY_ACTIVITY_WINDOW_S}`)" in body
     assert "scheduleRegionLocksRefresh(true)" in body
     assert "snap.region_locks" in body
     assert "return updateRegionLocks(refreshSeq, snap.region_locks);" in body
@@ -165,11 +165,50 @@ def test_dashboard_live_panel_refreshes_ignore_stale_responses_where_possible() 
     assert "return updateRegionLocks(refreshSeq, snap.region_locks);" in body
     assert "let _lastRegionLocksPayload = null;" in body
     assert "rich overlay failed" in body
-    assert "fetch(`/dashboard/api/snapshot?t=${Date.now()}`, { cache: 'no-store' })" in body
+    assert "fetchJSON('/dashboard/api/snapshot'" in body
+    assert "timeoutMs: _SNAPSHOT_POLL_TIMEOUT_MS" in body
     assert "setInterval(updateSnapshotPoll, 2500)" in body
-    assert "window_s=${TOPOLOGY_ACTIVITY_WINDOW_S}&t=${Date.now()}" in body
-    assert "fetch(`/dashboard/api/contention?t=${Date.now()}`, { cache: 'no-store' })" in body
+    assert "window_s=${TOPOLOGY_ACTIVITY_WINDOW_S}" in body
+    assert "fetchJSON('/dashboard/api/contention')" in body
     assert "if (refreshSeq !== _regionLocksRefreshSeq) return;" in body
+
+
+def test_dashboard_transport_self_heals_without_page_reload() -> None:
+    """Wedge-killers + watchdog: a dead stream, hung fetch, or poisoned frame
+    watermark must recover on its own — the trio of stream-fed panels
+    (topology / region locks / live tap) froze permanently on these before."""
+    html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    body = html_path.read_text()
+
+    # B1: timeout-bounded snapshot poll with a self-expiring in-flight guard.
+    assert "async function fetchJSON(url, { timeoutMs = _FETCH_JSON_TIMEOUT_MS } = {})" in body
+    assert "let _snapshotPollInFlightSince = 0;" in body
+    assert "_snapshotPollInFlightSince &&" in body
+    assert "now - _snapshotPollInFlightSince < _SNAPSHOT_POLL_TIMEOUT_MS + 2000" in body
+    assert "_snapshotPollInFlight = false" not in body  # old permanent-wedge boolean
+
+    # B2: no client-clock fallback for the frame watermark; null frames apply
+    # but never advance it; watermark resets on every (re)connect.
+    assert "if (!Number.isFinite(ts)) return null;" in body
+    assert "Date.now() / 1000 + 120" in body
+    assert body.count("_latestSnapshotFrameTs = 0;") >= 3  # decl init + both stream starters + watchdog
+    assert "if (frameTs !== null) {" in body
+
+    # B3: universal watchdog rebuilds the stream + fires a poll when snapshots
+    # stop applying; hooks cover sleep/wake and network flaps.
+    assert "function snapshotTransportWatchdog()" in body
+    assert "setInterval(snapshotTransportWatchdog, 5000)" in body
+    assert "document.addEventListener('visibilitychange'" in body
+    assert "window.addEventListener('online', snapshotTransportWatchdog)" in body
+    assert "let _lastSnapshotAppliedAt = Date.now();" in body
+
+    # B7: every legacy EventSource reconnect is guarded (no stampedes) and
+    # identity-checked (no stale-closure restarts).
+    assert body.count("es._reconnectScheduled = true;") >= 5
+    assert "if (_autopilotLogStream === es) startAutopilotLogStream();" in body
+    assert "if (_rawTapStream === es) startRawTapStream();" in body
+    assert "if (_structuredTapStream === es) startStructuredTapStream();" in body
+    assert "if (_plannerTapStream === es) startPlannerTapStream();" in body
 
 
 def test_dashboard_pareto_plot_uses_journal_sources_and_nonnegative_axes() -> None:
@@ -191,6 +230,36 @@ def test_dashboard_pareto_plot_uses_journal_sources_and_nonnegative_axes() -> No
     assert "/dashboard/api/pareto?scope=" in body
     assert "function convexHull2D(pts)" in body
     assert "paretoEraLegend(eras, PAD.l + 6, PAD.t + 12)" in body
+
+
+def test_dashboard_gepa_and_pareto_surface_real_suite_metrics() -> None:
+    html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    body = html_path.read_text()
+
+    assert "function realSuiteBadge(metric)" in body
+    assert "real_suite_v1 · q=" in body
+    assert "realSuiteBadge(t.real_suite_v1)" in body
+    assert "const suiteTip = p =>" in body
+    assert "p.real_suite_v1" in body
+    assert "real_suite_v1 q=" in body
+
+
+def test_dashboard_autopilot_progress_includes_eval_label() -> None:
+    html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    body = html_path.read_text()
+
+    assert "const evalLabel = prog.eval_label || phase.eval_label || '';" in body
+    assert "evalLabel ? `trial #${d.trial_id} (${action}, ${evalLabel})`" in body
+    assert "${evalLabel || 'T?'} tower ${lp.completed}/${lp.total}" in body
+    assert "${escapeHTML(String(evalLabel)) || 'T?'} tower ${prog.log_tail_progress.completed}/${prog.log_tail_progress.total}" in body
+    assert "const promotions = d.baseline_promotions || {};" in body
+    assert "baseline promotions ${promotions.count}" in body
+    assert "const outcome = d.outcome_kpis || {};" in body
+    assert "keepable ${fmtRate(keepable)}" in body
+    assert "wasted-eval ${fmtRate(wasted)}" in body
+    assert "learning-excluded ${fmtRate(excluded)}" in body
+    assert "_currentCodeHealthLabel(d.current_code_health)" in body
+    assert "current code ${health.status}" in body
 
 
 def test_dashboard_repo_readiness_panel_is_advisory_only() -> None:
@@ -254,3 +323,29 @@ def test_task_text_snapshot_uses_timezone_aware_utc(monkeypatch) -> None:
     # Header should still contain the "Z" suffix marker
     assert "@ " in out
     assert "Z ===" in out
+
+
+def test_dashboard_folds_devices_into_regions_lock_and_tap_panels() -> None:
+    """MI210/extern servers bypass the orchestrator pipeline; the Regions Lock
+    grid and the live tap panel must still surface their occupancy instead of
+    rendering an idle machine while a device is visibly working."""
+    html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    body = html_path.read_text()
+
+    # Panel renamed + device fold (operator request 2026-07-05).
+    assert "regions lock" in body
+    assert "cpu region locks" not in body
+    assert "function gpuDeviceRegionRows()" in body
+    assert body.count("rows.push(...gpuRows);") >= 2  # basic + rich renderers
+    assert "device occupancy from /slots, not a CPU region lock" in body
+
+    # Orphan (off-pipeline) inference cards in the live tap panel.
+    assert "function orphanDeviceSlots()" in body
+    assert "function orphanDeviceSlotCards()" in body
+    assert "orphan inference" in body
+    assert "no token tap — off-pipeline" in body
+    assert "!requests.length && !lockOnlyHolders.length && !orphanCards.length" in body
+
+    # A degraded contention matrix reads as an incident, not a status chip.
+    assert "admission gate degraded" in body
+    assert "contention-matrix-v6-quarter-refresh.md" in body

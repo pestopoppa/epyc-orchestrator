@@ -33,6 +33,12 @@ sys.path.insert(0, str(VALIDATE_DIR))
 sys.path.insert(0, str(ORCH_ROOT))
 
 from dynamic_stack_evidence_packet import build_packet as build_ds_e1_packet  # noqa: E402
+from eval_task_coverage_report import (  # noqa: E402
+    DEFAULT_JOURNAL_DIR as DEFAULT_EVAL_COVERAGE_JOURNAL_DIR,
+    build_report as build_eval_task_coverage_report,
+    default_pool_path as default_eval_coverage_pool_path,
+    resolve_journal_paths as resolve_eval_coverage_journal_paths,
+)
 from scripts.graph_router.offline_reward_pairwise_collection_status import (  # noqa: E402
     DEFAULT_MANIFEST as DEFAULT_A9_COLLECTION_MANIFEST,
     build_status as build_a9_collection_status,
@@ -55,6 +61,20 @@ DEFAULT_A9_COLLECTION_SCRIPT = (
     / "reports"
     / "offline_reward_oracle_token_coverage_final_labels_20260621"
     / "collect_offline_reward_pairwise_expanded_gap.sh"
+)
+DEFAULT_A9_AUDIT_TARGET_COLLECTION_MANIFEST = (
+    ORCH_ROOT
+    / "orchestration"
+    / "reports"
+    / "offline_reward_oracle_token_coverage_final_labels_20260621"
+    / "offline_reward_pairwise_audit_target_collection_manifest.json"
+)
+DEFAULT_A9_AUDIT_TARGET_COLLECTION_SCRIPT = (
+    ORCH_ROOT
+    / "orchestration"
+    / "reports"
+    / "offline_reward_oracle_token_coverage_final_labels_20260621"
+    / "collect_offline_reward_pairwise_audit_target.sh"
 )
 DEFAULT_A9_CONTRACT_SUMMARY = (
     ORCH_ROOT
@@ -83,6 +103,20 @@ DEFAULT_A9_SOURCE_REWARD_TARGET_CONTRACT = (
     / "reports"
     / "offline_reward_oracle_token_coverage_final_labels_20260621"
     / "offline_reward_source_reward_pairwise_target_contract.json"
+)
+DEFAULT_A9_AUDIT_TARGET_RANKER_SUMMARY = (
+    ORCH_ROOT
+    / "orchestration"
+    / "reports"
+    / "offline_reward_oracle_token_coverage_final_labels_20260621"
+    / "offline_reward_pairwise_ranker_score_ordered_audit_target_expanded_summary.json"
+)
+DEFAULT_A9_AUDIT_TARGET_DIRECTION_AUDIT = (
+    ORCH_ROOT
+    / "orchestration"
+    / "reports"
+    / "offline_reward_oracle_token_coverage_final_labels_20260621"
+    / "offline_reward_pairwise_audit_target_direction_audit.json"
 )
 DEFAULT_DS_E1_KV_PORT = 8194
 DEFAULT_XMAS_HELDOUT_PROMPTS_ARG = (
@@ -529,12 +563,20 @@ def w8_trajectory_section(trajectory_report: dict[str, Any]) -> GateSection:
     terminal_reason_counts = trajectory_report.get("terminal_reason_counts") or {}
     dominant_terminal_reason = trajectory_report.get("dominant_terminal_reason") or {}
     recent_active_candidates = trajectory_report.get("recent_active_candidates") or []
+    replay_eligible_candidates = (
+        trajectory_report.get("replay_eligible_candidates") or []
+    )
+    recent_replay_eligible_candidates = (
+        trajectory_report.get("recent_replay_eligible_candidates") or []
+    )
     stale_accumulating_candidates = (
         trajectory_report.get("stale_accumulating_candidates") or []
     )
     candidate_generation_required = _w8_candidate_generation_required(
         status_counts=status_counts,
         recent_active_candidates=recent_active_candidates,
+        replay_eligible_candidates=replay_eligible_candidates,
+        recent_replay_eligible_candidates=recent_replay_eligible_candidates,
         stale_accumulating_candidates=stale_accumulating_candidates,
     )
     blockers: list[str] = []
@@ -544,14 +586,21 @@ def w8_trajectory_section(trajectory_report: dict[str, Any]) -> GateSection:
             "replay_concentration_warning"
             + (f": {warning_reason}" if warning_reason else "")
         )
+    if candidate_generation_required:
+        blockers.append(
+            "w8_candidate_generation_required: no replay-eligible accumulating candidate"
+        )
     status = "blocked" if blockers else "ready"
+    if concentration.get("warning"):
+        summary_status = "has concentration warnings"
+    elif candidate_generation_required:
+        summary_status = "needs a replay-eligible candidate"
+    else:
+        summary_status = "has no concentration warning"
     return GateSection(
         key="w8_promotion_trajectory",
         status=status,
-        summary=(
-            "W8 replay trajectory "
-            f"{'has concentration warnings' if blockers else 'has no concentration warning'}."
-        ),
+        summary=f"W8 replay trajectory {summary_status}.",
         blockers=blockers,
         details={
             "status": trajectory_report.get("status"),
@@ -565,8 +614,106 @@ def w8_trajectory_section(trajectory_report: dict[str, Any]) -> GateSection:
             "open_requirements": trajectory_report.get("open_requirements"),
             "candidate_generation_required": candidate_generation_required,
             "recent_active_candidates": recent_active_candidates,
+            "replay_eligible_candidates": replay_eligible_candidates,
+            "recent_replay_eligible_candidates": recent_replay_eligible_candidates,
             "stale_accumulating_candidate_count": len(stale_accumulating_candidates),
             "replay_concentration": concentration,
+        },
+    )
+
+
+def _least_covered_non_sentinel_suites(
+    coverage_report: dict[str, Any],
+    *,
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    questions = coverage_report.get("questions") or {}
+    if not isinstance(questions, dict):
+        return []
+    counts = questions.get("suite_distinct_question_counts") or {}
+    if not isinstance(counts, dict):
+        return []
+    rows = []
+    for suite, count in counts.items():
+        suite_name = str(suite)
+        if suite_name.startswith("sentinel_"):
+            continue
+        try:
+            distinct_qids = int(count)
+        except (TypeError, ValueError):
+            continue
+        rows.append({"suite": suite_name, "distinct_qids": distinct_qids})
+    return sorted(rows, key=lambda item: (item["distinct_qids"], item["suite"]))[:limit]
+
+
+def eval_task_coverage_section(
+    coverage_report: dict[str, Any] | None = None,
+) -> GateSection:
+    """Surface planner-learning coverage without changing authority readiness."""
+    try:
+        report = coverage_report
+        if report is None:
+            report = build_eval_task_coverage_report(
+                journal_paths=resolve_eval_coverage_journal_paths(
+                    None,
+                    DEFAULT_EVAL_COVERAGE_JOURNAL_DIR,
+                ),
+                pool_path=default_eval_coverage_pool_path(),
+            )
+    except Exception as exc:  # noqa: BLE001 - advisory report must not gate.
+        return GateSection(
+            key="eval_task_coverage",
+            status="attention",
+            summary=f"Eval-task coverage report is unavailable: {exc}",
+            blockers=[],
+            details={"error": str(exc)},
+        )
+
+    coverage = report.get("coverage") or {}
+    if not isinstance(coverage, dict):
+        coverage = {}
+    questions = report.get("questions") or {}
+    if not isinstance(questions, dict):
+        questions = {}
+    journal = report.get("journal") or {}
+    if not isinstance(journal, dict):
+        journal = {}
+    pool = report.get("pool") or {}
+    if not isinstance(pool, dict):
+        pool = {}
+    coverage_status = str(coverage.get("status") or "unknown")
+    section_status = "ready" if coverage_status == "ok" else "attention"
+    distinct = coverage.get("distinct_journal_question_keys")
+    pool_stable = coverage.get("pool_stable_question_keys")
+    pct = coverage.get("distinct_vs_pool_stable_upper_bound_pct")
+    repeat = coverage.get("repeat_factor")
+    return GateSection(
+        key="eval_task_coverage",
+        status=section_status,
+        summary=(
+            "Eval-task coverage "
+            f"{coverage_status}: {distinct}/{pool_stable} stable qids "
+            f"({pct}%), repeat_factor={repeat}x."
+        ),
+        blockers=[],
+        details={
+            "coverage_status": coverage_status,
+            "question_result_rows": coverage.get("question_result_rows"),
+            "distinct_journal_question_keys": distinct,
+            "pool_stable_question_keys": pool_stable,
+            "distinct_vs_pool_stable_upper_bound_pct": pct,
+            "matched_pool_stable_pct": coverage.get("matched_pool_stable_pct"),
+            "repeat_factor": repeat,
+            "interpretation": coverage.get("interpretation"),
+            "eval_bearing_trials": journal.get("eval_bearing_trials"),
+            "trial_id_min": journal.get("trial_id_min"),
+            "trial_id_max": journal.get("trial_id_max"),
+            "tier_coverage": questions.get("tier_coverage"),
+            "least_covered_non_sentinel_suites": (
+                _least_covered_non_sentinel_suites(report)
+            ),
+            "pool_path": pool.get("path"),
+            "recommendation": report.get("recommendation"),
         },
     )
 
@@ -575,21 +722,38 @@ def _w8_candidate_generation_required(
     *,
     status_counts: dict[str, Any],
     recent_active_candidates: list[Any],
+    replay_eligible_candidates: list[Any],
+    recent_replay_eligible_candidates: list[Any],
     stale_accumulating_candidates: list[Any],
 ) -> bool:
     """Return True when W8 has no replayable accumulating candidate surface."""
+    if replay_eligible_candidates or recent_replay_eligible_candidates:
+        return False
+    if int(status_counts.get("confirmed_waiting_fresh_eval") or 0) > 0:
+        return False
     if recent_active_candidates or stale_accumulating_candidates:
-        return False
-    replayable_statuses = {
-        "active_recent_replay",
-        "single_observation",
-        "stale_accumulating",
-        "confirmed_waiting_fresh_eval",
-    }
-    if any(int(status_counts.get(status) or 0) > 0 for status in replayable_statuses):
-        return False
+        return True
     terminal_statuses = {"reverted", "excluded", "refuted", "finalized"}
     return any(int(status_counts.get(status) or 0) > 0 for status in terminal_statuses)
+
+
+def _a9_source_reward_ranker_ready(
+    *,
+    source_reward_decision: dict[str, Any],
+    source_reward_ranker_aggregate_decision: dict[str, Any],
+    source_reward_ranker_cv_decision: dict[str, Any],
+    source_reward_ranker_holdout_decision: dict[str, Any],
+) -> bool:
+    """Return True when the offline source-reward A9 target has full ranker evidence."""
+    return (
+        source_reward_decision.get("status") == "contract_ready"
+        and source_reward_ranker_aggregate_decision.get("status")
+        == "pairwise_ranker_signal"
+        and source_reward_ranker_cv_decision.get("status")
+        == "pairwise_ranker_signal"
+        and source_reward_ranker_holdout_decision.get("status")
+        == "holdout_signal_consistent"
+    )
 
 
 def ds_e1_section(
@@ -793,6 +957,15 @@ def a9_collection_section(
     source_reward_target_contract_path: Path | None = (
         DEFAULT_A9_SOURCE_REWARD_TARGET_CONTRACT
     ),
+    audit_target_ranker_summary_path: Path | None = (
+        DEFAULT_A9_AUDIT_TARGET_RANKER_SUMMARY
+    ),
+    audit_target_direction_audit_path: Path | None = (
+        DEFAULT_A9_AUDIT_TARGET_DIRECTION_AUDIT
+    ),
+    audit_target_collection_manifest_path: Path | None = (
+        DEFAULT_A9_AUDIT_TARGET_COLLECTION_MANIFEST
+    ),
 ) -> GateSection:
     """Surface the guarded A9 pairwise source-acquisition window."""
     status = build_a9_collection_status(manifest_path)
@@ -800,8 +973,6 @@ def a9_collection_section(
     ready = bool(status.get("ready"))
     status_label = str(status.get("status") or "unknown")
     section_status = "ready" if ready else "blocked"
-    if status_label == "no_runnable_batches":
-        section_status = "attention"
     contract_summary: dict[str, Any] = {}
     if contract_summary_path is not None and contract_summary_path.exists():
         try:
@@ -878,6 +1049,86 @@ def a9_collection_section(
             )
         except Exception as exc:
             source_reward_target_contract = {"load_error": str(exc)}
+    source_reward_ranker_ready = _a9_source_reward_ranker_ready(
+        source_reward_decision=source_reward_decision,
+        source_reward_ranker_aggregate_decision=(
+            source_reward_ranker_aggregate_decision
+        ),
+        source_reward_ranker_cv_decision=source_reward_ranker_cv_decision,
+        source_reward_ranker_holdout_decision=source_reward_ranker_holdout_decision,
+    )
+    source_reward_target_preregistered = (
+        source_reward_target_contract.get("status")
+        == "preregistered_offline_training_target"
+    )
+    audit_target_ranker_summary: dict[str, Any] = {}
+    if (
+        audit_target_ranker_summary_path is not None
+        and audit_target_ranker_summary_path.exists()
+    ):
+        try:
+            audit_target_ranker_summary = _load_json_object(
+                audit_target_ranker_summary_path
+            )
+        except Exception as exc:
+            audit_target_ranker_summary = {"load_error": str(exc)}
+    audit_target_ranker_input = audit_target_ranker_summary.get("input")
+    if not isinstance(audit_target_ranker_input, dict):
+        audit_target_ranker_input = {}
+    audit_target_ranker_aggregate = audit_target_ranker_summary.get("aggregate")
+    if not isinstance(audit_target_ranker_aggregate, dict):
+        audit_target_ranker_aggregate = {}
+    audit_target_ranker_aggregate_decision = audit_target_ranker_aggregate.get(
+        "decision"
+    )
+    if not isinstance(audit_target_ranker_aggregate_decision, dict):
+        audit_target_ranker_aggregate_decision = {}
+    audit_target_ranker_holdout_decision = audit_target_ranker_summary.get(
+        "holdout_decision"
+    )
+    if not isinstance(audit_target_ranker_holdout_decision, dict):
+        audit_target_ranker_holdout_decision = {}
+    audit_target_direction_audit: dict[str, Any] = {}
+    if (
+        audit_target_direction_audit_path is not None
+        and audit_target_direction_audit_path.exists()
+    ):
+        try:
+            audit_target_direction_audit = _load_json_object(
+                audit_target_direction_audit_path
+            )
+        except Exception as exc:
+            audit_target_direction_audit = {"load_error": str(exc)}
+    audit_target_direction_decision = audit_target_direction_audit.get("decision")
+    if not isinstance(audit_target_direction_decision, dict):
+        audit_target_direction_decision = {}
+    audit_target_collection_targets = audit_target_direction_audit.get(
+        "collection_targets"
+    )
+    if not isinstance(audit_target_collection_targets, list):
+        audit_target_collection_targets = []
+    audit_target_collection_status: dict[str, Any] = {}
+    if (
+        audit_target_collection_manifest_path is not None
+        and audit_target_collection_manifest_path.exists()
+    ):
+        audit_target_collection_status = build_a9_collection_status(
+            audit_target_collection_manifest_path
+        )
+    candidate_contract_exhausted = (
+        contract_decision.get("status") == "insufficient_contrast"
+    )
+    status_phrase = status_label
+    if status_label == "no_runnable_batches":
+        if (
+            candidate_contract_exhausted
+            and source_reward_ranker_ready
+            and source_reward_target_preregistered
+        ):
+            section_status = "ready"
+            status_phrase = "closed"
+        else:
+            section_status = "attention"
     summary_tail = ""
     if status_label == "no_runnable_batches" and contract_decision:
         summary_tail = (
@@ -899,12 +1150,28 @@ def a9_collection_section(
                 "; source-reward target contract is "
                 f"{source_reward_target_contract.get('status', 'unknown')}"
             )
+        if audit_target_ranker_holdout_decision:
+            summary_tail += (
+                "; audit-target ranker holdout is "
+                f"{audit_target_ranker_holdout_decision.get('status', 'unknown')}"
+            )
+            if audit_target_ranker_holdout_decision.get("eligible_holdouts"):
+                summary_tail += (
+                    f" ({audit_target_ranker_holdout_decision.get('passing_holdouts', 0)}/"
+                    f"{audit_target_ranker_holdout_decision.get('eligible_holdouts')} passing)"
+                )
+        if audit_target_collection_status:
+            summary_tail += (
+                "; audit-target collection window is "
+                f"{audit_target_collection_status.get('status', 'unknown')} "
+                f"with {audit_target_collection_status.get('batch_count', 0)} batch(es)"
+            )
     return GateSection(
         key="a9_pairwise_collection",
         status=section_status,
         summary=(
             "A9 pairwise source-acquisition window "
-            f"is {status_label} with {status.get('batch_count', 0)} batch(es)"
+            f"is {status_phrase} with {status.get('batch_count', 0)} batch(es)"
             f"{summary_tail}."
         ),
         blockers=blockers,
@@ -921,6 +1188,7 @@ def a9_collection_section(
             ),
             "candidate_contract_decision": contract_decision or None,
             "candidate_contract_coverage": contract_coverage or None,
+            "candidate_contract_exhausted": candidate_contract_exhausted,
             "source_reward_diagnostic_summary_path": (
                 str(source_reward_diagnostic_summary_path)
                 if source_reward_diagnostic_summary_path is not None
@@ -944,6 +1212,7 @@ def a9_collection_section(
             "source_reward_ranker_holdout_decision": (
                 source_reward_ranker_holdout_decision or None
             ),
+            "source_reward_ranker_ready": source_reward_ranker_ready,
             "source_reward_target_contract_path": (
                 str(source_reward_target_contract_path)
                 if source_reward_target_contract_path is not None
@@ -952,6 +1221,36 @@ def a9_collection_section(
             "source_reward_target_contract": (
                 source_reward_target_contract or None
             ),
+            "source_reward_target_preregistered": (
+                source_reward_target_preregistered
+            ),
+            "audit_target_ranker_summary_path": (
+                str(audit_target_ranker_summary_path)
+                if audit_target_ranker_summary_path is not None
+                else None
+            ),
+            "audit_target_ranker_input": audit_target_ranker_input or None,
+            "audit_target_ranker_aggregate_decision": (
+                audit_target_ranker_aggregate_decision or None
+            ),
+            "audit_target_ranker_holdout_decision": (
+                audit_target_ranker_holdout_decision or None
+            ),
+            "audit_target_direction_audit_path": (
+                str(audit_target_direction_audit_path)
+                if audit_target_direction_audit_path is not None
+                else None
+            ),
+            "audit_target_direction_decision": (
+                audit_target_direction_decision or None
+            ),
+            "audit_target_collection_targets": audit_target_collection_targets,
+            "audit_target_collection_manifest_path": (
+                str(audit_target_collection_manifest_path)
+                if audit_target_collection_manifest_path is not None
+                else None
+            ),
+            "audit_target_collection_status": audit_target_collection_status or None,
             "autopilot_guard": status.get("autopilot_guard"),
             "blockers": blockers,
             "warnings": list(status.get("warnings") or []),
@@ -1132,7 +1431,15 @@ def build_fable5_gate_report(
     xmas_table_path: Path = DEFAULT_XMAS_TABLE,
     xmas_ab_root: Path = DEFAULT_XMAS_AB_ROOT,
     a9_collection_manifest: Path = DEFAULT_A9_COLLECTION_MANIFEST,
+    a9_audit_target_ranker_summary_path: Path | None = (
+        DEFAULT_A9_AUDIT_TARGET_RANKER_SUMMARY
+    ),
+    a9_audit_target_direction_audit_path: Path | None = (
+        DEFAULT_A9_AUDIT_TARGET_DIRECTION_AUDIT
+    ),
     include_tool_use_activation: bool = True,
+    include_eval_task_coverage: bool = True,
+    eval_task_coverage_report: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     sections = [
         phase_section(phase_report),
@@ -1147,13 +1454,19 @@ def build_fable5_gate_report(
         ),
         w8_trajectory_section(build_w8_trajectory_report(journal_rows)),
         ds_e1_section(ds_e1_packet),
-        a9_collection_section(a9_collection_manifest),
+        a9_collection_section(
+            a9_collection_manifest,
+            audit_target_ranker_summary_path=a9_audit_target_ranker_summary_path,
+            audit_target_direction_audit_path=a9_audit_target_direction_audit_path,
+        ),
         xmas_section(
             config_path=config_path,
             candidate_table_path=xmas_table_path,
             ab_root=xmas_ab_root,
         ),
     ]
+    if include_eval_task_coverage:
+        sections.append(eval_task_coverage_section(eval_task_coverage_report))
     if include_tool_use_activation:
         sections.append(
             tool_use_activation_section(
@@ -1190,6 +1503,7 @@ def build_report_summary(
     xmas = by_key.get("xmas_production_path")
     phase = by_key.get("phase_health")
     tool_use = by_key.get("tool_use_activation")
+    eval_coverage = by_key.get("eval_task_coverage")
     return {
         "ready": not blockers,
         "blocker_count": len(blockers),
@@ -1316,6 +1630,26 @@ def build_report_summary(
                 "total_tool_calls"
             )
             if tool_use is not None
+            else None
+        ),
+        "eval_task_coverage_status": (
+            eval_coverage.details.get("coverage_status")
+            if eval_coverage is not None
+            else None
+        ),
+        "eval_task_coverage_pct": (
+            eval_coverage.details.get("distinct_vs_pool_stable_upper_bound_pct")
+            if eval_coverage is not None
+            else None
+        ),
+        "eval_task_repeat_factor": (
+            eval_coverage.details.get("repeat_factor")
+            if eval_coverage is not None
+            else None
+        ),
+        "eval_task_tier_coverage": (
+            eval_coverage.details.get("tier_coverage")
+            if eval_coverage is not None
             else None
         ),
     }
@@ -1858,14 +2192,17 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
             contract_next = str(contract_decision.get("recommended_next") or "")
             source_reward_ranker_ready = False
             if contract_status == "insufficient_contrast":
-                source_reward_ranker_ready = (
-                    source_reward_decision.get("status") == "contract_ready"
-                    and source_reward_ranker_aggregate_decision.get("status")
-                    == "pairwise_ranker_signal"
-                    and source_reward_ranker_cv_decision.get("status")
-                    == "pairwise_ranker_signal"
-                    and source_reward_ranker_holdout_decision.get("status")
-                    == "holdout_signal_consistent"
+                source_reward_ranker_ready = _a9_source_reward_ranker_ready(
+                    source_reward_decision=source_reward_decision,
+                    source_reward_ranker_aggregate_decision=(
+                        source_reward_ranker_aggregate_decision
+                    ),
+                    source_reward_ranker_cv_decision=(
+                        source_reward_ranker_cv_decision
+                    ),
+                    source_reward_ranker_holdout_decision=(
+                        source_reward_ranker_holdout_decision
+                    ),
                 )
                 if source_reward_ranker_ready:
                     if (
@@ -2057,6 +2394,96 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
                     "follow_up": (
                         "cd /mnt/raid0/llm/epyc-orchestrator && "
                         "uv run python scripts/graph_router/offline_reward_pairwise_collection_status.py"
+                    ),
+                }
+            )
+        audit_target_holdout_decision = (
+            a9.details.get("audit_target_ranker_holdout_decision") or {}
+        )
+        audit_target_direction_decision = (
+            a9.details.get("audit_target_direction_decision") or {}
+        )
+        if audit_target_holdout_decision.get("status") == "mixed_holdout_signal":
+            audit_target_collection_status = (
+                a9.details.get("audit_target_collection_status") or {}
+            )
+            audit_target_collection_batches = int(
+                audit_target_collection_status.get("batch_count") or 0
+            )
+            audit_target_collection_blockers = list(
+                audit_target_collection_status.get("blockers") or []
+            )
+            if audit_target_collection_batches > 0:
+                audit_target_action_status = (
+                    "ready"
+                    if audit_target_collection_status.get("ready")
+                    else "blocked"
+                )
+                audit_target_command = (
+                    "cd /mnt/raid0/llm/epyc-orchestrator && "
+                    f"{DEFAULT_A9_AUDIT_TARGET_COLLECTION_SCRIPT.relative_to(ORCH_ROOT)}"
+                )
+            else:
+                audit_target_action_status = "active"
+                audit_target_command = (
+                    "Use offline_reward_pairwise_audit_target_direction_audit.{json,md} "
+                    "as the current collection target list; after collection, "
+                    "rerun plan_offline_reward_pairwise_holdout_expansion.py, "
+                    "build_offline_reward_pairwise_contract.py, and "
+                    "evaluate_offline_reward_pairwise_ranker.py against the "
+                    "audit-target-expanded contract."
+                )
+            actions.append(
+                {
+                    "key": "collect_a9_audit_target_pairwise_preferences",
+                    "priority": "P1",
+                    "status": audit_target_action_status,
+                    "reason": (
+                        "The source-q-reward A9 training target is preregistered "
+                        "offline-only, but the broader audit-target-expanded "
+                        "pairwise ranker still has mixed independent-holdout "
+                        "signal. Remaining blockers are "
+                        f"{', '.join(audit_target_holdout_decision.get('blockers') or [])}."
+                    ),
+                    "requires": (
+                        "collect non-overlapping cross-action preference rows for "
+                        "the current audit-target direction gaps, then rebuild the "
+                        "score-ordered pairwise contract and rerun independent "
+                        "holdouts; do not retune the absolute verifier family"
+                    ),
+                    "blocked_by": audit_target_collection_blockers,
+                    "runtime_gate_change_allowed": False,
+                    "audit_target_ranker_summary_path": a9.details.get(
+                        "audit_target_ranker_summary_path"
+                    ),
+                    "audit_target_ranker_holdout_decision": (
+                        audit_target_holdout_decision or None
+                    ),
+                    "audit_target_ranker_input": a9.details.get(
+                        "audit_target_ranker_input"
+                    ),
+                    "audit_target_direction_audit_path": a9.details.get(
+                        "audit_target_direction_audit_path"
+                    ),
+                    "audit_target_direction_decision": (
+                        audit_target_direction_decision or None
+                    ),
+                    "audit_target_collection_targets": a9.details.get(
+                        "audit_target_collection_targets"
+                    ),
+                    "audit_target_collection_status": (
+                        audit_target_collection_status or None
+                    ),
+                    "audit_target_collection_manifest_path": a9.details.get(
+                        "audit_target_collection_manifest_path"
+                    ),
+                    "audit_target_collection_batch_count": (
+                        audit_target_collection_batches
+                    ),
+                    "command": audit_target_command,
+                    "follow_up": (
+                        "uv run python scripts/autopilot/fable5_gate_report.py "
+                        "--json --strict --require-current-code"
                     ),
                 }
             )

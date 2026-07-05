@@ -95,21 +95,21 @@ VERBOSE_ROOT_LM_TOOLS = """### Critical Tools — USE THESE FIRST
 DEFAULT_ROOT_LM_TOOLS = """## Tools
 
 **Research & Web**
-- `CALL("web_research", query="...", max_pages=3)`: Deep web research — searches, fetches, synthesizes. USE for factual questions needing real content. Prefer over web_search when you need information, not just URLs.
-- `CALL("web_search", query="...", max_results=5)`: Quick search, returns URLs + snippets only. Use for link lookup or quick fact check.
+- `CALL("web_research", query="...", max_pages=3)`: Deep web research; search, fetch, synthesize. Use for factual questions needing source content, not just URLs.
+- `CALL("web_search", query="...", max_results=5)`: Quick search; returns URLs + snippets. Use for links or quick fact checks.
 - `CALL("search_wikipedia", query="...")`: Search Wikipedia for verified info.
-- `search_arxiv(query)` / `search_papers(query)` / `search_books(query)`: Academic & book search via CALL.
+- `search_arxiv(query)` / `search_papers(query)` / `search_books(query)`: Academic and book search via CALL.
 - `get_wikipedia_article(title)`: Full Wikipedia article by exact title.
 - `fetch_docs(url)`: Fetch content from a URL.
 
 **Context & Files**
-- `context`: str — full input. Use peek/grep to inspect, never pass to llm_call.
+- `context`: str — full input. Inspect with peek/grep; never pass to llm_call.
 - `artifacts`: dict — store intermediate results between turns.
 - `peek(n, file_path=None)` / `grep(pattern, file_path=None)`: Inspect context or files.
 - `list_dir(path)` / `file_info(path)`: Directory listing, file metadata.
 
 **Code & Documents**
-- `CALL("run_python_code", code="...", stdin_data="...")`: Test code before submitting. ALWAYS test.
+- `CALL("run_python_code", code="...", stdin_data="...")`: Test code before submitting. Always test first.
 - `ocr_document(path)` / `analyze_figure(image_path, prompt)` / `extract_figure(pdf, page, bbox)`: Document/image processing (returns JSON).
 - `run_tests(path)` / `lint_python(path, fix=False)` / `json_parse(content)`: Code quality via CALL.
 - `run_shell(cmd)`: Sandboxed shell (ls, grep, git status only).
@@ -122,13 +122,13 @@ DEFAULT_ROOT_LM_TOOLS = """## Tools
 - `recall(query)`: Search episodic memory for past routing outcomes.
 
 **LLM & Long Context**
-- `llm_call(prompt, role='worker')` / `llm_batch(prompts, role='worker')`: Sub-LM calls. Keep prompts short.
+- `llm_call(prompt, role='worker')` / `llm_batch(prompts, role='worker')`: Sub-LM calls; keep prompts short.
 - `context_len()` / `chunk_context(n_chunks=4)` / `summarize_chunks(task, n_chunks=4)`: Long document processing.
 
 **Invocation & Completion**
 - `CALL(name, **kw)`: Invoke tool, returns JSON string. `TOOL(name, **kw)`: Returns Python object.
   Example: `result = CALL("search_arxiv", query="transformers"); data = json.loads(result)`
-- `list_tools()`: Discover all available tools.
+- `list_tools()`: Discover all tools.
 - `FINAL(answer)`: Signal completion. REQUIRED for every task."""
 
 # Compact tool descriptions for MINIMAL prompt style (~140 tokens vs ~1450)

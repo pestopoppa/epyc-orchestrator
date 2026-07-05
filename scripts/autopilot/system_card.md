@@ -6,7 +6,8 @@ Do not hand-edit this file; edit the source registries or constitution.
 ## Runtime State
 
 - paused: false
-- trial_counter: 1091
+- trial_counter: 1158
+- in_flight_trial: 1158 (structural_experiment)
 - pareto_epoch_ts: 1782511631.0
 - pareto_exclude_before_ts: 1782511631.0
 - active_instrument_eras: autopilot_speed=E5-autopilot-speed, cpu_bench=E5-cpu-kernel
@@ -39,6 +40,7 @@ Do not hand-edit this file; edit the source registries or constitution.
 - T0: T0 (10q sentinel, fast-reject)
 - T1: T1 (50q gate)
 - T2: T2 (480q comprehensive)
+- T3: T3 (expert/hard workflow eval)
 - Active T1 suites: agentic, bigcodebench, coder, cruxeval, debugbench, general, gpqa, hotpotqa, instruction_precision, livecodebench, long_context, math, mode_advantage, mode_advantage_hard, simpleqa, skill_transfer, thinking, tool_use, usaco, vl
 
 ## Baselines

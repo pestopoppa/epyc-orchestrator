@@ -1,0 +1,184 @@
+{
+  "activation_commands": [
+    "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/maintenance/verify_routing_wiring.py",
+    "ORCHESTRATOR_FEATURE_ROUTING_CLASSIFIER=1 ROUTING_CLASSIFIER_WEIGHTS=/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/routing_classifier_weights.npz /mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/server/orchestrator_stack.py reload orchestrator",
+    "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/validate/attest_flags.py --url http://localhost:8000 --polls 120 --delay-s 0.05 --min-workers 1 --expect routing_classifier=true"
+  ],
+  "allow_autopilot_active": false,
+  "applied": true,
+  "attestation_reports": {
+    "attest_routing_classifier_disabled": null,
+    "attest_routing_classifier_enabled": null
+  },
+  "blockers": [],
+  "decision_grade": false,
+  "generated_at": "2026-07-05T05:31:53+00:00",
+  "keep_enabled": false,
+  "notes": [
+    "No model prompts are sent by this rollout harness.",
+    "decision_grade=false because this attests feature rollout only, not routing quality."
+  ],
+  "preflight": {
+    "api_health": {
+      "elapsed_s": 0.058991989004425704,
+      "error": null,
+      "json_body": {
+        "backend_health": {},
+        "backend_probes": {
+          "architect_general": {
+            "failure_detail": "",
+            "failure_reason": "",
+            "latency_ms": 14.2,
+            "ok": true,
+            "status_code": 200,
+            "url": "http://localhost:8083"
+          },
+          "coder_escalation/frontdoor/worker_summarize": {
+            "failure_detail": "",
+            "failure_reason": "",
+            "latency_ms": 20.7,
+            "ok": true,
+            "status_code": 200,
+            "url": "http://localhost:8070"
+          },
+          "ingest_long_context": {
+            "failure_detail": "",
+            "failure_reason": "",
+            "latency_ms": 11.3,
+            "ok": true,
+            "status_code": 200,
+            "url": "http://localhost:8085"
+          },
+          "toolrunner/worker_general/worker_math": {
+            "failure_detail": "",
+            "failure_reason": "",
+            "latency_ms": 17.4,
+            "ok": true,
+            "status_code": 200,
+            "url": "http://localhost:8072"
+          },
+          "vision_escalation": {
+            "failure_detail": "",
+            "failure_reason": "",
+            "latency_ms": 5.9,
+            "ok": true,
+            "status_code": 200,
+            "url": "http://localhost:8087"
+          },
+          "worker_vision": {
+            "failure_detail": "",
+            "failure_reason": "",
+            "latency_ms": 8.0,
+            "ok": true,
+            "status_code": 200,
+            "url": "http://localhost:8086"
+          }
+        },
+        "knowledge_tools": {
+          "available": false,
+          "tools": {
+            "get_wikipedia_article": {
+              "available": false,
+              "error": "No module named 'mwclient'"
+            },
+            "search_arxiv": {
+              "available": false,
+              "error": "No module named 'arxiv'"
+            },
+            "search_books": {
+              "available": false,
+              "error": "No module named 'googleapiclient'"
+            },
+            "search_papers": {
+              "available": false,
+              "error": "No module named 'semanticscholar'"
+            },
+            "search_wikipedia": {
+              "available": false,
+              "error": "No module named 'mwclient'"
+            }
+          }
+        },
+        "mock_mode_available": true,
+        "models_loaded": 6,
+        "status": "ok",
+        "version": "0.1.0"
+      },
+      "ok": true,
+      "status": 200,
+      "url": "http://localhost:8000/health"
+    },
+    "api_url": "http://localhost:8000",
+    "autopilot_active": false,
+    "config_attest": {
+      "all_sampled_workers_enabled": false,
+      "any_sampled_worker_enabled": false,
+      "routing_classifier_by_pid": {
+        "1586439": false,
+        "1586440": false,
+        "1586443": false,
+        "1586444": false
+      },
+      "routing_classifier_sources_by_pid": {
+        "1586439": "ORCHESTRATOR_FEATURE_ROUTING_CLASSIFIER",
+        "1586440": "ORCHESTRATOR_FEATURE_ROUTING_CLASSIFIER",
+        "1586443": "ORCHESTRATOR_FEATURE_ROUTING_CLASSIFIER",
+        "1586444": "ORCHESTRATOR_FEATURE_ROUTING_CLASSIFIER"
+      },
+      "samples_requested": 12,
+      "workers_seen": 4
+    },
+    "weights_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/routing_classifier_weights.npz",
+    "weights_present": true
+  },
+  "rollback_commands": [
+    "ORCHESTRATOR_FEATURE_ROUTING_CLASSIFIER=0 ROUTING_CLASSIFIER_WEIGHTS=/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/routing_classifier_weights.npz /mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/server/orchestrator_stack.py reload orchestrator",
+    "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/validate/attest_flags.py --url http://localhost:8000 --polls 120 --delay-s 0.05 --min-workers 1 --expect routing_classifier=false"
+  ],
+  "rollback_steps": [
+    {
+      "command": "ORCHESTRATOR_FEATURE_ROUTING_CLASSIFIER=0 ROUTING_CLASSIFIER_WEIGHTS=/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/routing_classifier_weights.npz /mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/server/orchestrator_stack.py reload orchestrator",
+      "elapsed_s": 10.876982779009268,
+      "name": "reload_orchestrator_routing_classifier_disabled",
+      "returncode": 0,
+      "stderr_tail": "",
+      "stdout_tail": "Reloading orchestrator...\n  Starting orchestrator API on port 8000\n    Fleet marker: /mnt/raid0/llm/tmp/orchestrator_fleet_started_at\n    PID: 1633907\n    Waiting for health...\n    [OK] Orchestrator ready\n    [oom-protect] oom_score_adj=-1000 on 8/8 pid(s)\n"
+    },
+    {
+      "command": "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/validate/attest_flags.py --url http://localhost:8000 --polls 120 --delay-s 0.05 --min-workers 1 --expect routing_classifier=false",
+      "elapsed_s": 6.832266025012359,
+      "name": "attest_routing_classifier_disabled",
+      "returncode": 0,
+      "stderr_tail": "",
+      "stdout_tail": "llm/epyc-orchestrator/orchestration/runtime_flags.json\",\n        \"model_grading\": \"ORCHESTRATOR_FEATURE_MODEL_GRADING\",\n        \"openai_compat\": \"ORCHESTRATOR_FEATURE_OPENAI_COMPAT\",\n        \"output_formalizer\": \"runtime_file:/mnt/raid0/llm/epyc-orchestrator/orchestration/runtime_flags.json\",\n        \"output_spill_to_file\": \"runtime_file:/mnt/raid0/llm/epyc-orchestrator/orchestration/runtime_flags.json\",\n        \"parallel_execution\": \"ORCHESTRATOR_FEATURE_PARALLEL_EXECUTION\",\n        \"parallel_tools\": \"runtime_file:/mnt/raid0/llm/epyc-orchestrator/orchestration/runtime_flags.json\",\n        \"personas\": \"ORCHESTRATOR_FEATURE_PERSONAS\",\n        \"plan_review\": \"ORCHESTRATOR_FEATURE_PLAN_REVIEW\",\n        \"process_reward_telemetry\": \"ORCHESTRATOR_FEATURE_PROCESS_REWARD_TELEMETRY\",\n        \"react_mode\": \"runtime_file:/mnt/raid0/llm/epyc-orchestrator/orchestration/runtime_flags.json\",\n        \"reasoning_length_alarm\": \"runtime_file:/mnt/raid0/llm/epyc-orchestrator/orchestration/runtime_flags.json\",\n        \"repl\": \"runtime_file:/mnt/raid0/llm/epyc-orchestrator/orchestration/runtime_flags.json\",\n        \"restricted_python\": \"ORCHESTRATOR_FEATURE_RESTRICTED_PYTHON\",\n        \"resume_tokens\": \"ORCHESTRATOR_RESUME_TOKENS\",\n        \"review_before_commit_consult\": \"ORCHESTRATOR_FEATURE_REVIEW_BEFORE_COMMIT_CONSULT\",\n        \"role_aware_compaction\": \"ORCHESTRATOR_FEATURE_ROLE_AWARE_COMPACTION\",\n        \"routing_classifier\": \"ORCHESTRATOR_FEATURE_ROUTING_CLASSIFIER\",\n        \"script_interception\": \"ORCHESTRATOR_FEATURE_SCRIPT_INTERCEPTION\",\n        \"scripts\": \"runtime_file:/mnt/raid0/llm/epyc-orchestrator/orchestration/runtime_flags.json\",\n        \"segment_cache_dedup\": \"ORCHESTRATOR_FEATURE_SEGMENT_CACHE_DEDUP\",\n        \"self_speculation\": \"ORCHESTRATOR_FEATURE_SELF_SPECULATION\",\n        \"semantic_classifiers\": \"runtime_file:/mnt/raid0/llm/epyc-orchestrator/orchestration/runtime_flags.json\",\n        \"session_compaction\": \"runtime_file:/mnt/raid0/llm/epyc-orchestrator/orchestration/runtime_flags.json\",\n        \"session_log\": \"runtime_file:/mnt/raid0/llm/epyc-orchestrator/orchestration/runtime_flags.json\",\n        \"session_scratchpad\": \"runtime_file:/mnt/raid0/llm/epyc-orchestrator/orchestration/runtime_flags.json\",\n        \"session_token_budget\": \"ORCHESTRATOR_FEATURE_SESSION_TOKEN_BUDGET\",\n        \"side_effect_tracking\": \"ORCHESTRATOR_SIDE_EFFECT_TRACKING\",\n        \"skillbank\": \"ORCHESTRATOR_FEATURE_SKILLBANK\",\n        \"specialist_routing\": \"runtime_file:/mnt/raid0/llm/epyc-orchestrator/orchestration/runtime_flags.json\",\n        \"staged_rewards\": \"ORCHESTRATOR_FEATURE_STAGED_REWARDS\",\n        \"state_history_snapshots\": \"ORCHESTRATOR_FEATURE_STATE_HISTORY_SNAPSHOTS\",\n        \"streaming\": \"runtime_file:/mnt/raid0/llm/epyc-orchestrator/orchestration/runtime_flags.json\",\n        \"structured_delimiters\": \"runtime_file:/mnt/raid0/llm/epyc-orchestrator/orchestration/runtime_flags.json\",\n        \"structured_tool_output\": \"runtime_file:/mnt/raid0/llm/epyc-orchestrator/orchestration/runtime_flags.json\",\n        \"swarm_fanout\": \"ORCHESTRATOR_FEATURE_SWARM_FANOUT\",\n        \"task_token_budget\": \"runtime_file:/mnt/raid0/llm/epyc-orchestrator/orchestration/runtime_flags.json\",\n        \"tool_output_compression\": \"ORCHESTRATOR_FEATURE_TOOL_OUTPUT_COMPRESSION\",\n        \"tool_result_clearing\": \"runtime_file:/mnt/raid0/llm/epyc-orchestrator/orchestration/runtime_flags.json\",\n        \"tools\": \"ORCHESTRATOR_TOOLS\",\n        \"two_level_condensation\": \"ORCHESTRATOR_FEATURE_TWO_LEVEL_CONDENSATION\",\n        \"unified_streaming\": \"ORCHESTRATOR_FEATURE_UNIFIED_STREAMING\",\n        \"ure_uncertainty_shadow_log\": \"runtime_file:/mnt/raid0/llm/epyc-orchestrator/orchestration/runtime_flags.json\",\n        \"user_modeling\": \"runtime_file:/mnt/raid0/llm/epyc-orchestrator/orchestration/runtime_flags.json\",\n        \"web_research_rerank\": \"ORCHESTRATOR_FEATURE_WEB_RESEARCH_RERANK\",\n        \"worker_call_budget\": \"ORCHESTRATOR_WORKER_CALL_BUDGET\"\n      }\n    }\n  },\n  \"workers_seen\": 6\n}\n"
+    }
+  ],
+  "rollout_attested": true,
+  "status": "attestation_passed_rolled_back",
+  "steps": [
+    {
+      "command": "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/maintenance/verify_routing_wiring.py",
+      "elapsed_s": 0.22048838299815543,
+      "name": "verify_routing_wiring",
+      "returncode": 0,
+      "stderr_tail": "",
+      "stdout_tail": "========================================================================\nRouting-Wiring Pre-Flight Verification\n========================================================================\n\n[1/6] Loading classifier weights...\n  [OK] loaded 140,872 params, 8 actions, input_dim=1031, 8 per-class thresholds\n      class 0 (frontdoor): threshold=0.720\n      class 1 (architect_general): threshold=0.491\n      class 2 (architect_general): threshold=0.950\n      class 3 (coder_escalation): threshold=0.445\n      class 4 (worker_general): threshold=0.648\n      class 5 (worker_math): threshold=0.950\n      class 6 (worker_vision): threshold=0.950\n      class 7 (ingest_long_context): threshold=0.534\n\n[2/6] Loading verifier weights...\n  [OK] loaded 68,161 params, n_actions=0, feature_dim=1031, input_dim=1031\n\n[3/6] Smoke-testing classifier + verifier predict() on random features...\n  [OK] classifier.predict_action: action='coder_escalation', confidence=0.9995\n  [OK] verifier.predict(action_idx=0): P_success=0.9995\n\n[4/6] Constructing HybridRouter with shadow=1 (mirrors memrl.py wiring)...\n  [OK] HybridRouter constructed: classifier set, verifier set, shadow=True, threshold=0.5\n\n[5/6] Synthetic route through the classifier-frontdoor-verifier fast-path...\n  [OK] classifier\u2192coder_escalation (conf=0.999) \u2014 non-frontdoor route, verifier bypassed\n\n[6/6] Verifying enforcing mode (SHADOW=0) constructs correctly...\n  [OK] enforcing-mode constructor: shadow=False, threshold=0.5\n\n========================================================================\nALL CHECKS PASSED \u2014 routing wiring is ready for live traffic.\n========================================================================\n\nLaunch with:\n  python3 scripts/server/orchestrator_stack.py start\n\nShadow-mode env vars are already defaulted in orchestrator_stack.py:\n  ORCHESTRATOR_FRONTDOOR_VERIFIER_GATE=1  (verifier loads)\n  FRONTDOOR_VERIFIER_SHADOW=1             (verifier logs but doesn't gate)\n  FRONTDOOR_VERIFIER_THRESHOLD=0.5        (cutoff once enforcing)\n\nTo flip from shadow to enforcing once you've validated:\n  FRONTDOOR_VERIFIER_SHADOW=0 ./scripts/server/orchestrator_stack.py start\n\nTo analyze accumulated shadow data:\n  python3 scripts/maintenance/analyze_verifier_shadow.py\n"
+    },
+    {
+      "command": "ORCHESTRATOR_FEATURE_ROUTING_CLASSIFIER=1 ROUTING_CLASSIFIER_WEIGHTS=/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/routing_classifier_weights.npz /mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/server/orchestrator_stack.py reload orchestrator",
+      "elapsed_s": 10.897525430977112,
+      "name": "reload_orchestrator_routing_classifier_enabled",
+      "returncode": 0,
+      "stderr_tail": "",
+      "stdout_tail": "Reloading orchestrator...\n  Starting orchestrator API on port 8000\n    Fleet marker: /mnt/raid0/llm/tmp/orchestrator_fleet_started_at\n    PID: 1633285\n    Waiting for health...\n    [OK] Orchestrator ready\n    [oom-protect] oom_score_adj=-1000 on 8/8 pid(s)\n"
+    },
+    {
+      "command": "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/validate/attest_flags.py --url http://localhost:8000 --polls 120 --delay-s 0.05 --min-workers 1 --expect routing_classifier=true",
+      "elapsed_s": 6.8070363590086345,
+      "name": "attest_routing_classifier_enabled",
+      "returncode": 0,
+      "stderr_tail": "",
+      "stdout_tail": "llm/epyc-orchestrator/orchestration/runtime_flags.json\",\n        \"model_grading\": \"ORCHESTRATOR_FEATURE_MODEL_GRADING\",\n        \"openai_compat\": \"ORCHESTRATOR_FEATURE_OPENAI_COMPAT\",\n        \"output_formalizer\": \"runtime_file:/mnt/raid0/llm/epyc-orchestrator/orchestration/runtime_flags.json\",\n        \"output_spill_to_file\": \"runtime_file:/mnt/raid0/llm/epyc-orchestrator/orchestration/runtime_flags.json\",\n        \"parallel_execution\": \"ORCHESTRATOR_FEATURE_PARALLEL_EXECUTION\",\n        \"parallel_tools\": \"runtime_file:/mnt/raid0/llm/epyc-orchestrator/orchestration/runtime_flags.json\",\n        \"personas\": \"ORCHESTRATOR_FEATURE_PERSONAS\",\n        \"plan_review\": \"ORCHESTRATOR_FEATURE_PLAN_REVIEW\",\n        \"process_reward_telemetry\": \"ORCHESTRATOR_FEATURE_PROCESS_REWARD_TELEMETRY\",\n        \"react_mode\": \"runtime_file:/mnt/raid0/llm/epyc-orchestrator/orchestration/runtime_flags.json\",\n        \"reasoning_length_alarm\": \"runtime_file:/mnt/raid0/llm/epyc-orchestrator/orchestration/runtime_flags.json\",\n        \"repl\": \"runtime_file:/mnt/raid0/llm/epyc-orchestrator/orchestration/runtime_flags.json\",\n        \"restricted_python\": \"ORCHESTRATOR_FEATURE_RESTRICTED_PYTHON\",\n        \"resume_tokens\": \"ORCHESTRATOR_RESUME_TOKENS\",\n        \"review_before_commit_consult\": \"ORCHESTRATOR_FEATURE_REVIEW_BEFORE_COMMIT_CONSULT\",\n        \"role_aware_compaction\": \"ORCHESTRATOR_FEATURE_ROLE_AWARE_COMPACTION\",\n        \"routing_classifier\": \"ORCHESTRATOR_FEATURE_ROUTING_CLASSIFIER\",\n        \"script_interception\": \"ORCHESTRATOR_FEATURE_SCRIPT_INTERCEPTION\",\n        \"scripts\": \"runtime_file:/mnt/raid0/llm/epyc-orchestrator/orchestration/runtime_flags.json\",\n        \"segment_cache_dedup\": \"ORCHESTRATOR_FEATURE_SEGMENT_CACHE_DEDUP\",\n        \"self_speculation\": \"ORCHESTRATOR_FEATURE_SELF_SPECULATION\",\n        \"semantic_classifiers\": \"runtime_file:/mnt/raid0/llm/epyc-orchestrator/orchestration/runtime_flags.json\",\n        \"session_compaction\": \"runtime_file:/mnt/raid0/llm/epyc-orchestrator/orchestration/runtime_flags.json\",\n        \"session_log\": \"runtime_file:/mnt/raid0/llm/epyc-orchestrator/orchestration/runtime_flags.json\",\n        \"session_scratchpad\": \"runtime_file:/mnt/raid0/llm/epyc-orchestrator/orchestration/runtime_flags.json\",\n        \"session_token_budget\": \"ORCHESTRATOR_FEATURE_SESSION_TOKEN_BUDGET\",\n        \"side_effect_tracking\": \"ORCHESTRATOR_SIDE_EFFECT_TRACKING\",\n        \"skillbank\": \"ORCHESTRATOR_FEATURE_SKILLBANK\",\n        \"specialist_routing\": \"runtime_file:/mnt/raid0/llm/epyc-orchestrator/orchestration/runtime_flags.json\",\n        \"staged_rewards\": \"ORCHESTRATOR_FEATURE_STAGED_REWARDS\",\n        \"state_history_snapshots\": \"ORCHESTRATOR_FEATURE_STATE_HISTORY_SNAPSHOTS\",\n        \"streaming\": \"runtime_file:/mnt/raid0/llm/epyc-orchestrator/orchestration/runtime_flags.json\",\n        \"structured_delimiters\": \"runtime_file:/mnt/raid0/llm/epyc-orchestrator/orchestration/runtime_flags.json\",\n        \"structured_tool_output\": \"runtime_file:/mnt/raid0/llm/epyc-orchestrator/orchestration/runtime_flags.json\",\n        \"swarm_fanout\": \"ORCHESTRATOR_FEATURE_SWARM_FANOUT\",\n        \"task_token_budget\": \"runtime_file:/mnt/raid0/llm/epyc-orchestrator/orchestration/runtime_flags.json\",\n        \"tool_output_compression\": \"ORCHESTRATOR_FEATURE_TOOL_OUTPUT_COMPRESSION\",\n        \"tool_result_clearing\": \"runtime_file:/mnt/raid0/llm/epyc-orchestrator/orchestration/runtime_flags.json\",\n        \"tools\": \"ORCHESTRATOR_TOOLS\",\n        \"two_level_condensation\": \"ORCHESTRATOR_FEATURE_TWO_LEVEL_CONDENSATION\",\n        \"unified_streaming\": \"ORCHESTRATOR_FEATURE_UNIFIED_STREAMING\",\n        \"ure_uncertainty_shadow_log\": \"runtime_file:/mnt/raid0/llm/epyc-orchestrator/orchestration/runtime_flags.json\",\n        \"user_modeling\": \"runtime_file:/mnt/raid0/llm/epyc-orchestrator/orchestration/runtime_flags.json\",\n        \"web_research_rerank\": \"ORCHESTRATOR_FEATURE_WEB_RESEARCH_RERANK\",\n        \"worker_call_budget\": \"ORCHESTRATOR_WORKER_CALL_BUDGET\"\n      }\n    }\n  },\n  \"workers_seen\": 6\n}\n"
+    }
+  ]
+}

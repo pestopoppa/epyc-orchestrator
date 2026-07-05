@@ -21,6 +21,9 @@ from src.autopilot_core.tier_specs import goodput_qph_from_row, task_rate_qph_fr
 
 
 DEFAULT_EVIDENCE_CORE_ID = "core_v1"
+W8_REPLAY_MIN_COMBINED_E = 0.9
+W8_REPLAY_MIN_QUALITY_E = 1.0
+W8_REPLAY_MAX_K = 12
 
 
 def format_planner_evidence_section(
@@ -36,9 +39,11 @@ def format_planner_evidence_section(
     seq_rows = _seq_observation_rows(trusted, core_id=core_id)
     lines = [
         _instrument_power_line(vector_rows, seq_rows, core_id=core_id),
-        "",
-        "Candidate evidence blocks:",
     ]
+    replay_pressure = _w8_replay_pressure_line(seq_rows)
+    if replay_pressure:
+        lines.append(replay_pressure)
+    lines.extend(["", "Candidate evidence blocks:"])
     blocks = _candidate_evidence_blocks(
         vector_rows,
         seq_rows,
@@ -146,8 +151,9 @@ def _instrument_power_line(
         f"seq_candidates={len(seq_candidates)} median_questions={median_q} "
         f"quality_quantum~{quality_quantum:.3f}. "
         "Below-quantum deltas need paired/reproduced evidence before acting. "
-        "W8 confirmation needs repeated replayable numeric/structural candidates "
-        "with both E_quality and E_rate_noninf accumulating."
+        "W8 confirmation needs repeated replayable numeric_trial/structural_experiment "
+        "candidates with both E_quality and E_rate_noninf accumulating; seed_batch "
+        "and structural_prune candidates are not replayable and cannot satisfy W8 replay."
     )
 
 
@@ -203,6 +209,71 @@ def _candidate_evidence_blocks(
             )
         )
     return blocks
+
+
+def _w8_replay_pressure_line(seq_rows: list[dict[str, Any]]) -> str:
+    latest_by_candidate: dict[str, dict[str, Any]] = {}
+    for row in seq_rows:
+        seq = row.get("seq") if isinstance(row.get("seq"), Mapping) else {}
+        candidate = str(seq.get("candidate") or "")
+        if not candidate:
+            continue
+        previous = latest_by_candidate.get(candidate)
+        if previous is None or _latest_trial_id(row) >= _latest_trial_id(previous):
+            latest_by_candidate[candidate] = row
+
+    if not latest_by_candidate:
+        return ""
+
+    open_accumulating = 0
+    replayable = 0
+    confirmed = 0
+    blockers: Counter[str] = Counter()
+    for row in latest_by_candidate.values():
+        seq = row.get("seq") if isinstance(row.get("seq"), Mapping) else {}
+        state = str(seq.get("state") or "")
+        if seq.get("confirmed") is True or state == "confirmed":
+            confirmed += 1
+            continue
+        if state != "accumulating":
+            continue
+        ap24_blocker = _ap24_replay_blocker(row, seq)
+        if ap24_blocker:
+            continue
+        open_accumulating += 1
+        blocker = _config_replay_blocker(
+            row.get("config_snapshot")
+        ) or _w8_replay_floor_blocker(row, seq)
+        if blocker:
+            blockers[blocker] += 1
+        else:
+            replayable += 1
+
+    if confirmed:
+        return (
+            f"W8 replay pressure: {confirmed} confirmed candidate(s) await fresh "
+            "promotion eval; do not generate a new W8 candidate unless that fresh eval is blocked."
+        )
+    if open_accumulating == 0:
+        return (
+            "W8 replay pressure: no accumulating candidate exists; generate a "
+            "keepable replayable numeric_trial or structural_experiment candidate "
+            "before expecting W8 promotion evidence; structural_prune is not replayable."
+        )
+    if replayable == 0:
+        blocker_text = _format_counts(blockers, limit=3)
+        return (
+            f"W8 replay pressure: 0/{open_accumulating} accumulating candidate(s) are "
+            f"replayable (blocked={blocker_text}). Prefer an explicit single-param "
+            "numeric_trial or one-flag structural_experiment; seed_batch, deep_eval, "
+            "structural_prune, and empty-params numeric_trial cannot create replayable "
+            "W8 evidence."
+        )
+    return (
+        f"W8 replay pressure: {replayable}/{open_accumulating} accumulating candidate(s) "
+        "are replayable; prefer collecting replay/confirmation evidence before "
+        "opening unrelated W8 candidate generation."
+    )
 
 
 def _vector_note(rows: list[dict[str, Any]]) -> str:
@@ -304,11 +375,12 @@ def _seq_note(
     latest_seq = latest.get("seq") if isinstance(latest.get("seq"), Mapping) else {}
     e_rate = _float(latest_seq.get("E_rate_noninf"))
     combined = min(view.quality_state.wealth, e_rate) if e_rate > 0.0 else 0.0
-    keep_revert = str(latest.get("keep_revert_decision") or "").strip()
-    if keep_revert in {"revert", "excluded"}:
-        replayable = f"no(AP-24={keep_revert})"
+    ap24_blocker = _ap24_replay_blocker(latest, latest_seq)
+    if ap24_blocker:
+        replayable = f"no({ap24_blocker})"
     else:
-        replayable = "yes" if _replayable_config(latest.get("config_snapshot")) else "no"
+        config_blocker = _config_replay_blocker(latest.get("config_snapshot"))
+        replayable = f"no({config_blocker})" if config_blocker else "yes"
     return (
         f"seq={latest_seq.get('state') or view.state} k={view.quality_state.k} "
         f"E_quality={view.quality_state.wealth:.3f} "
@@ -317,15 +389,54 @@ def _seq_note(
     )
 
 
+def _ap24_replay_blocker(row: Mapping[str, Any], seq: Mapping[str, Any]) -> str:
+    """Return the AP-24 reason a latest seq row is terminal for replay."""
+    keep_revert = str(row.get("keep_revert_decision") or "").strip()
+    if keep_revert == "revert":
+        return "AP-24=revert"
+    if keep_revert != "excluded":
+        return ""
+    if str(seq.get("state") or "") != "accumulating":
+        return "AP-24=excluded"
+    if str(row.get("failure_analysis") or "").strip():
+        return "AP-24=excluded"
+    return ""
+
+
+def _w8_replay_floor_blocker(row: Mapping[str, Any], seq: Mapping[str, Any]) -> str:
+    try:
+        k = int(seq.get("k") or 0)
+    except (TypeError, ValueError):
+        k = 0
+    if k >= W8_REPLAY_MAX_K:
+        return "attempt_cap_reached"
+    e_quality = _float(seq.get("E_quality"))
+    e_rate = _float(seq.get("E_rate_noninf"))
+    combined = min(e_quality, e_rate) if e_quality > 0.0 and e_rate > 0.0 else 0.0
+    if combined < W8_REPLAY_MIN_COMBINED_E:
+        return "combined_E_below_replay_floor"
+    if e_quality < W8_REPLAY_MIN_QUALITY_E:
+        return "E_quality_below_replay_floor"
+    return ""
+
+
 def _replayable_config(value: Any) -> bool:
+    return not _config_replay_blocker(value)
+
+
+def _config_replay_blocker(value: Any) -> str:
     if not isinstance(value, Mapping):
-        return False
+        return "missing_action"
     action_type = str(value.get("type") or "")
     if action_type == "numeric_trial":
-        return isinstance(value.get("params"), Mapping) and bool(value.get("params"))
+        if isinstance(value.get("params"), Mapping) and bool(value.get("params")):
+            return ""
+        return "numeric_trial_missing_params"
     if action_type == "structural_experiment":
-        return isinstance(value.get("flags"), Mapping) and bool(value.get("flags"))
-    return False
+        if isinstance(value.get("flags"), Mapping) and bool(value.get("flags")):
+            return ""
+        return "structural_experiment_missing_flags"
+    return f"unreplayable_action={action_type or 'unknown'}"
 
 
 def _latest_trial_id(row_or_rows: Mapping[str, Any] | list[dict[str, Any]]) -> int:

@@ -50,6 +50,15 @@ def test_stage_sandbox_copies_touched(tmp_path: Path) -> None:
     cleanup_sandbox_dir(sb)
 
 
+def test_stage_sandbox_full_tree_copies_untouched(tmp_path: Path) -> None:
+    root = _repo(tmp_path, {"a.py": "x\n", "untouched.py": "keep\n"})
+    ps = PatchSet(files=[_modify("a.py", "x\n", [Hunk(start_line=1, end_line=1, replacement="y\n")])])
+    sb = stage_sandbox(ps, root, full_tree=True)
+    assert (sb / "a.py").read_text() == "x\n"
+    assert (sb / "untouched.py").read_text() == "keep\n"
+    cleanup_sandbox_dir(sb)
+
+
 def cleanup_sandbox_dir(p: Path) -> None:
     import shutil
     shutil.rmtree(p, ignore_errors=True)
@@ -293,6 +302,22 @@ def test_sandboxed_failing_verify_does_not_promote(tmp_path: Path) -> None:
     assert res.verify_passed is False and not res.ok
     assert promote_sandbox(res, root) is False
     assert (root / "a.py").read_text() == "old\n"  # untouched
+    cleanup_sandbox(res)
+
+
+def test_full_tree_verifier_sees_cross_file_state(tmp_path: Path) -> None:
+    root = _repo(tmp_path, {"a.py": "old\n", "untouched.py": "keep\n"})
+    ps = PatchSet(files=[_modify("a.py", "old\n", [Hunk(start_line=1, end_line=1, replacement="new\n")])])
+
+    def verify_fn(sandbox: Path) -> bool:
+        return (
+            (sandbox / "a.py").read_text() == "new\n"
+            and (sandbox / "untouched.py").read_text() == "keep\n"
+        )
+
+    res = apply_patchset_sandboxed(ps, repo_root=root, verify_fn=verify_fn, full_tree=True)
+    assert res.ok
+    assert res.verify_passed is True
     cleanup_sandbox(res)
 
 

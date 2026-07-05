@@ -55,6 +55,102 @@ def _apply_params(*args, **kwargs):
     from config_applicator import apply_params as _ap
     return _ap(*args, **kwargs)
 
+
+def _normalize_numeric_trial_params(
+    surface: str,
+    params: dict[str, Any],
+) -> dict[str, Any]:
+    """Accept controller-friendly short param names for a numeric surface.
+
+    NumericSwarm's internal/applicator names are fully qualified
+    (``kv.keep_ratio``), but the controller often emits the user-facing knob
+    name from the action schema (``keep_ratio``). Normalize when the short name
+    is unambiguous within the selected surface and leave unknown keys untouched
+    so the applicator can report an actionable error.
+    """
+    if not params:
+        return {}
+    try:
+        from species.numeric_swarm import SURFACES
+    except Exception:
+        log.debug("Could not import NumericSwarm surfaces for param normalization", exc_info=True)
+        return dict(params)
+
+    specs = SURFACES.get(surface, [])
+    full_names = {spec.name for spec in specs}
+    short_to_full: dict[str, str] = {}
+    for spec in specs:
+        if "." not in spec.name:
+            continue
+        short = spec.name.split(".", 1)[1]
+        if short in short_to_full:
+            short_to_full.pop(short, None)
+        else:
+            short_to_full[short] = spec.name
+
+    normalized: dict[str, Any] = {}
+    for key, value in params.items():
+        key_s = str(key)
+        if key_s in full_names:
+            normalized[key_s] = value
+        elif key_s in short_to_full:
+            normalized[short_to_full[key_s]] = value
+        else:
+            normalized[key_s] = value
+    return normalized
+
+
+def _numeric_apply_error_skip(
+    *,
+    surface: str,
+    params: dict[str, Any],
+    apply_result: dict[str, Any],
+) -> SkipOutcome:
+    errors = apply_result.get("errors") or []
+    if isinstance(errors, str):
+        errors = [errors]
+    reason = "; ".join(str(error) for error in errors) or str(apply_result)
+    unknown = apply_result.get("unknown_params") or []
+    status = "invalid" if unknown or "unknown_params:" in reason else "skipped"
+    return SkipOutcome(
+        status,
+        (
+            f"numeric_trial params failed to apply for surface {surface}: {reason}; "
+            f"params={dict(params)}"
+        ),
+        "numeric_trial",
+    )
+
+
+def _numeric_apply_no_changes(apply_result: dict[str, Any]) -> bool:
+    if apply_result.get("status") == "no_changes":
+        return True
+    nested_results = [
+        apply_result.get("hot_swap_result"),
+        apply_result.get("env_result"),
+        apply_result.get("kv_compact_result"),
+    ]
+    present = [result for result in nested_results if isinstance(result, dict)]
+    return bool(present) and all(
+        result.get("status") == "no_changes" for result in present
+    )
+
+
+def _numeric_no_change_skip(
+    *,
+    surface: str,
+    params: dict[str, Any],
+) -> SkipOutcome:
+    return SkipOutcome(
+        "skipped",
+        (
+            f"numeric_trial params produced no live config changes for surface "
+            f"{surface}; params={dict(params)}"
+        ),
+        "numeric_trial",
+    )
+
+
 if TYPE_CHECKING:
     from experiment_journal import ExperimentJournal
     from pareto_archive import ParetoArchive
@@ -378,7 +474,7 @@ def _action_seed_batch(action: dict[str, Any], ctx: _ActionContext):
 
 def _action_numeric_trial(action: dict[str, Any], ctx: _ActionContext):
     surface = action.get("surface", "memrl_retrieval")
-    explicit_params = action.get("params", {})
+    explicit_params = _normalize_numeric_trial_params(surface, action.get("params", {}) or {})
     suppressed_surfaces = _planner_convention_bindings(ctx, species="numeric_swarm")
     if surface in suppressed_surfaces:
         return (
@@ -393,17 +489,36 @@ def _action_numeric_trial(action: dict[str, Any], ctx: _ActionContext):
     if explicit_params:
         # Apply explicit params
         apply_result = _apply_params(explicit_params)
+        if _numeric_apply_no_changes(apply_result):
+            return (
+                _numeric_no_change_skip(surface=surface, params=explicit_params),
+                "numeric_swarm",
+            )
         if apply_result.get("status") == "error":
             log.warning(
                 "Skipping numeric trial eval; explicit params were not applied: %s",
                 apply_result.get("errors") or apply_result,
             )
-            return None, "numeric_swarm"
+            return (
+                _numeric_apply_error_skip(
+                    surface=surface,
+                    params=explicit_params,
+                    apply_result=apply_result,
+                ),
+                "numeric_swarm",
+            )
         action["params"] = dict(explicit_params)
     else:
         # Let Optuna suggest
         trial = ctx.swarm.suggest_trial(surface)
         apply_result = _apply_params(trial["params"])
+        if _numeric_apply_no_changes(apply_result):
+            reason = "suggested params produced no live config changes"
+            ctx.swarm.mark_failed(surface, trial["trial_number"], reason)
+            return (
+                _numeric_no_change_skip(surface=surface, params=dict(trial["params"])),
+                "numeric_swarm",
+            )
         if apply_result.get("status") == "error":
             reason = "; ".join(apply_result.get("errors", [])) or str(apply_result)
             ctx.swarm.mark_failed(surface, trial["trial_number"], reason)
@@ -411,7 +526,14 @@ def _action_numeric_trial(action: dict[str, Any], ctx: _ActionContext):
                 "Skipping numeric trial eval; suggested params were not applied: %s",
                 reason,
             )
-            return None, "numeric_swarm"
+            return (
+                _numeric_apply_error_skip(
+                    surface=surface,
+                    params=dict(trial["params"]),
+                    apply_result=apply_result,
+                ),
+                "numeric_swarm",
+            )
         action["params"] = dict(trial["params"])
         ctx.state["_current_optuna_trial"] = {
             "surface": surface,
@@ -1068,6 +1190,13 @@ def _action_structural_experiment(action: dict[str, Any], ctx: _ActionContext):
             "structural_lab",
         )
 
+    noop_reason = _structural_noop_reason(flags, ctx.lab)
+    if noop_reason:
+        return (
+            SkipOutcome("skipped", noop_reason, "structural_experiment"),
+            "structural_lab",
+        )
+
     validation = ctx.lab.propose_flag_experiment(flags)
     status = validation.get("status")
     if status != "valid":
@@ -1104,6 +1233,44 @@ def _action_structural_experiment(action: dict[str, Any], ctx: _ActionContext):
         ctx.swarm.mark_epoch(f"structural_experiment:{flags}")
 
     return eval_result, "structural_lab"
+
+
+def _structural_noop_reason(flags: dict[str, Any], lab: Any) -> str | None:
+    if not flags or lab is None or not hasattr(lab, "current_flags"):
+        return None
+    try:
+        current = lab.current_flags()
+    except Exception:
+        return None
+    if not isinstance(current, dict) or not current:
+        return None
+
+    requested: dict[str, bool] = {}
+    for name, value in flags.items():
+        desired = _coerce_bool(value)
+        actual = _coerce_bool(current.get(name))
+        if desired is None or actual is None:
+            return None
+        requested[str(name)] = desired
+        if actual != desired:
+            return None
+
+    rendered = ", ".join(
+        f"{name}={str(value).lower()}" for name, value in sorted(requested.items())
+    )
+    return f"structural_experiment would not change live flag state: {rendered}"
+
+
+def _coerce_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"true", "1", "yes", "on"}:
+            return True
+        if text in {"false", "0", "no", "off"}:
+            return False
+    return None
 
 
 def _action_structural_prune(action: dict[str, Any], ctx: _ActionContext):

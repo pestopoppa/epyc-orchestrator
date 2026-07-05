@@ -651,6 +651,12 @@ class TestPromptConstants:
         assert "grep" in DEFAULT_ROOT_LM_TOOLS
         assert "FINAL" in DEFAULT_ROOT_LM_TOOLS
 
+    def test_default_root_lm_tools_remains_compressed(self):
+        """Default tool prompt should stay materially smaller than verbose."""
+        from src.prompt_builders.constants import DEFAULT_ROOT_LM_TOOLS, VERBOSE_ROOT_LM_TOOLS
+
+        assert len(DEFAULT_ROOT_LM_TOOLS.split()) <= len(VERBOSE_ROOT_LM_TOOLS.split()) * 0.5
+
     def test_default_root_lm_rules_not_empty(self):
         """Test DEFAULT_ROOT_LM_RULES is a non-empty string."""
         from src.prompt_builders.constants import DEFAULT_ROOT_LM_RULES
@@ -964,8 +970,6 @@ class TestBuildArchitectInvestigatePrompt:
         assert "What is the capital of France?" in result
         assert "D|" in result  # Direct answer format
         assert "I|" in result  # Investigate/delegate format
-        # Structural: D| and I| decision formats present
-        assert "D|" in result and ("D|42" in result or "D|B" in result)
         assert "brief:" in result
 
     def test_with_context(self):
@@ -976,10 +980,21 @@ class TestBuildArchitectInvestigatePrompt:
             context="Document excerpt here...",
         )
         assert "Document excerpt here..." in result
-        assert "Context" in result
+        assert "Evidence bundle" in result
+        assert "not a solution plan" in result
         # Structural: Should have both D| and I| decision options
         assert result.count("D|") >= 1
         assert result.count("I|") >= 1
+
+    def test_discovery_framing_is_non_prescriptive(self):
+        from src.prompt_builders import build_architect_investigate_prompt
+
+        prompt = build_architect_investigate_prompt("Investigate the delegation path")
+        assert "open questions" in prompt
+        assert "file relationships" in prompt
+        assert "missing evidence" in prompt
+        assert "Do NOT propose an implementation" in prompt
+        assert "Do NOT assume omitted files are irrelevant" in prompt
 
     def test_mentions_valid_roles(self):
         from src.prompt_builders import build_architect_investigate_prompt

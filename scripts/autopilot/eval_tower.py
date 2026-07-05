@@ -1,4 +1,4 @@
-"""Tiered evaluation tower: T0 (10q/30s) → T1 (100q/5m) → T2 (500+/30m) → T3 (hard-only).
+"""Tiered evaluation tower: T0 (10q/30s) → T1 (100q/5m) → T2 (500+/30m) → T3 (expert/hard workflow).
 
 Wraps existing seeding infrastructure for orchestrator API calls and scoring.
 Training set (debug suites) is kept separate from validation set (HF benchmarks).
@@ -218,7 +218,7 @@ def _sample_scoreable_eval_questions_for_pool_tier(
 ) -> list[dict]:
     """Sample scoreable questions whose source-pool difficulty tier matches exactly.
 
-    This keeps T3 as a first-class hard-only lane without changing the broader mixed
+    This keeps T3 as a first-class expert/hard workflow lane without changing the broader mixed
     T1/T2 sampler, whose caller surface is much wider.
     """
     if not pool or n <= 0:
@@ -422,13 +422,13 @@ def _same_role_matrix_allows_eval_fanout(role: str) -> bool:
             load_contention_matrix,
             matrix_status,
             pair_policy,
-            topology_fingerprint,
+            topology_fingerprint_for_matrix,
         )
 
-        current_hash = topology_fingerprint(NUMA_CONFIG)
+        matrix = load_contention_matrix()
+        current_hash = topology_fingerprint_for_matrix(NUMA_CONFIG, matrix)
         if matrix_status(current_topology_hash=current_hash) != MatrixStatus.OK:
             return False
-        matrix = load_contention_matrix()
         return (
             pair_policy(role, role, TrafficClass.BACKGROUND, matrix=matrix)
             == PairDecision.ALLOW
@@ -718,7 +718,7 @@ def _parse_rubric_judge_scores(text: str) -> dict[str, float]:
 
 
 class EvalTower:
-    """Progressive evaluation: T0 → T1 → T2, with T3 hard-only stress eval."""
+    """Progressive evaluation: T0 → T1 → T2, with T3 expert/hard workflow eval."""
 
     def __init__(
         self,
@@ -1056,6 +1056,9 @@ class EvalTower:
                 call_kwargs["tools"] = q.get("tools")
             if "tool_choice" in q:
                 call_kwargs["tool_choice"] = q.get("tool_choice")
+            prompt_root = str(q.get("_prompt_root") or "").strip()
+            if prompt_root:
+                call_kwargs["prompt_root"] = prompt_root
             resp = call_orchestrator_forced(**call_kwargs)
             elapsed = time.time() - start
             answer = resp.get("answer", "")
@@ -2052,7 +2055,7 @@ class EvalTower:
         *,
         exclude_qids: set[str] | None = None,
     ) -> EvalResult:
-        """Tier 3: hard-only stress eval from pool rows explicitly labeled tier=3."""
+        """Tier 3: expert/hard workflow eval from pool rows explicitly labeled tier=3."""
         pool = self._load_pool()
         if not pool:
             log.error("No question pool available for T3")
@@ -2101,6 +2104,8 @@ class EvalTower:
             "seed": draw_seed,
             "pool_tier": 3,
         }
+        # Keep the original core_id for evidence continuity; only the human-facing
+        # label changed from "hard-only" to "expert/hard workflow".
         result.core_id = f"t3_hard_only_v1_seed_{draw_seed}_n{requested_n}"
         return result
 

@@ -173,6 +173,84 @@ def test_seq_inputs_use_trusted_same_tier_prior_rows(tmp_path: Path) -> None:
     assert inputs["baseline_reference"]["due"] is True
 
 
+def test_seq_paired_baseline_diagnostics_compares_latest_reference(
+    tmp_path: Path,
+) -> None:
+    action = {"type": "seed_batch", "n_questions": 10}
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    journal.record(
+        _entry(
+            1,
+            action,
+            eval_details_extra={
+                "seq_baseline_reference_draw": True,
+                "question_results": [
+                    {"qid": "q1", "suite": "math", "correct": False},
+                ],
+            },
+        )
+    )
+    journal.record(
+        _entry(
+            2,
+            action,
+            eval_details_extra={
+                "seq_baseline_reference_draw": True,
+                "seq_baseline_reference_reason": "cadence",
+                "question_results": [
+                    {"qid": "q1", "suite": "math", "correct": True},
+                    {"qid": "q2", "suite": "math", "correct": False},
+                    {"qid": "q3", "suite": "math", "correct": False},
+                ],
+            },
+        )
+    )
+
+    diag = autopilot._seq_paired_baseline_diagnostics(
+        journal=journal,
+        tier=1,
+        candidate="candidate-a",
+        candidate_trial_id=20,
+        question_results=[
+            {"qid": "q1", "suite": "math", "correct": True},
+            {"qid": "q2", "suite": "math", "correct": True},
+            {"qid": "q4", "suite": "math", "correct": False},
+        ],
+    )
+
+    assert diag["status"] == "ok"
+    assert diag["used_for_gating"] is False
+    assert diag["baseline_reference_trial_id"] == 2
+    assert diag["baseline_reference_reason"] == "cadence"
+    assert diag["candidate_trial_id"] == 20
+    assert diag["shared_qids"] == 2
+    assert diag["same_correct"] == 1
+    assert diag["a_wrong_b_correct"] == 1
+    assert diag["delta_b_minus_a"] == pytest.approx(0.5)
+
+
+def test_seq_paired_baseline_diagnostics_reports_missing_reference(
+    tmp_path: Path,
+) -> None:
+    journal = ExperimentJournal(journal_dir=tmp_path)
+
+    diag = autopilot._seq_paired_baseline_diagnostics(
+        journal=journal,
+        tier=1,
+        candidate="candidate-a",
+        candidate_trial_id=20,
+        question_results=[{"qid": "q1", "suite": "math", "correct": True}],
+    )
+
+    assert diag == {
+        "status": "no_baseline_reference_vector",
+        "candidate": "candidate-a",
+        "candidate_trial_id": 20,
+        "candidate_vector_qids": 1,
+        "used_for_gating": False,
+    }
+
+
 def test_seq_baseline_reference_state_tracks_cadence_and_staleness(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -770,6 +848,82 @@ def test_maybe_force_seq_baseline_draw_uses_alternate_when_default_blacklisted(
     assert state["seq_baseline_draw_forced"]["action"] == forced
 
 
+def test_maybe_force_seq_baseline_draw_suppresses_recent_blocked_latch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(autopilot, "SEQ_BASELINE_BLOCK_RETRY_CADENCE", 5)
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    action = {"type": "noop"}
+    forced_default = {"type": "seed_batch", "n_questions": 14}
+    state: dict = {
+        "seq_baseline_draw_blocked": {
+            "trial_id": 9,
+            "action": forced_default,
+            "reference_key": "tier=1:reference=none",
+            "reason": "all seed fallbacks were blacklisted",
+        }
+    }
+
+    forced, rationale, reference = autopilot._maybe_force_seq_baseline_draw(
+        action,
+        state=state,
+        journal=journal,
+        tier=1,
+        blacklist=[
+            {"pattern": forced_default, "reason": "default still blocked"}
+        ],
+        rationale={"planner": "kept"},
+        trial_counter=12,
+        enabled=True,
+    )
+
+    assert forced == action
+    assert rationale == {"planner": "kept"}
+    assert reference is None
+    assert state["seq_baseline_draw_blocked"]["trial_id"] == 9
+
+
+def test_maybe_force_seq_baseline_draw_retries_old_blocked_latch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(autopilot, "SEQ_BASELINE_BLOCK_RETRY_CADENCE", 5)
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    action = {"type": "noop"}
+    forced_default = {"type": "seed_batch", "n_questions": 14}
+    state: dict = {
+        "seq_baseline_draw_blocked": {
+            "trial_id": 9,
+            "action": forced_default,
+            "reference_key": "tier=1:reference=none",
+            "reason": "all seed fallbacks were blacklisted",
+        }
+    }
+
+    forced, rationale, reference = autopilot._maybe_force_seq_baseline_draw(
+        action,
+        state=state,
+        journal=journal,
+        tier=1,
+        blacklist=[
+            {"pattern": forced_default, "reason": "default still blocked"}
+        ],
+        rationale=None,
+        trial_counter=14,
+        enabled=True,
+    )
+
+    assert forced == {"type": "seed_batch", "n_questions": 16}
+    assert rationale == {
+        "seq_baseline_reference_draw": True,
+        "seq_baseline_reference_reason": "no marked seq baseline-reference draw",
+    }
+    assert reference is not None
+    assert state["seq_baseline_draw_blocked"] is None
+    assert state["seq_baseline_draw_forced"]["action"] == forced
+
+
 def test_maybe_force_seq_baseline_draw_records_block_when_all_fallbacks_blacklisted(
     tmp_path: Path,
 ) -> None:
@@ -1226,6 +1380,8 @@ def _run_loop_inner_seq_harness(
     verdict_seq: dict[str, Any],
     force_fresh_eval_context: dict[str, Any] | None = None,
     learning_exclusion: tuple[str | None, str, Any] = (None, "", None),
+    use_controller: bool = False,
+    planner_should_not_run: bool = False,
 ) -> tuple[dict[str, Any], list[tuple[bool, int]]]:
     baseline_update_calls: list[tuple[bool, int]] = []
 
@@ -1607,11 +1763,17 @@ def _run_loop_inner_seq_harness(
         lambda *args, **kwargs: {},
     )
     monkeypatch.setattr(autopilot, "get_preflight_diagnostics", None)
+    if planner_should_not_run:
+
+        def fail_plan_with_providers(*args: Any, **kwargs: Any) -> Any:
+            raise AssertionError("planner should be bypassed for forced seq action")
+
+        monkeypatch.setattr(autopilot, "plan_with_providers", fail_plan_with_providers)
 
     autopilot._run_loop_inner(
         max_trials=1,
         dry_run=False,
-        use_controller=False,
+        use_controller=use_controller,
         tui=None,
     )
 
@@ -1667,6 +1829,46 @@ def test_run_loop_inner_forwards_finalized_seq_to_gate_and_clears_pending(
         },
     }
     assert "seq_pending_promotion_fresh_eval" not in returned_state
+
+
+def test_run_loop_inner_forced_seq_fresh_eval_bypasses_controller_planner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state: dict[str, Any] = {
+        "trial_counter": 0,
+        "paused": False,
+        "td_errors": [],
+        "seeder_state": {},
+        "consecutive_failures": 0,
+        "quality_history": [],
+        "quality_history_by_tier": {},
+        "baseline_state": {},
+    }
+
+    returned_state, baseline_update_calls = _run_loop_inner_seq_harness(
+        monkeypatch,
+        state=state,
+        verdict_seq={
+            "candidate": "candidate-controller",
+            "confirmed": True,
+            "E_quality": 120.0,
+            "E_rate_noninf": 120.0,
+            "z": 0.2,
+            "r_eff": 200,
+        },
+        force_fresh_eval_context={
+            "candidate": "candidate-controller",
+            "source_trial_id": 17,
+        },
+        use_controller=True,
+        planner_should_not_run=True,
+    )
+
+    assert baseline_update_calls == [(True, 0)]
+    assert returned_state["seq_last_promotion_finalized"]["candidate"] == (
+        "candidate-controller"
+    )
+    assert "session_id" not in returned_state
 
 
 def test_run_loop_inner_nonfinalized_seq_does_not_promote_and_leaves_pending(

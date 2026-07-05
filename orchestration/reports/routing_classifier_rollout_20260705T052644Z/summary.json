@@ -1,0 +1,139 @@
+{
+  "activation_commands": [
+    "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/maintenance/verify_routing_wiring.py",
+    "ORCHESTRATOR_FEATURE_ROUTING_CLASSIFIER=1 ROUTING_CLASSIFIER_WEIGHTS=/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/routing_classifier_weights.npz /mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/server/orchestrator_stack.py reload orchestrator",
+    "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/validate/attest_flags.py --url http://localhost:8000 --polls 120 --delay-s 0.05 --min-workers 1 --expect routing_classifier=true"
+  ],
+  "allow_autopilot_active": false,
+  "applied": false,
+  "attestation_reports": {},
+  "blockers": [],
+  "decision_grade": false,
+  "generated_at": "2026-07-05T05:26:45+00:00",
+  "keep_enabled": false,
+  "notes": [
+    "No model prompts are sent by this rollout harness.",
+    "decision_grade=false because this attests feature rollout only, not routing quality."
+  ],
+  "preflight": {
+    "api_health": {
+      "elapsed_s": 0.11818874700111337,
+      "error": null,
+      "json_body": {
+        "backend_health": {},
+        "backend_probes": {
+          "architect_general": {
+            "failure_detail": "",
+            "failure_reason": "",
+            "latency_ms": 33.6,
+            "ok": true,
+            "status_code": 200,
+            "url": "http://localhost:8083"
+          },
+          "coder_escalation/frontdoor/worker_summarize": {
+            "failure_detail": "",
+            "failure_reason": "",
+            "latency_ms": 49.7,
+            "ok": true,
+            "status_code": 200,
+            "url": "http://localhost:8070"
+          },
+          "ingest_long_context": {
+            "failure_detail": "",
+            "failure_reason": "",
+            "latency_ms": 26.5,
+            "ok": true,
+            "status_code": 200,
+            "url": "http://localhost:8085"
+          },
+          "toolrunner/worker_general/worker_math": {
+            "failure_detail": "",
+            "failure_reason": "",
+            "latency_ms": 42.0,
+            "ok": true,
+            "status_code": 200,
+            "url": "http://localhost:8072"
+          },
+          "vision_escalation": {
+            "failure_detail": "",
+            "failure_reason": "",
+            "latency_ms": 11.8,
+            "ok": true,
+            "status_code": 200,
+            "url": "http://localhost:8087"
+          },
+          "worker_vision": {
+            "failure_detail": "",
+            "failure_reason": "",
+            "latency_ms": 19.0,
+            "ok": true,
+            "status_code": 200,
+            "url": "http://localhost:8086"
+          }
+        },
+        "knowledge_tools": {
+          "available": false,
+          "tools": {
+            "get_wikipedia_article": {
+              "available": false,
+              "error": "No module named 'mwclient'"
+            },
+            "search_arxiv": {
+              "available": false,
+              "error": "No module named 'arxiv'"
+            },
+            "search_books": {
+              "available": false,
+              "error": "No module named 'googleapiclient'"
+            },
+            "search_papers": {
+              "available": false,
+              "error": "No module named 'semanticscholar'"
+            },
+            "search_wikipedia": {
+              "available": false,
+              "error": "No module named 'mwclient'"
+            }
+          }
+        },
+        "mock_mode_available": true,
+        "models_loaded": 6,
+        "status": "ok",
+        "version": "0.1.0"
+      },
+      "ok": true,
+      "status": 200,
+      "url": "http://localhost:8000/health"
+    },
+    "api_url": "http://localhost:8000",
+    "autopilot_active": true,
+    "config_attest": {
+      "all_sampled_workers_enabled": false,
+      "any_sampled_worker_enabled": false,
+      "routing_classifier_by_pid": {
+        "1586440": false,
+        "1586442": false,
+        "1586443": false,
+        "1586444": false
+      },
+      "routing_classifier_sources_by_pid": {
+        "1586440": "ORCHESTRATOR_FEATURE_ROUTING_CLASSIFIER",
+        "1586442": "ORCHESTRATOR_FEATURE_ROUTING_CLASSIFIER",
+        "1586443": "ORCHESTRATOR_FEATURE_ROUTING_CLASSIFIER",
+        "1586444": "ORCHESTRATOR_FEATURE_ROUTING_CLASSIFIER"
+      },
+      "samples_requested": 12,
+      "workers_seen": 4
+    },
+    "weights_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/routing_classifier_weights.npz",
+    "weights_present": true
+  },
+  "rollback_commands": [
+    "ORCHESTRATOR_FEATURE_ROUTING_CLASSIFIER=0 ROUTING_CLASSIFIER_WEIGHTS=/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/routing_classifier_weights.npz /mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/server/orchestrator_stack.py reload orchestrator",
+    "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/validate/attest_flags.py --url http://localhost:8000 --polls 120 --delay-s 0.05 --min-workers 1 --expect routing_classifier=false"
+  ],
+  "rollback_steps": [],
+  "rollout_attested": false,
+  "status": "plan_only",
+  "steps": []
+}

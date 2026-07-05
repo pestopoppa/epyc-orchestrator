@@ -1,0 +1,114 @@
+{
+  "answer_key_schema": "ri10_canary_answer_key.v1",
+  "arm_comparison": {
+    "accuracy_delta_enforce_minus_shadow": 0.0,
+    "mean_token_f1_delta_enforce_minus_shadow": 0.0005305039787798366,
+    "status": "ready"
+  },
+  "buckets": {
+    "arm:enforce": {
+      "accuracy": 0.1,
+      "correct": 3,
+      "mean_token_f1": 0.06382727786074642,
+      "missing": 0,
+      "rows": 30,
+      "scored": 30
+    },
+    "arm:shadow": {
+      "accuracy": 0.1,
+      "correct": 3,
+      "mean_token_f1": 0.06329677388196658,
+      "missing": 0,
+      "rows": 30,
+      "scored": 30
+    },
+    "overall": {
+      "accuracy": 0.1,
+      "correct": 6,
+      "mean_token_f1": 0.0635620258713565,
+      "missing": 0,
+      "rows": 60,
+      "scored": 60
+    },
+    "role:frontdoor": {
+      "accuracy": 0.2,
+      "correct": 4,
+      "mean_token_f1": 0.028571428571428574,
+      "missing": 0,
+      "rows": 20,
+      "scored": 20
+    },
+    "role:worker_general": {
+      "accuracy": 0.1,
+      "correct": 2,
+      "mean_token_f1": 0.11727578962619531,
+      "missing": 0,
+      "rows": 20,
+      "scored": 20
+    },
+    "role:worker_vision": {
+      "accuracy": 0.0,
+      "correct": 0,
+      "mean_token_f1": 0.04483885941644562,
+      "missing": 0,
+      "rows": 20,
+      "scored": 20
+    },
+    "role_arm:frontdoor:enforce": {
+      "accuracy": 0.2,
+      "correct": 2,
+      "mean_token_f1": 0.028571428571428574,
+      "missing": 0,
+      "rows": 10,
+      "scored": 10
+    },
+    "role_arm:frontdoor:shadow": {
+      "accuracy": 0.2,
+      "correct": 2,
+      "mean_token_f1": 0.028571428571428574,
+      "missing": 0,
+      "rows": 10,
+      "scored": 10
+    },
+    "role_arm:worker_general:enforce": {
+      "accuracy": 0.1,
+      "correct": 1,
+      "mean_token_f1": 0.11727578962619531,
+      "missing": 0,
+      "rows": 10,
+      "scored": 10
+    },
+    "role_arm:worker_general:shadow": {
+      "accuracy": 0.1,
+      "correct": 1,
+      "mean_token_f1": 0.11727578962619531,
+      "missing": 0,
+      "rows": 10,
+      "scored": 10
+    },
+    "role_arm:worker_vision:enforce": {
+      "accuracy": 0.0,
+      "correct": 0,
+      "mean_token_f1": 0.045634615384615385,
+      "missing": 0,
+      "rows": 10,
+      "scored": 10
+    },
+    "role_arm:worker_vision:shadow": {
+      "accuracy": 0.0,
+      "correct": 0,
+      "mean_token_f1": 0.04404310344827586,
+      "missing": 0,
+      "rows": 10,
+      "scored": 10
+    }
+  },
+  "f1_threshold": 0.8,
+  "generated_at": "2026-07-05T18:56:38Z",
+  "rows": 60,
+  "schema_version": "ri10_canary_scored_response_report.v1",
+  "status": "ready",
+  "status_counts": {
+    "scored": 60
+  }
+}

@@ -269,6 +269,7 @@ def test_call_orchestrator_forced_includes_optional_payload_fields():
         ],
         tool_choice={"type": "function", "function": {"name": "web_search"}},
         max_tokens=1024,
+        prompt_root="/tmp/gepa-root",
     )
 
     payload = client.post.call_args.kwargs["json"]
@@ -284,6 +285,7 @@ def test_call_orchestrator_forced_includes_optional_payload_fields():
     assert payload["tools"][0]["function"]["name"] == "web_search"
     assert payload["tool_choice"]["function"]["name"] == "web_search"
     assert payload["max_tokens"] == 1024
+    assert payload["x_orchestrator_prompt_root"] == "/tmp/gepa-root"
 
 
 def test_call_orchestrator_forced_omits_native_tool_payload_by_default():
@@ -295,6 +297,7 @@ def test_call_orchestrator_forced_omits_native_tool_payload_by_default():
     payload = client.post.call_args.kwargs["json"]
     assert "tools" not in payload
     assert "tool_choice" not in payload
+    assert "x_orchestrator_prompt_root" not in payload
 
 
 class _Future:

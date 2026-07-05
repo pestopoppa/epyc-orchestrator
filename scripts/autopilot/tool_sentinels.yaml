@@ -17,15 +17,16 @@
 # runtime generation removes the realistic (grep-the-repo) bypass, and the
 # call-count measurement is what guarantees the tool was used.
 #
-# force_mode: "repl" pins the REPL CALL(...) path; scoring is `substring`.
-# FINAL-ANSWER DISCIPLINE (gate-2): each prompt demands the final answer be ONLY
-# the value (no code/quotes/wrapper) — models had returned code templates / the
-# raw ToolOutput repr. INERT unless AUTOPILOT_TOOL_SENTINELS=1.
+# force_mode: "repl" pins the REPL path; scoring is `substring`.
+# EXECUTION DISCIPLINE (gate-3): prompts must demand executable Python that
+# calls TOOL("get_eval_secret", name=...) and then FINAL(secret). Earlier prose
+# prompts conflicted with force_mode="repl" and caused comment-only/no-progress
+# failures despite telemetry being healthy. INERT unless AUTOPILOT_TOOL_SENTINELS=1.
 
 - id: tool_use_secret_alpha
   suite: tool_use
   force_mode: "repl"
-  prompt: "Call the get_eval_secret tool with name=\"alpha\" to retrieve a value that exists ONLY inside that tool — it is not in this prompt and not in any file you can read. Then write your FINAL answer as ONLY the exact value the tool returned, as plain text inside <answer></answer> tags. Do NOT include any code, quotation marks, or the tool-output wrapper — just the value itself."
+  prompt: "You are in a Python REPL. Write executable Python, not prose. The value exists ONLY inside the tool; it is not in this prompt and not in any file. Run exactly this pattern with the requested name, then stop: secret = TOOL(\"get_eval_secret\", name=\"alpha\"); FINAL(secret). Do not print or explain anything after FINAL."
   expected: "__resolved_at_runtime__"
   scoring_method: substring
   scoring_config: {}
@@ -33,7 +34,7 @@
 - id: tool_use_secret_bravo
   suite: tool_use
   force_mode: "repl"
-  prompt: "Use the get_eval_secret tool with name=\"bravo\" to obtain a secret token held only in server memory. Then write your FINAL answer as ONLY the exact token, as plain text inside <answer></answer> tags — no code, no quotes, no wrapper, just the value."
+  prompt: "You are in a Python REPL. Write executable Python, not prose. The secret token is held only in server memory and only get_eval_secret can return it. Run exactly this pattern with the requested name, then stop: secret = TOOL(\"get_eval_secret\", name=\"bravo\"); FINAL(secret). Do not print or explain anything after FINAL."
   expected: "__resolved_at_runtime__"
   scoring_method: substring
   scoring_config: {}
@@ -41,7 +42,7 @@
 - id: tool_use_secret_charlie
   suite: tool_use
   force_mode: "repl"
-  prompt: "Retrieve the value for name=\"charlie\" using the get_eval_secret tool. The value is not provided anywhere in this prompt and is not in any file — only the tool can produce it. Then write your FINAL answer as ONLY the exact value, as plain text inside <answer></answer> tags. Do NOT output code or a string expression; write the literal value the tool returned."
+  prompt: "You are in a Python REPL. Write executable Python, not prose. The value for name=\"charlie\" is not provided in this prompt and is not in any file; only the tool can produce it. Run exactly this pattern, then stop: secret = TOOL(\"get_eval_secret\", name=\"charlie\"); FINAL(secret). Do not print or explain anything after FINAL."
   expected: "__resolved_at_runtime__"
   scoring_method: substring
   scoring_config: {}
@@ -49,7 +50,7 @@
 - id: tool_use_secret_delta
   suite: tool_use
   force_mode: "repl"
-  prompt: "Call get_eval_secret with name=\"delta\" (this is the only tool that can produce the value — do not use web_research or any other tool). Then write your FINAL answer as ONLY the exact value it returned, as plain text inside <answer></answer> tags — no code, no quotes, no wrapper."
+  prompt: "You are in a Python REPL. Write executable Python, not prose. Use get_eval_secret with name=\"delta\"; do not use web_research or any other tool. Run exactly this pattern, then stop: secret = TOOL(\"get_eval_secret\", name=\"delta\"); FINAL(secret). Do not print or explain anything after FINAL."
   expected: "__resolved_at_runtime__"
   scoring_method: substring
   scoring_config: {}
@@ -57,7 +58,7 @@
 - id: tool_use_secret_echo
   suite: tool_use
   force_mode: "repl"
-  prompt: "Use the get_eval_secret tool with name=\"echo\" to look up a server-memory-only secret. Then write your FINAL answer as ONLY the exact value, as plain text inside <answer></answer> tags — no code, no quotation marks, no tool-output wrapper, just the value itself."
+  prompt: "You are in a Python REPL. Write executable Python, not prose. The echo secret exists only in server memory and only get_eval_secret can return it. Run exactly this pattern with the requested name, then stop: secret = TOOL(\"get_eval_secret\", name=\"echo\"); FINAL(secret). Do not print or explain anything after FINAL."
   expected: "__resolved_at_runtime__"
   scoring_method: substring
   scoring_config: {}

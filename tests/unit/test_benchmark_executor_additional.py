@@ -102,9 +102,38 @@ def test_server_manager_start_builds_expected_command_flags():
     assert "--override-kv" in cmd
     assert "--no-mmap" in cmd
     assert "-md" in cmd
-    assert "--draft-max" in cmd
+    assert "--spec-draft-n-max" in cmd
     assert "--mmproj" in cmd
     assert "-fa" not in cmd  # Registry requested flash-attn off.
+
+
+def test_server_manager_start_omits_same_file_draft_model_path():
+    manager = ServerManager(port=9000)
+    registry = MagicMock()
+    registry.get_max_context.return_value = 4096
+    registry.get_flash_attention.return_value = False
+    registry.get_ubatch_size.return_value = 2048
+    fake_log = MagicMock(name="/tmp/server.log")
+    fake_log.name = "/tmp/server.log"
+
+    with (
+        patch("scripts.lib.executor._numa_prefix", return_value=[]),
+        patch("scripts.lib.executor.get_binary", return_value="/bin/llama-server"),
+        patch("scripts.lib.executor.tempfile.NamedTemporaryFile", return_value=fake_log),
+        patch("scripts.lib.executor.subprocess.Popen") as popen,
+    ):
+        manager.start(
+            model_path="/models/qwen-mtp.gguf",
+            role="frontdoor",
+            registry=registry,
+            draft_model_path="/models/qwen-mtp.gguf",
+            draft_max=4,
+        )
+
+    cmd = popen.call_args.args[0]
+    assert "-md" not in cmd
+    assert cmd[cmd.index("--spec-type") + 1] == "draft-mtp"
+    assert cmd[cmd.index("--spec-draft-n-max") + 1] == "4"
 
 
 def test_server_manager_stop_kills_process_after_timeout():

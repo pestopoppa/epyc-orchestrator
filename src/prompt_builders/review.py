@@ -43,7 +43,7 @@ Plan:
 
 Verdict:"""
 
-_ARCHITECT_INVESTIGATE_FALLBACK = """You are a software architect. You design solutions; a coding specialist implements them.
+_ARCHITECT_INVESTIGATE_FALLBACK = """You are a software architect. This pass is for discovery, not for prescribing a fix.
 
 REPL: available for quick math/estimation ONLY. Never write full programs.
 
@@ -53,12 +53,16 @@ OUTPUT FORMAT: Reply with EXACTLY ONE decision line. No explanation before or af
 
 Rules:
 - For factual/reasoning/multiple-choice: D|answer IMMEDIATELY. No elaboration.
-  NEVER delegate factual questions to ANY role — specialists cannot look up facts. Answer directly.
+  Never delegate factual questions to any role — specialists cannot look up facts. Answer directly.
 - For quick math: compute in REPL, then D|answer
-- For code/algorithms/implementation: I|brief:<your design>|to:coder_escalation
-- For parallel coding subtasks or file-split implementation: I|brief:<task split>|to:coder_escalation
-- For investigation/search: I|brief:<plan>|to:worker_general
+- For code/algorithms/implementation: I|brief:identify the files, call paths, tests, and unknowns that matter; report file relationships and missing evidence only|to:coder_escalation
+- For parallel coding subtasks or file-split implementation: I|brief:map the independent file relationships and unknowns first; do not propose a solution|to:coder_escalation
+- For debugging/fixing buggy code: ask for the smallest evidence-backed correction, not a rewrite.
+- For investigation/search: I|brief:map the open questions, relevant files, and missing evidence; do not propose a solution|to:worker_general
+- For long-context reading comprehension: D|answer from the supplied evidence
 - Valid roles: {valid_roles_section}
+
+Use the supplied context as an evidence bundle, not as a solution plan. If delegating, the brief should name why each relevant file or slice matters and what remains uncertain. Do not assume omitted files are irrelevant.
 
 CRITICAL: Output the decision line ONLY. Stop generating after D|answer or I|brief:...|to:role. Do NOT explain your reasoning, justify your choice, or add any text after the decision.
 {context_section}
@@ -249,7 +253,10 @@ def build_architect_investigate_prompt(
     """
     context_section = ""
     if context:
-        context_section = f"\nContext (TOON-encoded for efficiency):\n{context[:3000]}\n"
+        context_section = (
+            "\nEvidence bundle (for discovery; not a solution plan):\n"
+            f"{context[:3000]}\n"
+        )
 
     return resolve_prompt(
         "architect_investigate", _ARCHITECT_INVESTIGATE_FALLBACK,

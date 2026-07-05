@@ -375,6 +375,31 @@ def _is_comment_only(code: str) -> bool:
     return True
 
 
+def _no_executable_code_nudge(state: TaskState, *, comment_ratio: float | None = None) -> str:
+    if state.tool_required:
+        prefix = (
+            f"Your code is {int(comment_ratio * 100)}% comments — "
+            if comment_ratio is not None
+            else "Your output was all comments — no executable code ran. "
+        )
+        return (
+            prefix
+            + "This turn requires a tool call. Write executable Python now, call the required tool "
+            'with TOOL("get_eval_secret", name="...") using the name from the prompt, and then '
+            "call FINAL(secret). Do not explain or re-derive."
+        )
+    if comment_ratio is not None:
+        return (
+            f"Your code is {int(comment_ratio * 100)}% comments — you already reasoned through the problem. "
+            'STOP re-deriving. Call FINAL now with the value you reached — e.g. FINAL("B") or FINAL(42). '
+            "Do NOT start over. Do NOT re-explain."
+        )
+    return (
+        "Your output was all comments — no executable code ran. "
+        'You already reasoned through the problem. Call FINAL now with the actual value — e.g. FINAL("B") or FINAL(42).'
+    )
+
+
 def _log_state_snapshot(ctx: Ctx, role: str) -> None:
     """Persist a full state snapshot for the current turn (LangGraph pre-migration)."""
     try:
@@ -417,16 +442,49 @@ def _batch_edit_repo_root() -> Path:
 
 
 def _batch_edit_verify_fn(sandbox_root: Path) -> bool:
-    """Inference-free accept gate: py_compile every .py in the sandbox (only touched
-    files are staged). Catches syntax errors before promotion. Whole-repo test/type-check
-    is the eventual accept gate (BEP audit #4) — a follow-up, not wired here."""
-    import py_compile
+    """Inference-free accept gate.
 
-    for p in Path(sandbox_root).rglob("*.py"):
+    Default behavior is unchanged: py_compile every staged .py file. When
+    ORCHESTRATOR_BATCH_EDIT_VERIFY_CMD is configured, the caller stages a tracked
+    repo snapshot and this helper runs that command in the sandbox as the final
+    accept gate.
+    """
+    import py_compile
+    import subprocess
+
+    root = Path(sandbox_root)
+    for p in root.rglob("*.py"):
         try:
             py_compile.compile(str(p), doraise=True)
         except Exception:
             return False
+    verify_cmd = os.environ.get("ORCHESTRATOR_BATCH_EDIT_VERIFY_CMD", "").strip()
+    if not verify_cmd:
+        return True
+    try:
+        timeout = float(os.environ.get("ORCHESTRATOR_BATCH_EDIT_VERIFY_TIMEOUT_SEC", "120"))
+    except ValueError:
+        log.warning("batch-edit verify timeout is not numeric")
+        return False
+    try:
+        completed = subprocess.run(
+            ["/bin/bash", "-lc", verify_cmd],
+            cwd=root,
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+        )
+    except Exception as exc:
+        log.warning("batch-edit verify command raised: %s", exc)
+        return False
+    if completed.returncode != 0:
+        log.warning(
+            "batch-edit verify command failed rc=%s stdout=%r stderr=%r",
+            completed.returncode,
+            completed.stdout[-1000:],
+            completed.stderr[-1000:],
+        )
+        return False
     return True
 
 
@@ -507,12 +565,14 @@ async def _maybe_batch_edit_turn(
     )
 
     repo_root = _batch_edit_repo_root()
+    full_tree_verify = bool(os.environ.get("ORCHESTRATOR_BATCH_EDIT_VERIFY_CMD", "").strip())
     try:
         result = await asyncio.to_thread(
             apply_patchset_sandboxed,
             ps,
             repo_root=repo_root,
             verify_fn=_batch_edit_verify_fn,
+            full_tree=full_tree_verify,
         )
     except Exception as e:  # noqa: BLE001 — apply must never crash the turn
         _record_batch_edit_state("apply_error", turn=turn, detail=str(e))
@@ -1012,10 +1072,7 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
             # Fall through to execute FINAL()
         else:
             log.info("Comment-only code detected (turn %d), nudging model", state.turns)
-            nudge = (
-                "Your output was all comments — no executable code ran. "
-                "You already reasoned through the problem. Call FINAL now with the actual value — e.g. FINAL(\"B\") or FINAL(42)."
-            )
+            nudge = _no_executable_code_nudge(state)
             _record_session_turn(state, role=str(role), code=code, nudge=nudge)
             return "", None, False, {"_nudge": nudge}
 
@@ -1045,11 +1102,7 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
                     "High comment ratio (%.0f%%, turn %d), nudging to commit",
                     ratio * 100, state.turns,
                 )
-                nudge = (
-                    f"Your code is {int(ratio*100)}% comments — you already reasoned through the problem. "
-                    "STOP re-deriving. Call FINAL now with the value you reached — e.g. FINAL(\"B\") or FINAL(42). "
-                    "Do NOT start over. Do NOT re-explain."
-                )
+                nudge = _no_executable_code_nudge(state, comment_ratio=ratio)
                 _record_session_turn(state, role=str(role), code=code, nudge=nudge)
                 return "", None, False, {"_nudge": nudge}
 
@@ -1315,5 +1368,3 @@ def _format_validation_failure_message(
         f"Rejected value: {rejected_trunc}\n"
         "Fix the value and call FINAL again. State is preserved."
     )
-
-

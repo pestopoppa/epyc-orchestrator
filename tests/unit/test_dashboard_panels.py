@@ -177,3 +177,34 @@ def test_stamped_endpoint_emits_wellformed_freshness(coro_factory, key):
     # sources carry the gating flag so the frontend can separate gating vs info.
     for s in env["sources"]:
         assert "gating" in s and "class" in s and "label" in s
+
+
+# --- tap events rotation window (same bug class, dot-suffix naming) -----------
+
+def test_latest_tap_events_mtime_follows_rotation(tmp_path, monkeypatch):
+    base = tmp_path / "inference_tap_events.jsonl"
+    rotated = tmp_path / "inference_tap_events.jsonl.1"
+    monkeypatch.setattr(P, "_INFERENCE_TAP_EVENTS_PATH", base)
+
+    # Post-rotation window: base missing, only .1 exists — must NOT be None.
+    rotated.write_text('{"kind":"chunk"}\n')
+    m = P._latest_tap_events_mtime()
+    assert m is not None
+    assert m == rotated.stat().st_mtime
+
+    # Base reappears newer: base wins.
+    import os
+    base.write_text('{"kind":"start"}\n')
+    os.utime(rotated, (base.stat().st_mtime - 100, base.stat().st_mtime - 100))
+    assert P._latest_tap_events_mtime() == base.stat().st_mtime
+
+    # Noise siblings are not shards.
+    (tmp_path / "inference_tap_events.jsonl.bak").write_text("x\n")
+    os.utime(tmp_path / "inference_tap_events.jsonl.bak",
+             (base.stat().st_mtime + 100, base.stat().st_mtime + 100))
+    assert P._latest_tap_events_mtime() == base.stat().st_mtime
+
+
+def test_latest_tap_events_mtime_none_when_no_files(tmp_path, monkeypatch):
+    monkeypatch.setattr(P, "_INFERENCE_TAP_EVENTS_PATH", tmp_path / "inference_tap_events.jsonl")
+    assert P._latest_tap_events_mtime() is None

@@ -831,12 +831,15 @@ class TestArchitectPromptBuilders:
         assert "I|" in prompt
         assert "brief:" in prompt
         assert "Question:" in prompt
+        assert "open questions" in prompt
+        assert "Do NOT propose an implementation" in prompt
 
     def test_investigate_prompt_includes_context(self):
         from src.prompt_builders import build_architect_investigate_prompt
 
         prompt = build_architect_investigate_prompt("What is X?", context="some ctx")
         assert "some ctx" in prompt
+        assert "not a solution plan" in prompt
 
     def test_synthesis_prompt_includes_report(self):
         from src.prompt_builders import build_architect_synthesis_prompt

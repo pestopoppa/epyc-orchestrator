@@ -109,6 +109,10 @@ def build_seq_readiness_report(
         trusted_rows,
         budget=alpha_wealth_budget,
     )
+    paired_baseline_screening = _paired_baseline_screening(
+        trusted_rows,
+        min_shared_qids=min_shared_qids,
+    )
     blockers = _cutover_blockers(
         trusted_vector_trials=len(trusted_rows),
         seq_shadow_rows=shadow["seq_shadow_rows"],
@@ -140,6 +144,7 @@ def build_seq_readiness_report(
         "pairwise_replays": [asdict(replay) for replay in pairwise],
         "seq_shadow": shadow,
         "alpha_wealth": alpha_wealth,
+        "paired_baseline_screening": paired_baseline_screening,
         "w8_promotion_evidence": _w8_promotion_evidence(state, normalized),
         "cutover_blockers": blockers,
         "recommendation": _recommendation(
@@ -206,6 +211,20 @@ def render_markdown(report: Mapping[str, Any]) -> str:
             f"{report.get('w8_promotion_evidence', {}).get('latest_required_E')}, "
             f"open_requirements="
             f"{report.get('w8_promotion_evidence', {}).get('open_requirements', [])}"
+        ),
+        (
+            "- Paired baseline screening: "
+            f"status={report.get('paired_baseline_screening', {}).get('status', 'unknown')}, "
+            f"diagnostics="
+            f"{report.get('paired_baseline_screening', {}).get('diagnostic_rows', 0)}, "
+            f"ok="
+            f"{report.get('paired_baseline_screening', {}).get('ok_rows', 0)}, "
+            f"sufficient_shared_qids="
+            f"{report.get('paired_baseline_screening', {}).get('sufficient_shared_qid_rows', 0)}, "
+            f"latest_trial="
+            f"{report.get('paired_baseline_screening', {}).get('latest_trial_id')}, "
+            f"observation_only="
+            f"{report.get('paired_baseline_screening', {}).get('observation_only')}"
         ),
         "",
         "## Candidate Clusters",
@@ -408,6 +427,100 @@ def _alpha_multiplicity_diagnostic(
         "budget_exhausted": spent >= budget if budget > 0.0 else bool(candidates),
         "new_fingerprint_confirmations_allowed": spent_with_new <= budget,
     }
+
+
+def _paired_baseline_screening(
+    rows: list[Mapping[str, Any]],
+    *,
+    min_shared_qids: int,
+) -> dict[str, Any]:
+    """Summarize journaled paired-baseline diagnostics without gating on them."""
+    diagnostics: list[dict[str, Any]] = []
+    status_counts: Counter[str] = Counter()
+    unexpected_gating_trial_ids: list[int] = []
+
+    for row in rows:
+        payload = _seq_paired_baseline(row)
+        if not payload:
+            continue
+        status = str(payload.get("status") or "unknown")
+        status_counts[status] += 1
+        trial_id = _trial_id(row)
+        if payload.get("used_for_gating") is True and trial_id is not None:
+            unexpected_gating_trial_ids.append(trial_id)
+
+        a_correct_b_wrong = _int_or_none(payload.get("a_correct_b_wrong")) or 0
+        a_wrong_b_correct = _int_or_none(payload.get("a_wrong_b_correct")) or 0
+        diagnostics.append(
+            {
+                "trial_id": trial_id,
+                "candidate": str(
+                    payload.get("candidate")
+                    or payload.get("trial_b")
+                    or row_fingerprint(dict(row))
+                ),
+                "status": status,
+                "used_for_gating": payload.get("used_for_gating") is True,
+                "shared_qids": _int_or_none(payload.get("shared_qids")),
+                "discordant_pairs": a_correct_b_wrong + a_wrong_b_correct,
+                "delta_b_minus_a": _float_or_none(payload.get("delta_b_minus_a")),
+                "p_value_two_sided": _float_or_none(payload.get("p_value_two_sided")),
+                "baseline_reference_trial_id": _int_or_none(
+                    payload.get("baseline_reference_trial_id")
+                ),
+                "baseline_reference_reason": str(
+                    payload.get("baseline_reference_reason") or ""
+                ),
+                "baseline_reference_vector_qids": _int_or_none(
+                    payload.get("baseline_reference_vector_qids")
+                ),
+                "candidate_vector_qids": _int_or_none(
+                    payload.get("candidate_vector_qids")
+                ),
+            }
+        )
+
+    diagnostics.sort(
+        key=lambda item: item["trial_id"] if item["trial_id"] is not None else -1,
+        reverse=True,
+    )
+    ok_rows = status_counts.get("ok", 0)
+    sufficient_shared = sum(
+        1
+        for item in diagnostics
+        if (item.get("shared_qids") or 0) >= min_shared_qids
+    )
+    if not diagnostics:
+        status = "no_diagnostics"
+    elif unexpected_gating_trial_ids:
+        status = "unexpected_gating_flag"
+    elif ok_rows:
+        status = "observed"
+    else:
+        status = "present_without_ok_pairs"
+
+    return {
+        "status": status,
+        "used_for_gating": False,
+        "observation_only": not unexpected_gating_trial_ids,
+        "diagnostic_rows": len(diagnostics),
+        "ok_rows": ok_rows,
+        "status_counts": dict(sorted(status_counts.items())),
+        "min_shared_qids": max(0, int(min_shared_qids)),
+        "sufficient_shared_qid_rows": sufficient_shared,
+        "unexpected_gating_trial_ids": unexpected_gating_trial_ids,
+        "latest_trial_id": diagnostics[0]["trial_id"] if diagnostics else None,
+        "latest": diagnostics[0] if diagnostics else {},
+        "recent": diagnostics[:10],
+    }
+
+
+def _seq_paired_baseline(row: Mapping[str, Any]) -> dict[str, Any]:
+    eval_details = row.get("eval_details") or {}
+    if not isinstance(eval_details, Mapping):
+        return {}
+    payload = eval_details.get("seq_paired_baseline")
+    return dict(payload) if isinstance(payload, Mapping) else {}
 
 
 def _safe_mapping(value: Any) -> dict[str, Any]:
@@ -677,6 +790,20 @@ def _float(value: Any) -> float:
         return float(value)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _float_or_none(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _fmt_rate(value: object) -> str:

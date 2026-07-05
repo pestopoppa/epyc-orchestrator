@@ -2,7 +2,7 @@
 """Re-embed episodic memories that lack FAISS embeddings.
 
 Launches multiple temporary llama-server instances with BGE-large in parallel,
-embeds all memories with non-empty objectives using concurrent requests,
+embeds all routing/escalation memories using concurrent requests,
 and saves the result as a numpy array keyed by memory ID.
 
 One-time operation to recover embeddings lost when the FAISS index was rebuilt.
@@ -46,6 +46,112 @@ DEFAULT_OUTPUT = PROJECT_ROOT / "orchestration/repl_memory/sessions/reembedded.n
 LLAMA_SERVER = Path("/mnt/raid0/llm/llama.cpp/build/bin/llama-server")
 
 from scripts.graph_router.extract_training_data import normalize_action
+
+TEXT_FIELDS = (
+    "objective",
+    "task_description",
+    "prompt",
+    "question",
+    "query",
+    "input",
+    "description",
+    "title",
+)
+
+
+def _text_value(value: object) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if value is None:
+        return ""
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    if isinstance(value, (list, tuple)):
+        parts = [_text_value(item) for item in value]
+        return " ".join(part for part in parts if part).strip()
+    if isinstance(value, dict):
+        # Keep the fallback deterministic and compact; most semantic signal is
+        # already in the explicit text fields handled before this branch.
+        try:
+            return json.dumps(value, sort_keys=True, ensure_ascii=False)[:900].strip()
+        except TypeError:
+            return str(value).strip()
+    return str(value).strip()
+
+
+def memory_embedding_text(
+    *,
+    action: str,
+    action_type: str,
+    context: dict,
+    outcome: object,
+    limit: int = 450,
+) -> str:
+    """Return stable semantic text for rebuilding a memory embedding.
+
+    Older seeded rows often used ``task_description`` instead of ``objective``.
+    The repair path must preserve those rows too; otherwise a full rebuild can
+    silently drop valid SQLite memories from the FAISS/id_map mirror.
+    """
+    for field in TEXT_FIELDS:
+        text = _text_value(context.get(field))
+        if text:
+            return text[:limit]
+
+    fallback_parts = [
+        f"action_type={action_type}",
+        f"action={action}",
+    ]
+    for field in ("task_type", "source", "question_id", "suite", "tier"):
+        text = _text_value(context.get(field))
+        if text:
+            fallback_parts.append(f"{field}={text}")
+    outcome_text = _text_value(outcome)
+    if outcome_text:
+        fallback_parts.append(f"outcome={outcome_text[:160]}")
+    return " | ".join(fallback_parts)[:limit]
+
+
+def rows_for_embedding(
+    rows: list[tuple[str, str, str, str | None, object, float]],
+) -> tuple[list[tuple[str, str, dict, str, float]], dict[str, int]]:
+    """Normalize SQLite memory rows into re-embedding rows and skip counts."""
+    valid_rows: list[tuple[str, str, dict, str, float]] = []
+    skipped = {"bad_json": 0, "empty_text": 0}
+    for row in rows:
+        mem_id, action, action_type, ctx_json, outcome, q_value = row
+        try:
+            ctx = json.loads(ctx_json) if ctx_json else {}
+        except (TypeError, json.JSONDecodeError):
+            skipped["bad_json"] += 1
+            ctx = {}
+        if not isinstance(ctx, dict):
+            skipped["bad_json"] += 1
+            ctx = {}
+
+        text = memory_embedding_text(
+            action=action,
+            action_type=action_type,
+            context=ctx,
+            outcome=outcome,
+        )
+        if not text:
+            skipped["empty_text"] += 1
+            continue
+
+        canonical = normalize_action(action) or action
+        valid_rows.append((mem_id, canonical, ctx, text, q_value))
+    return valid_rows, skipped
+
+
+def load_only_ids(path: Path | None) -> set[str] | None:
+    """Load an optional newline-delimited ID allowlist."""
+    if path is None:
+        return None
+    ids = {line.strip() for line in path.read_text().splitlines() if line.strip()}
+    if not ids:
+        raise SystemExit(f"--only-ids-file {path} did not contain any IDs")
+    return ids
 
 
 def probe_existing_server(port: int, timeout: float = 1.0) -> bool:
@@ -156,11 +262,18 @@ def main():
     parser.add_argument("--servers", type=int, default=8)
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--threads-per-server", type=int, default=4)
+    parser.add_argument(
+        "--only-ids-file",
+        type=str,
+        default=None,
+        help="Optional newline-delimited memory IDs to re-embed instead of all rows.",
+    )
     args = parser.parse_args()
 
     db_path = Path(args.db)
     output_path = Path(args.output)
     ports = list(range(args.base_port, args.base_port + args.servers))
+    only_ids = load_only_ids(Path(args.only_ids_file) if args.only_ids_file else None)
 
     # ── Extract memories from SQLite ──
     logger.info("Reading memories from %s", db_path)
@@ -172,30 +285,24 @@ def main():
         ORDER BY created_at
     """).fetchall()
     conn.close()
+    if only_ids is not None:
+        before = len(rows)
+        rows = [row for row in rows if row[0] in only_ids]
+        logger.info("Filtered to %d / %d requested memory IDs", len(rows), before)
+        missing = only_ids - {row[0] for row in rows}
+        if missing:
+            raise SystemExit(
+                f"{len(missing)} requested ID(s) were not found in the episodic DB; "
+                f"first missing: {sorted(missing)[:5]}"
+            )
     logger.info("Loaded %d memories", len(rows))
 
-    # Filter to normalizable actions with non-empty objectives
-    valid_rows = []
-    skipped = {"no_action": 0, "no_objective": 0}
-    for row in rows:
-        mem_id, action, action_type, ctx_json, outcome, q_value = row
-        canonical = normalize_action(action)
-        if canonical is None:
-            skipped["no_action"] += 1
-            continue
-
-        ctx = json.loads(ctx_json) if ctx_json else {}
-        objective = ctx.get("objective", "")
-        if not objective or not objective.strip():
-            skipped["no_objective"] += 1
-            continue
-
-        valid_rows.append((mem_id, canonical, ctx, objective.strip()[:450], q_value))
+    valid_rows, skipped = rows_for_embedding(rows)
 
     total = len(valid_rows)
     logger.info(
-        "Valid for embedding: %d (skipped: action=%d, no_objective=%d)",
-        total, skipped["no_action"], skipped["no_objective"],
+        "Valid for embedding: %d / %d (skipped: bad_json=%d, empty_text=%d)",
+        total, len(rows), skipped["bad_json"], skipped["empty_text"],
     )
     if not valid_rows:
         logger.error("No valid rows to embed")

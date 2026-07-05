@@ -470,17 +470,40 @@ class EpisodicStore:
             # Flush will happen on close() or store_immediate()
             pass
 
+    def _refresh_embedding_store_if_changed(self, *, force: bool = False) -> bool:
+        """Reload persisted FAISS files written by another process."""
+        if not self.use_faiss:
+            return False
+        reload_if_changed = getattr(self._embedding_store, "reload_if_changed", None)
+        if not callable(reload_if_changed):
+            return False
+        if self._faiss_lock_path is not None:
+            with _exclusive_file_lock(self._faiss_lock_path):
+                return bool(reload_if_changed(force=force))
+        return bool(reload_if_changed(force=force))
+
     async def _flush_loop(self) -> None:
         """Background flush loop (10s interval)."""
         while True:
             await asyncio.sleep(self._flush_interval)
             if self._dirty:
-                await asyncio.to_thread(self._embedding_store.save)
-                self._dirty = False
+                await asyncio.to_thread(self.flush)
                 logger.debug("Write-behind flush completed")
 
     def flush(self) -> None:
         """Synchronous flush of embedding store to disk."""
+        if self.use_faiss:
+            if self._dirty:
+                logger.warning(
+                    "Discarding dirty FAISS-backed EpisodicStore flush state after "
+                    "reloading the persisted mirror; FAISS writes should save "
+                    "synchronously in store()."
+                )
+                self._refresh_embedding_store_if_changed(force=True)
+                self._dirty = False
+            else:
+                self._refresh_embedding_store_if_changed()
+            return
         if self._dirty:
             self._embedding_store.save()
             self._dirty = False
@@ -518,6 +541,8 @@ class EpisodicStore:
         Returns:
             List of MemoryEntry sorted by similarity (descending)
         """
+        self._refresh_embedding_store_if_changed()
+
         # Phase 1: Embedding search (FAISS or NumPy)
         # Over-fetch to account for filtering
         candidates = self._embedding_store.search(query_embedding, k=k * 2)

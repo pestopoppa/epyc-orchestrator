@@ -2,11 +2,11 @@
 
 - Pairwise JSONL: `orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_preference_contract_score_ordered_audit_target_expanded.jsonl`
 - Feature contract: `pairwise_action_response_delta_v1`
-- Pair rows: `6192`
-- Cross-action pair rows: `4296`
+- Pair rows: `6244`
+- Cross-action pair rows: `4348`
 - Same-action pair rows: `1896`
-- Group count: `1937`
-- Pairing mode counts: `{'score_ordered': 6192}`
+- Group count: `1981`
+- Pairing mode counts: `{'score_ordered': 6244}`
 - Families: `['logistic_l2', 'hist_gradient_boosting', 'random_forest']`
 - Seeds: `[42, 7, 13, 101, 2026]`
 - Decision: `pairwise_ranker_signal`
@@ -16,9 +16,9 @@
 
 ## Family Summary
 
-- `hist_gradient_boosting`: acc mean `0.8306`, AUC mean `0.9237`, Brier mean `0.1130`, ECE mean `0.0316`, acc delta vs random `0.3306`
-- `logistic_l2`: acc mean `0.7460`, AUC mean `0.8284`, Brier mean `0.1682`, ECE mean `0.0303`, acc delta vs random `0.2460`
-- `random_forest`: acc mean `0.8192`, AUC mean `0.9147`, Brier mean `0.1276`, ECE mean `0.0894`, acc delta vs random `0.3192`
+- `hist_gradient_boosting`: acc mean `0.8301`, AUC mean `0.9207`, Brier mean `0.1153`, ECE mean `0.0295`, acc delta vs random `0.3301`
+- `logistic_l2`: acc mean `0.7458`, AUC mean `0.8262`, Brier mean `0.1693`, ECE mean `0.0337`, acc delta vs random `0.2458`
+- `random_forest`: acc mean `0.8186`, AUC mean `0.9117`, Brier mean `0.1301`, ECE mean `0.0848`, acc delta vs random `0.3186`
 
 ## Independent Holdout Summary
 
@@ -28,23 +28,23 @@
 - Recommended next: `collect_more_non_overlapping_cross_action_preferences`
 
 ### `source_family`
-- `orchestrator_live_seed`: decision `insufficient_pairwise_signal`, best `logistic_l2`, acc mean `0.5248`, AUC mean `0.5335`, test pairs `101`
-- `seeding_eval`: decision `insufficient_pairwise_signal`, best `random_forest`, acc mean `0.5705`, AUC mean `0.6276`, test pairs `156`
-- `three_way_eval`: decision `pairwise_ranker_signal`, best `hist_gradient_boosting`, acc mean `0.7258`, AUC mean `0.7647`, test pairs `5935`
+- `orchestrator_live_seed`: decision `insufficient_pairwise_signal`, best `random_forest`, acc mean `0.5558`, AUC mean `0.5870`, test pairs `104`
+- `seeding_eval`: decision `insufficient_pairwise_signal`, best `random_forest`, acc mean `0.5990`, AUC mean `0.6739`, test pairs `205`
+- `three_way_eval`: decision `pairwise_ranker_signal`, best `logistic_l2`, acc mean `0.7345`, AUC mean `0.8154`, test pairs `5935`
 ### `suite`
-- `coder`: decision `pairwise_ranker_signal`, best `random_forest`, acc mean `0.9317`, AUC mean `0.9764`, test pairs `543`
-- `debugbench`: decision `pairwise_ranker_signal`, best `hist_gradient_boosting`, acc mean `0.8093`, AUC mean `0.9059`, test pairs `656`
-- `general`: decision `insufficient_pairwise_signal`, best `hist_gradient_boosting`, acc mean `0.5766`, AUC mean `0.6232`, test pairs `535`
-- `gpqa`: decision `pairwise_ranker_signal`, best `random_forest`, acc mean `0.6429`, AUC mean `0.6884`, test pairs `955`
-- `hotpotqa`: decision `pairwise_ranker_signal`, best `random_forest`, acc mean `0.7311`, AUC mean `0.7747`, test pairs `1106`
-- `instruction_precision`: decision `pairwise_ranker_signal`, best `random_forest`, acc mean `0.6220`, AUC mean `0.6984`, test pairs `50`
-- `livecodebench`: decision `pairwise_ranker_signal`, best `random_forest`, acc mean `0.9349`, AUC mean `0.9904`, test pairs `616`
-- `long_context`: decision `pairwise_ranker_signal`, best `hist_gradient_boosting`, acc mean `0.7360`, AUC mean `0.8201`, test pairs `197`
-- `math`: decision `pairwise_ranker_signal`, best `hist_gradient_boosting`, acc mean `0.6522`, AUC mean `0.7164`, test pairs `23`
-- `mode_advantage`: decision `pairwise_ranker_signal`, best `logistic_l2`, acc mean `0.7388`, AUC mean `0.8321`, test pairs `134`
-- `mode_advantage_hard`: decision `pairwise_ranker_signal`, best `random_forest`, acc mean `0.8006`, AUC mean `0.8624`, test pairs `501`
-- `simpleqa`: decision `pairwise_ranker_signal`, best `hist_gradient_boosting`, acc mean `0.8110`, AUC mean `0.8944`, test pairs `456`
-- `thinking`: decision `pairwise_ranker_signal`, best `hist_gradient_boosting`, acc mean `0.6520`, AUC mean `0.7381`, test pairs `410`
+- `coder`: decision `pairwise_ranker_signal`, best `random_forest`, acc mean `0.9372`, AUC mean `0.9783`, test pairs `543`
+- `debugbench`: decision `pairwise_ranker_signal`, best `hist_gradient_boosting`, acc mean `0.8097`, AUC mean `0.9061`, test pairs `658`
+- `general`: decision `insufficient_pairwise_signal`, best `hist_gradient_boosting`, acc mean `0.5690`, AUC mean `0.6188`, test pairs `535`
+- `gpqa`: decision `pairwise_ranker_signal`, best `random_forest`, acc mean `0.6467`, AUC mean `0.6900`, test pairs `961`
+- `hotpotqa`: decision `pairwise_ranker_signal`, best `random_forest`, acc mean `0.7303`, AUC mean `0.7782`, test pairs `1114`
+- `instruction_precision`: decision `pairwise_ranker_signal`, best `random_forest`, acc mean `0.6188`, AUC mean `0.7107`, test pairs `64`
+- `livecodebench`: decision `pairwise_ranker_signal`, best `random_forest`, acc mean `0.9357`, AUC mean `0.9902`, test pairs `616`
+- `long_context`: decision `pairwise_ranker_signal`, best `hist_gradient_boosting`, acc mean `0.7518`, AUC mean `0.8236`, test pairs `197`
+- `math`: decision `pairwise_ranker_signal`, best `hist_gradient_boosting`, acc mean `0.6391`, AUC mean `0.7085`, test pairs `23`
+- `mode_advantage`: decision `pairwise_ranker_signal`, best `hist_gradient_boosting`, acc mean `0.7590`, AUC mean `0.8291`, test pairs `134`
+- `mode_advantage_hard`: decision `pairwise_ranker_signal`, best `random_forest`, acc mean `0.7988`, AUC mean `0.8621`, test pairs `501`
+- `simpleqa`: decision `pairwise_ranker_signal`, best `hist_gradient_boosting`, acc mean `0.8109`, AUC mean `0.8909`, test pairs `470`
+- `thinking`: decision `pairwise_ranker_signal`, best `hist_gradient_boosting`, acc mean `0.6502`, AUC mean `0.7354`, test pairs `418`
 
 ## Leakage Controls
 

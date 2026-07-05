@@ -28,6 +28,54 @@ def test_authority_env_forces_required_flags() -> None:
     assert env["AUTOPILOT_SEQ_VERDICT"] == "1"
     assert env["AUTOPILOT_W6_AUDIT_BLOCK"] == "1"
     assert env["AUTOPILOT_PLANNER_TIMEOUT"] == "600"
+    assert env["AUTOPILOT_PLANNER_SPEND_BREAKER"] == "1"
+
+
+def test_authority_env_defaults_to_router_mediated_local_planner_without_overriding() -> None:
+    env = launcher.authority_env(
+        {
+            "AUTOPILOT_PLANNER_PRIMARY": "claude",
+            "AUTOPILOT_LOCAL_PLANNER_MAX_TOKENS": "4096",
+        }
+    )
+
+    assert env["AUTOPILOT_PLANNER_PRIMARY"] == "claude"
+    assert env["AUTOPILOT_PLANNER_CRITIC"] == "codex"
+    assert env["AUTOPILOT_LOCAL_PLANNER_ROLE"] == "ingest_long_context"
+    assert env["AUTOPILOT_LOCAL_PLANNER_MODEL"] == "ingest_long_context"
+    assert env["AUTOPILOT_LOCAL_PLANNER_TEMPERATURE"] == "0"
+    assert env["AUTOPILOT_LOCAL_PLANNER_MAX_TOKENS"] == "4096"
+
+    default_env = launcher.authority_env({})
+    assert default_env["AUTOPILOT_PLANNER_PRIMARY"] == "local_chat"
+
+
+def test_authority_env_sets_latest_repo_readiness_pickup(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    older = tmp_path / "repo_readiness_autopilot_pickup_2026-07-03.json"
+    newer = tmp_path / "repo_readiness_autopilot_pickup_2026-07-05.json"
+    older.write_text("{}", encoding="utf-8")
+    newer.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(launcher, "DEFAULT_REPO_READINESS_DIRS", (tmp_path,))
+
+    env = launcher.authority_env({})
+
+    assert env["AUTOPILOT_REPO_READINESS_PICKUP"] == str(newer)
+
+
+def test_authority_env_preserves_explicit_repo_readiness_pickup(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    generated = tmp_path / "repo_readiness_autopilot_pickup_2026-07-05.json"
+    generated.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(launcher, "DEFAULT_REPO_READINESS_DIRS", (tmp_path,))
+
+    env = launcher.authority_env({"AUTOPILOT_REPO_READINESS_PICKUP": "/custom/pickup.json"})
+
+    assert env["AUTOPILOT_REPO_READINESS_PICKUP"] == "/custom/pickup.json"
 
 
 def test_build_command_uses_autopilot_start_and_default_trials(monkeypatch) -> None:

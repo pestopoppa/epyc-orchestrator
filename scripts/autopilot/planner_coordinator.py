@@ -7,7 +7,7 @@ import logging
 import os
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -76,6 +76,8 @@ _CRITIQUE_SECTION_CHAR_LIMIT = 1600
 # critic_unavailable pause that stalled the run, e.g. @711). Give generous
 # headroom; operator-tunable via AUTOPILOT_PLANNER_TIMEOUT. (2026-06-09)
 DEFAULT_PLANNER_TIMEOUT = int(os.environ.get("AUTOPILOT_PLANNER_TIMEOUT", "600"))
+DEFAULT_SPEND_BREAKER_LOCAL_PRIMARY = "local_chat"
+DEFAULT_SPEND_BREAKER_LOCAL_CRITIC = "local_worker"
 
 
 @dataclass
@@ -152,6 +154,77 @@ def load_planner_settings_from_env() -> PlannerSettings:
     )
 
 
+def _apply_planner_spend_breaker(
+    settings: PlannerSettings,
+    planner_state: dict[str, Any],
+) -> tuple[PlannerSettings, bool]:
+    if not _env_bool("AUTOPILOT_PLANNER_SPEND_BREAKER", True):
+        planner_state.pop("_spend_breaker", None)
+        return settings, False
+
+    try:
+        from scripts.economics.ledger import summarize_economics
+
+        ledger = summarize_economics(days=_env_int("AUTOPILOT_PLANNER_SPEND_DAYS", 7))
+    except Exception as exc:
+        log.warning("Planner spend breaker unavailable: %s", exc)
+        planner_state["_spend_breaker"] = {
+            "active": False,
+            "error": str(exc),
+        }
+        return settings, False
+
+    review = ledger.review
+    rules = ledger.rules
+    active = bool(review.planner_spend_triggered)
+    state = {
+        "active": active,
+        "projected_monthly_planner_spend_usd": round(
+            review.projected_monthly_planner_spend_usd,
+            6,
+        ),
+        "threshold_usd": round(rules.planner_monthly_spend_threshold_usd, 6),
+        "planner_spend_usd": round(ledger.planner.total_usd, 6),
+        "days": ledger.days,
+    }
+    planner_state["_spend_breaker"] = state
+    if not active:
+        return settings, False
+
+    local_primary = _normalize_provider(
+        os.environ.get(
+            "AUTOPILOT_PLANNER_SPEND_BREAKER_PRIMARY",
+            DEFAULT_SPEND_BREAKER_LOCAL_PRIMARY,
+        )
+    )
+    local_critic = _normalize_provider(
+        os.environ.get(
+            "AUTOPILOT_PLANNER_SPEND_BREAKER_CRITIC",
+            DEFAULT_SPEND_BREAKER_LOCAL_CRITIC,
+        )
+    )
+    state["local_primary"] = local_primary
+    state["local_critic"] = local_critic
+    state["previous_primary"] = _normalize_provider(settings.primary)
+    state["previous_critic"] = _normalize_provider(settings.critic)
+    log.warning(
+        "Planner spend breaker active: projected monthly planner spend $%.2f "
+        "exceeds threshold $%.2f; using local providers %s/%s",
+        review.projected_monthly_planner_spend_usd,
+        rules.planner_monthly_spend_threshold_usd,
+        local_primary,
+        local_critic,
+    )
+    return (
+        replace(
+            settings,
+            primary=local_primary,
+            critic=local_critic,
+        ),
+        True,
+    )
+
+
 def plan_with_providers(
     prompt: str,
     *,
@@ -166,6 +239,7 @@ def plan_with_providers(
     """Draft a canonical planner action with optional secondary critique."""
     settings = settings or load_planner_settings_from_env()
     planner_state = planner_state if planner_state is not None else {}
+    settings, spend_breaker_active = _apply_planner_spend_breaker(settings, planner_state)
     session_update = None
 
     primary_name = _normalize_provider(settings.primary)
@@ -174,11 +248,14 @@ def plan_with_providers(
     # different underlying model. With PRIMARY=codex + CRITIC=codex_critic the
     # names differ but both resolve to the codex binary — a name-based fallback
     # would re-hit codex when codex is offline → "no usable draft action".
-    fallback_name = (
-        critic_name
-        if _model_of(critic_name) != _model_of(primary_name)
-        else _other_provider(primary_name)
-    )
+    if spend_breaker_active:
+        fallback_name = critic_name if critic_name != primary_name else primary_name
+    else:
+        fallback_name = (
+            critic_name
+            if _model_of(critic_name) != _model_of(primary_name)
+            else _other_provider(primary_name)
+        )
     allow_fallback = settings.mode.strip().lower() != "single"
 
     draft_provider_name = primary_name
@@ -296,7 +373,9 @@ def plan_with_providers(
                 and primary_name != draft.provider
                 and not primary_circuit_open_before_draft
             )
-            if allow_primary_fallback_critique:
+            if allow_primary_fallback_critique and (
+                _model_of(primary_name) != "local" or spend_breaker_active
+            ):
                 critique_provider_name = primary_name
             else:
                 degraded = True
@@ -440,6 +519,11 @@ def uncritiqued_dispatch_block_reason(
     crit = decision.critique
     # Case A — no trusted primary draft (no critique object).
     if crit is None:
+        if decision.fallback_reason and _model_of(decision.draft_provider) == "codex":
+            # Operator-approved rollout mode: if the local drafter fails but Codex
+            # produces a schema-valid fallback draft, dispatch it and learn from
+            # the visible provider/fallback telemetry instead of pausing the loop.
+            return ""
         if action.get("type") in OBSERVATIONAL_ACTIONS:
             return ""
         return "critic_unavailable"
@@ -827,6 +911,17 @@ def _other_provider(name: str) -> str:
 # the dispatch set in planner_providers.get_planner_provider: codex_critic /
 # codex-critic / codex_reviewer / codex-reviewer all launch the codex binary.
 _CODEX_ROLE_NAMES = {"codex", "codex_critic", "codex-critic", "codex_reviewer", "codex-reviewer"}
+_LOCAL_ROLE_NAMES = {
+    "local",
+    "local_frontdoor",
+    "frontdoor_local",
+    "local_worker",
+    "local_worker_general",
+    "worker_general_local",
+    "local_ingest",
+    "local_ingest_long_context",
+    "ingest_local",
+}
 
 
 def _model_of(name: str) -> str:
@@ -841,6 +936,8 @@ def _model_of(name: str) -> str:
         return "claude"
     if normalized in _CODEX_ROLE_NAMES:
         return "codex"
+    if normalized in _LOCAL_ROLE_NAMES:
+        return "local"
     return normalized
 
 
@@ -856,3 +953,10 @@ def _env_float(name: str, default: float) -> float:
         return float(os.environ.get(name, str(default)))
     except (TypeError, ValueError):
         return default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off", ""}
