@@ -33,6 +33,12 @@ sys.path.insert(0, str(VALIDATE_DIR))
 sys.path.insert(0, str(ORCH_ROOT))
 
 from dynamic_stack_evidence_packet import build_packet as build_ds_e1_packet  # noqa: E402
+from eval_task_coverage_report import (  # noqa: E402
+    DEFAULT_JOURNAL_DIR as DEFAULT_EVAL_COVERAGE_JOURNAL_DIR,
+    build_report as build_eval_task_coverage_report,
+    default_pool_path as default_eval_coverage_pool_path,
+    resolve_journal_paths as resolve_eval_coverage_journal_paths,
+)
 from scripts.graph_router.offline_reward_pairwise_collection_status import (  # noqa: E402
     DEFAULT_MANIFEST as DEFAULT_A9_COLLECTION_MANIFEST,
     build_status as build_a9_collection_status,
@@ -567,6 +573,102 @@ def w8_trajectory_section(trajectory_report: dict[str, Any]) -> GateSection:
             "recent_active_candidates": recent_active_candidates,
             "stale_accumulating_candidate_count": len(stale_accumulating_candidates),
             "replay_concentration": concentration,
+        },
+    )
+
+
+def _least_covered_non_sentinel_suites(
+    coverage_report: dict[str, Any],
+    *,
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    questions = coverage_report.get("questions") or {}
+    if not isinstance(questions, dict):
+        return []
+    counts = questions.get("suite_distinct_question_counts") or {}
+    if not isinstance(counts, dict):
+        return []
+    rows = []
+    for suite, count in counts.items():
+        suite_name = str(suite)
+        if suite_name.startswith("sentinel_"):
+            continue
+        try:
+            distinct_qids = int(count)
+        except (TypeError, ValueError):
+            continue
+        rows.append({"suite": suite_name, "distinct_qids": distinct_qids})
+    return sorted(rows, key=lambda item: (item["distinct_qids"], item["suite"]))[:limit]
+
+
+def eval_task_coverage_section(
+    coverage_report: dict[str, Any] | None = None,
+) -> GateSection:
+    """Surface planner-learning coverage without changing authority readiness."""
+    try:
+        report = coverage_report
+        if report is None:
+            report = build_eval_task_coverage_report(
+                journal_paths=resolve_eval_coverage_journal_paths(
+                    None,
+                    DEFAULT_EVAL_COVERAGE_JOURNAL_DIR,
+                ),
+                pool_path=default_eval_coverage_pool_path(),
+            )
+    except Exception as exc:  # noqa: BLE001 - advisory report must not gate.
+        return GateSection(
+            key="eval_task_coverage",
+            status="attention",
+            summary=f"Eval-task coverage report is unavailable: {exc}",
+            blockers=[],
+            details={"error": str(exc)},
+        )
+
+    coverage = report.get("coverage") or {}
+    if not isinstance(coverage, dict):
+        coverage = {}
+    questions = report.get("questions") or {}
+    if not isinstance(questions, dict):
+        questions = {}
+    journal = report.get("journal") or {}
+    if not isinstance(journal, dict):
+        journal = {}
+    pool = report.get("pool") or {}
+    if not isinstance(pool, dict):
+        pool = {}
+    coverage_status = str(coverage.get("status") or "unknown")
+    section_status = "ready" if coverage_status == "ok" else "attention"
+    distinct = coverage.get("distinct_journal_question_keys")
+    pool_stable = coverage.get("pool_stable_question_keys")
+    pct = coverage.get("distinct_vs_pool_stable_upper_bound_pct")
+    repeat = coverage.get("repeat_factor")
+    return GateSection(
+        key="eval_task_coverage",
+        status=section_status,
+        summary=(
+            "Eval-task coverage "
+            f"{coverage_status}: {distinct}/{pool_stable} stable qids "
+            f"({pct}%), repeat_factor={repeat}x."
+        ),
+        blockers=[],
+        details={
+            "coverage_status": coverage_status,
+            "question_result_rows": coverage.get("question_result_rows"),
+            "distinct_journal_question_keys": distinct,
+            "pool_stable_question_keys": pool_stable,
+            "distinct_vs_pool_stable_upper_bound_pct": pct,
+            "matched_pool_stable_pct": coverage.get("matched_pool_stable_pct"),
+            "repeat_factor": repeat,
+            "interpretation": coverage.get("interpretation"),
+            "eval_bearing_trials": journal.get("eval_bearing_trials"),
+            "trial_id_min": journal.get("trial_id_min"),
+            "trial_id_max": journal.get("trial_id_max"),
+            "tier_coverage": questions.get("tier_coverage"),
+            "least_covered_non_sentinel_suites": (
+                _least_covered_non_sentinel_suites(report)
+            ),
+            "pool_path": pool.get("path"),
+            "recommendation": report.get("recommendation"),
         },
     )
 
@@ -1181,6 +1283,8 @@ def build_fable5_gate_report(
     xmas_ab_root: Path = DEFAULT_XMAS_AB_ROOT,
     a9_collection_manifest: Path = DEFAULT_A9_COLLECTION_MANIFEST,
     include_tool_use_activation: bool = True,
+    include_eval_task_coverage: bool = True,
+    eval_task_coverage_report: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     sections = [
         phase_section(phase_report),
@@ -1202,6 +1306,8 @@ def build_fable5_gate_report(
             ab_root=xmas_ab_root,
         ),
     ]
+    if include_eval_task_coverage:
+        sections.append(eval_task_coverage_section(eval_task_coverage_report))
     if include_tool_use_activation:
         sections.append(
             tool_use_activation_section(
@@ -1238,6 +1344,7 @@ def build_report_summary(
     xmas = by_key.get("xmas_production_path")
     phase = by_key.get("phase_health")
     tool_use = by_key.get("tool_use_activation")
+    eval_coverage = by_key.get("eval_task_coverage")
     return {
         "ready": not blockers,
         "blocker_count": len(blockers),
@@ -1364,6 +1471,26 @@ def build_report_summary(
                 "total_tool_calls"
             )
             if tool_use is not None
+            else None
+        ),
+        "eval_task_coverage_status": (
+            eval_coverage.details.get("coverage_status")
+            if eval_coverage is not None
+            else None
+        ),
+        "eval_task_coverage_pct": (
+            eval_coverage.details.get("distinct_vs_pool_stable_upper_bound_pct")
+            if eval_coverage is not None
+            else None
+        ),
+        "eval_task_repeat_factor": (
+            eval_coverage.details.get("repeat_factor")
+            if eval_coverage is not None
+            else None
+        ),
+        "eval_task_tier_coverage": (
+            eval_coverage.details.get("tier_coverage")
+            if eval_coverage is not None
             else None
         ),
     }

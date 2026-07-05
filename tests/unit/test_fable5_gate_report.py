@@ -548,6 +548,142 @@ def test_tool_use_activation_accepts_recent_nonzero_tool_telemetry() -> None:
     )
 
 
+def test_eval_task_coverage_section_is_advisory_attention() -> None:
+    section = report_mod.eval_task_coverage_section(
+        {
+            "coverage": {
+                "status": "low_coverage",
+                "question_result_rows": 200,
+                "distinct_journal_question_keys": 20,
+                "pool_stable_question_keys": 1000,
+                "distinct_vs_pool_stable_upper_bound_pct": 2.0,
+                "matched_pool_stable_pct": 1.5,
+                "repeat_factor": 10.0,
+                "interpretation": "planner coverage is narrow",
+            },
+            "journal": {
+                "eval_bearing_trials": 5,
+                "trial_id_min": 1,
+                "trial_id_max": 10,
+            },
+            "questions": {
+                "tier_coverage": {
+                    "1": {
+                        "eval_bearing_trials": 4,
+                        "question_result_rows": 180,
+                        "distinct_journal_question_keys": 18,
+                        "pool_question_keys": 900,
+                        "distinct_vs_pool_pct": 2.0,
+                    }
+                },
+                "suite_distinct_question_counts": {
+                    "sentinel_tool_use": 1,
+                    "agentic": 2,
+                    "coder": 5,
+                },
+            },
+            "pool": {"path": "question_pool.jsonl"},
+            "recommendation": {"do_not_change_mid_w8": True},
+        }
+    )
+
+    assert section.key == "eval_task_coverage"
+    assert section.status == "attention"
+    assert section.blockers == []
+    assert "20/1000" in section.summary
+    assert section.details["coverage_status"] == "low_coverage"
+    assert section.details["least_covered_non_sentinel_suites"] == [
+        {"suite": "agentic", "distinct_qids": 2},
+        {"suite": "coder", "distinct_qids": 5},
+    ]
+
+
+def test_eval_task_coverage_does_not_block_fable_readiness(monkeypatch, tmp_path: Path) -> None:
+    config = tmp_path / "classifier_config.yaml"
+    config.write_text(
+        """
+xmas_routing:
+  mode: "enforce"
+  winner_table_path: "orchestration/xmas_winner_table.yaml"
+  require_complete_table: true
+""",
+        encoding="utf-8",
+    )
+    table = tmp_path / "xmas_winner_table.yaml"
+    table.write_text("placeholder: true\n", encoding="utf-8")
+    ab_root = tmp_path / "xmas_live_ab"
+    run = ab_root / "run1"
+    run.mkdir(parents=True)
+    (run / "summary.json").write_text(
+        """
+{
+  "decision": {"status": "promote_candidate", "blockers": []},
+  "xmas_policy": "incumbent_constrained_cheapfirst_v2"
+}
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(report_mod, "validate_xmas_config", lambda path: [])
+    monkeypatch.setattr(report_mod, "validate_xmas_table", lambda path, **kwargs: [])
+    monkeypatch.setattr(
+        report_mod,
+        "build_restart_readiness_report",
+        lambda state, rows, **kwargs: {
+            "restart_ready": True,
+            "blockers": [],
+            "archive_authority": {},
+            "snapshot_replay": {},
+            "summary": {"w8_promotion_status": "finalized"},
+        },
+    )
+    monkeypatch.setattr(
+        report_mod,
+        "build_w8_trajectory_report",
+        lambda rows: {
+            "status": "ok",
+            "ok": True,
+            "replay_concentration": {"warning": False},
+        },
+    )
+    monkeypatch.setattr(
+        report_mod,
+        "build_a9_collection_status",
+        lambda path: {"ready": True, "status": "ready", "blockers": []},
+    )
+
+    report = report_mod.build_fable5_gate_report(
+        state={},
+        journal_rows=[],
+        phase_report={
+            "ok": True,
+            "status": "active",
+            "pid": 123,
+            "pid_alive": True,
+            "trial_id": 1,
+        },
+        ds_e1_packet={"ready_for_profile_decision": True, "blockers": []},
+        config_path=config,
+        xmas_table_path=table,
+        xmas_ab_root=ab_root,
+        eval_task_coverage_report={
+            "coverage": {
+                "status": "low_coverage",
+                "distinct_journal_question_keys": 20,
+                "pool_stable_question_keys": 1000,
+                "distinct_vs_pool_stable_upper_bound_pct": 2.0,
+                "repeat_factor": 10.0,
+            },
+            "questions": {"suite_distinct_question_counts": {}},
+        },
+        include_tool_use_activation=False,
+    )
+
+    assert report["ready"] is True
+    assert report["blockers"] == []
+    assert report["summary"]["section_statuses"]["eval_task_coverage"] == "attention"
+    assert report["summary"]["eval_task_coverage_status"] == "low_coverage"
+
+
 def test_tool_use_next_action_requires_controlled_restart() -> None:
     phase = report_mod.GateSection(
         key="phase_health",
