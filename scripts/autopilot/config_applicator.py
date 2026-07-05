@@ -157,6 +157,33 @@ class HotSwapApplicator:
             )
 
 
+def _live_api_env(keys: "list[str] | tuple[str, ...]") -> dict[str, str | None] | None:
+    """Exec-time env of the live API parent process, for the given keys.
+
+    Read from /proc/<pid>/environ — a process env cannot change after exec, so
+    this is exactly what a restart would (or would not) change. Returns None
+    when the live process can't be found/read; callers must treat None as
+    "unknown" and restart (fail-safe toward applying, never toward skipping).
+    """
+    try:
+        result = subprocess.run(
+            ["pgrep", "-f", r"uvicorn src\.api:app"],
+            capture_output=True, text=True, timeout=5,
+        )
+        pids = [p for p in result.stdout.split() if p.strip().isdigit()]
+        if not pids:
+            return None
+        raw = Path(f"/proc/{pids[0]}/environ").read_bytes()
+        env = dict(
+            pair.split("=", 1)
+            for pair in raw.decode("utf-8", errors="ignore").split("\0")
+            if "=" in pair
+        )
+        return {k: env.get(k) for k in keys}
+    except Exception:
+        return None
+
+
 class EnvRestartApplicator:
     """Apply env-backed params by staging env vars and optionally reloading API."""
 
@@ -182,9 +209,36 @@ class EnvRestartApplicator:
         log.info("Env params to apply: %s", env_changes)
 
         if self.restart:
-            return ApplyResult.from_payload(
+            # No-op guard: env-carrying trials restart the API twice (apply +
+            # boundary revert), and reverting to a baseline the process already
+            # runs — or re-applying an env identical to what's live — buys
+            # nothing while tearing down every SSE/in-flight request (~212
+            # restarts in one daemon log). Skip only on a POSITIVE match of
+            # every target key against the live process env; any uncertainty
+            # (process not found, unreadable environ) restarts as before.
+            # `api_restart` rides in the payload → journal, as an eval
+            # covariate (fresh-vs-warm API is a timing regime signal).
+            live = _live_api_env(list(env_changes.keys()))
+            if live is not None and all(
+                live.get(k) == v for k, v in env_changes.items()
+            ):
+                log.info(
+                    "Env already live on API (%s); skipping no-op restart",
+                    env_changes,
+                )
+                return ApplyResult(
+                    status="skipped_noop",
+                    payload={
+                        "status": "skipped_noop",
+                        "api_restart": "skipped_noop",
+                        "env_changes": env_changes,
+                    },
+                )
+            result = ApplyResult.from_payload(
                 restart_api(env_overrides=env_changes, url=self.url)
             )
+            result.payload.setdefault("api_restart", "performed")
+            return result
         return ApplyResult(
             status="staged",
             payload={"status": "staged", "env_changes": env_changes},

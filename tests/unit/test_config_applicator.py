@@ -764,3 +764,109 @@ def test_kv_compaction_applicator_honors_explicit_alias_role(
     assert result.status == "ok"
     assert set(result.payload["per_role"]) == {"coder_escalation"}
     assert calls == [8070]
+
+
+# ----- no-op API restart guard (env already live → skip the restart) ---------
+
+
+def test_env_restart_skips_noop_when_live_env_matches(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reverting to a baseline the API already runs must not bounce the API —
+    env-carrying trials restarted it twice (apply + revert) even when the
+    boundary revert was a no-op."""
+    restarts: list[dict] = []
+    monkeypatch.setattr(
+        applicator, "restart_api",
+        lambda env_overrides=None, url="": restarts.append(env_overrides) or {"status": "ok"},
+    )
+    monkeypatch.setattr(
+        applicator, "_live_api_env",
+        lambda keys: {"ORCHESTRATOR_THINK_HARDER_MIN_EXPECTED_ROI": "0.05"},
+    )
+
+    result = applicator.apply_env_params({"think_harder.min_expected_roi": 0.05})
+
+    assert result["status"] == "skipped_noop"
+    assert result["api_restart"] == "skipped_noop"
+    assert result["env_changes"] == {"ORCHESTRATOR_THINK_HARDER_MIN_EXPECTED_ROI": "0.05"}
+    assert restarts == []
+
+
+def test_env_restart_performs_when_live_env_differs(monkeypatch: pytest.MonkeyPatch) -> None:
+    restarts: list[dict] = []
+    monkeypatch.setattr(
+        applicator, "restart_api",
+        lambda env_overrides=None, url="": restarts.append(env_overrides) or {"status": "ok"},
+    )
+    monkeypatch.setattr(
+        applicator, "_live_api_env",
+        lambda keys: {"ORCHESTRATOR_THINK_HARDER_MIN_EXPECTED_ROI": "0.02"},
+    )
+
+    result = applicator.apply_env_params({"think_harder.min_expected_roi": 0.05})
+
+    assert result["status"] == "ok"
+    assert result["api_restart"] == "performed"
+    assert restarts == [{"ORCHESTRATOR_THINK_HARDER_MIN_EXPECTED_ROI": "0.05"}]
+
+
+def test_env_restart_performs_when_live_env_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unknown live state must fail safe toward restarting, never skipping."""
+    restarts: list[dict] = []
+    monkeypatch.setattr(
+        applicator, "restart_api",
+        lambda env_overrides=None, url="": restarts.append(env_overrides) or {"status": "ok"},
+    )
+    monkeypatch.setattr(applicator, "_live_api_env", lambda keys: None)
+
+    result = applicator.apply_env_params({"think_harder.min_expected_roi": 0.05})
+
+    assert result["status"] == "ok"
+    assert result["api_restart"] == "performed"
+    assert len(restarts) == 1
+
+
+def test_env_restart_performs_when_key_missing_from_live_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    restarts: list[dict] = []
+    monkeypatch.setattr(
+        applicator, "restart_api",
+        lambda env_overrides=None, url="": restarts.append(env_overrides) or {"status": "ok"},
+    )
+    # Key absent from the live process env → live.get(k) is None → restart.
+    monkeypatch.setattr(
+        applicator, "_live_api_env",
+        lambda keys: {"ORCHESTRATOR_THINK_HARDER_MIN_EXPECTED_ROI": None},
+    )
+
+    result = applicator.apply_env_params({"think_harder.min_expected_roi": 0.05})
+
+    assert result["api_restart"] == "performed"
+    assert len(restarts) == 1
+
+
+def test_live_api_env_reads_proc_environ(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    class FakeCompleted:
+        stdout = "4242\n"
+
+    monkeypatch.setattr(
+        applicator.subprocess, "run", lambda *a, **kw: FakeCompleted(),
+    )
+    environ_file = tmp_path / "environ"
+    environ_file.write_bytes(b"FOO=1\0ORCHESTRATOR_X=abc\0NOEQ\0")
+    real_read_bytes = Path.read_bytes
+
+    def fake_read_bytes(self):
+        if str(self) == "/proc/4242/environ":
+            return real_read_bytes(environ_file)
+        return real_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", fake_read_bytes)
+    out = applicator._live_api_env(["ORCHESTRATOR_X", "MISSING"])
+    assert out == {"ORCHESTRATOR_X": "abc", "MISSING": None}
+
+
+def test_live_api_env_none_when_no_process(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeCompleted:
+        stdout = ""
+
+    monkeypatch.setattr(applicator.subprocess, "run", lambda *a, **kw: FakeCompleted())
+    assert applicator._live_api_env(["ANY"]) is None

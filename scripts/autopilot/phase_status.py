@@ -64,6 +64,7 @@ AUTOPILOT_ENV_FLAGS = (
 AUTOPILOT_RUNTIME_SOURCE_PATHS = (
     ORCH_ROOT / "scripts" / "autopilot" / "autopilot.py",
     ORCH_ROOT / "scripts" / "autopilot" / "actions.py",
+    ORCH_ROOT / "scripts" / "autopilot" / "config_applicator.py",
     ORCH_ROOT / "scripts" / "autopilot" / "controller_io.py",
     ORCH_ROOT / "scripts" / "autopilot" / "eval_tower.py",
     ORCH_ROOT / "scripts" / "autopilot" / "experiment_journal.py",
