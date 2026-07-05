@@ -1742,6 +1742,7 @@ function renderAutopilotRunStrip() {
     const hasActiveInference = activeInferenceCount > 0 || activeLockCount > 0;
 
     const lastLogAge = proc.last_autopilot_log_age_s;
+    const evalLabel = prog.eval_label || phase.eval_label || '';
     let runState = 'waiting';
     let runClass = 'muted';
     if (!ap.running) {
@@ -1778,7 +1779,7 @@ function renderAutopilotRunStrip() {
         const action = prog.action_type || phase.action_type || '?';
         const bits = [`${escapeHTML(String(action))}`, `elapsed ${formatShortDuration(prog.elapsed_s)}`];
         if (prog.percent_source === 'log_tail' && prog.log_tail_progress) {
-            bits.push(`tower ${prog.log_tail_progress.completed}/${prog.log_tail_progress.total}`);
+            bits.push(`${escapeHTML(String(evalLabel)) || 'T?'} tower ${prog.log_tail_progress.completed}/${prog.log_tail_progress.total}`);
             if (prog.expected_s != null) bits.push(`projected ${formatShortDuration(prog.expected_s)}`);
         } else if ((prog.percent_source === 'action_p50' || prog.percent_source === 'aggregate_p50') && prog.now_percentile != null) {
             bits.push(`p${Math.round(prog.now_percentile * 100)}${prog.slow_tail ? '+' : ''}`);
@@ -5573,7 +5574,8 @@ function startDashboard() {
             }
             wrap.style.display = '';
             const action = d.action_type || '?';
-            label.textContent = `trial #${d.trial_id} (${action})`;
+            const evalLabel = d.eval_label || '';
+            label.textContent = evalLabel ? `trial #${d.trial_id} (${action}, ${evalLabel})` : `trial #${d.trial_id} (${action})`;
 
             const p = d.percent != null ? d.percent : 0;
             const fmt = (s) => s == null ? '?' : (s < 60 ? `${s.toFixed(0)}s` : `${(s/60).toFixed(1)}m`);
@@ -5635,7 +5637,7 @@ function startDashboard() {
             const metaBits = [`elapsed ${fmt(d.elapsed_s)}`];
             if (d.percent_source === 'log_tail' && d.log_tail_progress) {
                 const lp = d.log_tail_progress;
-                metaBits.push(`tower ${lp.completed}/${lp.total}`);
+                metaBits.push(`${evalLabel || 'T?'} tower ${lp.completed}/${lp.total}`);
                 metaBits.push(`projected total ~${fmt(d.expected_s)}`);
             } else if (d.percent_source === 'action_p50') {
                 metaBits.push(`${d.action_type} n=${d.n_action_type_samples}`);

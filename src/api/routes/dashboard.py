@@ -2539,20 +2539,23 @@ def _newest_autopilot_log() -> Path | None:
         return None
 
 
-def _tail_deep_eval_progress(log_path: Path) -> tuple[int, int] | None:
+def _tail_deep_eval_progress(log_path: Path) -> dict[str, int | str] | None:
     """Scan the autopilot log for the most-recent `T<n> progress: X/Y` line.
 
     The eval tower emits these lines as each question completes, so this gives
     the *true* completion fraction for a deep_eval trial — far more accurate
-    than the historical-median estimate. Returns (completed, total) or None.
+    than the historical-median estimate. Returns a dict with `eval_label`,
+    `completed`, and `total`, or None.
 
     Matches any tier digit (`T0`..`T3` and future tiers) — the label tracks the
     eval tier, so a hardcoded `T[12]` silently dropped the T3 expert/hard lane back
-    to the p90 estimate. `\\d+` keeps this generic as new tiers land.
+    to the p90 estimate. `\\d+` keeps this generic as new tiers land, and the
+    matched tier label is surfaced so the dashboard can display `T3 400/500`
+    instead of a generic tower fraction.
     """
     if not log_path.exists():
         return None
-    pat = re.compile(r"T\d+ progress: (\d+)/(\d+)")
+    pat = re.compile(r"(T\d+) progress: (\d+)/(\d+)")
     try:
         # Tail-read: tier-2 evals can run hours and the log can be large; read
         # only the last 64 KB to find the most recent progress marker.
@@ -2565,7 +2568,11 @@ def _tail_deep_eval_progress(log_path: Path) -> tuple[int, int] | None:
         for m in pat.finditer(chunk):
             last_match = m
         if last_match:
-            return int(last_match.group(1)), int(last_match.group(2))
+            return {
+                "eval_label": last_match.group(1),
+                "completed": int(last_match.group(2)),
+                "total": int(last_match.group(3)),
+            }
     except Exception:
         pass
     return None
@@ -2577,8 +2584,9 @@ async def autopilot_progress() -> JSONResponse:
 
     Sources, in priority order:
       1. For deep_eval/structural_experiment: tails the autopilot stdout log
-         for `T2 progress: X/Y` lines — these are the authoritative per-question
-         completion markers, so percent = X/Y exactly (no estimation).
+         for `Tn progress: X/Y` lines — these are the authoritative per-question
+         completion markers, so percent = X/Y exactly (no estimation) and the
+         tier label is surfaced as `eval_label`.
       2. Otherwise: full quantile distribution (p25/p50/p75/p90) of historical
          durations for the same `action_type`, derived from successive
          `timestamp` deltas in the journal (autopilot runs trials serially,
@@ -2602,6 +2610,7 @@ async def autopilot_progress() -> JSONResponse:
         "autopilot_alive": False,
         "trial_id": None,
         "action_type": None,
+        "eval_label": None,
         "started_at": None,
         "elapsed_s": None,
         "expected_s": None,                # log_tail: extrapolated projected total; others: p50 (legacy meta label)
@@ -2716,11 +2725,13 @@ async def autopilot_progress() -> JSONResponse:
         if log:
             progress = _tail_deep_eval_progress(log)
             if progress:
-                completed, total = progress
+                completed = progress["completed"]
+                total = progress["total"]
                 if total > 0:
                     pct = (completed / total) * 100.0
                     out["percent"] = round(min(99.0, max(0.0, pct)), 1)
                     out["percent_source"] = "log_tail"
+                    out["eval_label"] = progress["eval_label"]
                     out["log_tail_progress"] = {"completed": completed, "total": total}
                     # Also extrapolate an expected_s for the meta line:
                     # if X/Y done in elapsed_s, projected total ≈ elapsed_s × Y/X

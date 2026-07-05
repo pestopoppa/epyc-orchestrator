@@ -205,6 +205,16 @@ def test_dashboard_gepa_and_pareto_surface_real_suite_metrics() -> None:
     assert "real_suite_v1 q=" in body
 
 
+def test_dashboard_autopilot_progress_includes_eval_label() -> None:
+    html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    body = html_path.read_text()
+
+    assert "const evalLabel = prog.eval_label || phase.eval_label || '';" in body
+    assert "evalLabel ? `trial #${d.trial_id} (${action}, ${evalLabel})`" in body
+    assert "${evalLabel || 'T?'} tower ${lp.completed}/${lp.total}" in body
+    assert "${escapeHTML(String(evalLabel)) || 'T?'} tower ${prog.log_tail_progress.completed}/${prog.log_tail_progress.total}" in body
+
+
 def test_dashboard_repo_readiness_panel_is_advisory_only() -> None:
     """Repo-readiness queue can render in the dashboard without becoming a gate."""
     html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
