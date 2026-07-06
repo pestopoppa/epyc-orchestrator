@@ -2596,6 +2596,32 @@ def test_last_invalid_feedback_surfaces_repeats_after_clear() -> None:
     assert "4×" in text
 
 
+def test_last_invalid_feedback_does_not_poison_observational_deep_eval() -> None:
+    deep_eval = {"type": "deep_eval", "tier": 3}
+    numeric = {
+        "type": "numeric_trial",
+        "surface": "think_harder",
+        "params": {"think_harder.min_expected_roi": 0.05},
+    }
+    state = {
+        "last_invalid_action": deep_eval,
+        "last_invalid_reason": "critic rejected: repeated T3 probe",
+        "last_invalid_status": "critic_rejected",
+        "invalid_signature_counts": {
+            autopilot._action_signature(deep_eval): 8,
+            autopilot._action_signature(numeric): 3,
+        },
+    }
+
+    text = autopilot._build_last_invalid_feedback(state)
+
+    assert "remains schedulable" in text
+    assert '"deep_eval"' not in text
+    assert "8×" not in text
+    assert "think_harder" in text
+    assert "3×" in text
+
+
 def test_prior_planner_decision_digest_summarizes_bounded_archive(tmp_path) -> None:
     archive = tmp_path / "planner_archive.jsonl"
     archive.write_text(
@@ -2815,6 +2841,33 @@ def test_record_rejected_draft_blacklists_on_repeat(monkeypatch) -> None:
     assert state["consecutive_rejected_drafts"] == 2
 
 
+def test_record_rejected_draft_keeps_observational_deep_eval_advisory() -> None:
+    state = {
+        "invalid_signature_counts": {
+            autopilot._action_signature({"type": "deep_eval", "tier": 3}): 7
+        },
+        "consecutive_rejected_drafts": 1,
+    }
+    draft = {"type": "deep_eval", "tier": 3}
+
+    blacklisted = autopilot._record_rejected_draft(
+        state,
+        draft,
+        _FakeCritique(issues=["repeated T3 probe"]),
+        trial_id=1208,
+    )
+
+    assert blacklisted is False
+    assert state["invalid_signature_counts"] == {
+        autopilot._action_signature(draft): 7
+    }
+    assert "critic_rejected_signatures" not in state
+    assert state["consecutive_rejected_drafts"] == 1
+    assert state["critic_rejected_observational_signatures"][
+        autopilot._action_signature(draft)
+    ]["trial_id"] == 1208
+
+
 def test_operator_domain_critique_detection() -> None:
     assert autopilot._is_operator_domain_critique(
         _FakeCritique(issues=["baseline refresh is operator-domain"])
@@ -2915,6 +2968,20 @@ def test_critic_rejected_signature_skip_blocks_exact_concrete_repeat() -> None:
 
 def test_critic_rejected_signature_skip_allows_empty_numeric_optuna_request() -> None:
     draft = {"type": "numeric_trial", "surface": "think_harder", "params": {}}
+    state = {
+        "critic_rejected_signatures": {
+            autopilot._action_signature(draft): {
+                "trial_id": 44,
+                "reason": "critic rejected",
+            }
+        }
+    }
+
+    assert autopilot._critic_rejected_signature_skip(draft, state) is None
+
+
+def test_critic_rejected_signature_skip_allows_observational_deep_eval() -> None:
+    draft = {"type": "deep_eval", "tier": 3}
     state = {
         "critic_rejected_signatures": {
             autopilot._action_signature(draft): {

@@ -94,6 +94,7 @@ import controller_io
 from controller_io import PLANNER_ARCHIVE_PATH, invoke_controller as _invoke_controller_impl
 from planner_coordinator import plan_with_providers, uncritiqued_dispatch_block_reason
 from state_store import (
+    OBSERVATIONAL_ACTION_BLACKLIST_DENYLIST,
     append_blacklist as _append_blacklist_impl,
     check_blacklist,
     format_model_signatures,
@@ -2435,6 +2436,21 @@ def _format_blacklist_for_prompt(blacklist: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _is_observational_feedback_action(action: Any) -> bool:
+    return bool(
+        isinstance(action, dict)
+        and action.get("type") in OBSERVATIONAL_ACTION_BLACKLIST_DENYLIST
+    )
+
+
+def _is_observational_feedback_signature(signature: str) -> bool:
+    try:
+        action = json.loads(signature)
+    except (TypeError, json.JSONDecodeError):
+        return False
+    return _is_observational_feedback_action(action)
+
+
 def _enforce_experiment_quota(
     action: dict[str, Any],
     state: dict[str, Any],
@@ -3005,7 +3021,12 @@ def _build_last_invalid_feedback(state: dict[str, Any]) -> str:
     """
     counts = state.get("invalid_signature_counts", {}) or {}
     repeated = sorted(
-        ((c, s) for s, c in counts.items() if c >= 2), reverse=True
+        (
+            (c, s)
+            for s, c in counts.items()
+            if c >= 2 and not _is_observational_feedback_signature(s)
+        ),
+        reverse=True,
     )[:5]
 
     def _repeated_block(lines: list[str]) -> str:
@@ -3020,6 +3041,14 @@ def _build_last_invalid_feedback(state: dict[str, Any]) -> str:
         return "\n".join(lines)
 
     act = state.get("last_invalid_action")
+    if _is_observational_feedback_action(act):
+        lines = [
+            "  (last non-executing action was observational and remains schedulable; "
+            "it is not treated as a repeat blocker)"
+        ]
+        if repeated:
+            return _repeated_block(lines)
+        return "\n".join(lines)
     if not act:
         if repeated:
             return _repeated_block(
@@ -3520,6 +3549,25 @@ def _record_rejected_draft(
     reason = "critic rejected: " + ("; ".join(issues) if issues else
                                     getattr(critique, "decision", "rejected"))
     sig = _action_signature(draft_action)
+    if _is_observational_feedback_action(draft_action):
+        rejected_observational = state.setdefault(
+            "critic_rejected_observational_signatures", {}
+        )
+        rejected_observational[sig] = {
+            "trial_id": trial_id,
+            "action": draft_action,
+            "reason": reason,
+            "recorded_at": datetime.now(timezone.utc).isoformat(),
+        }
+        log.warning(
+            "Critic %s observational draft %s; recorded as advisory feedback "
+            "without invalid-signature poisoning",
+            getattr(critique, "decision", "rejected"),
+            json.dumps(draft_action, default=str),
+        )
+        if _is_operator_domain_critique(critique):
+            _append_operator_outbox_item(draft_action, critique, trial_id)
+        return False
     sig_counts = state.setdefault("invalid_signature_counts", {})
     sig_counts[sig] = int(sig_counts.get(sig, 0)) + 1
     rejected_signatures = state.setdefault("critic_rejected_signatures", {})
@@ -3572,6 +3620,8 @@ def _critic_rejected_signature_skip(
     action after a substituted fallback trial cleared last_invalid_action.
     """
     if not isinstance(action, dict):
+        return None
+    if _is_observational_feedback_action(action):
         return None
     if action.get("type") == "numeric_trial" and not (action.get("params") or {}):
         # Empty numeric params are an Optuna request, not the replay artifact.
