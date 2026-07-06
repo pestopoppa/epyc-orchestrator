@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from argparse import Namespace
+from pathlib import Path
 
 import pytest
+import yaml
+from jsonschema import Draft7Validator
 
 from scripts.lab import run_shadow_jobs
 
@@ -153,3 +156,55 @@ def test_run_from_args_requires_execution_mode(tmp_path, monkeypatch) -> None:
 
     with pytest.raises(run_shadow_jobs.ShadowBatchError, match="execute-command"):
         run_shadow_jobs.run_from_args(args)
+
+
+def test_production_inventory_includes_outcome_progress_active_safe_job() -> None:
+    root = Path(__file__).resolve().parents[2]
+    jobs_doc = yaml.safe_load((root / "orchestration/lab_jobs.yaml").read_text())
+    jobs = {job["job_id"]: job for job in jobs_doc["jobs"]}
+    job = jobs["autopilot_outcome_progress_watch"]
+
+    selected = run_shadow_jobs.select_jobs(
+        jobs_doc,
+        schedule="nightly",
+        job_ids=[],
+        include_disabled=False,
+        allow_gated=False,
+        active_safe_only=True,
+        max_jobs=0,
+    )
+
+    assert job["enabled"] is True
+    assert job["risk"] == "read_only"
+    assert run_shadow_jobs.is_active_safe_job(job) is True
+    assert run_shadow_jobs.execution_mode(job) == "deterministic_command"
+    assert "autopilot_outcome_progress_watch" in [item["job_id"] for item in selected]
+    assert job["execution"]["command"] == [
+        "python3",
+        "scripts/autopilot/phase_health_report.py",
+        "--json",
+        "--require-outcome-progress",
+    ]
+
+    schema = job["output_contract"]["json_schema"]
+    Draft7Validator.check_schema(schema)
+    Draft7Validator(schema).validate(
+        {
+            "ok": False,
+            "status": "outcome_stalled",
+            "blockers": ["frontier admission stale"],
+            "outcome_progress": {
+                "status": "attention",
+                "blockers": ["frontier admission stale"],
+                "latest_trial_id": 1206,
+                "latest_frontier_trial_id": 1005,
+                "latest_promotion_trial_id": 969,
+                "trials_since_frontier": 201,
+                "trials_since_promotion": 237,
+                "rates": {
+                    "keepable_rate": {"count": 0, "rate": 0.0, "total": 78},
+                    "wasted_eval_rate": {"count": 54, "rate": 0.692, "total": 78},
+                },
+            },
+        }
+    )

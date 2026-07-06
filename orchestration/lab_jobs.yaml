@@ -332,6 +332,91 @@ jobs:
           code_stale:
             type: boolean
 
+  - job_id: autopilot_outcome_progress_watch
+    title: AutoPilot outcome-progress watch
+    stage: shadow
+    enabled: true
+    risk: read_only
+    runtime_class: active_safe_deterministic
+    active_safe: true
+    schedule:
+      type: manual_or_nightly
+      cadence: daily
+      window: active_ok
+      runtime_class: active_safe_deterministic
+      max_runtime_s: 60
+    reference_skill: none
+    execution:
+      mode: deterministic_command
+      command:
+        - python3
+        - scripts/autopilot/phase_health_report.py
+        - --json
+        - --require-outcome-progress
+    input_spec:
+      sources:
+        - repo: epyc-orchestrator
+          path: scripts/autopilot/phase_health_report.py
+        - repo: epyc-orchestrator
+          path: scripts/autopilot/phase_status.py
+        - repo: epyc-orchestrator
+          path: scripts/autopilot/experiment_journal.py
+      context_budget_tokens: 4000
+      forbidden_actions:
+        - stop_autopilot
+        - restart_services
+        - edit_journal
+        - update_baseline
+    output_contract:
+      format: json
+      json_schema:
+        type: object
+        additionalProperties: true
+        required:
+          - ok
+          - status
+          - blockers
+          - outcome_progress
+        properties:
+          ok:
+            type: boolean
+          status:
+            type: string
+          blockers:
+            type: array
+            items:
+              type: string
+          outcome_progress:
+            type: object
+            additionalProperties: true
+            required:
+              - status
+              - blockers
+              - latest_trial_id
+              - latest_frontier_trial_id
+              - trials_since_frontier
+              - rates
+            properties:
+              status:
+                type: string
+              blockers:
+                type: array
+                items:
+                  type: string
+              latest_trial_id:
+                type: [integer, "null"]
+              latest_frontier_trial_id:
+                type: [integer, "null"]
+              latest_promotion_trial_id:
+                type: [integer, "null"]
+              trials_since_frontier:
+                type: [integer, "null"]
+              trials_since_promotion:
+                type: [integer, "null"]
+              rates:
+                type: object
+                additionalProperties: true
+
   - job_id: daily_digest_skeleton
     title: Daily digest skeleton
     stage: shadow
