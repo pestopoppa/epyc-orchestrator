@@ -1,0 +1,100 @@
+{
+  "builder": "scripts/tasks/package_real_suite_eval.py",
+  "by_suite": {
+    "real_suite_v1": {
+      "accuracy": 0.5833333333333334,
+      "correct": 7,
+      "count": 12
+    }
+  },
+  "by_task_class": {
+    "benchmark_eval_measurement": {
+      "accuracy": 0.0,
+      "correct": 0,
+      "count": 1,
+      "errors": 1,
+      "reliability": 0.0
+    },
+    "code_change_implementation": {
+      "accuracy": 0.0,
+      "correct": 0,
+      "count": 2,
+      "errors": 1,
+      "reliability": 0.5
+    },
+    "debug_root_cause": {
+      "accuracy": 1.0,
+      "correct": 2,
+      "count": 2,
+      "errors": 0,
+      "reliability": 1.0
+    },
+    "governance_docs_handoff": {
+      "accuracy": 0.5,
+      "correct": 1,
+      "count": 2,
+      "errors": 0,
+      "reliability": 1.0
+    },
+    "ops_deploy_process": {
+      "accuracy": 1.0,
+      "correct": 2,
+      "count": 2,
+      "errors": 0,
+      "reliability": 1.0
+    },
+    "planning_architecture_review": {
+      "accuracy": 0.5,
+      "correct": 1,
+      "count": 2,
+      "errors": 0,
+      "reliability": 1.0
+    },
+    "research_intake_deep_dive": {
+      "accuracy": 1.0,
+      "correct": 1,
+      "count": 1,
+      "errors": 0,
+      "reliability": 1.0
+    }
+  },
+  "caveat": "Partial real_suite_v1 run; useful for harness smoke only. It is not the clean full 50-question W3 acceptance run.",
+  "error_breakdown": {
+    "timed out": 2
+  },
+  "generated_at": "2026-07-06T15:18:54+00:00",
+  "metrics": {
+    "accuracy": 0.5833333333333334,
+    "aggregate_speed": 26.27470674440233,
+    "correct": 7,
+    "errors": 2,
+    "eval_concurrency": 3,
+    "eval_wall_s": 317.643887758255,
+    "incorrect": 3,
+    "median_request_speed": 12.473376618000282,
+    "n_questions": 12,
+    "quality_0_3": 1.75,
+    "reliability": 0.8333333333333334,
+    "speed_metric_mode": "aggregate_batch_tps"
+  },
+  "privacy": {
+    "committed_question_results": "compact prompt-free EvalTower result rows",
+    "private_key_matches": [],
+    "question_ledger_rows": "compact prompt-free per-question ledger rows"
+  },
+  "question_ledger_path": "orchestration/reports/real_suite_v1_eval_20260706T145900Z_n12/question_ledger.jsonl",
+  "run": {
+    "calibration_id": "real_suite_v1_eval_20260706T151336Z",
+    "core_id": "real_suite_v1",
+    "event_type": "real_suite_v1_evaltower_window",
+    "finished_at": "2026-07-06T15:18:54+00:00",
+    "requested_n": 12,
+    "seed": 4242,
+    "started_at": "2026-07-06T15:13:36+00:00",
+    "tier": 1,
+    "trial_id": null
+  },
+  "schema_version": "real_suite_v1_eval_report.v1",
+  "source_jsonl": "/mnt/raid0/llm/tmp/real_suite_v1_eval_20260706T145900Z_n12.jsonl",
+  "status": "eval_tower_real_suite_v1_run_packaged"
+}
