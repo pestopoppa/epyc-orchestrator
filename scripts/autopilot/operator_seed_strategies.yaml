@@ -207,6 +207,23 @@
   - tools
   - repl
   - react_mode
+- slug: parallel-read-only-tool-batching
+  tranche: green
+  species: structural_lab
+  entry_type: pattern
+  title: Prefer parallel read-only tool batches
+  description: parallel read-only tool batching for independent lookup tasks
+  insight: When a turn needs several independent read-only facts, issue the tool calls as one parallel batch instead of serializing them; keep serial order only when a dependency exists.
+  evidence_trial_ids: []
+  source_handoff: tool-use-eval-contract
+  seeded_reason: Bias the planner toward the already-available parallel-tools path so lookup-heavy turns finish faster without more reasoning hops
+  confidence: medium
+  bind_status: future
+  bind_identifiers:
+  - parallel_tools
+  - read_only
+  - tools_called
+  - tool_use_sentinel_lane
 - slug: xmas-winner-table
   tranche: green
   species: structural_lab
