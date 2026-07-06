@@ -1,0 +1,76 @@
+{
+  "allow_autopilot_active": false,
+  "allow_partial": false,
+  "api_url": "http://localhost:8000",
+  "applied": true,
+  "blockers": [
+    "AutoPilot appears active; real-suite run needs a clean window"
+  ],
+  "confirm_clean_window": true,
+  "decision_grade": false,
+  "decision_grade_notes": [
+    "requires --apply --confirm-clean-window",
+    "requires full real_suite_v1 50-question run",
+    "requires AutoPilot inactive unless --allow-autopilot-active is set",
+    "the run is standalone and does not write AutoPilot journal/state"
+  ],
+  "finished_at": "",
+  "generated_at": "2026-07-06T17:11:51+00:00",
+  "output_dir": "orchestration/reports/real_suite_v1_eval_20260706T000000Z_auto",
+  "packaged_summary": null,
+  "preflight": {
+    "api_health": {
+      "ok": true,
+      "status_code": 200,
+      "url": "http://localhost:8000/health"
+    },
+    "autopilot_active": true,
+    "autopilot_processes": [
+      "969844 /mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/autopilot/autopilot.py start --max-trials 3000"
+    ],
+    "available_questions": 50,
+    "suite_yaml": "/mnt/raid0/llm/epyc-inference-research/benchmarks/prompts/debug/real_suite_v1.yaml",
+    "suite_yaml_exists": true
+  },
+  "raw_jsonl": "",
+  "raw_row_metrics": {
+    "eval_wall_s": null,
+    "n_questions": null,
+    "quality": null,
+    "reliability": null
+  },
+  "seed": 4242,
+  "selected_n": 50,
+  "started_at": "",
+  "status": "blocked",
+  "suite": {
+    "generated_at": "2026-06-27T15:36:42+00:00",
+    "question_count": 50,
+    "scoring_methods": {
+      "code_execution": 7,
+      "exact_match": 8,
+      "f1": 9,
+      "multiple_choice": 11,
+      "programmatic": 5,
+      "substring": 10
+    },
+    "suite": "real_suite_v1",
+    "task_class_counts": {
+      "benchmark_eval_measurement": 8,
+      "code_change_implementation": 7,
+      "debug_root_cause": 7,
+      "governance_docs_handoff": 7,
+      "ops_deploy_process": 7,
+      "planning_architecture_review": 7,
+      "research_intake_deep_dive": 7
+    },
+    "tier_counts": {
+      "1": 20,
+      "2": 21,
+      "3": 9
+    },
+    "version": "1.0"
+  },
+  "suite_yaml": "/mnt/raid0/llm/epyc-inference-research/benchmarks/prompts/debug/real_suite_v1.yaml",
+  "tier_label": 1
+}
