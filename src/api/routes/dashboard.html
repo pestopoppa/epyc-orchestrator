@@ -2635,21 +2635,16 @@ function formatRegionLockHolderSummary() {
         const source = (!tapped && actionSource) ? ` (${actionSource})` : '';
         return `${formatPhysicalRoleWithLogicalAliases(holder.role, holder.shape, holder.idx)}${source}`;
     });
-    const seen = new Set(parts.map(label => label.replace(/^\s*[~≈]\s*/, '')));
     for (const [role, inferred] of Object.entries(_latestTapInferredRegionLocksByRole || {})) {
         const base = (_latestRegionLocksByRole && _latestRegionLocksByRole[role]) || {};
-        const procIdxs = new Set((base.procInstanceIdxs || []).map(Number));
         const instMap = new Map((base.instances || []).map(i => [Number(i.idx), i]));
         const sources = Array.isArray(inferred.sources) ? inferred.sources : [];
         for (const rawIdx of (inferred.instanceIdxs || [])) {
             const idx = Number(rawIdx);
-            if (!Number.isFinite(idx) || procIdxs.has(idx)) continue;
+            if (!Number.isFinite(idx)) continue;
             const inst = instMap.get(idx);
             const shape = (inst && inst.shape) || `idx${idx}`;
             const label = tapInferredHolderLabel(role, shape, idx, sources);
-            const key = label.replace(/^\s*[~≈]\s*/, '');
-            if (seen.has(key)) continue;
-            seen.add(key);
             parts.push(label);
         }
     }
@@ -2687,11 +2682,20 @@ function scheduleRegionLocksRefresh(force = false) {
 }
 
 function repaintRegionLocksFromStructuredTapFrame() {
-    // Structured tap updates can change the live-holder story before the next
-    // periodic lock poll lands. Force a fresh lock fetch so the grid repaints
-    // from current /dashboard/api/region_locks data instead of reusing the last
-    // cached payload, which can leave the panel visually stuck on an older
-    // holder.
+    // Prefer the latest coherent snapshot. Pulling /dashboard/api/region_locks
+    // again here can swap in a different worker cache mid-frame and make the
+    // grid diverge from the tap frame that just landed.
+    const latestRegionLocks = _lastRegionLocksPayload
+        || (_latestSnapshot && _latestSnapshot.region_locks ? _latestSnapshot.region_locks : null);
+    if (latestRegionLocks) {
+        updateRegionLocks(
+            _regionLocksRefreshSeq,
+            latestRegionLocks,
+            _latestSnapshotSeq,
+            (_latestSnapshot && _latestSnapshot.in_flight_tasks) || [],
+        );
+        return;
+    }
     scheduleRegionLocksRefresh(true);
 }
 
@@ -3610,7 +3614,6 @@ function applyStructuredTapFrame(data, {
     refreshLiveDotsFromStructuredTap();
     if (repaintLocks) {
         repaintRegionLocksFromStructuredTapFrame();
-        scheduleRegionLocksRefresh();
     }
     if (refreshDetail) refreshOpenStructuredTapDetail();
     return true;

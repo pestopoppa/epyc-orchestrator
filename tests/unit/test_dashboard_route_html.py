@@ -222,6 +222,95 @@ def test_dashboard_html_infers_quiet_tap_requests_into_region_lock_candidates() 
     assert result.returncode == 0, result.stderr or result.stdout
 
 
+def test_dashboard_html_preserves_tap_inferred_holders_even_when_proc_label_matches() -> None:
+    """A tapped holder should still appear when an older /proc label matches it."""
+    html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    body = html_path.read_text()
+    start = body.index("function currentAutopilotActionSource()")
+    end = body.index("function refreshLiveDotsFromStructuredTap()")
+    snippet = body[start:end]
+
+    script = textwrap.dedent(
+        f"""
+        const vm = require('vm');
+        const ctx = {{
+          _latestProcessStatus: {{}},
+          _latestRegionLocksByRole: {{
+            worker_general: {{
+              instanceIdxs: new Set([0]),
+              procInstanceIdxs: [0],
+              regions: new Set(['q0', 'q1', 'q2', 'q3']),
+              holderPids: new Set(['111']),
+              pidsByInstanceIdx: new Map([[0, new Set(['111'])]]),
+              instances: [{{ idx: 0, shape: 'full', regions: ['q0', 'q1', 'q2', 'q3'] }}],
+            }},
+          }},
+          _latestTapInferredRegionLocksByRole: {{
+            worker_general: {{
+              instanceIdxs: new Set([0]),
+              regions: new Set(['q0', 'q1', 'q2', 'q3']),
+              holderPids: new Set(['222']),
+              pidsByInstanceIdx: new Map([[0, new Set(['222'])]]),
+              sources: [{{
+                request_id: 'streaming',
+                role: 'frontdoor',
+                lock_role: 'worker_general',
+                instance_idx: 0,
+                instance_shape: 'full',
+                instance_regions: ['q0', 'q1', 'q2', 'q3'],
+                status: 'running',
+                chunk_count: 2,
+                response_len: 64,
+                quiet_s: 0,
+              }}],
+            }},
+          }},
+          _lastRegionLocksPayload: {{
+            by_role: {{
+              worker_general: {{
+                instances: [{{ idx: 0, shape: 'full', regions: ['q0', 'q1', 'q2', 'q3'] }}],
+              }},
+            }},
+          }},
+          _STRUCTURED_TAP_STALLED_S: 999999,
+          _structuredTapRequests: [{{
+            request_id: 'streaming',
+            role: 'frontdoor',
+            lock_role: 'worker_general',
+            instance_idx: 0,
+            instance_shape: 'full',
+            instance_regions: ['q0', 'q1', 'q2', 'q3'],
+            status: 'running',
+            chunk_count: 2,
+            response_len: 64,
+            quiet_s: 0,
+          }}],
+          escapeHTML: (s) => String(s),
+          clientBaseRole: (s) => String(s || ''),
+          roleColor: () => 'x',
+          inferStructuredTapLockIdentity: () => null,
+          structuredTapHasActiveCpuLock: () => true,
+          structuredTapCpuBlockers: () => [],
+          structuredTapCpuBlockerSummary: (blockers) => blockers.join(','),
+          topology: {{ nodes: [] }},
+        }};
+        vm.createContext(ctx);
+        vm.runInContext({json.dumps(snippet)}, ctx);
+        const summary = vm.runInContext('formatRegionLockHolderSummary()', ctx);
+        const occurrences = (summary.match(/worker_general\\.full/g) || []).length;
+        if (occurrences < 2) {{
+          throw new Error(`expected both proc and tap-inferred entries, got: ${{summary}}`);
+        }}
+        if (!summary.includes('tap-inferred streaming')) {{
+          throw new Error(`expected tap-inferred holder in summary, got: ${{summary}}`);
+        }}
+        """
+    )
+
+    result = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr or result.stdout
+
+
 def test_dashboard_html_merges_unique_tap_inferred_holders_into_region_lock_summary() -> None:
     """The Regions Lock header should list tap-inferred holders alongside real /proc holders."""
     html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
