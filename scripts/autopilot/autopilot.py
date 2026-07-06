@@ -740,6 +740,7 @@ def _build_higher_tier_planner_pressure(
     gate: SafetyGate | None,
     *,
     tiers: tuple[int, ...] = (2, 3),
+    w8_candidate_generation_active: bool = False,
 ) -> str:
     """Summarize non-default eval tiers for planner pressure without cross-tier scoring."""
     if archive is None:
@@ -751,10 +752,23 @@ def _build_higher_tier_planner_pressure(
         "- Preserve T1 as the deployment safety lane, but expect durable wins to generalize: T1 gains that never lift T2/T3 are overfit risk.",
         "- Prefer actions likely to improve T2/T3 same-tier frontier quality, then validate with deep_eval tier 2 or 3.",
         "- If T1/T2 hypervolume is plateauing, use the current kernel era for T3 hard-workflow exploration instead of repeated local T1 exploitation.",
-        "- T3 hard-workflow probes should favor technical tool-use, REPL, and multi-turn agentic hypotheses when W8 is not requesting promotion evidence.",
-        "- When W8 replay evidence is not asking for a specific promotion eval, prefer deep_eval tier 3 if T3 coverage/frontier is thin.",
         "- Never compare raw quality across tiers; compare each tier only to its own baseline/frontier.",
     ]
+    if w8_candidate_generation_active:
+        lines.append(
+            "- W8 candidate-generation override: do not emit seed_batch, "
+            "deep_eval, or structural_prune for higher-tier coverage this turn. "
+            "Preserve T2/T3 pressure through an available replayable candidate "
+            "action instead: numeric_trial with journaled applied params, or a "
+            "one-flag structural_experiment with a same-tier T2/T3 falsifier."
+        )
+    else:
+        lines.extend(
+            [
+                "- T3 hard-workflow probes should favor technical tool-use, REPL, and multi-turn agentic hypotheses when W8 is not requesting promotion evidence.",
+                "- When W8 replay evidence is not asking for a specific promotion eval, prefer deep_eval tier 3 if T3 coverage/frontier is thin.",
+            ]
+        )
     baseline = getattr(gate, "baseline", None) if gate is not None else None
     plateau_parts: list[str] = []
     for tier in (DEFAULT_FRONTIER_TIER, 2):
@@ -800,10 +814,17 @@ def _build_higher_tier_planner_pressure(
                 if baseline_quality is not None
                 else ""
             )
-            lines.append(
-                f"- T{tier}: empty frontier{baseline_text}; schedule deep_eval tier {tier} "
-                "when evidence budget allows."
-            )
+            if w8_candidate_generation_active:
+                lines.append(
+                    f"- T{tier}: empty frontier{baseline_text}; defer the "
+                    f"deep_eval tier {tier} coverage probe until W8 candidate "
+                    "generation clears."
+                )
+            else:
+                lines.append(
+                    f"- T{tier}: empty frontier{baseline_text}; schedule deep_eval tier {tier} "
+                    "when evidence budget allows."
+                )
             continue
         delta_text = ""
         if baseline_quality is not None:
@@ -899,6 +920,7 @@ def _build_eval_coverage_pressure(
     *,
     pool_total_questions: int | None = None,
     pool_tier_questions: Mapping[int | str, int] | None = None,
+    w8_candidate_generation_active: bool = False,
 ) -> str:
     """Summarize eval-task coverage so planner search does not overfit a narrow slice."""
     if journal is None:
@@ -936,6 +958,13 @@ def _build_eval_coverage_pressure(
                 suite_distinct.setdefault(suite, set()).add(qid)
 
     if question_rows <= 0:
+        if w8_candidate_generation_active:
+            return (
+                "No scored question-result rows are available yet. W8 candidate "
+                "generation is the active strict blocker, so do not use "
+                "seed_batch or deep_eval merely to collect coverage; choose an "
+                "available replayable candidate action."
+            )
         return (
             "No scored question-result rows are available yet; prefer seed_batch "
             "or deep_eval before drawing planner-learning conclusions."
@@ -985,13 +1014,22 @@ def _build_eval_coverage_pressure(
             f"T{tier}={tier_trials.get(tier, 0)} trial(s)"
             for tier in under_sampled_higher_tiers
         )
-        under_sampled_text = (
-            f" Higher-tier coverage is thin ({tier_list}); when the Fable gate "
-            "does not require a specific W8/promotion action, prefer deep_eval on "
-            "the thinnest tier or seed_batch coverage probes that broaden task families. "
-            "If T3 is thin, treat hard workflow, tool-use, REPL, and multi-turn task "
-            "coverage as high-value exploration."
-        )
+        if w8_candidate_generation_active:
+            under_sampled_text = (
+                f" Higher-tier coverage is thin ({tier_list}), but W8 candidate "
+                "generation is the active strict blocker; do not propose "
+                "seed_batch or deep_eval for coverage this turn. Preserve the "
+                "hard-workflow/tool-use/REPL hypothesis in the falsifier of an "
+                "available replayable candidate action."
+            )
+        else:
+            under_sampled_text = (
+                f" Higher-tier coverage is thin ({tier_list}); when the Fable gate "
+                "does not require a specific W8/promotion action, prefer deep_eval on "
+                "the thinnest tier or seed_batch coverage probes that broaden task families. "
+                "If T3 is thin, treat hard workflow, tool-use, REPL, and multi-turn task "
+                "coverage as high-value exploration."
+            )
     least_covered_suites = sorted(
         ((suite, len(qids)) for suite, qids in suite_distinct.items()),
         key=lambda item: item[1],
@@ -1001,19 +1039,30 @@ def _build_eval_coverage_pressure(
         suite_text = " Least-covered non-sentinel suites: " + ", ".join(
             f"{suite}={count}" for suite, count in least_covered_suites
         ) + "."
+    if w8_candidate_generation_active:
+        guidance = (
+            "If repeat_factor is high or coverage is low, keep the coverage "
+            "pressure visible but do not emit seed_batch or deep_eval while W8 "
+            "candidate generation is strict. Prefer an available replayable "
+            "numeric_trial or one-flag structural_experiment whose falsifier "
+            "names expected same-tier T2/T3 movement. Keep fixed authority-core "
+            "evidence separate from planner-learning coverage."
+        )
+    else:
+        guidance = (
+            "If repeat_factor is high or coverage is low, prefer actions that add "
+            "decision-grade diversity: seed_batch on under-covered suites, deep_eval tier 2/3, "
+            "or tool-use/REPL/agentic coverage probes. Healthy optimization should eventually "
+            "lift same-tier T2/T3 frontier quality; T1-only gains are overfit risk. Keep fixed "
+            "authority-core evidence separate from planner-learning coverage."
+        )
     lines = [
         (
             f"Eval coverage: {distinct_count} distinct qids / {question_rows} scored rows "
             f"(repeat_factor={repeat_factor:.2f}x{coverage_text}); eval trials by tier: {tier_text}."
         ),
         f"Tier detail: {tier_detail_text}.{under_sampled_text}{suite_text}",
-        (
-            "If repeat_factor is high or coverage is low, prefer actions that add "
-            "decision-grade diversity: seed_batch on under-covered suites, deep_eval tier 2/3, "
-            "or tool-use/REPL/agentic coverage probes. Healthy optimization should eventually "
-            "lift same-tier T2/T3 frontier quality; T1-only gains are overfit risk. Keep fixed "
-            "authority-core evidence separate from planner-learning coverage."
-        ),
+        guidance,
     ]
     return "\n".join(lines)
 
@@ -5619,6 +5668,9 @@ def _run_loop_inner(
                 )
             except Exception as _exc:
                 planner_evidence_text = f"(planner evidence unavailable: {_exc})"
+            w8_candidate_generation_active = _w8_candidate_generation_pressure(
+                planner_evidence_text
+            )
 
             _refresh_planner_convention_bindings(
                 strategy_store,
@@ -5670,8 +5722,12 @@ def _run_loop_inner(
             higher_tier_pressure_text = _build_higher_tier_planner_pressure(
                 archive,
                 gate,
+                w8_candidate_generation_active=w8_candidate_generation_active,
             )
-            eval_coverage_pressure_text = _build_eval_coverage_pressure(journal)
+            eval_coverage_pressure_text = _build_eval_coverage_pressure(
+                journal,
+                w8_candidate_generation_active=w8_candidate_generation_active,
+            )
             outcome_progress_pressure_text = _build_outcome_progress_pressure()
 
             prompt = CONTROLLER_PROMPT_TEMPLATE.format(

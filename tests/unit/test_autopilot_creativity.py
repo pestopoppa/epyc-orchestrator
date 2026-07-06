@@ -1004,6 +1004,51 @@ def test_higher_tier_pressure_preserves_same_tier_comparison() -> None:
     assert "deployment safety lane" in text
 
 
+def test_higher_tier_pressure_defers_deep_eval_when_w8_candidate_generation_active() -> None:
+    class FakeArchive:
+        def summary(self, *, tier):
+            if tier == 1:
+                return {
+                    "frontier_size": 4,
+                    "best_quality": 2.0,
+                    "best_speed": 42.0,
+                    "hv_slope_50": 0.0002,
+                }
+            if tier == 2:
+                return {
+                    "frontier_size": 0,
+                    "best_quality": 0.0,
+                    "best_speed": 0.0,
+                    "hv_slope_50": 0.0,
+                }
+            if tier == 3:
+                return {
+                    "frontier_size": 0,
+                    "best_quality": 0.0,
+                    "best_speed": 0.0,
+                    "hv_slope_50": 0.0,
+                }
+            raise AssertionError(f"unexpected tier {tier}")
+
+    class FakeBaseline:
+        def quality_for_tier(self, tier):
+            return {2: 1.1, 3: 0.2}[tier]
+
+    text = autopilot._build_higher_tier_planner_pressure(
+        FakeArchive(),
+        SimpleNamespace(baseline=FakeBaseline()),
+        w8_candidate_generation_active=True,
+    )
+
+    assert "W8 candidate-generation override" in text
+    assert "do not emit seed_batch, deep_eval, or structural_prune" in text
+    assert "numeric_trial with journaled applied params" in text
+    assert "one-flag structural_experiment" in text
+    assert "prefer deep_eval tier 3 if T3 coverage/frontier is thin" not in text
+    assert "schedule deep_eval tier 3" not in text
+    assert "defer the deep_eval tier 3 coverage probe until W8 candidate generation clears" in text
+
+
 def test_eval_coverage_pressure_reports_repeat_factor_and_pool_denominator() -> None:
     tier3_entry = _entry(
         2,
@@ -1053,6 +1098,63 @@ def test_eval_coverage_pressure_reports_repeat_factor_and_pool_denominator() -> 
     assert "under-covered suites" in text
     assert "T1-only gains are overfit risk" in text
     assert "fixed authority-core evidence separate" in text
+
+
+def test_eval_coverage_pressure_defers_seed_and_deep_eval_when_w8_candidate_generation_active() -> None:
+    tier3_entry = _entry(
+        2,
+        "deep_eval",
+        eval_details={
+            "question_results": [
+                {"suite": "coder", "qid": "a", "correct": True},
+                {"suite": "agentic", "qid": "c", "correct": False},
+            ]
+        },
+    )
+    tier3_entry.tier = 3
+    journal = SimpleNamespace(
+        entries_with_supersessions=lambda: [
+            _entry(
+                1,
+                "numeric_trial",
+                eval_details={
+                    "question_results": [
+                        {"suite": "coder", "qid": "a", "correct": True},
+                        {"suite": "coder", "qid": "b", "correct": False},
+                    ]
+                },
+            ),
+            tier3_entry,
+        ]
+    )
+
+    text = autopilot._build_eval_coverage_pressure(
+        journal,
+        pool_total_questions=100,
+        pool_tier_questions={1: 20, 2: 70, 3: 10},
+        w8_candidate_generation_active=True,
+    )
+
+    assert "Higher-tier coverage is thin" in text
+    assert "W8 candidate generation is the active strict blocker" in text
+    assert "do not propose seed_batch or deep_eval for coverage this turn" in text
+    assert "available replayable candidate action" in text
+    assert "Prefer an available replayable numeric_trial" in text
+    assert "deep_eval tier 2/3" not in text
+    assert "seed_batch on under-covered suites" not in text
+
+
+def test_eval_coverage_pressure_no_rows_respects_w8_candidate_generation_active() -> None:
+    journal = SimpleNamespace(entries_with_supersessions=lambda: [])
+
+    text = autopilot._build_eval_coverage_pressure(
+        journal,
+        w8_candidate_generation_active=True,
+    )
+
+    assert "No scored question-result rows" in text
+    assert "W8 candidate generation is the active strict blocker" in text
+    assert "do not use seed_batch or deep_eval" in text
 
 
 def test_outcome_progress_pressure_reports_stall_and_rates(monkeypatch) -> None:
