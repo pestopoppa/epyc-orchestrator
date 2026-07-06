@@ -1361,7 +1361,12 @@ function renderTopologyStrip() {
     }
 }
 
-function updateTopologyInflight(inflight) {
+function updateTopologyInflight(inflight, snapshotSeq = null) {
+    // Ignore in-flight task overlays unless caller tags them with a snapshot
+    // sequence. This avoids stale snapshot task lists being re-applied during
+    // lock-only refresh cycles and painting a single-holder badge from old
+    // state.
+    const safeInflight = snapshotSeq == null ? [] : (inflight || []);
     // Populate each role row's active-badge + nested .role-active-tasks
     // container from the snapshot's in_flight_tasks list. Called from
     // updateTopology so it stays in lock-step with slot-dot updates.
@@ -1369,7 +1374,7 @@ function updateTopologyInflight(inflight) {
     // Group inflight by the canonical base role (server-stamped `role`, which
     // matches the active_badge_<base> ids); fall back for older snapshots.
     const byRole = {};
-    for (const t of inflight || []) {
+    for (const t of safeInflight) {
         const role = t.role || t.chosen_action || t.final_role || 'unknown';
         const base = clientBaseRole(t.topology_role || role);
         if (!byRole[base]) byRole[base] = [];
@@ -1619,7 +1624,7 @@ async function openNodeDetail(port, label) {
     }
 }
 
-function updateTopology(activity, inflight) {
+function updateTopology(activity, inflight, snapshotSeq = null) {
     // Update slot-dot rows. Two passes:
     //   1) Each individual node's dots (children + bare-role rows) come from its
     //      own activity entry — same behavior as before grouping.
@@ -1691,11 +1696,12 @@ function updateTopology(activity, inflight) {
     // Third pass: per-role in-flight task badges + nested cards.
     // (B: merged in-flight panel into topology.)
     if (inflight !== undefined) {
-        updateTopologyInflight(inflight);
+        updateTopologyInflight(inflight, snapshotSeq);
     }
 }
 
 let _latestSnapshot = null;
+let _latestSnapshotSeq = 0;
 let _latestProcessStatus = null;
 let _processStatusFetchSeq = 0;
 let _latestAutopilotProgress = null;
@@ -5173,6 +5179,7 @@ function applyDashboardSnapshot(snap, source) {
         if (snap && snap.error) document.getElementById('status').textContent = `error: ${snap.error}`;
         return;
     }
+    const snapshotSeq = ++_latestSnapshotSeq;
     const frameTs = dashboardSnapshotFrameTs(snap);
     if (frameTs !== null) {
         if (frameTs + 0.001 < _latestSnapshotFrameTs) return;
@@ -5190,10 +5197,10 @@ function applyDashboardSnapshot(snap, source) {
     }
     updatePanelSafely('region_locks', () => {
         if (snap.region_locks) {
-            return updateRegionLocks(refreshSeq, snap.region_locks);
+            return updateRegionLocks(refreshSeq, snap.region_locks, snapshotSeq, snap.in_flight_tasks || []);
         }
     });
-    updatePanelSafely('topology', () => updateTopology(snap.activity || {}, snap.in_flight_tasks || []));
+    updatePanelSafely('topology', () => updateTopology(snap.activity || {}, snap.in_flight_tasks || [], snapshotSeq));
     // Topology + region-lock panels are live-recomputed server-side; their real
     // staleness signal is the coherent stream's own age, so feed both badges
     // from the snapshot envelope — a dropped stream then visibly ages them.
@@ -6145,7 +6152,12 @@ async function updateContentionGate(refreshSeq = _regionLocksRefreshSeq) {
             el.innerHTML = '<span style="color:var(--dim)">— contention fetch failed</span>';
         }
     }
-async function updateRegionLocks(refreshSeq = _regionLocksRefreshSeq, regionLocks = null) {
+async function updateRegionLocks(
+    refreshSeq = _regionLocksRefreshSeq,
+    regionLocks = null,
+    snapshotSeq = null,
+    snapshotInflightTasks = null,
+) {
         try {
             const d = regionLocks || await fetchJSON('/dashboard/api/region_locks');
             if (!regionLocks && refreshSeq !== _regionLocksRefreshSeq) return;
@@ -6431,7 +6443,10 @@ async function updateRegionLocks(refreshSeq = _regionLocksRefreshSeq, regionLock
             // main snapshot frames; repainting here makes the live inference,
             // topology, and region-lock panels consume the same lock cache.
             if (typeof updateTopologyInflight === 'function') {
-                updateTopologyInflight((_latestSnapshot && _latestSnapshot.in_flight_tasks) || []);
+                const overlayInflight = snapshotSeq != null
+                    ? ((Array.isArray(snapshotInflightTasks) ? snapshotInflightTasks : ((_latestSnapshot && _latestSnapshot.in_flight_tasks) || [])))
+                    : [];
+                updateTopologyInflight(overlayInflight, snapshotSeq);
             }
         } catch (err) {
             const status = document.getElementById('region-locks-status');

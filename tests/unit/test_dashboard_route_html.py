@@ -120,9 +120,12 @@ def test_dashboard_topology_activity_stats_refresh_with_live_age_tick() -> None:
     assert "fetchJSON(`/dashboard/api/topology_activity?window_s=${TOPOLOGY_ACTIVITY_WINDOW_S}`)" in body
     assert "scheduleRegionLocksRefresh(true)" in body
     assert "snap.region_locks" in body
-    assert "return updateRegionLocks(refreshSeq, snap.region_locks);" in body
+    assert "const snapshotSeq = ++_latestSnapshotSeq;" in body
+    assert "return updateRegionLocks(refreshSeq, snap.region_locks, snapshotSeq, snap.in_flight_tasks || [])" in body
     assert "const refreshSeq = ++_regionLocksRefreshSeq;" in body
     assert "updateContentionGate(refreshSeq);" in body
+    assert "function updateTopology(activity, inflight, snapshotSeq = null)" in body
+    assert "updateTopology(snap.activity || {}, snap.in_flight_tasks || [], snapshotSeq)" in body
     assert "let _topologyActivityRefreshSeq = 0;" in body
     assert "async function updateTopologyActivity(refreshSeq = ++_topologyActivityRefreshSeq)" in body
     assert "updateTopologyActivity();" in body
@@ -166,7 +169,9 @@ def test_dashboard_live_panel_refreshes_ignore_stale_responses_where_possible() 
     assert "if (requestSeq !== _processStatusFetchSeq) return;" in body
     assert "let _regionLocksRefreshSeq = 0;" in body
     assert "const refreshSeq = ++_regionLocksRefreshSeq;" in body
-    assert "updateRegionLocks(refreshSeq);" in body
+    assert "async function updateRegionLocks(" in body
+    assert "snapshotSeq = null," in body
+    assert "snapshotInflightTasks = null" in body
     assert "updateContentionGate(refreshSeq);" in body
     assert "updateTopologyActivity();" in body
     assert "function applyDashboardSnapshot(snap, source)" in body
@@ -174,9 +179,11 @@ def test_dashboard_live_panel_refreshes_ignore_stale_responses_where_possible() 
     assert "updatePanelSafely('decisions', () => updateDecisions(snap));" in body
     assert "const result = fn();" in body
     assert "result.catch((err) =>" in body
-    assert "return updateRegionLocks(refreshSeq, snap.region_locks);" in body
+    assert "return updateRegionLocks(refreshSeq, snap.region_locks, snapshotSeq, snap.in_flight_tasks || [])" in body
     assert "function repaintRegionLocksFromStructuredTapFrame()" in body
     assert "scheduleRegionLocksRefresh(true);" in body
+    assert "function updateTopologyInflight(inflight, snapshotSeq = null)" in body
+    assert "const safeInflight = snapshotSeq == null ? [] : (inflight || []);" in body
     assert "let _lastRegionLocksPayload = null;" in body
     assert "rich overlay failed" in body
     assert "fetchJSON('/dashboard/api/snapshot'" in body
@@ -185,6 +192,21 @@ def test_dashboard_live_panel_refreshes_ignore_stale_responses_where_possible() 
     assert "window_s=${TOPOLOGY_ACTIVITY_WINDOW_S}" in body
     assert "fetchJSON('/dashboard/api/contention')" in body
     assert "if (refreshSeq !== _regionLocksRefreshSeq) return;" in body
+
+
+def test_dashboard_snapshot_to_region_lock_overlay_choreography() -> None:
+    """Region-lock refreshes should only reuse in-flight tasks from the same snapshot frame."""
+    html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    body = html_path.read_text()
+
+    assert "let _latestSnapshotSeq = 0;" in body
+    assert "const snapshotSeq = ++_latestSnapshotSeq;" in body
+    assert "return updateRegionLocks(refreshSeq, snap.region_locks, snapshotSeq, snap.in_flight_tasks || []);" in body
+    assert "function updateTopology(activity, inflight, snapshotSeq = null)" in body
+    assert "updateTopologyInflight(inflight, snapshotSeq)" in body
+    assert "const safeInflight = snapshotSeq == null ? [] : (inflight || []);" in body
+    assert "const overlayInflight = snapshotSeq != null" in body
+    assert "updateTopologyInflight(overlayInflight, snapshotSeq);" in body
 
 
 def test_dashboard_transport_self_heals_without_page_reload() -> None:
