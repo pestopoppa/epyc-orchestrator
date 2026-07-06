@@ -472,11 +472,11 @@ def test_spend_breaker_forces_cloud_primary_to_local_providers(
             )
         ],
     )
-    local_ingest = FakeProvider(
-        "local_ingest",
+    local_worker = FakeProvider(
+        "local_worker",
         [
             PlannerProviderResult(
-                provider="local_ingest",
+                provider="local_worker",
                 role="critique",
                 ok=True,
                 text=_critique_text({"decision": "approve", "confidence": 0.8}),
@@ -498,21 +498,21 @@ def test_spend_breaker_forces_cloud_primary_to_local_providers(
         provider_factory=_factory(
             {
                 "local_frontdoor": local_frontdoor,
-                "local_ingest": local_ingest,
+                "local_worker": local_worker,
             }
         ),
     )
 
     assert decision.draft_provider == "local_frontdoor"
-    assert decision.critic_provider == "local_ingest"
+    assert decision.critic_provider == "local_worker"
     assert decision.action == {"type": "numeric_trial", "surface": "repl_executor"}
     assert state["_spend_breaker"]["active"] is True
     assert state["_spend_breaker"]["local_primary"] == "local_frontdoor"
-    assert state["_spend_breaker"]["local_critic"] == "local_ingest"
+    assert state["_spend_breaker"]["local_critic"] == "local_worker"
     assert state["_spend_breaker"]["previous_primary"] == "claude"
     assert state["_spend_breaker"]["previous_critic"] == "codex"
     assert [call["role"] for call in local_frontdoor.calls] == ["draft"]
-    assert [call["role"] for call in local_ingest.calls] == ["critique"]
+    assert [call["role"] for call in local_worker.calls] == ["critique"]
 
 
 def test_spend_breaker_replaces_cloud_critic_for_local_primary(
@@ -537,11 +537,11 @@ def test_spend_breaker_replaces_cloud_critic_for_local_primary(
             )
         ],
     )
-    local_ingest = FakeProvider(
-        "local_ingest",
+    local_worker = FakeProvider(
+        "local_worker",
         [
             PlannerProviderResult(
-                provider="local_ingest",
+                provider="local_worker",
                 role="critique",
                 ok=True,
                 text=_critique_text({"decision": "approve", "confidence": 0.8}),
@@ -563,13 +563,13 @@ def test_spend_breaker_replaces_cloud_critic_for_local_primary(
         provider_factory=_factory(
             {
                 "local_frontdoor": local_frontdoor,
-                "local_ingest": local_ingest,
+                "local_worker": local_worker,
             }
         ),
     )
 
     assert decision.draft_provider == "local_frontdoor"
-    assert decision.critic_provider == "local_ingest"
+    assert decision.critic_provider == "local_worker"
     assert state["_spend_breaker"]["previous_primary"] == "local_chat"
     assert state["_spend_breaker"]["previous_critic"] == "codex"
 

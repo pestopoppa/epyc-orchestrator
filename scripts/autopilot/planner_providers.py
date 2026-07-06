@@ -46,6 +46,15 @@ CRITICAL OUTPUT CONTRACT FOR THIS LOCAL AUTOPILOT DRAFT:
 - If no high-confidence action is justified, emit the safest valid fallback action from the prompt.
 """
 
+_LOCAL_CRITIQUE_OUTPUT_CONTRACT = """\
+CRITICAL OUTPUT CONTRACT FOR THIS LOCAL AUTOPILOT CRITIQUE:
+- Return exactly one fenced ```json:autopilot_critique block.
+- Do not write analysis, headings, caveats, summaries, or prose before or after the fence.
+- The JSON object must include decision, confidence, issues, revised_action, and revised_rationale.
+- Use only decision values approve, revise, or reject.
+- Do not invent flags, surfaces, suites, dependencies, or evidence.
+"""
+
 
 @dataclass
 class PlannerProviderResult:
@@ -636,11 +645,18 @@ def parse_openai_chat_response(data: dict[str, Any]) -> str:
 
 
 def _local_planner_prompt(prompt: str, *, planner_role: str | None = None) -> str:
-    if planner_role != "draft":
-        return prompt
-    if not _env_bool("AUTOPILOT_LOCAL_PLANNER_ACTION_CONTRACT", True):
-        return prompt
-    return f"{_LOCAL_ACTION_OUTPUT_CONTRACT}\n{prompt}\n\n{_LOCAL_ACTION_OUTPUT_CONTRACT}"
+    if planner_role == "draft":
+        if not _env_bool("AUTOPILOT_LOCAL_PLANNER_ACTION_CONTRACT", True):
+            return prompt
+        return f"{_LOCAL_ACTION_OUTPUT_CONTRACT}\n{prompt}\n\n{_LOCAL_ACTION_OUTPUT_CONTRACT}"
+    if planner_role == "critique":
+        if not _env_bool("AUTOPILOT_LOCAL_PLANNER_CRITIQUE_CONTRACT", True):
+            return prompt
+        return (
+            f"{_LOCAL_CRITIQUE_OUTPUT_CONTRACT}\n{prompt}\n\n"
+            f"{_LOCAL_CRITIQUE_OUTPUT_CONTRACT}"
+        )
+    return prompt
 
 
 def get_planner_provider(name: str) -> PlannerProvider:

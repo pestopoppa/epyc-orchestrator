@@ -176,8 +176,9 @@ def test_local_planner_provider_posts_role_scoped_payload(monkeypatch) -> None:
     assert captured["archive"]["url"] == "http://local/v1/chat/completions"
 
 
-def test_local_planner_contract_is_draft_only(monkeypatch) -> None:
+def test_local_planner_contract_wraps_draft_and_critique(monkeypatch) -> None:
     monkeypatch.delenv("AUTOPILOT_LOCAL_PLANNER_ACTION_CONTRACT", raising=False)
+    monkeypatch.delenv("AUTOPILOT_LOCAL_PLANNER_CRITIQUE_CONTRACT", raising=False)
 
     provider = planner_providers.LocalPlannerProvider()
 
@@ -190,17 +191,25 @@ def test_local_planner_contract_is_draft_only(monkeypatch) -> None:
 
     assert draft_content.startswith("CRITICAL OUTPUT CONTRACT")
     assert "\nplanner prompt\n" in draft_content
-    assert critique_content == "planner prompt"
+    assert critique_content.startswith("CRITICAL OUTPUT CONTRACT FOR THIS LOCAL AUTOPILOT CRITIQUE")
+    assert "\nplanner prompt\n" in critique_content
 
 
 def test_local_planner_contract_can_be_disabled(monkeypatch) -> None:
     monkeypatch.setenv("AUTOPILOT_LOCAL_PLANNER_ACTION_CONTRACT", "0")
+    monkeypatch.setenv("AUTOPILOT_LOCAL_PLANNER_CRITIQUE_CONTRACT", "0")
 
     provider = planner_providers.LocalPlannerProvider()
 
-    content = provider._payload("planner prompt", planner_role="draft")["messages"][0]["content"]
+    draft_content = provider._payload("planner prompt", planner_role="draft")["messages"][0][
+        "content"
+    ]
+    critique_content = provider._payload("planner prompt", planner_role="critique")["messages"][0][
+        "content"
+    ]
 
-    assert content == "planner prompt"
+    assert draft_content == "planner prompt"
+    assert critique_content == "planner prompt"
 
 
 def test_local_planner_default_url_uses_ipv4_loopback(monkeypatch) -> None:
@@ -448,7 +457,10 @@ def test_local_frontdoor_alias_ignores_ingest_env(monkeypatch) -> None:
     assert provider.name == "local_frontdoor"
     assert payload["x_orchestrator_role"] == "frontdoor"
     assert payload["model"] == "frontdoor"
-    assert payload["messages"][0]["content"] == "prompt"
+    assert "\nprompt\n" in payload["messages"][0]["content"]
+    assert "CRITICAL OUTPUT CONTRACT FOR THIS LOCAL AUTOPILOT CRITIQUE" in payload[
+        "messages"
+    ][0]["content"]
 
 
 def test_local_chat_alias_posts_draft_chat_payload_with_force_role(monkeypatch) -> None:
