@@ -46,11 +46,11 @@ FABLE_AUTHORITY_ENV: dict[str, str] = {
 }
 
 LOCAL_PLANNER_DEFAULT_ENV: dict[str, str] = {
-    "AUTOPILOT_PLANNER_PRIMARY": "local_ingest",
-    "AUTOPILOT_PLANNER_CRITIC": "local_frontdoor",
+    "AUTOPILOT_PLANNER_PRIMARY": "local_frontdoor",
+    "AUTOPILOT_PLANNER_CRITIC": "local_ingest",
     "AUTOPILOT_PLANNER_CRITIC_FALLBACK": "claude",
-    "AUTOPILOT_LOCAL_PLANNER_ROLE": "ingest_long_context",
-    "AUTOPILOT_LOCAL_PLANNER_MODEL": "ingest_long_context",
+    "AUTOPILOT_LOCAL_PLANNER_ROLE": "frontdoor",
+    "AUTOPILOT_LOCAL_PLANNER_MODEL": "frontdoor",
     "AUTOPILOT_LOCAL_PLANNER_TEMPERATURE": "0",
     "AUTOPILOT_LOCAL_PLANNER_MAX_TOKENS": "2048",
 }
