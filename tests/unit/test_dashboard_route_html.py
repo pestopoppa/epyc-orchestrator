@@ -478,7 +478,7 @@ def test_dashboard_topology_activity_stats_refresh_with_live_age_tick() -> None:
     assert "tap-inferred CPU holders and the lock grid reflect the same instant" in body
     assert "let _topologyActivityRefreshSeq = 0;" in body
     assert "async function updateTopologyActivity(refreshSeq = ++_topologyActivityRefreshSeq)" in body
-    assert "updateTopologyActivity(refreshSeq)" in body
+    assert "if (snap.topology_activity) applyTopologyActivityPayload(snap.topology_activity);" in body
     assert "recent <span class=\"stat-fresh\">${nReq}</span> req" in body
     assert "t/s avg" in body
     assert "setInterval(() => scheduleRegionLocksRefresh(true), 1500)" in body
@@ -525,7 +525,7 @@ def test_dashboard_live_panel_refreshes_ignore_stale_responses_where_possible() 
     assert "snapshotSeq = null," in body
     assert "snapshotInflightTasks = null" in body
     assert "updatePanelSafely('contention', () => updateContentionGate(refreshSeq));" in body
-    assert "updateTopologyActivity(refreshSeq)" in body
+    assert "function applyTopologyActivityPayload(d)" in body
     assert "function applyDashboardSnapshot(snap, source)" in body
     assert "updatePanelSafely('completed', () => updateTasks(snap));" in body
     assert "updatePanelSafely('decisions', () => updateDecisions(snap));" in body

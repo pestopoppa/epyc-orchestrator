@@ -3565,8 +3565,12 @@ async def llama_fleet_ids() -> JSONResponse:
     })
 
 
-@router.get("/dashboard/api/topology_activity")
-async def topology_activity(window_s: float = 600.0) -> JSONResponse:
+def _topology_activity_payload(
+    window_s: float = 600.0,
+    *,
+    now: float | None = None,
+    structured_requests: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Per-role recent activity stats for the topology strip.
 
     Aggregates from two cheap sources:
@@ -3592,14 +3596,15 @@ async def topology_activity(window_s: float = 600.0) -> JSONResponse:
     this panel: plaintext tap writes are not cross-process atomic and can
     interleave prompt/response sections during concurrent eval traffic.
     """
-    structured_tail = _read_tap_events_tail(_INFERENCE_TAP_EVENTS_PATH, max_bytes=1024 * 1024)
-    now = time.time()
-    structured_requests = _parse_structured_tap_requests(
-        structured_tail,
-        max_requests=160,
-        now_epoch=now,
-        quiet_after_s=max(15.0, min(window_s, 60.0)),
-    )
+    now = now or time.time()
+    if structured_requests is None:
+        structured_tail = _read_tap_events_tail(_INFERENCE_TAP_EVENTS_PATH, max_bytes=1024 * 1024)
+        structured_requests = _parse_structured_tap_requests(
+            structured_tail,
+            max_requests=160,
+            now_epoch=now,
+            quiet_after_s=max(15.0, min(window_s, 60.0)),
+        )
 
     per_role: dict[str, dict[str, Any]] = {}
     live_ports = _discover_llama_ports()
@@ -3740,7 +3745,12 @@ async def topology_activity(window_s: float = 600.0) -> JSONResponse:
         b["live_tps_n"] = len(live_tps_samples)
         b["avg_duration_s"] = (sum(dur_samples) / len(dur_samples)) if dur_samples else None
         out[role] = b
-    return JSONResponse(_stamp({"per_role": out, "window_s": window_s, "now": now}, "topology_activity", now=now))
+    return _stamp({"per_role": out, "window_s": window_s, "now": now}, "topology_activity", now=now)
+
+
+@router.get("/dashboard/api/topology_activity")
+async def topology_activity(window_s: float = 600.0) -> JSONResponse:
+    return JSONResponse(_topology_activity_payload(window_s=window_s))
 
 
 def _build_topology_nodes() -> list[dict[str, Any]]:
@@ -4217,6 +4227,11 @@ async def _snapshot_impl() -> JSONResponse:
         region_locks=region_locks,
         port_roles=port_roles,
     )
+    topology_activity_payload = _topology_activity_payload(
+        window_s=600.0,
+        now=_snap_now,
+        structured_requests=structured_requests,
+    )
     return JSONResponse(_stamp({
         "generated_at": _snap_now,
         # Coherent live correlation: topology + region locks + activity are all
@@ -4235,6 +4250,7 @@ async def _snapshot_impl() -> JSONResponse:
         "structured_requests": structured_requests,
         "tap_active": _structured_tap_active(structured_requests),
         "structured_tap_mtime": _latest_tap_events_mtime(),
+        "topology_activity": topology_activity_payload,
         "live_busy_by_role": role_busy,
         "region_locks": region_locks,
         "recent_decisions": recent,

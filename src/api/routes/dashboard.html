@@ -5368,7 +5368,9 @@ function applyDashboardSnapshot(snap, source) {
     });
     updatePanelSafely('topology', () => updateTopology(snap.activity || {}, snap.in_flight_tasks || [], snapshotSeq));
     updatePanelSafely('contention', () => updateContentionGate(refreshSeq));
-    updatePanelSafely('topology_activity', () => updateTopologyActivity(refreshSeq));
+    updatePanelSafely('topology_activity', () => {
+        if (snap.topology_activity) applyTopologyActivityPayload(snap.topology_activity);
+    });
     // Topology + region-lock panels are live-recomputed server-side; their real
     // staleness signal is the coherent stream's own age, so feed both badges
     // from the snapshot envelope — a dropped stream then visibly ages them.
@@ -6004,6 +6006,16 @@ function renderTopologyActivity() {
     });
 }
 
+function applyTopologyActivityPayload(d) {
+    _latestTopologyActivity = {
+        perRole: d.per_role || {},
+        window_s: Number(d.window_s || TOPOLOGY_ACTIVITY_WINDOW_S),
+        now: Number(d.now || 0),
+        fetchedAtMs: Date.now(),
+    };
+    renderTopologyActivity();
+}
+
 async function updateTopologyActivity(refreshSeq = ++_topologyActivityRefreshSeq) {
     // Per-role recent activity stats from /dashboard/api/topology_activity.
     // Populates each topology row's .activity-stats element with:
@@ -6018,13 +6030,7 @@ async function updateTopologyActivity(refreshSeq = ++_topologyActivityRefreshSeq
     try {
         const d = await fetchJSON(`/dashboard/api/topology_activity?window_s=${TOPOLOGY_ACTIVITY_WINDOW_S}`);
         if (refreshSeq !== _topologyActivityRefreshSeq) return;
-        _latestTopologyActivity = {
-            perRole: d.per_role || {},
-            window_s: Number(d.window_s || TOPOLOGY_ACTIVITY_WINDOW_S),
-            now: Number(d.now || 0),
-            fetchedAtMs: Date.now(),
-        };
-        renderTopologyActivity();
+        applyTopologyActivityPayload(d);
     } catch (e) {
     } finally {
         _topologyActivityFetchInFlight = false;

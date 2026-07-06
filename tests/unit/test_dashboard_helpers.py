@@ -2492,6 +2492,7 @@ def test_region_locks_cached_ttl_and_fail_open(monkeypatch) -> None:
 
 def test_snapshot_uses_fresh_region_lock_scan(monkeypatch) -> None:
     fresh = {"generated_at": 123.0, "entries": [{"role": "fresh"}], "by_role": {"fresh": {}}}
+    activity = {"per_role": {"frontdoor": {"n_recent": 1}}, "window_s": 600.0, "now": 456.0}
 
     async def fake_poll_all_slots():
         return {}, {"ports": 0, "answered": 0, "timed_out": 0, "duration_s": 0.0}
@@ -2508,12 +2509,14 @@ def test_snapshot_uses_fresh_region_lock_scan(monkeypatch) -> None:
     monkeypatch.setattr(dashboard, "_region_locks_payload", lambda: fresh)
     monkeypatch.setattr(dashboard, "_region_locks_cached", fake_cached)
     monkeypatch.setattr(dashboard, "_structured_tap_requests_for_dashboard", lambda **_k: [])
+    monkeypatch.setattr(dashboard, "_topology_activity_payload", lambda **_k: activity)
     monkeypatch.setattr(dashboard, "_topology_nodes_cached", lambda: [])
 
     response = asyncio.run(dashboard._snapshot_impl())
     payload = json.loads(response.body)
 
     assert payload["region_locks"] == fresh
+    assert payload["topology_activity"] == activity
 
 
 def test_enrich_structured_tap_requests_fails_open(monkeypatch) -> None:
