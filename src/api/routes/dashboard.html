@@ -1149,6 +1149,7 @@ let _lastSnapshotAppliedAt = Date.now();
 let _lastWatchdogRecoveryAt = 0;
 let _lastStructuredTapAppliedAt = Date.now();
 let _latestStructuredTapFrameTs = 0;
+let _lastCoherentSnapshotRequestAt = 0;
 
 // Signature of the strip's *structure* — the fields renderTopologyStrip lays
 // out (role labels, ports, backing models, kind). Live activity (dots, tps,
@@ -2732,28 +2733,11 @@ function scheduleRegionLocksRefresh(force = false) {
     const now = Date.now();
     if (!force && now - _lastRegionLockPollStarted < 700) return;
     _lastRegionLockPollStarted = now;
-    const refreshSeq = ++_regionLocksRefreshSeq;
-    updateRegionLocks(refreshSeq);
-    updateContentionGate(refreshSeq);
-    updateTopologyActivity();
+    requestCoherentDashboardSnapshot('region_locks_refresh');
 }
 
 function repaintRegionLocksFromStructuredTapFrame() {
-    // Prefer the latest coherent snapshot. Pulling /dashboard/api/region_locks
-    // again here can swap in a different worker cache mid-frame and make the
-    // grid diverge from the tap frame that just landed.
-    const latestRegionLocks = _lastRegionLocksPayload
-        || (_latestSnapshot && _latestSnapshot.region_locks ? _latestSnapshot.region_locks : null);
-    if (latestRegionLocks) {
-        updateRegionLocks(
-            _regionLocksRefreshSeq,
-            latestRegionLocks,
-            _latestSnapshotSeq,
-            (_latestSnapshot && _latestSnapshot.in_flight_tasks) || [],
-        );
-        return;
-    }
-    scheduleRegionLocksRefresh(true);
+    requestCoherentDashboardSnapshot('structured_tap_compat');
 }
 
 // Device rows for the Regions Lock grid: GPU/extern servers aren't CPU
@@ -3648,7 +3632,7 @@ function structuredTapFrameTs(data) {
 function applyStructuredTapFrame(data, {
     updateFreshness = true,
     paintTap = true,
-    repaintLocks = true,
+    requestSnapshot = true,
     refreshDetail = true,
 } = {}) {
     const frameTs = structuredTapFrameTs(data);
@@ -3669,8 +3653,8 @@ function applyStructuredTapFrame(data, {
     if (paintTap && _rawTapRenderMode === 'structured') paintRawTap();
     renderAutopilotRunStrip();
     refreshLiveDotsFromStructuredTap();
-    if (repaintLocks) {
-        repaintRegionLocksFromStructuredTapFrame();
+    if (requestSnapshot) {
+        requestCoherentDashboardSnapshot('structured_tap');
     }
     if (refreshDetail) refreshOpenStructuredTapDetail();
     return true;
@@ -3786,14 +3770,31 @@ function _stylePlannerLine(line) {
     if (/^\[assistant\]/i.test(line)) {
         return '<span style="color:#fbbf24">' + escaped + '</span>';
     }
-    // New-trial planning banner: make the session-start line the one thing
-    // that unmistakably pops while scrolling. Everything else around it (the
-    // ==== / ---- rule lines) stays dim so the header is the visual anchor.
-    if (/PLANNER session/i.test(line)) {
-        return '<span style="display:block;margin:6px 0 2px;padding:2px 8px;'
-            + 'background:#1e3a5f;color:#7dd3fc;font-weight:700;'
-            + 'border-left:3px solid #38bdf8;border-radius:3px">'
-            + '▶ ' + escaped + '</span>';
+    // Per-trial planning banner emitted by plan_with_providers():
+    //   >>>>>>>>>>>>>>>>>>>>>>>> TRIAL 1234 <<<<<<<<<<<<<<<<<<<<<<<<
+    // This is THE marker for "new trial planning begins" — render it as a big,
+    // high-contrast full-width block so you know exactly where to stop scrolling.
+    const trialBanner = line.match(/^>{4,}\s*(TRIAL[^<]*?)\s*<{4,}\s*$/i);
+    if (trialBanner) {
+        return '<span style="display:block;margin:16px 0 2px;padding:6px 10px;'
+            + 'background:#1e3a5f;color:#7dd3fc;font-weight:800;font-size:13px;'
+            + 'letter-spacing:0.5px;text-align:center;'
+            + 'border-top:2px solid #38bdf8;border-bottom:2px solid #38bdf8">'
+            + '▶ ' + escapeHTML(trialBanner[1]) + '</span>';
+    }
+    // Per-provider sub-headers within a cycle (draft / critique). Kept quieter
+    // than the trial banner so the trial boundary stays the dominant anchor.
+    const plannerHdr = line.match(/PLANNER\s+(?:provider=\S+\s+role=(\S+)|session)\s*start/i);
+    if (plannerHdr) {
+        const role = (plannerHdr[1] || 'draft').toLowerCase();
+        const isDraft = role === 'draft';
+        const fg = isDraft ? '#7dd3fc' : '#fbbf24';
+        const bar = isDraft ? '#38bdf8' : '#f59e0b';
+        const tag = isDraft ? '▸ draft' : '⤷ critique';
+        return '<span style="display:block;margin:4px 0 2px;padding:1px 8px;'
+            + 'color:' + fg + ';font-weight:600;'
+            + 'border-left:3px solid ' + bar + '">'
+            + tag + '  ·  ' + escaped + '</span>';
     }
     if (/^=+$|^-+$/.test(line)) {
         return '<span style="color:#475569">' + escaped + '</span>';
@@ -5349,7 +5350,7 @@ function applyDashboardSnapshot(snap, source) {
         applyStructuredTapFrame(snap, {
             updateFreshness: false,
             paintTap: _rawTapRenderMode === 'structured',
-            repaintLocks: false,
+            requestSnapshot: false,
             refreshDetail: false,
         });
     }
@@ -5366,6 +5367,8 @@ function applyDashboardSnapshot(snap, source) {
         }
     });
     updatePanelSafely('topology', () => updateTopology(snap.activity || {}, snap.in_flight_tasks || [], snapshotSeq));
+    updatePanelSafely('contention', () => updateContentionGate(refreshSeq));
+    updatePanelSafely('topology_activity', () => updateTopologyActivity(refreshSeq));
     // Topology + region-lock panels are live-recomputed server-side; their real
     // staleness signal is the coherent stream's own age, so feed both badges
     // from the snapshot envelope — a dropped stream then visibly ages them.
@@ -5395,6 +5398,17 @@ async function updateSnapshotPoll() {
     } finally {
         _snapshotPollInFlightSince = 0;
     }
+}
+
+function requestCoherentDashboardSnapshot(reason = '') {
+    // Single-writer coherence: live inference, topology overlay, and CPU-region
+    // locks are coupled panels. Side-streams may update their own isolated
+    // content, but they must not repaint these coupled panels from partial
+    // producer state. They request a fresh /dashboard/api/snapshot frame instead.
+    const now = Date.now();
+    if (now - _lastCoherentSnapshotRequestAt < 500) return;
+    _lastCoherentSnapshotRequestAt = now;
+    updateSnapshotPoll();
 }
 
 // ── Uniform panel freshness badges ─────────────────────────────────────────

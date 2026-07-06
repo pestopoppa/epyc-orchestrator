@@ -467,18 +467,18 @@ def test_dashboard_topology_activity_stats_refresh_with_live_age_tick() -> None:
     assert "const snapshotSeq = ++_latestSnapshotSeq;" in body
     assert "return updateRegionLocks(refreshSeq, snap.region_locks, snapshotSeq, snap.in_flight_tasks || [])" in body
     assert "const refreshSeq = ++_regionLocksRefreshSeq;" in body
-    assert "updateContentionGate(refreshSeq);" in body
+    assert "updatePanelSafely('contention', () => updateContentionGate(refreshSeq));" in body
     assert "function updateTopology(activity, inflight, snapshotSeq = null)" in body
     assert "updateTopology(snap.activity || {}, snap.in_flight_tasks || [], snapshotSeq)" in body
     assert "let _latestStructuredTapFrameTs = 0;" in body
     assert "function applyStructuredTapFrame(data, {" in body
     assert "if (Array.isArray(snap.structured_requests))" in body
     assert "applyStructuredTapFrame(snap, {" in body
-    assert "repaintLocks: false" in body
+    assert "requestSnapshot: false" in body
     assert "tap-inferred CPU holders and the lock grid reflect the same instant" in body
     assert "let _topologyActivityRefreshSeq = 0;" in body
     assert "async function updateTopologyActivity(refreshSeq = ++_topologyActivityRefreshSeq)" in body
-    assert "updateTopologyActivity();" in body
+    assert "updateTopologyActivity(refreshSeq)" in body
     assert "setInterval(() => scheduleRegionLocksRefresh(true), 1500)" in body
     assert "setInterval(renderTopologyActivity, TOPOLOGY_ACTIVITY_AGE_TICK_MS)" in body
     assert "lockActivitySignature" in body
@@ -501,8 +501,8 @@ def test_dashboard_topology_activity_stats_refresh_with_live_age_tick() -> None:
     assert "slot-inferred active instance(s)" in body
     assert "Tap PIDs identify backend llama-server processes" in body
     assert "active.instanceIdxs && active.instanceIdxs.has(Number(idx))" in body
-    assert "function repaintRegionLocksFromStructuredTapFrame()" in body
-    assert "repaintRegionLocksFromStructuredTapFrame();" in body
+    assert "function requestCoherentDashboardSnapshot(reason = '')" in body
+    assert "requestCoherentDashboardSnapshot('structured_tap')" in body
     assert "function structuredTapLogicalAliasesForIdentity(role, idx)" in body
     assert "formatPhysicalRoleWithLogicalAliases(holder.role, holder.shape, holder.idx)" in body
     assert "logical route(s): ${aliases.join(', ')}" in body
@@ -522,16 +522,16 @@ def test_dashboard_live_panel_refreshes_ignore_stale_responses_where_possible() 
     assert "async function updateRegionLocks(" in body
     assert "snapshotSeq = null," in body
     assert "snapshotInflightTasks = null" in body
-    assert "updateContentionGate(refreshSeq);" in body
-    assert "updateTopologyActivity();" in body
+    assert "updatePanelSafely('contention', () => updateContentionGate(refreshSeq));" in body
+    assert "updateTopologyActivity(refreshSeq)" in body
     assert "function applyDashboardSnapshot(snap, source)" in body
     assert "updatePanelSafely('completed', () => updateTasks(snap));" in body
     assert "updatePanelSafely('decisions', () => updateDecisions(snap));" in body
     assert "const result = fn();" in body
     assert "result.catch((err) =>" in body
     assert "return updateRegionLocks(refreshSeq, snap.region_locks, snapshotSeq, snap.in_flight_tasks || [])" in body
-    assert "function repaintRegionLocksFromStructuredTapFrame()" in body
-    assert "scheduleRegionLocksRefresh(true);" in body
+    assert "function requestCoherentDashboardSnapshot(reason = '')" in body
+    assert "requestCoherentDashboardSnapshot('region_locks_refresh')" in body
     assert "function updateTopologyInflight(inflight, snapshotSeq = null)" in body
     assert "const safeInflight = snapshotSeq == null ? [] : (inflight || []);" in body
     assert "let _lastRegionLocksPayload = null;" in body

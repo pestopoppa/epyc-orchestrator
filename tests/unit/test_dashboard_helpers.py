@@ -1578,7 +1578,8 @@ def test_dashboard_html_repaints_topology_after_region_lock_refresh() -> None:
     html = dashboard._DASHBOARD_HTML
     assert "const overlayInflight = snapshotSeq != null" in html
     assert "updateTopologyInflight(overlayInflight, snapshotSeq);" in html
-    assert "same lock cache" in html
+    assert "Single-writer coherence" in html
+    assert "requestCoherentDashboardSnapshot('region_locks_refresh')" in html
 
 
 def test_dashboard_effective_journal_rows_fold_supersession_events() -> None:
