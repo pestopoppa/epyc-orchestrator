@@ -956,6 +956,9 @@ def _reconcile(
         safe_rationale = {
             "falsifier": "safe fallback fails to improve trustworthy evidence",
             "rubric_scores": {},
+            "critic_reject_safe_fallback": True,
+            "critic_reject_issues": list(critique.issues or []),
+            "critic_reject_original_action": dict(action),
         }
         return (
             safe_action,

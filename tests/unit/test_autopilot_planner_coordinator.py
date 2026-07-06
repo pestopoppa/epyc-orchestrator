@@ -1157,9 +1157,12 @@ def test_reconcile_active_revise_with_invalid_revision_keeps_original() -> None:
 def test_reconcile_active_reject_without_revision_is_safe_seed_batch() -> None:
     action = {"type": "rollback", "to_checkpoint": "production_best"}
     crit = PlannerCritique(decision="reject", issues=["unsupported"])
-    out_action, _, _ = _reconcile(action, {}, "draft", crit, active=True)
+    out_action, out_rat, _ = _reconcile(action, {}, "draft", crit, active=True)
     assert out_action["type"] == "seed_batch"
     assert out_action["n_questions"] == planner_coordinator.SAFE_FALLBACK_SEED_N
+    assert out_rat["critic_reject_safe_fallback"] is True
+    assert out_rat["critic_reject_issues"] == ["unsupported"]
+    assert out_rat["critic_reject_original_action"] == action
 
 
 def test_decision_carries_original_draft_action_after_substitution() -> None:

@@ -2193,6 +2193,33 @@ def test_higher_tier_probe_skips_when_w8_candidate_generation_is_strict() -> Non
     assert "higher_tier_probe_guard" not in state
 
 
+def test_higher_tier_probe_respects_critic_reject_safe_fallback() -> None:
+    state = {}
+    requested = {
+        "type": "seed_batch",
+        "n_questions": autopilot.SAFE_FALLBACK_SEED_N,
+        "suites": ["coder", "math"],
+    }
+    safe_rationale = {
+        "falsifier": "safe fallback fails to improve trustworthy evidence",
+        "critic_reject_safe_fallback": True,
+        "critic_reject_original_action": {"type": "deep_eval", "tier": 3},
+    }
+
+    action, rationale = autopilot._maybe_force_higher_tier_probe(
+        requested,
+        state,
+        journal=SimpleNamespace(entries_with_supersessions=lambda: []),
+        archive=SimpleNamespace(summary=lambda tier: {"frontier_size": 0}),
+        rationale=safe_rationale,
+        trial_counter=100,
+    )
+
+    assert action == requested
+    assert rationale == safe_rationale
+    assert "higher_tier_probe_guard" not in state
+
+
 def test_higher_tier_probe_accepts_selected_t3_deep_eval() -> None:
     selected = {"type": "deep_eval", "tier": 3}
 
