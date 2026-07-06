@@ -253,7 +253,19 @@ def _is_alias_role(role: RoleConfig) -> bool:
     return bool(role.alias_to) or role.tier.upper() == "ALIAS"
 
 
-def _role_instance_ports(role: RoleConfig) -> list[int]:
+def _active_numa_mode() -> str:
+    mode = os.environ.get("ORCHESTRATOR_STACK_NUMA_MODE", "full").strip().lower()
+    return mode if mode in {"full", "quarter", "both"} else "full"
+
+
+def _role_instance_ports(role: RoleConfig, numa_mode: str | None = None) -> list[int]:
+    mode = numa_mode or "both"
+    if role.full and role.quarters:
+        if mode == "full":
+            return [role.full.port]
+        if mode == "quarter":
+            return [instance.port for instance in role.quarters]
+
     ports: list[int] = []
     if role.full:
         ports.append(role.full.port)
@@ -301,8 +313,9 @@ def _validate_stack_prior_parity(
         )
         return errors, warnings
 
+    numa_mode = _active_numa_mode()
     template_ports = {
-        role_name: _role_instance_ports(role)
+        role_name: _role_instance_ports(role, numa_mode=numa_mode)
         for role_name, role in template.roles.items()
     }
 

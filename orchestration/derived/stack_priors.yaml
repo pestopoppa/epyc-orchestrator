@@ -48,7 +48,7 @@ contract:
   - quality_overall
   - memory_cost
   fallback_policy: Consumers may use local fallback values only as explicit degraded mode when this generated contract is missing or invalid.
-compiled_at: '2026-07-06T20:15:42Z'
+compiled_at: '2026-07-06T20:56:01Z'
 status: compiled
 coverage_scope: descriptor_role_bindings
 precedence_spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
@@ -56,31 +56,31 @@ source_artifacts:
   registry:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
     sha256: d37ae875864dc027f0ddc28c0fb09f0effc93fc9dd8c84c76123581e8f434370
-    repo_commit: eec1c2fe
+    repo_commit: 84e2d17e
   descriptors:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_descriptors.yaml
     sha256: 03eb616db72eef1c461fdb3221e7ce40952e8a587e195e2924440c51049b8d00
-    repo_commit: eec1c2fe
+    repo_commit: 84e2d17e
   stack_manifest:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_manifest.py
     sha256: 90d455fcb6fa4cc2e95bc9980653827545f78cf6f43e42ee3dd6de82f6d1b93f
-    repo_commit: eec1c2fe
+    repo_commit: 84e2d17e
   stack_numa:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_numa.py
     sha256: 63ef5ec660d987fd0c2e2b9de311536c90044fe1cd938f0c072ac5a159b5ff34
-    repo_commit: eec1c2fe
+    repo_commit: 84e2d17e
   orchestrator_stack:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/orchestrator_stack.py
-    sha256: 3705cf299df28d451b4b7dba0a44d2a333a1aa4a67bb16b30792d1af19339c1a
-    repo_commit: eec1c2fe
+    sha256: 02b0e10877143039795751c99f5fd1e1ffac5602532a65edeeffd4cbdce19688
+    repo_commit: 84e2d17e
   stack_paths:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_paths.py
     sha256: 7eee8576101dbb827ec8e94a228beedb401d7cad80841e1a18aab9c03db4206b
-    repo_commit: eec1c2fe
+    repo_commit: 84e2d17e
   stack_runtime:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_runtime.py
     sha256: f749047dde702b21759f67dcc81bf6cd64f1157e8a1fdf250b317301c1b6d32c
-    repo_commit: eec1c2fe
+    repo_commit: 84e2d17e
 roles:
   architect_general:
     role: architect_general
@@ -214,11 +214,11 @@ roles:
     model_id: qwen3.6-35b-a3b-mtp-q8_0
     display_name: Qwen3.6-35B-A3B-MTP-Q8_0
     serving:
-      endpoint: http://localhost:8080
+      endpoint: http://localhost:8070
       server_role: coder_escalation
       binding: server_mode.direct
       ports:
-      - 8080
+      - 8070
       slots: 1
       tier: hot
       effective_context_tokens: 32768
@@ -227,9 +227,16 @@ roles:
       numa_policy: server_default
       shared_mmap: true
       launch:
-        entries: []
-        primary_roles: []
-        modes: []
+        entries:
+        - port: 8070
+          primary_role: frontdoor
+          mode: default
+          alias: true
+          numa_instance: 0
+        primary_roles:
+        - frontdoor
+        modes:
+        - default
         requirements:
           model_path: /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf
         runtime:
@@ -247,8 +254,8 @@ roles:
             kv_type_v: q8_0
             kv_hadamard: false
             no_mmap: false
-            mlock: false
-            slot_save_path: /mnt/raid0/llm/cache/kv_slots/coder_escalation
+            mlock: true
+            slot_save_path: /mnt/raid0/llm/cache/kv_slots/frontdoor
           flags:
             flash_attn: true
             jinja: true
@@ -328,14 +335,11 @@ roles:
     model_id: qwen3.6-35b-a3b-mtp-q8_0
     display_name: Qwen3.6-35B-A3B-MTP-Q8_0
     serving:
-      endpoint: http://localhost:8080
+      endpoint: http://localhost:8070
       server_role: frontdoor
       binding: server_mode.direct
       ports:
-      - 8080
-      - 8180
-      - 8280
-      - 8380
+      - 8070
       slots: 2
       tier: hot
       effective_context_tokens: 32768
@@ -345,26 +349,11 @@ roles:
       shared_mmap: true
       launch:
         entries:
-        - port: 8080
+        - port: 8070
           primary_role: frontdoor
           mode: default
           alias: false
-          numa_instance: 1
-        - port: 8180
-          primary_role: frontdoor
-          mode: default
-          alias: false
-          numa_instance: 2
-        - port: 8280
-          primary_role: frontdoor
-          mode: default
-          alias: false
-          numa_instance: 3
-        - port: 8380
-          primary_role: frontdoor
-          mode: default
-          alias: false
-          numa_instance: 4
+          numa_instance: 0
         primary_roles:
         - frontdoor
         modes:
@@ -468,14 +457,11 @@ roles:
     model_id: qwen3-next-80b-a3b-q4_k_m
     display_name: Qwen3-Next-80B-A3B-Instruct
     serving:
-      endpoint: http://localhost:8185
+      endpoint: http://localhost:8085
       server_role: ingest_long_context
       binding: server_mode.direct
       ports:
-      - 8185
-      - 8285
-      - 8385
-      - 8485
+      - 8085
       slots: 1
       tier: hot
       effective_context_tokens: 32768
@@ -485,26 +471,11 @@ roles:
       shared_mmap: true
       launch:
         entries:
-        - port: 8185
+        - port: 8085
           primary_role: ingest_long_context
           mode: default
           alias: false
-          numa_instance: 1
-        - port: 8285
-          primary_role: ingest_long_context
-          mode: default
-          alias: false
-          numa_instance: 2
-        - port: 8385
-          primary_role: ingest_long_context
-          mode: default
-          alias: false
-          numa_instance: 3
-        - port: 8485
-          primary_role: ingest_long_context
-          mode: default
-          alias: false
-          numa_instance: 4
+          numa_instance: 0
         primary_roles:
         - ingest_long_context
         modes:
@@ -755,11 +726,11 @@ roles:
     model_id: gemma4-26b-a4b-it-orig-q4_k_m
     display_name: gemma-4-26B-A4B-it-ORIG-Q4_K_M
     serving:
-      endpoint: http://localhost:8082
+      endpoint: http://localhost:8072
       server_role: worker
       binding: server_mode.shared_with
       ports:
-      - 8082
+      - 8072
       slots: 1
       tier: hot
       effective_context_tokens: 16384
@@ -769,11 +740,11 @@ roles:
       shared_mmap: true
       launch:
         entries:
-        - port: 8082
+        - port: 8072
           primary_role: worker_general
           mode: worker_pool
           alias: true
-          numa_instance: 1
+          numa_instance: 0
           worker_type: explore
         primary_roles:
         - worker_general
@@ -891,14 +862,11 @@ roles:
     model_id: qwen3-vl-30b-a3b-q4_k_m
     display_name: Qwen3-VL-30B-A3B-Instruct
     serving:
-      endpoint: http://localhost:8187
+      endpoint: http://localhost:8087
       server_role: vision_escalation
       binding: stack_manifest.role
       ports:
-      - 8187
-      - 8287
-      - 8387
-      - 8487
+      - 8087
       slots: 1
       tier: hot
       effective_context_tokens: 16384
@@ -908,29 +876,11 @@ roles:
       shared_mmap: false
       launch:
         entries:
-        - port: 8187
+        - port: 8087
           primary_role: vision_escalation
           mode: vision
           alias: false
-          numa_instance: 1
-          vision_type: escalation
-        - port: 8287
-          primary_role: vision_escalation
-          mode: vision
-          alias: false
-          numa_instance: 2
-          vision_type: escalation
-        - port: 8387
-          primary_role: vision_escalation
-          mode: vision
-          alias: false
-          numa_instance: 3
-          vision_type: escalation
-        - port: 8487
-          primary_role: vision_escalation
-          mode: vision
-          alias: false
-          numa_instance: 4
+          numa_instance: 0
           vision_type: escalation
         primary_roles:
         - vision_escalation
@@ -1028,14 +978,11 @@ roles:
     model_id: gemma4-26b-a4b-it-orig-q4_k_m
     display_name: gemma-4-26B-A4B-it-ORIG-Q4_K_M
     serving:
-      endpoint: http://localhost:8082
+      endpoint: http://localhost:8072
       server_role: worker
       binding: server_mode.model_role
       ports:
-      - 8082
-      - 8182
-      - 8282
-      - 8382
+      - 8072
       slots: 1
       tier: hot
       effective_context_tokens: 16384
@@ -1045,29 +992,11 @@ roles:
       shared_mmap: true
       launch:
         entries:
-        - port: 8082
+        - port: 8072
           primary_role: worker_general
           mode: worker_pool
           alias: false
-          numa_instance: 1
-          worker_type: explore
-        - port: 8182
-          primary_role: worker_general
-          mode: worker_pool
-          alias: false
-          numa_instance: 2
-          worker_type: explore
-        - port: 8282
-          primary_role: worker_general
-          mode: worker_pool
-          alias: false
-          numa_instance: 3
-          worker_type: explore
-        - port: 8382
-          primary_role: worker_general
-          mode: worker_pool
-          alias: false
-          numa_instance: 4
+          numa_instance: 0
           worker_type: explore
         primary_roles:
         - worker_general
@@ -1185,11 +1114,11 @@ roles:
     model_id: gemma4-26b-a4b-it-orig-q4_k_m
     display_name: gemma-4-26B-A4B-it-ORIG-Q4_K_M
     serving:
-      endpoint: http://localhost:8082
+      endpoint: http://localhost:8072
       server_role: worker
       binding: server_mode.shared_with
       ports:
-      - 8082
+      - 8072
       slots: 1
       tier: hot
       effective_context_tokens: 16384
@@ -1199,11 +1128,11 @@ roles:
       shared_mmap: true
       launch:
         entries:
-        - port: 8082
+        - port: 8072
           primary_role: worker_general
           mode: worker_pool
           alias: true
-          numa_instance: 1
+          numa_instance: 0
           worker_type: explore
         primary_roles:
         - worker_general
@@ -1321,11 +1250,11 @@ roles:
     model_id: qwen3.6-35b-a3b-mtp-q8_0
     display_name: Qwen3.6-35B-A3B-MTP-Q8_0
     serving:
-      endpoint: http://localhost:8080
+      endpoint: http://localhost:8070
       server_role: frontdoor
       binding: stack_manifest.alias->server_mode.direct
       ports:
-      - 8080
+      - 8070
       slots: 2
       tier: hot
       effective_context_tokens: 32768
@@ -1334,9 +1263,16 @@ roles:
       numa_policy: server_default
       shared_mmap: true
       launch:
-        entries: []
-        primary_roles: []
-        modes: []
+        entries:
+        - port: 8070
+          primary_role: frontdoor
+          mode: default
+          alias: true
+          numa_instance: 0
+        primary_roles:
+        - frontdoor
+        modes:
+        - default
         requirements:
           model_path: /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf
           draft_model_path: /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf
@@ -1355,19 +1291,19 @@ roles:
             kv_type_v: q8_0
             kv_hadamard: false
             no_mmap: false
-            mlock: false
-            slot_save_path: /mnt/raid0/llm/cache/kv_slots/worker_summarize
+            mlock: true
+            slot_save_path: /mnt/raid0/llm/cache/kv_slots/frontdoor
           flags:
             flash_attn: true
             jinja: true
             reasoning: null
             override_kv: []
             spec:
-              enabled: true
-              type: draft-mtp
+              enabled: false
+              type: null
               disabled_by: null
-              draft_model_path: /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf
-              draft_max: 4
+              draft_model_path: null
+              draft_max: null
               draft_p_min: null
               threads_draft: null
     priors:

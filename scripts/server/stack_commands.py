@@ -1014,11 +1014,11 @@ def cmd_start(args: argparse.Namespace) -> int:
                         print(f"  Including WARM server: port {warm_server['port']} ({role})")
                         break
 
-    # Apply --numa-mode filter (default 'quarter' to avoid full+quarter CPU overlap).
+    # Apply --numa-mode filter (default 'full' for single-user / AutoPilot speed integrity).
     # Picks full XOR quarters for any role with full_instance_idx + multiple instances
     # (currently frontdoor + coder_escalation + worker_general); single-instance roles
     # pass through. See launcher-numa-mode-gating handoff.
-    numa_mode = getattr(args, "numa_mode", "quarter")
+    numa_mode = getattr(args, "numa_mode", "full")
     if numa_mode == "both":
         # Light advisory only — 'both' has been working for frontdoor/coder_escalation since
         # 2026-03 (Qwen3.6-35B Q8 quarters tuned to coexist with the full instance). The

@@ -118,7 +118,7 @@ def test_start_parser_compiles_registry_by_default(monkeypatch) -> None:
 
     assert stack.main() == 0
     assert captured["compile_registry"] is True
-    assert captured["numa_mode"] == "quarter"
+    assert captured["numa_mode"] == "full"
 
 
 def test_start_parser_accepts_explicit_numa_mode_both(monkeypatch) -> None:
@@ -177,7 +177,7 @@ def test_cmd_start_compiles_registry_by_default_arg_absence(monkeypatch) -> None
     assert calls[0]["cache_key_path"].name == ".lean_cache_key"
 
 
-def test_cmd_start_defaults_missing_numa_mode_to_quarter(monkeypatch) -> None:
+def test_cmd_start_defaults_missing_numa_mode_to_full(monkeypatch) -> None:
     modes: list[str] = []
 
     class FakeRegistryLoader:
@@ -222,7 +222,7 @@ def test_cmd_start_defaults_missing_numa_mode_to_quarter(monkeypatch) -> None:
 
     assert not hasattr(args, "numa_mode")
     assert stack_commands.cmd_start(args) == 0
-    assert modes == ["quarter"]
+    assert modes == ["full"]
     assert saved
 
 

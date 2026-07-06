@@ -1996,14 +1996,14 @@ def main() -> int:
     start_parser.add_argument(
         "--numa-mode",
         choices=["full", "quarter", "both"],
-        default="quarter",
+        default="full",
         help=(
             "For roles with both a full-NUMA-node instance and quarter-instance siblings "
             "(currently frontdoor + coder_escalation + worker_general — see "
             "NUMA_CONFIG[role]['full_instance_idx']), pick one mode. "
             "'full' = single full instance (max single-stream tps; recommended for single-user "
-            "workloads). 'quarter' = default, 4 concurrent quarters (max aggregate under "
-            "multi-request load). 'both' = compatibility mode with all 5 — viable "
+            "workloads; default for AutoPilot/eval integrity). 'quarter' = 4 concurrent quarters "
+            "(max aggregate under multi-request load). 'both' = compatibility mode with all 5 — viable "
             "when the role's -t is small enough to avoid CPU oversubscription (Qwen3-Coder -t 24 "
             "and Qwen3.6-35B Q8 quarter-tuned were OK; gemma4-MTP -t 96 will hit load 420 → "
             "9 t/s with 'both', so use --numa-mode full for that role specifically). "
