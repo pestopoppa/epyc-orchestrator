@@ -567,6 +567,96 @@ jobs:
             items:
               type: string
 
+  - job_id: lab_review_queue_watch
+    title: Lab review-queue verdict packet watch
+    stage: shadow
+    enabled: true
+    risk: read_only
+    runtime_class: active_safe_deterministic
+    active_safe: true
+    schedule:
+      type: manual_or_nightly
+      cadence: daily
+      window: active_ok
+      runtime_class: active_safe_deterministic
+      max_runtime_s: 60
+    reference_skill: none
+    execution:
+      mode: deterministic_command
+      command:
+        - python3
+        - scripts/lab/review_queue_report.py
+        - --json
+    input_spec:
+      sources:
+        - repo: epyc-orchestrator
+          path: orchestration/lab_review_queue/
+        - repo: epyc-orchestrator
+          path: scripts/lab/record_verdict.py
+        - repo: epyc-orchestrator
+          path: scripts/lab/promote_job.py
+      context_budget_tokens: 4000
+      forbidden_actions:
+        - record_verdict
+        - modify_queue
+        - promote_job
+        - edit_journal
+    output_contract:
+      format: json
+      json_schema:
+        type: object
+        additionalProperties: true
+        required:
+          - schema_version
+          - ok
+          - status
+          - blockers
+          - summary
+          - pending_items
+        properties:
+          schema_version:
+            const: lab_review_queue_report.v1
+          ok:
+            type: boolean
+          status:
+            enum:
+              - ok
+              - attention
+          blockers:
+            type: array
+            items:
+              type: string
+          summary:
+            type: object
+            additionalProperties: true
+            required:
+              - task_records
+              - verdicts
+              - pending_reviews
+              - pending_reviews_by_class
+              - pending_review_candidates
+              - pending_active_safe
+            properties:
+              task_records:
+                type: integer
+              verdicts:
+                type: integer
+              pending_reviews:
+                type: integer
+              pending_reviews_by_class:
+                type: object
+                additionalProperties:
+                  type: integer
+              pending_review_candidates:
+                type: integer
+              pending_active_safe:
+                type: integer
+          pending_items:
+            type: array
+            items:
+              type: object
+              additionalProperties: true
+
   - job_id: daily_digest_skeleton
     title: Daily digest skeleton
     stage: shadow

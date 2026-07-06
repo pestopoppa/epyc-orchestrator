@@ -1,0 +1,172 @@
+from __future__ import annotations
+
+import json
+from argparse import Namespace
+from pathlib import Path
+
+import yaml
+
+from scripts.lab import review_queue_report
+
+
+def _write_jobs_file(path: Path) -> None:
+    doc = {
+        "version": 1,
+        "schema_version": "lab_jobs.v1",
+        "policy": {
+            "review_queue": "orchestration/lab_review_queue/",
+            "direct_repo_writes_allowed": False,
+            "default_stage": "shadow",
+        },
+        "jobs": [
+            {
+                "job_id": "handoff_freshness_lint",
+                "stage": "shadow",
+                "enabled": True,
+                "risk": "read_only",
+                "schedule": {"type": "nightly"},
+                "input_spec": {"sources": []},
+                "output_contract": {"format": "json", "json_schema": {"type": "object"}},
+            },
+            {
+                "job_id": "active_safe_watch",
+                "stage": "shadow",
+                "enabled": True,
+                "risk": "read_only",
+                "runtime_class": "active_safe_deterministic",
+                "active_safe": True,
+                "schedule": {"type": "manual_or_nightly"},
+                "execution": {"mode": "deterministic_command", "command": ["true"]},
+                "input_spec": {"sources": []},
+                "output_contract": {"format": "json", "json_schema": {"type": "object"}},
+            },
+        ],
+    }
+    path.write_text(yaml.safe_dump(doc, sort_keys=False))
+
+
+def _write_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload))
+
+
+def _write_jsonl(path: Path, rows: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+
+
+def _args(tmp_path: Path, jobs_file: Path, queue: Path, **overrides) -> Namespace:
+    values = {
+        "repo_root": str(tmp_path),
+        "jobs_file": str(jobs_file),
+        "queue_dir": str(queue),
+        "task_records_file": str(queue / "task_records.jsonl"),
+        "verdicts_file": str(queue / "review_verdicts.jsonl"),
+        "max_items": 25,
+    }
+    values.update(overrides)
+    return Namespace(**values)
+
+
+def test_review_queue_report_surfaces_pending_record_commands(tmp_path: Path) -> None:
+    jobs_file = tmp_path / "lab_jobs.yaml"
+    queue = tmp_path / "queue"
+    _write_jobs_file(jobs_file)
+    _write_json(queue / "handoff_freshness_lint" / "run-1" / "output.json", {"ok": True})
+    _write_jsonl(
+        queue / "task_records.jsonl",
+        [
+            {
+                "schema_version": "lab_task_record.v1",
+                "record_type": "task_record",
+                "job_id": "handoff_freshness_lint",
+                "run_id": "run-1",
+                "stage": "shadow",
+                "artifacts": {"output": "handoff_freshness_lint/run-1/output.json"},
+            }
+        ],
+    )
+
+    report = review_queue_report.run_from_args(_args(tmp_path, jobs_file, queue))
+
+    assert report["schema_version"] == "lab_review_queue_report.v1"
+    assert report["ok"] is True
+    assert report["status"] == "attention"
+    assert report["summary"]["pending_reviews"] == 1
+    assert report["summary"]["pending_review_candidates"] == 1
+    item = report["pending_items"][0]
+    assert item["record_class"] == "review_candidate"
+    assert item["output_exists"] is True
+    assert item["next_reviewer"] == "cloud_reference"
+    assert "scripts/lab/record_verdict.py" in item["cloud_reference_accept_command"]
+    assert "--reference-output '<cloud-reference-output.json>'" in item["cloud_reference_accept_command"]
+    assert "--reviewer operator" in item["operator_reject_command"]
+
+
+def test_review_queue_report_ignores_already_verdicted_runs(tmp_path: Path) -> None:
+    jobs_file = tmp_path / "lab_jobs.yaml"
+    queue = tmp_path / "queue"
+    _write_jobs_file(jobs_file)
+    _write_jsonl(
+        queue / "task_records.jsonl",
+        [
+            {
+                "job_id": "handoff_freshness_lint",
+                "run_id": "run-1",
+                "stage": "shadow",
+                "artifacts": {"output": "handoff_freshness_lint/run-1/output.json"},
+            }
+        ],
+    )
+    _write_jsonl(
+        queue / "review_verdicts.jsonl",
+        [
+            {
+                "schema_version": "lab_review_verdict.v1",
+                "job_id": "handoff_freshness_lint",
+                "run_id": "run-1",
+                "stage": "shadow",
+                "verdict": "accept",
+                "reviewer": "cloud_reference",
+            }
+        ],
+    )
+
+    report = review_queue_report.run_from_args(_args(tmp_path, jobs_file, queue))
+
+    assert report["status"] == "ok"
+    assert report["summary"]["pending_reviews"] == 0
+    assert report["pending_items"] == []
+
+
+def test_review_queue_report_flags_missing_outputs_and_counts_active_safe(
+    tmp_path: Path,
+) -> None:
+    jobs_file = tmp_path / "lab_jobs.yaml"
+    queue = tmp_path / "queue"
+    _write_jobs_file(jobs_file)
+    _write_jsonl(
+        queue / "task_records.jsonl",
+        [
+            {
+                "job_id": "active_safe_watch",
+                "run_id": "active-1",
+                "stage": "shadow",
+                "artifacts": {"output": "active_safe_watch/active-1/missing.json"},
+            }
+        ],
+    )
+
+    report = review_queue_report.run_from_args(_args(tmp_path, jobs_file, queue))
+
+    assert report["ok"] is False
+    assert report["status"] == "attention"
+    assert report["summary"]["pending_active_safe"] == 1
+    assert report["pending_items"][0]["next_reviewer"] == "operator"
+    assert report["missing_outputs"] == [
+        {
+            "job_id": "active_safe_watch",
+            "run_id": "active-1",
+            "output_path": "active_safe_watch/active-1/missing.json",
+        }
+    ]

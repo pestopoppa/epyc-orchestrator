@@ -299,3 +299,51 @@ def test_production_inventory_includes_quiet_window_queue_active_safe_job() -> N
             "checked_files": ["handoffs/active/master-handoff-index.md"],
         }
     )
+
+
+def test_production_inventory_includes_lab_review_queue_active_safe_job() -> None:
+    root = Path(__file__).resolve().parents[2]
+    jobs_doc = yaml.safe_load((root / "orchestration/lab_jobs.yaml").read_text())
+    jobs = {job["job_id"]: job for job in jobs_doc["jobs"]}
+    job = jobs["lab_review_queue_watch"]
+
+    selected = run_shadow_jobs.select_jobs(
+        jobs_doc,
+        schedule="nightly",
+        job_ids=[],
+        include_disabled=False,
+        allow_gated=False,
+        active_safe_only=True,
+        max_jobs=0,
+    )
+
+    assert job["enabled"] is True
+    assert job["risk"] == "read_only"
+    assert run_shadow_jobs.is_active_safe_job(job) is True
+    assert run_shadow_jobs.execution_mode(job) == "deterministic_command"
+    assert "lab_review_queue_watch" in [item["job_id"] for item in selected]
+    assert job["execution"]["command"] == [
+        "python3",
+        "scripts/lab/review_queue_report.py",
+        "--json",
+    ]
+
+    schema = job["output_contract"]["json_schema"]
+    Draft7Validator.check_schema(schema)
+    Draft7Validator(schema).validate(
+        {
+            "schema_version": "lab_review_queue_report.v1",
+            "ok": True,
+            "status": "attention",
+            "blockers": [],
+            "summary": {
+                "task_records": 2,
+                "verdicts": 1,
+                "pending_reviews": 1,
+                "pending_reviews_by_class": {"review_candidate": 1},
+                "pending_review_candidates": 1,
+                "pending_active_safe": 0,
+            },
+            "pending_items": [],
+        }
+    )
