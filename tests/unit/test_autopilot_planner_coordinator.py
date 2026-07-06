@@ -372,6 +372,25 @@ def test_selectable_deep_eval_tier3_local_draft_and_critic_is_accepted() -> None
     assert "currently unavailable" not in str(decision.provider_trace)
     assert [call["role"] for call in local_frontdoor.calls] == ["draft"]
     assert [call["role"] for call in local_worker.calls] == ["critique"]
+    critique_prompt = local_worker.calls[0]["prompt"]
+    assert "parsed_action_type: `deep_eval`" in critique_prompt
+    assert "currently_selectable_action_types: `deep_eval, numeric_trial, structural_experiment`" in critique_prompt
+    assert "`seed_batch` and `deep_eval` are valid known action types" in critique_prompt
+
+
+def test_critique_prompt_distinguishes_known_action_from_availability() -> None:
+    prompt = planner_coordinator.build_critique_prompt(
+        "### Action Availability\nDo not emit seed_batch for W8 replay pressure.\n",
+        _action_text({"type": "seed_batch", "n_questions": 12}),
+        {"type": "seed_batch", "n_questions": 12},
+        {"falsifier": "x"},
+        allowed_action_types=["numeric_trial", "structural_experiment"],
+    )
+
+    assert "parsed_action_type: `seed_batch`" in prompt
+    assert "seed_batch" in prompt.split("known_action_types:", 1)[1]
+    assert "currently_selectable_action_types: `numeric_trial, structural_experiment`" in prompt
+    assert "`seed_batch` and `deep_eval` are valid known action types" in prompt
 
 
 def test_planner_archive_records_provider_trace(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -450,7 +450,13 @@ def plan_with_providers(
                 )
             else:
                 critic_provider = provider_factory(critique_provider_name)
-                critique_prompt = build_critique_prompt(prompt, draft.text, action, rationale)
+                critique_prompt = build_critique_prompt(
+                    prompt,
+                    draft.text,
+                    action,
+                    rationale,
+                    allowed_action_types=allowed_actions,
+                )
                 critique_result = critic_provider.invoke(
                     critique_prompt,
                     role="critique",
@@ -681,8 +687,16 @@ def build_critique_prompt(
     draft_text: str,
     action: dict[str, Any],
     rationale: dict[str, Any],
+    *,
+    allowed_action_types: Iterable[str] | None = None,
 ) -> str:
     selected_context = _selected_critique_context(planner_prompt)
+    action_type = str(action.get("type", ""))
+    known_actions_text = ", ".join(sorted(KNOWN_ACTION_TYPES))
+    if allowed_action_types is None:
+        selectable_actions_text = "(not supplied; use the Action Availability section)"
+    else:
+        selectable_actions_text = ", ".join(sorted({str(item) for item in allowed_action_types}))
     return f"""\
 You are the secondary AutoPilot planner reviewer.
 
@@ -714,6 +728,13 @@ thresholds, baseline refresh) — those are outside the autopilot action space.
 Do NOT reject solely because the shared worktree has unrelated dirty files.
 The dispatcher has a target-path dirty fence: cite dirty state only when the
 parsed action would write/stage that same target path or prompt directory.
+Do NOT reject a draft by claiming its parsed action type is unrecognized,
+non-standard, or not in the AutoPilot schema when it appears in the
+authoritative action-type list below. If the selected context says a known
+action is temporarily unavailable or cannot satisfy the current W8 replay
+pressure, name that concrete availability/evidence reason instead.
+`seed_batch` and `deep_eval` are valid known action types. They may be the wrong
+choice for a replayable W8 candidate, but they are not schema errors.
 
 Return JSON ONLY in this fenced block:
 
@@ -732,6 +753,12 @@ available.
 ## Selected Measurement and Constraint Context
 
 {selected_context}
+
+## Authoritative Action-Type Check
+
+- parsed_action_type: `{action_type}`
+- known_action_types: `{known_actions_text}`
+- currently_selectable_action_types: `{selectable_actions_text}`
 
 ## Draft Text
 
