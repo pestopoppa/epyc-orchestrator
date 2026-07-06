@@ -311,7 +311,7 @@ def test_action_availability_filters_non_viable_tail_actions(tmp_path: Path) -> 
         failure_analysis="prompt edit regressed quality badly",
         hypothesis="edit frontdoor",
     ))
-    availability, viable = autopilot._build_action_availability(
+    availability, viable, selectable = autopilot._build_action_availability(
         journal=j,
         known_actions=KNOWN_ACTIONS,
         memory_count=100,
@@ -333,13 +333,14 @@ def test_action_availability_filters_non_viable_tail_actions(tmp_path: Path) -> 
     assert "rollback" not in viable
     assert "distill_knowledge" not in viable
     assert "distill_skillbank" not in viable
+    assert "seed_batch" in selectable
 
 
 def test_action_availability_blocks_seed_batch_when_fallbacks_exhausted(
     tmp_path: Path,
 ) -> None:
     j = _fresh_journal(tmp_path)
-    availability, viable = autopilot._build_action_availability(
+    availability, viable, selectable = autopilot._build_action_availability(
         journal=j,
         known_actions=KNOWN_ACTIONS,
         memory_count=10_000,
@@ -357,6 +358,7 @@ def test_action_availability_blocks_seed_batch_when_fallbacks_exhausted(
     assert "`seed_batch`" in availability
     assert "all configured measured seed fallback candidates are blacklisted" in availability
     assert "seed_batch" not in viable
+    assert "seed_batch" not in selectable
 
 
 def test_action_availability_surfaces_w8_candidate_generation_priority(
@@ -364,7 +366,7 @@ def test_action_availability_surfaces_w8_candidate_generation_priority(
 ) -> None:
     j = _fresh_journal(tmp_path)
 
-    availability, viable = autopilot._build_action_availability(
+    availability, viable, selectable = autopilot._build_action_availability(
         journal=j,
         known_actions=KNOWN_ACTIONS,
         memory_count=10_000,
@@ -385,18 +387,26 @@ def test_action_availability_surfaces_w8_candidate_generation_priority(
     assert "deep_eval" not in viable
     assert "seed_batch" not in viable
     assert "structural_prune" not in viable
+    assert "deep_eval" not in selectable
+    assert "seed_batch" not in selectable
+    assert "structural_prune" not in selectable
+
+    rendered = autopilot._format_available_action_schemas(selectable)
+    assert '- Numeric: {"type": "numeric_trial"' in rendered
+    assert '- Structural: {"type": "structural_experiment"' in rendered
+    assert "- Seed:" not in rendered
+    assert "- Deep eval:" not in rendered
+    assert "- Prune:" not in rendered
 
 
 def test_controller_prompt_binds_availability_before_global_action_schema() -> None:
     template = autopilot.CONTROLLER_PROMPT_TEMPLATE
 
     binding_idx = template.index("Action Availability")
-    unavailable_idx = template.index(
-        'If an action type appears under "Currently\nunavailable for active constraints"'
-    )
-    seed_schema_idx = template.index("- Seed:")
+    filtered_idx = template.index("already filtered")
+    schema_idx = template.index("{available_action_schemas}")
 
-    assert binding_idx < unavailable_idx < seed_schema_idx
+    assert binding_idx < filtered_idx < schema_idx
 
 
 def test_w8_candidate_generation_pressure_ignores_replayable_candidates() -> None:
@@ -448,7 +458,7 @@ def test_action_availability_surfaces_suppressed_numeric_surfaces(
     try:
         autopilot._PLANNER_SUPPRESSED_NUMERIC_SURFACES.clear()
         autopilot._PLANNER_SUPPRESSED_NUMERIC_SURFACES.add("kv_compaction")
-        availability, viable = autopilot._build_action_availability(
+        availability, viable, selectable = autopilot._build_action_availability(
             journal=j,
             known_actions=KNOWN_ACTIONS,
             memory_count=10_000,
@@ -463,6 +473,7 @@ def test_action_availability_surfaces_suppressed_numeric_surfaces(
     assert "convention-suppressed numeric surfaces are unavailable" in availability
     assert "kv_compaction" in availability
     assert "numeric_trial" in viable
+    assert "numeric_trial" in selectable
 
 
 def test_configured_numeric_surfaces_hide_planner_suppressed_surface() -> None:
@@ -923,17 +934,19 @@ def test_controller_prompt_includes_higher_tier_pressure_section() -> None:
 
     assert "Higher-Tier Objective Pressure" in template
     assert "{higher_tier_pressure}" in template
-    assert '{{"type": "deep_eval", "tier": 3}}' in template
-    assert "expert/hard workflow coverage or frontier evidence is thin" in template
+    rendered = autopilot._format_available_action_schemas(["deep_eval"])
+    assert '{"type": "deep_eval", "tier": 3}' in rendered
+    assert "expert/hard workflow coverage or frontier evidence is thin" in rendered
 
 
 def test_controller_prompt_deep_eval_tiers_match_validator_contract() -> None:
     template = autopilot.CONTROLLER_PROMPT_TEMPLATE
+    rendered = autopilot._format_available_action_schemas(["deep_eval"])
 
-    assert "Supported tiers: {deep_eval_tier_options}" in template
+    assert "Supported tiers: 0, 1, 2, or 3" in rendered
     assert autopilot._format_deep_eval_tier_options() == "0, 1, 2, or 3"
     assert "Only tier is supported" not in template
-    assert "Supported tiers: 0, 1, or 2" not in template
+    assert "Supported tiers: 0, 1, or 2" not in rendered
 
 
 def test_controller_prompt_includes_outcome_progress_pressure_section() -> None:
@@ -1131,6 +1144,7 @@ def test_controller_prompt_uses_fresh_strategy_hints_section(monkeypatch) -> Non
             converged=False,
             slot_memory="slots",
             action_availability="actions",
+            available_action_schemas="schemas",
             fable_gate_advisory="fable-gate",
             higher_tier_pressure="higher-tier",
             eval_coverage_pressure="coverage",
@@ -1151,9 +1165,6 @@ def test_controller_prompt_uses_fresh_strategy_hints_section(monkeypatch) -> Non
             feature_flags_block="flags",
             last_invalid_feedback="invalid",
             plot_paths="plots",
-            numeric_surface_options="numeric",
-            deep_eval_tier_options=autopilot._format_deep_eval_tier_options(),
-            code_targets="targets",
         )
 
     first_prompt = format_controller_prompt()

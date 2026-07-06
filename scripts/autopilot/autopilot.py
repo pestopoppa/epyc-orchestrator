@@ -3782,36 +3782,12 @@ Stagnation signal: {stagnation_signal}
 
 ## Available Actions
 
-The schemas below are globally supported, but the "Action Availability" section
-above is binding for this turn. If an action type appears under "Currently
-unavailable for active constraints", do not emit it even if its schema is listed
-below; choose a viable schema instead.
+The schemas below are already filtered by the "Action Availability" section for
+this turn. Do not emit an action type unless its schema appears in this section.
 
 Respond with EXACTLY ONE action in a ```json:autopilot_actions block:
 
-- Seed: {{"type": "seed_batch", "n_questions": 10-50, "suites": ["coder","math",...]}}
-- Numeric: {{"type": "numeric_trial", "surface": "{numeric_surface_options}", "params": {{}}}}
-  (Leave params empty to let Optuna suggest; provide params to test specific values)
-- Prompt: {{"type": "prompt_mutation", "file": "frontdoor.md", "mutation": "targeted_fix|compress|few_shot_evolution", "description": "..."}}
-- GEPA: {{"type": "gepa_optimize", "file": "frontdoor.md", "max_evals": 50, "description": "..."}}
-  (AP-19: Evolutionary prompt optimization via GEPA — runs ~50 evals internally, returns best candidate)
-- Code: {{"type": "code_mutation", "file": "src/escalation.py", "mutation": "targeted_fix", "description": "..."}}
-  (Mutate Python code — ONLY files in allowlist: {code_targets})
-- Structural: {{"type": "structural_experiment", "flags": {{"feature_name": true/false}}}}
-- Prune: {{"type": "structural_prune", "file": "frontdoor.md", "block": "## Section Name", "description": "..."}}
-  (Delete an instruction block from a .md prompt file — accepted only if quality >= baseline AND instruction_token_ratio decreases)
-- Compact: {{"type": "slot_compact", "port": 0, "slot_id": 0, "keep_ratio": 0.3, "scorer": "expected_attention", "keep_first": 5, "n_future": 128}}
-  (AM KV compaction — replace port=0 with a live port from Slot Memory or the generated system card before emitting the action. Use after long-context queries to free memory. Evaluates quality post-compact.)
-- Train: {{"type": "train_routing_models", "min_memories": 500}}
-  (min_memories: integer 1-100000; default 500. Do NOT set it to the current
-  memory_count — the validator REJECTS any value above 100000.)
-- Distill: {{"type": "distill_skillbank", "teacher": "claude", "categories": ["routing"]}}
-- Reset: {{"type": "reset_memories", "keep_seen": true, "keep_skills": true}}
-- Deep eval: {{"type": "deep_eval", "tier": 3}}
-  (Choose tier 3 when expert/hard workflow coverage or frontier evidence is thin; choose tier 2 for comprehensive validation or W8 promotion-eval evidence. Supported tiers: {deep_eval_tier_options}. Do NOT include target_trial, suites, baseline_recheck, or instrumentation fields.)
-- Rollback: {{"type": "rollback", "to_checkpoint": "production_best"}}
-- Distill: {{"type": "distill_knowledge", "last_n": 10}}
-  (Run every ~5 trials to extract insights from recent outcomes into strategy memory)
+{available_action_schemas}
 
 Include brief reasoning before the action block.
 
@@ -3827,6 +3803,95 @@ candidates against still-open hypotheses:
    "synthesis_note": "<optional one-line on fusion / cleaner model>"}}}}
 ```
 """
+
+
+def _format_available_action_schemas(action_types: list[str]) -> str:
+    """Render only currently selectable action schemas for the controller prompt."""
+    ordered = [action_type for action_type in action_types if action_type]
+    numeric_surface_options = "|".join(_configured_numeric_surfaces()) or "(none)"
+    code_targets = ", ".join(CODE_MUTATION_ALLOWLIST)
+    deep_eval_tier_options = _format_deep_eval_tier_options()
+    schemas = {
+        "seed_batch": (
+            '- Seed: {{"type": "seed_batch", "n_questions": 10-50, '
+            '"suites": ["coder","math",...]}}'
+        ),
+        "numeric_trial": (
+            '- Numeric: {{"type": "numeric_trial", "surface": "'
+            f'{numeric_surface_options}", "params": {{}}}}\n'
+            "  (Leave params empty to let Optuna suggest; provide params to "
+            "test specific values)"
+        ),
+        "prompt_mutation": (
+            '- Prompt: {{"type": "prompt_mutation", "file": "frontdoor.md", '
+            '"mutation": "targeted_fix|compress|few_shot_evolution", '
+            '"description": "..."}}'
+        ),
+        "gepa_optimize": (
+            '- GEPA: {{"type": "gepa_optimize", "file": "frontdoor.md", '
+            '"max_evals": 50, "description": "..."}}\n'
+            "  (AP-19: Evolutionary prompt optimization via GEPA — runs ~50 "
+            "evals internally, returns best candidate)"
+        ),
+        "code_mutation": (
+            '- Code: {{"type": "code_mutation", "file": "src/escalation.py", '
+            '"mutation": "targeted_fix", "description": "..."}}\n'
+            f"  (Mutate Python code — ONLY files in allowlist: {code_targets})"
+        ),
+        "structural_experiment": (
+            '- Structural: {{"type": "structural_experiment", '
+            '"flags": {{"feature_name": true/false}}}}'
+        ),
+        "structural_prune": (
+            '- Prune: {{"type": "structural_prune", "file": "frontdoor.md", '
+            '"block": "## Section Name", "description": "..."}}\n'
+            "  (Delete an instruction block from a .md prompt file — accepted "
+            "only if quality >= baseline AND instruction_token_ratio decreases)"
+        ),
+        "slot_compact": (
+            '- Compact: {{"type": "slot_compact", "port": 0, "slot_id": 0, '
+            '"keep_ratio": 0.3, "scorer": "expected_attention", '
+            '"keep_first": 5, "n_future": 128}}\n'
+            "  (AM KV compaction — replace port=0 with a live port from Slot "
+            "Memory or the generated system card before emitting the action. "
+            "Use after long-context queries to free memory. Evaluates quality "
+            "post-compact.)"
+        ),
+        "train_routing_models": (
+            '- Train: {{"type": "train_routing_models", "min_memories": 500}}\n'
+            "  (min_memories: integer 1-100000; default 500. Do NOT set it to "
+            "the current memory_count — the validator REJECTS any value above "
+            "100000.)"
+        ),
+        "distill_skillbank": (
+            '- Distill skillbank: {{"type": "distill_skillbank", '
+            '"teacher": "claude", "categories": ["routing"]}}'
+        ),
+        "reset_memories": (
+            '- Reset: {{"type": "reset_memories", "keep_seen": true, '
+            '"keep_skills": true}}'
+        ),
+        "deep_eval": (
+            '- Deep eval: {{"type": "deep_eval", "tier": 3}}\n'
+            "  (Choose tier 3 when expert/hard workflow coverage or frontier "
+            "evidence is thin; choose tier 2 for comprehensive validation or "
+            f"W8 promotion-eval evidence. Supported tiers: {deep_eval_tier_options}. "
+            "Do NOT include target_trial, suites, baseline_recheck, or "
+            "instrumentation fields.)"
+        ),
+        "rollback": (
+            '- Rollback: {{"type": "rollback", "to_checkpoint": "production_best"}}'
+        ),
+        "distill_knowledge": (
+            '- Distill knowledge: {{"type": "distill_knowledge", "last_n": 10}}\n'
+            "  (Run every ~5 trials to extract insights from recent outcomes "
+            "into strategy memory)"
+        ),
+    }
+    lines = [schemas[action_type] for action_type in ordered if action_type in schemas]
+    if lines:
+        return "\n".join(lines).replace("{{", "{").replace("}}", "}")
+    return "- Pause: no currently selectable autonomous action schema is available."
 
 
 def _read_guidance_file(path: Path, missing_label: str) -> str:
@@ -3944,8 +4009,8 @@ def _build_action_availability(
     blacklist: list[dict[str, Any]],
     suppressed_numeric_surfaces: set[str] | None = None,
     w8_replay_pressure_text: str = "",
-) -> tuple[str, list[str]]:
-    """Return prompt text + viable tail-seed action types for the planner."""
+) -> tuple[str, list[str], list[str]]:
+    """Return prompt text plus viable exploration and selectable action types."""
     blocked: dict[str, str] = {}
     cautions: dict[str, str] = {}
     priority: list[str] = []
@@ -4081,7 +4146,10 @@ def _build_action_availability(
         and action_type not in _RECOVERY_ONLY_ACTIONS
         and not (action_type == "train_routing_models" and not converged)
     ]
-    return "\n".join(lines), viable_tail_actions
+    selectable_actions = [
+        action_type for action_type in known_actions if action_type not in blocked
+    ]
+    return "\n".join(lines), viable_tail_actions, selectable_actions
 
 
 def _w8_candidate_generation_pressure(text: str) -> bool:
@@ -5566,7 +5634,11 @@ def _run_loop_inner(
                     "distill_skillbank", "reset_memories", "deep_eval",
                     "rollback", "distill_knowledge",
                 ]
-                action_availability_text, viable_tail_actions = _build_action_availability(
+                (
+                    action_availability_text,
+                    viable_tail_actions,
+                    selectable_action_types,
+                ) = _build_action_availability(
                     journal=journal,
                     known_actions=_known_actions,
                     memory_count=memory_count,
@@ -5588,6 +5660,7 @@ def _run_loop_inner(
                     f"(exploration-block assembly failed: {_exc})"
                 )
                 action_availability_text = "(action availability unavailable)"
+                selectable_action_types = _known_actions
                 stagnation_signal = "unknown"
 
             planner_strategy_hints_text = _build_planner_strategy_hints(
@@ -5620,6 +5693,9 @@ def _run_loop_inner(
                 converged=converged,
                 slot_memory=slot_memory_text,
                 action_availability=action_availability_text,
+                available_action_schemas=_format_available_action_schemas(
+                    selectable_action_types
+                ),
                 fable_gate_advisory=_build_fable_gate_advisory(),
                 higher_tier_pressure=higher_tier_pressure_text,
                 eval_coverage_pressure=eval_coverage_pressure_text,
@@ -5642,9 +5718,6 @@ def _run_loop_inner(
                     denylisted_flags=_PLANNER_DENYLISTED_FEATURE_FLAGS,
                 ),
                 last_invalid_feedback=_build_last_invalid_feedback(state),
-                numeric_surface_options="|".join(_configured_numeric_surfaces()),
-                deep_eval_tier_options=_format_deep_eval_tier_options(),
-                code_targets=", ".join(CODE_MUTATION_ALLOWLIST),
                 plot_paths="\n".join(f"  - {p}" for p in plot_paths) or "  (none yet)",
             ) + peaf.peaf_prompt_addendum()
 
