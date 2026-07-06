@@ -143,16 +143,27 @@ Initial keep rule:
 Source: `logs/planner_archive.jsonl` and `logs/agent_audit.log` when a future
 export or publish step is introduced.
 
+Executable preflight:
+
+```bash
+uv run python scripts/datasets/raw_trace_publish_preflight.py \
+  logs/planner_archive.jsonl logs/agent_audit.log \
+  --output orchestration/datasets/raw_trace_publish_preflight.json
+```
+
 Required preflight checks:
 
 - deterministic secret/PII scanning over the candidate export;
-- entropy/ML backstop for unknown secret shapes;
+- entropy backstop for unknown secret shapes;
 - reasoning-span scan over any `reasoning`, `thinking`, `trace`, or similar
   fields;
 - fail closed on any hit.
 
-This is hygiene only. It does not replace quarantine, operator review, or
-label authority, and it does not authorize publish or training.
+The current implementation reuses the production credential-redaction patterns,
+adds a high-entropy token backstop with hash-field false-positive guards, and
+reports reasoning-field hits separately. This is hygiene only. It does not
+replace quarantine, operator review, or label authority, and it does not
+authorize publish or training.
 
 ## Known Gaps
 
