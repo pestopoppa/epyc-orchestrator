@@ -379,10 +379,24 @@ def test_action_availability_surfaces_w8_candidate_generation_priority(
 
     assert "Priority pressure:" in availability
     assert "W8 candidate generation is the active strict blocker" in availability
+    assert "actions are ONLY" in availability
+    assert "Do not emit seed_batch, deep_eval, or structural_prune" in availability
     assert "Optuna-suggested numeric_trial that journals applied params" in availability
     assert "deep_eval" not in viable
     assert "seed_batch" not in viable
     assert "structural_prune" not in viable
+
+
+def test_controller_prompt_binds_availability_before_global_action_schema() -> None:
+    template = autopilot.CONTROLLER_PROMPT_TEMPLATE
+
+    binding_idx = template.index("Action Availability")
+    unavailable_idx = template.index(
+        'If an action type appears under "Currently\nunavailable for active constraints"'
+    )
+    seed_schema_idx = template.index("- Seed:")
+
+    assert binding_idx < unavailable_idx < seed_schema_idx
 
 
 def test_w8_candidate_generation_pressure_ignores_replayable_candidates() -> None:

@@ -3782,6 +3782,11 @@ Stagnation signal: {stagnation_signal}
 
 ## Available Actions
 
+The schemas below are globally supported, but the "Action Availability" section
+above is binding for this turn. If an action type appears under "Currently
+unavailable for active constraints", do not emit it even if its schema is listed
+below; choose a viable schema instead.
+
 Respond with EXACTLY ONE action in a ```json:autopilot_actions block:
 
 - Seed: {{"type": "seed_batch", "n_questions": 10-50, "suites": ["coder","math",...]}}
@@ -3950,10 +3955,12 @@ def _build_action_availability(
     )
     if w8_candidate_generation_active:
         priority.append(
-            "W8 candidate generation is the active strict blocker: prefer an "
-            "explicit or Optuna-suggested numeric_trial that journals applied params, "
-            "or a one-flag structural_experiment. Treat seed_batch, deep_eval, and "
-            "structural_prune as deferrals unless a seq due action is forcing them."
+            "W8 candidate generation is the active strict blocker. For this turn, "
+            "candidate generation actions are ONLY an explicit or Optuna-suggested "
+            "numeric_trial that journals applied params, or a one-flag "
+            "structural_experiment. Do not emit seed_batch, deep_eval, or "
+            "structural_prune; they are deferrals unless a seq due action is forcing "
+            "them."
         )
         blocked["seed_batch"] = (
             "W8 candidate generation is active; seed_batch cannot create replayable "
