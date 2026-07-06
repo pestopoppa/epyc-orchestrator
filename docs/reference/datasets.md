@@ -138,6 +138,22 @@ Initial keep rule:
 - Keep accepted/rejected reviewed rows for validation.
 - Use `unknown` rows only for unsupervised distribution modeling.
 
+### Raw-trace Publish Preflight
+
+Source: `logs/planner_archive.jsonl` and `logs/agent_audit.log` when a future
+export or publish step is introduced.
+
+Required preflight checks:
+
+- deterministic secret/PII scanning over the candidate export;
+- entropy/ML backstop for unknown secret shapes;
+- reasoning-span scan over any `reasoning`, `thinking`, `trace`, or similar
+  fields;
+- fail closed on any hit.
+
+This is hygiene only. It does not replace quarantine, operator review, or
+label authority, and it does not authorize publish or training.
+
 ## Known Gaps
 
 - Historical AutoPilot rows before the per-question ledger was deployed may lack
