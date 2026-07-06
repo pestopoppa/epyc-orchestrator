@@ -18,6 +18,10 @@ DEFAULT_QUEUE = Path("orchestration/lab_review_queue")
 DEFAULT_RECORDS = "task_records.jsonl"
 DEFAULT_VERDICTS = "review_verdicts.jsonl"
 TARGET_STAGES = ("reviewed", "autonomous")
+STAGE_PREDECESSORS = {
+    "reviewed": "shadow",
+    "autonomous": "reviewed",
+}
 
 
 class PromotionError(RuntimeError):
@@ -109,8 +113,25 @@ def _is_cloud_referenced(row: dict[str, Any]) -> bool:
     )
 
 
-def _has_gold_tuple(row: dict[str, Any]) -> bool:
-    return bool(row.get("tuple_path") or row.get("gold_tuple_path"))
+def _is_operator_reviewed(row: dict[str, Any]) -> bool:
+    return row.get("reviewer") == "operator"
+
+
+def _current_stage(job: dict[str, Any], jobs_doc: dict[str, Any]) -> str:
+    policy = jobs_doc.get("policy") if isinstance(jobs_doc.get("policy"), dict) else {}
+    return str(job.get("stage") or policy.get("default_stage") or "")
+
+
+def _has_gold_tuple(row: dict[str, Any], queue_dir: Path | None = None) -> bool:
+    raw_path = row.get("tuple_path") or row.get("gold_tuple_path")
+    if not raw_path:
+        return False
+    if queue_dir is None:
+        return True
+    tuple_path = Path(str(raw_path))
+    if not tuple_path.is_absolute():
+        tuple_path = queue_dir / tuple_path
+    return tuple_path.is_file()
 
 
 def _stage_for(row: dict[str, Any], records_by_run: dict[str, dict[str, Any]]) -> str:
@@ -150,6 +171,7 @@ def evaluate_promotion(
     target_stage: str,
     task_records: list[dict[str, Any]],
     verdicts: list[dict[str, Any]],
+    queue_dir: Path | None = None,
     min_shadow_runs: int = 10,
     min_reviewed_runs: int = 20,
     autonomous_accept_rate: float = 0.90,
@@ -157,6 +179,20 @@ def evaluate_promotion(
     if target_stage not in TARGET_STAGES:
         raise PromotionError(f"unsupported target stage: {target_stage}")
     job = _job_by_id(jobs_doc, job_id)
+    source_stage = STAGE_PREDECESSORS[target_stage]
+    current_stage = _current_stage(job, jobs_doc)
+    if current_stage != source_stage:
+        counts = {
+            "current_stage": current_stage,
+            "required_source_stage": source_stage,
+        }
+        return PromotionDecision(
+            job_id,
+            target_stage,
+            False,
+            f"{target_stage} promotion requires current job stage {source_stage}",
+            counts,
+        )
     records_by_run = {
         str(row.get("run_id")): row
         for row in task_records
@@ -170,8 +206,10 @@ def evaluate_promotion(
             records_by_run=records_by_run,
         )
         cloud_scored = [row for row in shadow if _is_cloud_referenced(row)]
-        gold_rows = [row for row in cloud_scored if _has_gold_tuple(row)]
+        gold_rows = [row for row in cloud_scored if _has_gold_tuple(row, queue_dir)]
         counts = {
+            "current_stage": current_stage,
+            "required_source_stage": source_stage,
             "shadow_scored": len(shadow),
             "shadow_cloud_scored": len(cloud_scored),
             "shadow_gold_tuples": len(gold_rows),
@@ -187,11 +225,16 @@ def evaluate_promotion(
                 counts,
             )
         if len(gold_rows) < min_shadow_runs:
+            reason = (
+                "cloud-reference verdicts must save existing F3 gold tuple files"
+                if queue_dir is not None
+                else "cloud-reference verdicts must save F3 gold tuple paths"
+            )
             return PromotionDecision(
                 job_id,
                 target_stage,
                 False,
-                "cloud-reference verdicts must save F3 gold tuple paths",
+                reason,
                 counts,
             )
         return PromotionDecision(
@@ -208,10 +251,14 @@ def evaluate_promotion(
         verdicts=verdicts,
         records_by_run=records_by_run,
     )
-    gold_rows = [row for row in reviewed if _has_gold_tuple(row)]
+    operator_reviewed = [row for row in reviewed if _is_operator_reviewed(row)]
+    gold_rows = [row for row in operator_reviewed if _has_gold_tuple(row, queue_dir)]
     accept_rate = _accept_rate(gold_rows)
     counts = {
+        "current_stage": current_stage,
+        "required_source_stage": source_stage,
         "reviewed_scored": len(reviewed),
+        "reviewed_operator_scored": len(operator_reviewed),
         "reviewed_gold_tuples": len(gold_rows),
         "reviewed_accept_rate": round(accept_rate, 4),
         "min_reviewed_runs": min_reviewed_runs,
@@ -226,11 +273,16 @@ def evaluate_promotion(
             counts,
         )
     if len(gold_rows) < min_reviewed_runs:
+        reason = (
+            "insufficient operator-reviewed verdicts with existing F3 gold tuple files"
+            if queue_dir is not None
+            else "insufficient operator-reviewed verdicts with F3 gold tuple paths"
+        )
         return PromotionDecision(
             job_id,
             target_stage,
             False,
-            "insufficient reviewed verdicts with F3 gold tuple paths",
+            reason,
             counts,
         )
     if accept_rate < autonomous_accept_rate:
@@ -301,6 +353,13 @@ def apply_promotion(
     if confirm_job_id != decision.job_id:
         raise PromotionError("--apply requires --confirm-job-id matching the promoted job")
     job = _job_by_id(jobs_doc, decision.job_id)
+    source_stage = STAGE_PREDECESSORS[decision.target_stage]
+    current_stage = _current_stage(job, jobs_doc)
+    if current_stage != source_stage:
+        raise PromotionError(
+            f"refusing {decision.target_stage} promotion from current stage {current_stage}; "
+            f"expected {source_stage}"
+        )
     job["stage"] = decision.target_stage
     job["enabled"] = True
     _write_yaml(jobs_file, jobs_doc)
@@ -325,6 +384,7 @@ def run_from_args(args: argparse.Namespace) -> PromotionDecision:
         target_stage=args.target_stage,
         task_records=_load_jsonl(records_file),
         verdicts=_load_jsonl(verdicts_file),
+        queue_dir=queue_dir,
         min_shadow_runs=args.min_shadow_runs,
         min_reviewed_runs=args.min_reviewed_runs,
         autonomous_accept_rate=args.autonomous_accept_rate,

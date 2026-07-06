@@ -73,6 +73,18 @@ def _write_jsonl(path: Path, rows: list[dict]) -> None:
     path.write_text("".join(json.dumps(row) + "\n" for row in rows))
 
 
+def _write_gold_tuple_files(queue_dir: Path, rows: list[dict]) -> None:
+    for row in rows:
+        raw_path = row.get("tuple_path") or row.get("gold_tuple_path")
+        if not raw_path:
+            continue
+        path = Path(raw_path)
+        if not path.is_absolute():
+            path = queue_dir / path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"job_id": row["job_id"], "run_id": row["run_id"]}))
+
+
 def _records(job_id: str, stage: str, n: int) -> list[dict]:
     return [
         {
@@ -123,10 +135,12 @@ def test_report_summarizes_schedulable_jobs_and_promotion_readiness(tmp_path: Pa
     _write_jobs_file(jobs_file)
     queue = tmp_path / "queue"
     _write_jsonl(queue / "task_records.jsonl", _records("shadow_ready", "shadow", 10))
+    verdicts = _verdicts("shadow_ready", "shadow", ["accept"] * 10)
     _write_jsonl(
         queue / "review_verdicts.jsonl",
-        _verdicts("shadow_ready", "shadow", ["accept"] * 10),
+        verdicts,
     )
+    _write_gold_tuple_files(queue, verdicts)
 
     report = readiness_report.run_from_args(_args(tmp_path, jobs_file))
 
