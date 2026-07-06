@@ -133,3 +133,21 @@ def test_multi_tool_telemetry_and_chain_ranking(tmp_path: Path, monkeypatch) -> 
     assert "REPL records with parallel_tools_used=True: 1 (50.0% of multi-tool REPL records)" in report
     assert "## Tool Chain Candidates" in report
     assert "| read_file -> write_file | 2 | ~1 | autopilot_bigrams:1, tool_chains:1 |" in report
+
+
+def test_load_explicit_read_only_tools_includes_registry_annotations() -> None:
+    read_only_tools = _MOD.load_explicit_read_only_tools(_MOD.TOOL_REGISTRY_YAML)
+
+    assert {
+        "http_get",
+        "search_wikipedia",
+        "json_query",
+        "statistics",
+        "matrix_solve",
+        "read_file",
+        "archive_search",
+    }.issubset(read_only_tools)
+    assert "python_eval" not in read_only_tools
+    assert "calculate" not in read_only_tools
+    assert "embed_text" not in read_only_tools
+    assert "vision_analyze" not in read_only_tools

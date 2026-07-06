@@ -27,6 +27,7 @@ tools:
       type: python
       module: orchestration.tools.web
       function: http_get
+    side_effects: ["read_only"]
     permissions: [network]
     allowed_callers: ["direct", "chain"]
     examples:
@@ -61,6 +62,7 @@ tools:
       type: python
       module: orchestration.tools.web
       function: web_search
+    side_effects: ["read_only"]
     permissions: [network]
     allowed_callers: ["direct", "chain"]
     examples:
@@ -97,6 +99,7 @@ tools:
       type: python
       module: orchestration.tools.web
       function: fetch_wikipedia
+    side_effects: ["read_only"]
     permissions: [network]
     allowed_callers: ["direct", "chain"]
 
@@ -113,6 +116,7 @@ tools:
       type: python
       module: src.tools.knowledge
       function: search_arxiv
+    side_effects: ["read_only"]
     permissions: [network]
     allowed_callers: ["direct", "chain"]
     examples:
@@ -131,6 +135,7 @@ tools:
       type: python
       module: src.tools.knowledge
       function: search_papers
+    side_effects: ["read_only"]
     permissions: [network]
     allowed_callers: ["direct", "chain"]
     examples:
@@ -149,6 +154,7 @@ tools:
       type: python
       module: src.tools.knowledge
       function: search_wikipedia
+    side_effects: ["read_only"]
     permissions: [network]
     allowed_callers: ["direct", "chain"]
 
@@ -163,6 +169,7 @@ tools:
       type: python
       module: src.tools.knowledge
       function: get_wikipedia_article
+    side_effects: ["read_only"]
     permissions: [network]
     allowed_callers: ["direct", "chain"]
 
@@ -178,6 +185,7 @@ tools:
       type: python
       module: src.tools.knowledge
       function: search_books
+    side_effects: ["read_only"]
     permissions: [network]
     allowed_callers: ["direct", "chain"]
     examples:
@@ -196,6 +204,7 @@ tools:
       type: python
       module: orchestration.tools.data
       function: json_query
+    side_effects: ["read_only"]
     permissions: []
     allowed_callers: ["direct", "chain"]
     examples:
@@ -214,6 +223,7 @@ tools:
       type: python
       module: orchestration.tools.data
       function: csv_to_json
+    side_effects: ["read_only"]
     permissions: []
     allowed_callers: ["direct", "chain"]
 
@@ -228,6 +238,7 @@ tools:
       type: python
       module: orchestration.tools.data
       function: json_to_csv
+    side_effects: ["read_only"]
     permissions: []
     allowed_callers: ["direct", "chain"]
 
@@ -242,6 +253,7 @@ tools:
       type: python
       module: orchestration.tools.data
       function: sql_query
+    side_effects: ["read_only"]
     permissions: []
     allowed_callers: ["direct", "chain"]
     examples:
@@ -338,6 +350,7 @@ tools:
       type: python
       module: orchestration.tools.math
       function: statistics
+    side_effects: ["read_only"]
     permissions: [compute]
     allowed_callers: ["direct", "chain"]
 
@@ -370,6 +383,7 @@ tools:
       type: python
       module: orchestration.tools.math
       function: symbolic_solve
+    side_effects: ["read_only"]
     permissions: [compute]
     allowed_callers: ["direct", "chain"]
     examples:
@@ -391,6 +405,7 @@ tools:
       type: cpp
       binary: llama-math-tools
       command: matrix_op
+    side_effects: ["read_only"]
     permissions: [compute]
     allowed_callers: ["direct", "chain"]
     examples:
@@ -409,6 +424,7 @@ tools:
       type: cpp
       binary: llama-math-tools
       command: matrix_op
+    side_effects: ["read_only"]
     permissions: [compute]
     allowed_callers: ["direct", "chain"]
 
@@ -423,6 +439,7 @@ tools:
       type: cpp
       binary: llama-math-tools
       command: matrix_op
+    side_effects: ["read_only"]
     permissions: [compute]
     allowed_callers: ["direct", "chain"]
 
@@ -441,6 +458,7 @@ tools:
       type: cpp
       binary: llama-math-tools
       command: solve_ode
+    side_effects: ["read_only"]
     permissions: [compute]
     allowed_callers: ["direct", "chain"]
     examples:
@@ -461,6 +479,7 @@ tools:
       type: cpp
       binary: llama-math-tools
       command: optimize
+    side_effects: ["read_only"]
     permissions: [compute]
     allowed_callers: ["direct", "chain"]
 
@@ -477,6 +496,7 @@ tools:
       type: cpp
       binary: llama-math-tools
       command: monte_carlo
+    side_effects: ["read_only"]
     permissions: [compute]
     allowed_callers: ["direct", "chain"]
     examples:
@@ -498,6 +518,7 @@ tools:
       type: cpp
       binary: llama-math-tools
       command: mcmc
+    side_effects: ["read_only"]
     permissions: [compute]
     allowed_callers: ["direct", "chain"]
     examples:
@@ -518,6 +539,7 @@ tools:
       type: cpp
       binary: llama-math-tools
       command: bayesopt
+    side_effects: ["read_only"]
     permissions: [compute]
     allowed_callers: ["direct", "chain"]
 
@@ -537,6 +559,7 @@ tools:
       type: cpp
       binary: llama-math-tools
       command: plot
+    side_effects: ["read_only"]
     permissions: [compute]
     allowed_callers: ["direct", "chain"]
 
@@ -554,6 +577,7 @@ tools:
       type: cpp
       binary: llama-math-tools
       command: plot
+    side_effects: ["read_only"]
     permissions: [compute]
     allowed_callers: ["direct", "chain"]
 
@@ -570,6 +594,7 @@ tools:
       type: cpp
       binary: llama-math-tools
       command: plot
+    side_effects: ["read_only"]
     permissions: [compute]
     allowed_callers: ["direct", "chain"]
 
@@ -589,6 +614,7 @@ tools:
       type: cpp
       binary: llama-math-tools
       command: plot_sixel
+    side_effects: ["read_only"]
     permissions: [compute]
     allowed_callers: ["direct", "chain"]
 
@@ -603,6 +629,7 @@ tools:
       type: cpp
       binary: llama-math-tools
       command: render_math
+    side_effects: ["read_only"]
     permissions: [compute]
     allowed_callers: ["direct", "chain"]
     examples:
@@ -623,6 +650,7 @@ tools:
       type: python
       module: orchestration.tools.system
       function: read_file
+    side_effects: ["read_only"]
     permissions: [filesystem]
     allowed_callers: ["direct", "chain"]
 
@@ -653,6 +681,7 @@ tools:
       type: python
       module: orchestration.tools.system
       function: list_directory
+    side_effects: ["read_only"]
     permissions: [filesystem]
     allowed_callers: ["direct", "chain"]
 
@@ -665,6 +694,7 @@ tools:
       type: python
       module: orchestration.tools.system
       function: get_current_date
+    side_effects: ["read_only"]
     permissions: []
     allowed_callers: ["direct", "chain"]
 
@@ -677,6 +707,7 @@ tools:
       type: python
       module: orchestration.tools.system
       function: get_current_time
+    side_effects: ["read_only"]
     permissions: []
     allowed_callers: ["direct", "chain"]
 
@@ -691,6 +722,7 @@ tools:
       type: python
       module: src.services.archive_extractor
       function: archive_open
+    side_effects: ["read_only"]
     permissions: [filesystem]
     allowed_callers: ["direct", "chain"]
     examples:
@@ -727,6 +759,7 @@ tools:
       type: python
       module: src.services.archive_extractor
       function: archive_file
+    side_effects: ["read_only"]
     permissions: [filesystem]
     allowed_callers: ["direct", "chain"]
 
@@ -741,6 +774,7 @@ tools:
       type: python
       module: src.services.archive_extractor
       function: archive_search
+    side_effects: ["read_only"]
     permissions: [filesystem]
     allowed_callers: ["direct", "chain"]
     examples:
