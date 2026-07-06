@@ -67,7 +67,7 @@ def test_dashboard_html_distinguishes_waiting_tap_from_active_locks() -> None:
     body = html_path.read_text()
 
     assert "waiting_cpu_lock" in body
-    assert "tap-inferred active holder" in body
+    assert "tap-inferred request(s)" in body
     assert "TAP ACTIVE" in body
     assert "structuredTapPrimaryRole" in body
     assert "function inferStructuredTapLockIdentity(req, byRole = null)" in body
@@ -97,7 +97,7 @@ def test_dashboard_html_separates_proc_holders_from_live_tap_requests() -> None:
     assert "live tap request(s)" in body
     assert "/proc holder instance(s)" in body
     assert "structuredTapLockCandidates" in body
-    assert "tap-inferred active holder(s)" in body
+    assert "tap-inferred request(s)" in body
 
 
 def test_dashboard_html_infers_quiet_tap_requests_into_region_lock_candidates() -> None:
@@ -322,10 +322,105 @@ def test_dashboard_html_merges_unique_tap_inferred_holders_into_region_lock_summ
     assert "tap-inferred active/pending" in body
     assert "tap-inferred streaming" in body
     assert "tap-inferred quiet/held" in body
-    assert "const tapInferredCountSuffix = tapInferredMissing.length" in body
+    assert "let tapInferredRequestCount = 0" in body
+    assert "tapInferredRequestCount += tapInferredSourceCount(inferred)" in body
+    assert "const tapInferredCountSuffix = tapInferredRequestCount" in body
     assert "const countSuffix = holderSources.length > 1 ? ` ×${holderSources.length}` : ''" in body
     assert "/proc holder instance(s)${tapInferredCountSuffix}: ${displayHeldBySummary" in body
     assert "~${formatPhysicalRoleWithLogicalAliases(role, shape, idx)}${countSuffix} (${inferredState})" in body
+
+
+def test_dashboard_html_counts_multiple_tap_requests_on_one_physical_holder() -> None:
+    """Eval batches can stream multiple requests through one lock; do not hide that behind one cell."""
+    html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    body = html_path.read_text()
+    start = body.index("function currentAutopilotActionSource()")
+    end = body.index("function refreshLiveDotsFromStructuredTap()")
+    snippet = body[start:end]
+
+    script = textwrap.dedent(
+        f"""
+        const vm = require('vm');
+        const ctx = {{
+          _latestProcessStatus: {{}},
+          _latestRegionLocksByRole: {{
+            worker_general: {{
+              instanceIdxs: new Set([0]),
+              procInstanceIdxs: new Set([0]),
+              regions: new Set(['q0', 'q1', 'q2', 'q3']),
+              holderPids: new Set(['111']),
+              pidsByInstanceIdx: new Map([[0, new Set(['111'])]]),
+              instances: [{{ idx: 0, shape: 'full', regions: ['q0', 'q1', 'q2', 'q3'] }}],
+            }},
+          }},
+          _latestTapInferredRegionLocksByRole: {{}},
+          _lastRegionLocksPayload: {{
+            by_role: {{
+              worker_general: {{
+                instances: [{{ idx: 0, shape: 'full', regions: ['q0', 'q1', 'q2', 'q3'] }}],
+              }},
+            }},
+          }},
+          _structuredTapRequests: [
+            {{
+              request_id: 'a',
+              role: 'worker_general',
+              lock_role: 'worker_general',
+              instance_idx: 0,
+              instance_shape: 'full',
+              instance_regions: ['q0', 'q1', 'q2', 'q3'],
+              status: 'running',
+              chunk_count: 2,
+              response_len: 64,
+              quiet_s: 0,
+            }},
+            {{
+              request_id: 'b',
+              role: 'worker_general',
+              lock_role: 'worker_general',
+              instance_idx: 0,
+              instance_shape: 'full',
+              instance_regions: ['q0', 'q1', 'q2', 'q3'],
+              status: 'running',
+              chunk_count: 2,
+              response_len: 64,
+              quiet_s: 0,
+            }},
+          ],
+          _STRUCTURED_TAP_STALLED_S: 999999,
+          escapeHTML: (s) => String(s),
+          clientBaseRole: (s) => String(s || ''),
+          roleColor: () => 'x',
+          inferStructuredTapLockIdentity: (req) => ({{
+            role: req.lock_role || req.topology_role || req.role || '',
+            idx: Number(req.instance_idx),
+            regions: Array.isArray(req.instance_regions) ? req.instance_regions : [],
+            shape: req.instance_shape || '',
+          }}),
+          structuredTapHasActiveCpuLock: () => true,
+          structuredTapCpuBlockers: () => [],
+          structuredTapCpuBlockerSummary: (blockers) => blockers.join(','),
+          topology: {{ nodes: [] }},
+        }};
+        vm.createContext(ctx);
+        vm.runInContext({json.dumps(snippet)}, ctx);
+        vm.runInContext('_latestTapInferredRegionLocksByRole = buildTapInferredRegionLocks();', ctx);
+        const inferredCount = vm.runInContext(
+          'tapInferredSourceCount(_latestTapInferredRegionLocksByRole.worker_general)',
+          ctx,
+        );
+        const summary = vm.runInContext('formatRegionLockHolderSummary()', ctx);
+        if (inferredCount !== 2) {{
+          throw new Error(`expected two tap-inferred requests, got ${{inferredCount}}`);
+        }}
+        if (!summary.includes('worker_general.full ×2')) {{
+          throw new Error(`expected source count in summary, got: ${{summary}}`);
+        }}
+        """
+    )
+
+    result = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr or result.stdout
 
 
 def test_dashboard_run_state_active_inference_overrides_quiet_log() -> None:

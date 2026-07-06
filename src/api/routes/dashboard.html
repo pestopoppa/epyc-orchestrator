@@ -2626,6 +2626,17 @@ function formatPhysicalRoleWithLogicalAliases(role, shape, idx = null) {
     return aliases.length ? `${base} (${aliases.join(', ')})` : base;
 }
 
+function tapInferredSourcesForInstance(inferred, idx) {
+    const sources = Array.isArray(inferred && inferred.sources) ? inferred.sources : [];
+    const nIdx = Number(idx);
+    if (!Number.isFinite(nIdx)) return sources;
+    return sources.filter(r => Number(r.instance_idx) === nIdx);
+}
+
+function tapInferredSourceCount(inferred) {
+    return (Array.isArray(inferred && inferred.sources) ? inferred.sources : []).length;
+}
+
 function tapInferredHolderLabel(role, shape, idx, sources) {
     const sourceList = Array.isArray(sources) ? sources : [];
     const matchingSources = sourceList.filter(r => Number(r.instance_idx) === Number(idx));
@@ -3775,7 +3786,16 @@ function _stylePlannerLine(line) {
     if (/^\[assistant\]/i.test(line)) {
         return '<span style="color:#fbbf24">' + escaped + '</span>';
     }
-    if (/^=+$|^-+$|PLANNER session/i.test(line)) {
+    // New-trial planning banner: make the session-start line the one thing
+    // that unmistakably pops while scrolling. Everything else around it (the
+    // ==== / ---- rule lines) stays dim so the header is the visual anchor.
+    if (/PLANNER session/i.test(line)) {
+        return '<span style="display:block;margin:6px 0 2px;padding:2px 8px;'
+            + 'background:#1e3a5f;color:#7dd3fc;font-weight:700;'
+            + 'border-left:3px solid #38bdf8;border-radius:3px">'
+            + '▶ ' + escaped + '</span>';
+    }
+    if (/^=+$|^-+$/.test(line)) {
         return '<span style="color:#475569">' + escaped + '</span>';
     }
     return escaped;
@@ -6503,12 +6523,16 @@ async function updateRegionLocks(
             }
             const displayHeldBySummary = formatRegionLockHolderSummary();
             const tapInferredMissing = [];
+            let tapInferredRequestCount = 0;
+            let tapInferredMissingRequestCount = 0;
             const slotInferredMissing = [];
             for (const [role, inferred] of Object.entries(_latestTapInferredRegionLocksByRole || {})) {
                 const actualActive = new Set(((byRole[role] || {}).active_instance_idxs || []).map(Number));
                 const instByIdx = new Map((((byRole[role] || {}).instances) || []).map(i => [Number(i.idx), i]));
+                tapInferredRequestCount += tapInferredSourceCount(inferred);
                 for (const idx of (inferred.instanceIdxs || [])) {
                     const nIdx = Number(idx);
+                    const sourceCount = tapInferredSourcesForInstance(inferred, nIdx).length || 1;
                     if (actualActive.has(nIdx)) continue;
                     const req = (inferred.sources || []).find(r => Number(r.instance_idx) === nIdx) || {};
                     const inst = instByIdx.get(nIdx);
@@ -6516,6 +6540,7 @@ async function updateRegionLocks(
                     if (!regions.length) continue;
                     const shape = req.instance_shape || (inst && inst.shape) || `idx${nIdx}`;
                     tapInferredMissing.push(formatPhysicalRoleWithLogicalAliases(role, shape, nIdx));
+                    tapInferredMissingRequestCount += sourceCount;
                     for (const region of regions) {
                         (globalHeldBy[region] ||= []).push({ role, shape, inferred: true });
                     }
@@ -6555,7 +6580,9 @@ async function updateRegionLocks(
                 enabled,
                 procHolderCount: actualActiveLockCount,
                 tapLiveRequestCount,
-                tapInferredCount: tapInferredMissing.length,
+                tapInferredCount: tapInferredRequestCount,
+                tapInferredPhysicalCount: tapInferredMissing.length,
+                tapInferredMissingRequestCount,
                 slotInferredCount: slotInferredMissing.length,
             };
             renderAutopilotRunStrip();
@@ -6567,8 +6594,11 @@ async function updateRegionLocks(
                 if (tapLiveRequestCount) {
                     titleBits.push(`${tapLiveRequestCount} live tap request(s)${tapLiveStateBits.length ? ` (${tapLiveStateBits.join(' · ')})` : ''}`);
                 }
+                if (tapInferredRequestCount) {
+                    titleBits.push(`${tapInferredRequestCount} tap-inferred request(s)`);
+                }
                 if (tapInferredMissing.length) {
-                    titleBits.push(`${tapInferredMissing.length} tap-inferred active instance(s)`);
+                    titleBits.push(`${tapInferredMissingRequestCount || tapInferredMissing.length} tap-inferred request(s) without /proc match`);
                 }
                 if (slotInferredMissing.length) {
                     titleBits.push(`${slotInferredMissing.length} slot-inferred active instance(s)`);
@@ -6585,14 +6615,17 @@ async function updateRegionLocks(
                 const liveTapSuffix = tapLiveRequestCount
                     ? `; +${tapLiveRequestCount} live tap request(s)${tapLiveStateBits.length ? ` (${tapLiveStateBits.join(' · ')})` : ''}`
                     : '';
-                const tapInferredCountSuffix = tapInferredMissing.length
-                    ? ` + ${tapInferredMissing.length} tap-inferred active holder(s)`
+                const tapInferredCountSuffix = tapInferredRequestCount
+                    ? ` + ${tapInferredRequestCount} tap-inferred request(s)`
+                    : '';
+                const tapInferredUnmatchedSuffix = tapInferredMissing.length
+                    ? `; ${tapInferredMissingRequestCount || tapInferredMissing.length} request(s) have no /proc match`
                     : '';
                 const slotInferredSuffix = slotInferredMissing.length
                     ? `; +${slotInferredMissing.length} slot-inferred active instance(s): ${slotInferredMissing.join(', ')}`
                     : '';
                 status.textContent = activeLockCount > 0
-                    ? `— ${actualActiveLockCount} /proc holder instance(s)${tapInferredCountSuffix}: ${displayHeldBySummary || 'none'}${liveTapSuffix}${slotInferredSuffix}; × cells are same-role or matrix-blocked waits; per-region locks ENABLED`
+                    ? `— ${actualActiveLockCount} /proc holder instance(s)${tapInferredCountSuffix}: ${displayHeldBySummary || 'none'}${liveTapSuffix}${tapInferredUnmatchedSuffix}${slotInferredSuffix}; × cells are same-role or matrix-blocked waits; per-region locks ENABLED`
                     : '— no locks held; per-region locks ENABLED';
                 status.style.color = activeLockCount > 0 ? '#fbbf24' : 'var(--muted)';
             }
@@ -6614,14 +6647,19 @@ async function updateRegionLocks(
                     if (activeSet.has(inst.idx)) {
                         const aliases = structuredTapLogicalAliasesForIdentity(role, inst.idx);
                         const logical = aliases.length ? `; logical route(s): ${aliases.join(', ')}` : '';
-                        const t = `${role}.${col.label} ACTIVE — instance idx=${inst.idx} holding {${(inst.regions || []).join(',')}}${logical}`;
+                        const inferred = (_latestTapInferredRegionLocksByRole[role] || null);
+                        const sourceCount = tapInferredSourcesForInstance(inferred, inst.idx).length;
+                        const tapNote = sourceCount ? `; ${sourceCount} structured tap request(s) map here` : '';
+                        const t = `${role}.${col.label} ACTIVE — instance idx=${inst.idx} holding {${(inst.regions || []).join(',')}}${logical}${tapNote}`;
                         rows.push(`<div class="rl-cell rl-active" title="${t}">⚡</div>`);
                         continue;
                     }
                     if (inferredActiveSet.has(Number(inst.idx))) {
                         const aliases = structuredTapLogicalAliasesForIdentity(role, inst.idx);
                         const logical = aliases.length ? `; logical route(s): ${aliases.join(', ')}` : '';
-                        const t = `${role}.${col.label} TAP ACTIVE — structured tap is streaming on idx=${inst.idx}${logical}; /proc lock poll has not observed the holder in this frame`;
+                        const inferred = (_latestTapInferredRegionLocksByRole[role] || null);
+                        const sourceCount = tapInferredSourcesForInstance(inferred, inst.idx).length || 1;
+                        const t = `${role}.${col.label} TAP ACTIVE — ${sourceCount} structured tap request(s) map to idx=${inst.idx}${logical}; /proc lock poll has not observed the holder in this frame`;
                         rows.push(`<div class="rl-cell rl-active rl-inferred" title="${t}">⚡</div>`);
                         continue;
                     }
