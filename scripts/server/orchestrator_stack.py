@@ -1574,10 +1574,15 @@ def start_orchestrator(profile: str | None = None) -> ProcessInfo | None:
     env.setdefault("ORCHESTRATOR_PER_REGION_LOCKS", "1")
     # 2026-05-31: default-on cross-role physical exclusion. Adds a
     # role-agnostic cpu_region.GLOBAL.{qN}.lock layer so different roles cannot
-    # decode on the same atomic CPU region. This intentionally leaves
-    # ORCHESTRATOR_SHAPE_AWARE_CONTENTION off until dispatch threads a real
-    # candidate_topology_idx through the admission gate.
+    # decode on the same atomic CPU region.
+    #
+    # 2026-07-06: enable shape-aware contention by default now that
+    # ConcurrencyAwareBackend dispatch threads the actual candidate_topology_idx
+    # through the admission gate. Physical disjointness alone is insufficient:
+    # the measured contention matrix still blocks some role pairs whose CPU
+    # regions do not literally overlap.
     env.setdefault("ORCHESTRATOR_CROSS_ROLE_DISJOINT_PLACEMENT", "1")
+    env.setdefault("ORCHESTRATOR_SHAPE_AWARE_CONTENTION", "1")
     # WP-7/J6 (2026-05-26): within-role placement rollout. These were previously
     # shell-env-only, so ANY API restart (autopilot config-apply, watcher relaunch,
     # manual) silently reverted the placement state machine to OFF — J6 ran without it
