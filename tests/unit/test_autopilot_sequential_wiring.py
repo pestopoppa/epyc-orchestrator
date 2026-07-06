@@ -579,10 +579,10 @@ def test_seq_candidate_replay_payload_requires_neutral_quality_e(
     assert autopilot._seq_candidate_replay_payload(journal, tier=1) is None
 
 
-def test_seq_candidate_replay_payload_skips_dispatch_invalid_action(
+def test_seq_candidate_replay_payload_allows_materialized_numeric_replay(
     tmp_path: Path,
 ) -> None:
-    invalid_action = {
+    optuna_action = {
         "type": "numeric_trial",
         "surface": "repl_executor",
         "params": {
@@ -599,9 +599,9 @@ def test_seq_candidate_replay_payload_skips_dispatch_invalid_action(
     journal.record(
         _entry(
             10,
-            invalid_action,
+            optuna_action,
             seq={
-                "candidate": autopilot._config_fingerprint(invalid_action),
+                "candidate": autopilot._config_fingerprint(optuna_action),
                 "core_id": "core_v1",
                 "k": 1,
                 "z": 0.2,
@@ -632,7 +632,7 @@ def test_seq_candidate_replay_payload_skips_dispatch_invalid_action(
     payload = autopilot._seq_candidate_replay_payload(journal, tier=1)
 
     assert payload is not None
-    assert payload["action"] == valid_action
+    assert payload["action"] == optuna_action
 
 
 def test_seq_candidate_replay_payload_prefers_under_observed_candidate(

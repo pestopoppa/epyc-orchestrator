@@ -415,6 +415,43 @@ def test_w8_candidate_generation_pressure_ignores_replayable_candidates() -> Non
     ) is False
 
 
+def test_w8_replay_pressure_remains_active_for_replayable_candidates() -> None:
+    assert autopilot._w8_replay_pressure_active(
+        "W8 replay pressure: 3/10 accumulating candidate(s) are replayable; "
+        "prefer collecting replay/confirmation evidence before opening unrelated "
+        "W8 candidate generation."
+    ) is True
+
+
+def test_action_availability_blocks_deferrals_during_w8_replay_pressure(
+    tmp_path: Path,
+) -> None:
+    j = _fresh_journal(tmp_path)
+
+    availability, viable, selectable = autopilot._build_action_availability(
+        journal=j,
+        known_actions=KNOWN_ACTIONS,
+        memory_count=10_000,
+        converged=True,
+        slot_memory_text="  healthy queried ports with empty KV cache: frontdoor:8070",
+        blacklist=[],
+        w8_replay_pressure_text=(
+            "W8 replay pressure: 3/10 accumulating candidate(s) are replayable; "
+            "prefer collecting replay/confirmation evidence before opening unrelated "
+            "W8 candidate generation."
+        ),
+    )
+
+    assert "W8 replay/confirmation evidence is active" in availability
+    assert "avoid seed_batch, deep_eval, and structural_prune" in availability
+    assert "deep_eval" not in viable
+    assert "seed_batch" not in viable
+    assert "structural_prune" not in viable
+    assert "deep_eval" not in selectable
+    assert "seed_batch" not in selectable
+    assert "structural_prune" not in selectable
+
+
 def test_w8_candidate_generation_replaces_deferral_with_numeric(monkeypatch) -> None:
     monkeypatch.setattr(autopilot, "_configured_numeric_surfaces", lambda: ("monitor",))
 

@@ -1589,7 +1589,7 @@ def _replace_blacklisted_w8_candidate_action(
     w8_replay_pressure_text: str,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """Keep W8 candidate generation from burning a trial on a known bad action."""
-    if not _w8_candidate_generation_pressure(w8_replay_pressure_text):
+    if not _w8_replay_pressure_active(w8_replay_pressure_text):
         return action, rationale
     blocked = check_blacklist(action, blacklist)
     if not blocked:
@@ -1925,7 +1925,12 @@ def _maybe_force_seq_promotion_fresh_eval(
 
 
 def _seq_promotion_replay_blocker(action: Any) -> str:
-    """Return why a seq-promotion candidate cannot be replayed for fresh eval."""
+    """Return why a seq-promotion candidate cannot be replayed for fresh eval.
+
+    AP-9 still guards new planner-proposed numeric_trial actions before dispatch.
+    W8 replay is different: a materialized NumericSwarm trial may contain several
+    applied params, but it is a single recorded candidate being re-measured.
+    """
     if not isinstance(action, dict):
         return "candidate action is missing or not an object"
     action_type = str(action.get("type") or "")
@@ -1933,16 +1938,22 @@ def _seq_promotion_replay_blocker(action: Any) -> str:
         params = action.get("params")
         if not isinstance(params, dict) or not params:
             return "candidate numeric_trial lacks replayable applied params"
+        return ""
     elif action_type == "structural_experiment":
         flags = action.get("flags")
         if not isinstance(flags, dict) or not flags:
             return "candidate structural_experiment lacks replayable flags"
+        if len(flags) > 1:
+            return (
+                f"candidate structural_experiment changes {len(flags)} flags at once "
+                f"({list(flags.keys())}); limit to 1 for clean attribution"
+            )
+        for key, value in flags.items():
+            if not isinstance(key, str) or not isinstance(value, bool):
+                return "candidate structural_experiment flags must map string names to booleans"
     else:
         return f"candidate action type is not replayable: {action_type or 'unknown'}"
 
-    scope_err = controller_io.validate_single_variable(action)
-    if scope_err:
-        return f"candidate action violates AP-9: {scope_err}"
     return ""
 
 
@@ -2611,7 +2622,7 @@ def _maybe_force_higher_tier_probe(
     """
     if not HIGHER_TIER_PROBE_GUARD:
         return action, rationale
-    if _w8_candidate_generation_pressure(w8_replay_pressure_text):
+    if _w8_replay_pressure_active(w8_replay_pressure_text):
         return action, rationale
     if isinstance(rationale, dict) and (
         rationale.get("critic_reject_numeric_fallback")
@@ -4214,6 +4225,7 @@ def _build_action_availability(
     w8_candidate_generation_active = _w8_candidate_generation_pressure(
         w8_replay_pressure_text
     )
+    w8_replay_pressure_active = _w8_replay_pressure_active(w8_replay_pressure_text)
     if w8_candidate_generation_active:
         priority.append(
             "W8 candidate generation is the active strict blocker. For this turn, "
@@ -4233,6 +4245,26 @@ def _build_action_availability(
         )
         blocked["structural_prune"] = (
             "W8 candidate generation is active; structural_prune is not replayable "
+            "W8 candidate evidence"
+        )
+    elif w8_replay_pressure_active:
+        priority.append(
+            "W8 replay/confirmation evidence is active. For this turn, avoid "
+            "seed_batch, deep_eval, and structural_prune unless a seq due action "
+            "has already forced a specific replay or fresh-eval. Prefer a "
+            "replayable numeric_trial or one-flag structural_experiment with a "
+            "W8 falsifier."
+        )
+        blocked["seed_batch"] = (
+            "W8 replay pressure is active; seed_batch cannot replay or strengthen "
+            "accumulating W8 candidate evidence"
+        )
+        blocked["deep_eval"] = (
+            "W8 replay pressure is active; generic deep_eval is validation-only "
+            "and should wait for the seq-specific fresh-eval path"
+        )
+        blocked["structural_prune"] = (
+            "W8 replay pressure is active; structural_prune is not replayable "
             "W8 candidate evidence"
         )
 
@@ -4363,6 +4395,21 @@ def _w8_candidate_generation_pressure(text: str) -> bool:
     )
 
 
+def _w8_replay_pressure_active(text: str) -> bool:
+    """Return True when the planner evidence asks this turn to serve W8."""
+    normalized = str(text or "").lower()
+    if "w8 replay pressure:" not in normalized:
+        return False
+    return any(
+        marker in normalized
+        for marker in (
+            "confirmed candidate(s) await fresh",
+            "no accumulating candidate exists",
+            "accumulating candidate(s) are replayable",
+        )
+    )
+
+
 def _w8_candidate_generation_deferral_reason(action: dict[str, Any]) -> str | None:
     """Return why an action cannot create replayable W8 candidate evidence."""
     action_type = str(action.get("type") or "")
@@ -4387,7 +4434,7 @@ def _replace_w8_candidate_generation_deferral(
     w8_replay_pressure_text: str,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """Convert W8-blocked deferral actions into replayable candidate generation."""
-    if not _w8_candidate_generation_pressure(w8_replay_pressure_text):
+    if not _w8_replay_pressure_active(w8_replay_pressure_text):
         return action, rationale
     reason = _w8_candidate_generation_deferral_reason(action)
     if reason is None:
@@ -4450,7 +4497,7 @@ def _repair_critic_reject_fallback_for_w8(
         w8_replay_pressure_text=w8_replay_pressure_text,
     )
     repaired = (
-        _w8_candidate_generation_pressure(w8_replay_pressure_text)
+        _w8_replay_pressure_active(w8_replay_pressure_text)
         and _w8_candidate_generation_deferral_reason(action) is None
     )
     if repaired:
@@ -5585,6 +5632,7 @@ def _run_loop_inner(
         seq_candidate_replay_context: dict[str, Any] | None = None
         seq_due_bypassed_planner = False
         planner_evidence_text = ""
+        outcome_progress_pressure_text = ""
         action, rationale, seq_fresh_eval_context, seq_baseline_draw_reference, seq_candidate_replay_context = _maybe_force_seq_due_action(
             state=state,
             journal=journal,
@@ -5815,7 +5863,7 @@ def _run_loop_inner(
                 )
             except Exception as _exc:
                 planner_evidence_text = f"(planner evidence unavailable: {_exc})"
-            w8_candidate_generation_active = _w8_candidate_generation_pressure(
+            w8_replay_pressure_active = _w8_replay_pressure_active(
                 planner_evidence_text
             )
 
@@ -5869,11 +5917,11 @@ def _run_loop_inner(
             higher_tier_pressure_text = _build_higher_tier_planner_pressure(
                 archive,
                 gate,
-                w8_candidate_generation_active=w8_candidate_generation_active,
+                w8_candidate_generation_active=w8_replay_pressure_active,
             )
             eval_coverage_pressure_text = _build_eval_coverage_pressure(
                 journal,
-                w8_candidate_generation_active=w8_candidate_generation_active,
+                w8_candidate_generation_active=w8_replay_pressure_active,
             )
             outcome_progress_pressure_text = _build_outcome_progress_pressure()
 

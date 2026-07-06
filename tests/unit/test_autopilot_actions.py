@@ -48,6 +48,52 @@ def test_dispatcher_rejects_ap9_scope_violation(caplog) -> None:
     assert species == "numeric_trial"
 
 
+def test_dispatcher_allows_current_forced_seq_candidate_replay(monkeypatch) -> None:
+    action = {
+        "type": "numeric_trial",
+        "surface": "repl_executor",
+        "params": {
+            "repl.turn_token_cap": 1964,
+            "repl.frontdoor_non_tool_token_cap": 866,
+        },
+    }
+    expected = actions.EvalResult(
+        tier=1,
+        quality=2.0,
+        speed=20.0,
+        cost=0.5,
+        reliability=1.0,
+    )
+
+    def fake_numeric_handler(handler_action, _ctx):  # noqa: ANN001
+        assert handler_action == action
+        return expected, "numeric_swarm"
+
+    monkeypatch.setitem(actions._ACTION_HANDLERS, "numeric_trial", fake_numeric_handler)
+
+    result, species = actions.dispatch_action(
+        action,
+        seeder=None,
+        swarm=None,
+        forge=None,
+        lab=None,
+        tower=None,
+        gate=None,
+        archive=None,
+        journal=None,
+        state={
+            "trial_counter": 1213,
+            "seq_candidate_replay_forced": {
+                "trial_id": 1213,
+                "action": action,
+            },
+        },
+    )
+
+    assert result is expected
+    assert species == "numeric_swarm"
+
+
 def test_dispatcher_rejects_deep_eval_sampling_knobs(monkeypatch) -> None:
     def fail_handler(action, ctx):  # noqa: ANN001, ARG001
         raise AssertionError("deep_eval handler should not run for invalid schema")
@@ -1674,7 +1720,7 @@ def test_w8_blacklisted_candidate_replacement_is_pressure_gated() -> None:
         ],
         {"falsifier": "original"},
         trial_counter=0,
-        w8_replay_pressure_text="W8 replay pressure: 1/1 accumulating candidate(s) are replayable.",
+        w8_replay_pressure_text="No active W8 replay pressure.",
     )
 
     assert action == requested
@@ -1951,7 +1997,7 @@ def test_critic_reject_fallback_not_repaired_without_w8_pressure() -> None:
         [],
         {"falsifier": "original"},
         trial_counter=0,
-        w8_replay_pressure_text="W8 replay pressure: 1/1 accumulating candidate(s) are replayable.",
+        w8_replay_pressure_text="No active W8 replay pressure.",
     )
 
     assert skip is None
@@ -2297,6 +2343,54 @@ def test_higher_tier_probe_accepts_selected_t3_deep_eval() -> None:
     assert action == selected
     assert rationale["higher_tier_probe_satisfied_by_selected_action"] is True
     assert rationale["higher_tier_probe_tier"] == 3
+
+
+def test_seq_candidate_replay_accepts_materialized_optuna_params() -> None:
+    action = {
+        "type": "numeric_trial",
+        "surface": "memrl_retrieval",
+        "params": {
+            "memrl_retrieval.q_weight": 0.61,
+            "memrl_retrieval.semantic_k": 25,
+            "memrl_retrieval.prior_strength": 0.43,
+        },
+    }
+    journal = SimpleNamespace(
+        entries_with_supersessions=lambda: [
+            SimpleNamespace(
+                trial_id=1212,
+                bug_corrupted_by="",
+                outcome_status="ok",
+                tier=autopilot.DEFAULT_FRONTIER_TIER,
+                keep_revert_decision="excluded",
+                failure_analysis="",
+                config_snapshot=action,
+                seq={
+                    "candidate": "candidate-optuna",
+                    "core_id": autopilot.DEFAULT_EVIDENCE_CORE_ID,
+                    "state": "accumulating",
+                    "k": 1,
+                    "E_quality": 1.02,
+                    "E_rate_noninf": 0.94,
+                },
+            )
+        ]
+    )
+
+    payload = autopilot._seq_candidate_replay_payload(journal, tier=1)
+
+    assert payload is not None
+    assert payload["candidate"] == "candidate-optuna"
+    assert payload["action"] == action
+
+
+def test_seq_candidate_replay_rejects_multi_flag_structural_candidate() -> None:
+    assert autopilot._seq_promotion_replay_blocker(
+        {
+            "type": "structural_experiment",
+            "flags": {"plan_review": True, "graph_router": True},
+        }
+    ).startswith("candidate structural_experiment changes 2 flags at once")
 
 
 def test_frontier_rerun_forces_numeric_trial() -> None:
