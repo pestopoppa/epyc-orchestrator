@@ -208,3 +208,53 @@ def test_production_inventory_includes_outcome_progress_active_safe_job() -> Non
             },
         }
     )
+
+
+def test_production_inventory_includes_planner_provider_active_safe_job() -> None:
+    root = Path(__file__).resolve().parents[2]
+    jobs_doc = yaml.safe_load((root / "orchestration/lab_jobs.yaml").read_text())
+    jobs = {job["job_id"]: job for job in jobs_doc["jobs"]}
+    job = jobs["autopilot_planner_provider_watch"]
+
+    selected = run_shadow_jobs.select_jobs(
+        jobs_doc,
+        schedule="nightly",
+        job_ids=[],
+        include_disabled=False,
+        allow_gated=False,
+        active_safe_only=True,
+        max_jobs=0,
+    )
+
+    assert job["enabled"] is True
+    assert job["risk"] == "read_only"
+    assert run_shadow_jobs.is_active_safe_job(job) is True
+    assert run_shadow_jobs.execution_mode(job) == "deterministic_command"
+    assert "autopilot_planner_provider_watch" in [item["job_id"] for item in selected]
+    assert job["execution"]["command"] == [
+        "python3",
+        "scripts/autopilot/planner_provider_health_report.py",
+        "--json",
+    ]
+
+    schema = job["output_contract"]["json_schema"]
+    Draft7Validator.check_schema(schema)
+    Draft7Validator(schema).validate(
+        {
+            "schema_version": "autopilot_planner_provider_health.v1",
+            "ok": True,
+            "status": "healthy",
+            "blockers": [],
+            "providers": {
+                "local_frontdoor": {
+                    "starts": 1,
+                    "ends": 1,
+                    "failures": 0,
+                }
+            },
+            "local": {"draft_successes": 1, "critique_successes": 1},
+            "critic_decisions": {"approve": 1},
+            "draft_actions": {"deep_eval": 1},
+            "recent_issues": [],
+        }
+    )

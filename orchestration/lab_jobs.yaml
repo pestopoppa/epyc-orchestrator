@@ -417,6 +417,87 @@ jobs:
                 type: object
                 additionalProperties: true
 
+  - job_id: autopilot_planner_provider_watch
+    title: AutoPilot planner provider health watch
+    stage: shadow
+    enabled: true
+    risk: read_only
+    runtime_class: active_safe_deterministic
+    active_safe: true
+    schedule:
+      type: manual_or_nightly
+      cadence: daily
+      window: active_ok
+      runtime_class: active_safe_deterministic
+      max_runtime_s: 60
+    reference_skill: none
+    execution:
+      mode: deterministic_command
+      command:
+        - python3
+        - scripts/autopilot/planner_provider_health_report.py
+        - --json
+    input_spec:
+      sources:
+        - repo: epyc-orchestrator
+          path: scripts/autopilot/planner_provider_health_report.py
+        - repo: epyc-orchestrator
+          path: scripts/autopilot/planner_coordinator.py
+      context_budget_tokens: 4000
+      forbidden_actions:
+        - stop_autopilot
+        - restart_services
+        - edit_journal
+        - update_baseline
+    output_contract:
+      format: json
+      json_schema:
+        type: object
+        additionalProperties: true
+        required:
+          - schema_version
+          - ok
+          - status
+          - blockers
+          - providers
+          - local
+          - critic_decisions
+          - draft_actions
+        properties:
+          schema_version:
+            const: autopilot_planner_provider_health.v1
+          ok:
+            type: boolean
+          status:
+            enum:
+              - healthy
+              - stale
+              - attention
+              - missing
+          blockers:
+            type: array
+            items:
+              type: string
+          providers:
+            type: object
+            additionalProperties: true
+          local:
+            type: object
+            additionalProperties: true
+          critic_decisions:
+            type: object
+            additionalProperties:
+              type: integer
+          draft_actions:
+            type: object
+            additionalProperties:
+              type: integer
+          recent_issues:
+            type: array
+            items:
+              type: object
+              additionalProperties: true
+
   - job_id: daily_digest_skeleton
     title: Daily digest skeleton
     stage: shadow
