@@ -657,6 +657,79 @@ jobs:
               type: object
               additionalProperties: true
 
+  - job_id: quiet_window_lab_plan_watch
+    title: Quiet-window lab batch plan watch
+    stage: shadow
+    enabled: true
+    risk: read_only
+    runtime_class: active_safe_deterministic
+    active_safe: true
+    schedule:
+      type: manual_or_nightly
+      cadence: daily
+      window: active_ok
+      runtime_class: active_safe_deterministic
+      max_runtime_s: 60
+    reference_skill: none
+    execution:
+      mode: deterministic_command
+      command:
+        - python3
+        - scripts/lab/quiet_window_lab_plan.py
+        - --json
+    input_spec:
+      sources:
+        - repo: epyc-orchestrator
+          path: orchestration/lab_jobs.yaml
+        - repo: epyc-orchestrator
+          path: scripts/lab/run_shadow_jobs.py
+        - repo: epyc-orchestrator
+          path: scripts/lab/review_queue_report.py
+      context_budget_tokens: 4000
+      forbidden_actions:
+        - execute_chat
+        - stop_autopilot
+        - restart_services
+        - record_verdict
+    output_contract:
+      format: json
+      json_schema:
+        type: object
+        additionalProperties: true
+        required:
+          - schema_version
+          - ok
+          - status
+          - blockers
+          - selected_jobs
+          - commands
+        properties:
+          schema_version:
+            const: quiet_window_lab_plan.v1
+          ok:
+            type: boolean
+          status:
+            enum:
+              - ready
+              - blocked
+              - no_jobs
+          blockers:
+            type: array
+            items:
+              type: string
+          selected_jobs:
+            type: array
+            items:
+              type: object
+              additionalProperties: true
+          commands:
+            type: object
+            additionalProperties: true
+            required:
+              - run_quiet_window_batch
+              - review_pending_items
+              - apply_reviewed_verdict_batch_template
+
   - job_id: daily_digest_skeleton
     title: Daily digest skeleton
     stage: shadow
