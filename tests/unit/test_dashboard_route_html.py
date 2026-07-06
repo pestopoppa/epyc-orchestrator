@@ -96,6 +96,21 @@ def test_dashboard_html_separates_proc_holders_from_live_tap_requests() -> None:
     assert "tap-inferred active stream(s)" in body
 
 
+def test_dashboard_html_merges_unique_tap_inferred_holders_into_region_lock_summary() -> None:
+    """The Regions Lock header should list tap-inferred holders alongside real /proc holders."""
+    html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    body = html_path.read_text()
+
+    assert "function formatRegionLockHolderSummary()" in body
+    assert "const displayHeldBySummary = formatRegionLockHolderSummary();" in body
+    assert "tap-inferred active/pending" in body
+    assert "tap-inferred streaming" in body
+    assert "const tapInferredCountSuffix = tapInferredMissing.length" in body
+    assert "const inferredState = activity && activity.state === 'prefill_decode_pending'" in body
+    assert "/proc holder instance(s)${tapInferredCountSuffix}: ${displayHeldBySummary" in body
+    assert "~${formatPhysicalRoleWithLogicalAliases(role, shape, idx)} (${inferredState})" in body
+
+
 def test_dashboard_run_state_active_inference_overrides_quiet_log() -> None:
     """Active tap/lock work should not render the top run-state as quiet."""
     html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"

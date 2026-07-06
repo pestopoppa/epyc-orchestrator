@@ -2588,11 +2588,37 @@ function structuredTapHolderCountLabel() {
 
 function formatRegionLockHolderSummary() {
     const actionSource = currentAutopilotActionSource();
-    return procRegionLockHolders().map(holder => {
+    const parts = procRegionLockHolders().map(holder => {
         const tapped = openStructuredTapRequests().some(req => structuredTapMatchesLockHolder(req, holder));
         const source = (!tapped && actionSource) ? ` (${actionSource})` : '';
         return `${formatPhysicalRoleWithLogicalAliases(holder.role, holder.shape, holder.idx)}${source}`;
-    }).join(', ');
+    });
+    const seen = new Set(parts.map(label => label.replace(/^\s*[~≈]\s*/, '')));
+    for (const [role, inferred] of Object.entries(_latestTapInferredRegionLocksByRole || {})) {
+        const base = (_latestRegionLocksByRole && _latestRegionLocksByRole[role]) || {};
+        const procIdxs = new Set((base.procInstanceIdxs || []).map(Number));
+        const instMap = new Map((base.instances || []).map(i => [Number(i.idx), i]));
+        const sources = Array.isArray(inferred.sources) ? inferred.sources : [];
+        for (const rawIdx of (inferred.instanceIdxs || [])) {
+            const idx = Number(rawIdx);
+            if (!Number.isFinite(idx) || procIdxs.has(idx)) continue;
+            const inst = instMap.get(idx);
+            const req = sources.find(r => Number(r.instance_idx) === idx) || sources[0] || null;
+            const activity = req ? structuredTapActivity(req) : null;
+            const inferredState = activity && activity.state === 'prefill_decode_pending'
+                ? 'tap-inferred active/pending'
+                : 'tap-inferred streaming';
+            const shape = req && req.instance_shape
+                ? String(req.instance_shape)
+                : (inst && inst.shape) || `idx${idx}`;
+            const label = `~${formatPhysicalRoleWithLogicalAliases(role, shape, idx)} (${inferredState})`;
+            const key = label.replace(/^\s*[~≈]\s*/, '');
+            if (seen.has(key)) continue;
+            seen.add(key);
+            parts.push(label);
+        }
+    }
+    return parts.join(', ');
 }
 
 function refreshLiveDotsFromStructuredTap() {
@@ -6308,7 +6334,7 @@ async function updateRegionLocks(
                     }
                 }
             }
-            const actualHeldBySummary = formatRegionLockHolderSummary();
+            const displayHeldBySummary = formatRegionLockHolderSummary();
             const tapInferredMissing = [];
             const slotInferredMissing = [];
             for (const [role, inferred] of Object.entries(_latestTapInferredRegionLocksByRole || {})) {
@@ -6392,14 +6418,14 @@ async function updateRegionLocks(
                 const liveTapSuffix = tapLiveRequestCount
                     ? `; +${tapLiveRequestCount} live tap request(s)${tapLiveStateBits.length ? ` (${tapLiveStateBits.join(' · ')})` : ''}`
                     : '';
-                const inferredSuffix = tapInferredMissing.length
-                    ? `; +${tapInferredMissing.length} tap-inferred active stream(s): ${tapInferredMissing.join(', ')}`
+                const tapInferredCountSuffix = tapInferredMissing.length
+                    ? ` + ${tapInferredMissing.length} tap-inferred active stream(s)`
                     : '';
                 const slotInferredSuffix = slotInferredMissing.length
                     ? `; +${slotInferredMissing.length} slot-inferred active instance(s): ${slotInferredMissing.join(', ')}`
                     : '';
                 status.textContent = activeLockCount > 0
-                    ? `— ${actualActiveLockCount} /proc holder instance(s): ${actualHeldBySummary || 'none'}${liveTapSuffix}${inferredSuffix}${slotInferredSuffix}; × cells are same-role or matrix-blocked waits; per-region locks ENABLED`
+                    ? `— ${actualActiveLockCount} /proc holder instance(s)${tapInferredCountSuffix}: ${displayHeldBySummary || 'none'}${liveTapSuffix}${slotInferredSuffix}; × cells are same-role or matrix-blocked waits; per-region locks ENABLED`
                     : '— no locks held; per-region locks ENABLED';
                 status.style.color = activeLockCount > 0 ? '#fbbf24' : 'var(--muted)';
             }
