@@ -70,6 +70,7 @@ from src.api.routes.dashboard_tasks import (
     _task_text_snapshot,
 )
 from src.api.routes.dashboard_topology import (
+    active_stack_numa_mode,
     role_aliases,
     _clean_model_name,
     _discover_llama_models,
@@ -629,11 +630,39 @@ def _region_lock_blocked_by_roles(
     return sorted(blocked)
 
 
-def _region_locks_payload() -> dict[str, Any]:
+def _filter_instance_regions_for_mode(
+    topology: dict[tuple[str, int], frozenset[str]],
+    numa_mode: str,
+) -> dict[tuple[str, int], frozenset[str]]:
+    """Mirror stack_manifest._filter_by_numa_mode for region-lock rendering."""
+    if numa_mode == "both":
+        return topology
+    try:
+        from scripts.server.stack_numa import NUMA_CONFIG
+    except Exception:
+        return topology
+
+    out: dict[tuple[str, int], frozenset[str]] = {}
+    for (role, idx), regs in topology.items():
+        cfg = NUMA_CONFIG.get(role) if isinstance(NUMA_CONFIG, dict) else None
+        full_idx = cfg.get("full_instance_idx") if isinstance(cfg, dict) else None
+        instances = cfg.get("instances") if isinstance(cfg, dict) else None
+        if not isinstance(full_idx, int) or not isinstance(instances, list) or len(instances) <= 1:
+            out[(role, idx)] = regs
+            continue
+        if numa_mode == "full" and idx == full_idx:
+            out[(role, idx)] = regs
+        elif numa_mode == "quarter" and idx != full_idx:
+            out[(role, idx)] = regs
+    return out
+
+
+def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
     """Return the current per-region lock snapshot as plain JSON data."""
     import os
     from pathlib import Path
 
+    active_mode = numa_mode or active_stack_numa_mode()
     try:
         from src.runtime.cpu_region_lock import _tmp_dir, _current_lock_owner_pids
         tmp_dir = _tmp_dir()
@@ -646,7 +675,7 @@ def _region_locks_payload() -> dict[str, Any]:
     # region-locking — those are the rows the panel should always show.
     try:
         from src.runtime.instance_topology import get_instance_regions, ATOMIC_REGIONS
-        topology = get_instance_regions()
+        topology = _filter_instance_regions_for_mode(get_instance_regions(), active_mode)
         all_regions = list(ATOMIC_REGIONS)
     except Exception:
         topology = {}
@@ -837,6 +866,7 @@ def _region_locks_payload() -> dict[str, Any]:
     feature_flag = os.environ.get("ORCHESTRATOR_PER_REGION_LOCKS", "0").strip()
     return {
         "per_region_locks_enabled": feature_flag in {"1", "true", "yes", "on"},
+        "stack_numa_mode": active_mode,
         "matrix_loaded": matrix is not None,
         "tmp_dir": str(tmp_dir),
         "entries": out,
@@ -3753,7 +3783,7 @@ async def topology_activity(window_s: float = 600.0) -> JSONResponse:
     return JSONResponse(_topology_activity_payload(window_s=window_s))
 
 
-def _build_topology_nodes() -> list[dict[str, Any]]:
+def _build_topology_nodes(numa_mode: str | None = None) -> list[dict[str, Any]]:
     """Build the topology node list (roles, ports, colors, backing models).
 
     Factored out of ``/dashboard/api/topology`` so the snapshot endpoint can
@@ -3763,10 +3793,11 @@ def _build_topology_nodes() -> list[dict[str, Any]]:
     post-reboot 'frozen strip' class of dashboard staleness, where the strip was
     fetched on a different cadence than the overlays keyed to it.
     """
+    active_mode = numa_mode or active_stack_numa_mode()
     llama_ports = _discover_llama_ports()
     llama_models = _discover_llama_models()
     services = _load_state_services()
-    expected_services = expected_stack_services()
+    expected_services = expected_stack_services(active_mode)
     expected_by_port = {
         svc["port"]: svc
         for svc in expected_services
@@ -3885,23 +3916,29 @@ _PORT_ROLES_CACHE: dict[str, Any] = {"ts": 0.0, "ports": None}
 _PORT_ROLES_TTL_S = 2.0
 
 
-def _region_locks_cached() -> dict[str, Any]:
+def _region_locks_cached(numa_mode: str | None = None) -> dict[str, Any]:
     """TTL-cached `_region_locks_payload()` that fails open to the last good
     payload (marked `stale_cache` + `error`) instead of raising into the
     serve path."""
+    active_mode = numa_mode or active_stack_numa_mode()
     now = time.time()
     c = _REGION_LOCKS_CACHE
     payload = c.get("payload")
-    if payload is not None and (now - c["ts"]) < _REGION_LOCKS_TTL_S:
+    if (
+        payload is not None
+        and c.get("numa_mode") == active_mode
+        and (now - c["ts"]) < _REGION_LOCKS_TTL_S
+    ):
         return payload
     try:
-        payload = _region_locks_payload()
+        payload = _region_locks_payload(active_mode)
     except Exception as exc:
         stale = c.get("payload")
         if stale is None:
             return {"error": str(exc), "entries": [], "by_role": {}}
         return {**stale, "error": str(exc), "stale_cache": True}
     c["ts"] = now
+    c["numa_mode"] = active_mode
     c["payload"] = payload
     return payload
 
@@ -3919,7 +3956,7 @@ def _port_roles_cached() -> dict[int, str]:
     return ports
 
 
-def _topology_nodes_cached() -> list[dict[str, Any]]:
+def _topology_nodes_cached(numa_mode: str | None = None) -> list[dict[str, Any]]:
     """Topology nodes with a short TTL.
 
     Topology STRUCTURE (which roles/ports exist) changes only on stack
@@ -3931,13 +3968,19 @@ def _topology_nodes_cached() -> list[dict[str, Any]]:
     real-time; only the node scaffold is cached. Per-worker cache (separate
     processes) is fine — the structure is identical across workers.
     """
+    active_mode = numa_mode or active_stack_numa_mode()
     now = time.time()
     c = _TOPOLOGY_NODES_CACHE
     nodes = c.get("nodes")
-    if nodes is not None and (now - c["ts"]) < _TOPOLOGY_NODES_TTL_S:
+    if (
+        nodes is not None
+        and c.get("numa_mode") == active_mode
+        and (now - c["ts"]) < _TOPOLOGY_NODES_TTL_S
+    ):
         return nodes
-    nodes = _build_topology_nodes()
+    nodes = _build_topology_nodes(active_mode)
     c["ts"] = now
+    c["numa_mode"] = active_mode
     c["nodes"] = nodes
     return nodes
 
@@ -3951,8 +3994,13 @@ async def topology() -> JSONResponse:
     injected inputs (the 2 Hz snapshot is the path that needs the TTL cache).
     """
     _topo_now = time.time()
+    active_mode = active_stack_numa_mode()
     return JSONResponse(_stamp(
-        {"nodes": _build_topology_nodes(), "generated_at": _topo_now},
+        {
+            "nodes": _build_topology_nodes(active_mode),
+            "generated_at": _topo_now,
+            "stack_numa_mode": active_mode,
+        },
         "topology", now=_topo_now,
     ))
 
@@ -4230,6 +4278,7 @@ async def snapshot() -> JSONResponse:
 
 
 async def _snapshot_impl() -> JSONResponse:
+    active_mode = active_stack_numa_mode()
     slots_by_port, slots_poll_meta = await _poll_all_slots()
     progress_log = _todays_progress_log()
     recent, rolling, cumulative = _scan_recent_decisions(progress_log)
@@ -4297,14 +4346,14 @@ async def _snapshot_impl() -> JSONResponse:
     # fresh lock scan here so an older per-worker cache cannot overwrite a
     # fresher direct `/dashboard/api/region_locks` poll in the same browser
     # session.
-    region_locks = _region_locks_payload()
+    region_locks = _region_locks_payload(active_mode)
     structured_requests = _structured_tap_requests_for_dashboard(
         max_requests=80,
         now_epoch=_snap_now,
         region_locks=region_locks,
         port_roles=port_roles,
     )
-    topology_nodes = _topology_nodes_cached()
+    topology_nodes = _topology_nodes_cached(active_mode)
     display_activity = _coherent_display_activity(
         activity,
         structured_requests=structured_requests,
@@ -4325,7 +4374,8 @@ async def _snapshot_impl() -> JSONResponse:
         # dots the frontend renders from this one object can never reflect
         # different instants. This is the keystone that kills the "tap shows
         # active inference beside a 'no locks held' grid" inconsistency.
-        "topology": {"nodes": topology_nodes},
+        "stack_numa_mode": active_mode,
+        "topology": {"nodes": topology_nodes, "stack_numa_mode": active_mode},
         "activity": activity,
         "display_activity": display_activity,
         # Fan-out degradation is data, not a silent gap: timed_out > 0 means

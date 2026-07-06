@@ -44,12 +44,49 @@ def test_role_color_unknown_falls_back_to_gray() -> None:
     assert dashboard_topology._role_color("unknown_role") == "#64748b"
 
 
-def test_port_hints_quarter_ports_generated() -> None:
-    # frontdoor at 8070, quarters at 8080/8180/8280/8380
-    assert dashboard_topology._PORT_HINTS[8080] == "frontdoor.q0"
-    assert dashboard_topology._PORT_HINTS[8180] == "frontdoor.q1"
-    assert dashboard_topology._PORT_HINTS[8280] == "frontdoor.q2"
-    assert dashboard_topology._PORT_HINTS[8380] == "frontdoor.q3"
+def test_port_hints_follow_current_full_mode_priors() -> None:
+    # Public compatibility hints are built from generated stack_priors, which
+    # now follow the active full-mode launch contract instead of advertising
+    # unloaded quarter replicas.
+    assert dashboard_topology._PORT_HINTS[8070] == "frontdoor"
+    assert dashboard_topology._PORT_HINTS[8072] == "worker_general"
+    assert 8080 not in dashboard_topology._PORT_HINTS
+    assert 8082 not in dashboard_topology._PORT_HINTS
+
+
+def test_active_stack_numa_mode_defaults_to_full(monkeypatch) -> None:
+    monkeypatch.delenv("ORCHESTRATOR_STACK_NUMA_MODE", raising=False)
+    assert dashboard_topology.active_stack_numa_mode() == "full"
+
+    monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "quarter")
+    assert dashboard_topology.active_stack_numa_mode() == "quarter"
+
+    monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "stale-quarter")
+    assert dashboard_topology.active_stack_numa_mode() == "full"
+
+
+def test_expected_stack_services_are_numa_mode_filtered(monkeypatch) -> None:
+    monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "full")
+    full_ports = {s["port"] for s in dashboard_topology.expected_stack_services()}
+    assert {8070, 8072, 8085}.issubset(full_ports)
+    assert full_ports.isdisjoint({8080, 8180, 8280, 8380, 8082, 8182, 8282, 8382})
+
+    quarter_services = dashboard_topology.expected_stack_services("quarter")
+    quarter_ports = {s["port"] for s in quarter_services}
+    assert {8080, 8180, 8280, 8380, 8082, 8182, 8282, 8382}.issubset(quarter_ports)
+    assert quarter_ports.isdisjoint({8070, 8072, 8085})
+    by_port = {s["port"]: s for s in quarter_services}
+    assert by_port[8080]["role"] == "frontdoor.q0"
+    assert by_port[8182]["role"] == "worker_general.q1"
+
+
+def test_port_hint_uses_active_manifest_mode_for_quarters(monkeypatch) -> None:
+    monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "full")
+    assert dashboard_topology._port_hint(8080) == "port_8080"
+
+    monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "quarter")
+    assert dashboard_topology._port_hint(8080) == "frontdoor.q0"
+    assert dashboard_topology._port_hint(8182) == "worker_general.q1"
 
 
 def test_expected_stack_services_include_embedder_fleet() -> None:
@@ -2465,7 +2502,7 @@ def test_poll_all_slots_empty_ports_meta() -> None:
 def test_region_locks_cached_ttl_and_fail_open(monkeypatch) -> None:
     calls = {"n": 0}
 
-    def fake_payload():
+    def fake_payload(_numa_mode=None):
         calls["n"] += 1
         if calls["n"] >= 3:
             raise RuntimeError("proc scan exploded")
@@ -2509,11 +2546,11 @@ def test_snapshot_uses_fresh_region_lock_scan(monkeypatch) -> None:
     monkeypatch.setattr(dashboard, "_count_log_events", lambda *_a, **_k: {})
     monkeypatch.setattr(dashboard, "_discover_llama_ports", lambda: {})
     monkeypatch.setattr(dashboard, "_gate_inflight_by_live_slots", lambda in_flight, *_a, **_k: in_flight)
-    monkeypatch.setattr(dashboard, "_region_locks_payload", lambda: fresh)
+    monkeypatch.setattr(dashboard, "_region_locks_payload", lambda _numa_mode=None: fresh)
     monkeypatch.setattr(dashboard, "_region_locks_cached", fake_cached)
     monkeypatch.setattr(dashboard, "_structured_tap_requests_for_dashboard", lambda **_k: [])
     monkeypatch.setattr(dashboard, "_topology_activity_payload", lambda **_k: activity)
-    monkeypatch.setattr(dashboard, "_topology_nodes_cached", lambda: [])
+    monkeypatch.setattr(dashboard, "_topology_nodes_cached", lambda _numa_mode=None: [])
 
     response = asyncio.run(dashboard._snapshot_impl())
     payload = json.loads(response.body)
@@ -2521,6 +2558,8 @@ def test_snapshot_uses_fresh_region_lock_scan(monkeypatch) -> None:
     assert payload["region_locks"] == fresh
     assert payload["topology_activity"] == activity
     assert payload["display_activity"] == {}
+    assert payload["stack_numa_mode"] == "full"
+    assert payload["topology"]["stack_numa_mode"] == "full"
 
 
 def test_coherent_display_activity_suppresses_uncorroborated_cpu_slots() -> None:
