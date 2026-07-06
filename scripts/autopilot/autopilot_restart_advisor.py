@@ -28,7 +28,7 @@ from phase_status import (  # noqa: E402
 )
 
 ADVISOR_VERSION = "autopilot_restart_advisor.v1"
-DEFAULT_MAX_TRIALS = 2000
+DEFAULT_MAX_TRIALS = 3000
 
 # Phases before a metric-bearing action starts, after a trial has fully
 # completed, or while the daemon is explicitly idle/latched. Restarting here may

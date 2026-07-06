@@ -62,14 +62,22 @@ def test_restart_advice_recommends_restart_at_loop_boundary() -> None:
             phase="loop_start",
             code_stale=True,
             blockers=["autopilot process predates runtime source changes: autopilot.py"],
-        ),
-        max_trials=2000,
+        )
     )
 
     assert advice["status"] == "restart_recommended"
     assert advice["restart_needed"] is True
     assert advice["safe_to_restart_now"] is True
     assert advice["stop_command"] == ["kill", "-TERM", "123"]
+    assert advice["start_command"][-1] == "3000"
+
+
+def test_restart_advice_honors_explicit_max_trials_override() -> None:
+    advice = advisor.build_restart_advice(
+        _phase_report(status="pid_dead", phase="stopped", pid_alive=False),
+        max_trials=2000,
+    )
+
     assert advice["start_command"][-1] == "2000"
 
 
