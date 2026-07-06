@@ -293,6 +293,14 @@ MAX_CONSECUTIVE_REJECTED_DRAFTS = int(
 # of passive seed/distill actions is the planner rationalizing no-op work; cap
 # consecutive passive actions and force a frontier-moving experiment instead.
 PASSIVE_ACTIONS = {"seed_batch", "distill_knowledge", "distill_skillbank"}
+OUTCOME_PROGRESS_ACTIONS = {
+    "code_mutation",
+    "gepa_optimize",
+    "numeric_trial",
+    "prompt_mutation",
+    "structural_experiment",
+    "train_routing_models",
+}
 QUOTA_MEMORY_THRESHOLD = int(
     os.environ.get("AUTOPILOT_QUOTA_MEMORY_THRESHOLD", "2000")
 )
@@ -1142,6 +1150,10 @@ def _build_outcome_progress_pressure(
 def _outcome_progress_frontier_stalled(outcome_progress_pressure_text: str) -> bool:
     text = outcome_progress_pressure_text.lower()
     return "outcome blockers:" in text and "frontier admission stale" in text
+
+
+def _action_can_move_outcome_frontier(action: Mapping[str, Any]) -> bool:
+    return str(action.get("type") or "") in OUTCOME_PROGRESS_ACTIONS
 
 
 _QUOTA_NUMERIC_SURFACES = _configured_numeric_surfaces()
@@ -2704,6 +2716,77 @@ def _maybe_force_higher_tier_probe(
             "higher_tier_probe_tier": tier,
             "higher_tier_probe_reason": reason,
             "higher_tier_probe_original": dict(action),
+        },
+    )
+
+
+def _maybe_force_outcome_progress_action(
+    action: dict[str, Any],
+    state: dict[str, Any],
+    *,
+    blacklist: list[dict[str, Any]] | None = None,
+    rationale: dict[str, Any] | None = None,
+    trial_counter: int = 0,
+    outcome_progress_pressure_text: str = "",
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Escalate stale outcome flow from prompt advice into a bounded fallback.
+
+    Outcome pressure is not a safety gate and does not alter scoring. It only
+    prevents stale frontier flow from being satisfied by passive seeding,
+    validation-only evals, or housekeeping when a metric-bearing numeric trial
+    remains available.
+    """
+    if not _outcome_progress_frontier_stalled(outcome_progress_pressure_text):
+        return action, rationale
+    if _action_can_move_outcome_frontier(action):
+        state["outcome_progress_forced"] = None
+        return (
+            action,
+            {
+                **(rationale or {}),
+                "outcome_progress_satisfied_by_selected_action": True,
+            },
+        )
+
+    forced, blocked_reason = _first_unblacklisted_numeric_trial_action(
+        blacklist or [],
+        trial_counter=trial_counter,
+    )
+    if forced is None:
+        state["outcome_progress_blocked"] = {
+            "trial_id": trial_counter,
+            "reason": blocked_reason,
+            "action": action,
+        }
+        log.warning(
+            "Outcome progress is frontier-stalled, but no numeric_trial "
+            "fallback remains available: %s",
+            blocked_reason,
+        )
+        return action, rationale
+
+    log.warning(
+        "Outcome progress is frontier-stalled; forcing numeric_trial(surface=%s) "
+        "instead of '%s'.",
+        forced["surface"],
+        action.get("type", "unknown"),
+    )
+    state["outcome_progress_forced"] = {
+        "trial_id": trial_counter,
+        "original_action": action,
+        "forced_action": forced,
+    }
+    state.pop("outcome_progress_blocked", None)
+    return (
+        forced,
+        {
+            **(rationale or {}),
+            "outcome_progress_forced": True,
+            "outcome_progress_original": dict(action),
+            "falsifier": (
+                (rationale or {}).get("falsifier")
+                or "outcome-progress numeric fallback fails to produce keepable frontier evidence"
+            ),
         },
     )
 
@@ -6150,6 +6233,19 @@ def _run_loop_inner(
                     rationale=rationale,
                     trial_counter=trial_counter,
                     w8_replay_pressure_text=planner_evidence_text,
+                    outcome_progress_pressure_text=outcome_progress_pressure_text,
+                )
+            if (
+                seq_fresh_eval_context is None
+                and seq_baseline_draw_reference is None
+                and seq_candidate_replay_context is None
+            ):
+                action, rationale = _maybe_force_outcome_progress_action(
+                    action,
+                    state,
+                    blacklist=blacklist,
+                    rationale=rationale,
+                    trial_counter=trial_counter,
                     outcome_progress_pressure_text=outcome_progress_pressure_text,
                 )
 

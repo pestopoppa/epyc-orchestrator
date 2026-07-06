@@ -2241,6 +2241,47 @@ def test_higher_tier_probe_skips_when_outcome_progress_is_frontier_stalled() -> 
     assert "higher_tier_probe_guard" not in state
 
 
+def test_outcome_progress_guard_forces_numeric_when_frontier_stalled() -> None:
+    state = {}
+
+    action, rationale = autopilot._maybe_force_outcome_progress_action(
+        {"type": "deep_eval", "tier": 3},
+        state,
+        blacklist=[],
+        rationale={"falsifier": "higher tier probe should improve coverage"},
+        trial_counter=100,
+        outcome_progress_pressure_text=(
+            "Outcome blockers: frontier admission stale: 205 trial(s) since frontier > 150"
+        ),
+    )
+
+    assert action["type"] == "numeric_trial"
+    assert action["surface"] in autopilot._configured_numeric_surfaces()
+    assert rationale["outcome_progress_forced"] is True
+    assert rationale["outcome_progress_original"] == {"type": "deep_eval", "tier": 3}
+    assert state["outcome_progress_forced"]["forced_action"] == action
+
+
+def test_outcome_progress_guard_preserves_frontier_moving_action() -> None:
+    state = {}
+    requested = {"type": "train_routing_models", "min_memories": 500}
+
+    action, rationale = autopilot._maybe_force_outcome_progress_action(
+        requested,
+        state,
+        blacklist=[],
+        rationale={"falsifier": "routing training should improve frontier flow"},
+        trial_counter=100,
+        outcome_progress_pressure_text=(
+            "Outcome blockers: frontier admission stale: 205 trial(s) since frontier > 150"
+        ),
+    )
+
+    assert action == requested
+    assert rationale["outcome_progress_satisfied_by_selected_action"] is True
+    assert state["outcome_progress_forced"] is None
+
+
 def test_higher_tier_probe_accepts_selected_t3_deep_eval() -> None:
     selected = {"type": "deep_eval", "tier": 3}
 
