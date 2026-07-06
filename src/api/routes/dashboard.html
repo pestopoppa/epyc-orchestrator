@@ -248,8 +248,8 @@ h2 .live-dot.down    { background: var(--bad);  box-shadow: 0 0 4px rgba(248, 11
 
 /* Compact topology strip — each role on its own row.
    Grid: role-name | port | activity-stats | slot-dots
-   Activity-stats column shows recent req count + t/s + last-active age
-   pulled from /dashboard/api/topology_activity (1.5s poll + 1s age tick). */
+   Activity-stats column shows live holders when lock/tap-correlated; otherwise
+   it shows explicitly historical/idle recency from /dashboard/api/topology_activity. */
 .topology-strip { display: flex; flex-direction: column; gap: 4px; }
 .topology-row {
     display: grid;
@@ -5967,10 +5967,8 @@ function renderTopologyActivity() {
                 const running = Number(stats.running_instance_count || 0) || Number(stats.live_tps_n || 0);
                 const expected = Number(stats.expected_instance_count || 0);
                 const suffix = expected > 1 && running > 0 ? ` ${running}/${expected}` : '';
-                const parts = [`<span class="stat-fresh">up${suffix}</span>`];
-                if (liveTps != null) {
-                    parts.push(`<span class="stat-fresh">${liveTps.toFixed(1)}</span> t/s live`);
-                } else if (stats.avg_tps_recent != null && stats.avg_tps_recent > 0) {
+                const parts = [`<span class="stat-stale">idle</span>`, `<span class="stat-fresh">servers up${suffix}</span>`];
+                if (stats.avg_tps_recent != null && stats.avg_tps_recent > 0) {
                     parts.push(`<span class="stat-stale">${stats.avg_tps_recent.toFixed(1)}</span> t/s hist`);
                 }
                 el.innerHTML = parts.join('<span class="stat-sep">·</span>');
@@ -5987,27 +5985,22 @@ function renderTopologyActivity() {
             return;
         }
         const parts = [];
+        parts.push(`<span class="stat-stale">idle</span>`);
         if (nRecent) {
-            parts.push(`recent <span class="stat-stale">${nRecent}</span> seen`);
+            parts.push(`last <span class="stat-stale">${formatTopologyActivityAge(age)}</span>`);
         } else {
             parts.push(`history <span class="stat-stale">${nCompleted}</span> done`);
         }
-        if (liveTps != null) {
-            parts.push(`<span class="stat-fresh">${liveTps.toFixed(1)}</span> t/s live`);
-        } else if (stats.avg_tps_recent != null && stats.avg_tps_recent > 0) {
+        if (stats.avg_tps_recent != null && stats.avg_tps_recent > 0) {
             parts.push(`<span class="stat-stale">${stats.avg_tps_recent.toFixed(1)}</span> t/s hist`);
         } else if (stats.avg_duration_s != null && stats.avg_duration_s > 0) {
-            parts.push(`<span class="stat-fresh">${stats.avg_duration_s.toFixed(1)}</span>s avg`);
-        }
-        if (age != null) {
-            parts.push(`<span class="stat-stale">${formatTopologyActivityAge(age)} ago</span>`);
+            parts.push(`<span class="stat-stale">${stats.avg_duration_s.toFixed(1)}</span>s avg hist`);
         }
         el.innerHTML = parts.join('<span class="stat-sep">·</span>');
         const tooltipBits = [
             nRecent
-                ? `${nRecent} recent completed/observed req in last ${Math.round(windowS)}s; not an active-holder signal`
+                ? `${nRecent} recent completed/observed request(s) in last ${Math.round(windowS)}s; idle, not an active-holder signal`
                 : `${nCompleted} completed req in historical summary window`,
-            liveTps != null ? `live ${liveTps.toFixed(2)} t/s (in-flight)` : null,
             stats.avg_tps_recent != null ? `historical avg ${stats.avg_tps_recent.toFixed(2)} t/s` : null,
             stats.avg_duration_s != null ? `avg ${stats.avg_duration_s.toFixed(2)}s/task` : null,
             age != null ? `last activity ${age.toFixed(1)}s ago` : null,
@@ -6028,9 +6021,10 @@ function applyTopologyActivityPayload(d) {
 
 async function updateTopologyActivity(refreshSeq = ++_topologyActivityRefreshSeq) {
     // Per-role recent activity stats from /dashboard/api/topology_activity.
-    // Populates each topology row's .activity-stats element with:
-    //   "last 12 req · 31 t/s hist · 3s ago" or "2 active · 31 t/s live"
-    // Color cues: fresh (<60s ago) in green, stale (>=60s) in dim.
+    // Populates each topology row's .activity-stats element with live-holder
+    // wording only when the shared lock/tap cache marks the role active.
+    // Non-active recency is rendered as idle/history to avoid implying
+    // concurrent inference when the live tap and CPU-lock grid are empty.
     // Falls back to "—" when the role has no data in the window.
     if (_topologyActivityFetchInFlight) {
         _topologyActivityRefreshQueued = true;

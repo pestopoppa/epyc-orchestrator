@@ -481,11 +481,13 @@ def test_dashboard_topology_activity_stats_refresh_with_live_age_tick() -> None:
     assert "let _topologyActivityRefreshSeq = 0;" in body
     assert "async function updateTopologyActivity(refreshSeq = ++_topologyActivityRefreshSeq)" in body
     assert "if (snap.topology_activity) applyTopologyActivityPayload(snap.topology_activity);" in body
-    assert "recent <span class=\"stat-stale\">${nRecent}</span> req" in body
+    assert "idle, not an active-holder signal" in body
+    assert "last <span class=\"stat-stale\">${formatTopologyActivityAge(age)}</span>" in body
     assert "not an active-holder signal" in body
     assert "historical avg ${stats.avg_tps_recent.toFixed(2)} t/s" in body
     assert "history <span class=\"stat-stale\">${nCompleted}</span> done" in body
     assert "t/s hist" in body
+    assert "servers up${suffix}" in body
     assert "setInterval(() => scheduleRegionLocksRefresh(true), 1500)" in body
     assert "setInterval(renderTopologyActivity, TOPOLOGY_ACTIVITY_AGE_TICK_MS)" in body
     assert "lockActivitySignature" in body
