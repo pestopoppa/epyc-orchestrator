@@ -224,6 +224,23 @@
   - read_only
   - tools_called
   - tool_use_sentinel_lane
+- slug: t3-hard-workflow-exploration
+  tranche: green
+  species: structural_lab
+  entry_type: pattern
+  title: Prefer T3 hard-workflow exploration when T1/T2 plateau
+  description: t3 hard-workflow exploration in structural_lab
+  insight: When T1/T2 hypervolume is plateauing and W8 is not requesting promotion evidence, bias toward replayable deep_eval tier 3 or other hard-workflow, tool-use-heavy probes instead of repeated local T1 exploitation; keep T1 as the deployment safety lane.
+  evidence_trial_ids: []
+  source_handoff: autopilot-continuous-optimization
+  seeded_reason: Bias the planner toward higher-tier hard-workflow probes when the local frontier is thin and T1-only churn is the default failure mode
+  confidence: medium
+  bind_status: future
+  bind_identifiers:
+  - deep_eval_tier_3
+  - t3_hard_workflow
+  - tool_use_sentinel_lane
+  - w8_promotion_evidence
 - slug: xmas-winner-table
   tranche: green
   species: structural_lab
