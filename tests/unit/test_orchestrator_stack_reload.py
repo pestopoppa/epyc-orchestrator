@@ -75,6 +75,36 @@ def test_repo_short_sha_returns_none_on_git_failure(monkeypatch, tmp_path: Path)
     assert stack._repo_short_sha(tmp_path) is None
 
 
+def test_start_orchestrator_sets_tool_sentinels_by_default(monkeypatch, tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeProc:
+        pid = 4321
+
+        def poll(self):
+            return None
+
+    def fake_popen(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["env"] = kwargs["env"]
+        return FakeProc()
+
+    monkeypatch.setattr(stack, "LOG_DIR", tmp_path)
+    monkeypatch.setattr(stack, "_pids_on_port", lambda _port: [])
+    monkeypatch.setattr(stack, "_write_orchestrator_marker", lambda **_kwargs: tmp_path / "marker")
+    monkeypatch.setattr(stack, "wait_for_health", lambda *args, **kwargs: True)
+    monkeypatch.setattr(stack, "_set_oom_protection", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(stack.subprocess, "Popen", fake_popen)
+
+    info = stack.start_orchestrator()
+
+    assert info is not None
+    env = captured["env"]
+    assert isinstance(env, dict)
+    assert env["AUTOPILOT_TOOL_SENTINELS"] == "1"
+    assert env["ORCHESTRATOR_STRUCTURED_TOOL_OUTPUT"] == "1"
+
+
 def test_start_parser_compiles_registry_by_default(monkeypatch) -> None:
     captured: dict[str, object] = {}
 

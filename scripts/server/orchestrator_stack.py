@@ -1623,6 +1623,10 @@ def start_orchestrator(profile: str | None = None) -> ProcessInfo | None:
     env["ORCHESTRATOR_RESUME_TOKENS"] = "1"
     env["ORCHESTRATOR_SIDE_EFFECT_TRACKING"] = "1"
     env["ORCHESTRATOR_STRUCTURED_TOOL_OUTPUT"] = "1"
+    # Gate-3 tool telemetry must survive API reloads too; the authority daemon
+    # already carries AUTOPILOT_TOOL_SENTINELS=1, but the orchestrator API was
+    # previously restarted without it and quietly lost tool-use activation.
+    env["AUTOPILOT_TOOL_SENTINELS"] = "1"
     # LangGraph Phase 3: per-node migration for live roles only.
     # The retired architect_coding role is intentionally not enabled here.
     for key in LANGGRAPH_PHASE3_LIVE_ENV_VARS:
