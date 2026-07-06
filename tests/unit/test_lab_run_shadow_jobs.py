@@ -258,6 +258,26 @@ def test_production_inventory_includes_planner_provider_active_safe_job() -> Non
             "recent_issues": [],
         }
     )
+    Draft7Validator(schema).validate(
+        {
+            "schema_version": "autopilot_planner_provider_health.v1",
+            "ok": True,
+            "status": "waiting_for_planner_turn",
+            "blockers": [],
+            "providers": {},
+            "local": {"draft_successes": 0, "critique_successes": 0},
+            "critic_decisions": {},
+            "draft_actions": {},
+            "recent_issues": [],
+            "window": {
+                "event_count": 0,
+                "raw_event_count": 1,
+                "phase": "dispatch_action",
+                "action_type": "numeric_trial",
+                "no_event_reason": "current phase is dispatch_action",
+            },
+        }
+    )
 
 
 def test_production_inventory_includes_quiet_window_queue_active_safe_job() -> None:

@@ -471,6 +471,7 @@ jobs:
           status:
             enum:
               - healthy
+              - waiting_for_planner_turn
               - stale
               - attention
               - missing

@@ -1,0 +1,57 @@
+{
+  "generated_at": "2026-07-06T11:56:36+00:00",
+  "job_id": "quiet_window_queue_watch",
+  "jobs_file": "/mnt/raid0/llm/epyc-orchestrator/orchestration/lab_jobs.yaml",
+  "missing_sources": [],
+  "run_id": "quiet_window_queue_watch-20260706T115636Z-05ddb4d7",
+  "schema_version": "lab_context_manifest.v1",
+  "source_count": 3,
+  "sources": [
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/handoffs/active/master-handoff-index.md",
+      "bytes": 79861,
+      "excerpt": "# EPYC Handoff \u2014 Master Index\n\n**Purpose**: dispatch. Find your domain index or claim a queue row. History lives in `progress/`; completed work in `handoffs/completed/`. Rows are **deleted** on completion (not struck through). Claims cite `MEASUREMENT.md` protocols; historical numbers era-label via `instrument_eras.yaml`. The pre-2026-06-12 chronology header + 66-row queue is preserved at `progress/2026-06/master-index-pre-rewrite-archive-2026-06-12.md`.\n\n## Domain indices\n| Routing/autopilot/stack | [routing-and-optimization-index.md](routing-and-optimization-index.md) | | Acceleration | [inference-acceleration-index.md](inference-acceleration-index.md) |\n|---|---|---|---|---|\n| CPU throughput | [cpu-inference-optimization-index.md](cpu-inference-optimization-index.md) | | Research/eval | [research-evaluation-index.md](research-evaluation-index.md) |\n| Hermes/agent UX | [hermes-agent-index.md](hermes-agent-index.md) | | Pipelines | [pipeline-integration-index.md](pipeline-integration-index.md) |\n\n**Standing contracts**: `/workspace/MEASUREMENT.md` (adopted) \u00b7 `instrument_eras.yaml` (epyc-orchestrator orchestration/) \u00b7 ATTESTATION (to build, findings-04 \u00a7B) \u00b7 current architecture review: [fable5-findings-00-executive-summary.md](../completed/fable5-findings-00-executive-summary.md) \u2014 **the Fable 5 one-shot review is COMPLETE (2026-06-12)**; its 7 findings (-01..-07) + appendix are the standing reference, not an open row. The stale 2026-06-15 transient pickup was archived to [`../archived/fable5-long-horizon-session-pickup-history-through-2026-06-20.md`](../archived/fable5-long-horizon-session-pickup-history-through-2026-06-20.md); resume from the domain indices and owning handoffs below.\n\n**Current coordination checkpoint - 2026-07-06T11:52Z**: orchestrator\n`60523b6` is live in the canonical Fable authority daemon, and the local\nplanner path remains `local_frontdoor` draft -> `local_worker` critique with\nClaude fallback. AutoPilot PID `131226` is live with `--max-trials 3000`,\nplanner hints, tool sentinels, sequential verdicts, and W6 audit flags.\n`phase_health_report.py --require-current-code --json` reports trial `1227`,\n`action_type=numeric_trial`, `phase=dis",
+      "kind": "source_excerpt",
+      "path": "handoffs/active/master-handoff-index.md",
+      "repo": "epyc-root",
+      "sha256": "aa59713869af5d406fe14cbcf3376a5106f851b862c8968b7cd24d20b53663ff",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/handoffs/active/bulk-inference-campaign.md",
+      "bytes": 118360,
+      "excerpt": "# Bulk Inference Campaign \u2014 active backlog (Packages G\u2013K)\n\n**Status**: active - live backlog is Queue 2 consolidated quiesce-window measurements, Queue 3 restart-bundle evidence accrual, standalone model-batched windows, and Package I frozen after the DAR-1 replay failed its reopen gate. J7/DCP remains default-off after the first live A/B worsened latency; K-MEM-1 completed its first Tulving baseline and no longer blocks the next throughput-sensitive lane; frontdoor G11 run `20260620_035613`, worker G11 run `20260620_062750`, and architect G10 run `20260620_081041` are packaged as raw-response/throughput evidence and deterministic-F1 scored. G12 tier calibration is complete: deterministic AA-Omniscience 4-class scoring was accepted for role-tier recalibration only, and orchestrator `d0e082a7` updated production factual-risk tier multipliers to `0.727978/0.824178/1.0`; factual-risk mode/canary/enforce decisions remain separate telemetry gates. The v6 contention-matrix age blocker was cleared on 2026-06-27 by refreshing the full/primary pair layer in orchestrator `526ba3a2`; Queue 3 baseline mutation should now fail or pass on clean evidence, not stale topology metadata.\n**Created**: 2026-04-06\n**Updated**: 2026-06-20 - K-MEM-1 run `20260619_141212` completed and was packaged in `epyc-inference-research` `b6edc64`; research `9e63af0` fixed Tulving ground-truth parsing and rescored it. The production/default-expert run scored 456/456 Tulving questions with avg F1 `0.4309`, Simple Recall `0.5530`, Chronological Awareness `0.1593`, and avg decode `17.27 t/s`; the runner log ended `448 completed, 8 skipped, 0 errors` because the first 8 rows were reused from the corrected resume. This is a mixed baseline with usable lexical entity/time/location recall, weak event/detail and chronology, and zero-answer hallucination failure; it is not a memory-routing promotion signal. Research `2eb94f8` adds a targeted 120-row follow-up manifest for zero-answer abstention, event-content/detail recall, and chronology-order repair. Frontdoor G5 short-m@k clean-window evidence is packaged in research `7e9f67f`. Frontdoor G11 clean-window run `20260620_035613` first exited after `24:57` w",
+      "kind": "source_excerpt",
+      "path": "handoffs/active/bulk-inference-campaign.md",
+      "repo": "epyc-root",
+      "sha256": "aceba2f0f9399e78a861481fb2f5b7dd2cabc757e4865a8a1529508a7ee4110f",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/handoffs/active/routing-and-optimization-index.md",
+      "bytes": 84404,
+      "excerpt": "# Routing & Optimization \u2014 Coordination Index\n\n**Created**: 2026-03-25\n**Purpose**: Actionable entry point for agents working on routing, optimization, and stack infrastructure. Read this first \u2014 it tells you what needs doing, in what order, and where to find the details.\n\n> **2026-06-12**: Fable 5 architecture review complete \u2014 verdicts + new owning handoffs in [master-handoff-index.md](master-handoff-index.md); standing reference [fable5-findings-00-executive-summary.md](../completed/fable5-findings-00-executive-summary.md). Measurement claims now follow /workspace/MEASUREMENT.md.\n> New owning handoffs in this domain: [routing-truth-restoration.md](routing-truth-restoration.md), [model-capability-descriptors.md](model-capability-descriptors.md), and the evidence-plane-* handoffs (autopilot).\n\n---\n\n## How to Use This Index\n\n1. **Read the outstanding tasks below** \u2014 they are ordered by priority and dependency\n2. **Check the dependency graph** \u2014 some tasks unblock others\n3. **Read the relevant handoff** for implementation details before starting work\n4. **After completing a task**, update both the handoff AND this index (mark task done, update status)\n5. **Check cross-cutting concerns** before modifying any subsystem \u2014 changes cascade\n\n---\n\n## Standing Comparative Context\n\nBefore proposing or revising routing/coordination architecture, read [`research/deep-dives/trinity-evolved-llm-coordinator-methodology.md`](../../research/deep-dives/trinity-evolved-llm-coordinator-methodology.md) (intake-474, ICLR 2026, Sakana AI). Trinity is the most direct prior art for the lightweight-learned-coordinator-over-heterogeneous-pool thesis we are pursuing. The deep-dive cross-checks Trinity's choices against ours on architecture, training signal, optimizer, action space, and pool composition \u2014 and lists the portable lessons (tri-role action space, sep-CMA-ES cold-start, block-\u03b5-separability diagnostic, SVD-FT) and the non-portable ones (penultimate-token finding, frontier-closed-pool gain numbers). Reference it explicitly when arguing for a routing-architecture change so we know which Trinity lever the change does or does not echo.\n\n**Routing/coordination design-space reference ",
+      "kind": "source_excerpt",
+      "path": "handoffs/active/routing-and-optimization-index.md",
+      "repo": "epyc-root",
+      "sha256": "8fa05e909cdbe9d3b6f10649d3f531b42eb3c9cec5e2cdc9f0d5fe52cc810077",
+      "truncated": true
+    }
+  ],
+  "summary": {
+    "budget_exhausted": false,
+    "excerpt_chars": 6600,
+    "kinds": {
+      "source_excerpt": 3
+    },
+    "max_context_chars": 16000,
+    "missing_source_count": 0,
+    "repos": [
+      "epyc-root"
+    ],
+    "schema_version": "lab_context_summary.v1",
+    "source_bytes": 282625,
+    "source_count": 3,
+    "truncated_source_count": 3
+  }
+}

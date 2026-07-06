@@ -1,0 +1,28 @@
+{
+  "action_type": "numeric_trial",
+  "advisor_version": "autopilot_restart_advisor.v1",
+  "blockers": [],
+  "code_stale": false,
+  "idle_reason": "evaluating question",
+  "ok": true,
+  "phase": "dispatch_action",
+  "phase_health_blockers": [],
+  "phase_health_ok": true,
+  "phase_health_status": "active",
+  "pid": 131226,
+  "pid_alive": true,
+  "reason": "live AutoPilot appears current",
+  "restart_needed": false,
+  "safe_to_restart_now": false,
+  "start_command": [
+    "uv",
+    "run",
+    "python",
+    "scripts/autopilot/start_fable_authority_daemon.py",
+    "--max-trials",
+    "3000"
+  ],
+  "status": "no_action",
+  "stop_command": [],
+  "trial_id": 1227
+}
