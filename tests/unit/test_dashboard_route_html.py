@@ -475,6 +475,8 @@ def test_dashboard_topology_activity_stats_refresh_with_live_age_tick() -> None:
     assert "if (Array.isArray(snap.structured_requests))" in body
     assert "applyStructuredTapFrame(snap, {" in body
     assert "requestSnapshot: false" in body
+    assert "acceptCoherentSnapshot: true" in body
+    assert "if (!acceptCoherentSnapshot && frameTs + 0.001 < _latestStructuredTapFrameTs) return false;" in body
     assert "tap-inferred CPU holders and the lock grid reflect the same instant" in body
     assert "let _topologyActivityRefreshSeq = 0;" in body
     assert "async function updateTopologyActivity(refreshSeq = ++_topologyActivityRefreshSeq)" in body

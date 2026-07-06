@@ -3634,11 +3634,12 @@ function applyStructuredTapFrame(data, {
     paintTap = true,
     requestSnapshot = true,
     refreshDetail = true,
+    acceptCoherentSnapshot = false,
 } = {}) {
     const frameTs = structuredTapFrameTs(data);
     if (frameTs !== null) {
-        if (frameTs + 0.001 < _latestStructuredTapFrameTs) return false;
-        _latestStructuredTapFrameTs = frameTs;
+        if (!acceptCoherentSnapshot && frameTs + 0.001 < _latestStructuredTapFrameTs) return false;
+        if (frameTs > _latestStructuredTapFrameTs) _latestStructuredTapFrameTs = frameTs;
     }
     _structuredTapRequests = data.structured_requests || [];
     _lastStructuredTapAppliedAt = Date.now();
@@ -5349,9 +5350,10 @@ function applyDashboardSnapshot(snap, source) {
     if (Array.isArray(snap.structured_requests)) {
         applyStructuredTapFrame(snap, {
             updateFreshness: false,
-            paintTap: _rawTapRenderMode === 'structured',
+            paintTap: true,
             requestSnapshot: false,
             refreshDetail: false,
+            acceptCoherentSnapshot: true,
         });
     }
     // Keystone coherence: drive the topology strip STRUCTURE from the SAME
