@@ -258,14 +258,11 @@ def plan_with_providers(
     # different underlying model. With PRIMARY=codex + CRITIC=codex_critic the
     # names differ but both resolve to the codex binary — a name-based fallback
     # would re-hit codex when codex is offline → "no usable draft action".
-    if spend_breaker_active:
-        fallback_name = critic_name if critic_name != primary_name else primary_name
-    else:
-        fallback_name = (
-            critic_name
-            if _model_of(critic_name) != _model_of(primary_name)
-            else _other_provider(primary_name)
-        )
+    fallback_name = _draft_fallback_provider_name(
+        primary_name,
+        critic_name,
+        spend_breaker_active=spend_breaker_active,
+    )
     allow_fallback = settings.mode.strip().lower() != "single"
 
     draft_provider_name = primary_name
@@ -400,7 +397,9 @@ def plan_with_providers(
                 and not primary_circuit_open_before_draft
             )
             if allow_primary_fallback_critique and (
-                _model_of(primary_name) != "local" or spend_breaker_active
+                _model_of(primary_name) != "local"
+                or spend_breaker_active
+                or _distinct_local_roles(primary_name, draft.provider)
             ):
                 critique_provider_name = primary_name
             else:
@@ -1154,6 +1153,31 @@ def _normalize_provider(name: str) -> str:
 
 def _other_provider(name: str) -> str:
     return "codex" if name == "claude" else "claude"
+
+
+def _distinct_local_roles(left: str, right: str) -> bool:
+    return (
+        _model_of(left) == "local"
+        and _model_of(right) == "local"
+        and _normalize_provider(left) != _normalize_provider(right)
+    )
+
+
+def _draft_fallback_provider_name(
+    primary_name: str,
+    critic_name: str,
+    *,
+    spend_breaker_active: bool,
+) -> str:
+    primary = _normalize_provider(primary_name)
+    critic = _normalize_provider(critic_name)
+    if spend_breaker_active:
+        return critic if critic != primary else primary
+    if _model_of(critic) != _model_of(primary):
+        return critic
+    if _distinct_local_roles(primary, critic):
+        return critic
+    return _other_provider(primary)
 
 
 # Provider-role names that resolve to the same underlying MODEL binary. Mirrors

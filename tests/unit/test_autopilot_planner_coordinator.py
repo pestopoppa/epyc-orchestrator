@@ -704,6 +704,68 @@ def test_spend_breaker_preserves_configured_local_critic(
     assert state["_spend_breaker"]["previous_critic"] == "local_worker"
 
 
+def test_local_role_primary_falls_back_to_local_critic_role(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AUTOPILOT_PLANNER_SPEND_BREAKER", "0")
+    action = {"type": "numeric_trial", "surface": "repl_executor"}
+    local_frontdoor = FakeProvider(
+        "local_frontdoor",
+        [
+            PlannerProviderResult(
+                provider="local_frontdoor",
+                role="draft",
+                ok=True,
+                text="I cannot decide.",
+            ),
+            PlannerProviderResult(
+                provider="local_frontdoor",
+                role="critique",
+                ok=True,
+                text=_critique_text({"decision": "approve", "confidence": 0.82}),
+            ),
+        ],
+    )
+    local_worker = FakeProvider(
+        "local_worker",
+        [
+            PlannerProviderResult(
+                provider="local_worker",
+                role="draft",
+                ok=True,
+                text=_action_text(action),
+            )
+        ],
+    )
+
+    decision = planner_coordinator.plan_with_providers(
+        "prompt",
+        session_id=None,
+        planner_state={},
+        settings=PlannerSettings(
+            primary="local_frontdoor",
+            critic="local_worker",
+            mode="draft_critique",
+            critique_policy="always",
+        ),
+        provider_factory=_factory(
+            {
+                "local_frontdoor": local_frontdoor,
+                "local_worker": local_worker,
+            }
+        ),
+    )
+
+    assert decision.action == action
+    assert decision.draft_provider == "local_worker"
+    assert decision.critic_provider == "local_frontdoor"
+    assert decision.critique is not None
+    assert decision.critique.decision == "approve"
+    assert "local_frontdoor draft failed" in decision.fallback_reason
+    assert [call["role"] for call in local_frontdoor.calls] == ["draft", "critique"]
+    assert [call["role"] for call in local_worker.calls] == ["draft"]
+
+
 def test_spend_breaker_keeps_config_when_under_threshold(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
