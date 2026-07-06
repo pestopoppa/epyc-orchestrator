@@ -187,3 +187,68 @@ def test_review_queue_report_flags_missing_outputs_and_counts_active_safe(
             "output_path": "active_safe_watch/active-1/missing.json",
         }
     ]
+
+
+def test_review_queue_report_renders_markdown_packet(tmp_path: Path) -> None:
+    jobs_file = tmp_path / "lab_jobs.yaml"
+    queue = tmp_path / "queue"
+    _write_jobs_file(jobs_file)
+    _write_json(queue / "active_safe_watch" / "active-1" / "output.json", {"ok": True})
+    _write_jsonl(
+        queue / "task_records.jsonl",
+        [
+            {
+                "job_id": "active_safe_watch",
+                "run_id": "active-1",
+                "stage": "shadow",
+                "artifacts": {"output": "active_safe_watch/active-1/output.json"},
+            }
+        ],
+    )
+
+    report = review_queue_report.run_from_args(_args(tmp_path, jobs_file, queue))
+    markdown = review_queue_report.render_markdown(report)
+
+    assert "# Lab Review Queue Report" in markdown
+    assert "| active_safe_watch | `active-1` | active_safe_deterministic | shadow | operator |" in markdown
+    assert "```jsonl" in markdown
+    assert '"schema_version": "lab_review_batch.v1"' in markdown
+    assert "apply_review_batch.py" in markdown
+
+
+def test_review_queue_report_cli_writes_markdown_packet(tmp_path: Path, capsys) -> None:
+    jobs_file = tmp_path / "lab_jobs.yaml"
+    queue = tmp_path / "queue"
+    out_md = tmp_path / "review.md"
+    _write_jobs_file(jobs_file)
+    _write_json(queue / "active_safe_watch" / "active-1" / "output.json", {"ok": True})
+    _write_jsonl(
+        queue / "task_records.jsonl",
+        [
+            {
+                "job_id": "active_safe_watch",
+                "run_id": "active-1",
+                "stage": "shadow",
+                "artifacts": {"output": "active_safe_watch/active-1/output.json"},
+            }
+        ],
+    )
+
+    rc = review_queue_report.main(
+        [
+            "--repo-root",
+            str(tmp_path),
+            "--jobs-file",
+            str(jobs_file),
+            "--queue-dir",
+            str(queue),
+            "--markdown",
+            "--output-md",
+            str(out_md),
+        ]
+    )
+
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "# Lab Review Queue Report" in captured.out
+    assert out_md.read_text(encoding="utf-8") == captured.out

@@ -269,6 +269,69 @@ def build_report(
     }
 
 
+def render_markdown(report: dict[str, Any]) -> str:
+    summary = report.get("summary") or {}
+    lines = [
+        "# Lab Review Queue Report",
+        "",
+        f"- generated_at: `{report.get('generated_at', '')}`",
+        f"- status: `{report.get('status', '')}`",
+        f"- pending_reviews: `{summary.get('pending_reviews', 0)}`",
+        f"- pending_active_safe: `{summary.get('pending_active_safe', 0)}`",
+        f"- pending_review_candidates: `{summary.get('pending_review_candidates', 0)}`",
+        f"- queue_dir: `{report.get('queue_dir', '')}`",
+        "",
+    ]
+    blockers = report.get("blockers") or []
+    if blockers:
+        lines.extend(["## Blockers", ""])
+        lines.extend(f"- {b}" for b in blockers)
+        lines.append("")
+
+    pending = report.get("pending_items") or []
+    if pending:
+        lines.extend([
+            "## Pending Items",
+            "",
+            "| job_id | run_id | class | stage | next_reviewer | output |",
+            "|---|---|---|---|---|---|",
+        ])
+        for item in pending:
+            lines.append(
+                "| {job_id} | `{run_id}` | {record_class} | {stage} | {next_reviewer} | `{output_path}` |".format(
+                    job_id=item.get("job_id", ""),
+                    run_id=item.get("run_id", ""),
+                    record_class=item.get("record_class", ""),
+                    stage=item.get("stage", ""),
+                    next_reviewer=item.get("next_reviewer", ""),
+                    output_path=item.get("output_path", ""),
+                )
+            )
+        lines.append("")
+        lines.extend([
+            "## Review Batch Template",
+            "",
+            "Edit `verdict`, `confidence`, and `notes`, then pass the JSONL to `scripts/lab/apply_review_batch.py`.",
+            "",
+            "```jsonl",
+            str(report.get("review_batch_template_jsonl") or ""),
+            "```",
+            "",
+        ])
+    else:
+        lines.extend(["No pending lab review items.", ""])
+
+    missing_outputs = report.get("missing_outputs") or []
+    if missing_outputs:
+        lines.extend(["## Missing Outputs", ""])
+        for item in missing_outputs:
+            lines.append(
+                f"- {item.get('job_id', '')} `{item.get('run_id', '')}` -> `{item.get('output_path', '')}`"
+            )
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def run_from_args(args: argparse.Namespace) -> dict[str, Any]:
     repo_root = Path(args.repo_root).expanduser().resolve()
     jobs_file = _resolve_path(repo_root, args.jobs_file)
@@ -294,7 +357,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--task-records-file")
     parser.add_argument("--verdicts-file")
     parser.add_argument("--max-items", type=int, default=25)
-    parser.add_argument("--json", action="store_true", help="Accepted for consistency; output is always JSON.")
+    parser.add_argument("--json", action="store_true", help="Emit JSON to stdout (default).")
+    parser.add_argument("--markdown", action="store_true", help="Emit a markdown review packet to stdout.")
+    parser.add_argument("--output-md", help="Also write a markdown review packet to this path.")
     return parser
 
 
@@ -306,7 +371,14 @@ def main(argv: list[str] | None = None) -> int:
     except ReviewQueueReportError as exc:
         print(f"review_queue_report: {exc}", file=sys.stderr)
         return 2
-    print(json.dumps(report, sort_keys=True))
+    if args.output_md:
+        output_path = Path(args.output_md)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(render_markdown(report), encoding="utf-8")
+    if args.markdown:
+        print(render_markdown(report), end="")
+    else:
+        print(json.dumps(report, sort_keys=True))
     return 0
 
 
