@@ -32,6 +32,17 @@ class FakeRouter:
         structured = SimpleNamespace(headings=[object()], tables=[object(), object()], figures=[])
         return ("# Heading\n\nstructured body\n", structured, 30.0)
 
+    def _extract_with_opendataloader_hybrid(
+        self,
+        pdf_path: Path,
+    ) -> tuple[str, Any, float]:
+        structured = SimpleNamespace(
+            headings=[object(), object()],
+            tables=[object()],
+            figures=[],
+        )
+        return ("# Heading\n\nhybrid body\n", structured, 40.0)
+
 
 def test_run_probe_summarizes_local_backends(tmp_path: Path) -> None:
     pdf_path = tmp_path / "sample.pdf"
@@ -92,6 +103,47 @@ def test_opendataloader_missing_java_records_missing_dependency(tmp_path: Path, 
     assert summary.failure_count == 1
     assert summary.records[0].failure_reason == "missing_dependency"
     assert summary.records[0].failure_detail == "java runtime not found"
+
+
+def test_opendataloader_hybrid_missing_sidecar_records_missing_dependency(tmp_path: Path, monkeypatch) -> None:
+    pdf_path = tmp_path / "sample.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+
+    monkeypatch.setattr(probe, "_python_module_exists", lambda module_name: True)
+    monkeypatch.setattr(probe, "_sidecar_reachable", lambda url: False)
+    summary = probe.run_probe(
+        [pdf_path],
+        backends=["opendataloader_hybrid"],
+        router=FakeRouter(),  # type: ignore[arg-type]
+    )
+
+    assert summary.failure_count == 1
+    assert summary.records[0].failure_reason == "missing_dependency"
+    assert "not reachable" in summary.records[0].failure_detail
+
+
+def test_run_probe_summarizes_hybrid_backend(tmp_path: Path, monkeypatch) -> None:
+    pdf_path = tmp_path / "sample.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+
+    monkeypatch.setattr(probe, "_python_module_exists", lambda module_name: True)
+    monkeypatch.setattr(probe, "_sidecar_reachable", lambda url: True)
+    summary = probe.run_probe(
+        [pdf_path],
+        backends=["opendataloader_hybrid"],
+        router=FakeRouter(),  # type: ignore[arg-type]
+    )
+
+    assert summary.success_count == 1
+    assert summary.failure_count == 0
+    backend = summary.backend_summaries["opendataloader_hybrid"]
+    assert backend.successes == 1
+    assert backend.failures == 0
+    structured = next(
+        record for record in summary.records if record.backend == "opendataloader_hybrid"
+    )
+    assert structured.structured_counts["headings"] == 2
+    assert structured.structured_counts["tables"] == 1
 
 
 def test_missing_pdf_records_failure(tmp_path: Path) -> None:
