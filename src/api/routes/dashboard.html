@@ -5980,11 +5980,11 @@ function renderTopologyActivity() {
             return;
         }
         const parts = [];
-        parts.push(`<span class="stat-fresh">${nReq}</span> req`);
+        parts.push(`recent <span class="stat-fresh">${nReq}</span> req`);
         if (liveTps != null) {
             parts.push(`<span class="stat-fresh">${liveTps.toFixed(1)}</span> t/s live`);
         } else if (stats.avg_tps_recent != null && stats.avg_tps_recent > 0) {
-            parts.push(`<span class="stat-fresh">${stats.avg_tps_recent.toFixed(1)}</span> t/s`);
+            parts.push(`<span class="stat-fresh">${stats.avg_tps_recent.toFixed(1)}</span> t/s avg`);
         } else if (stats.avg_duration_s != null && stats.avg_duration_s > 0) {
             parts.push(`<span class="stat-fresh">${stats.avg_duration_s.toFixed(1)}</span>s avg`);
         }
@@ -6007,7 +6007,7 @@ function renderTopologyActivity() {
 async function updateTopologyActivity(refreshSeq = ++_topologyActivityRefreshSeq) {
     // Per-role recent activity stats from /dashboard/api/topology_activity.
     // Populates each topology row's .activity-stats element with:
-    //   "12 req · 31 t/s · 3s ago"
+    //   "recent 12 req · 31 t/s avg · 3s ago" or "2 active · 31 t/s live"
     // Color cues: fresh (<60s ago) in green, stale (>=60s) in dim.
     // Falls back to "—" when the role has no data in the window.
     if (_topologyActivityFetchInFlight) {

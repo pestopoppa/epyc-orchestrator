@@ -87,6 +87,20 @@ def _gold_tuple_count(rows: list[dict[str, Any]]) -> int:
     return sum(1 for row in rows if row.get("tuple_path") or row.get("gold_tuple_path"))
 
 
+def _record_class(job: dict[str, Any]) -> str:
+    if run_shadow_jobs.is_active_safe_job(job):
+        return "active_safe_deterministic"
+    return "review_candidate"
+
+
+def _record_class_counts(rows: list[dict[str, Any]]) -> dict[str, int]:
+    counts = {"active_safe_deterministic": 0, "review_candidate": 0}
+    for row in rows:
+        record_class = str(row.get("record_class") or "review_candidate")
+        counts[record_class] = counts.get(record_class, 0) + 1
+    return dict(sorted(counts.items()))
+
+
 def _review_status(
     records: list[dict[str, Any]], verdicts: list[dict[str, Any]]
 ) -> dict[str, Any]:
@@ -199,6 +213,7 @@ def _job_readiness(
     job_id = str(job.get("job_id") or "")
     job_records = _records_for(task_records, job_id)
     job_verdicts = _verdicts_for(verdicts, job_id)
+    record_class = _record_class(job)
     review = _review_status(job_records, job_verdicts)
     promotion: dict[str, Any] = {}
     if job_id:
@@ -241,6 +256,13 @@ def _job_readiness(
         "task_records": {
             "total": len(job_records),
             "by_stage": _stage_counts(job_records),
+            "record_class": record_class,
+            "active_safe_deterministic": (
+                len(job_records) if record_class == "active_safe_deterministic" else 0
+            ),
+            "review_candidate": (
+                len(job_records) if record_class == "review_candidate" else 0
+            ),
         },
         "verdicts": {
             "total": len(job_verdicts),
@@ -303,6 +325,17 @@ def build_report(
         )
         for job in jobs
     ]
+    job_record_classes = {row["job_id"]: row["task_records"]["record_class"] for row in rows}
+    classified_task_records = [
+        {
+            **record,
+            "record_class": job_record_classes.get(
+                str(record.get("job_id") or ""),
+                "review_candidate",
+            ),
+        }
+        for record in task_records
+    ]
     promotion_ready = [
         row["job_id"]
         for row in rows
@@ -341,6 +374,17 @@ def build_report(
             + (len(quiet_window_nightly) if quiet_ready else 0),
             "manual_runnable": len(runnable_manual),
             "task_records": len(task_records),
+            "task_records_by_class": _record_class_counts(classified_task_records),
+            "active_safe_deterministic_task_records": sum(
+                1
+                for row in classified_task_records
+                if row.get("record_class") == "active_safe_deterministic"
+            ),
+            "review_candidate_task_records": sum(
+                1
+                for row in classified_task_records
+                if row.get("record_class") == "review_candidate"
+            ),
             "verdicts": len(verdicts),
             "gold_tuples": _gold_tuple_count(verdicts),
             "pending_reviews": pending_reviews,

@@ -479,6 +479,8 @@ def test_dashboard_topology_activity_stats_refresh_with_live_age_tick() -> None:
     assert "let _topologyActivityRefreshSeq = 0;" in body
     assert "async function updateTopologyActivity(refreshSeq = ++_topologyActivityRefreshSeq)" in body
     assert "updateTopologyActivity(refreshSeq)" in body
+    assert "recent <span class=\"stat-fresh\">${nReq}</span> req" in body
+    assert "t/s avg" in body
     assert "setInterval(() => scheduleRegionLocksRefresh(true), 1500)" in body
     assert "setInterval(renderTopologyActivity, TOPOLOGY_ACTIVITY_AGE_TICK_MS)" in body
     assert "lockActivitySignature" in body
