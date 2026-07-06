@@ -40,9 +40,10 @@ task-rate and goodput are better. Lower cost and lower tokens per solved task
 are better. Treat legacy throughput as a diagnostic unless the live objective
 policy says it is the active axis.
 
-Never compare quality across eval tiers. T0, T1, and T2 have different
-difficulty and separate baselines/frontiers. A lower T2 number is not a T1
-regression.
+Never compare quality across eval tiers. T0, T1, T2, and T3 have different
+difficulty and separate baselines/frontiers.
+T3 is the expert/hard workflow validation lane.
+A lower T2 or T3 number is not a T1 regression.
 
 If host health, speed, reliability, and multiple independent suites collapse
 together, treat it as infrastructure contamination until proven otherwise.

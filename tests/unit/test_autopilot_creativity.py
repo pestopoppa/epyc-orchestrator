@@ -942,11 +942,15 @@ def test_controller_prompt_includes_higher_tier_pressure_section() -> None:
 def test_controller_prompt_deep_eval_tiers_match_validator_contract() -> None:
     template = autopilot.CONTROLLER_PROMPT_TEMPLATE
     rendered = autopilot._format_available_action_schemas(["deep_eval"])
+    constitution = autopilot.CONSTITUTION_PATH.read_text(encoding="utf-8")
 
     assert "Supported tiers: 0, 1, 2, or 3" in rendered
     assert autopilot._format_deep_eval_tier_options() == "0, 1, 2, or 3"
     assert "Only tier is supported" not in template
     assert "Supported tiers: 0, 1, or 2" not in rendered
+    assert "T0, T1, T2, and T3" in constitution
+    assert "T3 is the expert/hard workflow validation lane" in constitution
+    assert "A lower T2 or T3 number is not a T1 regression" in constitution
 
 
 def test_controller_prompt_includes_outcome_progress_pressure_section() -> None:
