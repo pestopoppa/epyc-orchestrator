@@ -172,9 +172,62 @@ def test_best_config_promoted_only_from_seq_promotion_record():
     assert best["promoted"] is True and best["status"] == "promoted"
 
 
+def test_ruled_out_experiments_splits_fenced_and_invalid_surfaces():
+    state = {
+        "critic_rejected_signatures": {
+            "sig-1": {
+                "action": {
+                    "type": "numeric_trial",
+                    "surface": "repl_budget",
+                    "flags": {"batch_size": 32, "timeout_ms": 500},
+                },
+                "reason": "critic rejected: empty params are non-replayable; use concrete params",
+                "count": 3,
+                "trial_id": 10,
+            }
+        },
+        "invalid_signature_counts": {
+            '{"type":"seed_batch"}': 2,
+            '{"type":"numeric_trial"}': 4,
+        },
+    }
+
+    ruled = ob.ruled_out_experiments(state, limit=6)
+
+    assert ruled["fenced"][0]["label"].startswith("numeric sweep · batch_size=32")
+    assert ruled["fenced"][0]["count"] == 3
+    assert "non-replayable" in ruled["fenced"][0]["why"]
+    assert ruled["invalid_by_surface"] == [
+        {"label": "numeric sweep", "kind": "numeric_trial", "count": 4},
+        {"label": "eval seeding", "kind": "seed_batch", "count": 2},
+    ]
+
+
 def test_build_brief_end_to_end(tmp_path):
     state = tmp_path / "state.json"
-    state.write_text(json.dumps({"trial_counter": 1046, "pareto_exclude_before_ts": 99.0}))
+    state.write_text(
+        json.dumps(
+            {
+                "trial_counter": 1046,
+                "pareto_exclude_before_ts": 99.0,
+                "critic_rejected_signatures": {
+                    "sig-1": {
+                        "action": {
+                            "type": "numeric_trial",
+                            "surface": "repl_budget",
+                            "flags": {"batch_size": 32, "timeout_ms": 500},
+                        },
+                        "reason": "critic rejected: empty params are non-replayable; use concrete params",
+                        "count": 3,
+                        "trial_id": 10,
+                    }
+                },
+                "invalid_signature_counts": {
+                    '{"type":"seed_batch"}': 2,
+                },
+            }
+        )
+    )
     journal = tmp_path / "journal.jsonl"
     journal.write_text(
         json.dumps({"trial_id": 2, "tier": 1, "quality": 2.2, "speed": 40,
@@ -207,6 +260,8 @@ def test_build_brief_end_to_end(tmp_path):
     assert brief["levers"][0]["decision_grade"] is False
     assert brief["best_config"]["trial_id"] == 2
     assert len(brief["ruled_out"]) == 1
+    assert brief["ruled_out_experiments"]["fenced"][0]["count"] == 3
+    assert "numeric sweep" in brief["narrative"]
     # narrative is templated, not free-written: it must mention the top lever.
     assert "escalation.max_retries" in brief["narrative"]
     assert "observations" in brief["narrative"].lower()

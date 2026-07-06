@@ -799,6 +799,10 @@ body.insight-fullscreen-open { overflow: hidden; }
 .opt-brief .ob-lever .ob-bar > span { position: absolute; left:0; top:0; height:100%;
     background: var(--accent); border-radius: 3px; }
 .opt-brief .ob-lever .ob-rec { color: var(--good); text-align: right; }
+.opt-brief .ob-lever .ob-bar.ob-bar-bad > span { background: var(--bad); }
+.opt-brief .ob-lever .ob-rec.ob-rec-bad { color: var(--bad); }
+.opt-brief .ob-why { font-family: var(--font-mono); font-size: 9px; color: var(--dim);
+    margin: 0 0 4px; padding-left: 2px; line-height: 1.3; }
 .opt-brief .ob-pill { display:inline-block; margin: 2px 4px 2px 0; padding: 1px 6px;
     border-radius: 999px; border: 1px solid var(--border); font-size: 9px; color: var(--muted); }
 .opt-brief details { margin-top: 6px; }
@@ -4867,7 +4871,7 @@ function renderOptimizationBrief(b) {
     }
     const levers = Array.isArray(b.levers) ? b.levers : [];
     if (levers.length) {
-        parts.push('<div class="ob-section-title">levers that move the needle</div>');
+        parts.push('<div class="ob-section-title">what’s moving quality</div>');
         const maxImp = Math.max(...levers.map(l => l.importance || 0), 0.001);
         levers.slice(0, 6).forEach(l => {
             const pct = Math.round(100 * (l.importance || 0) / maxImp);
@@ -4878,6 +4882,26 @@ function renderOptimizationBrief(b) {
                 `<span class="ob-rec">${(l.importance || 0).toFixed(2)} ${rec}</span></div>`
             );
         });
+    }
+    const roe = b.ruled_out_experiments || {};
+    const fenced = Array.isArray(roe.fenced) ? roe.fenced : [];
+    if (fenced.length) {
+        parts.push('<div class="ob-section-title">what’s been ruled out (and why)</div>');
+        const maxCnt = Math.max(...fenced.map(f => f.count || 0), 1);
+        fenced.slice(0, 6).forEach(f => {
+            const pct = Math.round(100 * (f.count || 0) / maxCnt);
+            parts.push(
+                `<div class="ob-lever"><span class="ob-name" title="${escapeHTML(f.why || '')}">${escapeHTML(f.label || '')}</span>` +
+                `<span class="ob-bar ob-bar-bad"><span style="width:${pct}%"></span></span>` +
+                `<span class="ob-rec ob-rec-bad">${f.count || 0}× rejected</span></div>` +
+                `<div class="ob-why">${escapeHTML((f.why || '').slice(0, 160))}</div>`
+            );
+        });
+        const churn = Array.isArray(roe.invalid_by_surface) ? roe.invalid_by_surface : [];
+        if (churn.length) {
+            const churnTxt = churn.slice(0, 6).map(c => `${escapeHTML(c.label)} ${c.count}×`).join(' · ');
+            parts.push(`<div class="ob-why" style="margin-top:4px">malformed-proposal churn by surface: ${churnTxt}</div>`);
+        }
     }
     const ruled = Array.isArray(b.ruled_out) ? b.ruled_out : [];
     const expl = Array.isArray(b.exploring) ? b.exploring : [];
