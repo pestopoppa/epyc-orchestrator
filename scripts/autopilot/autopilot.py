@@ -1513,6 +1513,56 @@ def _replace_blacklisted_seed_fallback(
     return replacement, next_rationale
 
 
+def _replace_blacklisted_w8_candidate_action(
+    action: dict[str, Any],
+    blacklist: list[dict[str, Any]],
+    rationale: dict[str, Any] | None = None,
+    *,
+    trial_counter: int,
+    w8_replay_pressure_text: str,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Keep W8 candidate generation from burning a trial on a known bad action."""
+    if not _w8_candidate_generation_pressure(w8_replay_pressure_text):
+        return action, rationale
+    blocked = check_blacklist(action, blacklist)
+    if not blocked:
+        return action, rationale
+
+    replacement, fallback_reason = _first_unblacklisted_numeric_trial_action(
+        blacklist,
+        trial_counter=trial_counter,
+    )
+    if replacement is None:
+        log.warning(
+            "W8 candidate action %s is blacklisted (%s), but no replayable "
+            "numeric fallback remains unblocked: %s",
+            json.dumps(action, default=str),
+            blocked,
+            fallback_reason,
+        )
+        return action, rationale
+
+    next_rationale = {
+        **(rationale or {}),
+        "w8_blacklisted_candidate_replaced": True,
+        "w8_blacklisted_candidate_reason": blocked,
+        "w8_blacklisted_candidate_original": dict(action),
+        "w8_blacklisted_candidate_replacement": dict(replacement),
+        "falsifier": (
+            (rationale or {}).get("falsifier")
+            or "W8 blacklisted-candidate replacement fails to produce replayable seq evidence"
+        ),
+    }
+    log.warning(
+        "W8 candidate action %s is blacklisted (%s); using replayable "
+        "numeric_trial fallback %s.",
+        json.dumps(action, default=str),
+        blocked,
+        json.dumps(replacement, default=str),
+    )
+    return replacement, next_rationale
+
+
 def _replace_blacklisted_autonomous_action(
     action: dict[str, Any],
     blacklist: list[dict[str, Any]],
@@ -5914,6 +5964,13 @@ def _run_loop_inner(
                 pre_dispatch_skip.reason,
             )
         else:
+            action, rationale = _replace_blacklisted_w8_candidate_action(
+                action,
+                blacklist,
+                rationale,
+                trial_counter=trial_counter,
+                w8_replay_pressure_text=planner_evidence_text,
+            )
             action, rationale = _replace_blacklisted_seed_fallback(
                 action,
                 blacklist,

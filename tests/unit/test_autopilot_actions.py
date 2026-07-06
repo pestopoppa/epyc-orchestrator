@@ -1623,6 +1623,64 @@ def test_pre_dispatch_seed_fallback_reselects_blacklisted_action() -> None:
     assert rationale["fallback_seed_reselected_context"] == "test"
 
 
+def test_w8_replaces_blacklisted_candidate_before_invalid_skip(monkeypatch) -> None:
+    monkeypatch.setattr(
+        autopilot,
+        "_configured_numeric_surfaces",
+        lambda: ("escalation", "repl_budget"),
+    )
+
+    action, rationale = autopilot._replace_blacklisted_w8_candidate_action(
+        {"type": "structural_experiment", "flags": {"graph_router": True}},
+        [
+            {
+                "pattern": {
+                    "type": "structural_experiment",
+                    "flags": {"graph_router": True},
+                },
+                "reason": "repeated graph_router invalid",
+            }
+        ],
+        {"falsifier": "original"},
+        trial_counter=0,
+        w8_replay_pressure_text=(
+            "W8 replay pressure: 0/1 accumulating candidate(s) are replayable "
+            "(blocked=unreplayable_action=seed_batch:1)."
+        ),
+    )
+
+    assert action == {"type": "numeric_trial", "surface": "escalation", "params": {}}
+    assert rationale["falsifier"] == "original"
+    assert rationale["w8_blacklisted_candidate_replaced"] is True
+    assert rationale["w8_blacklisted_candidate_reason"] == "repeated graph_router invalid"
+    assert rationale["w8_blacklisted_candidate_original"] == {
+        "type": "structural_experiment",
+        "flags": {"graph_router": True},
+    }
+
+
+def test_w8_blacklisted_candidate_replacement_is_pressure_gated() -> None:
+    requested = {"type": "structural_experiment", "flags": {"graph_router": True}}
+    action, rationale = autopilot._replace_blacklisted_w8_candidate_action(
+        requested,
+        [
+            {
+                "pattern": {
+                    "type": "structural_experiment",
+                    "flags": {"graph_router": True},
+                },
+                "reason": "repeated graph_router invalid",
+            }
+        ],
+        {"falsifier": "original"},
+        trial_counter=0,
+        w8_replay_pressure_text="W8 replay pressure: 1/1 accumulating candidate(s) are replayable.",
+    )
+
+    assert action == requested
+    assert rationale == {"falsifier": "original"}
+
+
 def test_autonomous_blacklisted_action_reselects_seed_fallback() -> None:
     action, rationale = autopilot._replace_blacklisted_autonomous_action(
         {"type": "gepa_optimize", "file": "frontdoor.md", "max_evals": 50},
