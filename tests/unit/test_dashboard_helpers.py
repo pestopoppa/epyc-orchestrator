@@ -1580,6 +1580,8 @@ def test_dashboard_html_repaints_topology_after_region_lock_refresh() -> None:
     assert "updateTopologyInflight(overlayInflight, snapshotSeq);" in html
     assert "Single-writer coherence" in html
     assert "requestCoherentDashboardSnapshot('region_locks_refresh')" in html
+    assert "t/s hist" in html
+    assert "recent <span class=\"stat-stale\">${nRecent}</span> seen" in html
 
 
 def test_dashboard_effective_journal_rows_fold_supersession_events() -> None:

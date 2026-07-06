@@ -5952,7 +5952,7 @@ function renderTopologyActivity() {
             if (liveTps != null) {
                 parts.push(`<span class="stat-fresh">${liveTps.toFixed(1)}</span> t/s live`);
             } else if (stats && stats.avg_tps_recent != null && stats.avg_tps_recent > 0) {
-                parts.push(`<span class="stat-fresh">${stats.avg_tps_recent.toFixed(1)}</span> t/s`);
+                parts.push(`<span class="stat-stale">${stats.avg_tps_recent.toFixed(1)}</span> t/s hist`);
             }
             if (age != null) parts.push(`<span class="stat-fresh">${formatTopologyActivityAge(age)} ago</span>`);
             el.innerHTML = parts.join('<span class="stat-sep">·</span>');
@@ -5971,7 +5971,7 @@ function renderTopologyActivity() {
                 if (liveTps != null) {
                     parts.push(`<span class="stat-fresh">${liveTps.toFixed(1)}</span> t/s live`);
                 } else if (stats.avg_tps_recent != null && stats.avg_tps_recent > 0) {
-                    parts.push(`<span class="stat-fresh">${stats.avg_tps_recent.toFixed(1)}</span> t/s`);
+                    parts.push(`<span class="stat-stale">${stats.avg_tps_recent.toFixed(1)}</span> t/s hist`);
                 }
                 el.innerHTML = parts.join('<span class="stat-sep">·</span>');
                 const titleBits = [
@@ -5988,7 +5988,7 @@ function renderTopologyActivity() {
         }
         const parts = [];
         if (nRecent) {
-            parts.push(`recent <span class="stat-stale">${nRecent}</span> req`);
+            parts.push(`recent <span class="stat-stale">${nRecent}</span> seen`);
         } else {
             parts.push(`history <span class="stat-stale">${nCompleted}</span> done`);
         }
@@ -6000,8 +6000,7 @@ function renderTopologyActivity() {
             parts.push(`<span class="stat-fresh">${stats.avg_duration_s.toFixed(1)}</span>s avg`);
         }
         if (age != null) {
-            const ageClass = age < 60 ? 'stat-fresh' : 'stat-stale';
-            parts.push(`<span class="${ageClass}">${formatTopologyActivityAge(age)} ago</span>`);
+            parts.push(`<span class="stat-stale">${formatTopologyActivityAge(age)} ago</span>`);
         }
         el.innerHTML = parts.join('<span class="stat-sep">·</span>');
         const tooltipBits = [
