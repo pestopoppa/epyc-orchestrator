@@ -457,11 +457,11 @@ def test_dashboard_topology_activity_stats_refresh_with_live_age_tick() -> None:
     body = html_path.read_text()
 
     assert "TOPOLOGY_ACTIVITY_WINDOW_S = 60" in body
-    assert "TOPOLOGY_ACTIVITY_POLL_MS = 1500" in body
     assert "TOPOLOGY_ACTIVITY_AGE_TICK_MS = 1000" in body
     assert "topologyActivityAgeS" in body
     assert "renderTopologyActivity" in body
-    assert "fetchJSON(`/dashboard/api/topology_activity?window_s=${TOPOLOGY_ACTIVITY_WINDOW_S}`)" in body
+    assert "requestCoherentDashboardSnapshot('topology_activity_refresh')" in body
+    assert "fetchJSON(`/dashboard/api/topology_activity?window_s=${TOPOLOGY_ACTIVITY_WINDOW_S}`)" not in body
     assert "scheduleRegionLocksRefresh(true)" in body
     assert "snap.region_locks" in body
     assert "const snapshotSeq = ++_latestSnapshotSeq;" in body
@@ -493,6 +493,9 @@ def test_dashboard_topology_activity_stats_refresh_with_live_age_tick() -> None:
     assert "lockActivitySignature" in body
     assert "const liveActiveCount = Math.max(lockActiveCount, tapActiveCount);" in body
     assert "active CPU-region/tap holder(s)" in body
+    assert "request/tps fields are recent history from the same coherent snapshot" in body
+    assert "recent req" in body
+    assert "live req" not in body
     assert "historical summary ${stats.avg_tps_recent.toFixed(2)} t/s" in body
     assert "renderRegionLocksBasicGrid(grid, d);" in body
     assert "grid.dataset.regionLocksPainted = '1';" in body
@@ -547,7 +550,7 @@ def test_dashboard_live_panel_refreshes_ignore_stale_responses_where_possible() 
     assert "fetchJSON('/dashboard/api/snapshot'" in body
     assert "timeoutMs: _SNAPSHOT_POLL_TIMEOUT_MS" in body
     assert "setInterval(updateSnapshotPoll, 2500)" in body
-    assert "window_s=${TOPOLOGY_ACTIVITY_WINDOW_S}" in body
+    assert "fetchJSON(`/dashboard/api/topology_activity?window_s=${TOPOLOGY_ACTIVITY_WINDOW_S}`)" not in body
     assert "fetchJSON('/dashboard/api/contention')" in body
     assert "if (refreshSeq !== _regionLocksRefreshSeq) return;" in body
 

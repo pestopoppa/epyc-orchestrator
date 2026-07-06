@@ -5908,7 +5908,6 @@ async function updateProcessStatus() {
 // different — we don't need second-by-second granularity for build drift.
 let _buildRevLoaded = null;  // {git_sha, dashboard_html_mtime, dashboard_py_mtime, server_started_at}
 const TOPOLOGY_ACTIVITY_WINDOW_S = 60;
-const TOPOLOGY_ACTIVITY_POLL_MS = 1500;
 const TOPOLOGY_ACTIVITY_AGE_TICK_MS = 1000;
 let _latestTopologyActivity = null;  // {perRole, window_s, now, fetchedAtMs}
 let _topologyActivityFetchInFlight = false;
@@ -5958,16 +5957,16 @@ function renderTopologyActivity() {
         const stillInsideWindow = age == null || age <= windowS;
         if (liveActiveCount > 0) {
             const parts = [`<span class="stat-fresh">${liveActiveCount}</span> active`];
-            if (nRecent) parts.push(`<span class="stat-fresh">${nRecent}</span> live req`);
+            if (nRecent) parts.push(`<span class="stat-stale">${nRecent}</span> recent req`);
             else if (nCompleted) parts.push(`recent <span class="stat-stale">${nCompleted}</span> done`);
             if (liveTps != null) {
                 parts.push(`<span class="stat-fresh">${liveTps.toFixed(1)}</span> t/s live`);
             } else if (stats && stats.avg_tps_recent != null && stats.avg_tps_recent > 0) {
                 parts.push(`<span class="stat-stale">${stats.avg_tps_recent.toFixed(1)}</span> t/s hist`);
             }
-            if (age != null) parts.push(`<span class="stat-fresh">${formatTopologyActivityAge(age)} ago</span>`);
+            if (age != null) parts.push(`<span class="stat-stale">${formatTopologyActivityAge(age)} ago</span>`);
             el.innerHTML = parts.join('<span class="stat-sep">·</span>');
-            el.title = `${base} has ${liveActiveCount} active CPU-region/tap holder(s); shared live cache with the CPU region-lock panel`;
+            el.title = `${base} has ${liveActiveCount} active CPU-region/tap holder(s); request/tps fields are recent history from the same coherent snapshot`;
             return;
         }
         if (!stats || !nReq || !stillInsideWindow) {
@@ -6031,21 +6030,20 @@ function applyTopologyActivityPayload(d) {
 }
 
 async function updateTopologyActivity(refreshSeq = ++_topologyActivityRefreshSeq) {
-    // Per-role recent activity stats from /dashboard/api/topology_activity.
-    // Populates each topology row's .activity-stats element with live-holder
-    // wording only when the shared lock/tap cache marks the role active.
-    // Non-active recency is rendered as idle/history to avoid implying
-    // concurrent inference when the live tap and CPU-lock grid are empty.
-    // Falls back to "—" when the role has no data in the window.
+    // Coupled-panel single-writer rule: topology activity is allowed to paint
+    // only from /dashboard/api/snapshot, where it is reconciled with the same
+    // live tap and CPU-region-lock frame. Older standalone calls to
+    // /dashboard/api/topology_activity could overwrite a coherent "no active
+    // holders" paint with recent-history rows and make topology look live while
+    // the tap and lock panels were idle.
     if (_topologyActivityFetchInFlight) {
         _topologyActivityRefreshQueued = true;
         return;
     }
     _topologyActivityFetchInFlight = true;
     try {
-        const d = await fetchJSON(`/dashboard/api/topology_activity?window_s=${TOPOLOGY_ACTIVITY_WINDOW_S}`);
         if (refreshSeq !== _topologyActivityRefreshSeq) return;
-        applyTopologyActivityPayload(d);
+        requestCoherentDashboardSnapshot('topology_activity_refresh');
     } catch (e) {
     } finally {
         _topologyActivityFetchInFlight = false;
