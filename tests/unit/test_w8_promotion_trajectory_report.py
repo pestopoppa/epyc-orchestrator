@@ -177,6 +177,36 @@ def test_report_rejects_empty_numeric_trial_params_as_unreplayable() -> None:
     assert "no_replay_eligible_accumulating_candidate" in report["open_requirements"]
 
 
+def test_report_accepts_materialized_multi_param_numeric_candidate() -> None:
+    report = w8_promotion_trajectory_report.build_w8_trajectory_report(
+        [
+            _row(
+                10,
+                "candidate-optuna",
+                config_snapshot={
+                    "type": "numeric_trial",
+                    "surface": "memrl_retrieval",
+                    "params": {
+                        "memrl_retrieval.q_weight": 0.61,
+                        "memrl_retrieval.semantic_k": 25,
+                        "memrl_retrieval.prior_strength": 0.43,
+                    },
+                },
+                combined=0.95,
+                e_quality=1.05,
+                k=2,
+            )
+        ],
+        stale_trials=5,
+    )
+
+    assert report["status"] == "progressing"
+    assert report["replay_eligible_candidates"] == ["candidate-optuna"]
+    assert report["recent_replay_eligible_candidates"] == ["candidate-optuna"]
+    assert report["replay_blockers"] == {}
+    assert "no_replay_eligible_accumulating_candidate" not in report["open_requirements"]
+
+
 def test_report_does_not_treat_unreplayable_old_numeric_candidate_as_stale() -> None:
     report = w8_promotion_trajectory_report.build_w8_trajectory_report(
         [

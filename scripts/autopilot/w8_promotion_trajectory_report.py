@@ -673,6 +673,10 @@ def _replay_action_blocker(snapshot: W8Snapshot) -> str | None:
         params = action.get("params")
         if not isinstance(params, Mapping) or not params:
             return "candidate numeric_trial lacks replayable applied params"
+        # Materialized NumericSwarm/Optuna candidates can carry several applied
+        # params. AP-9 still rejects new planner-proposed multi-param actions at
+        # dispatch, but W8 replay re-measures one recorded candidate fingerprint.
+        return None
     elif action_type == "structural_experiment":
         flags = action.get("flags")
         if not isinstance(flags, Mapping) or not flags:
