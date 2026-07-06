@@ -672,6 +672,32 @@ def _unwrap_action(data: Any) -> dict[str, Any] | None:
     return None
 
 
+def _loads_json_payload(payload: str) -> Any:
+    """Load a JSON payload, tolerating only trivial trailing bracket noise.
+
+    Local planner models sometimes emit a valid fenced object followed by a
+    duplicate closing brace. Recover that narrow case so a usable action still
+    reaches schema validation, but do not accept arbitrary trailing prose.
+    """
+    stripped = payload.strip()
+    try:
+        return json.loads(stripped)
+    except json.JSONDecodeError as original_error:
+        decoder = json.JSONDecoder()
+        try:
+            data, end = decoder.raw_decode(stripped)
+        except json.JSONDecodeError:
+            raise original_error
+        trailing = stripped[end:].strip()
+        if trailing and set(trailing) <= {"}", "]", ")"}:
+            log.warning(
+                "Recovered planner JSON payload with trailing bracket noise: %r",
+                trailing[:80],
+            )
+            return data
+        raise original_error
+
+
 def extract_action(text: str) -> dict[str, Any] | None:
     """Extract structured action from controller response.
 
@@ -683,7 +709,7 @@ def extract_action(text: str) -> dict[str, Any] | None:
         start = text.index(marker) + len(marker)
         end = text.index("```", start)
         try:
-            data = json.loads(text[start:end].strip())
+            data = _loads_json_payload(text[start:end])
             return _unwrap_action(data)
         except json.JSONDecodeError as e:
             log.error("Failed to parse action JSON: %s", e)
@@ -694,7 +720,7 @@ def extract_action(text: str) -> dict[str, Any] | None:
         start = text.index("```json") + len("```json")
         end = text.index("```", start)
         try:
-            data = json.loads(text[start:end].strip())
+            data = _loads_json_payload(text[start:end])
             if isinstance(data, dict) and "type" in data:
                 return data
         except (json.JSONDecodeError, ValueError):

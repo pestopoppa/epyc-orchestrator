@@ -14,6 +14,7 @@ from typing import Any, Callable
 import peaf
 from controller_io import (
     _append_planner_archive,
+    _loads_json_payload,
     extract_action,
     extract_rationale,
     validate_single_variable,
@@ -980,7 +981,7 @@ def _extract_json_payload(
         payload = text.strip()
 
     try:
-        data = json.loads(payload)
+        data = _loads_json_payload(payload)
     except json.JSONDecodeError as exc:
         return None, str(exc)
     if not isinstance(data, dict):

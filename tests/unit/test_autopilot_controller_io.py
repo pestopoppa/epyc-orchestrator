@@ -30,6 +30,18 @@ More text after."""
     assert action == {"type": "seed_batch", "n_questions": 10}
 
 
+def test_extract_action_recovers_trailing_bracket_noise() -> None:
+    text = """Local draft leaked prose first.
+
+```json:autopilot_actions
+{"type": "structural_experiment", "flags": {"plan_review": true}}
+}
+```
+"""
+    action = controller_io.extract_action(text)
+    assert action == {"type": "structural_experiment", "flags": {"plan_review": True}}
+
+
 def test_extract_action_marker_unwraps_list() -> None:
     text = """```json:autopilot_actions
 [{"type": "numeric_trial", "surface": "x"}]

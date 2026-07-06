@@ -853,6 +853,18 @@ def test_unparseable_critique_fails_closed_not_open() -> None:
     assert planner_coordinator.uncritiqued_dispatch_block_reason(decision) == "critic_unavailable"
 
 
+def test_extract_critique_recovers_trailing_bracket_noise() -> None:
+    text = """```json:autopilot_critique
+{"decision": "reject", "confidence": 0.95, "issues": ["bad draft"]}
+}
+```"""
+    critique = planner_coordinator.extract_critique(text)
+    assert critique.decision == "reject"
+    assert critique.confidence == 0.95
+    assert critique.issues == ["bad draft"]
+    assert critique.parse_error == ""
+
+
 def test_failed_critique_invoke_fails_closed_not_open() -> None:
     """A critic process failure (timeout, nonzero exit, empty response) on a
     HIGH-risk draft must fail closed: keep the trusted draft + verdict
