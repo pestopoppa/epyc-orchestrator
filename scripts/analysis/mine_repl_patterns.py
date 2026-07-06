@@ -27,6 +27,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import NamedTuple
 
+import yaml
+
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
@@ -34,6 +36,7 @@ REPO = Path("/mnt/raid0/llm/epyc-orchestrator")
 AUTOPILOT_LOG = REPO / "logs" / "autopilot.log"
 DIAGNOSTICS_JSONL = REPO / "logs" / "seeding_diagnostics.jsonl"
 JOURNAL_JSONL = REPO / "orchestration" / "autopilot_journal.jsonl"
+TOOL_REGISTRY_YAML = REPO / "orchestration" / "tool_registry.yaml"
 REPORT_OUT = REPO / "docs" / "repl_pattern_analysis.md"
 
 
@@ -63,6 +66,8 @@ class DiagRecord(NamedTuple):
     tokens_generated: int
     elapsed_s: float
     parallel_tools_used: bool
+    tools_called: tuple[str, ...]
+    tool_chains: tuple[tuple[str, ...], ...]
 
 
 # ---------------------------------------------------------------------------
@@ -185,9 +190,90 @@ def parse_diagnostics(path: Path) -> list[DiagRecord]:
                 tokens_generated=rec.get("tokens_generated", 0),
                 elapsed_s=rec.get("elapsed_s", 0.0),
                 parallel_tools_used=rec.get("parallel_tools_used", False),
+                tools_called=_normalize_tool_names(rec.get("tools_called")),
+                tool_chains=_normalize_tool_chains(rec.get("tool_chains")),
             ))
 
     return records
+
+
+def _normalize_tool_names(value: object) -> tuple[str, ...]:
+    if isinstance(value, str):
+        name = value.strip()
+        return (name,) if name else ()
+    if not isinstance(value, list):
+        return ()
+    names: list[str] = []
+    for item in value:
+        name = str(item).strip()
+        if name:
+            names.append(name)
+    return tuple(names)
+
+
+def _normalize_tool_chains(value: object) -> tuple[tuple[str, ...], ...]:
+    if not isinstance(value, list):
+        return ()
+    chains: list[tuple[str, ...]] = []
+    for item in value:
+        chain = _extract_tool_chain(item)
+        if chain is not None and len(chain) >= 2:
+            chains.append(chain)
+    return tuple(chains)
+
+
+def _extract_tool_chain(value: object) -> tuple[str, ...] | None:
+    if isinstance(value, dict):
+        tools = value.get("tools")
+        if isinstance(tools, list):
+            return _normalize_tool_names(tools)
+
+        steps = value.get("steps")
+        if isinstance(steps, list):
+            names: list[str] = []
+            for step in steps:
+                if not isinstance(step, dict):
+                    continue
+                name = step.get("tool_name") or step.get("tool") or step.get("name")
+                if isinstance(name, str) and name.strip():
+                    names.append(name.strip())
+            return tuple(names)
+
+    if isinstance(value, list):
+        return _normalize_tool_names(value)
+
+    return None
+
+
+def load_explicit_read_only_tools(path: Path) -> set[str]:
+    """Load tools explicitly annotated with read_only side effects."""
+    if not path.exists():
+        return set()
+
+    try:
+        payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return set()
+    if not isinstance(payload, dict):
+        return set()
+    tools = payload.get("tools")
+    if not isinstance(tools, dict):
+        return set()
+
+    read_only: set[str] = set()
+    for tool_name, record in tools.items():
+        if not isinstance(tool_name, str) or not isinstance(record, dict):
+            continue
+        side_effects = record.get("side_effects")
+        if isinstance(side_effects, str):
+            effect_set = {side_effects}
+        elif isinstance(side_effects, list):
+            effect_set = {effect for effect in side_effects if isinstance(effect, str)}
+        else:
+            effect_set = set()
+        if "read_only" in effect_set:
+            read_only.add(tool_name)
+    return read_only
 
 
 # ---------------------------------------------------------------------------
@@ -262,7 +348,11 @@ def analyze_sessions(sessions: list[ReplSession]) -> dict:
     }
 
 
-def analyze_diagnostics(records: list[DiagRecord]) -> dict:
+def analyze_diagnostics(
+    records: list[DiagRecord],
+    *,
+    read_only_tools: set[str] | None = None,
+) -> dict:
     """Analyze diagnostics records for zero-tool session classification."""
     all_records = records
     repl_records = [r for r in records if r.mode == "repl"]
@@ -276,6 +366,20 @@ def analyze_diagnostics(records: list[DiagRecord]) -> dict:
     # REPL records: with vs without tools
     repl_with_tools = [r for r in repl_records if r.tools_used > 0]
     repl_no_tools = [r for r in repl_records if r.tools_used == 0]
+    repl_multi_tools = [r for r in repl_records if len(r.tools_called) >= 2]
+    repl_multi_tools_with_parallel = [
+        r for r in repl_multi_tools if r.parallel_tools_used
+    ]
+
+    read_only_classified = 0
+    read_only_eligible = 0
+    if read_only_tools:
+        for r in repl_multi_tools:
+            if not r.tools_called:
+                continue
+            read_only_eligible += 1
+            if all(tool in read_only_tools for tool in r.tools_called):
+                read_only_classified += 1
 
     # Suite breakdown for zero-tool REPL sessions
     zero_tool_suites: Counter = Counter()
@@ -286,6 +390,12 @@ def analyze_diagnostics(records: list[DiagRecord]) -> dict:
     tool_suites: Counter = Counter()
     for r in repl_with_tools:
         tool_suites[r.suite] += 1
+
+    # Candidate tool chains from diagnostics
+    tool_chain_counts: Counter = Counter()
+    for r in repl_records:
+        for chain in r.tool_chains:
+            tool_chain_counts[chain] += 1
 
     # Pass rate by mode
     mode_pass: dict[str, tuple[int, int]] = {}
@@ -305,9 +415,15 @@ def analyze_diagnostics(records: list[DiagRecord]) -> dict:
         "non_repl_records": len(non_repl),
         "repl_with_tools": len(repl_with_tools),
         "repl_no_tools": len(repl_no_tools),
+        "repl_multi_tools": len(repl_multi_tools),
+        "repl_multi_tools_with_parallel": len(repl_multi_tools_with_parallel),
+        "repl_multi_tools_read_only": read_only_classified,
+        "repl_multi_tools_read_only_eligible": read_only_eligible,
+        "read_only_tools_available": bool(read_only_tools),
         "suite_counts": suite_counts,
         "zero_tool_suites": zero_tool_suites,
         "tool_suites": tool_suites,
+        "tool_chain_counts": tool_chain_counts,
         "mode_pass": mode_pass,
         "anomaly_repl_no_tools": anomaly_count,
     }
@@ -386,6 +502,35 @@ def rank_combined_ops(analysis: dict) -> list[dict]:
     return candidates
 
 
+def rank_tool_chain_candidates(
+    session_analysis: dict,
+    diag_analysis: dict,
+) -> list[dict]:
+    """Rank exact tool chains observed in diagnostics and bigrams."""
+    chain_counts: Counter = Counter()
+    provenance: dict[tuple[str, ...], Counter] = defaultdict(Counter)
+
+    for chain, count in session_analysis["bigrams"].items():
+        chain_counts[chain] += count
+        provenance[chain]["autopilot_bigrams"] += count
+
+    for chain, count in diag_analysis["tool_chain_counts"].items():
+        chain_counts[chain] += count
+        provenance[chain]["tool_chains"] += count
+
+    ranked: list[dict] = []
+    for chain, count in chain_counts.most_common(20):
+        ranked.append({
+            "chain": chain,
+            "pattern": " -> ".join(chain),
+            "count": count,
+            "sources": dict(provenance[chain]),
+            "est_turn_savings": max(len(chain) - 1, 1),
+        })
+
+    return ranked
+
+
 # ---------------------------------------------------------------------------
 # Report generation
 # ---------------------------------------------------------------------------
@@ -394,6 +539,7 @@ def generate_report(
     session_analysis: dict,
     diag_analysis: dict,
     combined_ops: list[dict],
+    tool_chain_candidates: list[dict],
     instrumentation_gaps: list[str],
 ) -> str:
     """Generate the markdown report."""
@@ -423,6 +569,25 @@ def generate_report(
       f"({da['repl_with_tools']/max(da['repl_records'],1)*100:.1f}%)")
     L(f"- REPL without tools: {da['repl_no_tools']} "
       f"({da['repl_no_tools']/max(da['repl_records'],1)*100:.1f}%)")
+    L(f"- REPL records with >=2 tools_called: {da['repl_multi_tools']} "
+      f"({da['repl_multi_tools']/max(da['repl_records'],1)*100:.1f}%)")
+    if da["read_only_tools_available"]:
+        eligible = max(da["repl_multi_tools_read_only_eligible"], 1)
+        pct = da["repl_multi_tools_read_only"] / eligible * 100
+        L(
+            "- REPL records with explicit read-only tool chains: "
+            f"{da['repl_multi_tools_read_only']} "
+            f"({pct:.1f}% of multi-tool REPL records)"
+        )
+    else:
+        L(
+            "- REPL records with explicit read-only tool chains: "
+            "unavailable (no read_only annotations in tool registry)"
+        )
+    L(f"- REPL records with parallel_tools_used=True: "
+      f"{da['repl_multi_tools_with_parallel']} "
+      f"({da['repl_multi_tools_with_parallel']/max(da['repl_multi_tools'],1)*100:.1f}% "
+      f"of multi-tool REPL records)")
     L(f"- `repl_no_tools` anomaly flagged: {da['anomaly_repl_no_tools']}")
     L("")
 
@@ -497,6 +662,25 @@ def generate_report(
         L(f"| {a} -> {b} -> {c} | {count} | ~2 |")
     if not sa["trigrams"]:
         L("| _(no trigrams found)_ | - | - |")
+    L("")
+
+    # Tool chain candidates
+    L("## Tool Chain Candidates")
+    L("")
+    L("Exact tool chains observed in diagnostics and autopilot bigrams:")
+    L("")
+    L("| Chain | Count | Est. Turn Savings | Sources |")
+    L("|-------|-------|-------------------|---------|")
+    for candidate in tool_chain_candidates[:10]:
+        sources = ", ".join(
+            f"{name}:{count}" for name, count in sorted(candidate["sources"].items())
+        )
+        L(
+            f"| {candidate['pattern']} | {candidate['count']} | "
+            f"~{candidate['est_turn_savings']} | {sources or '-'} |"
+        )
+    if not tool_chain_candidates:
+        L("| _(no chain candidates found)_ | - | - | - |")
     L("")
 
     # Outcome by tool count
@@ -608,31 +792,25 @@ def main() -> None:
     # Analyze
     print("Analyzing sessions...", file=sys.stderr)
     session_analysis = analyze_sessions(sessions)
-    diag_analysis = analyze_diagnostics(diag_records)
+    read_only_tools = load_explicit_read_only_tools(TOOL_REGISTRY_YAML)
+    diag_analysis = analyze_diagnostics(
+        diag_records,
+        read_only_tools=read_only_tools,
+    )
     combined_ops = rank_combined_ops(session_analysis)
+    tool_chain_candidates = rank_tool_chain_candidates(
+        session_analysis,
+        diag_analysis,
+    )
 
     # Identify instrumentation gaps
     gaps: list[str] = []
     if not diag_records:
         gaps.append("seeding_diagnostics.jsonl not found or empty")
     else:
-        # Check if tools_called is always empty
-        has_tools_called = any(
-            r.tools_used > 0 for r in diag_records
-        )
-        has_tools_detail = False
-        # Re-check raw file for non-empty tools_called
-        if DIAGNOSTICS_JSONL.exists():
-            with DIAGNOSTICS_JSONL.open() as f:
-                for line in f:
-                    try:
-                        rec = json.loads(line)
-                        if rec.get("tools_called"):
-                            has_tools_detail = True
-                            break
-                    except json.JSONDecodeError:
-                        pass
-        if has_tools_called and not has_tools_detail:
+        has_tools_called = any(r.tools_called for r in diag_records)
+        has_tools_used = any(r.tools_used > 0 for r in diag_records)
+        if has_tools_used and not has_tools_called:
             gaps.append(
                 "`tools_called` array in seeding_diagnostics.jsonl is always "
                 "empty even when `tools_used > 0`. Per-tool-call names are "
@@ -671,7 +849,7 @@ def main() -> None:
 
     # Generate report
     report = generate_report(session_analysis, diag_analysis,
-                             combined_ops, gaps)
+                             combined_ops, tool_chain_candidates, gaps)
 
     # Write report
     REPORT_OUT.parent.mkdir(parents=True, exist_ok=True)
@@ -696,6 +874,16 @@ def main() -> None:
         print(f"  REPL mode:     {da['repl_records']}")
         print(f"  REPL + tools:  {da['repl_with_tools']} "
               f"({da['repl_with_tools']/max(da['repl_records'],1)*100:.1f}%)")
+        print(f"  Multi-tool records: {da['repl_multi_tools']} "
+              f"({da['repl_multi_tools']/max(da['repl_records'],1)*100:.1f}%)")
+        if da["read_only_tools_available"]:
+            print("  Explicit read-only multi-tool: "
+                  f"{da['repl_multi_tools_read_only']} / "
+                  f"{da['repl_multi_tools_read_only_eligible']}")
+        else:
+            print("  Explicit read-only multi-tool: unavailable")
+        print("  Parallel multi-tool: "
+              f"{da['repl_multi_tools_with_parallel']} / {da['repl_multi_tools']}")
         print()
 
         if sa["tool_freq"]:
@@ -708,6 +896,12 @@ def main() -> None:
             print("Top bigram patterns:")
             for (a, b), count in sa["bigrams"].most_common(5):
                 print(f"  {a} -> {b}: {count}")
+            print()
+
+        if tool_chain_candidates:
+            print("Top tool chain candidates:")
+            for candidate in tool_chain_candidates[:5]:
+                print(f"  {candidate['pattern']}: {candidate['count']}")
             print()
 
         if combined_ops:
