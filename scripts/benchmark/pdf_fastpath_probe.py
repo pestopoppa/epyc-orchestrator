@@ -102,6 +102,8 @@ class ProbeSummary:
     corpus_kind: str = "unspecified"
     manifest_path: str = ""
     structural_signal_totals: dict[str, int] = field(default_factory=dict)
+    structural_signal_pdf_count: int = 0
+    structural_signal_pdf_fraction: float = 0.0
 
     def to_dict(self, include_records: bool = True) -> dict[str, Any]:
         data = asdict(self)
@@ -557,6 +559,29 @@ def _structural_signal_totals(records: list[ExtractionRecord]) -> dict[str, int]
     }
 
 
+def _record_has_structural_signal(record: ExtractionRecord) -> bool:
+    if not record.success:
+        return False
+    return any(
+        (
+            record.table_like_line_count > 0,
+            any(count > 0 for count in record.structured_counts.values()),
+            bool(record.bbox_count),
+            bool(record.page_image_count),
+        )
+    )
+
+
+def _structural_signal_pdf_count(records: list[ExtractionRecord]) -> int:
+    return len(
+        {
+            record.pdf_path
+            for record in records
+            if _record_has_structural_signal(record)
+        }
+    )
+
+
 def run_probe(
     pdf_paths: list[Path],
     *,
@@ -582,6 +607,7 @@ def run_probe(
         for backend in selected_backends
     }
     success_count = sum(1 for record in records if record.success)
+    structural_signal_pdf_count = _structural_signal_pdf_count(records)
     return ProbeSummary(
         pdf_count=len(pdf_paths),
         backend_count=len(selected_backends),
@@ -593,6 +619,10 @@ def run_probe(
         corpus_kind=corpus_kind,
         manifest_path=str(manifest_path) if manifest_path else "",
         structural_signal_totals=_structural_signal_totals(records),
+        structural_signal_pdf_count=structural_signal_pdf_count,
+        structural_signal_pdf_fraction=(
+            structural_signal_pdf_count / len(pdf_paths) if pdf_paths else 0.0
+        ),
     )
 
 
@@ -660,6 +690,10 @@ def render_markdown(summary: ProbeSummary) -> str:
         f"- success_count: `{summary.success_count}`",
         f"- failure_count: `{summary.failure_count}`",
         f"- structural_signal_totals: `{json.dumps(summary.structural_signal_totals, sort_keys=True)}`",
+        (
+            f"- structural_signal_pdf_count: `{summary.structural_signal_pdf_count}` "
+            f"({summary.structural_signal_pdf_fraction:.1%})"
+        ),
         "",
         "| Backend | Attempts | Successes | Failures | Median latency ms | Median quality | Table-like lines | Structured h/t/f | BBoxes | Page images | Failure reasons |",
         "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
@@ -730,6 +764,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Omit per-PDF records from JSON output.",
     )
+    parser.add_argument(
+        "--require-structural-signal",
+        action="store_true",
+        help="Return exit code 3 when no PDF/backend pair produced table or layout signal.",
+    )
     return parser.parse_args(argv)
 
 
@@ -776,6 +815,12 @@ def main(argv: list[str] | None = None) -> int:
             print(f"\njson: {args.output_json}")
         if args.output_md:
             print(f"markdown: {args.output_md}")
+    if args.require_structural_signal and summary.structural_signal_pdf_count == 0:
+        print(
+            "No structural/table signal found; this corpus is not decision-useful for ODL table routing.",
+            file=sys.stderr,
+        )
+        return 3
     return 0
 
 

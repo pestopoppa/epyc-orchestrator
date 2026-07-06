@@ -44,6 +44,16 @@ class FakeRouter:
         return ("# Heading\n\nhybrid body\n", structured, 40.0)
 
 
+class NoSignalRouter:
+    pdftotext_path = "pdftotext"
+
+    def _assess_text_quality(self, text: str) -> tuple[float, bool]:
+        return (0.9, False) if text.strip() else (0.0, True)
+
+    def _extract_with_pdftotext(self, pdf_path: Path) -> tuple[str, float]:
+        return ("plain body text with enough words for quality\n", 10.0)
+
+
 def test_run_probe_summarizes_local_backends(tmp_path: Path) -> None:
     pdf_path = tmp_path / "sample.pdf"
     pdf_path.write_bytes(b"%PDF-1.4\n")
@@ -69,6 +79,8 @@ def test_run_probe_summarizes_local_backends(tmp_path: Path) -> None:
     assert summary.backend_summaries["opendataloader"].total_table_like_lines == 2
     assert summary.backend_summaries["opendataloader_structured"].total_structured_tables == 2
     assert summary.structural_signal_totals["structured_tables"] == 2
+    assert summary.structural_signal_pdf_count == 1
+    assert summary.structural_signal_pdf_fraction == 1.0
     structured = next(record for record in summary.records if record.backend == "opendataloader_structured")
     assert structured.structured_counts == {"figures": 0, "headings": 1, "tables": 2}
 
@@ -267,6 +279,30 @@ def test_main_writes_json_and_markdown(tmp_path: Path, monkeypatch) -> None:
     assert data["corpus_name"] == "unit"
     assert data["corpus_kind"] == "born_digital_fastpath"
     assert data["backend_summaries"]["pdftotext"]["successes"] == 1
+    assert data["structural_signal_pdf_count"] == 1
+    assert data["structural_signal_pdf_fraction"] == 1.0
     markdown = md_path.read_text(encoding="utf-8")
     assert "structural_signal_totals" in markdown
+    assert "structural_signal_pdf_count" in markdown
     assert "| pdftotext |" in markdown
+
+
+def test_main_can_require_structural_signal(tmp_path: Path, monkeypatch, capsys) -> None:
+    pdf_path = tmp_path / "sample.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+
+    monkeypatch.setattr(probe, "PDFRouter", lambda: NoSignalRouter())
+    monkeypatch.setattr(probe, "_executable_exists", lambda command: command == "pdftotext")
+    rc = probe.main(
+        [
+            "--pdf",
+            str(pdf_path),
+            "--backend",
+            "pdftotext",
+            "--require-structural-signal",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert rc == 3
+    assert "not decision-useful" in captured.err
