@@ -5483,6 +5483,18 @@ function _currentCodeHealthLabel(health) {
     if (!health || !health.status) return 'current code unknown';
     const bits = [`current code ${health.status}`];
     if (health.code_stale) bits.push('runtime source drift');
+    const advice = health.restart_advice || {};
+    if (advice.restart_needed) {
+        if (advice.safe_to_restart_now) {
+            bits.push('restart ready');
+        } else if (advice.status === 'wait_for_boundary') {
+            bits.push('restart wait for boundary');
+        } else if (advice.status) {
+            bits.push(`restart ${advice.status}`);
+        }
+    } else if (advice.status && !['no_action', 'restart_recommended'].includes(advice.status)) {
+        bits.push(`restart ${advice.status}`);
+    }
     return bits.join(' · ');
 }
 

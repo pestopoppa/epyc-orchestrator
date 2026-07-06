@@ -620,6 +620,31 @@ def test_autopilot_phase_health_reports_stale(tmp_path, monkeypatch) -> None:
     assert health["blockers"]
 
 
+def test_autopilot_current_code_health_includes_restart_advice(monkeypatch) -> None:
+    def fake_phase_health(**_kwargs):
+        return {
+            "ok": False,
+            "status": "code_stale",
+            "phase": "dispatch_action",
+            "pid": os.getpid(),
+            "pid_alive": True,
+            "trial_id": 1207,
+            "action_type": "seed_batch",
+            "idle_reason": "evaluating question",
+            "code_stale": True,
+            "blockers": ["autopilot process predates runtime source changes: autopilot.py"],
+        }
+
+    monkeypatch.setattr(dashboard, "build_phase_health_report", fake_phase_health)
+
+    health = dashboard._autopilot_current_code_health()
+
+    assert health is not None
+    assert health["restart_advice"]["restart_needed"] is True
+    assert health["restart_advice"]["safe_to_restart_now"] is False
+    assert health["restart_advice"]["status"] == "wait_for_boundary"
+
+
 def test_process_status_includes_autopilot_phase_health(tmp_path, monkeypatch) -> None:
     phase_path = tmp_path / "phase.json"
     phase_path.write_text(json.dumps({

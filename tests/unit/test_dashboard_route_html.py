@@ -456,6 +456,9 @@ def test_dashboard_autopilot_progress_includes_eval_label() -> None:
     assert "learning-excluded ${fmtRate(excluded)}" in body
     assert "_currentCodeHealthLabel(d.current_code_health)" in body
     assert "current code ${health.status}" in body
+    assert "const advice = health.restart_advice || {};" in body
+    assert "restart wait for boundary" in body
+    assert "restart ready" in body
 
 
 def test_dashboard_repo_readiness_panel_is_advisory_only() -> None:

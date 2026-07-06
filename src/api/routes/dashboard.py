@@ -107,6 +107,9 @@ from src.autopilot_core.tier_specs import DEFAULT_FRONTIER_TIER
 from scripts.autopilot.phase_status import (
     build_phase_health_report,
 )
+from scripts.autopilot.autopilot_restart_advisor import (
+    build_restart_advice as _build_autopilot_restart_advice,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -2810,6 +2813,22 @@ def _autopilot_current_code_health() -> dict[str, Any] | None:
         )
         if str(report.get("status") or "") in {"missing", "unavailable"}:
             return None
+        report = dict(report)
+        try:
+            report["restart_advice"] = _build_autopilot_restart_advice(
+                report,
+                max_trials=int(os.environ.get("AUTOPILOT_DASHBOARD_RESTART_MAX_TRIALS", "3000")),
+            )
+        except Exception as exc:  # noqa: BLE001
+            report["restart_advice"] = {
+                "advisor_version": "autopilot_restart_advisor.v1",
+                "ok": False,
+                "status": "manual_attention",
+                "restart_needed": False,
+                "safe_to_restart_now": False,
+                "reason": f"restart advice unavailable: {exc}",
+                "blockers": [f"restart advice unavailable: {exc}"],
+            }
         return report
     except Exception:
         return None
