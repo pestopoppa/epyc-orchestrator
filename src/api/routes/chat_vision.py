@@ -23,6 +23,7 @@ from src.prompt_builders import (
 from src.api.routes.chat_utils import QWEN_STOP
 from src.api.routes.vision_serving import (
     fallback_vl_port_for_role as _fallback_vl_port_for_role,
+    stack_priors_available as _stack_priors_available,
     vision_roles as _vision_roles,
 )
 from src.registry.stack_priors import (
@@ -103,9 +104,15 @@ def _vl_url_for_role(
     role: str,
     stack_priors_path: Path = _DEFAULT_STACK_PRIORS_PATH,
 ) -> str:
-    return _stack_prior_vl_urls(stack_priors_path).get(
-        role,
-        _fallback_vl_url_for_role(role),
+    urls = _stack_prior_vl_urls(stack_priors_path)
+    url = urls.get(role)
+    if isinstance(url, str):
+        return url
+    if not _stack_priors_available(stack_priors_path):
+        return _fallback_vl_url_for_role(role)
+    raise ValueError(
+        f"No generated VL URL for role {role!r}; degraded fallback disabled "
+        f"because live stack priors are available at {stack_priors_path}"
     )
 
 
@@ -116,6 +123,11 @@ def _vl_url_for_port(
     for url in _stack_prior_vl_urls(stack_priors_path).values():
         if urlparse(url).port == vl_port:
             return url
+    if _stack_priors_available(stack_priors_path):
+        raise ValueError(
+            f"No generated VL URL for port {vl_port}; degraded fallback disabled "
+            f"because live stack priors are available at {stack_priors_path}"
+        )
     for role in _vision_roles(stack_priors_path):
         if _fallback_vl_port_for_role(role) == vl_port:
             return _fallback_vl_url_for_role(role)

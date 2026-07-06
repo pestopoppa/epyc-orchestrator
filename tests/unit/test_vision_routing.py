@@ -283,6 +283,30 @@ roles:
         assert _fallback_vl_port_for_role("worker_vision") == 8086
         assert _vl_port_for_role("vision_escalation", tmp_path / "missing.yaml") == 8087
 
+    def test_vl_port_for_role_rejects_stale_degraded_fallback_when_priors_exist(
+        self, tmp_path: Path
+    ):
+        """Present generated priors are authoritative even when a legacy port exists."""
+        from src.api.routes.chat_pipeline.vision_stage import _vl_port_for_role
+
+        priors = tmp_path / "stack_priors.yaml"
+        priors.write_text(
+            """
+roles:
+  worker_general:
+    deployment_status: live_stack
+    serving:
+      endpoint: http://localhost:9102
+      launch:
+        modes: [worker_pool]
+        entries: []
+""",
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError, match="degraded fallback disabled"):
+            _vl_port_for_role("vision_escalation", priors)
+
     def test_returns_none_for_non_vision_role(self):
         """Non-vision roles return None (fall through)."""
         from src.api.routes.chat_pipeline.vision_stage import _execute_vision_multimodal
