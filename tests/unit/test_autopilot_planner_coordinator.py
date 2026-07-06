@@ -378,6 +378,30 @@ def test_selectable_deep_eval_tier3_local_draft_and_critic_is_accepted() -> None
     assert "`seed_batch` and `deep_eval` are valid known action types" in critique_prompt
 
 
+def test_trial_planning_banner_only_writes_for_live_trial_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    writes: list[str] = []
+
+    class Tap:
+        def write(self, text: str) -> None:
+            writes.append(text)
+
+        def flush(self) -> None:
+            writes.append("<flush>")
+
+        def close(self) -> None:
+            writes.append("<close>")
+
+    monkeypatch.setattr(planner_coordinator, "_open_planner_tap", lambda: Tap())
+
+    planner_coordinator._write_trial_planning_banner(None)
+    assert writes == []
+
+    planner_coordinator._write_trial_planning_banner(1234)
+    assert any("TRIAL 1234" in item for item in writes)
+    assert "<flush>" in writes
+    assert "<close>" in writes
+
+
 def test_critique_prompt_distinguishes_known_action_from_availability() -> None:
     prompt = planner_coordinator.build_critique_prompt(
         "### Action Availability\nDo not emit seed_batch for W8 replay pressure.\n",

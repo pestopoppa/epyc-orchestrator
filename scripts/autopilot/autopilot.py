@@ -5990,6 +5990,7 @@ def _run_loop_inner(
                 planner_state=planner_provider_state,
                 stagnation_signal=stagnation_signal,
                 allowed_action_types=selectable_action_types,
+                trial_id=trial_counter,
             )
             phase.set(
                 "planner_parse",

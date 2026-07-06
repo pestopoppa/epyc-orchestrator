@@ -9,13 +9,16 @@ import re
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
 import peaf
+
 from controller_io import (
     _append_planner_archive,
     _loads_json_payload,
+    _open_planner_tap,
     extract_action,
     extract_rationale,
     validate_single_variable,
@@ -236,6 +239,35 @@ def _apply_planner_spend_breaker(
     )
 
 
+def _write_trial_planning_banner(trial_id: int | None) -> None:
+    """Emit a big, scannable ``>>>> TRIAL N <<<<`` header into the planner tap.
+
+    Best-effort and self-contained: opens its own append handle so it never
+    disturbs the per-provider tap writes. The wide arrow rule makes the start of
+    each trial's planning trivial to spot while scrolling the raw log or the
+    dashboard planner panel.
+    """
+    if trial_id is None:
+        return
+    label = f"TRIAL {trial_id}"
+    ts = datetime.now().isoformat(timespec="seconds")
+    banner = (
+        f"\n{'>' * 24} {label} {'<' * 24}\n"
+        f"[{ts}] planning cycle start\n"
+    )
+    tap = _open_planner_tap()
+    if tap is None:
+        return
+    try:
+        tap.write(banner)
+        tap.flush()
+    finally:
+        try:
+            tap.close()
+        except Exception:
+            pass
+
+
 def plan_with_providers(
     prompt: str,
     *,
@@ -247,8 +279,12 @@ def plan_with_providers(
     settings: PlannerSettings | None = None,
     provider_factory: ProviderFactory = get_planner_provider,
     allowed_action_types: Iterable[str] | None = None,
+    trial_id: int | None = None,
 ) -> PlannerDecision:
     """Draft a canonical planner action with optional secondary critique."""
+    # One deterministic, unmistakable banner per live planning cycle. Tests and
+    # helper calls omit trial_id, so they do not write to the shared planner tap.
+    _write_trial_planning_banner(trial_id)
     settings = settings or load_planner_settings_from_env()
     planner_state = planner_state if planner_state is not None else {}
     settings, spend_breaker_active = _apply_planner_spend_breaker(settings, planner_state)
