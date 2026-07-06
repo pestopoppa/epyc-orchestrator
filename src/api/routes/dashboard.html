@@ -5988,7 +5988,7 @@ function renderTopologyActivity() {
         }
         const parts = [];
         if (nRecent) {
-            parts.push(`recent <span class="stat-fresh">${nRecent}</span> live req`);
+            parts.push(`last <span class="stat-fresh">${nRecent}</span> req`);
         } else {
             parts.push(`history <span class="stat-stale">${nCompleted}</span> done`);
         }
@@ -6009,7 +6009,7 @@ function renderTopologyActivity() {
                 ? `${nRecent} live/recent req in last ${Math.round(windowS)}s`
                 : `${nCompleted} completed req in historical summary window`,
             liveTps != null ? `live ${liveTps.toFixed(2)} t/s (in-flight)` : null,
-            stats.avg_tps_recent != null ? `avg ${stats.avg_tps_recent.toFixed(2)} t/s` : null,
+            stats.avg_tps_recent != null ? `historical avg ${stats.avg_tps_recent.toFixed(2)} t/s` : null,
             stats.avg_duration_s != null ? `avg ${stats.avg_duration_s.toFixed(2)}s/task` : null,
             age != null ? `last activity ${age.toFixed(1)}s ago` : null,
         ].filter(Boolean);
@@ -6030,7 +6030,7 @@ function applyTopologyActivityPayload(d) {
 async function updateTopologyActivity(refreshSeq = ++_topologyActivityRefreshSeq) {
     // Per-role recent activity stats from /dashboard/api/topology_activity.
     // Populates each topology row's .activity-stats element with:
-    //   "recent 12 req · 31 t/s avg · 3s ago" or "2 active · 31 t/s live"
+    //   "last 12 req · 31 t/s hist · 3s ago" or "2 active · 31 t/s live"
     // Color cues: fresh (<60s ago) in green, stale (>=60s) in dim.
     // Falls back to "—" when the role has no data in the window.
     if (_topologyActivityFetchInFlight) {
