@@ -5934,7 +5934,9 @@ function renderTopologyActivity() {
         const liveTps = (stats && stats.live_tps != null && Number(stats.live_tps) > 0)
             ? Number(stats.live_tps) : null;
         const age = topologyActivityAgeS(stats);
-        const nReq = stats ? (stats.n_recent || stats.n_completed || 0) : 0;
+        const nRecent = stats ? (stats.n_recent || 0) : 0;
+        const nCompleted = stats ? (stats.n_completed || 0) : 0;
+        const nReq = nRecent || nCompleted;
         const lockInfo = (typeof _latestRegionLocksByRole === 'object' && _latestRegionLocksByRole)
             ? _latestRegionLocksByRole[base] : null;
         const lockActiveCount = (lockInfo && lockInfo.instanceIdxs) ? lockInfo.instanceIdxs.size : 0;
@@ -5943,7 +5945,8 @@ function renderTopologyActivity() {
         const stillInsideWindow = age == null || age <= windowS;
         if (liveActiveCount > 0) {
             const parts = [`<span class="stat-fresh">${liveActiveCount}</span> active`];
-            if (nReq) parts.push(`<span class="stat-fresh">${nReq}</span> req`);
+            if (nRecent) parts.push(`<span class="stat-fresh">${nRecent}</span> live req`);
+            else if (nCompleted) parts.push(`recent <span class="stat-stale">${nCompleted}</span> done`);
             if (liveTps != null) {
                 parts.push(`<span class="stat-fresh">${liveTps.toFixed(1)}</span> t/s live`);
             } else if (stats && stats.avg_tps_recent != null && stats.avg_tps_recent > 0) {
@@ -5972,7 +5975,7 @@ function renderTopologyActivity() {
                 const titleBits = [
                     `${base} listener${running === 1 ? '' : 's'} running`,
                     `no recent requests in last ${Math.round(windowS)}s`,
-                    stats.avg_tps_recent != null ? `summary ${stats.avg_tps_recent.toFixed(2)} t/s` : null,
+                    stats.avg_tps_recent != null ? `historical summary ${stats.avg_tps_recent.toFixed(2)} t/s` : null,
                 ].filter(Boolean);
                 el.title = titleBits.join(' · ');
             } else {
@@ -5982,11 +5985,15 @@ function renderTopologyActivity() {
             return;
         }
         const parts = [];
-        parts.push(`recent <span class="stat-fresh">${nReq}</span> req`);
+        if (nRecent) {
+            parts.push(`recent <span class="stat-fresh">${nRecent}</span> live req`);
+        } else {
+            parts.push(`history <span class="stat-stale">${nCompleted}</span> done`);
+        }
         if (liveTps != null) {
             parts.push(`<span class="stat-fresh">${liveTps.toFixed(1)}</span> t/s live`);
         } else if (stats.avg_tps_recent != null && stats.avg_tps_recent > 0) {
-            parts.push(`<span class="stat-fresh">${stats.avg_tps_recent.toFixed(1)}</span> t/s avg`);
+            parts.push(`<span class="stat-stale">${stats.avg_tps_recent.toFixed(1)}</span> t/s hist`);
         } else if (stats.avg_duration_s != null && stats.avg_duration_s > 0) {
             parts.push(`<span class="stat-fresh">${stats.avg_duration_s.toFixed(1)}</span>s avg`);
         }
@@ -5996,7 +6003,9 @@ function renderTopologyActivity() {
         }
         el.innerHTML = parts.join('<span class="stat-sep">·</span>');
         const tooltipBits = [
-            `${nReq} req in last ${Math.round(windowS)}s`,
+            nRecent
+                ? `${nRecent} live/recent req in last ${Math.round(windowS)}s`
+                : `${nCompleted} completed req in historical summary window`,
             liveTps != null ? `live ${liveTps.toFixed(2)} t/s (in-flight)` : null,
             stats.avg_tps_recent != null ? `avg ${stats.avg_tps_recent.toFixed(2)} t/s` : null,
             stats.avg_duration_s != null ? `avg ${stats.avg_duration_s.toFixed(2)}s/task` : null,

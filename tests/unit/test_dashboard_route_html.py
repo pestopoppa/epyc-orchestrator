@@ -479,14 +479,15 @@ def test_dashboard_topology_activity_stats_refresh_with_live_age_tick() -> None:
     assert "let _topologyActivityRefreshSeq = 0;" in body
     assert "async function updateTopologyActivity(refreshSeq = ++_topologyActivityRefreshSeq)" in body
     assert "if (snap.topology_activity) applyTopologyActivityPayload(snap.topology_activity);" in body
-    assert "recent <span class=\"stat-fresh\">${nReq}</span> req" in body
-    assert "t/s avg" in body
+    assert "recent <span class=\"stat-fresh\">${nRecent}</span> live req" in body
+    assert "history <span class=\"stat-stale\">${nCompleted}</span> done" in body
+    assert "t/s hist" in body
     assert "setInterval(() => scheduleRegionLocksRefresh(true), 1500)" in body
     assert "setInterval(renderTopologyActivity, TOPOLOGY_ACTIVITY_AGE_TICK_MS)" in body
     assert "lockActivitySignature" in body
     assert "const liveActiveCount = Math.max(lockActiveCount, tapActiveCount);" in body
     assert "active CPU-region/tap holder(s)" in body
-    assert "summary ${stats.avg_tps_recent.toFixed(2)} t/s" in body
+    assert "historical summary ${stats.avg_tps_recent.toFixed(2)} t/s" in body
     assert "renderRegionLocksBasicGrid(grid, d);" in body
     assert "grid.dataset.regionLocksPainted = '1';" in body
     assert "basic matrix fallback; rich overlay still initializing" in body
