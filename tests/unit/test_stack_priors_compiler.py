@@ -31,6 +31,7 @@ from src.registry.stack_priors import (
     stack_prior_serving_url_value,
     stack_prior_serving_ports,
     stack_prior_uses_shared_worker_launch,
+    _stack_manifest_info,
     _server_mode_launch_requirement_overrides,
     validate_stack_priors_contract,
 )
@@ -41,6 +42,34 @@ _RETIRED_ARCHITECT_ROLE = "architect_" "coding"
 def _write_yaml(path: Path, data: dict) -> Path:
     path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
     return path
+
+
+def test_stack_manifest_info_defaults_to_launcher_quarter_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ORCHESTRATOR_STACK_NUMA_MODE", raising=False)
+
+    _aliases, roles = _stack_manifest_info()
+
+    assert roles["frontdoor"]["url"] == "http://localhost:8080"
+    assert roles["frontdoor"]["ports"] == [8080, 8180, 8280, 8380]
+    assert roles["coder_escalation"]["url"] == "http://localhost:8080"
+    assert roles["worker_summarize"]["url"] == "http://localhost:8080"
+    assert roles["worker_general"]["url"] == "http://localhost:8082"
+    assert roles["worker_general"]["ports"] == [8082, 8182, 8282, 8382]
+    assert roles["ingest_long_context"]["url"] == "http://localhost:8185"
+    assert roles["vision_escalation"]["url"] == "http://localhost:8187"
+
+
+def test_stack_manifest_info_can_compile_explicit_both_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "both")
+
+    _aliases, roles = _stack_manifest_info()
+
+    assert roles["frontdoor"]["url"] == "http://localhost:8070"
+    assert roles["frontdoor"]["ports"] == [8070, 8080, 8180, 8280, 8380]
+    assert roles["worker_general"]["url"] == "http://localhost:8072"
+    assert roles["worker_general"]["ports"] == [8072, 8082, 8182, 8282, 8382]
 
 
 def test_runtime_stack_prior_helpers_fail_closed_on_missing_artifact(tmp_path: Path) -> None:
@@ -341,7 +370,7 @@ def test_compile_prefers_server_mode_for_shared_role_memory_and_serving(tmp_path
     assert frontdoor_runtime["cache"]["slot_save_path"].endswith("/kv_slots/frontdoor")
     assert frontdoor_runtime["flags"]["jinja"] is True
     assert frontdoor_runtime["flags"]["spec"]["enabled"] is False
-    assert coder["serving"]["endpoint"] == "http://localhost:8070"
+    assert coder["serving"]["endpoint"] == "http://localhost:8080"
     assert coder["serving"]["shared_mmap"] is True
 
 
@@ -387,7 +416,7 @@ def test_compile_maps_model_role_server_binding(tmp_path: Path) -> None:
     worker = priors["roles"]["worker_general"]
     assert worker["serving"]["server_role"] == "worker"
     assert worker["serving"]["binding"] == "server_mode.model_role"
-    assert worker["serving"]["ports"] == [8072, 8082, 8182, 8282, 8382]
+    assert worker["serving"]["ports"] == [8082, 8182, 8282, 8382]
     assert worker["serving"]["effective_context_tokens"] == 16384
     assert worker["serving"]["launch"]["primary_roles"] == ["worker_general"]
     assert worker["serving"]["launch"]["modes"] == ["worker_pool"]
@@ -553,14 +582,13 @@ def test_compile_shared_aliases_use_runtime_descriptor(tmp_path: Path) -> None:
         ]
 
     assert priors["roles"]["worker_general"]["serving"]["ports"] == [
-        8072,
         8082,
         8182,
         8282,
         8382,
     ]
-    assert priors["roles"]["worker_math"]["serving"]["ports"] == [8072, 8082]
-    assert priors["roles"]["toolrunner"]["serving"]["ports"] == [8072, 8082]
+    assert priors["roles"]["worker_math"]["serving"]["ports"] == [8082]
+    assert priors["roles"]["toolrunner"]["serving"]["ports"] == [8082]
     assert priors["roles"]["worker_math"]["serving"]["effective_context_tokens"] == 16384
     assert priors["roles"]["toolrunner"]["serving"]["effective_context_tokens"] == 16384
     assert priors["roles"]["worker_math"]["serving"]["binding"] == "server_mode.shared_with"
@@ -654,7 +682,7 @@ def test_compile_preserves_conflicts_as_gaps_when_allowed(tmp_path: Path) -> Non
     assert role["status"] == "compiled_with_gaps"
     assert "Role-server conflict: stale worker server binding" in role["known_gaps"]
     assert role["serving"]["binding"] == "stack_manifest.alias->stack_manifest.role"
-    assert role["serving"]["ports"] == [8072, 8082]
+    assert role["serving"]["ports"] == [8082]
     assert role["serving"]["launch"]["entries"][0]["alias"] is True
     assert role["serving"]["launch"]["entries"][0]["primary_role"] == "worker_general"
 

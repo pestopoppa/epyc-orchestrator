@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import copy
 import hashlib
+import os
 import re
 import subprocess
 import sys
@@ -769,13 +770,19 @@ def _stack_manifest_info() -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
             VISION_WORKER_MODEL,
             WARM_SERVERS,
             WORKER_POOL_MODELS,
+            _filter_by_numa_mode,
         )
     except Exception:
         return {}, {}
 
+    numa_mode = os.environ.get("ORCHESTRATOR_STACK_NUMA_MODE", "quarter").strip().lower()
+    if numa_mode not in {"full", "quarter", "both"}:
+        numa_mode = "quarter"
+    active_servers = _filter_by_numa_mode(HOT_SERVERS + WARM_SERVERS, numa_mode)
+
     launch_ports_by_role: dict[str, list[int]] = {}
     launch_entries_by_role: dict[str, list[dict[str, Any]]] = {}
-    for server in HOT_SERVERS + WARM_SERVERS:
+    for server in active_servers:
         if not isinstance(server, dict):
             continue
         port = server.get("port")
@@ -1430,15 +1437,21 @@ def _serving_record(
         if isinstance(runtime_slots, int) and runtime_slots > 0:
             slots = runtime_slots
 
+    sorted_ports = sorted(ports)
+    if sorted_ports:
+        endpoint = f"http://localhost:{sorted_ports[0]}"
+    elif isinstance(launch_cfg, dict) and isinstance(launch_cfg.get("url"), str):
+        endpoint = launch_cfg.get("url")
+    elif isinstance(server_cfg, dict):
+        endpoint = server_cfg.get("url")
+    else:
+        endpoint = None
+
     return {
-        "endpoint": server_cfg.get("url")
-        if isinstance(server_cfg, dict)
-        else launch_cfg.get("url")
-        if isinstance(launch_cfg, dict)
-        else None,
+        "endpoint": endpoint,
         "server_role": server_role,
         "binding": binding,
-        "ports": sorted(ports),
+        "ports": sorted_ports,
         "slots": slots if isinstance(slots, int) and slots > 0 else None,
         "tier": launch_cfg.get("tier")
         if isinstance(launch_cfg, dict) and launch_cfg.get("tier") is not None
