@@ -2220,6 +2220,27 @@ def test_higher_tier_probe_respects_critic_reject_numeric_fallback() -> None:
     assert "higher_tier_probe_guard" not in state
 
 
+def test_higher_tier_probe_skips_when_outcome_progress_is_frontier_stalled() -> None:
+    state = {}
+    requested = {"type": "train_routing_models", "min_memories": 500}
+
+    action, rationale = autopilot._maybe_force_higher_tier_probe(
+        requested,
+        state,
+        journal=SimpleNamespace(entries_with_supersessions=lambda: []),
+        archive=SimpleNamespace(summary=lambda tier: {"frontier_size": 0}),
+        rationale={"falsifier": "train routing should improve frontier flow"},
+        trial_counter=100,
+        outcome_progress_pressure_text=(
+            "Outcome blockers: frontier admission stale: 205 trial(s) since frontier > 150"
+        ),
+    )
+
+    assert action == requested
+    assert rationale["higher_tier_probe_skipped_outcome_stalled"] is True
+    assert "higher_tier_probe_guard" not in state
+
+
 def test_higher_tier_probe_accepts_selected_t3_deep_eval() -> None:
     selected = {"type": "deep_eval", "tier": 3}
 

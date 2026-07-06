@@ -1139,6 +1139,11 @@ def _build_outcome_progress_pressure(
     return "\n".join(lines)
 
 
+def _outcome_progress_frontier_stalled(outcome_progress_pressure_text: str) -> bool:
+    text = outcome_progress_pressure_text.lower()
+    return "outcome blockers:" in text and "frontier admission stale" in text
+
+
 _QUOTA_NUMERIC_SURFACES = _configured_numeric_surfaces()
 
 
@@ -2583,6 +2588,7 @@ def _maybe_force_higher_tier_probe(
     rationale: dict[str, Any] | None = None,
     trial_counter: int = 0,
     w8_replay_pressure_text: str = "",
+    outcome_progress_pressure_text: str = "",
     tiers: tuple[int, ...] = HIGHER_TIER_PROBE_TIERS,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """Bound T1-only exploitation by forcing occasional T2/T3 eval probes.
@@ -2615,6 +2621,14 @@ def _maybe_force_higher_tier_probe(
                 **(rationale or {}),
                 "higher_tier_probe_satisfied_by_selected_action": True,
                 "higher_tier_probe_tier": selected_tier,
+            },
+        )
+    if _outcome_progress_frontier_stalled(outcome_progress_pressure_text):
+        return (
+            action,
+            {
+                **(rationale or {}),
+                "higher_tier_probe_skipped_outcome_stalled": True,
             },
         )
 
@@ -6136,6 +6150,7 @@ def _run_loop_inner(
                     rationale=rationale,
                     trial_counter=trial_counter,
                     w8_replay_pressure_text=planner_evidence_text,
+                    outcome_progress_pressure_text=outcome_progress_pressure_text,
                 )
 
         if critic_repeat_skip is None:
