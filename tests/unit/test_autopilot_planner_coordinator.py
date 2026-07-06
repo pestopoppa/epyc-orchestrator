@@ -1964,3 +1964,9 @@ def test_open_primary_circuit_routes_to_other_model() -> None:
     assert decision.draft_provider == "claude"
     assert decision.action == {"type": "seed_batch", "n_questions": 10}
     assert len(codex.calls) == 0
+
+
+def test_local_briefed_aliases_are_classified_as_local_model() -> None:
+    assert planner_coordinator._model_of("local_brief_frontdoor") == "local"
+    assert planner_coordinator._model_of("local_ingest_frontdoor") == "local"
+    assert planner_coordinator._model_of("local_brief_worker") == "local"

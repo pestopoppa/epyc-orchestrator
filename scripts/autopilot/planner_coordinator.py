@@ -1236,6 +1236,11 @@ _LOCAL_ROLE_NAMES = {
     "local_ingest",
     "local_ingest_long_context",
     "ingest_local",
+    "local_brief_frontdoor",
+    "local_ingest_frontdoor",
+    "local_two_stage",
+    "local_brief_worker",
+    "local_ingest_worker",
 }
 
 

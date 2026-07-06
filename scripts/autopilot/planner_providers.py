@@ -55,6 +55,16 @@ CRITICAL OUTPUT CONTRACT FOR THIS LOCAL AUTOPILOT CRITIQUE:
 - Do not invent flags, surfaces, suites, dependencies, or evidence.
 """
 
+_LOCAL_BRIEF_OUTPUT_CONTRACT = """\
+CRITICAL OUTPUT CONTRACT FOR THIS LOCAL AUTOPILOT BRIEF:
+- Produce a compact controller brief for a second local planner model.
+- Preserve only live constraints, allowed action types, feature-flag state,
+  blacklists, last non-executing action, evidence-power status, and outcome
+  blockers needed to choose one valid next action.
+- Do not propose an action, do not critique, and do not add new evidence.
+- Keep exact symbol names, action type names, surface names, and trial ids.
+"""
+
 
 @dataclass
 class PlannerProviderResult:
@@ -591,6 +601,211 @@ class LocalChatPlannerProvider:
         return payload
 
 
+class LocalBriefedPlannerProvider:
+    """Two-stage local provider: ingest-long-context brief, then local draft.
+
+    This is default-off and exposed only through explicit provider aliases. It
+    lets the local stack use the long-context role for the full controller
+    prompt while giving the final drafter a shorter, contract-focused brief.
+    Critique calls pass through to the final provider; the coordinator already
+    builds a reduced critique prompt, so summarizing it again adds failure modes
+    without reducing much context.
+    """
+
+    name = "local_brief_frontdoor"
+    supports_resume = False
+
+    def __init__(
+        self,
+        *,
+        brief_role: str | None = None,
+        draft_role: str | None = None,
+        brief_max_tokens: int | None = None,
+        draft_max_tokens: int | None = None,
+        name: str | None = None,
+        brief_provider: PlannerProvider | None = None,
+        draft_provider: PlannerProvider | None = None,
+    ) -> None:
+        self._brief_role = (
+            brief_role
+            or os.environ.get("AUTOPILOT_LOCAL_BRIEF_PLANNER_BRIEF_ROLE")
+            or "ingest_long_context"
+        )
+        self._draft_role = (
+            draft_role
+            or os.environ.get("AUTOPILOT_LOCAL_BRIEF_PLANNER_DRAFT_ROLE")
+            or "frontdoor"
+        )
+        self._brief_max_tokens = (
+            int(brief_max_tokens)
+            if brief_max_tokens is not None
+            else _env_int("AUTOPILOT_LOCAL_BRIEF_PLANNER_BRIEF_MAX_TOKENS", 1536)
+        )
+        self._draft_max_tokens = (
+            int(draft_max_tokens)
+            if draft_max_tokens is not None
+            else _env_int("AUTOPILOT_LOCAL_BRIEF_PLANNER_DRAFT_MAX_TOKENS", 2048)
+        )
+        self.name = name or self.name
+        self._brief_provider = brief_provider or LocalPlannerProvider(
+            role=self._brief_role,
+            model=self._brief_role,
+            max_tokens=self._brief_max_tokens,
+            name=f"{self.name}_brief",
+        )
+        self._draft_provider = draft_provider or LocalPlannerProvider(
+            role=self._draft_role,
+            model=self._draft_role,
+            max_tokens=self._draft_max_tokens,
+            name=f"{self.name}_draft",
+        )
+
+    def invoke(
+        self,
+        prompt: str,
+        *,
+        role: str,
+        session_id: str | None = None,
+        timeout: int = 300,
+        cwd: Path | str | None = None,
+    ) -> PlannerProviderResult:
+        del session_id
+        start = time.time()
+        tap = _open_planner_tap()
+
+        if role != "draft":
+            result = self._draft_provider.invoke(
+                prompt,
+                role=role,
+                session_id=None,
+                timeout=timeout,
+                cwd=cwd,
+            )
+            wrapped = PlannerProviderResult(
+                provider=self.name,
+                role=role,
+                text=result.text,
+                ok=result.ok,
+                error=result.error,
+                duration_s=time.time() - start,
+                raw_events=[
+                    json.dumps(
+                        {
+                            "stage": "passthrough",
+                            "provider": result.provider,
+                            "ok": result.ok,
+                            "error": result.error,
+                            "text_chars": len(result.text or ""),
+                        },
+                        default=str,
+                    )
+                ],
+            )
+            _archive_local_briefed_call(prompt, wrapped, None, result)
+            _close_tap(tap)
+            return wrapped
+
+        _tap_write(
+            tap,
+            f"\n{'=' * 72}\n"
+            f"[{datetime.now().isoformat(timespec='seconds')}] "
+            f"PLANNER provider={self.name} role=draft two-stage start\n"
+            f"brief_role: {self._brief_role}\n"
+            f"draft_role: {self._draft_role}\n"
+            f"prompt_chars: {len(prompt)}\n"
+            f"{'-' * 72}\n",
+        )
+        brief_prompt = _local_planner_brief_prompt(prompt)
+        brief_result = self._brief_provider.invoke(
+            brief_prompt,
+            role="brief",
+            session_id=None,
+            timeout=timeout,
+            cwd=cwd,
+        )
+        if not brief_result.ok or not brief_result.text.strip():
+            error = f"brief stage failed: {brief_result.error or 'empty brief'}"
+            result = PlannerProviderResult(
+                provider=self.name,
+                role=role,
+                ok=False,
+                error=error,
+                duration_s=time.time() - start,
+                raw_events=[
+                    json.dumps(
+                        {
+                            "stage": "brief",
+                            "provider": brief_result.provider,
+                            "ok": brief_result.ok,
+                            "error": brief_result.error,
+                        },
+                        default=str,
+                    )
+                ],
+            )
+            _tap_write(tap, f"[FAIL provider={self.name} role=draft] {error}\n{'=' * 72}\n")
+            _archive_local_briefed_call(prompt, result, brief_result, None)
+            _close_tap(tap)
+            return result
+
+        draft_prompt = _local_planner_briefed_draft_prompt(
+            brief_result.text,
+            original_prompt_chars=len(prompt),
+        )
+        draft_result = self._draft_provider.invoke(
+            draft_prompt,
+            role="draft",
+            session_id=None,
+            timeout=timeout,
+            cwd=cwd,
+        )
+        error = "" if draft_result.ok else f"draft stage failed: {draft_result.error}"
+        result = PlannerProviderResult(
+            provider=self.name,
+            role=role,
+            text=draft_result.text,
+            ok=draft_result.ok,
+            error=error,
+            duration_s=time.time() - start,
+            raw_events=[
+                json.dumps(
+                    {
+                        "stage": "brief",
+                        "provider": brief_result.provider,
+                        "ok": brief_result.ok,
+                        "text_chars": len(brief_result.text or ""),
+                    },
+                    default=str,
+                ),
+                json.dumps(
+                    {
+                        "stage": "draft",
+                        "provider": draft_result.provider,
+                        "ok": draft_result.ok,
+                        "error": draft_result.error,
+                        "text_chars": len(draft_result.text or ""),
+                    },
+                    default=str,
+                ),
+            ],
+        )
+        if result.ok:
+            _tap_write(
+                tap,
+                f"[local:result:{self.name}:draft] {result.text[:4000]}\n"
+                f"[END provider={self.name} role=draft] "
+                f"result_chars={len(result.text)}\n{'=' * 72}\n",
+            )
+        else:
+            _tap_write(
+                tap,
+                f"[FAIL provider={self.name} role=draft] {error[:400]}\n{'=' * 72}\n",
+            )
+        _archive_local_briefed_call(prompt, result, brief_result, draft_result)
+        _close_tap(tap)
+        return result
+
+
 def parse_codex_jsonl(output: str) -> str:
     """Extract assistant text from Codex ``--json`` JSONL output."""
     parts: list[str] = []
@@ -659,6 +874,38 @@ def _local_planner_prompt(prompt: str, *, planner_role: str | None = None) -> st
     return prompt
 
 
+def _local_planner_brief_prompt(prompt: str) -> str:
+    return (
+        f"{_LOCAL_BRIEF_OUTPUT_CONTRACT}\n"
+        "## Full AutoPilot Controller Prompt\n\n"
+        f"{prompt}\n\n"
+        f"{_LOCAL_BRIEF_OUTPUT_CONTRACT}"
+    )
+
+
+def _local_planner_briefed_draft_prompt(
+    brief: str,
+    *,
+    original_prompt_chars: int,
+) -> str:
+    return f"""\
+You are the AutoPilot meta-reasoning controller. A long-context local role has
+compressed the live controller prompt into the brief below.
+
+Return exactly one fenced ```json:autopilot_actions block followed by one fenced
+```json:autopilot_rationale block. Use only action types, fields, surfaces,
+flags, suites, and evidence explicitly present in the brief. If the brief is
+missing information needed for a higher-risk action, emit the safest valid
+fallback action named in the brief.
+
+Original controller prompt length: {original_prompt_chars} chars.
+
+## Controller Prompt Brief
+
+{brief.strip()}
+"""
+
+
 def get_planner_provider(name: str) -> PlannerProvider:
     normalized = (name or "").strip().lower()
     if normalized == "claude":
@@ -689,6 +936,18 @@ def get_planner_provider(name: str) -> PlannerProvider:
         )
     if normalized in {"local_chat", "local_chat_planner", "chat_local"}:
         return LocalChatPlannerProvider(name="local_chat")
+    if normalized in {"local_brief_frontdoor", "local_ingest_frontdoor", "local_two_stage"}:
+        return LocalBriefedPlannerProvider(
+            brief_role="ingest_long_context",
+            draft_role="frontdoor",
+            name="local_brief_frontdoor",
+        )
+    if normalized in {"local_brief_worker", "local_ingest_worker"}:
+        return LocalBriefedPlannerProvider(
+            brief_role="ingest_long_context",
+            draft_role="worker_general",
+            name="local_brief_worker",
+        )
     raise ValueError(f"Unknown planner provider: {name}")
 
 
@@ -737,6 +996,15 @@ def _tap_write(tap: Any, text: str) -> None:
     try:
         tap.write(text)
         tap.flush()
+    except Exception:
+        pass
+
+
+def _close_tap(tap: Any) -> None:
+    if tap is None:
+        return
+    try:
+        tap.close()
     except Exception:
         pass
 
@@ -938,6 +1206,41 @@ def _archive_local_chat_call(
             "response_preview": (
                 json.dumps(response_data, default=str)[:1000] if response_data is not None else ""
             ),
+        }
+    )
+
+
+def _archive_local_briefed_call(
+    prompt: str,
+    result: PlannerProviderResult,
+    brief_result: PlannerProviderResult | None,
+    draft_result: PlannerProviderResult | None,
+) -> None:
+    import hashlib
+
+    _append_planner_archive(
+        {
+            "ts": time.time(),
+            "ts_iso": datetime.now().isoformat(timespec="seconds"),
+            "provider": result.provider,
+            "role": result.role,
+            "duration_s": result.duration_s,
+            "ok": result.ok,
+            "error": result.error,
+            "prompt_chars": len(prompt),
+            "prompt_sha256_16": hashlib.sha256(prompt.encode()).hexdigest()[:16],
+            "result_chars": len(result.text),
+            "result_preview": result.text[:500],
+            "local_briefed_planner": {
+                "brief_provider": brief_result.provider if brief_result else "",
+                "brief_ok": bool(brief_result and brief_result.ok),
+                "brief_error": brief_result.error if brief_result else "",
+                "brief_chars": len((brief_result.text if brief_result else "") or ""),
+                "draft_provider": draft_result.provider if draft_result else "",
+                "draft_ok": bool(draft_result and draft_result.ok),
+                "draft_error": draft_result.error if draft_result else "",
+                "draft_chars": len((draft_result.text if draft_result else "") or ""),
+            },
         }
     )
 

@@ -17,6 +17,38 @@ sys.path.insert(0, str(AUTOPILOT_DIR))
 planner_providers = importlib.import_module("planner_providers")
 
 
+class FakePlannerProvider:
+    supports_resume = False
+
+    def __init__(self, name: str, responses: list[planner_providers.PlannerProviderResult]):
+        self.name = name
+        self.responses = list(responses)
+        self.calls: list[dict[str, Any]] = []
+
+    def invoke(
+        self,
+        prompt: str,
+        *,
+        role: str,
+        session_id: str | None = None,
+        timeout: int = 300,
+        cwd: Path | str | None = None,
+    ) -> planner_providers.PlannerProviderResult:
+        self.calls.append(
+            {
+                "prompt": prompt,
+                "role": role,
+                "session_id": session_id,
+                "timeout": timeout,
+                "cwd": cwd,
+            }
+        )
+        result = self.responses.pop(0)
+        result.provider = self.name
+        result.role = role
+        return result
+
+
 def test_claude_provider_does_not_resume_or_persist_session_by_default(tmp_path) -> None:
     captured: dict[str, Any] = {}
 
@@ -210,6 +242,135 @@ def test_local_planner_contract_can_be_disabled(monkeypatch) -> None:
 
     assert draft_content == "planner prompt"
     assert critique_content == "planner prompt"
+
+
+def test_local_briefed_provider_briefs_then_drafts(monkeypatch, tmp_path) -> None:
+    records: list[dict[str, Any]] = []
+    monkeypatch.setattr(planner_providers, "_open_planner_tap", lambda: None)
+    monkeypatch.setattr(planner_providers, "_append_planner_archive", records.append)
+
+    brief_provider = FakePlannerProvider(
+        "local_ingest_brief",
+        [
+            planner_providers.PlannerProviderResult(
+                provider="local_ingest_brief",
+                role="brief",
+                ok=True,
+                text="Allowed Actions: numeric_trial only. Safe fallback: memrl_retrieval.",
+            )
+        ],
+    )
+    draft_text = (
+        "```json:autopilot_actions\n"
+        '{"type":"numeric_trial","surface":"memrl_retrieval","params":{}}\n'
+        "```\n\n"
+        "```json:autopilot_rationale\n"
+        '{"falsifier":"no replayable evidence"}\n'
+        "```\n"
+    )
+    draft_provider = FakePlannerProvider(
+        "local_frontdoor_draft",
+        [
+            planner_providers.PlannerProviderResult(
+                provider="local_frontdoor_draft",
+                role="draft",
+                ok=True,
+                text=draft_text,
+            )
+        ],
+    )
+    provider = planner_providers.LocalBriefedPlannerProvider(
+        name="local_brief_frontdoor",
+        brief_provider=brief_provider,
+        draft_provider=draft_provider,
+    )
+
+    result = provider.invoke("FULL CONTROLLER PROMPT", role="draft", timeout=17, cwd=tmp_path)
+
+    assert result.ok is True
+    assert result.provider == "local_brief_frontdoor"
+    assert result.text == draft_text
+    assert brief_provider.calls[0]["role"] == "brief"
+    assert brief_provider.calls[0]["timeout"] == 17
+    assert brief_provider.calls[0]["cwd"] == tmp_path
+    assert "CRITICAL OUTPUT CONTRACT FOR THIS LOCAL AUTOPILOT BRIEF" in (
+        brief_provider.calls[0]["prompt"]
+    )
+    assert "FULL CONTROLLER PROMPT" in brief_provider.calls[0]["prompt"]
+    assert draft_provider.calls[0]["role"] == "draft"
+    assert "Controller Prompt Brief" in draft_provider.calls[0]["prompt"]
+    assert "FULL CONTROLLER PROMPT" not in draft_provider.calls[0]["prompt"]
+    assert "Original controller prompt length: 22 chars" in draft_provider.calls[0]["prompt"]
+    assert records[-1]["provider"] == "local_brief_frontdoor"
+    assert records[-1]["local_briefed_planner"]["brief_ok"] is True
+    assert records[-1]["local_briefed_planner"]["draft_ok"] is True
+
+
+def test_local_briefed_provider_stops_when_brief_fails(monkeypatch) -> None:
+    records: list[dict[str, Any]] = []
+    monkeypatch.setattr(planner_providers, "_open_planner_tap", lambda: None)
+    monkeypatch.setattr(planner_providers, "_append_planner_archive", records.append)
+
+    brief_provider = FakePlannerProvider(
+        "local_ingest_brief",
+        [
+            planner_providers.PlannerProviderResult(
+                provider="local_ingest_brief",
+                role="brief",
+                ok=False,
+                error="context too long",
+            )
+        ],
+    )
+    draft_provider = FakePlannerProvider("local_frontdoor_draft", [])
+    provider = planner_providers.LocalBriefedPlannerProvider(
+        brief_provider=brief_provider,
+        draft_provider=draft_provider,
+    )
+
+    result = provider.invoke("prompt", role="draft")
+
+    assert result.ok is False
+    assert result.error == "brief stage failed: context too long"
+    assert draft_provider.calls == []
+    assert records[-1]["local_briefed_planner"]["brief_ok"] is False
+    assert records[-1]["local_briefed_planner"]["draft_provider"] == ""
+
+
+def test_local_briefed_provider_passes_critique_through_without_brief(monkeypatch) -> None:
+    records: list[dict[str, Any]] = []
+    monkeypatch.setattr(planner_providers, "_open_planner_tap", lambda: None)
+    monkeypatch.setattr(planner_providers, "_append_planner_archive", records.append)
+
+    brief_provider = FakePlannerProvider("local_ingest_brief", [])
+    draft_provider = FakePlannerProvider(
+        "local_worker",
+        [
+            planner_providers.PlannerProviderResult(
+                provider="local_worker",
+                role="critique",
+                ok=True,
+                text="```json:autopilot_critique\n"
+                '{"decision":"approve","confidence":0.9,"issues":[]}\n'
+                "```",
+            )
+        ],
+    )
+    provider = planner_providers.LocalBriefedPlannerProvider(
+        name="local_brief_worker",
+        brief_provider=brief_provider,
+        draft_provider=draft_provider,
+    )
+
+    result = provider.invoke("critique prompt", role="critique", timeout=31)
+
+    assert result.ok is True
+    assert result.provider == "local_brief_worker"
+    assert brief_provider.calls == []
+    assert draft_provider.calls[0]["prompt"] == "critique prompt"
+    assert draft_provider.calls[0]["role"] == "critique"
+    assert draft_provider.calls[0]["timeout"] == 31
+    assert records[-1]["local_briefed_planner"]["draft_provider"] == "local_worker"
 
 
 def test_local_planner_default_url_uses_ipv4_loopback(monkeypatch) -> None:
@@ -445,6 +606,14 @@ def test_local_ingest_alias_selects_long_context_role() -> None:
 
     assert provider.name == "local_ingest"
     assert provider._payload("prompt")["x_orchestrator_role"] == "ingest_long_context"
+
+
+def test_local_briefed_alias_selects_ingest_then_frontdoor() -> None:
+    provider = planner_providers.get_planner_provider("local_ingest_frontdoor")
+
+    assert provider.name == "local_brief_frontdoor"
+    assert provider._brief_role == "ingest_long_context"
+    assert provider._draft_role == "frontdoor"
 
 
 def test_local_frontdoor_alias_ignores_ingest_env(monkeypatch) -> None:
