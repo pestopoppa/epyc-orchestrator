@@ -77,6 +77,23 @@ def test_dashboard_html_distinguishes_waiting_tap_from_active_locks() -> None:
     assert "lockOnlyStructuredTapHolders" in body
     assert "chat.* tap absent" in body
     assert "holders · ${tapped} tapped · ${offTap} off-tap" in body
+    assert "live tap request(s)" in body
+    assert "prefill/decode pending" in body
+    assert "tapLiveRequestCount" in body
+
+
+def test_dashboard_html_separates_proc_holders_from_live_tap_requests() -> None:
+    """The lock panel should distinguish real /proc holders from tap inference."""
+    html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    body = html_path.read_text()
+
+    assert "procHolderCount" in body
+    assert "tapInferredCount" in body
+    assert "slotInferredCount" in body
+    assert "tapLiveStateBits" in body
+    assert "live tap request(s)" in body
+    assert "/proc holder instance(s)" in body
+    assert "tap-inferred active stream(s)" in body
 
 
 def test_dashboard_run_state_active_inference_overrides_quiet_log() -> None:

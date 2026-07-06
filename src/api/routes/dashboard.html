@@ -6214,6 +6214,18 @@ async function updateRegionLocks(
             }
             _latestTapInferredRegionLocksByRole = buildTapInferredRegionLocks();
             _latestSlotInferredRegionLocksByRole = buildSlotInferredRegionLocks(byRole);
+            const tapLiveRequests = typeof liveStructuredTapRequests === 'function' ? liveStructuredTapRequests() : [];
+            const tapLiveRequestCount = tapLiveRequests.length;
+            const tapLiveStateCounts = {};
+            for (const req of tapLiveRequests) {
+                const activity = structuredTapActivity(req);
+                tapLiveStateCounts[activity.state] = (tapLiveStateCounts[activity.state] || 0) + 1;
+            }
+            const tapLiveStateBits = [];
+            if (tapLiveStateCounts.streaming) tapLiveStateBits.push(`${tapLiveStateCounts.streaming} streaming`);
+            if (tapLiveStateCounts.prefill_decode_pending) {
+                tapLiveStateBits.push(`${tapLiveStateCounts.prefill_decode_pending} prefill/decode pending`);
+            }
             for (const [role, inferred] of Object.entries(_latestTapInferredRegionLocksByRole || {})) {
                 const base = _latestRegionLocksByRole[role] || {
                     instanceIdxs: new Set(),
@@ -6348,21 +6360,38 @@ async function updateRegionLocks(
                 activeLockCount,
                 heldRegions: globalHeldRegions.size,
                 enabled,
+                procHolderCount: actualActiveLockCount,
+                tapLiveRequestCount,
+                tapInferredCount: tapInferredMissing.length,
+                slotInferredCount: slotInferredMissing.length,
             };
             renderAutopilotRunStrip();
             const regionDot = document.getElementById('region-locks-dot');
             if (!enabled) {
                 _setDotState(regionDot, 'down', 'per-region CPU locks disabled');
             } else if (activeLockCount > 0) {
+                const titleBits = [`${actualActiveLockCount} /proc holder instance(s)`];
+                if (tapLiveRequestCount) {
+                    titleBits.push(`${tapLiveRequestCount} live tap request(s)${tapLiveStateBits.length ? ` (${tapLiveStateBits.join(' · ')})` : ''}`);
+                }
+                if (tapInferredMissing.length) {
+                    titleBits.push(`${tapInferredMissing.length} tap-inferred active instance(s)`);
+                }
+                if (slotInferredMissing.length) {
+                    titleBits.push(`${slotInferredMissing.length} slot-inferred active instance(s)`);
+                }
                 _setDotState(
                     regionDot,
                     'active',
-                    `${activeLockCount} active instance(s) across ${globalHeldRegions.size} CPU region(s): ${heldBySummary || 'unknown'}`
+                    `${titleBits.join(' · ')} across ${globalHeldRegions.size} CPU region(s): ${heldBySummary || 'unknown'}`
                 );
             } else {
                 _setDotState(regionDot, 'idle', 'no CPU region locks currently held; grid shows dispatch readiness');
             }
             if (status && enabled) {
+                const liveTapSuffix = tapLiveRequestCount
+                    ? `; +${tapLiveRequestCount} live tap request(s)${tapLiveStateBits.length ? ` (${tapLiveStateBits.join(' · ')})` : ''}`
+                    : '';
                 const inferredSuffix = tapInferredMissing.length
                     ? `; +${tapInferredMissing.length} tap-inferred active stream(s): ${tapInferredMissing.join(', ')}`
                     : '';
@@ -6370,7 +6399,7 @@ async function updateRegionLocks(
                     ? `; +${slotInferredMissing.length} slot-inferred active instance(s): ${slotInferredMissing.join(', ')}`
                     : '';
                 status.textContent = activeLockCount > 0
-                    ? `— ${actualActiveLockCount} /proc holder instance(s): ${actualHeldBySummary || 'none'}${inferredSuffix}${slotInferredSuffix}; × cells are same-role or matrix-blocked waits; per-region locks ENABLED`
+                    ? `— ${actualActiveLockCount} /proc holder instance(s): ${actualHeldBySummary || 'none'}${liveTapSuffix}${inferredSuffix}${slotInferredSuffix}; × cells are same-role or matrix-blocked waits; per-region locks ENABLED`
                     : '— no locks held; per-region locks ENABLED';
                 status.style.color = activeLockCount > 0 ? '#fbbf24' : 'var(--muted)';
             }
