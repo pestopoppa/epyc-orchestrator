@@ -5988,7 +5988,7 @@ function renderTopologyActivity() {
         }
         const parts = [];
         if (nRecent) {
-            parts.push(`last <span class="stat-fresh">${nRecent}</span> req`);
+            parts.push(`recent <span class="stat-stale">${nRecent}</span> req`);
         } else {
             parts.push(`history <span class="stat-stale">${nCompleted}</span> done`);
         }
@@ -6006,7 +6006,7 @@ function renderTopologyActivity() {
         el.innerHTML = parts.join('<span class="stat-sep">·</span>');
         const tooltipBits = [
             nRecent
-                ? `${nRecent} live/recent req in last ${Math.round(windowS)}s`
+                ? `${nRecent} recent completed/observed req in last ${Math.round(windowS)}s; not an active-holder signal`
                 : `${nCompleted} completed req in historical summary window`,
             liveTps != null ? `live ${liveTps.toFixed(2)} t/s (in-flight)` : null,
             stats.avg_tps_recent != null ? `historical avg ${stats.avg_tps_recent.toFixed(2)} t/s` : null,
