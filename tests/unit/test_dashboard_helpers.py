@@ -2454,6 +2454,32 @@ def test_region_locks_cached_ttl_and_fail_open(monkeypatch) -> None:
     assert failed["entries"] == [{"role": "frontdoor"}]
 
 
+def test_snapshot_uses_fresh_region_lock_scan(monkeypatch) -> None:
+    fresh = {"generated_at": 123.0, "entries": [{"role": "fresh"}], "by_role": {"fresh": {}}}
+
+    async def fake_poll_all_slots():
+        return {}, {"ports": 0, "answered": 0, "timed_out": 0, "duration_s": 0.0}
+
+    def fake_cached():
+        raise AssertionError("snapshot must not use the cached region-lock payload")
+
+    monkeypatch.setattr(dashboard, "_poll_all_slots", fake_poll_all_slots)
+    monkeypatch.setattr(dashboard, "_todays_progress_log", lambda: Path("/does/not/exist"))
+    monkeypatch.setattr(dashboard, "_scan_recent_decisions", lambda _path: ([], {}, {}))
+    monkeypatch.setattr(dashboard, "_count_log_events", lambda *_a, **_k: {})
+    monkeypatch.setattr(dashboard, "_discover_llama_ports", lambda: {})
+    monkeypatch.setattr(dashboard, "_gate_inflight_by_live_slots", lambda in_flight, *_a, **_k: in_flight)
+    monkeypatch.setattr(dashboard, "_region_locks_payload", lambda: fresh)
+    monkeypatch.setattr(dashboard, "_region_locks_cached", fake_cached)
+    monkeypatch.setattr(dashboard, "_structured_tap_requests_for_dashboard", lambda **_k: [])
+    monkeypatch.setattr(dashboard, "_topology_nodes_cached", lambda: [])
+
+    response = asyncio.run(dashboard._snapshot_impl())
+    payload = json.loads(response.body)
+
+    assert payload["region_locks"] == fresh
+
+
 def test_enrich_structured_tap_requests_fails_open(monkeypatch) -> None:
     """Tap content must render even when the locks/topology domain raises."""
     def boom():

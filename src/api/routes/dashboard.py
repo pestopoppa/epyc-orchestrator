@@ -4202,7 +4202,11 @@ async def _snapshot_impl() -> JSONResponse:
     )
 
     _snap_now = time.time()
-    region_locks = _region_locks_cached()
+    # The snapshot stream is the coherence source for the dashboard UI. Use a
+    # fresh lock scan here so an older per-worker cache cannot overwrite a
+    # fresher direct `/dashboard/api/region_locks` poll in the same browser
+    # session.
+    region_locks = _region_locks_payload()
     structured_requests = _structured_tap_requests_for_dashboard(
         max_requests=80,
         now_epoch=_snap_now,
