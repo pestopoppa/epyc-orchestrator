@@ -556,6 +556,7 @@ class RoleResult:
     slot_progress_source: str = ""
     tools_used: int = 0
     tools_called: list[str] = field(default_factory=list)
+    tool_chains: list[dict[str, Any]] = field(default_factory=list)
     delegation_events: list[dict] = field(default_factory=list)
     delegation_diagnostics: dict[str, Any] = field(default_factory=dict)
     tools_success: bool | None = None
