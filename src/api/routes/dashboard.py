@@ -387,6 +387,28 @@ def _structured_tap_active(structured_requests: list[dict[str, Any]]) -> bool:
     return False
 
 
+def _structured_tap_requests_for_dashboard(
+    *,
+    max_requests: int,
+    now_epoch: float | None = None,
+    region_locks: dict[str, Any] | None = None,
+    port_roles: dict[int, str] | None = None,
+) -> list[dict[str, Any]]:
+    """Read, parse, and enrich structured tap rows for live dashboard panels."""
+    structured_tail = _read_tap_events_tail(_INFERENCE_TAP_EVENTS_PATH, max_bytes=1024 * 1024)
+    now = time.time() if now_epoch is None else now_epoch
+    structured_requests = _parse_structured_tap_requests(
+        structured_tail,
+        max_requests=max_requests,
+        now_epoch=now,
+    )
+    return _enrich_structured_tap_requests(
+        structured_requests,
+        port_roles=port_roles,
+        region_locks=region_locks,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Inference taps — live prompt + response stream written by autopilot's
 # seeding harness to /mnt/raid0/llm/tmp/*. These are the same files the
@@ -403,14 +425,11 @@ async def inference_tap_snapshot(max_sections: int = 20) -> JSONResponse:
     """
     inference_tail = _read_tail(_INFERENCE_TAP_PATH, max_bytes=512 * 1024)
     sections = _parse_inference_sections(inference_tail, max_sections=max_sections)
-    structured_tail = _read_tap_events_tail(_INFERENCE_TAP_EVENTS_PATH, max_bytes=1024 * 1024)
     now_epoch = time.time()
-    structured_requests = _parse_structured_tap_requests(
-        structured_tail,
+    structured_requests = _structured_tap_requests_for_dashboard(
         max_requests=max_sections,
         now_epoch=now_epoch,
     )
-    structured_requests = _enrich_structured_tap_requests(structured_requests)
     tap_active = _structured_tap_active(structured_requests)
     repl_tail = _read_tail(_REPL_TAP_PATH, max_bytes=64 * 1024)
     # Just take the last ~3000 chars of REPL for compactness
@@ -4183,6 +4202,13 @@ async def _snapshot_impl() -> JSONResponse:
     )
 
     _snap_now = time.time()
+    region_locks = _region_locks_cached()
+    structured_requests = _structured_tap_requests_for_dashboard(
+        max_requests=80,
+        now_epoch=_snap_now,
+        region_locks=region_locks,
+        port_roles=port_roles,
+    )
     return JSONResponse(_stamp({
         "generated_at": _snap_now,
         # Coherent live correlation: topology + region locks + activity are all
@@ -4198,8 +4224,11 @@ async def _snapshot_impl() -> JSONResponse:
         "slots_poll_meta": slots_poll_meta,
         "in_flight_tasks": in_flight_tasks,
         "recent_completed_tasks": recent_completed_tasks,
+        "structured_requests": structured_requests,
+        "tap_active": _structured_tap_active(structured_requests),
+        "structured_tap_mtime": _latest_tap_events_mtime(),
         "live_busy_by_role": role_busy,
-        "region_locks": _region_locks_cached(),
+        "region_locks": region_locks,
         "recent_decisions": recent,
         "source_counts_rolling": rolling,
         "source_counts_cumulative": cumulative,

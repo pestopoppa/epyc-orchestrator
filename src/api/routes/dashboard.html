@@ -1115,6 +1115,7 @@ const _FETCH_JSON_TIMEOUT_MS = 5000;
 let _lastSnapshotAppliedAt = Date.now();
 let _lastWatchdogRecoveryAt = 0;
 let _lastStructuredTapAppliedAt = Date.now();
+let _latestStructuredTapFrameTs = 0;
 
 // Signature of the strip's *structure* — the fields renderTopologyStrip lays
 // out (role labels, ports, backing models, kind). Live activity (dots, tps,
@@ -3576,23 +3577,47 @@ function startStructuredTapStream() {
 // Handler body shared by the standalone structured_tap EventSource and the
 // multiplexed connection (event: structured_tap). Keep all side effects here so
 // both transports behave identically.
-function applyStructuredTapData(data) {
+function structuredTapFrameTs(data) {
+    const ts = Number(data && (data.now != null ? data.now : data.generated_at));
+    if (!Number.isFinite(ts)) return null;
+    if (ts > Date.now() / 1000 + 120) return null;
+    return ts;
+}
+
+function applyStructuredTapFrame(data, {
+    updateFreshness = true,
+    paintTap = true,
+    repaintLocks = true,
+    refreshDetail = true,
+} = {}) {
+    const frameTs = structuredTapFrameTs(data);
+    if (frameTs !== null) {
+        if (frameTs + 0.001 < _latestStructuredTapFrameTs) return false;
+        _latestStructuredTapFrameTs = frameTs;
+    }
     _structuredTapRequests = data.structured_requests || [];
     _lastStructuredTapAppliedAt = Date.now();
     // The badge ages from the SAME frames as the content (either transport):
     // structured_tap_mtime is shard-aware server-side, `now` is server clock.
     // Feeding it from a different endpoint let badge and content disagree.
-    if (data.now != null) {
+    if (updateFreshness && data.now != null) {
         const tapMtime = data.structured_tap_mtime;
         const age = (tapMtime != null) ? Math.max(0, data.now - tapMtime) : null;
         setPanelFreshness('inference_tap', freshnessFromAge(age, 120, 600, 'structured tap'));
     }
-    if (_rawTapRenderMode === 'structured') paintRawTap();
+    if (paintTap && _rawTapRenderMode === 'structured') paintRawTap();
     renderAutopilotRunStrip();
     refreshLiveDotsFromStructuredTap();
-    repaintRegionLocksFromStructuredTapFrame();
-    scheduleRegionLocksRefresh();
-    refreshOpenStructuredTapDetail();
+    if (repaintLocks) {
+        repaintRegionLocksFromStructuredTapFrame();
+        scheduleRegionLocksRefresh();
+    }
+    if (refreshDetail) refreshOpenStructuredTapDetail();
+    return true;
+}
+
+function applyStructuredTapData(data) {
+    applyStructuredTapFrame(data);
 }
 
 // Tap-content fetch fallback: the tap panel's content is otherwise stream-only,
@@ -5248,6 +5273,17 @@ function applyDashboardSnapshot(snap, source) {
     _lastSnapshotAppliedAt = Date.now();
     _latestSnapshot = snap || {};
     const refreshSeq = ++_regionLocksRefreshSeq;
+    // Coherent snapshots now include the structured tap rows used by the live
+    // inference pane. Apply that frame before painting region locks/topology so
+    // tap-inferred CPU holders and the lock grid reflect the same instant.
+    if (Array.isArray(snap.structured_requests)) {
+        applyStructuredTapFrame(snap, {
+            updateFreshness: false,
+            paintTap: _rawTapRenderMode === 'structured',
+            repaintLocks: false,
+            refreshDetail: false,
+        });
+    }
     // Keystone coherence: drive the topology strip STRUCTURE from the SAME
     // snapshot as the region-lock grid + activity overlay, so all three reflect
     // one instant and the strip can never freeze on a stale structure while its

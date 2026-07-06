@@ -414,6 +414,48 @@ def test_inference_tap_snapshot_marks_stale_sentinel_inactive(
     assert payload["structured_requests"][0]["status"] == "quiet"
 
 
+def test_structured_tap_requests_for_dashboard_uses_shared_region_lock_frame(monkeypatch) -> None:
+    now = 100.0
+    event_line = json.dumps(
+        {
+            "event": "start",
+            "request_id": "chat-coder:abc",
+            "role": "coder_escalation",
+            "port": 8070,
+            "ts": "2026-05-22T10:00:00+00:00",
+            "ts_epoch": now - 1,
+            "prompt": "fix code",
+        }
+    )
+    region_locks = {
+        "by_role": {
+            "frontdoor": {
+                "instances": [
+                    {"idx": 0, "shape": "half0", "regions": ["q0", "q1"]},
+                    {"idx": 3, "shape": "q2", "regions": ["q2"]},
+                ],
+            },
+        },
+    }
+
+    monkeypatch.setattr(dashboard, "_read_tap_events_tail", lambda *a, **kw: event_line)
+    enriched = dashboard._structured_tap_requests_for_dashboard(
+        max_requests=20,
+        now_epoch=now,
+        region_locks=region_locks,
+        port_roles={8070: "frontdoor"},
+    )
+
+    assert len(enriched) == 1
+    req = enriched[0]
+    assert req["role"] == "coder_escalation"
+    assert req["topology_role"] == "frontdoor"
+    assert req["lock_role"] == "frontdoor"
+    assert req["instance_idx"] == 0
+    assert req["instance_shape"] == "half0"
+    assert req["instance_regions"] == ["q0", "q1"]
+
+
 def test_topology_activity_uses_structured_tap_not_legacy_sections(monkeypatch) -> None:
     now = 1_000.0
     structured_lines = [

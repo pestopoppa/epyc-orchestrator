@@ -286,6 +286,12 @@ def test_dashboard_topology_activity_stats_refresh_with_live_age_tick() -> None:
     assert "updateContentionGate(refreshSeq);" in body
     assert "function updateTopology(activity, inflight, snapshotSeq = null)" in body
     assert "updateTopology(snap.activity || {}, snap.in_flight_tasks || [], snapshotSeq)" in body
+    assert "let _latestStructuredTapFrameTs = 0;" in body
+    assert "function applyStructuredTapFrame(data, {" in body
+    assert "if (Array.isArray(snap.structured_requests))" in body
+    assert "applyStructuredTapFrame(snap, {" in body
+    assert "repaintLocks: false" in body
+    assert "tap-inferred CPU holders and the lock grid reflect the same instant" in body
     assert "let _topologyActivityRefreshSeq = 0;" in body
     assert "async function updateTopologyActivity(refreshSeq = ++_topologyActivityRefreshSeq)" in body
     assert "updateTopologyActivity();" in body
