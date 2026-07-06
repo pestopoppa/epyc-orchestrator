@@ -5627,20 +5627,42 @@ def _run_loop_inner(
         critic_fallback_skip: SkipOutcome | None = None
         critic_repeat_skip: SkipOutcome | None = None
         planner_decision: Any | None = None
+        action: dict[str, Any] | None = None
+        rationale: dict[str, Any] | None = None
         seq_fresh_eval_context: dict[str, Any] | None = None
         seq_baseline_draw_reference: dict[str, Any] | None = None
         seq_candidate_replay_context: dict[str, Any] | None = None
         seq_due_bypassed_planner = False
         planner_evidence_text = ""
         outcome_progress_pressure_text = ""
-        action, rationale, seq_fresh_eval_context, seq_baseline_draw_reference, seq_candidate_replay_context = _maybe_force_seq_due_action(
-            state=state,
-            journal=journal,
-            tier=DEFAULT_FRONTIER_TIER,
-            blacklist=blacklist,
-            trial_counter=trial_counter,
-            enabled=gate.use_sequential,
-        )
+        if action is None:
+            action, rationale, seq_fresh_eval_context, seq_baseline_draw_reference, seq_candidate_replay_context = _maybe_force_seq_due_action(
+                state=state,
+                journal=journal,
+                tier=DEFAULT_FRONTIER_TIER,
+                blacklist=blacklist,
+                trial_counter=trial_counter,
+                enabled=gate.use_sequential,
+            )
+        if action is None:
+            preplanner_action, preplanner_rationale = _maybe_force_frontier_rerun_action(
+                {"type": "seed_batch", "n_questions": SAFE_FALLBACK_SEED_N},
+                state,
+                journal=journal,
+                archive=archive,
+                blacklist=blacklist,
+                rationale=rationale,
+                trial_counter=trial_counter,
+            )
+            if preplanner_action != {"type": "seed_batch", "n_questions": SAFE_FALLBACK_SEED_N}:
+                action = preplanner_action
+                rationale = preplanner_rationale or {}
+                phase.set(
+                    "planner_bypassed_preemptive_gate",
+                    trial_id=trial_counter,
+                    gate="frontier_rerun",
+                    action_type=action.get("type", ""),
+                )
         if use_controller and action is None:
             phase.set(
                 "planner_prompt_build",

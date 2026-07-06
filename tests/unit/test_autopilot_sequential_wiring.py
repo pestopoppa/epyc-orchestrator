@@ -1871,6 +1871,47 @@ def test_run_loop_inner_forced_seq_fresh_eval_bypasses_controller_planner(
     assert "session_id" not in returned_state
 
 
+def test_run_loop_inner_forced_frontier_rerun_bypasses_controller_planner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state: dict[str, Any] = {
+        "trial_counter": 0,
+        "paused": False,
+        "td_errors": [],
+        "seeder_state": {},
+        "consecutive_failures": 0,
+        "quality_history": [],
+        "quality_history_by_tier": {},
+        "baseline_state": {},
+        "active_instrument_eras": {"autopilot_speed": "E5-autopilot-speed"},
+        "pareto_epoch_ts": 1_782_511_631.0,
+        "pareto_exclude_before_ts": 1_782_511_631.0,
+        "frontier_rerun_required": {
+            "required": True,
+            "reason": "v6 kernel era opened",
+        },
+    }
+
+    returned_state, _ = _run_loop_inner_seq_harness(
+        monkeypatch,
+        state=state,
+        verdict_seq={
+            "candidate": "candidate-controller",
+            "confirmed": True,
+            "E_quality": 10.0,
+            "E_rate_noninf": 10.0,
+            "z": 0.0,
+            "r_eff": 50,
+        },
+        use_controller=True,
+        planner_should_not_run=True,
+    )
+
+    assert returned_state["frontier_rerun_forced"]["forced_action"]["type"] == (
+        "numeric_trial"
+    )
+
+
 def test_run_loop_inner_nonfinalized_seq_does_not_promote_and_leaves_pending(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
