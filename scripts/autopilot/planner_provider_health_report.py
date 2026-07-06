@@ -84,12 +84,19 @@ def _parse_event_timestamp(value: str) -> float | None:
     return parsed.timestamp()
 
 
-def _read_phase_pid(path: Path) -> int | None:
+def _read_phase_payload(path: Path) -> dict[str, Any]:
     try:
         payload = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError):
-        return None
+        return {}
     if not isinstance(payload, dict):
+        return {}
+    return payload
+
+
+def _read_phase_pid(path: Path) -> int | None:
+    payload = _read_phase_payload(path)
+    if not payload:
         return None
     pid = payload.get("pid")
     if isinstance(pid, int) and pid > 0:
@@ -305,12 +312,17 @@ def build_report(
 
     text = _read_tail(tap_path, tail_bytes)
     raw_events = [event for block in _split_blocks(text) if (event := _parse_event_block(block))]
+    phase_payload = _read_phase_payload(phase_path)
+    phase_name = str(phase_payload.get("phase") or "")
+    action_type = str(phase_payload.get("action_type") or "")
     scoped_pid: int | None = None
     if scope_current_process and process_start_s is None:
-        scoped_pid = _read_phase_pid(phase_path)
+        pid = phase_payload.get("pid")
+        scoped_pid = pid if isinstance(pid, int) and pid > 0 else None
         process_start_s = _process_started_at_s(scoped_pid)
     elif scope_current_process:
-        scoped_pid = _read_phase_pid(phase_path)
+        pid = phase_payload.get("pid")
+        scoped_pid = pid if isinstance(pid, int) and pid > 0 else None
     if scope_current_process and process_start_s is not None:
         events = [
             event
@@ -321,9 +333,16 @@ def build_report(
         events = raw_events
     last_age_s = _age_seconds(tap_path)
     blockers: list[str] = []
+    no_event_reason = ""
     if not events:
         if raw_events and scope_current_process and process_start_s is not None:
-            blockers.append("no planner provider events parsed from current process window")
+            if phase_name and phase_name != "planner_invoke":
+                no_event_reason = (
+                    "no planner provider events parsed from current process window; "
+                    f"current phase is {phase_name}"
+                )
+            else:
+                blockers.append("no planner provider events parsed from current process window")
         else:
             blockers.append("no planner provider events parsed from tap log window")
 
@@ -365,6 +384,8 @@ def build_report(
     stale = bool(last_age_s is not None and last_age_s > stale_after_s)
     if blockers:
         status = "attention"
+    elif no_event_reason:
+        status = "waiting_for_planner_turn"
     elif stale:
         status = "stale"
     else:
@@ -388,6 +409,9 @@ def build_report(
             "phase_path": str(phase_path),
             "scoped_pid": scoped_pid,
             "process_started_at_s": round(process_start_s, 3) if process_start_s is not None else None,
+            "phase": phase_name,
+            "action_type": action_type,
+            "no_event_reason": no_event_reason,
         },
         "providers": providers,
         "local": {

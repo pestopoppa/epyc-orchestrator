@@ -132,6 +132,78 @@ def test_build_report_scopes_to_current_process_window(tmp_path: Path) -> None:
     assert report["draft_actions"] == {"deep_eval": 1}
 
 
+def test_build_report_treats_no_current_events_as_waiting_when_not_planning(
+    tmp_path: Path,
+) -> None:
+    tap = tmp_path / "planner_tap.log"
+    phase = tmp_path / "phase.json"
+    _write_tap(
+        tap,
+        [
+            """[2026-07-06T05:37:05] PLANNER provider=local_frontdoor role=draft start
+------------------------------------------------------------------------
+```json:autopilot_actions
+{"type": "seed_batch", "n_questions": 10}
+```
+[END provider=local_frontdoor role=draft] result_chars=100""",
+        ],
+    )
+    phase.write_text(
+        '{"pid": 1234, "phase": "dispatch_action", "action_type": "numeric_trial"}'
+    )
+    process_start_s = reporter._parse_event_timestamp("2026-07-06T06:02:00")
+
+    report = reporter.build_report(
+        tap_path=tap,
+        phase_path=phase,
+        process_start_s=process_start_s,
+        stale_after_s=999999,
+    )
+
+    assert report["ok"] is True
+    assert report["status"] == "waiting_for_planner_turn"
+    assert report["blockers"] == []
+    assert report["window"]["event_count"] == 0
+    assert report["window"]["raw_event_count"] == 1
+    assert report["window"]["phase"] == "dispatch_action"
+    assert report["window"]["action_type"] == "numeric_trial"
+    assert "current phase is dispatch_action" in report["window"]["no_event_reason"]
+
+
+def test_build_report_keeps_no_current_events_attention_while_planning(
+    tmp_path: Path,
+) -> None:
+    tap = tmp_path / "planner_tap.log"
+    phase = tmp_path / "phase.json"
+    _write_tap(
+        tap,
+        [
+            """[2026-07-06T05:37:05] PLANNER provider=local_frontdoor role=draft start
+------------------------------------------------------------------------
+```json:autopilot_actions
+{"type": "seed_batch", "n_questions": 10}
+```
+[END provider=local_frontdoor role=draft] result_chars=100""",
+        ],
+    )
+    phase.write_text('{"pid": 1234, "phase": "planner_invoke"}')
+    process_start_s = reporter._parse_event_timestamp("2026-07-06T06:02:00")
+
+    report = reporter.build_report(
+        tap_path=tap,
+        phase_path=phase,
+        process_start_s=process_start_s,
+        stale_after_s=999999,
+    )
+
+    assert report["ok"] is False
+    assert report["status"] == "attention"
+    assert report["blockers"] == [
+        "no planner provider events parsed from current process window"
+    ]
+    assert report["window"]["phase"] == "planner_invoke"
+
+
 def test_build_report_missing_tap_is_not_ok(tmp_path: Path) -> None:
     report = reporter.build_report(tap_path=tmp_path / "missing.log")
 
