@@ -3789,13 +3789,24 @@ function _stylePlannerLine(line) {
     if (plannerHdr) {
         const role = (plannerHdr[1] || 'draft').toLowerCase();
         const isDraft = role === 'draft';
-        const fg = isDraft ? '#7dd3fc' : '#fbbf24';
-        const bar = isDraft ? '#38bdf8' : '#f59e0b';
-        const tag = isDraft ? '▸ draft' : '⤷ critique';
+        // A `draft` opens a new planning attempt — render it as a big,
+        // full-width, centered banner so the start of planning is unmistakable
+        // while scrolling. This applies retroactively to ALL history in the tap
+        // (no trial number required). `critique` stays a quiet sub-header so the
+        // draft banner remains the dominant anchor.
+        if (isDraft) {
+            const tsMatch = line.match(/\[([0-9T:\-]+)\]/);
+            const tsLabel = tsMatch ? tsMatch[1] : '';
+            return '<span style="display:block;margin:16px 0 2px;padding:6px 10px;'
+                + 'background:#1e3a5f;color:#7dd3fc;font-weight:800;font-size:13px;'
+                + 'letter-spacing:0.5px;text-align:center;'
+                + 'border-top:2px solid #38bdf8;border-bottom:2px solid #38bdf8">'
+                + '▶ NEW PLANNING' + (tsLabel ? '  ·  ' + escapeHTML(tsLabel) : '')
+                + '</span>';
+        }
         return '<span style="display:block;margin:4px 0 2px;padding:1px 8px;'
-            + 'color:' + fg + ';font-weight:600;'
-            + 'border-left:3px solid ' + bar + '">'
-            + tag + '  ·  ' + escaped + '</span>';
+            + 'color:#fbbf24;font-weight:600;border-left:3px solid #f59e0b">'
+            + '⤷ critique  ·  ' + escaped + '</span>';
     }
     if (/^=+$|^-+$/.test(line)) {
         return '<span style="color:#475569">' + escaped + '</span>';
