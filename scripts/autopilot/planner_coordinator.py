@@ -52,7 +52,7 @@ MEDIUM_RISK_ACTIONS = {
     "distill_skillbank",
 }
 HIGH_RISK_ACTIONS = KNOWN_ACTION_TYPES - LOW_RISK_ACTIONS - MEDIUM_RISK_ACTIONS
-SAFE_FALLBACK_SEED_N = 14
+SAFE_FALLBACK_NUMERIC_SURFACE = "memrl_retrieval"
 
 # Actions safe to DISPATCH WITHOUT a critic verdict (degraded/uncritiqued mode).
 # Intentionally EMPTY: when the binding critic is unavailable we PAUSE by default
@@ -87,9 +87,9 @@ class PlannerSettings:
     primary: str = "claude"
     critic: str = "codex"
     # 2026-06-04: default flipped shadow_critique -> draft_critique. The critic is
-    # now BINDING: a valid revised_action is dispatched, and a reject routes to the
-    # safe fallback (see _reconcile). Shadow mode logged 320 reject/revise verdicts
-    # that were all ignored (264 dispatched anyway) while the run dead-locked.
+    # now BINDING: a valid revised_action is dispatched, and a reject routes to a
+    # metric-bearing fallback (see _reconcile). Shadow mode logged 320 reject/revise
+    # verdicts that were all ignored (264 dispatched anyway) while the run dead-locked.
     # Gated on the expanded _reconcile test matrix + the rejected-draft feedback
     # path in autopilot.py (a reject can no longer bypass blacklist/quota/skip).
     mode: str = "draft_critique"
@@ -125,7 +125,7 @@ class PlannerDecision:
     critique: PlannerCritique | None = None
     predicted_objectives: dict[str, float] = field(default_factory=dict)
     # The planner's ORIGINAL parsed action, before _reconcile may substitute it
-    # (revised_action in revise, or the safe fallback in reject). The main loop
+    # (revised_action in revise, or the metric fallback in reject). The main loop
     # uses this to record a critic-rejected/revised draft into the invalid-action
     # feedback + blacklist so a substituted draft cannot silently escape the
     # feedback loop (draft_critique authority change, 2026-06-04).
@@ -674,7 +674,7 @@ is to find missing constraints, unsafe assumptions, weak attribution, missing
 validation, stale context, or an action that violates the single-variable rule.
 
 Your verdict is BINDING (draft_critique mode): a `reject` routes the action to a
-safe fallback, and a `revise` with a valid `revised_action` REPLACES the draft.
+metric-bearing fallback, and a `revise` with a valid `revised_action` REPLACES the draft.
 Reject or revise (preferring a concrete `revised_action`) if the draft does any
 of the following — the relevant evidence is in the selected context below:
   - re-proposes a feature flag whose dependencies are not all currently ON (see
@@ -949,14 +949,14 @@ def _reconcile(
 
     if critique.decision == "reject":
         safe_action = {
-            "type": "seed_batch",
-            "n_questions": SAFE_FALLBACK_SEED_N,
-            "suites": ["coder", "math"],
+            "type": "numeric_trial",
+            "surface": SAFE_FALLBACK_NUMERIC_SURFACE,
+            "params": {},
         }
         safe_rationale = {
-            "falsifier": "safe fallback fails to improve trustworthy evidence",
+            "falsifier": "critic reject numeric fallback fails to produce replayable evidence",
             "rubric_scores": {},
-            "critic_reject_safe_fallback": True,
+            "critic_reject_numeric_fallback": True,
             "critic_reject_issues": list(critique.issues or []),
             "critic_reject_original_action": dict(action),
         }

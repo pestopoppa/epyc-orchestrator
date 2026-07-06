@@ -2530,9 +2530,12 @@ def _maybe_force_higher_tier_probe(
         return action, rationale
     if _w8_candidate_generation_pressure(w8_replay_pressure_text):
         return action, rationale
-    if isinstance(rationale, dict) and rationale.get("critic_reject_safe_fallback"):
+    if isinstance(rationale, dict) and (
+        rationale.get("critic_reject_numeric_fallback")
+        or rationale.get("critic_reject_safe_fallback")
+    ):
         # A binding critic already rejected the planner's preferred action and
-        # routed to the low-risk fallback. Do not let a quota/probe guard
+        # routed to a fallback. Do not let a quota/probe guard
         # immediately resurrect that rejected shape in the same trial.
         return action, rationale
 

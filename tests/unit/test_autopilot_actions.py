@@ -2193,16 +2193,16 @@ def test_higher_tier_probe_skips_when_w8_candidate_generation_is_strict() -> Non
     assert "higher_tier_probe_guard" not in state
 
 
-def test_higher_tier_probe_respects_critic_reject_safe_fallback() -> None:
+def test_higher_tier_probe_respects_critic_reject_numeric_fallback() -> None:
     state = {}
     requested = {
-        "type": "seed_batch",
-        "n_questions": autopilot.SAFE_FALLBACK_SEED_N,
-        "suites": ["coder", "math"],
+        "type": "numeric_trial",
+        "surface": "memrl_retrieval",
+        "params": {},
     }
     safe_rationale = {
-        "falsifier": "safe fallback fails to improve trustworthy evidence",
-        "critic_reject_safe_fallback": True,
+        "falsifier": "critic reject numeric fallback fails to produce replayable evidence",
+        "critic_reject_numeric_fallback": True,
         "critic_reject_original_action": {"type": "deep_eval", "tier": 3},
     }
 

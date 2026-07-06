@@ -881,7 +881,7 @@ def test_active_critique_applies_valid_revision() -> None:
     assert decision.canonical_text.startswith("```json:autopilot_actions")
 
 
-def test_active_reject_without_revision_uses_safe_seed_batch() -> None:
+def test_active_reject_without_revision_uses_numeric_fallback() -> None:
     original = {"type": "rollback", "to_checkpoint": "production_best"}
     claude = FakeProvider(
         "claude",
@@ -922,8 +922,13 @@ def test_active_reject_without_revision_uses_safe_seed_batch() -> None:
     )
 
     assert decision.action is not None
-    assert decision.action["type"] == "seed_batch"
-    assert decision.action["n_questions"] == planner_coordinator.SAFE_FALLBACK_SEED_N
+    assert decision.action == {
+        "type": "numeric_trial",
+        "surface": planner_coordinator.SAFE_FALLBACK_NUMERIC_SURFACE,
+        "params": {},
+    }
+    assert decision.rationale["critic_reject_numeric_fallback"] is True
+    assert decision.rationale["critic_reject_issues"] == ["unsupported rollback"]
 
 
 def test_unparseable_critique_fails_closed_not_open() -> None:
@@ -1227,13 +1232,16 @@ def test_reconcile_active_revise_with_invalid_revision_keeps_original() -> None:
     assert out_action == action  # invalid revision rejected, original retained
 
 
-def test_reconcile_active_reject_without_revision_is_safe_seed_batch() -> None:
+def test_reconcile_active_reject_without_revision_is_numeric_fallback() -> None:
     action = {"type": "rollback", "to_checkpoint": "production_best"}
     crit = PlannerCritique(decision="reject", issues=["unsupported"])
     out_action, out_rat, _ = _reconcile(action, {}, "draft", crit, active=True)
-    assert out_action["type"] == "seed_batch"
-    assert out_action["n_questions"] == planner_coordinator.SAFE_FALLBACK_SEED_N
-    assert out_rat["critic_reject_safe_fallback"] is True
+    assert out_action == {
+        "type": "numeric_trial",
+        "surface": planner_coordinator.SAFE_FALLBACK_NUMERIC_SURFACE,
+        "params": {},
+    }
+    assert out_rat["critic_reject_numeric_fallback"] is True
     assert out_rat["critic_reject_issues"] == ["unsupported"]
     assert out_rat["critic_reject_original_action"] == action
 
@@ -1269,7 +1277,11 @@ def test_decision_carries_original_draft_action_after_substitution() -> None:
         settings=PlannerSettings(mode="draft_critique", critique_policy="always"),
         provider_factory=_factory({"claude": claude, "codex": codex}),
     )
-    assert decision.action["type"] == "seed_batch"  # substituted
+    assert decision.action == {
+        "type": "numeric_trial",
+        "surface": planner_coordinator.SAFE_FALLBACK_NUMERIC_SURFACE,
+        "params": {},
+    }  # substituted
     assert decision.draft_action == original  # original preserved
 
 
