@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import pytest
 
+from src.config import stack_templates
 from src.config.stack_templates import (
     DEFAULT_MAX_MLOCK_GB,
     DEFAULT_MAX_TOTAL_GB,
@@ -23,6 +24,16 @@ from src.config.stack_templates import (
 from src.config.stack_migration import migrate_to_template
 
 _RETIRED_ARCHITECT_ROLE = "architect_" "coding"
+
+
+def _live_record(ports: list[int]) -> dict:
+    return {
+        "deployment_status": "live_stack",
+        "serving": {
+            "endpoint": f"http://localhost:{ports[0]}",
+            "ports": ports,
+        },
+    }
 
 
 def _make_role(ram_gb: float, tier: str, port: int, n_quarters: int = 0) -> RoleConfig:
@@ -157,6 +168,63 @@ class TestDefaultYamlRoundTrip:
         assert {t.roles[name].full.threads for name in embedder_roles} == {4}
         result = validate_template(t)
         assert result.valid, f"default template should validate: {result.errors}"
+
+    def test_default_yaml_rejects_generated_prior_port_drift(self, monkeypatch):
+        t = load_template("default")
+        live_records = {
+            role_name: _live_record(stack_templates._role_instance_ports(role))
+            for role_name, role in t.roles.items()
+            if not role.alias_to
+            and role.tier.upper() != "ALIAS"
+            and role.mode != "embedding"
+        }
+        live_records["frontdoor"] = _live_record([8070, 8080, 8180, 8280, 8399])
+        monkeypatch.setattr(
+            stack_templates,
+            "live_stack_role_records",
+            lambda: live_records,
+        )
+
+        result = validate_template(t)
+
+        assert not result.valid
+        assert any("frontdoor" in error and "generated stack-prior ports" in error for error in result.errors)
+
+    def test_default_yaml_allows_generated_alias_ports_on_alias_target(self, monkeypatch):
+        t = load_template("default")
+        live_records = {
+            role_name: _live_record(stack_templates._role_instance_ports(role))
+            for role_name, role in t.roles.items()
+            if not role.alias_to
+            and role.tier.upper() != "ALIAS"
+            and role.mode != "embedding"
+        }
+        live_records["coder_escalation"] = _live_record([8070])
+        live_records["worker_math"] = _live_record([8072, 8082])
+        monkeypatch.setattr(
+            stack_templates,
+            "live_stack_role_records",
+            lambda: live_records,
+        )
+
+        result = validate_template(t)
+
+        assert result.valid, result.errors
+
+    def test_non_default_template_does_not_require_stack_prior_port_parity(self, monkeypatch):
+        t = StackTemplate(
+            name="experimental",
+            roles={"frontdoor": _make_role(10, "HOT", 9999)},
+        )
+        monkeypatch.setattr(
+            stack_templates,
+            "live_stack_role_records",
+            lambda: {"frontdoor": _live_record([8070])},
+        )
+
+        result = validate_template(t)
+
+        assert result.valid, result.errors
 
     def test_default_yaml_preserves_ds7_decision_metadata(self):
         t = load_template("default")
