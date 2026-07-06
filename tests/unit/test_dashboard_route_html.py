@@ -549,7 +549,9 @@ def test_dashboard_autopilot_progress_includes_eval_label() -> None:
     assert "keepable ${fmtRate(keepable)}" in body
     assert "wasted-eval ${fmtRate(wasted)}" in body
     assert "learning-excluded ${fmtRate(excluded)}" in body
-    assert "_currentCodeHealthLabel(d.current_code_health)" in body
+    assert "const currentCodeHealthChip = _autopilotStatusChip(" in body
+    assert "_currentCodeHealthLabel(currentCodeHealth)" in body
+    assert "healthChips ? `<div style=\"margin-top:3px\">${healthChips}</div>` : ''" in body
     assert "current code ${health.status}" in body
     assert "const advice = health.restart_advice || {};" in body
     assert "restart wait for boundary" in body

@@ -1312,6 +1312,9 @@ async def process_status() -> JSONResponse:
             return None
     phase = _read_autopilot_phase()
     phase_health = _autopilot_phase_health()
+    outcome_progress = phase_health.get("outcome_progress") if isinstance(phase_health, dict) else None
+    if not isinstance(outcome_progress, dict):
+        outcome_progress = {}
     phase_age_s = phase_health.get("heartbeat_age_s")
     if phase_age_s is None:
         phase_age_s = _age_s(AUTOPILOT_PHASE_PATH)
@@ -1326,6 +1329,7 @@ async def process_status() -> JSONResponse:
         "autopilot_recent_lines": recent_lines,
         "autopilot_phase": phase,
         "autopilot_phase_health": phase_health,
+        "autopilot_outcome_progress": outcome_progress,
         "autopilot_state": _autopilot_state_summary(),
         "autopilot_phase_age_s": phase_age_s,
         "inference_tap_age_s": _age_s(_INFERENCE_TAP_PATH),

@@ -703,12 +703,38 @@ def test_process_status_includes_autopilot_phase_health(tmp_path, monkeypatch) -
         "_process_info_by_match",
         lambda _match: {"running": True, "pid": os.getpid()},
     )
+    monkeypatch.setattr(
+        dashboard,
+        "_autopilot_phase_health",
+        lambda: {
+            "status": "active",
+            "heartbeat_age_s": 12.5,
+            "outcome_progress": {
+                "status": "attention",
+                "latest_trial_id": 12,
+                "frontier_admissions": 1,
+                "trials_since_frontier": 151,
+                "baseline_promotions": 2,
+                "trials_since_promotion": 301,
+                "rates": {
+                    "keepable_rate": {"count": 4, "total": 10, "rate": 0.4},
+                    "wasted_eval_rate": {"count": 3, "total": 10, "rate": 0.3},
+                    "learning_excluded_rate": {"count": 2, "total": 10, "rate": 0.2},
+                },
+                "blockers": ["frontier admission stale: 151 trial(s) since frontier > 150"],
+            },
+        },
+    )
 
     response = asyncio.run(dashboard.process_status())
     payload = json.loads(response.body)
 
     assert payload["autopilot_phase"]["trial_id"] == 12
     assert payload["autopilot_phase_health"]["status"] == "active"
+    assert payload["autopilot_outcome_progress"]["status"] == "attention"
+    assert payload["autopilot_outcome_progress"]["blockers"] == [
+        "frontier admission stale: 151 trial(s) since frontier > 150",
+    ]
     assert payload["autopilot_phase_age_s"] == payload["autopilot_phase_health"]["heartbeat_age_s"]
 
 
@@ -1534,6 +1560,15 @@ def test_dashboard_html_surfaces_autopilot_phase_health() -> None:
     html = dashboard._DASHBOARD_HTML
     assert "autopilot_phase_health" in html
     assert "phase health" in html
+
+
+def test_dashboard_html_surfaces_autopilot_outcome_health() -> None:
+    from src.api.routes import dashboard
+
+    html = dashboard._DASHBOARD_HTML
+    assert "autopilot_outcome_progress" in html
+    assert "_autopilotOutcomeProgressLabel" in html
+    assert "autopilot-health-chip" in html
 
 
 def test_dashboard_html_repaints_topology_after_region_lock_refresh() -> None:

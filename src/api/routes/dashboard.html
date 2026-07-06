@@ -857,6 +857,39 @@ body.insight-fullscreen-open { overflow: hidden; }
     color: var(--muted);
     white-space: nowrap;
 }
+.autopilot-health-chip {
+    display: inline-block;
+    margin: 0 4px 4px 0;
+    padding: 2px 6px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,0.04);
+    font-size: 9px;
+    font-weight: 600;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    white-space: nowrap;
+    letter-spacing: 0;
+}
+.autopilot-health-chip.good {
+    background: rgba(52,211,153,0.12);
+    color: var(--good);
+    border-color: rgba(52,211,153,0.28);
+}
+.autopilot-health-chip.warn {
+    background: rgba(251,191,36,0.14);
+    color: var(--warn);
+    border-color: rgba(251,191,36,0.28);
+}
+.autopilot-health-chip.bad {
+    background: rgba(248,113,113,0.14);
+    color: var(--bad);
+    border-color: rgba(248,113,113,0.28);
+}
+.autopilot-health-chip.muted {
+    background: rgba(148,163,184,0.10);
+    color: var(--muted);
+    border-color: rgba(148,163,184,0.22);
+}
 
 /* Responsive */
 @media (max-width: 1100px) {
@@ -1762,6 +1795,7 @@ function renderAutopilotRunStrip() {
     const verdicts = rolling._verifier_verdicts || {};
     const completed = snap.recent_completed_tasks || [];
     const phaseHealth = proc.autopilot_phase_health || {};
+    const outcomeProgress = proc.autopilot_outcome_progress || {};
     const phaseHealthClass = _autopilotPhaseHealthClass(phaseHealth.status);
 
     const openReqs = typeof openStructuredTapRequests === 'function' ? openStructuredTapRequests() : [];
@@ -1804,15 +1838,28 @@ function renderAutopilotRunStrip() {
     }
     const workers = proc.gepa_worker_count || 0;
     const phaseName = phase.phase || progressPhaseName(prog, ap.running);
-    const phaseHealthLine = phaseHealth.status
-        ? `<br><strong style="color:${_autopilotPhaseHealthColor(phaseHealth.status)}">${escapeHTML(_autopilotPhaseHealthLabel(phaseHealth))}</strong>`
-        : '';
     const currentCodeHealth = prog.current_code_health || {};
-    const currentCodeHealthLine = currentCodeHealth.status
-        ? `<br><strong style="color:${_autopilotPhaseHealthColor(currentCodeHealth.status)}">${escapeHTML(_currentCodeHealthLabel(currentCodeHealth))}</strong>`
-        : '';
+    const phaseHealthChip = _autopilotStatusChip(
+        'phase',
+        phaseHealth.status,
+        _autopilotPhaseHealthLabel(phaseHealth),
+        phaseHealth.status ? phaseHealthClass : '',
+    );
+    const outcomeHealthChip = _autopilotStatusChip(
+        'outcome',
+        outcomeProgress.status,
+        _autopilotOutcomeProgressLabel(outcomeProgress),
+        _autopilotOutcomeHealthClass(outcomeProgress.status),
+    );
+    const currentCodeHealthChip = _autopilotStatusChip(
+        'code',
+        currentCodeHealth.status,
+        _currentCodeHealthLabel(currentCodeHealth),
+        _autopilotPhaseHealthClass(currentCodeHealth.status),
+    );
+    const healthChips = [phaseHealthChip, outcomeHealthChip, currentCodeHealthChip].filter(Boolean).join('');
     const runSub = ap.running
-        ? `${rawAp.running ? `pid ${escapeHTML(String(ap.pid || '?'))} · ${escapeHTML(String(ap.etime || '?'))}` : 'autopilot_progress confirms live trial'} · last log ${formatShortDuration(lastLogAge)} · ${workers} workers<br><strong>${escapeHTML(String(phaseName))}</strong>${phase.action_type || prog.action_type ? ` · ${escapeHTML(String(phase.action_type || prog.action_type))}` : ''}${phaseHealthLine}${currentCodeHealthLine}`
+        ? `${rawAp.running ? `pid ${escapeHTML(String(ap.pid || '?'))} · ${escapeHTML(String(ap.etime || '?'))}` : 'autopilot_progress confirms live trial'} · last log ${formatShortDuration(lastLogAge)} · ${workers} workers<br><strong>${escapeHTML(String(phaseName))}</strong>${phase.action_type || prog.action_type ? ` · ${escapeHTML(String(phase.action_type || prog.action_type))}` : ''}${healthChips ? `<div style="margin-top:3px">${healthChips}</div>` : ''}`
         : `no process matching autopilot.py start`;
 
     let trialValue = 'no trial';
@@ -1844,7 +1891,6 @@ function renderAutopilotRunStrip() {
         if (outcome.keepable_rate) bits.push(`keepable ${fmtRate(keepable)}`);
         if (outcome.wasted_eval_rate) bits.push(`wasted-eval ${fmtRate(wasted)}`);
         if (outcome.learning_excluded_rate) bits.push(`learning-excluded ${fmtRate(excluded)}`);
-        if (currentCodeHealthLine) bits.push(_currentCodeHealthLabel(currentCodeHealth));
         trialSub = bits.join(' · ');
     } else if (phase.trial_id != null) {
         trialValue = `#${escapeHTML(String(phase.trial_id))}`;
@@ -5537,6 +5583,43 @@ function _currentCodeHealthLabel(health) {
     return bits.join(' · ');
 }
 
+function _autopilotOutcomeHealthClass(status) {
+    if (status === 'ok') return 'good';
+    if (status === 'attention') return 'warn';
+    if (status === 'disabled' || status === 'unknown') return 'muted';
+    if (status) return 'bad';
+    return 'muted';
+}
+
+function _autopilotOutcomeProgressLabel(progress) {
+    if (!progress || !progress.status) return 'outcome health unknown';
+    const bits = [`outcome health ${progress.status}`];
+    if (progress.latest_trial_id != null) bits.push(`latest trial ${progress.latest_trial_id}`);
+    if (progress.frontier_admissions != null) bits.push(`frontier ${progress.frontier_admissions} admission${progress.frontier_admissions === 1 ? '' : 's'}`);
+    if (progress.trials_since_frontier != null) bits.push(`frontier stale ${progress.trials_since_frontier} trial${progress.trials_since_frontier === 1 ? '' : 's'}`);
+    if (progress.baseline_promotions != null) bits.push(`promotions ${progress.baseline_promotions}`);
+    if (progress.trials_since_promotion != null) bits.push(`promotion stale ${progress.trials_since_promotion} trial${progress.trials_since_promotion === 1 ? '' : 's'}`);
+    const rates = progress.rates || {};
+    const fmtRate = (metric) => {
+        if (!metric || metric.total == null || metric.total <= 0 || metric.rate == null) return 'unknown';
+        return `${Math.round(metric.rate * 100)}% (${metric.count}/${metric.total})`;
+    };
+    if (rates.keepable_rate) bits.push(`keepable ${fmtRate(rates.keepable_rate)}`);
+    if (rates.wasted_eval_rate) bits.push(`wasted-eval ${fmtRate(rates.wasted_eval_rate)}`);
+    if (rates.learning_excluded_rate) bits.push(`learning-excluded ${fmtRate(rates.learning_excluded_rate)}`);
+    if (Array.isArray(progress.blockers) && progress.blockers.length) {
+        bits.push(...progress.blockers.slice(0, 3));
+    }
+    return bits.join(' · ');
+}
+
+function _autopilotStatusChip(label, status, title, cls = '') {
+    if (!status) return '';
+    const className = ['autopilot-health-chip', cls].filter(Boolean).join(' ');
+    const text = `${label} ${status}`;
+    return `<span class="${className}" title="${escapeHTML(title || text)}">${escapeHTML(text)}</span>`;
+}
+
 function _phaseFocus(d, ap) {
     if (!ap || !ap.running) return 'none';
     const phase = d.autopilot_phase || {};
@@ -6171,7 +6254,6 @@ function startDashboard() {
             if (outcome.keepable_rate) metaBits.push(`keepable ${fmtRate(keepable)}`);
             if (outcome.wasted_eval_rate) metaBits.push(`wasted-eval ${fmtRate(wasted)}`);
             if (outcome.learning_excluded_rate) metaBits.push(`learning-excluded ${fmtRate(excluded)}`);
-            if (d.current_code_health) metaBits.push(_currentCodeHealthLabel(d.current_code_health));
             if (!d.autopilot_alive) metaBits.push('⚠ autopilot process not running');
             meta.textContent = metaBits.join(' · ');
         } catch (e) {
