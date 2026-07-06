@@ -365,5 +365,7 @@ def test_production_inventory_includes_lab_review_queue_active_safe_job() -> Non
                 "pending_active_safe": 0,
             },
             "pending_items": [],
+            "review_batch_template": [],
+            "review_batch_template_jsonl": "",
         }
     )

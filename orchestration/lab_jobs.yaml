@@ -657,6 +657,13 @@ jobs:
             items:
               type: object
               additionalProperties: true
+          review_batch_template:
+            type: array
+            items:
+              type: object
+              additionalProperties: true
+          review_batch_template_jsonl:
+            type: string
 
   - job_id: quiet_window_lab_plan_watch
     title: Quiet-window lab batch plan watch

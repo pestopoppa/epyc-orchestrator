@@ -127,6 +127,25 @@ def _record_command(
     return " ".join(shlex.quote(arg) for arg in argv)
 
 
+def _batch_template_row(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "schema_version": "lab_review_batch.v1",
+        "job_id": item["job_id"],
+        "run_id": item["run_id"],
+        "verdict": "<accept|reject>",
+        "reviewer": item["next_reviewer"],
+        "stage": item["stage"],
+        "confidence": None,
+        "notes": "",
+        "local_output": item["output_path"],
+        "reference_output": (
+            "<cloud-reference-output.json>"
+            if item["next_reviewer"] == "cloud_reference"
+            else None
+        ),
+    }
+
+
 def _pending_items(
     *,
     queue_dir: Path,
@@ -218,6 +237,7 @@ def build_report(
         for item in pending
         if not item["output_exists"]
     ]
+    review_batch_template = [_batch_template_row(item) for item in pending]
     total_pending = sum(pending_by_class.values())
     return {
         "schema_version": "lab_review_queue_report.v1",
@@ -241,6 +261,10 @@ def build_report(
             "items_truncated": total_pending > len(pending),
         },
         "pending_items": pending,
+        "review_batch_template": review_batch_template,
+        "review_batch_template_jsonl": "\n".join(
+            json.dumps(row, sort_keys=True) for row in review_batch_template
+        ),
         "missing_outputs": missing_outputs,
     }
 

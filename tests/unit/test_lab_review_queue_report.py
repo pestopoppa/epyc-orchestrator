@@ -101,6 +101,21 @@ def test_review_queue_report_surfaces_pending_record_commands(tmp_path: Path) ->
     assert "scripts/lab/record_verdict.py" in item["cloud_reference_accept_command"]
     assert "--reference-output '<cloud-reference-output.json>'" in item["cloud_reference_accept_command"]
     assert "--reviewer operator" in item["operator_reject_command"]
+    assert report["review_batch_template"] == [
+        {
+            "schema_version": "lab_review_batch.v1",
+            "job_id": "handoff_freshness_lint",
+            "run_id": "run-1",
+            "verdict": "<accept|reject>",
+            "reviewer": "cloud_reference",
+            "stage": "shadow",
+            "confidence": None,
+            "notes": "",
+            "local_output": "handoff_freshness_lint/run-1/output.json",
+            "reference_output": "<cloud-reference-output.json>",
+        }
+    ]
+    assert '"schema_version": "lab_review_batch.v1"' in report["review_batch_template_jsonl"]
 
 
 def test_review_queue_report_ignores_already_verdicted_runs(tmp_path: Path) -> None:
@@ -163,6 +178,8 @@ def test_review_queue_report_flags_missing_outputs_and_counts_active_safe(
     assert report["status"] == "attention"
     assert report["summary"]["pending_active_safe"] == 1
     assert report["pending_items"][0]["next_reviewer"] == "operator"
+    assert report["review_batch_template"][0]["reviewer"] == "operator"
+    assert report["review_batch_template"][0]["reference_output"] is None
     assert report["missing_outputs"] == [
         {
             "job_id": "active_safe_watch",
