@@ -1,0 +1,35 @@
+{
+  "artifact_jsonl": "/mnt/raid0/llm/tmp/j12_architect_think_loop_probe_20260706T143621Z.jsonl",
+  "interpretation": "revert architect jinja/chat-completions flip only if architect_general shows empty output, <think> leakage, known wait-reference loop, or repetition loop on this production /chat answer-field probe",
+  "roles": {
+    "architect_general": {
+      "avg_elapsed_s": 3.035,
+      "avg_tokens_generated": 34.067,
+      "empty": 0,
+      "error_answers": 0,
+      "expect_matches": 14,
+      "failed_task_ids": [],
+      "known_wait_reference_loops": 0,
+      "miss_task_ids": [
+        "plan_02"
+      ],
+      "n": 15,
+      "repetition_loops": 0,
+      "think_leaks": 0
+    },
+    "frontdoor": {
+      "avg_elapsed_s": 1.395,
+      "avg_tokens_generated": 28.667,
+      "empty": 0,
+      "error_answers": 0,
+      "expect_matches": 15,
+      "failed_task_ids": [],
+      "known_wait_reference_loops": 0,
+      "miss_task_ids": [],
+      "n": 15,
+      "repetition_loops": 0,
+      "think_leaks": 0
+    }
+  },
+  "stamp": "20260706T143621Z"
+}
