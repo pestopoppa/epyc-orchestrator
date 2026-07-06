@@ -498,6 +498,75 @@ jobs:
               type: object
               additionalProperties: true
 
+  - job_id: quiet_window_queue_watch
+    title: Quiet-window queue consistency watch
+    stage: shadow
+    enabled: true
+    risk: read_only
+    runtime_class: active_safe_deterministic
+    active_safe: true
+    schedule:
+      type: manual_or_nightly
+      cadence: daily
+      window: active_ok
+      runtime_class: active_safe_deterministic
+      max_runtime_s: 60
+    reference_skill: none
+    execution:
+      mode: deterministic_command
+      command:
+        - python3
+        - scripts/lab/quiet_window_queue_report.py
+        - --json
+    input_spec:
+      sources:
+        - repo: epyc-root
+          path: handoffs/active/master-handoff-index.md
+        - repo: epyc-root
+          path: handoffs/active/bulk-inference-campaign.md
+        - repo: epyc-root
+          path: handoffs/active/routing-and-optimization-index.md
+      context_budget_tokens: 4000
+      forbidden_actions:
+        - modify_index
+        - move_handoff
+        - stop_autopilot
+        - restart_services
+    output_contract:
+      format: json
+      json_schema:
+        type: object
+        additionalProperties: true
+        required:
+          - schema_version
+          - ok
+          - status
+          - blockers
+          - findings
+          - checked_files
+        properties:
+          schema_version:
+            const: quiet_window_queue_report.v1
+          ok:
+            type: boolean
+          status:
+            enum:
+              - ok
+              - attention
+          blockers:
+            type: array
+            items:
+              type: string
+          findings:
+            type: array
+            items:
+              type: object
+              additionalProperties: true
+          checked_files:
+            type: array
+            items:
+              type: string
+
   - job_id: daily_digest_skeleton
     title: Daily digest skeleton
     stage: shadow
