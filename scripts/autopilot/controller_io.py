@@ -698,11 +698,39 @@ def _loads_json_payload(payload: str) -> Any:
         raise original_error
 
 
+def _loads_leading_action(text: str) -> dict[str, Any] | None:
+    """Recover a strict leading JSON action with optional rationale sidecar.
+
+    Local planner models sometimes obey the JSON object shape but miss the
+    fenced ``json:autopilot_actions`` wrapper. Accept only an object/list at the
+    very start of the response, and only if the trailing text is empty or the
+    rationale fence. Arbitrary prose after the object remains unusable.
+    """
+    stripped = text.strip()
+    if not stripped or stripped[0] not in "{[":
+        return None
+    decoder = json.JSONDecoder()
+    try:
+        data, end = decoder.raw_decode(stripped)
+    except json.JSONDecodeError:
+        return None
+    action = _unwrap_action(data)
+    if action is None:
+        return None
+    trailing = stripped[end:].strip()
+    if not trailing or trailing.startswith("```json:autopilot_rationale"):
+        log.warning("Recovered planner action from leading JSON object without action fence")
+        return action
+    return None
+
+
 def extract_action(text: str) -> dict[str, Any] | None:
     """Extract structured action from controller response.
 
     Looks for ```json:autopilot_actions``` block first; falls back to any
-    ```json``` block whose payload is a dict with a 'type' field.
+    ```json``` block whose payload is a dict with a 'type' field. As a narrow
+    local-planner recovery path, also accepts a response that starts with a JSON
+    action object and is followed only by an optional rationale fence.
     """
     marker = "```json:autopilot_actions"
     if marker in text:
@@ -725,6 +753,10 @@ def extract_action(text: str) -> dict[str, Any] | None:
                 return data
         except (json.JSONDecodeError, ValueError):
             pass
+
+    leading = _loads_leading_action(text)
+    if leading is not None:
+        return leading
 
     return None
 

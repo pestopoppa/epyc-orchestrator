@@ -87,6 +87,17 @@ def _action_text(action: dict[str, Any]) -> str:
     )
 
 
+def _leading_action_text(action: dict[str, Any]) -> str:
+    import json
+
+    return (
+        f"{json.dumps(action)}\n\n"
+        "```json:autopilot_rationale\n"
+        '{"falsifier":"x","rubric_scores":{"info_gain":3}}\n'
+        "```\n"
+    )
+
+
 def _critique_text(payload: dict[str, Any]) -> str:
     import json
 
@@ -511,6 +522,66 @@ def test_spend_breaker_forces_cloud_primary_to_local_providers(
     assert state["_spend_breaker"]["local_critic"] == "local_worker"
     assert state["_spend_breaker"]["previous_primary"] == "claude"
     assert state["_spend_breaker"]["previous_critic"] == "codex"
+    assert [call["role"] for call in local_frontdoor.calls] == ["draft"]
+    assert [call["role"] for call in local_worker.calls] == ["critique"]
+
+
+def test_spend_breaker_accepts_local_frontdoor_leading_json_action(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from scripts.economics import ledger as ledger_mod
+
+    monkeypatch.setenv("AUTOPILOT_PLANNER_SPEND_BREAKER", "1")
+    monkeypatch.setattr(
+        ledger_mod,
+        "summarize_economics",
+        lambda *, days=7: _fake_economics_ledger(triggered=True),
+    )
+    local_frontdoor = FakeProvider(
+        "local_frontdoor",
+        [
+            PlannerProviderResult(
+                provider="local_frontdoor",
+                role="draft",
+                ok=True,
+                text=_leading_action_text({"type": "deep_eval", "tier": 3}),
+            )
+        ],
+    )
+    local_worker = FakeProvider(
+        "local_worker",
+        [
+            PlannerProviderResult(
+                provider="local_worker",
+                role="critique",
+                ok=True,
+                text=_critique_text({"decision": "approve", "confidence": 0.8}),
+            )
+        ],
+    )
+
+    decision = planner_coordinator.plan_with_providers(
+        "prompt",
+        session_id=None,
+        planner_state={},
+        settings=PlannerSettings(
+            primary="claude",
+            critic="codex",
+            mode="draft_critique",
+            critique_policy="always",
+        ),
+        provider_factory=_factory(
+            {
+                "local_frontdoor": local_frontdoor,
+                "local_worker": local_worker,
+            }
+        ),
+    )
+
+    assert decision.draft_provider == "local_frontdoor"
+    assert decision.critic_provider == "local_worker"
+    assert decision.action == {"type": "deep_eval", "tier": 3}
+    assert decision.fallback_reason == ""
     assert [call["role"] for call in local_frontdoor.calls] == ["draft"]
     assert [call["role"] for call in local_worker.calls] == ["critique"]
 

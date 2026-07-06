@@ -60,6 +60,26 @@ def test_extract_action_falls_back_to_generic_json_block() -> None:
     assert action == {"type": "rollback", "to_checkpoint": "production_best"}
 
 
+def test_extract_action_accepts_leading_json_with_rationale_sidecar() -> None:
+    text = """{
+  "type": "deep_eval",
+  "tier": 3
+}
+
+```json:autopilot_rationale
+{"falsifier": "tier 3 does not improve"}
+```"""
+    action = controller_io.extract_action(text)
+    assert action == {"type": "deep_eval", "tier": 3}
+
+
+def test_extract_action_rejects_leading_json_with_arbitrary_trailing_prose() -> None:
+    text = """{"type": "deep_eval", "tier": 3}
+
+This action should be accepted because it is safe."""
+    assert controller_io.extract_action(text) is None
+
+
 def test_extract_action_returns_none_when_no_block() -> None:
     assert controller_io.extract_action("plain text, no json") is None
 
