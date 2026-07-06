@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable
@@ -245,12 +246,18 @@ def plan_with_providers(
     stagnation_signal: str = "",
     settings: PlannerSettings | None = None,
     provider_factory: ProviderFactory = get_planner_provider,
+    allowed_action_types: Iterable[str] | None = None,
 ) -> PlannerDecision:
     """Draft a canonical planner action with optional secondary critique."""
     settings = settings or load_planner_settings_from_env()
     planner_state = planner_state if planner_state is not None else {}
     settings, spend_breaker_active = _apply_planner_spend_breaker(settings, planner_state)
     session_update = None
+    allowed_actions = (
+        frozenset(str(item) for item in allowed_action_types)
+        if allowed_action_types is not None
+        else None
+    )
 
     primary_name = _normalize_provider(settings.primary)
     critic_name = _normalize_provider(settings.critic)
@@ -292,7 +299,11 @@ def plan_with_providers(
     provider_trace: list[dict[str, Any]] = []
 
     action = extract_action(draft.text)
-    draft_unusable = _draft_unusable_reason(draft, action)
+    draft_unusable = _draft_unusable_reason(
+        draft,
+        action,
+        allowed_action_types=allowed_actions,
+    )
     provider_trace.append(
         _draft_provider_event(
             stage="draft_primary",
@@ -321,7 +332,11 @@ def plan_with_providers(
             )
             any_response_ok = any_response_ok or bool(fallback.ok)
             fallback_action = extract_action(fallback.text)
-            fallback_unusable = _draft_unusable_reason(fallback, fallback_action)
+            fallback_unusable = _draft_unusable_reason(
+                fallback,
+                fallback_action,
+                allowed_action_types=allowed_actions,
+            )
             provider_trace.append(
                 _draft_provider_event(
                     stage="draft_fallback",
@@ -487,6 +502,7 @@ def plan_with_providers(
                                 draft.text,
                                 critique,
                                 active=active_critique,
+                                allowed_action_types=allowed_actions,
                             )
                         else:
                             degraded = True
@@ -503,6 +519,7 @@ def plan_with_providers(
                             draft.text,
                             critique,
                             active=active_critique,
+                            allowed_action_types=allowed_actions,
                         )
                 else:
                     # The critic invoke FAILED outright (timeout / empty / nonzero rc).
@@ -538,6 +555,7 @@ def plan_with_providers(
                             draft.text,
                             critique,
                             active=active_critique,
+                            allowed_action_types=allowed_actions,
                         )
                     else:
                         degraded = True
@@ -937,12 +955,20 @@ def _reconcile(
     critique: PlannerCritique,
     *,
     active: bool,
+    allowed_action_types: Iterable[str] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], str]:
     if not active or critique.decision == "approve":
         return action, rationale, draft_text
 
     revised = critique.revised_action
-    if revised and _action_validation_error(revised) is None:
+    if (
+        revised
+        and _action_validation_error(
+            revised,
+            allowed_action_types=allowed_action_types,
+        )
+        is None
+    ):
         new_rationale = critique.revised_rationale or rationale
         return revised, new_rationale, _canonical_text_from_parts(revised, new_rationale)
 
@@ -995,6 +1021,8 @@ def _draft_is_usable(
 def _draft_unusable_reason(
     result: PlannerProviderResult,
     action: dict[str, Any] | None,
+    *,
+    allowed_action_types: Iterable[str] | None = None,
 ) -> str:
     """Why a draft is unusable ("" if usable). Surfaces the EXACT schema-validation
     error (e.g. an out-of-range min_memories) rather than an opaque 'invalid action'
@@ -1005,15 +1033,26 @@ def _draft_unusable_reason(
         return result.error or "provider error / empty response"
     if action is None:
         return "no parseable json:autopilot_actions block"
-    return _action_validation_error(action) or ""
+    return _action_validation_error(
+        action,
+        allowed_action_types=allowed_action_types,
+    ) or ""
 
 
-def _action_validation_error(action: dict[str, Any] | None) -> str | None:
+def _action_validation_error(
+    action: dict[str, Any] | None,
+    *,
+    allowed_action_types: Iterable[str] | None = None,
+) -> str | None:
     if not action:
         return "missing action"
     action_type = action.get("type")
     if action_type not in KNOWN_ACTION_TYPES:
         return f"unknown action type: {action_type}"
+    if allowed_action_types is not None:
+        allowed = {str(item) for item in allowed_action_types}
+        if action_type not in allowed:
+            return f"action type currently unavailable: {action_type}"
     return validate_single_variable(action)
 
 

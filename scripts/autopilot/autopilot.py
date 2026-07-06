@@ -5844,6 +5844,7 @@ def _run_loop_inner(
                 cwd=ORCH_ROOT,
                 planner_state=planner_provider_state,
                 stagnation_signal=stagnation_signal,
+                allowed_action_types=selectable_action_types,
             )
             phase.set(
                 "planner_parse",

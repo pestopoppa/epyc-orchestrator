@@ -243,6 +243,74 @@ def test_fallback_draft_gets_independent_primary_critique() -> None:
     assert planner_coordinator.uncritiqued_dispatch_block_reason(decision) == ""
 
 
+def test_currently_unavailable_primary_draft_falls_back_before_critique() -> None:
+    primary = FakeProvider(
+        "local_frontdoor",
+        [
+            PlannerProviderResult(
+                provider="local_frontdoor",
+                role="draft",
+                ok=True,
+                text=_action_text({"type": "deep_eval", "tier": 3}),
+            ),
+            PlannerProviderResult(
+                provider="local_frontdoor",
+                role="critique",
+                ok=True,
+                text=_critique_text(
+                    {
+                        "decision": "approve",
+                        "confidence": 0.91,
+                        "issues": [],
+                    }
+                ),
+            ),
+        ],
+    )
+    fallback = FakeProvider(
+        "local_worker",
+        [
+            PlannerProviderResult(
+                provider="local_worker",
+                role="draft",
+                ok=True,
+                text=_action_text({"type": "numeric_trial", "surface": "memrl_retrieval"}),
+            )
+        ],
+    )
+
+    decision = planner_coordinator.plan_with_providers(
+        "prompt",
+        session_id=None,
+        planner_state={},
+        settings=PlannerSettings(
+            primary="local_frontdoor",
+            critic="local_worker",
+            mode="draft_critique",
+            critique_policy="always",
+        ),
+        provider_factory=_factory({"local_frontdoor": primary, "local_worker": fallback}),
+        allowed_action_types=["numeric_trial", "structural_experiment"],
+    )
+
+    assert decision.action == {"type": "numeric_trial", "surface": "memrl_retrieval"}
+    assert decision.draft_provider == "local_worker"
+    assert decision.critic_provider == "local_frontdoor"
+    assert decision.critique is not None
+    assert decision.critique.decision == "approve"
+    assert [call["role"] for call in primary.calls] == ["draft", "critique"]
+    assert [call["role"] for call in fallback.calls] == ["draft"]
+    assert "local_frontdoor draft failed: action type currently unavailable: deep_eval" in (
+        decision.fallback_reason
+    )
+    assert decision.provider_trace[0]["stage"] == "draft_primary"
+    assert decision.provider_trace[0]["action_type"] == "deep_eval"
+    assert (
+        decision.provider_trace[0]["unusable_reason"]
+        == "action type currently unavailable: deep_eval"
+    )
+
+
 def test_planner_archive_records_provider_trace(monkeypatch: pytest.MonkeyPatch) -> None:
     records: list[dict[str, Any]] = []
     monkeypatch.setattr(planner_coordinator, "_append_planner_archive", records.append)
