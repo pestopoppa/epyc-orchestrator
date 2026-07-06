@@ -5368,7 +5368,7 @@ function applyDashboardSnapshot(snap, source) {
             return updateRegionLocks(refreshSeq, snap.region_locks, snapshotSeq, snap.in_flight_tasks || []);
         }
     });
-    updatePanelSafely('topology', () => updateTopology(snap.activity || {}, snap.in_flight_tasks || [], snapshotSeq));
+    updatePanelSafely('topology', () => updateTopology(snap.display_activity || snap.activity || {}, snap.in_flight_tasks || [], snapshotSeq));
     updatePanelSafely('contention', () => updateContentionGate(refreshSeq));
     updatePanelSafely('topology_activity', () => {
         if (snap.topology_activity) applyTopologyActivityPayload(snap.topology_activity);
@@ -6457,7 +6457,11 @@ async function updateRegionLocks(
                 };
             }
             _latestTapInferredRegionLocksByRole = buildTapInferredRegionLocks();
-            _latestSlotInferredRegionLocksByRole = buildSlotInferredRegionLocks(byRole);
+            // CPU region locks must be authoritative: use /proc holders plus
+            // structured tap metadata, but never promote raw llama /slots
+            // occupancy into a CPU-lock holder. /slots remains visible in the
+            // topology dots via snap.display_activity and in GPU/direct rows.
+            _latestSlotInferredRegionLocksByRole = {};
             const tapLiveRequests = typeof liveStructuredTapRequests === 'function' ? liveStructuredTapRequests() : [];
             const tapLiveRequestCount = tapLiveRequests.length;
             const tapLiveStateCounts = {};
@@ -6599,7 +6603,7 @@ async function updateRegionLocks(
                 (acc, info) => acc + ((info.active_instance_idxs || []).length),
                 0
             );
-            const activeLockCount = actualActiveLockCount + tapInferredMissing.length + slotInferredMissing.length;
+            const activeLockCount = actualActiveLockCount + tapInferredMissing.length;
             const heldBySummary = [...new Set(
                 Object.values(globalHeldBy)
                     .flat()

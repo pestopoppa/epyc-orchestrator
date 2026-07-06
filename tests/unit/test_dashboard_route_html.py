@@ -469,7 +469,7 @@ def test_dashboard_topology_activity_stats_refresh_with_live_age_tick() -> None:
     assert "const refreshSeq = ++_regionLocksRefreshSeq;" in body
     assert "updatePanelSafely('contention', () => updateContentionGate(refreshSeq));" in body
     assert "function updateTopology(activity, inflight, snapshotSeq = null)" in body
-    assert "updateTopology(snap.activity || {}, snap.in_flight_tasks || [], snapshotSeq)" in body
+    assert "updateTopology(snap.display_activity || snap.activity || {}, snap.in_flight_tasks || [], snapshotSeq)" in body
     assert "let _latestStructuredTapFrameTs = 0;" in body
     assert "function applyStructuredTapFrame(data, {" in body
     assert "if (Array.isArray(snap.structured_requests))" in body
@@ -503,9 +503,8 @@ def test_dashboard_topology_activity_stats_refresh_with_live_age_tick() -> None:
     assert "startPanelSafely('snapshot-poll', updateSnapshotPoll);" in body
     assert "setTimeout(ensureRegionLocksPanelPainted, 750)" in body
     assert "_latestSnapshot = snap || {};" in body
-    assert "buildSlotInferredRegionLocks(byRole)" in body
-    assert "SLOT ACTIVE" in body
-    assert "slot-inferred active instance(s)" in body
+    assert "_latestSlotInferredRegionLocksByRole = {};" in body
+    assert "never promote raw llama /slots" in body
     assert "Tap PIDs identify backend llama-server processes" in body
     assert "active.instanceIdxs && active.instanceIdxs.has(Number(idx))" in body
     assert "function requestCoherentDashboardSnapshot(reason = '')" in body

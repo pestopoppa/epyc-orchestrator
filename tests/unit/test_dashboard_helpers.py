@@ -2517,6 +2517,48 @@ def test_snapshot_uses_fresh_region_lock_scan(monkeypatch) -> None:
 
     assert payload["region_locks"] == fresh
     assert payload["topology_activity"] == activity
+    assert payload["display_activity"] == {}
+
+
+def test_coherent_display_activity_suppresses_uncorroborated_cpu_slots() -> None:
+    activity = {
+        8072: {"n_total": 1, "n_active": 1, "active_slots": [{"slot_id": 0}]},
+        8802: {"n_total": 1, "n_active": 1, "active_slots": [{"slot_id": 0}]},
+    }
+    out = dashboard._coherent_display_activity(
+        activity,
+        structured_requests=[],
+        region_locks={"by_role": {}},
+        port_roles={8072: "worker_general.q0", 8802: "mi210_gpu"},
+        topology_nodes=[
+            {"port": 8072, "kind": "llama-server"},
+            {"port": 8802, "kind": "gpu-llama-server"},
+        ],
+    )
+
+    assert out[8072]["n_active"] == 0
+    assert out[8072]["active_slots"] == []
+    assert out[8802]["n_active"] == 1
+
+
+def test_coherent_display_activity_keeps_structured_tap_cpu_slots() -> None:
+    activity = {
+        8072: {"n_total": 1, "n_active": 1, "active_slots": [{"slot_id": 0}]},
+    }
+    out = dashboard._coherent_display_activity(
+        activity,
+        structured_requests=[{
+            "status": "running",
+            "quiet_s": 1.0,
+            "port": 8072,
+        }],
+        region_locks={"by_role": {}},
+        port_roles={8072: "worker_general.q0"},
+        topology_nodes=[{"port": 8072, "kind": "llama-server"}],
+    )
+
+    assert out[8072]["n_active"] == 1
+    assert out[8072]["active_slots"] == [{"slot_id": 0}]
 
 
 def test_enrich_structured_tap_requests_fails_open(monkeypatch) -> None:

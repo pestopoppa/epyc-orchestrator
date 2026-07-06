@@ -4112,6 +4112,83 @@ def _gate_inflight_by_live_slots(
     return gated
 
 
+def _coherent_display_activity(
+    activity: dict[int, dict[str, Any]],
+    *,
+    structured_requests: list[dict[str, Any]],
+    region_locks: dict[str, Any],
+    port_roles: dict[int, str],
+    topology_nodes: list[dict[str, Any]],
+) -> dict[int, dict[str, Any]]:
+    """Return activity suitable for live dashboard painting.
+
+    Raw llama-server `/slots` is useful diagnostic telemetry, but it is not an
+    authoritative CPU-holder signal: slots can remain busy/ambiguous while the
+    structured tap and `/proc` lock scan have already moved on. The dashboard's
+    visible active topology state must therefore be corroborated by either a
+    current structured tap request or a current CPU-region lock. Device/direct
+    access servers are kept as raw slot occupancy because they intentionally
+    bypass the orchestrator tap/lock path.
+    """
+    active_ports: set[int] = set()
+    for req in structured_requests:
+        if str(req.get("status") or "").lower() != "running":
+            continue
+        try:
+            quiet_s = float(req.get("quiet_s") or 0.0)
+        except (TypeError, ValueError):
+            quiet_s = 0.0
+        if quiet_s >= 15.0:
+            continue
+        try:
+            active_ports.add(int(req.get("port")))
+        except (TypeError, ValueError):
+            pass
+
+    locks_by_role = region_locks.get("by_role") if isinstance(region_locks, dict) else {}
+    locks_by_role = locks_by_role if isinstance(locks_by_role, dict) else {}
+    for port, role_label in port_roles.items():
+        role, shape = _port_role_shape(role_label)
+        if not role:
+            continue
+        info = locks_by_role.get(role) or {}
+        active_idxs = {int(i) for i in info.get("active_instance_idxs", []) if str(i).lstrip("-").isdigit()}
+        if not active_idxs:
+            continue
+        instances = info.get("instances") if isinstance(info.get("instances"), list) else []
+        for inst in instances:
+            try:
+                idx = int(inst.get("idx"))
+            except (AttributeError, TypeError, ValueError):
+                continue
+            if idx not in active_idxs:
+                continue
+            inst_shape = str(inst.get("shape") or "")
+            if shape and inst_shape != shape:
+                continue
+            # A shape-less base port represents the primary/full endpoint; do
+            # not let a quarter holder make the base row look active.
+            if not shape and inst_shape not in {"", "full", "half0"}:
+                continue
+            active_ports.add(int(port))
+
+    node_kind_by_port = {
+        int(n["port"]): str(n.get("kind") or "")
+        for n in topology_nodes
+        if isinstance(n, dict) and isinstance(n.get("port"), int)
+    }
+    display: dict[int, dict[str, Any]] = {}
+    for port, entry in activity.items():
+        item = dict(entry)
+        kind = node_kind_by_port.get(int(port), "")
+        is_cpu_llama = kind == "llama-server"
+        if is_cpu_llama and int(port) not in active_ports:
+            item["n_active"] = 0
+            item["active_slots"] = []
+        display[int(port)] = item
+    return display
+
+
 def _count_log_events(
     path: Path, patterns: dict[str, str], window_s: float = 600.0,
 ) -> dict[str, int]:
@@ -4227,6 +4304,14 @@ async def _snapshot_impl() -> JSONResponse:
         region_locks=region_locks,
         port_roles=port_roles,
     )
+    topology_nodes = _topology_nodes_cached()
+    display_activity = _coherent_display_activity(
+        activity,
+        structured_requests=structured_requests,
+        region_locks=region_locks,
+        port_roles=port_roles,
+        topology_nodes=topology_nodes,
+    )
     topology_activity_payload = _topology_activity_payload(
         window_s=600.0,
         now=_snap_now,
@@ -4240,8 +4325,9 @@ async def _snapshot_impl() -> JSONResponse:
         # dots the frontend renders from this one object can never reflect
         # different instants. This is the keystone that kills the "tap shows
         # active inference beside a 'no locks held' grid" inconsistency.
-        "topology": {"nodes": _topology_nodes_cached()},
+        "topology": {"nodes": topology_nodes},
         "activity": activity,
+        "display_activity": display_activity,
         # Fan-out degradation is data, not a silent gap: timed_out > 0 means
         # some ports' slots are missing from `activity` this frame.
         "slots_poll_meta": slots_poll_meta,
