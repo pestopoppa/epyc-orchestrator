@@ -2322,7 +2322,9 @@ function currentOffTapTrafficLabel() {
 
 function buildTapInferredRegionLocks() {
     const inferred = {};
-    const requests = typeof liveStructuredTapRequests === 'function' ? liveStructuredTapRequests() : [];
+    const requests = typeof structuredTapLockCandidates === 'function'
+        ? structuredTapLockCandidates()
+        : (typeof liveStructuredTapRequests === 'function' ? liveStructuredTapRequests() : []);
     for (const req of requests) {
         const identity = inferStructuredTapLockIdentity(req, _lastRegionLocksPayload && _lastRegionLocksPayload.by_role ? _lastRegionLocksPayload.by_role : null);
         if (!identity) continue;
@@ -2488,6 +2490,15 @@ function liveStructuredTapRequests() {
         .filter(isLiveStructuredTapRequest);
 }
 
+function structuredTapLockCandidates() {
+    return openStructuredTapRequests().filter(req => {
+        const activity = structuredTapActivity(req);
+        // Quiet / stalled requests can still own a lock; queued or
+        // waiting-for-lock requests should not be inferred as holders.
+        return activity.state !== 'queued' && activity.state !== 'waiting_cpu_lock';
+    });
+}
+
 function structuredTapMatchesLockHolder(req, holder) {
     if (!req || !holder) return false;
     const holderRole = String(holder.role || '');
@@ -2568,6 +2579,36 @@ function formatPhysicalRoleWithLogicalAliases(role, shape, idx = null) {
     return aliases.length ? `${base} (${aliases.join(', ')})` : base;
 }
 
+function tapInferredHolderLabel(role, shape, idx, sources) {
+    const sourceList = Array.isArray(sources) ? sources : [];
+    const matchingSources = sourceList.filter(r => Number(r.instance_idx) === Number(idx));
+    const holderSources = matchingSources.length ? matchingSources : sourceList;
+    const activityOrder = [
+        'prefill_decode_pending',
+        'streaming',
+        'quiet',
+        'stalled',
+    ];
+    const source = activityOrder
+        .map(state => holderSources.find(r => structuredTapActivity(r).state === state))
+        .find(Boolean) || holderSources[0] || null;
+    const activity = source ? structuredTapActivity(source) : null;
+    let inferredState = 'tap-inferred holder';
+    if (activity) {
+        if (activity.state === 'prefill_decode_pending') {
+            inferredState = 'tap-inferred active/pending';
+        } else if (activity.state === 'streaming') {
+            inferredState = 'tap-inferred streaming';
+        } else if (activity.state === 'quiet') {
+            inferredState = 'tap-inferred quiet/held';
+        } else if (activity.state === 'stalled') {
+            inferredState = 'tap-inferred stalled/held';
+        }
+    }
+    const countSuffix = holderSources.length > 1 ? ` ×${holderSources.length}` : '';
+    return `~${formatPhysicalRoleWithLogicalAliases(role, shape, idx)}${countSuffix} (${inferredState})`;
+}
+
 function lockHolderConcurrentSummary(holder) {
     const others = procRegionLockHolders()
         .filter(h => !(h.role === holder.role && Number(h.idx) === Number(holder.idx)))
@@ -2603,15 +2644,8 @@ function formatRegionLockHolderSummary() {
             const idx = Number(rawIdx);
             if (!Number.isFinite(idx) || procIdxs.has(idx)) continue;
             const inst = instMap.get(idx);
-            const req = sources.find(r => Number(r.instance_idx) === idx) || sources[0] || null;
-            const activity = req ? structuredTapActivity(req) : null;
-            const inferredState = activity && activity.state === 'prefill_decode_pending'
-                ? 'tap-inferred active/pending'
-                : 'tap-inferred streaming';
-            const shape = req && req.instance_shape
-                ? String(req.instance_shape)
-                : (inst && inst.shape) || `idx${idx}`;
-            const label = `~${formatPhysicalRoleWithLogicalAliases(role, shape, idx)} (${inferredState})`;
+            const shape = (inst && inst.shape) || `idx${idx}`;
+            const label = tapInferredHolderLabel(role, shape, idx, sources);
             const key = label.replace(/^\s*[~≈]\s*/, '');
             if (seen.has(key)) continue;
             seen.add(key);
@@ -6419,7 +6453,7 @@ async function updateRegionLocks(
                     ? `; +${tapLiveRequestCount} live tap request(s)${tapLiveStateBits.length ? ` (${tapLiveStateBits.join(' · ')})` : ''}`
                     : '';
                 const tapInferredCountSuffix = tapInferredMissing.length
-                    ? ` + ${tapInferredMissing.length} tap-inferred active stream(s)`
+                    ? ` + ${tapInferredMissing.length} tap-inferred active holder(s)`
                     : '';
                 const slotInferredSuffix = slotInferredMissing.length
                     ? `; +${slotInferredMissing.length} slot-inferred active instance(s): ${slotInferredMissing.join(', ')}`

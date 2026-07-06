@@ -1474,7 +1474,8 @@ def test_dashboard_html_repaints_topology_after_region_lock_refresh() -> None:
     from src.api.routes import dashboard
 
     html = dashboard._DASHBOARD_HTML
-    assert "updateTopologyInflight((_latestSnapshot && _latestSnapshot.in_flight_tasks) || [])" in html
+    assert "const overlayInflight = snapshotSeq != null" in html
+    assert "updateTopologyInflight(overlayInflight, snapshotSeq);" in html
     assert "same lock cache" in html
 
 

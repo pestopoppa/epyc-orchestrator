@@ -8,6 +8,9 @@ loader path breaking after future refactors.
 from __future__ import annotations
 
 import asyncio
+import json
+import subprocess
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -64,7 +67,7 @@ def test_dashboard_html_distinguishes_waiting_tap_from_active_locks() -> None:
     body = html_path.read_text()
 
     assert "waiting_cpu_lock" in body
-    assert "tap-inferred active stream" in body
+    assert "tap-inferred active holder" in body
     assert "TAP ACTIVE" in body
     assert "structuredTapPrimaryRole" in body
     assert "function inferStructuredTapLockIdentity(req, byRole = null)" in body
@@ -93,7 +96,130 @@ def test_dashboard_html_separates_proc_holders_from_live_tap_requests() -> None:
     assert "tapLiveStateBits" in body
     assert "live tap request(s)" in body
     assert "/proc holder instance(s)" in body
-    assert "tap-inferred active stream(s)" in body
+    assert "structuredTapLockCandidates" in body
+    assert "tap-inferred active holder(s)" in body
+
+
+def test_dashboard_html_infers_quiet_tap_requests_into_region_lock_candidates() -> None:
+    """Quiet open tap requests can still hold locks, so the lock overlay must paint them."""
+    html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    body = html_path.read_text()
+    start = body.index("function currentAutopilotActionSource()")
+    end = body.index("function refreshLiveDotsFromStructuredTap()")
+    snippet = body[start:end]
+
+    script = textwrap.dedent(
+        f"""
+        const vm = require('vm');
+        const ctx = {{
+          _latestProcessStatus: {{}},
+          _latestRegionLocksByRole: {{}},
+          _latestTapInferredRegionLocksByRole: {{}},
+          _lastRegionLocksPayload: {{
+            by_role: {{
+              worker_general: {{
+                instances: [
+                  {{ idx: 0, shape: 'full', regions: ['q0', 'q1', 'q2', 'q3'] }},
+                  {{ idx: 3, shape: 'q2', regions: ['q2'] }},
+                ],
+              }},
+            }},
+          }},
+          _structuredTapRequests: [
+            {{
+              request_id: 'streaming',
+              role: 'frontdoor',
+              lock_role: 'worker_general',
+              instance_idx: 0,
+              instance_shape: 'full',
+              instance_regions: ['q0', 'q1', 'q2', 'q3'],
+              status: 'running',
+              chunk_count: 2,
+              response_len: 64,
+              quiet_s: 0,
+            }},
+            {{
+              request_id: 'quiet',
+              role: 'architect',
+              lock_role: 'worker_general',
+              instance_idx: 3,
+              instance_shape: 'q2',
+              instance_regions: ['q2'],
+              status: 'quiet',
+              chunk_count: 2,
+              response_len: 64,
+              quiet_s: 0,
+            }},
+            {{
+              request_id: 'waiting',
+              role: 'ingest',
+              lock_role: 'worker_general',
+              instance_idx: 3,
+              instance_shape: 'q2',
+              instance_regions: ['q2'],
+              status: 'running',
+              chunk_count: 0,
+              response_len: 0,
+              quiet_s: 0,
+            }},
+          ],
+          _STRUCTURED_TAP_STALLED_S: 999999,
+          escapeHTML: (s) => String(s),
+          clientBaseRole: (s) => String(s || ''),
+          roleColor: () => 'x',
+          inferStructuredTapLockIdentity: (req) => ({{
+            role: req.lock_role || req.topology_role || req.role || '',
+            idx: Number(req.instance_idx),
+            regions: Array.isArray(req.instance_regions) ? req.instance_regions : [],
+            shape: req.instance_shape || '',
+          }}),
+          structuredTapHasActiveCpuLock: (req) => req.request_id !== 'waiting',
+          structuredTapCpuBlockers: (req) => req.request_id === 'waiting' ? ['worker_general'] : [],
+          structuredTapCpuBlockerSummary: (blockers) => blockers.join(','),
+          topology: {{ nodes: [] }},
+        }};
+        vm.createContext(ctx);
+        vm.runInContext({json.dumps(snippet)}, ctx);
+        const candidateIds = vm.runInContext(
+          'structuredTapLockCandidates().map((req) => req.request_id).sort().join(\",\")',
+          ctx,
+        );
+        const inferred = vm.runInContext(`
+          const out = buildTapInferredRegionLocks();
+          JSON.stringify(Object.fromEntries(Object.entries(out).map(([role, bucket]) => [role, {{
+            instanceIdxs: [...bucket.instanceIdxs].map(Number).sort((a, b) => a - b),
+            requestIds: bucket.sources.map((req) => req.request_id).sort(),
+          }}])));
+        `, ctx);
+        vm.runInContext('_latestTapInferredRegionLocksByRole = buildTapInferredRegionLocks();', ctx);
+        const summary = vm.runInContext('formatRegionLockHolderSummary()', ctx);
+        if (candidateIds !== 'quiet,streaming') {{
+          throw new Error(`unexpected candidate ids: ${{candidateIds}}`);
+        }}
+        const parsed = JSON.parse(inferred);
+        if (!parsed.worker_general) {{
+          throw new Error('missing worker_general bucket');
+        }}
+        if (parsed.worker_general.instanceIdxs.join(',') !== '0,3') {{
+          throw new Error(`unexpected instanceIdxs: ${{parsed.worker_general.instanceIdxs.join(',')}}`);
+        }}
+        if (parsed.worker_general.requestIds.join(',') !== 'quiet,streaming') {{
+          throw new Error(`unexpected requestIds: ${{parsed.worker_general.requestIds.join(',')}}`);
+        }}
+        if (!summary.includes('tap-inferred quiet/held')) {{
+          throw new Error(`summary did not include quiet holder: ${{summary}}`);
+        }}
+        if (!summary.includes('tap-inferred streaming')) {{
+          throw new Error(`summary did not include streaming holder: ${{summary}}`);
+        }}
+        if (!summary.includes('frontdoor') || !summary.includes('architect')) {{
+          throw new Error(`summary did not include logical aliases: ${{summary}}`);
+        }}
+        """
+    )
+
+    result = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr or result.stdout
 
 
 def test_dashboard_html_merges_unique_tap_inferred_holders_into_region_lock_summary() -> None:
@@ -103,12 +229,14 @@ def test_dashboard_html_merges_unique_tap_inferred_holders_into_region_lock_summ
 
     assert "function formatRegionLockHolderSummary()" in body
     assert "const displayHeldBySummary = formatRegionLockHolderSummary();" in body
+    assert "function tapInferredHolderLabel(role, shape, idx, sources)" in body
     assert "tap-inferred active/pending" in body
     assert "tap-inferred streaming" in body
+    assert "tap-inferred quiet/held" in body
     assert "const tapInferredCountSuffix = tapInferredMissing.length" in body
-    assert "const inferredState = activity && activity.state === 'prefill_decode_pending'" in body
+    assert "const countSuffix = holderSources.length > 1 ? ` ×${holderSources.length}` : ''" in body
     assert "/proc holder instance(s)${tapInferredCountSuffix}: ${displayHeldBySummary" in body
-    assert "~${formatPhysicalRoleWithLogicalAliases(role, shape, idx)} (${inferredState})" in body
+    assert "~${formatPhysicalRoleWithLogicalAliases(role, shape, idx)}${countSuffix} (${inferredState})" in body
 
 
 def test_dashboard_run_state_active_inference_overrides_quiet_log() -> None:
