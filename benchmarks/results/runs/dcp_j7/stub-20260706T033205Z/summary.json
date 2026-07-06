@@ -1,0 +1,45 @@
+{
+  "decision": {
+    "blockers": [
+      "missing_latency_delta",
+      "quality_not_scored"
+    ],
+    "criteria": {
+      "min_latency_improvement": 0.1,
+      "min_rows_per_arm": 3,
+      "requires_no_delegation_failures": true,
+      "requires_no_quality_regression": true,
+      "requires_quality_scored_rows": true,
+      "requires_zero_errors": true
+    },
+    "recommendation": "rerun with enough rows and quality-scored prompts",
+    "schema_version": "dcp_j7_decision.v1",
+    "status": "insufficient"
+  },
+  "off": {
+    "avg_delegation_event_tokens": 0.0,
+    "avg_delegation_events": 0.0,
+    "avg_tokens_generated": 0.0,
+    "delegation_failures": 0,
+    "delegation_successes": 0,
+    "errors": 0,
+    "n": 3,
+    "p50_elapsed_s": 0.0,
+    "quality_failures": 0,
+    "quality_passes": 0,
+    "quality_scored": 0
+  },
+  "on": {
+    "avg_delegation_event_tokens": 0.0,
+    "avg_delegation_events": 0.0,
+    "avg_tokens_generated": 0.0,
+    "delegation_failures": 0,
+    "delegation_successes": 0,
+    "errors": 0,
+    "n": 3,
+    "p50_elapsed_s": 0.0,
+    "quality_failures": 0,
+    "quality_passes": 0,
+    "quality_scored": 0
+  }
+}

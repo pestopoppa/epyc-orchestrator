@@ -195,11 +195,20 @@ def test_decision_promotes_only_with_quality_and_latency_pass():
 
 
 def test_real_run_refuses_without_host_quiet(capsys):
-    code = dcp.main(["--reps", "1"])
+    code = dcp.main(["--real", "--reps", "1"])
     err = capsys.readouterr().err
 
     assert code == 2
     assert "REFUSING real J7 run" in err
+
+
+def test_default_main_is_stub_and_writes_artifacts(tmp_path, monkeypatch):
+    monkeypatch.setattr(dcp, "_orch_head", lambda: "abc123")
+    code = dcp.main(["--reps", "1", "--output", str(tmp_path)])
+
+    assert code == 0
+    assert '"mode": "stub"' in (tmp_path / "meta.json").read_text()
+    assert len((tmp_path / "results.jsonl").read_text().strip().splitlines()) == len(dcp.PROMPTS) * 2
 
 
 def test_stub_main_writes_artifacts(tmp_path, monkeypatch):
