@@ -128,7 +128,7 @@ def _record_command(
 
 
 def _batch_template_row(item: dict[str, Any]) -> dict[str, Any]:
-    return {
+    row = {
         "schema_version": "lab_review_batch.v1",
         "job_id": item["job_id"],
         "run_id": item["run_id"],
@@ -144,6 +144,9 @@ def _batch_template_row(item: dict[str, Any]) -> dict[str, Any]:
             else None
         ),
     }
+    if item.get("record_class") == "active_safe_deterministic":
+        row["write_gold_tuple"] = False
+    return row
 
 
 def _pending_items(
@@ -169,7 +172,7 @@ def _pending_items(
         output_path = _record_output_path(queue_dir, record)
         output_exists = output_path.is_file() if output_path is not None else False
         next_reviewer = (
-            "cloud_reference" if record_class == "review_candidate" else "operator"
+            "cloud_reference" if record_class == "review_candidate" else "automated"
         )
         pending.append(
             {
@@ -311,7 +314,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         lines.extend([
             "## Review Batch Template",
             "",
-            "Edit `verdict`, `confidence`, and `notes`, then pass the JSONL to `scripts/lab/apply_review_batch.py`.",
+            "For active-safe deterministic rows, run `scripts/lab/auto_review_active_safe.py --apply`; for model-backed rows, edit `verdict`, `confidence`, and `notes`, then pass the JSONL to `scripts/lab/apply_review_batch.py`.",
             "",
             "```jsonl",
             str(report.get("review_batch_template_jsonl") or ""),

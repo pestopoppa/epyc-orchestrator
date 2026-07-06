@@ -177,9 +177,10 @@ def test_review_queue_report_flags_missing_outputs_and_counts_active_safe(
     assert report["ok"] is False
     assert report["status"] == "attention"
     assert report["summary"]["pending_active_safe"] == 1
-    assert report["pending_items"][0]["next_reviewer"] == "operator"
-    assert report["review_batch_template"][0]["reviewer"] == "operator"
+    assert report["pending_items"][0]["next_reviewer"] == "automated"
+    assert report["review_batch_template"][0]["reviewer"] == "automated"
     assert report["review_batch_template"][0]["reference_output"] is None
+    assert report["review_batch_template"][0]["write_gold_tuple"] is False
     assert report["missing_outputs"] == [
         {
             "job_id": "active_safe_watch",
@@ -210,9 +211,10 @@ def test_review_queue_report_renders_markdown_packet(tmp_path: Path) -> None:
     markdown = review_queue_report.render_markdown(report)
 
     assert "# Lab Review Queue Report" in markdown
-    assert "| active_safe_watch | `active-1` | active_safe_deterministic | shadow | operator |" in markdown
+    assert "| active_safe_watch | `active-1` | active_safe_deterministic | shadow | automated |" in markdown
     assert "```jsonl" in markdown
     assert '"schema_version": "lab_review_batch.v1"' in markdown
+    assert "auto_review_active_safe.py --apply" in markdown
     assert "apply_review_batch.py" in markdown
 
 

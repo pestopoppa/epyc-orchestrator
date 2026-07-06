@@ -110,8 +110,15 @@ def apply_batch(
                 reference_output=row.get("reference_output"),
                 cloud_reference_run_id=row.get("cloud_reference_run_id"),
                 allow_duplicate=allow_duplicates or bool(row.get("allow_duplicate")),
+                write_gold_tuple=bool(row.get("write_gold_tuple", True)),
             )
-            applied.append({**item, "tuple_path": result["tuple_path"]})
+            applied.append(
+                {
+                    **item,
+                    "tuple_path": result.get("tuple_path"),
+                    "verdict_artifact_path": result.get("verdict_artifact_path"),
+                }
+            )
         except (ApplyReviewBatchError, record_verdict.VerdictError) as exc:
             errors.append({"row": idx, "error": str(exc)})
     return {

@@ -140,6 +140,7 @@ def record_verdict(
     reference_output: str | None,
     cloud_reference_run_id: str | None,
     allow_duplicate: bool,
+    write_gold_tuple: bool = True,
 ) -> dict[str, Any]:
     task_records = _load_jsonl(task_records_file)
     verdict_rows = _load_jsonl(verdicts_file)
@@ -163,9 +164,14 @@ def record_verdict(
     if reviewer == "cloud_reference" and reference_payload is None:
         raise VerdictError("--reviewer cloud_reference requires --reference-output")
     captured_at = utc_now()
-    tuple_path = queue_dir / "gold_tuples" / job_id / f"{run_id}.json"
-    gold_tuple = {
-        "schema_version": "lab_gold_tuple.v1",
+    artifact_schema = "lab_gold_tuple.v1" if write_gold_tuple else "lab_verdict_artifact.v1"
+    artifact_path = (
+        queue_dir / "gold_tuples" / job_id / f"{run_id}.json"
+        if write_gold_tuple
+        else queue_dir / "verdict_artifacts" / job_id / f"{run_id}.json"
+    )
+    artifact = {
+        "schema_version": artifact_schema,
         "job_id": job_id,
         "run_id": run_id,
         "captured_at": captured_at,
@@ -184,7 +190,7 @@ def record_verdict(
         },
         "task_record": task_record,
     }
-    _atomic_write_json(tuple_path, gold_tuple)
+    _atomic_write_json(artifact_path, artifact)
     verdict_row = {
         "schema_version": "lab_review_verdict.v1",
         "job_id": job_id,
@@ -195,8 +201,12 @@ def record_verdict(
         "reviewed_at": captured_at,
         "confidence": confidence,
         "notes": notes,
-        "tuple_path": _safe_rel(tuple_path, queue_dir),
     }
+    if write_gold_tuple:
+        verdict_row["tuple_path"] = _safe_rel(artifact_path, queue_dir)
+    else:
+        verdict_row["verdict_artifact_path"] = _safe_rel(artifact_path, queue_dir)
+        verdict_row["evidence_type"] = "deterministic_review"
     if reviewer == "cloud_reference":
         verdict_row["reference_type"] = "cloud_reference"
         verdict_row["cloud_reference_run_id"] = cloud_reference_run_id or f"cloud-{run_id}"
@@ -205,7 +215,8 @@ def record_verdict(
         "job_id": job_id,
         "run_id": run_id,
         "verdict": verdict,
-        "tuple_path": str(tuple_path),
+        "tuple_path": str(artifact_path) if write_gold_tuple else None,
+        "verdict_artifact_path": str(artifact_path) if not write_gold_tuple else None,
         "verdicts_file": str(verdicts_file),
     }
 
@@ -233,6 +244,7 @@ def run_from_args(args: argparse.Namespace) -> dict[str, Any]:
         reference_output=args.reference_output,
         cloud_reference_run_id=args.cloud_reference_run_id,
         allow_duplicate=args.allow_duplicate,
+        write_gold_tuple=not args.no_gold_tuple,
     )
 
 
@@ -253,6 +265,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--reference-output")
     parser.add_argument("--cloud-reference-run-id")
     parser.add_argument("--allow-duplicate", action="store_true")
+    parser.add_argument(
+        "--no-gold-tuple",
+        action="store_true",
+        help="Record a verdict artifact without minting an F3 lab_gold_tuple.v1 row.",
+    )
     return parser
 
 

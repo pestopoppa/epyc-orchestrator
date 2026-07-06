@@ -1,0 +1,107 @@
+{
+  "captured_at": "2026-07-06T23:21:59+00:00",
+  "confidence": 1.0,
+  "job_id": "autopilot_planner_provider_watch",
+  "local_output": {
+    "path": "autopilot_planner_provider_watch/autopilot_planner_provider_watch-20260706T115823Z-ab6d7cb7/output.json",
+    "payload": {
+      "blockers": [],
+      "critic_decisions": {},
+      "draft_actions": {},
+      "generated_at": "2026-07-06T11:58:23+00:00",
+      "local": {
+        "critique_successes": 0,
+        "draft_successes": 0,
+        "failures": 0,
+        "fallback_provider_starts": 0
+      },
+      "ok": true,
+      "providers": {},
+      "recent_issues": [],
+      "revised_actions": {},
+      "schema_version": "autopilot_planner_provider_health.v1",
+      "status": "waiting_for_planner_turn",
+      "tap_path": "/mnt/raid0/llm/tmp/planner_tap.log",
+      "window": {
+        "action_type": "numeric_trial",
+        "event_count": 0,
+        "last_event_timestamp": null,
+        "no_event_reason": "no planner provider events parsed from current process window; current phase is dispatch_action",
+        "phase": "dispatch_action",
+        "phase_path": "/mnt/raid0/llm/tmp/autopilot_phase.json",
+        "process_started_at_s": 1783333359.42,
+        "raw_event_count": 182,
+        "scope": "current_process",
+        "scoped_pid": 131226,
+        "stale_after_s": 7200.0,
+        "tail_bytes": 1500000,
+        "tap_mtime_age_s": 5488.605
+      }
+    }
+  },
+  "notes": "automated active-safe review accepted output with ok=true",
+  "reference_output": {
+    "path": null,
+    "payload": null
+  },
+  "reviewer": "automated",
+  "run_id": "autopilot_planner_provider_watch-20260706T115823Z-ab6d7cb7",
+  "schema_version": "lab_verdict_artifact.v1",
+  "stage": "shadow",
+  "task_record": {
+    "artifacts": {
+      "context_manifest": "autopilot_planner_provider_watch/autopilot_planner_provider_watch-20260706T115823Z-ab6d7cb7/context_manifest.json",
+      "output": "autopilot_planner_provider_watch/autopilot_planner_provider_watch-20260706T115823Z-ab6d7cb7/output.json",
+      "prompt": "autopilot_planner_provider_watch/autopilot_planner_provider_watch-20260706T115823Z-ab6d7cb7/prompt.txt"
+    },
+    "chat_meta": {
+      "command": [
+        "python3",
+        "scripts/autopilot/planner_provider_health_report.py",
+        "--json"
+      ],
+      "elapsed_s": 0.099,
+      "returncode": 0,
+      "stderr_tail": ""
+    },
+    "context": {
+      "budget_exhausted": false,
+      "excerpt_chars": 4400,
+      "kinds": {
+        "source_excerpt": 2
+      },
+      "max_context_chars": 16000,
+      "missing_source_count": 0,
+      "repos": [
+        "epyc-orchestrator"
+      ],
+      "schema_version": "lab_context_summary.v1",
+      "source_bytes": 70458,
+      "source_count": 2,
+      "truncated_source_count": 2
+    },
+    "generated_at": "2026-07-06T11:58:23+00:00",
+    "invocation_mode": "deterministic_command",
+    "job_id": "autopilot_planner_provider_watch",
+    "model_role": null,
+    "policy": {
+      "direct_repo_writes_allowed": false,
+      "review_queue_only": true
+    },
+    "record_type": "task_record",
+    "repo": {
+      "branch": "spec-dec-mtp-refresh-2026-06-22",
+      "commit": "60523b6be9b1aa13e2d2957044e0f61b93f9e300",
+      "dirty": true,
+      "path": "/mnt/raid0/llm/epyc-orchestrator"
+    },
+    "risk": "read_only",
+    "run_id": "autopilot_planner_provider_watch-20260706T115823Z-ab6d7cb7",
+    "schema_version": "lab_task_record.v1",
+    "stage": "shadow",
+    "validation": {
+      "output_contract": "passed"
+    }
+  },
+  "verdict": "accept"
+}

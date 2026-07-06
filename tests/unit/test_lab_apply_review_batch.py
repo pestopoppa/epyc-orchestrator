@@ -109,6 +109,32 @@ def test_apply_review_batch_dry_run_does_not_mutate_queue(tmp_path: Path) -> Non
     assert not (queue / "review_verdicts.jsonl").exists()
 
 
+def test_apply_review_batch_can_record_non_gold_verdict_artifact(tmp_path: Path) -> None:
+    queue, _reference, run_id = _seed_queue(tmp_path)
+    batch = tmp_path / "batch.jsonl"
+    _write_jsonl(
+        batch,
+        [
+            {
+                "job_id": "sample_job",
+                "run_id": run_id,
+                "verdict": "accept",
+                "reviewer": "automated",
+                "write_gold_tuple": False,
+            }
+        ],
+    )
+
+    report = apply_review_batch.run_from_args(_args(tmp_path, queue, batch))
+
+    assert report["ok"] is True
+    assert report["applied"][0]["tuple_path"] is None
+    assert report["applied"][0]["verdict_artifact_path"].endswith(
+        "verdict_artifacts/sample_job/run-1.json"
+    )
+    assert not (queue / "gold_tuples").exists()
+
+
 def test_apply_review_batch_reports_row_errors_without_partial_abort(tmp_path: Path) -> None:
     queue, reference, run_id = _seed_queue(tmp_path)
     batch = tmp_path / "batch.jsonl"

@@ -57,6 +57,7 @@ def _args(tmp_path: Path, queue: Path, run_id: str, **overrides) -> Namespace:
         "reference_output": str(tmp_path / "reference.json"),
         "cloud_reference_run_id": "cloud-run",
         "allow_duplicate": False,
+        "no_gold_tuple": False,
     }
     values.update(overrides)
     return Namespace(**values)
@@ -84,6 +85,32 @@ def test_cloud_reference_requires_reference_output(tmp_path: Path) -> None:
 
     with pytest.raises(record_verdict.VerdictError, match="requires --reference-output"):
         record_verdict.run_from_args(_args(tmp_path, queue, run_id, reference_output=None))
+
+
+def test_automated_verdict_can_skip_gold_tuple(tmp_path: Path) -> None:
+    queue, run_id = _seed_queue(tmp_path)
+
+    result = record_verdict.run_from_args(
+        _args(
+            tmp_path,
+            queue,
+            run_id,
+            reviewer="automated",
+            reference_output=None,
+            no_gold_tuple=True,
+        )
+    )
+
+    assert result["tuple_path"] is None
+    artifact = Path(result["verdict_artifact_path"])
+    assert artifact.exists()
+    assert not (queue / "gold_tuples" / "sample_job" / f"{run_id}.json").exists()
+    payload = json.loads(artifact.read_text())
+    assert payload["schema_version"] == "lab_verdict_artifact.v1"
+    verdict_row = json.loads((queue / "review_verdicts.jsonl").read_text().splitlines()[-1])
+    assert verdict_row["reviewer"] == "automated"
+    assert verdict_row["evidence_type"] == "deterministic_review"
+    assert "tuple_path" not in verdict_row
 
 
 def test_duplicate_verdict_requires_explicit_override(tmp_path: Path) -> None:
