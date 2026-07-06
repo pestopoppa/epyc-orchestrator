@@ -311,6 +311,69 @@ def test_currently_unavailable_primary_draft_falls_back_before_critique() -> Non
     )
 
 
+def test_selectable_deep_eval_tier3_local_draft_and_critic_is_accepted() -> None:
+    local_frontdoor = FakeProvider(
+        "local_frontdoor",
+        [
+            PlannerProviderResult(
+                provider="local_frontdoor",
+                role="draft",
+                ok=True,
+                text=_action_text({"type": "deep_eval", "tier": 3}),
+            )
+        ],
+    )
+    local_worker = FakeProvider(
+        "local_worker",
+        [
+            PlannerProviderResult(
+                provider="local_worker",
+                role="critique",
+                ok=True,
+                text=_critique_text(
+                    {
+                        "decision": "approve",
+                        "confidence": 0.92,
+                        "issues": [],
+                    }
+                ),
+            )
+        ],
+    )
+
+    decision = planner_coordinator.plan_with_providers(
+        "prompt",
+        session_id=None,
+        planner_state={},
+        settings=PlannerSettings(
+            primary="local_frontdoor",
+            critic="local_worker",
+            mode="draft_critique",
+            critique_policy="always",
+        ),
+        provider_factory=_factory(
+            {
+                "local_frontdoor": local_frontdoor,
+                "local_worker": local_worker,
+            }
+        ),
+        allowed_action_types=["numeric_trial", "structural_experiment", "deep_eval"],
+    )
+
+    assert decision.action == {"type": "deep_eval", "tier": 3}
+    assert decision.draft_provider == "local_frontdoor"
+    assert decision.critic_provider == "local_worker"
+    assert decision.fallback_reason == ""
+    assert decision.critique is not None
+    assert decision.critique.decision == "approve"
+    assert len(decision.provider_trace) == 2
+    assert decision.provider_trace[0]["action_type"] == "deep_eval"
+    assert decision.provider_trace[0]["unusable_reason"] == ""
+    assert "currently unavailable" not in str(decision.provider_trace)
+    assert [call["role"] for call in local_frontdoor.calls] == ["draft"]
+    assert [call["role"] for call in local_worker.calls] == ["critique"]
+
+
 def test_planner_archive_records_provider_trace(monkeypatch: pytest.MonkeyPatch) -> None:
     records: list[dict[str, Any]] = []
     monkeypatch.setattr(planner_coordinator, "_append_planner_archive", records.append)

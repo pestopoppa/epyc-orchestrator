@@ -40,7 +40,11 @@ url: http://127.0.0.1:8000/v1/chat/completions
         ],
     )
 
-    report = reporter.build_report(tap_path=tap, stale_after_s=999999)
+    report = reporter.build_report(
+        tap_path=tap,
+        stale_after_s=999999,
+        scope_current_process=False,
+    )
 
     assert report["ok"] is True
     assert report["status"] == "healthy"
@@ -69,7 +73,11 @@ def test_build_report_surfaces_local_failures_and_critic_rejections(tmp_path: Pa
         ],
     )
 
-    report = reporter.build_report(tap_path=tap, stale_after_s=999999)
+    report = reporter.build_report(
+        tap_path=tap,
+        stale_after_s=999999,
+        scope_current_process=False,
+    )
 
     assert report["ok"] is False
     assert report["status"] == "attention"
@@ -80,6 +88,48 @@ def test_build_report_surfaces_local_failures_and_critic_rejections(tmp_path: Pa
         issue["kind"] == "critic_issue" and "deep_eval" in issue["message"]
         for issue in report["recent_issues"]
     )
+
+
+def test_build_report_scopes_to_current_process_window(tmp_path: Path) -> None:
+    tap = tmp_path / "planner_tap.log"
+    _write_tap(
+        tap,
+        [
+            """[2026-07-06T05:37:05] PLANNER provider=codex role=draft start
+------------------------------------------------------------------------
+```json:autopilot_actions
+{"type": "seed_batch", "n_questions": 10}
+```
+[END provider=codex role=draft] result_chars=100""",
+            """[2026-07-06T06:03:11] PLANNER provider=local_frontdoor role=draft start
+------------------------------------------------------------------------
+```json:autopilot_actions
+{"type": "deep_eval", "tier": 3}
+```
+[END provider=local_frontdoor role=draft] result_chars=100""",
+            """[2026-07-06T06:06:48] PLANNER provider=local_worker role=critique start
+------------------------------------------------------------------------
+```json:autopilot_critique
+{"decision": "approve", "confidence": 0.91, "issues": []}
+```
+[END provider=local_worker role=critique] result_chars=100""",
+        ],
+    )
+    process_start_s = reporter._parse_event_timestamp("2026-07-06T06:02:00")
+
+    report = reporter.build_report(
+        tap_path=tap,
+        process_start_s=process_start_s,
+        stale_after_s=999999,
+    )
+
+    assert report["ok"] is True
+    assert report["window"]["scope"] == "current_process"
+    assert report["window"]["event_count"] == 2
+    assert report["window"]["raw_event_count"] == 3
+    assert report["local"]["fallback_provider_starts"] == 0
+    assert "codex" not in report["providers"]
+    assert report["draft_actions"] == {"deep_eval": 1}
 
 
 def test_build_report_missing_tap_is_not_ok(tmp_path: Path) -> None:
