@@ -137,6 +137,9 @@ class PlannerDecision:
     # content. The main loop uses this to pick deterministic-fallback vs pause when
     # both planner models are offline (cross-model failover, 2026-06-12).
     providers_unavailable: bool = False
+    # Ordered provider attempt telemetry for planner_archive.jsonl. This is
+    # observability only; dispatch semantics stay derived from action/critique.
+    provider_trace: list[dict[str, Any]] = field(default_factory=list)
 
 
 ProviderFactory = Callable[[str], PlannerProvider]
@@ -289,9 +292,18 @@ def plan_with_providers(
     # unavailable" (deterministic fallback / pause) from "models reachable but
     # drafted bad content" (keep the seed_batch default). (2026-06-12)
     any_response_ok = bool(draft.ok)
+    provider_trace: list[dict[str, Any]] = []
 
     action = extract_action(draft.text)
     draft_unusable = _draft_unusable_reason(draft, action)
+    provider_trace.append(
+        _draft_provider_event(
+            stage="draft_primary",
+            result=draft,
+            action=action,
+            unusable_reason=draft_unusable,
+        )
+    )
     if draft_unusable:
         _mark_failure(planner_state, draft.provider, settings)
         if (
@@ -312,7 +324,16 @@ def plan_with_providers(
             )
             any_response_ok = any_response_ok or bool(fallback.ok)
             fallback_action = extract_action(fallback.text)
-            if _draft_is_usable(fallback, fallback_action):
+            fallback_unusable = _draft_unusable_reason(fallback, fallback_action)
+            provider_trace.append(
+                _draft_provider_event(
+                    stage="draft_fallback",
+                    result=fallback,
+                    action=fallback_action,
+                    unusable_reason=fallback_unusable,
+                )
+            )
+            if not fallback_unusable:
                 session_update = fallback.session_id if fallback_provider.supports_resume else None
                 fallback_reason = (
                     fallback_reason or f"{draft.provider} draft failed: {draft_unusable}"
@@ -360,6 +381,7 @@ def plan_with_providers(
             fallback_reason=no_action_reason,
             predicted_objectives=peaf.extract_predicted_objectives(draft.text),
             providers_unavailable=providers_unavailable,
+            provider_trace=provider_trace,
         )
         _archive_decision(decision, planner_state)
         return decision
@@ -425,6 +447,13 @@ def plan_with_providers(
                 if critique_result.ok:
                     critique = extract_critique(critique_result.text)
                     critique.provider = critique_result.provider
+                    provider_trace.append(
+                        _critique_provider_event(
+                            stage="critique_primary",
+                            result=critique_result,
+                            critique=critique,
+                        )
+                    )
                     if critique.parse_error:
                         # The critic invoke "succeeded" (nonzero text) but the text
                         # is NOT a valid critique block — e.g. Codex emitted prose
@@ -449,6 +478,7 @@ def plan_with_providers(
                             cwd=cwd,
                             planner_state=planner_state,
                             settings=settings,
+                            provider_trace=provider_trace,
                         )
                         if fallback_critique and not fallback_critique.parse_error:
                             critique = fallback_critique
@@ -483,6 +513,13 @@ def plan_with_providers(
                     # pauses for HIGH risk). Shadow mode → non-binding, fail-open to the
                     # draft. Neither substitutes the stale seed_batch fallback. (2026-06-10)
                     _mark_failure(planner_state, critique_result.provider, settings)
+                    provider_trace.append(
+                        _critique_provider_event(
+                            stage="critique_primary",
+                            result=critique_result,
+                            critique=None,
+                        )
+                    )
                     fallback_critique = _try_fallback_critic(
                         provider_factory=provider_factory,
                         fallback_name=critic_fallback_name,
@@ -492,6 +529,7 @@ def plan_with_providers(
                         cwd=cwd,
                         planner_state=planner_state,
                         settings=settings,
+                        provider_trace=provider_trace,
                     )
                     if fallback_critique and not fallback_critique.parse_error:
                         critique = fallback_critique
@@ -528,6 +566,7 @@ def plan_with_providers(
         critique=critique,
         predicted_objectives=peaf.extract_predicted_objectives(canonical_text),
         draft_action=draft_action,
+        provider_trace=provider_trace,
     )
     _archive_decision(decision, planner_state)
     return decision
@@ -721,6 +760,7 @@ def _try_fallback_critic(
     cwd: Path | str | None,
     planner_state: dict[str, Any],
     settings: PlannerSettings,
+    provider_trace: list[dict[str, Any]] | None = None,
 ) -> PlannerCritique | None:
     if not fallback_name or fallback_name == _normalize_provider(failed_provider):
         return None
@@ -737,6 +777,14 @@ def _try_fallback_critic(
     )
     if not fallback_result.ok:
         _mark_failure(planner_state, fallback_result.provider, settings)
+        if provider_trace is not None:
+            provider_trace.append(
+                _critique_provider_event(
+                    stage="critique_fallback",
+                    result=fallback_result,
+                    critique=None,
+                )
+            )
         return PlannerCritique(
             decision="unavailable",
             raw_text=fallback_result.text,
@@ -750,6 +798,14 @@ def _try_fallback_critic(
 
     fallback_critique = extract_critique(fallback_result.text)
     fallback_critique.provider = fallback_result.provider
+    if provider_trace is not None:
+        provider_trace.append(
+            _critique_provider_event(
+                stage="critique_fallback",
+                result=fallback_result,
+                critique=fallback_critique,
+            )
+        )
     if fallback_critique.parse_error:
         _mark_failure(planner_state, fallback_result.provider, settings)
         fallback_critique.decision = "unavailable"
@@ -1035,9 +1091,58 @@ def _archive_decision(
             "critique_decision": critique.decision if critique else "",
             "critique_confidence": critique.confidence if critique else 0.0,
             "critique_issues": critique.issues if critique else [],
+            "draft_action": decision.draft_action,
+            "final_action": decision.action,
+            "provider_trace": decision.provider_trace,
             "planner_state": planner_state,
         }
     )
+
+
+def _clip(value: Any, limit: int = 300) -> str:
+    text = str(value or "")
+    return text if len(text) <= limit else text[:limit].rstrip() + "...[truncated]"
+
+
+def _draft_provider_event(
+    *,
+    stage: str,
+    result: PlannerProviderResult,
+    action: dict[str, Any] | None,
+    unusable_reason: str,
+) -> dict[str, Any]:
+    return {
+        "stage": stage,
+        "role": result.role or "draft",
+        "provider": result.provider,
+        "ok": bool(result.ok),
+        "text_chars": len(result.text or ""),
+        "error": _clip(result.error),
+        "parse_ok": action is not None,
+        "action_type": (action or {}).get("type", ""),
+        "unusable_reason": unusable_reason,
+    }
+
+
+def _critique_provider_event(
+    *,
+    stage: str,
+    result: PlannerProviderResult,
+    critique: PlannerCritique | None,
+) -> dict[str, Any]:
+    parse_error = critique.parse_error if critique else ""
+    return {
+        "stage": stage,
+        "role": result.role or "critique",
+        "provider": result.provider,
+        "ok": bool(result.ok),
+        "text_chars": len(result.text or ""),
+        "error": _clip(result.error),
+        "parse_ok": bool(result.ok and critique and not parse_error),
+        "critique_decision": critique.decision if critique else "",
+        "critique_confidence": critique.confidence if critique else 0.0,
+        "parse_error": _clip(parse_error),
+    }
 
 
 def _normalize_provider(name: str) -> str:

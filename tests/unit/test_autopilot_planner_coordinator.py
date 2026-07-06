@@ -232,6 +232,66 @@ def test_fallback_draft_gets_independent_primary_critique() -> None:
     assert planner_coordinator.uncritiqued_dispatch_block_reason(decision) == ""
 
 
+def test_planner_archive_records_provider_trace(monkeypatch: pytest.MonkeyPatch) -> None:
+    records: list[dict[str, Any]] = []
+    monkeypatch.setattr(planner_coordinator, "_append_planner_archive", records.append)
+
+    draft_text = _action_text({"type": "numeric_trial", "surface": "memrl_retrieval"})
+    claude = FakeProvider(
+        "claude",
+        [
+            PlannerProviderResult(
+                provider="claude",
+                role="draft",
+                ok=True,
+                text=draft_text,
+            )
+        ],
+    )
+    codex = FakeProvider(
+        "codex",
+        [
+            PlannerProviderResult(
+                provider="codex",
+                role="critique",
+                ok=True,
+                text=_critique_text({"decision": "approve", "confidence": 0.9}),
+            )
+        ],
+    )
+
+    decision = planner_coordinator.plan_with_providers(
+        "prompt",
+        session_id=None,
+        planner_state={},
+        settings=PlannerSettings(
+            primary="claude",
+            critic="codex",
+            mode="draft_critique",
+            critique_policy="always",
+        ),
+        provider_factory=_factory({"claude": claude, "codex": codex}),
+    )
+
+    assert decision.provider_trace == records[-1]["provider_trace"]
+    assert records[-1]["draft_action"] == {"type": "numeric_trial", "surface": "memrl_retrieval"}
+    assert records[-1]["final_action"] == decision.action
+    assert records[-1]["provider_trace"][0] == {
+        "stage": "draft_primary",
+        "role": "draft",
+        "provider": "claude",
+        "ok": True,
+        "text_chars": len(draft_text),
+        "error": "",
+        "parse_ok": True,
+        "action_type": "numeric_trial",
+        "unusable_reason": "",
+    }
+    assert records[-1]["provider_trace"][1]["stage"] == "critique_primary"
+    assert records[-1]["provider_trace"][1]["parse_ok"] is True
+    assert records[-1]["provider_trace"][1]["critique_decision"] == "approve"
+
+
 def test_fallback_draft_gets_primary_critique_even_when_draft_failure_opens_circuit() -> None:
     claude = FakeProvider(
         "claude",
