@@ -1,0 +1,56 @@
+{
+  "baseline_version": "intake_triage_nb_baseline.v1",
+  "data_path": "orchestration/datasets/intake_triage_reviewed_only_20260707T000910Z.jsonl",
+  "eligible_rows": 100,
+  "evaluation": {
+    "accuracy": 0.9,
+    "confusion": {
+      "new_opportunity": {
+        "new_opportunity": 4,
+        "worth_investigating": 2
+      },
+      "worth_investigating": {
+        "worth_investigating": 14
+      }
+    },
+    "correct": 18,
+    "heldout_rows": 20,
+    "labels": [
+      "adopt_component",
+      "adopt_patterns",
+      "new_opportunity",
+      "worth_investigating"
+    ],
+    "per_label": {
+      "new_opportunity": {
+        "correct": 4,
+        "total": 6
+      },
+      "worth_investigating": {
+        "correct": 14,
+        "total": 14
+      }
+    },
+    "status": "evaluated",
+    "train_rows": 80,
+    "vocab_size": 438
+  },
+  "generated_at": "2026-07-07T00:09:12+00:00",
+  "heldout_frac": 0.2,
+  "min_accuracy": 0.85,
+  "min_reviewed_labels": 100,
+  "privacy": {
+    "raw_text_in_report": false,
+    "reported_fields": "aggregate counts only"
+  },
+  "reviewed_rows": 100,
+  "schema_version": "intake_triage_baseline_report.v1",
+  "smoothing": 1.0,
+  "source_rows": 100,
+  "status": "acceptance_pass",
+  "target_field": "verdict",
+  "text_field": "features_text",
+  "trusted_label_sources": [
+    "operator"
+  ]
+}
