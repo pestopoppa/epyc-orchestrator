@@ -63,6 +63,10 @@ def test_consult_gate_result_from_summary_is_tiered() -> None:
                 "consult_calls": 4,
                 "consult_skips": 6,
                 "rerun_requests": 2,
+                "gate_reason_counts": {
+                    "parser_data_contract": 3,
+                    "plain_single_file_edit": 6,
+                },
             },
             "gated_comparison": {"quality_delta_pp": 10.0},
         },
@@ -78,6 +82,7 @@ def test_consult_gate_result_from_summary_is_tiered() -> None:
     assert result.per_suite_quality == {"consult_gate_targeted": 2.4}
     assert result.details["consult_calls"] == 4
     assert result.details["consult_skips"] == 6
+    assert result.details["gate_reason_counts"]["parser_data_contract"] == 3
 
 
 def test_dispatcher_allows_current_forced_seq_candidate_replay(monkeypatch) -> None:

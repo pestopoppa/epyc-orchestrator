@@ -1261,6 +1261,7 @@ def _consult_gate_result_from_summary(
     consult_calls = int(gated.get("consult_calls") or 0)
     consult_skips = int(gated.get("consult_skips") or 0)
     reruns = int(gated.get("rerun_requests") or 0)
+    gate_reason_counts = gated.get("gate_reason_counts") or {}
     consult_decisions = max(1, consult_calls + consult_skips)
     cost = round(min(1.0, consult_calls / consult_decisions), 4)
     reliability = round((int(gated.get("passes") or 0) / max(1, turns)), 4)
@@ -1284,6 +1285,7 @@ def _consult_gate_result_from_summary(
             "consult_calls": consult_calls,
             "consult_skips": consult_skips,
             "rerun_requests": reruns,
+            "gate_reason_counts": gate_reason_counts if isinstance(gate_reason_counts, dict) else {},
             "quality_0_1": quality_0_1,
         },
         eval_wall_s=elapsed_s,

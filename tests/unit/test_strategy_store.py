@@ -394,6 +394,151 @@ class TestStrategyStore:
         assert written["inserted_count"] == 1
         assert store.count() == 1
 
+    def test_store_consult_gate_journal_entry_keeps_dominated_policy_evidence(self, store):
+        entry = SimpleNamespace(
+            trial_id=21,
+            timestamp="2026-07-07T00:00:00Z",
+            species="consult_gate",
+            action_type="consult_gate_probe",
+            tier=3,
+            quality=2.4,
+            speed=18.5,
+            pareto_status="dominated",
+            config_snapshot={"task_suite": "targeted", "turns": 10, "tier": 3},
+            outcome_status="ok",
+            bug_corrupted_by="",
+            eval_details={
+                "speed_metric_mode": "consult_gate_tasks_per_hour",
+                "details": {
+                    "kind": "consult_gate_probe",
+                    "tier": 3,
+                    "consult_calls": 4,
+                    "consult_skips": 6,
+                    "rerun_requests": 2,
+                    "gate_reason_counts": {
+                        "parser_data_contract": 3,
+                        "plain_single_file_edit": 6,
+                    },
+                    "summary": {
+                        "baseline": {"turns": 10, "quality": 0.7, "passes": 7},
+                        "consult": {"turns": 10, "quality": 0.8, "passes": 8},
+                        "gated": {
+                            "turns": 10,
+                            "quality": 0.8,
+                            "passes": 8,
+                            "consult_calls": 4,
+                            "consult_skips": 6,
+                            "rerun_requests": 2,
+                            "gate_reason_counts": {
+                                "parser_data_contract": 3,
+                                "plain_single_file_edit": 6,
+                            },
+                        },
+                        "gated_comparison": {"quality_delta_pp": 10.0},
+                    },
+                },
+            },
+        )
+
+        sid = store.store_consult_gate_journal_entry(entry)
+        sid_again = store.store_consult_gate_journal_entry(entry)
+
+        assert sid == "journal-consult-gate-trial-21"
+        assert sid_again == sid
+        results = store.retrieve("consult parser data contract T3 targeted", k=5)
+        stored = next(item for item in results if item.id == sid)
+        assert stored.entry_type == "pattern"
+        assert stored.species == "consult_gate"
+        assert stored.evidence_trial_ids == [21]
+        assert stored.metadata["generated_from"] == "journal_consult_gate"
+        assert stored.metadata["consult_call_rate"] == 0.4
+        assert stored.metadata["gate_reason_counts"]["parser_data_contract"] == 3
+        assert "prefer targeted consult gate" in stored.generalized_content
+
+    def test_store_consult_gate_journal_entry_skips_untrustworthy_rows(self, store):
+        base = {
+            "trial_id": 22,
+            "timestamp": "2026-07-07T00:00:00Z",
+            "species": "consult_gate",
+            "action_type": "consult_gate_probe",
+            "tier": 3,
+            "quality": 1.0,
+            "speed": 10.0,
+            "pareto_status": "dominated",
+            "config_snapshot": {"task_suite": "targeted", "tier": 3},
+            "outcome_status": "ok",
+            "bug_corrupted_by": "",
+            "eval_details": {
+                "details": {
+                    "kind": "consult_gate_probe",
+                    "summary": {"gated": {"turns": 3, "quality": 0.0}},
+                }
+            },
+        }
+
+        assert store.store_consult_gate_journal_entry(
+            SimpleNamespace(**{**base, "outcome_status": "skipped"})
+        ) is None
+        assert store.store_consult_gate_journal_entry(
+            SimpleNamespace(**{**base, "bug_corrupted_by": "mock_backend"})
+        ) is None
+        assert store.store_consult_gate_journal_entry(
+            SimpleNamespace(
+                **{
+                    **base,
+                    "eval_details": {
+                        "learning_exclusion": {"by": "mad_noise"},
+                        "details": {
+                            "kind": "consult_gate_probe",
+                            "summary": {"gated": {"turns": 3, "quality": 0.0}},
+                        },
+                    },
+                }
+            )
+        ) is None
+        assert store.count() == 0
+
+    def test_sync_consult_gate_journal_entries_inserts_missing_only(self, store):
+        entry = SimpleNamespace(
+            trial_id=23,
+            timestamp="2026-07-07T00:00:00Z",
+            species="consult_gate",
+            action_type="consult_gate_probe",
+            tier=2,
+            quality=2.1,
+            speed=20.0,
+            pareto_status="candidate",
+            config_snapshot={"task_suite": "targeted", "turns": 5, "tier": 2},
+            outcome_status="ok",
+            bug_corrupted_by="",
+            eval_details={
+                "details": {
+                    "kind": "consult_gate_probe",
+                    "tier": 2,
+                    "summary": {
+                        "baseline": {"turns": 5, "quality": 0.4},
+                        "gated": {"turns": 5, "quality": 0.6, "consult_calls": 2, "consult_skips": 3},
+                    },
+                }
+            },
+        )
+
+        class FakeJournal:
+            def entries_with_supersessions(self):
+                return [entry]
+
+        dry = store.sync_consult_gate_journal_entries(FakeJournal(), dry_run=True)
+        assert dry["ok"] is False
+        assert dry["would_insert_count"] == 1
+        assert store.count() == 0
+
+        written = store.sync_consult_gate_journal_entries(FakeJournal(), dry_run=False)
+        assert written["ok"] is True
+        assert written["inserted"] == [
+            {"trial_id": 23, "strategy_id": "journal-consult-gate-trial-23"}
+        ]
+        assert store.count() == 1
+
     def test_frontier_journal_projection_report_flags_mismatched_projection(self, store):
         entry = SimpleNamespace(
             trial_id=11,

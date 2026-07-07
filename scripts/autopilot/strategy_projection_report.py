@@ -43,6 +43,12 @@ def build_strategy_projection_report(
             journal,
             dry_run=not write_missing,
         )
+        if hasattr(store, "sync_consult_gate_journal_entries"):
+            report["consult_gate"] = store.sync_consult_gate_journal_entries(
+                journal,
+                dry_run=not write_missing,
+            )
+            report["ok"] = bool(report.get("ok")) and bool(report["consult_gate"].get("ok"))
         report["allow_hash_fallback"] = allow_hash_fallback
         return report
     finally:
@@ -73,6 +79,15 @@ def render_markdown(report: dict[str, Any]) -> str:
             f"inserted={report.get('inserted_count', 0)}"
         ),
     ]
+    consult_gate = report.get("consult_gate")
+    if isinstance(consult_gate, dict):
+        lines.append(
+            "- Consult-gate projections: "
+            f"expected={consult_gate.get('expected_count', 0)}, "
+            f"projected={consult_gate.get('projected_count', 0)}, "
+            f"missing={consult_gate.get('missing_count', 0)}, "
+            f"inserted={consult_gate.get('inserted_count', 0)}"
+        )
     if report.get("missing"):
         lines.extend(["", "## Missing Projections", ""])
         lines.extend(

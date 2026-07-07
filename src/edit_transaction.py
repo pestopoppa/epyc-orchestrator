@@ -371,25 +371,27 @@ def run_edit_transaction(
         try:
             advisory, stats = review_before_commit(review_context)
         except Exception as exc:
-            consult_events.append(
-                {
-                    "interaction_type": "consult",
-                    "skill": "review_before_commit",
-                    "success": False,
-                    "reason": getattr(exc, "reason", type(exc).__name__),
-                }
-            )
+            event = {
+                "interaction_type": "consult",
+                "skill": "review_before_commit",
+                "success": False,
+                "reason": getattr(exc, "reason", type(exc).__name__),
+            }
+            if review_before_commit_gate is not None:
+                event["gate_reasons"] = gate_reasons
+            consult_events.append(event)
         else:
             rerun = _advisory_requests_rerun(advisory)
-            consult_events.append(
-                {
-                    "interaction_type": "consult",
-                    "skill": "review_before_commit",
-                    "success": True,
-                    "rerun_requested": rerun,
-                    **dict(stats or {}),
-                }
-            )
+            event = {
+                "interaction_type": "consult",
+                "skill": "review_before_commit",
+                "success": True,
+                "rerun_requested": rerun,
+                **dict(stats or {}),
+            }
+            if review_before_commit_gate is not None:
+                event["gate_reasons"] = gate_reasons
+            consult_events.append(event)
             if rerun:
                 rerun_prompt = (
                     f"{task_prompt.strip()}\n\n"

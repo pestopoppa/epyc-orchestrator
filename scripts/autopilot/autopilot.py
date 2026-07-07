@@ -7157,6 +7157,8 @@ def _run_loop_inner(
         if strategy_store is not None:
             try:
                 strategy_store.store_frontier_journal_entry(journal_entry)
+                if hasattr(strategy_store, "store_consult_gate_journal_entry"):
+                    strategy_store.store_consult_gate_journal_entry(journal_entry)
             except Exception as e:
                 log.warning("Strategy store journal projection failed: %s", e)
 

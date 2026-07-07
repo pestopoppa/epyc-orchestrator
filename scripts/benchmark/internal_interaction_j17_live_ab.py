@@ -465,6 +465,11 @@ def _summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
             for c in (r.get("consult_calls") or [])
         ]
         consult_events = [e for r in arm_rows for e in (r.get("consult_events") or [])]
+        gate_reason_counts: dict[str, int] = {}
+        for event in consult_events:
+            for reason in event.get("gate_reasons") or []:
+                reason = str(reason)
+                gate_reason_counts[reason] = gate_reason_counts.get(reason, 0) + 1
         out[arm] = {
             "turns": len(arm_rows),
             "passes": sum(1 for r in arm_rows if r["bucket"] == "pass"),
@@ -479,6 +484,7 @@ def _summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "consult_skips": sum(1 for e in consult_events if e.get("skipped")),
             "rerun_requests": sum(1 for e in consult_events if e.get("rerun_requested")),
             "cache_hits": sum(int(e.get("cache_hit", 0) or 0) for e in consult_events),
+            "gate_reason_counts": dict(sorted(gate_reason_counts.items())),
         }
     if "baseline" in out and "consult" in out:
         b = out["baseline"]
