@@ -857,6 +857,7 @@ async def _handle_chat(
 
             review_enabled = bool(features().review_before_commit_consult)
             review_before_commit = None
+            review_before_commit_gate = None
             if review_enabled:
                 def _review_before_commit(review_context: str) -> tuple[dict, dict]:
                     from src.orchestration.consultation import consult
@@ -870,6 +871,20 @@ async def _handle_chat(
                     )
 
                 review_before_commit = _review_before_commit
+                if bool(features().review_before_commit_targeted_gate):
+                    from src.orchestration.review_consult_gate import review_before_commit_targeted_gate
+
+                    def _targeted_review_gate(context: dict) -> dict:
+                        decision = review_before_commit_targeted_gate(
+                            task_prompt=str(context.get("task_prompt") or ""),
+                            current_paths=list(context.get("current_paths") or []),
+                            draft_paths=list(context.get("draft_paths") or []),
+                            delete_paths=list(context.get("delete_paths") or []),
+                            raw_model_output=str(context.get("raw_model_output") or ""),
+                        )
+                        return {"enabled": decision.enabled, "reasons": list(decision.reasons)}
+
+                    review_before_commit_gate = _targeted_review_gate
 
             edit_res, _raw = await asyncio.to_thread(
                 run_edit_transaction,
@@ -879,6 +894,7 @@ async def _handle_chat(
                 None,
                 review_before_commit=review_before_commit,
                 enable_review_before_commit=review_enabled,
+                review_before_commit_gate=review_before_commit_gate,
             )
             answer = (
                 edit_res.summary + (": " + ", ".join(edit_res.written) if edit_res.written else "")

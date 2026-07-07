@@ -283,6 +283,52 @@ def test_run_edit_transaction_review_denied_proceeds_with_original_draft(tmp_pat
     assert (tmp_path / "calc.py").read_text() == "VALUE = 2"
 
 
+def test_run_edit_transaction_review_gate_skips_consult(tmp_path):
+    (tmp_path / "calc.py").write_text("VALUE = 1\n")
+    calls = {"review": 0}
+
+    def stub(_prompt):
+        return "<<<FILE: calc.py>>>\nVALUE = 2\n<<<END>>>"
+
+    def review(_context):
+        calls["review"] += 1
+        return {
+            "risks": ["should not run"],
+            "blocking_issues": ["should not run"],
+            "confidence": 1.0,
+        }, {}
+
+    def gate(context):
+        assert context["task_prompt"] == "Set value"
+        assert context["draft_paths"] == ["calc.py"]
+        return {"enabled": False, "reasons": ["plain_single_file_edit"]}
+
+    res, raw = run_edit_transaction(
+        stub,
+        "Set value",
+        tmp_path,
+        ["calc.py"],
+        review_before_commit=review,
+        enable_review_before_commit=True,
+        review_before_commit_gate=gate,
+    )
+
+    assert raw
+    assert res.ok
+    assert calls["review"] == 0
+    assert res.consult_events == [
+        {
+            "interaction_type": "consult",
+            "skill": "review_before_commit",
+            "success": True,
+            "skipped": True,
+            "reason": "targeted_gate_skip",
+            "gate_reasons": ["plain_single_file_edit"],
+        }
+    ]
+    assert (tmp_path / "calc.py").read_text() == "VALUE = 2"
+
+
 def test_run_edit_transaction_uses_only_explicit_targets(tmp_path):
     (tmp_path / "a.py").write_text("A = 1\n")
     (tmp_path / "b.py").write_text("B = 2\n")
