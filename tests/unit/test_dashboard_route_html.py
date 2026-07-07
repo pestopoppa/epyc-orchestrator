@@ -497,9 +497,10 @@ def test_dashboard_topology_activity_stats_refresh_with_live_age_tick() -> None:
     assert "recent req" in body
     assert "live req" not in body
     assert "historical summary ${stats.avg_tps_recent.toFixed(2)} t/s" in body
-    assert "renderRegionLocksBasicGrid(grid, d);" in body
+    assert "renderRegionLocksBasicGrid(grid, d);" not in body
     assert "grid.dataset.regionLocksPainted = '1';" in body
-    assert "basic matrix fallback; rich overlay still initializing" in body
+    assert "waiting for coherent lock metadata" in body
+    assert "but no CPU lock holder correlated in this frame" in body
     assert "loading CPU region-lock matrix" in body
     assert "function startPanelSafely(name, fn)" in body
     assert "startPanelSafely('region-locks-primer', ensureRegionLocksPanelPainted);" in body

@@ -6449,7 +6449,6 @@ async function updateRegionLocks(
                 if (wa !== wb) return wa - wb;
                 return a[0].localeCompare(b[0]);
             });
-            renderRegionLocksBasicGrid(grid, d);
             // Column schema: each column corresponds to one canonical instance
             // SHAPE in NUMA_CONFIG. The backend tags each instance with a
             // `shape` field that exactly matches one of REGION_LOCK_COLS.
@@ -6669,6 +6668,12 @@ async function updateRegionLocks(
                     'active',
                     `${titleBits.join(' · ')} across ${globalHeldRegions.size} CPU region(s): ${heldBySummary || 'unknown'}`
                 );
+            } else if (tapLiveRequestCount > 0) {
+                _setDotState(
+                    regionDot,
+                    'standby',
+                    `${tapLiveRequestCount} live tap request(s), but no CPU lock holder correlated in this frame`
+                );
             } else {
                 _setDotState(regionDot, 'idle', 'no CPU region locks currently held; grid shows dispatch readiness');
             }
@@ -6685,10 +6690,16 @@ async function updateRegionLocks(
                 const slotInferredSuffix = slotInferredMissing.length
                     ? `; +${slotInferredMissing.length} slot-inferred active instance(s): ${slotInferredMissing.join(', ')}`
                     : '';
-                status.textContent = activeLockCount > 0
-                    ? `— ${actualActiveLockCount} /proc holder instance(s)${tapInferredCountSuffix}: ${displayHeldBySummary || 'none'}${liveTapSuffix}${tapInferredUnmatchedSuffix}${slotInferredSuffix}; × cells are same-role or matrix-blocked waits; per-region locks ENABLED`
-                    : '— no locks held; per-region locks ENABLED';
-                status.style.color = activeLockCount > 0 ? '#fbbf24' : 'var(--muted)';
+                if (activeLockCount > 0) {
+                    status.textContent = `— ${actualActiveLockCount} /proc holder instance(s)${tapInferredCountSuffix}: ${displayHeldBySummary || 'none'}${liveTapSuffix}${tapInferredUnmatchedSuffix}${slotInferredSuffix}; × cells are same-role or matrix-blocked waits; per-region locks ENABLED`;
+                    status.style.color = '#fbbf24';
+                } else if (tapLiveRequestCount > 0) {
+                    status.textContent = `— no /proc holder correlated; ${tapLiveRequestCount} live tap request(s) visible${tapLiveStateBits.length ? ` (${tapLiveStateBits.join(' · ')})` : ''}; waiting for coherent lock metadata; per-region locks ENABLED`;
+                    status.style.color = 'var(--warn,#fbbf24)';
+                } else {
+                    status.textContent = '— no locks held; per-region locks ENABLED';
+                    status.style.color = 'var(--muted)';
+                }
             }
 
             let nRoles = 0;
@@ -6799,7 +6810,6 @@ async function updateRegionLocks(
         try {
             const d = await fetchJSON('/dashboard/api/region_locks');
             _lastRegionLocksPayload = d;
-            renderRegionLocksBasicGrid(grid, d, 'basic matrix fallback; rich overlay still initializing');
             await updateRegionLocks(++_regionLocksRefreshSeq, d);
         } catch (err) {
             const msg = err && err.message ? err.message : String(err);
