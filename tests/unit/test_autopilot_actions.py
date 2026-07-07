@@ -48,6 +48,38 @@ def test_dispatcher_rejects_ap9_scope_violation(caplog) -> None:
     assert species == "numeric_trial"
 
 
+def test_consult_gate_result_from_summary_is_tiered() -> None:
+    summary = {
+        "turns_requested_per_arm": 10,
+        "rows_path": "/tmp/rows.jsonl",
+        "artifact_dir": "/tmp/artifact",
+        "summary": {
+            "baseline": {"turns": 10, "quality": 0.7, "passes": 7},
+            "consult": {"turns": 10, "quality": 0.8, "passes": 8, "consult_calls": 10},
+            "gated": {
+                "turns": 10,
+                "quality": 0.8,
+                "passes": 8,
+                "consult_calls": 4,
+                "consult_skips": 6,
+                "rerun_requests": 2,
+            },
+            "gated_comparison": {"quality_delta_pp": 10.0},
+        },
+    }
+
+    result = actions._consult_gate_result_from_summary(summary, elapsed_s=60.0, tier=3)
+
+    assert result.tier == 3
+    assert result.quality == 2.4
+    assert result.speed == 1800.0
+    assert result.cost == 0.4
+    assert result.reliability == 0.8
+    assert result.per_suite_quality == {"consult_gate_targeted": 2.4}
+    assert result.details["consult_calls"] == 4
+    assert result.details["consult_skips"] == 6
+
+
 def test_dispatcher_allows_current_forced_seq_candidate_replay(monkeypatch) -> None:
     action = {
         "type": "numeric_trial",
@@ -605,7 +637,7 @@ def test_action_handlers_registered_for_all_known_types() -> None:
     """Sanity check: every documented action type has a handler."""
     expected = {
         "seed_batch", "numeric_trial", "prompt_mutation", "gepa_optimize",
-        "code_mutation", "structural_experiment", "structural_prune",
+        "code_mutation", "structural_experiment", "consult_gate_probe", "structural_prune",
         "train_routing_models", "distill_skillbank", "reset_memories",
         "deep_eval", "rollback", "distill_knowledge", "slot_compact",
     }

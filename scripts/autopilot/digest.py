@@ -186,7 +186,7 @@ def _journal_entries_for_digest(journal: Any) -> list[Any]:
 def _mechanism_class(action_type: str) -> str:
     if action_type in {"prompt_mutation", "gepa_optimize"}:
         return "prompt_search"
-    if action_type in {"numeric_trial", "structural_experiment", "code_mutation"}:
+    if action_type in {"numeric_trial", "structural_experiment", "code_mutation", "consult_gate_probe"}:
         return "deterministic_code_config"
     if action_type in {"train_routing_models", "distill_skillbank", "seed_batch"}:
         return "data_training"

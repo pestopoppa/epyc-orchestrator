@@ -15,7 +15,6 @@ from contextlib import nullcontext
 import json
 import os
 import shutil
-import statistics
 import subprocess
 import sys
 import time
@@ -296,6 +295,7 @@ TARGETED_TASKS: list[dict[str, Any]] = [
 sys.path.insert(0, str(ORCH))
 from src.edit_transaction import EditResult, run_edit_transaction  # noqa: E402
 from src.orchestration.consultation import consult  # noqa: E402
+from src.orchestration.review_consult_gate import review_before_commit_targeted_gate  # noqa: E402
 
 
 @dataclass
@@ -335,7 +335,6 @@ class HTTPPrimitives:
             payload["context"] = "json_schema_supplied_by_consult_helper"
         resp = httpx.post(self.api_url, json=payload, timeout=self.timeout_s)
         elapsed = time.monotonic() - started
-        body = resp.text
         resp.raise_for_status()
         data = resp.json()
         text = data.get("answer") or data.get("response") or data.get("content") or ""
@@ -477,6 +476,7 @@ def _summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "consult_wall_p95_s": _percentile(consult_wall, 0.95),
             "consult_successes": sum(1 for e in consult_events if e.get("success")),
             "consult_failures": sum(1 for e in consult_events if not e.get("success")),
+            "consult_skips": sum(1 for e in consult_events if e.get("skipped")),
             "rerun_requests": sum(1 for e in consult_events if e.get("rerun_requested")),
             "cache_hits": sum(int(e.get("cache_hit", 0) or 0) for e in consult_events),
         }
@@ -499,6 +499,19 @@ def _summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 "Wall-clock p50 is used as the live proxy for coder decode p50 in this harness.",
             ],
         }
+    if "baseline" in out and "gated" in out:
+        b = out["baseline"]
+        g = out["gated"]
+        out["gated_comparison"] = {
+            "quality_delta_pp": round(100 * (g["quality"] - b["quality"]), 3),
+            "coder_wall_p50_delta_pct": (
+                round(100 * (g["coder_wall_p50_s"] - b["coder_wall_p50_s"]) / b["coder_wall_p50_s"], 3)
+                if b.get("coder_wall_p50_s") else None
+            ),
+            "consult_calls": g.get("consult_calls", 0),
+            "consult_skips": g.get("consult_skips", 0),
+            "rerun_requests": g.get("rerun_requests", 0),
+        }
     return out
 
 
@@ -509,6 +522,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--allow-autopilot-active", action="store_true")
     ap.add_argument("--api-url", default=DEFAULT_API_URL)
     ap.add_argument("--task-suite", choices=["bep", "targeted"], default="bep")
+    ap.add_argument(
+        "--arms",
+        default="baseline,consult",
+        help="Comma-separated arms to run: baseline, consult, gated.",
+    )
     ap.add_argument("--turns", type=int, default=50)
     ap.add_argument("--timeout-s", type=float, default=360)
     ap.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
@@ -526,6 +544,11 @@ def main(argv: list[str] | None = None) -> int:
         return 75
 
     tasks, task_notes = _load_tasks(args.task_suite)
+    arms = [arm.strip() for arm in args.arms.split(",") if arm.strip()]
+    allowed_arms = {"baseline", "consult", "gated"}
+    if not arms or any(arm not in allowed_arms for arm in arms):
+        print(f"Invalid --arms {args.arms!r}; choose from {sorted(allowed_arms)}", file=sys.stderr)
+        return 2
     run_ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out_dir = args.output_root / f"internal_interaction_j17_ab_{run_ts}"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -534,7 +557,7 @@ def main(argv: list[str] | None = None) -> int:
     task_plan = [tasks[i % len(tasks)] for i in range(args.turns)]
 
     with rows_path.open("w", encoding="utf-8") as fh:
-        for arm in ("baseline", "consult"):
+        for arm in arms:
             for idx, task in enumerate(task_plan, start=1):
                 root = args.scratch_root / arm / f"{idx:03d}_{task['id']}"
                 _reset_root(root, task.get("files"))
@@ -554,7 +577,8 @@ def main(argv: list[str] | None = None) -> int:
                     return text
 
                 review = None
-                if arm == "consult":
+                review_gate = None
+                if arm in {"consult", "gated"}:
                     def review(review_context: str) -> tuple[dict[str, Any], dict[str, Any]]:
                         return consult(
                             consultant_role="architect_general",
@@ -564,6 +588,16 @@ def main(argv: list[str] | None = None) -> int:
                             primitives=primitives,
                             override_priority="background",
                         )
+                if arm == "gated":
+                    def review_gate(context: dict[str, Any]) -> dict[str, Any]:
+                        decision = review_before_commit_targeted_gate(
+                            task_prompt=str(context.get("task_prompt") or ""),
+                            current_paths=list(context.get("current_paths") or []),
+                            draft_paths=list(context.get("draft_paths") or []),
+                            delete_paths=list(context.get("delete_paths") or []),
+                            raw_model_output=str(context.get("raw_model_output") or ""),
+                        )
+                        return {"enabled": decision.enabled, "reasons": list(decision.reasons)}
 
                 try:
                     result, raw = run_edit_transaction(
@@ -573,7 +607,8 @@ def main(argv: list[str] | None = None) -> int:
                         target_files=list((task.get("files") or {}).keys()) or None,
                         verify_fn=lambda tx_root, cmd=task["verifier_cmd"]: _run_verifier(tx_root, cmd),
                         review_before_commit=review,
-                        enable_review_before_commit=(arm == "consult"),
+                        enable_review_before_commit=(arm in {"consult", "gated"}),
+                        review_before_commit_gate=review_gate,
                     )
                 except Exception as exc:
                     result, raw, error = None, "", f"{type(exc).__name__}: {exc}"
@@ -611,6 +646,7 @@ def main(argv: list[str] | None = None) -> int:
         "orch_head": _git_head(),
         "api_url": args.api_url,
         "task_suite": args.task_suite,
+        "arms": arms,
         "turns_requested_per_arm": args.turns,
         "unique_task_count": len(tasks),
         "fixed_slice_repetitions": args.turns / max(1, len(tasks)),

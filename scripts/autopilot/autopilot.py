@@ -4049,6 +4049,13 @@ def _format_available_action_schemas(action_types: list[str]) -> str:
             '- Structural: {{"type": "structural_experiment", '
             '"flags": {{"feature_name": true/false}}}}'
         ),
+        "consult_gate_probe": (
+            '- Consult gate probe: {{"type": "consult_gate_probe", '
+            '"task_suite": "targeted", "turns": 10, "tier": 3}}\n'
+            "  (Runs baseline vs blanket consult vs targeted-gate edit-transaction "
+            "turns; records consult calls/skips/reruns/quality/latency. Use this "
+            "to optimize review_before_commit gating on hard workflow tiers.)"
+        ),
         "structural_prune": (
             '- Prune: {{"type": "structural_prune", "file": "frontdoor.md", '
             '"block": "## Section Name", "description": "..."}}\n'
@@ -5899,7 +5906,7 @@ def _run_loop_inner(
                 _known_actions = [
                     "seed_batch", "numeric_trial", "prompt_mutation",
                     "gepa_optimize", "code_mutation", "structural_experiment",
-                    "structural_prune", "slot_compact", "train_routing_models",
+                    "consult_gate_probe", "structural_prune", "slot_compact", "train_routing_models",
                     "distill_skillbank", "reset_memories", "deep_eval",
                     "rollback", "distill_knowledge",
                 ]
@@ -6847,6 +6854,8 @@ def _run_loop_inner(
                 hypothesis = f"Optimize {action.get('surface', 'unknown')} surface"
             elif action_type == "structural_experiment":
                 hypothesis = f"Toggle flags: {action.get('flags', {})}"
+            elif action_type == "consult_gate_probe":
+                hypothesis = "Probe targeted review-before-commit consult gate"
             elif action_type in ("train_routing_models", "distill_skillbank", "rollback"):
                 hypothesis = action_type.replace("_", " ").title()
         expected_mechanism = (

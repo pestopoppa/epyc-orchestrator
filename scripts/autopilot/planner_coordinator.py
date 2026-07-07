@@ -38,6 +38,7 @@ KNOWN_ACTION_TYPES = {
     "gepa_optimize",
     "code_mutation",
     "structural_experiment",
+    "consult_gate_probe",
     "structural_prune",
     "slot_compact",
     "train_routing_models",
@@ -51,6 +52,7 @@ KNOWN_ACTION_TYPES = {
 LOW_RISK_ACTIONS = {"seed_batch", "deep_eval", "distill_knowledge"}
 MEDIUM_RISK_ACTIONS = {
     "numeric_trial",
+    "consult_gate_probe",
     "slot_compact",
     "train_routing_models",
     "distill_skillbank",
