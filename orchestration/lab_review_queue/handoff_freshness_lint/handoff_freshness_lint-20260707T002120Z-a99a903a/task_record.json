@@ -1,0 +1,56 @@
+{
+  "artifacts": {
+    "context_manifest": "handoff_freshness_lint/handoff_freshness_lint-20260707T002120Z-a99a903a/context_manifest.json",
+    "output": "handoff_freshness_lint/handoff_freshness_lint-20260707T002120Z-a99a903a/output.json",
+    "prompt": "handoff_freshness_lint/handoff_freshness_lint-20260707T002120Z-a99a903a/prompt.txt"
+  },
+  "chat_meta": {
+    "elapsed_s": 34.28,
+    "mock_mode": false,
+    "real_mode": true,
+    "requested_role": "worker_explore",
+    "resolved_role": "worker_general",
+    "routed_to": "worker_general",
+    "routing_strategy": "forced",
+    "status_code": 200,
+    "tokens_generated": 1217
+  },
+  "context": {
+    "budget_exhausted": false,
+    "excerpt_chars": 8422,
+    "kinds": {
+      "dcp_pack:full": 4
+    },
+    "max_context_chars": 64000,
+    "missing_source_count": 1,
+    "repos": [
+      "epyc-root"
+    ],
+    "schema_version": "lab_context_summary.v1",
+    "source_bytes": 55622,
+    "source_count": 4,
+    "truncated_source_count": 3
+  },
+  "generated_at": "2026-07-07T00:21:20+00:00",
+  "invocation_mode": "execute_chat",
+  "job_id": "handoff_freshness_lint",
+  "model_role": "worker_explore",
+  "policy": {
+    "direct_repo_writes_allowed": false,
+    "review_queue_only": true
+  },
+  "record_type": "task_record",
+  "repo": {
+    "branch": "spec-dec-mtp-refresh-2026-06-22",
+    "commit": "9994973c1219affa8aab83a2ac2ebb3b1d7fa924",
+    "dirty": true,
+    "path": "/mnt/raid0/llm/epyc-orchestrator"
+  },
+  "risk": "read_only",
+  "run_id": "handoff_freshness_lint-20260707T002120Z-a99a903a",
+  "schema_version": "lab_task_record.v1",
+  "stage": "shadow",
+  "validation": {
+    "output_contract": "passed"
+  }
+}

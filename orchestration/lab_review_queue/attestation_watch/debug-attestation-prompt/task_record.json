@@ -1,0 +1,47 @@
+{
+  "artifacts": {
+    "context_manifest": "attestation_watch/debug-attestation-prompt/context_manifest.json",
+    "output": "attestation_watch/debug-attestation-prompt/output.json",
+    "prompt": "attestation_watch/debug-attestation-prompt/prompt.txt"
+  },
+  "chat_meta": {},
+  "context": {
+    "budget_exhausted": true,
+    "excerpt_chars": 48000,
+    "kinds": {
+      "source_excerpt": 160
+    },
+    "max_context_chars": 48000,
+    "missing_source_count": 1,
+    "repos": [
+      "epyc-orchestrator",
+      "epyc-root"
+    ],
+    "schema_version": "lab_context_summary.v1",
+    "source_bytes": 56195711,
+    "source_count": 160,
+    "truncated_source_count": 157
+  },
+  "generated_at": "2026-07-07T00:22:52+00:00",
+  "invocation_mode": "dry_run_contract_stub",
+  "job_id": "attestation_watch",
+  "model_role": "verifier",
+  "policy": {
+    "direct_repo_writes_allowed": false,
+    "review_queue_only": true
+  },
+  "record_type": "task_record",
+  "repo": {
+    "branch": "spec-dec-mtp-refresh-2026-06-22",
+    "commit": "9994973c1219affa8aab83a2ac2ebb3b1d7fa924",
+    "dirty": true,
+    "path": "/mnt/raid0/llm/epyc-orchestrator"
+  },
+  "risk": "read_only",
+  "run_id": "debug-attestation-prompt",
+  "schema_version": "lab_task_record.v1",
+  "stage": "shadow",
+  "validation": {
+    "output_contract": "passed"
+  }
+}

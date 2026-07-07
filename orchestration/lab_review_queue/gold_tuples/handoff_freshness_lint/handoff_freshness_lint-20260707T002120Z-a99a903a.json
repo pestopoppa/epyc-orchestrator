@@ -1,0 +1,132 @@
+{
+  "captured_at": "2026-07-07T00:31:05+00:00",
+  "confidence": 0.82,
+  "job_id": "handoff_freshness_lint",
+  "local_output": {
+    "path": "handoff_freshness_lint/handoff_freshness_lint-20260707T002120Z-a99a903a/output.json",
+    "payload": {
+      "findings": [
+        {
+          "evidence": "Status: refreshed 2026-07-03. However, the audit reset section and phase descriptions are heavily focused on the 2026-05-28 milestone.",
+          "file": "handoffs/active/agent-file-prose-compression.md",
+          "issue": "Stale handoff content: Last refresh was 2026-07-03, but the document contains significant historical context from May 2026 that may no longer reflect the current 'Phase 5' decision status.",
+          "severity": "high"
+        },
+        {
+          "evidence": "Created: 2026-04-22. Note in text mentions MI210 installed 2026-07-02, but the handoff status has not been progressed to reflect hardware availability.",
+          "file": "handoffs/active/agent-world-env-srl-synthesis.md",
+          "issue": "Stale handoff: The document is in a 'stub / in-planning' state with no recent updates since the creation date of 2026-04-22, despite new hardware (MI210) being installed on 2026-07-02.",
+          "severity": "medium"
+        }
+      ],
+      "generated_at": "2026-07-07T00:21:20+00:00",
+      "job_id": "handoff_freshness_lint",
+      "proposed_review_items": [
+        {
+          "action": "update",
+          "rationale": "The handoff needs to be updated to reflect the current status of Phase 5 rollout decisions, as the current text focuses on the May 2026 audit reset.",
+          "target": "handoffs/active/agent-file-prose-compression.md"
+        },
+        {
+          "action": "inspect",
+          "rationale": "With the installation of the MI210 GPU on 2026-07-02, Phase 1 (CPU-feasible) should be reviewed for completion or transition to Phase 2.",
+          "target": "handoffs/active/agent-world-env-synthesis.md"
+        },
+        {
+          "action": "archive_candidate",
+          "rationale": "This handoff was explicitly marked as RESOLVED on 2026-07-05; it should be moved to an archive or completed state.",
+          "target": "handoffs/active/contention-matrix-v6-quarter-refresh.md"
+        }
+      ],
+      "run_id": "handoff_freshness_lint-20260707T002120Z-a99a903a",
+      "summary": "Linting complete. Identified one high-priority stale handoff and one medium-priority investigation candidate. The contention matrix handoff was successfully resolved in the current run."
+    }
+  },
+  "notes": "Accepted as a model-backed handoff-maintenance review candidate; not direct closure authority.",
+  "reference_output": {
+    "path": "cloud_reference/handoff_freshness_lint/handoff_freshness_lint-20260707T002120Z-a99a903a.json",
+    "payload": {
+      "checks": [
+        {
+          "item": "agent-file-prose-compression.md stale/closure candidate",
+          "verdict": "plausible"
+        },
+        {
+          "item": "agent-world-env-synthesis.md MI210 follow-up",
+          "verdict": "plausible"
+        },
+        {
+          "item": "contention-matrix-v6-quarter-refresh.md archive candidate",
+          "verdict": "plausible"
+        }
+      ],
+      "decision": "accept",
+      "job_id": "handoff_freshness_lint",
+      "reviewed_at": "2026-07-07T00:31:00+00:00",
+      "run_id": "handoff_freshness_lint-20260707T002120Z-a99a903a",
+      "schema_version": "lab_cloud_reference.v1",
+      "summary": "Output is model-backed, non-mock, schema-valid, and identifies plausible handoff maintenance candidates. The findings should be treated as review prompts rather than direct archival authority."
+    }
+  },
+  "reviewer": "cloud_reference",
+  "run_id": "handoff_freshness_lint-20260707T002120Z-a99a903a",
+  "schema_version": "lab_gold_tuple.v1",
+  "stage": "shadow",
+  "task_record": {
+    "artifacts": {
+      "context_manifest": "handoff_freshness_lint/handoff_freshness_lint-20260707T002120Z-a99a903a/context_manifest.json",
+      "output": "handoff_freshness_lint/handoff_freshness_lint-20260707T002120Z-a99a903a/output.json",
+      "prompt": "handoff_freshness_lint/handoff_freshness_lint-20260707T002120Z-a99a903a/prompt.txt"
+    },
+    "chat_meta": {
+      "elapsed_s": 34.28,
+      "mock_mode": false,
+      "real_mode": true,
+      "requested_role": "worker_explore",
+      "resolved_role": "worker_general",
+      "routed_to": "worker_general",
+      "routing_strategy": "forced",
+      "status_code": 200,
+      "tokens_generated": 1217
+    },
+    "context": {
+      "budget_exhausted": false,
+      "excerpt_chars": 8422,
+      "kinds": {
+        "dcp_pack:full": 4
+      },
+      "max_context_chars": 64000,
+      "missing_source_count": 1,
+      "repos": [
+        "epyc-root"
+      ],
+      "schema_version": "lab_context_summary.v1",
+      "source_bytes": 55622,
+      "source_count": 4,
+      "truncated_source_count": 3
+    },
+    "generated_at": "2026-07-07T00:21:20+00:00",
+    "invocation_mode": "execute_chat",
+    "job_id": "handoff_freshness_lint",
+    "model_role": "worker_explore",
+    "policy": {
+      "direct_repo_writes_allowed": false,
+      "review_queue_only": true
+    },
+    "record_type": "task_record",
+    "repo": {
+      "branch": "spec-dec-mtp-refresh-2026-06-22",
+      "commit": "9994973c1219affa8aab83a2ac2ebb3b1d7fa924",
+      "dirty": true,
+      "path": "/mnt/raid0/llm/epyc-orchestrator"
+    },
+    "risk": "read_only",
+    "run_id": "handoff_freshness_lint-20260707T002120Z-a99a903a",
+    "schema_version": "lab_task_record.v1",
+    "stage": "shadow",
+    "validation": {
+      "output_contract": "passed"
+    }
+  },
+  "verdict": "accept"
+}

@@ -126,7 +126,9 @@ jobs:
           path: orchestration/
         - repo: epyc-root
           path: progress/
-      context_budget_tokens: 12000
+      # Keep the assembled prompt under the live backend admission limit; the
+      # broad orchestration/progress source set otherwise expands past 80k chars.
+      context_budget_tokens: 3000
       context_modes:
         - kb_rag
         - source_excerpt

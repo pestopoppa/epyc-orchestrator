@@ -1,0 +1,37 @@
+{
+  "findings": [
+    {
+      "evidence": "Status: refreshed 2026-07-03. However, the audit reset section and phase descriptions are heavily focused on the 2026-05-28 milestone.",
+      "file": "handoffs/active/agent-file-prose-compression.md",
+      "issue": "Stale handoff content: Last refresh was 2026-07-03, but the document contains significant historical context from May 2026 that may no longer reflect the current 'Phase 5' decision status.",
+      "severity": "high"
+    },
+    {
+      "evidence": "Created: 2026-04-22. Note in text mentions MI210 installed 2026-07-02, but the handoff status has not been progressed to reflect hardware availability.",
+      "file": "handoffs/active/agent-world-env-srl-synthesis.md",
+      "issue": "Stale handoff: The document is in a 'stub / in-planning' state with no recent updates since the creation date of 2026-04-22, despite new hardware (MI210) being installed on 2026-07-02.",
+      "severity": "medium"
+    }
+  ],
+  "generated_at": "2026-07-07T00:21:20+00:00",
+  "job_id": "handoff_freshness_lint",
+  "proposed_review_items": [
+    {
+      "action": "update",
+      "rationale": "The handoff needs to be updated to reflect the current status of Phase 5 rollout decisions, as the current text focuses on the May 2026 audit reset.",
+      "target": "handoffs/active/agent-file-prose-compression.md"
+    },
+    {
+      "action": "inspect",
+      "rationale": "With the installation of the MI210 GPU on 2026-07-02, Phase 1 (CPU-feasible) should be reviewed for completion or transition to Phase 2.",
+      "target": "handoffs/active/agent-world-env-synthesis.md"
+    },
+    {
+      "action": "archive_candidate",
+      "rationale": "This handoff was explicitly marked as RESOLVED on 2026-07-05; it should be moved to an archive or completed state.",
+      "target": "handoffs/active/contention-matrix-v6-quarter-refresh.md"
+    }
+  ],
+  "run_id": "handoff_freshness_lint-20260707T002120Z-a99a903a",
+  "summary": "Linting complete. Identified one high-priority stale handoff and one medium-priority investigation candidate. The contention matrix handoff was successfully resolved in the current run."
+}

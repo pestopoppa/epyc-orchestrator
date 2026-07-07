@@ -1,0 +1,109 @@
+{
+  "captured_at": "2026-07-07T00:31:05+00:00",
+  "confidence": 0.8,
+  "job_id": "handoff_freshness_lint",
+  "local_output": {
+    "path": "handoff_freshness_lint/handoff_freshness_lint-20260707T001532Z-6565bc6a/output.json",
+    "payload": {
+      "findings": [
+        {
+          "evidence": "Status is listed as 'stub / in-planning'. While hardware (MI210) was acquired on 2026-07-02, the Phase 2 GPU training/GRPO-viability smoke test remains 'unverified'.",
+          "file": "handoffs/active/agent-world-env-synthesis.md",
+          "issue": "Stale status / Unverified Phase 2 gate",
+          "severity": "high"
+        },
+        {
+          "evidence": "The document states 'Phase 3 is complete for the local production stack'. The remaining work (Phase 5 rollout) is described as a 'separate decision'.",
+          "file": "handoffs/active/agent-file-prose-compression.md",
+          "issue": "Potential for archival; Phase 3 complete for local stack",
+          "severity": "medium"
+        }
+      ],
+      "generated_at": "2026-07-07T00:15:32+00:00",
+      "job_id": "handoff_freshness_lint",
+      "proposed_review_items": [
+        {
+          "action": "inspect",
+          "rationale": "Hardware (MI210) was recently installed (2026-07-02). Need to verify if the 'unverified' smoke test for Phase 2 can now be executed or if the status should be updated from 'stub'.",
+          "target": "handoffs/active/agent-world-env-synthesis.md"
+        },
+        {
+          "action": "archive_candidate",
+          "rationale": "The core implementation for the local production stack (Phase 3) is finished. The handoff should be reviewed to see if it can be moved to a 'completed' or 'post-mortem' state, leaving only Phase 5 as a new task.",
+          "target": "handoffs/active/agent-file-prose-compression.md"
+        }
+      ],
+      "run_id": "handoff_freshness_lint-20260707T001532Z-6565bc6a",
+      "summary": "Linter run completed. Identified one high-priority stale handoff regarding Agent-World Environment Synthesis and one medium-priority maintenance item for the Prose Compression handoff."
+    }
+  },
+  "notes": "Superseded by patched run with explicit non-mock metadata; closed without gold tuple.",
+  "reference_output": {
+    "path": "cloud_reference/handoff_freshness_lint/handoff_freshness_lint-20260707T001532Z-6565bc6a.json",
+    "payload": {
+      "decision": "reject",
+      "job_id": "handoff_freshness_lint",
+      "reviewed_at": "2026-07-07T00:31:00+00:00",
+      "run_id": "handoff_freshness_lint-20260707T001532Z-6565bc6a",
+      "schema_version": "lab_cloud_reference.v1",
+      "summary": "Superseded by handoff_freshness_lint-20260707T002120Z-a99a903a, which records explicit non-mock and resolved-role metadata after the lab runner guard fix."
+    }
+  },
+  "reviewer": "cloud_reference",
+  "run_id": "handoff_freshness_lint-20260707T001532Z-6565bc6a",
+  "schema_version": "lab_verdict_artifact.v1",
+  "stage": "shadow",
+  "task_record": {
+    "artifacts": {
+      "context_manifest": "handoff_freshness_lint/handoff_freshness_lint-20260707T001532Z-6565bc6a/context_manifest.json",
+      "output": "handoff_freshness_lint/handoff_freshness_lint-20260707T001532Z-6565bc6a/output.json",
+      "prompt": "handoff_freshness_lint/handoff_freshness_lint-20260707T001532Z-6565bc6a/prompt.txt"
+    },
+    "chat_meta": {
+      "elapsed_s": 28.939,
+      "routed_to": "worker_general",
+      "routing_strategy": "forced",
+      "status_code": 200,
+      "tokens_generated": 968
+    },
+    "context": {
+      "budget_exhausted": false,
+      "excerpt_chars": 8422,
+      "kinds": {
+        "dcp_pack:full": 4
+      },
+      "max_context_chars": 64000,
+      "missing_source_count": 1,
+      "repos": [
+        "epyc-root"
+      ],
+      "schema_version": "lab_context_summary.v1",
+      "source_bytes": 55622,
+      "source_count": 4,
+      "truncated_source_count": 3
+    },
+    "generated_at": "2026-07-07T00:15:32+00:00",
+    "invocation_mode": "execute_chat",
+    "job_id": "handoff_freshness_lint",
+    "model_role": "worker_explore",
+    "policy": {
+      "direct_repo_writes_allowed": false,
+      "review_queue_only": true
+    },
+    "record_type": "task_record",
+    "repo": {
+      "branch": "spec-dec-mtp-refresh-2026-06-22",
+      "commit": "9994973c1219affa8aab83a2ac2ebb3b1d7fa924",
+      "dirty": true,
+      "path": "/mnt/raid0/llm/epyc-orchestrator"
+    },
+    "risk": "read_only",
+    "run_id": "handoff_freshness_lint-20260707T001532Z-6565bc6a",
+    "schema_version": "lab_task_record.v1",
+    "stage": "shadow",
+    "validation": {
+      "output_contract": "passed"
+    }
+  },
+  "verdict": "reject"
+}

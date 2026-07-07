@@ -1,0 +1,8 @@
+{
+  "schema_version": "lab_cloud_reference.v1",
+  "job_id": "handoff_freshness_lint",
+  "run_id": "handoff_freshness_lint-20260707T001532Z-6565bc6a",
+  "reviewed_at": "2026-07-07T00:31:00+00:00",
+  "decision": "reject",
+  "summary": "Superseded by handoff_freshness_lint-20260707T002120Z-a99a903a, which records explicit non-mock and resolved-role metadata after the lab runner guard fix."
+}
