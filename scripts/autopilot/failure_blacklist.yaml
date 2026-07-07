@@ -20,10 +20,13 @@ blacklist:
     type: structural_experiment
     flags:
       graph_router: true
-  reason: 'Auto-blacklisted: 3× critic-rejected — critic rejected: Draft action exactly
-    matches a Blacklisted Configurations entry'
-  added: '2026-06-05T19:16:24.457198+00:00'
-  source_trial: 669
+  reason: 'Auto-blacklisted: 11× critic-rejected — critic rejected: repeats the Last
+    Non-Executing Action'
+  added: '2026-07-06T12:33:43.043264+00:00'
+  source_trial: 1231
+  reason_class: critic_rejected
+  ttl_days: 14
+  expires_at: '2026-07-20T12:33:43.043264+00:00'
 - pattern:
     type: structural_experiment
     flags:
@@ -172,3 +175,266 @@ blacklist:
   reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 889'
   added: '2026-06-20T10:51:17.866830+00:00'
   source_trial: 889
+- pattern:
+    type: distill_skillbank
+  reason: 'Auto-blacklisted: 3× critic-rejected — critic rejected: Draft selects a
+    metric-free knowledge/maintenance action to bre'
+  added: '2026-06-21T18:59:42.560917+00:00'
+  source_trial: 936
+- pattern:
+    type: structural_experiment
+    flags:
+      user_modeling: true
+  reason: 'Auto-blacklisted: 2× critic-rejected — critic rejected: Draft asserts user_modeling
+    is eligible and dependency-met, but'
+  added: '2026-06-27T11:10:59.904808+00:00'
+  source_trial: 975
+- pattern:
+    type: deep_eval
+    tier: 0
+  reason: 'Auto-blacklisted: 3× critic-rejected — critic rejected: Draft weakly attributes
+    surface exhaustion: selected context sh'
+  added: '2026-06-27T15:16:20.813432+00:00'
+  source_trial: 981
+- pattern:
+    type: numeric_trial
+    surface: memrl_retrieval
+  reason: 'Auto-blacklisted: 2× invalid — action blacklisted: Auto-blacklisted: 3
+    consecutive failures ending at trial 106'
+  added: '2026-07-03T23:37:11.437623+00:00'
+  source_trial: 1100
+- pattern:
+    type: deep_eval
+    tier: 2
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1063'
+  added: '2026-07-03T05:50:18.986249+00:00'
+  source_trial: 1063
+- pattern:
+    type: numeric_trial
+    surface: escalation
+  reason: 'Auto-blacklisted: 2× critic-rejected — critic rejected: Draft falsely states
+    every eligible true-direction structural f'
+  added: '2026-07-03T05:52:08.110419+00:00'
+  source_trial: 1064
+- pattern:
+    type: numeric_trial
+    surface: think_harder
+  reason: 'Auto-blacklisted: 2× critic-rejected — critic rejected: Draft frames the
+    trial as evidence for an operator-domain basel'
+  added: '2026-07-03T05:53:06.586673+00:00'
+  source_trial: 1065
+- pattern:
+    type: seed_batch
+    n_questions: 16
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1067'
+  added: '2026-07-03T07:39:34.808504+00:00'
+  source_trial: 1067
+- pattern:
+    type: structural_experiment
+    flags:
+      depth_model_overrides: false
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1071'
+  added: '2026-07-03T10:04:36.016160+00:00'
+  source_trial: 1071
+- pattern:
+    type: numeric_trial
+    surface: monitor
+  reason: 'Auto-blacklisted: 5× critic-rejected — critic rejected: Draft relies on
+    an unsupported attribution that the repeated ge'
+  added: '2026-07-03T11:01:30.125683+00:00'
+  source_trial: 1074
+- pattern:
+    type: seed_batch
+    n_questions: 18
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1074'
+  added: '2026-07-03T11:30:26.817126+00:00'
+  source_trial: 1074
+- pattern:
+    type: structural_experiment
+    flags:
+      reasoning_length_alarm: false
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1080'
+  added: '2026-07-03T12:50:43.229975+00:00'
+  source_trial: 1080
+- pattern:
+    type: numeric_trial
+    surface: repl_budget
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1083'
+  added: '2026-07-03T14:10:47.551444+00:00'
+  source_trial: 1083
+- pattern:
+    type: numeric_trial
+    surface: chat_pipeline
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1087'
+  added: '2026-07-03T15:36:01.329974+00:00'
+  source_trial: 1087
+- pattern:
+    type: numeric_trial
+    surface: repl_executor
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1090'
+  added: '2026-07-03T17:09:21.659718+00:00'
+  source_trial: 1090
+- pattern:
+    type: numeric_trial
+    surface: kv_compaction
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1093'
+  added: '2026-07-03T18:27:29.134210+00:00'
+  source_trial: 1093
+- pattern:
+    type: structural_experiment
+    flags:
+      session_compaction: false
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1096'
+  added: '2026-07-03T20:55:39.657033+00:00'
+  source_trial: 1096
+- pattern:
+    type: seed_batch
+    n_questions: 20
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1099'
+  added: '2026-07-03T23:33:32.873587+00:00'
+  source_trial: 1099
+- pattern:
+    type: structural_experiment
+    flags:
+      escalation_compression: false
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1104'
+  added: '2026-07-04T01:07:44.577431+00:00'
+  source_trial: 1104
+- pattern:
+    type: seed_batch
+    n_questions: 24
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1107'
+  added: '2026-07-04T02:26:02.231455+00:00'
+  source_trial: 1107
+- pattern:
+    type: seed_batch
+    n_questions: 10
+    suites:
+    - general
+    - hotpotqa
+  reason: 'Auto-blacklisted: 2× critic-rejected — critic rejected: seed_batch is a
+    measurement action, not a lever — cannot move t'
+  added: '2026-07-04T02:57:21.563572+00:00'
+  source_trial: 1108
+- pattern:
+    type: distill_knowledge
+    last_n: 30
+  reason: 'MANUAL recovery @1111: critic_reject_loop from repeated metric-free distill_knowledge
+    last_n=30 drafts; exact blacklist after df22c9fe preserved last_n patterns.'
+  added: '2026-07-04T03:40:16.513147+00:00'
+  source_trial: 1111
+- pattern:
+    type: structural_experiment
+    flags:
+      cascading_tool_policy: false
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1114'
+  added: '2026-07-04T08:56:01.873781+00:00'
+  source_trial: 1114
+- pattern:
+    type: seed_batch
+    n_questions: 30
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1117'
+  added: '2026-07-04T10:46:54.098326+00:00'
+  source_trial: 1117
+- pattern:
+    type: structural_experiment
+    flags:
+      parallel_tools: false
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1120'
+  added: '2026-07-04T12:15:43.597335+00:00'
+  source_trial: 1120
+- pattern:
+    type: structural_experiment
+    flags:
+      scripts: false
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1125'
+  added: '2026-07-04T13:51:31.743633+00:00'
+  source_trial: 1125
+- pattern:
+    type: structural_experiment
+    flags:
+      structured_tool_output: false
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1131'
+  added: '2026-07-04T17:32:30.422094+00:00'
+  source_trial: 1131
+- pattern:
+    type: deep_eval
+    tier: 3
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1143'
+  added: '2026-07-04T23:26:36.834665+00:00'
+  source_trial: 1143
+- pattern:
+    type: numeric_trial
+    surface: memrl_retrieval
+    params:
+      memrl_retrieval.q_weight: 0.9371674634482647
+      memrl_retrieval.min_similarity: 0.20993434358613497
+      memrl_retrieval.min_q_value: 0.2274263410369349
+      memrl_retrieval.confidence_threshold: 0.7710956592694671
+      memrl_retrieval.semantic_k: 50
+      memrl_retrieval.prior_strength: 0.3617174980458628
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1187'
+  added: '2026-07-05T21:21:06.195396+00:00'
+  source_trial: 1187
+  reason_class: safety_failure
+  ttl_days: 30
+  expires_at: '2026-08-04T21:21:06.195396+00:00'
+- pattern:
+    type: numeric_trial
+    surface: chat_pipeline
+    params:
+      chat.try_cheap_first_quality_threshold: 0.8742715026951258
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1194'
+  added: '2026-07-05T23:51:52.304736+00:00'
+  source_trial: 1194
+  reason_class: safety_failure
+  ttl_days: 30
+  expires_at: '2026-08-04T23:51:52.304736+00:00'
+- pattern:
+    type: numeric_trial
+    surface: memrl_retrieval
+    params:
+      memrl_retrieval.q_weight: 0.778555980384655
+      memrl_retrieval.min_similarity: 0.11693900408429533
+      memrl_retrieval.min_q_value: 0.3132859919596247
+      memrl_retrieval.confidence_threshold: 0.37376723328541694
+      memrl_retrieval.semantic_k: 24
+      memrl_retrieval.prior_strength: 0.18304830958391616
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1236'
+  added: '2026-07-06T17:03:03.469323+00:00'
+  source_trial: 1236
+  reason_class: safety_failure
+  ttl_days: 30
+  expires_at: '2026-08-05T17:03:03.469323+00:00'
+- pattern:
+    type: numeric_trial
+    surface: memrl_retrieval
+    params:
+      memrl_retrieval.q_weight: 0.7133794720319888
+      memrl_retrieval.min_similarity: 0.27207794141520625
+      memrl_retrieval.min_q_value: 0.11606889958109015
+      memrl_retrieval.confidence_threshold: 0.5045953368174769
+      memrl_retrieval.semantic_k: 27
+      memrl_retrieval.prior_strength: 0.0639036760180505
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1239'
+  added: '2026-07-06T18:51:53.160704+00:00'
+  source_trial: 1239
+  reason_class: safety_failure
+  ttl_days: 30
+  expires_at: '2026-08-05T18:51:53.160704+00:00'
+- pattern:
+    type: numeric_trial
+    surface: memrl_retrieval
+    params:
+      memrl_retrieval.q_weight: 0.6092378384116528
+      memrl_retrieval.min_similarity: 0.18898793380901582
+      memrl_retrieval.min_q_value: 0.4466554835607902
+      memrl_retrieval.confidence_threshold: 0.8994671628965458
+      memrl_retrieval.semantic_k: 14
+      memrl_retrieval.prior_strength: 0.3407170695938033
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1242'
+  added: '2026-07-06T19:06:04.762283+00:00'
+  source_trial: 1242
+  reason_class: safety_failure
+  ttl_days: 30
+  expires_at: '2026-08-05T19:06:04.762283+00:00'
