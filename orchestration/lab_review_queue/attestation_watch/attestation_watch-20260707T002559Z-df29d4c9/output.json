@@ -1,0 +1,25 @@
+{
+  "drift_detected": true,
+  "drift_items": [
+    {
+      "current": "empty",
+      "previous": "present",
+      "risk": "high",
+      "surface": "attestation_state"
+    },
+    {
+      "current": "heterogeneous_workers_detected",
+      "previous": "consistent",
+      "risk": "medium",
+      "surface": "model_registry_consistency"
+    }
+  ],
+  "generated_at": "2026-07-07T00:25:59+00:00",
+  "job_id": "attestation_watch",
+  "recommended_operator_checks": [
+    "Verify attestation/latest.json is not empty or corrupted.",
+    "Check for worker heterogeneity in the model registry configuration.",
+    "Review recent autopilot trial logs for unrecorded state changes."
+  ],
+  "run_id": "attestation_watch-20260707T002559Z-df29d4c9"
+}

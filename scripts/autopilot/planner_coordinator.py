@@ -7,13 +7,18 @@ import logging
 import os
 import re
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
 import peaf
+
 from controller_io import (
     _append_planner_archive,
+    _loads_json_payload,
+    _open_planner_tap,
     extract_action,
     extract_rationale,
     validate_single_variable,
@@ -51,7 +56,7 @@ MEDIUM_RISK_ACTIONS = {
     "distill_skillbank",
 }
 HIGH_RISK_ACTIONS = KNOWN_ACTION_TYPES - LOW_RISK_ACTIONS - MEDIUM_RISK_ACTIONS
-SAFE_FALLBACK_SEED_N = 14
+SAFE_FALLBACK_NUMERIC_SURFACE = "memrl_retrieval"
 
 # Actions safe to DISPATCH WITHOUT a critic verdict (degraded/uncritiqued mode).
 # Intentionally EMPTY: when the binding critic is unavailable we PAUSE by default
@@ -76,8 +81,9 @@ _CRITIQUE_SECTION_CHAR_LIMIT = 1600
 # critic_unavailable pause that stalled the run, e.g. @711). Give generous
 # headroom; operator-tunable via AUTOPILOT_PLANNER_TIMEOUT. (2026-06-09)
 DEFAULT_PLANNER_TIMEOUT = int(os.environ.get("AUTOPILOT_PLANNER_TIMEOUT", "600"))
-DEFAULT_SPEND_BREAKER_LOCAL_PRIMARY = "local_chat"
+DEFAULT_SPEND_BREAKER_LOCAL_PRIMARY = "local_frontdoor"
 DEFAULT_SPEND_BREAKER_LOCAL_CRITIC = "local_worker"
+DEFAULT_CODEX_CRITIC_FALLBACK = "claude"
 
 
 @dataclass
@@ -85,9 +91,9 @@ class PlannerSettings:
     primary: str = "claude"
     critic: str = "codex"
     # 2026-06-04: default flipped shadow_critique -> draft_critique. The critic is
-    # now BINDING: a valid revised_action is dispatched, and a reject routes to the
-    # safe fallback (see _reconcile). Shadow mode logged 320 reject/revise verdicts
-    # that were all ignored (264 dispatched anyway) while the run dead-locked.
+    # now BINDING: a valid revised_action is dispatched, and a reject routes to a
+    # metric-bearing fallback (see _reconcile). Shadow mode logged 320 reject/revise
+    # verdicts that were all ignored (264 dispatched anyway) while the run dead-locked.
     # Gated on the expanded _reconcile test matrix + the rejected-draft feedback
     # path in autopilot.py (a reject can no longer bypass blacklist/quota/skip).
     mode: str = "draft_critique"
@@ -123,7 +129,7 @@ class PlannerDecision:
     critique: PlannerCritique | None = None
     predicted_objectives: dict[str, float] = field(default_factory=dict)
     # The planner's ORIGINAL parsed action, before _reconcile may substitute it
-    # (revised_action in revise, or the safe fallback in reject). The main loop
+    # (revised_action in revise, or the metric fallback in reject). The main loop
     # uses this to record a critic-rejected/revised draft into the invalid-action
     # feedback + blacklist so a substituted draft cannot silently escape the
     # feedback loop (draft_critique authority change, 2026-06-04).
@@ -135,6 +141,9 @@ class PlannerDecision:
     # content. The main loop uses this to pick deterministic-fallback vs pause when
     # both planner models are offline (cross-model failover, 2026-06-12).
     providers_unavailable: bool = False
+    # Ordered provider attempt telemetry for planner_archive.jsonl. This is
+    # observability only; dispatch semantics stay derived from action/critique.
+    provider_trace: list[dict[str, Any]] = field(default_factory=list)
 
 
 ProviderFactory = Callable[[str], PlannerProvider]
@@ -197,10 +206,15 @@ def _apply_planner_spend_breaker(
             DEFAULT_SPEND_BREAKER_LOCAL_PRIMARY,
         )
     )
+    spend_breaker_critic = os.environ.get("AUTOPILOT_PLANNER_SPEND_BREAKER_CRITIC")
+    configured_critic = _normalize_provider(settings.critic)
     local_critic = _normalize_provider(
-        os.environ.get(
-            "AUTOPILOT_PLANNER_SPEND_BREAKER_CRITIC",
-            DEFAULT_SPEND_BREAKER_LOCAL_CRITIC,
+        spend_breaker_critic
+        if spend_breaker_critic is not None
+        else (
+            configured_critic
+            if _model_of(configured_critic) == "local"
+            else DEFAULT_SPEND_BREAKER_LOCAL_CRITIC
         )
     )
     state["local_primary"] = local_primary
@@ -225,6 +239,35 @@ def _apply_planner_spend_breaker(
     )
 
 
+def _write_trial_planning_banner(trial_id: int | None) -> None:
+    """Emit a big, scannable ``>>>> TRIAL N <<<<`` header into the planner tap.
+
+    Best-effort and self-contained: opens its own append handle so it never
+    disturbs the per-provider tap writes. The wide arrow rule makes the start of
+    each trial's planning trivial to spot while scrolling the raw log or the
+    dashboard planner panel.
+    """
+    if trial_id is None:
+        return
+    label = f"TRIAL {trial_id}"
+    ts = datetime.now().isoformat(timespec="seconds")
+    banner = (
+        f"\n{'>' * 24} {label} {'<' * 24}\n"
+        f"[{ts}] planning cycle start\n"
+    )
+    tap = _open_planner_tap()
+    if tap is None:
+        return
+    try:
+        tap.write(banner)
+        tap.flush()
+    finally:
+        try:
+            tap.close()
+        except Exception:
+            pass
+
+
 def plan_with_providers(
     prompt: str,
     *,
@@ -235,12 +278,22 @@ def plan_with_providers(
     stagnation_signal: str = "",
     settings: PlannerSettings | None = None,
     provider_factory: ProviderFactory = get_planner_provider,
+    allowed_action_types: Iterable[str] | None = None,
+    trial_id: int | None = None,
 ) -> PlannerDecision:
     """Draft a canonical planner action with optional secondary critique."""
+    # One deterministic, unmistakable banner per live planning cycle. Tests and
+    # helper calls omit trial_id, so they do not write to the shared planner tap.
+    _write_trial_planning_banner(trial_id)
     settings = settings or load_planner_settings_from_env()
     planner_state = planner_state if planner_state is not None else {}
     settings, spend_breaker_active = _apply_planner_spend_breaker(settings, planner_state)
     session_update = None
+    allowed_actions = (
+        frozenset(str(item) for item in allowed_action_types)
+        if allowed_action_types is not None
+        else None
+    )
 
     primary_name = _normalize_provider(settings.primary)
     critic_name = _normalize_provider(settings.critic)
@@ -248,14 +301,11 @@ def plan_with_providers(
     # different underlying model. With PRIMARY=codex + CRITIC=codex_critic the
     # names differ but both resolve to the codex binary — a name-based fallback
     # would re-hit codex when codex is offline → "no usable draft action".
-    if spend_breaker_active:
-        fallback_name = critic_name if critic_name != primary_name else primary_name
-    else:
-        fallback_name = (
-            critic_name
-            if _model_of(critic_name) != _model_of(primary_name)
-            else _other_provider(primary_name)
-        )
+    fallback_name = _draft_fallback_provider_name(
+        primary_name,
+        critic_name,
+        spend_breaker_active=spend_breaker_active,
+    )
     allow_fallback = settings.mode.strip().lower() != "single"
 
     draft_provider_name = primary_name
@@ -282,9 +332,22 @@ def plan_with_providers(
     # unavailable" (deterministic fallback / pause) from "models reachable but
     # drafted bad content" (keep the seed_batch default). (2026-06-12)
     any_response_ok = bool(draft.ok)
+    provider_trace: list[dict[str, Any]] = []
 
     action = extract_action(draft.text)
-    draft_unusable = _draft_unusable_reason(draft, action)
+    draft_unusable = _draft_unusable_reason(
+        draft,
+        action,
+        allowed_action_types=allowed_actions,
+    )
+    provider_trace.append(
+        _draft_provider_event(
+            stage="draft_primary",
+            result=draft,
+            action=action,
+            unusable_reason=draft_unusable,
+        )
+    )
     if draft_unusable:
         _mark_failure(planner_state, draft.provider, settings)
         if (
@@ -305,13 +368,23 @@ def plan_with_providers(
             )
             any_response_ok = any_response_ok or bool(fallback.ok)
             fallback_action = extract_action(fallback.text)
-            if _draft_is_usable(fallback, fallback_action):
-                session_update = (
-                    fallback.session_id if fallback_provider.supports_resume else None
+            fallback_unusable = _draft_unusable_reason(
+                fallback,
+                fallback_action,
+                allowed_action_types=allowed_actions,
+            )
+            provider_trace.append(
+                _draft_provider_event(
+                    stage="draft_fallback",
+                    result=fallback,
+                    action=fallback_action,
+                    unusable_reason=fallback_unusable,
                 )
+            )
+            if not fallback_unusable:
+                session_update = fallback.session_id if fallback_provider.supports_resume else None
                 fallback_reason = (
-                    fallback_reason
-                    or f"{draft.provider} draft failed: {draft_unusable}"
+                    fallback_reason or f"{draft.provider} draft failed: {draft_unusable}"
                 )
                 _mark_success(planner_state, fallback.provider)
                 draft = fallback
@@ -356,6 +429,7 @@ def plan_with_providers(
             fallback_reason=no_action_reason,
             predicted_objectives=peaf.extract_predicted_objectives(draft.text),
             providers_unavailable=providers_unavailable,
+            provider_trace=provider_trace,
         )
         _archive_decision(decision, planner_state)
         return decision
@@ -374,87 +448,168 @@ def plan_with_providers(
                 and not primary_circuit_open_before_draft
             )
             if allow_primary_fallback_critique and (
-                _model_of(primary_name) != "local" or spend_breaker_active
+                _model_of(primary_name) != "local"
+                or spend_breaker_active
+                or _distinct_local_roles(primary_name, draft.provider)
             ):
                 critique_provider_name = primary_name
             else:
                 degraded = True
 
-        if degraded and critique is None:
-            pass
-        elif (
-            _circuit_is_open(planner_state, critique_provider_name)
-            and not allow_primary_fallback_critique
-        ):
-            # Critic circuit is open (it failed repeatedly and is cooling down),
-            # but the PRIMARY draft succeeded. Treat as critic-unavailable on a
-            # TRUSTED draft: keep the draft and let the dispatch gate proceed for
-            # low/medium-risk actions (pause only for HIGH risk) rather than
-            # discarding a good primary draft for a stale seed_batch fallback.
-            # (2026-06-10)
-            degraded = True
-            critique = PlannerCritique(
-                decision="unavailable",
-                provider=critique_provider_name,
-                parse_error="critic circuit open",
+        if not (degraded and critique is None):
+            critic_fallback_name = _critic_fallback_provider_name(
+                critique_provider_name,
+                draft.provider,
             )
-        else:
-            critic_provider = provider_factory(critique_provider_name)
-            critique_prompt = build_critique_prompt(prompt, draft.text, action, rationale)
-            critique_result = critic_provider.invoke(
-                critique_prompt,
-                role="critique",
-                session_id=None,
-                timeout=timeout,
-                cwd=cwd,
-            )
-            if critique_result.ok:
-                critique = extract_critique(critique_result.text)
-                critique.provider = critique_result.provider
-                if critique.parse_error:
-                    # The critic invoke "succeeded" (nonzero text) but the text
-                    # is NOT a valid critique block — e.g. Codex emitted prose
-                    # or an error message instead of the json:autopilot_critique
-                    # fence. This is a FAILED REVIEW, not a rejection of the draft.
-                    # Mark failure (feeds circuit breaker) and degrade. In binding
-                    # (draft_critique) mode flag the verdict "unavailable" and KEEP
-                    # the trusted-primary draft: the dispatch gate then proceeds for
-                    # low/medium-risk actions and pauses only for HIGH-risk ones.
-                    # We deliberately do NOT force a `reject` → seed_batch fallback:
-                    # a critic *failure* must not discard a good primary draft, and
-                    # the stale-seed substitution is what re-triggered the
-                    # critic_reject_loop halt @708. A genuine parsed `reject` (no
-                    # parse_error) still routes to the safe fallback below. (2026-06-10)
-                    _mark_failure(planner_state, critique_result.provider, settings)
-                    degraded = True
-                    if active_critique:
-                        critique.decision = "unavailable"
-                    # keep draft action/rationale/canonical_text (no _reconcile)
-                else:
-                    _mark_success(planner_state, critique_result.provider)
-                    action, rationale, canonical_text = _reconcile(
-                        action,
-                        rationale,
-                        draft.text,
-                        critique,
-                        active=active_critique,
-                    )
-            else:
-                # The critic invoke FAILED outright (timeout / empty / nonzero rc).
-                # Same principle as the parse_error branch: a failed *review* must
-                # not discard the trusted-primary draft. Binding mode → verdict
-                # "unavailable" + KEEP the draft (gate proceeds for low/medium risk,
-                # pauses for HIGH risk). Shadow mode → non-binding, fail-open to the
-                # draft. Neither substitutes the stale seed_batch fallback. (2026-06-10)
-                _mark_failure(planner_state, critique_result.provider, settings)
+            if (
+                _circuit_is_open(planner_state, critique_provider_name)
+                and not allow_primary_fallback_critique
+                and critic_fallback_name
+                and not _circuit_is_open(planner_state, critic_fallback_name)
+            ):
+                critique_provider_name = critic_fallback_name
+            elif (
+                _circuit_is_open(planner_state, critique_provider_name)
+                and not allow_primary_fallback_critique
+            ):
+                # Critic circuit is open (it failed repeatedly and is cooling down),
+                # but the PRIMARY draft succeeded. Treat as critic-unavailable on a
+                # TRUSTED draft: keep the draft and let the dispatch gate proceed for
+                # low/medium-risk actions (pause only for HIGH risk) rather than
+                # discarding a good primary draft for a stale seed_batch fallback.
+                # (2026-06-10)
                 degraded = True
                 critique = PlannerCritique(
-                    decision="unavailable" if active_critique else "approve",
-                    raw_text=critique_result.text,
-                    provider=critique_result.provider,
-                    parse_error=critique_result.error or "critique failed",
+                    decision="unavailable",
+                    provider=critique_provider_name,
+                    parse_error="critic circuit open",
                 )
-                # keep draft action/rationale/canonical_text (no _reconcile)
+            else:
+                critic_provider = provider_factory(critique_provider_name)
+                critique_prompt = build_critique_prompt(
+                    prompt,
+                    draft.text,
+                    action,
+                    rationale,
+                    allowed_action_types=allowed_actions,
+                )
+                critique_result = critic_provider.invoke(
+                    critique_prompt,
+                    role="critique",
+                    session_id=None,
+                    timeout=timeout,
+                    cwd=cwd,
+                )
+                if critique_result.ok:
+                    critique = extract_critique(critique_result.text)
+                    critique.provider = critique_result.provider
+                    provider_trace.append(
+                        _critique_provider_event(
+                            stage="critique_primary",
+                            result=critique_result,
+                            critique=critique,
+                        )
+                    )
+                    if critique.parse_error:
+                        # The critic invoke "succeeded" (nonzero text) but the text
+                        # is NOT a valid critique block — e.g. Codex emitted prose
+                        # or an error message instead of the json:autopilot_critique
+                        # fence. This is a FAILED REVIEW, not a rejection of the draft.
+                        # Mark failure (feeds circuit breaker) and degrade. In binding
+                        # (draft_critique) mode flag the verdict "unavailable" and KEEP
+                        # the trusted-primary draft: the dispatch gate then proceeds for
+                        # low/medium-risk actions and pauses only for HIGH-risk ones.
+                        # We deliberately do NOT force a `reject` → seed_batch fallback:
+                        # a critic *failure* must not discard a good primary draft, and
+                        # the stale-seed substitution is what re-triggered the
+                        # critic_reject_loop halt @708. A genuine parsed `reject` (no
+                        # parse_error) still routes to the safe fallback below. (2026-06-10)
+                        _mark_failure(planner_state, critique_result.provider, settings)
+                        fallback_critique = _try_fallback_critic(
+                            provider_factory=provider_factory,
+                            fallback_name=critic_fallback_name,
+                            failed_provider=critique_result.provider,
+                            critique_prompt=critique_prompt,
+                            timeout=timeout,
+                            cwd=cwd,
+                            planner_state=planner_state,
+                            settings=settings,
+                            provider_trace=provider_trace,
+                        )
+                        if fallback_critique and not fallback_critique.parse_error:
+                            critique = fallback_critique
+                            action, rationale, canonical_text = _reconcile(
+                                action,
+                                rationale,
+                                draft.text,
+                                critique,
+                                active=active_critique,
+                                allowed_action_types=allowed_actions,
+                            )
+                        else:
+                            degraded = True
+                            if fallback_critique:
+                                critique = fallback_critique
+                            if active_critique:
+                                critique.decision = "unavailable"
+                            # keep draft action/rationale/canonical_text (no _reconcile)
+                    else:
+                        _mark_success(planner_state, critique_result.provider)
+                        action, rationale, canonical_text = _reconcile(
+                            action,
+                            rationale,
+                            draft.text,
+                            critique,
+                            active=active_critique,
+                            allowed_action_types=allowed_actions,
+                        )
+                else:
+                    # The critic invoke FAILED outright (timeout / empty / nonzero rc).
+                    # Same principle as the parse_error branch: a failed *review* must
+                    # not discard the trusted-primary draft. Binding mode → verdict
+                    # "unavailable" + KEEP the draft (gate proceeds for low/medium risk,
+                    # pauses for HIGH risk). Shadow mode → non-binding, fail-open to the
+                    # draft. Neither substitutes the stale seed_batch fallback. (2026-06-10)
+                    _mark_failure(planner_state, critique_result.provider, settings)
+                    provider_trace.append(
+                        _critique_provider_event(
+                            stage="critique_primary",
+                            result=critique_result,
+                            critique=None,
+                        )
+                    )
+                    fallback_critique = _try_fallback_critic(
+                        provider_factory=provider_factory,
+                        fallback_name=critic_fallback_name,
+                        failed_provider=critique_result.provider,
+                        critique_prompt=critique_prompt,
+                        timeout=timeout,
+                        cwd=cwd,
+                        planner_state=planner_state,
+                        settings=settings,
+                        provider_trace=provider_trace,
+                    )
+                    if fallback_critique and not fallback_critique.parse_error:
+                        critique = fallback_critique
+                        action, rationale, canonical_text = _reconcile(
+                            action,
+                            rationale,
+                            draft.text,
+                            critique,
+                            active=active_critique,
+                            allowed_action_types=allowed_actions,
+                        )
+                    else:
+                        degraded = True
+                        critique = fallback_critique or PlannerCritique(
+                            decision="unavailable" if active_critique else "approve",
+                            raw_text=critique_result.text,
+                            provider=critique_result.provider,
+                            parse_error=critique_result.error or "critique failed",
+                        )
+                        if active_critique:
+                            critique.decision = "unavailable"
+                        # keep draft action/rationale/canonical_text (no _reconcile)
 
     decision = PlannerDecision(
         action=action,
@@ -470,6 +625,7 @@ def plan_with_providers(
         critique=critique,
         predicted_objectives=peaf.extract_predicted_objectives(canonical_text),
         draft_action=draft_action,
+        provider_trace=provider_trace,
     )
     _archive_decision(decision, planner_state)
     return decision
@@ -567,8 +723,16 @@ def build_critique_prompt(
     draft_text: str,
     action: dict[str, Any],
     rationale: dict[str, Any],
+    *,
+    allowed_action_types: Iterable[str] | None = None,
 ) -> str:
     selected_context = _selected_critique_context(planner_prompt)
+    action_type = str(action.get("type", ""))
+    known_actions_text = ", ".join(sorted(KNOWN_ACTION_TYPES))
+    if allowed_action_types is None:
+        selectable_actions_text = "(not supplied; use the Action Availability section)"
+    else:
+        selectable_actions_text = ", ".join(sorted({str(item) for item in allowed_action_types}))
     return f"""\
 You are the secondary AutoPilot planner reviewer.
 
@@ -577,7 +741,7 @@ is to find missing constraints, unsafe assumptions, weak attribution, missing
 validation, stale context, or an action that violates the single-variable rule.
 
 Your verdict is BINDING (draft_critique mode): a `reject` routes the action to a
-safe fallback, and a `revise` with a valid `revised_action` REPLACES the draft.
+metric-bearing fallback, and a `revise` with a valid `revised_action` REPLACES the draft.
 Reject or revise (preferring a concrete `revised_action`) if the draft does any
 of the following — the relevant evidence is in the selected context below:
   - re-proposes a feature flag whose dependencies are not all currently ON (see
@@ -588,12 +752,25 @@ of the following — the relevant evidence is in the selected context below:
   - matches a "Blacklisted Configurations" entry.
   - cites below-MDE or single-trial evidence as decisive without a reproduction
     plan; use the "Evidence Power" section to reject unmeasurable proposals.
+Do NOT reject a `numeric_trial` solely because `"params": {{}}`. In the action
+schema, empty params means "ask NumericSwarm/Optuna for concrete values"; the
+dispatcher writes the applied params into the trial action and eval details
+before W8 replay/promotion accounting. Historical logged rows that stayed empty
+are not replayable, but a new empty-params numeric request is a valid way to
+produce a replayable candidate if the selected surface is otherwise allowed.
 Do NOT manufacture host-noise / contention narratives when System Health is
 nominal, and do NOT propose operator-domain actions (widening safety-gate
 thresholds, baseline refresh) — those are outside the autopilot action space.
 Do NOT reject solely because the shared worktree has unrelated dirty files.
 The dispatcher has a target-path dirty fence: cite dirty state only when the
 parsed action would write/stage that same target path or prompt directory.
+Do NOT reject a draft by claiming its parsed action type is unrecognized,
+non-standard, or not in the AutoPilot schema when it appears in the
+authoritative action-type list below. If the selected context says a known
+action is temporarily unavailable or cannot satisfy the current W8 replay
+pressure, name that concrete availability/evidence reason instead.
+`seed_batch` and `deep_eval` are valid known action types. They may be the wrong
+choice for a replayable W8 candidate, but they are not schema errors.
 
 Return JSON ONLY in this fenced block:
 
@@ -613,6 +790,12 @@ available.
 
 {selected_context}
 
+## Authoritative Action-Type Check
+
+- parsed_action_type: `{action_type}`
+- known_action_types: `{known_actions_text}`
+- currently_selectable_action_types: `{selectable_actions_text}`
+
 ## Draft Text
 
 {draft_text}
@@ -627,6 +810,96 @@ available.
 """
 
 
+def _critic_fallback_provider_name(
+    critic_provider_name: str,
+    draft_provider_name: str,
+) -> str:
+    configured = os.environ.get("AUTOPILOT_PLANNER_CRITIC_FALLBACK")
+    if configured is None:
+        if _model_of(critic_provider_name) != "codex":
+            return ""
+        configured = DEFAULT_CODEX_CRITIC_FALLBACK
+
+    fallback = _normalize_provider(configured)
+    if fallback in {"", "0", "false", "no", "none", "off"}:
+        return ""
+    if fallback == _normalize_provider(critic_provider_name):
+        return ""
+    if _model_of(fallback) == _model_of(draft_provider_name):
+        return ""
+    return fallback
+
+
+def _try_fallback_critic(
+    *,
+    provider_factory: ProviderFactory,
+    fallback_name: str,
+    failed_provider: str,
+    critique_prompt: str,
+    timeout: int,
+    cwd: Path | str | None,
+    planner_state: dict[str, Any],
+    settings: PlannerSettings,
+    provider_trace: list[dict[str, Any]] | None = None,
+) -> PlannerCritique | None:
+    if not fallback_name or fallback_name == _normalize_provider(failed_provider):
+        return None
+    if _circuit_is_open(planner_state, fallback_name):
+        return None
+
+    fallback_provider = provider_factory(fallback_name)
+    fallback_result = fallback_provider.invoke(
+        critique_prompt,
+        role="critique",
+        session_id=None,
+        timeout=timeout,
+        cwd=cwd,
+    )
+    if not fallback_result.ok:
+        _mark_failure(planner_state, fallback_result.provider, settings)
+        if provider_trace is not None:
+            provider_trace.append(
+                _critique_provider_event(
+                    stage="critique_fallback",
+                    result=fallback_result,
+                    critique=None,
+                )
+            )
+        return PlannerCritique(
+            decision="unavailable",
+            raw_text=fallback_result.text,
+            provider=fallback_result.provider,
+            parse_error=(
+                f"{failed_provider} critique failed; "
+                f"{fallback_result.provider} fallback failed: "
+                f"{fallback_result.error or 'critique failed'}"
+            ),
+        )
+
+    fallback_critique = extract_critique(fallback_result.text)
+    fallback_critique.provider = fallback_result.provider
+    if provider_trace is not None:
+        provider_trace.append(
+            _critique_provider_event(
+                stage="critique_fallback",
+                result=fallback_result,
+                critique=fallback_critique,
+            )
+        )
+    if fallback_critique.parse_error:
+        _mark_failure(planner_state, fallback_result.provider, settings)
+        fallback_critique.decision = "unavailable"
+        fallback_critique.parse_error = (
+            f"{failed_provider} critique failed; "
+            f"{fallback_result.provider} fallback unparseable: "
+            f"{fallback_critique.parse_error}"
+        )
+        return fallback_critique
+
+    _mark_success(planner_state, fallback_result.provider)
+    return fallback_critique
+
+
 def _selected_critique_context(planner_prompt: str) -> str:
     sections = [
         section
@@ -634,7 +907,9 @@ def _selected_critique_context(planner_prompt: str) -> str:
         if (section := _extract_markdown_section(planner_prompt, heading))
     ]
     if not sections:
-        return "(selected planner context unavailable; critique only the parsed draft and rationale)"
+        return (
+            "(selected planner context unavailable; critique only the parsed draft and rationale)"
+        )
     return "\n\n".join(sections)
 
 
@@ -643,12 +918,14 @@ def _extract_markdown_section(text: str, heading: str) -> str:
     if start < 0:
         return ""
     tail = text[start:]
-    next_heading = re.search(r"\n#{2,3}\s+", tail[len(heading):])
+    next_heading = re.search(r"\n#{2,3}\s+", tail[len(heading) :])
     end = len(heading) + next_heading.start() if next_heading else len(tail)
     section = tail[:end].strip()
     if len(section) <= _CRITIQUE_SECTION_CHAR_LIMIT:
         return section
-    return section[:_CRITIQUE_SECTION_CHAR_LIMIT].rstrip() + "\n  ... [truncated for critic context]"
+    return (
+        section[:_CRITIQUE_SECTION_CHAR_LIMIT].rstrip() + "\n  ... [truncated for critic context]"
+    )
 
 
 def extract_critique(text: str) -> PlannerCritique:
@@ -741,24 +1018,35 @@ def _reconcile(
     critique: PlannerCritique,
     *,
     active: bool,
+    allowed_action_types: Iterable[str] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], str]:
     if not active or critique.decision == "approve":
         return action, rationale, draft_text
 
     revised = critique.revised_action
-    if revised and _action_validation_error(revised) is None:
+    if (
+        revised
+        and _action_validation_error(
+            revised,
+            allowed_action_types=allowed_action_types,
+        )
+        is None
+    ):
         new_rationale = critique.revised_rationale or rationale
         return revised, new_rationale, _canonical_text_from_parts(revised, new_rationale)
 
     if critique.decision == "reject":
         safe_action = {
-            "type": "seed_batch",
-            "n_questions": SAFE_FALLBACK_SEED_N,
-            "suites": ["coder", "math"],
+            "type": "numeric_trial",
+            "surface": SAFE_FALLBACK_NUMERIC_SURFACE,
+            "params": {},
         }
         safe_rationale = {
-            "falsifier": "safe fallback fails to improve trustworthy evidence",
+            "falsifier": "critic reject numeric fallback fails to produce replayable evidence",
             "rubric_scores": {},
+            "critic_reject_numeric_fallback": True,
+            "critic_reject_issues": list(critique.issues or []),
+            "critic_reject_original_action": dict(action),
         }
         return (
             safe_action,
@@ -796,6 +1084,8 @@ def _draft_is_usable(
 def _draft_unusable_reason(
     result: PlannerProviderResult,
     action: dict[str, Any] | None,
+    *,
+    allowed_action_types: Iterable[str] | None = None,
 ) -> str:
     """Why a draft is unusable ("" if usable). Surfaces the EXACT schema-validation
     error (e.g. an out-of-range min_memories) rather than an opaque 'invalid action'
@@ -806,15 +1096,26 @@ def _draft_unusable_reason(
         return result.error or "provider error / empty response"
     if action is None:
         return "no parseable json:autopilot_actions block"
-    return _action_validation_error(action) or ""
+    return _action_validation_error(
+        action,
+        allowed_action_types=allowed_action_types,
+    ) or ""
 
 
-def _action_validation_error(action: dict[str, Any] | None) -> str | None:
+def _action_validation_error(
+    action: dict[str, Any] | None,
+    *,
+    allowed_action_types: Iterable[str] | None = None,
+) -> str | None:
     if not action:
         return "missing action"
     action_type = action.get("type")
     if action_type not in KNOWN_ACTION_TYPES:
         return f"unknown action type: {action_type}"
+    if allowed_action_types is not None:
+        allowed = {str(item) for item in allowed_action_types}
+        if action_type not in allowed:
+            return f"action type currently unavailable: {action_type}"
     return validate_single_variable(action)
 
 
@@ -840,7 +1141,7 @@ def _extract_json_payload(
         payload = text.strip()
 
     try:
-        data = json.loads(payload)
+        data = _loads_json_payload(payload)
     except json.JSONDecodeError as exc:
         return None, str(exc)
     if not isinstance(data, dict):
@@ -894,9 +1195,58 @@ def _archive_decision(
             "critique_decision": critique.decision if critique else "",
             "critique_confidence": critique.confidence if critique else 0.0,
             "critique_issues": critique.issues if critique else [],
+            "draft_action": decision.draft_action,
+            "final_action": decision.action,
+            "provider_trace": decision.provider_trace,
             "planner_state": planner_state,
         }
     )
+
+
+def _clip(value: Any, limit: int = 300) -> str:
+    text = str(value or "")
+    return text if len(text) <= limit else text[:limit].rstrip() + "...[truncated]"
+
+
+def _draft_provider_event(
+    *,
+    stage: str,
+    result: PlannerProviderResult,
+    action: dict[str, Any] | None,
+    unusable_reason: str,
+) -> dict[str, Any]:
+    return {
+        "stage": stage,
+        "role": result.role or "draft",
+        "provider": result.provider,
+        "ok": bool(result.ok),
+        "text_chars": len(result.text or ""),
+        "error": _clip(result.error),
+        "parse_ok": action is not None,
+        "action_type": (action or {}).get("type", ""),
+        "unusable_reason": unusable_reason,
+    }
+
+
+def _critique_provider_event(
+    *,
+    stage: str,
+    result: PlannerProviderResult,
+    critique: PlannerCritique | None,
+) -> dict[str, Any]:
+    parse_error = critique.parse_error if critique else ""
+    return {
+        "stage": stage,
+        "role": result.role or "critique",
+        "provider": result.provider,
+        "ok": bool(result.ok),
+        "text_chars": len(result.text or ""),
+        "error": _clip(result.error),
+        "parse_ok": bool(result.ok and critique and not parse_error),
+        "critique_decision": critique.decision if critique else "",
+        "critique_confidence": critique.confidence if critique else 0.0,
+        "parse_error": _clip(parse_error),
+    }
 
 
 def _normalize_provider(name: str) -> str:
@@ -907,6 +1257,31 @@ def _other_provider(name: str) -> str:
     return "codex" if name == "claude" else "claude"
 
 
+def _distinct_local_roles(left: str, right: str) -> bool:
+    return (
+        _model_of(left) == "local"
+        and _model_of(right) == "local"
+        and _normalize_provider(left) != _normalize_provider(right)
+    )
+
+
+def _draft_fallback_provider_name(
+    primary_name: str,
+    critic_name: str,
+    *,
+    spend_breaker_active: bool,
+) -> str:
+    primary = _normalize_provider(primary_name)
+    critic = _normalize_provider(critic_name)
+    if spend_breaker_active:
+        return critic if critic != primary else primary
+    if _model_of(critic) != _model_of(primary):
+        return critic
+    if _distinct_local_roles(primary, critic):
+        return critic
+    return _other_provider(primary)
+
+
 # Provider-role names that resolve to the same underlying MODEL binary. Mirrors
 # the dispatch set in planner_providers.get_planner_provider: codex_critic /
 # codex-critic / codex_reviewer / codex-reviewer all launch the codex binary.
@@ -915,12 +1290,20 @@ _LOCAL_ROLE_NAMES = {
     "local",
     "local_frontdoor",
     "frontdoor_local",
+    "local_chat",
+    "local_chat_planner",
+    "chat_local",
     "local_worker",
     "local_worker_general",
     "worker_general_local",
     "local_ingest",
     "local_ingest_long_context",
     "ingest_local",
+    "local_brief_frontdoor",
+    "local_ingest_frontdoor",
+    "local_two_stage",
+    "local_brief_worker",
+    "local_ingest_worker",
 }
 
 

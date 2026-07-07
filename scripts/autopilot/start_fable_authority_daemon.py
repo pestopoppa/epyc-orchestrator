@@ -46,10 +46,11 @@ FABLE_AUTHORITY_ENV: dict[str, str] = {
 }
 
 LOCAL_PLANNER_DEFAULT_ENV: dict[str, str] = {
-    "AUTOPILOT_PLANNER_PRIMARY": "local_chat",
-    "AUTOPILOT_PLANNER_CRITIC": "codex",
-    "AUTOPILOT_LOCAL_PLANNER_ROLE": "ingest_long_context",
-    "AUTOPILOT_LOCAL_PLANNER_MODEL": "ingest_long_context",
+    "AUTOPILOT_PLANNER_PRIMARY": "local_frontdoor",
+    "AUTOPILOT_PLANNER_CRITIC": "local_worker",
+    "AUTOPILOT_PLANNER_CRITIC_FALLBACK": "claude",
+    "AUTOPILOT_LOCAL_PLANNER_ROLE": "frontdoor",
+    "AUTOPILOT_LOCAL_PLANNER_MODEL": "frontdoor",
     "AUTOPILOT_LOCAL_PLANNER_TEMPERATURE": "0",
     "AUTOPILOT_LOCAL_PLANNER_MAX_TOKENS": "2048",
 }
@@ -149,7 +150,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Start AutoPilot with the Fable authority/tool-sentinel env."
     )
-    parser.add_argument("--max-trials", type=int, default=2000)
+    parser.add_argument("--max-trials", type=int, default=3000)
     parser.add_argument("--log-dir", type=Path, default=DEFAULT_LOG_DIR)
     parser.add_argument(
         "--allow-existing",
@@ -162,6 +163,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Print the command/env payload without starting a process.",
     )
     parser.add_argument(
+        "--preflight",
+        action="store_true",
+        help="Print read-only stale-daemon restart advice and exit without starting.",
+    )
+    parser.add_argument(
         "autopilot_args",
         nargs=argparse.REMAINDER,
         help="Additional args appended after 'autopilot.py start --max-trials N'.",
@@ -171,6 +177,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    if args.preflight:
+        from autopilot_restart_advisor import (  # type: ignore
+            build_restart_advice,
+        )
+        from phase_status import build_phase_health_report  # type: ignore
+
+        advice = build_restart_advice(
+            build_phase_health_report(require_current_code=True),
+            max_trials=args.max_trials,
+        )
+        print(json.dumps(advice, indent=2, sort_keys=True))
+        return 0
+
     env = authority_env()
     extra_args = list(args.autopilot_args or [])
     if extra_args and extra_args[0] == "--":
@@ -181,8 +200,7 @@ def main(argv: list[str] | None = None) -> int:
     live = live_autopilot_processes()
     if live and not args.allow_existing and not args.dry_run:
         print(
-            "Refusing to start another AutoPilot; live process(es):\n"
-            + "\n".join(live),
+            "Refusing to start another AutoPilot; live process(es):\n" + "\n".join(live),
             file=sys.stderr,
         )
         return RUNNING_REFUSAL_EXIT

@@ -1,0 +1,788 @@
+{
+  "corpus_kind": "structural_table_heavy",
+  "corpus_name": "structural-table-heavy-alllocal-n200",
+  "generated_at": "2026-07-07T00:44:27.124277+00:00",
+  "pdfs": [
+    {
+      "char_count": 30143,
+      "line_count": 385,
+      "page_count": 24,
+      "path": "/mnt/raid0/llm/cloud-llm-vault/twyne/claude/-workspace/fd577f5e-bc61-464f-bddf-ca7c32ddfe90/tool-results/webfetch-1778155544913-84vz7j.pdf",
+      "path_hint_count": 0,
+      "reasons": [
+        "table_like_lines=72",
+        "pages=24"
+      ],
+      "sampled_pages": 3,
+      "score": 600.649,
+      "size_bytes": 2112260,
+      "table_like_line_count": 72
+    },
+    {
+      "char_count": 21515,
+      "line_count": 249,
+      "page_count": 7,
+      "path": "/mnt/raid0/llm/hermes-agent/skills/research/ml-paper-writing/templates/icml2026/example_paper.pdf",
+      "path_hint_count": 1,
+      "reasons": [
+        "table_like_lines=42",
+        "path_hints=1",
+        "pages=7"
+      ],
+      "sampled_pages": 3,
+      "score": 360.073,
+      "size_bytes": 193509,
+      "table_like_line_count": 42
+    },
+    {
+      "char_count": 25936,
+      "line_count": 226,
+      "page_count": 20,
+      "path": "/mnt/raid0/llm/cloud-llm-vault/epyc/claude/-workspace/42206ce2-040d-4c53-9afd-5c6f6d4024f0/tool-results/webfetch-1783273030037-df7ofd.pdf",
+      "path_hint_count": 0,
+      "reasons": [
+        "table_like_lines=33",
+        "pages=20"
+      ],
+      "sampled_pages": 3,
+      "score": 286.216,
+      "size_bytes": 1282711,
+      "table_like_line_count": 33
+    },
+    {
+      "char_count": 4172,
+      "line_count": 64,
+      "page_count": 67,
+      "path": "/mnt/raid0/llm/llama.cpp-experimental/_libomp_src/openmp-20.1.8.src/runtime/doc/Reference.pdf",
+      "path_hint_count": 0,
+      "reasons": [
+        "table_like_lines=29",
+        "pages=67"
+      ],
+      "sampled_pages": 3,
+      "score": 276.911,
+      "size_bytes": 507616,
+      "table_like_line_count": 29
+    },
+    {
+      "char_count": 16918,
+      "line_count": 206,
+      "page_count": 32,
+      "path": "/mnt/raid0/llm/cloud-llm-vault/epyc/claude/-workspace/a1e3a8ca-dae4-40f4-89db-d91d16d0e3ac/tool-results/webfetch-1779866174536-mvj09s.pdf",
+      "path_hint_count": 0,
+      "reasons": [
+        "table_like_lines=26",
+        "pages=32"
+      ],
+      "sampled_pages": 3,
+      "score": 236.751,
+      "size_bytes": 2372946,
+      "table_like_line_count": 26
+    },
+    {
+      "char_count": 19842,
+      "line_count": 175,
+      "page_count": 12,
+      "path": "/mnt/raid0/llm/cloud-llm-vault/epyc/claude/-workspace/42206ce2-040d-4c53-9afd-5c6f6d4024f0/tool-results/webfetch-1783181650242-4v0h3d.pdf",
+      "path_hint_count": 0,
+      "reasons": [
+        "table_like_lines=22",
+        "pages=12"
+      ],
+      "sampled_pages": 3,
+      "score": 193.687,
+      "size_bytes": 697260,
+      "table_like_line_count": 22
+    },
+    {
+      "char_count": 18887,
+      "line_count": 167,
+      "page_count": 3,
+      "path": "/mnt/raid0/llm/epyc-root/repos/epyc-llama.bak-2026-05-22-141927/tools/server/webui/tests/stories/fixtures/assets/example.pdf",
+      "path_hint_count": 0,
+      "reasons": [
+        "table_like_lines=22",
+        "pages=3"
+      ],
+      "sampled_pages": 3,
+      "score": 188.591,
+      "size_bytes": 351048,
+      "table_like_line_count": 22
+    },
+    {
+      "char_count": 18887,
+      "line_count": 167,
+      "page_count": 3,
+      "path": "/mnt/raid0/llm/ik_llama.cpp/examples/server/webui_llamacpp/src/stories/fixtures/assets/example.pdf",
+      "path_hint_count": 0,
+      "reasons": [
+        "table_like_lines=22",
+        "pages=3"
+      ],
+      "sampled_pages": 3,
+      "score": 188.591,
+      "size_bytes": 351048,
+      "table_like_line_count": 22
+    },
+    {
+      "char_count": 18887,
+      "line_count": 167,
+      "page_count": 3,
+      "path": "/mnt/raid0/llm/llama.cpp-deepseek-v4/tools/server/webui/tests/stories/fixtures/assets/example.pdf",
+      "path_hint_count": 0,
+      "reasons": [
+        "table_like_lines=22",
+        "pages=3"
+      ],
+      "sampled_pages": 3,
+      "score": 188.591,
+      "size_bytes": 351048,
+      "table_like_line_count": 22
+    },
+    {
+      "char_count": 18887,
+      "line_count": 167,
+      "page_count": 3,
+      "path": "/mnt/raid0/llm/llama.cpp-dflash/tools/server/webui/tests/stories/fixtures/assets/example.pdf",
+      "path_hint_count": 0,
+      "reasons": [
+        "table_like_lines=22",
+        "pages=3"
+      ],
+      "sampled_pages": 3,
+      "score": 188.591,
+      "size_bytes": 351048,
+      "table_like_line_count": 22
+    },
+    {
+      "char_count": 18887,
+      "line_count": 167,
+      "page_count": 3,
+      "path": "/mnt/raid0/llm/llama.cpp-experimental/build-upstream/tools/ui/ui-src/tests/stories/fixtures/assets/example.pdf",
+      "path_hint_count": 0,
+      "reasons": [
+        "table_like_lines=22",
+        "pages=3"
+      ],
+      "sampled_pages": 3,
+      "score": 188.591,
+      "size_bytes": 351048,
+      "table_like_line_count": 22
+    },
+    {
+      "char_count": 18887,
+      "line_count": 167,
+      "page_count": 3,
+      "path": "/mnt/raid0/llm/llama.cpp-experimental/tools/ui/tests/stories/fixtures/assets/example.pdf",
+      "path_hint_count": 0,
+      "reasons": [
+        "table_like_lines=22",
+        "pages=3"
+      ],
+      "sampled_pages": 3,
+      "score": 188.591,
+      "size_bytes": 351048,
+      "table_like_line_count": 22
+    },
+    {
+      "char_count": 18887,
+      "line_count": 167,
+      "page_count": 3,
+      "path": "/mnt/raid0/llm/llama.cpp-longcat-probe/tools/server/webui/tests/stories/fixtures/assets/example.pdf",
+      "path_hint_count": 0,
+      "reasons": [
+        "table_like_lines=22",
+        "pages=3"
+      ],
+      "sampled_pages": 3,
+      "score": 188.591,
+      "size_bytes": 351048,
+      "table_like_line_count": 22
+    },
+    {
+      "char_count": 18887,
+      "line_count": 167,
+      "page_count": 3,
+      "path": "/mnt/raid0/llm/llama.cpp-mi210-hip/build-hip/tools/ui/ui-src/tests/stories/fixtures/assets/example.pdf",
+      "path_hint_count": 0,
+      "reasons": [
+        "table_like_lines=22",
+        "pages=3"
+      ],
+      "sampled_pages": 3,
+      "score": 188.591,
+      "size_bytes": 351048,
+      "table_like_line_count": 22
+    },
+    {
+      "char_count": 18887,
+      "line_count": 167,
+      "page_count": 3,
+      "path": "/mnt/raid0/llm/llama.cpp-mi210-hip/tools/ui/tests/stories/fixtures/assets/example.pdf",
+      "path_hint_count": 0,
+      "reasons": [
+        "table_like_lines=22",
+        "pages=3"
+      ],
+      "sampled_pages": 3,
+      "score": 188.591,
+      "size_bytes": 351048,
+      "table_like_line_count": 22
+    },
+    {
+      "char_count": 18887,
+      "line_count": 167,
+      "page_count": 3,
+      "path": "/mnt/raid0/llm/llama.cpp-v5/tools/server/webui/tests/stories/fixtures/assets/example.pdf",
+      "path_hint_count": 0,
+      "reasons": [
+        "table_like_lines=22",
+        "pages=3"
+      ],
+      "sampled_pages": 3,
+      "score": 188.591,
+      "size_bytes": 351048,
+      "table_like_line_count": 22
+    },
+    {
+      "char_count": 18887,
+      "line_count": 167,
+      "page_count": 3,
+      "path": "/mnt/raid0/llm/llama.cpp-v6-f1/build/tools/ui/ui-src/tests/stories/fixtures/assets/example.pdf",
+      "path_hint_count": 0,
+      "reasons": [
+        "table_like_lines=22",
+        "pages=3"
+      ],
+      "sampled_pages": 3,
+      "score": 188.591,
+      "size_bytes": 351048,
+      "table_like_line_count": 22
+    },
+    {
+      "char_count": 18887,
+      "line_count": 167,
+      "page_count": 3,
+      "path": "/mnt/raid0/llm/llama.cpp-v6-f1/tools/ui/tests/stories/fixtures/assets/example.pdf",
+      "path_hint_count": 0,
+      "reasons": [
+        "table_like_lines=22",
+        "pages=3"
+      ],
+      "sampled_pages": 3,
+      "score": 188.591,
+      "size_bytes": 351048,
+      "table_like_line_count": 22
+    },
+    {
+      "char_count": 18887,
+      "line_count": 167,
+      "page_count": 3,
+      "path": "/mnt/raid0/llm/llama.cpp-v6-iqk/build/tools/ui/ui-src/tests/stories/fixtures/assets/example.pdf",
+      "path_hint_count": 0,
+      "reasons": [
+        "table_like_lines=22",
+        "pages=3"
+      ],
+      "sampled_pages": 3,
+      "score": 188.591,
+      "size_bytes": 351048,
+      "table_like_line_count": 22
+    },
+    {
+      "char_count": 18887,
+      "line_count": 167,
+      "page_count": 3,
+      "path": "/mnt/raid0/llm/llama.cpp-v6-iqk/tools/ui/tests/stories/fixtures/assets/example.pdf",
+      "path_hint_count": 0,
+      "reasons": [
+        "table_like_lines=22",
+        "pages=3"
+      ],
+      "sampled_pages": 3,
+      "score": 188.591,
+      "size_bytes": 351048,
+      "table_like_line_count": 22
+    },
+    {
+      "char_count": 18887,
+      "line_count": 167,
+      "page_count": 3,
+      "path": "/mnt/raid0/llm/llama.cpp/build/tools/ui/ui-src/tests/stories/fixtures/assets/example.pdf",
+      "path_hint_count": 0,
+      "reasons": [
+        "table_like_lines=22",
+        "pages=3"
+      ],
+      "sampled_pages": 3,
+      "score": 188.591,
+      "size_bytes": 351048,
+      "table_like_line_count": 22
+    },
+    {
+      "char_count": 18887,
+      "line_count": 167,
+      "page_count": 3,
+      "path": "/mnt/raid0/llm/llama.cpp/tools/ui/tests/stories/fixtures/assets/example.pdf",
+      "path_hint_count": 0,
+      "reasons": [
+        "table_like_lines=22",
+        "pages=3"
+      ],
+      "sampled_pages": 3,
+      "score": 188.591,
+      "size_bytes": 351048,
+      "table_like_line_count": 22
+    },
+    {
+      "char_count": 23022,
+      "line_count": 195,
+      "page_count": 7,
+      "path": "/mnt/raid0/llm/cloud-llm-vault/epyc/claude/-workspace/80d6589a-a54a-4b67-b427-f05e41354a24/tool-results/webfetch-1779659974367-z8evab.pdf",
+      "path_hint_count": 0,
+      "reasons": [
+        "table_like_lines=21",
+        "pages=7"
+      ],
+      "sampled_pages": 3,
+      "score": 183.515,
+      "size_bytes": 1017696,
+      "table_like_line_count": 21
+    },
+    {
+      "char_count": 26758,
+      "line_count": 373,
+      "page_count": 27,
+      "path": "/mnt/raid0/llm/cloud-llm-vault/epyc/claude/-workspace/afec995c-8558-4cb8-92ad-d5d8fd4db036/tool-results/webfetch-1779662839515-emmgc4.pdf",
+      "path_hint_count": 0,
+      "reasons": [
+        "table_like_lines=18",
+        "pages=27"
+      ],
+      "sampled_pages": 3,
+      "score": 170.996,
+      "size_bytes": 5596682,
+      "table_like_line_count": 18
+    },
+    {
+      "char_count": 21796,
+      "line_count": 369,
+      "page_count": 26,
+      "path": "/mnt/raid0/llm/cloud-llm-vault/epyc/claude/-workspace/afec995c-8558-4cb8-92ad-d5d8fd4db036/tool-results/webfetch-1779662898251-j864kq.pdf",
+      "path_hint_count": 0,
+      "reasons": [
+        "table_like_lines=18",
+        "pages=26"
+      ],
+      "sampled_pages": 3,
+      "score": 169.223,
+      "size_bytes": 1292838,
+      "table_like_line_count": 18
+    },
+    {
+      "char_count": 16526,
+      "line_count": 200,
+      "page_count": 43,
+      "path": "/mnt/raid0/llm/cloud-llm-vault/epyc/claude/-workspace/bdab88ac-76c2-423c-b482-2610f8d8bc37/tool-results/webfetch-1780584534457-1icotc.pdf",
+      "path_hint_count": 0,
+      "reasons": [
+        "table_like_lines=16",
+        "pages=43"
+      ],
+      "sampled_pages": 3,
+      "score": 162.927,
+      "size_bytes": 5167744,
+      "table_like_line_count": 16
+    },
+    {
+      "char_count": 20396,
+      "line_count": 241,
+      "page_count": 21,
+      "path": "/mnt/raid0/llm/cloud-llm-vault/epyc/claude/-workspace/7f76f55b-9edd-452d-9362-354805ba3078/tool-results/webfetch-1779286297437-l2wobm.pdf",
+      "path_hint_count": 0,
+      "reasons": [
+        "table_like_lines=17",
+        "pages=21"
+      ],
+      "sampled_pages": 3,
+      "score": 159.588,
+      "size_bytes": 3497471,
+      "table_like_line_count": 17
+    },
+    {
+      "char_count": 14452,
+      "line_count": 197,
+      "page_count": 76,
+      "path": "/mnt/raid0/llm/cloud-llm-vault/epyc/claude/-workspace/85f084c9-21fe-42f3-9dd7-4aa68d4424d6/tool-results/webfetch-1779193527514-l6o1tw.pdf",
+      "path_hint_count": 0,
+      "reasons": [
+        "table_like_lines=13",
+        "pages=76"
+      ],
+      "sampled_pages": 3,
+      "score": 154.823,
+      "size_bytes": 2578984,
+      "table_like_line_count": 13
+    },
+    {
+      "char_count": 8086,
+      "line_count": 218,
+      "page_count": 7,
+      "path": "/mnt/raid0/llm/hermes-agent/skills/research/ml-paper-writing/templates/iclr2026/iclr2026_conference.pdf",
+      "path_hint_count": 1,
+      "reasons": [
+        "table_like_lines=15",
+        "path_hints=1",
+        "pages=7"
+      ],
+      "sampled_pages": 3,
+      "score": 144.104,
+      "size_bytes": 200508,
+      "table_like_line_count": 15
+    },
+    {
+      "char_count": 28913,
+      "line_count": 399,
+      "page_count": 15,
+      "path": "/mnt/raid0/llm/models/hy-mt2-1.8b/base-metadata/HY_MT2_0_Report.pdf",
+      "path_hint_count": 1,
+      "reasons": [
+        "table_like_lines=14",
+        "path_hints=1",
+        "pages=15"
+      ],
+      "sampled_pages": 3,
+      "score": 142.233,
+      "size_bytes": 2326591,
+      "table_like_line_count": 14
+    },
+    {
+      "char_count": 13601,
+      "line_count": 197,
+      "page_count": 32,
+      "path": "/mnt/raid0/llm/cloud-llm-vault/epyc/claude/-workspace/953db9dc-972d-4673-917b-86ec8dccff94/tool-results/webfetch-1779961176164-wtew7b.pdf",
+      "path_hint_count": 0,
+      "reasons": [
+        "table_like_lines=14",
+        "pages=32"
+      ],
+      "sampled_pages": 3,
+      "score": 141.988,
+      "size_bytes": 9867624,
+      "table_like_line_count": 14
+    },
+    {
+      "char_count": 8467,
+      "line_count": 181,
+      "page_count": 5,
+      "path": "/mnt/raid0/llm/hermes-agent/skills/research/ml-paper-writing/templates/colm2025/colm2025_conference.pdf",
+      "path_hint_count": 1,
+      "reasons": [
+        "table_like_lines=14",
+        "path_hints=1",
+        "pages=5"
+      ],
+      "sampled_pages": 3,
+      "score": 134.677,
+      "size_bytes": 122635,
+      "table_like_line_count": 14
+    },
+    {
+      "char_count": 18358,
+      "line_count": 189,
+      "page_count": 16,
+      "path": "/mnt/raid0/llm/cloud-llm-vault/epyc/claude/-workspace/afec995c-8558-4cb8-92ad-d5d8fd4db036/tool-results/webfetch-1779662903874-hkpnrn.pdf",
+      "path_hint_count": 0,
+      "reasons": [
+        "table_like_lines=12",
+        "pages=16"
+      ],
+      "sampled_pages": 3,
+      "score": 116.635,
+      "size_bytes": 2078204,
+      "table_like_line_count": 12
+    },
+    {
+      "char_count": 14344,
+      "line_count": 188,
+      "page_count": 34,
+      "path": "/mnt/raid0/llm/cloud-llm-vault/epyc/claude/-workspace/6c02455f-fb67-4138-86f7-00acad8aeff3/tool-results/webfetch-1781264558867-mwepzd.pdf",
+      "path_hint_count": 0,
+      "reasons": [
+        "table_like_lines=10",
+        "pages=34"
+      ],
+      "sampled_pages": 3,
+      "score": 109.329,
+      "size_bytes": 1460697,
+      "table_like_line_count": 10
+    },
+    {
+      "char_count": 18510,
+      "line_count": 205,
+      "page_count": 27,
+      "path": "/mnt/raid0/llm/cloud-llm-vault/epyc/claude/-workspace/953db9dc-972d-4673-917b-86ec8dccff94/tool-results/webfetch-1779961177566-v8e6uo.pdf",
+      "path_hint_count": 0,
+      "reasons": [
+        "table_like_lines=10",
+        "pages=27"
+      ],
+      "sampled_pages": 3,
+      "score": 106.193,
+      "size_bytes": 2219715,
+      "table_like_line_count": 10
+    },
+    {
+      "char_count": 12956,
+      "line_count": 137,
+      "page_count": 36,
+      "path": "/mnt/raid0/llm/cloud-llm-vault/epyc/claude/-workspace/92309a40-8fbd-42c9-94d9-afedb0ef7a0d/tool-results/webfetch-1780496750053-1eu3ya.pdf",
+      "path_hint_count": 0,
+      "reasons": [
+        "table_like_lines=9",
+        "pages=36"
+      ],
+      "sampled_pages": 3,
+      "score": 103.155,
+      "size_bytes": 3780367,
+      "table_like_line_count": 9
+    },
+    {
+      "char_count": 12389,
+      "line_count": 164,
+      "page_count": 13,
+      "path": "/mnt/raid0/llm/epyc-root/tmp/echo.pdf",
+      "path_hint_count": 0,
+      "reasons": [
+        "table_like_lines=10",
+        "pages=13"
+      ],
+      "sampled_pages": 3,
+      "score": 98.303,
+      "size_bytes": 796918,
+      "table_like_line_count": 10
+    },
+    {
+      "char_count": 18114,
+      "line_count": 220,
+      "page_count": 27,
+      "path": "/mnt/raid0/llm/cloud-llm-vault/epyc/claude/-workspace/85f084c9-21fe-42f3-9dd7-4aa68d4424d6/tool-results/webfetch-1779194119996-hbdy3v.pdf",
+      "path_hint_count": 0,
+      "reasons": [
+        "table_like_lines=8",
+        "pages=27"
+      ],
+      "sampled_pages": 3,
+      "score": 89.161,
+      "size_bytes": 676812,
+      "table_like_line_count": 8
+    },
+    {
+      "char_count": 17845,
+      "line_count": 193,
+      "page_count": 24,
+      "path": "/mnt/raid0/llm/cloud-llm-vault/epyc/claude/-workspace/85f084c9-21fe-42f3-9dd7-4aa68d4424d6/tool-results/webfetch-1779195830801-qfqc9r.pdf",
+      "path_hint_count": 0,
+      "reasons": [
+        "table_like_lines=8",
+        "pages=24"
+      ],
+      "sampled_pages": 3,
+      "score": 88.427,
+      "size_bytes": 1635439,
+      "table_like_line_count": 8
+    },
+    {
+      "char_count": 19592,
+      "line_count": 196,
+      "page_count": 28,
+      "path": "/mnt/raid0/llm/cloud-llm-vault/epyc/claude/-workspace/bf495ba8-3e1f-46e8-a3d0-971a20014284/tool-results/webfetch-1781885934975-fet6wj.pdf",
+      "path_hint_count": 0,
+      "reasons": [
+        "table_like_lines=7",
+        "pages=28"
+      ],
+      "sampled_pages": 3,
+      "score": 82.237,
+      "size_bytes": 1314271,
+      "table_like_line_count": 7
+    },
+    {
+      "char_count": 14736,
+      "line_count": 176,
+      "page_count": 27,
+      "path": "/mnt/raid0/llm/cloud-llm-vault/epyc/claude/-workspace/71bd0bbf-8324-4cf1-8caf-4119f07dc6e4/tool-results/webfetch-1779916734141-ctz9sy.pdf",
+      "path_hint_count": 0,
+      "reasons": [
+        "table_like_lines=7",
+        "pages=27"
+      ],
+      "sampled_pages": 3,
+      "score": 81.389,
+      "size_bytes": 879864,
+      "table_like_line_count": 7
+    },
+    {
+      "char_count": 14736,
+      "line_count": 176,
+      "page_count": 27,
+      "path": "/mnt/raid0/llm/cloud-llm-vault/epyc/claude/-workspace/71bd0bbf-8324-4cf1-8caf-4119f07dc6e4/tool-results/webfetch-1779919932894-t9ma96.pdf",
+      "path_hint_count": 0,
+      "reasons": [
+        "table_like_lines=7",
+        "pages=27"
+      ],
+      "sampled_pages": 3,
+      "score": 81.389,
+      "size_bytes": 879864,
+      "table_like_line_count": 7
+    },
+    {
+      "char_count": 12833,
+      "line_count": 158,
+      "page_count": 24,
+      "path": "/mnt/raid0/llm/cloud-llm-vault/epyc/claude/-workspace/afec995c-8558-4cb8-92ad-d5d8fd4db036/tool-results/webfetch-1779662904484-w9knr4.pdf",
+      "path_hint_count": 0,
+      "reasons": [
+        "table_like_lines=7",
+        "pages=24"
+      ],
+      "sampled_pages": 3,
+      "score": 80.717,
+      "size_bytes": 2283715,
+      "table_like_line_count": 7
+    },
+    {
+      "char_count": 21492,
+      "line_count": 198,
+      "page_count": 8,
+      "path": "/mnt/raid0/llm/cloud-llm-vault/epyc/claude/-workspace/b1eb9014-d66a-42f3-b715-db96ce8bd056/tool-results/webfetch-1781264898211-dmbvam.pdf",
+      "path_hint_count": 0,
+      "reasons": [
+        "table_like_lines=8",
+        "pages=8"
+      ],
+      "sampled_pages": 3,
+      "score": 79.458,
+      "size_bytes": 535812,
+      "table_like_line_count": 8
+    },
+    {
+      "char_count": 11984,
+      "line_count": 163,
+      "page_count": 33,
+      "path": "/mnt/raid0/llm/cloud-llm-vault/epyc/claude/-workspace/80d6589a-a54a-4b67-b427-f05e41354a24/tool-results/webfetch-1779662426653-hh9lck.pdf",
+      "path_hint_count": 0,
+      "reasons": [
+        "table_like_lines=4",
+        "pages=33"
+      ],
+      "sampled_pages": 3,
+      "score": 60.798,
+      "size_bytes": 1409701,
+      "table_like_line_count": 4
+    },
+    {
+      "char_count": 1379,
+      "line_count": 21,
+      "page_count": 1,
+      "path": "/mnt/raid0/llm/epyc-root/tmp/rustevo/RustEvo/Imgs/overview.pdf",
+      "path_hint_count": 0,
+      "reasons": [
+        "table_like_lines=6",
+        "pages=1"
+      ],
+      "sampled_pages": 3,
+      "score": 59.381,
+      "size_bytes": 275731,
+      "table_like_line_count": 6
+    },
+    {
+      "char_count": 5416,
+      "line_count": 168,
+      "page_count": 1,
+      "path": "/mnt/raid0/llm/epyc-root/tmp/rustevo/RustEvo/Imgs/RQ5.pdf",
+      "path_hint_count": 0,
+      "reasons": [
+        "table_like_lines=6",
+        "pages=1"
+      ],
+      "sampled_pages": 3,
+      "score": 57.27,
+      "size_bytes": 24263,
+      "table_like_line_count": 6
+    },
+    {
+      "char_count": 13439,
+      "line_count": 184,
+      "page_count": 23,
+      "path": "/mnt/raid0/llm/cloud-llm-vault/epyc/claude/-workspace/afec995c-8558-4cb8-92ad-d5d8fd4db036/tool-results/webfetch-1779662848114-cjj9h2.pdf",
+      "path_hint_count": 0,
+      "reasons": [
+        "table_like_lines=4",
+        "pages=23"
+      ],
+      "sampled_pages": 3,
+      "score": 55.72,
+      "size_bytes": 1288337,
+      "table_like_line_count": 4
+    },
+    {
+      "char_count": 14521,
+      "line_count": 171,
+      "page_count": 15,
+      "path": "/mnt/raid0/llm/cloud-llm-vault/epyc/claude/-workspace/85f084c9-21fe-42f3-9dd7-4aa68d4424d6/tool-results/webfetch-1779195873343-frx8lc.pdf",
+      "path_hint_count": 0,
+      "reasons": [
+        "table_like_lines=3",
+        "pages=15"
+      ],
+      "sampled_pages": 3,
+      "score": 43.516,
+      "size_bytes": 1018895,
+      "table_like_line_count": 3
+    },
+    {
+      "char_count": 13680,
+      "line_count": 169,
+      "page_count": 28,
+      "path": "/mnt/raid0/llm/cloud-llm-vault/epyc/claude/-workspace/85f084c9-21fe-42f3-9dd7-4aa68d4424d6/tool-results/webfetch-1779195828392-1vc3sp.pdf",
+      "path_hint_count": 0,
+      "reasons": [
+        "table_like_lines=2",
+        "pages=28"
+      ],
+      "sampled_pages": 3,
+      "score": 41.876,
+      "size_bytes": 866542,
+      "table_like_line_count": 2
+    },
+    {
+      "char_count": 18218,
+      "line_count": 187,
+      "page_count": 22,
+      "path": "/mnt/raid0/llm/cloud-llm-vault/epyc/claude/-workspace/bf495ba8-3e1f-46e8-a3d0-971a20014284/tool-results/webfetch-1781885673639-mt2cv9.pdf",
+      "path_hint_count": 0,
+      "reasons": [
+        "table_like_lines=2",
+        "pages=22"
+      ],
+      "sampled_pages": 3,
+      "score": 40.396,
+      "size_bytes": 4989704,
+      "table_like_line_count": 2
+    }
+  ],
+  "schema_version": "pdf_probe_manifest.v1",
+  "selection": {
+    "candidate_count": 51,
+    "limit": 200,
+    "max_files": null,
+    "min_table_like_lines": 1,
+    "roots": [
+      "/mnt/raid0/llm"
+    ],
+    "sample_pages": 3,
+    "selected_count": 51
+  }
+}

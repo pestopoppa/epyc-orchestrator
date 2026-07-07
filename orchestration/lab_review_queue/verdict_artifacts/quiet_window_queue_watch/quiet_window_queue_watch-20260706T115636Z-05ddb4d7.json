@@ -1,0 +1,97 @@
+{
+  "captured_at": "2026-07-06T23:21:59+00:00",
+  "confidence": 1.0,
+  "job_id": "quiet_window_queue_watch",
+  "local_output": {
+    "path": "quiet_window_queue_watch/quiet_window_queue_watch-20260706T115636Z-05ddb4d7/output.json",
+    "payload": {
+      "active_queue": {
+        "forbidden_active_terms": [
+          "DS-E1 KV measurement",
+          "E2/E1 batched-decode measurement"
+        ],
+        "requires": [
+          "E1 dense-control",
+          "W8/Fable readiness",
+          "real_suite_v1"
+        ]
+      },
+      "blockers": [],
+      "checked_files": [
+        "handoffs/active/master-handoff-index.md",
+        "handoffs/active/bulk-inference-campaign.md",
+        "handoffs/active/routing-and-optimization-index.md"
+      ],
+      "findings": [],
+      "generated_at": "2026-07-06T11:56:36+00:00",
+      "ok": true,
+      "schema_version": "quiet_window_queue_report.v1",
+      "status": "ok"
+    }
+  },
+  "notes": "automated active-safe review accepted output with ok=true",
+  "reference_output": {
+    "path": null,
+    "payload": null
+  },
+  "reviewer": "automated",
+  "run_id": "quiet_window_queue_watch-20260706T115636Z-05ddb4d7",
+  "schema_version": "lab_verdict_artifact.v1",
+  "stage": "shadow",
+  "task_record": {
+    "artifacts": {
+      "context_manifest": "quiet_window_queue_watch/quiet_window_queue_watch-20260706T115636Z-05ddb4d7/context_manifest.json",
+      "output": "quiet_window_queue_watch/quiet_window_queue_watch-20260706T115636Z-05ddb4d7/output.json",
+      "prompt": "quiet_window_queue_watch/quiet_window_queue_watch-20260706T115636Z-05ddb4d7/prompt.txt"
+    },
+    "chat_meta": {
+      "command": [
+        "python3",
+        "scripts/lab/quiet_window_queue_report.py",
+        "--json"
+      ],
+      "elapsed_s": 0.077,
+      "returncode": 0,
+      "stderr_tail": ""
+    },
+    "context": {
+      "budget_exhausted": false,
+      "excerpt_chars": 6600,
+      "kinds": {
+        "source_excerpt": 3
+      },
+      "max_context_chars": 16000,
+      "missing_source_count": 0,
+      "repos": [
+        "epyc-root"
+      ],
+      "schema_version": "lab_context_summary.v1",
+      "source_bytes": 282625,
+      "source_count": 3,
+      "truncated_source_count": 3
+    },
+    "generated_at": "2026-07-06T11:56:36+00:00",
+    "invocation_mode": "deterministic_command",
+    "job_id": "quiet_window_queue_watch",
+    "model_role": null,
+    "policy": {
+      "direct_repo_writes_allowed": false,
+      "review_queue_only": true
+    },
+    "record_type": "task_record",
+    "repo": {
+      "branch": "spec-dec-mtp-refresh-2026-06-22",
+      "commit": "60523b6be9b1aa13e2d2957044e0f61b93f9e300",
+      "dirty": true,
+      "path": "/mnt/raid0/llm/epyc-orchestrator"
+    },
+    "risk": "read_only",
+    "run_id": "quiet_window_queue_watch-20260706T115636Z-05ddb4d7",
+    "schema_version": "lab_task_record.v1",
+    "stage": "shadow",
+    "validation": {
+      "output_contract": "passed"
+    }
+  },
+  "verdict": "accept"
+}

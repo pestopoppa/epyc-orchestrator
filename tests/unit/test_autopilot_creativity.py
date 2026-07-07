@@ -311,7 +311,7 @@ def test_action_availability_filters_non_viable_tail_actions(tmp_path: Path) -> 
         failure_analysis="prompt edit regressed quality badly",
         hypothesis="edit frontdoor",
     ))
-    availability, viable = autopilot._build_action_availability(
+    availability, viable, selectable = autopilot._build_action_availability(
         journal=j,
         known_actions=KNOWN_ACTIONS,
         memory_count=100,
@@ -333,13 +333,14 @@ def test_action_availability_filters_non_viable_tail_actions(tmp_path: Path) -> 
     assert "rollback" not in viable
     assert "distill_knowledge" not in viable
     assert "distill_skillbank" not in viable
+    assert "seed_batch" in selectable
 
 
 def test_action_availability_blocks_seed_batch_when_fallbacks_exhausted(
     tmp_path: Path,
 ) -> None:
     j = _fresh_journal(tmp_path)
-    availability, viable = autopilot._build_action_availability(
+    availability, viable, selectable = autopilot._build_action_availability(
         journal=j,
         known_actions=KNOWN_ACTIONS,
         memory_count=10_000,
@@ -357,6 +358,7 @@ def test_action_availability_blocks_seed_batch_when_fallbacks_exhausted(
     assert "`seed_batch`" in availability
     assert "all configured measured seed fallback candidates are blacklisted" in availability
     assert "seed_batch" not in viable
+    assert "seed_batch" not in selectable
 
 
 def test_action_availability_surfaces_w8_candidate_generation_priority(
@@ -364,7 +366,7 @@ def test_action_availability_surfaces_w8_candidate_generation_priority(
 ) -> None:
     j = _fresh_journal(tmp_path)
 
-    availability, viable = autopilot._build_action_availability(
+    availability, viable, selectable = autopilot._build_action_availability(
         journal=j,
         known_actions=KNOWN_ACTIONS,
         memory_count=10_000,
@@ -379,15 +381,111 @@ def test_action_availability_surfaces_w8_candidate_generation_priority(
 
     assert "Priority pressure:" in availability
     assert "W8 candidate generation is the active strict blocker" in availability
-    assert "explicit single-param numeric_trial or one-flag structural_experiment" in availability
-    assert "deep_eval" in viable
-    assert "seed_batch" in viable
+    assert "actions are ONLY" in availability
+    assert "Do not emit seed_batch, deep_eval, or structural_prune" in availability
+    assert "Optuna-suggested numeric_trial that journals applied params" in availability
+    assert "deep_eval" not in viable
+    assert "seed_batch" not in viable
+    assert "structural_prune" not in viable
+    assert "deep_eval" not in selectable
+    assert "seed_batch" not in selectable
+    assert "structural_prune" not in selectable
+
+    rendered = autopilot._format_available_action_schemas(selectable)
+    assert '- Numeric: {"type": "numeric_trial"' in rendered
+    assert '- Structural: {"type": "structural_experiment"' in rendered
+    assert "- Seed:" not in rendered
+    assert "- Deep eval:" not in rendered
+    assert "- Prune:" not in rendered
+
+
+def test_controller_prompt_binds_availability_before_global_action_schema() -> None:
+    template = autopilot.CONTROLLER_PROMPT_TEMPLATE
+
+    binding_idx = template.index("Action Availability")
+    filtered_idx = template.index("already filtered")
+    schema_idx = template.index("{available_action_schemas}")
+
+    assert binding_idx < filtered_idx < schema_idx
 
 
 def test_w8_candidate_generation_pressure_ignores_replayable_candidates() -> None:
     assert autopilot._w8_candidate_generation_pressure(
         "W8 replay pressure: 1/1 accumulating candidate(s) are replayable"
     ) is False
+
+
+def test_w8_replay_pressure_remains_active_for_replayable_candidates() -> None:
+    assert autopilot._w8_replay_pressure_active(
+        "W8 replay pressure: 3/10 accumulating candidate(s) are replayable; "
+        "prefer collecting replay/confirmation evidence before opening unrelated "
+        "W8 candidate generation."
+    ) is True
+
+
+def test_action_availability_blocks_deferrals_during_w8_replay_pressure(
+    tmp_path: Path,
+) -> None:
+    j = _fresh_journal(tmp_path)
+
+    availability, viable, selectable = autopilot._build_action_availability(
+        journal=j,
+        known_actions=KNOWN_ACTIONS,
+        memory_count=10_000,
+        converged=True,
+        slot_memory_text="  healthy queried ports with empty KV cache: frontdoor:8070",
+        blacklist=[],
+        w8_replay_pressure_text=(
+            "W8 replay pressure: 3/10 accumulating candidate(s) are replayable; "
+            "prefer collecting replay/confirmation evidence before opening unrelated "
+            "W8 candidate generation."
+        ),
+    )
+
+    assert "W8 replay/confirmation evidence is active" in availability
+    assert "avoid seed_batch, deep_eval, and structural_prune" in availability
+    assert "deep_eval" not in viable
+    assert "seed_batch" not in viable
+    assert "structural_prune" not in viable
+    assert "deep_eval" not in selectable
+    assert "seed_batch" not in selectable
+    assert "structural_prune" not in selectable
+
+
+def test_w8_candidate_generation_replaces_deferral_with_numeric(monkeypatch) -> None:
+    monkeypatch.setattr(autopilot, "_configured_numeric_surfaces", lambda: ("monitor",))
+
+    action, rationale = autopilot._replace_w8_candidate_generation_deferral(
+        {"type": "seed_batch", "n_questions": 40},
+        [],
+        {"falsifier": "original"},
+        trial_counter=123,
+        w8_replay_pressure_text=(
+            "W8 replay pressure: 0/1 accumulating candidate(s) are replayable "
+            "(blocked=unreplayable_action=seed_batch:1)."
+        ),
+    )
+
+    assert action == {"type": "numeric_trial", "surface": "monitor", "params": {}}
+    assert rationale["w8_candidate_generation_replaced"] is True
+    assert rationale["w8_candidate_generation_reason"] == "unreplayable_action=seed_batch"
+    assert rationale["falsifier"] == "original"
+
+
+def test_w8_candidate_generation_keeps_numeric_optuna_request() -> None:
+    action, rationale = autopilot._replace_w8_candidate_generation_deferral(
+        {"type": "numeric_trial", "surface": "monitor", "params": {}},
+        [],
+        {"falsifier": "keep"},
+        trial_counter=123,
+        w8_replay_pressure_text=(
+            "W8 replay pressure: 0/1 accumulating candidate(s) are replayable "
+            "(blocked=numeric_trial_missing_params:1)."
+        ),
+    )
+
+    assert action == {"type": "numeric_trial", "surface": "monitor", "params": {}}
+    assert rationale == {"falsifier": "keep"}
 
 
 def test_action_availability_surfaces_suppressed_numeric_surfaces(
@@ -397,7 +495,7 @@ def test_action_availability_surfaces_suppressed_numeric_surfaces(
     try:
         autopilot._PLANNER_SUPPRESSED_NUMERIC_SURFACES.clear()
         autopilot._PLANNER_SUPPRESSED_NUMERIC_SURFACES.add("kv_compaction")
-        availability, viable = autopilot._build_action_availability(
+        availability, viable, selectable = autopilot._build_action_availability(
             journal=j,
             known_actions=KNOWN_ACTIONS,
             memory_count=10_000,
@@ -412,6 +510,7 @@ def test_action_availability_surfaces_suppressed_numeric_surfaces(
     assert "convention-suppressed numeric surfaces are unavailable" in availability
     assert "kv_compaction" in availability
     assert "numeric_trial" in viable
+    assert "numeric_trial" in selectable
 
 
 def test_configured_numeric_surfaces_hide_planner_suppressed_surface() -> None:
@@ -872,8 +971,23 @@ def test_controller_prompt_includes_higher_tier_pressure_section() -> None:
 
     assert "Higher-Tier Objective Pressure" in template
     assert "{higher_tier_pressure}" in template
-    assert '{{"type": "deep_eval", "tier": 3}}' in template
-    assert "expert/hard workflow coverage or frontier evidence is thin" in template
+    rendered = autopilot._format_available_action_schemas(["deep_eval"])
+    assert '{"type": "deep_eval", "tier": 3}' in rendered
+    assert "expert/hard workflow coverage or frontier evidence is thin" in rendered
+
+
+def test_controller_prompt_deep_eval_tiers_match_validator_contract() -> None:
+    template = autopilot.CONTROLLER_PROMPT_TEMPLATE
+    rendered = autopilot._format_available_action_schemas(["deep_eval"])
+    constitution = autopilot.CONSTITUTION_PATH.read_text(encoding="utf-8")
+
+    assert "Supported tiers: 0, 1, 2, or 3" in rendered
+    assert autopilot._format_deep_eval_tier_options() == "0, 1, 2, or 3"
+    assert "Only tier is supported" not in template
+    assert "Supported tiers: 0, 1, or 2" not in rendered
+    assert "T0, T1, T2, and T3" in constitution
+    assert "T3 is the expert/hard workflow validation lane" in constitution
+    assert "A lower T2 or T3 number is not a T1 regression" in constitution
 
 
 def test_controller_prompt_includes_outcome_progress_pressure_section() -> None:
@@ -931,6 +1045,51 @@ def test_higher_tier_pressure_preserves_same_tier_comparison() -> None:
     assert "deployment safety lane" in text
 
 
+def test_higher_tier_pressure_defers_deep_eval_when_w8_candidate_generation_active() -> None:
+    class FakeArchive:
+        def summary(self, *, tier):
+            if tier == 1:
+                return {
+                    "frontier_size": 4,
+                    "best_quality": 2.0,
+                    "best_speed": 42.0,
+                    "hv_slope_50": 0.0002,
+                }
+            if tier == 2:
+                return {
+                    "frontier_size": 0,
+                    "best_quality": 0.0,
+                    "best_speed": 0.0,
+                    "hv_slope_50": 0.0,
+                }
+            if tier == 3:
+                return {
+                    "frontier_size": 0,
+                    "best_quality": 0.0,
+                    "best_speed": 0.0,
+                    "hv_slope_50": 0.0,
+                }
+            raise AssertionError(f"unexpected tier {tier}")
+
+    class FakeBaseline:
+        def quality_for_tier(self, tier):
+            return {2: 1.1, 3: 0.2}[tier]
+
+    text = autopilot._build_higher_tier_planner_pressure(
+        FakeArchive(),
+        SimpleNamespace(baseline=FakeBaseline()),
+        w8_candidate_generation_active=True,
+    )
+
+    assert "W8 candidate-generation override" in text
+    assert "do not emit seed_batch, deep_eval, or structural_prune" in text
+    assert "numeric_trial with journaled applied params" in text
+    assert "one-flag structural_experiment" in text
+    assert "prefer deep_eval tier 3 if T3 coverage/frontier is thin" not in text
+    assert "schedule deep_eval tier 3" not in text
+    assert "defer the deep_eval tier 3 coverage probe until W8 candidate generation clears" in text
+
+
 def test_eval_coverage_pressure_reports_repeat_factor_and_pool_denominator() -> None:
     tier3_entry = _entry(
         2,
@@ -980,6 +1139,63 @@ def test_eval_coverage_pressure_reports_repeat_factor_and_pool_denominator() -> 
     assert "under-covered suites" in text
     assert "T1-only gains are overfit risk" in text
     assert "fixed authority-core evidence separate" in text
+
+
+def test_eval_coverage_pressure_defers_seed_and_deep_eval_when_w8_candidate_generation_active() -> None:
+    tier3_entry = _entry(
+        2,
+        "deep_eval",
+        eval_details={
+            "question_results": [
+                {"suite": "coder", "qid": "a", "correct": True},
+                {"suite": "agentic", "qid": "c", "correct": False},
+            ]
+        },
+    )
+    tier3_entry.tier = 3
+    journal = SimpleNamespace(
+        entries_with_supersessions=lambda: [
+            _entry(
+                1,
+                "numeric_trial",
+                eval_details={
+                    "question_results": [
+                        {"suite": "coder", "qid": "a", "correct": True},
+                        {"suite": "coder", "qid": "b", "correct": False},
+                    ]
+                },
+            ),
+            tier3_entry,
+        ]
+    )
+
+    text = autopilot._build_eval_coverage_pressure(
+        journal,
+        pool_total_questions=100,
+        pool_tier_questions={1: 20, 2: 70, 3: 10},
+        w8_candidate_generation_active=True,
+    )
+
+    assert "Higher-tier coverage is thin" in text
+    assert "W8 candidate generation is the active strict blocker" in text
+    assert "do not propose seed_batch or deep_eval for coverage this turn" in text
+    assert "available replayable candidate action" in text
+    assert "Prefer an available replayable numeric_trial" in text
+    assert "deep_eval tier 2/3" not in text
+    assert "seed_batch on under-covered suites" not in text
+
+
+def test_eval_coverage_pressure_no_rows_respects_w8_candidate_generation_active() -> None:
+    journal = SimpleNamespace(entries_with_supersessions=lambda: [])
+
+    text = autopilot._build_eval_coverage_pressure(
+        journal,
+        w8_candidate_generation_active=True,
+    )
+
+    assert "No scored question-result rows" in text
+    assert "W8 candidate generation is the active strict blocker" in text
+    assert "do not use seed_batch or deep_eval" in text
 
 
 def test_outcome_progress_pressure_reports_stall_and_rates(monkeypatch) -> None:
@@ -1071,6 +1287,7 @@ def test_controller_prompt_uses_fresh_strategy_hints_section(monkeypatch) -> Non
             converged=False,
             slot_memory="slots",
             action_availability="actions",
+            available_action_schemas="schemas",
             fable_gate_advisory="fable-gate",
             higher_tier_pressure="higher-tier",
             eval_coverage_pressure="coverage",
@@ -1091,8 +1308,6 @@ def test_controller_prompt_uses_fresh_strategy_hints_section(monkeypatch) -> Non
             feature_flags_block="flags",
             last_invalid_feedback="invalid",
             plot_paths="plots",
-            numeric_surface_options="numeric",
-            code_targets="targets",
         )
 
     first_prompt = format_controller_prompt()

@@ -149,6 +149,48 @@ roles:
             "http://localhost:8087"
         )
 
+    def test_vl_url_for_role_rejects_stale_degraded_fallback_when_priors_exist(
+        self, tmp_path: Path
+    ):
+        priors = tmp_path / "stack_priors.yaml"
+        priors.write_text(
+            """
+roles:
+  worker_general:
+    deployment_status: live_stack
+    serving:
+      endpoint: http://localhost:9102
+      launch:
+        modes: [worker_pool]
+        entries: []
+""",
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError, match="degraded fallback disabled"):
+            _vl_url_for_role("vision_escalation", priors)
+
+    def test_vl_url_for_port_rejects_stale_degraded_fallback_when_priors_exist(
+        self, tmp_path: Path
+    ):
+        priors = tmp_path / "stack_priors.yaml"
+        priors.write_text(
+            """
+roles:
+  worker_general:
+    deployment_status: live_stack
+    serving:
+      endpoint: http://localhost:9102
+      launch:
+        modes: [worker_pool]
+        entries: []
+""",
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError, match="degraded fallback disabled"):
+            _vl_url_for_port(8086, priors)
+
     def test_fallback_vl_port_prefers_manifest_port(self, monkeypatch):
         monkeypatch.setattr(
             "src.api.routes.vision_serving.manifest_vl_port_for_role",

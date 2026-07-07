@@ -1,0 +1,929 @@
+{
+  "generated_at": "2026-07-06T23:58:01+00:00",
+  "labels_needed": 100,
+  "min_reviewed_labels": 100,
+  "next_review_items": [
+    {
+      "categories": [
+        "agent_architecture",
+        "benchmark_methodology"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "routing-intelligence.md",
+      "destination_index": "",
+      "intake_id": "intake-103",
+      "novelty": "high",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-103 --verdict worth_investigating --destination-handoff routing-intelligence.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "title": "Thinking to Recall: How Reasoning Unlocks Parametric Knowledge in LLMs",
+      "url": "https://arxiv.org/abs/2603.09906"
+    },
+    {
+      "categories": [
+        "training_distillation",
+        "agent_architecture",
+        "benchmark_methodology"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "08-doc-to-lora-prototype.md",
+      "destination_index": "",
+      "intake_id": "intake-105",
+      "novelty": "high",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-105 --verdict worth_investigating --destination-handoff 08-doc-to-lora-prototype.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "title": "PostTrainBench: Can LLM Agents Automate LLM Post-Training?",
+      "url": "https://arxiv.org/abs/2603.08640"
+    },
+    {
+      "categories": [
+        "training_distillation",
+        "agent_architecture"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "autopilot-continuous-optimization.md",
+      "destination_index": "",
+      "intake_id": "intake-106",
+      "novelty": "high",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-106 --verdict worth_investigating --destination-handoff autopilot-continuous-optimization.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "title": "Agentic Critical Training (ACT)",
+      "url": "https://arxiv.org/abs/2603.08706"
+    },
+    {
+      "categories": [
+        "autonomous_research",
+        "agent_architecture"
+      ],
+      "current_verdict": "new_opportunity",
+      "destination_handoff": "autopilot-continuous-optimization.md",
+      "destination_index": "",
+      "intake_id": "intake-108",
+      "novelty": "high",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-108 --verdict new_opportunity --destination-handoff autopilot-continuous-optimization.md",
+      "relevance": "high",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "title": "EvoScientist: Multi-Agent Evolving AI Scientists for End-to-End Scientific Discovery",
+      "url": "https://arxiv.org/abs/2603.08127"
+    },
+    {
+      "categories": [
+        "training_distillation",
+        "cost_aware_routing"
+      ],
+      "current_verdict": "new_opportunity",
+      "destination_handoff": "routing-intelligence.md",
+      "destination_index": "",
+      "intake_id": "intake-110",
+      "novelty": "high",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-110 --verdict new_opportunity --destination-handoff routing-intelligence.md",
+      "relevance": "high",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "title": "On-Policy Self-Distillation for Reasoning Compression (OPSDC)",
+      "url": "https://arxiv.org/abs/2603.05433"
+    },
+    {
+      "categories": [
+        "training_distillation",
+        "agent_architecture"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "",
+      "destination_index": "",
+      "intake_id": "intake-111",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-111 --verdict worth_investigating",
+      "relevance": "low",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "title": "AReaL: Large-Scale Asynchronous Reinforcement Learning System",
+      "url": "https://github.com/inclusionAI/AReaL"
+    },
+    {
+      "categories": [
+        "agent_architecture"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "rlm-orchestrator-roadmap.md",
+      "destination_index": "",
+      "intake_id": "intake-115",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-115 --verdict worth_investigating --destination-handoff rlm-orchestrator-roadmap.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "title": "Paperclip - Multi-agent orchestration for autonomous business structures",
+      "url": "https://github.com/paperclipai/paperclip"
+    },
+    {
+      "categories": [
+        "agent_architecture",
+        "memory_augmented"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "rlm-orchestrator-roadmap.md",
+      "destination_index": "",
+      "intake_id": "intake-117",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-117 --verdict worth_investigating --destination-handoff rlm-orchestrator-roadmap.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "title": "Hermes Agent - Self-improving AI agent with learning loop",
+      "url": "https://github.com/NousResearch/hermes-agent"
+    },
+    {
+      "categories": [
+        "inference_serving",
+        "hardware_optimization"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "orchestrator-stack-audit.md",
+      "destination_index": "",
+      "intake_id": "intake-119",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-119 --verdict worth_investigating --destination-handoff orchestrator-stack-audit.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "title": "llmfit - Right-size LLM models to your hardware",
+      "url": "https://github.com/AlexsJones/llmfit"
+    },
+    {
+      "categories": [
+        "agent_architecture",
+        "benchmark_methodology"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "routing-intelligence.md",
+      "destination_index": "",
+      "intake_id": "intake-120",
+      "novelty": "high",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-120 --verdict worth_investigating --destination-handoff routing-intelligence.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "blog",
+      "title": "Reasoning Models Struggle to Control their Chains of Thought, and That's Good",
+      "url": "https://openai.com/index/reasoning-models-chain-of-thought-controllability/"
+    },
+    {
+      "categories": [
+        "multimodal",
+        "moe_optimization"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "multimodal-pipeline.md",
+      "destination_index": "",
+      "intake_id": "intake-121",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-121 --verdict worth_investigating --destination-handoff multimodal-pipeline.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "blog",
+      "title": "Moondream 3 Preview - Compact MoE Vision-Language Model",
+      "url": "https://huggingface.co/moondream/moondream3-preview"
+    },
+    {
+      "categories": [
+        "multimodal"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "multimodal-pipeline.md",
+      "destination_index": "",
+      "intake_id": "intake-123",
+      "novelty": "high",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-123 --verdict worth_investigating --destination-handoff multimodal-pipeline.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "title": "Qwen3-TTS - Open-Source Text-to-Speech (repo for arxiv:2601.15621)",
+      "url": "https://github.com/QwenLM/Qwen3-TTS"
+    },
+    {
+      "categories": [
+        "cost_aware_routing",
+        "agent_architecture"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "",
+      "destination_index": "",
+      "intake_id": "intake-125",
+      "novelty": "high",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-125 --verdict worth_investigating",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "title": "S3-CoT: Self-Sampled Succinct Reasoning Enables Efficient Chain-of-Thought LLMs",
+      "url": "https://arxiv.org/abs/2602.01982"
+    },
+    {
+      "categories": [
+        "cost_aware_routing",
+        "agent_architecture"
+      ],
+      "current_verdict": "new_opportunity",
+      "destination_handoff": "reasoning-compression.md",
+      "destination_index": "",
+      "intake_id": "intake-126",
+      "novelty": "high",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-126 --verdict new_opportunity --destination-handoff reasoning-compression.md",
+      "relevance": "high",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "title": "Steering Large Reasoning Models towards Concise Reasoning via Flow Matching",
+      "url": "https://arxiv.org/abs/2602.05539"
+    },
+    {
+      "categories": [
+        "cost_aware_routing",
+        "benchmark_methodology"
+      ],
+      "current_verdict": "new_opportunity",
+      "destination_handoff": "reasoning-compression.md",
+      "destination_index": "",
+      "intake_id": "intake-127",
+      "novelty": "high",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-127 --verdict new_opportunity --destination-handoff reasoning-compression.md",
+      "relevance": "high",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "title": "TrimR: Verifier-based Training-Free Thinking Compression",
+      "url": "https://arxiv.org/abs/2505.17155"
+    },
+    {
+      "categories": [
+        "cost_aware_routing",
+        "kv_cache"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "reasoning-compression.md",
+      "destination_index": "",
+      "intake_id": "intake-128",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-128 --verdict worth_investigating --destination-handoff reasoning-compression.md",
+      "relevance": "high",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "title": "Reasoning Efficiently Through Adaptive Chain-of-Thought Compression",
+      "url": "https://arxiv.org/abs/2509.14093"
+    },
+    {
+      "categories": [
+        "cost_aware_routing",
+        "speculative_decoding"
+      ],
+      "current_verdict": "new_opportunity",
+      "destination_handoff": "reasoning-compression.md",
+      "destination_index": "",
+      "intake_id": "intake-129",
+      "novelty": "high",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-129 --verdict new_opportunity --destination-handoff reasoning-compression.md",
+      "relevance": "high",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "title": "Don't Overthink It \u2014 Shorter Thinking Chains for Improved Reasoning",
+      "url": "https://arxiv.org/abs/2505.17813"
+    },
+    {
+      "categories": [
+        "cost_aware_routing",
+        "benchmark_methodology"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "",
+      "destination_index": "",
+      "intake_id": "intake-130",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-130 --verdict worth_investigating",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "title": "Do NOT Think That Much \u2014 On the Overthinking of o1-Like LLMs",
+      "url": "https://arxiv.org/abs/2412.21187"
+    },
+    {
+      "categories": [
+        "autonomous_research",
+        "agent_architecture"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "autopilot-continuous-optimization.md",
+      "destination_index": "",
+      "intake_id": "intake-131",
+      "novelty": "high",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-131 --verdict worth_investigating --destination-handoff autopilot-continuous-optimization.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "title": "AgentRxiv: Towards Collaborative Autonomous Research",
+      "url": "https://arxiv.org/abs/2503.18102"
+    },
+    {
+      "categories": [
+        "benchmark_methodology",
+        "autonomous_research"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "",
+      "destination_index": "",
+      "intake_id": "intake-132",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-132 --verdict worth_investigating",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "title": "ResearchBench: Benchmarking LLMs in Scientific Discovery",
+      "url": "https://arxiv.org/abs/2503.21248"
+    },
+    {
+      "categories": [
+        "cost_aware_routing",
+        "agent_architecture"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "reasoning-compression.md",
+      "destination_index": "",
+      "intake_id": "intake-133",
+      "novelty": "high",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-133 --verdict worth_investigating --destination-handoff reasoning-compression.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "title": "Reasoning as Compression \u2014 Unifying Budget Forcing via Information Bottleneck",
+      "url": "https://arxiv.org/abs/2603.08462"
+    },
+    {
+      "categories": [
+        "cost_aware_routing",
+        "kv_cache"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "reasoning-compression.md",
+      "destination_index": "",
+      "intake_id": "intake-134",
+      "novelty": "high",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-134 --verdict worth_investigating --destination-handoff reasoning-compression.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "title": "CoLaR: Think Silently, Think Fast \u2014 Dynamic Latent Compression of Reasoning",
+      "url": "https://arxiv.org/abs/2505.16552"
+    },
+    {
+      "categories": [
+        "agent_architecture",
+        "memory_augmented"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "rlm-orchestrator-roadmap.md",
+      "destination_index": "",
+      "intake_id": "intake-140",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-140 --verdict worth_investigating --destination-handoff rlm-orchestrator-roadmap.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "title": "Lossless Claw \u2014 LCM (Lossless Context Management) plugin for OpenClaw",
+      "url": "https://github.com/martian-engineering/lossless-claw"
+    },
+    {
+      "categories": [
+        "agent_architecture",
+        "memory_augmented"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "rlm-orchestrator-roadmap.md",
+      "destination_index": "",
+      "intake_id": "intake-141",
+      "novelty": "high",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-141 --verdict worth_investigating --destination-handoff rlm-orchestrator-roadmap.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "title": "Contextual Memory Virtualisation: DAG-Based State Management and Structurally Lossless Trimming for LLM Agents",
+      "url": "https://arxiv.org/abs/2602.22402"
+    },
+    {
+      "categories": [
+        "training_distillation",
+        "cost_aware_routing"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "autopilot-continuous-optimization.md",
+      "destination_index": "",
+      "intake_id": "intake-142",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-142 --verdict worth_investigating --destination-handoff autopilot-continuous-optimization.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "title": "Distilling Many-Shot In-Context Learning into a Cheat Sheet",
+      "url": "https://arxiv.org/abs/2509.20820"
+    }
+  ],
+  "privacy": {
+    "raw_text_in_report": false,
+    "reported_fields": "aggregate counts plus sanitized pending review sample"
+  },
+  "queue_path": "orchestration/datasets/intake_triage_review_queue.jsonl",
+  "queue_rows": 120,
+  "queue_unique_intake_ids": 120,
+  "ready_for_baseline": false,
+  "remaining_queue_items": 120,
+  "review_batch_template": [
+    {
+      "categories": [
+        "agent_architecture",
+        "benchmark_methodology"
+      ],
+      "destination_handoff": "routing-intelligence.md",
+      "destination_index": "",
+      "intake_id": "intake-103",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "suggested_verdict": "worth_investigating",
+      "title": "Thinking to Recall: How Reasoning Unlocks Parametric Knowledge in LLMs",
+      "url": "https://arxiv.org/abs/2603.09906",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "training_distillation",
+        "agent_architecture",
+        "benchmark_methodology"
+      ],
+      "destination_handoff": "08-doc-to-lora-prototype.md",
+      "destination_index": "",
+      "intake_id": "intake-105",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "suggested_verdict": "worth_investigating",
+      "title": "PostTrainBench: Can LLM Agents Automate LLM Post-Training?",
+      "url": "https://arxiv.org/abs/2603.08640",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "training_distillation",
+        "agent_architecture"
+      ],
+      "destination_handoff": "autopilot-continuous-optimization.md",
+      "destination_index": "",
+      "intake_id": "intake-106",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "suggested_verdict": "worth_investigating",
+      "title": "Agentic Critical Training (ACT)",
+      "url": "https://arxiv.org/abs/2603.08706",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "autonomous_research",
+        "agent_architecture"
+      ],
+      "destination_handoff": "autopilot-continuous-optimization.md",
+      "destination_index": "",
+      "intake_id": "intake-108",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "suggested_verdict": "new_opportunity",
+      "title": "EvoScientist: Multi-Agent Evolving AI Scientists for End-to-End Scientific Discovery",
+      "url": "https://arxiv.org/abs/2603.08127",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "training_distillation",
+        "cost_aware_routing"
+      ],
+      "destination_handoff": "routing-intelligence.md",
+      "destination_index": "",
+      "intake_id": "intake-110",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "suggested_verdict": "new_opportunity",
+      "title": "On-Policy Self-Distillation for Reasoning Compression (OPSDC)",
+      "url": "https://arxiv.org/abs/2603.05433",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "training_distillation",
+        "agent_architecture"
+      ],
+      "destination_handoff": "",
+      "destination_index": "",
+      "intake_id": "intake-111",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "suggested_verdict": "worth_investigating",
+      "title": "AReaL: Large-Scale Asynchronous Reinforcement Learning System",
+      "url": "https://github.com/inclusionAI/AReaL",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "agent_architecture"
+      ],
+      "destination_handoff": "rlm-orchestrator-roadmap.md",
+      "destination_index": "",
+      "intake_id": "intake-115",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "suggested_verdict": "worth_investigating",
+      "title": "Paperclip - Multi-agent orchestration for autonomous business structures",
+      "url": "https://github.com/paperclipai/paperclip",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "agent_architecture",
+        "memory_augmented"
+      ],
+      "destination_handoff": "rlm-orchestrator-roadmap.md",
+      "destination_index": "",
+      "intake_id": "intake-117",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "suggested_verdict": "worth_investigating",
+      "title": "Hermes Agent - Self-improving AI agent with learning loop",
+      "url": "https://github.com/NousResearch/hermes-agent",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "inference_serving",
+        "hardware_optimization"
+      ],
+      "destination_handoff": "orchestrator-stack-audit.md",
+      "destination_index": "",
+      "intake_id": "intake-119",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "suggested_verdict": "worth_investigating",
+      "title": "llmfit - Right-size LLM models to your hardware",
+      "url": "https://github.com/AlexsJones/llmfit",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "agent_architecture",
+        "benchmark_methodology"
+      ],
+      "destination_handoff": "routing-intelligence.md",
+      "destination_index": "",
+      "intake_id": "intake-120",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "blog",
+      "suggested_verdict": "worth_investigating",
+      "title": "Reasoning Models Struggle to Control their Chains of Thought, and That's Good",
+      "url": "https://openai.com/index/reasoning-models-chain-of-thought-controllability/",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "multimodal",
+        "moe_optimization"
+      ],
+      "destination_handoff": "multimodal-pipeline.md",
+      "destination_index": "",
+      "intake_id": "intake-121",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "blog",
+      "suggested_verdict": "worth_investigating",
+      "title": "Moondream 3 Preview - Compact MoE Vision-Language Model",
+      "url": "https://huggingface.co/moondream/moondream3-preview",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "multimodal"
+      ],
+      "destination_handoff": "multimodal-pipeline.md",
+      "destination_index": "",
+      "intake_id": "intake-123",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "suggested_verdict": "worth_investigating",
+      "title": "Qwen3-TTS - Open-Source Text-to-Speech (repo for arxiv:2601.15621)",
+      "url": "https://github.com/QwenLM/Qwen3-TTS",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "cost_aware_routing",
+        "agent_architecture"
+      ],
+      "destination_handoff": "",
+      "destination_index": "",
+      "intake_id": "intake-125",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "suggested_verdict": "worth_investigating",
+      "title": "S3-CoT: Self-Sampled Succinct Reasoning Enables Efficient Chain-of-Thought LLMs",
+      "url": "https://arxiv.org/abs/2602.01982",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "cost_aware_routing",
+        "agent_architecture"
+      ],
+      "destination_handoff": "reasoning-compression.md",
+      "destination_index": "",
+      "intake_id": "intake-126",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "suggested_verdict": "new_opportunity",
+      "title": "Steering Large Reasoning Models towards Concise Reasoning via Flow Matching",
+      "url": "https://arxiv.org/abs/2602.05539",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "cost_aware_routing",
+        "benchmark_methodology"
+      ],
+      "destination_handoff": "reasoning-compression.md",
+      "destination_index": "",
+      "intake_id": "intake-127",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "suggested_verdict": "new_opportunity",
+      "title": "TrimR: Verifier-based Training-Free Thinking Compression",
+      "url": "https://arxiv.org/abs/2505.17155",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "cost_aware_routing",
+        "kv_cache"
+      ],
+      "destination_handoff": "reasoning-compression.md",
+      "destination_index": "",
+      "intake_id": "intake-128",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "suggested_verdict": "worth_investigating",
+      "title": "Reasoning Efficiently Through Adaptive Chain-of-Thought Compression",
+      "url": "https://arxiv.org/abs/2509.14093",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "cost_aware_routing",
+        "speculative_decoding"
+      ],
+      "destination_handoff": "reasoning-compression.md",
+      "destination_index": "",
+      "intake_id": "intake-129",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "suggested_verdict": "new_opportunity",
+      "title": "Don't Overthink It \u2014 Shorter Thinking Chains for Improved Reasoning",
+      "url": "https://arxiv.org/abs/2505.17813",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "cost_aware_routing",
+        "benchmark_methodology"
+      ],
+      "destination_handoff": "",
+      "destination_index": "",
+      "intake_id": "intake-130",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "suggested_verdict": "worth_investigating",
+      "title": "Do NOT Think That Much \u2014 On the Overthinking of o1-Like LLMs",
+      "url": "https://arxiv.org/abs/2412.21187",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "autonomous_research",
+        "agent_architecture"
+      ],
+      "destination_handoff": "autopilot-continuous-optimization.md",
+      "destination_index": "",
+      "intake_id": "intake-131",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "suggested_verdict": "worth_investigating",
+      "title": "AgentRxiv: Towards Collaborative Autonomous Research",
+      "url": "https://arxiv.org/abs/2503.18102",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "benchmark_methodology",
+        "autonomous_research"
+      ],
+      "destination_handoff": "",
+      "destination_index": "",
+      "intake_id": "intake-132",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "suggested_verdict": "worth_investigating",
+      "title": "ResearchBench: Benchmarking LLMs in Scientific Discovery",
+      "url": "https://arxiv.org/abs/2503.21248",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "cost_aware_routing",
+        "agent_architecture"
+      ],
+      "destination_handoff": "reasoning-compression.md",
+      "destination_index": "",
+      "intake_id": "intake-133",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "suggested_verdict": "worth_investigating",
+      "title": "Reasoning as Compression \u2014 Unifying Budget Forcing via Information Bottleneck",
+      "url": "https://arxiv.org/abs/2603.08462",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "cost_aware_routing",
+        "kv_cache"
+      ],
+      "destination_handoff": "reasoning-compression.md",
+      "destination_index": "",
+      "intake_id": "intake-134",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "suggested_verdict": "worth_investigating",
+      "title": "CoLaR: Think Silently, Think Fast \u2014 Dynamic Latent Compression of Reasoning",
+      "url": "https://arxiv.org/abs/2505.16552",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "agent_architecture",
+        "memory_augmented"
+      ],
+      "destination_handoff": "rlm-orchestrator-roadmap.md",
+      "destination_index": "",
+      "intake_id": "intake-140",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "suggested_verdict": "worth_investigating",
+      "title": "Lossless Claw \u2014 LCM (Lossless Context Management) plugin for OpenClaw",
+      "url": "https://github.com/martian-engineering/lossless-claw",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "agent_architecture",
+        "memory_augmented"
+      ],
+      "destination_handoff": "rlm-orchestrator-roadmap.md",
+      "destination_index": "",
+      "intake_id": "intake-141",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "suggested_verdict": "worth_investigating",
+      "title": "Contextual Memory Virtualisation: DAG-Based State Management and Structurally Lossless Trimming for LLM Agents",
+      "url": "https://arxiv.org/abs/2602.22402",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "training_distillation",
+        "cost_aware_routing"
+      ],
+      "destination_handoff": "autopilot-continuous-optimization.md",
+      "destination_index": "",
+      "intake_id": "intake-142",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "suggested_verdict": "worth_investigating",
+      "title": "Distilling Many-Shot In-Context Learning into a Cheat Sheet",
+      "url": "https://arxiv.org/abs/2509.20820",
+      "verdict": ""
+    }
+  ],
+  "review_batch_template_rows": 25,
+  "reviewed_label_sources": {},
+  "reviewed_labels_path": "orchestration/datasets/intake_triage_reviewed.jsonl",
+  "reviewed_queue_items": 0,
+  "reviewed_rows": 0,
+  "reviewed_unique_intake_ids": 0,
+  "schema_version": "intake_triage_review_status.v1",
+  "status": "needs_reviewed_labels",
+  "trusted_label_sources": [
+    "operator"
+  ],
+  "trusted_reviewed_rows": 0,
+  "trusted_reviewed_unique_intake_ids": 0
+}

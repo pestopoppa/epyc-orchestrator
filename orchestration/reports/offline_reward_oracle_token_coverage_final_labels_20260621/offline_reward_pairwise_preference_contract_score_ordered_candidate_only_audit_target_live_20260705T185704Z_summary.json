@@ -1,0 +1,121 @@
+{
+  "artifact_scope": {
+    "allow_protected_output_overwrite": false,
+    "candidate_only_manifest": true,
+    "mode": "candidate_only",
+    "protected_broad_output": false
+  },
+  "contract": {
+    "learning_target": "within_source_record_score_ordered_preference",
+    "material_difference_from_stopped_family": [
+      "uses pairwise preference labels instead of absolute binary labels",
+      "controls prompt and expected answer by pairing only within the same source task",
+      "keeps conflicting absolute model-input groups as contrastive evidence instead of dropping all conflicting rows",
+      "can expand beyond binary labels by ordering rows with distinct offline oracle scores",
+      "does not train a classifier or authorize a runtime gate"
+    ],
+    "min_score_delta": 0.0,
+    "name": "within_task_pairwise_preference_v1",
+    "pairing_mode": "score_ordered",
+    "row_schema_version": "offline_reward_pairwise_preference.v1"
+  },
+  "coverage": {
+    "action_pair_counts": {
+      "architect_general>coder_escalation": 2,
+      "coder_escalation>architect_general": 2,
+      "coder_escalation>frontdoor": 1,
+      "frontdoor>architect_general": 1
+    },
+    "contrastive_groups": 6,
+    "cross_action_pair_rows": 6,
+    "pair_rows": 6,
+    "same_action_pair_rows": 0,
+    "skipped_no_contrast_groups": 75,
+    "source_family_pair_counts": {
+      "seeding_eval": 6
+    },
+    "source_record_groups": 81,
+    "suite_pair_counts": {
+      "debugbench": 1,
+      "general": 1,
+      "hotpotqa": 1,
+      "simpleqa": 3
+    },
+    "unique_action_pairs": 4
+  },
+  "decision": {
+    "min_cross_action_pairs": 50,
+    "min_pairs": 100,
+    "recommended_next": "collect_more_within_task_score_contrasts",
+    "runtime_gate_change_allowed": false,
+    "status": "insufficient_contrast"
+  },
+  "generated_at": "2026-07-05T20:06:47.276551+00:00",
+  "group_diagnostics": [
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_20260705T185704Z.json|17|debugbench_find-the-middle-index-in-array_python|15fa588e60abc8be8ddf1460f3b87101f913162239bf61baf20c67cb1c28e94d|0471c791ef2d61d12ffb63bcaf1d66fea692ea2f2edba722d190b7efedcd7443",
+      "negative_rows": 1,
+      "pairs": 1,
+      "positive_rows": 1,
+      "rows": 2
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_20260705T185704Z.json|18|mmlu_elementary_mathematics_02137|def5888d2f05d27f5f476e00773139279ed4cd2da6010289c9fbcf118311615e|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "negative_rows": 1,
+      "pairs": 1,
+      "positive_rows": 1,
+      "rows": 2
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_20260705T185704Z.json|19|hotpot_bridge_5a83dd2c554299334474609e|6ce8cfd0e1bd194ffebf36c3c0ac361201a2d22279272500395266d3a5fa6a79|c0b04fc54c6b854d074f6258546b391c14b4cad0c258a9c790754de42686133f",
+      "negative_rows": 0,
+      "pairs": 1,
+      "positive_rows": 2,
+      "rows": 2
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_20260705T185704Z.json|0|simpleqa_general_03546|2f65f61e08b230d971aa1bfe2f6cb4510fd7b1707e99958a210bd3b22ec7c0b4|af14badf8eb11812f2176ce030a0b4d6434d708cb880cef47c634a7388cb11ae",
+      "negative_rows": 2,
+      "pairs": 1,
+      "positive_rows": 0,
+      "rows": 2
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_20260705T185704Z.json|10|simpleqa_general_00576|417d34486a3d9652cba64cd599d7abd8d50d5b4652f038569b035597e12107f4|9ac3cc0df19bf244253d3a03be4e40e3642d7ae90914a0e1044ebfa90e009254",
+      "negative_rows": 2,
+      "pairs": 1,
+      "positive_rows": 0,
+      "rows": 2
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_20260705T185704Z.json|7|simpleqa_general_02482|9667c5da23028a45793c3aefd94053513dbc904776b1eaf981c2646b5d2ac1e3|b1ab1e892617f210425f658cf1d361b5489028c8771b56d845fe1c62c1fbc8b0",
+      "negative_rows": 1,
+      "pairs": 1,
+      "positive_rows": 1,
+      "rows": 2
+    }
+  ],
+  "inputs": {
+    "eligible_rows": 162,
+    "manifest_jsonl": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_feature_manifest_pairwise_audit_target_live_20260705T185704Z.jsonl",
+    "manifest_rows": 162,
+    "skipped_unmapped_or_unlabeled_rows": 0
+  },
+  "outputs": {
+    "pairwise_jsonl": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_preference_contract_score_ordered_candidate_only_audit_target_live_20260705T185704Z.jsonl",
+    "summary_json": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_preference_contract_score_ordered_candidate_only_audit_target_live_20260705T185704Z_summary.json",
+    "summary_md": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_preference_contract_score_ordered_candidate_only_audit_target_live_20260705T185704Z_summary.md"
+  },
+  "privacy": {
+    "commits_prompt_answer_expected_text": false,
+    "private_fields_excluded": [
+      "answer",
+      "expected",
+      "prompt",
+      "reference",
+      "response"
+    ],
+    "text_represented_by_sha256_lengths_and_deltas": true
+  },
+  "schema_version": "offline_reward_pairwise_contract_summary.v1"
+}

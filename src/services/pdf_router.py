@@ -427,24 +427,37 @@ class PDFRouter:
     def _extract_with_odl_table_backend(
         self,
         pdf_path: Path,
-    ) -> tuple[str, "ODLStructuredDocument | None", float]:
+    ) -> tuple[str, "ODLStructuredDocument | None", float, str]:
         backend = self._select_odl_table_backend(pdf_path)
         if backend == "local":
-            return self._extract_with_opendataloader_structured(pdf_path)
+            text, structured, latency_ms = self._extract_with_opendataloader_structured(
+                pdf_path
+            )
+            return text, structured, latency_ms, "local"
         if backend == "hybrid":
             text, structured, latency_ms = self._extract_with_opendataloader_hybrid(pdf_path)
             if text or structured is not None:
-                return text, structured, latency_ms
+                return text, structured, latency_ms, "hybrid"
             logger.info(
                 "ODL hybrid backend produced no structured output for %s; "
                 "using local structured OpenDataLoader",
                 pdf_path.name,
             )
-            return self._extract_with_opendataloader_structured(pdf_path)
+            text, structured, latency_ms = self._extract_with_opendataloader_structured(
+                pdf_path
+            )
+            return text, structured, latency_ms, "local"
 
         # Defensive fallback for future backend names added to the selector.
         logger.warning("Unhandled ODL table backend %r; using local structured ODL", backend)
-        return self._extract_with_opendataloader_structured(pdf_path)
+        text, structured, latency_ms = self._extract_with_opendataloader_structured(pdf_path)
+        return text, structured, latency_ms, "local"
+
+    @staticmethod
+    def _odl_structured_method(backend: str) -> str:
+        if backend == "hybrid":
+            return "opendataloader_hybrid"
+        return "opendataloader_structured"
 
     def extract_opendataloader_structured(
         self,
@@ -454,7 +467,9 @@ class PDFRouter:
     ) -> PDFExtractionResult:
         """Run the local structured ODL extraction path without OCR fallback."""
         pdf_path = Path(pdf_path)
-        text, structured_data, latency_ms = self._extract_with_odl_table_backend(pdf_path)
+        text, structured_data, latency_ms, backend = self._extract_with_odl_table_backend(
+            pdf_path
+        )
         figures = (
             self._extract_figures_from_odl_structured(pdf_path, structured_data)
             if extract_figures
@@ -465,7 +480,7 @@ class PDFRouter:
             text=text,
             figures=figures,
             page_count=page_count,
-            method="opendataloader_structured",
+            method=self._odl_structured_method(backend),
             latency_ms=latency_ms,
             ocr_required=False,
             structured_data=structured_data,
@@ -734,10 +749,10 @@ class PDFRouter:
             )
             if use_odl_structured:
                 # Phase 2: text + structured JSON in one ODL invocation.
-                text, structured_data, extract_latency = (
+                text, structured_data, extract_latency, odl_backend = (
                     self._extract_with_odl_table_backend(pdf_path)
                 )
-                extract_method = "opendataloader_structured"
+                extract_method = self._odl_structured_method(odl_backend)
                 if not text:
                     # Fall through to pdftotext if ODL returned nothing usable.
                     text, extract_latency = self._extract_with_pdftotext(pdf_path)

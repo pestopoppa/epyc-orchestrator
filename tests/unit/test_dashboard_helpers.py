@@ -44,12 +44,49 @@ def test_role_color_unknown_falls_back_to_gray() -> None:
     assert dashboard_topology._role_color("unknown_role") == "#64748b"
 
 
-def test_port_hints_quarter_ports_generated() -> None:
-    # frontdoor at 8070, quarters at 8080/8180/8280/8380
-    assert dashboard_topology._PORT_HINTS[8080] == "frontdoor.q0"
-    assert dashboard_topology._PORT_HINTS[8180] == "frontdoor.q1"
-    assert dashboard_topology._PORT_HINTS[8280] == "frontdoor.q2"
-    assert dashboard_topology._PORT_HINTS[8380] == "frontdoor.q3"
+def test_port_hints_follow_current_full_mode_priors() -> None:
+    # Public compatibility hints are built from generated stack_priors, which
+    # now follow the active full-mode launch contract instead of advertising
+    # unloaded quarter replicas.
+    assert dashboard_topology._PORT_HINTS[8070] == "frontdoor"
+    assert dashboard_topology._PORT_HINTS[8072] == "worker_general"
+    assert 8080 not in dashboard_topology._PORT_HINTS
+    assert 8082 not in dashboard_topology._PORT_HINTS
+
+
+def test_active_stack_numa_mode_defaults_to_full(monkeypatch) -> None:
+    monkeypatch.delenv("ORCHESTRATOR_STACK_NUMA_MODE", raising=False)
+    assert dashboard_topology.active_stack_numa_mode() == "full"
+
+    monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "quarter")
+    assert dashboard_topology.active_stack_numa_mode() == "quarter"
+
+    monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "stale-quarter")
+    assert dashboard_topology.active_stack_numa_mode() == "full"
+
+
+def test_expected_stack_services_are_numa_mode_filtered(monkeypatch) -> None:
+    monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "full")
+    full_ports = {s["port"] for s in dashboard_topology.expected_stack_services()}
+    assert {8070, 8072, 8085}.issubset(full_ports)
+    assert full_ports.isdisjoint({8080, 8180, 8280, 8380, 8082, 8182, 8282, 8382})
+
+    quarter_services = dashboard_topology.expected_stack_services("quarter")
+    quarter_ports = {s["port"] for s in quarter_services}
+    assert {8080, 8180, 8280, 8380, 8082, 8182, 8282, 8382}.issubset(quarter_ports)
+    assert quarter_ports.isdisjoint({8070, 8072, 8085})
+    by_port = {s["port"]: s for s in quarter_services}
+    assert by_port[8080]["role"] == "frontdoor.q0"
+    assert by_port[8182]["role"] == "worker_general.q1"
+
+
+def test_port_hint_uses_active_manifest_mode_for_quarters(monkeypatch) -> None:
+    monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "full")
+    assert dashboard_topology._port_hint(8080) == "port_8080"
+
+    monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "quarter")
+    assert dashboard_topology._port_hint(8080) == "frontdoor.q0"
+    assert dashboard_topology._port_hint(8182) == "worker_general.q1"
 
 
 def test_expected_stack_services_include_embedder_fleet() -> None:
@@ -368,6 +405,94 @@ def test_parse_structured_tap_requests_marks_quiet_open_request() -> None:
     assert "no tap output" in req["status_reason"]
 
 
+def test_structured_tap_active_ignores_stale_quiet_history() -> None:
+    assert dashboard._structured_tap_active(
+        [
+            {"status": "quiet", "quiet_s": 300.0},
+            {"status": "complete", "quiet_s": 0.0},
+        ]
+    ) is False
+    assert dashboard._structured_tap_active(
+        [{"status": "running", "quiet_s": 15.0}]
+    ) is False
+    assert dashboard._structured_tap_active(
+        [{"status": "running", "quiet_s": 2.0}]
+    ) is True
+
+
+def test_inference_tap_snapshot_marks_stale_sentinel_inactive(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    sentinel = tmp_path / "inference_tap_active"
+    sentinel.touch()
+    event_line = json.dumps(
+        {
+            "event": "start",
+            "request_id": "req-stale",
+            "role": "ingest_long_context",
+            "ts": "2026-05-22T10:00:00+00:00",
+            "ts_epoch": 100.0,
+            "prompt": "planner critique",
+        }
+    )
+
+    monkeypatch.setattr(dashboard, "_TAP_SENTINEL_PATH", sentinel)
+    monkeypatch.setattr(dashboard.time, "time", lambda: 130.0)
+    monkeypatch.setattr(dashboard, "_read_tail", lambda *a, **kw: "")
+    monkeypatch.setattr(dashboard, "_read_tap_events_tail", lambda *a, **kw: event_line)
+    monkeypatch.setattr(dashboard, "_latest_tap_events_mtime", lambda: 100.0)
+
+    response = asyncio.run(dashboard.inference_tap_snapshot())
+    payload = json.loads(response.body)
+
+    assert payload["tap_sentinel_active"] is True
+    assert payload["tap_active"] is False
+    assert payload["structured_requests"][0]["status"] == "quiet"
+
+
+def test_structured_tap_requests_for_dashboard_uses_shared_region_lock_frame(monkeypatch) -> None:
+    now = 100.0
+    event_line = json.dumps(
+        {
+            "event": "start",
+            "request_id": "chat-coder:abc",
+            "role": "coder_escalation",
+            "port": 8070,
+            "ts": "2026-05-22T10:00:00+00:00",
+            "ts_epoch": now - 1,
+            "prompt": "fix code",
+        }
+    )
+    region_locks = {
+        "by_role": {
+            "frontdoor": {
+                "instances": [
+                    {"idx": 0, "shape": "half0", "regions": ["q0", "q1"]},
+                    {"idx": 3, "shape": "q2", "regions": ["q2"]},
+                ],
+            },
+        },
+    }
+
+    monkeypatch.setattr(dashboard, "_read_tap_events_tail", lambda *a, **kw: event_line)
+    enriched = dashboard._structured_tap_requests_for_dashboard(
+        max_requests=20,
+        now_epoch=now,
+        region_locks=region_locks,
+        port_roles={8070: "frontdoor"},
+    )
+
+    assert len(enriched) == 1
+    req = enriched[0]
+    assert req["role"] == "coder_escalation"
+    assert req["topology_role"] == "frontdoor"
+    assert req["lock_role"] == "frontdoor"
+    assert req["instance_idx"] == 0
+    assert req["instance_shape"] == "half0"
+    assert req["instance_regions"] == ["q0", "q1"]
+
+
 def test_topology_activity_uses_structured_tap_not_legacy_sections(monkeypatch) -> None:
     now = 1_000.0
     structured_lines = [
@@ -574,6 +699,31 @@ def test_autopilot_phase_health_reports_stale(tmp_path, monkeypatch) -> None:
     assert health["blockers"]
 
 
+def test_autopilot_current_code_health_includes_restart_advice(monkeypatch) -> None:
+    def fake_phase_health(**_kwargs):
+        return {
+            "ok": False,
+            "status": "code_stale",
+            "phase": "dispatch_action",
+            "pid": os.getpid(),
+            "pid_alive": True,
+            "trial_id": 1207,
+            "action_type": "seed_batch",
+            "idle_reason": "evaluating question",
+            "code_stale": True,
+            "blockers": ["autopilot process predates runtime source changes: autopilot.py"],
+        }
+
+    monkeypatch.setattr(dashboard, "build_phase_health_report", fake_phase_health)
+
+    health = dashboard._autopilot_current_code_health()
+
+    assert health is not None
+    assert health["restart_advice"]["restart_needed"] is True
+    assert health["restart_advice"]["safe_to_restart_now"] is False
+    assert health["restart_advice"]["status"] == "wait_for_boundary"
+
+
 def test_process_status_includes_autopilot_phase_health(tmp_path, monkeypatch) -> None:
     phase_path = tmp_path / "phase.json"
     phase_path.write_text(json.dumps({
@@ -590,12 +740,38 @@ def test_process_status_includes_autopilot_phase_health(tmp_path, monkeypatch) -
         "_process_info_by_match",
         lambda _match: {"running": True, "pid": os.getpid()},
     )
+    monkeypatch.setattr(
+        dashboard,
+        "_autopilot_phase_health",
+        lambda: {
+            "status": "active",
+            "heartbeat_age_s": 12.5,
+            "outcome_progress": {
+                "status": "attention",
+                "latest_trial_id": 12,
+                "frontier_admissions": 1,
+                "trials_since_frontier": 151,
+                "baseline_promotions": 2,
+                "trials_since_promotion": 301,
+                "rates": {
+                    "keepable_rate": {"count": 4, "total": 10, "rate": 0.4},
+                    "wasted_eval_rate": {"count": 3, "total": 10, "rate": 0.3},
+                    "learning_excluded_rate": {"count": 2, "total": 10, "rate": 0.2},
+                },
+                "blockers": ["frontier admission stale: 151 trial(s) since frontier > 150"],
+            },
+        },
+    )
 
     response = asyncio.run(dashboard.process_status())
     payload = json.loads(response.body)
 
     assert payload["autopilot_phase"]["trial_id"] == 12
     assert payload["autopilot_phase_health"]["status"] == "active"
+    assert payload["autopilot_outcome_progress"]["status"] == "attention"
+    assert payload["autopilot_outcome_progress"]["blockers"] == [
+        "frontier admission stale: 151 trial(s) since frontier > 150",
+    ]
     assert payload["autopilot_phase_age_s"] == payload["autopilot_phase_health"]["heartbeat_age_s"]
 
 
@@ -1423,13 +1599,27 @@ def test_dashboard_html_surfaces_autopilot_phase_health() -> None:
     assert "phase health" in html
 
 
+def test_dashboard_html_surfaces_autopilot_outcome_health() -> None:
+    from src.api.routes import dashboard
+
+    html = dashboard._DASHBOARD_HTML
+    assert "autopilot_outcome_progress" in html
+    assert "_autopilotOutcomeProgressLabel" in html
+    assert "autopilot-health-chip" in html
+
+
 def test_dashboard_html_repaints_topology_after_region_lock_refresh() -> None:
     """Live inference/topology/CPU-lock panels should share one lock-cache frame."""
     from src.api.routes import dashboard
 
     html = dashboard._DASHBOARD_HTML
-    assert "updateTopologyInflight((_latestSnapshot && _latestSnapshot.in_flight_tasks) || [])" in html
-    assert "same lock cache" in html
+    assert "const overlayInflight = snapshotSeq != null" in html
+    assert "updateTopologyInflight(overlayInflight, snapshotSeq);" in html
+    assert "Single-writer coherence" in html
+    assert "requestCoherentDashboardSnapshot('region_locks_refresh')" in html
+    assert "t/s hist" in html
+    assert "idle, not an active-holder signal" in html
+    assert "last <span class=\"stat-stale\">${formatTopologyActivityAge(age)}</span>" in html
 
 
 def test_dashboard_effective_journal_rows_fold_supersession_events() -> None:
@@ -2312,7 +2502,7 @@ def test_poll_all_slots_empty_ports_meta() -> None:
 def test_region_locks_cached_ttl_and_fail_open(monkeypatch) -> None:
     calls = {"n": 0}
 
-    def fake_payload():
+    def fake_payload(_numa_mode=None):
         calls["n"] += 1
         if calls["n"] >= 3:
             raise RuntimeError("proc scan exploded")
@@ -2338,6 +2528,79 @@ def test_region_locks_cached_ttl_and_fail_open(monkeypatch) -> None:
     assert failed["stale_cache"] is True
     assert "proc scan exploded" in failed["error"]
     assert failed["entries"] == [{"role": "frontdoor"}]
+
+
+def test_snapshot_uses_fresh_region_lock_scan(monkeypatch) -> None:
+    fresh = {"generated_at": 123.0, "entries": [{"role": "fresh"}], "by_role": {"fresh": {}}}
+    activity = {"per_role": {"frontdoor": {"n_recent": 1}}, "window_s": 600.0, "now": 456.0}
+
+    async def fake_poll_all_slots():
+        return {}, {"ports": 0, "answered": 0, "timed_out": 0, "duration_s": 0.0}
+
+    def fake_cached():
+        raise AssertionError("snapshot must not use the cached region-lock payload")
+
+    monkeypatch.setattr(dashboard, "_poll_all_slots", fake_poll_all_slots)
+    monkeypatch.setattr(dashboard, "_todays_progress_log", lambda: Path("/does/not/exist"))
+    monkeypatch.setattr(dashboard, "_scan_recent_decisions", lambda _path: ([], {}, {}))
+    monkeypatch.setattr(dashboard, "_count_log_events", lambda *_a, **_k: {})
+    monkeypatch.setattr(dashboard, "_discover_llama_ports", lambda: {})
+    monkeypatch.setattr(dashboard, "_gate_inflight_by_live_slots", lambda in_flight, *_a, **_k: in_flight)
+    monkeypatch.setattr(dashboard, "_region_locks_payload", lambda _numa_mode=None: fresh)
+    monkeypatch.setattr(dashboard, "_region_locks_cached", fake_cached)
+    monkeypatch.setattr(dashboard, "_structured_tap_requests_for_dashboard", lambda **_k: [])
+    monkeypatch.setattr(dashboard, "_topology_activity_payload", lambda **_k: activity)
+    monkeypatch.setattr(dashboard, "_topology_nodes_cached", lambda _numa_mode=None: [])
+
+    response = asyncio.run(dashboard._snapshot_impl())
+    payload = json.loads(response.body)
+
+    assert payload["region_locks"] == fresh
+    assert payload["topology_activity"] == activity
+    assert payload["display_activity"] == {}
+    assert payload["stack_numa_mode"] == "full"
+    assert payload["topology"]["stack_numa_mode"] == "full"
+
+
+def test_coherent_display_activity_suppresses_uncorroborated_cpu_slots() -> None:
+    activity = {
+        8072: {"n_total": 1, "n_active": 1, "active_slots": [{"slot_id": 0}]},
+        8802: {"n_total": 1, "n_active": 1, "active_slots": [{"slot_id": 0}]},
+    }
+    out = dashboard._coherent_display_activity(
+        activity,
+        structured_requests=[],
+        region_locks={"by_role": {}},
+        port_roles={8072: "worker_general.q0", 8802: "mi210_gpu"},
+        topology_nodes=[
+            {"port": 8072, "kind": "llama-server"},
+            {"port": 8802, "kind": "gpu-llama-server"},
+        ],
+    )
+
+    assert out[8072]["n_active"] == 0
+    assert out[8072]["active_slots"] == []
+    assert out[8802]["n_active"] == 1
+
+
+def test_coherent_display_activity_keeps_structured_tap_cpu_slots() -> None:
+    activity = {
+        8072: {"n_total": 1, "n_active": 1, "active_slots": [{"slot_id": 0}]},
+    }
+    out = dashboard._coherent_display_activity(
+        activity,
+        structured_requests=[{
+            "status": "running",
+            "quiet_s": 1.0,
+            "port": 8072,
+        }],
+        region_locks={"by_role": {}},
+        port_roles={8072: "worker_general.q0"},
+        topology_nodes=[{"port": 8072, "kind": "llama-server"}],
+    )
+
+    assert out[8072]["n_active"] == 1
+    assert out[8072]["active_slots"] == [{"slot_id": 0}]
 
 
 def test_enrich_structured_tap_requests_fails_open(monkeypatch) -> None:

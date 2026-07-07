@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 AUDIT_SCHEMA_VERSION = "offline_reward_pairwise_preference_direction_audit.v1"
+COLLECTION_TARGETS_SCHEMA_VERSION = "offline_reward_pairwise_collection_targets.v1"
 PAIRWISE_ROW_SCHEMA_VERSION = "offline_reward_pairwise_preference.v1"
 HOLDOUT_FIELDS = ("source_family", "suite")
 
@@ -318,6 +319,17 @@ def render_markdown(summary: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def collection_targets_payload(summary: dict[str, Any]) -> dict[str, Any]:
+    """Return the small downstream artifact consumed by the A9 collection planner."""
+    return {
+        "schema_version": COLLECTION_TARGETS_SCHEMA_VERSION,
+        "source_audit_schema_version": summary.get("schema_version"),
+        "thresholds": summary.get("thresholds", {}),
+        "decision": summary.get("decision", {}),
+        "collection_targets": summary.get("collection_targets", []),
+    }
+
+
 def run_pairwise_preference_audit(args: argparse.Namespace) -> dict[str, Any]:
     rows = _load_rows(args.pairwise_jsonl)
     return audit_pairwise_preference_directions(
@@ -339,6 +351,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pairwise-jsonl", type=Path, required=True)
     parser.add_argument("--audit-json", type=Path, required=True)
     parser.add_argument("--audit-md", type=Path, required=True)
+    parser.add_argument(
+        "--collection-targets-json",
+        type=Path,
+        help=(
+            "Optional compact JSON artifact containing only collection_targets "
+            "plus provenance, for plan_offline_reward_pairwise_holdout_expansion.py."
+        ),
+    )
     parser.add_argument("--min-stratum-rows", type=int, default=DEFAULT_MIN_STRATUM_ROWS)
     parser.add_argument("--min-action-pair-rows", type=int, default=DEFAULT_MIN_ACTION_PAIR_ROWS)
     parser.add_argument(
@@ -361,6 +381,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     args.audit_md.parent.mkdir(parents=True, exist_ok=True)
     args.audit_md.write_text(render_markdown(summary), encoding="utf-8")
+    if args.collection_targets_json:
+        args.collection_targets_json.parent.mkdir(parents=True, exist_ok=True)
+        args.collection_targets_json.write_text(
+            json.dumps(collection_targets_payload(summary), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
     return 0
 
 

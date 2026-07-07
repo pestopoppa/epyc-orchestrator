@@ -1,0 +1,99 @@
+You are running a shadow self-running-lab job.
+
+job_id: autopilot_outcome_progress_watch
+title: AutoPilot outcome-progress watch
+run_id: autopilot_outcome_progress_watch-20260706T115635Z-37413a28
+generated_at: 2026-07-06T11:56:35+00:00
+risk: read_only
+forbidden_actions: ["stop_autopilot", "restart_services", "edit_journal", "update_baseline"]
+
+Return ONLY a JSON object matching this JSON Schema:
+{
+  "additionalProperties": true,
+  "properties": {
+    "blockers": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "ok": {
+      "type": "boolean"
+    },
+    "outcome_progress": {
+      "additionalProperties": true,
+      "properties": {
+        "blockers": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "latest_frontier_trial_id": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "latest_promotion_trial_id": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "latest_trial_id": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "rates": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "status": {
+          "type": "string"
+        },
+        "trials_since_frontier": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "trials_since_promotion": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "status",
+        "blockers",
+        "latest_trial_id",
+        "latest_frontier_trial_id",
+        "trials_since_frontier",
+        "rates"
+      ],
+      "type": "object"
+    },
+    "status": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "ok",
+    "status",
+    "blockers",
+    "outcome_progress"
+  ],
+  "type": "object"
+}
+
+Missing or skipped sources:
+[]
+
+Source excerpts:
+{"repo": "epyc-orchestrator", "path": "scripts/autopilot/phase_health_report.py", "sha256": "5ed5c27589f18465eabb2326f7c2c8d1dc9e53562f525707fe11892fac8df35f", "truncated": true, "excerpt": "#!/usr/bin/env python3\n\"\"\"Read-only AutoPilot phase heartbeat health report.\"\"\"\n\nfrom __future__ import annotations\n\nimport argparse\nimport json\nfrom pathlib import Path\nimport sys\n\nSCRIPT_DIR = Path(__file__).resolve().parent\nORCH_ROOT = SCRIPT_DIR.parents[1]\nsys.path.insert(0, str(SCRIPT_DIR))\nsys.path.insert(0, str(ORCH_ROOT))\n\nfrom phase_status import (  # noqa: E402\n    DEFAULT_AUTOPILOT_LOG_PATH,\n    DEFAULT_JOURNAL_DIR,\n    DEFAULT_OUTCOME_STALL_FRONTIER_TRIALS,\n    DEFAULT_OUTCOME_STALL_PROMOTION_TRIALS,\n    DEFAULT_OUTCOME_RECENT_WINDOW_TRIALS,\n    DEFAULT_STALE_AFTER_S,\n    PHASE_PATH,\n    build_phase_health_report,\n    format_phase_health_report,\n)\n\n\ndef _parse_args(argv: list[str] | None = None) -> argparse.Namespace:\n    parser = argparse.ArgumentParser(\n        description=\"Report AutoPilot phase-heartbeat liveness without writing state.\"\n    )\n    parser.add_argument(\n        \"--phase-path\",\n        type=Path,\n        default=PHASE_PATH,\n        help=f\"Phase heartbeat JSON path (default: {PHASE_PATH})\",\n    )\n    parser.add_argument(\n        \"--stale-after-s\",\n        type=float,\n        default=DEFAULT_STALE_AFTER_S,\n        help=\"Heartbeat age threshold that marks an active phase stale.\",\n    )\n    parser.add_argument(\n        \"--log-path\",\n        type=Path,\n        default=None,\n        help=(\n            \"AutoPilot log path used to fill missing in-flight eval counters \"\n            f\"(default for the live phase path: {DEFAULT_AUTOPILOT_LOG_PATH})\"\n        ),\n    )\n    parser.add_argument(\"--json\", action=\"store_true\", help=\"Emit structured JSON.\")\n    parser.add_argument(\n        \"--strict\",\n        action=\"store_true\",\n        help=\"Exit nonzero when the heartbeat is missing, dead, or stale.\",\n    )\n    parser.add_argument(\n        \"--require-current-code\",\n        action=\"store_true\",\n        help=(\n            \"Also fail strict checks when the live AutoPilot process predates \"\n            \"runtime AutoPilot source changes.\"\n        ),\n    )\n    parser.add_argument(\n        \"--journal-dir\",\n        type=Path,\n        default=DEFAULT_JOURNAL_DIR,\n        help=f\"AutoPilot journal shard directory (default: {DEFAULT_JOURNAL_DIR})\",\n    )\n    pa"}
+{"repo": "epyc-orchestrator", "path": "scripts/autopilot/phase_status.py", "sha256": "29a9e4db03f21fe01aae8a091dd5ca0f4c4b31c78f83090070cbcdc84c884c80", "truncated": true, "excerpt": "\"\"\"Autopilot phase heartbeat and low-priority async task helpers.\n\nThe dashboard can only explain idle time if the controller loop publishes\nwhat it is doing before planner/model taps become active. This module keeps\nthat state in /mnt/raid0/llm/tmp as a best-effort JSON heartbeat.\n\"\"\"\n\nfrom __future__ import annotations\n\nimport contextlib\nimport fcntl\nimport json\nimport logging\nimport os\nimport re\nimport subprocess\nimport tempfile\nimport threading\nimport time\nfrom concurrent.futures import Future, ThreadPoolExecutor\nfrom datetime import datetime, timezone\nfrom pathlib import Path\nfrom typing import Any, Callable, Iterable, Iterator\n\nlog = logging.getLogger(\"autopilot.phase\")\n\nORCH_ROOT = Path(__file__).resolve().parents[2]\nRESEARCH_ROOT = ORCH_ROOT.parent / \"epyc-inference-research\"\nPHASE_PATH = Path(\"/mnt/raid0/llm/tmp/autopilot_phase.json\")\nPHASE_EVENTS_PATH = Path(\"/mnt/raid0/llm/tmp/autopilot_phase.jsonl\")\nDEFAULT_AUTOPILOT_LOG_PATH = ORCH_ROOT / \"logs\" / \"autopilot.log\"\nDEFAULT_JOURNAL_DIR = ORCH_ROOT / \"orchestration\"\nDEFAULT_TMP_AUTOPILOT_LOG_DIR = Path(\"/mnt/raid0/llm/tmp\")\nDEFAULT_TMP_AUTOPILOT_LOG_PATTERN = \"autopilot*.log\"\nDEFAULT_STALE_AFTER_S = 900.0\nDEFAULT_OUTCOME_STALL_FRONTIER_TRIALS = int(\n    os.environ.get(\"AUTOPILOT_OUTCOME_STALL_FRONTIER_TRIALS\", \"150\")\n)\nDEFAULT_OUTCOME_STALL_PROMOTION_TRIALS = int(\n    os.environ.get(\"AUTOPILOT_OUTCOME_STALL_PROMOTION_TRIALS\", \"300\")\n)\nDEFAULT_OUTCOME_RECENT_WINDOW_TRIALS = int(\n    os.environ.get(\"AUTOPILOT_OUTCOME_RECENT_WINDOW_TRIALS\", \"120\")\n)\nLOG_TAIL_BYTES = 65536\nLOG_TAIL_CANDIDATE_LIMIT = 8\nEVAL_PROGRESS_FIELDS = (\n    \"eval_label\",\n    \"eval_completed_questions\",\n    \"eval_total_questions\",\n    \"eval_correct_questions\",\n    \"eval_correct_pct\",\n    \"eval_concurrency\",\n)\nAUTOPILOT_ENV_FLAGS = (\n    \"AUTOPILOT_PLANNER_HINTS\",\n    \"AUTOPILOT_SEQ_VERDICT\",\n    \"AUTOPILOT_W6_AUDIT_BLOCK\",\n    \"AUTOPILOT_W6_AUDIT_N\",\n    \"AUTOPILOT_W6_AUDIT_EVERY_N_TRIALS\",\n    \"AUTOPILOT_W6_AUDIT_SHADOW_ONLY\",\n    \"AUTOPILOT_PLANNER_TIMEOUT\",\n)\nAUTOPILOT_RUNTIME_SOURCE_PATHS = (\n    ORCH_ROOT / \"scripts\" / \"autopilot\" / \"autopilot.py\",\n    ORCH_ROOT / \"scripts\" / \"autopilot\" / \"actions.py\",\n    ORCH_ROOT / \"scripts\" /"}
+{"repo": "epyc-orchestrator", "path": "scripts/autopilot/experiment_journal.py", "sha256": "93edbd3e92d4cb9795181525d73dd24ba4145ec5189401d3ecdb259861437bd8", "truncated": true, "excerpt": "\"\"\"Experiment journal: dual TSV + JSONL logging for AutoPilot trials.\n\nAppend-only with rotation (new file per 1000 trials).\n\"\"\"\n\nfrom __future__ import annotations\n\nimport csv\nimport copy\nimport hashlib\nimport json\nimport re\nfrom dataclasses import asdict, dataclass, field, replace\nfrom datetime import datetime, timezone\nfrom enum import Enum\nfrom pathlib import Path\nfrom typing import Any\n\nfrom src.autopilot_core.tier_specs import DEFAULT_FRONTIER_TIER\n\n\nclass DeficiencyCategory(str, Enum):\n    \"\"\"Structured failure classification for safety gate violations (AP-14).\n\n    Each category maps to a specific SafetyGate check or dispatch_action guard.\n    Using str mixin for natural JSON serialization in JSONL journal.\n    \"\"\"\n    QUALITY_FLOOR = \"quality_floor\"\n    REGRESSION = \"regression\"\n    PER_SUITE = \"per_suite_regression\"\n    ROUTING_DIVERSITY = \"routing_diversity\"\n    THROUGHPUT = \"throughput\"\n    CONSECUTIVE_FAILURES = \"consecutive_failures\"\n    CODE_VALIDATION = \"code_validation\"\n    SHRINKAGE = \"shrinkage\"\n    REVERT = \"revert\"\n    # 2026-06-04 non-executing-action residue (graph_router deadlock fix). An\n    # action that never ran an eval — so it has no quality/speed evidence — but\n    # whose failure reason is actionable and MUST be fed back to the planner\n    # instead of being silently dropped (the \"return None, increment, continue\"\n    # blind spot that let 119 identical invalid structural_experiments dispatch).\n    #   INVALID_ACTION: failed pre-execution validation (e.g. a feature flag\n    #     whose dependency is not enabled). Carries the validator reason.\n    #   DISPATCH_SKIPPED: skipped at the dispatcher (AP-9 scope violation,\n    #     dirty-tree fence, unknown action type, or a handler no-op).\n    INVALID_ACTION = \"invalid_action\"\n    DISPATCH_SKIPPED = \"dispatch_skipped\"\n    # 2026-05-23 exogenous-restart resilience (handoff Phase 5).\n    # EXOGENOUS_RELOAD: trial corrupted by an operator/external service reload\n    #   detected via fleet markers; at least one question stayed unrecovered.\n    #   bug_corrupted_by is set to \"exogenous_operator_reload\" so the planner's\n    #   trustworthiness gate excludes it from hypothesis chains. SafetyGa"}

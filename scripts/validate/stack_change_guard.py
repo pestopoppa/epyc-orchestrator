@@ -7,6 +7,7 @@ import argparse
 import fnmatch
 import hashlib
 import json
+import os
 import re
 import sys
 from collections import Counter
@@ -815,10 +816,13 @@ def _launch_manifest_targets(
 ) -> dict[str, dict[str, Any]]:
     """Return live launch ports/tier per role from the computed manifest."""
     try:
-        from scripts.server.stack_manifest import HOT_SERVERS, WARM_SERVERS
+        from scripts.server.stack_manifest import HOT_SERVERS, WARM_SERVERS, _filter_by_numa_mode
     except Exception:
         return {}
 
+    numa_mode = os.environ.get("ORCHESTRATOR_STACK_NUMA_MODE", "full").strip().lower()
+    if numa_mode not in {"full", "quarter", "both"}:
+        numa_mode = "full"
     registry = _load_yaml_mapping(registry_path)
     registry_roles = registry.get("roles") if isinstance(registry.get("roles"), dict) else {}
     server_mode = (
@@ -827,7 +831,10 @@ def _launch_manifest_targets(
     descriptor_roles = _descriptor_by_role(_load_yaml_mapping(descriptor_path))
 
     targets: dict[str, dict[str, Any]] = {}
-    for tier, servers in (("hot", HOT_SERVERS), ("warm", WARM_SERVERS)):
+    for tier, servers in (
+        ("hot", _filter_by_numa_mode(HOT_SERVERS, numa_mode)),
+        ("warm", _filter_by_numa_mode(WARM_SERVERS, numa_mode)),
+    ):
         for server in servers:
             if not isinstance(server, dict):
                 continue

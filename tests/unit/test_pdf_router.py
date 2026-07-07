@@ -302,7 +302,7 @@ class TestPDFRouterExtraction:
         mock_figures.assert_not_called()
         assert result.text == "Intro\nBody"
         assert result.structured_data is structured
-        assert result.method == "opendataloader_structured"
+        assert result.method == "opendataloader_hybrid"
 
     def test_odl_hybrid_table_backend_falls_back_to_local_when_empty(
         self,
@@ -336,6 +336,44 @@ class TestPDFRouterExtraction:
         mock_hybrid_odl.assert_called_once_with(pdf_path)
         mock_local_odl.assert_called_once_with(pdf_path)
         assert result.text == "Intro\nBody"
+        assert result.structured_data is structured
+        assert result.method == "opendataloader_structured"
+
+    @pytest.mark.asyncio
+    async def test_extract_structured_odl_reports_hybrid_backend(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        from src.models.odl_structured import HeadingNode, ODLStructuredDocument
+
+        pdf_path = tmp_path / "structured.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\n%EOF\n")
+        structured = ODLStructuredDocument(headings=[HeadingNode(level=1, text="Intro")])
+
+        monkeypatch.setenv("PDF_EXTRACTOR", "opendataloader")
+        monkeypatch.setenv("ORCHESTRATOR_ODL_STRUCTURED", "1")
+        monkeypatch.setenv(ODL_TABLE_BACKEND_ENV, "hybrid")
+
+        router = PDFRouter()
+        with patch.object(router, "_page_dimensions_pymupdf", return_value={1: (1000, 1000)}):
+            with patch.object(
+                router,
+                "_extract_with_opendataloader_hybrid",
+                return_value=("Intro\nBody", structured, 12.0),
+            ) as mock_hybrid_odl:
+                with patch.object(router, "_extract_with_opendataloader_structured") as mock_local_odl:
+                    with patch.object(router, "_assess_text_quality", return_value=(0.9, False)):
+                        with patch.object(
+                            router,
+                            "_extract_figures_from_odl_structured",
+                            return_value=[],
+                        ):
+                            result = await router.extract(pdf_path, extract_figures=True)
+
+        mock_hybrid_odl.assert_called_once_with(pdf_path)
+        mock_local_odl.assert_not_called()
+        assert result.method == "opendataloader_hybrid"
         assert result.structured_data is structured
 
     def test_extract_with_opendataloader_reads_temp_markdown(self, tmp_path):

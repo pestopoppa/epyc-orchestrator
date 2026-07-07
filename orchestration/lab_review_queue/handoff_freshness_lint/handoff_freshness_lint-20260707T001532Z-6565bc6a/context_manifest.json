@@ -1,0 +1,73 @@
+{
+  "generated_at": "2026-07-07T00:15:32+00:00",
+  "job_id": "handoff_freshness_lint",
+  "jobs_file": "/mnt/raid0/llm/epyc-orchestrator/orchestration/lab_jobs.yaml",
+  "missing_sources": [
+    {
+      "path": "handoff freshness index hygiene active handoffs progress reporting stale gates",
+      "reason": "kb_rag_no_results",
+      "repo": "kb-rag"
+    }
+  ],
+  "run_id": "handoff_freshness_lint-20260707T001532Z-6565bc6a",
+  "schema_version": "lab_context_manifest.v1",
+  "source_count": 4,
+  "sources": [
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/handoffs/active/agent-file-prose-compression.md",
+      "bytes": 19066,
+      "excerpt": "# Per-Model Agent-File Prose Compression\n\n**Status**: refreshed 2026-07-03 \u2014 Phase 1+2+3+4 LANDED for the local production stack; registry operating points are applied; `/new-model` Step 6.5 now points at the live runner and relative-to-baseline gate. Phase 5 rollout remains a separate decision, with optional n=30 expansion before broad compressed-artifact rollout.\n**Created**: 2026-04-30 (via research intake \u2014 intake-509 deep-dive follow-up)\n**Updated**: 2026-05-28\n**Categories**: agent_architecture, benchmark_methodology, routing_intelligence\n**Priority**: HIGH (cheap to pilot; high-amortization payoff if eval lands)\n**Depends on**: `agent-file-architecture` skill (thin-map structural compression upstream of this), `/new-model` onboarding skill (the deployment pipeline this hooks into)\n\n## 2026-05-28 Audit Reset \u2014 Executor Start Here\n\nThis handoff remains active because the high-value deployment decision is no longer the existence of compressed files or the first local-stack curve; it is whether to roll compressed artifacts beyond the pilot `ENGINEERING_STANDARDS` file, and whether to run the n=30 expansion before that rollout.\n\n**Critique of older structure**: completed implementation and future eval were mixed together. That made the handoff look close to done while the only safety-critical gate, Phase 3, had no executable runbook, no artifact path, and no fork for failed models.\n\n**Completed evidence to preserve**:\n\n- `/agent-file-compress` skill landed in root commit `40d8348`.\n- Compliance suite and `/new-model` Step 6.5 landed in root commit `0467891`.\n- Registry validator and field landed in root/research commits around `306fa66` / `a90b4ee`.\n- Pilot artifacts exist under `agents/shared/ENGINEERING_STANDARDS.compressed-{mild,medium,aggressive}.md`.\n\n**Phase 3 is complete for the local production stack**:\n\n1. Live runner interface: `tests/compliance/agent_file/live_runner.py`.\n2. Correct gate: compare each compressed level to the level=`none` baseline for that model: `compliance >= 0.95 * baseline_compliance`, `procedure >= 0.95 * baseline_procedure`, and `recall >= 0.90` absolute. If the model's baseline recall is below `0.90`, operating point is `none`",
+      "kind": "dcp_pack:full",
+      "path": "handoffs/active/agent-file-prose-compression.md",
+      "repo": "epyc-root",
+      "sha256": "8d5255da7df39b3165743ec046ae776fc847378f710f6548594ca5ee0dbad7e1",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/handoffs/active/agent-world-env-synthesis.md",
+      "bytes": 31445,
+      "excerpt": "# Agent-World Environment Synthesis\n\n**Status**: stub / in-planning (Phase 1 training-free; Phase 2 GPU-gated)\n**Created**: 2026-04-22 (split from `autopilot-continuous-optimization.md` per deep-dive integration pass)\n**Categories**: agent_architecture, autonomous_research, training_distillation\n**Priority**: MEDIUM (autopilot 5th species; concrete Tier 3 recipe for meta-harness outer loop)\n**Depends on**: `autopilot-continuous-optimization.md` (AR-3 loop), `meta-harness-optimization.md` (Tier 3)\n\n## Objective\n\nAdopt Agent-World's autonomous environment + task synthesis (Environment-Task Discovery) as the 5th species in the EPYC autopilot loop. Phase 1 is training-free and CPU-feasible today: LLM-orchestrated exploration of databases and MCP tool ecosystems to synthesize verifiable tasks with controllable difficulty, feeding them as new benchmark suites into AR-3. Phase 2 is GPU training \u2014 multi-environment GRPO of the co-evolving policy; the GPU now exists (**MI210, gfx90a, 64 GB, installed 2026-07-02** \u2014 not the never-acquired DGX Spark), but Phase 2 stays **downstream-gated on Phase 1** (still stub/CPU-training-free) and on a gfx90a GRPO-viability smoke [unverified]. A single MI210 is well below the paper's 8\u00d7B200 training scale, so scope Phase 2 as a *small-model reproduction* probe, not a full retrain.\n\n## Research Context\n\n| Intake ID | Title | Relevance | Verdict |\n|-----------|-------|-----------|---------|\n| intake-444 | Agent-World: Scaling Real-World Environment Synthesis for Evolving General Agent Intelligence (arxiv:2604.18292) | high | worth_investigating |\n| intake-411 | Qwen-Agent MCP singleton manager pattern | medium | adopt_patterns |\n| intake-412 | DeepPlanning benchmark | medium | adopt_patterns |\n\n**Source deep dive**: [`/workspace/research/deep-dives/agent-world-environment-synthesis.md`](../../research/deep-dives/agent-world-environment-synthesis.md) (426 lines)\n\n## Key Claims (from Agent-World paper)\n\n- Agentic Environment-Task Discovery autonomously explores databases + tool ecosystems to synthesize verifiable tasks with controllable difficulty.\n- Continuous Self-Evolving Agent Training combines multi-env RL with dynamic task synthesis;",
+      "kind": "dcp_pack:full",
+      "path": "handoffs/active/agent-world-env-synthesis.md",
+      "repo": "epyc-root",
+      "sha256": "75d9f890d9b674fd910a645ef7a8c1d3b3b5abd67042e85477ac8f45613de57b",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/handoffs/active/contention-matrix-v6-quarter-refresh.md",
+      "bytes": 3286,
+      "excerpt": "# Contention matrix v6 quarter refresh \u2014 false-stale resolved\n\n**Status**: RESOLVED 2026-07-05 \u2014 no matrix re-bench required for the current production role set.\n**Created**: 2026-07-05 by the dashboard-hardening session.\n**Priority**: HIGH at creation; now MONITOR.\n\n## Resolution (2026-07-05)\n\nThe live `matrix_status: \"stale\"` diagnosis was a topology-fingerprint false\npositive, not evidence that the v6 contention matrix was measured under the\nwrong production topology.\n\nRoot cause:\n- Full `NUMA_CONFIG` hash: `5d19b3e4edf6fc27`.\n- Stored contention matrix hash: `df373c79cc4af06f`.\n- Current hash over roles actually measured in `contention_matrix.yaml`,\n  excluding auxiliary explicit-only `eval_batch_frontdoor`:\n  `df373c79cc4af06f`.\n\nThe auxiliary `eval_batch_frontdoor` role exists in launch topology but is not a\nproduction admission target in the measured contention matrix. Full-topology\nfreshness checks therefore marked the matrix stale even though all measured\nproduction roles still match the matrix topology.\n\n## What Landed\n\n- Orchestrator `3d1706c6` first changed the dashboard/admission freshness path\n  to ignore auxiliary roles in contention topology checks.\n- Orchestrator `120498c9` centralized the measured-role topology helper in\n  `src/scheduling/contention.py` and aligned the gate, validator,\n  SafetyGate/EvalTower consumers, and `scripts/server/contention_matrix.py`\n  validation paths.\n- Validation passed:\n  - `uv run pytest -q tests/unit/test_scheduling_contention.py tests/unit/test_scheduling_contention_gate.py tests/unit/test_dynamic_stack_evidence_packet.py tests/unit/test_eval_tower_concurrency_metrics.py tests/unit/test_safety_gate_baseline_eligibility.py` -> `108 passed`\n  - `uv run python scripts/validate/check_contention_matrix_fresh.py` -> `OK`\n  - `uv run python scripts/server/contention_matrix.py validate` -> status `ok`\n- GitNexus is current at orchestrator commit `120498c`.\n- The orchestrator API was reloaded; live `/dashboard/api/contention` reports\n  `matrix_status: \"ok\"`.\n\n## What Did Not Happen\n\nThe matrix benchmark was **not** rerun. That is intentional: the measured-role\ntopology hash matched the committed matrix, so rerunning the",
+      "kind": "dcp_pack:full",
+      "path": "handoffs/active/contention-matrix-v6-quarter-refresh.md",
+      "repo": "epyc-root",
+      "sha256": "3a3d52a5cdc9dce59da71abc34c73859137469f82d0cd971e69e405c5d3bd1e9",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-01/2026-01-11.md",
+      "bytes": 1825,
+      "excerpt": "# Progress Log: 2026-01-11\n\n## Paged Attention - PR Submitted & Production Integration\n\n### PR Submission\n\n**PR #18747:** https://github.com/ggml-org/llama.cpp/pull/18747\n- Title: `ggml, llama : add CPU paged attention for memory-efficient KV cache`\n- Status: Open, awaiting review\n- Complements PR #17579 (CUDA-only paged attention)\n\n### Performance Results\n\n| Model | Generation Speedup | Memory Savings |\n|-------|-------------------|----------------|\n| Llama 70B | **+76%** (block_size=64) | up to 80% |\n| Qwen 1.7B | \u00b12% (negligible) | up to 92% |\n| DeepSeek 32B | -11% overhead | up to 80% |\n\n**Key insight:** Paged attention benefits memory-bound large models (70B+) via block prefetching. Not recommended for compute-bound medium models.\n\n### Production Integration\n\nCherry-picked 7 commits to `production-consolidated` branch:\n- feat: implement CPU paged attention for flash attention\n- feat: implement dynamic block allocation\n- feat: add block pool statistics\n- feat: add KV cache memory reduction\n- test: add unit tests for block pool and table\n- feat: add CLI flags for paged attention\n- refactor: trim verbose comments\n\n### Orchestrator Impact\n\nPaged attention will benefit architect models (>70B) in escalation chain:\n- +76% generation speedup reduces escalation latency\n- 60-80% memory savings allows larger context or more concurrent models\n- KV cache for 405B at 128K context: 63 GiB \u2192 12-25 GiB with paging\n\n### Blocked Task\n\nModel registry update deferred (benchmark script running):\n- Add `paged_attention` flag to 70B+ models in model_registry.yaml\n- See `/mnt/raid0/llm/claude/orchestration/BLOCKED_TASKS.md`\n\n## Files Modified\n\n- `/mnt/raid0/llm/llama.cpp/research/paged_attention_phase3_checkpoint.md` - Updated status\n- `/mnt/raid0/llm/claude/orchestration/BLOCKED_TASKS.md` - Added blocked task\n",
+      "kind": "dcp_pack:full",
+      "path": "progress/2026-01/2026-01-11.md",
+      "repo": "epyc-root",
+      "sha256": "c5d13997ed885d27a8f10e33f9afd513a4b305c96464d890d1d8816784b36c11",
+      "truncated": false
+    }
+  ],
+  "summary": {
+    "budget_exhausted": false,
+    "excerpt_chars": 8422,
+    "kinds": {
+      "dcp_pack:full": 4
+    },
+    "max_context_chars": 64000,
+    "missing_source_count": 1,
+    "repos": [
+      "epyc-root"
+    ],
+    "schema_version": "lab_context_summary.v1",
+    "source_bytes": 55622,
+    "source_count": 4,
+    "truncated_source_count": 3
+  }
+}

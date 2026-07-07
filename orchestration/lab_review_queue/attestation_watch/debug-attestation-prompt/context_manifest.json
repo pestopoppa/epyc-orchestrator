@@ -1,0 +1,1634 @@
+{
+  "generated_at": "2026-07-07T00:22:52+00:00",
+  "job_id": "attestation_watch",
+  "jobs_file": "/mnt/raid0/llm/epyc-orchestrator/orchestration/lab_jobs.yaml",
+  "missing_sources": [
+    {
+      "path": "attestation drift production flags model registry worker heterogeneity missing snapshot",
+      "reason": "kb_rag_no_results",
+      "repo": "kb-rag"
+    }
+  ],
+  "run_id": "debug-attestation-prompt",
+  "schema_version": "lab_context_manifest.v1",
+  "source_count": 160,
+  "sources": [
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/.autopilot.lock",
+      "bytes": 0,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/.autopilot.lock",
+      "repo": "epyc-orchestrator",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "truncated": false
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/.lean_cache_key",
+      "bytes": 64,
+      "excerpt": "1dd70ebf2f77497a552ea4fae4e271bc7c85acd54b0e5c8a50e403dd39bd9b42",
+      "kind": "source_excerpt",
+      "path": "orchestration/.lean_cache_key",
+      "repo": "epyc-orchestrator",
+      "sha256": "5642390aa562b713b25e7b2f75b511f083f2ba590a7c39e9c46e2b50a7379959",
+      "truncated": false
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/README.md",
+      "bytes": 25112,
+      "excerpt": "# Orchestration\n\nThis folder contains the schemas, validators, configuration, and **self-management procedures** for the hierarchical local-agent orchestration system.\n\n## Contents\n\n| File | Purpose |\n|------|---------|\n| `task_ir.schema.json` | JSON Schema for TaskIR (emitted by Front Door) |\n| `architecture_ir.schema.json` | JSON Schema for ArchitectureIR (emitted by Tier-B3 Architect) |\n| `validate_ir.py` | Python validator for both schemas |\n| `model_registry.yaml` | Deterministic model \u2192 role mapping with acceleration configs |\n| `procedure.schema.json` | JSON Schema for procedure YAML validation |\n| `procedure_registry.py` | Procedure loader, validator, and executor |\n| `procedure_scheduler.py` | Background job scheduler with pause/resume |\n| `procedures/` | YAML procedure definitions (11 procedures) |\n| `procedures/state/` | Procedure execution state files |\n| `checkpoints/` | Server config checkpoints for hot-swap |\n| `patches/` | Patch queue for approval workflow |\n\n## Quick Start\n\n### 1. Validate a TaskIR file\n\n```bash\n# Validate a file\npython orchestration/validate_ir.py task orchestration/last_task_ir.json\n\n# Validate from stdin (e.g., Front Door output)\necho '{\"task_id\": \"abc\", ...}' | python orchestration/validate_ir.py task -\n```\n\n### 2. Validate an ArchitectureIR file\n\n```bash\npython orchestration/validate_ir.py arch architecture/architecture_ir.json\n```\n\n### 3. Run all gates\n\n```bash\nmake gates\n# or\njust gates\n```\n\n## Workflow\n\n1. **Front Door** receives user input and emits `TaskIR` JSON\n2. Save output to `orchestration/last_task_ir.json` (gitignored)\n3. **Dispatcher** reads `TaskIR` and routes to specialists/workers\n4. Workers emit artifacts (code, docs, diffs)\n5. Run `make gates` to validate\n6. On failure: return gate report to producing agent (once)\n7. On second failure: escalate one tier\n\n## TaskIR Schema\n\nRequired fields:\n- `task_id`: Unique identifier (UUID recommended)\n- `task_type`: `chat | doc | code | ingest | manage`\n- `priority`: `interactive | batch`\n- `objective`: What success looks like\n- `inputs`: Array of `{type, value}` objects\n- `constraints`: Hard requirements\n- `assumptions`: Decisions made when request was ambiguous\n- `age",
+      "kind": "source_excerpt",
+      "path": "orchestration/README.md",
+      "repo": "epyc-orchestrator",
+      "sha256": "2bb00e72768d1b318d29f26738cad8139f82af0f1ec47c6884b86291e51f604a",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/anomaly_signals.yaml",
+      "bytes": 3729,
+      "excerpt": "# Anomaly signal configuration for pipeline monitoring.\n#\n# This file externalizes detector weights, thresholds, and categories\n# from src/pipeline_monitor/anomaly.py.  The Python module loads this\n# YAML at startup and falls back to hardcoded SIGNAL_WEIGHTS if missing.\n#\n# Scoring: anomaly_score = max(triggered signal weights).\n\nscoring:\n  aggregation: max  # current behavior: max(triggered_weights)\n  grading_sample_rate: 0.1  # fraction of answers sampled for model-graded eval\n\nsignals:\n  # \u2500\u2500 Category: empty_output (weight 1.0) \u2500\u2500\n  near_empty:\n    weight: 1.0\n    category: empty_output\n    params:\n      threshold: 5  # min word-tokens for code_execution answers\n\n  silent_execution:\n    weight: 0.5\n    category: empty_output\n    params: {}\n\n  repl_max_turns:\n    weight: 1.0\n    category: empty_output\n    params: {}\n\n  max_turns_exhausted:\n    weight: 1.0\n    category: empty_output\n    params: {}\n\n  # \u2500\u2500 Category: protocol_error (weight 1.0) \u2500\u2500\n  format_violation:\n    weight: 1.0\n    category: protocol_error\n    params: {}\n\n  delegation_format_error:\n    weight: 1.0\n    category: protocol_error\n    params: {}\n\n  template_echo:\n    weight: 1.0\n    category: protocol_error\n    params: {}\n\n  status_phrase_final:\n    weight: 1.0\n    category: protocol_error\n    params: {}\n\n  function_repr_leak:\n    weight: 1.0\n    category: leak\n    params: {}\n\n  malformed_delegation:\n    weight: 0.5\n    category: protocol_error\n    params: {}\n\n  # \u2500\u2500 Category: quality_concern (weight 0.5) \u2500\u2500\n  repetition_loop:\n    weight: 1.0\n    category: quality_concern\n    params:\n      threshold: 0.4  # trigram unique ratio below this = degeneration\n\n  self_doubt_loop:\n    weight: 0.5\n    category: quality_concern\n    params:\n      threshold: 3  # restart phrases count\n\n  excessive_tokens:\n    weight: 0.5\n    category: quality_concern\n    params:\n      threshold: 2000  # max tokens for MCQ answers\n\n  comment_only:\n    weight: 0.5\n    category: quality_concern\n    params: {}\n\n  prose_only_code_task:\n    weight: 1.0\n    category: quality_concern\n    params: {}\n\n  assistant_help_request:\n    weight: 1.0\n    category: quality_concern\n    params: {}\n\n  # \u2500\u2500 Category: routing_issue (weight 0.5) \u2500\u2500\n",
+      "kind": "source_excerpt",
+      "path": "orchestration/anomaly_signals.yaml",
+      "repo": "epyc-orchestrator",
+      "sha256": "7c8a66b2725a5301feb5392dfa269edc4d5307092dfbb71485b2725f30bda0d0",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/architecture_ir.schema.json",
+      "bytes": 9342,
+      "excerpt": "{\n  \"$schema\": \"https://json-schema.org/draft/2020-12/schema\",\n  \"$id\": \"https://github.com/pestopoppa/amd-epyc-inference/schemas/architecture_ir.schema.json\",\n  \"title\": \"ArchitectureIR\",\n  \"description\": \"Intermediate representation emitted by Tier-B3 Architect for system design, invariants, and acceptance criteria.\",\n  \"type\": \"object\",\n  \"additionalProperties\": false,\n  \"required\": [\n    \"name\",\n    \"version\",\n    \"goals\",\n    \"non_goals\",\n    \"global_invariants\",\n    \"repo_layout\",\n    \"modules\",\n    \"contracts\",\n    \"cross_cutting\",\n    \"acceptance\"\n  ],\n  \"properties\": {\n    \"name\": {\n      \"type\": \"string\",\n      \"minLength\": 1,\n      \"description\": \"Project or component name\"\n    },\n    \"version\": {\n      \"type\": \"string\",\n      \"minLength\": 1,\n      \"description\": \"Architecture version (semver recommended)\"\n    },\n    \"created_at\": {\n      \"type\": \"string\",\n      \"format\": \"date-time\"\n    },\n    \"context\": {\n      \"type\": \"object\",\n      \"description\": \"Project context and constraints\",\n      \"properties\": {\n        \"domain\": { \"type\": \"string\" },\n        \"language_stack\": {\n          \"type\": \"array\",\n          \"items\": { \"type\": \"string\" }\n        },\n        \"constraints\": {\n          \"type\": \"array\",\n          \"items\": { \"type\": \"string\" }\n        },\n        \"target_environment\": { \"type\": \"string\" }\n      }\n    },\n    \"goals\": {\n      \"type\": \"array\",\n      \"minItems\": 1,\n      \"items\": { \"type\": \"string\" },\n      \"description\": \"What this architecture aims to achieve\"\n    },\n    \"non_goals\": {\n      \"type\": \"array\",\n      \"items\": { \"type\": \"string\" },\n      \"description\": \"Explicitly out of scope\"\n    },\n    \"global_invariants\": {\n      \"type\": \"array\",\n      \"items\": { \"type\": \"string\" },\n      \"description\": \"System-wide invariants that must always hold\"\n    },\n    \"decisions\": {\n      \"type\": \"array\",\n      \"description\": \"Architecture Decision Records (ADRs)\",\n      \"items\": {\n        \"type\": \"object\",\n        \"additionalProperties\": false,\n        \"required\": [\"id\", \"title\", \"status\", \"rationale\"],\n        \"properties\": {\n          \"id\": {\n            \"type\": \"string\",\n            \"pattern\": \"^ADR-[0-9]+$\",\n            \"description\": \"ADR ide",
+      "kind": "source_excerpt",
+      "path": "orchestration/architecture_ir.schema.json",
+      "repo": "epyc-orchestrator",
+      "sha256": "5adc6397ba669cefa7d1b84b0f14397a8cc0bbdc9257b0778cedc4aad3359d90",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/archived_backups/autopilot_journal.jsonl.broken-run-backup",
+      "bytes": 9092,
+      "excerpt": "{\"trial_id\": 0, \"timestamp\": \"2026-03-31T15:53:27.669912+00:00\", \"species\": \"seeder\", \"action_type\": \"seed_batch\", \"tier\": 0, \"quality\": 0.0, \"speed\": 0.0, \"cost\": 0.5, \"reliability\": 0.1, \"pareto_status\": \"frontier\", \"git_tag\": \"autopilot/trial-0\", \"reasoning_hash\": \"\", \"config_snapshot\": {\"type\": \"seed_batch\", \"n_questions\": 50, \"suites\": [\"coder\", \"math\", \"reason\", \"chat\"]}, \"config_diff\": {}, \"reasoning\": \"\", \"parent_trial\": null, \"memory_count\": 0, \"active_flags\": [], \"eval_details\": {\"per_suite_quality\": {\"general\": 0.0, \"math\": 0.0, \"coder\": 0.0, \"thinking\": 0.0, \"instruction_precision\": 0.0, \"long_context\": 0.0, \"agentic\": 0.0, \"hotpotqa\": 0.0, \"simpleqa\": 0.0, \"mode_advantage_hard\": 0.0}, \"routing_distribution\": {\"frontdoor\": 1.0}, \"details\": {\"correct\": 0, \"total\": 10, \"errors\": 9}}, \"failure_analysis\": \"VIOLATIONS:\\n  - Quality floor violation: 0.000 < 2.0\\n  - Quality regression: -1.720 vs baseline (threshold: -0.05)\\n  - Throughput floor: 0.0 t/s < 10.2 t/s (80% of baseline 12.7)\\n\\nDEGRADED SUITES:\\n  - general: 0.000 (floor: 2.0)\\n  - math: 0.000 (floor: 2.0)\\n  - coder: 0.000 (floor: 2.0)\\n  - thinking: 0.000 (floor: 2.0)\\n  - instruction_precision: 0.000 (floor: 2.0)\\n  - long_context: 0.000 (floor: 2.0)\\n  - agentic: 0.000 (floor: 2.0)\\n  - hotpotqa: 0.000 (floor: 2.0)\\n  - simpleqa: 0.000 (floor: 2.0)\\n  - mode_advantage_hard: 0.000 (floor: 2.0)\\n\\nROUTING IMBALANCE:\\n  - frontdoor: 100.0% of requests\", \"hypothesis\": \"\", \"expected_mechanism\": \"\"}\n{\"trial_id\": 1, \"timestamp\": \"2026-03-31T20:07:58.717206+00:00\", \"species\": \"seeder\", \"action_type\": \"seed_batch\", \"tier\": 0, \"quality\": 0.0, \"speed\": 0.0, \"cost\": 0.5, \"reliability\": 0.1, \"pareto_status\": \"frontier\", \"git_tag\": \"autopilot/trial-1\", \"reasoning_hash\": \"\", \"config_snapshot\": {\"type\": \"seed_batch\", \"n_questions\": 30, \"suites\": [\"math\", \"coder\", \"general\", \"simpleqa\"]}, \"config_diff\": {\"n_questions\": {\"old\": 50, \"new\": 30}, \"suites\": {\"old\": [\"coder\", \"math\", \"reason\", \"chat\"], \"new\": [\"math\", \"coder\", \"general\", \"simpleqa\"]}}, \"reasoning\": \"\", \"parent_trial\": 0, \"memory_count\": 0, \"active_flags\": [], \"eval_details\": {\"per_suite_quality\": {\"general\": 0.0, \"math\": 0.0, \"coder\": 0.0, \"think",
+      "kind": "source_excerpt",
+      "path": "orchestration/archived_backups/autopilot_journal.jsonl.broken-run-backup",
+      "repo": "epyc-orchestrator",
+      "sha256": "5b9ba7b0ca1c5c3b686cf494c119ca5aa01729de9445e39cc058bbfbe2de51bb",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/archived_backups/autopilot_journal.tsv.broken-run-backup",
+      "bytes": 713,
+      "excerpt": "trial_id\ttimestamp\tspecies\taction_type\ttier\tquality\tspeed\tcost\treliability\tpareto_status\tgit_tag\treasoning_hash\n0\t2026-03-31T15:53:27.669912+00:00\tseeder\tseed_batch\t0\t0.0\t0.0\t0.5\t0.1\tfrontier\tautopilot/trial-0\t\n1\t2026-03-31T20:07:58.717206+00:00\tseeder\tseed_batch\t0\t0.0\t0.0\t0.5\t0.1\tfrontier\tautopilot/trial-1\t\n2\t2026-03-31T23:30:48.515065+00:00\tseeder\tseed_batch\t0\t0.0\t0.0\t0.5\t0.1\tfrontier\tautopilot/trial-2\t\n3\t2026-04-01T02:56:23.321775+00:00\tseeder\tseed_batch\t0\t0.0\t0.0\t0.5\t0.1\tfrontier\tautopilot/trial-3\t\n4\t2026-04-01T06:37:23.068342+00:00\tseeder\tseed_batch\t0\t0.0\t0.0\t0.5\t0.1\tfrontier\tautopilot/trial-4\t\n5\t2026-04-01T09:56:23.958931+00:00\tseeder\tseed_batch\t0\t0.0\t0.0\t0.5\t0.1\tfrontier\tautopilot/trial-5\t\n",
+      "kind": "source_excerpt",
+      "path": "orchestration/archived_backups/autopilot_journal.tsv.broken-run-backup",
+      "repo": "epyc-orchestrator",
+      "sha256": "ebe82480115c3d6003040186dbe2998eaa78231f51e3e789edfa2a10d8f24788",
+      "truncated": false
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/archived_backups/autopilot_rewind187_backup_20260531_232720/autopilot_journal.jsonl",
+      "bytes": 2481700,
+      "excerpt": "{\"trial_id\": 0, \"timestamp\": \"2026-05-26T22:42:53.969323+00:00\", \"species\": \"seeder\", \"action_type\": \"seed_batch\", \"tier\": 0, \"quality\": 1.5, \"speed\": 2.2755463094675665, \"cost\": 0.5, \"reliability\": 0.5, \"pareto_status\": \"frontier\", \"git_tag\": \"autopilot/trial-0\", \"reasoning_hash\": \"\", \"config_snapshot\": {\"type\": \"seed_batch\", \"n_questions\": 10}, \"config_diff\": {}, \"reasoning\": \"{\\\"type\\\": \\\"seed_batch\\\", \\\"n_questions\\\": 10}\", \"parent_trial\": 568, \"memory_count\": 0, \"active_flags\": [], \"eval_details\": {\"per_suite_quality\": {\"general\": 3.0, \"math\": 3.0, \"coder\": 3.0, \"thinking\": 0.0, \"instruction_precision\": 3.0, \"long_context\": 3.0, \"agentic\": 0.0, \"hotpotqa\": 0.0, \"simpleqa\": 0.0, \"mode_advantage_hard\": 0.0}, \"routing_distribution\": {\"frontdoor\": 1.0}, \"details\": {\"correct\": 5, \"total\": 10, \"errors\": 5, \"speed_semantics\": \"speed is the objective speed used by safety/Pareto; median_request_tps and aggregate_tps retain raw throughput components\", \"speed_metric_mode\": \"aggregate_batch_tps\", \"objective_speed_tps\": 2.2755463094675665, \"median_request_tps\": 1.8505623353740999, \"aggregate_tps\": 2.2755463094675665, \"eval_concurrency\": 3, \"eval_wall_s\": 268.50695037841797, \"sum_request_elapsed_s\": 762.9167668819427, \"tokens_generated\": 611}, \"speed_metric_mode\": \"aggregate_batch_tps\", \"median_request_speed\": 1.8505623353740999, \"aggregate_speed\": 2.2755463094675665, \"eval_concurrency\": 3, \"eval_wall_s\": 268.50695037841797, \"sum_request_elapsed_s\": 762.9167668819427, \"ece\": 0.0, \"auroc\": 0.0, \"calibration_violations\": 0, \"gepa_ratio\": 0.3}, \"metric_schema_version\": 1, \"harness_metrics\": {}, \"oracle_adequacy\": {}, \"failure_analysis\": \"legacy-scale failure_analysis omitted: references impossible 0-3 quality baseline/per-suite regression; use recorded q/s/r fields instead\", \"hypothesis\": \"Seed 10 questions across all\", \"expected_mechanism\": \"seed_batch\", \"deficiency_category\": \"quality_floor\", \"instruction_token_count\": 10454, \"instruction_token_ratio\": 0.997957118582584, \"self_criticism\": \"legacy-scale failure_analysis omitted: references impossible 0-3 quality baseline/per-suite regression; use recorded q/s/r fields instead\", \"keep_revert_decision\": \"revert\", \"optimizati",
+      "kind": "source_excerpt",
+      "path": "orchestration/archived_backups/autopilot_rewind187_backup_20260531_232720/autopilot_journal.jsonl",
+      "repo": "epyc-orchestrator",
+      "sha256": "59e22bfbe0f3d9d21e4a0ecbecff8f61eba32002f36f8ac92e2d78fe2e7ad02b",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/archived_backups/autopilot_rewind187_backup_20260531_232720/autopilot_journal.tsv",
+      "bytes": 25284,
+      "excerpt": "trial_id\ttimestamp\tspecies\taction_type\ttier\tquality\tspeed\tcost\treliability\tpareto_status\tgit_tag\treasoning_hash\n0\t2026-05-26T22:42:53.969323+00:00\tseeder\tseed_batch\t0\t1.5\t2.2755463094675665\t0.5\t0.5\tfrontier\tautopilot/trial-0\t\n1\t2026-05-26T22:57:24.119620+00:00\tseeder\tseed_batch\t0\t1.7999999999999998\t22.964524731419544\t0.5\t0.7\tfrontier\tautopilot/trial-1\t\n2\t2026-05-26T23:45:03.767683+00:00\t(killed)\tseed_batch\t0\t0.0\t0.0\t0.0\t0.0\tdominated\t\t\n3\t2026-05-27T00:30:03.043889+00:00\tseeder\tseed_batch\t0\t2.0999999999999996\t24.846700478672926\t0.5\t0.8\tfrontier\tautopilot/trial-3\t\n4\t2026-05-27T00:44:22.678927+00:00\tseeder\tseed_batch\t0\t0.8999999999999999\t2.0274378977374363\t0.5\t0.3\tdominated\tautopilot/trial-4\t\n5\t2026-05-27T01:08:45.134250+00:00\tseeder\tseed_batch\t0\t2.0999999999999996\t21.684861568726728\t0.5\t0.7\tdominated\tautopilot/trial-5\t\n6\t2026-05-27T01:25:08.784497+00:00\tseeder\tseed_batch\t0\t2.0999999999999996\t10.294747777513333\t0.5\t0.7\tdominated\tautopilot/trial-6\t\n7\t2026-05-27T01:39:44.679538+00:00\tseeder\tseed_batch\t0\t2.4000000000000004\t34.15730312032289\t0.5\t0.8\tfrontier\tautopilot/trial-7\t\n8\t2026-05-27T01:52:38.953127+00:00\tseeder\tseed_batch\t0\t1.7999999999999998\t29.364718135950394\t0.5\t0.6\tdominated\tautopilot/trial-8\t\n9\t2026-05-27T02:09:05.022749+00:00\tseeder\tseed_batch\t0\t1.2000000000000002\t15.445720908659103\t0.5\t0.4\tdominated\tautopilot/trial-9\t\n10\t2026-05-27T02:42:36.522014+00:00\tseeder\tseed_batch\t1\t0.15789473684210525\t8.088044711196055\t0.5\t0.13157894736842105\tdominated\tautopilot/trial-10\t\n11\t2026-05-27T02:50:40.498845+00:00\tseeder\tseed_batch\t0\t2.0999999999999996\t49.253627432009424\t0.5\t0.8\tfrontier\tautopilot/trial-11\t\n12\t2026-05-27T03:04:43.795466+00:00\tseeder\tseed_batch\t0\t0.6000000000000001\t0.7745584007492753\t0.5\t0.2\tdominated\tautopilot/trial-12\t\n13\t2026-05-27T03:15:39.667403+00:00\tseeder\tseed_batch\t0\t0.8999999999999999\t3.6072602112349377\t0.5\t0.3\tdominated\tautopilot/trial-13\t\n14\t2026-05-27T03:30:07.021665+00:00\tseeder\tseed_batch\t0\t1.5\t24.21738335376251\t0.5\t0.5\tdominated\tautopilot/trial-14\t\n15\t2026-05-27T04:00:57.736350+00:00\tseeder\tseed_batch\t1\t0.0\t2.7414036890672238\t0.5\t0.07894736842105263\tdominated\tautopilot/trial-15\t\n16\t2026-05-27T04:39:12.492799+00:00\tseeder\tseed_batch\t1\t0.315",
+      "kind": "source_excerpt",
+      "path": "orchestration/archived_backups/autopilot_rewind187_backup_20260531_232720/autopilot_journal.tsv",
+      "repo": "epyc-orchestrator",
+      "sha256": "3a9d13e3fff38a1e03345a8b5050f4ab4e73bca878a1571966d121c590643241",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/archived_backups/autopilot_rewind187_backup_20260531_232720/autopilot_state.json",
+      "bytes": 127081,
+      "excerpt": "{\n  \"trial_counter\": 191,\n  \"session_id\": \"96da520b-63f5-4583-a149-fa805e20de98\",\n  \"paused\": true,\n  \"species_budget\": {\n    \"seeder\": 0.55,\n    \"numeric_swarm\": 0.15,\n    \"prompt_forge\": 0.15,\n    \"structural_lab\": 0.1,\n    \"evolution_manager\": 0.05\n  },\n  \"td_errors\": [\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n",
+      "kind": "source_excerpt",
+      "path": "orchestration/archived_backups/autopilot_rewind187_backup_20260531_232720/autopilot_state.json",
+      "repo": "epyc-orchestrator",
+      "sha256": "544c64378a0888e0bd4380744fcabd15edf041e04b8b031611967923a1a280d3",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/archived_backups/autopilot_rewind187_backup_20260531_232720/short_term_memory.md",
+      "bytes": 7588,
+      "excerpt": "# AutoPilot Short-Term Memory\n<!-- Auto-generated. Last updated: 2026-05-31T13:34:32+00:00 -->\n\n## Running Hypotheses\n- [t165] Seed 10 questions across all -- rejected (q=1.66)\n- [t166] Seed 10 questions across all -- rejected (q=1.74)\n- [t167] Seed 10 questions across all -- rejected (q=1.66)\n- [t168] Seed 10 questions across all -- rejected (q=1.66)\n- [t169] Seed 10 questions across all -- rejected (q=1.58)\n- [t170] Seed 10 questions across all -- rejected (q=1.74)\n- [t171] Seed 10 questions across all -- rejected (q=1.74)\n- [t172] Seed 10 questions across all -- rejected (q=1.74)\n- [t173] Seed 10 questions across all -- rejected (q=2.40)\n- [t174] Seed 10 questions across all -- rejected (q=1.66)\n- [t175] Seed 10 questions across all -- rejected (q=1.50)\n- [t176] Seed 10 questions across all -- rejected (q=1.74)\n- [t177] Seed 10 questions across all -- rejected (q=1.50)\n- [t178] Seed 10 questions across all -- rejected (q=1.74)\n- [t179] Seed 10 questions across all -- rejected (q=1.58)\n- [t180] Seed 10 questions across all -- rejected (q=1.50)\n- [t181] Seed 10 questions across all -- rejected (q=1.50)\n- [t182] Seed 10 questions across all -- rejected (q=1.74)\n- [t183] Seed 10 questions across all -- rejected (q=1.74)\n- [t185] Seed 10 questions across all -- rejected (q=1.66)\n- [t189] Apply exactly one scoped edit to the single global t499 answer-format rule: limit <answer>...</answer> wrapping to code completion, multi-step agent, and implementation outputs; require bare outputs for short factual, multiple-choice, and instruction-following responses. Do not modify any other prompt blocks. -- confirmed (q=1.11)\n- [t190] Implement a minimal final-output normalization guard in escalation_helpers.py: when the final response is exactly a single top-level <answer>...</answer> envelope with no extra content, return inner text for direct-answer scoring paths; otherwise leave output unchanged. Do not alter routing, prompts, scorer logic, or other files. Hypothesis: zero-signal on instruction_precision is partly caused by post-generation envelope wrapping, not model reasoning. Falsifier: instruction_precision remains 0.00 after this isolated normalization change. -- rej",
+      "kind": "source_excerpt",
+      "path": "orchestration/archived_backups/autopilot_rewind187_backup_20260531_232720/short_term_memory.md",
+      "repo": "epyc-orchestrator",
+      "sha256": "fa1af19e1ebbb3cd94b22b06264f49e3292633c46cbcb0cb7c60434fb0adef24",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/archived_backups/autopilot_state.json.pre-codexprimary-20260610_105127",
+      "bytes": 188095,
+      "excerpt": "{\n  \"trial_counter\": 711,\n  \"session_id\": \"6bde1d20-4dcd-43e3-bc2f-25d95e899841\",\n  \"paused\": true,\n  \"species_budget\": {\n    \"seeder\": 0.13636363636363635,\n    \"numeric_swarm\": 0.22727272727272727,\n    \"prompt_forge\": 0.27272727272727276,\n    \"structural_lab\": 0.2727272727272727,\n    \"evolution_manager\": 0.09090909090909091\n  },\n  \"td_errors\": [\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.",
+      "kind": "source_excerpt",
+      "path": "orchestration/archived_backups/autopilot_state.json.pre-codexprimary-20260610_105127",
+      "repo": "epyc-orchestrator",
+      "sha256": "fa9666dc283a89da1430ee288d6234e02dadda01c0b3207da9ee43934862eafe",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/archived_backups/autopilot_state.json.pre-halt-reset-20260607_160428",
+      "bytes": 184450,
+      "excerpt": "{\n  \"trial_counter\": 708,\n  \"session_id\": \"96da520b-63f5-4583-a149-fa805e20de98\",\n  \"paused\": true,\n  \"species_budget\": {\n    \"seeder\": 0.13636363636363635,\n    \"numeric_swarm\": 0.22727272727272727,\n    \"prompt_forge\": 0.27272727272727276,\n    \"structural_lab\": 0.2727272727272727,\n    \"evolution_manager\": 0.09090909090909091\n  },\n  \"td_errors\": [\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.",
+      "kind": "source_excerpt",
+      "path": "orchestration/archived_backups/autopilot_state.json.pre-halt-reset-20260607_160428",
+      "repo": "epyc-orchestrator",
+      "sha256": "5b674eef606c73184d90e0205958ca259f9bcf11b34766ef5bfe7352e7e4d2af",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/archived_backups/autopilot_state.json.pre-mad-scrub-20260604",
+      "bytes": 56338,
+      "excerpt": "{\n  \"trial_counter\": 500,\n  \"session_id\": \"96da520b-63f5-4583-a149-fa805e20de98\",\n  \"paused\": false,\n  \"species_budget\": {\n    \"seeder\": 0.45833333333333337,\n    \"numeric_swarm\": 0.125,\n    \"prompt_forge\": 0.20833333333333334,\n    \"structural_lab\": 0.16666666666666669,\n    \"evolution_manager\": 0.04166666666666667\n  },\n  \"td_errors\": [\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n",
+      "kind": "source_excerpt",
+      "path": "orchestration/archived_backups/autopilot_state.json.pre-mad-scrub-20260604",
+      "repo": "epyc-orchestrator",
+      "sha256": "15a9cbe4b80f228254777a0b32afb7a194df29800980702c78b9e98cf8a309ac",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/archived_backups/autopilot_state.json.pre-resume-20260607_162643",
+      "bytes": 184401,
+      "excerpt": "{\n  \"trial_counter\": 708,\n  \"session_id\": null,\n  \"paused\": false,\n  \"species_budget\": {\n    \"seeder\": 0.13636363636363635,\n    \"numeric_swarm\": 0.22727272727272727,\n    \"prompt_forge\": 0.27272727272727276,\n    \"structural_lab\": 0.2727272727272727,\n    \"evolution_manager\": 0.09090909090909091\n  },\n  \"td_errors\": [\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n   ",
+      "kind": "source_excerpt",
+      "path": "orchestration/archived_backups/autopilot_state.json.pre-resume-20260607_162643",
+      "repo": "epyc-orchestrator",
+      "sha256": "ce9d405e7d7b53ef8756f904d8cc4e92ddb3a198d560a8b10fef188801c2db83",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/archived_backups/autopilot_state.json.pre-resume711-20260610_102601",
+      "bytes": 188081,
+      "excerpt": "{\n  \"trial_counter\": 711,\n  \"session_id\": \"e75a37f8-f521-4853-98b1-61060617ab61\",\n  \"paused\": true,\n  \"species_budget\": {\n    \"seeder\": 0.13636363636363635,\n    \"numeric_swarm\": 0.22727272727272727,\n    \"prompt_forge\": 0.27272727272727276,\n    \"structural_lab\": 0.2727272727272727,\n    \"evolution_manager\": 0.09090909090909091\n  },\n  \"td_errors\": [\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.0,\n    0.",
+      "kind": "source_excerpt",
+      "path": "orchestration/archived_backups/autopilot_state.json.pre-resume711-20260610_102601",
+      "repo": "epyc-orchestrator",
+      "sha256": "22183968015146291bf812f0bbd44a87b060b0d59693c4a570042844720451e7",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/archived_backups/autopilot_state.json.pre-uncontested-restart-1781326613",
+      "bytes": 288262,
+      "excerpt": "{\n  \"_last_instruction_ratio\": 0.9791694846476396,\n  \"autopilot_fleet_started_at\": 1781290035.4002302,\n  \"baseline_state\": {\n    \"baselines_by_tier\": {\n      \"1\": 1.813953488372093,\n      \"2\": 1.5242914979757085\n    },\n    \"cost\": 0.5,\n    \"frontdoor_speed\": 12.7,\n    \"per_suite_counts_by_tier\": {\n      \"1\": {\n        \"agentic\": 2,\n        \"bigcodebench\": 2,\n        \"coder\": 2,\n        \"cruxeval\": 2,\n        \"debugbench\": 2,\n        \"general\": 2,\n        \"gpqa\": 2,\n        \"hotpotqa\": 2,\n        \"instruction_precision\": 2,\n        \"livecodebench\": 2,\n        \"long_context\": 2,\n        \"math\": 2,\n        \"mode_advantage\": 2,\n        \"mode_advantage_hard\": 2,\n        \"simpleqa\": 2,\n        \"skill_transfer\": 2,\n        \"thinking\": 2,\n        \"tool_use\": 5,\n        \"usaco\": 2,\n        \"vl\": 2\n      }\n    },\n    \"per_suite_quality\": {\n      \"agentic\": null,\n      \"coder\": null,\n      \"general\": null,\n      \"gpqa\": null,\n      \"hotpotqa\": null,\n      \"instruction_precision\": null,\n      \"long_context\": null,\n      \"math\": null,\n      \"mode_advantage_hard\": null,\n      \"simpleqa\": null,\n      \"thinking\": null\n    },\n    \"per_suite_quality_by_tier\": {\n      \"1\": {\n        \"agentic\": 1.5,\n        \"bigcodebench\": 0.0,\n        \"coder\": 3.0,\n        \"cruxeval\": 3.0,\n        \"debugbench\": 3.0,\n        \"general\": 3.0,\n        \"gpqa\": 1.5,\n        \"hotpotqa\": 3.0,\n        \"instruction_precision\": 0.0,\n        \"livecodebench\": 3.0,\n        \"long_context\": 3.0,\n        \"math\": 3.0,\n        \"mode_advantage\": 1.5,\n        \"mode_advantage_hard\": 0.0,\n        \"simpleqa\": 1.5,\n        \"skill_transfer\": 1.5,\n        \"thinking\": 3.0,\n        \"tool_use\": 3.0,\n        \"usaco\": 0.0,\n        \"vl\": 0.0\n      },\n      \"2\": {\n        \"agentic\": 2.192307692307692,\n        \"bigcodebench\": 0.576923076923077,\n        \"coder\": 2.0769230769230766,\n        \"cruxeval\": 1.9615384615384617,\n        \"debugbench\": 1.9615384615384617,\n        \"general\": 2.4230769230769234,\n        \"gpqa\": 1.0384615384615383,\n        \"hotpotqa\": 1.9615384615384617,\n        \"instruction_precision\": 0.0,\n        \"livecodebench\": 2.769230769230769,\n        \"long_context\": 2.769230769230769,\n        \"math\": 2.5384615384615383,",
+      "kind": "source_excerpt",
+      "path": "orchestration/archived_backups/autopilot_state.json.pre-uncontested-restart-1781326613",
+      "repo": "epyc-orchestrator",
+      "sha256": "4fc67b5d09ae6182a7c3f92e92eb67706d0391106abcacdb8290fb128e39bae8",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/archived_backups/failure_blacklist.yaml.pre-n12-20260607_160524",
+      "bytes": 9586,
+      "excerpt": "blacklist:\n- pattern:\n    type: structural_experiment\n    flags:\n      lookup_cache: true\n  reason: Lookup table segfaults on Qwen3.5 hybrids after 1-3 prompts (2026-03-19).\n    Hardware-level architectural incompatibility \u2014 only works on dense models.\n  added: '2026-04-01T00:00:00Z'\n  severity: crash\n  source_trial: -1\n  notes: Server launch flag \u2014 not runtime-tunable. Prevents restart-based experiments.\n- pattern:\n    type: structural_experiment\n    flags:\n      session_log: false\n  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 188'\n  added: '2026-05-31T23:59:58.394405+00:00'\n  source_trial: 188\n- pattern:\n    type: code_mutation\n    file: src/tool_policy.py\n    mutation: targeted_fix\n  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 190'\n  added: '2026-06-01T00:31:58.040045+00:00'\n  source_trial: 190\n- pattern:\n    type: distill_skillbank\n  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 193'\n  added: '2026-06-01T01:31:36.486393+00:00'\n  source_trial: 193\n- pattern:\n    type: numeric_trial\n    surface: memrl_retrieval\n  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 360'\n  added: '2026-06-03T15:07:36.868467+00:00'\n  source_trial: 360\n- pattern:\n    type: deep_eval\n    tier: 2\n  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 367'\n  added: '2026-06-04T06:25:47.773880+00:00'\n  source_trial: 367\n- pattern:\n    type: seed_batch\n    n_questions: 10\n  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 379'\n  added: '2026-06-04T09:15:51.921541+00:00'\n  source_trial: 379\n- pattern:\n    type: structural_experiment\n    flags:\n      skillbank: true\n  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 505'\n  added: '2026-06-04T15:42:30.779348+00:00'\n  source_trial: 505\n- pattern:\n    type: structural_experiment\n    flags:\n      graph_router: true\n  reason: 'Auto-blacklisted: 2\u00d7 invalid \u2014 graph_router feature requires specialist_routing\n    feature'\n  added: '2026-06-04T17:17:42.501586+00:00'\n  source_trial: 518\n- pattern:\n    type: seed_batch\n    n_questions: 3\n  reason: 'Auto-blacklisted: 2\u00d7 critic-rejected \u2014 critic rejected: Draft proposes\n    seed",
+      "kind": "source_excerpt",
+      "path": "orchestration/archived_backups/failure_blacklist.yaml.pre-n12-20260607_160524",
+      "repo": "epyc-orchestrator",
+      "sha256": "d20d65be141aff7a8821652203fe13c9577b96036987941a4bc690b2ea3f9ba8",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/archived_backups/legacy_scale_cleanup_backup_20260531_122902/autopilot_journal.jsonl",
+      "bytes": 2456843,
+      "excerpt": "{\"trial_id\": 0, \"timestamp\": \"2026-05-26T22:42:53.969323+00:00\", \"species\": \"seeder\", \"action_type\": \"seed_batch\", \"tier\": 0, \"quality\": 1.5, \"speed\": 2.2755463094675665, \"cost\": 0.5, \"reliability\": 0.5, \"pareto_status\": \"frontier\", \"git_tag\": \"autopilot/trial-0\", \"reasoning_hash\": \"\", \"config_snapshot\": {\"type\": \"seed_batch\", \"n_questions\": 10}, \"config_diff\": {}, \"reasoning\": \"{\\\"type\\\": \\\"seed_batch\\\", \\\"n_questions\\\": 10}\", \"parent_trial\": 568, \"memory_count\": 0, \"active_flags\": [], \"eval_details\": {\"per_suite_quality\": {\"general\": 3.0, \"math\": 3.0, \"coder\": 3.0, \"thinking\": 0.0, \"instruction_precision\": 3.0, \"long_context\": 3.0, \"agentic\": 0.0, \"hotpotqa\": 0.0, \"simpleqa\": 0.0, \"mode_advantage_hard\": 0.0}, \"routing_distribution\": {\"frontdoor\": 1.0}, \"details\": {\"correct\": 5, \"total\": 10, \"errors\": 5, \"speed_semantics\": \"speed is the objective speed used by safety/Pareto; median_request_tps and aggregate_tps retain raw throughput components\", \"speed_metric_mode\": \"aggregate_batch_tps\", \"objective_speed_tps\": 2.2755463094675665, \"median_request_tps\": 1.8505623353740999, \"aggregate_tps\": 2.2755463094675665, \"eval_concurrency\": 3, \"eval_wall_s\": 268.50695037841797, \"sum_request_elapsed_s\": 762.9167668819427, \"tokens_generated\": 611}, \"speed_metric_mode\": \"aggregate_batch_tps\", \"median_request_speed\": 1.8505623353740999, \"aggregate_speed\": 2.2755463094675665, \"eval_concurrency\": 3, \"eval_wall_s\": 268.50695037841797, \"sum_request_elapsed_s\": 762.9167668819427, \"ece\": 0.0, \"auroc\": 0.0, \"calibration_violations\": 0, \"gepa_ratio\": 0.3}, \"failure_analysis\": \"legacy-scale failure_analysis omitted: references impossible 0-3 quality baseline/per-suite regression; use recorded q/s/r fields instead\", \"hypothesis\": \"Seed 10 questions across all\", \"expected_mechanism\": \"seed_batch\", \"deficiency_category\": \"quality_floor\", \"instruction_token_count\": 10454, \"instruction_token_ratio\": 0.997957118582584, \"self_criticism\": \"legacy-scale failure_analysis omitted: references impossible 0-3 quality baseline/per-suite regression; use recorded q/s/r fields instead\", \"keep_revert_decision\": \"revert\", \"optimization_directions\": \"Investigate declining suites: thinking (0.00 < 3.00), hot",
+      "kind": "source_excerpt",
+      "path": "orchestration/archived_backups/legacy_scale_cleanup_backup_20260531_122902/autopilot_journal.jsonl",
+      "repo": "epyc-orchestrator",
+      "sha256": "33e3b6b4b7a8f46d11e328f772321c7bbd6ea07952c04b36f0706b0d94ec21ac",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/archived_backups/legacy_scale_cleanup_backup_20260531_122902/autopilot_journal.tsv",
+      "bytes": 24756,
+      "excerpt": "trial_id\ttimestamp\tspecies\taction_type\ttier\tquality\tspeed\tcost\treliability\tpareto_status\tgit_tag\treasoning_hash\n0\t2026-05-26T22:42:53.969323+00:00\tseeder\tseed_batch\t0\t1.5\t2.2755463094675665\t0.5\t0.5\tfrontier\tautopilot/trial-0\t\n1\t2026-05-26T22:57:24.119620+00:00\tseeder\tseed_batch\t0\t1.7999999999999998\t22.964524731419544\t0.5\t0.7\tfrontier\tautopilot/trial-1\t\n2\t2026-05-26T23:45:03.767683+00:00\t(killed)\tseed_batch\t0\t0.0\t0.0\t0.0\t0.0\tdominated\t\t\n3\t2026-05-27T00:30:03.043889+00:00\tseeder\tseed_batch\t0\t2.0999999999999996\t24.846700478672926\t0.5\t0.8\tfrontier\tautopilot/trial-3\t\n4\t2026-05-27T00:44:22.678927+00:00\tseeder\tseed_batch\t0\t0.8999999999999999\t2.0274378977374363\t0.5\t0.3\tdominated\tautopilot/trial-4\t\n5\t2026-05-27T01:08:45.134250+00:00\tseeder\tseed_batch\t0\t2.0999999999999996\t21.684861568726728\t0.5\t0.7\tdominated\tautopilot/trial-5\t\n6\t2026-05-27T01:25:08.784497+00:00\tseeder\tseed_batch\t0\t2.0999999999999996\t10.294747777513333\t0.5\t0.7\tdominated\tautopilot/trial-6\t\n7\t2026-05-27T01:39:44.679538+00:00\tseeder\tseed_batch\t0\t2.4000000000000004\t34.15730312032289\t0.5\t0.8\tfrontier\tautopilot/trial-7\t\n8\t2026-05-27T01:52:38.953127+00:00\tseeder\tseed_batch\t0\t1.7999999999999998\t29.364718135950394\t0.5\t0.6\tdominated\tautopilot/trial-8\t\n9\t2026-05-27T02:09:05.022749+00:00\tseeder\tseed_batch\t0\t1.2000000000000002\t15.445720908659103\t0.5\t0.4\tdominated\tautopilot/trial-9\t\n10\t2026-05-27T02:42:36.522014+00:00\tseeder\tseed_batch\t1\t0.15789473684210525\t8.088044711196055\t0.5\t0.13157894736842105\tdominated\tautopilot/trial-10\t\n11\t2026-05-27T02:50:40.498845+00:00\tseeder\tseed_batch\t0\t2.0999999999999996\t49.253627432009424\t0.5\t0.8\tfrontier\tautopilot/trial-11\t\n12\t2026-05-27T03:04:43.795466+00:00\tseeder\tseed_batch\t0\t0.6000000000000001\t0.7745584007492753\t0.5\t0.2\tdominated\tautopilot/trial-12\t\n13\t2026-05-27T03:15:39.667403+00:00\tseeder\tseed_batch\t0\t0.8999999999999999\t3.6072602112349377\t0.5\t0.3\tdominated\tautopilot/trial-13\t\n14\t2026-05-27T03:30:07.021665+00:00\tseeder\tseed_batch\t0\t1.5\t24.21738335376251\t0.5\t0.5\tdominated\tautopilot/trial-14\t\n15\t2026-05-27T04:00:57.736350+00:00\tseeder\tseed_batch\t1\t0.0\t2.7414036890672238\t0.5\t0.07894736842105263\tdominated\tautopilot/trial-15\t\n16\t2026-05-27T04:39:12.492799+00:00\tseeder\tseed_batch\t1\t0.315",
+      "kind": "source_excerpt",
+      "path": "orchestration/archived_backups/legacy_scale_cleanup_backup_20260531_122902/autopilot_journal.tsv",
+      "repo": "epyc-orchestrator",
+      "sha256": "804111dcda68c1b499705a39392c6dde9af2561b227c94014109da23aace7c3f",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/archived_backups/legacy_scale_cleanup_backup_20260531_122902/short_term_memory.md",
+      "bytes": 6811,
+      "excerpt": "# AutoPilot Short-Term Memory\n<!-- Auto-generated. Last updated: 2026-05-31T11:12:49+00:00 -->\n\n## Running Hypotheses\n- [t164] Seed 10 questions across all -- rejected (q=1.66)\n- [t165] Seed 10 questions across all -- rejected (q=1.66)\n- [t166] Seed 10 questions across all -- rejected (q=1.74)\n- [t167] Seed 10 questions across all -- rejected (q=1.66)\n- [t168] Seed 10 questions across all -- rejected (q=1.66)\n- [t169] Seed 10 questions across all -- rejected (q=1.58)\n- [t170] Seed 10 questions across all -- rejected (q=1.74)\n- [t171] Seed 10 questions across all -- rejected (q=1.74)\n- [t172] Seed 10 questions across all -- rejected (q=1.74)\n- [t173] Seed 10 questions across all -- rejected (q=2.40)\n- [t174] Seed 10 questions across all -- rejected (q=1.66)\n- [t175] Seed 10 questions across all -- rejected (q=1.50)\n- [t176] Seed 10 questions across all -- rejected (q=1.74)\n- [t177] Seed 10 questions across all -- rejected (q=1.50)\n- [t178] Seed 10 questions across all -- rejected (q=1.74)\n- [t179] Seed 10 questions across all -- rejected (q=1.58)\n- [t180] Seed 10 questions across all -- rejected (q=1.50)\n- [t181] Seed 10 questions across all -- rejected (q=1.50)\n- [t182] Seed 10 questions across all -- rejected (q=1.74)\n- [t183] Seed 10 questions across all -- rejected (q=1.74)\n- [t184] Seed 10 questions across all -- rejected (q=1.74)\n- [t185] Seed 10 questions across all -- rejected (q=1.66)\n- [t186] Seed 10 questions across all -- rejected (q=1.66)\n- [t187] Seed 10 questions across all -- rejected (q=0.00)\n- [t189] Apply exactly one scoped edit to the single global t499 answer-format rule: limit <answer>...</answer> wrapping to code completion, multi-step agent, and implementation outputs; require bare outputs for short factual, multiple-choice, and instruction-following responses. Do not modify any other prompt blocks. -- confirmed (q=1.11)\n- [t190] Implement a minimal final-output normalization guard in escalation_helpers.py: when the final response is exactly a single top-level <answer>...</answer> envelope with no extra content, return inner text for direct-answer scoring paths; otherwise leave output unchanged. Do not alter routing, prompts, scorer logic,",
+      "kind": "source_excerpt",
+      "path": "orchestration/archived_backups/legacy_scale_cleanup_backup_20260531_122902/short_term_memory.md",
+      "repo": "epyc-orchestrator",
+      "sha256": "397d8479911d20d61f6aabc0c3a8b605499e633bcd02396e7adb218b58bb16a4",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/archived_backups/legacy_scale_cleanup_backup_20260531_122902/strategies.db",
+      "bytes": 1490944,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/archived_backups/legacy_scale_cleanup_backup_20260531_122902/strategies.db",
+      "repo": "epyc-orchestrator",
+      "sha256": "14470838858f1169ce1a37e1916e818d992bec123595429c5c622b1945953d8b",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/archived_backups/legacy_scale_cleanup_backup_20260531_122902/strategy_embeddings.faiss",
+      "bytes": 1011757,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/archived_backups/legacy_scale_cleanup_backup_20260531_122902/strategy_embeddings.faiss",
+      "repo": "epyc-orchestrator",
+      "sha256": "dc84936e558bbec56de2b696e56a1518d7dd0e3e9c717596ed22fd3179e2f822",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/archived_backups/legacy_scale_cleanup_backup_20260531_122902/strategy_id_map.npy",
+      "bytes": 9910,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/archived_backups/legacy_scale_cleanup_backup_20260531_122902/strategy_id_map.npy",
+      "repo": "epyc-orchestrator",
+      "sha256": "603ade99ddc0bec2d28cdddb1bf2f01c8926d4423e6cf3d9dca5f240457637a1",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/archived_backups/optuna_study.db.bak-quarantine786-20260613_093831",
+      "bytes": 270336,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/archived_backups/optuna_study.db.bak-quarantine786-20260613_093831",
+      "repo": "epyc-orchestrator",
+      "sha256": "a90260ee71aff07e5c623fff0e8e81e5921ba9d009e0052a47d202ae3b60d3c3",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/archived_backups/scrub_gatelock_backup_20260601_091315/autopilot_journal.jsonl",
+      "bytes": 3047047,
+      "excerpt": "{\"trial_id\": 0, \"timestamp\": \"2026-05-26T22:42:53.969323+00:00\", \"species\": \"seeder\", \"action_type\": \"seed_batch\", \"tier\": 0, \"quality\": 1.5, \"speed\": 2.2755463094675665, \"cost\": 0.5, \"reliability\": 0.5, \"pareto_status\": \"frontier\", \"git_tag\": \"autopilot/trial-0\", \"reasoning_hash\": \"\", \"config_snapshot\": {\"type\": \"seed_batch\", \"n_questions\": 10}, \"config_diff\": {}, \"reasoning\": \"{\\\"type\\\": \\\"seed_batch\\\", \\\"n_questions\\\": 10}\", \"parent_trial\": 568, \"memory_count\": 0, \"active_flags\": [], \"eval_details\": {\"per_suite_quality\": {\"general\": 3.0, \"math\": 3.0, \"coder\": 3.0, \"thinking\": 0.0, \"instruction_precision\": 3.0, \"long_context\": 3.0, \"agentic\": 0.0, \"hotpotqa\": 0.0, \"simpleqa\": 0.0, \"mode_advantage_hard\": 0.0}, \"routing_distribution\": {\"frontdoor\": 1.0}, \"details\": {\"correct\": 5, \"total\": 10, \"errors\": 5, \"speed_semantics\": \"speed is the objective speed used by safety/Pareto; median_request_tps and aggregate_tps retain raw throughput components\", \"speed_metric_mode\": \"aggregate_batch_tps\", \"objective_speed_tps\": 2.2755463094675665, \"median_request_tps\": 1.8505623353740999, \"aggregate_tps\": 2.2755463094675665, \"eval_concurrency\": 3, \"eval_wall_s\": 268.50695037841797, \"sum_request_elapsed_s\": 762.9167668819427, \"tokens_generated\": 611}, \"speed_metric_mode\": \"aggregate_batch_tps\", \"median_request_speed\": 1.8505623353740999, \"aggregate_speed\": 2.2755463094675665, \"eval_concurrency\": 3, \"eval_wall_s\": 268.50695037841797, \"sum_request_elapsed_s\": 762.9167668819427, \"ece\": 0.0, \"auroc\": 0.0, \"calibration_violations\": 0, \"gepa_ratio\": 0.3}, \"metric_schema_version\": 1, \"harness_metrics\": {}, \"oracle_adequacy\": {}, \"failure_analysis\": \"legacy-scale failure_analysis omitted: references impossible 0-3 quality baseline/per-suite regression; use recorded q/s/r fields instead\", \"hypothesis\": \"Seed 10 questions across all\", \"expected_mechanism\": \"seed_batch\", \"deficiency_category\": \"quality_floor\", \"instruction_token_count\": 10454, \"instruction_token_ratio\": 0.997957118582584, \"self_criticism\": \"legacy-scale failure_analysis omitted: references impossible 0-3 quality baseline/per-suite regression; use recorded q/s/r fields instead\", \"keep_revert_decision\": \"revert\", \"optimizati",
+      "kind": "source_excerpt",
+      "path": "orchestration/archived_backups/scrub_gatelock_backup_20260601_091315/autopilot_journal.jsonl",
+      "repo": "epyc-orchestrator",
+      "sha256": "af5d20f1f6043cef2e5fc8df35a5df967ec4488e6e2ac2e265650627188a2c2b",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/archived_backups/scrub_gatelock_backup_20260601_091315/short_term_memory.md",
+      "bytes": 7073,
+      "excerpt": "# AutoPilot Short-Term Memory\n<!-- Auto-generated. Last updated: 2026-06-01T06:39:28+00:00 -->\n\n## Running Hypotheses\n- [t165] Seed 10 questions across all -- rejected (q=1.66)\n- [t166] Seed 10 questions across all -- rejected (q=1.74)\n- [t167] Seed 10 questions across all -- rejected (q=1.66)\n- [t168] Seed 10 questions across all -- rejected (q=1.66)\n- [t169] Seed 10 questions across all -- rejected (q=1.58)\n- [t170] Seed 10 questions across all -- rejected (q=1.74)\n- [t171] Seed 10 questions across all -- rejected (q=1.74)\n- [t172] Seed 10 questions across all -- rejected (q=1.74)\n- [t173] Seed 10 questions across all -- rejected (q=2.40)\n- [t174] Seed 10 questions across all -- rejected (q=1.66)\n- [t175] Seed 10 questions across all -- rejected (q=1.50)\n- [t176] Seed 10 questions across all -- rejected (q=1.74)\n- [t177] Seed 10 questions across all -- rejected (q=1.50)\n- [t178] Seed 10 questions across all -- rejected (q=1.74)\n- [t179] Seed 10 questions across all -- rejected (q=1.58)\n- [t180] Seed 10 questions across all -- rejected (q=1.50)\n- [t181] Seed 10 questions across all -- rejected (q=1.50)\n- [t182] Seed 10 questions across all -- rejected (q=1.74)\n- [t183] Seed 10 questions across all -- rejected (q=1.74)\n- [t185] Seed 10 questions across all -- rejected (q=1.66)\n- [t193] Optimize escalation surface -- rejected (q=1.66)\n- [t196] Rollback -- rejected (q=2.40)\n- [t214] Rollback -- rejected (q=1.74)\n- [t180] Rollback -- confirmed (q=2.40)\n- [t185] Apply exactly one scoped edit in the frontdoor reasoning section: add a single concise verification instruction for multiple-choice responses ('before final answer, briefly eliminate each non-selected option'). Do not modify any answer-format/wrapping rules or any other prompt blocks; keep net prompt length change minimal. -- rejected (q=0.39)\n- [t207] Seed 10 questions across all -- rejected (q=0.39)\n\n## Optimization Directions\n- [t176] Seeding complete \u2014 evaluate if routing data is sufficient for training\n- [t177] Investigate declining suites: hotpotqa (1.50 < 3.00), skill_transfer (0.00 < 1.50), cruxeval (1.50 < 3.00), agentic (1.50 < 3.00), math (1.50 < 3.00)\n- [t177] Seeding complete \u2014 evaluate if routi",
+      "kind": "source_excerpt",
+      "path": "orchestration/archived_backups/scrub_gatelock_backup_20260601_091315/short_term_memory.md",
+      "repo": "epyc-orchestrator",
+      "sha256": "8c1a453a1f6fc3edb8fc409700190fb1aafacd1b98a7aade774c5b9ac2b1bb11",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/archived_backups/scrub_gatelock_backup_20260601_091315/strategies.db",
+      "bytes": 1490944,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/archived_backups/scrub_gatelock_backup_20260601_091315/strategies.db",
+      "repo": "epyc-orchestrator",
+      "sha256": "da1e45c6af3283d6e0daaaed84b87688e199db77e19688ea4fc3fda5a8c83a18",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/archived_backups/scrub_gatelock_backup_20260601_091315/strategy_embeddings.faiss",
+      "bytes": 1663021,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/archived_backups/scrub_gatelock_backup_20260601_091315/strategy_embeddings.faiss",
+      "repo": "epyc-orchestrator",
+      "sha256": "f9ad2e5f29c3f366b5099e675ebf3339b5062f32ae4e24196451981f83bc1f9e",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/archived_backups/scrub_gatelock_backup_20260601_091315/strategy_id_map.npy",
+      "bytes": 16112,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/archived_backups/scrub_gatelock_backup_20260601_091315/strategy_id_map.npy",
+      "repo": "epyc-orchestrator",
+      "sha256": "5f0863e644a2ebccda62f3b04500496961d5ea041c98801d5c482b75d547b2cf",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/attestation/latest.json",
+      "bytes": 340741,
+      "excerpt": "{\n  \"generated_at\": \"2026-06-28T04:46:52Z\",\n  \"numa_ports\": {\n    \"8070\": {\n      \"cpu_list\": \"0-47,96-143\",\n      \"instance_idx\": 0,\n      \"numactl_policy\": null,\n      \"role\": \"frontdoor\",\n      \"threads\": 96\n    },\n    \"8072\": {\n      \"cpu_list\": \"0-95\",\n      \"instance_idx\": 0,\n      \"numactl_policy\": null,\n      \"role\": \"worker_general\",\n      \"threads\": 96\n    },\n    \"8080\": {\n      \"cpu_list\": \"0-23,96-119\",\n      \"instance_idx\": 1,\n      \"numactl_policy\": null,\n      \"role\": \"frontdoor\",\n      \"threads\": 48\n    },\n    \"8082\": {\n      \"cpu_list\": \"0-23,96-119\",\n      \"instance_idx\": 1,\n      \"numactl_policy\": null,\n      \"role\": \"worker_general\",\n      \"threads\": 48\n    },\n    \"8083\": {\n      \"cpu_list\": \"0-95\",\n      \"instance_idx\": 0,\n      \"numactl_policy\": \"interleave=all\",\n      \"role\": \"architect_general\",\n      \"threads\": 96\n    },\n    \"8085\": {\n      \"cpu_list\": \"0-47,96-143\",\n      \"instance_idx\": 0,\n      \"numactl_policy\": null,\n      \"role\": \"ingest_long_context\",\n      \"threads\": 96\n    },\n    \"8086\": {\n      \"cpu_list\": \"24-47,120-143\",\n      \"instance_idx\": 0,\n      \"numactl_policy\": null,\n      \"role\": \"worker_vision\",\n      \"threads\": 24\n    },\n    \"8087\": {\n      \"cpu_list\": \"48-95,144-191\",\n      \"instance_idx\": 0,\n      \"numactl_policy\": null,\n      \"role\": \"vision_escalation\",\n      \"threads\": 96\n    },\n    \"8180\": {\n      \"cpu_list\": \"24-47,120-143\",\n      \"instance_idx\": 2,\n      \"numactl_policy\": null,\n      \"role\": \"frontdoor\",\n      \"threads\": 48\n    },\n    \"8182\": {\n      \"cpu_list\": \"24-47,120-143\",\n      \"instance_idx\": 2,\n      \"numactl_policy\": null,\n      \"role\": \"worker_general\",\n      \"threads\": 48\n    },\n    \"8185\": {\n      \"cpu_list\": \"0-23,96-119\",\n      \"instance_idx\": 1,\n      \"numactl_policy\": null,\n      \"role\": \"ingest_long_context\",\n      \"threads\": 48\n    },\n    \"8187\": {\n      \"cpu_list\": \"0-23,96-119\",\n      \"instance_idx\": 1,\n      \"numactl_policy\": null,\n      \"role\": \"vision_escalation\",\n      \"threads\": 48\n    },\n    \"8280\": {\n      \"cpu_list\": \"48-71,144-167\",\n      \"instance_idx\": 3,\n      \"numactl_policy\": null,\n      \"role\": \"frontdoor\",\n      \"threads\": 48\n    },\n    \"8282\": {\n      \"cpu_list\": \"48-71,",
+      "kind": "source_excerpt",
+      "path": "orchestration/attestation/latest.json",
+      "repo": "epyc-orchestrator",
+      "sha256": "693601e3b3df81b8eed9ed8ca94d7c60fcbc4c38beb33efd85b0e154bee66673",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/attestation/latest.md",
+      "bytes": 13209,
+      "excerpt": "# Running-State Attestation\n\nGenerated: `2026-06-28T04:46:52Z`\nTrigger: `v6-iqk-eval-parity-armC-full-on`\nScope: `W1_W2_W3_W4_process_flags_serving_eval_drift_cadence_consumers`\nProcesses: `33`\nIssues: `16`\n\n## Process Summary\n\n| kind | count |\n|---|---:|\n| lightonocr | 1 |\n| llama_server | 28 |\n| mcp_server | 3 |\n| orchestrator_api | 1 |\n\n## Processes\n\n| pid | kind | port | registry | exe | sha256[:12] | link status |\n|---:|---|---:|---|---|---|---|\n| 1554 | mcp_server |  |  | `/home/node/.local/share/uv/python/cpython-3.14.5-linux-x86_64-gnu/bin/python3.14` | a1512f9a0702 | ok |\n| 1328126 | orchestrator_api | 8000 |  | `/home/node/.local/share/uv/python/cpython-3.14.5-linux-x86_64-gnu/bin/python3.14` | a1512f9a0702 | ok |\n| 1373518 | llama_server | 8072 | server_mode.worker | `/mnt/raid0/llm/llama.cpp/build/bin/llama-server` | c670826a4654 | ok |\n| 2395669 | mcp_server |  |  | `/home/node/.local/share/uv/python/cpython-3.14.5-linux-x86_64-gnu/bin/python3.14` | a1512f9a0702 | ok |\n| 3750433 | llama_server | 8082 |",
+      "kind": "source_excerpt",
+      "path": "orchestration/attestation/latest.md",
+      "repo": "epyc-orchestrator",
+      "sha256": "f8a870b09ab58521713b113e30423d5d09aa195cd407ee61fda1b3f07c3ee246",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/authority_consent.json",
+      "bytes": 514,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/authority_consent.json",
+      "repo": "epyc-orchestrator",
+      "sha256": "5b66a9d98f51b6ab44898e8fafba5c2763a74dd5d06936272f6ea1270a42078f",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_baseline.yaml",
+      "bytes": 4802,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/autopilot_baseline.yaml",
+      "repo": "epyc-orchestrator",
+      "sha256": "9ec00bc5b197dcb1572fdf882f72c6565bccf74d97f026d94683e8103523b2da",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_checkpoints/20260401_095708/checkpoint_meta.json",
+      "bytes": 210,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/autopilot_checkpoints/20260401_095708/checkpoint_meta.json",
+      "repo": "epyc-orchestrator",
+      "sha256": "5685fd407c24844776f7768cef588e7f5509e22ed6caacf04768aaa5c2013e19",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_checkpoints/20260401_095708/classifier_config.yaml",
+      "bytes": 7459,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/autopilot_checkpoints/20260401_095708/classifier_config.yaml",
+      "repo": "epyc-orchestrator",
+      "sha256": "bef88a4fd9e760460adda35f34206ef70a84a7acc9b2dd3e67025ed7c8174363",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_checkpoints/20260401_095708/embeddings.faiss",
+      "bytes": 45,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/autopilot_checkpoints/20260401_095708/embeddings.faiss",
+      "repo": "epyc-orchestrator",
+      "sha256": "7cfbb225fcb0cbe0273cc8f3ee54e61722928d3c40754990345b43a5de150c6b",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_checkpoints/20260401_095708/episodic.db",
+      "bytes": 19349504,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/autopilot_checkpoints/20260401_095708/episodic.db",
+      "repo": "epyc-orchestrator",
+      "sha256": "37ad1189dc7c21d60618bcf032d6bf3311436c45707e70f94fe89c8fcd9ad6ef",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_checkpoints/20260401_095708/id_map.npy",
+      "bytes": 275,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/autopilot_checkpoints/20260401_095708/id_map.npy",
+      "repo": "epyc-orchestrator",
+      "sha256": "1d4ee2e04611f45d75c21d87468ccd4f5b028b3cc951678a41ceb263db5cb3ca",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_checkpoints/20260401_095708/prompts/architect_investigate.md",
+      "bytes": 3861,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/autopilot_checkpoints/20260401_095708/prompts/architect_investigate.md",
+      "repo": "epyc-orchestrator",
+      "sha256": "c3fdd7a548cbf83cf62b1da426e61afee01ed2589491a70b541c71550b62486c",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_checkpoints/20260401_095708/prompts/architect_synthesis.md",
+      "bytes": 1233,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/autopilot_checkpoints/20260401_095708/prompts/architect_synthesis.md",
+      "repo": "epyc-orchestrator",
+      "sha256": "742a0f6b10a756b94cd565278e0d7544bce4f3cc8b608f4f16f062f8823fea46",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_checkpoints/20260401_095708/prompts/compaction_index.md",
+      "bytes": 1722,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/autopilot_checkpoints/20260401_095708/prompts/compaction_index.md",
+      "repo": "epyc-orchestrator",
+      "sha256": "f6cfbd58a2aa8e6aca5e854319690b41d61c6731af3cc0869c86a3c4da923583",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_checkpoints/20260401_095708/prompts/confidence_estimation.md",
+      "bytes": 578,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/autopilot_checkpoints/20260401_095708/prompts/confidence_estimation.md",
+      "repo": "epyc-orchestrator",
+      "sha256": "1be4c297e800807e23c7995bb5cd649cf8bbf7e2a0ae5d356162a97fb8d2105c",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_checkpoints/20260401_095708/prompts/debugger_system.md",
+      "bytes": 10899,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/autopilot_checkpoints/20260401_095708/prompts/debugger_system.md",
+      "repo": "epyc-orchestrator",
+      "sha256": "a70e3b818d84819dbb4265d65541df6a142193869c9283ef2045ae3bdb8cf449",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_checkpoints/20260401_095708/prompts/formalizer.md",
+      "bytes": 217,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/autopilot_checkpoints/20260401_095708/prompts/formalizer.md",
+      "repo": "epyc-orchestrator",
+      "sha256": "f71767d8e9419a0e9b196d2c0fc83df5900574e6f4ad01af82a5b2454e1a3bdf",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_checkpoints/20260401_095708/prompts/frontdoor.md",
+      "bytes": 6519,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/autopilot_checkpoints/20260401_095708/prompts/frontdoor.md",
+      "repo": "epyc-orchestrator",
+      "sha256": "0f9eedc033108ed9769d34d74df0e0fd78fec340e3f1db2e9e11b56f104c600c",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_checkpoints/20260401_095708/prompts/meta_agent_reflect.md",
+      "bytes": 1765,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/autopilot_checkpoints/20260401_095708/prompts/meta_agent_reflect.md",
+      "repo": "epyc-orchestrator",
+      "sha256": "e14a0fbebc430f00e9a5a1de3a6389280243c9d9c87ede7c5d3d89a3d599d4e8",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_checkpoints/20260401_095708/prompts/plan_review.md",
+      "bytes": 309,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/autopilot_checkpoints/20260401_095708/prompts/plan_review.md",
+      "repo": "epyc-orchestrator",
+      "sha256": "eb76a0cf2df3af1fddf61ff960c3931b73190835f5cbd6b727cf0ac6e57f221a",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_checkpoints/20260401_095708/prompts/review_verdict.md",
+      "bytes": 183,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/autopilot_checkpoints/20260401_095708/prompts/review_verdict.md",
+      "repo": "epyc-orchestrator",
+      "sha256": "38554a2709b146aed2377d503546d6905e4ea2caf128de45e2616e9f4b53a44d",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_checkpoints/20260401_095708/prompts/revision.md",
+      "bytes": 220,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/autopilot_checkpoints/20260401_095708/prompts/revision.md",
+      "repo": "epyc-orchestrator",
+      "sha256": "19f530639be9d671cb75ed5b6aab50dbc0f660769e4f80533c80c4ad8930bc32",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_checkpoints/20260401_095708/prompts/roles/architect_coding.md",
+      "bytes": 437,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/autopilot_checkpoints/20260401_095708/prompts/roles/architect_coding.md",
+      "repo": "epyc-orchestrator",
+      "sha256": "f11899b7b991388d947174253c6691b19025810fdb3c21f25b3d3398bba193ca",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_checkpoints/20260401_095708/prompts/roles/architect_general.md",
+      "bytes": 430,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/autopilot_checkpoints/20260401_095708/prompts/roles/architect_general.md",
+      "repo": "epyc-orchestrator",
+      "sha256": "7f2e05fe4a4fb8962d195e5033f52ae1858f6db956c7a5d6f3815fdf017fc6e6",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_checkpoints/20260401_095708/prompts/roles/coder_escalation.md",
+      "bytes": 822,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/autopilot_checkpoints/20260401_095708/prompts/roles/coder_escalation.md",
+      "repo": "epyc-orchestrator",
+      "sha256": "095e14815921e258f02cf8193bae37fc1cb906deb8420d72a0c826fb38bdb983",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_checkpoints/20260401_095708/prompts/roles/coder_primary.md",
+      "bytes": 243,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/autopilot_checkpoints/20260401_095708/prompts/roles/coder_primary.md",
+      "repo": "epyc-orchestrator",
+      "sha256": "ea5b9e54940ef4502d0640d9a0b656f9427d6f6e1104bebee15e677c06279379",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_checkpoints/20260401_095708/prompts/roles/frontdoor.md",
+      "bytes": 668,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/autopilot_checkpoints/20260401_095708/prompts/roles/frontdoor.md",
+      "repo": "epyc-orchestrator",
+      "sha256": "1cdfe2c7512fee5d1ced61947f53e44271112070081da6f9d672bb5659e51fbb",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_checkpoints/20260401_095708/prompts/roles/ingest_long_context.md",
+      "bytes": 122,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/autopilot_checkpoints/20260401_095708/prompts/roles/ingest_long_context.md",
+      "repo": "epyc-orchestrator",
+      "sha256": "a1e24bcd31eded6cc39eb9cee627d80f865ac02e845ab3355b7c7031145147db",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_checkpoints/20260401_095708/prompts/roles/worker_general.md",
+      "bytes": 271,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/autopilot_checkpoints/20260401_095708/prompts/roles/worker_general.md",
+      "repo": "epyc-orchestrator",
+      "sha256": "ae44bfdf8e99d109a11e0617520b58cbe5854b470a3bb70e6a31c448f5e6bed2",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_checkpoints/20260401_095708/prompts/roles/worker_math.md",
+      "bytes": 244,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/autopilot_checkpoints/20260401_095708/prompts/roles/worker_math.md",
+      "repo": "epyc-orchestrator",
+      "sha256": "76b4943ef128fccbac25b2a354545c706ec4c9b51ae8353a7b894f97c9c5889f",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_checkpoints/20260401_095708/prompts/roles/worker_vision.md",
+      "bytes": 107,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/autopilot_checkpoints/20260401_095708/prompts/roles/worker_vision.md",
+      "repo": "epyc-orchestrator",
+      "sha256": "3e22631960b0f849025f609938f86fabd9e811ba20931eceef531946ac6b1a20",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_checkpoints/20260401_095708/prompts/root_lm_system.md",
+      "bytes": 915,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/autopilot_checkpoints/20260401_095708/prompts/root_lm_system.md",
+      "repo": "epyc-orchestrator",
+      "sha256": "bbc6e5a217125924bb268457e671ac350a9f1ac2fbb5d2bfbb6b4c44e7c3962f",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_checkpoints/20260401_095708/prompts/rules.md",
+      "bytes": 6655,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/autopilot_checkpoints/20260401_095708/prompts/rules.md",
+      "repo": "epyc-orchestrator",
+      "sha256": "f27c0b7b13304a84282f0e407b7af82075e21c8f880952f1891390500a981df7",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_checkpoints/20260401_095708/prompts/task_decomposition.md",
+      "bytes": 578,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/autopilot_checkpoints/20260401_095708/prompts/task_decomposition.md",
+      "repo": "epyc-orchestrator",
+      "sha256": "9b436cd0ca94027ba97718ff9292aeb6738c25d8cf3359775e2dc71792118c6a",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_checkpoints/20260401_095708/prompts/tools.md",
+      "bytes": 714,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/autopilot_checkpoints/20260401_095708/prompts/tools.md",
+      "repo": "epyc-orchestrator",
+      "sha256": "313e2c4e59872c921c8d9fddd48268e4b091a1451decaf874784b438b469b7bf",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_checkpoints/20260401_095807/checkpoint_meta.json",
+      "bytes": 210,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/autopilot_checkpoints/20260401_095807/checkpoint_meta.json",
+      "repo": "epyc-orchestrator",
+      "sha256": "f2d54c070a498fd9686f45155bb66ba044e3062304238f3ad52ed942b7272e13",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_checkpoints/20260401_095807/classifier_config.yaml",
+      "bytes": 7459,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/autopilot_checkpoints/20260401_095807/classifier_config.yaml",
+      "repo": "epyc-orchestrator",
+      "sha256": "bef88a4fd9e760460adda35f34206ef70a84a7acc9b2dd3e67025ed7c8174363",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_checkpoints/20260401_095807/embeddings.faiss",
+      "bytes": 385069,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/autopilot_checkpoints/20260401_095807/embeddings.faiss",
+      "repo": "epyc-orchestrator",
+      "sha256": "058fa9686a8c093e15fe62da07d006f632abf8c772983450c6466041a95c71a5",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_checkpoints/20260401_095807/episodic.db",
+      "bytes": 19349504,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/autopilot_checkpoints/20260401_095807/episodic.db",
+      "repo": "epyc-orchestrator",
+      "sha256": "4c6b00e21858dd6957f4f5e0516716979990ce8acafca86677765d5754c42fd0",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_checkpoints/20260401_095807/id_map.npy",
+      "bytes": 3943,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/autopilot_checkpoints/20260401_095807/id_map.npy",
+      "repo": "epyc-orchestrator",
+      "sha256": "c9a84dec8cd995e9ad1cc90ac3b0c3759b6a382d52d0c6f58e35d2d643e70a8a",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_checkpoints/20260401_095807/prompts/architect_investigate.md",
+      "bytes": 3861,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/autopilot_checkpoints/20260401_095807/prompts/architect_investigate.md",
+      "repo": "epyc-orchestrator",
+      "sha256": "c3fdd7a548cbf83cf62b1da426e61afee01ed2589491a70b541c71550b62486c",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_checkpoints/20260401_095807/prompts/architect_synthesis.md",
+      "bytes": 1233,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/autopilot_checkpoints/20260401_095807/prompts/architect_synthesis.md",
+      "repo": "epyc-orchestrator",
+      "sha256": "742a0f6b10a756b94cd565278e0d7544bce4f3cc8b608f4f16f062f8823fea46",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_checkpoints/20260401_095807/prompts/compaction_index.md",
+      "bytes": 1722,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/autopilot_checkpoints/20260401_095807/prompts/compaction_index.md",
+      "repo": "epyc-orchestrator",
+      "sha256": "f6cfbd58a2aa8e6aca5e854319690b41d61c6731af3cc0869c86a3c4da923583",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_checkpoints/20260401_095807/prompts/confidence_estimation.md",
+      "bytes": 578,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/autopilot_checkpoints/20260401_095807/prompts/confidence_estimation.md",
+      "repo": "epyc-orchestrator",
+      "sha256": "1be4c297e800807e23c7995bb5cd649cf8bbf7e2a0ae5d356162a97fb8d2105c",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_checkpoints/20260401_095807/prompts/debugger_system.md",
+      "bytes": 10899,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/autopilot_checkpoints/20260401_095807/prompts/debugger_system.md",
+      "repo": "epyc-orchestrator",
+      "sha256": "a70e3b818d84819dbb4265d65541df6a142193869c9283ef2045ae3bdb8cf449",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_checkpoints/20260401_095807/prompts/formalizer.md",
+      "bytes": 217,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/autopilot_checkpoints/20260401_095807/prompts/formalizer.md",
+      "repo": "epyc-orchestrator",
+      "sha256": "f71767d8e9419a0e9b196d2c0fc83df5900574e6f4ad01af82a5b2454e1a3bdf",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_checkpoints/20260401_095807/prompts/frontdoor.md",
+      "bytes": 6519,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/autopilot_checkpoints/20260401_095807/prompts/frontdoor.md",
+      "repo": "epyc-orchestrator",
+      "sha256": "0f9eedc033108ed9769d34d74df0e0fd78fec340e3f1db2e9e11b56f104c600c",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_checkpoints/20260401_095807/prompts/meta_agent_reflect.md",
+      "bytes": 1765,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/autopilot_checkpoints/20260401_095807/prompts/meta_agent_reflect.md",
+      "repo": "epyc-orchestrator",
+      "sha256": "e14a0fbebc430f00e9a5a1de3a6389280243c9d9c87ede7c5d3d89a3d599d4e8",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_checkpoints/20260401_095807/prompts/plan_review.md",
+      "bytes": 309,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/autopilot_checkpoints/20260401_095807/prompts/plan_review.md",
+      "repo": "epyc-orchestrator",
+      "sha256": "eb76a0cf2df3af1fddf61ff960c3931b73190835f5cbd6b727cf0ac6e57f221a",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_checkpoints/20260401_095807/prompts/review_verdict.md",
+      "bytes": 183,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/autopilot_checkpoints/20260401_095807/prompts/review_verdict.md",
+      "repo": "epyc-orchestrator",
+      "sha256": "38554a2709b146aed2377d503546d6905e4ea2caf128de45e2616e9f4b53a44d",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_checkpoints/20260401_095807/prompts/revision.md",
+      "bytes": 220,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/autopilot_checkpoints/20260401_095807/prompts/revision.md",
+      "repo": "epyc-orchestrator",
+      "sha256": "19f530639be9d671cb75ed5b6aab50dbc0f660769e4f80533c80c4ad8930bc32",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_checkpoints/20260401_095807/prompts/roles/architect_coding.md",
+      "bytes": 437,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "orchestration/autopilot_checkpoints/20260401_095807/prompts/roles/architect_coding.md",
+      "repo": "epyc-orchestrator",
+      "sha256": "f11899b7b991388d947174253c6691b19025810fdb3c21f25b3d3398bba193ca",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2025-12/2025-12-16.md",
+      "bytes": 15586,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2025-12/2025-12-16.md",
+      "repo": "epyc-root",
+      "sha256": "61872cf583c3f8c9d9a4dfb394b0f3de03be9bf88ce0da8ce55ba8543d269abf",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2025-12/2025-12-21.md",
+      "bytes": 8234,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2025-12/2025-12-21.md",
+      "repo": "epyc-root",
+      "sha256": "e7bccc4f39e344a4796b3c0d43fc8640829644d56f31f71f71c8759973ea66d0",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2025-12/2025-12-22.md",
+      "bytes": 3862,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2025-12/2025-12-22.md",
+      "repo": "epyc-root",
+      "sha256": "905a009ce534c3626d5b097db9c8c1bfa99ea99d2bea488106eddef234ffdd37",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2025-12/2025-12-24.md",
+      "bytes": 2646,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2025-12/2025-12-24.md",
+      "repo": "epyc-root",
+      "sha256": "65664dca1e8680de5ca58ca033c9ddd0ae79f69d139ab0f11deaa8e1b0cbdeaa",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-01/2026-01-01.md",
+      "bytes": 3730,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-01/2026-01-01.md",
+      "repo": "epyc-root",
+      "sha256": "124745c98ee966bfb94dac1798efee4644e1a1350ac43b9d1268181de8b9f5a4",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-01/2026-01-04.md",
+      "bytes": 11451,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-01/2026-01-04.md",
+      "repo": "epyc-root",
+      "sha256": "eff5246e8e03371b61fa51243a898800bdae79272c243bc48b76883f58dd0d29",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-01/2026-01-05.md",
+      "bytes": 3427,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-01/2026-01-05.md",
+      "repo": "epyc-root",
+      "sha256": "d16a220f2ade7f785b69e9ccaa1e2d1b8f29900f13103a7005e669d89ce7e443",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-01/2026-01-07.md",
+      "bytes": 19247,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-01/2026-01-07.md",
+      "repo": "epyc-root",
+      "sha256": "51ab92f5ca4a140f432c7475b57be5ec45c68cafcea42719ef61c375a465c8a0",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-01/2026-01-08.md",
+      "bytes": 12081,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-01/2026-01-08.md",
+      "repo": "epyc-root",
+      "sha256": "e56916b49a7640e5d499789e70d7bf08574ce74fd7f629a1bc9883a78e18aa47",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-01/2026-01-09.md",
+      "bytes": 12778,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-01/2026-01-09.md",
+      "repo": "epyc-root",
+      "sha256": "46a89e715e71945f5216aa56a62543580c6dfc567b7ca92806d70f9a775b7571",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-01/2026-01-10.md",
+      "bytes": 15894,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-01/2026-01-10.md",
+      "repo": "epyc-root",
+      "sha256": "d94739882d33e5d0dd8e00df917c690164b72f6fdad38ff6d10bee3b20e1f3e3",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-01/2026-01-11.md",
+      "bytes": 1825,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-01/2026-01-11.md",
+      "repo": "epyc-root",
+      "sha256": "c5d13997ed885d27a8f10e33f9afd513a4b305c96464d890d1d8816784b36c11",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-01/2026-01-12.md",
+      "bytes": 4140,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-01/2026-01-12.md",
+      "repo": "epyc-root",
+      "sha256": "8e91e16e0bae0b9301ffc0287819dfc259ff9edac6ec45bedaed3797e39dcffb",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-01/2026-01-13.md",
+      "bytes": 15607,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-01/2026-01-13.md",
+      "repo": "epyc-root",
+      "sha256": "8fd6de85815167d63d09bbf7669171018b410a401f614925c527f1d49d1b1449",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-01/2026-01-14.md",
+      "bytes": 14265,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-01/2026-01-14.md",
+      "repo": "epyc-root",
+      "sha256": "c955c2ae24d9dfc00fa181f39ab56c5662d2d19d565e3c2a060877bb89a51bff",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-01/2026-01-15.md",
+      "bytes": 25529,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-01/2026-01-15.md",
+      "repo": "epyc-root",
+      "sha256": "811c3a36713be11b3ed4212917d90588981b52a0e92be00448d69e320af98615",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-01/2026-01-16.md",
+      "bytes": 30355,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-01/2026-01-16.md",
+      "repo": "epyc-root",
+      "sha256": "9930189008301f09685aec6938b64a73a284ebc189b525092415d4cb6e0c28d8",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-01/2026-01-18.md",
+      "bytes": 3663,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-01/2026-01-18.md",
+      "repo": "epyc-root",
+      "sha256": "f6eefaf33ffbd13a46dd42c54a80cee76bb26714ce4615c2bbd45cd6ed2d587e",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-01/2026-01-20.md",
+      "bytes": 7840,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-01/2026-01-20.md",
+      "repo": "epyc-root",
+      "sha256": "5163ad6f8e60dd553362778d402c02dbf3e31a0638295960120f5f8dc8f79590",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-01/2026-01-21.md",
+      "bytes": 10520,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-01/2026-01-21.md",
+      "repo": "epyc-root",
+      "sha256": "3bafd431a42729e1026a326ea3080c05f740399697991b7607364d841d972b47",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-01/2026-01-22.md",
+      "bytes": 3269,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-01/2026-01-22.md",
+      "repo": "epyc-root",
+      "sha256": "6ad4e944041e0ee553925bf4165c240b785d7e88efec3b5d0d7aeb150457a17b",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-01/2026-01-23.md",
+      "bytes": 10552,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-01/2026-01-23.md",
+      "repo": "epyc-root",
+      "sha256": "e2bded0d3845d40aabed7531402a5910088b0e8196dd0b89dbceccfa45b95b0e",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-01/2026-01-24.md",
+      "bytes": 22288,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-01/2026-01-24.md",
+      "repo": "epyc-root",
+      "sha256": "557a5b5dfa55cb89fb0c202acef8f299afcb9c68d820d4d4b17fbe430f53cbd6",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-01/2026-01-26.md",
+      "bytes": 10047,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-01/2026-01-26.md",
+      "repo": "epyc-root",
+      "sha256": "d3725bfde550643c8cee1da52a9c7a803038261da934b8fb4ccc19dd130509b4",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-01/2026-01-27.md",
+      "bytes": 18667,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-01/2026-01-27.md",
+      "repo": "epyc-root",
+      "sha256": "9778d244d22eb4e3c213572de043820e81ec55be069e156032861424d215dbb3",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-01/2026-01-28.md",
+      "bytes": 38436,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-01/2026-01-28.md",
+      "repo": "epyc-root",
+      "sha256": "939aaa973cf04d335df67fd785e09899a280ab65368a9e293c4be4c01c2a4cf3",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-01/2026-01-29.md",
+      "bytes": 36098,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-01/2026-01-29.md",
+      "repo": "epyc-root",
+      "sha256": "4ca128b35745a55047f0a1a1082f12bc1d07bda9785f52c2295d318107c6f63f",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-01/2026-01-30.md",
+      "bytes": 37758,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-01/2026-01-30.md",
+      "repo": "epyc-root",
+      "sha256": "328896c85331244997cc34f1d97c1abca0bc3b8142b829ae476eb9c32863eeb3",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-01/2026-01-31.md",
+      "bytes": 30164,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-01/2026-01-31.md",
+      "repo": "epyc-root",
+      "sha256": "e45dc865a1a531923cba6dd2fbe65c973ca5410e73b939270f1ab011afec246c",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-02/2026-02-01.md",
+      "bytes": 44517,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-02/2026-02-01.md",
+      "repo": "epyc-root",
+      "sha256": "cf6de718f8810f06569012e4698133e73b681129adedaf49526ffb21f1d19c18",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-02/2026-02-02.md",
+      "bytes": 12136,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-02/2026-02-02.md",
+      "repo": "epyc-root",
+      "sha256": "cc197c602a7307ad54b3f8e822bd48cd8580871568792c864357476d3234e12c",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-02/2026-02-03.md",
+      "bytes": 41551,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-02/2026-02-03.md",
+      "repo": "epyc-root",
+      "sha256": "4402b1a554b38434cdaec11b48b9ee539646466a9ac86a67cc1b60806a933829",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-02/2026-02-04.md",
+      "bytes": 24320,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-02/2026-02-04.md",
+      "repo": "epyc-root",
+      "sha256": "23ae43d4101df618268bb95f823bbf8d1a37cca16f1087f2fc0ec99228db1f49",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-02/2026-02-05.md",
+      "bytes": 20565,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-02/2026-02-05.md",
+      "repo": "epyc-root",
+      "sha256": "b2c03cf0fc4c795c03219272ad6cb1fbecb68b127d586e29a6383b38d469976d",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-02/2026-02-06.md",
+      "bytes": 6960,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-02/2026-02-06.md",
+      "repo": "epyc-root",
+      "sha256": "c636103060a8f47bd97d2f0a9cdcca0bb1e9fe8aaa08d3c2ea605031df446f3c",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-02/2026-02-07.md",
+      "bytes": 30919,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-02/2026-02-07.md",
+      "repo": "epyc-root",
+      "sha256": "62a34eff2784c9c7c57cbe7f1f2996ca18459a95e608b7d710e7171ddc729e77",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-02/2026-02-08.md",
+      "bytes": 25383,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-02/2026-02-08.md",
+      "repo": "epyc-root",
+      "sha256": "1198937a2366bf8666454ad576a198889e37cfa97a45999dac9e00beab5cd6c3",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-02/2026-02-09.md",
+      "bytes": 33270,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-02/2026-02-09.md",
+      "repo": "epyc-root",
+      "sha256": "9dd91394345170282179e653da92d62ce4ce891536ede2ea0f15e2cea2af3397",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-02/2026-02-10.md",
+      "bytes": 13568,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-02/2026-02-10.md",
+      "repo": "epyc-root",
+      "sha256": "f9291dbc9c36b5d568591b2602ae4260dfd05932b03675ae5768b0c32a75d28c",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-02/2026-02-11.md",
+      "bytes": 13644,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-02/2026-02-11.md",
+      "repo": "epyc-root",
+      "sha256": "6bcf8a5afa3d02699c09dc760a1d3de50a7aa4cd44376684edf223f3d3a07c73",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-02/2026-02-12.md",
+      "bytes": 2632,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-02/2026-02-12.md",
+      "repo": "epyc-root",
+      "sha256": "cd764f6343cd4085d5b1c23027a81dfe17f1a65ab94361d9b60fa44ba0bdb700",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-02/2026-02-13.md",
+      "bytes": 14929,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-02/2026-02-13.md",
+      "repo": "epyc-root",
+      "sha256": "dd1703dff5361529b105a864c4d977577a072cd88e7a5da2d538ee77062dd0dd",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-02/2026-02-14.md",
+      "bytes": 7573,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-02/2026-02-14.md",
+      "repo": "epyc-root",
+      "sha256": "a112c167a2d78df2c4c944482d11a82ef1b6f5f57c0f0ff8179df4c8fb17238c",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-02/2026-02-15.md",
+      "bytes": 24833,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-02/2026-02-15.md",
+      "repo": "epyc-root",
+      "sha256": "9e1e1a1ec77bdc41040676e962adc605e41d1bb06804e0113bd879a87572261f",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-02/2026-02-16.md",
+      "bytes": 27233,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-02/2026-02-16.md",
+      "repo": "epyc-root",
+      "sha256": "bd8cdc20e0f0f86656d16c73685b9fd5813e661d233654abac1fc4b103a6cf93",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-02/2026-02-17.md",
+      "bytes": 49973,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-02/2026-02-17.md",
+      "repo": "epyc-root",
+      "sha256": "6ae74172489b14df8b5fccd7a073bc4103e99f092121dbfd90108254c34d3887",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-02/2026-02-18.md",
+      "bytes": 36905,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-02/2026-02-18.md",
+      "repo": "epyc-root",
+      "sha256": "71f97480c4c0f08c6b1bd99afd2360bc407d79fc3bc6d8670b349c9c315349c6",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-02/2026-02-19.md",
+      "bytes": 49629,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-02/2026-02-19.md",
+      "repo": "epyc-root",
+      "sha256": "f976b02e20777c241e8b06390e70c2910022f07b14450f72f178471fe0e7b09a",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-02/2026-02-20.md",
+      "bytes": 27527,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-02/2026-02-20.md",
+      "repo": "epyc-root",
+      "sha256": "575c639f3ab51343a0f0a215124f603d2d05399c548a777bda87026609e604cd",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-02/2026-02-21.md",
+      "bytes": 5145,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-02/2026-02-21.md",
+      "repo": "epyc-root",
+      "sha256": "2f09a6e38f262c0774420995fd2625c108deb7000f3f13cf799fc4acfa6076ef",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-02/2026-02-22.md",
+      "bytes": 5898,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-02/2026-02-22.md",
+      "repo": "epyc-root",
+      "sha256": "baa2a526c8d445f7f7ac99f6d8c78881387cb189b0ed90aee4270a6aa83388bd",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-02/2026-02-24.md",
+      "bytes": 5469,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-02/2026-02-24.md",
+      "repo": "epyc-root",
+      "sha256": "13392a2a86e62c2be93cd2f547bd2b51b3b9c2e1481acba7ba5db27e064163e7",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-02/2026-02-25.md",
+      "bytes": 1856,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-02/2026-02-25.md",
+      "repo": "epyc-root",
+      "sha256": "1b60e0a7741e9ea1a0b27149d4b8f43eb2069ddc3c46bf43d8e34de076001df7",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-02/2026-02-26.md",
+      "bytes": 2998,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-02/2026-02-26.md",
+      "repo": "epyc-root",
+      "sha256": "b1c8477c975725e3ad15d793496fe5748c46f449affa190f98af945faa45b391",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-02/2026-02-27.md",
+      "bytes": 3797,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-02/2026-02-27.md",
+      "repo": "epyc-root",
+      "sha256": "ba86ac39735c934c6d7b6ba5eb9db6861e590fc572887b7f8235b10b167ae536",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-03/2026-03-02.md",
+      "bytes": 10084,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-03/2026-03-02.md",
+      "repo": "epyc-root",
+      "sha256": "d7b74249134aa9d960429bf81e50b85371599c7b34b4d714544cea3d3db25fe8",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-03/2026-03-03.md",
+      "bytes": 44783,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-03/2026-03-03.md",
+      "repo": "epyc-root",
+      "sha256": "22dfc98454454935957d464b0dc70f3b3e6e452c08448542a27857b25dbd91d2",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-03/2026-03-04.md",
+      "bytes": 10022,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-03/2026-03-04.md",
+      "repo": "epyc-root",
+      "sha256": "35eeac1ed6f62338c77f7a1f1e1315eb9759ee0d74f7768b5858d3ed301e51ae",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-03/2026-03-05.md",
+      "bytes": 14678,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-03/2026-03-05.md",
+      "repo": "epyc-root",
+      "sha256": "5846ce1c0b4f9fc1b0a6cdb475f53889ef0c1a89589949645c0a113242e0a625",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-03/2026-03-06.md",
+      "bytes": 10437,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-03/2026-03-06.md",
+      "repo": "epyc-root",
+      "sha256": "fe239bc7b02ec2f42f22cc4b1342a5eb98abd141e8342f7f371de5a2aa49d1c1",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-03/2026-03-07.md",
+      "bytes": 14765,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-03/2026-03-07.md",
+      "repo": "epyc-root",
+      "sha256": "e22bf8375b2db5b346354fbd63271abf64e6fddf348bf4dc368750edf6f55bc9",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-03/2026-03-08.md",
+      "bytes": 5020,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-03/2026-03-08.md",
+      "repo": "epyc-root",
+      "sha256": "e752ed1fe72a33140ce28127ef8730e49d72ad5e8e417392fe7e4b41aadb7854",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-03/2026-03-09.md",
+      "bytes": 5815,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-03/2026-03-09.md",
+      "repo": "epyc-root",
+      "sha256": "de05eadfb0173271531c6db0be8feeb8607b4a7225674a93bb67a4d478fa8176",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-03/2026-03-10.md",
+      "bytes": 19786,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-03/2026-03-10.md",
+      "repo": "epyc-root",
+      "sha256": "6625d388f74ca3f77430056107498aeef6d009868f62817cefbd326aca864cda",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-03/2026-03-11.md",
+      "bytes": 10761,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-03/2026-03-11.md",
+      "repo": "epyc-root",
+      "sha256": "9e6712f32e596299de7ec23ed9b1494c7e6b548a9b0373d2038b33eb39d43ef9",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-03/2026-03-15.md",
+      "bytes": 38024,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-03/2026-03-15.md",
+      "repo": "epyc-root",
+      "sha256": "9bf9ab107c3579319bb043f64c8aff07f471c7379ec534015ef2dcc8fe5296fa",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-03/2026-03-16.md",
+      "bytes": 20517,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-03/2026-03-16.md",
+      "repo": "epyc-root",
+      "sha256": "1949941f3c24ff46c6a966b113faaaf2735d69ddad31d28c2512dc139f7c6b5c",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-03/2026-03-17.md",
+      "bytes": 28918,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-03/2026-03-17.md",
+      "repo": "epyc-root",
+      "sha256": "488d9780100241e7848975771901f1f7d36ef9df7914158b1abcc8ed0e59d791",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-03/2026-03-18.md",
+      "bytes": 27244,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-03/2026-03-18.md",
+      "repo": "epyc-root",
+      "sha256": "db7606dfa1adb52b5a53b1d003b32484c8d17e57b7b1f625af29c100fae5a2a7",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-03/2026-03-19.md",
+      "bytes": 7560,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-03/2026-03-19.md",
+      "repo": "epyc-root",
+      "sha256": "da8def23e4208ab97bd4718772cc6048f60e174f1b995701552c6cfd3ab339b2",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-03/2026-03-20.md",
+      "bytes": 18630,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-03/2026-03-20.md",
+      "repo": "epyc-root",
+      "sha256": "1a318aaad766b3420e72ec98e3a1dd0ddaa09e554fe64f821018713b367406a1",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-03/2026-03-21.md",
+      "bytes": 5494,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-03/2026-03-21.md",
+      "repo": "epyc-root",
+      "sha256": "a117112f664197f2891ebd7a33a7100b945c6357723e2d5cc85e4c8759a3fc3a",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-03/2026-03-24.md",
+      "bytes": 13543,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-03/2026-03-24.md",
+      "repo": "epyc-root",
+      "sha256": "4507cab8fac4431f0367d54c96c50c72610af95b83226fa7ee487520d991e3d3",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-03/2026-03-25.md",
+      "bytes": 17934,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-03/2026-03-25.md",
+      "repo": "epyc-root",
+      "sha256": "4e98c6c2460f35bae2c939ea490c6417f1ee74b53146132d80e357c0968739fe",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-03/2026-03-28.md",
+      "bytes": 24610,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-03/2026-03-28.md",
+      "repo": "epyc-root",
+      "sha256": "a2c3bb19e8abd631eee100e916e0a2bd831cf81fb44d222c9fc986341342934d",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-03/2026-03-29.md",
+      "bytes": 17412,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-03/2026-03-29.md",
+      "repo": "epyc-root",
+      "sha256": "cd26c46769e2e2c19b879a133bc2dab9c041232411b9f77fc69319f5170fa383",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-03/2026-03-30.md",
+      "bytes": 2403,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-03/2026-03-30.md",
+      "repo": "epyc-root",
+      "sha256": "eecf2781c8e408d18363bc746df097cf2410e488671d724265e97883acbf9d53",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-04/2026-04-01.md",
+      "bytes": 10824,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-04/2026-04-01.md",
+      "repo": "epyc-root",
+      "sha256": "1bf1c488d355d44ca0ad918ea83bc2389fcfd29cb6c30b5113fd0e6510376520",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-04/2026-04-02.md",
+      "bytes": 3227,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-04/2026-04-02.md",
+      "repo": "epyc-root",
+      "sha256": "d61fa2c6be75c3cd3cbb504ff2265adc7feee58a4268b686e56c49f83c16a341",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-root/progress/2026-04/2026-04-04.md",
+      "bytes": 34960,
+      "excerpt": "",
+      "kind": "source_excerpt",
+      "path": "progress/2026-04/2026-04-04.md",
+      "repo": "epyc-root",
+      "sha256": "33dbff77d974ccd823124c8c51668fa6eaa07a2476acd9e9782134d5c5162045",
+      "truncated": true
+    }
+  ],
+  "summary": {
+    "budget_exhausted": true,
+    "excerpt_chars": 48000,
+    "kinds": {
+      "source_excerpt": 160
+    },
+    "max_context_chars": 48000,
+    "missing_source_count": 1,
+    "repos": [
+      "epyc-orchestrator",
+      "epyc-root"
+    ],
+    "schema_version": "lab_context_summary.v1",
+    "source_bytes": 56195711,
+    "source_count": 160,
+    "truncated_source_count": 157
+  }
+}

@@ -341,6 +341,7 @@ def _build_role_result(
         tool_output_tokens=resp.get("tool_output_tokens", 0),
         tools_used=resp.get("tools_used", 0),
         tools_called=resp.get("tools_called", []),
+        tool_chains=resp.get("tool_chains", []),
         delegation_events=resp.get("delegation_events", []),
         delegation_diagnostics=resp.get("delegation_diagnostics", {}),
         tools_success=resp.get("tools_success"),

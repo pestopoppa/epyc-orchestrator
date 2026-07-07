@@ -33,6 +33,7 @@ DEFAULT_CANARY_ROLES = ("frontdoor",)
 LATENCY_REGRESSION_THRESHOLD = 1.10
 COST_REGRESSION_THRESHOLD = 1.05
 RATE_INFLATION_THRESHOLD = 1.20
+SCORED_SUMMARY_SCHEMA = "ri10_canary_scored_response_report.v1"
 
 
 def _iso_now() -> str:
@@ -153,6 +154,64 @@ def _quality_value(record: dict[str, Any] | None) -> float | None:
     return None
 
 
+def _scored_bucket(bucket: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "rows": int(bucket.get("rows") or 0),
+        "scored": int(bucket.get("scored") or 0),
+        "missing": int(bucket.get("missing") or 0),
+        "correct": int(bucket.get("correct") or 0),
+        "accuracy": _round(_float_value(bucket.get("accuracy"))),
+        "mean_token_f1": _round(_float_value(bucket.get("mean_token_f1"))),
+    }
+
+
+def _load_scored_quality_evidence(scored_summary_path: Path | None) -> dict[str, Any]:
+    if scored_summary_path is None:
+        return {"status": "not_provided"}
+    loaded = json.loads(scored_summary_path.read_text(encoding="utf-8"))
+    if not isinstance(loaded, dict):
+        raise ValueError(f"scored summary must be a JSON object: {scored_summary_path}")
+    schema = loaded.get("schema_version")
+    if schema != SCORED_SUMMARY_SCHEMA:
+        raise ValueError(
+            f"unsupported scored summary schema {schema!r}; expected {SCORED_SUMMARY_SCHEMA!r}"
+        )
+    buckets = loaded.get("buckets") or {}
+    if not isinstance(buckets, dict):
+        buckets = {}
+    comparison = loaded.get("arm_comparison") or {}
+    if not isinstance(comparison, dict):
+        comparison = {}
+    arms = {
+        "enforce": _scored_bucket(buckets.get("arm:enforce") or {}),
+        "shadow": _scored_bucket(buckets.get("arm:shadow") or {}),
+    }
+    ready = (
+        loaded.get("status") == "ready"
+        and comparison.get("status") == "ready"
+        and arms["enforce"]["scored"] > 0
+        and arms["shadow"]["scored"] > 0
+    )
+    return {
+        "status": "ready" if ready else "not_ready",
+        "source_path": str(scored_summary_path),
+        "summary_status": loaded.get("status"),
+        "arm_comparison_status": comparison.get("status"),
+        "rows": int(loaded.get("rows") or 0),
+        "status_counts": loaded.get("status_counts") or {},
+        "f1_threshold": _float_value(loaded.get("f1_threshold")),
+        "arms": arms,
+        "comparison": {
+            "accuracy_delta_enforce_minus_shadow": _round(
+                _float_value(comparison.get("accuracy_delta_enforce_minus_shadow"))
+            ),
+            "mean_token_f1_delta_enforce_minus_shadow": _round(
+                _float_value(comparison.get("mean_token_f1_delta_enforce_minus_shadow"))
+            ),
+        },
+    }
+
+
 def _completion_success(record: dict[str, Any] | None) -> bool:
     if not record:
         return False
@@ -248,14 +307,39 @@ def _rate_inflated(enforce_rate: float | None, shadow_rate: float | None) -> boo
     return enforce_rate > shadow_rate * RATE_INFLATION_THRESHOLD
 
 
-def _decision(sample_report: dict[str, Any], arms: dict[str, dict[str, Any]], cmp: dict[str, Any]) -> dict[str, Any]:
+def _decision(
+    sample_report: dict[str, Any],
+    arms: dict[str, dict[str, Any]],
+    cmp: dict[str, Any],
+    quality_evidence: dict[str, Any],
+) -> dict[str, Any]:
     blockers: list[str] = []
     notes: list[str] = []
     if sample_report.get("canary_decision_ready") is not True:
         blockers.append("telemetry_not_decision_ready")
     enforce = arms.get("enforce", {})
     shadow = arms.get("shadow", {})
-    if enforce.get("quality_count", 0) == 0 or shadow.get("quality_count", 0) == 0:
+    quality_status = quality_evidence.get("status")
+    if quality_status == "ready":
+        quality_cmp = quality_evidence.get("comparison") or {}
+        accuracy_delta = quality_cmp.get("accuracy_delta_enforce_minus_shadow")
+        token_f1_delta = quality_cmp.get("mean_token_f1_delta_enforce_minus_shadow")
+        if accuracy_delta is not None and accuracy_delta < 0:
+            blockers.append("factuality_regression")
+        elif token_f1_delta is not None and token_f1_delta < 0:
+            blockers.append("factuality_regression")
+        elif accuracy_delta is None or accuracy_delta <= 0:
+            blockers.append("factuality_no_enforce_lift")
+            notes.append(
+                "Attached scored RI-10 evidence does not show an enforce-arm factuality lift; "
+                "hold classifier/risk-routing expansion frozen."
+            )
+    elif quality_status == "not_ready":
+        blockers.append("factuality_scored_summary_not_ready")
+        notes.append(
+            "A scored RI-10 summary was provided, but its arm comparison is not ready for a rollout decision."
+        )
+    elif enforce.get("quality_count", 0) == 0 or shadow.get("quality_count", 0) == 0:
         blockers.append("factuality_not_scored")
         notes.append(
             "Progress logs contain operational outcomes, but no scored factuality/accuracy field "
@@ -284,6 +368,8 @@ def _decision(sample_report: dict[str, Any], arms: dict[str, dict[str, Any]], cm
         status = "awaiting_telemetry"
     elif blockers == ["factuality_not_scored"]:
         status = "hold_quality_unscored"
+    elif blockers == ["factuality_no_enforce_lift"]:
+        status = "hold_quality_scored_no_lift"
     elif blockers:
         status = "hold"
     else:
@@ -308,6 +394,7 @@ def build_report(
     decision_gate: int = DEFAULT_GATE,
     min_arm_samples: int = DEFAULT_MIN_ARM_SAMPLES,
     canary_roles: Iterable[str] = DEFAULT_CANARY_ROLES,
+    scored_summary_path: Path | None = None,
 ) -> dict[str, Any]:
     canary_role_set = {str(role) for role in canary_roles if str(role)}
     routing_rows: list[dict[str, Any]] = []
@@ -382,7 +469,8 @@ def build_report(
         min_arm_samples=min_arm_samples,
         canary_roles=canary_roles,
     )
-    decision = _decision(sample_report, arm_summaries, cmp)
+    quality_evidence = _load_scored_quality_evidence(scored_summary_path)
+    decision = _decision(sample_report, arm_summaries, cmp, quality_evidence)
     return {
         "generated_at": _iso_now(),
         "source_glob": str(log_dir / "*.jsonl"),
@@ -405,6 +493,7 @@ def build_report(
         },
         "arms": arm_summaries,
         "comparison": cmp,
+        "quality_evidence": quality_evidence,
         "measurement_notes": [
             "This is an observational live-traffic canary comparison, not paired prompt A/B.",
             "Operational task success is reported separately from factuality/accuracy; it does not satisfy RI-10 factuality evidence.",
@@ -416,6 +505,7 @@ def render_markdown(report: dict[str, Any]) -> str:
     decision = report["decision"]
     arms = report["arms"]
     cmp = report["comparison"]
+    quality_evidence = report.get("quality_evidence") or {"status": "not_provided"}
     lines = [
         "# RI-10 Canary Decision Report",
         "",
@@ -457,6 +547,41 @@ def render_markdown(report: dict[str, Any]) -> str:
             f"- review-rate ratio enforce/shadow: `{cmp['plan_review_task_rate_ratio_enforce_over_shadow']}`",
             f"- quality delta enforce-shadow: `{cmp['quality_mean_delta_enforce_minus_shadow']}`",
             "",
+            "## Scored Factuality Evidence",
+            "",
+            f"- status: `{quality_evidence.get('status')}`",
+        ]
+    )
+    if quality_evidence.get("source_path"):
+        quality_cmp = quality_evidence.get("comparison") or {}
+        quality_arms = quality_evidence.get("arms") or {}
+        lines.extend(
+            [
+                f"- source: `{quality_evidence['source_path']}`",
+                f"- rows: `{quality_evidence.get('rows')}`",
+                f"- accuracy delta enforce-shadow: `{quality_cmp.get('accuracy_delta_enforce_minus_shadow')}`",
+                f"- token-F1 delta enforce-shadow: `{quality_cmp.get('mean_token_f1_delta_enforce_minus_shadow')}`",
+                "",
+                "| Arm | Rows | Scored | Missing | Correct | Accuracy | Mean Token F1 |",
+                "|---|---:|---:|---:|---:|---:|---:|",
+            ]
+        )
+        for arm in ("enforce", "shadow"):
+            stats = quality_arms.get(arm) or {}
+            lines.append(
+                "| {arm} | {rows} | {scored} | {missing} | {correct} | {accuracy} | {f1} |".format(
+                    arm=arm,
+                    rows=stats.get("rows"),
+                    scored=stats.get("scored"),
+                    missing=stats.get("missing"),
+                    correct=stats.get("correct"),
+                    accuracy=stats.get("accuracy"),
+                    f1=stats.get("mean_token_f1"),
+                )
+            )
+    lines.extend(
+        [
+            "",
             "## Measurement Notes",
             "",
         ]
@@ -476,6 +601,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--min-arm-samples", type=int, default=DEFAULT_MIN_ARM_SAMPLES)
     parser.add_argument("--canary-role", action="append", default=None)
     parser.add_argument("--all-canary-roles", action="store_true")
+    parser.add_argument(
+        "--scored-summary",
+        type=Path,
+        help="Attach an RI-10 scored response summary JSON as factuality evidence.",
+    )
     parser.add_argument("--output", type=Path, help="Write JSON report to this path.")
     parser.add_argument("--markdown-output", type=Path, help="Write Markdown report to this path.")
     return parser.parse_args(argv)
@@ -496,6 +626,7 @@ def main(argv: list[str] | None = None) -> int:
         decision_gate=args.decision_gate,
         min_arm_samples=args.min_arm_samples,
         canary_roles=canary_roles,
+        scored_summary_path=args.scored_summary,
     )
     rendered = json.dumps(report, indent=2, sort_keys=True) + "\n"
     if args.output:

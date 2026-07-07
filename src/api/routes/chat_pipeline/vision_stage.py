@@ -22,8 +22,9 @@ from src.api.routes.chat_utils import RoutingResult
 from src.api.services.memrl import score_completed_task
 from src.api.routes.vision_serving import (
     VISION_ROLES as _LEGACY_VISION_ROLES,
-    fallback_vl_port_for_role as _fallback_vl_port_for_role,
+    fallback_vl_port_for_role as _fallback_vl_port_for_role,  # noqa: F401 - test compat
     stack_prior_vl_ports as _shared_stack_prior_vl_ports,
+    vl_port_for_role as _shared_vl_port_for_role,
     vision_roles as _shared_vision_roles,
 )
 from src.api.structured_logging import task_extra
@@ -52,8 +53,7 @@ def _vl_port_for_role(
     role: str,
     stack_priors_path: Path = _DEFAULT_STACK_PRIORS_PATH,
 ) -> int:
-    ports = _stack_prior_vl_ports(stack_priors_path)
-    return ports.get(role, _fallback_vl_port_for_role(role))
+    return _shared_vl_port_for_role(role, stack_priors_path)
 
 
 async def _execute_vision(

@@ -75,6 +75,36 @@ def test_repo_short_sha_returns_none_on_git_failure(monkeypatch, tmp_path: Path)
     assert stack._repo_short_sha(tmp_path) is None
 
 
+def test_start_orchestrator_sets_tool_sentinels_by_default(monkeypatch, tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeProc:
+        pid = 4321
+
+        def poll(self):
+            return None
+
+    def fake_popen(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["env"] = kwargs["env"]
+        return FakeProc()
+
+    monkeypatch.setattr(stack, "LOG_DIR", tmp_path)
+    monkeypatch.setattr(stack, "_pids_on_port", lambda _port: [])
+    monkeypatch.setattr(stack, "_write_orchestrator_marker", lambda **_kwargs: tmp_path / "marker")
+    monkeypatch.setattr(stack, "wait_for_health", lambda *args, **kwargs: True)
+    monkeypatch.setattr(stack, "_set_oom_protection", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(stack.subprocess, "Popen", fake_popen)
+
+    info = stack.start_orchestrator()
+
+    assert info is not None
+    env = captured["env"]
+    assert isinstance(env, dict)
+    assert env["AUTOPILOT_TOOL_SENTINELS"] == "1"
+    assert env["ORCHESTRATOR_STRUCTURED_TOOL_OUTPUT"] == "1"
+
+
 def test_start_parser_compiles_registry_by_default(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
@@ -88,7 +118,7 @@ def test_start_parser_compiles_registry_by_default(monkeypatch) -> None:
 
     assert stack.main() == 0
     assert captured["compile_registry"] is True
-    assert captured["numa_mode"] == "quarter"
+    assert captured["numa_mode"] == "full"
 
 
 def test_start_parser_accepts_explicit_numa_mode_both(monkeypatch) -> None:
@@ -147,7 +177,7 @@ def test_cmd_start_compiles_registry_by_default_arg_absence(monkeypatch) -> None
     assert calls[0]["cache_key_path"].name == ".lean_cache_key"
 
 
-def test_cmd_start_defaults_missing_numa_mode_to_quarter(monkeypatch) -> None:
+def test_cmd_start_defaults_missing_numa_mode_to_full(monkeypatch) -> None:
     modes: list[str] = []
 
     class FakeRegistryLoader:
@@ -192,7 +222,7 @@ def test_cmd_start_defaults_missing_numa_mode_to_quarter(monkeypatch) -> None:
 
     assert not hasattr(args, "numa_mode")
     assert stack_commands.cmd_start(args) == 0
-    assert modes == ["quarter"]
+    assert modes == ["full"]
     assert saved
 
 
@@ -464,11 +494,14 @@ def test_status_attestation_detects_expected_model_basename() -> None:
         log_file="frontdoor.log",
     )
 
-    assert stack_commands._status_attestation(
-        info,
-        alive=True,
-        cmdline=["llama-server", "-m", "/canonical/current.gguf"],
-    ) == "ok"
+    assert (
+        stack_commands._status_attestation(
+            info,
+            alive=True,
+            cmdline=["llama-server", "-m", "/canonical/current.gguf"],
+        )
+        == "ok"
+    )
 
 
 def test_status_attestation_detects_model_drift() -> None:
@@ -481,11 +514,14 @@ def test_status_attestation_detects_model_drift() -> None:
         log_file="frontdoor.log",
     )
 
-    assert stack_commands._status_attestation(
-        info,
-        alive=True,
-        cmdline=["llama-server", "-m", "/models/stale.gguf"],
-    ) == "model-drift"
+    assert (
+        stack_commands._status_attestation(
+            info,
+            alive=True,
+            cmdline=["llama-server", "-m", "/models/stale.gguf"],
+        )
+        == "model-drift"
+    )
 
 
 def test_status_attestation_detects_expected_mmproj_basename() -> None:
@@ -498,18 +534,21 @@ def test_status_attestation_detects_expected_mmproj_basename() -> None:
         log_file="vision.log",
     )
 
-    assert stack_commands._status_attestation(
-        info,
-        alive=True,
-        cmdline=[
-            "llama-server",
-            "-m",
-            "/models/current.gguf",
-            "--mmproj",
-            "/canonical/mmproj-model-f16.gguf",
-        ],
-        launch_requirements={"mmproj_path": "/models/mmproj-model-f16.gguf"},
-    ) == "ok"
+    assert (
+        stack_commands._status_attestation(
+            info,
+            alive=True,
+            cmdline=[
+                "llama-server",
+                "-m",
+                "/models/current.gguf",
+                "--mmproj",
+                "/canonical/mmproj-model-f16.gguf",
+            ],
+            launch_requirements={"mmproj_path": "/models/mmproj-model-f16.gguf"},
+        )
+        == "ok"
+    )
 
 
 def test_status_attestation_detects_mmproj_drift() -> None:
@@ -522,18 +561,21 @@ def test_status_attestation_detects_mmproj_drift() -> None:
         log_file="vision.log",
     )
 
-    assert stack_commands._status_attestation(
-        info,
-        alive=True,
-        cmdline=[
-            "llama-server",
-            "-m",
-            "/models/current.gguf",
-            "--mmproj",
-            "/models/stale-mmproj.gguf",
-        ],
-        launch_requirements={"mmproj_path": "/models/current-mmproj.gguf"},
-    ) == "mmproj-drift"
+    assert (
+        stack_commands._status_attestation(
+            info,
+            alive=True,
+            cmdline=[
+                "llama-server",
+                "-m",
+                "/models/current.gguf",
+                "--mmproj",
+                "/models/stale-mmproj.gguf",
+            ],
+            launch_requirements={"mmproj_path": "/models/current-mmproj.gguf"},
+        )
+        == "mmproj-drift"
+    )
 
 
 def test_runtime_attestation_warnings_report_model_drift(monkeypatch) -> None:
@@ -659,6 +701,75 @@ def test_runtime_attestation_warnings_report_runtime_flag_drift(monkeypatch) -> 
     ]
 
 
+def _worker_general_launch_contract(model_path: str, draft_model_path: str) -> tuple[dict, dict]:
+    return (
+        {
+            "model_path": model_path,
+            "draft_model_path": draft_model_path,
+        },
+        {
+            "binary_path": "/opt/llama/bin/llama-server",
+            "cache": {
+                "context_tokens": 16384,
+                "slots": 1,
+                "ubatch": 512,
+                "kv_type_k": "q8_0",
+                "kv_type_v": "q8_0",
+                "no_mmap": False,
+            },
+            "flags": {
+                "flash_attn": False,
+                "jinja": False,
+                "reasoning": "off",
+                "spec": {
+                    "enabled": True,
+                    "type": "draft-mtp",
+                    "draft_model_path": draft_model_path,
+                    "draft_max": 2,
+                    "draft_p_min": 0.0,
+                    "threads_draft": 16,
+                },
+            },
+        },
+    )
+
+
+def test_worker_general_builder_omits_same_file_embedded_draft(monkeypatch) -> None:
+    monkeypatch.setattr(
+        stack,
+        "_stack_prior_launch",
+        lambda _role: _worker_general_launch_contract(
+            "/models/gemma-mtp.gguf",
+            "/models/gemma-mtp.gguf",
+        ),
+    )
+    monkeypatch.setattr(stack, "_resolve_thread_count", lambda _role, _idx: "96")
+
+    cmd = stack._build_worker_general_command(8072, "/models/fallback.gguf", None)
+
+    assert "-md" not in cmd
+    assert cmd[cmd.index("--spec-type") + 1] == "draft-mtp"
+    assert cmd[cmd.index("--spec-draft-n-max") + 1] == "2"
+    assert cmd[cmd.index("--threads-draft") + 1] == "16"
+
+
+def test_worker_general_builder_keeps_separate_draft_model(monkeypatch) -> None:
+    monkeypatch.setattr(
+        stack,
+        "_stack_prior_launch",
+        lambda _role: _worker_general_launch_contract(
+            "/models/gemma-target.gguf",
+            "/models/gemma-assistant.gguf",
+        ),
+    )
+    monkeypatch.setattr(stack, "_resolve_thread_count", lambda _role, _idx: "96")
+
+    cmd = stack._build_worker_general_command(8072, "/models/fallback.gguf", None)
+
+    assert cmd[cmd.index("-md") + 1] == "/models/gemma-assistant.gguf"
+    assert cmd[cmd.index("--spec-type") + 1] == "draft-mtp"
+
+
 def test_runtime_attestation_accepts_embedded_nextn_without_md() -> None:
     info = stack_commands.ProcessInfo(
         role="frontdoor",
@@ -765,11 +876,14 @@ def test_launch_contract_for_process_canonicalizes_alias_role() -> None:
         }
     }
 
-    assert stack_commands._launch_contract_for_process(
-        "worker_explore",
-        info,
-        contracts,
-    ) == contracts["worker_general"]
+    assert (
+        stack_commands._launch_contract_for_process(
+            "worker_explore",
+            info,
+            contracts,
+        )
+        == contracts["worker_general"]
+    )
 
 
 def test_runtime_attestation_warnings_match_replica_by_port(monkeypatch) -> None:

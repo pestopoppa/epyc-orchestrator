@@ -33,6 +33,7 @@ from src.context_assembly import (
 )
 from src.context_discovery import build_python_codemap
 from src.retrieval import kb_rag
+from src.roles import Role
 
 
 DEFAULT_API_URL = "http://127.0.0.1:8000"
@@ -53,10 +54,23 @@ KB_RAG_CONTEXT_MODE = "kb_rag"
 SOURCE_CONTEXT_MODE = "source_excerpt"
 DEFAULT_KB_RAG_TOP_K = 6
 DETERMINISTIC_COMMAND_MODE = "deterministic_command"
+LAB_ROLE_ALIASES = {
+    "verifier": Role.ARCHITECT_GENERAL.value,
+}
 
 
 class LabRunnerError(RuntimeError):
     """Raised for operator-facing lab runner failures."""
+
+
+def resolve_model_role(role: str) -> str:
+    """Resolve lab vocabulary roles to live orchestrator roles."""
+    raw = role.strip()
+    if not raw:
+        raise LabRunnerError("model_role is required for live chat execution")
+    mapped = LAB_ROLE_ALIASES.get(raw, raw)
+    canonical = Role.from_string(mapped)
+    return canonical.value if canonical is not None else mapped
 
 
 @dataclass(frozen=True)
@@ -678,9 +692,11 @@ def call_chat_api(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     import httpx
 
+    resolved_role = resolve_model_role(role)
     payload = {
         "prompt": prompt,
-        "force_role": role,
+        "role": resolved_role,
+        "force_role": resolved_role,
         "force_mode": "direct",
         "allow_delegation": False,
         "max_turns": 1,
@@ -698,9 +714,15 @@ def call_chat_api(
     text = body.get("answer") or body.get("response") or body.get("content") or ""
     if not isinstance(text, str):
         raise LabRunnerError("chat response did not include text output")
+    if body.get("mock_mode") is True or text.lstrip().startswith("[MOCK]"):
+        raise LabRunnerError("chat response used mock mode despite live execution request")
     return extract_json_object(text), {
         "status_code": response.status_code,
         "elapsed_s": round(elapsed, 3),
+        "requested_role": role,
+        "resolved_role": resolved_role,
+        "mock_mode": body.get("mock_mode"),
+        "real_mode": body.get("real_mode"),
         "routed_to": body.get("routed_to"),
         "routing_strategy": body.get("routing_strategy"),
         "tokens_generated": body.get("tokens_generated"),

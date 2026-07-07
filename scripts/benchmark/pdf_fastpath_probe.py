@@ -15,6 +15,7 @@ import importlib
 import importlib.util
 import json
 import os
+import socket
 import re
 import shutil
 import sys
@@ -23,16 +24,18 @@ from collections import Counter
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.services.pdf_router import PDFRouter  # noqa: E402
+from src.services.pdf_router import ODL_HYBRID_URL_ENV, PDFRouter  # noqa: E402
 
 BACKENDS = (
     "pdftotext",
     "opendataloader",
     "opendataloader_structured",
+    "opendataloader_hybrid",
     "liteparse",
 )
 
@@ -99,6 +102,8 @@ class ProbeSummary:
     corpus_kind: str = "unspecified"
     manifest_path: str = ""
     structural_signal_totals: dict[str, int] = field(default_factory=dict)
+    structural_signal_pdf_count: int = 0
+    structural_signal_pdf_fraction: float = 0.0
 
     def to_dict(self, include_records: bool = True) -> dict[str, Any]:
         data = asdict(self)
@@ -392,6 +397,34 @@ def _run_backend(pdf_path: Path, backend: str, router: PDFRouter) -> ExtractionR
             record.failure_reason = reason
         return record
 
+    if backend == "opendataloader_hybrid":
+        dependency_failure = _opendataloader_hybrid_dependency_failure()
+        if dependency_failure is not None:
+            reason, detail = dependency_failure
+            return _failure_record(
+                backend=backend,
+                pdf_path=pdf_path,
+                reason=reason,
+                detail=detail,
+            )
+        text, structured, elapsed_ms = router._extract_with_opendataloader_hybrid(pdf_path)
+        reason = (
+            "missing_dependency"
+            if elapsed_ms == 0.0 and not text and structured is None
+            else ""
+        )
+        record = _record_from_text(
+            backend=backend,
+            pdf_path=pdf_path,
+            text=text,
+            elapsed_ms=elapsed_ms,
+            router=router,
+            structured_counts=_structured_counts(structured),
+        )
+        if reason and record.failure_reason == "empty_output":
+            record.failure_reason = reason
+        return record
+
     if backend == "liteparse":
         parsed, elapsed_ms, failure_reason, failure_detail = _run_liteparse(pdf_path)
         if failure_reason:
@@ -419,11 +452,46 @@ def _python_module_exists(module_name: str) -> bool:
     return importlib.util.find_spec(module_name) is not None
 
 
-def _opendataloader_dependency_failure() -> tuple[str, str] | None:
+def _opendataloader_dependency_failure(require_java: bool = True) -> tuple[str, str] | None:
     if not _python_module_exists("opendataloader_pdf"):
         return "missing_dependency", "opendataloader_pdf is not importable"
-    if not _executable_exists("java"):
+    if require_java and not _executable_exists("java"):
         return "missing_dependency", "java runtime not found"
+    return None
+
+
+def _sidecar_reachable(url: str) -> bool:
+    """Return True when the sidecar host/port is reachable."""
+    parsed = urlparse(url)
+    if parsed.hostname is None:
+        return False
+    host = parsed.hostname
+    if parsed.port is not None:
+        port = parsed.port
+    elif parsed.scheme == "https":
+        port = 443
+    elif parsed.scheme == "http":
+        port = 80
+    else:
+        return False
+
+    try:
+        with socket.create_connection((host, port), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
+def _opendataloader_hybrid_dependency_failure() -> tuple[str, str] | None:
+    base_failure = _opendataloader_dependency_failure(require_java=False)
+    if base_failure is not None:
+        return base_failure
+
+    sidecar_url = os.environ.get(ODL_HYBRID_URL_ENV, "http://localhost:5002").strip()
+    if not sidecar_url:
+        return "missing_dependency", "ODL_HYBRID_URL is empty"
+    if not _sidecar_reachable(sidecar_url):
+        return "missing_dependency", f"ODL sidecar not reachable at {sidecar_url}"
     return None
 
 
@@ -491,6 +559,29 @@ def _structural_signal_totals(records: list[ExtractionRecord]) -> dict[str, int]
     }
 
 
+def _record_has_structural_signal(record: ExtractionRecord) -> bool:
+    if not record.success:
+        return False
+    return any(
+        (
+            record.table_like_line_count > 0,
+            any(count > 0 for count in record.structured_counts.values()),
+            bool(record.bbox_count),
+            bool(record.page_image_count),
+        )
+    )
+
+
+def _structural_signal_pdf_count(records: list[ExtractionRecord]) -> int:
+    return len(
+        {
+            record.pdf_path
+            for record in records
+            if _record_has_structural_signal(record)
+        }
+    )
+
+
 def run_probe(
     pdf_paths: list[Path],
     *,
@@ -516,6 +607,7 @@ def run_probe(
         for backend in selected_backends
     }
     success_count = sum(1 for record in records if record.success)
+    structural_signal_pdf_count = _structural_signal_pdf_count(records)
     return ProbeSummary(
         pdf_count=len(pdf_paths),
         backend_count=len(selected_backends),
@@ -527,6 +619,10 @@ def run_probe(
         corpus_kind=corpus_kind,
         manifest_path=str(manifest_path) if manifest_path else "",
         structural_signal_totals=_structural_signal_totals(records),
+        structural_signal_pdf_count=structural_signal_pdf_count,
+        structural_signal_pdf_fraction=(
+            structural_signal_pdf_count / len(pdf_paths) if pdf_paths else 0.0
+        ),
     )
 
 
@@ -594,6 +690,10 @@ def render_markdown(summary: ProbeSummary) -> str:
         f"- success_count: `{summary.success_count}`",
         f"- failure_count: `{summary.failure_count}`",
         f"- structural_signal_totals: `{json.dumps(summary.structural_signal_totals, sort_keys=True)}`",
+        (
+            f"- structural_signal_pdf_count: `{summary.structural_signal_pdf_count}` "
+            f"({summary.structural_signal_pdf_fraction:.1%})"
+        ),
         "",
         "| Backend | Attempts | Successes | Failures | Median latency ms | Median quality | Table-like lines | Structured h/t/f | BBoxes | Page images | Failure reasons |",
         "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
@@ -664,6 +764,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Omit per-PDF records from JSON output.",
     )
+    parser.add_argument(
+        "--require-structural-signal",
+        action="store_true",
+        help="Return exit code 3 when no PDF/backend pair produced table or layout signal.",
+    )
     return parser.parse_args(argv)
 
 
@@ -710,6 +815,12 @@ def main(argv: list[str] | None = None) -> int:
             print(f"\njson: {args.output_json}")
         if args.output_md:
             print(f"markdown: {args.output_md}")
+    if args.require_structural_signal and summary.structural_signal_pdf_count == 0:
+        print(
+            "No structural/table signal found; this corpus is not decision-useful for ODL table routing.",
+            file=sys.stderr,
+        )
+        return 3
     return 0
 
 

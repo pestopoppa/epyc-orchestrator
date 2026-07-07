@@ -28,6 +28,43 @@ from controller_io import (
 
 log = logging.getLogger("autopilot")
 
+_LOCAL_TRANSIENT_HTTP_ERRORS = (
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.PoolTimeout,
+    httpx.ReadError,
+    httpx.ReadTimeout,
+    httpx.RemoteProtocolError,
+)
+
+_LOCAL_ACTION_OUTPUT_CONTRACT = """\
+CRITICAL OUTPUT CONTRACT FOR THIS LOCAL AUTOPILOT DRAFT:
+- Return exactly one fenced ```json:autopilot_actions block followed by one fenced ```json:autopilot_rationale block.
+- Do not write analysis, caveats, summaries, or prose before the first fence.
+- Use only action types and fields explicitly allowed in the prompt.
+- Do not invent flags, surfaces, suites, dependencies, or evidence.
+- If no high-confidence action is justified, emit the safest valid fallback action from the prompt.
+"""
+
+_LOCAL_CRITIQUE_OUTPUT_CONTRACT = """\
+CRITICAL OUTPUT CONTRACT FOR THIS LOCAL AUTOPILOT CRITIQUE:
+- Return exactly one fenced ```json:autopilot_critique block.
+- Do not write analysis, headings, caveats, summaries, or prose before or after the fence.
+- The JSON object must include decision, confidence, issues, revised_action, and revised_rationale.
+- Use only decision values approve, revise, or reject.
+- Do not invent flags, surfaces, suites, dependencies, or evidence.
+"""
+
+_LOCAL_BRIEF_OUTPUT_CONTRACT = """\
+CRITICAL OUTPUT CONTRACT FOR THIS LOCAL AUTOPILOT BRIEF:
+- Produce a compact controller brief for a second local planner model.
+- Preserve only live constraints, allowed action types, feature-flag state,
+  blacklists, last non-executing action, evidence-power status, and outcome
+  blockers needed to choose one valid next action.
+- Do not propose an action, do not critique, and do not add new evidence.
+- Keep exact symbol names, action type names, surface names, and trial ids.
+"""
+
 
 @dataclass
 class PlannerProviderResult:
@@ -301,7 +338,7 @@ class LocalPlannerProvider:
         self._url = (
             url
             or os.environ.get("AUTOPILOT_LOCAL_PLANNER_URL")
-            or "http://localhost:8000/v1/chat/completions"
+            or "http://127.0.0.1:8000/v1/chat/completions"
         )
         self._role = role or os.environ.get("AUTOPILOT_LOCAL_PLANNER_ROLE") or "frontdoor"
         self._model = model or os.environ.get("AUTOPILOT_LOCAL_PLANNER_MODEL") or self._role
@@ -316,14 +353,10 @@ class LocalPlannerProvider:
             else _env_optional_float("AUTOPILOT_LOCAL_PLANNER_TOP_P")
         )
         self._top_k = (
-            int(top_k)
-            if top_k is not None
-            else _env_optional_int("AUTOPILOT_LOCAL_PLANNER_TOP_K")
+            int(top_k) if top_k is not None else _env_optional_int("AUTOPILOT_LOCAL_PLANNER_TOP_K")
         )
         self._seed = (
-            int(seed)
-            if seed is not None
-            else _env_optional_int("AUTOPILOT_LOCAL_PLANNER_SEED")
+            int(seed) if seed is not None else _env_optional_int("AUTOPILOT_LOCAL_PLANNER_SEED")
         )
         self._max_tokens = (
             int(max_tokens)
@@ -344,7 +377,7 @@ class LocalPlannerProvider:
         del session_id, cwd
         start = time.time()
         tap = _open_planner_tap()
-        payload = self._payload(prompt)
+        payload = self._payload(prompt, planner_role=role)
         try:
             if tap is not None:
                 _tap_write(
@@ -358,15 +391,21 @@ class LocalPlannerProvider:
                     f"{'-' * 72}\n",
                 )
             with httpx.Client(timeout=timeout) as client:
-                response = client.post(self._url, json=payload)
-                response.raise_for_status()
-                data = response.json()
+                data = _post_local_json_with_retries(
+                    client,
+                    self._url,
+                    payload,
+                    provider=self.name,
+                    role=role,
+                    tap=tap,
+                )
             text = parse_openai_chat_response(data)
             ok = bool(text.strip())
             error = "" if ok else "empty response"
             if ok:
                 _tap_write(
                     tap,
+                    f"[local:result:{self.name}:{role}] {text[:4000]}\n"
                     f"[END provider={self.name} role={role}] "
                     f"result_chars={len(text)}\n{'=' * 72}\n",
                 )
@@ -409,10 +448,11 @@ class LocalPlannerProvider:
                 except Exception:
                     pass
 
-    def _payload(self, prompt: str) -> dict[str, Any]:
+    def _payload(self, prompt: str, *, planner_role: str | None = None) -> dict[str, Any]:
+        content = _local_planner_prompt(prompt, planner_role=planner_role)
         payload: dict[str, Any] = {
             "model": self._model,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": [{"role": "user", "content": content}],
             "temperature": self._temperature,
             "max_tokens": self._max_tokens,
             "stream": False,
@@ -431,9 +471,8 @@ class LocalPlannerProvider:
 class LocalChatPlannerProvider:
     """OpenAI-compatible local planner via the orchestrator ``/chat`` endpoint.
 
-    Unlike ``LocalPlannerProvider``, this path intentionally avoids forcing a
-    role so the orchestrator's normal router, delegation, and memory flow can
-    draft the plan.
+    Draft calls can force the ingest lane to keep controller prompts out of the
+    chat router while preserving the regular /chat transport.
     """
 
     name = "local_chat"
@@ -456,6 +495,10 @@ class LocalChatPlannerProvider:
             if max_tokens is not None
             else _env_int("AUTOPILOT_LOCAL_PLANNER_MAX_TOKENS", 2048)
         )
+        self._force_role = _env_optional_force_role(
+            "AUTOPILOT_LOCAL_CHAT_PLANNER_FORCE_ROLE",
+            default="ingest_long_context",
+        )
         self.name = name or self.name
 
     def invoke(
@@ -470,7 +513,7 @@ class LocalChatPlannerProvider:
         del session_id, cwd
         start = time.time()
         tap = _open_planner_tap()
-        payload = self._payload(prompt)
+        payload = self._payload(prompt, planner_role=role)
 
         try:
             if tap is not None:
@@ -485,15 +528,21 @@ class LocalChatPlannerProvider:
                     f"{'-' * 72}\n",
                 )
             with httpx.Client(timeout=timeout) as client:
-                response = client.post(self._url, json=payload)
-                response.raise_for_status()
-                data = response.json()
+                data = _post_local_json_with_retries(
+                    client,
+                    self._url,
+                    payload,
+                    provider=self.name,
+                    role=role,
+                    tap=tap,
+                )
             text = str(data.get("answer") or "")
             ok = bool(text.strip())
             error = "" if ok else "empty response"
             if ok:
                 _tap_write(
                     tap,
+                    f"[local:result:{self.name}:{role}] {text[:4000]}\n"
                     f"[END provider={self.name} role={role}] "
                     f"result_chars={len(text)}\n{'=' * 72}\n",
                 )
@@ -536,8 +585,8 @@ class LocalChatPlannerProvider:
                 except Exception:
                     pass
 
-    def _payload(self, prompt: str) -> dict[str, Any]:
-        return {
+    def _payload(self, prompt: str, *, planner_role: str | None = None) -> dict[str, Any]:
+        payload: dict[str, Any] = {
             "prompt": prompt,
             "mock_mode": False,
             "real_mode": True,
@@ -547,6 +596,214 @@ class LocalChatPlannerProvider:
             "workload_class": "campaign",
             "request_id": f"planner-local-chat-{uuid.uuid4().hex[:8]}",
         }
+        if planner_role == "draft" and self._force_role:
+            payload["force_role"] = self._force_role
+        return payload
+
+
+class LocalBriefedPlannerProvider:
+    """Two-stage local provider: ingest-long-context brief, then local draft.
+
+    This is default-off and exposed only through explicit provider aliases. It
+    lets the local stack use the long-context role for the full controller
+    prompt while giving the final drafter a shorter, contract-focused brief.
+    Critique calls pass through to the final provider; the coordinator already
+    builds a reduced critique prompt, so summarizing it again adds failure modes
+    without reducing much context.
+    """
+
+    name = "local_brief_frontdoor"
+    supports_resume = False
+
+    def __init__(
+        self,
+        *,
+        brief_role: str | None = None,
+        draft_role: str | None = None,
+        brief_max_tokens: int | None = None,
+        draft_max_tokens: int | None = None,
+        name: str | None = None,
+        brief_provider: PlannerProvider | None = None,
+        draft_provider: PlannerProvider | None = None,
+    ) -> None:
+        self._brief_role = (
+            brief_role
+            or os.environ.get("AUTOPILOT_LOCAL_BRIEF_PLANNER_BRIEF_ROLE")
+            or "ingest_long_context"
+        )
+        self._draft_role = (
+            draft_role
+            or os.environ.get("AUTOPILOT_LOCAL_BRIEF_PLANNER_DRAFT_ROLE")
+            or "frontdoor"
+        )
+        self._brief_max_tokens = (
+            int(brief_max_tokens)
+            if brief_max_tokens is not None
+            else _env_int("AUTOPILOT_LOCAL_BRIEF_PLANNER_BRIEF_MAX_TOKENS", 1536)
+        )
+        self._draft_max_tokens = (
+            int(draft_max_tokens)
+            if draft_max_tokens is not None
+            else _env_int("AUTOPILOT_LOCAL_BRIEF_PLANNER_DRAFT_MAX_TOKENS", 2048)
+        )
+        self.name = name or self.name
+        self._brief_provider = brief_provider or LocalPlannerProvider(
+            role=self._brief_role,
+            model=self._brief_role,
+            max_tokens=self._brief_max_tokens,
+            name=f"{self.name}_brief",
+        )
+        self._draft_provider = draft_provider or LocalPlannerProvider(
+            role=self._draft_role,
+            model=self._draft_role,
+            max_tokens=self._draft_max_tokens,
+            name=f"{self.name}_draft",
+        )
+
+    def invoke(
+        self,
+        prompt: str,
+        *,
+        role: str,
+        session_id: str | None = None,
+        timeout: int = 300,
+        cwd: Path | str | None = None,
+    ) -> PlannerProviderResult:
+        del session_id
+        start = time.time()
+        tap = _open_planner_tap()
+
+        if role != "draft":
+            result = self._draft_provider.invoke(
+                prompt,
+                role=role,
+                session_id=None,
+                timeout=timeout,
+                cwd=cwd,
+            )
+            wrapped = PlannerProviderResult(
+                provider=self.name,
+                role=role,
+                text=result.text,
+                ok=result.ok,
+                error=result.error,
+                duration_s=time.time() - start,
+                raw_events=[
+                    json.dumps(
+                        {
+                            "stage": "passthrough",
+                            "provider": result.provider,
+                            "ok": result.ok,
+                            "error": result.error,
+                            "text_chars": len(result.text or ""),
+                        },
+                        default=str,
+                    )
+                ],
+            )
+            _archive_local_briefed_call(prompt, wrapped, None, result)
+            _close_tap(tap)
+            return wrapped
+
+        _tap_write(
+            tap,
+            f"\n{'=' * 72}\n"
+            f"[{datetime.now().isoformat(timespec='seconds')}] "
+            f"PLANNER provider={self.name} role=draft two-stage start\n"
+            f"brief_role: {self._brief_role}\n"
+            f"draft_role: {self._draft_role}\n"
+            f"prompt_chars: {len(prompt)}\n"
+            f"{'-' * 72}\n",
+        )
+        brief_prompt = _local_planner_brief_prompt(prompt)
+        brief_result = self._brief_provider.invoke(
+            brief_prompt,
+            role="brief",
+            session_id=None,
+            timeout=timeout,
+            cwd=cwd,
+        )
+        if not brief_result.ok or not brief_result.text.strip():
+            error = f"brief stage failed: {brief_result.error or 'empty brief'}"
+            result = PlannerProviderResult(
+                provider=self.name,
+                role=role,
+                ok=False,
+                error=error,
+                duration_s=time.time() - start,
+                raw_events=[
+                    json.dumps(
+                        {
+                            "stage": "brief",
+                            "provider": brief_result.provider,
+                            "ok": brief_result.ok,
+                            "error": brief_result.error,
+                        },
+                        default=str,
+                    )
+                ],
+            )
+            _tap_write(tap, f"[FAIL provider={self.name} role=draft] {error}\n{'=' * 72}\n")
+            _archive_local_briefed_call(prompt, result, brief_result, None)
+            _close_tap(tap)
+            return result
+
+        draft_prompt = _local_planner_briefed_draft_prompt(
+            brief_result.text,
+            original_prompt_chars=len(prompt),
+        )
+        draft_result = self._draft_provider.invoke(
+            draft_prompt,
+            role="draft",
+            session_id=None,
+            timeout=timeout,
+            cwd=cwd,
+        )
+        error = "" if draft_result.ok else f"draft stage failed: {draft_result.error}"
+        result = PlannerProviderResult(
+            provider=self.name,
+            role=role,
+            text=draft_result.text,
+            ok=draft_result.ok,
+            error=error,
+            duration_s=time.time() - start,
+            raw_events=[
+                json.dumps(
+                    {
+                        "stage": "brief",
+                        "provider": brief_result.provider,
+                        "ok": brief_result.ok,
+                        "text_chars": len(brief_result.text or ""),
+                    },
+                    default=str,
+                ),
+                json.dumps(
+                    {
+                        "stage": "draft",
+                        "provider": draft_result.provider,
+                        "ok": draft_result.ok,
+                        "error": draft_result.error,
+                        "text_chars": len(draft_result.text or ""),
+                    },
+                    default=str,
+                ),
+            ],
+        )
+        if result.ok:
+            _tap_write(
+                tap,
+                f"[local:result:{self.name}:draft] {result.text[:4000]}\n"
+                f"[END provider={self.name} role=draft] "
+                f"result_chars={len(result.text)}\n{'=' * 72}\n",
+            )
+        else:
+            _tap_write(
+                tap,
+                f"[FAIL provider={self.name} role=draft] {error[:400]}\n{'=' * 72}\n",
+            )
+        _archive_local_briefed_call(prompt, result, brief_result, draft_result)
+        _close_tap(tap)
+        return result
 
 
 def parse_codex_jsonl(output: str) -> str:
@@ -602,6 +859,53 @@ def parse_openai_chat_response(data: dict[str, Any]) -> str:
     return ""
 
 
+def _local_planner_prompt(prompt: str, *, planner_role: str | None = None) -> str:
+    if planner_role == "draft":
+        if not _env_bool("AUTOPILOT_LOCAL_PLANNER_ACTION_CONTRACT", True):
+            return prompt
+        return f"{_LOCAL_ACTION_OUTPUT_CONTRACT}\n{prompt}\n\n{_LOCAL_ACTION_OUTPUT_CONTRACT}"
+    if planner_role == "critique":
+        if not _env_bool("AUTOPILOT_LOCAL_PLANNER_CRITIQUE_CONTRACT", True):
+            return prompt
+        return (
+            f"{_LOCAL_CRITIQUE_OUTPUT_CONTRACT}\n{prompt}\n\n"
+            f"{_LOCAL_CRITIQUE_OUTPUT_CONTRACT}"
+        )
+    return prompt
+
+
+def _local_planner_brief_prompt(prompt: str) -> str:
+    return (
+        f"{_LOCAL_BRIEF_OUTPUT_CONTRACT}\n"
+        "## Full AutoPilot Controller Prompt\n\n"
+        f"{prompt}\n\n"
+        f"{_LOCAL_BRIEF_OUTPUT_CONTRACT}"
+    )
+
+
+def _local_planner_briefed_draft_prompt(
+    brief: str,
+    *,
+    original_prompt_chars: int,
+) -> str:
+    return f"""\
+You are the AutoPilot meta-reasoning controller. A long-context local role has
+compressed the live controller prompt into the brief below.
+
+Return exactly one fenced ```json:autopilot_actions block followed by one fenced
+```json:autopilot_rationale block. Use only action types, fields, surfaces,
+flags, suites, and evidence explicitly present in the brief. If the brief is
+missing information needed for a higher-risk action, emit the safest valid
+fallback action named in the brief.
+
+Original controller prompt length: {original_prompt_chars} chars.
+
+## Controller Prompt Brief
+
+{brief.strip()}
+"""
+
+
 def get_planner_provider(name: str) -> PlannerProvider:
     normalized = (name or "").strip().lower()
     if normalized == "claude":
@@ -610,8 +914,14 @@ def get_planner_provider(name: str) -> PlannerProvider:
         return CodexPlannerProvider()
     if normalized in {"codex_critic", "codex-critic", "codex_reviewer", "codex-reviewer"}:
         return CodexPlannerProvider(name="codex_critic")
-    if normalized in {"local", "local_frontdoor", "frontdoor_local"}:
+    if normalized == "local":
         return LocalPlannerProvider(name="local")
+    if normalized in {"local_frontdoor", "frontdoor_local"}:
+        return LocalPlannerProvider(
+            role="frontdoor",
+            model="frontdoor",
+            name="local_frontdoor",
+        )
     if normalized in {"local_worker", "local_worker_general", "worker_general_local"}:
         return LocalPlannerProvider(
             role="worker_general",
@@ -626,6 +936,18 @@ def get_planner_provider(name: str) -> PlannerProvider:
         )
     if normalized in {"local_chat", "local_chat_planner", "chat_local"}:
         return LocalChatPlannerProvider(name="local_chat")
+    if normalized in {"local_brief_frontdoor", "local_ingest_frontdoor", "local_two_stage"}:
+        return LocalBriefedPlannerProvider(
+            brief_role="ingest_long_context",
+            draft_role="frontdoor",
+            name="local_brief_frontdoor",
+        )
+    if normalized in {"local_brief_worker", "local_ingest_worker"}:
+        return LocalBriefedPlannerProvider(
+            brief_role="ingest_long_context",
+            draft_role="worker_general",
+            name="local_brief_worker",
+        )
     raise ValueError(f"Unknown planner provider: {name}")
 
 
@@ -676,6 +998,109 @@ def _tap_write(tap: Any, text: str) -> None:
         tap.flush()
     except Exception:
         pass
+
+
+def _close_tap(tap: Any) -> None:
+    if tap is None:
+        return
+    try:
+        tap.close()
+    except Exception:
+        pass
+
+
+def _post_local_json_with_retries(
+    client: httpx.Client,
+    url: str,
+    payload: dict[str, Any],
+    *,
+    provider: str,
+    role: str,
+    tap: Any,
+) -> dict[str, Any]:
+    attempts = max(1, _env_int("AUTOPILOT_LOCAL_PLANNER_HTTP_ATTEMPTS", 4))
+    base_sleep_s = max(0.0, _env_float("AUTOPILOT_LOCAL_PLANNER_RETRY_SLEEP_S", 2.0))
+    max_sleep_s = max(base_sleep_s, _env_float("AUTOPILOT_LOCAL_PLANNER_RETRY_MAX_SLEEP_S", 8.0))
+    last_exc: Exception | None = None
+
+    for attempt in range(1, attempts + 1):
+        try:
+            response = client.post(url, json=payload)
+            response.raise_for_status()
+            data = response.json()
+            payload_error = _local_planner_payload_error(data)
+            if not payload_error:
+                return data
+            if not _local_planner_payload_error_retryable(payload_error):
+                raise RuntimeError(payload_error)
+            if attempt >= attempts:
+                raise RuntimeError(payload_error)
+            sleep_s = min(max_sleep_s, base_sleep_s * attempt)
+            _tap_write(
+                tap,
+                f"[RETRY provider={provider} role={role}] "
+                f"attempt={attempt}/{attempts} local_error={payload_error[:180]}; "
+                f"sleep={sleep_s:.1f}s\n",
+            )
+            if sleep_s > 0:
+                time.sleep(sleep_s)
+        except _LOCAL_TRANSIENT_HTTP_ERRORS as exc:
+            last_exc = exc
+            if attempt >= attempts:
+                raise
+            sleep_s = min(max_sleep_s, base_sleep_s * attempt)
+            _tap_write(
+                tap,
+                f"[RETRY provider={provider} role={role}] "
+                f"attempt={attempt}/{attempts} transient={type(exc).__name__}: "
+                f"{str(exc)[:180]}; sleep={sleep_s:.1f}s\n",
+            )
+            if sleep_s > 0:
+                time.sleep(sleep_s)
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            if status not in {502, 503, 504} or attempt >= attempts:
+                raise
+            last_exc = exc
+            sleep_s = min(max_sleep_s, base_sleep_s * attempt)
+            _tap_write(
+                tap,
+                f"[RETRY provider={provider} role={role}] "
+                f"attempt={attempt}/{attempts} status={status}; sleep={sleep_s:.1f}s\n",
+            )
+            if sleep_s > 0:
+                time.sleep(sleep_s)
+
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("local planner HTTP retry loop exited without response")
+
+
+def _local_planner_payload_error(data: dict[str, Any]) -> str:
+    text = parse_openai_chat_response(data)
+    if not text and isinstance(data.get("answer"), str):
+        text = str(data["answer"])
+    stripped = text.strip()
+    if stripped.startswith("[ERROR"):
+        return stripped
+    if stripped.startswith("[MOCK]"):
+        return stripped
+    return ""
+
+
+def _local_planner_payload_error_retryable(error: str) -> bool:
+    """Return whether a local planner error payload can clear by waiting.
+
+    Admission pressure and mock-mode races are transient. Backend 400s from the
+    role server are deterministic for the same prompt/role pair, so retrying
+    only burns the planner window before falling back.
+    """
+    lowered = str(error or "").lower()
+    if "400 bad request" in lowered:
+        return False
+    if "context" in lowered and ("exceed" in lowered or "too long" in lowered):
+        return False
+    return True
 
 
 def _archive_codex_call(
@@ -739,9 +1164,7 @@ def _archive_local_call(
                 "max_tokens": payload.get("max_tokens"),
             },
             "response_preview": (
-                json.dumps(response_data, default=str)[:1000]
-                if response_data is not None
-                else ""
+                json.dumps(response_data, default=str)[:1000] if response_data is not None else ""
             ),
         }
     )
@@ -781,10 +1204,43 @@ def _archive_local_chat_call(
                 "max_tokens": payload.get("max_tokens"),
             },
             "response_preview": (
-                json.dumps(response_data, default=str)[:1000]
-                if response_data is not None
-                else ""
+                json.dumps(response_data, default=str)[:1000] if response_data is not None else ""
             ),
+        }
+    )
+
+
+def _archive_local_briefed_call(
+    prompt: str,
+    result: PlannerProviderResult,
+    brief_result: PlannerProviderResult | None,
+    draft_result: PlannerProviderResult | None,
+) -> None:
+    import hashlib
+
+    _append_planner_archive(
+        {
+            "ts": time.time(),
+            "ts_iso": datetime.now().isoformat(timespec="seconds"),
+            "provider": result.provider,
+            "role": result.role,
+            "duration_s": result.duration_s,
+            "ok": result.ok,
+            "error": result.error,
+            "prompt_chars": len(prompt),
+            "prompt_sha256_16": hashlib.sha256(prompt.encode()).hexdigest()[:16],
+            "result_chars": len(result.text),
+            "result_preview": result.text[:500],
+            "local_briefed_planner": {
+                "brief_provider": brief_result.provider if brief_result else "",
+                "brief_ok": bool(brief_result and brief_result.ok),
+                "brief_error": brief_result.error if brief_result else "",
+                "brief_chars": len((brief_result.text if brief_result else "") or ""),
+                "draft_provider": draft_result.provider if draft_result else "",
+                "draft_ok": bool(draft_result and draft_result.ok),
+                "draft_error": draft_result.error if draft_result else "",
+                "draft_chars": len((draft_result.text if draft_result else "") or ""),
+            },
         }
     )
 
@@ -801,6 +1257,13 @@ def _env_float(name: str, default: float) -> float:
         return float(os.environ.get(name, str(default)))
     except (TypeError, ValueError):
         return default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off", ""}
 
 
 def _env_optional_int(name: str) -> int | None:
@@ -821,3 +1284,13 @@ def _env_optional_float(name: str) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _env_optional_force_role(name: str, *, default: str) -> str | None:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    normalized = value.strip()
+    if not normalized or normalized.lower() in {"0", "false", "off"}:
+        return None
+    return normalized

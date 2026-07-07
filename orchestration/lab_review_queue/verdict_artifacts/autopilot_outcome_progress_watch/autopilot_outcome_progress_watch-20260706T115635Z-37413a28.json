@@ -1,0 +1,191 @@
+{
+  "captured_at": "2026-07-06T23:21:59+00:00",
+  "confidence": 1.0,
+  "job_id": "autopilot_outcome_progress_watch",
+  "local_output": {
+    "path": "autopilot_outcome_progress_watch/autopilot_outcome_progress_watch-20260706T115635Z-37413a28/output.json",
+    "payload": {
+      "action_type": "numeric_trial",
+      "autopilot_env_flags": {
+        "AUTOPILOT_PLANNER_HINTS": "1",
+        "AUTOPILOT_PLANNER_TIMEOUT": "600",
+        "AUTOPILOT_SEQ_VERDICT": "1",
+        "AUTOPILOT_W6_AUDIT_BLOCK": "1",
+        "AUTOPILOT_W6_AUDIT_EVERY_N_TRIALS": "1",
+        "AUTOPILOT_W6_AUDIT_N": "10",
+        "AUTOPILOT_W6_AUDIT_SHADOW_ONLY": "1"
+      },
+      "autopilot_planner_timeout": "600",
+      "blockers": [
+        "outcome progress stalled: frontier admission stale: 221 trial(s) since frontier > 150"
+      ],
+      "code_stale": false,
+      "code_stale_paths": [],
+      "eval_completed_questions": 30,
+      "eval_concurrency": null,
+      "eval_correct_pct": null,
+      "eval_correct_questions": null,
+      "eval_label": "T1",
+      "eval_progress_log_path": "/mnt/raid0/llm/epyc-orchestrator/logs/autopilot.log",
+      "eval_progress_source": "log_tail",
+      "eval_total_questions": 65,
+      "heartbeat": {
+        "action_type": "numeric_trial",
+        "idle_reason": "evaluating question",
+        "phase": "dispatch_action",
+        "phase_age_s": 553.0108523368835,
+        "phase_started_at": 1783338422.082776,
+        "pid": 131226,
+        "prompt_preview": "Extract the key claims from this passage:\n\n\"According to a 2024 WHO report, global life expectancy reached 73.3\nyears, up from 66.8 years in 2000. The largest gains were in Africa,\nwhere life expectancy increased by 12 years. Heart disease ",
+        "trial_id": 1227,
+        "updated_at": 1783338975.0936284,
+        "updated_at_iso": "2026-07-06T11:56:15.093632+00:00"
+      },
+      "heartbeat_age_s": 20.74980068206787,
+      "idle_reason": "evaluating question",
+      "ok": false,
+      "outcome_progress": {
+        "baseline_promotions": 1,
+        "blockers": [
+          "frontier admission stale: 221 trial(s) since frontier > 150"
+        ],
+        "frontier_admissions": 84,
+        "journal_dir": "/mnt/raid0/llm/epyc-orchestrator/orchestration",
+        "latest_frontier_trial_id": 1005,
+        "latest_promotion_trial_id": 969,
+        "latest_trial_id": 1226,
+        "max_trials_since_frontier": 150,
+        "max_trials_since_promotion": 300,
+        "rates": {
+          "keepable_rate": {
+            "count": 0,
+            "rate": 0.0,
+            "total": 72
+          },
+          "learning_excluded_rate": {
+            "count": 31,
+            "rate": 0.431,
+            "total": 72
+          },
+          "recent_window_trials": 120,
+          "wasted_eval_rate": {
+            "count": 41,
+            "rate": 0.569,
+            "total": 72
+          }
+        },
+        "status": "attention",
+        "trial_rows": 1106,
+        "trials_since_frontier": 221,
+        "trials_since_promotion": 257
+      },
+      "path": "/mnt/raid0/llm/tmp/autopilot_phase.json",
+      "phase": "dispatch_action",
+      "phase_age_s_recorded": 553.0108523368835,
+      "phase_started_at": 1783338422.082776,
+      "pid": 131226,
+      "pid_alive": true,
+      "planner_hints_enabled": true,
+      "process_started_at_s": 1783333359.42,
+      "require_current_code": false,
+      "require_outcome_progress": true,
+      "runtime_source_paths_checked": [
+        "/mnt/raid0/llm/epyc-orchestrator/scripts/autopilot/autopilot.py",
+        "/mnt/raid0/llm/epyc-orchestrator/scripts/autopilot/actions.py",
+        "/mnt/raid0/llm/epyc-orchestrator/scripts/autopilot/config_applicator.py",
+        "/mnt/raid0/llm/epyc-orchestrator/scripts/autopilot/controller_io.py",
+        "/mnt/raid0/llm/epyc-orchestrator/scripts/autopilot/eval_tower.py",
+        "/mnt/raid0/llm/epyc-orchestrator/scripts/autopilot/experiment_journal.py",
+        "/mnt/raid0/llm/epyc-orchestrator/scripts/autopilot/planner_coordinator.py",
+        "/mnt/raid0/llm/epyc-orchestrator/scripts/autopilot/planner_providers.py",
+        "/mnt/raid0/llm/epyc-orchestrator/scripts/autopilot/state_store.py",
+        "/mnt/raid0/llm/epyc-orchestrator/scripts/autopilot/species/seeder.py",
+        "/mnt/raid0/llm/epyc-orchestrator/scripts/benchmark/seeding_eval.py",
+        "/mnt/raid0/llm/epyc-orchestrator/scripts/benchmark/seeding_scoring.py",
+        "/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/strategy_store.py",
+        "/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/knowledge_distiller.py",
+        "/mnt/raid0/llm/epyc-orchestrator/scripts/autopilot/species/evolution_manager.py",
+        "/mnt/raid0/llm/epyc-orchestrator/scripts/autopilot/safety_gate.py",
+        "/mnt/raid0/llm/epyc-orchestrator/scripts/autopilot/phase_status.py",
+        "/mnt/raid0/llm/epyc-orchestrator/src/autopilot_core/planner_evidence.py",
+        "/mnt/raid0/llm/epyc-inference-research/scripts/benchmark/debug_scorer.py"
+      ],
+      "seq_verdict_enabled": true,
+      "stale_after_s": 900.0,
+      "status": "outcome_stalled",
+      "trial_id": 1227,
+      "updated_at": 1783338975.0936284,
+      "updated_at_iso": "2026-07-06T11:56:15.093632+00:00",
+      "w6_audit_accrual_enabled": true,
+      "w6_audit_every_n_trials": "1",
+      "w6_audit_n": "10",
+      "w6_audit_shadow_only": true
+    }
+  },
+  "notes": "automated active-safe review rejected output without ok=true",
+  "reference_output": {
+    "path": null,
+    "payload": null
+  },
+  "reviewer": "automated",
+  "run_id": "autopilot_outcome_progress_watch-20260706T115635Z-37413a28",
+  "schema_version": "lab_verdict_artifact.v1",
+  "stage": "shadow",
+  "task_record": {
+    "artifacts": {
+      "context_manifest": "autopilot_outcome_progress_watch/autopilot_outcome_progress_watch-20260706T115635Z-37413a28/context_manifest.json",
+      "output": "autopilot_outcome_progress_watch/autopilot_outcome_progress_watch-20260706T115635Z-37413a28/output.json",
+      "prompt": "autopilot_outcome_progress_watch/autopilot_outcome_progress_watch-20260706T115635Z-37413a28/prompt.txt"
+    },
+    "chat_meta": {
+      "command": [
+        "python3",
+        "scripts/autopilot/phase_health_report.py",
+        "--json",
+        "--require-outcome-progress"
+      ],
+      "elapsed_s": 0.282,
+      "returncode": 0,
+      "stderr_tail": ""
+    },
+    "context": {
+      "budget_exhausted": false,
+      "excerpt_chars": 6600,
+      "kinds": {
+        "source_excerpt": 3
+      },
+      "max_context_chars": 16000,
+      "missing_source_count": 0,
+      "repos": [
+        "epyc-orchestrator"
+      ],
+      "schema_version": "lab_context_summary.v1",
+      "source_bytes": 85534,
+      "source_count": 3,
+      "truncated_source_count": 3
+    },
+    "generated_at": "2026-07-06T11:56:35+00:00",
+    "invocation_mode": "deterministic_command",
+    "job_id": "autopilot_outcome_progress_watch",
+    "model_role": null,
+    "policy": {
+      "direct_repo_writes_allowed": false,
+      "review_queue_only": true
+    },
+    "record_type": "task_record",
+    "repo": {
+      "branch": "spec-dec-mtp-refresh-2026-06-22",
+      "commit": "60523b6be9b1aa13e2d2957044e0f61b93f9e300",
+      "dirty": true,
+      "path": "/mnt/raid0/llm/epyc-orchestrator"
+    },
+    "risk": "read_only",
+    "run_id": "autopilot_outcome_progress_watch-20260706T115635Z-37413a28",
+    "schema_version": "lab_task_record.v1",
+    "stage": "shadow",
+    "validation": {
+      "output_contract": "passed"
+    }
+  },
+  "verdict": "reject"
+}

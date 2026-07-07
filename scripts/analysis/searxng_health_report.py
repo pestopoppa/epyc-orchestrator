@@ -37,8 +37,11 @@ from typing import Any
 LOG_DIR = Path("/mnt/raid0/llm/epyc-orchestrator/logs/progress")
 SERVER_LOG_DIR = Path("/mnt/raid0/llm/epyc-orchestrator/logs")
 
-# Configured engine set (from config/searxng/settings.yml per handoff SX-3)
-CONFIGURED_ENGINES = {"duckduckgo", "brave", "wikipedia", "qwant", "startpage"}
+# Configured enabled engine set (from config/searxng/settings.yml). The
+# original SX-3 target included DDG/Qwant/Startpage, but the current EPYC egress
+# is blocked by those engines. The live profile is Bing primary, Brave
+# best-effort, and Wikipedia healthy.
+CONFIGURED_ENGINES = {"bing", "brave", "wikipedia"}
 
 # Thresholds for go/no-go verdict
 MAX_ENGINES_DOWN_PCT = 50  # >50% of engines unresponsive in a query = bad query
@@ -235,6 +238,9 @@ def format_human(tel: dict[str, Any], verdict: dict[str, Any]) -> str:
     lines.append("")
     lines.append("Engine health:")
     lines.append(
+        "  configured engines      : " + ", ".join(sorted(CONFIGURED_ENGINES))
+    )
+    lines.append(
         f"  unresponsive events     : {tel['unresponsive_events']}"
     )
     lines.append(
@@ -291,6 +297,7 @@ def main() -> int:
     if args.json:
         out = {
             "window": {"start": start.isoformat(), "end": end.isoformat()},
+            "configured_engines": sorted(CONFIGURED_ENGINES),
             "telemetry": {
                 "searxng_queries": tel["searxng_queries"],
                 "ddg_queries": tel["ddg_queries"],

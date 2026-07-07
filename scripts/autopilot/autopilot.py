@@ -94,6 +94,7 @@ import controller_io
 from controller_io import PLANNER_ARCHIVE_PATH, invoke_controller as _invoke_controller_impl
 from planner_coordinator import plan_with_providers, uncritiqued_dispatch_block_reason
 from state_store import (
+    OBSERVATIONAL_ACTION_BLACKLIST_DENYLIST,
     append_blacklist as _append_blacklist_impl,
     check_blacklist,
     format_model_signatures,
@@ -292,11 +293,36 @@ MAX_CONSECUTIVE_REJECTED_DRAFTS = int(
 # of passive seed/distill actions is the planner rationalizing no-op work; cap
 # consecutive passive actions and force a frontier-moving experiment instead.
 PASSIVE_ACTIONS = {"seed_batch", "distill_knowledge", "distill_skillbank"}
+OUTCOME_PROGRESS_ACTIONS = {
+    "code_mutation",
+    "gepa_optimize",
+    "numeric_trial",
+    "prompt_mutation",
+    "structural_experiment",
+    "train_routing_models",
+}
 QUOTA_MEMORY_THRESHOLD = int(
     os.environ.get("AUTOPILOT_QUOTA_MEMORY_THRESHOLD", "2000")
 )
 MAX_CONSECUTIVE_PASSIVE = int(
     os.environ.get("AUTOPILOT_MAX_CONSECUTIVE_PASSIVE", "3")
+)
+HIGHER_TIER_PROBE_GUARD = os.environ.get(
+    "AUTOPILOT_HIGHER_TIER_PROBE_GUARD", "1"
+).strip().lower() not in {"0", "false", "no", "off"}
+HIGHER_TIER_PROBE_TIERS = tuple(
+    int(part)
+    for part in os.environ.get("AUTOPILOT_HIGHER_TIER_PROBE_TIERS", "2,3").split(",")
+    if part.strip().isdigit() and int(part) > DEFAULT_FRONTIER_TIER
+) or (2, 3)
+HIGHER_TIER_PROBE_MIN_GAP_TRIALS = int(
+    os.environ.get("AUTOPILOT_HIGHER_TIER_PROBE_MIN_GAP_TRIALS", "12")
+)
+HIGHER_TIER_PROBE_STALE_TRIALS = int(
+    os.environ.get("AUTOPILOT_HIGHER_TIER_PROBE_STALE_TRIALS", "24")
+)
+HIGHER_TIER_PROBE_MIN_TRIALS_PER_TIER = int(
+    os.environ.get("AUTOPILOT_HIGHER_TIER_PROBE_MIN_TRIALS_PER_TIER", "3")
 )
 # numeric_trial with empty params is the safest self-configuring frontier action
 # (Optuna suggests the values; no file/flag dependency to get wrong).
@@ -723,6 +749,7 @@ def _build_higher_tier_planner_pressure(
     gate: SafetyGate | None,
     *,
     tiers: tuple[int, ...] = (2, 3),
+    w8_candidate_generation_active: bool = False,
 ) -> str:
     """Summarize non-default eval tiers for planner pressure without cross-tier scoring."""
     if archive is None:
@@ -734,10 +761,23 @@ def _build_higher_tier_planner_pressure(
         "- Preserve T1 as the deployment safety lane, but expect durable wins to generalize: T1 gains that never lift T2/T3 are overfit risk.",
         "- Prefer actions likely to improve T2/T3 same-tier frontier quality, then validate with deep_eval tier 2 or 3.",
         "- If T1/T2 hypervolume is plateauing, use the current kernel era for T3 hard-workflow exploration instead of repeated local T1 exploitation.",
-        "- T3 hard-workflow probes should favor technical tool-use, REPL, and multi-turn agentic hypotheses when W8 is not requesting promotion evidence.",
-        "- When W8 replay evidence is not asking for a specific promotion eval, prefer deep_eval tier 3 if T3 coverage/frontier is thin.",
         "- Never compare raw quality across tiers; compare each tier only to its own baseline/frontier.",
     ]
+    if w8_candidate_generation_active:
+        lines.append(
+            "- W8 candidate-generation override: do not emit seed_batch, "
+            "deep_eval, or structural_prune for higher-tier coverage this turn. "
+            "Preserve T2/T3 pressure through an available replayable candidate "
+            "action instead: numeric_trial with journaled applied params, or a "
+            "one-flag structural_experiment with a same-tier T2/T3 falsifier."
+        )
+    else:
+        lines.extend(
+            [
+                "- T3 hard-workflow probes should favor technical tool-use, REPL, and multi-turn agentic hypotheses when W8 is not requesting promotion evidence.",
+                "- When W8 replay evidence is not asking for a specific promotion eval, prefer deep_eval tier 3 if T3 coverage/frontier is thin.",
+            ]
+        )
     baseline = getattr(gate, "baseline", None) if gate is not None else None
     plateau_parts: list[str] = []
     for tier in (DEFAULT_FRONTIER_TIER, 2):
@@ -783,10 +823,17 @@ def _build_higher_tier_planner_pressure(
                 if baseline_quality is not None
                 else ""
             )
-            lines.append(
-                f"- T{tier}: empty frontier{baseline_text}; schedule deep_eval tier {tier} "
-                "when evidence budget allows."
-            )
+            if w8_candidate_generation_active:
+                lines.append(
+                    f"- T{tier}: empty frontier{baseline_text}; defer the "
+                    f"deep_eval tier {tier} coverage probe until W8 candidate "
+                    "generation clears."
+                )
+            else:
+                lines.append(
+                    f"- T{tier}: empty frontier{baseline_text}; schedule deep_eval tier {tier} "
+                    "when evidence budget allows."
+                )
             continue
         delta_text = ""
         if baseline_quality is not None:
@@ -882,6 +929,7 @@ def _build_eval_coverage_pressure(
     *,
     pool_total_questions: int | None = None,
     pool_tier_questions: Mapping[int | str, int] | None = None,
+    w8_candidate_generation_active: bool = False,
 ) -> str:
     """Summarize eval-task coverage so planner search does not overfit a narrow slice."""
     if journal is None:
@@ -919,6 +967,13 @@ def _build_eval_coverage_pressure(
                 suite_distinct.setdefault(suite, set()).add(qid)
 
     if question_rows <= 0:
+        if w8_candidate_generation_active:
+            return (
+                "No scored question-result rows are available yet. W8 candidate "
+                "generation is the active strict blocker, so do not use "
+                "seed_batch or deep_eval merely to collect coverage; choose an "
+                "available replayable candidate action."
+            )
         return (
             "No scored question-result rows are available yet; prefer seed_batch "
             "or deep_eval before drawing planner-learning conclusions."
@@ -968,13 +1023,22 @@ def _build_eval_coverage_pressure(
             f"T{tier}={tier_trials.get(tier, 0)} trial(s)"
             for tier in under_sampled_higher_tiers
         )
-        under_sampled_text = (
-            f" Higher-tier coverage is thin ({tier_list}); when the Fable gate "
-            "does not require a specific W8/promotion action, prefer deep_eval on "
-            "the thinnest tier or seed_batch coverage probes that broaden task families. "
-            "If T3 is thin, treat hard workflow, tool-use, REPL, and multi-turn task "
-            "coverage as high-value exploration."
-        )
+        if w8_candidate_generation_active:
+            under_sampled_text = (
+                f" Higher-tier coverage is thin ({tier_list}), but W8 candidate "
+                "generation is the active strict blocker; do not propose "
+                "seed_batch or deep_eval for coverage this turn. Preserve the "
+                "hard-workflow/tool-use/REPL hypothesis in the falsifier of an "
+                "available replayable candidate action."
+            )
+        else:
+            under_sampled_text = (
+                f" Higher-tier coverage is thin ({tier_list}); when the Fable gate "
+                "does not require a specific W8/promotion action, prefer deep_eval on "
+                "the thinnest tier or seed_batch coverage probes that broaden task families. "
+                "If T3 is thin, treat hard workflow, tool-use, REPL, and multi-turn task "
+                "coverage as high-value exploration."
+            )
     least_covered_suites = sorted(
         ((suite, len(qids)) for suite, qids in suite_distinct.items()),
         key=lambda item: item[1],
@@ -984,19 +1048,30 @@ def _build_eval_coverage_pressure(
         suite_text = " Least-covered non-sentinel suites: " + ", ".join(
             f"{suite}={count}" for suite, count in least_covered_suites
         ) + "."
+    if w8_candidate_generation_active:
+        guidance = (
+            "If repeat_factor is high or coverage is low, keep the coverage "
+            "pressure visible but do not emit seed_batch or deep_eval while W8 "
+            "candidate generation is strict. Prefer an available replayable "
+            "numeric_trial or one-flag structural_experiment whose falsifier "
+            "names expected same-tier T2/T3 movement. Keep fixed authority-core "
+            "evidence separate from planner-learning coverage."
+        )
+    else:
+        guidance = (
+            "If repeat_factor is high or coverage is low, prefer actions that add "
+            "decision-grade diversity: seed_batch on under-covered suites, deep_eval tier 2/3, "
+            "or tool-use/REPL/agentic coverage probes. Healthy optimization should eventually "
+            "lift same-tier T2/T3 frontier quality; T1-only gains are overfit risk. Keep fixed "
+            "authority-core evidence separate from planner-learning coverage."
+        )
     lines = [
         (
             f"Eval coverage: {distinct_count} distinct qids / {question_rows} scored rows "
             f"(repeat_factor={repeat_factor:.2f}x{coverage_text}); eval trials by tier: {tier_text}."
         ),
         f"Tier detail: {tier_detail_text}.{under_sampled_text}{suite_text}",
-        (
-            "If repeat_factor is high or coverage is low, prefer actions that add "
-            "decision-grade diversity: seed_batch on under-covered suites, deep_eval tier 2/3, "
-            "or tool-use/REPL/agentic coverage probes. Healthy optimization should eventually "
-            "lift same-tier T2/T3 frontier quality; T1-only gains are overfit risk. Keep fixed "
-            "authority-core evidence separate from planner-learning coverage."
-        ),
+        guidance,
     ]
     return "\n".join(lines)
 
@@ -1070,6 +1145,15 @@ def _build_outcome_progress_pressure(
             "highest-information actions while preserving W8/W6 evidence gates."
         )
     return "\n".join(lines)
+
+
+def _outcome_progress_frontier_stalled(outcome_progress_pressure_text: str) -> bool:
+    text = outcome_progress_pressure_text.lower()
+    return "outcome blockers:" in text and "frontier admission stale" in text
+
+
+def _action_can_move_outcome_frontier(action: Mapping[str, Any]) -> bool:
+    return str(action.get("type") or "") in OUTCOME_PROGRESS_ACTIONS
 
 
 _QUOTA_NUMERIC_SURFACES = _configured_numeric_surfaces()
@@ -1496,6 +1580,56 @@ def _replace_blacklisted_seed_fallback(
     return replacement, next_rationale
 
 
+def _replace_blacklisted_w8_candidate_action(
+    action: dict[str, Any],
+    blacklist: list[dict[str, Any]],
+    rationale: dict[str, Any] | None = None,
+    *,
+    trial_counter: int,
+    w8_replay_pressure_text: str,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Keep W8 candidate generation from burning a trial on a known bad action."""
+    if not _w8_replay_pressure_active(w8_replay_pressure_text):
+        return action, rationale
+    blocked = check_blacklist(action, blacklist)
+    if not blocked:
+        return action, rationale
+
+    replacement, fallback_reason = _first_unblacklisted_numeric_trial_action(
+        blacklist,
+        trial_counter=trial_counter,
+    )
+    if replacement is None:
+        log.warning(
+            "W8 candidate action %s is blacklisted (%s), but no replayable "
+            "numeric fallback remains unblocked: %s",
+            json.dumps(action, default=str),
+            blocked,
+            fallback_reason,
+        )
+        return action, rationale
+
+    next_rationale = {
+        **(rationale or {}),
+        "w8_blacklisted_candidate_replaced": True,
+        "w8_blacklisted_candidate_reason": blocked,
+        "w8_blacklisted_candidate_original": dict(action),
+        "w8_blacklisted_candidate_replacement": dict(replacement),
+        "falsifier": (
+            (rationale or {}).get("falsifier")
+            or "W8 blacklisted-candidate replacement fails to produce replayable seq evidence"
+        ),
+    }
+    log.warning(
+        "W8 candidate action %s is blacklisted (%s); using replayable "
+        "numeric_trial fallback %s.",
+        json.dumps(action, default=str),
+        blocked,
+        json.dumps(replacement, default=str),
+    )
+    return replacement, next_rationale
+
+
 def _replace_blacklisted_autonomous_action(
     action: dict[str, Any],
     blacklist: list[dict[str, Any]],
@@ -1791,7 +1925,12 @@ def _maybe_force_seq_promotion_fresh_eval(
 
 
 def _seq_promotion_replay_blocker(action: Any) -> str:
-    """Return why a seq-promotion candidate cannot be replayed for fresh eval."""
+    """Return why a seq-promotion candidate cannot be replayed for fresh eval.
+
+    AP-9 still guards new planner-proposed numeric_trial actions before dispatch.
+    W8 replay is different: a materialized NumericSwarm trial may contain several
+    applied params, but it is a single recorded candidate being re-measured.
+    """
     if not isinstance(action, dict):
         return "candidate action is missing or not an object"
     action_type = str(action.get("type") or "")
@@ -1799,16 +1938,22 @@ def _seq_promotion_replay_blocker(action: Any) -> str:
         params = action.get("params")
         if not isinstance(params, dict) or not params:
             return "candidate numeric_trial lacks replayable applied params"
+        return ""
     elif action_type == "structural_experiment":
         flags = action.get("flags")
         if not isinstance(flags, dict) or not flags:
             return "candidate structural_experiment lacks replayable flags"
+        if len(flags) > 1:
+            return (
+                f"candidate structural_experiment changes {len(flags)} flags at once "
+                f"({list(flags.keys())}); limit to 1 for clean attribution"
+            )
+        for key, value in flags.items():
+            if not isinstance(key, str) or not isinstance(value, bool):
+                return "candidate structural_experiment flags must map string names to booleans"
     else:
         return f"candidate action type is not replayable: {action_type or 'unknown'}"
 
-    scope_err = controller_io.validate_single_variable(action)
-    if scope_err:
-        return f"candidate action violates AP-9: {scope_err}"
     return ""
 
 
@@ -2319,6 +2464,21 @@ def _format_blacklist_for_prompt(blacklist: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _is_observational_feedback_action(action: Any) -> bool:
+    return bool(
+        isinstance(action, dict)
+        and action.get("type") in OBSERVATIONAL_ACTION_BLACKLIST_DENYLIST
+    )
+
+
+def _is_observational_feedback_signature(signature: str) -> bool:
+    try:
+        action = json.loads(signature)
+    except (TypeError, json.JSONDecodeError):
+        return False
+    return _is_observational_feedback_action(action)
+
+
 def _enforce_experiment_quota(
     action: dict[str, Any],
     state: dict[str, Any],
@@ -2382,6 +2542,264 @@ def _enforce_experiment_quota(
 
     state["consecutive_passive_actions"] = streak + 1
     return action, rationale
+
+
+def _entry_action_tier(entry: Any) -> int | None:
+    try:
+        return int(getattr(entry, "tier"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _iter_journal_entries(journal: ExperimentJournal | None) -> list[Any]:
+    if journal is None:
+        return []
+    try:
+        if hasattr(journal, "entries_with_supersessions"):
+            return list(journal.entries_with_supersessions())
+        return list(journal.all_entries())
+    except Exception:
+        return []
+
+
+def _higher_tier_trial_stats(
+    journal: ExperimentJournal | None,
+    *,
+    tiers: tuple[int, ...] = HIGHER_TIER_PROBE_TIERS,
+) -> dict[int, dict[str, int | None]]:
+    stats: dict[int, dict[str, int | None]] = {
+        tier: {"count": 0, "last_trial_id": None} for tier in tiers
+    }
+    for entry in _iter_journal_entries(journal):
+        if getattr(entry, "bug_corrupted_by", ""):
+            continue
+        tier = _entry_action_tier(entry)
+        if tier not in stats:
+            continue
+        current = stats[tier]
+        current["count"] = int(current.get("count") or 0) + 1
+        try:
+            trial_id = int(getattr(entry, "trial_id"))
+        except (TypeError, ValueError):
+            continue
+        last = current.get("last_trial_id")
+        if last is None or trial_id > int(last):
+            current["last_trial_id"] = trial_id
+    return stats
+
+
+def _archive_frontier_size(archive: ParetoArchive | None, tier: int) -> int | None:
+    if archive is None:
+        return None
+    try:
+        summary = archive.summary(tier=tier)
+    except Exception:
+        return None
+    try:
+        return int(summary.get("frontier_size") or 0)
+    except (TypeError, ValueError):
+        return None
+
+
+def _maybe_force_higher_tier_probe(
+    action: dict[str, Any],
+    state: dict[str, Any],
+    *,
+    journal: ExperimentJournal | None = None,
+    archive: ParetoArchive | None = None,
+    blacklist: list[dict[str, Any]] | None = None,
+    rationale: dict[str, Any] | None = None,
+    trial_counter: int = 0,
+    w8_replay_pressure_text: str = "",
+    outcome_progress_pressure_text: str = "",
+    tiers: tuple[int, ...] = HIGHER_TIER_PROBE_TIERS,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Bound T1-only exploitation by forcing occasional T2/T3 eval probes.
+
+    The default frontier and promotion logic remain T1-scoped. This guard only
+    prevents higher-tier evidence from going stale while the planner repeatedly
+    exploits T1; each tier is still compared to its own baseline/frontier.
+    """
+    if not HIGHER_TIER_PROBE_GUARD:
+        return action, rationale
+    if _w8_replay_pressure_active(w8_replay_pressure_text):
+        return action, rationale
+    if isinstance(rationale, dict) and (
+        rationale.get("critic_reject_numeric_fallback")
+        or rationale.get("critic_reject_safe_fallback")
+    ):
+        # A binding critic already rejected the planner's preferred action and
+        # routed to a fallback. Do not let a quota/probe guard
+        # immediately resurrect that rejected shape in the same trial.
+        return action, rationale
+
+    try:
+        selected_tier = int(action.get("tier", DEFAULT_FRONTIER_TIER))
+    except (TypeError, ValueError):
+        selected_tier = DEFAULT_FRONTIER_TIER
+    if action.get("type") == "deep_eval" and selected_tier in tiers:
+        return (
+            action,
+            {
+                **(rationale or {}),
+                "higher_tier_probe_satisfied_by_selected_action": True,
+                "higher_tier_probe_tier": selected_tier,
+            },
+        )
+    if _outcome_progress_frontier_stalled(outcome_progress_pressure_text):
+        return (
+            action,
+            {
+                **(rationale or {}),
+                "higher_tier_probe_skipped_outcome_stalled": True,
+            },
+        )
+
+    guard_state = state.get("higher_tier_probe_guard")
+    if isinstance(guard_state, dict):
+        try:
+            last_forced = int(guard_state.get("last_forced_trial_id"))
+        except (TypeError, ValueError):
+            last_forced = None
+        if (
+            last_forced is not None
+            and trial_counter - last_forced < HIGHER_TIER_PROBE_MIN_GAP_TRIALS
+        ):
+            return action, rationale
+
+    stats = _higher_tier_trial_stats(journal, tiers=tiers)
+    candidates: list[tuple[tuple[int, int, int, int, int], int, str]] = []
+    for tier in tiers:
+        count = int(stats.get(tier, {}).get("count") or 0)
+        last_trial_id = stats.get(tier, {}).get("last_trial_id")
+        gap = (
+            HIGHER_TIER_PROBE_STALE_TRIALS + 1
+            if last_trial_id is None
+            else max(0, trial_counter - int(last_trial_id))
+        )
+        frontier_size = _archive_frontier_size(archive, tier)
+        no_frontier = frontier_size == 0
+        deficit = max(0, HIGHER_TIER_PROBE_MIN_TRIALS_PER_TIER - count)
+        stale = last_trial_id is None or gap >= HIGHER_TIER_PROBE_STALE_TRIALS
+        if not (deficit or stale or no_frontier):
+            continue
+        forced = {"type": "deep_eval", "tier": tier}
+        blocked = check_blacklist(forced, blacklist or [])
+        if blocked:
+            continue
+        reason = (
+            f"T{tier} higher-tier probe due: count={count}, "
+            f"last_trial={last_trial_id if last_trial_id is not None else 'never'}, "
+            f"gap={gap}, frontier={frontier_size if frontier_size is not None else 'unknown'}"
+        )
+        score = (
+            1 if last_trial_id is None else 0,
+            1 if no_frontier else 0,
+            deficit,
+            gap,
+            -tier,
+        )
+        candidates.append((score, tier, reason))
+
+    if not candidates:
+        return action, rationale
+
+    _score, tier, reason = max(candidates, key=lambda item: item[0])
+    forced = {"type": "deep_eval", "tier": tier}
+    state["higher_tier_probe_guard"] = {
+        "last_forced_trial_id": trial_counter,
+        "last_forced_tier": tier,
+        "last_forced_reason": reason,
+        "original_action": dict(action),
+        "forced_action": dict(forced),
+    }
+    log.warning(
+        "Higher-tier probe guard forcing deep_eval(tier=%d) instead of %s: %s",
+        tier,
+        json.dumps(action, default=str),
+        reason,
+    )
+    return (
+        forced,
+        {
+            **(rationale or {}),
+            "higher_tier_probe_forced": True,
+            "higher_tier_probe_tier": tier,
+            "higher_tier_probe_reason": reason,
+            "higher_tier_probe_original": dict(action),
+        },
+    )
+
+
+def _maybe_force_outcome_progress_action(
+    action: dict[str, Any],
+    state: dict[str, Any],
+    *,
+    blacklist: list[dict[str, Any]] | None = None,
+    rationale: dict[str, Any] | None = None,
+    trial_counter: int = 0,
+    outcome_progress_pressure_text: str = "",
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Escalate stale outcome flow from prompt advice into a bounded fallback.
+
+    Outcome pressure is not a safety gate and does not alter scoring. It only
+    prevents stale frontier flow from being satisfied by passive seeding,
+    validation-only evals, or housekeeping when a metric-bearing numeric trial
+    remains available.
+    """
+    if not _outcome_progress_frontier_stalled(outcome_progress_pressure_text):
+        return action, rationale
+    if _action_can_move_outcome_frontier(action):
+        state["outcome_progress_forced"] = None
+        return (
+            action,
+            {
+                **(rationale or {}),
+                "outcome_progress_satisfied_by_selected_action": True,
+            },
+        )
+
+    forced, blocked_reason = _first_unblacklisted_numeric_trial_action(
+        blacklist or [],
+        trial_counter=trial_counter,
+    )
+    if forced is None:
+        state["outcome_progress_blocked"] = {
+            "trial_id": trial_counter,
+            "reason": blocked_reason,
+            "action": action,
+        }
+        log.warning(
+            "Outcome progress is frontier-stalled, but no numeric_trial "
+            "fallback remains available: %s",
+            blocked_reason,
+        )
+        return action, rationale
+
+    log.warning(
+        "Outcome progress is frontier-stalled; forcing numeric_trial(surface=%s) "
+        "instead of '%s'.",
+        forced["surface"],
+        action.get("type", "unknown"),
+    )
+    state["outcome_progress_forced"] = {
+        "trial_id": trial_counter,
+        "original_action": action,
+        "forced_action": forced,
+    }
+    state.pop("outcome_progress_blocked", None)
+    return (
+        forced,
+        {
+            **(rationale or {}),
+            "outcome_progress_forced": True,
+            "outcome_progress_original": dict(action),
+            "falsifier": (
+                (rationale or {}).get("falsifier")
+                or "outcome-progress numeric fallback fails to produce keepable frontier evidence"
+            ),
+        },
+    )
 
 
 def _maybe_force_frontier_rerun_action(
@@ -2711,7 +3129,12 @@ def _build_last_invalid_feedback(state: dict[str, Any]) -> str:
     """
     counts = state.get("invalid_signature_counts", {}) or {}
     repeated = sorted(
-        ((c, s) for s, c in counts.items() if c >= 2), reverse=True
+        (
+            (c, s)
+            for s, c in counts.items()
+            if c >= 2 and not _is_observational_feedback_signature(s)
+        ),
+        reverse=True,
     )[:5]
 
     def _repeated_block(lines: list[str]) -> str:
@@ -2726,6 +3149,14 @@ def _build_last_invalid_feedback(state: dict[str, Any]) -> str:
         return "\n".join(lines)
 
     act = state.get("last_invalid_action")
+    if _is_observational_feedback_action(act):
+        lines = [
+            "  (last non-executing action was observational and remains schedulable; "
+            "it is not treated as a repeat blocker)"
+        ]
+        if repeated:
+            return _repeated_block(lines)
+        return "\n".join(lines)
     if not act:
         if repeated:
             return _repeated_block(
@@ -3226,6 +3657,25 @@ def _record_rejected_draft(
     reason = "critic rejected: " + ("; ".join(issues) if issues else
                                     getattr(critique, "decision", "rejected"))
     sig = _action_signature(draft_action)
+    if _is_observational_feedback_action(draft_action):
+        rejected_observational = state.setdefault(
+            "critic_rejected_observational_signatures", {}
+        )
+        rejected_observational[sig] = {
+            "trial_id": trial_id,
+            "action": draft_action,
+            "reason": reason,
+            "recorded_at": datetime.now(timezone.utc).isoformat(),
+        }
+        log.warning(
+            "Critic %s observational draft %s; recorded as advisory feedback "
+            "without invalid-signature poisoning",
+            getattr(critique, "decision", "rejected"),
+            json.dumps(draft_action, default=str),
+        )
+        if _is_operator_domain_critique(critique):
+            _append_operator_outbox_item(draft_action, critique, trial_id)
+        return False
     sig_counts = state.setdefault("invalid_signature_counts", {})
     sig_counts[sig] = int(sig_counts.get(sig, 0)) + 1
     rejected_signatures = state.setdefault("critic_rejected_signatures", {})
@@ -3278,6 +3728,14 @@ def _critic_rejected_signature_skip(
     action after a substituted fallback trial cleared last_invalid_action.
     """
     if not isinstance(action, dict):
+        return None
+    if _is_observational_feedback_action(action):
+        return None
+    if action.get("type") == "numeric_trial" and not (action.get("params") or {}):
+        # Empty numeric params are an Optuna request, not the replay artifact.
+        # NumericSwarm samples concrete values at dispatch and actions.py mutates
+        # the action before journaling, so the apparent signature is not an exact
+        # repeat in the material sense that this guard is meant to block.
         return None
     rejected = state.get("critic_rejected_signatures", {}) or {}
     if not isinstance(rejected, dict):
@@ -3376,6 +3834,18 @@ FABLE_GATE_REPORT_GLOBS = (
 FABLE_GATE_ADVISORY_MAX_AGE_S = int(
     os.environ.get("AUTOPILOT_FABLE_GATE_ADVISORY_MAX_AGE_S", "14400")
 )
+
+
+def _format_deep_eval_tier_options() -> str:
+    tiers = [str(tier) for tier in sorted(controller_io.DEEP_EVAL_TIERS)]
+    if not tiers:
+        return "(none)"
+    if len(tiers) == 1:
+        return tiers[0]
+    if len(tiers) == 2:
+        return " or ".join(tiers)
+    return f"{', '.join(tiers[:-1])}, or {tiers[-1]}"
+
 
 CONTROLLER_PROMPT_TEMPLATE = """\
 You are the AutoPilot meta-reasoning controller for an LLM orchestration stack.
@@ -3519,31 +3989,12 @@ Stagnation signal: {stagnation_signal}
 
 ## Available Actions
 
+The schemas below are already filtered by the "Action Availability" section for
+this turn. Do not emit an action type unless its schema appears in this section.
+
 Respond with EXACTLY ONE action in a ```json:autopilot_actions block:
 
-- Seed: {{"type": "seed_batch", "n_questions": 10-50, "suites": ["coder","math",...]}}
-- Numeric: {{"type": "numeric_trial", "surface": "{numeric_surface_options}", "params": {{}}}}
-  (Leave params empty to let Optuna suggest; provide params to test specific values)
-- Prompt: {{"type": "prompt_mutation", "file": "frontdoor.md", "mutation": "targeted_fix|compress|few_shot_evolution", "description": "..."}}
-- GEPA: {{"type": "gepa_optimize", "file": "frontdoor.md", "max_evals": 50, "description": "..."}}
-  (AP-19: Evolutionary prompt optimization via GEPA — runs ~50 evals internally, returns best candidate)
-- Code: {{"type": "code_mutation", "file": "src/escalation.py", "mutation": "targeted_fix", "description": "..."}}
-  (Mutate Python code — ONLY files in allowlist: {code_targets})
-- Structural: {{"type": "structural_experiment", "flags": {{"feature_name": true/false}}}}
-- Prune: {{"type": "structural_prune", "file": "frontdoor.md", "block": "## Section Name", "description": "..."}}
-  (Delete an instruction block from a .md prompt file — accepted only if quality >= baseline AND instruction_token_ratio decreases)
-- Compact: {{"type": "slot_compact", "port": 0, "slot_id": 0, "keep_ratio": 0.3, "scorer": "expected_attention", "keep_first": 5, "n_future": 128}}
-  (AM KV compaction — replace port=0 with a live port from Slot Memory or the generated system card before emitting the action. Use after long-context queries to free memory. Evaluates quality post-compact.)
-- Train: {{"type": "train_routing_models", "min_memories": 500}}
-  (min_memories: integer 1-100000; default 500. Do NOT set it to the current
-  memory_count — the validator REJECTS any value above 100000.)
-- Distill: {{"type": "distill_skillbank", "teacher": "claude", "categories": ["routing"]}}
-- Reset: {{"type": "reset_memories", "keep_seen": true, "keep_skills": true}}
-- Deep eval: {{"type": "deep_eval", "tier": 3}}
-  (Choose tier 3 when expert/hard workflow coverage or frontier evidence is thin; choose tier 2 for comprehensive validation or W8 promotion-eval evidence. Supported tiers: 0, 1, 2, or 3. Do NOT include target_trial, suites, baseline_recheck, or instrumentation fields.)
-- Rollback: {{"type": "rollback", "to_checkpoint": "production_best"}}
-- Distill: {{"type": "distill_knowledge", "last_n": 10}}
-  (Run every ~5 trials to extract insights from recent outcomes into strategy memory)
+{available_action_schemas}
 
 Include brief reasoning before the action block.
 
@@ -3559,6 +4010,95 @@ candidates against still-open hypotheses:
    "synthesis_note": "<optional one-line on fusion / cleaner model>"}}}}
 ```
 """
+
+
+def _format_available_action_schemas(action_types: list[str]) -> str:
+    """Render only currently selectable action schemas for the controller prompt."""
+    ordered = [action_type for action_type in action_types if action_type]
+    numeric_surface_options = "|".join(_configured_numeric_surfaces()) or "(none)"
+    code_targets = ", ".join(CODE_MUTATION_ALLOWLIST)
+    deep_eval_tier_options = _format_deep_eval_tier_options()
+    schemas = {
+        "seed_batch": (
+            '- Seed: {{"type": "seed_batch", "n_questions": 10-50, '
+            '"suites": ["coder","math",...]}}'
+        ),
+        "numeric_trial": (
+            '- Numeric: {{"type": "numeric_trial", "surface": "'
+            f'{numeric_surface_options}", "params": {{}}}}\n'
+            "  (Leave params empty to let Optuna suggest; provide params to "
+            "test specific values)"
+        ),
+        "prompt_mutation": (
+            '- Prompt: {{"type": "prompt_mutation", "file": "frontdoor.md", '
+            '"mutation": "targeted_fix|compress|few_shot_evolution", '
+            '"description": "..."}}'
+        ),
+        "gepa_optimize": (
+            '- GEPA: {{"type": "gepa_optimize", "file": "frontdoor.md", '
+            '"max_evals": 50, "description": "..."}}\n'
+            "  (AP-19: Evolutionary prompt optimization via GEPA — runs ~50 "
+            "evals internally, returns best candidate)"
+        ),
+        "code_mutation": (
+            '- Code: {{"type": "code_mutation", "file": "src/escalation.py", '
+            '"mutation": "targeted_fix", "description": "..."}}\n'
+            f"  (Mutate Python code — ONLY files in allowlist: {code_targets})"
+        ),
+        "structural_experiment": (
+            '- Structural: {{"type": "structural_experiment", '
+            '"flags": {{"feature_name": true/false}}}}'
+        ),
+        "structural_prune": (
+            '- Prune: {{"type": "structural_prune", "file": "frontdoor.md", '
+            '"block": "## Section Name", "description": "..."}}\n'
+            "  (Delete an instruction block from a .md prompt file — accepted "
+            "only if quality >= baseline AND instruction_token_ratio decreases)"
+        ),
+        "slot_compact": (
+            '- Compact: {{"type": "slot_compact", "port": 0, "slot_id": 0, '
+            '"keep_ratio": 0.3, "scorer": "expected_attention", '
+            '"keep_first": 5, "n_future": 128}}\n'
+            "  (AM KV compaction — replace port=0 with a live port from Slot "
+            "Memory or the generated system card before emitting the action. "
+            "Use after long-context queries to free memory. Evaluates quality "
+            "post-compact.)"
+        ),
+        "train_routing_models": (
+            '- Train: {{"type": "train_routing_models", "min_memories": 500}}\n'
+            "  (min_memories: integer 1-100000; default 500. Do NOT set it to "
+            "the current memory_count — the validator REJECTS any value above "
+            "100000.)"
+        ),
+        "distill_skillbank": (
+            '- Distill skillbank: {{"type": "distill_skillbank", '
+            '"teacher": "claude", "categories": ["routing"]}}'
+        ),
+        "reset_memories": (
+            '- Reset: {{"type": "reset_memories", "keep_seen": true, '
+            '"keep_skills": true}}'
+        ),
+        "deep_eval": (
+            '- Deep eval: {{"type": "deep_eval", "tier": 3}}\n'
+            "  (Choose tier 3 when expert/hard workflow coverage or frontier "
+            "evidence is thin; choose tier 2 for comprehensive validation or "
+            f"W8 promotion-eval evidence. Supported tiers: {deep_eval_tier_options}. "
+            "Do NOT include target_trial, suites, baseline_recheck, or "
+            "instrumentation fields.)"
+        ),
+        "rollback": (
+            '- Rollback: {{"type": "rollback", "to_checkpoint": "production_best"}}'
+        ),
+        "distill_knowledge": (
+            '- Distill knowledge: {{"type": "distill_knowledge", "last_n": 10}}\n'
+            "  (Run every ~5 trials to extract insights from recent outcomes "
+            "into strategy memory)"
+        ),
+    }
+    lines = [schemas[action_type] for action_type in ordered if action_type in schemas]
+    if lines:
+        return "\n".join(lines).replace("{{", "{").replace("}}", "}")
+    return "- Pause: no currently selectable autonomous action schema is available."
 
 
 def _read_guidance_file(path: Path, missing_label: str) -> str:
@@ -3676,18 +4216,56 @@ def _build_action_availability(
     blacklist: list[dict[str, Any]],
     suppressed_numeric_surfaces: set[str] | None = None,
     w8_replay_pressure_text: str = "",
-) -> tuple[str, list[str]]:
-    """Return prompt text + viable tail-seed action types for the planner."""
+) -> tuple[str, list[str], list[str]]:
+    """Return prompt text plus viable exploration and selectable action types."""
     blocked: dict[str, str] = {}
     cautions: dict[str, str] = {}
     priority: list[str] = []
 
-    if _w8_candidate_generation_pressure(w8_replay_pressure_text):
+    w8_candidate_generation_active = _w8_candidate_generation_pressure(
+        w8_replay_pressure_text
+    )
+    w8_replay_pressure_active = _w8_replay_pressure_active(w8_replay_pressure_text)
+    if w8_candidate_generation_active:
         priority.append(
-            "W8 candidate generation is the active strict blocker: prefer an "
-            "explicit single-param numeric_trial or one-flag structural_experiment. "
-            "Treat seed_batch, deep_eval, structural_prune, and empty-params "
-            "numeric_trial as deferrals unless the rationale explains a direct W8 unblock."
+            "W8 candidate generation is the active strict blocker. For this turn, "
+            "candidate generation actions are ONLY an explicit or Optuna-suggested "
+            "numeric_trial that journals applied params, or a one-flag "
+            "structural_experiment. Do not emit seed_batch, deep_eval, or "
+            "structural_prune; they are deferrals unless a seq due action is forcing "
+            "them."
+        )
+        blocked["seed_batch"] = (
+            "W8 candidate generation is active; seed_batch cannot create replayable "
+            "W8 candidate evidence"
+        )
+        blocked["deep_eval"] = (
+            "W8 candidate generation is active; deep_eval validates candidates but "
+            "does not create a replayable candidate"
+        )
+        blocked["structural_prune"] = (
+            "W8 candidate generation is active; structural_prune is not replayable "
+            "W8 candidate evidence"
+        )
+    elif w8_replay_pressure_active:
+        priority.append(
+            "W8 replay/confirmation evidence is active. For this turn, avoid "
+            "seed_batch, deep_eval, and structural_prune unless a seq due action "
+            "has already forced a specific replay or fresh-eval. Prefer a "
+            "replayable numeric_trial or one-flag structural_experiment with a "
+            "W8 falsifier."
+        )
+        blocked["seed_batch"] = (
+            "W8 replay pressure is active; seed_batch cannot replay or strengthen "
+            "accumulating W8 candidate evidence"
+        )
+        blocked["deep_eval"] = (
+            "W8 replay pressure is active; generic deep_eval is validation-only "
+            "and should wait for the seq-specific fresh-eval path"
+        )
+        blocked["structural_prune"] = (
+            "W8 replay pressure is active; structural_prune is not replayable "
+            "W8 candidate evidence"
         )
 
     blocked.update(_type_only_blacklisted_actions(blacklist))
@@ -3722,7 +4300,7 @@ def _build_action_availability(
         )
 
     seed_exhaustion = _seed_fallback_exhaustion_reason(blacklist)
-    if seed_exhaustion:
+    if seed_exhaustion and "seed_batch" not in blocked:
         blocked["seed_batch"] = (
             "all configured measured seed fallback candidates are blacklisted; "
             f"last reason: {seed_exhaustion}"
@@ -3774,7 +4352,7 @@ def _build_action_availability(
         for item in priority:
             lines.append(f"- {item}")
     if blocked:
-        lines.append("Currently unavailable:")
+        lines.append("Currently unavailable for active constraints:")
         for action_type, reason in sorted(blocked.items()):
             lines.append(f"- `{action_type}`: {reason}")
     if cautions:
@@ -3796,7 +4374,10 @@ def _build_action_availability(
         and action_type not in _RECOVERY_ONLY_ACTIONS
         and not (action_type == "train_routing_models" and not converged)
     ]
-    return "\n".join(lines), viable_tail_actions
+    selectable_actions = [
+        action_type for action_type in known_actions if action_type not in blocked
+    ]
+    return "\n".join(lines), viable_tail_actions, selectable_actions
 
 
 def _w8_candidate_generation_pressure(text: str) -> bool:
@@ -3812,6 +4393,119 @@ def _w8_candidate_generation_pressure(text: str) -> bool:
             and "are replayable" in normalized
         )
     )
+
+
+def _w8_replay_pressure_active(text: str) -> bool:
+    """Return True when the planner evidence asks this turn to serve W8."""
+    normalized = str(text or "").lower()
+    if "w8 replay pressure:" not in normalized:
+        return False
+    return any(
+        marker in normalized
+        for marker in (
+            "confirmed candidate(s) await fresh",
+            "no accumulating candidate exists",
+            "accumulating candidate(s) are replayable",
+        )
+    )
+
+
+def _w8_candidate_generation_deferral_reason(action: dict[str, Any]) -> str | None:
+    """Return why an action cannot create replayable W8 candidate evidence."""
+    action_type = str(action.get("type") or "")
+    if action_type == "numeric_trial":
+        # Empty params are acceptable at dispatch time: NumericSwarm fills Optuna
+        # params and actions.py journals the applied params before W8 recording.
+        return None
+    if action_type == "structural_experiment":
+        flags = action.get("flags")
+        if isinstance(flags, dict) and flags:
+            return None
+        return "structural_experiment_missing_flags"
+    return f"unreplayable_action={action_type or 'unknown'}"
+
+
+def _replace_w8_candidate_generation_deferral(
+    action: dict[str, Any],
+    blacklist: list[dict[str, Any]],
+    rationale: dict[str, Any] | None,
+    *,
+    trial_counter: int,
+    w8_replay_pressure_text: str,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Convert W8-blocked deferral actions into replayable candidate generation."""
+    if not _w8_replay_pressure_active(w8_replay_pressure_text):
+        return action, rationale
+    reason = _w8_candidate_generation_deferral_reason(action)
+    if reason is None:
+        return action, rationale
+    replacement, fallback_reason = _first_unblacklisted_numeric_trial_action(
+        blacklist,
+        trial_counter=trial_counter,
+    )
+    if replacement is None:
+        log.warning(
+            "W8 candidate generation pressure is active but %s cannot be replaced: %s",
+            reason,
+            fallback_reason,
+        )
+        return action, rationale
+    next_rationale = {
+        **(rationale or {}),
+        "w8_candidate_generation_replaced": True,
+        "w8_candidate_generation_original": dict(action),
+        "w8_candidate_generation_reason": reason,
+        "w8_candidate_generation_replacement": dict(replacement),
+        "falsifier": (
+            (rationale or {}).get("falsifier")
+            or "W8 candidate generation replacement fails to produce replayable seq evidence"
+        ),
+    }
+    log.warning(
+        "W8 candidate generation pressure replaced %s action %s with numeric_trial "
+        "fallback %s.",
+        reason,
+        json.dumps(action, default=str),
+        json.dumps(replacement, default=str),
+    )
+    return replacement, next_rationale
+
+
+def _repair_critic_reject_fallback_for_w8(
+    action: dict[str, Any],
+    blacklist: list[dict[str, Any]],
+    rationale: dict[str, Any] | None,
+    *,
+    trial_counter: int,
+    w8_replay_pressure_text: str,
+) -> tuple[dict[str, Any], dict[str, Any] | None, SkipOutcome | None, bool]:
+    """Keep critic fallback paths aligned with the active W8 replayability gate."""
+    action, rationale, seed_skip = _replace_exhausted_critic_seed_fallback(
+        action,
+        blacklist,
+        rationale,
+        trial_counter=trial_counter,
+    )
+    if seed_skip is not None:
+        return action, rationale, seed_skip, False
+
+    action, rationale = _replace_w8_candidate_generation_deferral(
+        action,
+        blacklist,
+        rationale,
+        trial_counter=trial_counter,
+        w8_replay_pressure_text=w8_replay_pressure_text,
+    )
+    repaired = (
+        _w8_replay_pressure_active(w8_replay_pressure_text)
+        and _w8_candidate_generation_deferral_reason(action) is None
+    )
+    if repaired:
+        rationale = {
+            **(rationale or {}),
+            "critic_reject_loop_repaired_by_w8_candidate": True,
+        }
+    return action, rationale, None, repaired
 
 
 def _build_exploration_block(
@@ -4933,18 +5627,42 @@ def _run_loop_inner(
         critic_fallback_skip: SkipOutcome | None = None
         critic_repeat_skip: SkipOutcome | None = None
         planner_decision: Any | None = None
+        action: dict[str, Any] | None = None
+        rationale: dict[str, Any] | None = None
         seq_fresh_eval_context: dict[str, Any] | None = None
         seq_baseline_draw_reference: dict[str, Any] | None = None
         seq_candidate_replay_context: dict[str, Any] | None = None
         seq_due_bypassed_planner = False
-        action, rationale, seq_fresh_eval_context, seq_baseline_draw_reference, seq_candidate_replay_context = _maybe_force_seq_due_action(
-            state=state,
-            journal=journal,
-            tier=DEFAULT_FRONTIER_TIER,
-            blacklist=blacklist,
-            trial_counter=trial_counter,
-            enabled=gate.use_sequential,
-        )
+        planner_evidence_text = ""
+        outcome_progress_pressure_text = ""
+        if action is None:
+            action, rationale, seq_fresh_eval_context, seq_baseline_draw_reference, seq_candidate_replay_context = _maybe_force_seq_due_action(
+                state=state,
+                journal=journal,
+                tier=DEFAULT_FRONTIER_TIER,
+                blacklist=blacklist,
+                trial_counter=trial_counter,
+                enabled=gate.use_sequential,
+            )
+        if action is None:
+            preplanner_action, preplanner_rationale = _maybe_force_frontier_rerun_action(
+                {"type": "seed_batch", "n_questions": SAFE_FALLBACK_SEED_N},
+                state,
+                journal=journal,
+                archive=archive,
+                blacklist=blacklist,
+                rationale=rationale,
+                trial_counter=trial_counter,
+            )
+            if preplanner_action != {"type": "seed_batch", "n_questions": SAFE_FALLBACK_SEED_N}:
+                action = preplanner_action
+                rationale = preplanner_rationale or {}
+                phase.set(
+                    "planner_bypassed_preemptive_gate",
+                    trial_id=trial_counter,
+                    gate="frontier_rerun",
+                    action_type=action.get("type", ""),
+                )
         if use_controller and action is None:
             phase.set(
                 "planner_prompt_build",
@@ -5167,6 +5885,9 @@ def _run_loop_inner(
                 )
             except Exception as _exc:
                 planner_evidence_text = f"(planner evidence unavailable: {_exc})"
+            w8_replay_pressure_active = _w8_replay_pressure_active(
+                planner_evidence_text
+            )
 
             _refresh_planner_convention_bindings(
                 strategy_store,
@@ -5182,7 +5903,11 @@ def _run_loop_inner(
                     "distill_skillbank", "reset_memories", "deep_eval",
                     "rollback", "distill_knowledge",
                 ]
-                action_availability_text, viable_tail_actions = _build_action_availability(
+                (
+                    action_availability_text,
+                    viable_tail_actions,
+                    selectable_action_types,
+                ) = _build_action_availability(
                     journal=journal,
                     known_actions=_known_actions,
                     memory_count=memory_count,
@@ -5204,6 +5929,7 @@ def _run_loop_inner(
                     f"(exploration-block assembly failed: {_exc})"
                 )
                 action_availability_text = "(action availability unavailable)"
+                selectable_action_types = _known_actions
                 stagnation_signal = "unknown"
 
             planner_strategy_hints_text = _build_planner_strategy_hints(
@@ -5213,8 +5939,12 @@ def _run_loop_inner(
             higher_tier_pressure_text = _build_higher_tier_planner_pressure(
                 archive,
                 gate,
+                w8_candidate_generation_active=w8_replay_pressure_active,
             )
-            eval_coverage_pressure_text = _build_eval_coverage_pressure(journal)
+            eval_coverage_pressure_text = _build_eval_coverage_pressure(
+                journal,
+                w8_candidate_generation_active=w8_replay_pressure_active,
+            )
             outcome_progress_pressure_text = _build_outcome_progress_pressure()
 
             prompt = CONTROLLER_PROMPT_TEMPLATE.format(
@@ -5236,6 +5966,9 @@ def _run_loop_inner(
                 converged=converged,
                 slot_memory=slot_memory_text,
                 action_availability=action_availability_text,
+                available_action_schemas=_format_available_action_schemas(
+                    selectable_action_types
+                ),
                 fable_gate_advisory=_build_fable_gate_advisory(),
                 higher_tier_pressure=higher_tier_pressure_text,
                 eval_coverage_pressure=eval_coverage_pressure_text,
@@ -5258,8 +5991,6 @@ def _run_loop_inner(
                     denylisted_flags=_PLANNER_DENYLISTED_FEATURE_FLAGS,
                 ),
                 last_invalid_feedback=_build_last_invalid_feedback(state),
-                numeric_surface_options="|".join(_configured_numeric_surfaces()),
-                code_targets=", ".join(CODE_MUTATION_ALLOWLIST),
                 plot_paths="\n".join(f"  - {p}" for p in plot_paths) or "  (none yet)",
             ) + peaf.peaf_prompt_addendum()
 
@@ -5280,6 +6011,8 @@ def _run_loop_inner(
                 cwd=ORCH_ROOT,
                 planner_state=planner_provider_state,
                 stagnation_signal=stagnation_signal,
+                allowed_action_types=selectable_action_types,
+                trial_id=trial_counter,
             )
             phase.set(
                 "planner_parse",
@@ -5372,12 +6105,13 @@ def _run_loop_inner(
             ):
                 _record_rejected_draft(state, draft_action, crit, trial_counter)
                 blacklist = load_blacklist()  # may have grown
-                action, rationale, critic_fallback_skip = (
-                    _replace_exhausted_critic_seed_fallback(
+                action, rationale, critic_fallback_skip, critic_rejection_repaired = (
+                    _repair_critic_reject_fallback_for_w8(
                         action,
                         blacklist,
                         rationale,
                         trial_counter=trial_counter,
+                        w8_replay_pressure_text=planner_evidence_text,
                     )
                 )
                 if critic_fallback_skip is not None:
@@ -5398,6 +6132,8 @@ def _run_loop_inner(
                         trial_id=trial_counter,
                     )
                     break
+                if critic_rejection_repaired:
+                    state["consecutive_rejected_drafts"] = 0
                 if (
                     int(state.get("consecutive_rejected_drafts", 0))
                     >= MAX_CONSECUTIVE_REJECTED_DRAFTS
@@ -5542,6 +6278,47 @@ def _run_loop_inner(
                     trial_counter=trial_counter,
                     enabled=gate.use_sequential,
                 )
+            if (
+                seq_fresh_eval_context is None
+                and seq_baseline_draw_reference is None
+                and seq_candidate_replay_context is None
+            ):
+                action, rationale = _replace_w8_candidate_generation_deferral(
+                    action,
+                    blacklist,
+                    rationale,
+                    trial_counter=trial_counter,
+                    w8_replay_pressure_text=planner_evidence_text,
+                )
+            if (
+                seq_fresh_eval_context is None
+                and seq_baseline_draw_reference is None
+                and seq_candidate_replay_context is None
+            ):
+                action, rationale = _maybe_force_higher_tier_probe(
+                    action,
+                    state,
+                    journal=journal,
+                    archive=archive,
+                    blacklist=blacklist,
+                    rationale=rationale,
+                    trial_counter=trial_counter,
+                    w8_replay_pressure_text=planner_evidence_text,
+                    outcome_progress_pressure_text=outcome_progress_pressure_text,
+                )
+            if (
+                seq_fresh_eval_context is None
+                and seq_baseline_draw_reference is None
+                and seq_candidate_replay_context is None
+            ):
+                action, rationale = _maybe_force_outcome_progress_action(
+                    action,
+                    state,
+                    blacklist=blacklist,
+                    rationale=rationale,
+                    trial_counter=trial_counter,
+                    outcome_progress_pressure_text=outcome_progress_pressure_text,
+                )
 
         if critic_repeat_skip is None:
             action, rationale = _maybe_force_frontier_rerun_action(
@@ -5564,6 +6341,13 @@ def _run_loop_inner(
                 pre_dispatch_skip.reason,
             )
         else:
+            action, rationale = _replace_blacklisted_w8_candidate_action(
+                action,
+                blacklist,
+                rationale,
+                trial_counter=trial_counter,
+                w8_replay_pressure_text=planner_evidence_text,
+            )
             action, rationale = _replace_blacklisted_seed_fallback(
                 action,
                 blacklist,

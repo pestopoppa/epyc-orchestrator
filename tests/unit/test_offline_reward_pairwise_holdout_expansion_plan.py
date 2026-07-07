@@ -347,16 +347,21 @@ def test_pairwise_holdout_plan_filters_to_audit_collection_targets(tmp_path: Pat
     candidates, summary = mod.build_plan(args)
 
     assert len(candidates) == 1
-    assert summary["decision"]["status"] == "expansion_plan_ready"
+    assert summary["decision"]["status"] == "insufficient_non_overlapping_cross_action_candidates"
     assert summary["collection_target_count"] == 1
-    assert summary["matched_collection_target_counts"] == {
+    assert summary["matched_collection_target_counts"] == {}
+    assert summary["candidate_presence_collection_target_counts"] == {
         "source_family:seeding_eval:coder_escalation>frontdoor": 1
     }
-    assert summary["unmatched_collection_targets"] == []
+    assert summary["collection_target_match_metric"] == "source_binary_reward_directional_contrast"
+    assert summary["unmatched_collection_targets"] == [
+        "source_family:seeding_eval:coder_escalation>frontdoor"
+    ]
+    assert summary["candidate_contrast_groups"] == 0
     assert summary["source_record_requirements"] == [
         {
             "target": "source_family:seeding_eval:coder_escalation>frontdoor",
-            "status": "matched_existing_candidates",
+            "status": "needs_new_source_records",
             "stratum_field": "source_family",
             "stratum_value": "seeding_eval",
             "action_pair": "coder_escalation>frontdoor",
@@ -368,9 +373,11 @@ def test_pairwise_holdout_plan_filters_to_audit_collection_targets(tmp_path: Pat
             "needs_direction": ["prefer other-side of coder_escalation>frontdoor"],
             "current_rows": 2,
             "current_direction_balance": 0.0,
-            "matched_candidate_groups": 1,
+            "matched_candidate_groups": 0,
+            "presence_candidate_groups": 1,
+            "matched_candidate_group_metric": "source_binary_reward_directional_contrast",
             "suggested_min_rows": 20,
-            "suggested_min_new_source_records": 19,
+            "suggested_min_new_source_records": 20,
             "collection_priority": 0,
             "collection_priority_reason": "independent_holdout_source_family_blocker",
             "source_record_shape": (
@@ -399,7 +406,7 @@ def test_pairwise_holdout_plan_filters_to_audit_collection_targets(tmp_path: Pat
             "max_tokens": 1024,
             "strict_modes": True,
             "question_source": "auto",
-            "requested_new_source_records": 19,
+            "requested_new_source_records": 20,
             "estimated_new_source_records": 36,
             "sample_size_semantics": (
                 "seed_specialist_routing.py interprets --sample-size as "
@@ -443,6 +450,102 @@ def test_pairwise_holdout_plan_filters_to_audit_collection_targets(tmp_path: Pat
             "stratum_field": "source_family",
             "stratum_value": "seeding_eval",
             "action_pair": "coder_escalation>frontdoor",
+        }
+    ]
+    assert summary["selected_groups"][0]["binary_reward_contrast_collection_targets"] == []
+
+
+def test_pairwise_holdout_counts_directional_binary_contrast(tmp_path: Path) -> None:
+    source = tmp_path / "seeding_20260621_eval.jsonl"
+    _write_jsonl(
+        source,
+        [
+            {
+                "question_id": "q-live",
+                "suite": "livecodebench",
+                "prompt": "Solve task",
+                "expected": "42",
+                "role_results": {
+                    "frontdoor:direct": {
+                        "answer": "41",
+                        "passed": False,
+                        "elapsed_seconds": 1.0,
+                    },
+                    "coder_primary": {
+                        "answer": "42",
+                        "passed": True,
+                        "elapsed_seconds": 2.0,
+                    },
+                },
+            }
+        ],
+    )
+    manifest = tmp_path / "manifest.jsonl"
+    _write_jsonl(manifest, [])
+    pairwise = tmp_path / "pairs.jsonl"
+    _write_jsonl(pairwise, [])
+    audit = tmp_path / "audit.json"
+    audit.write_text(
+        json.dumps(
+            {
+                "collection_targets": [
+                    {
+                        "stratum_field": "source_family",
+                        "stratum_value": "seeding_eval",
+                        "action_pair": "coder_escalation>frontdoor",
+                        "current_rows": 2,
+                        "current_direction_balance": 0.0,
+                        "needs_direction": ["prefer other-side of coder_escalation>frontdoor"],
+                        "prefer_hi": 0,
+                        "prefer_lo": 2,
+                        "suggested_min_rows": 20,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    args = mod.build_parser().parse_args(
+        [
+            "--input",
+            str(source),
+            "--existing-manifest",
+            str(manifest),
+            "--existing-pairwise-jsonl",
+            str(pairwise),
+            "--candidates-jsonl",
+            str(tmp_path / "candidates.jsonl"),
+            "--summary-json",
+            str(tmp_path / "summary.json"),
+            "--collection-targets-json",
+            str(audit),
+            "--target-source-families",
+            "",
+            "--target-suites",
+            "",
+            "--min-cross-action-candidate-groups",
+            "1",
+        ]
+    )
+
+    candidates, summary = mod.build_plan(args)
+
+    assert len(candidates) == 2
+    target_key = "source_family:seeding_eval:coder_escalation>frontdoor"
+    assert summary["decision"]["status"] == "expansion_plan_ready"
+    assert summary["candidate_contrast_groups"] == 1
+    assert summary["matched_collection_target_counts"] == {target_key: 1}
+    contrast_targets = summary["selected_groups"][0]["binary_reward_contrast_collection_targets"]
+    assert contrast_targets == [
+        {
+            "target": target_key,
+            "stratum_field": "source_family",
+            "stratum_value": "seeding_eval",
+            "action_pair": "coder_escalation>frontdoor",
+            "preferred_action": "coder_escalation",
+            "rejected_action": "frontdoor",
+            "contrast_metric": "source_binary_reward",
         }
     ]
 

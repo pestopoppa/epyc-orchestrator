@@ -1,0 +1,32 @@
+{
+  "findings": [
+    {
+      "evidence": "Status is listed as 'stub / in-planning'. While hardware (MI210) was acquired on 2026-07-02, the Phase 2 GPU training/GRPO-viability smoke test remains 'unverified'.",
+      "file": "handoffs/active/agent-world-env-synthesis.md",
+      "issue": "Stale status / Unverified Phase 2 gate",
+      "severity": "high"
+    },
+    {
+      "evidence": "The document states 'Phase 3 is complete for the local production stack'. The remaining work (Phase 5 rollout) is described as a 'separate decision'.",
+      "file": "handoffs/active/agent-file-prose-compression.md",
+      "issue": "Potential for archival; Phase 3 complete for local stack",
+      "severity": "medium"
+    }
+  ],
+  "generated_at": "2026-07-07T00:15:32+00:00",
+  "job_id": "handoff_freshness_lint",
+  "proposed_review_items": [
+    {
+      "action": "inspect",
+      "rationale": "Hardware (MI210) was recently installed (2026-07-02). Need to verify if the 'unverified' smoke test for Phase 2 can now be executed or if the status should be updated from 'stub'.",
+      "target": "handoffs/active/agent-world-env-synthesis.md"
+    },
+    {
+      "action": "archive_candidate",
+      "rationale": "The core implementation for the local production stack (Phase 3) is finished. The handoff should be reviewed to see if it can be moved to a 'completed' or 'post-mortem' state, leaving only Phase 5 as a new task.",
+      "target": "handoffs/active/agent-file-prose-compression.md"
+    }
+  ],
+  "run_id": "handoff_freshness_lint-20260707T001532Z-6565bc6a",
+  "summary": "Linter run completed. Identified one high-priority stale handoff regarding Agent-World Environment Synthesis and one medium-priority maintenance item for the Prose Compression handoff."
+}

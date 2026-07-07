@@ -300,6 +300,9 @@ def test_sandboxed_failing_verify_does_not_promote(tmp_path: Path) -> None:
     ps = PatchSet(files=[_modify("a.py", "old\n", [Hunk(start_line=1, end_line=1, replacement="new\n")])])
     res = apply_patchset_sandboxed(ps, repo_root=root, verify_fn=lambda sb: False)
     assert res.verify_passed is False and not res.ok
+    assert res.failed == [
+        {"path": "*", "failure_type": FailureType.VERIFY_FAILED, "detail": "verify_fn returned False"}
+    ]
     assert promote_sandbox(res, root) is False
     assert (root / "a.py").read_text() == "old\n"  # untouched
     cleanup_sandbox(res)

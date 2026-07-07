@@ -248,8 +248,8 @@ h2 .live-dot.down    { background: var(--bad);  box-shadow: 0 0 4px rgba(248, 11
 
 /* Compact topology strip — each role on its own row.
    Grid: role-name | port | activity-stats | slot-dots
-   Activity-stats column shows recent req count + t/s + last-active age
-   pulled from /dashboard/api/topology_activity (1.5s poll + 1s age tick). */
+   Activity-stats column shows live holders when lock/tap-correlated; otherwise
+   it shows explicitly historical/idle recency from /dashboard/api/topology_activity. */
 .topology-strip { display: flex; flex-direction: column; gap: 4px; }
 .topology-row {
     display: grid;
@@ -537,8 +537,9 @@ details.tap-section .tap-box-label.response-label { margin-top: 10px; }
     overflow-x: auto;
     font-family: var(--font-mono);
     font-size: 12px;
-    white-space: pre;
-    word-wrap: normal;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    overflow-wrap: anywhere;
     margin: 8px 0;
 }
 .prompt-text code, .stream-text code, .tap-content code {
@@ -798,6 +799,10 @@ body.insight-fullscreen-open { overflow: hidden; }
 .opt-brief .ob-lever .ob-bar > span { position: absolute; left:0; top:0; height:100%;
     background: var(--accent); border-radius: 3px; }
 .opt-brief .ob-lever .ob-rec { color: var(--good); text-align: right; }
+.opt-brief .ob-lever .ob-bar.ob-bar-bad > span { background: var(--bad); }
+.opt-brief .ob-lever .ob-rec.ob-rec-bad { color: var(--bad); }
+.opt-brief .ob-why { font-family: var(--font-mono); font-size: 9px; color: var(--dim);
+    margin: 0 0 4px; padding-left: 2px; line-height: 1.3; }
 .opt-brief .ob-pill { display:inline-block; margin: 2px 4px 2px 0; padding: 1px 6px;
     border-radius: 999px; border: 1px solid var(--border); font-size: 9px; color: var(--muted); }
 .opt-brief details { margin-top: 6px; }
@@ -855,6 +860,39 @@ body.insight-fullscreen-open { overflow: hidden; }
     font-size: 9px;
     color: var(--muted);
     white-space: nowrap;
+}
+.autopilot-health-chip {
+    display: inline-block;
+    margin: 0 4px 4px 0;
+    padding: 2px 6px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,0.04);
+    font-size: 9px;
+    font-weight: 600;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    white-space: nowrap;
+    letter-spacing: 0;
+}
+.autopilot-health-chip.good {
+    background: rgba(52,211,153,0.12);
+    color: var(--good);
+    border-color: rgba(52,211,153,0.28);
+}
+.autopilot-health-chip.warn {
+    background: rgba(251,191,36,0.14);
+    color: var(--warn);
+    border-color: rgba(251,191,36,0.28);
+}
+.autopilot-health-chip.bad {
+    background: rgba(248,113,113,0.14);
+    color: var(--bad);
+    border-color: rgba(248,113,113,0.28);
+}
+.autopilot-health-chip.muted {
+    background: rgba(148,163,184,0.10);
+    color: var(--muted);
+    border-color: rgba(148,163,184,0.22);
 }
 
 /* Responsive */
@@ -1114,6 +1152,8 @@ const _FETCH_JSON_TIMEOUT_MS = 5000;
 let _lastSnapshotAppliedAt = Date.now();
 let _lastWatchdogRecoveryAt = 0;
 let _lastStructuredTapAppliedAt = Date.now();
+let _latestStructuredTapFrameTs = 0;
+let _lastCoherentSnapshotRequestAt = 0;
 
 // Signature of the strip's *structure* — the fields renderTopologyStrip lays
 // out (role labels, ports, backing models, kind). Live activity (dots, tps,
@@ -1360,7 +1400,12 @@ function renderTopologyStrip() {
     }
 }
 
-function updateTopologyInflight(inflight) {
+function updateTopologyInflight(inflight, snapshotSeq = null) {
+    // Ignore in-flight task overlays unless caller tags them with a snapshot
+    // sequence. This avoids stale snapshot task lists being re-applied during
+    // lock-only refresh cycles and painting a single-holder badge from old
+    // state.
+    const safeInflight = snapshotSeq == null ? [] : (inflight || []);
     // Populate each role row's active-badge + nested .role-active-tasks
     // container from the snapshot's in_flight_tasks list. Called from
     // updateTopology so it stays in lock-step with slot-dot updates.
@@ -1368,7 +1413,7 @@ function updateTopologyInflight(inflight) {
     // Group inflight by the canonical base role (server-stamped `role`, which
     // matches the active_badge_<base> ids); fall back for older snapshots.
     const byRole = {};
-    for (const t of inflight || []) {
+    for (const t of safeInflight) {
         const role = t.role || t.chosen_action || t.final_role || 'unknown';
         const base = clientBaseRole(t.topology_role || role);
         if (!byRole[base]) byRole[base] = [];
@@ -1618,7 +1663,7 @@ async function openNodeDetail(port, label) {
     }
 }
 
-function updateTopology(activity, inflight) {
+function updateTopology(activity, inflight, snapshotSeq = null) {
     // Update slot-dot rows. Two passes:
     //   1) Each individual node's dots (children + bare-role rows) come from its
     //      own activity entry — same behavior as before grouping.
@@ -1690,11 +1735,12 @@ function updateTopology(activity, inflight) {
     // Third pass: per-role in-flight task badges + nested cards.
     // (B: merged in-flight panel into topology.)
     if (inflight !== undefined) {
-        updateTopologyInflight(inflight);
+        updateTopologyInflight(inflight, snapshotSeq);
     }
 }
 
 let _latestSnapshot = null;
+let _latestSnapshotSeq = 0;
 let _latestProcessStatus = null;
 let _processStatusFetchSeq = 0;
 let _latestAutopilotProgress = null;
@@ -1754,6 +1800,7 @@ function renderAutopilotRunStrip() {
     const verdicts = rolling._verifier_verdicts || {};
     const completed = snap.recent_completed_tasks || [];
     const phaseHealth = proc.autopilot_phase_health || {};
+    const outcomeProgress = proc.autopilot_outcome_progress || {};
     const phaseHealthClass = _autopilotPhaseHealthClass(phaseHealth.status);
 
     const openReqs = typeof openStructuredTapRequests === 'function' ? openStructuredTapRequests() : [];
@@ -1796,15 +1843,28 @@ function renderAutopilotRunStrip() {
     }
     const workers = proc.gepa_worker_count || 0;
     const phaseName = phase.phase || progressPhaseName(prog, ap.running);
-    const phaseHealthLine = phaseHealth.status
-        ? `<br><strong style="color:${_autopilotPhaseHealthColor(phaseHealth.status)}">${escapeHTML(_autopilotPhaseHealthLabel(phaseHealth))}</strong>`
-        : '';
     const currentCodeHealth = prog.current_code_health || {};
-    const currentCodeHealthLine = currentCodeHealth.status
-        ? `<br><strong style="color:${_autopilotPhaseHealthColor(currentCodeHealth.status)}">${escapeHTML(_currentCodeHealthLabel(currentCodeHealth))}</strong>`
-        : '';
+    const phaseHealthChip = _autopilotStatusChip(
+        'phase',
+        phaseHealth.status,
+        _autopilotPhaseHealthLabel(phaseHealth),
+        phaseHealth.status ? phaseHealthClass : '',
+    );
+    const outcomeHealthChip = _autopilotStatusChip(
+        'outcome',
+        outcomeProgress.status,
+        _autopilotOutcomeProgressLabel(outcomeProgress),
+        _autopilotOutcomeHealthClass(outcomeProgress.status),
+    );
+    const currentCodeHealthChip = _autopilotStatusChip(
+        'code',
+        currentCodeHealth.status,
+        _currentCodeHealthLabel(currentCodeHealth),
+        _autopilotPhaseHealthClass(currentCodeHealth.status),
+    );
+    const healthChips = [phaseHealthChip, outcomeHealthChip, currentCodeHealthChip].filter(Boolean).join('');
     const runSub = ap.running
-        ? `${rawAp.running ? `pid ${escapeHTML(String(ap.pid || '?'))} · ${escapeHTML(String(ap.etime || '?'))}` : 'autopilot_progress confirms live trial'} · last log ${formatShortDuration(lastLogAge)} · ${workers} workers<br><strong>${escapeHTML(String(phaseName))}</strong>${phase.action_type || prog.action_type ? ` · ${escapeHTML(String(phase.action_type || prog.action_type))}` : ''}${phaseHealthLine}${currentCodeHealthLine}`
+        ? `${rawAp.running ? `pid ${escapeHTML(String(ap.pid || '?'))} · ${escapeHTML(String(ap.etime || '?'))}` : 'autopilot_progress confirms live trial'} · last log ${formatShortDuration(lastLogAge)} · ${workers} workers<br><strong>${escapeHTML(String(phaseName))}</strong>${phase.action_type || prog.action_type ? ` · ${escapeHTML(String(phase.action_type || prog.action_type))}` : ''}${healthChips ? `<div style="margin-top:3px">${healthChips}</div>` : ''}`
         : `no process matching autopilot.py start`;
 
     let trialValue = 'no trial';
@@ -1836,7 +1896,6 @@ function renderAutopilotRunStrip() {
         if (outcome.keepable_rate) bits.push(`keepable ${fmtRate(keepable)}`);
         if (outcome.wasted_eval_rate) bits.push(`wasted-eval ${fmtRate(wasted)}`);
         if (outcome.learning_excluded_rate) bits.push(`learning-excluded ${fmtRate(excluded)}`);
-        if (currentCodeHealthLine) bits.push(_currentCodeHealthLabel(currentCodeHealth));
         trialSub = bits.join(' · ');
     } else if (phase.trial_id != null) {
         trialValue = `#${escapeHTML(String(phase.trial_id))}`;
@@ -2243,7 +2302,21 @@ function topologyRoleShapeFromLabel(label) {
 
 function inferStructuredTapLockIdentity(req, byRole = null) {
     if (!req) return null;
-    const directRole = String(req.lock_role || req.topology_role || (req.role ? clientBaseRole(req.role) : '') || req.role || '');
+    const port = req.port != null ? Number(req.port) : null;
+    const topoNode = (topology && Number.isFinite(port))
+        ? (topology.nodes || []).find(n => Number(n.port) === port)
+        : null;
+    const topo = topoNode ? topologyRoleShapeFromLabel(topoNode.label || topoNode.role || '') : { base: '', shape: '' };
+    const roleCandidates = [
+        req.lock_role,
+        req.topology_role,
+        topo.base,
+        req.role ? clientBaseRole(req.role) : '',
+        req.role,
+    ].filter(Boolean).map(String);
+    const directRole = byRole
+        ? (roleCandidates.find(r => byRole[r]) || roleCandidates[0] || '')
+        : (roleCandidates[0] || '');
     const directIdx = req.instance_idx != null ? Number(req.instance_idx) : null;
     const directRegions = (req.instance_regions || []).map(String).filter(Boolean);
     if (directRole && directIdx != null && Number.isFinite(directIdx) && directRegions.length) {
@@ -2255,12 +2328,7 @@ function inferStructuredTapLockIdentity(req, byRole = null) {
         };
     }
 
-    const port = req.port != null ? Number(req.port) : null;
-    const topoNode = (topology && Number.isFinite(port))
-        ? (topology.nodes || []).find(n => Number(n.port) === port)
-        : null;
-    const topo = topoNode ? topologyRoleShapeFromLabel(topoNode.label || topoNode.role || '') : { base: '', shape: '' };
-    const role = topo.base || directRole;
+    const role = directRole || topo.base;
     const roleInfo = byRole && role ? byRole[role] : null;
     const insts = roleInfo && Array.isArray(roleInfo.instances) ? roleInfo.instances : [];
     let inst = null;
@@ -2306,7 +2374,9 @@ function currentOffTapTrafficLabel() {
 
 function buildTapInferredRegionLocks() {
     const inferred = {};
-    const requests = typeof liveStructuredTapRequests === 'function' ? liveStructuredTapRequests() : [];
+    const requests = typeof structuredTapLockCandidates === 'function'
+        ? structuredTapLockCandidates()
+        : (typeof liveStructuredTapRequests === 'function' ? liveStructuredTapRequests() : []);
     for (const req of requests) {
         const identity = inferStructuredTapLockIdentity(req, _lastRegionLocksPayload && _lastRegionLocksPayload.by_role ? _lastRegionLocksPayload.by_role : null);
         if (!identity) continue;
@@ -2472,6 +2542,15 @@ function liveStructuredTapRequests() {
         .filter(isLiveStructuredTapRequest);
 }
 
+function structuredTapLockCandidates() {
+    return openStructuredTapRequests().filter(req => {
+        const activity = structuredTapActivity(req);
+        // Quiet / stalled requests can still own a lock; queued or
+        // waiting-for-lock requests should not be inferred as holders.
+        return activity.state !== 'queued' && activity.state !== 'waiting_cpu_lock';
+    });
+}
+
 function structuredTapMatchesLockHolder(req, holder) {
     if (!req || !holder) return false;
     const holderRole = String(holder.role || '');
@@ -2552,6 +2631,47 @@ function formatPhysicalRoleWithLogicalAliases(role, shape, idx = null) {
     return aliases.length ? `${base} (${aliases.join(', ')})` : base;
 }
 
+function tapInferredSourcesForInstance(inferred, idx) {
+    const sources = Array.isArray(inferred && inferred.sources) ? inferred.sources : [];
+    const nIdx = Number(idx);
+    if (!Number.isFinite(nIdx)) return sources;
+    return sources.filter(r => Number(r.instance_idx) === nIdx);
+}
+
+function tapInferredSourceCount(inferred) {
+    return (Array.isArray(inferred && inferred.sources) ? inferred.sources : []).length;
+}
+
+function tapInferredHolderLabel(role, shape, idx, sources) {
+    const sourceList = Array.isArray(sources) ? sources : [];
+    const matchingSources = sourceList.filter(r => Number(r.instance_idx) === Number(idx));
+    const holderSources = matchingSources.length ? matchingSources : sourceList;
+    const activityOrder = [
+        'prefill_decode_pending',
+        'streaming',
+        'quiet',
+        'stalled',
+    ];
+    const source = activityOrder
+        .map(state => holderSources.find(r => structuredTapActivity(r).state === state))
+        .find(Boolean) || holderSources[0] || null;
+    const activity = source ? structuredTapActivity(source) : null;
+    let inferredState = 'tap-inferred holder';
+    if (activity) {
+        if (activity.state === 'prefill_decode_pending') {
+            inferredState = 'tap-inferred active/pending';
+        } else if (activity.state === 'streaming') {
+            inferredState = 'tap-inferred streaming';
+        } else if (activity.state === 'quiet') {
+            inferredState = 'tap-inferred quiet/held';
+        } else if (activity.state === 'stalled') {
+            inferredState = 'tap-inferred stalled/held';
+        }
+    }
+    const countSuffix = holderSources.length > 1 ? ` ×${holderSources.length}` : '';
+    return `~${formatPhysicalRoleWithLogicalAliases(role, shape, idx)}${countSuffix} (${inferredState})`;
+}
+
 function lockHolderConcurrentSummary(holder) {
     const others = procRegionLockHolders()
         .filter(h => !(h.role === holder.role && Number(h.idx) === Number(holder.idx)))
@@ -2572,11 +2692,25 @@ function structuredTapHolderCountLabel() {
 
 function formatRegionLockHolderSummary() {
     const actionSource = currentAutopilotActionSource();
-    return procRegionLockHolders().map(holder => {
+    const parts = procRegionLockHolders().map(holder => {
         const tapped = openStructuredTapRequests().some(req => structuredTapMatchesLockHolder(req, holder));
         const source = (!tapped && actionSource) ? ` (${actionSource})` : '';
         return `${formatPhysicalRoleWithLogicalAliases(holder.role, holder.shape, holder.idx)}${source}`;
-    }).join(', ');
+    });
+    for (const [role, inferred] of Object.entries(_latestTapInferredRegionLocksByRole || {})) {
+        const base = (_latestRegionLocksByRole && _latestRegionLocksByRole[role]) || {};
+        const instMap = new Map((base.instances || []).map(i => [Number(i.idx), i]));
+        const sources = Array.isArray(inferred.sources) ? inferred.sources : [];
+        for (const rawIdx of (inferred.instanceIdxs || [])) {
+            const idx = Number(rawIdx);
+            if (!Number.isFinite(idx)) continue;
+            const inst = instMap.get(idx);
+            const shape = (inst && inst.shape) || `idx${idx}`;
+            const label = tapInferredHolderLabel(role, shape, idx, sources);
+            parts.push(label);
+        }
+    }
+    return parts.join(', ');
 }
 
 function refreshLiveDotsFromStructuredTap() {
@@ -2603,15 +2737,11 @@ function scheduleRegionLocksRefresh(force = false) {
     const now = Date.now();
     if (!force && now - _lastRegionLockPollStarted < 700) return;
     _lastRegionLockPollStarted = now;
-    const refreshSeq = ++_regionLocksRefreshSeq;
-    updateRegionLocks(refreshSeq);
-    updateContentionGate(refreshSeq);
-    updateTopologyActivity();
+    requestCoherentDashboardSnapshot('region_locks_refresh');
 }
 
 function repaintRegionLocksFromStructuredTapFrame() {
-    if (!_lastRegionLocksPayload) return;
-    updateRegionLocks(_regionLocksRefreshSeq, _lastRegionLocksPayload);
+    requestCoherentDashboardSnapshot('structured_tap_compat');
 }
 
 // Device rows for the Regions Lock grid: GPU/extern servers aren't CPU
@@ -3496,23 +3626,47 @@ function startStructuredTapStream() {
 // Handler body shared by the standalone structured_tap EventSource and the
 // multiplexed connection (event: structured_tap). Keep all side effects here so
 // both transports behave identically.
-function applyStructuredTapData(data) {
+function structuredTapFrameTs(data) {
+    const ts = Number(data && (data.now != null ? data.now : data.generated_at));
+    if (!Number.isFinite(ts)) return null;
+    if (ts > Date.now() / 1000 + 120) return null;
+    return ts;
+}
+
+function applyStructuredTapFrame(data, {
+    updateFreshness = true,
+    paintTap = true,
+    requestSnapshot = true,
+    refreshDetail = true,
+    acceptCoherentSnapshot = false,
+} = {}) {
+    const frameTs = structuredTapFrameTs(data);
+    if (frameTs !== null) {
+        if (!acceptCoherentSnapshot && frameTs + 0.001 < _latestStructuredTapFrameTs) return false;
+        if (frameTs > _latestStructuredTapFrameTs) _latestStructuredTapFrameTs = frameTs;
+    }
     _structuredTapRequests = data.structured_requests || [];
     _lastStructuredTapAppliedAt = Date.now();
     // The badge ages from the SAME frames as the content (either transport):
     // structured_tap_mtime is shard-aware server-side, `now` is server clock.
     // Feeding it from a different endpoint let badge and content disagree.
-    if (data.now != null) {
+    if (updateFreshness && data.now != null) {
         const tapMtime = data.structured_tap_mtime;
         const age = (tapMtime != null) ? Math.max(0, data.now - tapMtime) : null;
         setPanelFreshness('inference_tap', freshnessFromAge(age, 120, 600, 'structured tap'));
     }
-    if (_rawTapRenderMode === 'structured') paintRawTap();
+    if (paintTap && _rawTapRenderMode === 'structured') paintRawTap();
     renderAutopilotRunStrip();
     refreshLiveDotsFromStructuredTap();
-    repaintRegionLocksFromStructuredTapFrame();
-    scheduleRegionLocksRefresh();
-    refreshOpenStructuredTapDetail();
+    if (requestSnapshot) {
+        requestCoherentDashboardSnapshot('structured_tap');
+    }
+    if (refreshDetail) refreshOpenStructuredTapDetail();
+    return true;
+}
+
+function applyStructuredTapData(data) {
+    applyStructuredTapFrame(data);
 }
 
 // Tap-content fetch fallback: the tap panel's content is otherwise stream-only,
@@ -3621,7 +3775,44 @@ function _stylePlannerLine(line) {
     if (/^\[assistant\]/i.test(line)) {
         return '<span style="color:#fbbf24">' + escaped + '</span>';
     }
-    if (/^=+$|^-+$|PLANNER session/i.test(line)) {
+    // Per-trial planning banner emitted by plan_with_providers():
+    //   >>>>>>>>>>>>>>>>>>>>>>>> TRIAL 1234 <<<<<<<<<<<<<<<<<<<<<<<<
+    // This is THE marker for "new trial planning begins" — render it as a big,
+    // high-contrast full-width block so you know exactly where to stop scrolling.
+    const trialBanner = line.match(/^>{4,}\s*(TRIAL[^<]*?)\s*<{4,}\s*$/i);
+    if (trialBanner) {
+        return '<span style="display:block;margin:16px 0 2px;padding:6px 10px;'
+            + 'background:#1e3a5f;color:#7dd3fc;font-weight:800;font-size:13px;'
+            + 'letter-spacing:0.5px;text-align:center;'
+            + 'border-top:2px solid #38bdf8;border-bottom:2px solid #38bdf8">'
+            + '▶ ' + escapeHTML(trialBanner[1]) + '</span>';
+    }
+    // Per-provider sub-headers within a cycle (draft / critique). Kept quieter
+    // than the trial banner so the trial boundary stays the dominant anchor.
+    const plannerHdr = line.match(/PLANNER\s+(?:provider=\S+\s+role=(\S+)|session)\s*start/i);
+    if (plannerHdr) {
+        const role = (plannerHdr[1] || 'draft').toLowerCase();
+        const isDraft = role === 'draft';
+        // A `draft` opens a new planning attempt — render it as a big,
+        // full-width, centered banner so the start of planning is unmistakable
+        // while scrolling. This applies retroactively to ALL history in the tap
+        // (no trial number required). `critique` stays a quiet sub-header so the
+        // draft banner remains the dominant anchor.
+        if (isDraft) {
+            const tsMatch = line.match(/\[([0-9T:\-]+)\]/);
+            const tsLabel = tsMatch ? tsMatch[1] : '';
+            return '<span style="display:block;margin:16px 0 2px;padding:6px 10px;'
+                + 'background:#1e3a5f;color:#7dd3fc;font-weight:800;font-size:13px;'
+                + 'letter-spacing:0.5px;text-align:center;'
+                + 'border-top:2px solid #38bdf8;border-bottom:2px solid #38bdf8">'
+                + '▶ NEW PLANNING' + (tsLabel ? '  ·  ' + escapeHTML(tsLabel) : '')
+                + '</span>';
+        }
+        return '<span style="display:block;margin:4px 0 2px;padding:1px 8px;'
+            + 'color:#fbbf24;font-weight:600;border-left:3px solid #f59e0b">'
+            + '⤷ critique  ·  ' + escaped + '</span>';
+    }
+    if (/^=+$|^-+$/.test(line)) {
         return '<span style="color:#475569">' + escaped + '</span>';
     }
     return escaped;
@@ -3632,6 +3823,22 @@ function _paintPlannerTap() {
     if (!pre) return;
     pre.innerHTML = _plannerTapBuffer.split('\n').map(_stylePlannerLine).join('\n');
     if (_plannerTapPinned) pre.scrollTop = pre.scrollHeight;
+}
+
+function _plannerTapStatusText(lines) {
+    const proc = _latestProcessStatus || {};
+    const ap = proc.autopilot || {};
+    const phase = proc.autopilot_phase || {};
+    const phaseName = String(phase.phase || '');
+    const age = proc.planner_tap_age_s;
+    const ageText = age != null ? ` · last event ${Math.round(age)}s ago` : '';
+    if (!ap.running) {
+        return `— planner history · autopilot stopped${ageText} · ${lines} lines`;
+    }
+    if (_phaseFocus(proc, ap) === 'planner') {
+        return `— planner active · ${phaseName || 'phase unknown'}${ageText} · ${lines} lines`;
+    }
+    return `— planner history${ageText} · ${lines} lines`;
 }
 
 function startPlannerTapStream() {
@@ -3709,7 +3916,7 @@ function applyPlannerTapData(data) {
         }
     }
     const lines = _plannerTapBuffer ? _plannerTapBuffer.split('\n').filter(Boolean).length : 0;
-    if (status) status.textContent = `— planner tap stream connected · ${lines} lines`;
+    if (status) status.textContent = _plannerTapStatusText(lines);
     _paintPlannerTap();
 }
 
@@ -4664,7 +4871,7 @@ function renderOptimizationBrief(b) {
     }
     const levers = Array.isArray(b.levers) ? b.levers : [];
     if (levers.length) {
-        parts.push('<div class="ob-section-title">levers that move the needle</div>');
+        parts.push('<div class="ob-section-title">what’s moving quality</div>');
         const maxImp = Math.max(...levers.map(l => l.importance || 0), 0.001);
         levers.slice(0, 6).forEach(l => {
             const pct = Math.round(100 * (l.importance || 0) / maxImp);
@@ -4675,6 +4882,26 @@ function renderOptimizationBrief(b) {
                 `<span class="ob-rec">${(l.importance || 0).toFixed(2)} ${rec}</span></div>`
             );
         });
+    }
+    const roe = b.ruled_out_experiments || {};
+    const fenced = Array.isArray(roe.fenced) ? roe.fenced : [];
+    if (fenced.length) {
+        parts.push('<div class="ob-section-title">what’s been ruled out (and why)</div>');
+        const maxCnt = Math.max(...fenced.map(f => f.count || 0), 1);
+        fenced.slice(0, 6).forEach(f => {
+            const pct = Math.round(100 * (f.count || 0) / maxCnt);
+            parts.push(
+                `<div class="ob-lever"><span class="ob-name" title="${escapeHTML(f.why || '')}">${escapeHTML(f.label || '')}</span>` +
+                `<span class="ob-bar ob-bar-bad"><span style="width:${pct}%"></span></span>` +
+                `<span class="ob-rec ob-rec-bad">${f.count || 0}× rejected</span></div>` +
+                `<div class="ob-why">${escapeHTML((f.why || '').slice(0, 160))}</div>`
+            );
+        });
+        const churn = Array.isArray(roe.invalid_by_surface) ? roe.invalid_by_surface : [];
+        if (churn.length) {
+            const churnTxt = churn.slice(0, 6).map(c => `${escapeHTML(c.label)} ${c.count}×`).join(' · ');
+            parts.push(`<div class="ob-why" style="margin-top:4px">malformed-proposal churn by surface: ${churnTxt}</div>`);
+        }
     }
     const ruled = Array.isArray(b.ruled_out) ? b.ruled_out : [];
     const expl = Array.isArray(b.exploring) ? b.exploring : [];
@@ -5143,6 +5370,7 @@ function applyDashboardSnapshot(snap, source) {
         if (snap && snap.error) document.getElementById('status').textContent = `error: ${snap.error}`;
         return;
     }
+    const snapshotSeq = ++_latestSnapshotSeq;
     const frameTs = dashboardSnapshotFrameTs(snap);
     if (frameTs !== null) {
         if (frameTs + 0.001 < _latestSnapshotFrameTs) return;
@@ -5151,6 +5379,18 @@ function applyDashboardSnapshot(snap, source) {
     _lastSnapshotAppliedAt = Date.now();
     _latestSnapshot = snap || {};
     const refreshSeq = ++_regionLocksRefreshSeq;
+    // Coherent snapshots now include the structured tap rows used by the live
+    // inference pane. Apply that frame before painting region locks/topology so
+    // tap-inferred CPU holders and the lock grid reflect the same instant.
+    if (Array.isArray(snap.structured_requests)) {
+        applyStructuredTapFrame(snap, {
+            updateFreshness: false,
+            paintTap: true,
+            requestSnapshot: false,
+            refreshDetail: false,
+            acceptCoherentSnapshot: true,
+        });
+    }
     // Keystone coherence: drive the topology strip STRUCTURE from the SAME
     // snapshot as the region-lock grid + activity overlay, so all three reflect
     // one instant and the strip can never freeze on a stale structure while its
@@ -5160,10 +5400,14 @@ function applyDashboardSnapshot(snap, source) {
     }
     updatePanelSafely('region_locks', () => {
         if (snap.region_locks) {
-            return updateRegionLocks(refreshSeq, snap.region_locks);
+            return updateRegionLocks(refreshSeq, snap.region_locks, snapshotSeq, snap.in_flight_tasks || []);
         }
     });
-    updatePanelSafely('topology', () => updateTopology(snap.activity || {}, snap.in_flight_tasks || []));
+    updatePanelSafely('topology', () => updateTopology(snap.display_activity || snap.activity || {}, snap.in_flight_tasks || [], snapshotSeq));
+    updatePanelSafely('contention', () => updateContentionGate(refreshSeq));
+    updatePanelSafely('topology_activity', () => {
+        if (snap.topology_activity) applyTopologyActivityPayload(snap.topology_activity);
+    });
     // Topology + region-lock panels are live-recomputed server-side; their real
     // staleness signal is the coherent stream's own age, so feed both badges
     // from the snapshot envelope — a dropped stream then visibly ages them.
@@ -5193,6 +5437,17 @@ async function updateSnapshotPoll() {
     } finally {
         _snapshotPollInFlightSince = 0;
     }
+}
+
+function requestCoherentDashboardSnapshot(reason = '') {
+    // Single-writer coherence: live inference, topology overlay, and CPU-region
+    // locks are coupled panels. Side-streams may update their own isolated
+    // content, but they must not repaint these coupled panels from partial
+    // producer state. They request a fresh /dashboard/api/snapshot frame instead.
+    const now = Date.now();
+    if (now - _lastCoherentSnapshotRequestAt < 500) return;
+    _lastCoherentSnapshotRequestAt = now;
+    updateSnapshotPoll();
 }
 
 // ── Uniform panel freshness badges ─────────────────────────────────────────
@@ -5386,7 +5641,56 @@ function _currentCodeHealthLabel(health) {
     if (!health || !health.status) return 'current code unknown';
     const bits = [`current code ${health.status}`];
     if (health.code_stale) bits.push('runtime source drift');
+    const advice = health.restart_advice || {};
+    if (advice.restart_needed) {
+        if (advice.safe_to_restart_now) {
+            bits.push('restart ready');
+        } else if (advice.status === 'wait_for_boundary') {
+            bits.push('restart wait for boundary');
+        } else if (advice.status) {
+            bits.push(`restart ${advice.status}`);
+        }
+    } else if (advice.status && !['no_action', 'restart_recommended'].includes(advice.status)) {
+        bits.push(`restart ${advice.status}`);
+    }
     return bits.join(' · ');
+}
+
+function _autopilotOutcomeHealthClass(status) {
+    if (status === 'ok') return 'good';
+    if (status === 'attention') return 'warn';
+    if (status === 'disabled' || status === 'unknown') return 'muted';
+    if (status) return 'bad';
+    return 'muted';
+}
+
+function _autopilotOutcomeProgressLabel(progress) {
+    if (!progress || !progress.status) return 'outcome health unknown';
+    const bits = [`outcome health ${progress.status}`];
+    if (progress.latest_trial_id != null) bits.push(`latest trial ${progress.latest_trial_id}`);
+    if (progress.frontier_admissions != null) bits.push(`frontier ${progress.frontier_admissions} admission${progress.frontier_admissions === 1 ? '' : 's'}`);
+    if (progress.trials_since_frontier != null) bits.push(`frontier stale ${progress.trials_since_frontier} trial${progress.trials_since_frontier === 1 ? '' : 's'}`);
+    if (progress.baseline_promotions != null) bits.push(`promotions ${progress.baseline_promotions}`);
+    if (progress.trials_since_promotion != null) bits.push(`promotion stale ${progress.trials_since_promotion} trial${progress.trials_since_promotion === 1 ? '' : 's'}`);
+    const rates = progress.rates || {};
+    const fmtRate = (metric) => {
+        if (!metric || metric.total == null || metric.total <= 0 || metric.rate == null) return 'unknown';
+        return `${Math.round(metric.rate * 100)}% (${metric.count}/${metric.total})`;
+    };
+    if (rates.keepable_rate) bits.push(`keepable ${fmtRate(rates.keepable_rate)}`);
+    if (rates.wasted_eval_rate) bits.push(`wasted-eval ${fmtRate(rates.wasted_eval_rate)}`);
+    if (rates.learning_excluded_rate) bits.push(`learning-excluded ${fmtRate(rates.learning_excluded_rate)}`);
+    if (Array.isArray(progress.blockers) && progress.blockers.length) {
+        bits.push(...progress.blockers.slice(0, 3));
+    }
+    return bits.join(' · ');
+}
+
+function _autopilotStatusChip(label, status, title, cls = '') {
+    if (!status) return '';
+    const className = ['autopilot-health-chip', cls].filter(Boolean).join(' ');
+    const text = `${label} ${status}`;
+    return `<span class="${className}" title="${escapeHTML(title || text)}">${escapeHTML(text)}</span>`;
 }
 
 function _phaseFocus(d, ap) {
@@ -5556,6 +5860,11 @@ async function updateProcessStatus() {
         const tapDot  = document.getElementById('tap-live-dot');
         const planDot = document.getElementById('planner-live-dot');
         const apDot   = document.getElementById('autopilot-live-dot');
+        const plannerStatus = document.getElementById('planner-status');
+        if (plannerStatus && _plannerTapBuffer) {
+            const plannerLines = _plannerTapBuffer.split('\n').filter(Boolean).length;
+            plannerStatus.textContent = _plannerTapStatusText(plannerLines);
+        }
 
         // Live tap dot
         if (tapAge == null) {
@@ -5623,7 +5932,6 @@ async function updateProcessStatus() {
 // different — we don't need second-by-second granularity for build drift.
 let _buildRevLoaded = null;  // {git_sha, dashboard_html_mtime, dashboard_py_mtime, server_started_at}
 const TOPOLOGY_ACTIVITY_WINDOW_S = 60;
-const TOPOLOGY_ACTIVITY_POLL_MS = 1500;
 const TOPOLOGY_ACTIVITY_AGE_TICK_MS = 1000;
 let _latestTopologyActivity = null;  // {perRole, window_s, now, fetchedAtMs}
 let _topologyActivityFetchInFlight = false;
@@ -5662,7 +5970,9 @@ function renderTopologyActivity() {
         const liveTps = (stats && stats.live_tps != null && Number(stats.live_tps) > 0)
             ? Number(stats.live_tps) : null;
         const age = topologyActivityAgeS(stats);
-        const nReq = stats ? (stats.n_recent || stats.n_completed || 0) : 0;
+        const nRecent = stats ? (stats.n_recent || 0) : 0;
+        const nCompleted = stats ? (stats.n_completed || 0) : 0;
+        const nReq = nRecent || nCompleted;
         const lockInfo = (typeof _latestRegionLocksByRole === 'object' && _latestRegionLocksByRole)
             ? _latestRegionLocksByRole[base] : null;
         const lockActiveCount = (lockInfo && lockInfo.instanceIdxs) ? lockInfo.instanceIdxs.size : 0;
@@ -5671,15 +5981,16 @@ function renderTopologyActivity() {
         const stillInsideWindow = age == null || age <= windowS;
         if (liveActiveCount > 0) {
             const parts = [`<span class="stat-fresh">${liveActiveCount}</span> active`];
-            if (nReq) parts.push(`<span class="stat-fresh">${nReq}</span> req`);
+            if (nRecent) parts.push(`<span class="stat-stale">${nRecent}</span> recent req`);
+            else if (nCompleted) parts.push(`recent <span class="stat-stale">${nCompleted}</span> done`);
             if (liveTps != null) {
                 parts.push(`<span class="stat-fresh">${liveTps.toFixed(1)}</span> t/s live`);
             } else if (stats && stats.avg_tps_recent != null && stats.avg_tps_recent > 0) {
-                parts.push(`<span class="stat-fresh">${stats.avg_tps_recent.toFixed(1)}</span> t/s`);
+                parts.push(`<span class="stat-stale">${stats.avg_tps_recent.toFixed(1)}</span> t/s hist`);
             }
-            if (age != null) parts.push(`<span class="stat-fresh">${formatTopologyActivityAge(age)} ago</span>`);
+            if (age != null) parts.push(`<span class="stat-stale">${formatTopologyActivityAge(age)} ago</span>`);
             el.innerHTML = parts.join('<span class="stat-sep">·</span>');
-            el.title = `${base} has ${liveActiveCount} active CPU-region/tap holder(s); shared live cache with the CPU region-lock panel`;
+            el.title = `${base} has ${liveActiveCount} active CPU-region/tap holder(s); request/tps fields are recent history from the same coherent snapshot`;
             return;
         }
         if (!stats || !nReq || !stillInsideWindow) {
@@ -5690,17 +6001,15 @@ function renderTopologyActivity() {
                 const running = Number(stats.running_instance_count || 0) || Number(stats.live_tps_n || 0);
                 const expected = Number(stats.expected_instance_count || 0);
                 const suffix = expected > 1 && running > 0 ? ` ${running}/${expected}` : '';
-                const parts = [`<span class="stat-fresh">up${suffix}</span>`];
-                if (liveTps != null) {
-                    parts.push(`<span class="stat-fresh">${liveTps.toFixed(1)}</span> t/s live`);
-                } else if (stats.avg_tps_recent != null && stats.avg_tps_recent > 0) {
-                    parts.push(`<span class="stat-fresh">${stats.avg_tps_recent.toFixed(1)}</span> t/s`);
+                const parts = [`<span class="stat-stale">idle</span>`, `<span class="stat-fresh">servers up${suffix}</span>`];
+                if (stats.avg_tps_recent != null && stats.avg_tps_recent > 0) {
+                    parts.push(`<span class="stat-stale">${stats.avg_tps_recent.toFixed(1)}</span> t/s hist`);
                 }
                 el.innerHTML = parts.join('<span class="stat-sep">·</span>');
                 const titleBits = [
                     `${base} listener${running === 1 ? '' : 's'} running`,
                     `no recent requests in last ${Math.round(windowS)}s`,
-                    stats.avg_tps_recent != null ? `summary ${stats.avg_tps_recent.toFixed(2)} t/s` : null,
+                    stats.avg_tps_recent != null ? `historical summary ${stats.avg_tps_recent.toFixed(2)} t/s` : null,
                 ].filter(Boolean);
                 el.title = titleBits.join(' · ');
             } else {
@@ -5710,23 +6019,23 @@ function renderTopologyActivity() {
             return;
         }
         const parts = [];
-        parts.push(`<span class="stat-fresh">${nReq}</span> req`);
-        if (liveTps != null) {
-            parts.push(`<span class="stat-fresh">${liveTps.toFixed(1)}</span> t/s live`);
-        } else if (stats.avg_tps_recent != null && stats.avg_tps_recent > 0) {
-            parts.push(`<span class="stat-fresh">${stats.avg_tps_recent.toFixed(1)}</span> t/s`);
-        } else if (stats.avg_duration_s != null && stats.avg_duration_s > 0) {
-            parts.push(`<span class="stat-fresh">${stats.avg_duration_s.toFixed(1)}</span>s avg`);
+        parts.push(`<span class="stat-stale">idle</span>`);
+        if (nRecent) {
+            parts.push(`last <span class="stat-stale">${formatTopologyActivityAge(age)}</span>`);
+        } else {
+            parts.push(`history <span class="stat-stale">${nCompleted}</span> done`);
         }
-        if (age != null) {
-            const ageClass = age < 60 ? 'stat-fresh' : 'stat-stale';
-            parts.push(`<span class="${ageClass}">${formatTopologyActivityAge(age)} ago</span>`);
+        if (stats.avg_tps_recent != null && stats.avg_tps_recent > 0) {
+            parts.push(`<span class="stat-stale">${stats.avg_tps_recent.toFixed(1)}</span> t/s hist`);
+        } else if (stats.avg_duration_s != null && stats.avg_duration_s > 0) {
+            parts.push(`<span class="stat-stale">${stats.avg_duration_s.toFixed(1)}</span>s avg hist`);
         }
         el.innerHTML = parts.join('<span class="stat-sep">·</span>');
         const tooltipBits = [
-            `${nReq} req in last ${Math.round(windowS)}s`,
-            liveTps != null ? `live ${liveTps.toFixed(2)} t/s (in-flight)` : null,
-            stats.avg_tps_recent != null ? `avg ${stats.avg_tps_recent.toFixed(2)} t/s` : null,
+            nRecent
+                ? `${nRecent} recent completed/observed request(s) in last ${Math.round(windowS)}s; idle, not an active-holder signal`
+                : `${nCompleted} completed req in historical summary window`,
+            stats.avg_tps_recent != null ? `historical avg ${stats.avg_tps_recent.toFixed(2)} t/s` : null,
             stats.avg_duration_s != null ? `avg ${stats.avg_duration_s.toFixed(2)}s/task` : null,
             age != null ? `last activity ${age.toFixed(1)}s ago` : null,
         ].filter(Boolean);
@@ -5734,27 +6043,31 @@ function renderTopologyActivity() {
     });
 }
 
+function applyTopologyActivityPayload(d) {
+    _latestTopologyActivity = {
+        perRole: d.per_role || {},
+        window_s: Number(d.window_s || TOPOLOGY_ACTIVITY_WINDOW_S),
+        now: Number(d.now || 0),
+        fetchedAtMs: Date.now(),
+    };
+    renderTopologyActivity();
+}
+
 async function updateTopologyActivity(refreshSeq = ++_topologyActivityRefreshSeq) {
-    // Per-role recent activity stats from /dashboard/api/topology_activity.
-    // Populates each topology row's .activity-stats element with:
-    //   "12 req · 31 t/s · 3s ago"
-    // Color cues: fresh (<60s ago) in green, stale (>=60s) in dim.
-    // Falls back to "—" when the role has no data in the window.
+    // Coupled-panel single-writer rule: topology activity is allowed to paint
+    // only from /dashboard/api/snapshot, where it is reconciled with the same
+    // live tap and CPU-region-lock frame. Older standalone calls to
+    // /dashboard/api/topology_activity could overwrite a coherent "no active
+    // holders" paint with recent-history rows and make topology look live while
+    // the tap and lock panels were idle.
     if (_topologyActivityFetchInFlight) {
         _topologyActivityRefreshQueued = true;
         return;
     }
     _topologyActivityFetchInFlight = true;
     try {
-        const d = await fetchJSON(`/dashboard/api/topology_activity?window_s=${TOPOLOGY_ACTIVITY_WINDOW_S}`);
         if (refreshSeq !== _topologyActivityRefreshSeq) return;
-        _latestTopologyActivity = {
-            perRole: d.per_role || {},
-            window_s: Number(d.window_s || TOPOLOGY_ACTIVITY_WINDOW_S),
-            now: Number(d.now || 0),
-            fetchedAtMs: Date.now(),
-        };
-        renderTopologyActivity();
+        requestCoherentDashboardSnapshot('topology_activity_refresh');
     } catch (e) {
     } finally {
         _topologyActivityFetchInFlight = false;
@@ -6018,7 +6331,6 @@ function startDashboard() {
             if (outcome.keepable_rate) metaBits.push(`keepable ${fmtRate(keepable)}`);
             if (outcome.wasted_eval_rate) metaBits.push(`wasted-eval ${fmtRate(wasted)}`);
             if (outcome.learning_excluded_rate) metaBits.push(`learning-excluded ${fmtRate(excluded)}`);
-            if (d.current_code_health) metaBits.push(_currentCodeHealthLabel(d.current_code_health));
             if (!d.autopilot_alive) metaBits.push('⚠ autopilot process not running');
             meta.textContent = metaBits.join(' · ');
         } catch (e) {
@@ -6110,7 +6422,12 @@ async function updateContentionGate(refreshSeq = _regionLocksRefreshSeq) {
             el.innerHTML = '<span style="color:var(--dim)">— contention fetch failed</span>';
         }
     }
-async function updateRegionLocks(refreshSeq = _regionLocksRefreshSeq, regionLocks = null) {
+async function updateRegionLocks(
+    refreshSeq = _regionLocksRefreshSeq,
+    regionLocks = null,
+    snapshotSeq = null,
+    snapshotInflightTasks = null,
+) {
         try {
             const d = regionLocks || await fetchJSON('/dashboard/api/region_locks');
             if (!regionLocks && refreshSeq !== _regionLocksRefreshSeq) return;
@@ -6166,7 +6483,23 @@ async function updateRegionLocks(refreshSeq = _regionLocksRefreshSeq, regionLock
                 };
             }
             _latestTapInferredRegionLocksByRole = buildTapInferredRegionLocks();
-            _latestSlotInferredRegionLocksByRole = buildSlotInferredRegionLocks(byRole);
+            // CPU region locks must be authoritative: use /proc holders plus
+            // structured tap metadata, but never promote raw llama /slots
+            // occupancy into a CPU-lock holder. /slots remains visible in the
+            // topology dots via snap.display_activity and in GPU/direct rows.
+            _latestSlotInferredRegionLocksByRole = {};
+            const tapLiveRequests = typeof liveStructuredTapRequests === 'function' ? liveStructuredTapRequests() : [];
+            const tapLiveRequestCount = tapLiveRequests.length;
+            const tapLiveStateCounts = {};
+            for (const req of tapLiveRequests) {
+                const activity = structuredTapActivity(req);
+                tapLiveStateCounts[activity.state] = (tapLiveStateCounts[activity.state] || 0) + 1;
+            }
+            const tapLiveStateBits = [];
+            if (tapLiveStateCounts.streaming) tapLiveStateBits.push(`${tapLiveStateCounts.streaming} streaming`);
+            if (tapLiveStateCounts.prefill_decode_pending) {
+                tapLiveStateBits.push(`${tapLiveStateCounts.prefill_decode_pending} prefill/decode pending`);
+            }
             for (const [role, inferred] of Object.entries(_latestTapInferredRegionLocksByRole || {})) {
                 const base = _latestRegionLocksByRole[role] || {
                     instanceIdxs: new Set(),
@@ -6249,14 +6582,18 @@ async function updateRegionLocks(refreshSeq = _regionLocksRefreshSeq, regionLock
                     }
                 }
             }
-            const actualHeldBySummary = formatRegionLockHolderSummary();
+            const displayHeldBySummary = formatRegionLockHolderSummary();
             const tapInferredMissing = [];
+            let tapInferredRequestCount = 0;
+            let tapInferredMissingRequestCount = 0;
             const slotInferredMissing = [];
             for (const [role, inferred] of Object.entries(_latestTapInferredRegionLocksByRole || {})) {
                 const actualActive = new Set(((byRole[role] || {}).active_instance_idxs || []).map(Number));
                 const instByIdx = new Map((((byRole[role] || {}).instances) || []).map(i => [Number(i.idx), i]));
+                tapInferredRequestCount += tapInferredSourceCount(inferred);
                 for (const idx of (inferred.instanceIdxs || [])) {
                     const nIdx = Number(idx);
+                    const sourceCount = tapInferredSourcesForInstance(inferred, nIdx).length || 1;
                     if (actualActive.has(nIdx)) continue;
                     const req = (inferred.sources || []).find(r => Number(r.instance_idx) === nIdx) || {};
                     const inst = instByIdx.get(nIdx);
@@ -6264,6 +6601,7 @@ async function updateRegionLocks(refreshSeq = _regionLocksRefreshSeq, regionLock
                     if (!regions.length) continue;
                     const shape = req.instance_shape || (inst && inst.shape) || `idx${nIdx}`;
                     tapInferredMissing.push(formatPhysicalRoleWithLogicalAliases(role, shape, nIdx));
+                    tapInferredMissingRequestCount += sourceCount;
                     for (const region of regions) {
                         (globalHeldBy[region] ||= []).push({ role, shape, inferred: true });
                     }
@@ -6291,7 +6629,7 @@ async function updateRegionLocks(refreshSeq = _regionLocksRefreshSeq, regionLock
                 (acc, info) => acc + ((info.active_instance_idxs || []).length),
                 0
             );
-            const activeLockCount = actualActiveLockCount + tapInferredMissing.length + slotInferredMissing.length;
+            const activeLockCount = actualActiveLockCount + tapInferredMissing.length;
             const heldBySummary = [...new Set(
                 Object.values(globalHeldBy)
                     .flat()
@@ -6301,29 +6639,54 @@ async function updateRegionLocks(refreshSeq = _regionLocksRefreshSeq, regionLock
                 activeLockCount,
                 heldRegions: globalHeldRegions.size,
                 enabled,
+                procHolderCount: actualActiveLockCount,
+                tapLiveRequestCount,
+                tapInferredCount: tapInferredRequestCount,
+                tapInferredPhysicalCount: tapInferredMissing.length,
+                tapInferredMissingRequestCount,
+                slotInferredCount: slotInferredMissing.length,
             };
             renderAutopilotRunStrip();
             const regionDot = document.getElementById('region-locks-dot');
             if (!enabled) {
                 _setDotState(regionDot, 'down', 'per-region CPU locks disabled');
             } else if (activeLockCount > 0) {
+                const titleBits = [`${actualActiveLockCount} /proc holder instance(s)`];
+                if (tapLiveRequestCount) {
+                    titleBits.push(`${tapLiveRequestCount} live tap request(s)${tapLiveStateBits.length ? ` (${tapLiveStateBits.join(' · ')})` : ''}`);
+                }
+                if (tapInferredRequestCount) {
+                    titleBits.push(`${tapInferredRequestCount} tap-inferred request(s)`);
+                }
+                if (tapInferredMissing.length) {
+                    titleBits.push(`${tapInferredMissingRequestCount || tapInferredMissing.length} tap-inferred request(s) without /proc match`);
+                }
+                if (slotInferredMissing.length) {
+                    titleBits.push(`${slotInferredMissing.length} slot-inferred active instance(s)`);
+                }
                 _setDotState(
                     regionDot,
                     'active',
-                    `${activeLockCount} active instance(s) across ${globalHeldRegions.size} CPU region(s): ${heldBySummary || 'unknown'}`
+                    `${titleBits.join(' · ')} across ${globalHeldRegions.size} CPU region(s): ${heldBySummary || 'unknown'}`
                 );
             } else {
                 _setDotState(regionDot, 'idle', 'no CPU region locks currently held; grid shows dispatch readiness');
             }
             if (status && enabled) {
-                const inferredSuffix = tapInferredMissing.length
-                    ? `; +${tapInferredMissing.length} tap-inferred active stream(s): ${tapInferredMissing.join(', ')}`
+                const liveTapSuffix = tapLiveRequestCount
+                    ? `; +${tapLiveRequestCount} live tap request(s)${tapLiveStateBits.length ? ` (${tapLiveStateBits.join(' · ')})` : ''}`
+                    : '';
+                const tapInferredCountSuffix = tapInferredRequestCount
+                    ? ` + ${tapInferredRequestCount} tap-inferred request(s)`
+                    : '';
+                const tapInferredUnmatchedSuffix = tapInferredMissing.length
+                    ? `; ${tapInferredMissingRequestCount || tapInferredMissing.length} request(s) have no /proc match`
                     : '';
                 const slotInferredSuffix = slotInferredMissing.length
                     ? `; +${slotInferredMissing.length} slot-inferred active instance(s): ${slotInferredMissing.join(', ')}`
                     : '';
                 status.textContent = activeLockCount > 0
-                    ? `— ${actualActiveLockCount} /proc holder instance(s): ${actualHeldBySummary || 'none'}${inferredSuffix}${slotInferredSuffix}; × cells are same-role or matrix-blocked waits; per-region locks ENABLED`
+                    ? `— ${actualActiveLockCount} /proc holder instance(s)${tapInferredCountSuffix}: ${displayHeldBySummary || 'none'}${liveTapSuffix}${tapInferredUnmatchedSuffix}${slotInferredSuffix}; × cells are same-role or matrix-blocked waits; per-region locks ENABLED`
                     : '— no locks held; per-region locks ENABLED';
                 status.style.color = activeLockCount > 0 ? '#fbbf24' : 'var(--muted)';
             }
@@ -6345,14 +6708,19 @@ async function updateRegionLocks(refreshSeq = _regionLocksRefreshSeq, regionLock
                     if (activeSet.has(inst.idx)) {
                         const aliases = structuredTapLogicalAliasesForIdentity(role, inst.idx);
                         const logical = aliases.length ? `; logical route(s): ${aliases.join(', ')}` : '';
-                        const t = `${role}.${col.label} ACTIVE — instance idx=${inst.idx} holding {${(inst.regions || []).join(',')}}${logical}`;
+                        const inferred = (_latestTapInferredRegionLocksByRole[role] || null);
+                        const sourceCount = tapInferredSourcesForInstance(inferred, inst.idx).length;
+                        const tapNote = sourceCount ? `; ${sourceCount} structured tap request(s) map here` : '';
+                        const t = `${role}.${col.label} ACTIVE — instance idx=${inst.idx} holding {${(inst.regions || []).join(',')}}${logical}${tapNote}`;
                         rows.push(`<div class="rl-cell rl-active" title="${t}">⚡</div>`);
                         continue;
                     }
                     if (inferredActiveSet.has(Number(inst.idx))) {
                         const aliases = structuredTapLogicalAliasesForIdentity(role, inst.idx);
                         const logical = aliases.length ? `; logical route(s): ${aliases.join(', ')}` : '';
-                        const t = `${role}.${col.label} TAP ACTIVE — structured tap is streaming on idx=${inst.idx}${logical}; /proc lock poll has not observed the holder in this frame`;
+                        const inferred = (_latestTapInferredRegionLocksByRole[role] || null);
+                        const sourceCount = tapInferredSourcesForInstance(inferred, inst.idx).length || 1;
+                        const t = `${role}.${col.label} TAP ACTIVE — ${sourceCount} structured tap request(s) map to idx=${inst.idx}${logical}; /proc lock poll has not observed the holder in this frame`;
                         rows.push(`<div class="rl-cell rl-active rl-inferred" title="${t}">⚡</div>`);
                         continue;
                     }
@@ -6396,7 +6764,10 @@ async function updateRegionLocks(refreshSeq = _regionLocksRefreshSeq, regionLock
             // main snapshot frames; repainting here makes the live inference,
             // topology, and region-lock panels consume the same lock cache.
             if (typeof updateTopologyInflight === 'function') {
-                updateTopologyInflight((_latestSnapshot && _latestSnapshot.in_flight_tasks) || []);
+                const overlayInflight = snapshotSeq != null
+                    ? ((Array.isArray(snapshotInflightTasks) ? snapshotInflightTasks : ((_latestSnapshot && _latestSnapshot.in_flight_tasks) || [])))
+                    : [];
+                updateTopologyInflight(overlayInflight, snapshotSeq);
             }
         } catch (err) {
             const status = document.getElementById('region-locks-status');

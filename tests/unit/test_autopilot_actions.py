@@ -48,6 +48,52 @@ def test_dispatcher_rejects_ap9_scope_violation(caplog) -> None:
     assert species == "numeric_trial"
 
 
+def test_dispatcher_allows_current_forced_seq_candidate_replay(monkeypatch) -> None:
+    action = {
+        "type": "numeric_trial",
+        "surface": "repl_executor",
+        "params": {
+            "repl.turn_token_cap": 1964,
+            "repl.frontdoor_non_tool_token_cap": 866,
+        },
+    }
+    expected = actions.EvalResult(
+        tier=1,
+        quality=2.0,
+        speed=20.0,
+        cost=0.5,
+        reliability=1.0,
+    )
+
+    def fake_numeric_handler(handler_action, _ctx):  # noqa: ANN001
+        assert handler_action == action
+        return expected, "numeric_swarm"
+
+    monkeypatch.setitem(actions._ACTION_HANDLERS, "numeric_trial", fake_numeric_handler)
+
+    result, species = actions.dispatch_action(
+        action,
+        seeder=None,
+        swarm=None,
+        forge=None,
+        lab=None,
+        tower=None,
+        gate=None,
+        archive=None,
+        journal=None,
+        state={
+            "trial_counter": 1213,
+            "seq_candidate_replay_forced": {
+                "trial_id": 1213,
+                "action": action,
+            },
+        },
+    )
+
+    assert result is expected
+    assert species == "numeric_swarm"
+
+
 def test_dispatcher_rejects_deep_eval_sampling_knobs(monkeypatch) -> None:
     def fail_handler(action, ctx):  # noqa: ANN001, ARG001
         raise AssertionError("deep_eval handler should not run for invalid schema")
@@ -1623,6 +1669,64 @@ def test_pre_dispatch_seed_fallback_reselects_blacklisted_action() -> None:
     assert rationale["fallback_seed_reselected_context"] == "test"
 
 
+def test_w8_replaces_blacklisted_candidate_before_invalid_skip(monkeypatch) -> None:
+    monkeypatch.setattr(
+        autopilot,
+        "_configured_numeric_surfaces",
+        lambda: ("escalation", "repl_budget"),
+    )
+
+    action, rationale = autopilot._replace_blacklisted_w8_candidate_action(
+        {"type": "structural_experiment", "flags": {"graph_router": True}},
+        [
+            {
+                "pattern": {
+                    "type": "structural_experiment",
+                    "flags": {"graph_router": True},
+                },
+                "reason": "repeated graph_router invalid",
+            }
+        ],
+        {"falsifier": "original"},
+        trial_counter=0,
+        w8_replay_pressure_text=(
+            "W8 replay pressure: 0/1 accumulating candidate(s) are replayable "
+            "(blocked=unreplayable_action=seed_batch:1)."
+        ),
+    )
+
+    assert action == {"type": "numeric_trial", "surface": "escalation", "params": {}}
+    assert rationale["falsifier"] == "original"
+    assert rationale["w8_blacklisted_candidate_replaced"] is True
+    assert rationale["w8_blacklisted_candidate_reason"] == "repeated graph_router invalid"
+    assert rationale["w8_blacklisted_candidate_original"] == {
+        "type": "structural_experiment",
+        "flags": {"graph_router": True},
+    }
+
+
+def test_w8_blacklisted_candidate_replacement_is_pressure_gated() -> None:
+    requested = {"type": "structural_experiment", "flags": {"graph_router": True}}
+    action, rationale = autopilot._replace_blacklisted_w8_candidate_action(
+        requested,
+        [
+            {
+                "pattern": {
+                    "type": "structural_experiment",
+                    "flags": {"graph_router": True},
+                },
+                "reason": "repeated graph_router invalid",
+            }
+        ],
+        {"falsifier": "original"},
+        trial_counter=0,
+        w8_replay_pressure_text="No active W8 replay pressure.",
+    )
+
+    assert action == requested
+    assert rationale == {"falsifier": "original"}
+
+
 def test_autonomous_blacklisted_action_reselects_seed_fallback() -> None:
     action, rationale = autopilot._replace_blacklisted_autonomous_action(
         {"type": "gepa_optimize", "file": "frontdoor.md", "max_evals": 50},
@@ -1861,6 +1965,47 @@ def test_exhausted_critic_seed_fallback_uses_numeric_when_surface_ban_is_legacy(
     assert skip is None
 
 
+def test_critic_reject_seed_fallback_repairs_to_w8_candidate(monkeypatch) -> None:
+    monkeypatch.setattr(
+        autopilot,
+        "_configured_numeric_surfaces",
+        lambda: ("repl_budget",),
+    )
+
+    action, rationale, skip, repaired = autopilot._repair_critic_reject_fallback_for_w8(
+        {"type": "seed_batch", "n_questions": autopilot.SAFE_FALLBACK_SEED_N},
+        [],
+        {"falsifier": "original"},
+        trial_counter=0,
+        w8_replay_pressure_text=(
+            "W8 replay pressure: 0/1 accumulating candidate(s) are replayable "
+            "(blocked=unreplayable_action=seed_batch:1)."
+        ),
+    )
+
+    assert skip is None
+    assert repaired is True
+    assert action == {"type": "numeric_trial", "surface": "repl_budget", "params": {}}
+    assert rationale["w8_candidate_generation_replaced"] is True
+    assert rationale["critic_reject_loop_repaired_by_w8_candidate"] is True
+    assert rationale["falsifier"] == "original"
+
+
+def test_critic_reject_fallback_not_repaired_without_w8_pressure() -> None:
+    action, rationale, skip, repaired = autopilot._repair_critic_reject_fallback_for_w8(
+        {"type": "seed_batch", "n_questions": autopilot.SAFE_FALLBACK_SEED_N},
+        [],
+        {"falsifier": "original"},
+        trial_counter=0,
+        w8_replay_pressure_text="No active W8 replay pressure.",
+    )
+
+    assert skip is None
+    assert repaired is False
+    assert action == {"type": "seed_batch", "n_questions": autopilot.SAFE_FALLBACK_SEED_N}
+    assert rationale == {"falsifier": "original"}
+
+
 def test_first_meta_action_is_allowed() -> None:
     action, rationale = autopilot._force_metric_action_after_meta(
         {"type": "distill_knowledge", "last_n": 10},
@@ -1999,6 +2144,253 @@ def test_quota_resets_counter_on_nonpassive_action() -> None:
     )
     assert action["type"] == "prompt_mutation"
     assert state["consecutive_passive_actions"] == 0
+
+
+def test_higher_tier_probe_forces_t2_when_empty() -> None:
+    state = {}
+    journal = SimpleNamespace(entries_with_supersessions=lambda: [])
+    archive = SimpleNamespace(summary=lambda tier: {"frontier_size": 0})
+
+    action, rationale = autopilot._maybe_force_higher_tier_probe(
+        {"type": "numeric_trial", "surface": "think_harder"},
+        state,
+        journal=journal,
+        archive=archive,
+        rationale={"falsifier": "x"},
+        trial_counter=100,
+    )
+
+    assert action == {"type": "deep_eval", "tier": 2}
+    assert rationale["higher_tier_probe_forced"] is True
+    assert rationale["higher_tier_probe_tier"] == 2
+    assert state["higher_tier_probe_guard"]["last_forced_tier"] == 2
+
+
+def test_higher_tier_probe_selects_staler_t3_after_t2_has_rows() -> None:
+    state = {}
+    journal = SimpleNamespace(
+        entries_with_supersessions=lambda: [
+            SimpleNamespace(
+                bug_corrupted_by="",
+                tier=2,
+                trial_id=95,
+            )
+            for _ in range(3)
+        ]
+    )
+    archive = SimpleNamespace(
+        summary=lambda tier: {"frontier_size": 1 if tier == 2 else 0}
+    )
+
+    action, rationale = autopilot._maybe_force_higher_tier_probe(
+        {"type": "structural_experiment", "flags": {"tool_use": True}},
+        state,
+        journal=journal,
+        archive=archive,
+        rationale={},
+        trial_counter=100,
+    )
+
+    assert action == {"type": "deep_eval", "tier": 3}
+    assert rationale["higher_tier_probe_tier"] == 3
+
+
+def test_higher_tier_probe_respects_cooldown() -> None:
+    state = {
+        "higher_tier_probe_guard": {
+            "last_forced_trial_id": 95,
+            "last_forced_tier": 2,
+        }
+    }
+    requested = {"type": "numeric_trial", "surface": "monitor"}
+
+    action, rationale = autopilot._maybe_force_higher_tier_probe(
+        requested,
+        state,
+        journal=SimpleNamespace(entries_with_supersessions=lambda: []),
+        archive=SimpleNamespace(summary=lambda tier: {"frontier_size": 0}),
+        rationale={},
+        trial_counter=100,
+    )
+
+    assert action == requested
+    assert rationale == {}
+
+
+def test_higher_tier_probe_skips_when_w8_candidate_generation_is_strict() -> None:
+    state = {}
+    requested = {"type": "seed_batch", "n_questions": 14}
+
+    action, rationale = autopilot._maybe_force_higher_tier_probe(
+        requested,
+        state,
+        journal=SimpleNamespace(entries_with_supersessions=lambda: []),
+        archive=SimpleNamespace(summary=lambda tier: {"frontier_size": 0}),
+        rationale={},
+        trial_counter=100,
+        w8_replay_pressure_text=(
+            "W8 replay pressure: no accumulating candidate exists; "
+            "0/3 are replayable"
+        ),
+    )
+
+    assert action == requested
+    assert rationale == {}
+    assert "higher_tier_probe_guard" not in state
+
+
+def test_higher_tier_probe_respects_critic_reject_numeric_fallback() -> None:
+    state = {}
+    requested = {
+        "type": "numeric_trial",
+        "surface": "memrl_retrieval",
+        "params": {},
+    }
+    safe_rationale = {
+        "falsifier": "critic reject numeric fallback fails to produce replayable evidence",
+        "critic_reject_numeric_fallback": True,
+        "critic_reject_original_action": {"type": "deep_eval", "tier": 3},
+    }
+
+    action, rationale = autopilot._maybe_force_higher_tier_probe(
+        requested,
+        state,
+        journal=SimpleNamespace(entries_with_supersessions=lambda: []),
+        archive=SimpleNamespace(summary=lambda tier: {"frontier_size": 0}),
+        rationale=safe_rationale,
+        trial_counter=100,
+    )
+
+    assert action == requested
+    assert rationale == safe_rationale
+    assert "higher_tier_probe_guard" not in state
+
+
+def test_higher_tier_probe_skips_when_outcome_progress_is_frontier_stalled() -> None:
+    state = {}
+    requested = {"type": "train_routing_models", "min_memories": 500}
+
+    action, rationale = autopilot._maybe_force_higher_tier_probe(
+        requested,
+        state,
+        journal=SimpleNamespace(entries_with_supersessions=lambda: []),
+        archive=SimpleNamespace(summary=lambda tier: {"frontier_size": 0}),
+        rationale={"falsifier": "train routing should improve frontier flow"},
+        trial_counter=100,
+        outcome_progress_pressure_text=(
+            "Outcome blockers: frontier admission stale: 205 trial(s) since frontier > 150"
+        ),
+    )
+
+    assert action == requested
+    assert rationale["higher_tier_probe_skipped_outcome_stalled"] is True
+    assert "higher_tier_probe_guard" not in state
+
+
+def test_outcome_progress_guard_forces_numeric_when_frontier_stalled() -> None:
+    state = {}
+
+    action, rationale = autopilot._maybe_force_outcome_progress_action(
+        {"type": "deep_eval", "tier": 3},
+        state,
+        blacklist=[],
+        rationale={"falsifier": "higher tier probe should improve coverage"},
+        trial_counter=100,
+        outcome_progress_pressure_text=(
+            "Outcome blockers: frontier admission stale: 205 trial(s) since frontier > 150"
+        ),
+    )
+
+    assert action["type"] == "numeric_trial"
+    assert action["surface"] in autopilot._configured_numeric_surfaces()
+    assert rationale["outcome_progress_forced"] is True
+    assert rationale["outcome_progress_original"] == {"type": "deep_eval", "tier": 3}
+    assert state["outcome_progress_forced"]["forced_action"] == action
+
+
+def test_outcome_progress_guard_preserves_frontier_moving_action() -> None:
+    state = {}
+    requested = {"type": "train_routing_models", "min_memories": 500}
+
+    action, rationale = autopilot._maybe_force_outcome_progress_action(
+        requested,
+        state,
+        blacklist=[],
+        rationale={"falsifier": "routing training should improve frontier flow"},
+        trial_counter=100,
+        outcome_progress_pressure_text=(
+            "Outcome blockers: frontier admission stale: 205 trial(s) since frontier > 150"
+        ),
+    )
+
+    assert action == requested
+    assert rationale["outcome_progress_satisfied_by_selected_action"] is True
+    assert state["outcome_progress_forced"] is None
+
+
+def test_higher_tier_probe_accepts_selected_t3_deep_eval() -> None:
+    selected = {"type": "deep_eval", "tier": 3}
+
+    action, rationale = autopilot._maybe_force_higher_tier_probe(
+        selected,
+        {},
+        journal=SimpleNamespace(entries_with_supersessions=lambda: []),
+        archive=SimpleNamespace(summary=lambda tier: {"frontier_size": 0}),
+        rationale={},
+        trial_counter=100,
+    )
+
+    assert action == selected
+    assert rationale["higher_tier_probe_satisfied_by_selected_action"] is True
+    assert rationale["higher_tier_probe_tier"] == 3
+
+
+def test_seq_candidate_replay_accepts_materialized_optuna_params() -> None:
+    action = {
+        "type": "numeric_trial",
+        "surface": "memrl_retrieval",
+        "params": {
+            "memrl_retrieval.q_weight": 0.61,
+            "memrl_retrieval.semantic_k": 25,
+            "memrl_retrieval.prior_strength": 0.43,
+        },
+    }
+    journal = SimpleNamespace(
+        entries_with_supersessions=lambda: [
+            SimpleNamespace(
+                trial_id=1212,
+                bug_corrupted_by="",
+                outcome_status="ok",
+                tier=autopilot.DEFAULT_FRONTIER_TIER,
+                keep_revert_decision="excluded",
+                failure_analysis="",
+                config_snapshot=action,
+                seq={
+                    "candidate": "candidate-optuna",
+                    "core_id": autopilot.DEFAULT_EVIDENCE_CORE_ID,
+                    "state": "accumulating",
+                    "k": 1,
+                    "E_quality": 1.02,
+                    "E_rate_noninf": 0.94,
+                },
+            )
+        ]
+    )
+
+    payload = autopilot._seq_candidate_replay_payload(journal, tier=1)
+
+    assert payload is not None
+    assert payload["candidate"] == "candidate-optuna"
+    assert payload["action"] == action
+
+
+def test_seq_candidate_replay_rejects_multi_flag_structural_candidate() -> None:
+    assert autopilot._seq_promotion_replay_blocker(
+        {
+            "type": "structural_experiment",
+            "flags": {"plan_review": True, "graph_router": True},
+        }
+    ).startswith("candidate structural_experiment changes 2 flags at once")
 
 
 def test_frontier_rerun_forces_numeric_trial() -> None:
@@ -2360,6 +2752,32 @@ def test_last_invalid_feedback_surfaces_repeats_after_clear() -> None:
     assert "4×" in text
 
 
+def test_last_invalid_feedback_does_not_poison_observational_deep_eval() -> None:
+    deep_eval = {"type": "deep_eval", "tier": 3}
+    numeric = {
+        "type": "numeric_trial",
+        "surface": "think_harder",
+        "params": {"think_harder.min_expected_roi": 0.05},
+    }
+    state = {
+        "last_invalid_action": deep_eval,
+        "last_invalid_reason": "critic rejected: repeated T3 probe",
+        "last_invalid_status": "critic_rejected",
+        "invalid_signature_counts": {
+            autopilot._action_signature(deep_eval): 8,
+            autopilot._action_signature(numeric): 3,
+        },
+    }
+
+    text = autopilot._build_last_invalid_feedback(state)
+
+    assert "remains schedulable" in text
+    assert '"deep_eval"' not in text
+    assert "8×" not in text
+    assert "think_harder" in text
+    assert "3×" in text
+
+
 def test_prior_planner_decision_digest_summarizes_bounded_archive(tmp_path) -> None:
     archive = tmp_path / "planner_archive.jsonl"
     archive.write_text(
@@ -2579,6 +2997,33 @@ def test_record_rejected_draft_blacklists_on_repeat(monkeypatch) -> None:
     assert state["consecutive_rejected_drafts"] == 2
 
 
+def test_record_rejected_draft_keeps_observational_deep_eval_advisory() -> None:
+    state = {
+        "invalid_signature_counts": {
+            autopilot._action_signature({"type": "deep_eval", "tier": 3}): 7
+        },
+        "consecutive_rejected_drafts": 1,
+    }
+    draft = {"type": "deep_eval", "tier": 3}
+
+    blacklisted = autopilot._record_rejected_draft(
+        state,
+        draft,
+        _FakeCritique(issues=["repeated T3 probe"]),
+        trial_id=1208,
+    )
+
+    assert blacklisted is False
+    assert state["invalid_signature_counts"] == {
+        autopilot._action_signature(draft): 7
+    }
+    assert "critic_rejected_signatures" not in state
+    assert state["consecutive_rejected_drafts"] == 1
+    assert state["critic_rejected_observational_signatures"][
+        autopilot._action_signature(draft)
+    ]["trial_id"] == 1208
+
+
 def test_operator_domain_critique_detection() -> None:
     assert autopilot._is_operator_domain_critique(
         _FakeCritique(issues=["baseline refresh is operator-domain"])
@@ -2655,8 +3100,12 @@ def test_record_rejected_draft_outboxes_operator_domain(monkeypatch) -> None:
     assert calls == [(draft, 30)]
 
 
-def test_critic_rejected_signature_skip_blocks_exact_repeat() -> None:
-    draft = {"type": "numeric_trial", "surface": "think_harder", "params": {}}
+def test_critic_rejected_signature_skip_blocks_exact_concrete_repeat() -> None:
+    draft = {
+        "type": "numeric_trial",
+        "surface": "think_harder",
+        "params": {"think_harder.min_expected_roi": 0.05},
+    }
     sig = autopilot._action_signature(draft)
     state = {
         "critic_rejected_signatures": {
@@ -2671,6 +3120,34 @@ def test_critic_rejected_signature_skip_blocks_exact_repeat() -> None:
     assert "trial 44" in result.reason
     assert "change a material field" in result.reason
     assert result.action_type == "numeric_trial"
+
+
+def test_critic_rejected_signature_skip_allows_empty_numeric_optuna_request() -> None:
+    draft = {"type": "numeric_trial", "surface": "think_harder", "params": {}}
+    state = {
+        "critic_rejected_signatures": {
+            autopilot._action_signature(draft): {
+                "trial_id": 44,
+                "reason": "critic rejected",
+            }
+        }
+    }
+
+    assert autopilot._critic_rejected_signature_skip(draft, state) is None
+
+
+def test_critic_rejected_signature_skip_allows_observational_deep_eval() -> None:
+    draft = {"type": "deep_eval", "tier": 3}
+    state = {
+        "critic_rejected_signatures": {
+            autopilot._action_signature(draft): {
+                "trial_id": 44,
+                "reason": "critic rejected",
+            }
+        }
+    }
+
+    assert autopilot._critic_rejected_signature_skip(draft, state) is None
 
 
 def test_critic_rejected_signature_skip_allows_material_change() -> None:

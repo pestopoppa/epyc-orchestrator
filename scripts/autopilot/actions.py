@@ -1768,6 +1768,24 @@ def _mutation_dirty_target_reason(action: dict[str, Any]) -> str | None:
     return None
 
 
+def _is_forced_seq_candidate_replay(
+    action: dict[str, Any],
+    state: dict[str, Any],
+) -> bool:
+    """Return True for the exact W8 replay action forced for the current trial."""
+    marker = state.get("seq_candidate_replay_forced")
+    if not isinstance(marker, dict):
+        return False
+    if marker.get("action") != action:
+        return False
+    try:
+        marker_trial = int(marker.get("trial_id"))
+        current_trial = int(state.get("trial_counter"))
+    except (TypeError, ValueError):
+        return False
+    return marker_trial == current_trial
+
+
 def dispatch_action(
     action: dict[str, Any],
     seeder: "Seeder",
@@ -1797,11 +1815,20 @@ def dispatch_action(
     """
     action_type = action.get("type", "")
 
-    # AP-9: Single-variable scope enforcement
-    scope_err = validate_single_variable(action)
-    if scope_err:
-        log.warning("AP-9 scope violation: %s — skipping trial", scope_err)
-        return SkipOutcome("skipped", f"AP-9 scope violation: {scope_err}", action_type), action_type
+    # AP-9: Single-variable scope enforcement. Forced W8 candidate replays are
+    # exact re-measurements of a journaled NumericSwarm candidate, not a new
+    # planner-proposed multi-knob experiment.
+    if _is_forced_seq_candidate_replay(action, state):
+        log.info(
+            "AP-9 scope check bypassed for forced seq candidate replay "
+            "(trial=%s)",
+            state.get("trial_counter"),
+        )
+    else:
+        scope_err = validate_single_variable(action)
+        if scope_err:
+            log.warning("AP-9 scope violation: %s — skipping trial", scope_err)
+            return SkipOutcome("skipped", f"AP-9 scope violation: {scope_err}", action_type), action_type
     # Dirty-tree fence (see _mutation_dirty_target_reason): a file-mutating
     # action must never commit — or write over — pre-existing uncommitted work.
     dirty_reason = _mutation_dirty_target_reason(action)

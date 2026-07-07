@@ -1,0 +1,175 @@
+{
+  "allow_autopilot_active": false,
+  "allow_partial": false,
+  "api_url": "http://localhost:8000",
+  "applied": true,
+  "blockers": [],
+  "confirm_clean_window": true,
+  "decision_grade": true,
+  "decision_grade_notes": [
+    "requires --apply --confirm-clean-window",
+    "requires full real_suite_v1 50-question run",
+    "requires AutoPilot inactive unless --allow-autopilot-active is set",
+    "the run is standalone and does not write AutoPilot journal/state"
+  ],
+  "finished_at": "2026-07-06T19:22:18+00:00",
+  "generated_at": "2026-07-06T19:22:18+00:00",
+  "output_dir": "/mnt/raid0/llm/epyc-orchestrator/orchestration/reports/real_suite_v1_eval_20260706T192007Z",
+  "packaged_summary": {
+    "builder": "scripts/tasks/package_real_suite_eval.py",
+    "by_suite": {
+      "real_suite_v1": {
+        "accuracy": 0.0,
+        "correct": 0,
+        "count": 50
+      }
+    },
+    "by_task_class": {
+      "benchmark_eval_measurement": {
+        "accuracy": 0.0,
+        "correct": 0,
+        "count": 8,
+        "errors": 8,
+        "reliability": 0.0
+      },
+      "code_change_implementation": {
+        "accuracy": 0.0,
+        "correct": 0,
+        "count": 7,
+        "errors": 7,
+        "reliability": 0.0
+      },
+      "debug_root_cause": {
+        "accuracy": 0.0,
+        "correct": 0,
+        "count": 7,
+        "errors": 7,
+        "reliability": 0.0
+      },
+      "governance_docs_handoff": {
+        "accuracy": 0.0,
+        "correct": 0,
+        "count": 7,
+        "errors": 7,
+        "reliability": 0.0
+      },
+      "ops_deploy_process": {
+        "accuracy": 0.0,
+        "correct": 0,
+        "count": 7,
+        "errors": 7,
+        "reliability": 0.0
+      },
+      "planning_architecture_review": {
+        "accuracy": 0.0,
+        "correct": 0,
+        "count": 7,
+        "errors": 7,
+        "reliability": 0.0
+      },
+      "research_intake_deep_dive": {
+        "accuracy": 0.0,
+        "correct": 0,
+        "count": 7,
+        "errors": 7,
+        "reliability": 0.0
+      }
+    },
+    "caveat": "Clean-window standalone EvalTower real_suite_v1 run. It is isolated from AutoPilot journal/state and packaged prompt-free for F1 W3 acceptance review.",
+    "error_breakdown": {
+      "[ERROR: Backend unavailable (circuit open): http://localhost:8070]": 12,
+      "[FAILED: repeated no-progress nudges at coder_escalation: Your output was all comments \u2014 no executable code ran. This turn requires a tool call. Write executable Python now, call the required tool wit": 2,
+      "[FAILED: repeated no-progress nudges at coder_escalation: Your output was all comments \u2014 no executable code ran. You already reasoned through the problem. Call FINAL now with the actual value \u2014 e.g. F": 14,
+      "[FAILED: repeated no-progress nudges at frontdoor: Your output was all comments \u2014 no executable code ran. This turn requires a tool call. Write executable Python now, call the required tool with TOOL(": 2,
+      "[FAILED: repeated no-progress nudges at frontdoor: Your output was all comments \u2014 no executable code ran. You already reasoned through the problem. Call FINAL now with the actual value \u2014 e.g. FINAL(\"B": 20
+    },
+    "generated_at": "2026-07-06T19:22:18+00:00",
+    "metrics": {
+      "accuracy": 0.0,
+      "aggregate_speed": 0.0,
+      "correct": 0,
+      "errors": 50,
+      "eval_concurrency": 3,
+      "eval_wall_s": 130.89456224441528,
+      "incorrect": 0,
+      "median_request_speed": 0.0,
+      "n_questions": 50,
+      "quality_0_3": 0.0,
+      "reliability": 0.0,
+      "speed_metric_mode": "median_request_tps"
+    },
+    "privacy": {
+      "committed_question_results": "compact prompt-free EvalTower result rows",
+      "private_key_matches": [],
+      "question_ledger_rows": "compact prompt-free per-question ledger rows"
+    },
+    "question_ledger_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/reports/real_suite_v1_eval_20260706T192007Z/question_ledger.jsonl",
+    "run": {
+      "calibration_id": "real_suite_v1_eval_20260706T192007Z",
+      "core_id": "real_suite_v1",
+      "event_type": "real_suite_v1_evaltower_window",
+      "finished_at": "2026-07-06T19:22:18+00:00",
+      "requested_n": 50,
+      "seed": 4242,
+      "started_at": "2026-07-06T19:20:07+00:00",
+      "tier": 1,
+      "trial_id": null
+    },
+    "schema_version": "real_suite_v1_eval_report.v1",
+    "source_jsonl": "/mnt/raid0/llm/tmp/real_suite_v1_eval_20260706T192007Z.jsonl",
+    "status": "eval_tower_real_suite_v1_run_packaged"
+  },
+  "preflight": {
+    "api_health": {
+      "ok": true,
+      "status_code": 200,
+      "url": "http://localhost:8000/health"
+    },
+    "autopilot_active": false,
+    "autopilot_processes": [],
+    "available_questions": 50,
+    "suite_yaml": "/mnt/raid0/llm/epyc-inference-research/benchmarks/prompts/debug/real_suite_v1.yaml",
+    "suite_yaml_exists": true
+  },
+  "raw_jsonl": "/mnt/raid0/llm/tmp/real_suite_v1_eval_20260706T192007Z.jsonl",
+  "raw_row_metrics": {
+    "eval_wall_s": 130.89456224441528,
+    "n_questions": 50,
+    "quality": 0.0,
+    "reliability": 0.0
+  },
+  "seed": 4242,
+  "selected_n": 50,
+  "started_at": "2026-07-06T19:20:07+00:00",
+  "status": "clean_full_suite_packaged",
+  "suite": {
+    "generated_at": "2026-06-27T15:36:42+00:00",
+    "question_count": 50,
+    "scoring_methods": {
+      "code_execution": 7,
+      "exact_match": 8,
+      "f1": 9,
+      "multiple_choice": 11,
+      "programmatic": 5,
+      "substring": 10
+    },
+    "suite": "real_suite_v1",
+    "task_class_counts": {
+      "benchmark_eval_measurement": 8,
+      "code_change_implementation": 7,
+      "debug_root_cause": 7,
+      "governance_docs_handoff": 7,
+      "ops_deploy_process": 7,
+      "planning_architecture_review": 7,
+      "research_intake_deep_dive": 7
+    },
+    "tier_counts": {
+      "1": 20,
+      "2": 21,
+      "3": 9
+    },
+    "version": "1.0"
+  },
+  "suite_yaml": "/mnt/raid0/llm/epyc-inference-research/benchmarks/prompts/debug/real_suite_v1.yaml",
+  "tier_label": 1
+}

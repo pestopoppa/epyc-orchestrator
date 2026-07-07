@@ -341,3 +341,99 @@ def test_deterministic_command_requires_read_only_job(tmp_path: Path) -> None:
                 execute_command=True,
             )
         )
+
+
+def test_call_chat_api_resolves_lab_role_and_requests_real_mode(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _Response:
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {
+                "answer": json.dumps({"job_id": "sample_shadow"}),
+                "mock_mode": False,
+                "real_mode": True,
+                "routed_to": "architect_general",
+            }
+
+    class _Client:
+        def __init__(self, *, timeout: float) -> None:
+            captured["timeout"] = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        def post(self, url: str, *, json: dict):
+            captured["url"] = url
+            captured["payload"] = json
+            return _Response()
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "Client", _Client)
+
+    output, meta = run_job.call_chat_api(
+        api_url="http://unit",
+        role="verifier",
+        prompt="return json",
+        run_id="run-1",
+        timeout_s=12.0,
+    )
+
+    assert output == {"job_id": "sample_shadow"}
+    assert captured["url"] == "http://unit/chat"
+    payload = captured["payload"]
+    assert payload["force_role"] == "architect_general"
+    assert payload["role"] == "architect_general"
+    assert payload["mock_mode"] is False
+    assert payload["real_mode"] is True
+    assert meta["requested_role"] == "verifier"
+    assert meta["resolved_role"] == "architect_general"
+
+
+def test_call_chat_api_rejects_mock_response(monkeypatch) -> None:
+    class _Response:
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {
+                "answer": "[MOCK] Processed prompt",
+                "mock_mode": True,
+                "real_mode": False,
+            }
+
+    class _Client:
+        def __init__(self, *, timeout: float) -> None:
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        def post(self, url: str, *, json: dict):
+            return _Response()
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "Client", _Client)
+
+    with pytest.raises(run_job.LabRunnerError, match="mock mode"):
+        run_job.call_chat_api(
+            api_url="http://unit",
+            role="worker_explore",
+            prompt="return json",
+            run_id="run-1",
+            timeout_s=12.0,
+        )

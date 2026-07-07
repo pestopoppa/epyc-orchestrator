@@ -1,0 +1,34 @@
+{
+  "blockers": [],
+  "critic_decisions": {},
+  "draft_actions": {},
+  "generated_at": "2026-07-06T11:58:23+00:00",
+  "local": {
+    "critique_successes": 0,
+    "draft_successes": 0,
+    "failures": 0,
+    "fallback_provider_starts": 0
+  },
+  "ok": true,
+  "providers": {},
+  "recent_issues": [],
+  "revised_actions": {},
+  "schema_version": "autopilot_planner_provider_health.v1",
+  "status": "waiting_for_planner_turn",
+  "tap_path": "/mnt/raid0/llm/tmp/planner_tap.log",
+  "window": {
+    "action_type": "numeric_trial",
+    "event_count": 0,
+    "last_event_timestamp": null,
+    "no_event_reason": "no planner provider events parsed from current process window; current phase is dispatch_action",
+    "phase": "dispatch_action",
+    "phase_path": "/mnt/raid0/llm/tmp/autopilot_phase.json",
+    "process_started_at_s": 1783333359.42,
+    "raw_event_count": 182,
+    "scope": "current_process",
+    "scoped_pid": 131226,
+    "stale_after_s": 7200.0,
+    "tail_bytes": 1500000,
+    "tap_mtime_age_s": 5488.605
+  }
+}

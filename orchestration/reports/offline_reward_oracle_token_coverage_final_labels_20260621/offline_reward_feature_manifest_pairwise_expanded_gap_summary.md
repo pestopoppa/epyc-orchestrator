@@ -1,8 +1,8 @@
 # Offline Reward Feature Manifest
 
-- Labels: `orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_labels.jsonl`
-- Rows: `626`
-- Unique source records: `302`
+- Labels: `/mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_expanded_gap_labels.jsonl`
+- Rows: `476`
+- Unique source records: `238`
 - Embedding dimension required: `1024`
 - Engineered feature dimension: `11`
 

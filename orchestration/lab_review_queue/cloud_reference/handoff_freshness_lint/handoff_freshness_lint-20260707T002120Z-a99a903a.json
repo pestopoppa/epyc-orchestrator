@@ -1,0 +1,22 @@
+{
+  "schema_version": "lab_cloud_reference.v1",
+  "job_id": "handoff_freshness_lint",
+  "run_id": "handoff_freshness_lint-20260707T002120Z-a99a903a",
+  "reviewed_at": "2026-07-07T00:31:00+00:00",
+  "decision": "accept",
+  "summary": "Output is model-backed, non-mock, schema-valid, and identifies plausible handoff maintenance candidates. The findings should be treated as review prompts rather than direct archival authority.",
+  "checks": [
+    {
+      "item": "agent-file-prose-compression.md stale/closure candidate",
+      "verdict": "plausible"
+    },
+    {
+      "item": "agent-world-env-synthesis.md MI210 follow-up",
+      "verdict": "plausible"
+    },
+    {
+      "item": "contention-matrix-v6-quarter-refresh.md archive candidate",
+      "verdict": "plausible"
+    }
+  ]
+}

@@ -1,0 +1,81 @@
+You are running a shadow self-running-lab job.
+
+job_id: autopilot_planner_provider_watch
+title: AutoPilot planner provider health watch
+run_id: autopilot_planner_provider_watch-20260706T115823Z-ab6d7cb7
+generated_at: 2026-07-06T11:58:23+00:00
+risk: read_only
+forbidden_actions: ["stop_autopilot", "restart_services", "edit_journal", "update_baseline"]
+
+Return ONLY a JSON object matching this JSON Schema:
+{
+  "additionalProperties": true,
+  "properties": {
+    "blockers": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "critic_decisions": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "type": "object"
+    },
+    "draft_actions": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "type": "object"
+    },
+    "local": {
+      "additionalProperties": true,
+      "type": "object"
+    },
+    "ok": {
+      "type": "boolean"
+    },
+    "providers": {
+      "additionalProperties": true,
+      "type": "object"
+    },
+    "recent_issues": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "autopilot_planner_provider_health.v1"
+    },
+    "status": {
+      "enum": [
+        "healthy",
+        "waiting_for_planner_turn",
+        "stale",
+        "attention",
+        "missing"
+      ]
+    }
+  },
+  "required": [
+    "schema_version",
+    "ok",
+    "status",
+    "blockers",
+    "providers",
+    "local",
+    "critic_decisions",
+    "draft_actions"
+  ],
+  "type": "object"
+}
+
+Missing or skipped sources:
+[]
+
+Source excerpts:
+{"repo": "epyc-orchestrator", "path": "scripts/autopilot/planner_provider_health_report.py", "sha256": "3afb0eb1369cc0de041a25f06e4afc2ceb2921a4f9ff2df3e40b5874c5c662a8", "truncated": true, "excerpt": "#!/usr/bin/env python3\n\"\"\"Read-only planner provider health report for local AutoPilot operation.\"\"\"\n\nfrom __future__ import annotations\n\nimport argparse\nimport datetime as dt\nimport json\nimport os\nimport re\nfrom pathlib import Path\nfrom typing import Any\n\n\nSCHEMA_VERSION = \"autopilot_planner_provider_health.v1\"\nDEFAULT_TAP_PATH = Path(\"/mnt/raid0/llm/tmp/planner_tap.log\")\nDEFAULT_PHASE_PATH = Path(\"/mnt/raid0/llm/tmp/autopilot_phase.json\")\nDEFAULT_TAIL_BYTES = 1_500_000\nDEFAULT_STALE_AFTER_S = 7_200.0\nLOCAL_PROVIDER_PREFIX = \"local_\"\nSTART_RE = re.compile(\n    r\"^\\[(?P<timestamp>[^\\]]+)\\]\\s+PLANNER\\s+\"\n    r\"provider=(?P<provider>\\S+)\\s+role=(?P<role>\\S+)\\s+start\",\n    re.MULTILINE,\n)\nEND_RE = re.compile(\n    r\"^\\[END\\s+provider=(?P<provider>\\S+)\\s+role=(?P<role>[^\\]]+)\\]\\s+\"\n    r\"result_chars=(?P<result_chars>\\d+)\",\n    re.MULTILINE,\n)\nFAIL_RE = re.compile(\n    r\"^\\[FAIL\\s+provider=(?P<provider>\\S+)\\s+role=(?P<role>[^\\]]+)\\]\\s*(?P<message>.*)\",\n    re.MULTILINE,\n)\nRETRY_RE = re.compile(\n    r\"^\\[RETRY\\s+provider=(?P<provider>\\S+)\\s+role=(?P<role>[^\\]]+)\\]\\s*(?P<message>.*)\",\n    re.MULTILINE,\n)\nACTION_FENCE_RE = re.compile(r\"```json:autopilot_actions\\s*(?P<payload>.*?)```\", re.DOTALL)\nCRITIQUE_FENCE_RE = re.compile(r\"```json:autopilot_critique\\s*(?P<payload>.*?)```\", re.DOTALL)\n\n\ndef _utc_now() -> str:\n    return dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat()\n\n\ndef _read_tail(path: Path, tail_bytes: int) -> str:\n    with path.open(\"rb\") as fh:\n        fh.seek(0, 2)\n        size = fh.tell()\n        fh.seek(max(0, size - max(1, tail_bytes)))\n        return fh.read().decode(\"utf-8\", errors=\"replace\")\n\n\ndef _split_blocks(text: str) -> list[str]:\n    return [block.strip() for block in re.split(r\"\\n={20,}\\n\", text) if block.strip()]\n\n\ndef _parse_json_payload(payload: str) -> tuple[dict[str, Any] | None, str]:\n    payload = payload.strip()\n    try:\n        value = json.loads(payload)\n    except json.JSONDecodeError:\n        start = payload.find(\"{\")\n        end = payload.rfind(\"}\")\n        if start < 0 or end <= start:\n            return None, \"json_object_not_found\"\n        try:\n            value = json.loads(payload[start : end + 1])\n        e"}
+{"repo": "epyc-orchestrator", "path": "scripts/autopilot/planner_coordinator.py", "sha256": "2bf5cfcdf35377bcedfa487ee23210073e56a9e891824cc631eca12f0d8af519", "truncated": true, "excerpt": "\"\"\"Draft, critique, fallback, and reconciliation for AutoPilot planning.\"\"\"\n\nfrom __future__ import annotations\n\nimport json\nimport logging\nimport os\nimport re\nimport time\nfrom collections.abc import Iterable\nfrom dataclasses import dataclass, field, replace\nfrom datetime import datetime\nfrom pathlib import Path\nfrom typing import Any, Callable\n\nimport peaf\n\nfrom controller_io import (\n    _append_planner_archive,\n    _loads_json_payload,\n    _open_planner_tap,\n    extract_action,\n    extract_rationale,\n    validate_single_variable,\n)\nfrom planner_providers import (\n    PlannerProvider,\n    PlannerProviderResult,\n    get_planner_provider,\n)\n\nlog = logging.getLogger(\"autopilot\")\n\nKNOWN_ACTION_TYPES = {\n    \"seed_batch\",\n    \"numeric_trial\",\n    \"prompt_mutation\",\n    \"gepa_optimize\",\n    \"code_mutation\",\n    \"structural_experiment\",\n    \"structural_prune\",\n    \"slot_compact\",\n    \"train_routing_models\",\n    \"distill_skillbank\",\n    \"reset_memories\",\n    \"deep_eval\",\n    \"rollback\",\n    \"distill_knowledge\",\n}\n\nLOW_RISK_ACTIONS = {\"seed_batch\", \"deep_eval\", \"distill_knowledge\"}\nMEDIUM_RISK_ACTIONS = {\n    \"numeric_trial\",\n    \"slot_compact\",\n    \"train_routing_models\",\n    \"distill_skillbank\",\n}\nHIGH_RISK_ACTIONS = KNOWN_ACTION_TYPES - LOW_RISK_ACTIONS - MEDIUM_RISK_ACTIONS\nSAFE_FALLBACK_NUMERIC_SURFACE = \"memrl_retrieval\"\n\n# Actions safe to DISPATCH WITHOUT a critic verdict (degraded/uncritiqued mode).\n# Intentionally EMPTY: when the binding critic is unavailable we PAUSE by default\n# rather than run anything unreviewed. NOTE this is deliberately stricter than\n# LOW_RISK_ACTIONS — seed_batch is NOT here, because low-risk seed looping was the\n# exact failure the critic exists to catch (critic_reject_loop @708). Extend ONLY\n# with genuinely observational, non-mutating, non-looping action types.\nOBSERVATIONAL_ACTIONS: frozenset[str] = frozenset()\n_CRITIQUE_CONTEXT_HEADINGS = (\n    \"### Evidence Power and Sequential Candidate Status\",\n    \"### System Health\",\n    \"### Action Availability\",\n    \"### Blacklisted Configurations\",\n    \"### Feature Flags\",\n    \"### Last Non-Executing Action\",\n)\n_CRITIQUE_SECTION_CHAR_LIMIT = 1600\n\n# Claude planner drafts run a ~80KB prompt"}

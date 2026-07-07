@@ -6,9 +6,9 @@ inference half an executable gate: run matched DCP_PRE_ASSEMBLY off/on arms
 against delegation-heavy prompts, capture latency/token/delegation telemetry,
 and leave production state reverted to OFF.
 
-Default mode is --stub, which performs no inference and only exercises the
-artifact schema.  Real inference is refused unless --host-quiet-confirmed is
-passed and AutoPilot is not running.
+Default mode is stub, which performs no inference and only exercises the
+artifact schema.  Real inference requires --real, --host-quiet-confirmed, and a
+stopped AutoPilot process.
 """
 from __future__ import annotations
 
@@ -319,7 +319,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("--output", default="", help="Output directory; defaults under benchmarks/results")
     ap.add_argument("--api-url", default=API_URL)
     ap.add_argument("--timeout-s", type=int, default=300)
-    ap.add_argument("--stub", action="store_true", help="No inference; schema/artifact dry-run")
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument("--stub", action="store_true", help="No inference; schema/artifact dry-run (default)")
+    mode.add_argument("--real", action="store_true", help="Run live inference; requires --host-quiet-confirmed")
     ap.add_argument(
         "--host-quiet-confirmed",
         action="store_true",
@@ -330,7 +332,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
-    real = not args.stub
+    real = bool(args.real)
     if real and not args.host_quiet_confirmed:
         print(
             "REFUSING real J7 run: pass --host-quiet-confirmed after clean DCP attestation "

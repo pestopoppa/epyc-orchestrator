@@ -44,6 +44,11 @@ def vision_roles(stack_priors_path: Path) -> frozenset[str]:
         return LEGACY_VISION_ROLES
     return _vision_roles_from_records(records)
 
+
+def stack_priors_available(stack_priors_path: Path) -> bool:
+    """Return True when a generated live stack-priors artifact is readable."""
+    return bool(live_stack_role_records(stack_priors_path))
+
 # Degraded fallback only. Normal vision serving discovery reads generated stack
 # priors first, then stack_manifest PORT_MAP before reaching this table.
 def manifest_vl_port_for_role(role: str) -> int | None:
@@ -63,6 +68,22 @@ def fallback_vl_port_for_role(role: str) -> int:
     if legacy_port is None:
         raise ValueError(f"No degraded VL port fallback for role {role!r}")
     return legacy_port
+
+
+def vl_port_for_role(role: str, stack_priors_path: Path) -> int:
+    """Return the VL port for ``role`` without masking generated-prior drift."""
+    records = live_stack_role_records(stack_priors_path)
+    if not records:
+        return fallback_vl_port_for_role(role)
+
+    ports = live_role_primary_ports(_vision_roles_from_records(records), stack_priors_path)
+    port = ports.get(role)
+    if isinstance(port, int):
+        return port
+    raise ValueError(
+        f"No generated VL port for role {role!r}; degraded fallback disabled "
+        f"because live stack priors are available at {stack_priors_path}"
+    )
 
 
 def stack_prior_vl_ports(

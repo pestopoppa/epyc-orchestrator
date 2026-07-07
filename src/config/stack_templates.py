@@ -23,7 +23,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from src.registry.stack_priors import live_stack_role_records
+from src.registry.stack_priors import (
+    live_stack_role_records,
+    stack_prior_primary_port,
+    stack_prior_serving,
+    stack_prior_serving_ports,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -244,6 +249,124 @@ class ValidationResult:
         return ", ".join(parts)
 
 
+def _is_alias_role(role: RoleConfig) -> bool:
+    return bool(role.alias_to) or role.tier.upper() == "ALIAS"
+
+
+def _active_numa_mode() -> str:
+    mode = os.environ.get("ORCHESTRATOR_STACK_NUMA_MODE", "full").strip().lower()
+    return mode if mode in {"full", "quarter", "both"} else "full"
+
+
+def _role_instance_ports(role: RoleConfig, numa_mode: str | None = None) -> list[int]:
+    mode = numa_mode or "both"
+    if role.full and role.quarters:
+        if mode == "full":
+            return [role.full.port]
+        if mode == "quarter":
+            return [instance.port for instance in role.quarters]
+
+    ports: list[int] = []
+    if role.full:
+        ports.append(role.full.port)
+    ports.extend(instance.port for instance in role.quarters)
+    ports.extend(instance.port for instance in role.replicas)
+    return ports
+
+
+def _stack_prior_record_ports(record: dict[str, Any]) -> list[int]:
+    serving = stack_prior_serving(record)
+    ports = stack_prior_serving_ports(serving)
+    if ports:
+        return ports
+    primary_port = stack_prior_primary_port(serving)
+    return [primary_port] if primary_port is not None else []
+
+
+def _requires_stack_prior_parity(template: StackTemplate) -> bool:
+    """Return True for the production baseline template backed by stack priors."""
+    return (
+        template.name == "default"
+        or template.metadata.get("ds7_profile") == "steady_state_static_prewarm"
+    )
+
+
+def _validate_stack_prior_parity(
+    template: StackTemplate,
+    live_records: dict[str, dict[str, Any]],
+) -> tuple[list[str], list[str]]:
+    """Validate default-template launch topology against generated stack priors.
+
+    The generated prior records represent the current stack's live serving surface.
+    ``default.yaml`` is the DS-7 production baseline, so deployable roles must keep
+    matching those generated ports. Logical aliases are allowed, but any generated
+    alias-serving ports must be served by the alias target in the template.
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
+    if not _requires_stack_prior_parity(template):
+        return errors, warnings
+    if not live_records:
+        warnings.append(
+            "Could not validate default template against generated stack priors: "
+            "no live stack-prior role records found"
+        )
+        return errors, warnings
+
+    numa_mode = _active_numa_mode()
+    template_ports = {
+        role_name: _role_instance_ports(role, numa_mode=numa_mode)
+        for role_name, role in template.roles.items()
+    }
+
+    for role_name, role in template.roles.items():
+        if _is_alias_role(role) or role.mode == "embedding":
+            continue
+        if role_name not in live_records:
+            errors.append(
+                f"Default template deployable role '{role_name}' is missing from "
+                "generated live stack priors"
+            )
+
+    for role_name, record in live_records.items():
+        prior_ports = _stack_prior_record_ports(record)
+        if not prior_ports:
+            warnings.append(
+                f"Generated stack prior for live role '{role_name}' has no serving ports"
+            )
+            continue
+        if role_name not in template.roles:
+            errors.append(
+                f"Generated live stack-prior role '{role_name}' is missing from "
+                "default stack template"
+            )
+            continue
+
+        role = template.roles[role_name]
+        if _is_alias_role(role):
+            target_ports = set(template_ports.get(role.alias_to, []))
+            missing_ports = [port for port in prior_ports if port not in target_ports]
+            if missing_ports:
+                errors.append(
+                    f"Default template alias role '{role_name}' points to "
+                    f"'{role.alias_to}', but generated prior ports {prior_ports} "
+                    f"are not served by target ports {sorted(target_ports)}"
+                )
+            continue
+
+        if role.mode == "embedding":
+            continue
+
+        template_role_ports = template_ports.get(role_name, [])
+        if sorted(template_role_ports) != sorted(prior_ports):
+            errors.append(
+                f"Default template role '{role_name}' ports {template_role_ports} "
+                f"do not match generated stack-prior ports {prior_ports}"
+            )
+
+    return errors, warnings
+
+
 def validate_template(
     template: StackTemplate,
     registry_path: Path | None = None,
@@ -260,7 +383,8 @@ def validate_template(
     """
     errors: list[str] = []
     warnings: list[str] = []
-    live_roles = set(live_stack_role_records().keys())
+    live_records = live_stack_role_records()
+    live_roles = set(live_records.keys())
 
     # 1. Memory budget (fine-grained: HOT mlock vs total loaded vs KV reserve)
     budget = template.resource_budget
@@ -322,7 +446,7 @@ def validate_template(
             )
             continue
 
-        is_alias = bool(role.alias_to) or role.tier.upper() == "ALIAS"
+        is_alias = _is_alias_role(role)
         if is_alias:
             if not role.alias_to:
                 errors.append(f"Alias role '{role_name}' must set alias_to")
@@ -338,6 +462,10 @@ def validate_template(
 
         if role.tier == "HOT" and role.instance_count == 0:
             errors.append(f"Role '{role_name}' is HOT but has no instances defined")
+
+    parity_errors, parity_warnings = _validate_stack_prior_parity(template, live_records)
+    errors.extend(parity_errors)
+    warnings.extend(parity_warnings)
 
     # 5. Model existence (if registry available)
     if registry_path and registry_path.exists():

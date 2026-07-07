@@ -1,0 +1,96 @@
+You are running a shadow self-running-lab job.
+
+job_id: autopilot_restart_advisor
+title: AutoPilot stale-daemon restart advisor
+run_id: autopilot_restart_advisor-20260706T115635Z-2a913962
+generated_at: 2026-07-06T11:56:35+00:00
+risk: read_only
+forbidden_actions: ["stop_autopilot", "restart_services", "edit_journal", "update_baseline"]
+
+Return ONLY a JSON object matching this JSON Schema:
+{
+  "additionalProperties": true,
+  "properties": {
+    "action_type": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "advisor_version": {
+      "const": "autopilot_restart_advisor.v1"
+    },
+    "blockers": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "code_stale": {
+      "type": "boolean"
+    },
+    "ok": {
+      "type": "boolean"
+    },
+    "phase": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "pid": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "pid_alive": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "reason": {
+      "type": "string"
+    },
+    "restart_needed": {
+      "type": "boolean"
+    },
+    "safe_to_restart_now": {
+      "type": "boolean"
+    },
+    "status": {
+      "enum": [
+        "no_action",
+        "restart_recommended",
+        "wait_for_boundary",
+        "manual_attention"
+      ]
+    },
+    "trial_id": {
+      "type": [
+        "integer",
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "advisor_version",
+    "ok",
+    "status",
+    "restart_needed",
+    "safe_to_restart_now",
+    "reason",
+    "blockers"
+  ],
+  "type": "object"
+}
+
+Missing or skipped sources:
+[]
+
+Source excerpts:
+{"repo": "epyc-orchestrator", "path": "scripts/autopilot/autopilot_restart_advisor.py", "sha256": "f12c544031095d0f01736a2cd1e2572b6c3ce016edbf7a1e354a32f9aa03f760", "truncated": true, "excerpt": "#!/usr/bin/env python3\n\"\"\"Read-only advice for stale AutoPilot restart timing.\n\nThis complements restart_readiness_report.py. Readiness answers whether the\nledger/baseline/cutover state is internally consistent for a restart. This\nadvisor answers the operational question: if the live daemon is stale, is the\ncurrent phase a reasonable restart boundary or should the operator wait?\n\"\"\"\n\nfrom __future__ import annotations\n\nimport argparse\nimport json\nfrom pathlib import Path\nimport sys\nfrom typing import Any\n\nSCRIPT_DIR = Path(__file__).resolve().parent\nORCH_ROOT = SCRIPT_DIR.parents[1]\nsys.path.insert(0, str(SCRIPT_DIR))\nsys.path.insert(0, str(ORCH_ROOT))\n\nfrom phase_status import (  # noqa: E402\n    DEFAULT_JOURNAL_DIR,\n    DEFAULT_STALE_AFTER_S,\n    PHASE_PATH,\n    build_phase_health_report,\n)\n\nADVISOR_VERSION = \"autopilot_restart_advisor.v1\"\nDEFAULT_MAX_TRIALS = 3000\n\n# Phases before a metric-bearing action starts, after a trial has fully\n# completed, or while the daemon is explicitly idle/latched. Restarting here may\n# lose a planner attempt, but should not corrupt an in-flight eval row.\nSAFE_RESTART_PHASES = frozenset(\n    {\n        \"stopped\",\n        \"paused\",\n        \"loop_start\",\n        \"health_check\",\n        \"health_backoff\",\n        \"preflight\",\n        \"observe\",\n        \"planner_prompt_build\",\n        \"autonomous_select\",\n        \"max_trials_reached\",\n        \"critic_unavailable_halt\",\n        \"critic_reject_loop_halt\",\n        \"planners_offline_halt\",\n        \"meta_loop_halt\",\n        \"skip_loop_halt\",\n        \"async_plots_scheduled\",\n        \"async_digest_scheduled\",\n    }\n)\n\n# These phases are in or immediately around action execution, safety gating,\n# journal construction, artifact generation, or final state save. A stale daemon\n# should be restarted after the loop reaches a later boundary.\nWAIT_FOR_BOUNDARY_PHASES = frozenset(\n    {\n        \"dispatch_action\",\n        \"dispatch_complete\",\n        \"dispatch_precheck_skip\",\n        \"dispatch_skip\",\n        \"dispatch_dry_run\",\n        \"safety_gate\",\n        \"self_criticism\",\n        \"record_trial\",\n        \"post_trial_artifacts\",\n        \"checkpoint\",\n        \"save_state\",\n        \"shutting_down\",\n  "}
+{"repo": "epyc-orchestrator", "path": "scripts/autopilot/phase_status.py", "sha256": "29a9e4db03f21fe01aae8a091dd5ca0f4c4b31c78f83090070cbcdc84c884c80", "truncated": true, "excerpt": "\"\"\"Autopilot phase heartbeat and low-priority async task helpers.\n\nThe dashboard can only explain idle time if the controller loop publishes\nwhat it is doing before planner/model taps become active. This module keeps\nthat state in /mnt/raid0/llm/tmp as a best-effort JSON heartbeat.\n\"\"\"\n\nfrom __future__ import annotations\n\nimport contextlib\nimport fcntl\nimport json\nimport logging\nimport os\nimport re\nimport subprocess\nimport tempfile\nimport threading\nimport time\nfrom concurrent.futures import Future, ThreadPoolExecutor\nfrom datetime import datetime, timezone\nfrom pathlib import Path\nfrom typing import Any, Callable, Iterable, Iterator\n\nlog = logging.getLogger(\"autopilot.phase\")\n\nORCH_ROOT = Path(__file__).resolve().parents[2]\nRESEARCH_ROOT = ORCH_ROOT.parent / \"epyc-inference-research\"\nPHASE_PATH = Path(\"/mnt/raid0/llm/tmp/autopilot_phase.json\")\nPHASE_EVENTS_PATH = Path(\"/mnt/raid0/llm/tmp/autopilot_phase.jsonl\")\nDEFAULT_AUTOPILOT_LOG_PATH = ORCH_ROOT / \"logs\" / \"autopilot.log\"\nDEFAULT_JOURNAL_DIR = ORCH_ROOT / \"orchestration\"\nDEFAULT_TMP_AUTOPILOT_LOG_DIR = Path(\"/mnt/raid0/llm/tmp\")\nDEFAULT_TMP_AUTOPILOT_LOG_PATTERN = \"autopilot*.log\"\nDEFAULT_STALE_AFTER_S = 900.0\nDEFAULT_OUTCOME_STALL_FRONTIER_TRIALS = int(\n    os.environ.get(\"AUTOPILOT_OUTCOME_STALL_FRONTIER_TRIALS\", \"150\")\n)\nDEFAULT_OUTCOME_STALL_PROMOTION_TRIALS = int(\n    os.environ.get(\"AUTOPILOT_OUTCOME_STALL_PROMOTION_TRIALS\", \"300\")\n)\nDEFAULT_OUTCOME_RECENT_WINDOW_TRIALS = int(\n    os.environ.get(\"AUTOPILOT_OUTCOME_RECENT_WINDOW_TRIALS\", \"120\")\n)\nLOG_TAIL_BYTES = 65536\nLOG_TAIL_CANDIDATE_LIMIT = 8\nEVAL_PROGRESS_FIELDS = (\n    \"eval_label\",\n    \"eval_completed_questions\",\n    \"eval_total_questions\",\n    \"eval_correct_questions\",\n    \"eval_correct_pct\",\n    \"eval_concurrency\",\n)\nAUTOPILOT_ENV_FLAGS = (\n    \"AUTOPILOT_PLANNER_HINTS\",\n    \"AUTOPILOT_SEQ_VERDICT\",\n    \"AUTOPILOT_W6_AUDIT_BLOCK\",\n    \"AUTOPILOT_W6_AUDIT_N\",\n    \"AUTOPILOT_W6_AUDIT_EVERY_N_TRIALS\",\n    \"AUTOPILOT_W6_AUDIT_SHADOW_ONLY\",\n    \"AUTOPILOT_PLANNER_TIMEOUT\",\n)\nAUTOPILOT_RUNTIME_SOURCE_PATHS = (\n    ORCH_ROOT / \"scripts\" / \"autopilot\" / \"autopilot.py\",\n    ORCH_ROOT / \"scripts\" / \"autopilot\" / \"actions.py\",\n    ORCH_ROOT / \"scripts\" /"}
+{"repo": "epyc-orchestrator", "path": "scripts/autopilot/start_fable_authority_daemon.py", "sha256": "cbcc044313ea486870039bd208f002d902b900f41f3994304dfde741b4787676", "truncated": true, "excerpt": "#!/usr/bin/env python3\n\"\"\"Start AutoPilot with the Fable authority/restart environment.\n\nThis wrapper exists because the daemon's authority/tool telemetry state is\nprocess-environment gated. A bare ``autopilot.py start`` can look healthy while\nsilently dropping sequential verdicts, W6 audit accrual, planner hints, or tool\nsentinels from the live process.\n\"\"\"\n\nfrom __future__ import annotations\n\nimport argparse\nfrom datetime import datetime, timezone\nimport json\nimport os\nfrom pathlib import Path\nimport subprocess\nimport sys\nfrom typing import Any\n\n\nSCRIPT_DIR = Path(__file__).resolve().parent\nORCH_ROOT = SCRIPT_DIR.parents[1]\nDEFAULT_LOG_DIR = Path(\"/mnt/raid0/llm/tmp\")\nLIVE_PROCESS_PATTERN = \"scripts/autopilot/autopilot.py start\"\nRUNNING_REFUSAL_EXIT = 75\nREPO_READINESS_PICKUP_ENV = \"AUTOPILOT_REPO_READINESS_PICKUP\"\nREPO_READINESS_DIR_ENV = \"AUTOPILOT_REPO_READINESS_DIR\"\nDEFAULT_REPO_READINESS_DIRS = (\n    Path(\"/mnt/raid0/llm/epyc-root/data/repo_readiness\"),\n    Path(\"/workspace/repos/epyc-root/data/repo_readiness\"),\n)\nREPO_READINESS_PICKUP_GLOB = \"repo_readiness_autopilot_pickup_*.json\"\n\nFABLE_AUTHORITY_ENV: dict[str, str] = {\n    \"AUTOPILOT_SEQ_VERDICT\": \"1\",\n    \"AUTOPILOT_W6_AUDIT_BLOCK\": \"1\",\n    \"AUTOPILOT_W6_AUDIT_N\": \"10\",\n    \"AUTOPILOT_W6_AUDIT_EVERY_N_TRIALS\": \"1\",\n    \"AUTOPILOT_W6_AUDIT_SHADOW_ONLY\": \"1\",\n    \"AUTOPILOT_PLANNER_TIMEOUT\": \"600\",\n    \"AUTOPILOT_PLANNER_SPEND_BREAKER\": \"1\",\n    \"AUTOPILOT_PLANNER_HINTS\": \"1\",\n    \"AUTOPILOT_TOOL_SENTINELS\": \"1\",\n    \"AUTOPILOT_STEPPING_STONES\": \"1\",\n}\n\nLOCAL_PLANNER_DEFAULT_ENV: dict[str, str] = {\n    \"AUTOPILOT_PLANNER_PRIMARY\": \"local_frontdoor\",\n    \"AUTOPILOT_PLANNER_CRITIC\": \"local_worker\",\n    \"AUTOPILOT_PLANNER_CRITIC_FALLBACK\": \"claude\",\n    \"AUTOPILOT_LOCAL_PLANNER_ROLE\": \"frontdoor\",\n    \"AUTOPILOT_LOCAL_PLANNER_MODEL\": \"frontdoor\",\n    \"AUTOPILOT_LOCAL_PLANNER_TEMPERATURE\": \"0\",\n    \"AUTOPILOT_LOCAL_PLANNER_MAX_TOKENS\": \"2048\",\n}\n\n\ndef authority_env(base: dict[str, str] | None = None) -> dict[str, str]:\n    \"\"\"Return an environment with required Fable authority keys enforced.\"\"\"\n    env = dict(os.environ if base is None else base)\n    env.update(FABLE_AUTHORITY_ENV)\n    for key, value in L"}

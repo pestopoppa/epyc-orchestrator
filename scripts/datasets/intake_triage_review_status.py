@@ -18,6 +18,8 @@ from scripts.datasets._common import load_jsonl, utc_now
 DEFAULT_QUEUE = Path("orchestration/datasets/intake_triage_review_queue.jsonl")
 DEFAULT_REVIEWED_LABELS = Path("orchestration/datasets/intake_triage_reviewed.jsonl")
 DEFAULT_REPORT = Path("orchestration/reports/intake_triage_review_status.json")
+DEFAULT_REVIEW_PACKET = Path("orchestration/reports/intake_triage_review_packet.md")
+DEFAULT_BATCH_TEMPLATE = Path("orchestration/datasets/intake_triage_review_batch_template.jsonl")
 REPORT_VERSION = "intake_triage_review_status.v1"
 DEFAULT_TRUSTED_LABEL_SOURCES = ("operator",)
 
@@ -83,6 +85,96 @@ def _pending_sample(
     return sample
 
 
+def _batch_template_rows(pending_items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for item in pending_items:
+        rows.append(
+            {
+                "schema_version": "intake_triage_review_batch.v1",
+                "intake_id": item["intake_id"],
+                "title": item.get("title") or "",
+                "url": item.get("url") or "",
+                "source_type": item.get("source_type") or "",
+                "categories": item.get("categories") or [],
+                "suggested_verdict": item.get("current_verdict") or "",
+                "verdict": "",
+                "destination_handoff": item.get("destination_handoff") or "",
+                "destination_index": item.get("destination_index") or "",
+                "label_source": "operator",
+                "reviewer": "operator",
+                "notes": "",
+                "source_text_excluded": True,
+            }
+        )
+    return rows
+
+
+def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> int:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+    return len(rows)
+
+
+def render_markdown(report: dict[str, Any]) -> str:
+    lines = [
+        "# Intake Triage Review Packet",
+        "",
+        f"- generated_at: `{report.get('generated_at', '')}`",
+        f"- status: `{report.get('status', '')}`",
+        f"- queue_rows: `{report.get('queue_rows', 0)}`",
+        f"- trusted_reviewed_unique_intake_ids: `{report.get('trusted_reviewed_unique_intake_ids', 0)}`",
+        f"- labels_needed: `{report.get('labels_needed', 0)}`",
+        f"- remaining_queue_items: `{report.get('remaining_queue_items', 0)}`",
+        f"- trusted_label_sources: `{', '.join(report.get('trusted_label_sources') or [])}`",
+        "",
+        "Edit the batch template rows by filling `verdict`, `reviewer`, and `notes`, then validate with:",
+        "",
+        "```bash",
+        "uv run python scripts/datasets/apply_intake_triage_review_batch.py --batch <filled-template.jsonl>",
+        "```",
+        "",
+        "Apply only after review:",
+        "",
+        "```bash",
+        "uv run python scripts/datasets/apply_intake_triage_review_batch.py --batch <filled-template.jsonl> --apply",
+        "```",
+        "",
+    ]
+    items = report.get("next_review_items") or []
+    if items:
+        lines.extend(
+            [
+                "## Pending Items",
+                "",
+                "| intake_id | verdict | relevance | novelty | destination | title |",
+                "|---|---|---|---|---|---|",
+            ]
+        )
+        for item in items:
+            title = str(item.get("title") or "").replace("|", "\\|")
+            destination = str(item.get("destination_handoff") or item.get("destination_index") or "")
+            lines.append(
+                "| {intake_id} | {verdict} | {relevance} | {novelty} | `{destination}` | {title} |".format(
+                    intake_id=item.get("intake_id", ""),
+                    verdict=item.get("current_verdict", ""),
+                    relevance=item.get("relevance", ""),
+                    novelty=item.get("novelty", ""),
+                    destination=destination,
+                    title=title,
+                )
+            )
+        lines.extend(["", "## Batch Template", "", "```jsonl"])
+        for row in report.get("review_batch_template", []) or []:
+            lines.append(json.dumps(row, sort_keys=True))
+        lines.extend(["```", ""])
+    else:
+        lines.extend(["No pending intake-triage review items were included in this packet.", ""])
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def summarize(
     *,
     queue_path: Path,
@@ -118,6 +210,7 @@ def summarize(
         reviewed_ids=reviewed_ids,
         limit=max(0, pending_sample_limit),
     )
+    review_batch_template = _batch_template_rows(next_review_items)
     return {
         "schema_version": REPORT_VERSION,
         "generated_at": utc_now(),
@@ -137,6 +230,8 @@ def summarize(
         "remaining_queue_items": len(remaining_queue_ids),
         "labels_needed": labels_needed,
         "next_review_items": next_review_items,
+        "review_batch_template": review_batch_template,
+        "review_batch_template_rows": len(review_batch_template),
         "ready_for_baseline": status == "ready_for_baseline",
         "privacy": {
             "raw_text_in_report": False,
@@ -166,6 +261,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         report_path.parent.mkdir(parents=True, exist_ok=True)
         report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
         report["report_path"] = str(report_path)
+    if args.batch_template:
+        batch_template_path = Path(args.batch_template).expanduser()
+        written = _write_jsonl(batch_template_path, report["review_batch_template"])
+        report["batch_template_path"] = str(batch_template_path)
+        report["batch_template_written"] = written
+    if args.output_md:
+        output_md_path = Path(args.output_md).expanduser()
+        output_md_path.parent.mkdir(parents=True, exist_ok=True)
+        output_md_path.write_text(render_markdown(report), encoding="utf-8")
+        report["output_md_path"] = str(output_md_path)
     return report
 
 
@@ -198,12 +303,35 @@ def build_parser() -> argparse.ArgumentParser:
         default="",
         help="Optionally write a JSON report; defaults to the standard report path when no value is supplied.",
     )
+    parser.add_argument(
+        "--batch-template",
+        nargs="?",
+        const=str(DEFAULT_BATCH_TEMPLATE),
+        default="",
+        help="Optionally write an operator-fillable JSONL batch template from the pending sample.",
+    )
+    parser.add_argument(
+        "--markdown",
+        action="store_true",
+        help="Emit a markdown review packet instead of JSON.",
+    )
+    parser.add_argument(
+        "--output-md",
+        nargs="?",
+        const=str(DEFAULT_REVIEW_PACKET),
+        default="",
+        help="Optionally write a markdown review packet; defaults to the standard report path when no value is supplied.",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
-    result = run(build_parser().parse_args(argv))
-    print(json.dumps(result, sort_keys=True))
+    args = build_parser().parse_args(argv)
+    result = run(args)
+    if args.markdown:
+        print(render_markdown(result), end="")
+    else:
+        print(json.dumps(result, sort_keys=True))
     return 0
 
 

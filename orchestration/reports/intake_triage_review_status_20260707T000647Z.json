@@ -1,0 +1,939 @@
+{
+  "generated_at": "2026-07-07T00:06:47+00:00",
+  "labels_needed": 25,
+  "min_reviewed_labels": 100,
+  "next_review_items": [
+    {
+      "categories": [
+        "autonomous_research",
+        "swarm_techniques",
+        "hardware_optimization"
+      ],
+      "current_verdict": "new_opportunity",
+      "destination_handoff": "autopilot-continuous-optimization.md",
+      "destination_index": "",
+      "intake_id": "intake-248",
+      "novelty": "high",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-248 --verdict new_opportunity --destination-handoff autopilot-continuous-optimization.md",
+      "relevance": "high",
+      "source_text_excluded": true,
+      "source_type": "blog",
+      "title": "SiliconSwarm@Ensue \u2014 Multi-Agent ANE Optimization via Collective Intelligence",
+      "url": ""
+    },
+    {
+      "categories": [
+        "agent_architecture"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "hermes-agent-index.md",
+      "destination_index": "",
+      "intake_id": "intake-249",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-249 --verdict worth_investigating --destination-handoff hermes-agent-index.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "blog",
+      "title": "Claude Code Repo Leak Analysis \u2014 Harness Architecture Deep Dive (@neural_avb via Codex)",
+      "url": ""
+    },
+    {
+      "categories": [
+        "quantization",
+        "multimodal"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "multimodal-pipeline.md",
+      "destination_index": "",
+      "intake_id": "intake-251",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-251 --verdict worth_investigating --destination-handoff multimodal-pipeline.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "blog",
+      "title": "Gemma 4 MLX Collection \u2014 Apple MLX Optimized Gemma 4 Models",
+      "url": "https://huggingface.co/collections/mlx-community/gemma-4"
+    },
+    {
+      "categories": [
+        "multimodal",
+        "quantization"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "multimodal-pipeline.md",
+      "destination_index": "",
+      "intake_id": "intake-252",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-252 --verdict worth_investigating --destination-handoff multimodal-pipeline.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "blog",
+      "title": "Gemma 4 Official \u2014 Google DeepMind Open Model Family",
+      "url": "https://deepmind.google/models/gemma/"
+    },
+    {
+      "categories": [
+        "inference_serving",
+        "moe_optimization",
+        "agent_architecture"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "dynamic-stack-concurrency.md",
+      "destination_index": "",
+      "intake_id": "intake-253",
+      "novelty": "high",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-253 --verdict worth_investigating --destination-handoff dynamic-stack-concurrency.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "blog",
+      "title": "mesh-llm \u2014 Decentralized P2P LLM Inference with MoE Expert Sharding",
+      "url": "https://docs.anarchai.org/"
+    },
+    {
+      "categories": [
+        "agent_architecture"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "meta-harness-optimization.md",
+      "destination_index": "",
+      "intake_id": "intake-254",
+      "novelty": "low",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-254 --verdict worth_investigating --destination-handoff meta-harness-optimization.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "title": "Goose \u2014 Open Source Autonomous AI Coding Agent by Block",
+      "url": "https://github.com/block/goose"
+    },
+    {
+      "categories": [
+        "agent_architecture"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "meta-harness-optimization.md",
+      "destination_index": "",
+      "intake_id": "intake-255",
+      "novelty": "low",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-255 --verdict worth_investigating --destination-handoff meta-harness-optimization.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "title": "Clido \u2014 Multi-Provider CLI Coding Agent in Rust",
+      "url": "https://github.com/clido-ai/clido-cli"
+    },
+    {
+      "categories": [
+        "kv_cache",
+        "inference_serving",
+        "ssm_hybrid"
+      ],
+      "current_verdict": "new_opportunity",
+      "destination_handoff": "kv-cache-quantization.md",
+      "destination_index": "",
+      "intake_id": "intake-256",
+      "novelty": "high",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-256 --verdict new_opportunity --destination-handoff kv-cache-quantization.md",
+      "relevance": "high",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "title": "Screening Is Enough \u2014 Multiscreen Architecture Replacing Softmax Attention",
+      "url": "https://arxiv.org/abs/2604.01178"
+    },
+    {
+      "categories": [
+        "training_distillation",
+        "agent_architecture"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "reasoning-compression.md",
+      "destination_index": "",
+      "intake_id": "intake-258",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-258 --verdict worth_investigating --destination-handoff reasoning-compression.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "title": "Think Anywhere in Code Generation",
+      "url": "https://arxiv.org/abs/2603.29957"
+    },
+    {
+      "categories": [
+        "context_extension",
+        "agent_architecture"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "context-folding-progressive.md",
+      "destination_index": "",
+      "intake_id": "intake-259",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-259 --verdict worth_investigating --destination-handoff context-folding-progressive.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "title": "RTK \u2014 Rust Token Killer: CLI Proxy for LLM Token Compression",
+      "url": "https://github.com/rtk-ai/rtk"
+    },
+    {
+      "categories": [
+        "agent_architecture",
+        "training_distillation",
+        "memory_augmented"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "context-folding-progressive.md",
+      "destination_index": "",
+      "intake_id": "intake-261",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-261 --verdict worth_investigating --destination-handoff context-folding-progressive.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "title": "Skill0: In-Context Agentic Reinforcement Learning for Skill Internalization",
+      "url": "https://arxiv.org/abs/2604.02268"
+    },
+    {
+      "categories": [
+        "memory_augmented",
+        "agent_architecture"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "context-folding-progressive.md",
+      "destination_index": "",
+      "intake_id": "intake-262",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-262 --verdict worth_investigating --destination-handoff context-folding-progressive.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "title": "AgentOCR: Reimagining Agent History via Optical Self-Compression",
+      "url": "https://arxiv.org/abs/2601.04786"
+    },
+    {
+      "categories": [
+        "agent_architecture",
+        "agent_architecture"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "claude-code-local-constellation-routing.md",
+      "destination_index": "",
+      "intake_id": "intake-263",
+      "novelty": "low",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-263 --verdict worth_investigating --destination-handoff claude-code-local-constellation-routing.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "title": "claude-acp-server \u2014 Anthropic API to ACP Translation Layer",
+      "url": "https://github.com/0xSero/claude-acp-server"
+    },
+    {
+      "categories": [
+        "training_distillation",
+        "benchmark_methodology"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "reasoning-compression.md",
+      "destination_index": "",
+      "intake_id": "intake-264",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-264 --verdict worth_investigating --destination-handoff reasoning-compression.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "title": "Embarrassingly Simple Self-Distillation Improves Code Generation",
+      "url": "https://arxiv.org/abs/2604.01193"
+    },
+    {
+      "categories": [
+        "autonomous_research",
+        "memory_augmented",
+        "agent_architecture"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "autopilot-continuous-optimization.md",
+      "destination_index": "",
+      "intake_id": "intake-265",
+      "novelty": "high",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-265 --verdict worth_investigating --destination-handoff autopilot-continuous-optimization.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "title": "Omni-SimpleMem: Autoresearch-Guided Discovery of Lifelong Multimodal Agent Memory",
+      "url": "https://arxiv.org/abs/2604.01007"
+    },
+    {
+      "categories": [
+        "training_distillation"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "reasoning-compression.md",
+      "destination_index": "",
+      "intake_id": "intake-266",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-266 --verdict worth_investigating --destination-handoff reasoning-compression.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "title": "A Survey of On-Policy Distillation for Large Language Models",
+      "url": "https://arxiv.org/abs/2604.00626"
+    },
+    {
+      "categories": [
+        "memory_augmented",
+        "agent_architecture"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "context-folding-progressive.md",
+      "destination_index": "",
+      "intake_id": "intake-267",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-267 --verdict worth_investigating --destination-handoff context-folding-progressive.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "title": "ByteRover: Agent-Native Memory Through LLM-Curated Hierarchical Context",
+      "url": "https://arxiv.org/abs/2604.01599"
+    },
+    {
+      "categories": [
+        "knowledge_management",
+        "agent_architecture",
+        "rag_alternatives"
+      ],
+      "current_verdict": "adopt_patterns",
+      "destination_handoff": "context-folding-progressive.md",
+      "destination_index": "",
+      "intake_id": "intake-268",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-268 --verdict adopt_patterns --destination-handoff context-folding-progressive.md",
+      "relevance": "high",
+      "source_text_excluded": true,
+      "source_type": "blog",
+      "title": "LLM Wiki: Persistent LLM-Compiled Knowledge Bases",
+      "url": "https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f"
+    },
+    {
+      "categories": [
+        "knowledge_management",
+        "agent_architecture",
+        "tool_implementation"
+      ],
+      "current_verdict": "adopt_patterns",
+      "destination_handoff": "context-folding-progressive.md",
+      "destination_index": "",
+      "intake_id": "intake-269",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-269 --verdict adopt_patterns --destination-handoff context-folding-progressive.md",
+      "relevance": "high",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "title": "nvk/llm-wiki: Claude Code Plugin for LLM-Compiled Knowledge Bases",
+      "url": "https://github.com/nvk/llm-wiki"
+    },
+    {
+      "categories": [
+        "knowledge_management",
+        "local_inference",
+        "search_retrieval"
+      ],
+      "current_verdict": "adopt_component",
+      "destination_handoff": "context-folding-progressive.md",
+      "destination_index": "",
+      "intake_id": "intake-270",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-270 --verdict adopt_component --destination-handoff context-folding-progressive.md",
+      "relevance": "high",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "title": "tobi/qmd: Local Hybrid Search Engine for Markdown Knowledge Bases",
+      "url": "https://github.com/tobi/qmd"
+    },
+    {
+      "categories": [
+        "agent_architecture",
+        "benchmark_methodology"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "meta-harness-optimization.md",
+      "destination_index": "",
+      "intake_id": "intake-271",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-271 --verdict worth_investigating --destination-handoff meta-harness-optimization.md",
+      "relevance": "high",
+      "source_text_excluded": true,
+      "source_type": "blog",
+      "title": "Skill Issue: Harness Engineering for Coding Agents",
+      "url": "https://www.humanlayer.dev/blog/skill-issue-harness-engineering-for-coding-agents"
+    },
+    {
+      "categories": [
+        "agent_architecture",
+        "benchmark_methodology"
+      ],
+      "current_verdict": "new_opportunity",
+      "destination_handoff": "meta-harness-optimization.md",
+      "destination_index": "",
+      "intake_id": "intake-272",
+      "novelty": "high",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-272 --verdict new_opportunity --destination-handoff meta-harness-optimization.md",
+      "relevance": "high",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "title": "Evaluating AGENTS.md: Are Repository-Level Context Files Helpful for Coding Agents?",
+      "url": "https://arxiv.org/abs/2602.11988"
+    },
+    {
+      "categories": [
+        "context_extension",
+        "benchmark_methodology"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "context-folding-progressive.md",
+      "destination_index": "",
+      "intake_id": "intake-273",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-273 --verdict worth_investigating --destination-handoff context-folding-progressive.md",
+      "relevance": "high",
+      "source_text_excluded": true,
+      "source_type": "blog",
+      "title": "Context Rot: How Increasing Input Tokens Impacts LLM Performance",
+      "url": "https://research.trychroma.com/context-rot"
+    },
+    {
+      "categories": [
+        "agent_architecture",
+        "context_extension"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "context-folding-progressive.md",
+      "destination_index": "",
+      "intake_id": "intake-274",
+      "novelty": "high",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-274 --verdict worth_investigating --destination-handoff context-folding-progressive.md",
+      "relevance": "high",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "title": "The Complexity Trap: Simple Observation Masking Is as Efficient as LLM Summarization for Agent Context Management",
+      "url": "https://arxiv.org/abs/2508.21433"
+    },
+    {
+      "categories": [
+        "hardware_optimization"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "routing-and-optimization-index.md",
+      "destination_index": "",
+      "intake_id": "intake-275",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-275 --verdict worth_investigating --destination-handoff routing-and-optimization-index.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "title": "PufferLib 4.0: 20M Step/s RL Training Without PyTorch",
+      "url": "https://github.com/pufferai/pufferlib"
+    }
+  ],
+  "privacy": {
+    "raw_text_in_report": false,
+    "reported_fields": "aggregate counts plus sanitized pending review sample"
+  },
+  "queue_path": "orchestration/datasets/intake_triage_review_queue.jsonl",
+  "queue_rows": 120,
+  "queue_unique_intake_ids": 120,
+  "ready_for_baseline": false,
+  "remaining_queue_items": 45,
+  "review_batch_template": [
+    {
+      "categories": [
+        "autonomous_research",
+        "swarm_techniques",
+        "hardware_optimization"
+      ],
+      "destination_handoff": "autopilot-continuous-optimization.md",
+      "destination_index": "",
+      "intake_id": "intake-248",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "blog",
+      "suggested_verdict": "new_opportunity",
+      "title": "SiliconSwarm@Ensue \u2014 Multi-Agent ANE Optimization via Collective Intelligence",
+      "url": "",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "agent_architecture"
+      ],
+      "destination_handoff": "hermes-agent-index.md",
+      "destination_index": "",
+      "intake_id": "intake-249",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "blog",
+      "suggested_verdict": "worth_investigating",
+      "title": "Claude Code Repo Leak Analysis \u2014 Harness Architecture Deep Dive (@neural_avb via Codex)",
+      "url": "",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "quantization",
+        "multimodal"
+      ],
+      "destination_handoff": "multimodal-pipeline.md",
+      "destination_index": "",
+      "intake_id": "intake-251",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "blog",
+      "suggested_verdict": "worth_investigating",
+      "title": "Gemma 4 MLX Collection \u2014 Apple MLX Optimized Gemma 4 Models",
+      "url": "https://huggingface.co/collections/mlx-community/gemma-4",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "multimodal",
+        "quantization"
+      ],
+      "destination_handoff": "multimodal-pipeline.md",
+      "destination_index": "",
+      "intake_id": "intake-252",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "blog",
+      "suggested_verdict": "worth_investigating",
+      "title": "Gemma 4 Official \u2014 Google DeepMind Open Model Family",
+      "url": "https://deepmind.google/models/gemma/",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "inference_serving",
+        "moe_optimization",
+        "agent_architecture"
+      ],
+      "destination_handoff": "dynamic-stack-concurrency.md",
+      "destination_index": "",
+      "intake_id": "intake-253",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "blog",
+      "suggested_verdict": "worth_investigating",
+      "title": "mesh-llm \u2014 Decentralized P2P LLM Inference with MoE Expert Sharding",
+      "url": "https://docs.anarchai.org/",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "agent_architecture"
+      ],
+      "destination_handoff": "meta-harness-optimization.md",
+      "destination_index": "",
+      "intake_id": "intake-254",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "suggested_verdict": "worth_investigating",
+      "title": "Goose \u2014 Open Source Autonomous AI Coding Agent by Block",
+      "url": "https://github.com/block/goose",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "agent_architecture"
+      ],
+      "destination_handoff": "meta-harness-optimization.md",
+      "destination_index": "",
+      "intake_id": "intake-255",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "suggested_verdict": "worth_investigating",
+      "title": "Clido \u2014 Multi-Provider CLI Coding Agent in Rust",
+      "url": "https://github.com/clido-ai/clido-cli",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "kv_cache",
+        "inference_serving",
+        "ssm_hybrid"
+      ],
+      "destination_handoff": "kv-cache-quantization.md",
+      "destination_index": "",
+      "intake_id": "intake-256",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "suggested_verdict": "new_opportunity",
+      "title": "Screening Is Enough \u2014 Multiscreen Architecture Replacing Softmax Attention",
+      "url": "https://arxiv.org/abs/2604.01178",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "training_distillation",
+        "agent_architecture"
+      ],
+      "destination_handoff": "reasoning-compression.md",
+      "destination_index": "",
+      "intake_id": "intake-258",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "suggested_verdict": "worth_investigating",
+      "title": "Think Anywhere in Code Generation",
+      "url": "https://arxiv.org/abs/2603.29957",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "context_extension",
+        "agent_architecture"
+      ],
+      "destination_handoff": "context-folding-progressive.md",
+      "destination_index": "",
+      "intake_id": "intake-259",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "suggested_verdict": "worth_investigating",
+      "title": "RTK \u2014 Rust Token Killer: CLI Proxy for LLM Token Compression",
+      "url": "https://github.com/rtk-ai/rtk",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "agent_architecture",
+        "training_distillation",
+        "memory_augmented"
+      ],
+      "destination_handoff": "context-folding-progressive.md",
+      "destination_index": "",
+      "intake_id": "intake-261",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "suggested_verdict": "worth_investigating",
+      "title": "Skill0: In-Context Agentic Reinforcement Learning for Skill Internalization",
+      "url": "https://arxiv.org/abs/2604.02268",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "memory_augmented",
+        "agent_architecture"
+      ],
+      "destination_handoff": "context-folding-progressive.md",
+      "destination_index": "",
+      "intake_id": "intake-262",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "suggested_verdict": "worth_investigating",
+      "title": "AgentOCR: Reimagining Agent History via Optical Self-Compression",
+      "url": "https://arxiv.org/abs/2601.04786",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "agent_architecture",
+        "agent_architecture"
+      ],
+      "destination_handoff": "claude-code-local-constellation-routing.md",
+      "destination_index": "",
+      "intake_id": "intake-263",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "suggested_verdict": "worth_investigating",
+      "title": "claude-acp-server \u2014 Anthropic API to ACP Translation Layer",
+      "url": "https://github.com/0xSero/claude-acp-server",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "training_distillation",
+        "benchmark_methodology"
+      ],
+      "destination_handoff": "reasoning-compression.md",
+      "destination_index": "",
+      "intake_id": "intake-264",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "suggested_verdict": "worth_investigating",
+      "title": "Embarrassingly Simple Self-Distillation Improves Code Generation",
+      "url": "https://arxiv.org/abs/2604.01193",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "autonomous_research",
+        "memory_augmented",
+        "agent_architecture"
+      ],
+      "destination_handoff": "autopilot-continuous-optimization.md",
+      "destination_index": "",
+      "intake_id": "intake-265",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "suggested_verdict": "worth_investigating",
+      "title": "Omni-SimpleMem: Autoresearch-Guided Discovery of Lifelong Multimodal Agent Memory",
+      "url": "https://arxiv.org/abs/2604.01007",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "training_distillation"
+      ],
+      "destination_handoff": "reasoning-compression.md",
+      "destination_index": "",
+      "intake_id": "intake-266",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "suggested_verdict": "worth_investigating",
+      "title": "A Survey of On-Policy Distillation for Large Language Models",
+      "url": "https://arxiv.org/abs/2604.00626",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "memory_augmented",
+        "agent_architecture"
+      ],
+      "destination_handoff": "context-folding-progressive.md",
+      "destination_index": "",
+      "intake_id": "intake-267",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "suggested_verdict": "worth_investigating",
+      "title": "ByteRover: Agent-Native Memory Through LLM-Curated Hierarchical Context",
+      "url": "https://arxiv.org/abs/2604.01599",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "knowledge_management",
+        "agent_architecture",
+        "rag_alternatives"
+      ],
+      "destination_handoff": "context-folding-progressive.md",
+      "destination_index": "",
+      "intake_id": "intake-268",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "blog",
+      "suggested_verdict": "adopt_patterns",
+      "title": "LLM Wiki: Persistent LLM-Compiled Knowledge Bases",
+      "url": "https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "knowledge_management",
+        "agent_architecture",
+        "tool_implementation"
+      ],
+      "destination_handoff": "context-folding-progressive.md",
+      "destination_index": "",
+      "intake_id": "intake-269",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "suggested_verdict": "adopt_patterns",
+      "title": "nvk/llm-wiki: Claude Code Plugin for LLM-Compiled Knowledge Bases",
+      "url": "https://github.com/nvk/llm-wiki",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "knowledge_management",
+        "local_inference",
+        "search_retrieval"
+      ],
+      "destination_handoff": "context-folding-progressive.md",
+      "destination_index": "",
+      "intake_id": "intake-270",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "suggested_verdict": "adopt_component",
+      "title": "tobi/qmd: Local Hybrid Search Engine for Markdown Knowledge Bases",
+      "url": "https://github.com/tobi/qmd",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "agent_architecture",
+        "benchmark_methodology"
+      ],
+      "destination_handoff": "meta-harness-optimization.md",
+      "destination_index": "",
+      "intake_id": "intake-271",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "blog",
+      "suggested_verdict": "worth_investigating",
+      "title": "Skill Issue: Harness Engineering for Coding Agents",
+      "url": "https://www.humanlayer.dev/blog/skill-issue-harness-engineering-for-coding-agents",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "agent_architecture",
+        "benchmark_methodology"
+      ],
+      "destination_handoff": "meta-harness-optimization.md",
+      "destination_index": "",
+      "intake_id": "intake-272",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "suggested_verdict": "new_opportunity",
+      "title": "Evaluating AGENTS.md: Are Repository-Level Context Files Helpful for Coding Agents?",
+      "url": "https://arxiv.org/abs/2602.11988",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "context_extension",
+        "benchmark_methodology"
+      ],
+      "destination_handoff": "context-folding-progressive.md",
+      "destination_index": "",
+      "intake_id": "intake-273",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "blog",
+      "suggested_verdict": "worth_investigating",
+      "title": "Context Rot: How Increasing Input Tokens Impacts LLM Performance",
+      "url": "https://research.trychroma.com/context-rot",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "agent_architecture",
+        "context_extension"
+      ],
+      "destination_handoff": "context-folding-progressive.md",
+      "destination_index": "",
+      "intake_id": "intake-274",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "suggested_verdict": "worth_investigating",
+      "title": "The Complexity Trap: Simple Observation Masking Is as Efficient as LLM Summarization for Agent Context Management",
+      "url": "https://arxiv.org/abs/2508.21433",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "hardware_optimization"
+      ],
+      "destination_handoff": "routing-and-optimization-index.md",
+      "destination_index": "",
+      "intake_id": "intake-275",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "suggested_verdict": "worth_investigating",
+      "title": "PufferLib 4.0: 20M Step/s RL Training Without PyTorch",
+      "url": "https://github.com/pufferai/pufferlib",
+      "verdict": ""
+    }
+  ],
+  "review_batch_template_rows": 25,
+  "reviewed_label_sources": {
+    "operator": 75
+  },
+  "reviewed_labels_path": "orchestration/datasets/intake_triage_reviewed.jsonl",
+  "reviewed_queue_items": 75,
+  "reviewed_rows": 75,
+  "reviewed_unique_intake_ids": 75,
+  "schema_version": "intake_triage_review_status.v1",
+  "status": "needs_reviewed_labels",
+  "trusted_label_sources": [
+    "operator"
+  ],
+  "trusted_reviewed_rows": 75,
+  "trusted_reviewed_unique_intake_ids": 75
+}

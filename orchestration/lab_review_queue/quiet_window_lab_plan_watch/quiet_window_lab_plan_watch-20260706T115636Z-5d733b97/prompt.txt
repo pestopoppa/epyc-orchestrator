@@ -1,0 +1,67 @@
+You are running a shadow self-running-lab job.
+
+job_id: quiet_window_lab_plan_watch
+title: Quiet-window lab batch plan watch
+run_id: quiet_window_lab_plan_watch-20260706T115636Z-5d733b97
+generated_at: 2026-07-06T11:56:36+00:00
+risk: read_only
+forbidden_actions: ["execute_chat", "stop_autopilot", "restart_services", "record_verdict"]
+
+Return ONLY a JSON object matching this JSON Schema:
+{
+  "additionalProperties": true,
+  "properties": {
+    "blockers": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "commands": {
+      "additionalProperties": true,
+      "required": [
+        "run_quiet_window_batch",
+        "review_pending_items",
+        "apply_reviewed_verdict_batch_template"
+      ],
+      "type": "object"
+    },
+    "ok": {
+      "type": "boolean"
+    },
+    "schema_version": {
+      "const": "quiet_window_lab_plan.v1"
+    },
+    "selected_jobs": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "status": {
+      "enum": [
+        "ready",
+        "blocked",
+        "no_jobs"
+      ]
+    }
+  },
+  "required": [
+    "schema_version",
+    "ok",
+    "status",
+    "blockers",
+    "selected_jobs",
+    "commands"
+  ],
+  "type": "object"
+}
+
+Missing or skipped sources:
+[]
+
+Source excerpts:
+{"repo": "epyc-orchestrator", "path": "orchestration/lab_jobs.yaml", "sha256": "20680648b87eec7f008e81054cf3efc631c7671ff600ce2b9daeb2718e2f63ed", "truncated": true, "excerpt": "version: 1\nschema_version: lab_jobs.v1\ncreated: \"2026-06-12\"\nowner: frontier-f2-self-running-lab\nstatus: shadow_inventory_only\n\npolicy:\n  review_queue: orchestration/lab_review_queue/\n  direct_repo_writes_allowed: false\n  default_stage: shadow\n  allowed_risks:\n    - read_only\n    - write_reviewed\n    - write_auto\n  runtime_class: background\n  max_context_tokens_default: 24000\n  notes:\n    - Jobs produce structured reports or drafts only.\n    - No job may edit handoffs, indices, lab_jobs.yaml, or trust-boundary files directly.\n    - Intake-touching jobs require the F5 quarantine policy before any run outside shadow.\n\njobs:\n  - job_id: handoff_freshness_lint\n    title: Handoff freshness and index hygiene lint\n    stage: shadow\n    enabled: true\n    risk: read_only\n    model_role: worker_explore\n    schedule:\n      type: nightly\n      cadence: daily\n      window: off_peak\n      max_runtime_s: 900\n    reference_skill: none\n    input_spec:\n      sources:\n        - repo: epyc-root\n          path: handoffs/active/master-handoff-index.md\n        - repo: epyc-root\n          path: handoffs/active/\n        - repo: epyc-root\n          path: progress/\n      context_budget_tokens: 16000\n      context_modes:\n        - dcp_pack\n        - kb_rag\n        - source_excerpt\n      kb_top_k: 6\n      kb_queries:\n        - \"handoff freshness index hygiene active handoffs progress reporting stale gates\"\n      max_bundle_files: 40\n      required_checks:\n        - stale_active_handoff_over_14d_without_gate\n        - unchecked_completed_task\n        - missing_reporting_section\n        - index_row_without_owner_handoff\n      forbidden_actions:\n        - modify_index\n        - move_handoff\n        - close_handoff\n    output_contract:\n      format: json\n      json_schema:\n        type: object\n        additionalProperties: false\n        required:\n          - job_id\n          - run_id\n          - generated_at\n          - summary\n          - findings\n          - proposed_review_items\n        properties:\n          job_id:\n            const: handoff_freshness_lint\n          run_id:\n            type: string\n          generated_at:\n            type: string\n          summary:\n            type: string\n"}
+{"repo": "epyc-orchestrator", "path": "scripts/lab/run_shadow_jobs.py", "sha256": "ac7b17d830af42ea8ab3faaf20ab9e478c4f52e9151691c95c0385360ec0894d", "truncated": true, "excerpt": "#!/usr/bin/env python3\n\"\"\"Run a bounded batch of shadow lab jobs through the review queue.\"\"\"\nfrom __future__ import annotations\n\nimport argparse\nimport json\nimport sys\nfrom argparse import Namespace\nfrom pathlib import Path\nfrom typing import Any\n\nimport yaml\n\nfrom scripts.lab import run_job\n\n\nDEFAULT_JOBS_FILE = \"orchestration/lab_jobs.yaml\"\nDEFAULT_MAX_JOBS = 2\nACTIVE_SAFE_RUNTIME_CLASSES = frozenset({\"active_safe\", \"active_safe_deterministic\"})\n\n\nclass ShadowBatchError(RuntimeError):\n    \"\"\"Raised for operator-facing shadow batch failures.\"\"\"\n\n\ndef _load_yaml(path: Path) -> dict[str, Any]:\n    try:\n        data = yaml.safe_load(path.read_text()) or {}\n    except FileNotFoundError as exc:\n        raise ShadowBatchError(f\"jobs file not found: {path}\") from exc\n    if not isinstance(data, dict):\n        raise ShadowBatchError(f\"jobs file must contain a mapping: {path}\")\n    return data\n\n\ndef _scheduled_for(job: dict[str, Any], schedule: str) -> bool:\n    job_schedule = job.get(\"schedule\") or {}\n    schedule_type = job_schedule.get(\"type\")\n    cadence = job_schedule.get(\"cadence\")\n    if schedule == \"manual\":\n        return schedule_type in {\"manual\", \"manual_or_nightly\"}\n    if schedule == \"nightly\":\n        return schedule_type in {\"nightly\", \"manual_or_nightly\"} and cadence == \"daily\"\n    return False\n\n\ndef execution_mode(job: dict[str, Any]) -> str:\n    execution = job.get(\"execution\") or {}\n    return str(execution.get(\"mode\") or \"model_chat\")\n\n\ndef is_active_safe_job(job: dict[str, Any]) -> bool:\n    \"\"\"Return true for read-only deterministic jobs safe during live inference.\"\"\"\n    schedule = job.get(\"schedule\") or {}\n    runtime_class = str(job.get(\"runtime_class\") or schedule.get(\"runtime_class\") or \"\")\n    marked_active_safe = (\n        job.get(\"active_safe\") is True or runtime_class in ACTIVE_SAFE_RUNTIME_CLASSES\n    )\n    return (\n        marked_active_safe\n        and job.get(\"risk\") == \"read_only\"\n        and execution_mode(job) == run_job.DETERMINISTIC_COMMAND_MODE\n    )\n\n\ndef select_jobs(\n    jobs_doc: dict[str, Any],\n    *,\n    schedule: str,\n    job_ids: list[str],\n    include_disabled: bool,\n    allow_gated: bool,\n    max_jobs: int,\n    active_"}
+{"repo": "epyc-orchestrator", "path": "scripts/lab/review_queue_report.py", "sha256": "caca8501e14be8c0f7697f00217473481682a8c19977b48a34c638820af632ff", "truncated": true, "excerpt": "#!/usr/bin/env python3\n\"\"\"Report pending self-running-lab reviews without recording verdicts.\"\"\"\nfrom __future__ import annotations\n\nimport argparse\nimport datetime as dt\nimport json\nimport shlex\nimport sys\nfrom pathlib import Path\nfrom typing import Any\n\nimport yaml\n\nfrom scripts.lab import run_shadow_jobs\n\n\nDEFAULT_JOBS_FILE = Path(\"orchestration/lab_jobs.yaml\")\nDEFAULT_QUEUE = Path(\"orchestration/lab_review_queue\")\nDEFAULT_RECORDS = \"task_records.jsonl\"\nDEFAULT_VERDICTS = \"review_verdicts.jsonl\"\n\n\nclass ReviewQueueReportError(RuntimeError):\n    \"\"\"Raised for operator-facing review queue report failures.\"\"\"\n\n\ndef utc_now() -> str:\n    return dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat()\n\n\ndef _load_yaml(path: Path) -> dict[str, Any]:\n    try:\n        data = yaml.safe_load(path.read_text()) or {}\n    except FileNotFoundError as exc:\n        raise ReviewQueueReportError(f\"jobs file not found: {path}\") from exc\n    if not isinstance(data, dict):\n        raise ReviewQueueReportError(f\"jobs file must contain a mapping: {path}\")\n    return data\n\n\ndef _load_jsonl(path: Path) -> list[dict[str, Any]]:\n    if not path.exists():\n        return []\n    rows: list[dict[str, Any]] = []\n    for lineno, line in enumerate(path.read_text().splitlines(), start=1):\n        if not line.strip():\n            continue\n        try:\n            row = json.loads(line)\n        except json.JSONDecodeError as exc:\n            raise ReviewQueueReportError(f\"{path}:{lineno}: invalid JSONL row: {exc}\") from exc\n        if not isinstance(row, dict):\n            raise ReviewQueueReportError(f\"{path}:{lineno}: JSONL row must be an object\")\n        rows.append(row)\n    return rows\n\n\ndef _resolve_path(repo_root: Path, raw_path: str | Path) -> Path:\n    path = Path(raw_path).expanduser()\n    if not path.is_absolute():\n        path = repo_root / path\n    return path.resolve()\n\n\ndef _safe_rel(path: Path, root: Path) -> str:\n    try:\n        return str(path.relative_to(root))\n    except ValueError:\n        return str(path)\n\n\ndef _job_classes(jobs_doc: dict[str, Any]) -> dict[str, str]:\n    classes: dict[str, str] = {}\n    for job in jobs_doc.get(\"jobs\", []) or []:\n        if not i"}

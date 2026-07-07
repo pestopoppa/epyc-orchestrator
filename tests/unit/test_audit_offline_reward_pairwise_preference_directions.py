@@ -114,14 +114,31 @@ def test_cli_writes_json_and_md(tmp_path: Path) -> None:
     pairwise = _write(tmp_path, rows)
     aj = tmp_path / "audit.json"
     am = tmp_path / "audit.md"
+    ct = tmp_path / "collection_targets.json"
     rc = mod.main(
-        ["--pairwise-jsonl", str(pairwise), "--audit-json", str(aj), "--audit-md", str(am)]
+        [
+            "--pairwise-jsonl",
+            str(pairwise),
+            "--audit-json",
+            str(aj),
+            "--audit-md",
+            str(am),
+            "--collection-targets-json",
+            str(ct),
+        ]
     )
     assert rc == 0
     payload = json.loads(aj.read_text(encoding="utf-8"))
     assert payload["schema_version"] == mod.AUDIT_SCHEMA_VERSION
     assert payload["input"]["pair_rows"] == 12
     assert am.read_text(encoding="utf-8").startswith("# Pairwise preference-direction audit")
+    compact = json.loads(ct.read_text(encoding="utf-8"))
+    assert compact == mod.collection_targets_payload(payload)
+    assert compact["schema_version"] == mod.COLLECTION_TARGETS_SCHEMA_VERSION
+    assert compact["source_audit_schema_version"] == mod.AUDIT_SCHEMA_VERSION
+    assert compact["decision"]["status"] == payload["decision"]["status"]
+    assert compact["thresholds"] == payload["thresholds"]
+    assert compact["collection_targets"] == payload["collection_targets"]
 
 
 def test_bad_schema_version_errors(tmp_path: Path) -> None:

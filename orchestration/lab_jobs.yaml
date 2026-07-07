@@ -126,7 +126,9 @@ jobs:
           path: orchestration/
         - repo: epyc-root
           path: progress/
-      context_budget_tokens: 12000
+      # Keep the assembled prompt under the live backend admission limit; the
+      # broad orchestration/progress source set otherwise expands past 80k chars.
+      context_budget_tokens: 3000
       context_modes:
         - kb_rag
         - source_excerpt
@@ -250,6 +252,493 @@ jobs:
             type: [boolean, "null"]
           w6_audit_accrual_enabled:
             type: [boolean, "null"]
+
+  - job_id: autopilot_restart_advisor
+    title: AutoPilot stale-daemon restart advisor
+    stage: shadow
+    enabled: true
+    risk: read_only
+    runtime_class: active_safe_deterministic
+    active_safe: true
+    schedule:
+      type: manual_or_nightly
+      cadence: daily
+      window: active_ok
+      runtime_class: active_safe_deterministic
+      max_runtime_s: 60
+    reference_skill: none
+    execution:
+      mode: deterministic_command
+      command:
+        - python3
+        - scripts/autopilot/autopilot_restart_advisor.py
+        - --json
+    input_spec:
+      sources:
+        - repo: epyc-orchestrator
+          path: scripts/autopilot/autopilot_restart_advisor.py
+        - repo: epyc-orchestrator
+          path: scripts/autopilot/phase_status.py
+        - repo: epyc-orchestrator
+          path: scripts/autopilot/start_fable_authority_daemon.py
+      context_budget_tokens: 4000
+      forbidden_actions:
+        - stop_autopilot
+        - restart_services
+        - edit_journal
+        - update_baseline
+    output_contract:
+      format: json
+      json_schema:
+        type: object
+        additionalProperties: true
+        required:
+          - advisor_version
+          - ok
+          - status
+          - restart_needed
+          - safe_to_restart_now
+          - reason
+          - blockers
+        properties:
+          advisor_version:
+            const: autopilot_restart_advisor.v1
+          ok:
+            type: boolean
+          status:
+            enum:
+              - no_action
+              - restart_recommended
+              - wait_for_boundary
+              - manual_attention
+          restart_needed:
+            type: boolean
+          safe_to_restart_now:
+            type: boolean
+          reason:
+            type: string
+          blockers:
+            type: array
+            items:
+              type: string
+          phase:
+            type: [string, "null"]
+          pid:
+            type: [integer, "null"]
+          pid_alive:
+            type: [boolean, "null"]
+          trial_id:
+            type: [integer, string, "null"]
+          action_type:
+            type: [string, "null"]
+          code_stale:
+            type: boolean
+
+  - job_id: autopilot_outcome_progress_watch
+    title: AutoPilot outcome-progress watch
+    stage: shadow
+    enabled: true
+    risk: read_only
+    runtime_class: active_safe_deterministic
+    active_safe: true
+    schedule:
+      type: manual_or_nightly
+      cadence: daily
+      window: active_ok
+      runtime_class: active_safe_deterministic
+      max_runtime_s: 60
+    reference_skill: none
+    execution:
+      mode: deterministic_command
+      command:
+        - python3
+        - scripts/autopilot/phase_health_report.py
+        - --json
+        - --require-outcome-progress
+    input_spec:
+      sources:
+        - repo: epyc-orchestrator
+          path: scripts/autopilot/phase_health_report.py
+        - repo: epyc-orchestrator
+          path: scripts/autopilot/phase_status.py
+        - repo: epyc-orchestrator
+          path: scripts/autopilot/experiment_journal.py
+      context_budget_tokens: 4000
+      forbidden_actions:
+        - stop_autopilot
+        - restart_services
+        - edit_journal
+        - update_baseline
+    output_contract:
+      format: json
+      json_schema:
+        type: object
+        additionalProperties: true
+        required:
+          - ok
+          - status
+          - blockers
+          - outcome_progress
+        properties:
+          ok:
+            type: boolean
+          status:
+            type: string
+          blockers:
+            type: array
+            items:
+              type: string
+          outcome_progress:
+            type: object
+            additionalProperties: true
+            required:
+              - status
+              - blockers
+              - latest_trial_id
+              - latest_frontier_trial_id
+              - trials_since_frontier
+              - rates
+            properties:
+              status:
+                type: string
+              blockers:
+                type: array
+                items:
+                  type: string
+              latest_trial_id:
+                type: [integer, "null"]
+              latest_frontier_trial_id:
+                type: [integer, "null"]
+              latest_promotion_trial_id:
+                type: [integer, "null"]
+              trials_since_frontier:
+                type: [integer, "null"]
+              trials_since_promotion:
+                type: [integer, "null"]
+              rates:
+                type: object
+                additionalProperties: true
+
+  - job_id: autopilot_planner_provider_watch
+    title: AutoPilot planner provider health watch
+    stage: shadow
+    enabled: true
+    risk: read_only
+    runtime_class: active_safe_deterministic
+    active_safe: true
+    schedule:
+      type: manual_or_nightly
+      cadence: daily
+      window: active_ok
+      runtime_class: active_safe_deterministic
+      max_runtime_s: 60
+    reference_skill: none
+    execution:
+      mode: deterministic_command
+      command:
+        - python3
+        - scripts/autopilot/planner_provider_health_report.py
+        - --json
+    input_spec:
+      sources:
+        - repo: epyc-orchestrator
+          path: scripts/autopilot/planner_provider_health_report.py
+        - repo: epyc-orchestrator
+          path: scripts/autopilot/planner_coordinator.py
+      context_budget_tokens: 4000
+      forbidden_actions:
+        - stop_autopilot
+        - restart_services
+        - edit_journal
+        - update_baseline
+    output_contract:
+      format: json
+      json_schema:
+        type: object
+        additionalProperties: true
+        required:
+          - schema_version
+          - ok
+          - status
+          - blockers
+          - providers
+          - local
+          - critic_decisions
+          - draft_actions
+        properties:
+          schema_version:
+            const: autopilot_planner_provider_health.v1
+          ok:
+            type: boolean
+          status:
+            enum:
+              - healthy
+              - waiting_for_planner_turn
+              - stale
+              - attention
+              - missing
+          blockers:
+            type: array
+            items:
+              type: string
+          providers:
+            type: object
+            additionalProperties: true
+          local:
+            type: object
+            additionalProperties: true
+          critic_decisions:
+            type: object
+            additionalProperties:
+              type: integer
+          draft_actions:
+            type: object
+            additionalProperties:
+              type: integer
+          recent_issues:
+            type: array
+            items:
+              type: object
+              additionalProperties: true
+
+  - job_id: quiet_window_queue_watch
+    title: Quiet-window queue consistency watch
+    stage: shadow
+    enabled: true
+    risk: read_only
+    runtime_class: active_safe_deterministic
+    active_safe: true
+    schedule:
+      type: manual_or_nightly
+      cadence: daily
+      window: active_ok
+      runtime_class: active_safe_deterministic
+      max_runtime_s: 60
+    reference_skill: none
+    execution:
+      mode: deterministic_command
+      command:
+        - python3
+        - scripts/lab/quiet_window_queue_report.py
+        - --json
+    input_spec:
+      sources:
+        - repo: epyc-root
+          path: handoffs/active/master-handoff-index.md
+        - repo: epyc-root
+          path: handoffs/active/bulk-inference-campaign.md
+        - repo: epyc-root
+          path: handoffs/active/routing-and-optimization-index.md
+      context_budget_tokens: 4000
+      forbidden_actions:
+        - modify_index
+        - move_handoff
+        - stop_autopilot
+        - restart_services
+    output_contract:
+      format: json
+      json_schema:
+        type: object
+        additionalProperties: true
+        required:
+          - schema_version
+          - ok
+          - status
+          - blockers
+          - findings
+          - checked_files
+        properties:
+          schema_version:
+            const: quiet_window_queue_report.v1
+          ok:
+            type: boolean
+          status:
+            enum:
+              - ok
+              - attention
+          blockers:
+            type: array
+            items:
+              type: string
+          findings:
+            type: array
+            items:
+              type: object
+              additionalProperties: true
+          checked_files:
+            type: array
+            items:
+              type: string
+
+  - job_id: lab_review_queue_watch
+    title: Lab review-queue verdict packet watch
+    stage: shadow
+    enabled: true
+    risk: read_only
+    runtime_class: active_safe_deterministic
+    active_safe: true
+    schedule:
+      type: manual_or_nightly
+      cadence: daily
+      window: active_ok
+      runtime_class: active_safe_deterministic
+      max_runtime_s: 60
+    reference_skill: none
+    execution:
+      mode: deterministic_command
+      command:
+        - python3
+        - scripts/lab/review_queue_report.py
+        - --json
+    input_spec:
+      sources:
+        - repo: epyc-orchestrator
+          path: orchestration/lab_review_queue/
+        - repo: epyc-orchestrator
+          path: scripts/lab/record_verdict.py
+        - repo: epyc-orchestrator
+          path: scripts/lab/promote_job.py
+      context_budget_tokens: 4000
+      forbidden_actions:
+        - record_verdict
+        - modify_queue
+        - promote_job
+        - edit_journal
+    output_contract:
+      format: json
+      json_schema:
+        type: object
+        additionalProperties: true
+        required:
+          - schema_version
+          - ok
+          - status
+          - blockers
+          - summary
+          - pending_items
+        properties:
+          schema_version:
+            const: lab_review_queue_report.v1
+          ok:
+            type: boolean
+          status:
+            enum:
+              - ok
+              - attention
+          blockers:
+            type: array
+            items:
+              type: string
+          summary:
+            type: object
+            additionalProperties: true
+            required:
+              - task_records
+              - verdicts
+              - pending_reviews
+              - pending_reviews_by_class
+              - pending_review_candidates
+              - pending_active_safe
+            properties:
+              task_records:
+                type: integer
+              verdicts:
+                type: integer
+              pending_reviews:
+                type: integer
+              pending_reviews_by_class:
+                type: object
+                additionalProperties:
+                  type: integer
+              pending_review_candidates:
+                type: integer
+              pending_active_safe:
+                type: integer
+          pending_items:
+            type: array
+            items:
+              type: object
+              additionalProperties: true
+          review_batch_template:
+            type: array
+            items:
+              type: object
+              additionalProperties: true
+          review_batch_template_jsonl:
+            type: string
+
+  - job_id: quiet_window_lab_plan_watch
+    title: Quiet-window lab batch plan watch
+    stage: shadow
+    enabled: true
+    risk: read_only
+    runtime_class: active_safe_deterministic
+    active_safe: true
+    schedule:
+      type: manual_or_nightly
+      cadence: daily
+      window: active_ok
+      runtime_class: active_safe_deterministic
+      max_runtime_s: 60
+    reference_skill: none
+    execution:
+      mode: deterministic_command
+      command:
+        - python3
+        - scripts/lab/quiet_window_lab_plan.py
+        - --json
+    input_spec:
+      sources:
+        - repo: epyc-orchestrator
+          path: orchestration/lab_jobs.yaml
+        - repo: epyc-orchestrator
+          path: scripts/lab/run_shadow_jobs.py
+        - repo: epyc-orchestrator
+          path: scripts/lab/review_queue_report.py
+      context_budget_tokens: 4000
+      forbidden_actions:
+        - execute_chat
+        - stop_autopilot
+        - restart_services
+        - record_verdict
+    output_contract:
+      format: json
+      json_schema:
+        type: object
+        additionalProperties: true
+        required:
+          - schema_version
+          - ok
+          - status
+          - blockers
+          - selected_jobs
+          - commands
+        properties:
+          schema_version:
+            const: quiet_window_lab_plan.v1
+          ok:
+            type: boolean
+          status:
+            enum:
+              - ready
+              - blocked
+              - no_jobs
+          blockers:
+            type: array
+            items:
+              type: string
+          selected_jobs:
+            type: array
+            items:
+              type: object
+              additionalProperties: true
+          commands:
+            type: object
+            additionalProperties: true
+            required:
+              - run_quiet_window_batch
+              - review_pending_items
+              - apply_reviewed_verdict_batch_template
 
   - job_id: daily_digest_skeleton
     title: Daily digest skeleton

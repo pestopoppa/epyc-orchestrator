@@ -1,0 +1,57 @@
+{
+  "artifacts": {
+    "context_manifest": "attestation_watch/attestation_watch-20260707T002559Z-df29d4c9/context_manifest.json",
+    "output": "attestation_watch/attestation_watch-20260707T002559Z-df29d4c9/output.json",
+    "prompt": "attestation_watch/attestation_watch-20260707T002559Z-df29d4c9/prompt.txt"
+  },
+  "chat_meta": {
+    "elapsed_s": 165.016,
+    "mock_mode": false,
+    "real_mode": true,
+    "requested_role": "verifier",
+    "resolved_role": "architect_general",
+    "routed_to": "architect_general",
+    "routing_strategy": "forced",
+    "status_code": 200,
+    "tokens_generated": 401
+  },
+  "context": {
+    "budget_exhausted": true,
+    "excerpt_chars": 12000,
+    "kinds": {
+      "source_excerpt": 160
+    },
+    "max_context_chars": 12000,
+    "missing_source_count": 1,
+    "repos": [
+      "epyc-orchestrator",
+      "epyc-root"
+    ],
+    "schema_version": "lab_context_summary.v1",
+    "source_bytes": 56195711,
+    "source_count": 160,
+    "truncated_source_count": 157
+  },
+  "generated_at": "2026-07-07T00:25:59+00:00",
+  "invocation_mode": "execute_chat",
+  "job_id": "attestation_watch",
+  "model_role": "verifier",
+  "policy": {
+    "direct_repo_writes_allowed": false,
+    "review_queue_only": true
+  },
+  "record_type": "task_record",
+  "repo": {
+    "branch": "spec-dec-mtp-refresh-2026-06-22",
+    "commit": "9994973c1219affa8aab83a2ac2ebb3b1d7fa924",
+    "dirty": true,
+    "path": "/mnt/raid0/llm/epyc-orchestrator"
+  },
+  "risk": "read_only",
+  "run_id": "attestation_watch-20260707T002559Z-df29d4c9",
+  "schema_version": "lab_task_record.v1",
+  "stage": "shadow",
+  "validation": {
+    "output_contract": "passed"
+  }
+}

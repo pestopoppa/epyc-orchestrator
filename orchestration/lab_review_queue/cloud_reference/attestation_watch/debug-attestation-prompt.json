@@ -1,0 +1,8 @@
+{
+  "schema_version": "lab_cloud_reference.v1",
+  "job_id": "attestation_watch",
+  "run_id": "debug-attestation-prompt",
+  "reviewed_at": "2026-07-07T00:31:00+00:00",
+  "decision": "reject",
+  "summary": "Dry-run contract stub generated only to inspect prompt size; not model-backed evidence and must not mint a gold tuple."
+}

@@ -100,6 +100,7 @@ _NUMERIC_SURFACES = set(_RAW_NUMERIC_SURFACES)
 _PROMPT_MUTATIONS = {"targeted_fix", "compress", "few_shot_evolution"}
 _CODE_MUTATIONS = {"targeted_fix"}
 _SLOT_SCORERS = {"expected_attention", "knorm"}
+DEEP_EVAL_TIERS = (0, 1, 2, 3)
 
 
 def set_suppressed_numeric_surfaces(surfaces: set[str] | list[str] | tuple[str, ...]) -> None:
@@ -206,7 +207,7 @@ _ACTION_SCHEMAS: dict[str, dict[str, Any]] = {
     "deep_eval": {
         "allowed": {"type", "tier"},
         "required": {"tier"},
-        "enums": {"tier": {0, 1, 2, 3}},
+        "enums": {"tier": set(DEEP_EVAL_TIERS)},
     },
     "rollback": {
         "allowed": {"type", "to_checkpoint"},
@@ -671,18 +672,72 @@ def _unwrap_action(data: Any) -> dict[str, Any] | None:
     return None
 
 
+def _loads_json_payload(payload: str) -> Any:
+    """Load a JSON payload, tolerating only trivial trailing bracket noise.
+
+    Local planner models sometimes emit a valid fenced object followed by a
+    duplicate closing brace. Recover that narrow case so a usable action still
+    reaches schema validation, but do not accept arbitrary trailing prose.
+    """
+    stripped = payload.strip()
+    try:
+        return json.loads(stripped)
+    except json.JSONDecodeError as original_error:
+        decoder = json.JSONDecoder()
+        try:
+            data, end = decoder.raw_decode(stripped)
+        except json.JSONDecodeError:
+            raise original_error
+        trailing = stripped[end:].strip()
+        if trailing and set(trailing) <= {"}", "]", ")"}:
+            log.warning(
+                "Recovered planner JSON payload with trailing bracket noise: %r",
+                trailing[:80],
+            )
+            return data
+        raise original_error
+
+
+def _loads_leading_action(text: str) -> dict[str, Any] | None:
+    """Recover a strict leading JSON action with optional rationale sidecar.
+
+    Local planner models sometimes obey the JSON object shape but miss the
+    fenced ``json:autopilot_actions`` wrapper. Accept only an object/list at the
+    very start of the response, and only if the trailing text is empty or the
+    rationale fence. Arbitrary prose after the object remains unusable.
+    """
+    stripped = text.strip()
+    if not stripped or stripped[0] not in "{[":
+        return None
+    decoder = json.JSONDecoder()
+    try:
+        data, end = decoder.raw_decode(stripped)
+    except json.JSONDecodeError:
+        return None
+    action = _unwrap_action(data)
+    if action is None:
+        return None
+    trailing = stripped[end:].strip()
+    if not trailing or trailing.startswith("```json:autopilot_rationale"):
+        log.warning("Recovered planner action from leading JSON object without action fence")
+        return action
+    return None
+
+
 def extract_action(text: str) -> dict[str, Any] | None:
     """Extract structured action from controller response.
 
     Looks for ```json:autopilot_actions``` block first; falls back to any
-    ```json``` block whose payload is a dict with a 'type' field.
+    ```json``` block whose payload is a dict with a 'type' field. As a narrow
+    local-planner recovery path, also accepts a response that starts with a JSON
+    action object and is followed only by an optional rationale fence.
     """
     marker = "```json:autopilot_actions"
     if marker in text:
         start = text.index(marker) + len(marker)
         end = text.index("```", start)
         try:
-            data = json.loads(text[start:end].strip())
+            data = _loads_json_payload(text[start:end])
             return _unwrap_action(data)
         except json.JSONDecodeError as e:
             log.error("Failed to parse action JSON: %s", e)
@@ -693,11 +748,15 @@ def extract_action(text: str) -> dict[str, Any] | None:
         start = text.index("```json") + len("```json")
         end = text.index("```", start)
         try:
-            data = json.loads(text[start:end].strip())
+            data = _loads_json_payload(text[start:end])
             if isinstance(data, dict) and "type" in data:
                 return data
         except (json.JSONDecodeError, ValueError):
             pass
+
+    leading = _loads_leading_action(text)
+    if leading is not None:
+        return leading
 
     return None
 

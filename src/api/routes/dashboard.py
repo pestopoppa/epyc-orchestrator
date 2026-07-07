@@ -70,6 +70,7 @@ from src.api.routes.dashboard_tasks import (
     _task_text_snapshot,
 )
 from src.api.routes.dashboard_topology import (
+    active_stack_numa_mode,
     role_aliases,
     _clean_model_name,
     _discover_llama_models,
@@ -106,6 +107,9 @@ from src.autopilot_core.pareto_math import (
 from src.autopilot_core.tier_specs import DEFAULT_FRONTIER_TIER
 from scripts.autopilot.phase_status import (
     build_phase_health_report,
+)
+from scripts.autopilot.autopilot_restart_advisor import (
+    build_restart_advice as _build_autopilot_restart_advice,
 )
 
 logger = logging.getLogger(__name__)
@@ -363,6 +367,49 @@ def _repo_readiness_summary(
     }
 
 
+def _structured_tap_active(structured_requests: list[dict[str, Any]]) -> bool:
+    """True only when structured tap evidence shows current live inference.
+
+    The sentinel file can outlive the request that created it, and tailed
+    structured records intentionally retain quiet/stalled history for diagnosis.
+    Treat only non-quiet running records as active so the dashboard does not
+    present old planner/eval requests as live work after AutoPilot stops.
+    """
+    for req in structured_requests:
+        if str(req.get("status") or "").lower() != "running":
+            continue
+        quiet_s = req.get("quiet_s")
+        try:
+            if quiet_s is not None and float(quiet_s) >= 15.0:
+                continue
+        except (TypeError, ValueError):
+            pass
+        return True
+    return False
+
+
+def _structured_tap_requests_for_dashboard(
+    *,
+    max_requests: int,
+    now_epoch: float | None = None,
+    region_locks: dict[str, Any] | None = None,
+    port_roles: dict[int, str] | None = None,
+) -> list[dict[str, Any]]:
+    """Read, parse, and enrich structured tap rows for live dashboard panels."""
+    structured_tail = _read_tap_events_tail(_INFERENCE_TAP_EVENTS_PATH, max_bytes=1024 * 1024)
+    now = time.time() if now_epoch is None else now_epoch
+    structured_requests = _parse_structured_tap_requests(
+        structured_tail,
+        max_requests=max_requests,
+        now_epoch=now,
+    )
+    return _enrich_structured_tap_requests(
+        structured_requests,
+        port_roles=port_roles,
+        region_locks=region_locks,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Inference taps — live prompt + response stream written by autopilot's
 # seeding harness to /mnt/raid0/llm/tmp/*. These are the same files the
@@ -377,17 +424,14 @@ async def inference_tap_snapshot(max_sections: int = 20) -> JSONResponse:
     Source: /mnt/raid0/llm/tmp/{inference_tap.log, autopilot_prompt_tap.txt,
     repl_tap.log} — the same files autopilot_tui.py tails.
     """
-    tap_active = _TAP_SENTINEL_PATH.exists()
     inference_tail = _read_tail(_INFERENCE_TAP_PATH, max_bytes=512 * 1024)
     sections = _parse_inference_sections(inference_tail, max_sections=max_sections)
-    structured_tail = _read_tap_events_tail(_INFERENCE_TAP_EVENTS_PATH, max_bytes=1024 * 1024)
     now_epoch = time.time()
-    structured_requests = _parse_structured_tap_requests(
-        structured_tail,
+    structured_requests = _structured_tap_requests_for_dashboard(
         max_requests=max_sections,
         now_epoch=now_epoch,
     )
-    structured_requests = _enrich_structured_tap_requests(structured_requests)
+    tap_active = _structured_tap_active(structured_requests)
     repl_tail = _read_tail(_REPL_TAP_PATH, max_bytes=64 * 1024)
     # Just take the last ~3000 chars of REPL for compactness
     repl_tail = repl_tail[-3000:] if repl_tail else ""
@@ -401,6 +445,7 @@ async def inference_tap_snapshot(max_sections: int = 20) -> JSONResponse:
 
     return JSONResponse(_stamp({
         "tap_active": tap_active,
+        "tap_sentinel_active": _TAP_SENTINEL_PATH.exists(),
         "inference_sections": sections,
         "structured_requests": structured_requests,
         "inference_tap_mtime": mtime(_INFERENCE_TAP_PATH),
@@ -585,11 +630,39 @@ def _region_lock_blocked_by_roles(
     return sorted(blocked)
 
 
-def _region_locks_payload() -> dict[str, Any]:
+def _filter_instance_regions_for_mode(
+    topology: dict[tuple[str, int], frozenset[str]],
+    numa_mode: str,
+) -> dict[tuple[str, int], frozenset[str]]:
+    """Mirror stack_manifest._filter_by_numa_mode for region-lock rendering."""
+    if numa_mode == "both":
+        return topology
+    try:
+        from scripts.server.stack_numa import NUMA_CONFIG
+    except Exception:
+        return topology
+
+    out: dict[tuple[str, int], frozenset[str]] = {}
+    for (role, idx), regs in topology.items():
+        cfg = NUMA_CONFIG.get(role) if isinstance(NUMA_CONFIG, dict) else None
+        full_idx = cfg.get("full_instance_idx") if isinstance(cfg, dict) else None
+        instances = cfg.get("instances") if isinstance(cfg, dict) else None
+        if not isinstance(full_idx, int) or not isinstance(instances, list) or len(instances) <= 1:
+            out[(role, idx)] = regs
+            continue
+        if numa_mode == "full" and idx == full_idx:
+            out[(role, idx)] = regs
+        elif numa_mode == "quarter" and idx != full_idx:
+            out[(role, idx)] = regs
+    return out
+
+
+def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
     """Return the current per-region lock snapshot as plain JSON data."""
     import os
     from pathlib import Path
 
+    active_mode = numa_mode or active_stack_numa_mode()
     try:
         from src.runtime.cpu_region_lock import _tmp_dir, _current_lock_owner_pids
         tmp_dir = _tmp_dir()
@@ -602,7 +675,7 @@ def _region_locks_payload() -> dict[str, Any]:
     # region-locking — those are the rows the panel should always show.
     try:
         from src.runtime.instance_topology import get_instance_regions, ATOMIC_REGIONS
-        topology = get_instance_regions()
+        topology = _filter_instance_regions_for_mode(get_instance_regions(), active_mode)
         all_regions = list(ATOMIC_REGIONS)
     except Exception:
         topology = {}
@@ -793,6 +866,7 @@ def _region_locks_payload() -> dict[str, Any]:
     feature_flag = os.environ.get("ORCHESTRATOR_PER_REGION_LOCKS", "0").strip()
     return {
         "per_region_locks_enabled": feature_flag in {"1", "true", "yes", "on"},
+        "stack_numa_mode": active_mode,
         "matrix_loaded": matrix is not None,
         "tmp_dir": str(tmp_dir),
         "entries": out,
@@ -1016,9 +1090,11 @@ async def structured_tap_stream(request: Request) -> StreamingResponse:
                     max_requests=40,
                     now_epoch=now_epoch,
                 )
+                enriched_requests = _enrich_structured_tap_requests(structured_requests)
                 payload = json.dumps({
-                    "tap_active": _TAP_SENTINEL_PATH.exists(),
-                    "structured_requests": _enrich_structured_tap_requests(structured_requests),
+                    "tap_active": _structured_tap_active(enriched_requests),
+                    "tap_sentinel_active": _TAP_SENTINEL_PATH.exists(),
+                    "structured_requests": enriched_requests,
                     "structured_tap_mtime": mtime or None,
                     "now": now_epoch,
                 })
@@ -1207,10 +1283,12 @@ async def inference_tap_stream(request: Request) -> StreamingResponse:
                     max_requests=10,
                     now_epoch=now_epoch,
                 )
+                enriched_requests = _enrich_structured_tap_requests(structured_requests)
                 payload = json.dumps({
-                    "tap_active": _TAP_SENTINEL_PATH.exists(),
+                    "tap_active": _structured_tap_active(enriched_requests),
+                    "tap_sentinel_active": _TAP_SENTINEL_PATH.exists(),
                     "inference_sections": sections,
-                    "structured_requests": _enrich_structured_tap_requests(structured_requests),
+                    "structured_requests": enriched_requests,
                     "inference_tap_mtime": inf_m,
                     "structured_tap_mtime": structured_m,
                     "repl_tap_mtime": rpl_m,
@@ -1264,6 +1342,9 @@ async def process_status() -> JSONResponse:
             return None
     phase = _read_autopilot_phase()
     phase_health = _autopilot_phase_health()
+    outcome_progress = phase_health.get("outcome_progress") if isinstance(phase_health, dict) else None
+    if not isinstance(outcome_progress, dict):
+        outcome_progress = {}
     phase_age_s = phase_health.get("heartbeat_age_s")
     if phase_age_s is None:
         phase_age_s = _age_s(AUTOPILOT_PHASE_PATH)
@@ -1278,6 +1359,7 @@ async def process_status() -> JSONResponse:
         "autopilot_recent_lines": recent_lines,
         "autopilot_phase": phase,
         "autopilot_phase_health": phase_health,
+        "autopilot_outcome_progress": outcome_progress,
         "autopilot_state": _autopilot_state_summary(),
         "autopilot_phase_age_s": phase_age_s,
         "inference_tap_age_s": _age_s(_INFERENCE_TAP_PATH),
@@ -2784,6 +2866,22 @@ def _autopilot_current_code_health() -> dict[str, Any] | None:
         )
         if str(report.get("status") or "") in {"missing", "unavailable"}:
             return None
+        report = dict(report)
+        try:
+            report["restart_advice"] = _build_autopilot_restart_advice(
+                report,
+                max_trials=int(os.environ.get("AUTOPILOT_DASHBOARD_RESTART_MAX_TRIALS", "3000")),
+            )
+        except Exception as exc:  # noqa: BLE001
+            report["restart_advice"] = {
+                "advisor_version": "autopilot_restart_advisor.v1",
+                "ok": False,
+                "status": "manual_attention",
+                "restart_needed": False,
+                "safe_to_restart_now": False,
+                "reason": f"restart advice unavailable: {exc}",
+                "blockers": [f"restart advice unavailable: {exc}"],
+            }
         return report
     except Exception:
         return None
@@ -3497,8 +3595,12 @@ async def llama_fleet_ids() -> JSONResponse:
     })
 
 
-@router.get("/dashboard/api/topology_activity")
-async def topology_activity(window_s: float = 600.0) -> JSONResponse:
+def _topology_activity_payload(
+    window_s: float = 600.0,
+    *,
+    now: float | None = None,
+    structured_requests: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Per-role recent activity stats for the topology strip.
 
     Aggregates from two cheap sources:
@@ -3524,14 +3626,15 @@ async def topology_activity(window_s: float = 600.0) -> JSONResponse:
     this panel: plaintext tap writes are not cross-process atomic and can
     interleave prompt/response sections during concurrent eval traffic.
     """
-    structured_tail = _read_tap_events_tail(_INFERENCE_TAP_EVENTS_PATH, max_bytes=1024 * 1024)
-    now = time.time()
-    structured_requests = _parse_structured_tap_requests(
-        structured_tail,
-        max_requests=160,
-        now_epoch=now,
-        quiet_after_s=max(15.0, min(window_s, 60.0)),
-    )
+    now = now or time.time()
+    if structured_requests is None:
+        structured_tail = _read_tap_events_tail(_INFERENCE_TAP_EVENTS_PATH, max_bytes=1024 * 1024)
+        structured_requests = _parse_structured_tap_requests(
+            structured_tail,
+            max_requests=160,
+            now_epoch=now,
+            quiet_after_s=max(15.0, min(window_s, 60.0)),
+        )
 
     per_role: dict[str, dict[str, Any]] = {}
     live_ports = _discover_llama_ports()
@@ -3672,10 +3775,15 @@ async def topology_activity(window_s: float = 600.0) -> JSONResponse:
         b["live_tps_n"] = len(live_tps_samples)
         b["avg_duration_s"] = (sum(dur_samples) / len(dur_samples)) if dur_samples else None
         out[role] = b
-    return JSONResponse(_stamp({"per_role": out, "window_s": window_s, "now": now}, "topology_activity", now=now))
+    return _stamp({"per_role": out, "window_s": window_s, "now": now}, "topology_activity", now=now)
 
 
-def _build_topology_nodes() -> list[dict[str, Any]]:
+@router.get("/dashboard/api/topology_activity")
+async def topology_activity(window_s: float = 600.0) -> JSONResponse:
+    return JSONResponse(_topology_activity_payload(window_s=window_s))
+
+
+def _build_topology_nodes(numa_mode: str | None = None) -> list[dict[str, Any]]:
     """Build the topology node list (roles, ports, colors, backing models).
 
     Factored out of ``/dashboard/api/topology`` so the snapshot endpoint can
@@ -3685,10 +3793,11 @@ def _build_topology_nodes() -> list[dict[str, Any]]:
     post-reboot 'frozen strip' class of dashboard staleness, where the strip was
     fetched on a different cadence than the overlays keyed to it.
     """
+    active_mode = numa_mode or active_stack_numa_mode()
     llama_ports = _discover_llama_ports()
     llama_models = _discover_llama_models()
     services = _load_state_services()
-    expected_services = expected_stack_services()
+    expected_services = expected_stack_services(active_mode)
     expected_by_port = {
         svc["port"]: svc
         for svc in expected_services
@@ -3807,23 +3916,29 @@ _PORT_ROLES_CACHE: dict[str, Any] = {"ts": 0.0, "ports": None}
 _PORT_ROLES_TTL_S = 2.0
 
 
-def _region_locks_cached() -> dict[str, Any]:
+def _region_locks_cached(numa_mode: str | None = None) -> dict[str, Any]:
     """TTL-cached `_region_locks_payload()` that fails open to the last good
     payload (marked `stale_cache` + `error`) instead of raising into the
     serve path."""
+    active_mode = numa_mode or active_stack_numa_mode()
     now = time.time()
     c = _REGION_LOCKS_CACHE
     payload = c.get("payload")
-    if payload is not None and (now - c["ts"]) < _REGION_LOCKS_TTL_S:
+    if (
+        payload is not None
+        and c.get("numa_mode") == active_mode
+        and (now - c["ts"]) < _REGION_LOCKS_TTL_S
+    ):
         return payload
     try:
-        payload = _region_locks_payload()
+        payload = _region_locks_payload(active_mode)
     except Exception as exc:
         stale = c.get("payload")
         if stale is None:
             return {"error": str(exc), "entries": [], "by_role": {}}
         return {**stale, "error": str(exc), "stale_cache": True}
     c["ts"] = now
+    c["numa_mode"] = active_mode
     c["payload"] = payload
     return payload
 
@@ -3841,7 +3956,7 @@ def _port_roles_cached() -> dict[int, str]:
     return ports
 
 
-def _topology_nodes_cached() -> list[dict[str, Any]]:
+def _topology_nodes_cached(numa_mode: str | None = None) -> list[dict[str, Any]]:
     """Topology nodes with a short TTL.
 
     Topology STRUCTURE (which roles/ports exist) changes only on stack
@@ -3853,13 +3968,19 @@ def _topology_nodes_cached() -> list[dict[str, Any]]:
     real-time; only the node scaffold is cached. Per-worker cache (separate
     processes) is fine — the structure is identical across workers.
     """
+    active_mode = numa_mode or active_stack_numa_mode()
     now = time.time()
     c = _TOPOLOGY_NODES_CACHE
     nodes = c.get("nodes")
-    if nodes is not None and (now - c["ts"]) < _TOPOLOGY_NODES_TTL_S:
+    if (
+        nodes is not None
+        and c.get("numa_mode") == active_mode
+        and (now - c["ts"]) < _TOPOLOGY_NODES_TTL_S
+    ):
         return nodes
-    nodes = _build_topology_nodes()
+    nodes = _build_topology_nodes(active_mode)
     c["ts"] = now
+    c["numa_mode"] = active_mode
     c["nodes"] = nodes
     return nodes
 
@@ -3873,8 +3994,13 @@ async def topology() -> JSONResponse:
     injected inputs (the 2 Hz snapshot is the path that needs the TTL cache).
     """
     _topo_now = time.time()
+    active_mode = active_stack_numa_mode()
     return JSONResponse(_stamp(
-        {"nodes": _build_topology_nodes(), "generated_at": _topo_now},
+        {
+            "nodes": _build_topology_nodes(active_mode),
+            "generated_at": _topo_now,
+            "stack_numa_mode": active_mode,
+        },
         "topology", now=_topo_now,
     ))
 
@@ -4034,6 +4160,83 @@ def _gate_inflight_by_live_slots(
     return gated
 
 
+def _coherent_display_activity(
+    activity: dict[int, dict[str, Any]],
+    *,
+    structured_requests: list[dict[str, Any]],
+    region_locks: dict[str, Any],
+    port_roles: dict[int, str],
+    topology_nodes: list[dict[str, Any]],
+) -> dict[int, dict[str, Any]]:
+    """Return activity suitable for live dashboard painting.
+
+    Raw llama-server `/slots` is useful diagnostic telemetry, but it is not an
+    authoritative CPU-holder signal: slots can remain busy/ambiguous while the
+    structured tap and `/proc` lock scan have already moved on. The dashboard's
+    visible active topology state must therefore be corroborated by either a
+    current structured tap request or a current CPU-region lock. Device/direct
+    access servers are kept as raw slot occupancy because they intentionally
+    bypass the orchestrator tap/lock path.
+    """
+    active_ports: set[int] = set()
+    for req in structured_requests:
+        if str(req.get("status") or "").lower() != "running":
+            continue
+        try:
+            quiet_s = float(req.get("quiet_s") or 0.0)
+        except (TypeError, ValueError):
+            quiet_s = 0.0
+        if quiet_s >= 15.0:
+            continue
+        try:
+            active_ports.add(int(req.get("port")))
+        except (TypeError, ValueError):
+            pass
+
+    locks_by_role = region_locks.get("by_role") if isinstance(region_locks, dict) else {}
+    locks_by_role = locks_by_role if isinstance(locks_by_role, dict) else {}
+    for port, role_label in port_roles.items():
+        role, shape = _port_role_shape(role_label)
+        if not role:
+            continue
+        info = locks_by_role.get(role) or {}
+        active_idxs = {int(i) for i in info.get("active_instance_idxs", []) if str(i).lstrip("-").isdigit()}
+        if not active_idxs:
+            continue
+        instances = info.get("instances") if isinstance(info.get("instances"), list) else []
+        for inst in instances:
+            try:
+                idx = int(inst.get("idx"))
+            except (AttributeError, TypeError, ValueError):
+                continue
+            if idx not in active_idxs:
+                continue
+            inst_shape = str(inst.get("shape") or "")
+            if shape and inst_shape != shape:
+                continue
+            # A shape-less base port represents the primary/full endpoint; do
+            # not let a quarter holder make the base row look active.
+            if not shape and inst_shape not in {"", "full", "half0"}:
+                continue
+            active_ports.add(int(port))
+
+    node_kind_by_port = {
+        int(n["port"]): str(n.get("kind") or "")
+        for n in topology_nodes
+        if isinstance(n, dict) and isinstance(n.get("port"), int)
+    }
+    display: dict[int, dict[str, Any]] = {}
+    for port, entry in activity.items():
+        item = dict(entry)
+        kind = node_kind_by_port.get(int(port), "")
+        is_cpu_llama = kind == "llama-server"
+        if is_cpu_llama and int(port) not in active_ports:
+            item["n_active"] = 0
+            item["active_slots"] = []
+        display[int(port)] = item
+    return display
+
+
 def _count_log_events(
     path: Path, patterns: dict[str, str], window_s: float = 600.0,
 ) -> dict[str, int]:
@@ -4075,6 +4278,7 @@ async def snapshot() -> JSONResponse:
 
 
 async def _snapshot_impl() -> JSONResponse:
+    active_mode = active_stack_numa_mode()
     slots_by_port, slots_poll_meta = await _poll_all_slots()
     progress_log = _todays_progress_log()
     recent, rolling, cumulative = _scan_recent_decisions(progress_log)
@@ -4138,6 +4342,30 @@ async def _snapshot_impl() -> JSONResponse:
     )
 
     _snap_now = time.time()
+    # The snapshot stream is the coherence source for the dashboard UI. Use a
+    # fresh lock scan here so an older per-worker cache cannot overwrite a
+    # fresher direct `/dashboard/api/region_locks` poll in the same browser
+    # session.
+    region_locks = _region_locks_payload(active_mode)
+    structured_requests = _structured_tap_requests_for_dashboard(
+        max_requests=80,
+        now_epoch=_snap_now,
+        region_locks=region_locks,
+        port_roles=port_roles,
+    )
+    topology_nodes = _topology_nodes_cached(active_mode)
+    display_activity = _coherent_display_activity(
+        activity,
+        structured_requests=structured_requests,
+        region_locks=region_locks,
+        port_roles=port_roles,
+        topology_nodes=topology_nodes,
+    )
+    topology_activity_payload = _topology_activity_payload(
+        window_s=600.0,
+        now=_snap_now,
+        structured_requests=structured_requests,
+    )
     return JSONResponse(_stamp({
         "generated_at": _snap_now,
         # Coherent live correlation: topology + region locks + activity are all
@@ -4146,15 +4374,21 @@ async def _snapshot_impl() -> JSONResponse:
         # dots the frontend renders from this one object can never reflect
         # different instants. This is the keystone that kills the "tap shows
         # active inference beside a 'no locks held' grid" inconsistency.
-        "topology": {"nodes": _topology_nodes_cached()},
+        "stack_numa_mode": active_mode,
+        "topology": {"nodes": topology_nodes, "stack_numa_mode": active_mode},
         "activity": activity,
+        "display_activity": display_activity,
         # Fan-out degradation is data, not a silent gap: timed_out > 0 means
         # some ports' slots are missing from `activity` this frame.
         "slots_poll_meta": slots_poll_meta,
         "in_flight_tasks": in_flight_tasks,
         "recent_completed_tasks": recent_completed_tasks,
+        "structured_requests": structured_requests,
+        "tap_active": _structured_tap_active(structured_requests),
+        "structured_tap_mtime": _latest_tap_events_mtime(),
+        "topology_activity": topology_activity_payload,
         "live_busy_by_role": role_busy,
-        "region_locks": _region_locks_cached(),
+        "region_locks": region_locks,
         "recent_decisions": recent,
         "source_counts_rolling": rolling,
         "source_counts_cumulative": cumulative,
@@ -4244,9 +4478,11 @@ async def _structured_tap_payloads():
             structured_requests = _parse_structured_tap_requests(
                 tail, max_requests=40, now_epoch=now_epoch,
             )
+            enriched_requests = _enrich_structured_tap_requests(structured_requests)
             yield json.dumps({
-                "tap_active": _TAP_SENTINEL_PATH.exists(),
-                "structured_requests": _enrich_structured_tap_requests(structured_requests),
+                "tap_active": _structured_tap_active(enriched_requests),
+                "tap_sentinel_active": _TAP_SENTINEL_PATH.exists(),
+                "structured_requests": enriched_requests,
                 "structured_tap_mtime": mtime or None,
                 "now": now_epoch,
             })

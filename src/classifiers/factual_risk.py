@@ -179,23 +179,6 @@ DEFAULT_STACK_PRIORS_PATH = PROJECT_ROOT / "orchestration" / "derived" / "stack_
 _TIER_1_MIN_MODEL_MEM_GB = 60.0
 _TIER_2_MIN_MODEL_MEM_GB = 18.0
 
-# Explicit degraded fallback only. Normal live role tiers come from generated
-# stack priors so model swaps update factual-risk role adjustment automatically.
-_DEGRADED_ROLE_TO_TIER: dict[str, str] = {
-    "architect_general": "tier_1",
-    "thinking_reasoning": "tier_1",
-    "thinking_exploration": "tier_1",
-    "coder_escalation": "tier_2",
-    "coder_general": "tier_2",
-    "frontdoor": "tier_2",
-    "ingest_long_context": "tier_2",
-    "worker_summarize": "tier_2",
-    "vision_escalation": "tier_2",
-    "worker_general": "tier_3",
-    "worker_math": "tier_3",
-    "worker_vision": "tier_3",
-    "toolrunner": "tier_3",
-}
 _STACK_PRIOR_ROLE_TIERS_CACHE: dict[str, str] | None = None
 
 
@@ -239,6 +222,24 @@ def _stack_prior_role_tiers(
     return _role_tiers_from_stack_priors(stack_priors_path)
 
 
+def _degraded_role_tier(role_name: str) -> str | None:
+    """Return the explicit degraded role tier for a canonical role name."""
+    if role_name in {"architect_general", "thinking_reasoning", "thinking_exploration"}:
+        return "tier_1"
+    if role_name in {
+        "coder_escalation",
+        "coder_general",
+        "frontdoor",
+        "ingest_long_context",
+        "worker_summarize",
+        "vision_escalation",
+    }:
+        return "tier_2"
+    if role_name in {"worker_general", "worker_math", "worker_vision", "toolrunner"}:
+        return "tier_3"
+    return None
+
+
 def _role_tier_for_role(
     role: str,
     stack_priors_path: Path = DEFAULT_STACK_PRIORS_PATH,
@@ -247,7 +248,7 @@ def _role_tier_for_role(
     role_name = normalized.value if normalized is not None else str(role)
     return (
         _stack_prior_role_tiers(stack_priors_path).get(role_name)
-        or _DEGRADED_ROLE_TO_TIER.get(role_name)
+        or _degraded_role_tier(role_name)
         or "tier_3"
     )
 

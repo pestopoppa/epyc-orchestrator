@@ -579,10 +579,10 @@ def test_seq_candidate_replay_payload_requires_neutral_quality_e(
     assert autopilot._seq_candidate_replay_payload(journal, tier=1) is None
 
 
-def test_seq_candidate_replay_payload_skips_dispatch_invalid_action(
+def test_seq_candidate_replay_payload_allows_materialized_numeric_replay(
     tmp_path: Path,
 ) -> None:
-    invalid_action = {
+    optuna_action = {
         "type": "numeric_trial",
         "surface": "repl_executor",
         "params": {
@@ -599,9 +599,9 @@ def test_seq_candidate_replay_payload_skips_dispatch_invalid_action(
     journal.record(
         _entry(
             10,
-            invalid_action,
+            optuna_action,
             seq={
-                "candidate": autopilot._config_fingerprint(invalid_action),
+                "candidate": autopilot._config_fingerprint(optuna_action),
                 "core_id": "core_v1",
                 "k": 1,
                 "z": 0.2,
@@ -632,7 +632,7 @@ def test_seq_candidate_replay_payload_skips_dispatch_invalid_action(
     payload = autopilot._seq_candidate_replay_payload(journal, tier=1)
 
     assert payload is not None
-    assert payload["action"] == valid_action
+    assert payload["action"] == optuna_action
 
 
 def test_seq_candidate_replay_payload_prefers_under_observed_candidate(
@@ -1869,6 +1869,47 @@ def test_run_loop_inner_forced_seq_fresh_eval_bypasses_controller_planner(
         "candidate-controller"
     )
     assert "session_id" not in returned_state
+
+
+def test_run_loop_inner_forced_frontier_rerun_bypasses_controller_planner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state: dict[str, Any] = {
+        "trial_counter": 0,
+        "paused": False,
+        "td_errors": [],
+        "seeder_state": {},
+        "consecutive_failures": 0,
+        "quality_history": [],
+        "quality_history_by_tier": {},
+        "baseline_state": {},
+        "active_instrument_eras": {"autopilot_speed": "E5-autopilot-speed"},
+        "pareto_epoch_ts": 1_782_511_631.0,
+        "pareto_exclude_before_ts": 1_782_511_631.0,
+        "frontier_rerun_required": {
+            "required": True,
+            "reason": "v6 kernel era opened",
+        },
+    }
+
+    returned_state, _ = _run_loop_inner_seq_harness(
+        monkeypatch,
+        state=state,
+        verdict_seq={
+            "candidate": "candidate-controller",
+            "confirmed": True,
+            "E_quality": 10.0,
+            "E_rate_noninf": 10.0,
+            "z": 0.0,
+            "r_eff": 50,
+        },
+        use_controller=True,
+        planner_should_not_run=True,
+    )
+
+    assert returned_state["frontier_rerun_forced"]["forced_action"]["type"] == (
+        "numeric_trial"
+    )
 
 
 def test_run_loop_inner_nonfinalized_seq_does_not_promote_and_leaves_pending(

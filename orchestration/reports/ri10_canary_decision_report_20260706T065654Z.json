@@ -1,0 +1,167 @@
+{
+  "arms": {
+    "enforce": {
+      "completed": 61,
+      "escalation_event_count": 0,
+      "escalation_task_count": 0,
+      "escalation_task_rate": 0.0,
+      "estimated_cost_count": 61,
+      "estimated_cost_mean": 0.000361869,
+      "estimated_cost_sum": 0.022074,
+      "failed": 0,
+      "latency_count": 61,
+      "latency_mean_s": 3.081,
+      "latency_p50_s": 2.086,
+      "latency_p95_s": 5.428,
+      "missing_outcome": 0,
+      "operational_error_or_missing": 0,
+      "operational_error_or_missing_rate": 0.0,
+      "plan_review_decisions": {},
+      "plan_review_event_count": 0,
+      "plan_review_task_count": 0,
+      "plan_review_task_rate": 0.0,
+      "quality_count": 0,
+      "quality_mean": null,
+      "risk_gate_actions": {
+        "<missing>": 61
+      },
+      "roles": {
+        "frontdoor": 21,
+        "worker_general": 20,
+        "worker_vision": 20
+      },
+      "rows": 61,
+      "success": 61,
+      "unique_tasks": 61
+    },
+    "shadow": {
+      "completed": 79,
+      "escalation_event_count": 0,
+      "escalation_task_count": 0,
+      "escalation_task_rate": 0.0,
+      "estimated_cost_count": 80,
+      "estimated_cost_mean": 0.000680012,
+      "estimated_cost_sum": 0.054401,
+      "failed": 1,
+      "latency_count": 80,
+      "latency_mean_s": 6.234,
+      "latency_p50_s": 1.792,
+      "latency_p95_s": 25.663,
+      "missing_outcome": 0,
+      "operational_error_or_missing": 1,
+      "operational_error_or_missing_rate": 0.0125,
+      "plan_review_decisions": {},
+      "plan_review_event_count": 0,
+      "plan_review_task_count": 0,
+      "plan_review_task_rate": 0.0,
+      "quality_count": 0,
+      "quality_mean": null,
+      "risk_gate_actions": {
+        "<missing>": 61,
+        "not_enforced": 19
+      },
+      "roles": {
+        "frontdoor": 21,
+        "worker_general": 33,
+        "worker_vision": 26
+      },
+      "rows": 80,
+      "success": 79,
+      "unique_tasks": 80
+    }
+  },
+  "canary_roles": [
+    "frontdoor",
+    "worker_general",
+    "worker_vision"
+  ],
+  "canary_start": "2026-04-06",
+  "comparison": {
+    "escalation_task_rate_ratio_enforce_over_shadow": null,
+    "estimated_cost_mean_ratio_enforce_over_shadow": 0.532151,
+    "latency_mean_ratio_enforce_over_shadow": 0.494225,
+    "latency_p95_ratio_enforce_over_shadow": 0.211511,
+    "operational_error_rate_delta": -0.0125,
+    "plan_review_task_rate_ratio_enforce_over_shadow": null,
+    "quality_mean_delta_enforce_minus_shadow": null
+  },
+  "decision": {
+    "blockers": [
+      "factuality_no_enforce_lift"
+    ],
+    "notes": [
+      "Attached scored RI-10 evidence does not show an enforce-arm factuality lift; hold classifier/risk-routing expansion frozen."
+    ],
+    "status": "hold_quality_scored_no_lift",
+    "thresholds": {
+      "max_escalation_or_review_rate_ratio": 1.2,
+      "max_estimated_cost_mean_ratio": 1.05,
+      "max_p95_latency_ratio": 1.1
+    }
+  },
+  "decision_gate_high_risk_samples": 50,
+  "generated_at": "2026-07-06T06:57:14Z",
+  "measurement_notes": [
+    "This is an observational live-traffic canary comparison, not paired prompt A/B.",
+    "Operational task success is reported separately from factuality/accuracy; it does not satisfy RI-10 factuality evidence."
+  ],
+  "min_canary_arm_samples": 10,
+  "quality_evidence": {
+    "arm_comparison_status": "ready",
+    "arms": {
+      "enforce": {
+        "accuracy": 0.1,
+        "correct": 3,
+        "mean_token_f1": 0.063827,
+        "missing": 0,
+        "rows": 30,
+        "scored": 30
+      },
+      "shadow": {
+        "accuracy": 0.1,
+        "correct": 3,
+        "mean_token_f1": 0.063297,
+        "missing": 0,
+        "rows": 30,
+        "scored": 30
+      }
+    },
+    "comparison": {
+      "accuracy_delta_enforce_minus_shadow": 0.0,
+      "mean_token_f1_delta_enforce_minus_shadow": 0.000531
+    },
+    "f1_threshold": 0.8,
+    "rows": 60,
+    "source_path": "orchestration/reports/ri10_canary_scored_summary_20260705T185001Z.json",
+    "status": "ready",
+    "status_counts": {
+      "scored": 60
+    },
+    "summary_status": "ready"
+  },
+  "sample_coverage": {
+    "canary_arm_counts_by_role_since_telemetry_health_start": {
+      "frontdoor": {
+        "enforce_high_risk": 21,
+        "shadow_high_risk": 21
+      },
+      "worker_general": {
+        "enforce_high_risk": 20,
+        "shadow_high_risk": 33
+      },
+      "worker_vision": {
+        "enforce_high_risk": 20,
+        "shadow_high_risk": 26
+      }
+    },
+    "canary_arm_counts_since_telemetry_health_start": {
+      "enforce_high_risk": 61,
+      "shadow_high_risk": 80
+    },
+    "canary_decision_ready": true,
+    "telemetry_collection_blocker": "decision_ready",
+    "telemetry_collection_reason": "current high-risk telemetry has decision-grade canary arm coverage"
+  },
+  "source_glob": "/mnt/raid0/llm/epyc-orchestrator/logs/progress/*.jsonl",
+  "telemetry_health_start": "2026-06-20"
+}

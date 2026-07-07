@@ -10,7 +10,7 @@ import yaml
 from scripts.lab import promote_job
 
 
-def _write_jobs_file(path: Path, *, risk: str = "read_only") -> None:
+def _write_jobs_file(path: Path, *, risk: str = "read_only", stage: str = "shadow") -> None:
     doc = {
         "version": 1,
         "schema_version": "lab_jobs.v1",
@@ -23,7 +23,7 @@ def _write_jobs_file(path: Path, *, risk: str = "read_only") -> None:
             {
                 "job_id": "sample_job",
                 "title": "Sample job",
-                "stage": "shadow",
+                "stage": stage,
                 "enabled": False,
                 "risk": risk,
                 "model_role": "verifier",
@@ -38,6 +38,18 @@ def _write_jobs_file(path: Path, *, risk: str = "read_only") -> None:
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+
+
+def _write_gold_tuple_files(queue_dir: Path, rows: list[dict]) -> None:
+    for row in rows:
+        raw_path = row.get("tuple_path") or row.get("gold_tuple_path")
+        if not raw_path:
+            continue
+        path = Path(raw_path)
+        if not path.is_absolute():
+            path = queue_dir / path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"job_id": row["job_id"], "run_id": row["run_id"]}))
 
 
 def _records(stage: str, n: int) -> list[dict]:
@@ -105,10 +117,12 @@ def test_reviewed_requires_ten_cloud_reference_gold_tuples(tmp_path: Path) -> No
     assert "insufficient shadow verdicts" in decision.reason
 
     _write_jsonl(tmp_path / "queue" / "task_records.jsonl", _records("shadow", 10))
+    verdicts = _verdicts("shadow", ["accept"] * 10)
     _write_jsonl(
         tmp_path / "queue" / "review_verdicts.jsonl",
-        _verdicts("shadow", ["accept"] * 10),
+        verdicts,
     )
+    _write_gold_tuple_files(tmp_path / "queue", verdicts)
     decision = promote_job.run_from_args(_args(tmp_path, jobs_file))
     assert decision.eligible
     assert decision.counts["shadow_cloud_scored"] == 10
@@ -131,12 +145,14 @@ def test_reviewed_requires_saved_gold_tuple_paths(tmp_path: Path) -> None:
 
 def test_autonomous_requires_read_only_and_accept_rate(tmp_path: Path) -> None:
     jobs_file = tmp_path / "lab_jobs.yaml"
-    _write_jobs_file(jobs_file, risk="read_only")
+    _write_jobs_file(jobs_file, risk="read_only", stage="reviewed")
     _write_jsonl(tmp_path / "queue" / "task_records.jsonl", _records("reviewed", 20))
+    verdicts = _verdicts("reviewed", ["accept"] * 17 + ["reject"] * 3, cloud=False)
     _write_jsonl(
         tmp_path / "queue" / "review_verdicts.jsonl",
-        _verdicts("reviewed", ["accept"] * 17 + ["reject"] * 3, cloud=False),
+        verdicts,
     )
+    _write_gold_tuple_files(tmp_path / "queue", verdicts)
 
     decision = promote_job.run_from_args(
         _args(tmp_path, jobs_file, target_stage="autonomous")
@@ -144,10 +160,12 @@ def test_autonomous_requires_read_only_and_accept_rate(tmp_path: Path) -> None:
     assert not decision.eligible
     assert "accept rate" in decision.reason
 
+    verdicts = _verdicts("reviewed", ["accept"] * 18 + ["reject"] * 2, cloud=False)
     _write_jsonl(
         tmp_path / "queue" / "review_verdicts.jsonl",
-        _verdicts("reviewed", ["accept"] * 18 + ["reject"] * 2, cloud=False),
+        verdicts,
     )
+    _write_gold_tuple_files(tmp_path / "queue", verdicts)
     decision = promote_job.run_from_args(
         _args(tmp_path, jobs_file, target_stage="autonomous")
     )
@@ -157,12 +175,14 @@ def test_autonomous_requires_read_only_and_accept_rate(tmp_path: Path) -> None:
 
 def test_autonomous_rejects_write_reviewed_jobs(tmp_path: Path) -> None:
     jobs_file = tmp_path / "lab_jobs.yaml"
-    _write_jobs_file(jobs_file, risk="write_reviewed")
+    _write_jobs_file(jobs_file, risk="write_reviewed", stage="reviewed")
     _write_jsonl(tmp_path / "queue" / "task_records.jsonl", _records("reviewed", 20))
+    verdicts = _verdicts("reviewed", ["accept"] * 20, cloud=False)
     _write_jsonl(
         tmp_path / "queue" / "review_verdicts.jsonl",
-        _verdicts("reviewed", ["accept"] * 20, cloud=False),
+        verdicts,
     )
+    _write_gold_tuple_files(tmp_path / "queue", verdicts)
 
     decision = promote_job.run_from_args(
         _args(tmp_path, jobs_file, target_stage="autonomous")
@@ -175,10 +195,12 @@ def test_apply_requires_confirmation_and_updates_job_stage(tmp_path: Path) -> No
     jobs_file = tmp_path / "lab_jobs.yaml"
     _write_jobs_file(jobs_file)
     _write_jsonl(tmp_path / "queue" / "task_records.jsonl", _records("shadow", 10))
+    verdicts = _verdicts("shadow", ["accept"] * 10)
     _write_jsonl(
         tmp_path / "queue" / "review_verdicts.jsonl",
-        _verdicts("shadow", ["accept"] * 10),
+        verdicts,
     )
+    _write_gold_tuple_files(tmp_path / "queue", verdicts)
 
     with pytest.raises(promote_job.PromotionError, match="confirm-job-id"):
         promote_job.run_from_args(
@@ -192,3 +214,49 @@ def test_apply_requires_confirmation_and_updates_job_stage(tmp_path: Path) -> No
     job = updated["jobs"][0]
     assert job["stage"] == "reviewed"
     assert job["enabled"] is True
+
+
+def test_promotions_must_follow_stage_ladder(tmp_path: Path) -> None:
+    jobs_file = tmp_path / "lab_jobs.yaml"
+    _write_jobs_file(jobs_file, stage="reviewed")
+    _write_jsonl(tmp_path / "queue" / "task_records.jsonl", _records("shadow", 10))
+    verdicts = _verdicts("shadow", ["accept"] * 10)
+    _write_jsonl(tmp_path / "queue" / "review_verdicts.jsonl", verdicts)
+    _write_gold_tuple_files(tmp_path / "queue", verdicts)
+
+    decision = promote_job.run_from_args(_args(tmp_path, jobs_file))
+
+    assert not decision.eligible
+    assert "requires current job stage shadow" in decision.reason
+    assert decision.counts["current_stage"] == "reviewed"
+
+
+def test_autonomous_requires_operator_reviewed_gold_tuples(tmp_path: Path) -> None:
+    jobs_file = tmp_path / "lab_jobs.yaml"
+    _write_jobs_file(jobs_file, stage="reviewed")
+    _write_jsonl(tmp_path / "queue" / "task_records.jsonl", _records("reviewed", 20))
+    verdicts = _verdicts("reviewed", ["accept"] * 20, cloud=True)
+    _write_jsonl(tmp_path / "queue" / "review_verdicts.jsonl", verdicts)
+    _write_gold_tuple_files(tmp_path / "queue", verdicts)
+
+    decision = promote_job.run_from_args(
+        _args(tmp_path, jobs_file, target_stage="autonomous")
+    )
+
+    assert not decision.eligible
+    assert "operator-reviewed verdicts" in decision.reason
+    assert decision.counts["reviewed_scored"] == 20
+    assert decision.counts["reviewed_operator_scored"] == 0
+
+
+def test_gold_tuple_paths_must_exist_when_queue_dir_is_known(tmp_path: Path) -> None:
+    jobs_file = tmp_path / "lab_jobs.yaml"
+    _write_jobs_file(jobs_file)
+    _write_jsonl(tmp_path / "queue" / "task_records.jsonl", _records("shadow", 10))
+    verdicts = _verdicts("shadow", ["accept"] * 10)
+    _write_jsonl(tmp_path / "queue" / "review_verdicts.jsonl", verdicts)
+
+    decision = promote_job.run_from_args(_args(tmp_path, jobs_file))
+
+    assert not decision.eligible
+    assert "existing F3 gold tuple files" in decision.reason

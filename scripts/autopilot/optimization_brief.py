@@ -346,6 +346,103 @@ def ruled_out_and_exploring(
     return ruled_out, exploring
 
 
+_REJECT_TYPE_LABEL = {
+    "structural_experiment": "structural flag flip",
+    "prompt_mutation": "prompt edit",
+    "code_mutation": "code edit",
+    "numeric_trial": "numeric sweep",
+    "seed_batch": "eval seeding",
+    "deep_eval": "deep eval",
+    "gepa_optimize": "GEPA prompt evolution",
+    "structural_prune": "prompt prune",
+    "few_shot_evolution": "few-shot edit",
+    "targeted_fix": "targeted fix",
+    "compress": "prompt compress",
+}
+
+
+def _short_reason(reason: Any) -> str:
+    """First clause of a critic reason, banner-stripped, capped for display."""
+    text = str(reason or "").strip()
+    if text.lower().startswith("critic rejected:"):
+        text = text.split(":", 1)[1].strip()
+    for sep in ("; ", ". "):
+        if sep in text:
+            text = text.split(sep, 1)[0]
+            break
+    return text[:160]
+
+
+def ruled_out_experiments(
+    state: dict[str, Any], *, limit: int = 6
+) -> dict[str, Any]:
+    """Surface *what was tried and rejected, and why* — the intuition the bare
+    "N dead-ends fenced" count omits. The two state ledgers carry different
+    signal, so they stay separate rather than being pooled into one count race:
+
+      * ``fenced`` (from ``critic_rejected_signatures``) — the critic vetoed a
+        specific proposal; each row carries a human ``reason`` and a repeat
+        ``count`` (how many times the planner re-proposed it = how firmly the
+        boundary is fenced). This is the reason-bearing "and why" list.
+      * ``invalid_by_surface`` (from ``invalid_signature_counts``) — proposals
+        that failed structural validation before execution, aggregated by
+        experiment *type*: a churn summary of which surfaces the planner keeps
+        drafting malformed actions against, not specific falsified ideas.
+
+    Observations only — a rejection means a lever did not clear the gate, never
+    a ratified law.
+    """
+
+    def _label(atype: str, detail: str) -> str:
+        base = _REJECT_TYPE_LABEL.get(atype, atype)
+        return f"{base} · {detail}"[:80] if detail else base[:80]
+
+    fenced: list[dict[str, Any]] = []
+    crs = state.get("critic_rejected_signatures")
+    if isinstance(crs, dict):
+        for rec in crs.values():
+            if not isinstance(rec, dict):
+                continue
+            action = rec.get("action") if isinstance(rec.get("action"), dict) else {}
+            atype = str(action.get("type") or "?")
+            flags = action.get("flags")
+            if isinstance(flags, dict) and flags:
+                detail = ", ".join(f"{k}={v}" for k, v in list(flags.items())[:2])
+            else:
+                detail = str(action.get("file") or action.get("surface") or "")
+            fenced.append(
+                {
+                    "label": _label(atype, detail),
+                    "kind": atype,
+                    "count": int(rec.get("count") or 1),
+                    "why": _short_reason(rec.get("reason")),
+                    "last_trial": rec.get("trial_id"),
+                }
+            )
+    fenced.sort(key=lambda x: x["count"], reverse=True)
+
+    invalid_by_surface: list[dict[str, Any]] = []
+    inv = state.get("invalid_signature_counts")
+    if isinstance(inv, dict):
+        agg: dict[str, int] = {}
+        for sig, cnt in inv.items():
+            try:
+                meta = json.loads(sig)
+            except (json.JSONDecodeError, TypeError):
+                meta = {}
+            atype = str(meta.get("type") or meta.get("mutation") or "?")
+            agg[atype] = agg.get(atype, 0) + int(cnt or 0)
+        invalid_by_surface = [
+            {"label": _REJECT_TYPE_LABEL.get(a, a), "kind": a, "count": c}
+            for a, c in sorted(agg.items(), key=lambda kv: kv[1], reverse=True)
+        ]
+
+    return {
+        "fenced": fenced[:limit],
+        "invalid_by_surface": invalid_by_surface[:limit],
+    }
+
+
 def _narrative(
     *,
     trial_counter: Any,
@@ -353,6 +450,7 @@ def _narrative(
     best: dict[str, Any],
     ruled_out: list[dict[str, Any]],
     exploring: list[dict[str, Any]],
+    ruled_out_exp: dict[str, Any],
     banner: dict[str, Any],
 ) -> str:
     """Deterministic prose assembled from the structured fields above."""
@@ -376,6 +474,13 @@ def _narrative(
             f"(quality {q})" if q is not None else f"an {label} best config exists"
         )
     parts.append(f"{len(ruled_out)} dead-ends remain fenced")
+    fenced = (ruled_out_exp or {}).get("fenced") or []
+    if fenced:
+        top_ro = fenced[0]
+        parts.append(
+            f"the most-fenced dead-end is {top_ro['label']} "
+            f"({top_ro['count']}× rejected)"
+        )
     parts.append(f"{len(exploring)} hypotheses are queued")
     lead = f"At trial {trial_counter}: " if trial_counter is not None else ""
     tail = (
@@ -425,6 +530,7 @@ def build_optimization_brief(
     levers = levers_from_digest(digest_text)
     best = best_config(rows, exclude_before_ts=exclude_before_ts)
     ruled_out, exploring = ruled_out_and_exploring(strategy_db)
+    ruled_out_exp = ruled_out_experiments(state)
 
     # decision_grade is a property of the whole brief right now: nothing can be
     # ratified unless authority is enabled. Tag every lever accordingly.
@@ -437,6 +543,7 @@ def build_optimization_brief(
         best=best,
         ruled_out=ruled_out,
         exploring=exploring,
+        ruled_out_exp=ruled_out_exp,
         banner=banner,
     )
 
@@ -450,6 +557,7 @@ def build_optimization_brief(
         "narrative": narrative,
         "best_config": best,
         "levers": levers,
+        "ruled_out_experiments": ruled_out_exp,
         "ruled_out": ruled_out,
         "exploring": exploring,
     }

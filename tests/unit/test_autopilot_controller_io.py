@@ -30,6 +30,18 @@ More text after."""
     assert action == {"type": "seed_batch", "n_questions": 10}
 
 
+def test_extract_action_recovers_trailing_bracket_noise() -> None:
+    text = """Local draft leaked prose first.
+
+```json:autopilot_actions
+{"type": "structural_experiment", "flags": {"plan_review": true}}
+}
+```
+"""
+    action = controller_io.extract_action(text)
+    assert action == {"type": "structural_experiment", "flags": {"plan_review": True}}
+
+
 def test_extract_action_marker_unwraps_list() -> None:
     text = """```json:autopilot_actions
 [{"type": "numeric_trial", "surface": "x"}]
@@ -46,6 +58,26 @@ def test_extract_action_falls_back_to_generic_json_block() -> None:
 ```"""
     action = controller_io.extract_action(text)
     assert action == {"type": "rollback", "to_checkpoint": "production_best"}
+
+
+def test_extract_action_accepts_leading_json_with_rationale_sidecar() -> None:
+    text = """{
+  "type": "deep_eval",
+  "tier": 3
+}
+
+```json:autopilot_rationale
+{"falsifier": "tier 3 does not improve"}
+```"""
+    action = controller_io.extract_action(text)
+    assert action == {"type": "deep_eval", "tier": 3}
+
+
+def test_extract_action_rejects_leading_json_with_arbitrary_trailing_prose() -> None:
+    text = """{"type": "deep_eval", "tier": 3}
+
+This action should be accepted because it is safe."""
+    assert controller_io.extract_action(text) is None
 
 
 def test_extract_action_returns_none_when_no_block() -> None:
@@ -306,6 +338,8 @@ def test_validate_deep_eval_rejects_ignored_schema_fields() -> None:
 
 
 def test_validate_deep_eval_requires_valid_tier() -> None:
+    assert tuple(controller_io.DEEP_EVAL_TIERS) == (0, 1, 2, 3)
+    assert controller_io._ACTION_SCHEMAS["deep_eval"]["enums"]["tier"] == {0, 1, 2, 3}
     assert controller_io.validate_single_variable(
         {"type": "deep_eval", "tier": 2}
     ) is None

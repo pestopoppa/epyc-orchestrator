@@ -1,0 +1,19 @@
+{
+  "schema_version": "lab_cloud_reference.v1",
+  "job_id": "attestation_watch",
+  "run_id": "attestation_watch-20260707T002559Z-df29d4c9",
+  "reviewed_at": "2026-07-07T00:31:00+00:00",
+  "decision": "reject",
+  "summary": "Output is model-backed and non-mock, but the primary high-risk drift claim is false: orchestration/attestation/latest.json exists and is non-empty. Keep as a negative gold tuple for attestation-watch calibration.",
+  "checks": [
+    {
+      "item": "attestation_state current=empty",
+      "verdict": "false",
+      "evidence": "orchestration/attestation/latest.json is present and approximately 340741 bytes."
+    },
+    {
+      "item": "worker heterogeneity",
+      "verdict": "insufficiently_supported"
+    }
+  ]
+}

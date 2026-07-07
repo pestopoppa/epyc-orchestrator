@@ -30,6 +30,7 @@ class TestBuildDiagnostic:
             delegation_events=[],
             tools_used=0,
             tools_called=[],
+            tool_chains=[],
         )
         assert diag["question_id"] == "thinking/t1_q1"
         assert diag["suite"] == "thinking"
@@ -64,6 +65,7 @@ class TestBuildDiagnostic:
             delegation_events=[],
             tools_used=0,
             tools_called=[],
+            tool_chains=[],
             difficulty_score=0.27,
             difficulty_band="medium",
             factual_risk_score=0.82,
@@ -94,8 +96,10 @@ class TestBuildDiagnostic:
             delegation_diagnostics={"break_reason": "role_repetition", "effective_max_loops": 2},
             tools_used=1,
             tools_called=["delegate"],
+            tool_chains=[{"chain_id": "c1", "steps": ["delegate", "final"]}],
         )
         assert diag["delegation_diagnostics"]["break_reason"] == "role_repetition"
+        assert diag["tool_chains"][0]["chain_id"] == "c1"
 
     def test_anomaly_signals_populated(self):
         diag = build_diagnostic(
@@ -116,6 +120,7 @@ class TestBuildDiagnostic:
             delegation_events=[],
             tools_used=0,
             tools_called=[],
+            tool_chains=[],
         )
         assert diag["anomaly_signals"]["format_violation"] is True
         assert diag["anomaly_score"] >= 1.0
@@ -139,6 +144,7 @@ class TestBuildDiagnostic:
             delegation_events=[],
             tools_used=0,
             tools_called=[],
+            tool_chains=[],
             tap_offset_bytes=1024,
             tap_length_bytes=4096,
         )
@@ -167,6 +173,7 @@ class TestAppendDiagnostic:
             delegation_events=[],
             tools_used=0,
             tools_called=[],
+            tool_chains=[],
         )
         append_diagnostic(diag, path=path)
 
@@ -192,11 +199,12 @@ class TestAppendDiagnostic:
                 error_type="none",
                 tokens_generated=10,
                 elapsed_s=1.0,
-                role_history=["frontdoor"],
-                delegation_events=[],
-                tools_used=0,
-                tools_called=[],
-            )
+            role_history=["frontdoor"],
+            delegation_events=[],
+            tools_used=0,
+            tools_called=[],
+            tool_chains=[],
+        )
             append_diagnostic(diag, path=path)
 
         lines = path.read_text().strip().split("\n")

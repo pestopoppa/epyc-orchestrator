@@ -50,6 +50,49 @@ def _completed(task_id: str, timestamp: str, *, elapsed: float, outcome: str = "
     }
 
 
+def _write_scored_summary(
+    path: Path,
+    *,
+    enforce_accuracy: float,
+    shadow_accuracy: float,
+    enforce_f1: float = 0.2,
+    shadow_f1: float = 0.1,
+) -> None:
+    payload = {
+        "schema_version": "ri10_canary_scored_response_report.v1",
+        "generated_at": "2026-07-05T18:56:38Z",
+        "answer_key_schema": "ri10_canary_answer_key.v1",
+        "f1_threshold": 0.8,
+        "status": "ready",
+        "rows": 20,
+        "status_counts": {"scored": 20},
+        "buckets": {
+            "arm:enforce": {
+                "rows": 10,
+                "scored": 10,
+                "missing": 0,
+                "correct": int(enforce_accuracy * 10),
+                "accuracy": enforce_accuracy,
+                "mean_token_f1": enforce_f1,
+            },
+            "arm:shadow": {
+                "rows": 10,
+                "scored": 10,
+                "missing": 0,
+                "correct": int(shadow_accuracy * 10),
+                "accuracy": shadow_accuracy,
+                "mean_token_f1": shadow_f1,
+            },
+        },
+        "arm_comparison": {
+            "status": "ready",
+            "accuracy_delta_enforce_minus_shadow": enforce_accuracy - shadow_accuracy,
+            "mean_token_f1_delta_enforce_minus_shadow": enforce_f1 - shadow_f1,
+        },
+    }
+    path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+
+
 def test_build_report_holds_when_factuality_is_unscored(tmp_path: Path) -> None:
     rows = [
         _routing_row("e1", "2026-06-20T00:00:00Z", mode="enforce", cost=0.001),
@@ -72,6 +115,54 @@ def test_build_report_holds_when_factuality_is_unscored(tmp_path: Path) -> None:
     assert report["arms"]["enforce"]["rows"] == 1
     assert report["arms"]["shadow"]["rows"] == 1
     assert report["comparison"]["estimated_cost_mean_ratio_enforce_over_shadow"] == 0.5
+
+
+def test_build_report_holds_when_scored_factuality_has_no_enforce_lift(tmp_path: Path) -> None:
+    rows = [
+        _routing_row("e1", "2026-06-20T00:00:00Z", mode="enforce"),
+        _completed("e1", "2026-06-20T00:00:02Z", elapsed=1.0),
+        _routing_row("s1", "2026-06-20T00:01:00Z", mode="shadow"),
+        _completed("s1", "2026-06-20T00:01:03Z", elapsed=1.0),
+    ]
+    _write_jsonl(tmp_path / "2026-06-20.jsonl", rows)
+    scored_path = tmp_path / "scored_summary.json"
+    _write_scored_summary(scored_path, enforce_accuracy=0.1, shadow_accuracy=0.1)
+
+    report = report_mod.build_report(
+        tmp_path,
+        telemetry_health_start="2026-06-20",
+        decision_gate=2,
+        min_arm_samples=1,
+        scored_summary_path=scored_path,
+    )
+
+    assert report["quality_evidence"]["status"] == "ready"
+    assert report["quality_evidence"]["arms"]["enforce"]["scored"] == 10
+    assert report["decision"]["status"] == "hold_quality_scored_no_lift"
+    assert report["decision"]["blockers"] == ["factuality_no_enforce_lift"]
+
+
+def test_build_report_promotes_when_scored_factuality_lifts_without_blockers(tmp_path: Path) -> None:
+    rows = [
+        _routing_row("e1", "2026-06-20T00:00:00Z", mode="enforce"),
+        _completed("e1", "2026-06-20T00:00:02Z", elapsed=1.0),
+        _routing_row("s1", "2026-06-20T00:01:00Z", mode="shadow"),
+        _completed("s1", "2026-06-20T00:01:03Z", elapsed=1.0),
+    ]
+    _write_jsonl(tmp_path / "2026-06-20.jsonl", rows)
+    scored_path = tmp_path / "scored_summary.json"
+    _write_scored_summary(scored_path, enforce_accuracy=0.2, shadow_accuracy=0.1)
+
+    report = report_mod.build_report(
+        tmp_path,
+        telemetry_health_start="2026-06-20",
+        decision_gate=2,
+        min_arm_samples=1,
+        scored_summary_path=scored_path,
+    )
+
+    assert report["decision"]["status"] == "promote_candidate"
+    assert report["decision"]["blockers"] == []
 
 
 def test_build_report_blocks_latency_regression(tmp_path: Path) -> None:

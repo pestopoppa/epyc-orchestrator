@@ -73,6 +73,18 @@ def _write_jsonl(path: Path, rows: list[dict]) -> None:
     path.write_text("".join(json.dumps(row) + "\n" for row in rows))
 
 
+def _write_gold_tuple_files(queue_dir: Path, rows: list[dict]) -> None:
+    for row in rows:
+        raw_path = row.get("tuple_path") or row.get("gold_tuple_path")
+        if not raw_path:
+            continue
+        path = Path(raw_path)
+        if not path.is_absolute():
+            path = queue_dir / path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"job_id": row["job_id"], "run_id": row["run_id"]}))
+
+
 def _records(job_id: str, stage: str, n: int) -> list[dict]:
     return [
         {
@@ -123,10 +135,12 @@ def test_report_summarizes_schedulable_jobs_and_promotion_readiness(tmp_path: Pa
     _write_jobs_file(jobs_file)
     queue = tmp_path / "queue"
     _write_jsonl(queue / "task_records.jsonl", _records("shadow_ready", "shadow", 10))
+    verdicts = _verdicts("shadow_ready", "shadow", ["accept"] * 10)
     _write_jsonl(
         queue / "review_verdicts.jsonl",
-        _verdicts("shadow_ready", "shadow", ["accept"] * 10),
+        verdicts,
     )
+    _write_gold_tuple_files(queue, verdicts)
 
     report = readiness_report.run_from_args(_args(tmp_path, jobs_file))
 
@@ -152,6 +166,12 @@ def test_report_treats_missing_logs_as_zero_evidence(tmp_path: Path) -> None:
     report = readiness_report.run_from_args(_args(tmp_path, jobs_file))
 
     assert report["summary"]["task_records"] == 0
+    assert report["summary"]["task_records_by_class"] == {
+        "active_safe_deterministic": 0,
+        "review_candidate": 0,
+    }
+    assert report["summary"]["active_safe_deterministic_task_records"] == 0
+    assert report["summary"]["review_candidate_task_records"] == 0
     assert report["summary"]["verdicts"] == 0
     assert report["summary"]["promotion_ready"] == 0
     assert report["jobs"][0]["promotion"]["reviewed"]["eligible"] is False
@@ -226,6 +246,41 @@ def test_report_keeps_active_safe_jobs_ready_when_autopilot_running(
     assert active_safe["active_safe"] is True
     assert active_safe["requires_quiet_window"] is False
     assert active_safe["execution_mode"] == "deterministic_command"
+    assert active_safe["task_records"]["record_class"] == "active_safe_deterministic"
+
+
+def test_report_classifies_active_safe_records_separately_from_review_candidates(
+    tmp_path: Path,
+) -> None:
+    jobs_file = tmp_path / "lab_jobs.yaml"
+    _write_jobs_file(jobs_file)
+    _append_active_safe_job(jobs_file)
+    queue = tmp_path / "queue"
+    _write_jsonl(
+        queue / "task_records.jsonl",
+        _records("shadow_ready", "shadow", 2)
+        + _records("active_safe_watch", "shadow", 3),
+    )
+
+    report = readiness_report.run_from_args(
+        _args(tmp_path, jobs_file, skip_process_check=True)
+    )
+
+    assert report["summary"]["task_records"] == 5
+    assert report["summary"]["task_records_by_class"] == {
+        "active_safe_deterministic": 3,
+        "review_candidate": 2,
+    }
+    assert report["summary"]["active_safe_deterministic_task_records"] == 3
+    assert report["summary"]["review_candidate_task_records"] == 2
+    shadow_ready = next(job for job in report["jobs"] if job["job_id"] == "shadow_ready")
+    active_safe = next(job for job in report["jobs"] if job["job_id"] == "active_safe_watch")
+    assert shadow_ready["task_records"]["record_class"] == "review_candidate"
+    assert shadow_ready["task_records"]["review_candidate"] == 2
+    assert shadow_ready["task_records"]["active_safe_deterministic"] == 0
+    assert active_safe["task_records"]["record_class"] == "active_safe_deterministic"
+    assert active_safe["task_records"]["active_safe_deterministic"] == 3
+    assert active_safe["task_records"]["review_candidate"] == 0
 
 
 def test_report_skip_process_check_leaves_ready_now_unknown(tmp_path: Path) -> None:

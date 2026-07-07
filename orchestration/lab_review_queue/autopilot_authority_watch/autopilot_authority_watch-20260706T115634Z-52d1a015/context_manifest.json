@@ -1,0 +1,47 @@
+{
+  "generated_at": "2026-07-06T11:56:34+00:00",
+  "job_id": "autopilot_authority_watch",
+  "jobs_file": "/mnt/raid0/llm/epyc-orchestrator/orchestration/lab_jobs.yaml",
+  "missing_sources": [],
+  "run_id": "autopilot_authority_watch-20260706T115634Z-52d1a015",
+  "schema_version": "lab_context_manifest.v1",
+  "source_count": 2,
+  "sources": [
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/scripts/autopilot/phase_health_report.py",
+      "bytes": 4370,
+      "excerpt": "#!/usr/bin/env python3\n\"\"\"Read-only AutoPilot phase heartbeat health report.\"\"\"\n\nfrom __future__ import annotations\n\nimport argparse\nimport json\nfrom pathlib import Path\nimport sys\n\nSCRIPT_DIR = Path(__file__).resolve().parent\nORCH_ROOT = SCRIPT_DIR.parents[1]\nsys.path.insert(0, str(SCRIPT_DIR))\nsys.path.insert(0, str(ORCH_ROOT))\n\nfrom phase_status import (  # noqa: E402\n    DEFAULT_AUTOPILOT_LOG_PATH,\n    DEFAULT_JOURNAL_DIR,\n    DEFAULT_OUTCOME_STALL_FRONTIER_TRIALS,\n    DEFAULT_OUTCOME_STALL_PROMOTION_TRIALS,\n    DEFAULT_OUTCOME_RECENT_WINDOW_TRIALS,\n    DEFAULT_STALE_AFTER_S,\n    PHASE_PATH,\n    build_phase_health_report,\n    format_phase_health_report,\n)\n\n\ndef _parse_args(argv: list[str] | None = None) -> argparse.Namespace:\n    parser = argparse.ArgumentParser(\n        description=\"Report AutoPilot phase-heartbeat liveness without writing state.\"\n    )\n    parser.add_argument(\n        \"--phase-path\",\n        type=Path,\n        default=PHASE_PATH,\n        help=f\"Phase heartbeat JSON path (default: {PHASE_PATH})\",\n    )\n    parser.add_argument(\n        \"--stale-after-s\",\n        type=float,\n        default=DEFAULT_STALE_AFTER_S,\n        help=\"Heartbeat age threshold that marks an active phase stale.\",\n    )\n    parser.add_argument(\n        \"--log-path\",\n        type=Path,\n        default=None,\n        help=(\n            \"AutoPilot log path used to fill missing in-flight eval counters \"\n            f\"(default for the live phase path: {DEFAULT_AUTOPILOT_LOG_PATH})\"\n        ),\n    )\n    parser.add_argument(\"--json\", action=\"store_true\", help=\"Emit structured JSON.\")\n    parser.add_argument(\n        \"--strict\",\n        action=\"store_true\",\n        help=\"Exit nonzero when the heartbeat is missing, dead, or stale.\",\n    )\n    parser.add_argument(\n        \"--require-current-code\",\n        action=\"store_true\",\n        help=(\n            \"Also fail strict checks when the live AutoPilot process predates \"\n            \"runtime AutoPilot source changes.\"\n        ),\n    )\n    parser.add_argument(\n        \"--journal-dir\",\n        type=Path,\n        default=DEFAULT_JOURNAL_DIR,\n        help=f\"AutoPilot journal shard directory (default: {DEFAULT_JOURNAL_DIR})\",\n    )\n    pa",
+      "kind": "source_excerpt",
+      "path": "scripts/autopilot/phase_health_report.py",
+      "repo": "epyc-orchestrator",
+      "sha256": "5ed5c27589f18465eabb2326f7c2c8d1dc9e53562f525707fe11892fac8df35f",
+      "truncated": true
+    },
+    {
+      "abs_path": "/mnt/raid0/llm/epyc-orchestrator/scripts/autopilot/phase_status.py",
+      "bytes": 33079,
+      "excerpt": "\"\"\"Autopilot phase heartbeat and low-priority async task helpers.\n\nThe dashboard can only explain idle time if the controller loop publishes\nwhat it is doing before planner/model taps become active. This module keeps\nthat state in /mnt/raid0/llm/tmp as a best-effort JSON heartbeat.\n\"\"\"\n\nfrom __future__ import annotations\n\nimport contextlib\nimport fcntl\nimport json\nimport logging\nimport os\nimport re\nimport subprocess\nimport tempfile\nimport threading\nimport time\nfrom concurrent.futures import Future, ThreadPoolExecutor\nfrom datetime import datetime, timezone\nfrom pathlib import Path\nfrom typing import Any, Callable, Iterable, Iterator\n\nlog = logging.getLogger(\"autopilot.phase\")\n\nORCH_ROOT = Path(__file__).resolve().parents[2]\nRESEARCH_ROOT = ORCH_ROOT.parent / \"epyc-inference-research\"\nPHASE_PATH = Path(\"/mnt/raid0/llm/tmp/autopilot_phase.json\")\nPHASE_EVENTS_PATH = Path(\"/mnt/raid0/llm/tmp/autopilot_phase.jsonl\")\nDEFAULT_AUTOPILOT_LOG_PATH = ORCH_ROOT / \"logs\" / \"autopilot.log\"\nDEFAULT_JOURNAL_DIR = ORCH_ROOT / \"orchestration\"\nDEFAULT_TMP_AUTOPILOT_LOG_DIR = Path(\"/mnt/raid0/llm/tmp\")\nDEFAULT_TMP_AUTOPILOT_LOG_PATTERN = \"autopilot*.log\"\nDEFAULT_STALE_AFTER_S = 900.0\nDEFAULT_OUTCOME_STALL_FRONTIER_TRIALS = int(\n    os.environ.get(\"AUTOPILOT_OUTCOME_STALL_FRONTIER_TRIALS\", \"150\")\n)\nDEFAULT_OUTCOME_STALL_PROMOTION_TRIALS = int(\n    os.environ.get(\"AUTOPILOT_OUTCOME_STALL_PROMOTION_TRIALS\", \"300\")\n)\nDEFAULT_OUTCOME_RECENT_WINDOW_TRIALS = int(\n    os.environ.get(\"AUTOPILOT_OUTCOME_RECENT_WINDOW_TRIALS\", \"120\")\n)\nLOG_TAIL_BYTES = 65536\nLOG_TAIL_CANDIDATE_LIMIT = 8\nEVAL_PROGRESS_FIELDS = (\n    \"eval_label\",\n    \"eval_completed_questions\",\n    \"eval_total_questions\",\n    \"eval_correct_questions\",\n    \"eval_correct_pct\",\n    \"eval_concurrency\",\n)\nAUTOPILOT_ENV_FLAGS = (\n    \"AUTOPILOT_PLANNER_HINTS\",\n    \"AUTOPILOT_SEQ_VERDICT\",\n    \"AUTOPILOT_W6_AUDIT_BLOCK\",\n    \"AUTOPILOT_W6_AUDIT_N\",\n    \"AUTOPILOT_W6_AUDIT_EVERY_N_TRIALS\",\n    \"AUTOPILOT_W6_AUDIT_SHADOW_ONLY\",\n    \"AUTOPILOT_PLANNER_TIMEOUT\",\n)\nAUTOPILOT_RUNTIME_SOURCE_PATHS = (\n    ORCH_ROOT / \"scripts\" / \"autopilot\" / \"autopilot.py\",\n    ORCH_ROOT / \"scripts\" / \"autopilot\" / \"actions.py\",\n    ORCH_ROOT / \"scripts\" /",
+      "kind": "source_excerpt",
+      "path": "scripts/autopilot/phase_status.py",
+      "repo": "epyc-orchestrator",
+      "sha256": "29a9e4db03f21fe01aae8a091dd5ca0f4c4b31c78f83090070cbcdc84c884c80",
+      "truncated": true
+    }
+  ],
+  "summary": {
+    "budget_exhausted": false,
+    "excerpt_chars": 4400,
+    "kinds": {
+      "source_excerpt": 2
+    },
+    "max_context_chars": 16000,
+    "missing_source_count": 0,
+    "repos": [
+      "epyc-orchestrator"
+    ],
+    "schema_version": "lab_context_summary.v1",
+    "source_bytes": 37449,
+    "source_count": 2,
+    "truncated_source_count": 2
+  }
+}

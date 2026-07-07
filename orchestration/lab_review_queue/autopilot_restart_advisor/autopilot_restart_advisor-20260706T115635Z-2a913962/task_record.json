@@ -1,0 +1,55 @@
+{
+  "artifacts": {
+    "context_manifest": "autopilot_restart_advisor/autopilot_restart_advisor-20260706T115635Z-2a913962/context_manifest.json",
+    "output": "autopilot_restart_advisor/autopilot_restart_advisor-20260706T115635Z-2a913962/output.json",
+    "prompt": "autopilot_restart_advisor/autopilot_restart_advisor-20260706T115635Z-2a913962/prompt.txt"
+  },
+  "chat_meta": {
+    "command": [
+      "python3",
+      "scripts/autopilot/autopilot_restart_advisor.py",
+      "--json"
+    ],
+    "elapsed_s": 0.389,
+    "returncode": 0,
+    "stderr_tail": ""
+  },
+  "context": {
+    "budget_exhausted": false,
+    "excerpt_chars": 6600,
+    "kinds": {
+      "source_excerpt": 3
+    },
+    "max_context_chars": 16000,
+    "missing_source_count": 0,
+    "repos": [
+      "epyc-orchestrator"
+    ],
+    "schema_version": "lab_context_summary.v1",
+    "source_bytes": 49299,
+    "source_count": 3,
+    "truncated_source_count": 3
+  },
+  "generated_at": "2026-07-06T11:56:35+00:00",
+  "invocation_mode": "deterministic_command",
+  "job_id": "autopilot_restart_advisor",
+  "model_role": null,
+  "policy": {
+    "direct_repo_writes_allowed": false,
+    "review_queue_only": true
+  },
+  "record_type": "task_record",
+  "repo": {
+    "branch": "spec-dec-mtp-refresh-2026-06-22",
+    "commit": "60523b6be9b1aa13e2d2957044e0f61b93f9e300",
+    "dirty": true,
+    "path": "/mnt/raid0/llm/epyc-orchestrator"
+  },
+  "risk": "read_only",
+  "run_id": "autopilot_restart_advisor-20260706T115635Z-2a913962",
+  "schema_version": "lab_task_record.v1",
+  "stage": "shadow",
+  "validation": {
+    "output_contract": "passed"
+  }
+}

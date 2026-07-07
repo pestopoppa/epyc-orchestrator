@@ -1,0 +1,36 @@
+{
+  "builder": "intake_triage_builder.v1",
+  "counts": {
+    "emitted": 100,
+    "label_sources": {
+      "operator": 100,
+      "research-intake": 678
+    },
+    "reviewed_labels_loaded": 100,
+    "reviewed_labels_used": 100,
+    "source_rows": 778,
+    "verdicts": {
+      "adopt_component": 21,
+      "adopt_patterns": 98,
+      "already_integrated": 120,
+      "new_opportunity": 62,
+      "not_applicable": 154,
+      "superseded": 3,
+      "worth_investigating": 320
+    },
+    "written": 100
+  },
+  "generated_at": "2026-07-07T00:09:11+00:00",
+  "options": {
+    "include_excluded": false,
+    "require_reviewed_labels": true,
+    "reviewed_labels": "orchestration/datasets/intake_triage_reviewed.jsonl",
+    "trusted_label_sources": [
+      "operator"
+    ]
+  },
+  "output_path": "orchestration/datasets/intake_triage_reviewed_only_20260707T000910Z.jsonl",
+  "schema_version": "dataset_builder_manifest.v1",
+  "source_path": "/mnt/raid0/llm/epyc-root/research/intake_index.yaml",
+  "source_sha256": "344e700a2eb90f60d42b52f9ca2733a8a24b6e1138c82a2ac0a6d778f8d28c51"
+}

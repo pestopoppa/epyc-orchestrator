@@ -1,0 +1,947 @@
+{
+  "generated_at": "2026-07-07T00:04:02+00:00",
+  "labels_needed": 75,
+  "min_reviewed_labels": 100,
+  "next_review_items": [
+    {
+      "categories": [
+        "agent_architecture",
+        "memory_augmented"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "hermes-agent-index.md",
+      "destination_index": "",
+      "intake_id": "intake-144",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-144 --verdict worth_investigating --destination-handoff hermes-agent-index.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "title": "Deep Agents \u2014 Batteries-Included Agent Harness (LangGraph)",
+      "url": "https://github.com/langchain-ai/deepagents"
+    },
+    {
+      "categories": [
+        "agent_architecture",
+        "inference_serving"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "hermes-agent-index.md",
+      "destination_index": "",
+      "intake_id": "intake-145",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-145 --verdict worth_investigating --destination-handoff hermes-agent-index.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "title": "Agent Protocol \u2014 Framework-Agnostic Agent Serving Standard",
+      "url": "https://github.com/langchain-ai/agent-protocol"
+    },
+    {
+      "categories": [
+        "agent_architecture",
+        "inference_serving"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "hermes-agent-index.md",
+      "destination_index": "",
+      "intake_id": "intake-146",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-146 --verdict worth_investigating --destination-handoff hermes-agent-index.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "title": "LangGraph \u2014 Low-Level Agent Orchestration as Graphs",
+      "url": "https://github.com/langchain-ai/langgraph"
+    },
+    {
+      "categories": [
+        "autonomous_research",
+        "agent_architecture"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "autopilot-continuous-optimization.md",
+      "destination_index": "",
+      "intake_id": "intake-148",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-148 --verdict worth_investigating --destination-handoff autopilot-continuous-optimization.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "title": "AutoResearch: AI agents running autonomous ML experiments on single GPU",
+      "url": "https://github.com/karpathy/autoresearch"
+    },
+    {
+      "categories": [
+        "autonomous_research",
+        "agent_architecture"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "autopilot-continuous-optimization.md",
+      "destination_index": "",
+      "intake_id": "intake-149",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-149 --verdict worth_investigating --destination-handoff autopilot-continuous-optimization.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "title": "PraxLab: Autonomous experiment harness for AI agent model training",
+      "url": "https://github.com/Hamza-Mos/praxlab"
+    },
+    {
+      "categories": [
+        "agent_architecture",
+        "benchmark_methodology"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "autopilot-continuous-optimization.md",
+      "destination_index": "",
+      "intake_id": "intake-150",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-150 --verdict worth_investigating --destination-handoff autopilot-continuous-optimization.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "title": "Get Physics Done (GPD): Agentic AI copilot for physics research",
+      "url": "https://github.com/psi-oss/get-physics-done"
+    },
+    {
+      "categories": [
+        "agent_architecture",
+        "retrieval_augmented_decoding"
+      ],
+      "current_verdict": "new_opportunity",
+      "destination_handoff": "claude-code-local-constellation-routing.md",
+      "destination_index": "",
+      "intake_id": "intake-151",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-151 --verdict new_opportunity --destination-handoff claude-code-local-constellation-routing.md",
+      "relevance": "high",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "title": "GitNexus: Client-side knowledge graph for codebase intelligence via MCP",
+      "url": "https://github.com/abhigyanpatwari/GitNexus"
+    },
+    {
+      "categories": [
+        "ssm_hybrid",
+        "moe_optimization",
+        "inference_serving",
+        "speculative_decoding"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "ssm-hybrid-acceleration.md",
+      "destination_index": "",
+      "intake_id": "intake-152",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-152 --verdict worth_investigating --destination-handoff ssm-hybrid-acceleration.md",
+      "relevance": "high",
+      "source_text_excluded": true,
+      "source_type": "blog",
+      "title": "Qwen3.5 Serving Recipe: Configuration Tips for Hybrid MoE+Delta Net",
+      "url": "https://docs.vllm.ai/projects/recipes/en/latest/Qwen/Qwen3.5.html"
+    },
+    {
+      "categories": [
+        "agent_architecture",
+        "context_extension",
+        "training_distillation"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "rlm-orchestrator-roadmap.md",
+      "destination_index": "",
+      "intake_id": "intake-154",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-154 --verdict worth_investigating --destination-handoff rlm-orchestrator-roadmap.md",
+      "relevance": "high",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "title": "Scaling Long-Horizon LLM Agent via Context-Folding",
+      "url": "https://arxiv.org/abs/2510.11967"
+    },
+    {
+      "categories": [
+        "agent_architecture",
+        "context_extension"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "reasoning-compression.md",
+      "destination_index": "",
+      "intake_id": "intake-155",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-155 --verdict worth_investigating --destination-handoff reasoning-compression.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "title": "AgentFold: Long-Horizon Web Agents with Proactive Context Management",
+      "url": "https://arxiv.org/abs/2510.24699"
+    },
+    {
+      "categories": [
+        "context_extension",
+        "memory_augmented",
+        "training_distillation"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "yarn-context-extension-research.md",
+      "destination_index": "",
+      "intake_id": "intake-156",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-156 --verdict worth_investigating --destination-handoff yarn-context-extension-research.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "title": "MemAgent: Reshaping Long-Context LLM with Multi-Conv RL-based Memory Agent",
+      "url": "https://arxiv.org/abs/2507.02259"
+    },
+    {
+      "categories": [
+        "agent_architecture",
+        "context_extension"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "reasoning-compression.md",
+      "destination_index": "",
+      "intake_id": "intake-157",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-157 --verdict worth_investigating --destination-handoff reasoning-compression.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "title": "ReSum: Unlocking Long-Horizon Search Intelligence via Context Summarization",
+      "url": "https://arxiv.org/abs/2509.13313"
+    },
+    {
+      "categories": [
+        "speculative_decoding",
+        "inference_serving"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "mtp-speculative-decoding.md",
+      "destination_index": "",
+      "intake_id": "intake-158",
+      "novelty": "high",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-158 --verdict worth_investigating --destination-handoff mtp-speculative-decoding.md",
+      "relevance": "high",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "title": "DFlash: Block Diffusion for Flash Speculative Decoding",
+      "url": "https://arxiv.org/abs/2602.06036"
+    },
+    {
+      "categories": [
+        "speculative_decoding",
+        "inference_serving"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "",
+      "destination_index": "",
+      "intake_id": "intake-159",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-159 --verdict worth_investigating",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "title": "DART: Diffusion-Inspired Speculative Decoding for Fast LLM Inference",
+      "url": "https://arxiv.org/abs/2601.19278"
+    },
+    {
+      "categories": [
+        "document_processing",
+        "multimodal"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "multimodal-pipeline.md",
+      "destination_index": "",
+      "intake_id": "intake-161",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-161 --verdict worth_investigating --destination-handoff multimodal-pipeline.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "title": "OpenDataLoader PDF - PDF Parser for AI-ready data",
+      "url": "https://github.com/opendataloader-project/opendataloader-pdf"
+    },
+    {
+      "categories": [
+        "quantization",
+        "hardware_optimization",
+        "training_distillation"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "08-doc-to-lora-prototype.md",
+      "destination_index": "",
+      "intake_id": "intake-162",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-162 --verdict worth_investigating --destination-handoff 08-doc-to-lora-prototype.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "title": "QVAC Fabric LLM.cpp: llama.cpp fork with Vulkan/Metal BitNet GPU inference and LoRA fine-tuning",
+      "url": "https://github.com/tetherto/qvac-fabric-llm.cpp"
+    },
+    {
+      "categories": [
+        "quantization",
+        "hardware_optimization",
+        "training_distillation"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "08-doc-to-lora-prototype.md",
+      "destination_index": "",
+      "intake_id": "intake-164",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-164 --verdict worth_investigating --destination-handoff 08-doc-to-lora-prototype.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "blog",
+      "title": "LoRA Fine-Tuning BitNet b1.58 LLMs on Heterogeneous Edge GPUs via QVAC Fabric",
+      "url": "https://huggingface.co/blog/qvac/fabric-llm-finetune-bitnet"
+    },
+    {
+      "categories": [
+        "quantization",
+        "hardware_optimization"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "",
+      "destination_index": "",
+      "intake_id": "intake-165",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-165 --verdict worth_investigating",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "title": "BitNet b1.58 2B4T Technical Report",
+      "url": "https://arxiv.org/abs/2504.12285"
+    },
+    {
+      "categories": [
+        "moe_optimization",
+        "quantization",
+        "hardware_optimization"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "ssm-hybrid-acceleration.md",
+      "destination_index": "",
+      "intake_id": "intake-166",
+      "novelty": "high",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-166 --verdict worth_investigating --destination-handoff ssm-hybrid-acceleration.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "title": "Flash-MoE: Pure C/Metal inference engine for Qwen3.5-397B on MacBook Pro",
+      "url": "https://github.com/danveloper/flash-moe"
+    },
+    {
+      "categories": [
+        "moe_optimization",
+        "hardware_optimization"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "",
+      "destination_index": "",
+      "intake_id": "intake-167",
+      "novelty": "high",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-167 --verdict worth_investigating",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "title": "FlashMoE: Reducing SSD I/O Bottlenecks via ML-Based Cache Replacement for MoE Inference on Edge Devices",
+      "url": "https://arxiv.org/abs/2601.17063"
+    },
+    {
+      "categories": [
+        "moe_optimization",
+        "speculative_decoding"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "ssm-hybrid-acceleration.md",
+      "destination_index": "",
+      "intake_id": "intake-168",
+      "novelty": "high",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-168 --verdict worth_investigating --destination-handoff ssm-hybrid-acceleration.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "title": "SpecMoEOff: Accelerating MoE Inference by Hiding Offloading Latency with Speculative Decoding",
+      "url": "https://arxiv.org/abs/2508.21706"
+    },
+    {
+      "categories": [
+        "hardware_optimization",
+        "moe_optimization"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "",
+      "destination_index": "",
+      "intake_id": "intake-169",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-169 --verdict worth_investigating",
+      "relevance": "low",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "title": "LLM in a Flash: Efficient Large Language Model Inference with Limited Memory",
+      "url": "https://arxiv.org/abs/2312.11514"
+    },
+    {
+      "categories": [
+        "agent_architecture",
+        "swarm_techniques"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "hermes-agent-index.md",
+      "destination_index": "",
+      "intake_id": "intake-172",
+      "novelty": "high",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-172 --verdict worth_investigating --destination-handoff hermes-agent-index.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "blog",
+      "title": "OpenGauss: Open Source Autoformalization Harness for Lean",
+      "url": "https://www.math.inc/opengauss"
+    },
+    {
+      "categories": [
+        "agent_architecture",
+        "swarm_techniques"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "hermes-agent-index.md",
+      "destination_index": "",
+      "intake_id": "intake-173",
+      "novelty": "high",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-173 --verdict worth_investigating --destination-handoff hermes-agent-index.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "title": "OpenGauss GitHub Repository \u2014 Lean Workflow Orchestrator",
+      "url": "https://github.com/math-inc/OpenGauss"
+    },
+    {
+      "categories": [
+        "retrieval_augmented_decoding",
+        "routing_intelligence"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "routing-intelligence.md",
+      "destination_index": "",
+      "intake_id": "intake-174",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-174 --verdict worth_investigating --destination-handoff routing-intelligence.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "title": "Reason-ModernColBERT: Late-Interaction Retriever for Reasoning Tasks",
+      "url": "https://huggingface.co/lightonai/Reason-ModernColBERT"
+    }
+  ],
+  "privacy": {
+    "raw_text_in_report": false,
+    "reported_fields": "aggregate counts plus sanitized pending review sample"
+  },
+  "queue_path": "orchestration/datasets/intake_triage_review_queue.jsonl",
+  "queue_rows": 120,
+  "queue_unique_intake_ids": 120,
+  "ready_for_baseline": false,
+  "remaining_queue_items": 95,
+  "review_batch_template": [
+    {
+      "categories": [
+        "agent_architecture",
+        "memory_augmented"
+      ],
+      "destination_handoff": "hermes-agent-index.md",
+      "destination_index": "",
+      "intake_id": "intake-144",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "suggested_verdict": "worth_investigating",
+      "title": "Deep Agents \u2014 Batteries-Included Agent Harness (LangGraph)",
+      "url": "https://github.com/langchain-ai/deepagents",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "agent_architecture",
+        "inference_serving"
+      ],
+      "destination_handoff": "hermes-agent-index.md",
+      "destination_index": "",
+      "intake_id": "intake-145",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "suggested_verdict": "worth_investigating",
+      "title": "Agent Protocol \u2014 Framework-Agnostic Agent Serving Standard",
+      "url": "https://github.com/langchain-ai/agent-protocol",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "agent_architecture",
+        "inference_serving"
+      ],
+      "destination_handoff": "hermes-agent-index.md",
+      "destination_index": "",
+      "intake_id": "intake-146",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "suggested_verdict": "worth_investigating",
+      "title": "LangGraph \u2014 Low-Level Agent Orchestration as Graphs",
+      "url": "https://github.com/langchain-ai/langgraph",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "autonomous_research",
+        "agent_architecture"
+      ],
+      "destination_handoff": "autopilot-continuous-optimization.md",
+      "destination_index": "",
+      "intake_id": "intake-148",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "suggested_verdict": "worth_investigating",
+      "title": "AutoResearch: AI agents running autonomous ML experiments on single GPU",
+      "url": "https://github.com/karpathy/autoresearch",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "autonomous_research",
+        "agent_architecture"
+      ],
+      "destination_handoff": "autopilot-continuous-optimization.md",
+      "destination_index": "",
+      "intake_id": "intake-149",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "suggested_verdict": "worth_investigating",
+      "title": "PraxLab: Autonomous experiment harness for AI agent model training",
+      "url": "https://github.com/Hamza-Mos/praxlab",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "agent_architecture",
+        "benchmark_methodology"
+      ],
+      "destination_handoff": "autopilot-continuous-optimization.md",
+      "destination_index": "",
+      "intake_id": "intake-150",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "suggested_verdict": "worth_investigating",
+      "title": "Get Physics Done (GPD): Agentic AI copilot for physics research",
+      "url": "https://github.com/psi-oss/get-physics-done",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "agent_architecture",
+        "retrieval_augmented_decoding"
+      ],
+      "destination_handoff": "claude-code-local-constellation-routing.md",
+      "destination_index": "",
+      "intake_id": "intake-151",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "suggested_verdict": "new_opportunity",
+      "title": "GitNexus: Client-side knowledge graph for codebase intelligence via MCP",
+      "url": "https://github.com/abhigyanpatwari/GitNexus",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "ssm_hybrid",
+        "moe_optimization",
+        "inference_serving",
+        "speculative_decoding"
+      ],
+      "destination_handoff": "ssm-hybrid-acceleration.md",
+      "destination_index": "",
+      "intake_id": "intake-152",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "blog",
+      "suggested_verdict": "worth_investigating",
+      "title": "Qwen3.5 Serving Recipe: Configuration Tips for Hybrid MoE+Delta Net",
+      "url": "https://docs.vllm.ai/projects/recipes/en/latest/Qwen/Qwen3.5.html",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "agent_architecture",
+        "context_extension",
+        "training_distillation"
+      ],
+      "destination_handoff": "rlm-orchestrator-roadmap.md",
+      "destination_index": "",
+      "intake_id": "intake-154",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "suggested_verdict": "worth_investigating",
+      "title": "Scaling Long-Horizon LLM Agent via Context-Folding",
+      "url": "https://arxiv.org/abs/2510.11967",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "agent_architecture",
+        "context_extension"
+      ],
+      "destination_handoff": "reasoning-compression.md",
+      "destination_index": "",
+      "intake_id": "intake-155",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "suggested_verdict": "worth_investigating",
+      "title": "AgentFold: Long-Horizon Web Agents with Proactive Context Management",
+      "url": "https://arxiv.org/abs/2510.24699",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "context_extension",
+        "memory_augmented",
+        "training_distillation"
+      ],
+      "destination_handoff": "yarn-context-extension-research.md",
+      "destination_index": "",
+      "intake_id": "intake-156",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "suggested_verdict": "worth_investigating",
+      "title": "MemAgent: Reshaping Long-Context LLM with Multi-Conv RL-based Memory Agent",
+      "url": "https://arxiv.org/abs/2507.02259",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "agent_architecture",
+        "context_extension"
+      ],
+      "destination_handoff": "reasoning-compression.md",
+      "destination_index": "",
+      "intake_id": "intake-157",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "suggested_verdict": "worth_investigating",
+      "title": "ReSum: Unlocking Long-Horizon Search Intelligence via Context Summarization",
+      "url": "https://arxiv.org/abs/2509.13313",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "speculative_decoding",
+        "inference_serving"
+      ],
+      "destination_handoff": "mtp-speculative-decoding.md",
+      "destination_index": "",
+      "intake_id": "intake-158",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "suggested_verdict": "worth_investigating",
+      "title": "DFlash: Block Diffusion for Flash Speculative Decoding",
+      "url": "https://arxiv.org/abs/2602.06036",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "speculative_decoding",
+        "inference_serving"
+      ],
+      "destination_handoff": "",
+      "destination_index": "",
+      "intake_id": "intake-159",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "suggested_verdict": "worth_investigating",
+      "title": "DART: Diffusion-Inspired Speculative Decoding for Fast LLM Inference",
+      "url": "https://arxiv.org/abs/2601.19278",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "document_processing",
+        "multimodal"
+      ],
+      "destination_handoff": "multimodal-pipeline.md",
+      "destination_index": "",
+      "intake_id": "intake-161",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "suggested_verdict": "worth_investigating",
+      "title": "OpenDataLoader PDF - PDF Parser for AI-ready data",
+      "url": "https://github.com/opendataloader-project/opendataloader-pdf",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "quantization",
+        "hardware_optimization",
+        "training_distillation"
+      ],
+      "destination_handoff": "08-doc-to-lora-prototype.md",
+      "destination_index": "",
+      "intake_id": "intake-162",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "suggested_verdict": "worth_investigating",
+      "title": "QVAC Fabric LLM.cpp: llama.cpp fork with Vulkan/Metal BitNet GPU inference and LoRA fine-tuning",
+      "url": "https://github.com/tetherto/qvac-fabric-llm.cpp",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "quantization",
+        "hardware_optimization",
+        "training_distillation"
+      ],
+      "destination_handoff": "08-doc-to-lora-prototype.md",
+      "destination_index": "",
+      "intake_id": "intake-164",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "blog",
+      "suggested_verdict": "worth_investigating",
+      "title": "LoRA Fine-Tuning BitNet b1.58 LLMs on Heterogeneous Edge GPUs via QVAC Fabric",
+      "url": "https://huggingface.co/blog/qvac/fabric-llm-finetune-bitnet",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "quantization",
+        "hardware_optimization"
+      ],
+      "destination_handoff": "",
+      "destination_index": "",
+      "intake_id": "intake-165",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "suggested_verdict": "worth_investigating",
+      "title": "BitNet b1.58 2B4T Technical Report",
+      "url": "https://arxiv.org/abs/2504.12285",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "moe_optimization",
+        "quantization",
+        "hardware_optimization"
+      ],
+      "destination_handoff": "ssm-hybrid-acceleration.md",
+      "destination_index": "",
+      "intake_id": "intake-166",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "suggested_verdict": "worth_investigating",
+      "title": "Flash-MoE: Pure C/Metal inference engine for Qwen3.5-397B on MacBook Pro",
+      "url": "https://github.com/danveloper/flash-moe",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "moe_optimization",
+        "hardware_optimization"
+      ],
+      "destination_handoff": "",
+      "destination_index": "",
+      "intake_id": "intake-167",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "suggested_verdict": "worth_investigating",
+      "title": "FlashMoE: Reducing SSD I/O Bottlenecks via ML-Based Cache Replacement for MoE Inference on Edge Devices",
+      "url": "https://arxiv.org/abs/2601.17063",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "moe_optimization",
+        "speculative_decoding"
+      ],
+      "destination_handoff": "ssm-hybrid-acceleration.md",
+      "destination_index": "",
+      "intake_id": "intake-168",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "suggested_verdict": "worth_investigating",
+      "title": "SpecMoEOff: Accelerating MoE Inference by Hiding Offloading Latency with Speculative Decoding",
+      "url": "https://arxiv.org/abs/2508.21706",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "hardware_optimization",
+        "moe_optimization"
+      ],
+      "destination_handoff": "",
+      "destination_index": "",
+      "intake_id": "intake-169",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "suggested_verdict": "worth_investigating",
+      "title": "LLM in a Flash: Efficient Large Language Model Inference with Limited Memory",
+      "url": "https://arxiv.org/abs/2312.11514",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "agent_architecture",
+        "swarm_techniques"
+      ],
+      "destination_handoff": "hermes-agent-index.md",
+      "destination_index": "",
+      "intake_id": "intake-172",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "blog",
+      "suggested_verdict": "worth_investigating",
+      "title": "OpenGauss: Open Source Autoformalization Harness for Lean",
+      "url": "https://www.math.inc/opengauss",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "agent_architecture",
+        "swarm_techniques"
+      ],
+      "destination_handoff": "hermes-agent-index.md",
+      "destination_index": "",
+      "intake_id": "intake-173",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "suggested_verdict": "worth_investigating",
+      "title": "OpenGauss GitHub Repository \u2014 Lean Workflow Orchestrator",
+      "url": "https://github.com/math-inc/OpenGauss",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "retrieval_augmented_decoding",
+        "routing_intelligence"
+      ],
+      "destination_handoff": "routing-intelligence.md",
+      "destination_index": "",
+      "intake_id": "intake-174",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "suggested_verdict": "worth_investigating",
+      "title": "Reason-ModernColBERT: Late-Interaction Retriever for Reasoning Tasks",
+      "url": "https://huggingface.co/lightonai/Reason-ModernColBERT",
+      "verdict": ""
+    }
+  ],
+  "review_batch_template_rows": 25,
+  "reviewed_label_sources": {
+    "operator": 25
+  },
+  "reviewed_labels_path": "orchestration/datasets/intake_triage_reviewed.jsonl",
+  "reviewed_queue_items": 25,
+  "reviewed_rows": 25,
+  "reviewed_unique_intake_ids": 25,
+  "schema_version": "intake_triage_review_status.v1",
+  "status": "needs_reviewed_labels",
+  "trusted_label_sources": [
+    "operator"
+  ],
+  "trusted_reviewed_rows": 25,
+  "trusted_reviewed_unique_intake_ids": 25
+}

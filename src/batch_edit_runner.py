@@ -334,6 +334,8 @@ def apply_patchset_sandboxed(
         except Exception as e:
             result.verify_passed = False
             result.add_failure("*", FailureType.VERIFY_FAILED, str(e))
+        if result.verify_passed is False and not result.failed:
+            result.add_failure("*", FailureType.VERIFY_FAILED, "verify_fn returned False")
     return result
 
 

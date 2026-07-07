@@ -87,6 +87,17 @@ def _action_text(action: dict[str, Any]) -> str:
     )
 
 
+def _leading_action_text(action: dict[str, Any]) -> str:
+    import json
+
+    return (
+        f"{json.dumps(action)}\n\n"
+        "```json:autopilot_rationale\n"
+        '{"falsifier":"x","rubric_scores":{"info_gain":3}}\n'
+        "```\n"
+    )
+
+
 def _critique_text(payload: dict[str, Any]) -> str:
     import json
 
@@ -230,6 +241,240 @@ def test_fallback_draft_gets_independent_primary_critique() -> None:
     assert [call["role"] for call in claude.calls] == ["draft", "critique"]
     assert [call["role"] for call in codex.calls] == ["draft"]
     assert planner_coordinator.uncritiqued_dispatch_block_reason(decision) == ""
+
+
+def test_currently_unavailable_primary_draft_falls_back_before_critique() -> None:
+    primary = FakeProvider(
+        "local_frontdoor",
+        [
+            PlannerProviderResult(
+                provider="local_frontdoor",
+                role="draft",
+                ok=True,
+                text=_action_text({"type": "deep_eval", "tier": 3}),
+            ),
+            PlannerProviderResult(
+                provider="local_frontdoor",
+                role="critique",
+                ok=True,
+                text=_critique_text(
+                    {
+                        "decision": "approve",
+                        "confidence": 0.91,
+                        "issues": [],
+                    }
+                ),
+            ),
+        ],
+    )
+    fallback = FakeProvider(
+        "local_worker",
+        [
+            PlannerProviderResult(
+                provider="local_worker",
+                role="draft",
+                ok=True,
+                text=_action_text({"type": "numeric_trial", "surface": "memrl_retrieval"}),
+            )
+        ],
+    )
+
+    decision = planner_coordinator.plan_with_providers(
+        "prompt",
+        session_id=None,
+        planner_state={},
+        settings=PlannerSettings(
+            primary="local_frontdoor",
+            critic="local_worker",
+            mode="draft_critique",
+            critique_policy="always",
+        ),
+        provider_factory=_factory({"local_frontdoor": primary, "local_worker": fallback}),
+        allowed_action_types=["numeric_trial", "structural_experiment"],
+    )
+
+    assert decision.action == {"type": "numeric_trial", "surface": "memrl_retrieval"}
+    assert decision.draft_provider == "local_worker"
+    assert decision.critic_provider == "local_frontdoor"
+    assert decision.critique is not None
+    assert decision.critique.decision == "approve"
+    assert [call["role"] for call in primary.calls] == ["draft", "critique"]
+    assert [call["role"] for call in fallback.calls] == ["draft"]
+    assert "local_frontdoor draft failed: action type currently unavailable: deep_eval" in (
+        decision.fallback_reason
+    )
+    assert decision.provider_trace[0]["stage"] == "draft_primary"
+    assert decision.provider_trace[0]["action_type"] == "deep_eval"
+    assert (
+        decision.provider_trace[0]["unusable_reason"]
+        == "action type currently unavailable: deep_eval"
+    )
+
+
+def test_selectable_deep_eval_tier3_local_draft_and_critic_is_accepted() -> None:
+    local_frontdoor = FakeProvider(
+        "local_frontdoor",
+        [
+            PlannerProviderResult(
+                provider="local_frontdoor",
+                role="draft",
+                ok=True,
+                text=_action_text({"type": "deep_eval", "tier": 3}),
+            )
+        ],
+    )
+    local_worker = FakeProvider(
+        "local_worker",
+        [
+            PlannerProviderResult(
+                provider="local_worker",
+                role="critique",
+                ok=True,
+                text=_critique_text(
+                    {
+                        "decision": "approve",
+                        "confidence": 0.92,
+                        "issues": [],
+                    }
+                ),
+            )
+        ],
+    )
+
+    decision = planner_coordinator.plan_with_providers(
+        "prompt",
+        session_id=None,
+        planner_state={},
+        settings=PlannerSettings(
+            primary="local_frontdoor",
+            critic="local_worker",
+            mode="draft_critique",
+            critique_policy="always",
+        ),
+        provider_factory=_factory(
+            {
+                "local_frontdoor": local_frontdoor,
+                "local_worker": local_worker,
+            }
+        ),
+        allowed_action_types=["numeric_trial", "structural_experiment", "deep_eval"],
+    )
+
+    assert decision.action == {"type": "deep_eval", "tier": 3}
+    assert decision.draft_provider == "local_frontdoor"
+    assert decision.critic_provider == "local_worker"
+    assert decision.fallback_reason == ""
+    assert decision.critique is not None
+    assert decision.critique.decision == "approve"
+    assert len(decision.provider_trace) == 2
+    assert decision.provider_trace[0]["action_type"] == "deep_eval"
+    assert decision.provider_trace[0]["unusable_reason"] == ""
+    assert "currently unavailable" not in str(decision.provider_trace)
+    assert [call["role"] for call in local_frontdoor.calls] == ["draft"]
+    assert [call["role"] for call in local_worker.calls] == ["critique"]
+    critique_prompt = local_worker.calls[0]["prompt"]
+    assert "parsed_action_type: `deep_eval`" in critique_prompt
+    assert "currently_selectable_action_types: `deep_eval, numeric_trial, structural_experiment`" in critique_prompt
+    assert "`seed_batch` and `deep_eval` are valid known action types" in critique_prompt
+
+
+def test_trial_planning_banner_only_writes_for_live_trial_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    writes: list[str] = []
+
+    class Tap:
+        def write(self, text: str) -> None:
+            writes.append(text)
+
+        def flush(self) -> None:
+            writes.append("<flush>")
+
+        def close(self) -> None:
+            writes.append("<close>")
+
+    monkeypatch.setattr(planner_coordinator, "_open_planner_tap", lambda: Tap())
+
+    planner_coordinator._write_trial_planning_banner(None)
+    assert writes == []
+
+    planner_coordinator._write_trial_planning_banner(1234)
+    assert any("TRIAL 1234" in item for item in writes)
+    assert "<flush>" in writes
+    assert "<close>" in writes
+
+
+def test_critique_prompt_distinguishes_known_action_from_availability() -> None:
+    prompt = planner_coordinator.build_critique_prompt(
+        "### Action Availability\nDo not emit seed_batch for W8 replay pressure.\n",
+        _action_text({"type": "seed_batch", "n_questions": 12}),
+        {"type": "seed_batch", "n_questions": 12},
+        {"falsifier": "x"},
+        allowed_action_types=["numeric_trial", "structural_experiment"],
+    )
+
+    assert "parsed_action_type: `seed_batch`" in prompt
+    assert "seed_batch" in prompt.split("known_action_types:", 1)[1]
+    assert "currently_selectable_action_types: `numeric_trial, structural_experiment`" in prompt
+    assert "`seed_batch` and `deep_eval` are valid known action types" in prompt
+
+
+def test_planner_archive_records_provider_trace(monkeypatch: pytest.MonkeyPatch) -> None:
+    records: list[dict[str, Any]] = []
+    monkeypatch.setattr(planner_coordinator, "_append_planner_archive", records.append)
+
+    draft_text = _action_text({"type": "numeric_trial", "surface": "memrl_retrieval"})
+    claude = FakeProvider(
+        "claude",
+        [
+            PlannerProviderResult(
+                provider="claude",
+                role="draft",
+                ok=True,
+                text=draft_text,
+            )
+        ],
+    )
+    codex = FakeProvider(
+        "codex",
+        [
+            PlannerProviderResult(
+                provider="codex",
+                role="critique",
+                ok=True,
+                text=_critique_text({"decision": "approve", "confidence": 0.9}),
+            )
+        ],
+    )
+
+    decision = planner_coordinator.plan_with_providers(
+        "prompt",
+        session_id=None,
+        planner_state={},
+        settings=PlannerSettings(
+            primary="claude",
+            critic="codex",
+            mode="draft_critique",
+            critique_policy="always",
+        ),
+        provider_factory=_factory({"claude": claude, "codex": codex}),
+    )
+
+    assert decision.provider_trace == records[-1]["provider_trace"]
+    assert records[-1]["draft_action"] == {"type": "numeric_trial", "surface": "memrl_retrieval"}
+    assert records[-1]["final_action"] == decision.action
+    assert records[-1]["provider_trace"][0] == {
+        "stage": "draft_primary",
+        "role": "draft",
+        "provider": "claude",
+        "ok": True,
+        "text_chars": len(draft_text),
+        "error": "",
+        "parse_ok": True,
+        "action_type": "numeric_trial",
+        "unusable_reason": "",
+    }
+    assert records[-1]["provider_trace"][1]["stage"] == "critique_primary"
+    assert records[-1]["provider_trace"][1]["parse_ok"] is True
+    assert records[-1]["provider_trace"][1]["critique_decision"] == "approve"
 
 
 def test_fallback_draft_gets_primary_critique_even_when_draft_failure_opens_circuit() -> None:
@@ -401,11 +646,11 @@ def test_spend_breaker_forces_cloud_primary_to_local_providers(
         "summarize_economics",
         lambda *, days=7: _fake_economics_ledger(triggered=True),
     )
-    local_chat = FakeProvider(
-        "local_chat",
+    local_frontdoor = FakeProvider(
+        "local_frontdoor",
         [
             PlannerProviderResult(
-                provider="local_chat",
+                provider="local_frontdoor",
                 role="draft",
                 ok=True,
                 text=_action_text({"type": "numeric_trial", "surface": "repl_executor"}),
@@ -437,19 +682,81 @@ def test_spend_breaker_forces_cloud_primary_to_local_providers(
         ),
         provider_factory=_factory(
             {
-                "local_chat": local_chat,
+                "local_frontdoor": local_frontdoor,
                 "local_worker": local_worker,
             }
         ),
     )
 
-    assert decision.draft_provider == "local_chat"
+    assert decision.draft_provider == "local_frontdoor"
     assert decision.critic_provider == "local_worker"
     assert decision.action == {"type": "numeric_trial", "surface": "repl_executor"}
     assert state["_spend_breaker"]["active"] is True
+    assert state["_spend_breaker"]["local_primary"] == "local_frontdoor"
+    assert state["_spend_breaker"]["local_critic"] == "local_worker"
     assert state["_spend_breaker"]["previous_primary"] == "claude"
     assert state["_spend_breaker"]["previous_critic"] == "codex"
-    assert [call["role"] for call in local_chat.calls] == ["draft"]
+    assert [call["role"] for call in local_frontdoor.calls] == ["draft"]
+    assert [call["role"] for call in local_worker.calls] == ["critique"]
+
+
+def test_spend_breaker_accepts_local_frontdoor_leading_json_action(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from scripts.economics import ledger as ledger_mod
+
+    monkeypatch.setenv("AUTOPILOT_PLANNER_SPEND_BREAKER", "1")
+    monkeypatch.setattr(
+        ledger_mod,
+        "summarize_economics",
+        lambda *, days=7: _fake_economics_ledger(triggered=True),
+    )
+    local_frontdoor = FakeProvider(
+        "local_frontdoor",
+        [
+            PlannerProviderResult(
+                provider="local_frontdoor",
+                role="draft",
+                ok=True,
+                text=_leading_action_text({"type": "deep_eval", "tier": 3}),
+            )
+        ],
+    )
+    local_worker = FakeProvider(
+        "local_worker",
+        [
+            PlannerProviderResult(
+                provider="local_worker",
+                role="critique",
+                ok=True,
+                text=_critique_text({"decision": "approve", "confidence": 0.8}),
+            )
+        ],
+    )
+
+    decision = planner_coordinator.plan_with_providers(
+        "prompt",
+        session_id=None,
+        planner_state={},
+        settings=PlannerSettings(
+            primary="claude",
+            critic="codex",
+            mode="draft_critique",
+            critique_policy="always",
+        ),
+        provider_factory=_factory(
+            {
+                "local_frontdoor": local_frontdoor,
+                "local_worker": local_worker,
+            }
+        ),
+    )
+
+    assert decision.draft_provider == "local_frontdoor"
+    assert decision.critic_provider == "local_worker"
+    assert decision.action == {"type": "deep_eval", "tier": 3}
+    assert decision.fallback_reason == ""
+    assert [call["role"] for call in local_frontdoor.calls] == ["draft"]
     assert [call["role"] for call in local_worker.calls] == ["critique"]
 
 
@@ -464,11 +771,11 @@ def test_spend_breaker_replaces_cloud_critic_for_local_primary(
         "summarize_economics",
         lambda *, days=7: _fake_economics_ledger(triggered=True),
     )
-    local_chat = FakeProvider(
-        "local_chat",
+    local_frontdoor = FakeProvider(
+        "local_frontdoor",
         [
             PlannerProviderResult(
-                provider="local_chat",
+                provider="local_frontdoor",
                 role="draft",
                 ok=True,
                 text=_action_text({"type": "numeric_trial", "surface": "repl_executor"}),
@@ -500,16 +807,137 @@ def test_spend_breaker_replaces_cloud_critic_for_local_primary(
         ),
         provider_factory=_factory(
             {
-                "local_chat": local_chat,
+                "local_frontdoor": local_frontdoor,
                 "local_worker": local_worker,
             }
         ),
     )
 
-    assert decision.draft_provider == "local_chat"
+    assert decision.draft_provider == "local_frontdoor"
     assert decision.critic_provider == "local_worker"
     assert state["_spend_breaker"]["previous_primary"] == "local_chat"
     assert state["_spend_breaker"]["previous_critic"] == "codex"
+
+
+def test_spend_breaker_preserves_configured_local_critic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from scripts.economics import ledger as ledger_mod
+
+    monkeypatch.setenv("AUTOPILOT_PLANNER_SPEND_BREAKER", "1")
+    monkeypatch.setattr(
+        ledger_mod,
+        "summarize_economics",
+        lambda *, days=7: _fake_economics_ledger(triggered=True),
+    )
+    local_frontdoor = FakeProvider(
+        "local_frontdoor",
+        [
+            PlannerProviderResult(
+                provider="local_frontdoor",
+                role="draft",
+                ok=True,
+                text=_action_text({"type": "numeric_trial", "surface": "repl_executor"}),
+            )
+        ],
+    )
+    local_worker = FakeProvider(
+        "local_worker",
+        [
+            PlannerProviderResult(
+                provider="local_worker",
+                role="critique",
+                ok=True,
+                text=_critique_text({"decision": "approve", "confidence": 0.8}),
+            )
+        ],
+    )
+    state: dict[str, Any] = {}
+
+    decision = planner_coordinator.plan_with_providers(
+        "prompt",
+        session_id=None,
+        planner_state=state,
+        settings=PlannerSettings(
+            primary="claude",
+            critic="local_worker",
+            mode="draft_critique",
+            critique_policy="always",
+        ),
+        provider_factory=_factory(
+            {
+                "local_frontdoor": local_frontdoor,
+                "local_worker": local_worker,
+            }
+        ),
+    )
+
+    assert decision.draft_provider == "local_frontdoor"
+    assert decision.critic_provider == "local_worker"
+    assert state["_spend_breaker"]["local_critic"] == "local_worker"
+    assert state["_spend_breaker"]["previous_critic"] == "local_worker"
+
+
+def test_local_role_primary_falls_back_to_local_critic_role(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AUTOPILOT_PLANNER_SPEND_BREAKER", "0")
+    action = {"type": "numeric_trial", "surface": "repl_executor"}
+    local_frontdoor = FakeProvider(
+        "local_frontdoor",
+        [
+            PlannerProviderResult(
+                provider="local_frontdoor",
+                role="draft",
+                ok=True,
+                text="I cannot decide.",
+            ),
+            PlannerProviderResult(
+                provider="local_frontdoor",
+                role="critique",
+                ok=True,
+                text=_critique_text({"decision": "approve", "confidence": 0.82}),
+            ),
+        ],
+    )
+    local_worker = FakeProvider(
+        "local_worker",
+        [
+            PlannerProviderResult(
+                provider="local_worker",
+                role="draft",
+                ok=True,
+                text=_action_text(action),
+            )
+        ],
+    )
+
+    decision = planner_coordinator.plan_with_providers(
+        "prompt",
+        session_id=None,
+        planner_state={},
+        settings=PlannerSettings(
+            primary="local_frontdoor",
+            critic="local_worker",
+            mode="draft_critique",
+            critique_policy="always",
+        ),
+        provider_factory=_factory(
+            {
+                "local_frontdoor": local_frontdoor,
+                "local_worker": local_worker,
+            }
+        ),
+    )
+
+    assert decision.action == action
+    assert decision.draft_provider == "local_worker"
+    assert decision.critic_provider == "local_frontdoor"
+    assert decision.critique is not None
+    assert decision.critique.decision == "approve"
+    assert "local_frontdoor draft failed" in decision.fallback_reason
+    assert [call["role"] for call in local_frontdoor.calls] == ["draft", "critique"]
+    assert [call["role"] for call in local_worker.calls] == ["draft"]
 
 
 def test_spend_breaker_keeps_config_when_under_threshold(
@@ -689,7 +1117,7 @@ def test_active_critique_applies_valid_revision() -> None:
     assert decision.canonical_text.startswith("```json:autopilot_actions")
 
 
-def test_active_reject_without_revision_uses_safe_seed_batch() -> None:
+def test_active_reject_without_revision_uses_numeric_fallback() -> None:
     original = {"type": "rollback", "to_checkpoint": "production_best"}
     claude = FakeProvider(
         "claude",
@@ -730,8 +1158,13 @@ def test_active_reject_without_revision_uses_safe_seed_batch() -> None:
     )
 
     assert decision.action is not None
-    assert decision.action["type"] == "seed_batch"
-    assert decision.action["n_questions"] == planner_coordinator.SAFE_FALLBACK_SEED_N
+    assert decision.action == {
+        "type": "numeric_trial",
+        "surface": planner_coordinator.SAFE_FALLBACK_NUMERIC_SURFACE,
+        "params": {},
+    }
+    assert decision.rationale["critic_reject_numeric_fallback"] is True
+    assert decision.rationale["critic_reject_issues"] == ["unsupported rollback"]
 
 
 def test_unparseable_critique_fails_closed_not_open() -> None:
@@ -791,10 +1224,19 @@ def test_unparseable_critique_fails_closed_not_open() -> None:
     assert state.get("codex", {}).get("failures", 0) >= 1
     # Fail-closed for HIGH-risk: the unsafe uncritiqued draft is NOT admitted —
     # the dispatch gate pauses for operator review.
-    assert (
-        planner_coordinator.uncritiqued_dispatch_block_reason(decision)
-        == "critic_unavailable"
-    )
+    assert planner_coordinator.uncritiqued_dispatch_block_reason(decision) == "critic_unavailable"
+
+
+def test_extract_critique_recovers_trailing_bracket_noise() -> None:
+    text = """```json:autopilot_critique
+{"decision": "reject", "confidence": 0.95, "issues": ["bad draft"]}
+}
+```"""
+    critique = planner_coordinator.extract_critique(text)
+    assert critique.decision == "reject"
+    assert critique.confidence == 0.95
+    assert critique.issues == ["bad draft"]
+    assert critique.parse_error == ""
 
 
 def test_failed_critique_invoke_fails_closed_not_open() -> None:
@@ -846,10 +1288,91 @@ def test_failed_critique_invoke_fails_closed_not_open() -> None:
     assert decision.degraded is True
     assert state.get("codex", {}).get("failures", 0) >= 1
     # HIGH-risk + critic unavailable => gate pauses (fails closed).
-    assert (
-        planner_coordinator.uncritiqued_dispatch_block_reason(decision)
-        == "critic_unavailable"
+    assert planner_coordinator.uncritiqued_dispatch_block_reason(decision) == "critic_unavailable"
+
+
+def test_codex_critic_failure_falls_back_to_claude_for_local_draft() -> None:
+    original = {"type": "numeric_trial", "surface": "memrl_retrieval"}
+    local_ingest = FakeProvider(
+        "local_ingest",
+        [
+            PlannerProviderResult(
+                provider="local_ingest",
+                role="draft",
+                ok=True,
+                text=_action_text(original),
+            )
+        ],
     )
+    codex = FakeProvider(
+        "codex",
+        [
+            PlannerProviderResult(
+                provider="codex",
+                role="critique",
+                ok=False,
+                text="",
+                error="quota exhausted",
+            )
+        ],
+    )
+    claude = FakeProvider(
+        "claude",
+        [
+            PlannerProviderResult(
+                provider="claude",
+                role="critique",
+                ok=True,
+                text=_critique_text({"decision": "approve", "confidence": 0.83}),
+            )
+        ],
+    )
+    state: dict[str, Any] = {}
+
+    decision = planner_coordinator.plan_with_providers(
+        "prompt",
+        session_id=None,
+        planner_state=state,
+        settings=PlannerSettings(
+            primary="local_ingest",
+            critic="codex",
+            mode="draft_critique",
+            critique_policy="always",
+        ),
+        provider_factory=_factory(
+            {
+                "local_ingest": local_ingest,
+                "codex": codex,
+                "claude": claude,
+            }
+        ),
+    )
+
+    assert decision.action == original
+    assert decision.draft_provider == "local_ingest"
+    assert decision.critic_provider == "claude"
+    assert decision.critique is not None
+    assert decision.critique.decision == "approve"
+    assert decision.degraded is False
+    assert state.get("codex", {}).get("failures") == 1
+    assert state.get("claude", {}).get("failures") == 0
+    assert [call["role"] for call in codex.calls] == ["critique"]
+    assert [call["role"] for call in claude.calls] == ["critique"]
+
+
+def test_critique_prompt_allows_empty_numeric_optuna_request() -> None:
+    prompt = "### Evidence Power and Sequential Candidate Status\nW8 replay pressure"
+    text = planner_coordinator.build_critique_prompt(
+        prompt,
+        _action_text({"type": "numeric_trial", "surface": "think_harder", "params": {}}),
+        {"type": "numeric_trial", "surface": "think_harder", "params": {}},
+        {"falsifier": "x"},
+    )
+
+    assert 'Do NOT reject a `numeric_trial` solely because `"params": {}`' in text
+    assert "NumericSwarm/Optuna" in text
+    assert "Historical logged rows that stayed empty" in text
+    assert "are not replayable" in text
 
 
 def test_unparseable_critique_shadow_mode_keeps_draft() -> None:
@@ -859,12 +1382,20 @@ def test_unparseable_critique_shadow_mode_keeps_draft() -> None:
     original = {"type": "seed_batch", "n_questions": 10}
     claude = FakeProvider(
         "claude",
-        [PlannerProviderResult(provider="claude", role="draft", ok=True, text=_action_text(original))],
+        [
+            PlannerProviderResult(
+                provider="claude", role="draft", ok=True, text=_action_text(original)
+            )
+        ],
         supports_resume=True,
     )
     codex = FakeProvider(
         "codex",
-        [PlannerProviderResult(provider="codex", role="critique", ok=True, text="garbage not-json")],
+        [
+            PlannerProviderResult(
+                provider="codex", role="critique", ok=True, text="garbage not-json"
+            )
+        ],
     )
     state: dict[str, Any] = {}
     decision = planner_coordinator.plan_with_providers(
@@ -883,6 +1414,7 @@ def test_default_planner_mode_is_active_draft_critique() -> None:
     """The shipped default must be the BINDING critic (the shadow→active flip)."""
     assert planner_coordinator.PlannerSettings().mode == "draft_critique"
     import os as _os
+
     saved = _os.environ.pop("AUTOPILOT_PLANNER_MODE", None)
     try:
         assert planner_coordinator.load_planner_settings_from_env().mode == "draft_critique"
@@ -915,8 +1447,11 @@ def test_reconcile_active_approve_is_passthrough() -> None:
 def test_reconcile_active_revise_applies_valid_revision() -> None:
     action = {"type": "structural_experiment", "flags": {"a": True}}
     revised = {"type": "seed_batch", "n_questions": 12}
-    crit = PlannerCritique(decision="revise", revised_action=revised,
-                           revised_rationale={"falsifier": "y", "rubric_scores": {}})
+    crit = PlannerCritique(
+        decision="revise",
+        revised_action=revised,
+        revised_rationale={"falsifier": "y", "rubric_scores": {}},
+    )
     out_action, out_rat, out_text = _reconcile(action, {}, "draft", crit, active=True)
     assert out_action == revised
     assert out_rat == {"falsifier": "y", "rubric_scores": {}}
@@ -933,12 +1468,18 @@ def test_reconcile_active_revise_with_invalid_revision_keeps_original() -> None:
     assert out_action == action  # invalid revision rejected, original retained
 
 
-def test_reconcile_active_reject_without_revision_is_safe_seed_batch() -> None:
+def test_reconcile_active_reject_without_revision_is_numeric_fallback() -> None:
     action = {"type": "rollback", "to_checkpoint": "production_best"}
     crit = PlannerCritique(decision="reject", issues=["unsupported"])
-    out_action, _, _ = _reconcile(action, {}, "draft", crit, active=True)
-    assert out_action["type"] == "seed_batch"
-    assert out_action["n_questions"] == planner_coordinator.SAFE_FALLBACK_SEED_N
+    out_action, out_rat, _ = _reconcile(action, {}, "draft", crit, active=True)
+    assert out_action == {
+        "type": "numeric_trial",
+        "surface": planner_coordinator.SAFE_FALLBACK_NUMERIC_SURFACE,
+        "params": {},
+    }
+    assert out_rat["critic_reject_numeric_fallback"] is True
+    assert out_rat["critic_reject_issues"] == ["unsupported"]
+    assert out_rat["critic_reject_original_action"] == action
 
 
 def test_decision_carries_original_draft_action_after_substitution() -> None:
@@ -947,21 +1488,37 @@ def test_decision_carries_original_draft_action_after_substitution() -> None:
     original = {"type": "structural_experiment", "flags": {"graph_router": True}}
     claude = FakeProvider(
         "claude",
-        [PlannerProviderResult(provider="claude", role="draft", ok=True, text=_action_text(original))],
+        [
+            PlannerProviderResult(
+                provider="claude", role="draft", ok=True, text=_action_text(original)
+            )
+        ],
         supports_resume=True,
     )
     codex = FakeProvider(
         "codex",
-        [PlannerProviderResult(provider="codex", role="critique", ok=True,
-                               text=_critique_text({"decision": "reject", "issues": ["deps unmet"]}))],
+        [
+            PlannerProviderResult(
+                provider="codex",
+                role="critique",
+                ok=True,
+                text=_critique_text({"decision": "reject", "issues": ["deps unmet"]}),
+            )
+        ],
     )
     decision = planner_coordinator.plan_with_providers(
-        "prompt", session_id=None, planner_state={},
+        "prompt",
+        session_id=None,
+        planner_state={},
         settings=PlannerSettings(mode="draft_critique", critique_policy="always"),
         provider_factory=_factory({"claude": claude, "codex": codex}),
     )
-    assert decision.action["type"] == "seed_batch"          # substituted
-    assert decision.draft_action == original                # original preserved
+    assert decision.action == {
+        "type": "numeric_trial",
+        "surface": planner_coordinator.SAFE_FALLBACK_NUMERIC_SURFACE,
+        "params": {},
+    }  # substituted
+    assert decision.draft_action == original  # original preserved
 
 
 def test_critique_prompt_surfaces_flag_and_feedback_context() -> None:
@@ -984,8 +1541,10 @@ def test_critique_prompt_surfaces_flag_and_feedback_context() -> None:
         "  SHOULD_NOT_REACH_CRITIC\n"
     )
     out = planner_coordinator.build_critique_prompt(
-        planner_prompt, "draft text",
-        {"type": "structural_experiment", "flags": {"graph_router": True}}, {},
+        planner_prompt,
+        "draft text",
+        {"type": "structural_experiment", "flags": {"graph_router": True}},
+        {},
     )
     # Selected context embedded:
     assert "Selected Measurement and Constraint Context" in out
@@ -1011,13 +1570,12 @@ def test_critique_prompt_surfaces_flag_and_feedback_context() -> None:
 
 def test_critique_prompt_caps_selected_sections() -> None:
     long_feature_section = "x" * 2000
-    planner_prompt = (
-        "### Feature Flags\n"
-        f"{long_feature_section}\n"
-        "TAIL_MARKER_AFTER_LIMIT\n"
-    )
+    planner_prompt = f"### Feature Flags\n{long_feature_section}\nTAIL_MARKER_AFTER_LIMIT\n"
     out = planner_coordinator.build_critique_prompt(
-        planner_prompt, "draft text", {"type": "seed_batch"}, {},
+        planner_prompt,
+        "draft text",
+        {"type": "seed_batch"},
+        {},
     )
     assert "... [truncated for critic context]" in out
     assert "TAIL_MARKER_AFTER_LIMIT" not in out
@@ -1067,12 +1625,24 @@ def test_open_primary_circuit_routes_directly_to_fallback() -> None:
     assert len(codex.calls) == 1
 
 
-def _uncritiqued_decision(action: Any, *, degraded: bool, critique: Any,
-                          rationale: Any = None, mode: str = "draft_critique"):
+def _uncritiqued_decision(
+    action: Any,
+    *,
+    degraded: bool,
+    critique: Any,
+    rationale: Any = None,
+    mode: str = "draft_critique",
+):
     return planner_coordinator.PlannerDecision(
-        action=action, rationale=rationale or {}, session_id=None, canonical_text="",
-        draft_text="", draft_provider="codex", mode=mode,
-        degraded=degraded, critique=critique,
+        action=action,
+        rationale=rationale or {},
+        session_id=None,
+        canonical_text="",
+        draft_text="",
+        draft_provider="codex",
+        mode=mode,
+        degraded=degraded,
+        critique=critique,
     )
 
 
@@ -1080,22 +1650,42 @@ def test_uncritiqued_degraded_nonobservational_action_pauses() -> None:
     """Degraded with NO critic verdict + non-observational action => critic_unavailable.
     seed_batch is explicitly NOT safe (the @708 critic_reject_loop failure mode)."""
     ubr = planner_coordinator.uncritiqued_dispatch_block_reason
-    assert ubr(_uncritiqued_decision({"type": "seed_batch", "n_questions": 12},
-               degraded=True, critique=None)) == "critic_unavailable"
+    assert (
+        ubr(
+            _uncritiqued_decision(
+                {"type": "seed_batch", "n_questions": 12}, degraded=True, critique=None
+            )
+        )
+        == "critic_unavailable"
+    )
     # OBSERVATIONAL_ACTIONS is empty => every non-observational action blocks.
-    assert ubr(_uncritiqued_decision({"type": "structural_experiment"},
-               degraded=True, critique=None)) == "critic_unavailable"
+    assert (
+        ubr(_uncritiqued_decision({"type": "structural_experiment"}, degraded=True, critique=None))
+        == "critic_unavailable"
+    )
 
 
 def test_uncritiqued_gate_allows_when_critiqued_or_not_degraded() -> None:
     ubr = planner_coordinator.uncritiqued_dispatch_block_reason
     crit = planner_coordinator.PlannerCritique(decision="approve", provider="codex")
     # real critic verdict => not uncritiqued => no pause
-    assert ubr(_uncritiqued_decision({"type": "seed_batch", "n_questions": 12},
-               degraded=True, critique=crit)) == ""
+    assert (
+        ubr(
+            _uncritiqued_decision(
+                {"type": "seed_batch", "n_questions": 12}, degraded=True, critique=crit
+            )
+        )
+        == ""
+    )
     # not degraded => no pause
-    assert ubr(_uncritiqued_decision({"type": "seed_batch", "n_questions": 12},
-               degraded=False, critique=None)) == ""
+    assert (
+        ubr(
+            _uncritiqued_decision(
+                {"type": "seed_batch", "n_questions": 12}, degraded=False, critique=None
+            )
+        )
+        == ""
+    )
     # no dict action => handled by the separate no-action path => no pause
     assert ubr(_uncritiqued_decision(None, degraded=True, critique=None)) == ""
 
@@ -1109,18 +1699,18 @@ def test_draft_validation_error_is_surfaced_not_opaque() -> None:
     good = {"type": "train_routing_models", "min_memories": 500}
     codex = FakeProvider(
         "codex",
-        [PlannerProviderResult(provider="codex", role="draft", ok=True,
-                               text=_action_text(bad))],
+        [PlannerProviderResult(provider="codex", role="draft", ok=True, text=_action_text(bad))],
     )
     claude = FakeProvider(
         "claude",
-        [PlannerProviderResult(provider="claude", role="draft", ok=True,
-                               text=_action_text(good))],
+        [PlannerProviderResult(provider="claude", role="draft", ok=True, text=_action_text(good))],
         supports_resume=True,
     )
     state: dict[str, Any] = {}
     decision = planner_coordinator.plan_with_providers(
-        "prompt", session_id=None, planner_state=state,
+        "prompt",
+        session_id=None,
+        planner_state=state,
         settings=PlannerSettings(primary="codex", critic="claude", mode="fallback"),
         provider_factory=_factory({"codex": codex, "claude": claude}),
     )
@@ -1147,34 +1737,94 @@ def test_uncritiqued_unavailable_dispatch_rule() -> None:
     falsifier = {"falsifier": "tps drops >5% if X regresses"}
 
     # HIGH risk => pause
-    assert ubr(_uncritiqued_decision({"type": "structural_experiment"},
-               degraded=True, critique=unavail, rationale=falsifier)) == "critic_unavailable"
+    assert (
+        ubr(
+            _uncritiqued_decision(
+                {"type": "structural_experiment"},
+                degraded=True,
+                critique=unavail,
+                rationale=falsifier,
+            )
+        )
+        == "critic_unavailable"
+    )
     # seed_batch (loop-prone low-risk) => pause even with a falsifier
-    assert ubr(_uncritiqued_decision({"type": "seed_batch", "n_questions": 12},
-               degraded=True, critique=unavail, rationale=falsifier)) == "critic_unavailable"
+    assert (
+        ubr(
+            _uncritiqued_decision(
+                {"type": "seed_batch", "n_questions": 12},
+                degraded=True,
+                critique=unavail,
+                rationale=falsifier,
+            )
+        )
+        == "critic_unavailable"
+    )
     # passive low-risk (deep_eval) => pause (not in OBSERVATIONAL_ACTIONS)
-    assert ubr(_uncritiqued_decision({"type": "deep_eval", "tier": 2},
-               degraded=True, critique=unavail, rationale=falsifier)) == "critic_unavailable"
+    assert (
+        ubr(
+            _uncritiqued_decision(
+                {"type": "deep_eval", "tier": 2},
+                degraded=True,
+                critique=unavail,
+                rationale=falsifier,
+            )
+        )
+        == "critic_unavailable"
+    )
 
     # MEDIUM experiment, novel + falsifier => PROCEED
-    assert ubr(_uncritiqued_decision({"type": "numeric_trial"},
-               degraded=True, critique=unavail, rationale=falsifier)) == ""
+    assert (
+        ubr(
+            _uncritiqued_decision(
+                {"type": "numeric_trial"}, degraded=True, critique=unavail, rationale=falsifier
+            )
+        )
+        == ""
+    )
     # MEDIUM but no falsifier (loop-keeping) => pause
-    assert ubr(_uncritiqued_decision({"type": "numeric_trial"},
-               degraded=True, critique=unavail, rationale={})) == "critic_unavailable"
+    assert (
+        ubr(
+            _uncritiqued_decision(
+                {"type": "numeric_trial"}, degraded=True, critique=unavail, rationale={}
+            )
+        )
+        == "critic_unavailable"
+    )
     # MEDIUM + blacklisted => pause
-    assert ubr(_uncritiqued_decision({"type": "numeric_trial"},
-               degraded=True, critique=unavail, rationale=falsifier),
-               is_blacklisted=True) == "critic_unavailable"
+    assert (
+        ubr(
+            _uncritiqued_decision(
+                {"type": "numeric_trial"}, degraded=True, critique=unavail, rationale=falsifier
+            ),
+            is_blacklisted=True,
+        )
+        == "critic_unavailable"
+    )
     # MEDIUM + repeated (recurring invalid signature) => pause
-    assert ubr(_uncritiqued_decision({"type": "numeric_trial"},
-               degraded=True, critique=unavail, rationale=falsifier),
-               is_repeated=True) == "critic_unavailable"
+    assert (
+        ubr(
+            _uncritiqued_decision(
+                {"type": "numeric_trial"}, degraded=True, critique=unavail, rationale=falsifier
+            ),
+            is_repeated=True,
+        )
+        == "critic_unavailable"
+    )
 
     # shadow (non-binding) mode never blocks, even for HIGH risk
-    assert ubr(_uncritiqued_decision({"type": "structural_experiment"},
-               degraded=True, critique=unavail, rationale=falsifier,
-               mode="shadow_critique")) == ""
+    assert (
+        ubr(
+            _uncritiqued_decision(
+                {"type": "structural_experiment"},
+                degraded=True,
+                critique=unavail,
+                rationale=falsifier,
+                mode="shadow_critique",
+            )
+        )
+        == ""
+    )
 
 
 def test_failed_critique_keeps_draft_seed_batch_still_pauses() -> None:
@@ -1185,18 +1835,26 @@ def test_failed_critique_keeps_draft_seed_batch_still_pauses() -> None:
     original = {"type": "seed_batch", "n_questions": 12}  # loop-prone low-risk
     claude = FakeProvider(
         "claude",
-        [PlannerProviderResult(provider="claude", role="draft", ok=True,
-                               text=_action_text(original))],
+        [
+            PlannerProviderResult(
+                provider="claude", role="draft", ok=True, text=_action_text(original)
+            )
+        ],
         supports_resume=True,
     )
     codex = FakeProvider(
         "codex",
-        [PlannerProviderResult(provider="codex", role="critique", ok=False,
-                               text="", error="timeout after 600s")],
+        [
+            PlannerProviderResult(
+                provider="codex", role="critique", ok=False, text="", error="timeout after 600s"
+            )
+        ],
     )
     state: dict[str, Any] = {}
     decision = planner_coordinator.plan_with_providers(
-        "prompt", session_id=None, planner_state=state,
+        "prompt",
+        session_id=None,
+        planner_state=state,
         settings=PlannerSettings(mode="draft_critique", critique_policy="always"),
         provider_factory=_factory({"claude": claude, "codex": codex}),
     )
@@ -1207,10 +1865,7 @@ def test_failed_critique_keeps_draft_seed_batch_still_pauses() -> None:
     assert decision.degraded is True
     assert state.get("codex", {}).get("failures", 0) >= 1
     # seed_batch is loop-prone => the gate pauses for operator review.
-    assert (
-        planner_coordinator.uncritiqued_dispatch_block_reason(decision)
-        == "critic_unavailable"
-    )
+    assert planner_coordinator.uncritiqued_dispatch_block_reason(decision) == "critic_unavailable"
 
 
 def test_cross_model_failover_codex_offline_crosses_to_claude() -> None:
@@ -1219,15 +1874,22 @@ def test_cross_model_failover_codex_offline_crosses_to_claude() -> None:
     # not re-hit codex. (cross-model failover, 2026-06-12)
     codex = FakeProvider(
         "codex",
-        [PlannerProviderResult(provider="codex", role="draft", ok=False,
-                               text="", error="timeout after 600s")],
+        [
+            PlannerProviderResult(
+                provider="codex", role="draft", ok=False, text="", error="timeout after 600s"
+            )
+        ],
     )
     claude = FakeProvider(
         "claude",
-        [PlannerProviderResult(
-            provider="claude", role="draft", ok=True,
-            text=_action_text({"type": "seed_batch", "n_questions": 10}),
-        )],
+        [
+            PlannerProviderResult(
+                provider="claude",
+                role="draft",
+                ok=True,
+                text=_action_text({"type": "seed_batch", "n_questions": 10}),
+            )
+        ],
     )
 
     def factory(name: str) -> FakeProvider:
@@ -1237,9 +1899,10 @@ def test_cross_model_failover_codex_offline_crosses_to_claude() -> None:
         return claude
 
     decision = planner_coordinator.plan_with_providers(
-        "prompt", session_id=None, planner_state={},
-        settings=PlannerSettings(primary="codex", critic="codex_critic",
-                                 mode="draft_critique"),
+        "prompt",
+        session_id=None,
+        planner_state={},
+        settings=PlannerSettings(primary="codex", critic="codex_critic", mode="draft_critique"),
         provider_factory=factory,
     )
 
@@ -1251,13 +1914,15 @@ def test_cross_model_failover_codex_offline_crosses_to_claude() -> None:
 def test_both_models_unavailable_sets_providers_unavailable() -> None:
     codex = FakeProvider(
         "codex",
-        [PlannerProviderResult(provider="codex", role="draft", ok=False,
-                               text="", error="timeout")],
+        [PlannerProviderResult(provider="codex", role="draft", ok=False, text="", error="timeout")],
     )
     claude = FakeProvider(
         "claude",
-        [PlannerProviderResult(provider="claude", role="draft", ok=False,
-                               text="", error="empty response")],
+        [
+            PlannerProviderResult(
+                provider="claude", role="draft", ok=False, text="", error="empty response"
+            )
+        ],
     )
 
     def factory(name: str) -> FakeProvider:
@@ -1266,9 +1931,10 @@ def test_both_models_unavailable_sets_providers_unavailable() -> None:
         return claude
 
     decision = planner_coordinator.plan_with_providers(
-        "prompt", session_id=None, planner_state={},
-        settings=PlannerSettings(primary="codex", critic="codex_critic",
-                                 mode="draft_critique"),
+        "prompt",
+        session_id=None,
+        planner_state={},
+        settings=PlannerSettings(primary="codex", critic="codex_critic", mode="draft_critique"),
         provider_factory=factory,
     )
 
@@ -1282,13 +1948,11 @@ def test_content_failure_is_not_providers_unavailable() -> None:
     # CONTENT failure, not an availability failure → providers_unavailable False.
     codex = FakeProvider(
         "codex",
-        [PlannerProviderResult(provider="codex", role="draft", ok=True,
-                               text="no json")],
+        [PlannerProviderResult(provider="codex", role="draft", ok=True, text="no json")],
     )
     claude = FakeProvider(
         "claude",
-        [PlannerProviderResult(provider="claude", role="draft", ok=True,
-                               text="also no json")],
+        [PlannerProviderResult(provider="claude", role="draft", ok=True, text="also no json")],
     )
 
     def factory(name: str) -> FakeProvider:
@@ -1297,9 +1961,10 @@ def test_content_failure_is_not_providers_unavailable() -> None:
         return claude
 
     decision = planner_coordinator.plan_with_providers(
-        "prompt", session_id=None, planner_state={},
-        settings=PlannerSettings(primary="codex", critic="codex_critic",
-                                 mode="draft_critique"),
+        "prompt",
+        session_id=None,
+        planner_state={},
+        settings=PlannerSettings(primary="codex", critic="codex_critic", mode="draft_critique"),
         provider_factory=factory,
     )
 
@@ -1314,10 +1979,14 @@ def test_open_primary_circuit_routes_to_other_model() -> None:
 
     claude = FakeProvider(
         "claude",
-        [PlannerProviderResult(
-            provider="claude", role="draft", ok=True,
-            text=_action_text({"type": "seed_batch", "n_questions": 10}),
-        )],
+        [
+            PlannerProviderResult(
+                provider="claude",
+                role="draft",
+                ok=True,
+                text=_action_text({"type": "seed_batch", "n_questions": 10}),
+            )
+        ],
     )
     codex = FakeProvider("codex", [])  # must NOT be invoked
 
@@ -1328,12 +1997,19 @@ def test_open_primary_circuit_routes_to_other_model() -> None:
 
     state = {"codex": {"circuit_open_until": _time.time() + 600.0, "failures": 2}}
     decision = planner_coordinator.plan_with_providers(
-        "prompt", session_id=None, planner_state=state,
-        settings=PlannerSettings(primary="codex", critic="codex_critic",
-                                 mode="draft_critique"),
+        "prompt",
+        session_id=None,
+        planner_state=state,
+        settings=PlannerSettings(primary="codex", critic="codex_critic", mode="draft_critique"),
         provider_factory=factory,
     )
 
     assert decision.draft_provider == "claude"
     assert decision.action == {"type": "seed_batch", "n_questions": 10}
     assert len(codex.calls) == 0
+
+
+def test_local_briefed_aliases_are_classified_as_local_model() -> None:
+    assert planner_coordinator._model_of("local_brief_frontdoor") == "local"
+    assert planner_coordinator._model_of("local_ingest_frontdoor") == "local"
+    assert planner_coordinator._model_of("local_brief_worker") == "local"

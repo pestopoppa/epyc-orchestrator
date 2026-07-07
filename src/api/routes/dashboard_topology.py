@@ -113,8 +113,54 @@ def _build_port_hints() -> dict[int, str]:
 _PORT_HINTS: dict[int, str] = _build_port_hints()
 
 
+def active_stack_numa_mode() -> str:
+    """Return the stack NUMA mode this API process should render.
+
+    The launcher exports ORCHESTRATOR_STACK_NUMA_MODE when starting the API.
+    Defaulting to ``full`` matches the current production launcher default and
+    prevents the dashboard from advertising quarter replicas unless the stack
+    was explicitly launched in quarter/both mode.
+    """
+    import os
+
+    mode = os.environ.get("ORCHESTRATOR_STACK_NUMA_MODE", "full").strip().lower()
+    return mode if mode in {"full", "quarter", "both"} else "full"
+
+
+def _manifest_server_label(server: dict[str, Any]) -> str:
+    roles = server.get("roles") or []
+    role = str(roles[0]) if isinstance(roles, list) and roles else ""
+    if not role:
+        return ""
+    numa_instance = server.get("numa_instance")
+    if isinstance(numa_instance, int) and numa_instance > 0:
+        return f"{role}.q{numa_instance - 1}"
+    return role
+
+
+def _manifest_port_hints(numa_mode: str | None = None) -> dict[int, str]:
+    try:
+        from scripts.server.stack_manifest import HOT_SERVERS, WARM_SERVERS, _filter_by_numa_mode
+    except Exception:
+        return {}
+    mode = numa_mode or active_stack_numa_mode()
+    try:
+        servers = _filter_by_numa_mode(HOT_SERVERS + WARM_SERVERS, mode)
+    except Exception:
+        servers = HOT_SERVERS + WARM_SERVERS
+    hints: dict[int, str] = {}
+    for server in servers:
+        if not isinstance(server, dict):
+            continue
+        port = server.get("port")
+        label = _manifest_server_label(server)
+        if isinstance(port, int) and label:
+            hints[port] = label
+    return hints
+
+
 def _port_hint(port: int) -> str:
-    return _PORT_HINTS.get(port, f"port_{port}")
+    return _PORT_HINTS.get(port) or _manifest_port_hints().get(port, f"port_{port}")
 
 # Per-role display colors (CSS hex).
 _ROLE_COLORS: dict[str, str] = {
@@ -308,23 +354,30 @@ def _load_state_services(state_path: Path) -> list[dict[str, Any]]:
     return services
 
 
-def expected_stack_services() -> list[dict[str, Any]]:
+def expected_stack_services(numa_mode: str | None = None) -> list[dict[str, Any]]:
     """Expected stack servers from the launch manifest, including unloaded ports."""
     try:
-        from scripts.server.stack_manifest import HOT_SERVERS, WARM_SERVERS
+        from scripts.server.stack_manifest import HOT_SERVERS, WARM_SERVERS, _filter_by_numa_mode
     except Exception as exc:
         logger.debug("Failed to load stack manifest services: %s", exc)
         return []
 
+    mode = numa_mode or active_stack_numa_mode()
     services: list[dict[str, Any]] = []
-    for server in HOT_SERVERS + WARM_SERVERS:
+    try:
+        servers = _filter_by_numa_mode(HOT_SERVERS + WARM_SERVERS, mode)
+    except Exception as exc:
+        logger.debug("Failed to filter stack manifest services by NUMA mode %s: %s", mode, exc)
+        servers = HOT_SERVERS + WARM_SERVERS
+
+    for server in servers:
         if not isinstance(server, dict):
             continue
         port = server.get("port")
         roles = server.get("roles") or []
         if not isinstance(port, int) or not isinstance(roles, list) or not roles:
             continue
-        role = _port_hint(port)
+        role = _manifest_server_label(server) or _port_hint(port)
         if role == f"port_{port}":
             role = str(roles[0])
         services.append({

@@ -1,0 +1,55 @@
+{
+  "artifacts": {
+    "context_manifest": "autopilot_planner_provider_watch/autopilot_planner_provider_watch-20260706T115823Z-ab6d7cb7/context_manifest.json",
+    "output": "autopilot_planner_provider_watch/autopilot_planner_provider_watch-20260706T115823Z-ab6d7cb7/output.json",
+    "prompt": "autopilot_planner_provider_watch/autopilot_planner_provider_watch-20260706T115823Z-ab6d7cb7/prompt.txt"
+  },
+  "chat_meta": {
+    "command": [
+      "python3",
+      "scripts/autopilot/planner_provider_health_report.py",
+      "--json"
+    ],
+    "elapsed_s": 0.099,
+    "returncode": 0,
+    "stderr_tail": ""
+  },
+  "context": {
+    "budget_exhausted": false,
+    "excerpt_chars": 4400,
+    "kinds": {
+      "source_excerpt": 2
+    },
+    "max_context_chars": 16000,
+    "missing_source_count": 0,
+    "repos": [
+      "epyc-orchestrator"
+    ],
+    "schema_version": "lab_context_summary.v1",
+    "source_bytes": 70458,
+    "source_count": 2,
+    "truncated_source_count": 2
+  },
+  "generated_at": "2026-07-06T11:58:23+00:00",
+  "invocation_mode": "deterministic_command",
+  "job_id": "autopilot_planner_provider_watch",
+  "model_role": null,
+  "policy": {
+    "direct_repo_writes_allowed": false,
+    "review_queue_only": true
+  },
+  "record_type": "task_record",
+  "repo": {
+    "branch": "spec-dec-mtp-refresh-2026-06-22",
+    "commit": "60523b6be9b1aa13e2d2957044e0f61b93f9e300",
+    "dirty": true,
+    "path": "/mnt/raid0/llm/epyc-orchestrator"
+  },
+  "risk": "read_only",
+  "run_id": "autopilot_planner_provider_watch-20260706T115823Z-ab6d7cb7",
+  "schema_version": "lab_task_record.v1",
+  "stage": "shadow",
+  "validation": {
+    "output_contract": "passed"
+  }
+}

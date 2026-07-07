@@ -79,7 +79,10 @@ orchestrator branch:
   `suggested_verdict`.
 - `intake_triage_review_status.py`: read-only readiness report for the review
   queue and reviewed-label corpus; reports aggregate counts only and identifies
-  whether the 100-reviewed-label baseline gate can run.
+  whether the 100-reviewed-label baseline gate can run. It can also emit a
+  markdown review packet with `--output-md` and an operator-fillable JSONL
+  batch template with `--batch-template`; both remain dry-review artifacts until
+  `apply_intake_triage_review_batch.py --apply` records reviewed labels.
 
 ### Planner SFT Builder
 
@@ -138,6 +141,33 @@ Initial keep rule:
 - Keep accepted/rejected reviewed rows for validation.
 - Use `unknown` rows only for unsupervised distribution modeling.
 
+### Raw-trace Publish Preflight
+
+Source: `logs/planner_archive.jsonl` and `logs/agent_audit.log` when a future
+export or publish step is introduced.
+
+Executable preflight:
+
+```bash
+uv run python scripts/datasets/raw_trace_publish_preflight.py \
+  logs/planner_archive.jsonl logs/agent_audit.log \
+  --output orchestration/datasets/raw_trace_publish_preflight.json
+```
+
+Required preflight checks:
+
+- deterministic secret/PII scanning over the candidate export;
+- entropy backstop for unknown secret shapes;
+- reasoning-span scan over any `reasoning`, `thinking`, `trace`, or similar
+  fields;
+- fail closed on any hit.
+
+The current implementation reuses the production credential-redaction patterns,
+adds a high-entropy token backstop with hash-field false-positive guards, and
+reports reasoning-field hits separately. This is hygiene only. It does not
+replace quarantine, operator review, or label authority, and it does not
+authorize publish or training.
+
 ## Known Gaps
 
 - Historical AutoPilot rows before the per-question ledger was deployed may lack
@@ -155,9 +185,9 @@ Initial keep rule:
   label corpus exists until those reviews append rows to
   `orchestration/datasets/intake_triage_reviewed.jsonl`. Use
   `scripts/datasets/intake_triage_review_status.py` to report the live queue,
-  reviewed-label count, and remaining labels needed before running the baseline
-  acceptance gate. Use `scripts/datasets/apply_intake_triage_review_batch.py`
-  for operator-reviewed batches; it validates without writing unless `--apply`
-  is provided.
+  reviewed-label count, remaining labels needed, and optional review packets
+  before running the baseline acceptance gate. Use
+  `scripts/datasets/apply_intake_triage_review_batch.py` for operator-reviewed
+  batches; it validates without writing unless `--apply` is provided.
 - No builder should train on strategy-memory text from scrubbed or gate-lock-era
   rows until it joins each strategy to trustworthy journal evidence.

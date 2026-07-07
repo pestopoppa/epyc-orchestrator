@@ -126,8 +126,8 @@ def test_seq_rows_explain_seed_batch_is_not_w8_replayable() -> None:
     assert "seq_candidates=1" in text
     assert "W8 replay pressure: 0/1 accumulating candidate(s) are replayable" in text
     assert (
-        "seed_batch, deep_eval, structural_prune, and empty-params numeric_trial "
-        "cannot create replayable W8 evidence"
+        "seed_batch, deep_eval, and structural_prune cannot create replayable W8 "
+        "evidence"
     ) in text
     assert "replayable=no(unreplayable_action=seed_batch)" in text
     assert "replayable=no" in text
@@ -161,6 +161,8 @@ def test_w8_replay_pressure_counts_empty_numeric_params_as_blocked() -> None:
 
     assert "W8 replay pressure: 0/2 accumulating candidate(s) are replayable" in text
     assert "blocked=numeric_trial_missing_params:1,unreplayable_action=seed_batch:1" in text
+    assert "Historical empty-params numeric rows are not replayable as logged" in text
+    assert "new Optuna-suggested numeric_trial is acceptable" in text
 
 
 def test_w8_replay_pressure_names_structural_prune_as_unreplayable() -> None:
@@ -183,7 +185,7 @@ def test_w8_replay_pressure_names_structural_prune_as_unreplayable() -> None:
 
     assert "W8 replay pressure: 0/1 accumulating candidate(s) are replayable" in text
     assert "blocked=unreplayable_action=structural_prune:1" in text
-    assert "structural_prune, and empty-params numeric_trial cannot create replayable W8 evidence" in text
+    assert "seed_batch, deep_eval, and structural_prune cannot create replayable W8 evidence" in text
     assert "replayable=no(unreplayable_action=structural_prune)" in text
 
 

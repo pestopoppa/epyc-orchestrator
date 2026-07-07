@@ -1,0 +1,88 @@
+{
+  "blockers": [
+    "active AutoPilot process count: 1",
+    "active llama-server process count: 28"
+  ],
+  "commands": {
+    "apply_reviewed_verdict_batch_template": "uv run python scripts/lab/apply_review_batch.py --batch '<reviewed-verdicts.jsonl>' --queue-dir /mnt/raid0/llm/epyc-orchestrator/orchestration/lab_review_queue",
+    "review_pending_items": "uv run python scripts/lab/review_queue_report.py --json --queue-dir /mnt/raid0/llm/epyc-orchestrator/orchestration/lab_review_queue",
+    "run_quiet_window_batch": "uv run python scripts/lab/run_shadow_jobs.py --quiet-window-only --execute-chat --continue-on-error --schedule nightly --max-jobs 2 --queue-dir /mnt/raid0/llm/epyc-orchestrator/orchestration/lab_review_queue --api-url http://127.0.0.1:8000 --timeout-s 900.0"
+  },
+  "generated_at": "2026-07-06T11:56:37+00:00",
+  "next_steps": [
+    "Stop AutoPilot and wait for live llama-server inference to quiesce.",
+    "Run the quiet-window batch command once; it writes lab_task_record.v1 rows and review artifacts.",
+    "Run the review-queue report command and review each pending item.",
+    "Apply reviewed verdicts with the batch-apply template so F2 tuples feed F3 gold data."
+  ],
+  "ok": true,
+  "queue_dir": "/mnt/raid0/llm/epyc-orchestrator/orchestration/lab_review_queue",
+  "quiet_window": {
+    "active_autopilot_processes": [
+      {
+        "cmd": "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/autopilot/autopilot.py start --max-trials 3000",
+        "pid": 131226
+      }
+    ],
+    "active_llama_process_count": 28,
+    "active_llama_process_examples": [
+      {
+        "cmd": "/mnt/raid0/llm/llama.cpp/build/bin/llama-server -m /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf --host 127.0.0.1 --port 8080 -np 1 -c 32768 -t 48 -ub 8192 --flash-attn on --jinja -ctk q8_0 -ctv q8_0 --mlock --spec-type draft-mtp --spec-draft-n-max 4 --slot-save-path /mnt/raid0/llm/cache/kv_slots/frontdoor",
+        "pid": 1870477
+      },
+      {
+        "cmd": "/mnt/raid0/llm/llama.cpp/build/bin/llama-server -m /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf --host 127.0.0.1 --port 8180 -np 1 -c 32768 -t 48 -ub 8192 --flash-attn on --jinja -ctk q8_0 -ctv q8_0 --mlock --spec-type draft-mtp --spec-draft-n-max 4 --slot-save-path /mnt/raid0/llm/cache/kv_slots/frontdoor",
+        "pid": 1870837
+      },
+      {
+        "cmd": "/mnt/raid0/llm/llama.cpp/build/bin/llama-server -m /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf --host 127.0.0.1 --port 8280 -np 1 -c 32768 -t 48 -ub 8192 --flash-attn on --jinja -ctk q8_0 -ctv q8_0 --mlock --spec-type draft-mtp --spec-draft-n-max 4 --slot-save-path /mnt/raid0/llm/cache/kv_slots/frontdoor",
+        "pid": 1871111
+      },
+      {
+        "cmd": "/mnt/raid0/llm/llama.cpp/build/bin/llama-server -m /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf --host 127.0.0.1 --port 8380 -np 1 -c 32768 -t 48 -ub 8192 --flash-attn on --jinja -ctk q8_0 -ctv q8_0 --mlock --spec-type draft-mtp --spec-draft-n-max 4 --slot-save-path /mnt/raid0/llm/cache/kv_slots/frontdoor",
+        "pid": 1871389
+      },
+      {
+        "cmd": "/mnt/raid0/llm/llama.cpp/build/bin/llama-server -m /mnt/raid0/llm/models/gemma-4-26B-A4B-it-ORIG-Q4_K_M.gguf -md /mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-v6-Q8_0.gguf --spec-type draft-mtp --spec-draft-n-max 2 --draft-p-min 0.0 --threads-draft 16 -ub 512 --no-mmap --reasoning off --jinja --host 127.0.0.1 --port 8082 -np 1 -c 16384 -t 48 -ctk q8_0 -ctv q8_0 --flash-attn on",
+        "pid": 1871717
+      }
+    ],
+    "blockers": [
+      "active AutoPilot process count: 1",
+      "active llama-server process count: 28"
+    ],
+    "ready": false
+  },
+  "schema_version": "quiet_window_lab_plan.v1",
+  "selected_jobs": [
+    {
+      "context_modes": [
+        "dcp_pack",
+        "kb_rag",
+        "source_excerpt"
+      ],
+      "execution_mode": "model_chat",
+      "job_id": "handoff_freshness_lint",
+      "max_runtime_s": 900,
+      "risk": "read_only",
+      "scheduled_nightly": true,
+      "stage": "shadow",
+      "title": "Handoff freshness and index hygiene lint"
+    },
+    {
+      "context_modes": [
+        "kb_rag",
+        "source_excerpt"
+      ],
+      "execution_mode": "model_chat",
+      "job_id": "attestation_watch",
+      "max_runtime_s": 600,
+      "risk": "read_only",
+      "scheduled_nightly": true,
+      "stage": "shadow",
+      "title": "Attestation drift watch"
+    }
+  ],
+  "status": "blocked",
+  "timeout_s": 900.0
+}
