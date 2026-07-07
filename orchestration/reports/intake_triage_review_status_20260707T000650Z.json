@@ -1,0 +1,761 @@
+{
+  "generated_at": "2026-07-07T00:06:50+00:00",
+  "labels_needed": 0,
+  "min_reviewed_labels": 100,
+  "next_review_items": [
+    {
+      "categories": [
+        "benchmark_methodology",
+        "inference_serving",
+        "agent_architecture"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "",
+      "destination_index": "",
+      "intake_id": "intake-278",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-278 --verdict worth_investigating",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "blog",
+      "title": "GLM-5.1 API Guide \u2014 Z.AI Developer Documentation",
+      "url": "https://docs.z.ai/guides/llm/glm-5.1"
+    },
+    {
+      "categories": [
+        "moe_optimization",
+        "inference_serving",
+        "benchmark_methodology"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "",
+      "destination_index": "",
+      "intake_id": "intake-279",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-279 --verdict worth_investigating",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "title": "GLM-5.1 HuggingFace Model Card \u2014 754B MoE-DSA Open-Weight Flagship",
+      "url": "https://huggingface.co/zai-org/GLM-5.1"
+    },
+    {
+      "categories": [
+        "benchmark_methodology",
+        "agent_architecture"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "",
+      "destination_index": "",
+      "intake_id": "intake-280",
+      "novelty": "low",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-280 --verdict worth_investigating",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "blog",
+      "title": "GLM-5.1 Blog Post \u2014 Z.AI Announcement (partial fetch)",
+      "url": "https://z.ai/blog/glm-5.1"
+    },
+    {
+      "categories": [
+        "moe_optimization",
+        "inference_serving",
+        "agent_architecture",
+        "training_distillation"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "inference-acceleration-index.md",
+      "destination_index": "",
+      "intake_id": "intake-281",
+      "novelty": "high",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-281 --verdict worth_investigating --destination-handoff inference-acceleration-index.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "title": "GLM-5: from Vibe Coding to Agentic Engineering",
+      "url": "https://arxiv.org/abs/2602.15763"
+    },
+    {
+      "categories": [
+        "kv_cache"
+      ],
+      "current_verdict": "new_opportunity",
+      "destination_handoff": "kv-cache-quantization.md",
+      "destination_index": "",
+      "intake_id": "intake-284",
+      "novelty": "high",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-284 --verdict new_opportunity --destination-handoff kv-cache-quantization.md",
+      "relevance": "high",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "title": "TriAttention: Efficient Long Reasoning with Trigonometric KV Compression",
+      "url": "https://arxiv.org/abs/2604.04921"
+    },
+    {
+      "categories": [
+        "training_distillation"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "reasoning-compression.md",
+      "destination_index": "",
+      "intake_id": "intake-286",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-286 --verdict worth_investigating --destination-handoff reasoning-compression.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "title": "Self-Distilled RLVR (RLSD)",
+      "url": "https://arxiv.org/abs/2604.03128"
+    },
+    {
+      "categories": [
+        "kv_cache"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "kv-cache-quantization.md",
+      "destination_index": "",
+      "intake_id": "intake-287",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-287 --verdict worth_investigating --destination-handoff kv-cache-quantization.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "title": "LongFlow: Efficient KV Cache Compression for Reasoning Models",
+      "url": "https://arxiv.org/abs/2603.11504"
+    },
+    {
+      "categories": [
+        "kv_cache"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "kv-cache-quantization.md",
+      "destination_index": "",
+      "intake_id": "intake-288",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-288 --verdict worth_investigating --destination-handoff kv-cache-quantization.md",
+      "relevance": "high",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "title": "Expected Attention: KV Cache Compression by Estimating Attention from Future Queries Distribution",
+      "url": "https://arxiv.org/abs/2510.00636"
+    },
+    {
+      "categories": [
+        "kv_cache",
+        "training_distillation",
+        "context_extension",
+        "inference_serving"
+      ],
+      "current_verdict": "new_opportunity",
+      "destination_handoff": "reasoning-compression.md",
+      "destination_index": "",
+      "intake_id": "intake-289",
+      "novelty": "high",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-289 --verdict new_opportunity --destination-handoff reasoning-compression.md",
+      "relevance": "high",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "title": "Memento: Teaching LLMs to Manage Their Own Context",
+      "url": "https://github.com/microsoft/memento"
+    },
+    {
+      "categories": [
+        "training_distillation",
+        "benchmark_methodology"
+      ],
+      "current_verdict": "new_opportunity",
+      "destination_handoff": "reasoning-compression.md",
+      "destination_index": "",
+      "intake_id": "intake-290",
+      "novelty": "high",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-290 --verdict new_opportunity --destination-handoff reasoning-compression.md",
+      "relevance": "high",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "title": "OpenMementos-228K: Segmented Reasoning Traces with Block Summaries",
+      "url": "https://huggingface.co/datasets/microsoft/OpenMementos"
+    },
+    {
+      "categories": [
+        "agent_architecture",
+        "memory_augmented"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "hermes-agent-index.md",
+      "destination_index": "",
+      "intake_id": "intake-291",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-291 --verdict worth_investigating --destination-handoff hermes-agent-index.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "title": "Rowboat: Open-Source AI Coworker with Knowledge Graph Memory",
+      "url": "https://github.com/rowboatlabs/rowboat"
+    },
+    {
+      "categories": [
+        "context_extension",
+        "training_distillation"
+      ],
+      "current_verdict": "new_opportunity",
+      "destination_handoff": "reasoning-compression.md",
+      "destination_index": "",
+      "intake_id": "intake-292",
+      "novelty": "high",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-292 --verdict new_opportunity --destination-handoff reasoning-compression.md",
+      "relevance": "high",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "title": "InftyThink: Breaking the Length Limits of Long-Context Reasoning in Large Language Models",
+      "url": "https://arxiv.org/abs/2503.06692"
+    },
+    {
+      "categories": [
+        "context_extension",
+        "training_distillation"
+      ],
+      "current_verdict": "new_opportunity",
+      "destination_handoff": "reasoning-compression.md",
+      "destination_index": "",
+      "intake_id": "intake-293",
+      "novelty": "high",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-293 --verdict new_opportunity --destination-handoff reasoning-compression.md",
+      "relevance": "high",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "title": "InftyThink+: Effective and Efficient Infinite-Horizon Reasoning via Reinforcement Learning",
+      "url": "https://arxiv.org/abs/2602.06960"
+    },
+    {
+      "categories": [
+        "context_extension",
+        "training_distillation",
+        "inference_serving"
+      ],
+      "current_verdict": "new_opportunity",
+      "destination_handoff": "reasoning-compression.md",
+      "destination_index": "",
+      "intake_id": "intake-294",
+      "novelty": "high",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-294 --verdict new_opportunity --destination-handoff reasoning-compression.md",
+      "relevance": "high",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "title": "Accordion-Thinking: Self-Regulated Step Summaries for Efficient and Readable LLM Reasoning",
+      "url": "https://arxiv.org/abs/2602.03249"
+    },
+    {
+      "categories": [
+        "agent_architecture"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "meta-harness-optimization.md",
+      "destination_index": "",
+      "intake_id": "intake-295",
+      "novelty": "medium",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-295 --verdict worth_investigating --destination-handoff meta-harness-optimization.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "title": "FFF.nvim: Frecency-Based Fuzzy File Finder for AI Agents",
+      "url": "https://github.com/dmtrKovalenko/fff.nvim"
+    },
+    {
+      "categories": [
+        "agent_architecture"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "tool-output-compression.md",
+      "destination_index": "",
+      "intake_id": "intake-302",
+      "novelty": "high",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-302 --verdict worth_investigating --destination-handoff tool-output-compression.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "title": "SkillReducer: Optimizing LLM Agent Skills for Token Efficiency",
+      "url": "https://arxiv.org/abs/2603.29919"
+    },
+    {
+      "categories": [
+        "hardware_optimization",
+        "inference_serving",
+        "local_inference"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "inference-acceleration-index.md",
+      "destination_index": "",
+      "intake_id": "intake-303",
+      "novelty": "high",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-303 --verdict worth_investigating --destination-handoff inference-acceleration-index.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "title": "rocWMMA: C++ Header Library for AMD Matrix Multiply-Accumulate Operations",
+      "url": "https://github.com/ROCm/rocWMMA"
+    },
+    {
+      "categories": [
+        "hardware_optimization",
+        "inference_serving"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "inference-acceleration-index.md",
+      "destination_index": "",
+      "intake_id": "intake-304",
+      "novelty": "high",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-304 --verdict worth_investigating --destination-handoff inference-acceleration-index.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "blog",
+      "title": "How to Accelerate AI Applications on RDNA 3 Using WMMA",
+      "url": "https://gpuopen.com/learn/wmma_on_rdna3/"
+    },
+    {
+      "categories": [
+        "hardware_optimization",
+        "inference_serving",
+        "benchmark_methodology"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "inference-acceleration-index.md",
+      "destination_index": "",
+      "intake_id": "intake-305",
+      "novelty": "high",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-305 --verdict worth_investigating --destination-handoff inference-acceleration-index.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "blog",
+      "title": "Accelerating llama.cpp on AMD Instinct MI300X",
+      "url": "https://rocm.blogs.amd.com/ecosystems-and-partners/llama-cpp-oct2025/README.html"
+    },
+    {
+      "categories": [
+        "hardware_optimization",
+        "inference_serving",
+        "kv_cache"
+      ],
+      "current_verdict": "worth_investigating",
+      "destination_handoff": "inference-acceleration-index.md",
+      "destination_index": "",
+      "intake_id": "intake-306",
+      "novelty": "high",
+      "record_command": "uv run python scripts/datasets/record_intake_triage_verdict.py --intake /mnt/raid0/llm/epyc-root/research/intake_index.yaml --output orchestration/datasets/intake_triage_reviewed.jsonl --intake-id intake-306 --verdict worth_investigating --destination-handoff inference-acceleration-index.md",
+      "relevance": "medium",
+      "source_text_excluded": true,
+      "source_type": "blog",
+      "title": "AMD RDNA3 Users Finally Get Decent llama.cpp Performance \u2014 rocWMMA Optimization Fixes",
+      "url": "https://www.banandre.com/blog/amd-rdna3-faster-llamacpp-performance-rocm-optimizations"
+    }
+  ],
+  "privacy": {
+    "raw_text_in_report": false,
+    "reported_fields": "aggregate counts plus sanitized pending review sample"
+  },
+  "queue_path": "orchestration/datasets/intake_triage_review_queue.jsonl",
+  "queue_rows": 120,
+  "queue_unique_intake_ids": 120,
+  "ready_for_baseline": true,
+  "remaining_queue_items": 20,
+  "review_batch_template": [
+    {
+      "categories": [
+        "benchmark_methodology",
+        "inference_serving",
+        "agent_architecture"
+      ],
+      "destination_handoff": "",
+      "destination_index": "",
+      "intake_id": "intake-278",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "blog",
+      "suggested_verdict": "worth_investigating",
+      "title": "GLM-5.1 API Guide \u2014 Z.AI Developer Documentation",
+      "url": "https://docs.z.ai/guides/llm/glm-5.1",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "moe_optimization",
+        "inference_serving",
+        "benchmark_methodology"
+      ],
+      "destination_handoff": "",
+      "destination_index": "",
+      "intake_id": "intake-279",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "suggested_verdict": "worth_investigating",
+      "title": "GLM-5.1 HuggingFace Model Card \u2014 754B MoE-DSA Open-Weight Flagship",
+      "url": "https://huggingface.co/zai-org/GLM-5.1",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "benchmark_methodology",
+        "agent_architecture"
+      ],
+      "destination_handoff": "",
+      "destination_index": "",
+      "intake_id": "intake-280",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "blog",
+      "suggested_verdict": "worth_investigating",
+      "title": "GLM-5.1 Blog Post \u2014 Z.AI Announcement (partial fetch)",
+      "url": "https://z.ai/blog/glm-5.1",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "moe_optimization",
+        "inference_serving",
+        "agent_architecture",
+        "training_distillation"
+      ],
+      "destination_handoff": "inference-acceleration-index.md",
+      "destination_index": "",
+      "intake_id": "intake-281",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "suggested_verdict": "worth_investigating",
+      "title": "GLM-5: from Vibe Coding to Agentic Engineering",
+      "url": "https://arxiv.org/abs/2602.15763",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "kv_cache"
+      ],
+      "destination_handoff": "kv-cache-quantization.md",
+      "destination_index": "",
+      "intake_id": "intake-284",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "suggested_verdict": "new_opportunity",
+      "title": "TriAttention: Efficient Long Reasoning with Trigonometric KV Compression",
+      "url": "https://arxiv.org/abs/2604.04921",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "training_distillation"
+      ],
+      "destination_handoff": "reasoning-compression.md",
+      "destination_index": "",
+      "intake_id": "intake-286",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "suggested_verdict": "worth_investigating",
+      "title": "Self-Distilled RLVR (RLSD)",
+      "url": "https://arxiv.org/abs/2604.03128",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "kv_cache"
+      ],
+      "destination_handoff": "kv-cache-quantization.md",
+      "destination_index": "",
+      "intake_id": "intake-287",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "suggested_verdict": "worth_investigating",
+      "title": "LongFlow: Efficient KV Cache Compression for Reasoning Models",
+      "url": "https://arxiv.org/abs/2603.11504",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "kv_cache"
+      ],
+      "destination_handoff": "kv-cache-quantization.md",
+      "destination_index": "",
+      "intake_id": "intake-288",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "suggested_verdict": "worth_investigating",
+      "title": "Expected Attention: KV Cache Compression by Estimating Attention from Future Queries Distribution",
+      "url": "https://arxiv.org/abs/2510.00636",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "kv_cache",
+        "training_distillation",
+        "context_extension",
+        "inference_serving"
+      ],
+      "destination_handoff": "reasoning-compression.md",
+      "destination_index": "",
+      "intake_id": "intake-289",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "suggested_verdict": "new_opportunity",
+      "title": "Memento: Teaching LLMs to Manage Their Own Context",
+      "url": "https://github.com/microsoft/memento",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "training_distillation",
+        "benchmark_methodology"
+      ],
+      "destination_handoff": "reasoning-compression.md",
+      "destination_index": "",
+      "intake_id": "intake-290",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "suggested_verdict": "new_opportunity",
+      "title": "OpenMementos-228K: Segmented Reasoning Traces with Block Summaries",
+      "url": "https://huggingface.co/datasets/microsoft/OpenMementos",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "agent_architecture",
+        "memory_augmented"
+      ],
+      "destination_handoff": "hermes-agent-index.md",
+      "destination_index": "",
+      "intake_id": "intake-291",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "suggested_verdict": "worth_investigating",
+      "title": "Rowboat: Open-Source AI Coworker with Knowledge Graph Memory",
+      "url": "https://github.com/rowboatlabs/rowboat",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "context_extension",
+        "training_distillation"
+      ],
+      "destination_handoff": "reasoning-compression.md",
+      "destination_index": "",
+      "intake_id": "intake-292",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "suggested_verdict": "new_opportunity",
+      "title": "InftyThink: Breaking the Length Limits of Long-Context Reasoning in Large Language Models",
+      "url": "https://arxiv.org/abs/2503.06692",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "context_extension",
+        "training_distillation"
+      ],
+      "destination_handoff": "reasoning-compression.md",
+      "destination_index": "",
+      "intake_id": "intake-293",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "suggested_verdict": "new_opportunity",
+      "title": "InftyThink+: Effective and Efficient Infinite-Horizon Reasoning via Reinforcement Learning",
+      "url": "https://arxiv.org/abs/2602.06960",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "context_extension",
+        "training_distillation",
+        "inference_serving"
+      ],
+      "destination_handoff": "reasoning-compression.md",
+      "destination_index": "",
+      "intake_id": "intake-294",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "suggested_verdict": "new_opportunity",
+      "title": "Accordion-Thinking: Self-Regulated Step Summaries for Efficient and Readable LLM Reasoning",
+      "url": "https://arxiv.org/abs/2602.03249",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "agent_architecture"
+      ],
+      "destination_handoff": "meta-harness-optimization.md",
+      "destination_index": "",
+      "intake_id": "intake-295",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "suggested_verdict": "worth_investigating",
+      "title": "FFF.nvim: Frecency-Based Fuzzy File Finder for AI Agents",
+      "url": "https://github.com/dmtrKovalenko/fff.nvim",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "agent_architecture"
+      ],
+      "destination_handoff": "tool-output-compression.md",
+      "destination_index": "",
+      "intake_id": "intake-302",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "paper",
+      "suggested_verdict": "worth_investigating",
+      "title": "SkillReducer: Optimizing LLM Agent Skills for Token Efficiency",
+      "url": "https://arxiv.org/abs/2603.29919",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "hardware_optimization",
+        "inference_serving",
+        "local_inference"
+      ],
+      "destination_handoff": "inference-acceleration-index.md",
+      "destination_index": "",
+      "intake_id": "intake-303",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "repo",
+      "suggested_verdict": "worth_investigating",
+      "title": "rocWMMA: C++ Header Library for AMD Matrix Multiply-Accumulate Operations",
+      "url": "https://github.com/ROCm/rocWMMA",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "hardware_optimization",
+        "inference_serving"
+      ],
+      "destination_handoff": "inference-acceleration-index.md",
+      "destination_index": "",
+      "intake_id": "intake-304",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "blog",
+      "suggested_verdict": "worth_investigating",
+      "title": "How to Accelerate AI Applications on RDNA 3 Using WMMA",
+      "url": "https://gpuopen.com/learn/wmma_on_rdna3/",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "hardware_optimization",
+        "inference_serving",
+        "benchmark_methodology"
+      ],
+      "destination_handoff": "inference-acceleration-index.md",
+      "destination_index": "",
+      "intake_id": "intake-305",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "blog",
+      "suggested_verdict": "worth_investigating",
+      "title": "Accelerating llama.cpp on AMD Instinct MI300X",
+      "url": "https://rocm.blogs.amd.com/ecosystems-and-partners/llama-cpp-oct2025/README.html",
+      "verdict": ""
+    },
+    {
+      "categories": [
+        "hardware_optimization",
+        "inference_serving",
+        "kv_cache"
+      ],
+      "destination_handoff": "inference-acceleration-index.md",
+      "destination_index": "",
+      "intake_id": "intake-306",
+      "label_source": "operator",
+      "notes": "",
+      "reviewer": "operator",
+      "schema_version": "intake_triage_review_batch.v1",
+      "source_text_excluded": true,
+      "source_type": "blog",
+      "suggested_verdict": "worth_investigating",
+      "title": "AMD RDNA3 Users Finally Get Decent llama.cpp Performance \u2014 rocWMMA Optimization Fixes",
+      "url": "https://www.banandre.com/blog/amd-rdna3-faster-llamacpp-performance-rocm-optimizations",
+      "verdict": ""
+    }
+  ],
+  "review_batch_template_rows": 20,
+  "reviewed_label_sources": {
+    "operator": 100
+  },
+  "reviewed_labels_path": "orchestration/datasets/intake_triage_reviewed.jsonl",
+  "reviewed_queue_items": 100,
+  "reviewed_rows": 100,
+  "reviewed_unique_intake_ids": 100,
+  "schema_version": "intake_triage_review_status.v1",
+  "status": "ready_for_baseline",
+  "trusted_label_sources": [
+    "operator"
+  ],
+  "trusted_reviewed_rows": 100,
+  "trusted_reviewed_unique_intake_ids": 100
+}
