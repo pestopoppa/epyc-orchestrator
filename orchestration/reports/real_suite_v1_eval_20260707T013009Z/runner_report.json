@@ -1,0 +1,172 @@
+{
+  "allow_autopilot_active": false,
+  "allow_partial": false,
+  "api_url": "http://localhost:8000",
+  "applied": true,
+  "blockers": [],
+  "confirm_clean_window": true,
+  "decision_grade": true,
+  "decision_grade_notes": [
+    "requires --apply --confirm-clean-window",
+    "requires full real_suite_v1 50-question run",
+    "requires AutoPilot inactive unless --allow-autopilot-active is set",
+    "the run is standalone and does not write AutoPilot journal/state"
+  ],
+  "finished_at": "2026-07-07T01:49:48+00:00",
+  "generated_at": "2026-07-07T01:49:48+00:00",
+  "output_dir": "/mnt/raid0/llm/epyc-orchestrator/orchestration/reports/real_suite_v1_eval_20260707T013009Z",
+  "packaged_summary": {
+    "builder": "scripts/tasks/package_real_suite_eval.py",
+    "by_suite": {
+      "real_suite_v1": {
+        "accuracy": 0.7,
+        "correct": 35,
+        "count": 50
+      }
+    },
+    "by_task_class": {
+      "benchmark_eval_measurement": {
+        "accuracy": 0.875,
+        "correct": 7,
+        "count": 8,
+        "errors": 0,
+        "reliability": 1.0
+      },
+      "code_change_implementation": {
+        "accuracy": 0.2857142857142857,
+        "correct": 2,
+        "count": 7,
+        "errors": 1,
+        "reliability": 0.8571428571428571
+      },
+      "debug_root_cause": {
+        "accuracy": 0.8571428571428571,
+        "correct": 6,
+        "count": 7,
+        "errors": 0,
+        "reliability": 1.0
+      },
+      "governance_docs_handoff": {
+        "accuracy": 0.7142857142857143,
+        "correct": 5,
+        "count": 7,
+        "errors": 0,
+        "reliability": 1.0
+      },
+      "ops_deploy_process": {
+        "accuracy": 1.0,
+        "correct": 7,
+        "count": 7,
+        "errors": 0,
+        "reliability": 1.0
+      },
+      "planning_architecture_review": {
+        "accuracy": 0.42857142857142855,
+        "correct": 3,
+        "count": 7,
+        "errors": 1,
+        "reliability": 0.8571428571428571
+      },
+      "research_intake_deep_dive": {
+        "accuracy": 0.7142857142857143,
+        "correct": 5,
+        "count": 7,
+        "errors": 1,
+        "reliability": 0.8571428571428571
+      }
+    },
+    "caveat": "Clean-window standalone EvalTower real_suite_v1 run. It is isolated from AutoPilot journal/state and packaged prompt-free for F1 W3 acceptance review.",
+    "error_breakdown": {
+      "no such group": 1,
+      "timed out": 2
+    },
+    "generated_at": "2026-07-07T01:49:48+00:00",
+    "metrics": {
+      "accuracy": 0.7,
+      "aggregate_speed": 29.462209210024955,
+      "correct": 35,
+      "errors": 3,
+      "eval_concurrency": 1,
+      "eval_wall_s": 1178.696402311325,
+      "incorrect": 12,
+      "median_request_speed": 32.60615581444019,
+      "n_questions": 50,
+      "quality_0_3": 2.0999999999999996,
+      "reliability": 0.94,
+      "speed_metric_mode": "median_request_tps"
+    },
+    "privacy": {
+      "committed_question_results": "compact prompt-free EvalTower result rows",
+      "private_key_matches": [],
+      "question_ledger_rows": "compact prompt-free per-question ledger rows"
+    },
+    "question_ledger_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/reports/real_suite_v1_eval_20260707T013009Z/question_ledger.jsonl",
+    "run": {
+      "calibration_id": "real_suite_v1_eval_20260707T013009Z",
+      "core_id": "real_suite_v1",
+      "event_type": "real_suite_v1_evaltower_window",
+      "finished_at": "2026-07-07T01:49:48+00:00",
+      "requested_n": 50,
+      "seed": 4242,
+      "started_at": "2026-07-07T01:30:09+00:00",
+      "tier": 1,
+      "trial_id": null
+    },
+    "schema_version": "real_suite_v1_eval_report.v1",
+    "source_jsonl": "/mnt/raid0/llm/tmp/real_suite_v1_eval_20260707T013009Z.jsonl",
+    "status": "eval_tower_real_suite_v1_run_packaged"
+  },
+  "preflight": {
+    "api_health": {
+      "ok": true,
+      "status_code": 200,
+      "url": "http://localhost:8000/health"
+    },
+    "autopilot_active": false,
+    "autopilot_processes": [],
+    "available_questions": 50,
+    "suite_yaml": "/mnt/raid0/llm/epyc-inference-research/benchmarks/prompts/debug/real_suite_v1.yaml",
+    "suite_yaml_exists": true
+  },
+  "raw_jsonl": "/mnt/raid0/llm/tmp/real_suite_v1_eval_20260707T013009Z.jsonl",
+  "raw_row_metrics": {
+    "eval_wall_s": 1178.696402311325,
+    "n_questions": 50,
+    "quality": 2.0999999999999996,
+    "reliability": 0.94
+  },
+  "seed": 4242,
+  "selected_n": 50,
+  "started_at": "2026-07-07T01:30:09+00:00",
+  "status": "clean_full_suite_packaged",
+  "suite": {
+    "generated_at": "2026-06-27T15:36:42+00:00",
+    "question_count": 50,
+    "scoring_methods": {
+      "code_execution": 7,
+      "exact_match": 8,
+      "f1": 9,
+      "multiple_choice": 11,
+      "programmatic": 5,
+      "substring": 10
+    },
+    "suite": "real_suite_v1",
+    "task_class_counts": {
+      "benchmark_eval_measurement": 8,
+      "code_change_implementation": 7,
+      "debug_root_cause": 7,
+      "governance_docs_handoff": 7,
+      "ops_deploy_process": 7,
+      "planning_architecture_review": 7,
+      "research_intake_deep_dive": 7
+    },
+    "tier_counts": {
+      "1": 20,
+      "2": 21,
+      "3": 9
+    },
+    "version": "1.0"
+  },
+  "suite_yaml": "/mnt/raid0/llm/epyc-inference-research/benchmarks/prompts/debug/real_suite_v1.yaml",
+  "tier_label": 1
+}
