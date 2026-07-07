@@ -1,0 +1,53 @@
+{
+  "api_url": "http://localhost:8000/chat",
+  "fixed_slice_repetitions": 5.0,
+  "kind": "internal_interaction_j17_live_ab",
+  "orch_head": "2858218e",
+  "rows_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/reports/internal_interaction_j17_ab_20260707T121211Z/turns.jsonl",
+  "run_ts": "20260707T121211Z",
+  "summary": {
+    "baseline": {
+      "cache_hits": 0,
+      "coder_wall_p50_s": 5.093,
+      "coder_wall_p95_s": 11.853,
+      "consult_calls": 0,
+      "consult_failures": 0,
+      "consult_successes": 0,
+      "consult_wall_p50_s": null,
+      "consult_wall_p95_s": null,
+      "passes": 35,
+      "quality": 0.7,
+      "rerun_requests": 0,
+      "turns": 50
+    },
+    "comparison": {
+      "cache_hit_rate": 0.0,
+      "coder_wall_p50_delta_pct": 14.49,
+      "gate_notes": [
+        "Targeted consult-value slice has 10 unique higher-risk edit tasks repeated to reach the requested turns.",
+        "Tasks stress compatibility shims, migration defaults, rollback semantics, parsing edge cases, concurrency, graph cycles, optional dependencies, plugin contracts, and path safety.",
+        "The slice is synthetic but designed so a pre-commit reviewer can plausibly catch hidden verifier failures.",
+        "Consult helper currently records cache_ttl_seconds but no cache_hit events.",
+        "Wall-clock p50 is used as the live proxy for coder decode p50 in this harness."
+      ],
+      "quality_delta_pp": 10.0
+    },
+    "consult": {
+      "cache_hits": 0,
+      "coder_wall_p50_s": 5.831,
+      "coder_wall_p95_s": 10.669,
+      "consult_calls": 50,
+      "consult_failures": 0,
+      "consult_successes": 50,
+      "consult_wall_p50_s": 22.871,
+      "consult_wall_p95_s": 41.643,
+      "passes": 40,
+      "quality": 0.8,
+      "rerun_requests": 15,
+      "turns": 50
+    }
+  },
+  "task_suite": "targeted",
+  "turns_requested_per_arm": 50,
+  "unique_task_count": 10
+}
