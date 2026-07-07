@@ -872,16 +872,18 @@ async def _handle_chat(
 
                 review_before_commit = _review_before_commit
                 if bool(features().review_before_commit_targeted_gate):
-                    from src.orchestration.review_consult_gate import review_before_commit_targeted_gate
+                    from src.orchestration.review_consult_gate import review_before_commit_gate_from_context
 
                     def _targeted_review_gate(context: dict) -> dict:
-                        decision = review_before_commit_targeted_gate(
-                            task_prompt=str(context.get("task_prompt") or ""),
-                            current_paths=list(context.get("current_paths") or []),
-                            draft_paths=list(context.get("draft_paths") or []),
-                            delete_paths=list(context.get("delete_paths") or []),
-                            raw_model_output=str(context.get("raw_model_output") or ""),
-                        )
+                        context = dict(context)
+                        context["signals"] = {
+                            "difficulty_band": str(getattr(routing, "difficulty_band", "") or ""),
+                            "factual_risk_band": str(getattr(routing, "factual_risk_band", "") or ""),
+                            "factual_risk_score": float(getattr(routing, "factual_risk_score", 0.0) or 0.0),
+                            "benchmark_class": str(getattr(request, "batch_id", "") or ""),
+                            "latency_budget_remaining_s": max(0.0, request_deadline_s - time.perf_counter()),
+                        }
+                        decision = review_before_commit_gate_from_context(context)
                         return {"enabled": decision.enabled, "reasons": list(decision.reasons)}
 
                     review_before_commit_gate = _targeted_review_gate
