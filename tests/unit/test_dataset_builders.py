@@ -935,6 +935,79 @@ def test_intake_triage_review_status_reports_sanitized_pending_sample(
         report["privacy"]["reported_fields"]
         == "aggregate counts plus sanitized pending review sample"
     )
+    assert report["review_batch_template"] == [
+        {
+            "schema_version": "intake_triage_review_batch.v1",
+            "intake_id": "intake-1",
+            "title": "Candidate One",
+            "url": "https://example.test/one",
+            "source_type": "paper",
+            "categories": ["agent_architecture"],
+            "suggested_verdict": "worth_investigating",
+            "verdict": "",
+            "destination_handoff": "routing-intelligence.md",
+            "destination_index": "",
+            "label_source": "operator",
+            "reviewer": "operator",
+            "notes": "",
+            "source_text_excluded": True,
+        }
+    ]
+    assert report["review_batch_template_rows"] == 1
+
+
+def test_intake_triage_review_status_writes_packet_artifacts(tmp_path: Path) -> None:
+    queue = tmp_path / "review_queue.jsonl"
+    reviewed = tmp_path / "reviewed.jsonl"
+    report = tmp_path / "status.json"
+    packet = tmp_path / "packet.md"
+    batch = tmp_path / "batch.jsonl"
+    queue.write_text(
+        json.dumps(
+            {
+                "intake_id": "intake-1",
+                "title": "Candidate | One",
+                "url": "https://example.test/one",
+                "source_type": "paper",
+                "categories": ["agent_architecture"],
+                "novelty": "high",
+                "relevance": "medium",
+                "current_verdict": "worth_investigating",
+                "destination_handoff": "routing-intelligence.md",
+                "source_text": "must not appear",
+            }
+        )
+        + "\n"
+    )
+    reviewed.write_text("")
+
+    result = intake_triage_review_status.run(
+        Namespace(
+            queue=str(queue),
+            reviewed_labels=str(reviewed),
+            min_reviewed_labels=1,
+            trusted_label_source=[],
+            pending_sample=1,
+            report=str(report),
+            batch_template=str(batch),
+            output_md=str(packet),
+            markdown=False,
+            json=True,
+        )
+    )
+
+    assert result["batch_template_written"] == 1
+    assert result["report_path"] == str(report)
+    assert result["output_md_path"] == str(packet)
+    batch_rows = _read_jsonl(batch)
+    assert batch_rows[0]["intake_id"] == "intake-1"
+    assert batch_rows[0]["verdict"] == ""
+    assert batch_rows[0]["source_text_excluded"] is True
+    assert "must not appear" not in json.dumps(batch_rows)
+    md = packet.read_text()
+    assert "Intake Triage Review Packet" in md
+    assert "Candidate \\| One" in md
+    assert "must not appear" not in md
 
 
 def test_intake_triage_review_status_reports_ready(tmp_path: Path) -> None:

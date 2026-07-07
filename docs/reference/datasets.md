@@ -79,7 +79,10 @@ orchestrator branch:
   `suggested_verdict`.
 - `intake_triage_review_status.py`: read-only readiness report for the review
   queue and reviewed-label corpus; reports aggregate counts only and identifies
-  whether the 100-reviewed-label baseline gate can run.
+  whether the 100-reviewed-label baseline gate can run. It can also emit a
+  markdown review packet with `--output-md` and an operator-fillable JSONL
+  batch template with `--batch-template`; both remain dry-review artifacts until
+  `apply_intake_triage_review_batch.py --apply` records reviewed labels.
 
 ### Planner SFT Builder
 
@@ -182,9 +185,9 @@ authorize publish or training.
   label corpus exists until those reviews append rows to
   `orchestration/datasets/intake_triage_reviewed.jsonl`. Use
   `scripts/datasets/intake_triage_review_status.py` to report the live queue,
-  reviewed-label count, and remaining labels needed before running the baseline
-  acceptance gate. Use `scripts/datasets/apply_intake_triage_review_batch.py`
-  for operator-reviewed batches; it validates without writing unless `--apply`
-  is provided.
+  reviewed-label count, remaining labels needed, and optional review packets
+  before running the baseline acceptance gate. Use
+  `scripts/datasets/apply_intake_triage_review_batch.py` for operator-reviewed
+  batches; it validates without writing unless `--apply` is provided.
 - No builder should train on strategy-memory text from scrubbed or gate-lock-era
   rows until it joins each strategy to trustworthy journal evidence.
