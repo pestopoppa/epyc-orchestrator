@@ -2811,6 +2811,36 @@ function renderRegionLocksBasicGrid(grid, d, note = '') {
     grid.innerHTML = rows.join('') + suffix;
 }
 
+function renderRegionLocksDisplayMatrix(grid, d) {
+    const matrix = d && d.display_matrix ? d.display_matrix : null;
+    const columns = matrix && Array.isArray(matrix.columns) ? matrix.columns : [];
+    const rowsIn = matrix && Array.isArray(matrix.rows) ? matrix.rows : [];
+    if (!grid || !columns.length || !rowsIn.length) return false;
+    grid.dataset.regionLocksPainted = '1';
+    const rows = [];
+    rows.push(`<div style="color:var(--muted);font-size:10px">role / instance shape</div>`);
+    for (const col of columns) {
+        rows.push(`<div style="color:var(--muted);font-size:10px;text-align:center;font-weight:600">${escapeHTML(col.label || col.key || '')}</div>`);
+    }
+    const stateClass = { active: 'rl-active', blocked: 'rl-blocked', ready: 'rl-ready', na: 'rl-na' };
+    for (const row of rowsIn) {
+        rows.push(`<div style="overflow:hidden;color:var(--fg);font-size:11px;line-height:1.3">${escapeHTML(row.role || '')}</div>`);
+        for (const cell of (row.cells || [])) {
+            const state = String(cell.state || 'na');
+            const cls = stateClass[state] || 'rl-na';
+            rows.push(`<div class="rl-cell ${cls}" title="${escapeHTML(cell.title || '')}">${escapeHTML(cell.label || '—')}</div>`);
+        }
+    }
+    const gpuRows = gpuDeviceRegionRows();
+    rows.push(...gpuRows);
+    grid.innerHTML = rows.join('');
+    const footer = document.createElement('div');
+    footer.style.cssText = 'grid-column:1/-1;color:var(--dim);font-size:10px;font-family:var(--font-ui);margin-top:6px;line-height:1.5';
+    footer.innerHTML = `${rowsIn.length} role(s) from backend display matrix · Legend: <span style="color:#fbbf24">⚡ active holder</span> · <span style="color:#f87171">× waiting on occupied CPU regions</span> · <span style="color:var(--good,#34d399)">✅ ready to dispatch</span> · <span style="color:var(--dim)">— shape not in this role's same_role matrix</span>.`;
+    grid.appendChild(footer);
+    return true;
+}
+
 function rememberStructuredTapAccordion(detailsEl) {
     const requestId = detailsEl && detailsEl.dataset ? detailsEl.dataset.structuredRequestId : '';
     if (!requestId) return;
@@ -6442,6 +6472,7 @@ async function updateRegionLocks(
                     : '— DISABLED (legacy global lock; set ORCHESTRATOR_PER_REGION_LOCKS=1)';
                 status.style.color = enabled ? 'var(--muted)' : 'var(--warn, #fbbf24)';
             }
+            const backendMatrix = d.display_matrix || null;
             // by_role from the server is { role: { wired, regions, instances[], active_instance_idxs[] } }.
             const byRole = d.by_role || {};
             const roleEntries = Object.entries(byRole).sort((a, b) => {
@@ -6700,6 +6731,16 @@ async function updateRegionLocks(
                     status.textContent = '— no locks held; per-region locks ENABLED';
                     status.style.color = 'var(--muted)';
                 }
+            }
+
+            if (backendMatrix && renderRegionLocksDisplayMatrix(grid, d)) {
+                if (typeof updateTopologyInflight === 'function') {
+                    const overlayInflight = snapshotSeq != null
+                        ? ((Array.isArray(snapshotInflightTasks) ? snapshotInflightTasks : ((_latestSnapshot && _latestSnapshot.in_flight_tasks) || [])))
+                        : [];
+                    updateTopologyInflight(overlayInflight, snapshotSeq);
+                }
+                return;
             }
 
             let nRoles = 0;

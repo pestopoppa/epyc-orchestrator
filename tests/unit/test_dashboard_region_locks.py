@@ -324,6 +324,13 @@ class TestRegionLocksSnapshot:
         assert payload["stack_numa_mode"] == "full"
         assert [inst["shape"] for inst in worker["instances"]] == ["full"]
         assert worker["active_instance_idxs"] == [0]
+        assert payload["display_matrix"]["active_holder_count"] == 1
+        worker_display = next(
+            row for row in payload["display_matrix"]["rows"]
+            if row["role"] == "worker_general"
+        )
+        assert worker_display["cells"][0]["state"] == "active"
+        assert worker_display["cells"][0]["label"] == "⚡"
 
     @pytest.mark.asyncio
     async def test_region_lock_grid_shapes_follow_quarter_mode(self, tmp_path, monkeypatch) -> None:
