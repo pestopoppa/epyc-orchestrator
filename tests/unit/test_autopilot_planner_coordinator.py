@@ -646,22 +646,22 @@ def test_spend_breaker_forces_cloud_primary_to_local_providers(
         "summarize_economics",
         lambda *, days=7: _fake_economics_ledger(triggered=True),
     )
-    local_frontdoor = FakeProvider(
-        "local_frontdoor",
+    local_ingest = FakeProvider(
+        "local_ingest",
         [
             PlannerProviderResult(
-                provider="local_frontdoor",
+                provider="local_ingest",
                 role="draft",
                 ok=True,
                 text=_action_text({"type": "numeric_trial", "surface": "repl_executor"}),
             )
         ],
     )
-    local_worker = FakeProvider(
-        "local_worker",
+    local_frontdoor = FakeProvider(
+        "local_frontdoor",
         [
             PlannerProviderResult(
-                provider="local_worker",
+                provider="local_frontdoor",
                 role="critique",
                 ok=True,
                 text=_critique_text({"decision": "approve", "confidence": 0.8}),
@@ -682,25 +682,25 @@ def test_spend_breaker_forces_cloud_primary_to_local_providers(
         ),
         provider_factory=_factory(
             {
+                "local_ingest": local_ingest,
                 "local_frontdoor": local_frontdoor,
-                "local_worker": local_worker,
             }
         ),
     )
 
-    assert decision.draft_provider == "local_frontdoor"
-    assert decision.critic_provider == "local_worker"
+    assert decision.draft_provider == "local_ingest"
+    assert decision.critic_provider == "local_frontdoor"
     assert decision.action == {"type": "numeric_trial", "surface": "repl_executor"}
     assert state["_spend_breaker"]["active"] is True
-    assert state["_spend_breaker"]["local_primary"] == "local_frontdoor"
-    assert state["_spend_breaker"]["local_critic"] == "local_worker"
+    assert state["_spend_breaker"]["local_primary"] == "local_ingest"
+    assert state["_spend_breaker"]["local_critic"] == "local_frontdoor"
     assert state["_spend_breaker"]["previous_primary"] == "claude"
     assert state["_spend_breaker"]["previous_critic"] == "codex"
-    assert [call["role"] for call in local_frontdoor.calls] == ["draft"]
-    assert [call["role"] for call in local_worker.calls] == ["critique"]
+    assert [call["role"] for call in local_ingest.calls] == ["draft"]
+    assert [call["role"] for call in local_frontdoor.calls] == ["critique"]
 
 
-def test_spend_breaker_accepts_local_frontdoor_leading_json_action(
+def test_spend_breaker_accepts_local_ingest_leading_json_action(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from scripts.economics import ledger as ledger_mod
@@ -711,22 +711,22 @@ def test_spend_breaker_accepts_local_frontdoor_leading_json_action(
         "summarize_economics",
         lambda *, days=7: _fake_economics_ledger(triggered=True),
     )
-    local_frontdoor = FakeProvider(
-        "local_frontdoor",
+    local_ingest = FakeProvider(
+        "local_ingest",
         [
             PlannerProviderResult(
-                provider="local_frontdoor",
+                provider="local_ingest",
                 role="draft",
                 ok=True,
                 text=_leading_action_text({"type": "deep_eval", "tier": 3}),
             )
         ],
     )
-    local_worker = FakeProvider(
-        "local_worker",
+    local_frontdoor = FakeProvider(
+        "local_frontdoor",
         [
             PlannerProviderResult(
-                provider="local_worker",
+                provider="local_frontdoor",
                 role="critique",
                 ok=True,
                 text=_critique_text({"decision": "approve", "confidence": 0.8}),
@@ -746,18 +746,18 @@ def test_spend_breaker_accepts_local_frontdoor_leading_json_action(
         ),
         provider_factory=_factory(
             {
+                "local_ingest": local_ingest,
                 "local_frontdoor": local_frontdoor,
-                "local_worker": local_worker,
             }
         ),
     )
 
-    assert decision.draft_provider == "local_frontdoor"
-    assert decision.critic_provider == "local_worker"
+    assert decision.draft_provider == "local_ingest"
+    assert decision.critic_provider == "local_frontdoor"
     assert decision.action == {"type": "deep_eval", "tier": 3}
     assert decision.fallback_reason == ""
-    assert [call["role"] for call in local_frontdoor.calls] == ["draft"]
-    assert [call["role"] for call in local_worker.calls] == ["critique"]
+    assert [call["role"] for call in local_ingest.calls] == ["draft"]
+    assert [call["role"] for call in local_frontdoor.calls] == ["critique"]
 
 
 def test_spend_breaker_replaces_cloud_critic_for_local_primary(
@@ -771,22 +771,22 @@ def test_spend_breaker_replaces_cloud_critic_for_local_primary(
         "summarize_economics",
         lambda *, days=7: _fake_economics_ledger(triggered=True),
     )
-    local_frontdoor = FakeProvider(
-        "local_frontdoor",
+    local_ingest = FakeProvider(
+        "local_ingest",
         [
             PlannerProviderResult(
-                provider="local_frontdoor",
+                provider="local_ingest",
                 role="draft",
                 ok=True,
                 text=_action_text({"type": "numeric_trial", "surface": "repl_executor"}),
             )
         ],
     )
-    local_worker = FakeProvider(
-        "local_worker",
+    local_frontdoor = FakeProvider(
+        "local_frontdoor",
         [
             PlannerProviderResult(
-                provider="local_worker",
+                provider="local_frontdoor",
                 role="critique",
                 ok=True,
                 text=_critique_text({"decision": "approve", "confidence": 0.8}),
@@ -807,14 +807,14 @@ def test_spend_breaker_replaces_cloud_critic_for_local_primary(
         ),
         provider_factory=_factory(
             {
+                "local_ingest": local_ingest,
                 "local_frontdoor": local_frontdoor,
-                "local_worker": local_worker,
             }
         ),
     )
 
-    assert decision.draft_provider == "local_frontdoor"
-    assert decision.critic_provider == "local_worker"
+    assert decision.draft_provider == "local_ingest"
+    assert decision.critic_provider == "local_frontdoor"
     assert state["_spend_breaker"]["previous_primary"] == "local_chat"
     assert state["_spend_breaker"]["previous_critic"] == "codex"
 
@@ -830,11 +830,11 @@ def test_spend_breaker_preserves_configured_local_critic(
         "summarize_economics",
         lambda *, days=7: _fake_economics_ledger(triggered=True),
     )
-    local_frontdoor = FakeProvider(
-        "local_frontdoor",
+    local_ingest = FakeProvider(
+        "local_ingest",
         [
             PlannerProviderResult(
-                provider="local_frontdoor",
+                provider="local_ingest",
                 role="draft",
                 ok=True,
                 text=_action_text({"type": "numeric_trial", "surface": "repl_executor"}),
@@ -866,13 +866,13 @@ def test_spend_breaker_preserves_configured_local_critic(
         ),
         provider_factory=_factory(
             {
-                "local_frontdoor": local_frontdoor,
+                "local_ingest": local_ingest,
                 "local_worker": local_worker,
             }
         ),
     )
 
-    assert decision.draft_provider == "local_frontdoor"
+    assert decision.draft_provider == "local_ingest"
     assert decision.critic_provider == "local_worker"
     assert state["_spend_breaker"]["local_critic"] == "local_worker"
     assert state["_spend_breaker"]["previous_critic"] == "local_worker"

@@ -959,7 +959,7 @@ def _reload_role_via_stack(
 
     try:
         subprocess.run(
-            [sys.executable, str(stack_script), "reload", role],
+            [_stack_reload_python(), str(stack_script), "reload", role],
             cwd=str(ORCH_ROOT),
             env=env,
             timeout=180,
@@ -999,7 +999,7 @@ def _reload_api_via_stack(
 
     try:
         subprocess.run(
-            [sys.executable, str(stack_script), "reload", "orchestrator"],
+            [_stack_reload_python(), str(stack_script), "reload", "orchestrator"],
             cwd=str(ORCH_ROOT),
             env=env,
             timeout=90,
@@ -1023,6 +1023,39 @@ def _reload_api_via_stack(
     except Exception as e:
         log.error("Stack reload failed: %s", e)
         return {"status": "error", "error": str(e), "method": "stack_reload"}
+
+
+def _stack_reload_python() -> str:
+    """Return a stable Python executable for orchestrator_stack reloads.
+
+    AutoPilot is often launched as ``.venv/bin/python``. If another session
+    recreates the venv while AutoPilot is running, ``sys.executable`` can become
+    a stale symlink even though the current process remains alive. Stack reloads
+    are then falsely reported as failed. Prefer an explicit override, then the
+    interpreter's resolved/base executable, and finally the uv-managed Python
+    used by this host.
+    """
+    import os
+
+    candidates = [
+        os.environ.get("AUTOPILOT_STACK_RELOAD_PYTHON"),
+        getattr(sys, "_base_executable", None),
+        sys.executable,
+        "/home/node/.local/share/uv/python/cpython-3.12-linux-x86_64-gnu/bin/python3.12",
+        "/home/node/.local/share/uv/python/cpython-3.12.13-linux-x86_64-gnu/bin/python3.12",
+        "/usr/bin/python3",
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        path = Path(str(candidate))
+        try:
+            resolved = path.resolve(strict=True)
+        except OSError:
+            continue
+        if resolved.exists():
+            return str(resolved)
+    return sys.executable
 
 
 class HealthCheckResult:

@@ -80,6 +80,34 @@ def test_restart_role_success_uses_stack_reload(monkeypatch: pytest.MonkeyPatch)
     assert calls[0]["env"]["ORCHESTRATOR_FRONTDOOR_REPL_NON_TOOL_N_TOKENS"] == "768"
 
 
+def test_stack_reload_python_prefers_explicit_override(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    override = tmp_path / "reload-python"
+    override.write_text("#!/bin/sh\n", encoding="utf-8")
+    override.chmod(0o755)
+    monkeypatch.setenv("AUTOPILOT_STACK_RELOAD_PYTHON", str(override))
+    monkeypatch.setattr(applicator.sys, "_base_executable", "/missing/base/python")
+    monkeypatch.setattr(applicator.sys, "executable", "/missing/venv/python")
+
+    assert applicator._stack_reload_python() == str(override.resolve())
+
+
+def test_stack_reload_python_survives_stale_sys_executable(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    base = tmp_path / "base-python"
+    base.write_text("#!/bin/sh\n", encoding="utf-8")
+    base.chmod(0o755)
+    monkeypatch.delenv("AUTOPILOT_STACK_RELOAD_PYTHON", raising=False)
+    monkeypatch.setattr(applicator.sys, "_base_executable", str(base))
+    monkeypatch.setattr(applicator.sys, "executable", str(tmp_path / "missing-venv-python"))
+
+    assert applicator._stack_reload_python() == str(base.resolve())
+
+
 def test_restart_role_success_journals_restart_boundary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
