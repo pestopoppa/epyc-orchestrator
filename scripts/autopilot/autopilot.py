@@ -3600,6 +3600,9 @@ def _record_skip_trial(
     status: str,
     reason: str,
     memory_count: int,
+    *,
+    bug_corrupted_by: str = "",
+    bug_corrupted_reason: str = "",
 ) -> None:
     """Journal a non-executing trial so it leaves durable residue (audit + planner).
 
@@ -3631,6 +3634,8 @@ def _record_skip_trial(
         failure_analysis=reason,
         deficiency_category=deficiency,
         outcome_status=status,
+        bug_corrupted_by=bug_corrupted_by,
+        bug_corrupted_reason=bug_corrupted_reason,
     )
     journal.record(entry)
 
@@ -6509,32 +6514,53 @@ def _run_loop_inner(
             if isinstance(eval_result, SkipOutcome):
                 skip_status = eval_result.status
                 skip_reason = eval_result.reason
+                skip_bug_corrupted_by = getattr(eval_result, "bug_corrupted_by", "") or ""
+                skip_bug_corrupted_reason = (
+                    getattr(eval_result, "bug_corrupted_reason", "") or ""
+                )
             else:
                 skip_status = "skipped"
                 skip_reason = f"{action_type} returned no eval result (handler no-op)"
+                skip_bug_corrupted_by = ""
+                skip_bug_corrupted_reason = ""
 
             sig = _action_signature(action)
             sig_counts = state.setdefault("invalid_signature_counts", {})
-            sig_counts[sig] = int(sig_counts.get(sig, 0)) + 1
-            skip_streak = int(state.get("consecutive_skip_actions", 0)) + 1
-            state["consecutive_skip_actions"] = skip_streak
-            state["last_invalid_action"] = action
-            state["last_invalid_reason"] = skip_reason
-            state["last_invalid_status"] = skip_status
+            if skip_bug_corrupted_by:
+                sig_seen = int(sig_counts.get(sig, 0))
+                skip_streak = int(state.get("consecutive_skip_actions", 0))
+            else:
+                sig_counts[sig] = int(sig_counts.get(sig, 0)) + 1
+                sig_seen = sig_counts[sig]
+                skip_streak = int(state.get("consecutive_skip_actions", 0)) + 1
+                state["consecutive_skip_actions"] = skip_streak
+                state["last_invalid_action"] = action
+                state["last_invalid_reason"] = skip_reason
+                state["last_invalid_status"] = skip_status
 
             try:
                 _record_skip_trial(
                     journal, trial_counter, action, species_name,
                     skip_status, skip_reason, memory_count,
+                    bug_corrupted_by=skip_bug_corrupted_by,
+                    bug_corrupted_reason=skip_bug_corrupted_reason,
                 )
             except Exception:
                 log.debug("skip-trial journal write failed", exc_info=True)
 
-            log.warning(
-                "Trial %d %s (%s): %s [signature seen %d×, consecutive skips=%d]",
-                trial_counter, skip_status, action_type, skip_reason,
-                sig_counts[sig], skip_streak,
-            )
+            if skip_bug_corrupted_by:
+                log.warning(
+                    "Trial %d %s (%s): %s [bug_corrupted_by=%s; not counted "
+                    "against planner signature pressure]",
+                    trial_counter, skip_status, action_type, skip_reason,
+                    skip_bug_corrupted_by,
+                )
+            else:
+                log.warning(
+                    "Trial %d %s (%s): %s [signature seen %d×, consecutive skips=%d]",
+                    trial_counter, skip_status, action_type, skip_reason,
+                    sig_seen, skip_streak,
+                )
             phase.set(
                 "dispatch_skip",
                 trial_id=trial_counter,
@@ -6547,12 +6573,14 @@ def _run_loop_inner(
             # blacklisted: their coarse pattern would over-match (e.g. one
             # scope-violating numeric_trial would ban all numeric_trials).
             if (
+                not skip_bug_corrupted_by
+                and
                 skip_status == "invalid"
-                and sig_counts[sig] >= INVALID_SIGNATURE_BLACKLIST_THRESHOLD
+                and sig_seen >= INVALID_SIGNATURE_BLACKLIST_THRESHOLD
             ):
                 append_blacklist(
                     action, trial_counter,
-                    f"Auto-blacklisted: {sig_counts[sig]}× invalid — {skip_reason[:80]}",
+                    f"Auto-blacklisted: {sig_seen}× invalid — {skip_reason[:80]}",
                     reason_class="invalid_repeat",
                 )
                 blacklist = load_blacklist()
@@ -6566,7 +6594,7 @@ def _run_loop_inner(
             # non-executing actions means a stuck planner / impossible action
             # space. Latch paused=True so a supervisor restart cannot re-enter
             # the loop (same durable-halt semantics as the meta-action guard).
-            if skip_streak >= MAX_CONSECUTIVE_SKIP:
+            if not skip_bug_corrupted_by and skip_streak >= MAX_CONSECUTIVE_SKIP:
                 state["paused"] = True
                 state["_dispatch_deficiency"] = "skip_action_loop"
                 save_state(state)

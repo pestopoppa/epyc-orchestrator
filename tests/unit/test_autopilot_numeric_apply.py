@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(AUTOPILOT_DIR))
 
 autopilot = importlib.import_module("scripts.autopilot.autopilot")
+experiment_journal = importlib.import_module("scripts.autopilot.experiment_journal")
 
 
 class FailingTower:
@@ -37,7 +38,7 @@ class FakeSwarm:
         self.failed = (surface, trial_number, reason)
 
 
-def test_suggested_numeric_trial_marks_failed_and_skips_eval(
+def test_suggested_numeric_trial_env_restart_skips_without_marking_failed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -63,8 +64,40 @@ def test_suggested_numeric_trial_marks_failed_and_skips_eval(
     assert isinstance(result, autopilot.SkipOutcome)
     assert result.status == "skipped"
     assert "env_restart: reload failed" in result.reason
+    assert result.bug_corrupted_by == "env_restart_apply_failure"
     assert species == "numeric_swarm"
-    assert swarm.failed == ("think_harder", 7, "env_restart: reload failed")
+    assert swarm.failed is None
+
+
+def test_suggested_numeric_trial_non_infra_apply_error_marks_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        autopilot,
+        "apply_params",
+        lambda _params: {"status": "error", "errors": ["hot_swap: rejected"]},
+    )
+    swarm = FakeSwarm()
+
+    result, species = autopilot.dispatch_action(
+        {"type": "numeric_trial", "surface": "think_harder"},
+        seeder=None,
+        swarm=swarm,
+        forge=None,
+        lab=None,
+        tower=FailingTower(),
+        gate=None,
+        archive=None,
+        journal=None,
+        state={},
+    )
+
+    assert isinstance(result, autopilot.SkipOutcome)
+    assert result.status == "skipped"
+    assert result.bug_corrupted_by == ""
+    assert "hot_swap: rejected" in result.reason
+    assert species == "numeric_swarm"
+    assert swarm.failed == ("think_harder", 7, "hot_swap: rejected")
 
 
 def test_explicit_numeric_trial_failure_skips_eval(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -95,3 +128,24 @@ def test_explicit_numeric_trial_failure_skips_eval(monkeypatch: pytest.MonkeyPat
     assert result.status == "invalid"
     assert "unknown_params: x" in result.reason
     assert species == "numeric_swarm"
+
+
+def test_bug_corrupted_skip_trial_journals_contamination_tag(tmp_path: Path) -> None:
+    journal = experiment_journal.ExperimentJournal(journal_dir=tmp_path)
+
+    autopilot._record_skip_trial(
+        journal,
+        42,
+        {"type": "numeric_trial", "surface": "memrl_retrieval"},
+        "numeric_swarm",
+        "skipped",
+        "numeric_trial params failed to apply: env_restart: reload failed",
+        123,
+        bug_corrupted_by="env_restart_apply_failure",
+        bug_corrupted_reason="reload failed before params applied",
+    )
+
+    entry = experiment_journal.ExperimentJournal(journal_dir=tmp_path).all_entries()[0]
+    assert entry.outcome_status == "skipped"
+    assert entry.bug_corrupted_by == "env_restart_apply_failure"
+    assert entry.bug_corrupted_reason == "reload failed before params applied"

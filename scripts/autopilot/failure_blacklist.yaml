@@ -19,17 +19,6 @@ blacklist:
 - pattern:
     type: structural_experiment
     flags:
-      graph_router: true
-  reason: 'Auto-blacklisted: 11× critic-rejected — critic rejected: repeats the Last
-    Non-Executing Action'
-  added: '2026-07-06T12:33:43.043264+00:00'
-  source_trial: 1231
-  reason_class: critic_rejected
-  ttl_days: 14
-  expires_at: '2026-07-20T12:33:43.043264+00:00'
-- pattern:
-    type: structural_experiment
-    flags:
       parallel_execution: true
   reason: 'Auto-blacklisted: 2× invalid — parallel_execution feature requires architect_delegation
     feature'
@@ -197,13 +186,6 @@ blacklist:
   added: '2026-06-27T15:16:20.813432+00:00'
   source_trial: 981
 - pattern:
-    type: numeric_trial
-    surface: memrl_retrieval
-  reason: 'Auto-blacklisted: 2× invalid — action blacklisted: Auto-blacklisted: 3
-    consecutive failures ending at trial 106'
-  added: '2026-07-03T23:37:11.437623+00:00'
-  source_trial: 1100
-- pattern:
     type: deep_eval
     tier: 2
   reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1063'
@@ -307,16 +289,6 @@ blacklist:
   added: '2026-07-04T02:26:02.231455+00:00'
   source_trial: 1107
 - pattern:
-    type: seed_batch
-    n_questions: 10
-    suites:
-    - general
-    - hotpotqa
-  reason: 'Auto-blacklisted: 2× critic-rejected — critic rejected: seed_batch is a
-    measurement action, not a lever — cannot move t'
-  added: '2026-07-04T02:57:21.563572+00:00'
-  source_trial: 1108
-- pattern:
     type: distill_knowledge
     last_n: 30
   reason: 'MANUAL recovery @1111: critic_reject_loop from repeated metric-free distill_knowledge
@@ -358,28 +330,6 @@ blacklist:
   added: '2026-07-04T17:32:30.422094+00:00'
   source_trial: 1131
 - pattern:
-    type: deep_eval
-    tier: 3
-  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1143'
-  added: '2026-07-04T23:26:36.834665+00:00'
-  source_trial: 1143
-- pattern:
-    type: numeric_trial
-    surface: memrl_retrieval
-    params:
-      memrl_retrieval.q_weight: 0.9371674634482647
-      memrl_retrieval.min_similarity: 0.20993434358613497
-      memrl_retrieval.min_q_value: 0.2274263410369349
-      memrl_retrieval.confidence_threshold: 0.7710956592694671
-      memrl_retrieval.semantic_k: 50
-      memrl_retrieval.prior_strength: 0.3617174980458628
-  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1187'
-  added: '2026-07-05T21:21:06.195396+00:00'
-  source_trial: 1187
-  reason_class: safety_failure
-  ttl_days: 30
-  expires_at: '2026-08-04T21:21:06.195396+00:00'
-- pattern:
     type: numeric_trial
     surface: chat_pipeline
     params:
@@ -390,51 +340,3 @@ blacklist:
   reason_class: safety_failure
   ttl_days: 30
   expires_at: '2026-08-04T23:51:52.304736+00:00'
-- pattern:
-    type: numeric_trial
-    surface: memrl_retrieval
-    params:
-      memrl_retrieval.q_weight: 0.778555980384655
-      memrl_retrieval.min_similarity: 0.11693900408429533
-      memrl_retrieval.min_q_value: 0.3132859919596247
-      memrl_retrieval.confidence_threshold: 0.37376723328541694
-      memrl_retrieval.semantic_k: 24
-      memrl_retrieval.prior_strength: 0.18304830958391616
-  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1236'
-  added: '2026-07-06T17:03:03.469323+00:00'
-  source_trial: 1236
-  reason_class: safety_failure
-  ttl_days: 30
-  expires_at: '2026-08-05T17:03:03.469323+00:00'
-- pattern:
-    type: numeric_trial
-    surface: memrl_retrieval
-    params:
-      memrl_retrieval.q_weight: 0.7133794720319888
-      memrl_retrieval.min_similarity: 0.27207794141520625
-      memrl_retrieval.min_q_value: 0.11606889958109015
-      memrl_retrieval.confidence_threshold: 0.5045953368174769
-      memrl_retrieval.semantic_k: 27
-      memrl_retrieval.prior_strength: 0.0639036760180505
-  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1239'
-  added: '2026-07-06T18:51:53.160704+00:00'
-  source_trial: 1239
-  reason_class: safety_failure
-  ttl_days: 30
-  expires_at: '2026-08-05T18:51:53.160704+00:00'
-- pattern:
-    type: numeric_trial
-    surface: memrl_retrieval
-    params:
-      memrl_retrieval.q_weight: 0.6092378384116528
-      memrl_retrieval.min_similarity: 0.18898793380901582
-      memrl_retrieval.min_q_value: 0.4466554835607902
-      memrl_retrieval.confidence_threshold: 0.8994671628965458
-      memrl_retrieval.semantic_k: 14
-      memrl_retrieval.prior_strength: 0.3407170695938033
-  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1242'
-  added: '2026-07-06T19:06:04.762283+00:00'
-  source_trial: 1242
-  reason_class: safety_failure
-  ttl_days: 30
-  expires_at: '2026-08-05T19:06:04.762283+00:00'

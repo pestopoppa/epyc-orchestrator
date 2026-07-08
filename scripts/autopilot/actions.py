@@ -116,6 +116,7 @@ def _numeric_apply_error_skip(
     reason = "; ".join(str(error) for error in errors) or str(apply_result)
     unknown = apply_result.get("unknown_params") or []
     status = "invalid" if unknown or "unknown_params:" in reason else "skipped"
+    infra = _numeric_apply_error_is_infra(reason, apply_result)
     return SkipOutcome(
         status,
         (
@@ -123,7 +124,20 @@ def _numeric_apply_error_skip(
             f"params={dict(params)}"
         ),
         "numeric_trial",
+        bug_corrupted_by="env_restart_apply_failure" if infra else "",
+        bug_corrupted_reason=(
+            "numeric_trial params were not applied because API/env restart failed"
+            if infra
+            else ""
+        ),
     )
+
+
+def _numeric_apply_error_is_infra(reason: str, apply_result: dict[str, Any]) -> bool:
+    """True when params failed because orchestration reload infrastructure failed."""
+    if apply_result.get("unknown_params") or "unknown_params:" in reason:
+        return False
+    return "env_restart:" in reason
 
 
 def _numeric_apply_no_changes(apply_result: dict[str, Any]) -> bool:
@@ -204,6 +218,8 @@ class SkipOutcome:
     status: str
     reason: str
     action_type: str = ""
+    bug_corrupted_by: str = ""
+    bug_corrupted_reason: str = ""
 
 
 @dataclass
@@ -528,7 +544,8 @@ def _action_numeric_trial(action: dict[str, Any], ctx: _ActionContext):
             )
         if apply_result.get("status") == "error":
             reason = "; ".join(apply_result.get("errors", [])) or str(apply_result)
-            ctx.swarm.mark_failed(surface, trial["trial_number"], reason)
+            if not _numeric_apply_error_is_infra(reason, apply_result):
+                ctx.swarm.mark_failed(surface, trial["trial_number"], reason)
             log.warning(
                 "Skipping numeric trial eval; suggested params were not applied: %s",
                 reason,

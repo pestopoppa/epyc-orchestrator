@@ -151,7 +151,7 @@ def _instrument_power_line(
         f"seq_candidates={len(seq_candidates)} median_questions={median_q} "
         f"quality_quantum~{quality_quantum:.3f}. "
         "Below-quantum deltas need paired/reproduced evidence before acting. "
-        "W8 confirmation needs repeated replayable numeric_trial/structural_experiment "
+        "W8 confirmation needs repeated replayable numeric_trial/structural_experiment/consult_gate_probe "
         "candidates with both E_quality and E_rate_noninf accumulating; seed_batch "
         "and structural_prune candidates are not replayable and cannot satisfy W8 replay."
     )
@@ -257,7 +257,7 @@ def _w8_replay_pressure_line(seq_rows: list[dict[str, Any]]) -> str:
     if open_accumulating == 0:
         return (
             "W8 replay pressure: no accumulating candidate exists; generate a "
-            "keepable replayable numeric_trial or structural_experiment candidate "
+            "keepable replayable numeric_trial, structural_experiment, or consult_gate_probe candidate "
             "before expecting W8 promotion evidence; structural_prune is not replayable."
         )
     if replayable == 0:
@@ -265,7 +265,8 @@ def _w8_replay_pressure_line(seq_rows: list[dict[str, Any]]) -> str:
         return (
             f"W8 replay pressure: 0/{open_accumulating} accumulating candidate(s) are "
             f"replayable (blocked={blocker_text}). Prefer a numeric_trial that will "
-            "journal non-empty applied params, or a one-flag structural_experiment; "
+            "journal non-empty applied params, a one-flag structural_experiment, or "
+            "a consult_gate_probe with concrete tier/task_suite/turns; "
             "seed_batch, deep_eval, and structural_prune cannot create replayable W8 "
             "evidence. Historical empty-params numeric rows are not replayable as "
             "logged, but a new Optuna-suggested numeric_trial is acceptable if the "
@@ -438,6 +439,16 @@ def _config_replay_blocker(value: Any) -> str:
         if isinstance(value.get("flags"), Mapping) and bool(value.get("flags")):
             return ""
         return "structural_experiment_missing_flags"
+    if action_type == "consult_gate_probe":
+        task_suite = str(value.get("task_suite") or "").strip()
+        try:
+            turns = int(value.get("turns") or 0)
+            tier = int(value.get("tier") or 0)
+        except (TypeError, ValueError):
+            return "consult_gate_probe_missing_replay_fields"
+        if task_suite and turns > 0 and 1 <= tier <= 3:
+            return ""
+        return "consult_gate_probe_missing_replay_fields"
     return f"unreplayable_action={action_type or 'unknown'}"
 
 
