@@ -4212,11 +4212,12 @@ async function updateGepa() {
                 // the pareto column so a mid-trial kill is visible instead of the
                 // row silently vanishing (which read as a frozen panel).
                 const killed = !!t.bug_corrupted_by;
-                const paretoColor = killed ? '#f87171' :
+                const quarantineLabel = String(t.quarantine_label || '');
+                const paretoColor = killed ? (quarantineLabel === 'seq-refuted' ? '#fbbf24' : '#f87171') :
                                      t.pareto_status === 'pareto_frontier' ? '#34d399' :
                                      t.pareto_status === 'dominated' ? '#94a3b8' : '#fcd34d';
                 const statusText = killed
-                    ? (String(t.bug_corrupted_by).includes('killed') ? 'killed' : 'corrupted')
+                    ? (quarantineLabel || (String(t.bug_corrupted_by).includes('killed') ? 'killed' : 'corrupted'))
                     : (t.pareto_status||'').replace('pareto_','');
                 const tierColor = (t.tier != null && !paretoIsAuditTier(t.tier)) ? paretoTierColor(t.tier) : '#64748b';
                 const rowStyle = killed ? 'opacity:0.5' : '';

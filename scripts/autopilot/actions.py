@@ -435,7 +435,10 @@ def _action_seed_batch(action: dict[str, Any], ctx: _ActionContext):
     }
     strategy_hints = _seed_batch_strategy_hints(action, ctx)
     if strategy_hints:
-        run_kwargs["strategy_hints"] = strategy_hints
+        log.info(
+            "Seed-batch StrategyStore hints available for planner context; "
+            "not injecting them into sampled question prompts."
+        )
     seeder_result = ctx.seeder.run_batch(**run_kwargs)
     _batch_elapsed = _time.perf_counter() - _batch_start
 

@@ -120,7 +120,7 @@ def test_seeder_run_batch_counts_question_success_once_per_question():
     assert result.per_action_stats["architect_general"] == {"total": 1, "correct": 0}
 
 
-def test_seeder_run_batch_appends_strategy_hints_without_mutating_question():
+def test_seeder_run_batch_ignores_strategy_hints_without_mutating_question():
     mod = _load_module("species_seeder_hints_test", _AUTO / "seeder.py")
     question = {"id": "q1", "suite": "general", "prompt": "2+2?", "expected": "4"}
     role_results = {"frontdoor": SimpleNamespace(passed=True)}
@@ -169,10 +169,10 @@ def test_seeder_run_batch_appends_strategy_hints_without_mutating_question():
         )
 
     assert question["prompt"] == "2+2?"
-    assert "2+2?" in seen_prompts[0]
-    assert "### Planner Context" in seen_prompts[0]
-    assert "Prefer balanced suites." in seen_prompts[0]
-    assert result.results[0]["planner_hints_applied"] is True
+    assert seen_prompts[0] == "2+2?"
+    assert "### Planner Context" not in seen_prompts[0]
+    assert "Prefer balanced suites." not in seen_prompts[0]
+    assert "planner_hints_applied" not in result.results[0]
 
 
 def test_seeder_memory_count_reads_sqlite_without_episodic_store_import(tmp_path):

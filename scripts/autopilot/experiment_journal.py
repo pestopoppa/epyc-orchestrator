@@ -679,9 +679,14 @@ class ExperimentJournal:
             for i, e in enumerate(recent):
                 prefix = f"  #{e.trial_id} [{e.species}/{e.action_type}] "
                 if e.bug_corrupted_by:
+                    label = (
+                        "EXCLUDED_BY"
+                        if str(e.bug_corrupted_by) == "seq_refuted"
+                        else "CORRUPTED_BY"
+                    )
                     line = (
                         prefix
-                        + f"CORRUPTED_BY={e.bug_corrupted_by} "
+                        + f"{label}={e.bug_corrupted_by} "
                         + "(metrics/reason hidden; excluded from planner trust)"
                     )
                     lines.append(line)

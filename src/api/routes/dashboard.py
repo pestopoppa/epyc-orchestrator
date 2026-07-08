@@ -5010,6 +5010,11 @@ async def gepa_status() -> JSONResponse:
                     # Non-empty when the trial was killed mid-flight or otherwise
                     # quarantined; the client renders these muted + tagged.
                     "bug_corrupted_by": j.get("bug_corrupted_by") or None,
+                    "quarantine_label": (
+                        "seq-refuted"
+                        if str(j.get("bug_corrupted_by") or "") == "seq_refuted"
+                        else ("killed" if "killed" in str(j.get("bug_corrupted_by") or "") else "corrupted")
+                    ) if j.get("bug_corrupted_by") else None,
                     "description": (j.get("config_snapshot", {}).get("description") or "")[:140],
                 })
         except Exception:

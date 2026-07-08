@@ -98,20 +98,8 @@ def _question_with_strategy_hints(
     question: dict[str, Any],
     strategy_hints: str | None,
 ) -> dict[str, Any]:
-    """Return a prompt-info copy with planner hints appended to the prompt."""
-    if not strategy_hints:
-        return question
-    prompt = str(question.get("prompt", ""))
-    if not prompt:
-        return question
-    enriched = dict(question)
-    enriched["prompt"] = (
-        f"{prompt}\n\n"
-        "### Planner Context\n"
-        f"{strategy_hints}"
-    )
-    enriched["planner_hints_applied"] = True
-    return enriched
+    """Deprecated no-op: planner hints must never enter eval prompts."""
+    return question
 
 
 class Seeder:
@@ -248,10 +236,11 @@ class Seeder:
 
         questions = questions[:n]
         if strategy_hints:
-            questions = [
-                _question_with_strategy_hints(q, strategy_hints)
-                for q in questions
-            ]
+            log.warning(
+                "Ignoring seed_batch strategy_hints for %d sampled question(s); "
+                "planner hints are not answer-context and must not enter eval prompts.",
+                len(questions),
+            )
         log.info(
             "Seeding batch %d: %d questions × %d roles across %s",
             self._batch_count, len(questions), len(self._active_roles), suites,
@@ -361,10 +350,9 @@ class Seeder:
                         "question_id": qid,
                         "rewards": rewards,
                         "roles_tested": metadata.get("roles_tested", []),
-                        "planner_hints_applied": bool(
-                            q.get("planner_hints_applied")
-                        ),
                     }
+                    if q.get("planner_hints_applied"):
+                        result_row["planner_hints_applied"] = True
                     batch_result.results.append(result_row)
                     self._question_results.append(result_row)
 

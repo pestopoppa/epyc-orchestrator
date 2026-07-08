@@ -2142,6 +2142,40 @@ def test_gepa_status_uses_superseded_journal_rows(
     assert set(by_trial) == {1, 2}
     assert by_trial[1]["bug_corrupted_by"] is None
     assert by_trial[2]["bug_corrupted_by"] == "resource_contention"
+    assert by_trial[2]["quarantine_label"] == "corrupted"
+
+
+def test_gepa_status_recent_trials_labels_seq_refuted_as_excluded(
+    tmp_path: Path, monkeypatch
+) -> None:
+    log_path = tmp_path / "autopilot.log"
+    journal_path = tmp_path / "autopilot_journal.jsonl"
+    log_path.write_text("2026-07-08 00:00:00,000 GEPA: Trial active\n")
+    rows = [
+        {
+            "trial_id": 10,
+            "timestamp": "2026-07-08T00:00:00+00:00",
+            "species": "seeder",
+            "action_type": "seed_batch",
+            "tier": 1,
+            "quality": 2.0,
+            "speed": 25.0,
+            "cost": 0.5,
+            "reliability": 0.9,
+            "pareto_status": "dominated",
+            "bug_corrupted_by": "seq_refuted",
+        }
+    ]
+    journal_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+    monkeypatch.setattr(dashboard, "AUTOPILOT_LOG", log_path)
+    monkeypatch.setattr(dashboard, "_AUTOPILOT_JOURNAL_PATH", journal_path)
+
+    response = asyncio.run(dashboard.gepa_status())
+    payload = json.loads(response.body)
+
+    row = payload["recent_trials"][0]
+    assert row["bug_corrupted_by"] == "seq_refuted"
+    assert row["quarantine_label"] == "seq-refuted"
 
 
 def test_gepa_status_recent_trials_carry_tier(tmp_path: Path, monkeypatch) -> None:
