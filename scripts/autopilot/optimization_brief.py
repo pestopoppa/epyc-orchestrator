@@ -374,7 +374,7 @@ def _short_reason(reason: Any) -> str:
 
 
 def ruled_out_experiments(
-    state: dict[str, Any], *, limit: int = 6
+    state: dict[str, Any], *, limit: int = 6, journal_rows: list[dict[str, Any]] | None = None
 ) -> dict[str, Any]:
     """Surface *what was tried and rejected, and why* — the intuition the bare
     "N dead-ends fenced" count omits. The two state ledgers carry different
@@ -384,10 +384,18 @@ def ruled_out_experiments(
         specific proposal; each row carries a human ``reason`` and a repeat
         ``count`` (how many times the planner re-proposed it = how firmly the
         boundary is fenced). This is the reason-bearing "and why" list.
-      * ``invalid_by_surface`` (from ``invalid_signature_counts``) — proposals
-        that failed structural validation before execution, aggregated by
-        experiment *type*: a churn summary of which surfaces the planner keeps
-        drafting malformed actions against, not specific falsified ideas.
+      * ``invalid_by_surface`` (from journal rows, with state fallback) —
+        proposals that failed structural validation before execution, grouped
+        by experiment *type*: a churn summary of which surfaces the planner
+        keeps drafting malformed actions against, not specific falsified ideas.
+      * ``corrupted_by_surface`` (from journal rows) — executed trials that were
+        exogenously corrupted by reloads / host events / other operator-side
+        teardowns. These are surfaced separately so they do not get mistaken
+        for planner malformed-proposal churn.
+      * ``stale_fenced_by_surface`` (from journal rows) — critic fences whose
+        associated trial later ended up bug-corrupted. These are hidden from
+        the main "ruled out" list so poisoned context does not look like a live
+        boundary.
 
     Observations only — a rejection means a lever did not clear the gate, never
     a ratified law.
@@ -398,6 +406,15 @@ def ruled_out_experiments(
         return f"{base} · {detail}"[:80] if detail else base[:80]
 
     fenced: list[dict[str, Any]] = []
+    stale_fenced_by_surface: list[dict[str, Any]] = []
+    trial_rows: dict[int, dict[str, Any]] = {}
+    if isinstance(journal_rows, list):
+        for row in journal_rows:
+            if isinstance(row, dict):
+                try:
+                    trial_rows[int(row.get("trial_id"))] = row
+                except (TypeError, ValueError):
+                    continue
     crs = state.get("critic_rejected_signatures")
     if isinstance(crs, dict):
         for rec in crs.values():
@@ -410,36 +427,90 @@ def ruled_out_experiments(
                 detail = ", ".join(f"{k}={v}" for k, v in list(flags.items())[:2])
             else:
                 detail = str(action.get("file") or action.get("surface") or "")
+            trial_id = rec.get("trial_id")
+            try:
+                trial_row = trial_rows.get(int(trial_id))
+            except (TypeError, ValueError):
+                trial_row = None
+            if trial_row and str(trial_row.get("bug_corrupted_by") or "").strip():
+                stale_fenced_by_surface.append(
+                    {
+                        "label": _label(atype, detail),
+                        "kind": atype,
+                        "count": int(rec.get("count") or 1),
+                    }
+                )
+                continue
             fenced.append(
                 {
                     "label": _label(atype, detail),
                     "kind": atype,
                     "count": int(rec.get("count") or 1),
                     "why": _short_reason(rec.get("reason")),
-                    "last_trial": rec.get("trial_id"),
+                    "last_trial": trial_id,
                 }
             )
     fenced.sort(key=lambda x: x["count"], reverse=True)
+    stale_fenced_by_surface.sort(key=lambda x: (-x["count"], x["kind"]))
 
     invalid_by_surface: list[dict[str, Any]] = []
-    inv = state.get("invalid_signature_counts")
-    if isinstance(inv, dict):
-        agg: dict[str, int] = {}
-        for sig, cnt in inv.items():
-            try:
-                meta = json.loads(sig)
-            except (json.JSONDecodeError, TypeError):
-                meta = {}
-            atype = str(meta.get("type") or meta.get("mutation") or "?")
-            agg[atype] = agg.get(atype, 0) + int(cnt or 0)
+    corrupted_by_surface: list[dict[str, Any]] = []
+
+    def _surface_name(row: dict[str, Any]) -> str:
+        return str(
+            row.get("action_type")
+            or (row.get("action") or {}).get("type")
+            or row.get("surface")
+            or row.get("species")
+            or "?"
+        )
+
+    if isinstance(journal_rows, list):
+        malformed: dict[str, int] = {}
+        corrupted: dict[str, int] = {}
+        for row in journal_rows:
+            if not isinstance(row, dict):
+                continue
+            atype = _surface_name(row)
+            bug = str(row.get("bug_corrupted_by") or "").strip()
+            outcome = str(row.get("outcome_status") or "").strip().lower()
+            if bug:
+                corrupted[atype] = corrupted.get(atype, 0) + 1
+            elif outcome in {"invalid", "skipped"}:
+                malformed[atype] = malformed.get(atype, 0) + 1
         invalid_by_surface = [
             {"label": _REJECT_TYPE_LABEL.get(a, a), "kind": a, "count": c}
-            for a, c in sorted(agg.items(), key=lambda kv: kv[1], reverse=True)
+            for a, c in sorted(
+                malformed.items(), key=lambda kv: (-kv[1], kv[0])
+            )
         ]
+        corrupted_by_surface = [
+            {"label": _REJECT_TYPE_LABEL.get(a, a), "kind": a, "count": c}
+            for a, c in sorted(
+                corrupted.items(), key=lambda kv: (-kv[1], kv[0])
+            )
+        ]
+    else:
+        inv = state.get("invalid_signature_counts")
+        if isinstance(inv, dict):
+            agg: dict[str, int] = {}
+            for sig, cnt in inv.items():
+                try:
+                    meta = json.loads(sig)
+                except (json.JSONDecodeError, TypeError):
+                    meta = {}
+                atype = str(meta.get("type") or meta.get("mutation") or "?")
+                agg[atype] = agg.get(atype, 0) + int(cnt or 0)
+            invalid_by_surface = [
+                {"label": _REJECT_TYPE_LABEL.get(a, a), "kind": a, "count": c}
+                for a, c in sorted(agg.items(), key=lambda kv: (-kv[1], kv[0]))
+            ]
 
     return {
         "fenced": fenced[:limit],
         "invalid_by_surface": invalid_by_surface[:limit],
+        "corrupted_by_surface": corrupted_by_surface[:limit],
+        "stale_fenced_by_surface": stale_fenced_by_surface[:limit],
     }
 
 
@@ -530,7 +601,7 @@ def build_optimization_brief(
     levers = levers_from_digest(digest_text)
     best = best_config(rows, exclude_before_ts=exclude_before_ts)
     ruled_out, exploring = ruled_out_and_exploring(strategy_db)
-    ruled_out_exp = ruled_out_experiments(state)
+    ruled_out_exp = ruled_out_experiments(state, journal_rows=rows)
 
     # decision_grade is a property of the whole brief right now: nothing can be
     # ratified unless authority is enabled. Tag every lever accordingly.

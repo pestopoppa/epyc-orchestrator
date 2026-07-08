@@ -186,20 +186,30 @@ def test_ruled_out_experiments_splits_fenced_and_invalid_surfaces():
                 "trial_id": 10,
             }
         },
-        "invalid_signature_counts": {
-            '{"type":"seed_batch"}': 2,
-            '{"type":"numeric_trial"}': 4,
-        },
     }
+    rows = [
+        {"trial_id": 1, "action_type": "seed_batch", "outcome_status": "skipped"},
+        {"trial_id": 2, "action_type": "numeric_trial", "outcome_status": "invalid"},
+        {
+            "trial_id": 10,
+            "action_type": "numeric_trial",
+            "outcome_status": "ok",
+            "bug_corrupted_by": "exogenous_operator_reload",
+        },
+    ]
 
-    ruled = ob.ruled_out_experiments(state, limit=6)
+    ruled = ob.ruled_out_experiments(state, limit=6, journal_rows=rows)
 
-    assert ruled["fenced"][0]["label"].startswith("numeric sweep · batch_size=32")
-    assert ruled["fenced"][0]["count"] == 3
-    assert "non-replayable" in ruled["fenced"][0]["why"]
+    assert ruled["fenced"] == []
     assert ruled["invalid_by_surface"] == [
-        {"label": "numeric sweep", "kind": "numeric_trial", "count": 4},
-        {"label": "eval seeding", "kind": "seed_batch", "count": 2},
+        {"label": "numeric sweep", "kind": "numeric_trial", "count": 1},
+        {"label": "eval seeding", "kind": "seed_batch", "count": 1},
+    ]
+    assert ruled["corrupted_by_surface"] == [
+        {"label": "numeric sweep", "kind": "numeric_trial", "count": 1},
+    ]
+    assert ruled["stale_fenced_by_surface"] == [
+        {"label": "numeric sweep · batch_size=32, timeout_ms=500", "kind": "numeric_trial", "count": 3},
     ]
 
 
@@ -222,16 +232,28 @@ def test_build_brief_end_to_end(tmp_path):
                         "trial_id": 10,
                     }
                 },
-                "invalid_signature_counts": {
-                    '{"type":"seed_batch"}': 2,
-                },
             }
         )
     )
     journal = tmp_path / "journal.jsonl"
     journal.write_text(
         json.dumps({"trial_id": 2, "tier": 1, "quality": 2.2, "speed": 40,
-                    "timestamp": 200.0, "config_snapshot": {"a": 2}}) + "\n"
+                    "timestamp": 200.0, "config_snapshot": {"a": 2},
+                    "action_type": "seed_batch", "outcome_status": "ok"}) + "\n"
+        + json.dumps({"trial_id": 4, "tier": 0, "quality": 0.0, "speed": 0,
+                    "timestamp": 205.0, "config_snapshot": {"type": "numeric_trial"},
+                    "action_type": "numeric_trial", "outcome_status": "invalid"}) + "\n"
+        + json.dumps({"trial_id": 10, "tier": 1, "quality": 1.0, "speed": 0,
+                    "timestamp": 210.0, "config_snapshot": {"a": 3},
+                    "action_type": "numeric_trial", "outcome_status": "ok",
+                    "bug_corrupted_by": "autopilot_killed_mid_trial"}) + "\n"
+        + json.dumps({"trial_id": 3, "tier": 1, "quality": 1.0, "speed": 0,
+                    "timestamp": 215.0, "config_snapshot": {"a": 3},
+                    "action_type": "seed_batch", "outcome_status": "skipped",
+                    "deficiency_category": "dispatch_skipped",
+                    "failure_analysis": "dispatcher no-op",
+                    "pareto_status": "skipped",
+                    }) + "\n"
     )
     db = tmp_path / "strategies.db"
     conn = sqlite3.connect(db)
@@ -260,8 +282,15 @@ def test_build_brief_end_to_end(tmp_path):
     assert brief["levers"][0]["decision_grade"] is False
     assert brief["best_config"]["trial_id"] == 2
     assert len(brief["ruled_out"]) == 1
-    assert brief["ruled_out_experiments"]["fenced"][0]["count"] == 3
-    assert "numeric sweep" in brief["narrative"]
+    assert brief["ruled_out_experiments"]["fenced"] == []
+    assert brief["ruled_out_experiments"]["invalid_by_surface"] == [
+        {"label": "numeric sweep", "kind": "numeric_trial", "count": 1},
+        {"label": "eval seeding", "kind": "seed_batch", "count": 1},
+    ]
+    assert brief["ruled_out_experiments"]["corrupted_by_surface"][0]["kind"] == "numeric_trial"
+    assert brief["ruled_out_experiments"]["stale_fenced_by_surface"] == [
+        {"label": "numeric sweep · batch_size=32, timeout_ms=500", "kind": "numeric_trial", "count": 3},
+    ]
     # narrative is templated, not free-written: it must mention the top lever.
     assert "escalation.max_retries" in brief["narrative"]
     assert "observations" in brief["narrative"].lower()

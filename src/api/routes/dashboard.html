@@ -4959,6 +4959,16 @@ function renderOptimizationBrief(b) {
             const churnTxt = churn.slice(0, 6).map(c => `${escapeHTML(c.label)} ${c.count}×`).join(' · ');
             parts.push(`<div class="ob-why" style="margin-top:4px">malformed-proposal churn by surface: ${churnTxt}</div>`);
         }
+        const corrupted = Array.isArray(roe.corrupted_by_surface) ? roe.corrupted_by_surface : [];
+        if (corrupted.length) {
+            const corrTxt = corrupted.slice(0, 6).map(c => `${escapeHTML(c.label)} ${c.count}×`).join(' · ');
+            parts.push(`<div class="ob-why" style="margin-top:4px">exogenous corruption / teardown by surface: ${corrTxt}</div>`);
+        }
+        const stale = Array.isArray(roe.stale_fenced_by_surface) ? roe.stale_fenced_by_surface : [];
+        if (stale.length) {
+            const staleTxt = stale.slice(0, 6).map(c => `${escapeHTML(c.label)} ${c.count}×`).join(' · ');
+            parts.push(`<div class="ob-why" style="margin-top:4px">stale critic fences hidden from main list: ${staleTxt}</div>`);
+        }
     }
     const ruled = Array.isArray(b.ruled_out) ? b.ruled_out : [];
     const expl = Array.isArray(b.exploring) ? b.exploring : [];
