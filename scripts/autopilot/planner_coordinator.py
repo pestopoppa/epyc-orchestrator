@@ -547,6 +547,7 @@ def plan_with_providers(
                                 critique,
                                 active=active_critique,
                                 allowed_action_types=allowed_actions,
+                                planner_prompt=prompt,
                             )
                         else:
                             degraded = True
@@ -564,6 +565,7 @@ def plan_with_providers(
                             critique,
                             active=active_critique,
                             allowed_action_types=allowed_actions,
+                            planner_prompt=prompt,
                         )
                 else:
                     # The critic invoke FAILED outright (timeout / empty / nonzero rc).
@@ -600,6 +602,7 @@ def plan_with_providers(
                             critique,
                             active=active_critique,
                             allowed_action_types=allowed_actions,
+                            planner_prompt=prompt,
                         )
                     else:
                         degraded = True
@@ -1021,6 +1024,7 @@ def _reconcile(
     *,
     active: bool,
     allowed_action_types: Iterable[str] | None = None,
+    planner_prompt: str = "",
 ) -> tuple[dict[str, Any], dict[str, Any], str]:
     if not active or critique.decision == "approve":
         return action, rationale, draft_text
@@ -1028,9 +1032,10 @@ def _reconcile(
     revised = critique.revised_action
     if (
         revised
-        and _action_validation_error(
+        and _revision_validation_error(
             revised,
             allowed_action_types=allowed_action_types,
+            planner_prompt=planner_prompt,
         )
         is None
     ):
@@ -1060,6 +1065,60 @@ def _reconcile(
         )
 
     return action, rationale, draft_text
+
+
+def _revision_validation_error(
+    action: dict[str, Any],
+    *,
+    allowed_action_types: Iterable[str] | None = None,
+    planner_prompt: str = "",
+) -> str | None:
+    schema_error = _action_validation_error(
+        action,
+        allowed_action_types=allowed_action_types,
+    )
+    if schema_error:
+        return schema_error
+    return _structural_noop_revision_error(action, planner_prompt)
+
+
+def _structural_noop_revision_error(
+    action: dict[str, Any],
+    planner_prompt: str,
+) -> str | None:
+    if action.get("type") != "structural_experiment":
+        return None
+    flags = action.get("flags")
+    if not isinstance(flags, dict) or len(flags) != 1:
+        return None
+    flag, value = next(iter(flags.items()))
+    if not isinstance(flag, str) or not isinstance(value, bool):
+        return None
+    live_state = _feature_flag_state_from_prompt(planner_prompt, flag)
+    if live_state is None:
+        return None
+    if live_state is value:
+        return f"structural_experiment would not change live flag state: {flag}={str(value).lower()}"
+    return None
+
+
+def _feature_flag_state_from_prompt(prompt: str, flag: str) -> bool | None:
+    escaped = re.escape(flag)
+    current_match = re.search(
+        rf"\b{escaped}\b[^\n]{{0,120}}\(currently\s+(ON|OFF)\)",
+        prompt,
+        flags=re.IGNORECASE,
+    )
+    if current_match:
+        return current_match.group(1).upper() == "ON"
+    invalid_match = re.search(
+        rf"would not change live flag state:\s*{escaped}\s*=\s*(true|false)",
+        prompt,
+        flags=re.IGNORECASE,
+    )
+    if invalid_match:
+        return invalid_match.group(1).lower() == "true"
+    return None
 
 
 def _canonical_text_from_parts(

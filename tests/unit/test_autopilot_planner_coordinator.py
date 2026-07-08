@@ -1482,6 +1482,39 @@ def test_reconcile_active_reject_without_revision_is_numeric_fallback() -> None:
     assert out_rat["critic_reject_original_action"] == action
 
 
+def test_reconcile_reject_ignores_noop_structural_revision() -> None:
+    action = {"type": "structural_experiment", "flags": {"graph_router": True}}
+    noop_revision = {"type": "structural_experiment", "flags": {"specialist_routing": True}}
+    crit = PlannerCritique(
+        decision="reject",
+        issues=["dependency first"],
+        revised_action=noop_revision,
+    )
+    prompt = (
+        "### Feature Flags (live state + dependency rules)\n"
+        "  - specialist_routing (currently ON)\n"
+        "  - graph_router (currently OFF) requires [specialist_routing=ON]\n"
+    )
+
+    out_action, out_rat, _ = _reconcile(
+        action,
+        {},
+        "draft",
+        crit,
+        active=True,
+        allowed_action_types=["numeric_trial", "structural_experiment"],
+        planner_prompt=prompt,
+    )
+
+    assert out_action == {
+        "type": "numeric_trial",
+        "surface": planner_coordinator.SAFE_FALLBACK_NUMERIC_SURFACE,
+        "params": {},
+    }
+    assert out_rat["critic_reject_numeric_fallback"] is True
+    assert out_rat["critic_reject_original_action"] == action
+
+
 def test_decision_carries_original_draft_action_after_substitution() -> None:
     """draft_action must preserve the planner's ORIGINAL action even when the
     binding critic substitutes it (so the loop can record the rejected draft)."""
