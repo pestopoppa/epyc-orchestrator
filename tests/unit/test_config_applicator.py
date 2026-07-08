@@ -90,6 +90,7 @@ def test_stack_reload_python_prefers_explicit_override(
     monkeypatch.setenv("AUTOPILOT_STACK_RELOAD_PYTHON", str(override))
     monkeypatch.setattr(applicator.sys, "_base_executable", "/missing/base/python")
     monkeypatch.setattr(applicator.sys, "executable", "/missing/venv/python")
+    monkeypatch.setattr(applicator, "_stack_reload_python_usable", lambda path: path == override)
 
     assert applicator._stack_reload_python() == str(override)
 
@@ -106,6 +107,7 @@ def test_stack_reload_python_preserves_live_venv_entrypoint(
     monkeypatch.setattr(applicator, "ORCH_ROOT", tmp_path)
     monkeypatch.setattr(applicator.sys, "_base_executable", str(tmp_path / "base-python"))
     monkeypatch.setattr(applicator.sys, "executable", str(tmp_path / "missing-venv-python"))
+    monkeypatch.setattr(applicator, "_stack_reload_python_usable", lambda path: path == venv_python)
 
     assert applicator._stack_reload_python() == str(venv_python)
 
@@ -121,6 +123,26 @@ def test_stack_reload_python_survives_stale_sys_executable(
     monkeypatch.setattr(applicator, "ORCH_ROOT", tmp_path / "missing-orch-root")
     monkeypatch.setattr(applicator.sys, "_base_executable", str(base))
     monkeypatch.setattr(applicator.sys, "executable", str(tmp_path / "missing-venv-python"))
+    monkeypatch.setattr(applicator, "_stack_reload_python_usable", lambda path: path == base.resolve())
+
+    assert applicator._stack_reload_python() == str(base.resolve())
+
+
+def test_stack_reload_python_skips_broken_venv_entrypoint(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    broken_venv = tmp_path / ".venv" / "bin" / "python"
+    base = tmp_path / "base-python"
+    broken_venv.parent.mkdir(parents=True)
+    broken_venv.symlink_to(tmp_path / "missing-python")
+    base.write_text("#!/bin/sh\n", encoding="utf-8")
+    base.chmod(0o755)
+    monkeypatch.delenv("AUTOPILOT_STACK_RELOAD_PYTHON", raising=False)
+    monkeypatch.setattr(applicator, "ORCH_ROOT", tmp_path)
+    monkeypatch.setattr(applicator.sys, "_base_executable", str(base))
+    monkeypatch.setattr(applicator.sys, "executable", str(broken_venv))
+    monkeypatch.setattr(applicator, "_stack_reload_python_usable", lambda path: path == base.resolve())
 
     assert applicator._stack_reload_python() == str(base.resolve())
 

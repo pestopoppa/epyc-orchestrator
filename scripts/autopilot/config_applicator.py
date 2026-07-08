@@ -1047,7 +1047,7 @@ def _stack_reload_python() -> str:
         if not candidate:
             continue
         path = Path(str(candidate))
-        if path.exists():
+        if _stack_reload_python_usable(path):
             return str(path)
 
     base_candidates = [
@@ -1064,9 +1064,26 @@ def _stack_reload_python() -> str:
             resolved = path.resolve(strict=True)
         except OSError:
             continue
-        if resolved.exists():
+        if _stack_reload_python_usable(resolved):
             return str(resolved)
     return sys.executable
+
+
+def _stack_reload_python_usable(path: Path) -> bool:
+    """Return true when ``path`` can import stack reload dependencies."""
+    if not path.exists():
+        return False
+    try:
+        proc = subprocess.Popen(
+            [str(path), "-c", "import yaml"],
+            cwd=str(ORCH_ROOT),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        proc.communicate(timeout=10)
+        return proc.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
 
 
 class HealthCheckResult:
