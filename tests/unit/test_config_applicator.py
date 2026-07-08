@@ -91,7 +91,23 @@ def test_stack_reload_python_prefers_explicit_override(
     monkeypatch.setattr(applicator.sys, "_base_executable", "/missing/base/python")
     monkeypatch.setattr(applicator.sys, "executable", "/missing/venv/python")
 
-    assert applicator._stack_reload_python() == str(override.resolve())
+    assert applicator._stack_reload_python() == str(override)
+
+
+def test_stack_reload_python_preserves_live_venv_entrypoint(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    venv_python = tmp_path / ".venv" / "bin" / "python"
+    venv_python.parent.mkdir(parents=True)
+    venv_python.write_text("#!/bin/sh\n", encoding="utf-8")
+    venv_python.chmod(0o755)
+    monkeypatch.delenv("AUTOPILOT_STACK_RELOAD_PYTHON", raising=False)
+    monkeypatch.setattr(applicator, "ORCH_ROOT", tmp_path)
+    monkeypatch.setattr(applicator.sys, "_base_executable", str(tmp_path / "base-python"))
+    monkeypatch.setattr(applicator.sys, "executable", str(tmp_path / "missing-venv-python"))
+
+    assert applicator._stack_reload_python() == str(venv_python)
 
 
 def test_stack_reload_python_survives_stale_sys_executable(
@@ -102,6 +118,7 @@ def test_stack_reload_python_survives_stale_sys_executable(
     base.write_text("#!/bin/sh\n", encoding="utf-8")
     base.chmod(0o755)
     monkeypatch.delenv("AUTOPILOT_STACK_RELOAD_PYTHON", raising=False)
+    monkeypatch.setattr(applicator, "ORCH_ROOT", tmp_path / "missing-orch-root")
     monkeypatch.setattr(applicator.sys, "_base_executable", str(base))
     monkeypatch.setattr(applicator.sys, "executable", str(tmp_path / "missing-venv-python"))
 

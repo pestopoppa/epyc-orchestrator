@@ -1030,22 +1030,33 @@ def _stack_reload_python() -> str:
 
     AutoPilot is often launched as ``.venv/bin/python``. If another session
     recreates the venv while AutoPilot is running, ``sys.executable`` can become
-    a stale symlink even though the current process remains alive. Stack reloads
-    are then falsely reported as failed. Prefer an explicit override, then the
-    interpreter's resolved/base executable, and finally the uv-managed Python
-    used by this host.
+    a stale symlink even though the current process remains alive. Conversely,
+    resolving a healthy venv symlink to its base interpreter drops site-packages
+    and makes reloads fail on imports such as ``yaml``. Prefer an explicit
+    override, then a live repo venv entrypoint, and only then base interpreters.
     """
     import os
 
-    candidates = [
+    path_candidates = [
         os.environ.get("AUTOPILOT_STACK_RELOAD_PYTHON"),
-        getattr(sys, "_base_executable", None),
+        ORCH_ROOT / ".venv" / "bin" / "python",
+        ORCH_ROOT / ".venv" / "bin" / "python3",
         sys.executable,
+    ]
+    for candidate in path_candidates:
+        if not candidate:
+            continue
+        path = Path(str(candidate))
+        if path.exists():
+            return str(path)
+
+    base_candidates = [
+        getattr(sys, "_base_executable", None),
         "/home/node/.local/share/uv/python/cpython-3.12-linux-x86_64-gnu/bin/python3.12",
         "/home/node/.local/share/uv/python/cpython-3.12.13-linux-x86_64-gnu/bin/python3.12",
         "/usr/bin/python3",
     ]
-    for candidate in candidates:
+    for candidate in base_candidates:
         if not candidate:
             continue
         path = Path(str(candidate))
