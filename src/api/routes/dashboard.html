@@ -4259,6 +4259,12 @@ async function updateGepa() {
         }
         const all = header + trialsTable + recentLines;
         el.innerHTML = all || '<div style="color:var(--muted)">no recent GEPA activity</div>';
+        setPanelFreshness('gepa', d._freshness || {
+            generated_at: Date.now() / 1000,
+            staleness_class: 'fresh',
+            worst_age_s: 0,
+            reason: 'GEPA panel rendered successfully',
+        });
     } catch (e) { renderPanelErrorChip('gepa', e); }
 }
 
@@ -4339,6 +4345,12 @@ async function updatePareto() {
         }
         renderParetoScatter(d);
         renderHypervolumeTimeline(d);
+        setPanelFreshness('pareto', d._freshness || {
+            generated_at: Date.now() / 1000,
+            staleness_class: 'fresh',
+            worst_age_s: 0,
+            reason: 'Pareto panel rendered successfully',
+        });
     } catch (e) { renderPanelErrorChip('pareto', e); }
 }
 

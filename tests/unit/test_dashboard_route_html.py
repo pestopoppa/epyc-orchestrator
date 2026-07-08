@@ -628,6 +628,8 @@ def test_dashboard_pareto_plot_uses_journal_sources_and_nonnegative_axes() -> No
     assert "/dashboard/api/pareto?scope=" in body
     assert "function convexHull2D(pts)" in body
     assert "paretoEraLegend(eras, PAD.l + 6, PAD.t + 12)" in body
+    assert "setPanelFreshness('pareto', d._freshness || {" in body
+    assert "Pareto panel rendered successfully" in body
 
 
 def test_dashboard_gepa_and_pareto_surface_real_suite_metrics() -> None:
@@ -640,6 +642,8 @@ def test_dashboard_gepa_and_pareto_surface_real_suite_metrics() -> None:
     assert "const suiteTip = p =>" in body
     assert "p.real_suite_v1" in body
     assert "real_suite_v1 q=" in body
+    assert "setPanelFreshness('gepa', d._freshness || {" in body
+    assert "GEPA panel rendered successfully" in body
 
 
 def test_dashboard_autopilot_progress_includes_eval_label() -> None:
