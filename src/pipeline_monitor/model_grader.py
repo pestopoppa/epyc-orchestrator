@@ -172,7 +172,7 @@ def grade_answer(
 
 def _extract_classification(text: str, choices: list[str]) -> str | None:
     """Extract classification letter from the last non-empty line of response."""
-    lines = [l.strip() for l in text.strip().splitlines() if l.strip()]
+    lines = [line.strip() for line in text.strip().splitlines() if line.strip()]
     if not lines:
         return None
 

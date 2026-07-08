@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import pytest
 
-from scripts.server import stack_numa
 from scripts.server.stack_numa import (
     MLOCK_ROLES,
     NUMA_CONFIG,

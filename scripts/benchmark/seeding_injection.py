@@ -11,6 +11,8 @@ import logging
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+import httpx
+
 __all__ = [
     "EMBEDDER_PORTS",
     "RewardDeliverySummary",
@@ -103,8 +105,6 @@ def _inject_single_reward(
     Reward injection runs in a background ThreadPoolExecutor; a per-call
     httpx.Client is created here to avoid sharing across threads.
     """
-    import httpx
-
     if watcher is None:
         try:
             with httpx.Client() as client:

@@ -46,14 +46,16 @@ from __future__ import annotations
 
 import argparse
 import logging
-import os
-import random
 import signal
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, Callable
+
+if TYPE_CHECKING:
+    from orchestration.repl_memory.retriever import RetrievalConfig
+    from src.pipeline_monitor.claude_debugger import ClaudeDebugger
 
 # Bootstrap: needed before seeding_types can be imported. Same value as seeding_types.PROJECT_ROOT.
 PROJECT_ROOT = Path(__file__).parent.parent.parent
@@ -100,10 +102,6 @@ from seeding_types import (  # noqa: E402, F401
     state,
 )
 from seeding_types import (  # noqa: E402 (additional imports for 3-way routing)
-    ACTION_SELF_DIRECT,
-    ACTION_SELF_REPL,
-    ACTION_ARCHITECT,
-    ACTION_WORKER,
     THREE_WAY_ACTIONS,
 )
 from seeding_rewards import (  # noqa: E402, F401
@@ -255,7 +253,7 @@ def run_batch_3way(
     session_id: str,
     dry_run: bool = False,
     cooldown: float = 0.0,
-    on_progress: "Callable[[int, int, str, str], None] | None" = None,
+    on_progress: Callable[[int, int, str, str], None] | None = None,
     use_pool: bool = True,
     debugger: "ClaudeDebugger | None" = None,
     outcome_tracker: Any = None,
@@ -667,7 +665,7 @@ def print_3way_summary(results: list[ThreeWayResult]) -> None:
         avg_q = s["total_reward"] / s["n"] if s["n"] > 0 else 0.5
         print(f"{action:20s} {s['pass']:5d} {s['fail']:5d} {acc:6.1f}% {avg_q:6.3f}")
 
-    print(f"\nTool Value (SELF:direct vs SELF:repl):")
+    print("\nTool Value (SELF:direct vs SELF:repl):")
     print(f"  Tools helped: {tool_value_stats['helped']}")
     print(f"  Tools neutral: {tool_value_stats['neutral']}")
     print(f"  Tools hurt: {tool_value_stats['hurt']}")
@@ -1082,7 +1080,7 @@ Examples (legacy mode - DEPRECATED):
                 consecutive_failures = 0
                 all_results: list[ThreeWayResult] = []
                 logger.info(f"Starting continuous 3-way evaluation: session={session_id}")
-                logger.info(f"  Ctrl+C to stop gracefully (finishes current question)")
+                logger.info("  Ctrl+C to stop gracefully (finishes current question)")
 
                 while not state.shutdown:
                     if not _check_server_health(args.url):
@@ -1091,7 +1089,7 @@ Examples (legacy mode - DEPRECATED):
                             logger.error(f"API unrecoverable after {MAX_RECOVERY_ATTEMPTS} attempts.")
                             break
                         backoff = min(30 * (2 ** (consecutive_failures - 1)), 600)
-                        logger.warning(f"API down. Attempting recovery...")
+                        logger.warning("API down. Attempting recovery...")
                         recovered = _attempt_recovery(args.url)
                         if recovered:
                             logger.info("Recovery successful — resuming")
@@ -1276,7 +1274,7 @@ Examples (legacy mode - DEPRECATED):
         batch = 0
         consecutive_failures = 0
         logger.info(f"Starting continuous evaluation: session={session_id}")
-        logger.info(f"  Ctrl+C to stop gracefully (finishes current question)")
+        logger.info("  Ctrl+C to stop gracefully (finishes current question)")
 
         while not state.shutdown:
             if not _check_server_health(args.url):
@@ -1342,7 +1340,7 @@ Examples (legacy mode - DEPRECATED):
                 time.sleep(1)
 
         logger.info(f"\nSession complete: {session_id}")
-        logger.info(f"  Run --stats to see aggregate results")
+        logger.info("  Run --stats to see aggregate results")
 
     else:
         # ── One-shot mode (original behavior with HF datasets) ──

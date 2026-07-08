@@ -44,22 +44,12 @@ API_URL = os.environ.get("ORCHESTRATOR_API_URL", "http://localhost:8000")
 # Re-export profile registry + validator/report classes so existing imports keep working.
 # Sibling modules created during the 2026-05-22 Task-D refactor.
 from feature_validation_profiles import (
-    ComparisonReport,
-    FeatureProfile,
-    MetricSnapshot,
-    TestSpec,
     _build_profiles,
 )
 from feature_validation_offline import OfflineValidator
 from feature_validation_live import (
     LiveValidator,
-    _ensure_stack_running,
-    _hot_reload_feature,
     _load_prompt_manifest,
-    _now_iso,
-    _read_meminfo_mb,
-    _verify_health_mid_run,
-    _write_incremental,
 )
 from feature_validation_report import ReportGenerator
 

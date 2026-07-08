@@ -15,7 +15,6 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 import httpx
 
@@ -242,7 +241,7 @@ def measure_ttft(port: int, prompt: str, trials: int = 3) -> float:
     for _ in range(trials):
         start = time.perf_counter()
         try:
-            resp = client.post(
+            _resp = client.post(
                 f"http://127.0.0.1:{port}/completion",
                 json={"prompt": prompt, "n_predict": 1, "stream": False},
             )
@@ -301,7 +300,7 @@ def check_server(port: int) -> bool:
     try:
         resp = httpx.get(f"http://127.0.0.1:{port}/health", timeout=5.0)
         return resp.status_code == 200
-    except Exception as e:
+    except Exception:
         return False
 
 

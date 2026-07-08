@@ -6,26 +6,22 @@ Task-D refactor.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
-import time
+import subprocess
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from feature_validation_profiles import (
-    ComparisonReport,
     FeatureProfile,
     MetricSnapshot,
     TestSpec,
-    _build_profiles,
 )
 
 logger = logging.getLogger("feature_validation")
 
-import os
 import sys
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
@@ -35,6 +31,18 @@ sys.path.insert(0, str(PROJECT_ROOT / "scripts" / "benchmark"))
 RESULTS_DIR = PROJECT_ROOT / "benchmarks" / "results" / "runs" / "feature_validation"
 MANIFESTS_DIR = PROJECT_ROOT / "benchmarks" / "prompts" / "v1" / "feature_validation"
 API_URL = os.environ.get("ORCHESTRATOR_API_URL", "http://localhost:8000")
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _write_incremental(path: Path, data: dict[str, Any]) -> None:
+    import json
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a") as f:
+        f.write(json.dumps(data, default=str) + "\n")
 
 
 
@@ -254,7 +262,8 @@ class OfflineValidator:
             assert Features(resume_tokens=True).resume_tokens is True
 
             from src.graph.resume_token import ResumeToken
-            import hashlib, json
+            import hashlib
+            import json
             from dataclasses import asdict
             # Build token and compute checksum (mirrors from_state logic)
             token = ResumeToken(
@@ -343,7 +352,7 @@ class OfflineValidator:
             from src.features import Features
             assert Features(escalation_compression=True).escalation_compression is True
 
-            from src.services.prompt_compressor import PromptCompressor, CompressionResult
+            from src.services.prompt_compressor import CompressionResult
             # Verify the dataclass has expected fields
             fields = {f.name for f in CompressionResult.__dataclass_fields__.values()}
             expected = {"compressed_text", "original_chars", "compressed_chars", "actual_ratio", "latency_ms"}

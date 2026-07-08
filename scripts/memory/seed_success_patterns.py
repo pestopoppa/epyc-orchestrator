@@ -12,13 +12,12 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
-import json
 import random
 import sys
 from dataclasses import dataclass
 from itertools import cycle
 from pathlib import Path
-from typing import Dict, Iterator, List, Optional, Tuple
+from typing import Dict, Iterator, List, Tuple
 
 import httpx
 import numpy as np
@@ -112,7 +111,7 @@ def generate_routing_patterns(model_reg: Dict) -> List[SuccessPattern]:
     patterns = []
 
     # Extract roles from server_mode
-    server_mode = model_reg.get("server_mode", {})
+    _server_mode = model_reg.get("server_mode", {})
     roles = {
         "frontdoor": {
             "tasks": ["quick question", "simple lookup", "intent classification",
@@ -527,7 +526,7 @@ def main():
 
     # Final stats
     final_stats = store.get_stats()
-    print(f"\n=== Results ===")
+    print("\n=== Results ===")
     print(f"Seeded: {stats['seeded']}")
     print(f"Failed: {stats['failed']}")
     print(f"By type: {stats['by_type']}")

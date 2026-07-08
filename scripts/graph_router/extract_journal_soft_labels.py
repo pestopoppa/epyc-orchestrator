@@ -300,7 +300,7 @@ def _write_routing_analysis(
     lines = [
         "# P4.5 Journal Routing Analysis",
         "",
-        f"Per-suite per-role correctness extracted from autopilot journal.",
+        "Per-suite per-role correctness extracted from autopilot journal.",
         f"Temperature τ={tau} for soft labels.",
         "",
         "## Statistically Robust Routing Misses",
@@ -454,7 +454,7 @@ def main() -> None:
     print(f"Skipped (insufficient data): {summary['skipped_insufficient']}")
     print(f"Skipped (no route info): {summary['skipped_no_route']}")
     print(f"Temperature τ: {summary['tau']}")
-    print(f"\nSuite distribution of soft-label records:")
+    print("\nSuite distribution of soft-label records:")
     for suite, count in summary["suite_distribution"].items():
         print(f"  {suite:<35} {count:4d}")
     print(f"\nStatistically robust routing misses (Wilson-CI, both arms n>={summary['robust_min_n']}):")
@@ -467,9 +467,9 @@ def main() -> None:
     else:
         print("  None.")
     print(f"\nOutput: {summary['output_dir']}")
-    print(f"  soft_labels.jsonl   → embed with BGE for MLP training")
-    print(f"  suite_priors.json   → use as label smoothing prior")
-    print(f"  routing_analysis.md → routing diagnostic report")
+    print("  soft_labels.jsonl   → embed with BGE for MLP training")
+    print("  suite_priors.json   → use as label smoothing prior")
+    print("  routing_analysis.md → routing diagnostic report")
 
 
 if __name__ == "__main__":

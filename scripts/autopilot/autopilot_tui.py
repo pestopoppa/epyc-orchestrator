@@ -22,7 +22,6 @@ from __future__ import annotations
 import argparse
 import collections
 import os
-import re
 import textwrap
 import threading
 import time

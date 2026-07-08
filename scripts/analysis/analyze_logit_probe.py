@@ -73,7 +73,7 @@ def main():
     path = Path(args.data_path)
     entries = load_probe_data(path)
 
-    print(f"=== Logit Probe Analysis ===")
+    print("=== Logit Probe Analysis ===")
     print(f"Data file: {path}")
     print(f"Entries: {len(entries)}")
 
@@ -88,7 +88,7 @@ def main():
           f"range={stats['prompt_len_range']}")
     print(f"Avg probs per entry: {stats['avg_probs_per_entry']:.0f}")
     print(f"Unique first tokens: {stats['unique_first_tokens']}")
-    print(f"\nTop first tokens:")
+    print("\nTop first tokens:")
     for tok, count in stats["top_first_tokens"]:
         print(f"  {tok!r}: {count}")
 

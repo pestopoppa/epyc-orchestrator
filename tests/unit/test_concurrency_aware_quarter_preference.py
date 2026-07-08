@@ -10,7 +10,6 @@ from __future__ import annotations
 import importlib
 import sys
 from pathlib import Path
-from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[2]

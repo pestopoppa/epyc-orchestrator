@@ -106,7 +106,7 @@ def apply_host_prerequisites(auto_fix: bool = True) -> bool:
         return False
 
     print("  [FIX] Applying canonical settings (sudo -n)...")
-    ok_fix = True
+    _ok_fix = True
     for key, val in _HOST_PREREQ_SYSCTLS.items():
         if _read_sysctl(key) == val:
             continue
@@ -116,7 +116,7 @@ def apply_host_prerequisites(auto_fix: bool = True) -> bool:
             print(f"    ✓ sysctl {key}={val}")
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as exc:
             print(f"    ✗ FAILED to set sysctl {key}: {exc}")
-            ok_fix = False
+            _ok_fix = False
 
     for path, val in _HOST_PREREQ_THP.items():
         if _read_thp_active(path) == val:
@@ -130,7 +130,7 @@ def apply_host_prerequisites(auto_fix: bool = True) -> bool:
             print(f"    ✓ {path} = {val}")
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as exc:
             print(f"    ✗ FAILED to set {path}: {exc}")
-            ok_fix = False
+            _ok_fix = False
 
     if _read_governor() != _HOST_PREREQ_GOVERNOR:
         try:
@@ -141,7 +141,7 @@ def apply_host_prerequisites(auto_fix: bool = True) -> bool:
             print(f"    ✓ cpu governor = {_HOST_PREREQ_GOVERNOR}")
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as exc:
             print(f"    ✗ FAILED to set governor: {exc}")
-            ok_fix = False
+            _ok_fix = False
 
     # Re-audit
     ok, drift_after = check_host_prerequisites()

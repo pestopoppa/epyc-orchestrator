@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 
@@ -166,9 +165,9 @@ async def _refresh_two_level_summary(state: TaskState, deps: TaskDeps) -> None:
         try:
             from src.config import get_config
 
-            trigger_ratio = get_config().chat.session_compaction_trigger_ratio
+            _trigger_ratio = get_config().chat.session_compaction_trigger_ratio
         except (AttributeError, Exception):
-            trigger_ratio = 0.75
+            _trigger_ratio = 0.75
         total_chars = sum(len(b) for b in state.pending_granular_blocks)
         if total_chars > 3000:
             trigger = "context_pressure"

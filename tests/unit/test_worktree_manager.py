@@ -3,14 +3,11 @@
 These tests use a temporary git repo to avoid touching the real project.
 """
 
-import os
 import subprocess
-import tempfile
-from pathlib import Path
 
 import pytest
 
-from scripts.autopilot.worktree_manager import WorktreeManager, ExperimentContext, _git
+from scripts.autopilot.worktree_manager import WorktreeManager
 
 
 @pytest.fixture

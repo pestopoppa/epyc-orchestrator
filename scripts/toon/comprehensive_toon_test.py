@@ -637,7 +637,7 @@ Summary:"""
         # JSON timing
         json_prompt = prompt_template.format(data=json_str)
         start = time.perf_counter()
-        resp = client.post(
+        _resp = client.post(
             f"http://127.0.0.1:{port}/completion",
             json={"prompt": json_prompt, "n_predict": 1, "stream": False},
         )
@@ -646,7 +646,7 @@ Summary:"""
         # TOON timing
         toon_prompt = prompt_template.format(data=toon_str)
         start = time.perf_counter()
-        resp = client.post(
+        _resp = client.post(
             f"http://127.0.0.1:{port}/completion",
             json={"prompt": toon_prompt, "n_predict": 1, "stream": False},
         )

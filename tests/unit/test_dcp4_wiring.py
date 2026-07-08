@@ -12,7 +12,6 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import pytest
 
 from src.context_discovery import assemble_delegation_bundle, render_bundle
 from src.api.routes import chat_delegation as CD
@@ -29,15 +28,20 @@ def _files() -> dict[str, str]:
 
 def test_render_bundle_full_mode():
     files = _files()
-    reader = lambda p: files.get(p)
+    def reader(p: str) -> str | None:
+        return files.get(p)
+
+    def code_search(q: str, limit: int = 20) -> list[dict]:
+        return [
+            {"path": "mod/foo.py", "score": 0.9},
+            {"path": "mod/data.py", "score": 0.5},
+        ]
+
     # no line_ranges in hits → FULL desired; big budget → all FULL
     bundle = assemble_delegation_bundle(
         "foo",
         budget=100_000,
-        code_search_fn=lambda q, limit=20: [
-            {"path": "mod/foo.py", "score": 0.9},
-            {"path": "mod/data.py", "score": 0.5},
-        ],
+        code_search_fn=code_search,
         file_reader_fn=reader,
     )
     text = render_bundle(bundle, file_reader_fn=reader)
@@ -48,14 +52,19 @@ def test_render_bundle_full_mode():
 
 def test_render_bundle_skips_unreadable_entries():
     files = {"present.py": "X = 1\n"}
-    reader = lambda p: files.get(p)  # returns None for missing
+    def reader(p: str) -> str | None:
+        return files.get(p)
+
+    def code_search(q: str, limit: int = 20) -> list[dict]:
+        return [
+            {"path": "present.py", "score": 0.9},
+            {"path": "gone.py", "score": 0.8},
+        ]
+
     bundle = assemble_delegation_bundle(
         "x",
         budget=100_000,
-        code_search_fn=lambda q, limit=20: [
-            {"path": "present.py", "score": 0.9},
-            {"path": "gone.py", "score": 0.8},
-        ],
+        code_search_fn=code_search,
         file_reader_fn=reader,
     )
     text = render_bundle(bundle, file_reader_fn=reader)

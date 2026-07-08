@@ -101,9 +101,9 @@ def validate_binaries(registry: Optional["ModelRegistry"] = None) -> dict[str, s
 
     if missing:
         raise FileNotFoundError(
-            f"Missing llama.cpp binaries (check registry runtime_defaults.binaries):\n"
+            "Missing llama.cpp binaries (check registry runtime_defaults.binaries):\n"
             + "\n".join(missing)
-            + f"\n\nRegistry location: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml"
+            + "\n\nRegistry location: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml"
         )
 
     return paths

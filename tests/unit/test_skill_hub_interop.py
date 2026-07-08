@@ -1,6 +1,5 @@
 """Tests for skill hub interop (B3)."""
 
-from pathlib import Path
 
 from src.skill_hub_interop import (
     SkillBundle,

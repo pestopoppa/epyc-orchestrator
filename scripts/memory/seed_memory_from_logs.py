@@ -9,7 +9,6 @@ and creates memory entries with embeddings and Q-values.
 
 import json
 import sys
-from collections import defaultdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -132,21 +131,21 @@ def main():
     log_dir = Path("/mnt/raid0/llm/epyc-orchestrator/logs/progress")
     max_entries = int(sys.argv[1]) if len(sys.argv) > 1 else 1000
 
-    print(f"Initializing embedder...")
+    print("Initializing embedder...")
     embedder = TaskEmbedder()
     print(f"Model available: {embedder.is_model_available}")
 
-    print(f"Initializing store...")
+    print("Initializing store...")
     store = EpisodicStore()
 
     print(f"Parsing logs (max {max_entries} entries)...")
     tasks = parse_logs(log_dir, max_entries)
     print(f"Found {len(tasks)} task pairs")
 
-    print(f"Seeding memory...")
+    print("Seeding memory...")
     seeded = seed_memory(store, embedder, tasks)
 
-    print(f"\n=== Results ===")
+    print("\n=== Results ===")
     print(f"Seeded: {seeded} memories")
     stats = store.get_stats()
     print(f"Total memories: {stats['total_memories']}")

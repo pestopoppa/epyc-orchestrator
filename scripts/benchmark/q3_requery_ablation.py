@@ -271,7 +271,7 @@ def main():
         print(f"  {r['prompt_id']:<20} {kw:>10} {ft:>10} {cb:>10} {r['winner']:>12}")
 
     print(f"  {'-' * 62}")
-    n = len(results)
+    _n = len(results)
     print(f"  {'TOTAL':<20} {keyword_total:>10} {token_total:>10} {combined_total:>10}")
 
     # Percentage improvement
@@ -282,7 +282,7 @@ def main():
         print(f"  Combined vs keyword:     {cb_pct:+.1f}%")
 
     # ── Decision ──
-    print(f"\n  DECISION:")
+    print("\n  DECISION:")
     if token_total <= keyword_total * 1.1:
         print("  First-20-token re-query does NOT meaningfully improve over keyword-only.")
         print("  Q3 CLOSED — keyword-only retrieval is sufficient.")

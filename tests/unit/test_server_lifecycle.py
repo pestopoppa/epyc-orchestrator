@@ -6,7 +6,6 @@ import pytest
 
 from src.backends.server_lifecycle import (
     LlamaServerLifecycle,
-    ServerCapabilities,
     ServerConfig,
     ServerLifecycle,
     ServerType,

@@ -35,7 +35,10 @@ import logging
 import threading
 import time
 from contextlib import contextmanager
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
+
+if TYPE_CHECKING:
+    from src.scheduling.migration_transaction import MigrationTransaction
 
 try:
     import httpx

@@ -147,7 +147,7 @@ def test_inject_3way_rewards_http_tracks_done_exceptions_and_timeout():
         "ARCHITECT": done_exc,
         "WORKER": not_done,
     }
-    by_future = {
+    _by_future = {
         done_ok: "SELF:direct",
         done_exc: "ARCHITECT",
         not_done: "WORKER",

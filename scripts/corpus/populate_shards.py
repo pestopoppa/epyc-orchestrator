@@ -22,7 +22,7 @@ import os
 import sqlite3
 import time
 from concurrent.futures import ThreadPoolExecutor
-from multiprocessing import Process, Queue
+from multiprocessing import Process
 
 logging.basicConfig(
     level=logging.INFO,

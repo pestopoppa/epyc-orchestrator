@@ -16,7 +16,6 @@ Implementation surface:
 
 import json
 
-import pytest
 from pydantic import BaseModel
 
 from src.api.models import ChatRequest

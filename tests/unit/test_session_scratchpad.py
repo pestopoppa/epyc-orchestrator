@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-import pytest
-from unittest.mock import patch
 
 from src.graph.session_log import (
     ScratchpadEntry,
-    SCRATCHPAD_CATEGORIES,
     MAX_SCRATCHPAD_ENTRIES,
     parse_scratchpad_from_response,
     prune_scratchpad,

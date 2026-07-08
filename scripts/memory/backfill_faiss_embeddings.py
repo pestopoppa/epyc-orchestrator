@@ -201,10 +201,10 @@ def main():
     final_sqlite = len(get_all_memory_ids(store))
     final_faiss = store._embedding_store.count
 
-    print(f"\n=== Results ===")
+    print("\n=== Results ===")
     print(f"Backfilled: {stats['backfilled']}")
     print(f"Failed: {stats['failed']}")
-    print(f"\nFinal counts:")
+    print("\nFinal counts:")
     print(f"  SQLite: {final_sqlite}")
     print(f"  FAISS: {final_faiss}")
 

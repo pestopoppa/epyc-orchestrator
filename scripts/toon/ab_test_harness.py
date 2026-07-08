@@ -23,14 +23,14 @@ import argparse
 import json
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from src.services.toon_encoder import encode, is_available, should_use_toon
+from src.services.toon_encoder import encode, is_available
 
 
 @dataclass

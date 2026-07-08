@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 DATA_DIR = Path("/mnt/raid0/llm/data/eval/scoring_verifiers")
 
@@ -113,7 +113,7 @@ def load_scoring_verifiers_suite(dataset_name: str):
     problems = load_problems(dataset_name)
 
     is_plus = dataset_name.endswith("+")
-    base_name = dataset_name.replace("+", "").replace("-", "")
+    _base_name = dataset_name.replace("+", "").replace("-", "")
     domain = "humaneval" if "HE" in dataset_name else "mbpp"
 
     questions = []

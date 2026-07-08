@@ -74,7 +74,7 @@ def check_health(port: int) -> bool:
 
 
 def smoke_inference(port: int) -> dict | None:
-    print(f"\n[2/6] /v1/chat/completions inference")
+    print("\n[2/6] /v1/chat/completions inference")
     payload = {
         "messages": [{"role": "user", "content": SMOKE_PROMPT}],
         "max_tokens": 256,
@@ -106,7 +106,7 @@ def smoke_inference(port: int) -> dict | None:
 
 
 def check_content(data: dict) -> str | None:
-    print(f"\n[3/6] Response has non-empty content")
+    print("\n[3/6] Response has non-empty content")
     try:
         content = data["choices"][0]["message"]["content"]
     except (KeyError, IndexError, TypeError) as e:
@@ -120,7 +120,7 @@ def check_content(data: dict) -> str | None:
 
 
 def check_code_block(content: str) -> bool:
-    print(f"\n[4/6] Response contains a Python code block")
+    print("\n[4/6] Response contains a Python code block")
     if "```python" in content or "```\n" in content:
         pass_("code-fenced block present")
         return True
@@ -130,7 +130,7 @@ def check_code_block(content: str) -> bool:
 
 
 def check_tool_used(content: str) -> bool:
-    print(f"\n[5/6] Response uses an expected REPL tool")
+    print("\n[5/6] Response uses an expected REPL tool")
     expected = ["list_dir", "FINAL", "peek", "grep"]
     used = [t for t in expected if f"{t}(" in content]
     if not used:
@@ -141,7 +141,7 @@ def check_tool_used(content: str) -> bool:
 
 
 def check_tps_and_mtp(data: dict, content: str) -> bool:
-    print(f"\n[6/6] tps and MTP path verification")
+    print("\n[6/6] tps and MTP path verification")
     # Try to read llama.cpp's `usage.completion_tokens` and llama-perf timings.
     # ik_llama.cpp exposes either via `timings` block or via `usage`.
     timings = data.get("timings") or {}
@@ -155,7 +155,7 @@ def check_tps_and_mtp(data: dict, content: str) -> bool:
     if tps is None:
         # Fallback: rough estimate from response length and total time
         # (we don't have per-step timing without /completion endpoint).
-        fail_(f"no tps available — can't verify performance")
+        fail_("no tps available — can't verify performance")
         print(f"  timings: {timings}")
         print(f"  usage:   {usage}")
         return False
@@ -176,7 +176,7 @@ def check_tps_and_mtp(data: dict, content: str) -> bool:
         # Soft-warn rather than fail: 40-50 t/s could still be MTP-on with a
         # cold cache, or could be MTP silently disengaged. Worth a closer look.
         print(f"  [WARN] tps {tps:.1f} between dense-baseline and MTP-on ranges")
-        print(f"         If consistent across multiple calls, MTP may not be engaging")
+        print("         If consistent across multiple calls, MTP may not be engaging")
     return True
 
 
@@ -203,15 +203,15 @@ def main() -> int:
     tool_ok = check_tool_used(content)
     perf_ok = check_tps_and_mtp(data, content)
 
-    print(f"\n=== Sample response (first 400 chars) ===")
+    print("\n=== Sample response (first 400 chars) ===")
     print(content[:400])
     if len(content) > 400:
         print("...")
 
-    print(f"\n=== Summary ===")
-    print(f"  health:     PASS")
-    print(f"  inference:  PASS")
-    print(f"  content:    PASS")
+    print("\n=== Summary ===")
+    print("  health:     PASS")
+    print("  inference:  PASS")
+    print("  content:    PASS")
     print(f"  code block: {'PASS' if code_ok else 'FAIL'}")
     print(f"  tool usage: {'PASS' if tool_ok else 'FAIL'}")
     print(f"  tps + MTP:  {'PASS' if perf_ok else 'FAIL'}")

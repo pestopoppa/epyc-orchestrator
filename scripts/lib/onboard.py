@@ -45,7 +45,7 @@ def _read_registry_timeout(category: str, key: str, fallback: int) -> int:
             timeouts = reg._raw.get("runtime_defaults", {}).get("timeouts", {})
             cat_data = timeouts.get(category, {})
             return cat_data.get(key, timeouts.get("default", fallback))
-    except Exception as e:
+    except Exception:
         pass
     return fallback
 
@@ -355,7 +355,7 @@ def generate_optimization_options(
         List of Config objects that can be tested.
     """
     # Create a temporary executor (skip validation since model not in registry yet)
-    executor = Executor(registry, validate=True)
+    _executor = Executor(registry, validate=True)
 
     # Generate configs based on architecture
     # Use a placeholder role since model isn't in registry yet
@@ -598,7 +598,7 @@ def run_health_check(
 
             except subprocess.TimeoutExpired:
                 continue
-            except Exception as e:
+            except Exception:
                 continue
 
         # All attempts failed
@@ -871,7 +871,7 @@ if __name__ == "__main__":
 
     path = sys.argv[1]
 
-    print(f"=== Onboarding Model ===\n")
+    print("=== Onboarding Model ===\n")
     print(f"Path: {path}\n")
 
     try:

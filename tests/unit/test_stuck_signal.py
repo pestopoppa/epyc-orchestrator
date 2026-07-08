@@ -1,9 +1,7 @@
 """Tests for REPL STUCK("reason") signal (NIB2-24)."""
 
-import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
-import pytest
 
 from src.repl_environment import REPLEnvironment
 

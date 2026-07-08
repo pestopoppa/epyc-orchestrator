@@ -61,7 +61,7 @@ class TestSpillIfTruncated:
 
         with patch("src.graph.helpers.os.makedirs"):
             # Patch open to write to tmp_path instead
-            spill_path = str(tmp_path / "spill_test_output_t2.txt")
+            _spill_path = str(tmp_path / "spill_test_output_t2.txt")
             result = _spill_if_truncated(text, 1500, "output", state)
 
         assert "peek(99999" in result
@@ -75,7 +75,7 @@ class TestSpillIfTruncated:
         state = _FakeState(task_id="content_check", turns=1)
         text = "B" * 3000
 
-        result = _spill_if_truncated(text, 500, "error", state)
+        _result = _spill_if_truncated(text, 500, "error", state)
 
         # Verify the spill file was created with full content
         spill_path = "/mnt/raid0/llm/tmp/content_check_error_t1.txt"

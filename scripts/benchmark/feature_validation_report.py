@@ -6,11 +6,11 @@ Task-D refactor.
 
 from __future__ import annotations
 
+import csv
 import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 logger = logging.getLogger("feature_validation")
 
@@ -24,6 +24,12 @@ sys.path.insert(0, str(PROJECT_ROOT / "scripts" / "benchmark"))
 RESULTS_DIR = PROJECT_ROOT / "benchmarks" / "results" / "runs" / "feature_validation"
 MANIFESTS_DIR = PROJECT_ROOT / "benchmarks" / "prompts" / "v1" / "feature_validation"
 API_URL = os.environ.get("ORCHESTRATOR_API_URL", "http://localhost:8000")
+
+from feature_validation_profiles import FeatureProfile, PROFILES
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 

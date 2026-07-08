@@ -107,7 +107,7 @@ def main() -> int:
     assert hr_shadow.frontdoor_verifier is v, "verifier not threaded through"
     assert hr_shadow.frontdoor_verifier_shadow is True, "shadow flag not picked up"
     assert hr_shadow.frontdoor_verifier_threshold == 0.5, "threshold not picked up"
-    ok(f"HybridRouter constructed: classifier set, verifier set, shadow=True, threshold=0.5")
+    ok("HybridRouter constructed: classifier set, verifier set, shadow=True, threshold=0.5")
 
     # 5. Synthetic route — exercise the fast-path with shadow mode
     print("\n[5/6] Synthetic route through the classifier-frontdoor-verifier fast-path...")
@@ -121,7 +121,7 @@ def main() -> int:
         action, confidence = hr_shadow.routing_classifier.predict_action(features)
         if action is None:
             print(f"      classifier returned None — confidence {confidence:.4f} below per-class threshold")
-            print(f"      (this is fine — fast-path would fall through to KNN; not a wiring failure)")
+            print("      (this is fine — fast-path would fall through to KNN; not a wiring failure)")
         elif confidence >= hr_shadow.classifier_confidence_threshold:
             if hr_shadow.frontdoor_verifier is not None and action == "frontdoor":
                 p_success = float(hr_shadow.frontdoor_verifier.predict(features, action_idx=0))
@@ -132,7 +132,7 @@ def main() -> int:
                 ok(f"classifier→{action} (conf={confidence:.3f}) — non-frontdoor route, verifier bypassed")
         else:
             print(f"      classifier confidence {confidence:.4f} below global threshold {hr_shadow.classifier_confidence_threshold}")
-            print(f"      (this is fine — fast-path would fall through to KNN)")
+            print("      (this is fine — fast-path would fall through to KNN)")
     except Exception as exc:
         traceback.print_exc()
         fail(f"fast-path crashed: {type(exc).__name__}: {exc}")

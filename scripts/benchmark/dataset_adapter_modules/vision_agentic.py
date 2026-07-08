@@ -7,11 +7,8 @@ compatibility — existing imports keep working.
 
 from __future__ import annotations
 
-import json
-import random
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
 
 from .base import BaseAdapter
 
@@ -128,7 +125,7 @@ class GaiaAdapter(BaseAdapter):
                     shutil.copy2(file_bytes, dest)
                 elif isinstance(file_bytes, bytes):
                     dest.write_bytes(file_bytes)
-            except Exception as e:
+            except Exception:
                 return ""
 
         return f"\nThe file is available at: {dest}"

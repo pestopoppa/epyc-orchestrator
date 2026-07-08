@@ -5,7 +5,6 @@ from __future__ import annotations
 import urllib.error
 from contextlib import contextmanager
 
-import pytest
 
 from scripts.server import stack_health
 from scripts.server.stack_health import wait_for_health

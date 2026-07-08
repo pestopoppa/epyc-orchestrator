@@ -7,11 +7,8 @@ compatibility — existing imports keep working.
 
 from __future__ import annotations
 
-import json
 import random
 import re
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
 
 from .base import BaseAdapter
 
@@ -32,7 +29,7 @@ class MathAdapter(BaseAdapter):
             self._gsm8k = hf.load_dataset("openai/gsm8k", "main", split="test")
             try:
                 self._math500 = hf.load_dataset("HuggingFaceH4/MATH-500", split="test")
-            except Exception as e:
+            except Exception:
                 self._math500 = []
             # Combine into unified list
             self._dataset = list(range(len(self._gsm8k) + len(self._math500)))

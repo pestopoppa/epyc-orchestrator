@@ -7,7 +7,6 @@ Real strategies don't always succeed or always fail. These memories
 capture the uncertainty: "this approach works ~70% of the time."
 """
 
-import json
 import random
 import sys
 from pathlib import Path
@@ -407,7 +406,7 @@ def main():
     print(f"\nSeeding probabilistic memories ({len(PROBABILISTIC_PATTERNS)} patterns, {count} each)...")
     seeded = seed_probabilistic_memories(store, embedder, count)
 
-    print(f"\n=== Results ===")
+    print("\n=== Results ===")
     print(f"Seeded: {seeded} probabilistic memories")
 
     stats = store.get_stats()

@@ -19,7 +19,6 @@ grounds (per the 2026-04-22 amended EV-8 gate).
 from __future__ import annotations
 
 import math
-from typing import Any
 
 from src.tools.diversity.metrics import distinct_n
 

@@ -8,10 +8,8 @@ feature-by-tier validation matrix.
 
 from __future__ import annotations
 
-import json
 import logging
-from dataclasses import asdict, dataclass, field
-from pathlib import Path
+from dataclasses import dataclass, field
 from typing import Any
 
 logger = logging.getLogger("feature_validation")

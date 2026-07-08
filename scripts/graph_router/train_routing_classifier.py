@@ -135,7 +135,7 @@ def train(
 
     # ── Calibrate per-class confidence thresholds ──
     logger.info("\nCalibrating per-class confidence thresholds...")
-    thresholds = clf.calibrate_thresholds(X_val, y_val, target_precision=0.9)
+    _thresholds = clf.calibrate_thresholds(X_val, y_val, target_precision=0.9)
 
     # Random baseline
     random_baseline = 1.0 / max(n_actions, 1)

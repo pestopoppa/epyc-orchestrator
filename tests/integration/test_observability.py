@@ -22,7 +22,6 @@ from src.graph.decision_gates import _make_end_result
 from src.graph.state import TaskDeps, TaskState
 from src.roles import Role
 
-from .conftest import StubFailureGraph, StubHypothesisGraph
 
 pytestmark = pytest.mark.integration
 
@@ -261,7 +260,7 @@ class TestMakeEndResult:
         state.record_role(Role.FRONTDOOR)
         ctx = _make_ctx(state, deps)
 
-        result = _make_end_result(ctx, "the answer", True)
+        _result = _make_end_result(ctx, "the answer", True)
 
         hg = deps.hypothesis_graph
         assert len(hg.evidence) >= 1
@@ -275,7 +274,7 @@ class TestMakeEndResult:
         state.record_role(Role.FRONTDOOR)
         ctx = _make_ctx(state, deps)
 
-        result = _make_end_result(ctx, "[FAILED]", False)
+        _result = _make_end_result(ctx, "[FAILED]", False)
 
         hg = deps.hypothesis_graph
         assert any(e["outcome"] == "failure" for e in hg.evidence)

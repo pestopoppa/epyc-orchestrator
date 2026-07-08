@@ -427,12 +427,12 @@ def main():
     print(f"Seeding {count_per_domain} memories per domain...")
     seeded = seed_diverse_memories(store, embedder, count_per_domain)
 
-    print(f"\n=== Results ===")
+    print("\n=== Results ===")
     print(f"Seeded: {seeded} memories")
     stats = store.get_stats()
     print(f"Total memories: {stats['total_memories']}")
     print(f"Avg Q-value: {stats['overall_avg_q']:.4f}")
-    print(f"\nBy action type:")
+    print("\nBy action type:")
     for action_type, info in stats['by_action_type'].items():
         print(f"  {action_type}: {info['count']} memories, avg Q={info['avg_q']:.4f}")
 

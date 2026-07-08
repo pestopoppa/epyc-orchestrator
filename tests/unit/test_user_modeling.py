@@ -1,11 +1,9 @@
 """Tests for user modeling subsystem (B1)."""
 
-import tempfile
-from pathlib import Path
 
 import pytest
 
-from src.user_modeling.profile_store import ProfileStore, UserFact, UserProfile
+from src.user_modeling.profile_store import ProfileStore, UserFact
 from src.user_modeling.deriver import derive_preferences, extract_preferences_from_text
 from src.user_modeling.tools import user_conclude, user_profile, user_search
 
@@ -152,7 +150,6 @@ PREF [format] Use markdown tables not ASCII art
 class TestToolFunctions:
     def test_user_conclude_and_profile(self, store, monkeypatch):
         # Patch the singleton to use our test store
-        import src.user_modeling.tools as tools_mod
         import src.user_modeling.profile_store as store_mod
         monkeypatch.setattr(store_mod, "_store", store)
 

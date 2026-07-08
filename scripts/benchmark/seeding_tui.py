@@ -753,7 +753,7 @@ class SeedingTUI:
         """Truncate the REPL tap file at session start."""
         try:
             Path(self._repl_tap_path).parent.mkdir(parents=True, exist_ok=True)
-            with open(self._repl_tap_path, "w") as f:
+            with open(self._repl_tap_path, "w") as _f:
                 pass  # truncate
         except OSError:
             pass

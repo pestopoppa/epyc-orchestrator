@@ -17,7 +17,7 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Iterable
 
 log = logging.getLogger("autopilot.env_synth.gap_diagnosis")
 

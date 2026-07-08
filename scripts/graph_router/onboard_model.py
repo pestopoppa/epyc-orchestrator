@@ -19,12 +19,10 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import sys
 from pathlib import Path
 
-import numpy as np
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -102,7 +100,7 @@ def onboard(
         return
 
     # 5. Predict routing distribution for sample task types
-    task_types = ["code", "chat", "architecture", "ingest", "general"]
+    _task_types = ["code", "chat", "architecture", "ingest", "general"]
     sample_queries = {
         "code": "Write a Python function to sort a list of dictionaries by key",
         "chat": "Explain the difference between TCP and UDP protocols",
