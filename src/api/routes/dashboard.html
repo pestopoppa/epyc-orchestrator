@@ -3860,13 +3860,20 @@ function _plannerTapStatusText(lines) {
     const ap = proc.autopilot || {};
     const phase = proc.autopilot_phase || {};
     const phaseName = String(phase.phase || '');
+    const actionType = String(phase.action_type || '');
     const age = proc.planner_tap_age_s;
     const ageText = age != null ? ` · last event ${Math.round(age)}s ago` : '';
     if (!ap.running) {
         return `— planner history · autopilot stopped${ageText} · ${lines} lines`;
     }
+    if (proc.planner_tap_precedes_autopilot_start) {
+        return `— planner history from previous daemon${ageText} · current ${actionType || phaseName || 'phase'} has no planner trace · ${lines} lines`;
+    }
     if (_phaseFocus(proc, ap) === 'planner') {
         return `— planner active · ${phaseName || 'phase unknown'}${ageText} · ${lines} lines`;
+    }
+    if (phaseName === 'dispatch_action' && actionType && actionType !== 'planner_coordinator') {
+        return `— no planner trace for current ${actionType}${ageText} · ${lines} history lines`;
     }
     return `— planner history${ageText} · ${lines} lines`;
 }

@@ -1438,6 +1438,18 @@ async def process_status() -> JSONResponse:
         phase = dict(phase)
         phase.setdefault("idle_reason", "autopilot process not running")
 
+    planner_tap_path = Path("/mnt/raid0/llm/tmp/planner_tap.log")
+    planner_tap_mtime_s: float | None = None
+    planner_tap_precedes_process = False
+    try:
+        planner_tap_mtime_s = planner_tap_path.stat().st_mtime
+        phase_health_dict = phase_health if isinstance(phase_health, dict) else {}
+        process_started_at_s = phase_health_dict.get("process_started_at_s")
+        if isinstance(process_started_at_s, (int, float)):
+            planner_tap_precedes_process = planner_tap_mtime_s < float(process_started_at_s)
+    except OSError:
+        pass
+
     return JSONResponse(_stamp({
         "autopilot": autopilot,
         "gepa_worker_count": n_workers,
@@ -1449,7 +1461,9 @@ async def process_status() -> JSONResponse:
         "autopilot_state": _autopilot_state_summary(),
         "autopilot_phase_age_s": phase_age_s,
         "inference_tap_age_s": _age_s(_INFERENCE_TAP_PATH),
-        "planner_tap_age_s": _age_s(Path("/mnt/raid0/llm/tmp/planner_tap.log")),
+        "planner_tap_age_s": _age_s(planner_tap_path),
+        "planner_tap_mtime_s": planner_tap_mtime_s,
+        "planner_tap_precedes_autopilot_start": planner_tap_precedes_process,
     }, "process_status"), headers=_NO_STORE_HEADERS)
 
 
