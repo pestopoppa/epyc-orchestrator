@@ -113,6 +113,7 @@ from src.autopilot_core.action_identity import (
 )
 from src.autopilot_core.learning_exclusions import (
     BENIGN_LEARNING_EXCLUSIONS,
+    NON_CORRUPT_LEARNING_EXCLUSIONS,
     classify_learning_exclusion,
 )
 from src.autopilot_core.planner_evidence import (
@@ -7013,18 +7014,22 @@ def _run_loop_inner(
         if not deficiency_category:
             deficiency_category = state.pop("_dispatch_deficiency", "")
 
-        # Apply the learning-exclusion decision computed above. Both exogenous
-        # reload and mad_noise produce a single bug_corrupted_by tag + an
-        # eval_details["learning_exclusion"] audit record. The deficiency
-        # category is overridden so the planner can distinguish exclusion
-        # reasons from genuine safety-gate failures.
+        # Apply the learning-exclusion decision computed above. True measurement
+        # contamination (exogenous reload, prompt leak, kill/reload artifacts)
+        # produces bug_corrupted_by + eval_details["learning_exclusion"]. Valid
+        # negative evidence such as seq_refuted remains a learning exclusion but
+        # must not be hidden as corrupted data.
         # Benign convergence exclusions (reproduction_confirmed) skip the Pareto
         # archive (via learning_excluded_by above) but must NOT populate
         # bug_corrupted_by — otherwise trustworthiness_score() and the journal
         # trust render would treat a valid confirmation like a kill / reload /
         # commit-invalidation, and the planner would narrate a "noisy instrument"
         # (2026-05-31 incident → meta-action loop).
-        if learning_excluded_by and learning_excluded_by not in BENIGN_LEARNING_EXCLUSIONS:
+        if (
+            learning_excluded_by
+            and learning_excluded_by not in BENIGN_LEARNING_EXCLUSIONS
+            and learning_excluded_by not in NON_CORRUPT_LEARNING_EXCLUSIONS
+        ):
             bug_corrupted_by = learning_excluded_by
             bug_corrupted_reason = learning_excluded_reason
         else:

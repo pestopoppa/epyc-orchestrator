@@ -13,6 +13,7 @@ from src.autopilot_core.journal_reconstruction import (
 )
 from src.autopilot_core.learning_exclusions import (
     BENIGN_LEARNING_EXCLUSIONS,
+    NON_CORRUPT_LEARNING_EXCLUSIONS,
     WITHIN_NOISE_EXCLUSIONS,
     classify_learning_exclusion,
 )
@@ -53,6 +54,7 @@ __all__ = [
     "EProcessUpdate",
     "EPHEMERAL_ACTION_KEYS",
     "LEGACY_OBJECTIVE_POLICY",
+    "NON_CORRUPT_LEARNING_EXCLUSIONS",
     "STATE_ACCUMULATING",
     "STATE_CONFIRMED",
     "STATE_REFUTED",

@@ -2145,7 +2145,7 @@ def test_gepa_status_uses_superseded_journal_rows(
     assert by_trial[2]["quarantine_label"] == "corrupted"
 
 
-def test_gepa_status_recent_trials_labels_seq_refuted_as_excluded(
+def test_gepa_status_recent_trials_labels_seq_refuted_without_corruption(
     tmp_path: Path, monkeypatch
 ) -> None:
     log_path = tmp_path / "autopilot.log"
@@ -2163,7 +2163,13 @@ def test_gepa_status_recent_trials_labels_seq_refuted_as_excluded(
             "cost": 0.5,
             "reliability": 0.9,
             "pareto_status": "dominated",
-            "bug_corrupted_by": "seq_refuted",
+            "keep_revert_decision": "excluded",
+            "eval_details": {
+                "learning_exclusion": {
+                    "by": "seq_refuted",
+                    "reason": "sequential e-process refuted the candidate improvement",
+                }
+            },
         }
     ]
     journal_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
@@ -2174,8 +2180,11 @@ def test_gepa_status_recent_trials_labels_seq_refuted_as_excluded(
     payload = json.loads(response.body)
 
     row = payload["recent_trials"][0]
-    assert row["bug_corrupted_by"] == "seq_refuted"
-    assert row["quarantine_label"] == "seq-refuted"
+    assert row["bug_corrupted_by"] is None
+    assert row["quarantine_label"] is None
+    assert row["learning_excluded_by"] == "seq_refuted"
+    assert row["keep_revert_decision"] == "excluded"
+    assert row["exclusion_label"] == "seq-refuted"
 
 
 def test_gepa_status_recent_trials_carry_tier(tmp_path: Path, monkeypatch) -> None:

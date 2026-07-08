@@ -5005,6 +5005,13 @@ async def gepa_status() -> JSONResponse:
             # trial simply vanished with no signal it had died. The client greys +
             # tags these rows so recent activity is always visible.
             for j in _effective_journal_trial_rows(journal_rows)[-15:]:
+                eval_details = j.get("eval_details") if isinstance(j.get("eval_details"), dict) else {}
+                learning_exclusion = eval_details.get("learning_exclusion") if isinstance(eval_details, dict) else {}
+                if not isinstance(learning_exclusion, dict):
+                    learning_exclusion = {}
+                learning_excluded_by = str(learning_exclusion.get("by") or "").strip()
+                keep_revert_decision = str(j.get("keep_revert_decision") or "").strip()
+                bug_corrupted_by = str(j.get("bug_corrupted_by") or "").strip()
                 recent_trials.append({
                     "trial_id": j.get("trial_id"),
                     "timestamp": j.get("timestamp", ""),
@@ -5023,12 +5030,17 @@ async def gepa_status() -> JSONResponse:
                     "real_suite_v1": _suite_metric_for_dashboard(j, "real_suite_v1"),
                     # Non-empty when the trial was killed mid-flight or otherwise
                     # quarantined; the client renders these muted + tagged.
-                    "bug_corrupted_by": j.get("bug_corrupted_by") or None,
+                    "bug_corrupted_by": bug_corrupted_by or None,
                     "quarantine_label": (
+                        "killed" if "killed" in bug_corrupted_by else "corrupted"
+                    ) if bug_corrupted_by else None,
+                    "learning_excluded_by": learning_excluded_by or None,
+                    "keep_revert_decision": keep_revert_decision or None,
+                    "exclusion_label": (
                         "seq-refuted"
-                        if str(j.get("bug_corrupted_by") or "") == "seq_refuted"
-                        else ("killed" if "killed" in str(j.get("bug_corrupted_by") or "") else "corrupted")
-                    ) if j.get("bug_corrupted_by") else None,
+                        if learning_excluded_by == "seq_refuted"
+                        else ("excluded" if learning_excluded_by or keep_revert_decision == "excluded" else None)
+                    ),
                     "description": (j.get("config_snapshot", {}).get("description") or "")[:140],
                 })
         except Exception:

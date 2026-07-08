@@ -4219,15 +4219,22 @@ async function updateGepa() {
                 // the pareto column so a mid-trial kill is visible instead of the
                 // row silently vanishing (which read as a frozen panel).
                 const killed = !!t.bug_corrupted_by;
+                const excluded = !killed && (!!t.learning_excluded_by || t.keep_revert_decision === 'excluded');
                 const quarantineLabel = String(t.quarantine_label || '');
-                const paretoColor = killed ? (quarantineLabel === 'seq-refuted' ? '#fbbf24' : '#f87171') :
+                const exclusionLabel = String(t.exclusion_label || '');
+                const paretoColor = killed ? '#f87171' :
+                                     excluded ? '#fbbf24' :
                                      t.pareto_status === 'pareto_frontier' ? '#34d399' :
                                      t.pareto_status === 'dominated' ? '#94a3b8' : '#fcd34d';
                 const statusText = killed
                     ? (quarantineLabel || (String(t.bug_corrupted_by).includes('killed') ? 'killed' : 'corrupted'))
+                    : excluded
+                    ? (exclusionLabel || 'excluded')
                     : (t.pareto_status||'').replace('pareto_','');
                 const tierColor = (t.tier != null && !paretoIsAuditTier(t.tier)) ? paretoTierColor(t.tier) : '#64748b';
                 const rowStyle = killed ? 'opacity:0.5' : '';
+                const statusTitle = killed ? String(t.bug_corrupted_by) :
+                                    excluded ? String(t.learning_excluded_by || t.keep_revert_decision || '') : '';
                 trialsTable += `<div style="display:grid;grid-template-columns:${gepaCols};gap:6px;padding:1px 0;${rowStyle}">
                     <div>${t.trial_id||'-'}</div>
                     <div style="color:${tierColor};font-weight:600">${t.tier!=null?('T'+t.tier):'-'}</div>
@@ -4236,7 +4243,7 @@ async function updateGepa() {
                     <div>${(!killed && t.quality!=null)?t.quality.toFixed(2):'-'}</div>
                     <div>${(!killed && t.speed!=null)?t.speed.toFixed(1):'-'}</div>
                     <div>${(!killed && t.cost!=null)?t.cost.toFixed(2):'-'}</div>
-                    <div style="color:${paretoColor}" title="${killed?escapeHTML(String(t.bug_corrupted_by)):''}">${statusText}</div>
+                    <div style="color:${paretoColor}" title="${escapeHTML(statusTitle)}">${statusText}</div>
                     <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHTML(t.description||'')}">${escapeHTML((t.description||'').slice(0,80))}</div>
                 </div>`;
             });
