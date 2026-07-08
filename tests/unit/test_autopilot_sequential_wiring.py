@@ -789,6 +789,59 @@ def test_maybe_force_seq_candidate_replay_forces_action_and_rationale(
     assert state["seq_candidate_replay_forced"]["action"] == action
 
 
+def test_maybe_force_seq_candidate_replay_blocks_noop_structural_candidate(
+    tmp_path: Path,
+) -> None:
+    action = {
+        "type": "structural_experiment",
+        "flags": {"langgraph_coder": False},
+    }
+    candidate = autopilot._config_fingerprint(action)
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    journal.record(
+        _entry(
+            10,
+            action,
+            seq={
+                "candidate": candidate,
+                "core_id": "core_v1",
+                "k": 1,
+                "z": 0.1,
+                "z_rate": -0.1,
+                "E_quality": 1.02,
+                "E_rate_noninf": 0.96,
+                "state": "accumulating",
+                "confirmed": False,
+            },
+        )
+    )
+    state: dict[str, Any] = {}
+    lab = SimpleNamespace(current_flags=lambda: {"langgraph_coder": False})
+    original = {"type": "seed_batch", "n_questions": 14}
+
+    forced, rationale, payload = autopilot._maybe_force_seq_candidate_replay(
+        original,
+        state=state,
+        journal=journal,
+        tier=1,
+        blacklist=[],
+        rationale={"planner": "kept"},
+        trial_counter=20,
+        enabled=True,
+        lab=lab,
+    )
+
+    assert forced == original
+    assert rationale == {"planner": "kept"}
+    assert payload is None
+    assert state["seq_candidate_replay_blocked"]["candidate"] == candidate
+    assert (
+        state["seq_candidate_replay_blocked"]["reason"]
+        == "structural_experiment would not change live flag state: langgraph_coder=false"
+    )
+    assert "seq_candidate_replay_forced" not in state
+
+
 def test_maybe_force_seq_baseline_draw_marks_rationale_and_state(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -103,7 +103,7 @@ from state_store import (
     load_state as _load_state_impl,
     save_state as _save_state_impl,
 )
-from actions import dispatch_action, SkipOutcome
+from actions import dispatch_action, SkipOutcome, _structural_noop_reason
 from paired_stats import QuestionOutcome, mcnemar_from_vectors
 from src.autopilot_core.action_identity import (
     EPHEMERAL_ACTION_KEYS,
@@ -2082,6 +2082,7 @@ def _maybe_force_seq_candidate_replay(
     rationale: dict[str, Any] | None,
     trial_counter: int,
     enabled: bool,
+    lab: Any | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any] | None]:
     """Replay an accumulating W8 candidate before it is abandoned underpowered."""
     if not enabled or not SEQ_CANDIDATE_REPLAY_ENABLED:
@@ -2093,6 +2094,8 @@ def _maybe_force_seq_candidate_replay(
         return action, rationale, None
     forced = dict(payload["action"])
     blocked_reason = check_blacklist(forced, blacklist)
+    if not blocked_reason and forced.get("type") == "structural_experiment":
+        blocked_reason = _structural_noop_reason(forced.get("flags", {}), lab)
     if blocked_reason:
         state["seq_candidate_replay_blocked"] = {
             "trial_id": trial_counter,
@@ -2138,6 +2141,7 @@ def _maybe_force_seq_due_action(
     blacklist: list[dict[str, Any]],
     trial_counter: int,
     enabled: bool,
+    lab: Any | None = None,
 ) -> tuple[
     dict[str, Any] | None,
     dict[str, Any] | None,
@@ -2188,6 +2192,7 @@ def _maybe_force_seq_due_action(
         rationale=placeholder_rationale,
         trial_counter=trial_counter,
         enabled=enabled,
+        lab=lab,
     )
     if replay_context is not None:
         return action, rationale, None, None, replay_context
@@ -5656,6 +5661,7 @@ def _run_loop_inner(
                 blacklist=blacklist,
                 trial_counter=trial_counter,
                 enabled=gate.use_sequential,
+                lab=lab,
             )
         if action is None:
             preplanner_action, preplanner_rationale = _maybe_force_frontier_rerun_action(
@@ -6290,6 +6296,7 @@ def _run_loop_inner(
                     rationale=rationale,
                     trial_counter=trial_counter,
                     enabled=gate.use_sequential,
+                    lab=lab,
                 )
             if (
                 seq_fresh_eval_context is None
