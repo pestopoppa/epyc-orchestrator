@@ -493,6 +493,112 @@ def test_structured_tap_requests_for_dashboard_uses_shared_region_lock_frame(mon
     assert req["instance_regions"] == ["q0", "q1"]
 
 
+def test_offwindow_lock_holder_recovered_from_wide_tail(monkeypatch) -> None:
+    """A live CPU-region holder whose `start` event aged out of the 1 MB tail
+    must be recovered from the wider reverse window so it is NOT mis-rendered as
+    a false "off-tap holder". Regression for the recurring worker_general.full /
+    autopilot:numeric_trial warning."""
+    now = 1_000.0
+    held_event = json.dumps({
+        "event": "start",
+        "request_id": "chat-HELD:1",
+        "task_id": "chat-HELD",
+        "role": "worker_general",
+        "topology_role": "worker_general",
+        "lock_role": "worker_general",
+        "instance_idx": 0,
+        "instance_shape": "full",
+        "port": 8072,
+        "pid": 999,
+        "ts": "2026-07-10T11:00:00+00:00",
+        "ts_epoch": now - 3,  # recent → status "running", not complete
+        "prompt": "eval prompt",
+    })
+
+    # 1 MB tail: holder absent (aged out). Wider recovery read: holder present.
+    def fake_tail(_path, max_bytes=1024 * 1024):
+        return held_event if max_bytes > 1024 * 1024 else ""
+
+    monkeypatch.setattr(dashboard, "_read_tap_events_tail", fake_tail)
+
+    region_locks = {
+        "by_role": {
+            "worker_general": {
+                "instances": [
+                    {"idx": 0, "shape": "full", "regions": ["q0", "q1", "q2", "q3"]},
+                ],
+                "regions": [
+                    {"region": r, "held": True,
+                     "holder_pids": ["999"], "holder_instance_idxs": [0]}
+                    for r in ("q0", "q1", "q2", "q3")
+                ],
+            },
+        },
+    }
+
+    recovered = dashboard._structured_tap_requests_for_dashboard(
+        max_requests=20,
+        now_epoch=now,
+        region_locks=region_locks,
+        port_roles={8072: "worker_general"},
+    )
+
+    assert [r["request_id"] for r in recovered] == ["chat-HELD:1"]
+    assert recovered[0]["instance_idx"] == 0
+    assert recovered[0]["status"] == "running"
+
+
+def test_offwindow_recovery_skipped_when_holder_already_in_window(monkeypatch) -> None:
+    """When the holder's request is already in the 1 MB tail, no wider read is
+    issued and no duplicate row is injected (the common streaming path)."""
+    now = 2_000.0
+    live_event = json.dumps({
+        "event": "start",
+        "request_id": "chat-LIVE:1",
+        "role": "worker_general",
+        "topology_role": "worker_general",
+        "lock_role": "worker_general",
+        "instance_idx": 0,
+        "port": 8072,
+        "pid": 999,
+        "ts": "2026-07-10T12:00:00+00:00",
+        "ts_epoch": now - 2,
+        "prompt": "live prompt",
+    })
+
+    wide_reads: list[int] = []
+
+    def fake_tail(_path, max_bytes=1024 * 1024):
+        if max_bytes > 1024 * 1024:
+            wide_reads.append(max_bytes)
+            return live_event  # would duplicate if erroneously merged
+        return live_event
+
+    monkeypatch.setattr(dashboard, "_read_tap_events_tail", fake_tail)
+
+    region_locks = {
+        "by_role": {
+            "worker_general": {
+                "instances": [{"idx": 0, "shape": "full",
+                               "regions": ["q0", "q1", "q2", "q3"]}],
+                "regions": [
+                    {"region": r, "held": True,
+                     "holder_pids": ["999"], "holder_instance_idxs": [0]}
+                    for r in ("q0", "q1", "q2", "q3")
+                ],
+            },
+        },
+    }
+
+    out = dashboard._structured_tap_requests_for_dashboard(
+        max_requests=20, now_epoch=now, region_locks=region_locks,
+        port_roles={8072: "worker_general"},
+    )
+
+    assert [r["request_id"] for r in out] == ["chat-LIVE:1"]  # no duplicate
+    assert wide_reads == []  # holder already visible → no wider read
+
+
 def test_topology_activity_uses_structured_tap_not_legacy_sections(monkeypatch) -> None:
     now = 1_000.0
     structured_lines = [

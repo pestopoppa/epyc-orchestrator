@@ -2935,7 +2935,7 @@ function renderLockOnlyTapHolderCard(holder, i) {
             <span style="color:var(--dim)"> · holder pid=${escapeHTML(pids)} · ${escapeHTML(holder.shape || '?')} · regions ${escapeHTML(regions)}</span>
         </div>
         ${concurrent ? `<div class="meta" style="color:#c084fc">${escapeHTML(concurrent)}</div>` : ''}
-        <div class="prompt">/proc shows this CPU-region holder, but no matching structured /chat tap request is open.</div>
+        <div class="prompt">/proc shows this CPU-region holder, but no recent structured /chat tap event is in view — likely a long prompt-prefill, a non-streaming dispatch, or a stalled request (the CPU-region lock itself is real).</div>
     </div>`;
 }
 
@@ -3049,8 +3049,8 @@ function openLockOnlyTapDetail(idx) {
     const regions = holder.regions && holder.regions.length ? holder.regions.join(', ') : '?';
     const concurrent = lockHolderConcurrentSummary(holder);
     const body = [
-        `**${lockHolderLabel(holder)}** is holding CPU regions from /proc, but no matching structured /chat tap request is open.`,
-        `This usually means off-tap-route traffic such as seed_batch, probe, eval, or other internal dispatch is running through the seeding/autopilot harness rather than the /chat tap path.`,
+        `**${lockHolderLabel(holder)}** holds CPU regions (from /proc/locks — the instance is genuinely occupied), but no structured /chat tap request for it is currently in view.`,
+        `The dashboard already folds back holders whose tap events aged out of the live window, so one still shown here has produced no recent tap event: a long prompt-prefill that has not streamed a token yet, a non-streaming internal dispatch, or a stalled request. This does NOT by itself mean off-tap traffic — autopilot eval / numeric_trial dispatch IS tapped, and its holder is normally reconciled automatically.`,
         `Holder pid: ${pids}`,
         `Instance shape: ${holder.shape || '?'}`,
         `Regions: ${regions}`,

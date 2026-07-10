@@ -388,6 +388,149 @@ def _structured_tap_active(structured_requests: list[dict[str, Any]]) -> bool:
     return False
 
 
+# Widen the tail read only for lock-holder recovery (below). The live panel
+# parses a fixed ~1 MB tail; under autopilot-eval load inference_tap_events.jsonl
+# rotates at 512 MB every day or two, so 1 MB spans only seconds. A request that
+# holds a CPU-region lock but is briefly between visible tap events (a long
+# prompt-prefill emitting no chunks yet, while concurrent cross-role chunk
+# traffic pushes its `start` event past the tail) is genuinely live yet absent
+# from the parsed set, and the dashboard mis-renders it as an "off-tap holder".
+_OFFWINDOW_RECOVERY_BYTES = 8 * 1024 * 1024
+
+
+def _tap_request_role_keys(req: dict[str, Any]) -> set[str]:
+    """Role identifiers a parsed tap request can match a lock holder on.
+
+    Mirrors the client's `structuredTapMatchesLockHolder`: a holder role matches
+    if it equals the request's lock_role, topology_role, role, or base_role(role).
+    """
+    keys: set[str] = set()
+    for key in (req.get("lock_role"), req.get("topology_role"), req.get("role")):
+        if key:
+            keys.add(str(key))
+    role = req.get("role")
+    if role:
+        keys.add(base_role(str(role)))
+    return keys
+
+
+def _lock_holder_identities(
+    region_locks: dict[str, Any] | None,
+) -> list[tuple[str, int, tuple[str, ...]]]:
+    """(role, instance_idx, holder_pids) for every instance currently holding a
+    CPU-region lock, read from the /proc-derived region_locks payload.
+
+    Region locks are fcntl.flock locks surfaced via /proc/locks (see
+    src.runtime.cpu_region_lock), so the kernel drops them the instant the owning
+    process exits — a holder here is ALWAYS a live dispatch, never an orphan.
+    """
+    by_role = region_locks.get("by_role") if isinstance(region_locks, dict) else None
+    if not isinstance(by_role, dict):
+        return []
+    out: list[tuple[str, int, tuple[str, ...]]] = []
+    for role, bucket in by_role.items():
+        if not isinstance(bucket, dict):
+            continue
+        pids_by_idx: dict[int, set[str]] = {}
+        for region in bucket.get("regions", []) or []:
+            if not isinstance(region, dict) or not region.get("held"):
+                continue
+            pids = [str(p) for p in (region.get("holder_pids") or [])]
+            for idx in region.get("holder_instance_idxs") or []:
+                if str(idx).lstrip("-").isdigit():
+                    pids_by_idx.setdefault(int(idx), set()).update(pids)
+        for idx, pids in pids_by_idx.items():
+            out.append((str(role), idx, tuple(sorted(pids))))
+    return out
+
+
+def _recover_offwindow_lock_holder_requests(
+    parsed_requests: list[dict[str, Any]],
+    region_locks: dict[str, Any] | None,
+    *,
+    max_requests: int,
+    now_epoch: float,
+) -> list[dict[str, Any]]:
+    """Fold genuinely-running lock holders that aged out of the live tail back in.
+
+    Matches the client's holder↔request rule (role AND (instance_idx OR pid)):
+    for any active region-lock holder with no matching parsed request, read a
+    wider reverse window (`_OFFWINDOW_RECOVERY_BYTES`) once and merge its newest
+    still-running request. This is what stops the false "off-tap CPU-region
+    holder" cards for autopilot eval / numeric_trial traffic — which IS tapped,
+    but whose `start` event scrolls out of the 1 MB window during a long prefill
+    (tap events stamp os.getpid(), the same process that holds the flock, so the
+    holder pid and the tap pid are the same worker).
+
+    Bounded on purpose: the wider read runs only when a holder is otherwise
+    invisible (rare — a streaming holder stays in the 1 MB window via its chunk
+    events), so the common path pays nothing beyond a couple of set builds.
+    """
+    holders = _lock_holder_identities(region_locks)
+    if not holders:
+        return parsed_requests
+
+    represented: set[tuple[str, int]] = set()
+    represented_pids: set[str] = set()
+    for req in parsed_requests:
+        pid = req.get("pid")
+        if pid not in (None, ""):
+            represented_pids.add(str(pid))
+        idx_raw = req.get("instance_idx")
+        if not str(idx_raw if idx_raw is not None else "").lstrip("-").isdigit():
+            continue
+        idx = int(idx_raw)
+        for role_key in _tap_request_role_keys(req):
+            represented.add((role_key, idx))
+
+    unmatched = {
+        (role, idx)
+        for role, idx, pids in holders
+        if (role, idx) not in represented and not (set(pids) & represented_pids)
+    }
+    if not unmatched:
+        return parsed_requests
+
+    wide_tail = _read_tap_events_tail(
+        _INFERENCE_TAP_EVENTS_PATH, max_bytes=_OFFWINDOW_RECOVERY_BYTES
+    )
+    if not wide_tail:
+        return parsed_requests
+
+    seen_ids = {str(r.get("request_id") or "") for r in parsed_requests}
+    recovered: list[dict[str, Any]] = []
+    # _parse_structured_tap_requests returns most-recent-updated first, so the
+    # first running match for a holder is its newest request.
+    for req in _parse_structured_tap_requests(
+        wide_tail, max_requests=max_requests, now_epoch=now_epoch
+    ):
+        if not unmatched:
+            break
+        if req.get("status") == "complete":
+            continue
+        rid = str(req.get("request_id") or "")
+        if rid in seen_ids:
+            continue
+        idx_raw = req.get("instance_idx")
+        if not str(idx_raw if idx_raw is not None else "").lstrip("-").isdigit():
+            continue
+        idx = int(idx_raw)
+        matched = next(
+            (
+                (role_key, idx)
+                for role_key in _tap_request_role_keys(req)
+                if (role_key, idx) in unmatched
+            ),
+            None,
+        )
+        if matched is None:
+            continue
+        recovered.append(req)
+        seen_ids.add(rid)
+        unmatched.discard(matched)
+    return recovered + parsed_requests if recovered else parsed_requests
+
+
 def _structured_tap_requests_for_dashboard(
     *,
     max_requests: int,
@@ -403,10 +546,21 @@ def _structured_tap_requests_for_dashboard(
         max_requests=max_requests,
         now_epoch=now,
     )
+    # Resolve the region-lock frame once, then reconcile it against the parsed
+    # window: recover live holders whose tap events aged out of the fixed tail
+    # (else they surface as false "off-tap holder" cards) before enriching with
+    # lock metadata off that same frame.
+    resolved_locks = region_locks if region_locks is not None else _region_locks_cached()
+    structured_requests = _recover_offwindow_lock_holder_requests(
+        structured_requests,
+        resolved_locks,
+        max_requests=max_requests,
+        now_epoch=now,
+    )
     return _enrich_structured_tap_requests(
         structured_requests,
         port_roles=port_roles,
-        region_locks=region_locks,
+        region_locks=resolved_locks,
     )
 
 
@@ -4574,11 +4728,12 @@ async def _structured_tap_payloads():
         if mtime != last_mtime or (now_epoch - last_emit) >= 2.0:
             last_mtime = mtime
             last_emit = now_epoch
-            tail = _read_tap_events_tail(_INFERENCE_TAP_EVENTS_PATH, max_bytes=1024 * 1024)
-            structured_requests = _parse_structured_tap_requests(
-                tail, max_requests=40, now_epoch=now_epoch,
+            # Shared helper: parses the live tail, recovers off-window lock
+            # holders (so this stream stops flagging tapped autopilot-eval
+            # traffic as "off-tap"), and enriches — same frame as the snapshot.
+            enriched_requests = _structured_tap_requests_for_dashboard(
+                max_requests=40, now_epoch=now_epoch,
             )
-            enriched_requests = _enrich_structured_tap_requests(structured_requests)
             yield json.dumps({
                 "tap_active": _structured_tap_active(enriched_requests),
                 "tap_sentinel_active": _TAP_SENTINEL_PATH.exists(),
