@@ -76,7 +76,7 @@ Run `make gates` after any changes. This runs:
 <!-- gitnexus:keep -->
 # GitNexus — Code Intelligence
 
-Indexed as **epyc-orchestrator** (44947 symbols, 79153 relationships, 300 execution flows). Use the `gitnexus` CLI; `gitnexus-*` skills auto-surface in the Skill tool.
+Indexed as **epyc-orchestrator** (45416 symbols, 79641 relationships, 300 execution flows). Use the `gitnexus` CLI; `gitnexus-*` skills auto-surface in the Skill tool.
 
 **Re-index when stale:** `scripts/gitnexus-analyze.sh` — NOT bare `gitnexus analyze` (re-installs skills into a nested subdir).
 

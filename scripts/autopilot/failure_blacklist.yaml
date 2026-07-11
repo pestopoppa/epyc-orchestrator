@@ -340,3 +340,75 @@ blacklist:
   reason_class: safety_failure
   ttl_days: 30
   expires_at: '2026-08-04T23:51:52.304736+00:00'
+- pattern:
+    type: consult_gate_probe
+    tier: 3
+  reason: 'Auto-blacklisted: 2× invalid — exact action signature was previously critic-rejected
+    at trial 1291: critic reje'
+  added: '2026-07-08T17:48:32.308697+00:00'
+  source_trial: 1292
+  reason_class: invalid_repeat
+  ttl_days: 14
+  expires_at: '2026-07-22T17:48:32.308697+00:00'
+- pattern:
+    type: seed_batch
+    n_questions: 40
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1294'
+  added: '2026-07-08T19:07:56.029480+00:00'
+  source_trial: 1294
+  reason_class: safety_failure
+  ttl_days: 30
+  expires_at: '2026-08-07T19:07:56.029480+00:00'
+- pattern:
+    type: numeric_trial
+    surface: memrl_retrieval
+    params:
+      memrl_retrieval.q_weight: 0.7675438676097692
+      memrl_retrieval.min_similarity: 0.2415865485848426
+      memrl_retrieval.min_q_value: 0.40706101193797406
+      memrl_retrieval.confidence_threshold: 0.6027165056990965
+      memrl_retrieval.semantic_k: 10
+      memrl_retrieval.prior_strength: 0.14807952660937118
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1297'
+  added: '2026-07-08T20:02:08.643192+00:00'
+  source_trial: 1297
+  reason_class: safety_failure
+  ttl_days: 30
+  expires_at: '2026-08-07T20:02:08.643192+00:00'
+- pattern:
+    type: structural_experiment
+    flags:
+      graph_router: true
+  reason: 'Auto-blacklisted: 3× critic-rejected — critic rejected: The draft proposes
+    enabling graph_router via structural_experim'
+  added: '2026-07-08T21:16:04.193631+00:00'
+  source_trial: 1301
+  reason_class: critic_rejected
+  ttl_days: 14
+  expires_at: '2026-07-22T21:16:04.193631+00:00'
+- pattern:
+    type: structural_experiment
+    flags:
+      langgraph_coder: false
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1302'
+  added: '2026-07-10T10:50:39.751114+00:00'
+  source_trial: 1302
+  reason_class: safety_failure
+  ttl_days: 30
+  expires_at: '2026-08-09T10:50:39.751114+00:00'
+- pattern:
+    type: numeric_trial
+    surface: memrl_retrieval
+    params:
+      memrl_retrieval.q_weight: 0.8822226350498095
+      memrl_retrieval.min_similarity: 0.533080180723579
+      memrl_retrieval.min_q_value: 0.5201044797430083
+      memrl_retrieval.confidence_threshold: 0.6804060170702582
+      memrl_retrieval.semantic_k: 8
+      memrl_retrieval.prior_strength: 0.46704307761466823
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1303'
+  added: '2026-07-10T11:16:44.953224+00:00'
+  source_trial: 1303
+  reason_class: safety_failure
+  ttl_days: 30
+  expires_at: '2026-08-09T11:16:44.953224+00:00'
