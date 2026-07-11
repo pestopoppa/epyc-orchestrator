@@ -38,8 +38,13 @@ CODE_MUTATION_ALLOWLIST = [
 ]
 
 # New-file code mutations are more permissive than the existing-file allowlist,
-# but they stay directory-scoped and may only create files inside src/.
+# but they stay directory-scoped. ``src/`` is for ordinary code scaffolds;
+# ``schema_evolution/`` is the AutoMem/MH-9 lane for default-inert memory
+# schema/scaffold proposals.
 NEW_FILE_MUTATION_ROOT = PROJECT_ROOT / "src"
+MEMORY_SCHEMA_MUTATION_ROOT = (
+    PROJECT_ROOT / "orchestration" / "repl_memory" / "schema_evolution"
+)
 
 MUTATION_TYPES = [
     "targeted_fix",  # Fix specific failure patterns
@@ -290,6 +295,30 @@ def _resolve_code_mutation_target(target_file: str) -> Path:
     if not resolved.is_relative_to(PROJECT_ROOT):
         raise FileNotFoundError(f"Target file not found: {PROJECT_ROOT / target_file}")
     return resolved
+
+
+def new_file_mutation_roots() -> tuple[Path, ...]:
+    """Directory roots where MH-9 may create brand-new Python modules."""
+    return (NEW_FILE_MUTATION_ROOT, MEMORY_SCHEMA_MUTATION_ROOT)
+
+
+def new_file_mutation_root_labels() -> tuple[str, ...]:
+    """Planner-facing labels for sanctioned new-file mutation roots."""
+    labels: list[str] = []
+    for root in new_file_mutation_roots():
+        try:
+            labels.append(str(root.relative_to(PROJECT_ROOT)))
+        except ValueError:
+            labels.append(str(root))
+    return tuple(labels)
+
+
+def _is_under_any(path: Path, roots: tuple[Path, ...]) -> bool:
+    return any(path.is_relative_to(root) for root in roots)
+
+
+def _is_memory_schema_evolution_target(path: Path) -> bool:
+    return path.is_relative_to(MEMORY_SCHEMA_MUTATION_ROOT)
 
 
 def _suite_mentions(text: str) -> set[str]:
@@ -877,10 +906,11 @@ class PromptForge:
 
         abs_path = _resolve_code_mutation_target(target_file)
         if mutation_type == "new_file":
-            if not abs_path.parent.is_relative_to(NEW_FILE_MUTATION_ROOT):
+            roots = new_file_mutation_roots()
+            if not _is_under_any(abs_path.parent, roots):
                 raise ValueError(
                     f"New-file mutation blocked: {target_file} must stay under "
-                    f"{NEW_FILE_MUTATION_ROOT.relative_to(PROJECT_ROOT)}"
+                    f"one of {', '.join(new_file_mutation_root_labels())}"
                 )
             if not abs_path.parent.exists():
                 raise FileNotFoundError(f"New-file parent directory not found: {abs_path.parent}")
@@ -1175,7 +1205,8 @@ class PromptForge:
             "new_file": (
                 "Create a new Python module at the requested path. Keep it "
                 "directory-scoped, minimal, and self-contained. Do not alter "
-                "existing files."
+                "existing files. Allowed roots: "
+                f"{', '.join(new_file_mutation_root_labels())}."
             ),
         }
         lines.append(
@@ -1222,6 +1253,29 @@ class PromptForge:
             "observable failure mechanisms."
         )
         lines.append("")
+
+        try:
+            target_abs = _resolve_code_mutation_target(target_file)
+        except FileNotFoundError:
+            target_abs = PROJECT_ROOT / target_file
+        if mutation_type == "new_file" and _is_memory_schema_evolution_target(target_abs):
+            lines.append(
+                "## AutoMem memory schema-evolution contract (MH-9/P2):\n"
+                "- Create a default-inert schema/scaffold module for "
+                "`MemoryAction` / `MemoryActionStore`; importing it must not "
+                "write files, start subprocesses, call inference, or touch the "
+                "trace store.\n"
+                "- Express schema-evolution moves as prompt-free helpers, "
+                "contracts, constants, or pure validators over "
+                "APPEND/CREATE/UPSERT and the status/inventory/strategy/plan/log "
+                "channels.\n"
+                "- Do not change SafetyGate, Pareto admission, eval scoring, "
+                "blacklists, thresholds, planner spend-breaker flags, or live "
+                "runtime behavior.\n"
+                "- Keep exports narrow and include explicit blockers when "
+                "calibration, process, or validation evidence is missing."
+            )
+            lines.append("")
 
         lines.append(self._negative_transfer_safety_block())
         lines.append("")

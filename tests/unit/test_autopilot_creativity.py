@@ -409,6 +409,15 @@ def test_controller_prompt_binds_availability_before_global_action_schema() -> N
     assert binding_idx < filtered_idx < schema_idx
 
 
+def test_action_schema_surfaces_new_file_memory_schema_root() -> None:
+    rendered = autopilot._format_available_action_schemas(["code_mutation"])
+
+    assert '"mutation": "targeted_fix"' in rendered
+    assert 'use mutation "new_file" only under' in rendered
+    assert "orchestration/repl_memory/schema_evolution" in rendered
+    assert "memory schema-evolution files must be default-inert" in rendered
+
+
 def test_w8_candidate_generation_pressure_ignores_replayable_candidates() -> None:
     assert autopilot._w8_candidate_generation_pressure(
         "W8 replay pressure: 1/1 accumulating candidate(s) are replayable"

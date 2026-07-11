@@ -261,6 +261,74 @@ def test_new_file_code_mutation_rejects_collision(tmp_path: Path, monkeypatch) -
         )
 
 
+def test_new_file_code_mutation_accepts_memory_schema_evolution_path(
+    tmp_path: Path, monkeypatch
+) -> None:
+    schema_dir = tmp_path / "orchestration" / "repl_memory" / "schema_evolution"
+    schema_dir.mkdir(parents=True)
+    for init_dir in [
+        tmp_path / "orchestration",
+        tmp_path / "orchestration" / "repl_memory",
+        schema_dir,
+    ]:
+        (init_dir / "__init__.py").write_text("")
+    monkeypatch.setattr(prompt_forge_mod, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(prompt_forge_mod, "NEW_FILE_MUTATION_ROOT", tmp_path / "src")
+    monkeypatch.setattr(prompt_forge_mod, "MEMORY_SCHEMA_MUTATION_ROOT", schema_dir)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    for module_name in [
+        name
+        for name in list(sys.modules)
+        if name == "orchestration" or name.startswith("orchestration.")
+    ]:
+        monkeypatch.delitem(sys.modules, module_name, raising=False)
+
+    forge = PromptForge(prompts_dir=tmp_path / "prompts", auto_commit=False)
+    monkeypatch.setattr(
+        forge,
+        "_invoke_claude",
+        lambda _prompt: "```python\nSCHEMA_VERSION = 1\nCHANNELS = ('plan',)\n```",
+    )
+
+    mutation = forge.propose_code_mutation(
+        target_file="orchestration/repl_memory/schema_evolution/plan_schema.py",
+        mutation_type="new_file",
+        description="Add a default-inert memory schema helper",
+    )
+
+    assert mutation.syntax_valid is True
+    assert mutation.original_content == ""
+    assert "SCHEMA_VERSION = 1" in mutation.mutated_content
+    assert mutation.safety_valid is True
+
+
+def test_new_file_memory_schema_prompt_includes_automem_contract(
+    tmp_path: Path, monkeypatch
+) -> None:
+    schema_dir = tmp_path / "orchestration" / "repl_memory" / "schema_evolution"
+    schema_dir.mkdir(parents=True)
+    monkeypatch.setattr(prompt_forge_mod, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(prompt_forge_mod, "NEW_FILE_MUTATION_ROOT", tmp_path / "src")
+    monkeypatch.setattr(prompt_forge_mod, "MEMORY_SCHEMA_MUTATION_ROOT", schema_dir)
+    forge = PromptForge(prompts_dir=tmp_path / "prompts", auto_commit=False)
+
+    prompt = forge._build_code_mutation_prompt(
+        target_file="orchestration/repl_memory/schema_evolution/plan_schema.py",
+        mutation_type="new_file",
+        original_content="",
+        failure_context="Trial #1317 needs memory plan schema evolution.",
+        per_suite_quality=None,
+        description="Add memory schema scaffold",
+    )
+
+    assert "AutoMem memory schema-evolution contract (MH-9/P2)" in prompt
+    assert "default-inert schema/scaffold module" in prompt
+    assert "APPEND/CREATE/UPSERT" in prompt
+    assert "status/inventory/strategy/plan/log" in prompt
+    assert "Do not change SafetyGate, Pareto admission, eval scoring" in prompt
+    assert "planner spend-breaker flags" in prompt
+
+
 def test_resolve_prompt_rejects_symlink_escape(tmp_path: Path) -> None:
     prompts_dir = tmp_path / "prompts"
     prompts_dir.mkdir()

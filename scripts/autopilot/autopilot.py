@@ -77,7 +77,7 @@ from meta_optimizer import MetaOptimizer, SpeciesBudget
 from progress_plots import PLOTS_DIR, generate_all_plots
 import peaf
 from species import Seeder, NumericSwarm, PromptForge, StructuralLab, EvolutionManager
-from species.prompt_forge import CODE_MUTATION_ALLOWLIST
+from species.prompt_forge import CODE_MUTATION_ALLOWLIST, new_file_mutation_root_labels
 from digest import generate_digest, should_generate_today
 from short_term_memory import ShortTermMemory
 from self_criticism import SelfCriticism, generate_self_criticism
@@ -4375,6 +4375,7 @@ def _format_available_action_schemas(action_types: list[str]) -> str:
     ordered = [action_type for action_type in action_types if action_type]
     numeric_surface_options = "|".join(_configured_numeric_surfaces()) or "(none)"
     code_targets = ", ".join(CODE_MUTATION_ALLOWLIST)
+    new_file_roots = ", ".join(new_file_mutation_root_labels())
     deep_eval_tier_options = _format_deep_eval_tier_options()
     schemas = {
         "seed_batch": (
@@ -4400,7 +4401,10 @@ def _format_available_action_schemas(action_types: list[str]) -> str:
         "code_mutation": (
             '- Code: {{"type": "code_mutation", "file": "src/escalation.py", '
             '"mutation": "targeted_fix", "description": "..."}}\n'
-            f"  (Mutate Python code — ONLY files in allowlist: {code_targets})"
+            f"  (Existing-file mutations: ONLY files in allowlist: {code_targets}. "
+            'For scaffold/schema evolution, use mutation "new_file" only under '
+            f"these roots: {new_file_roots}; memory schema-evolution files must "
+            "be default-inert.)"
         ),
         "structural_experiment": (
             '- Structural: {{"type": "structural_experiment", '
