@@ -276,6 +276,66 @@ def test_blacklist_prompt_includes_older_enforced_patterns(monkeypatch) -> None:
     assert "source_trial=505" in text
 
 
+def test_blacklist_prompt_separates_p0_3_retryable_entries(monkeypatch) -> None:
+    monkeypatch.setattr(autopilot, "BLACKLIST_RENDER_CAP", 4)
+
+    text = autopilot._format_blacklist_for_prompt(
+        [
+            {
+                "pattern": {
+                    "type": "structural_experiment",
+                    "flags": {"architect_delegation": True},
+                },
+                "reason": "Auto-blacklisted: 3 consecutive failures ending at trial 655",
+                "source_trial": 655,
+            },
+            {
+                "pattern": {"type": "prompt_mutation", "file": "frontdoor.md"},
+                "reason": "MANUAL FREEZE: remove after restart",
+                "source_trial": -1,
+            },
+        ]
+    )
+
+    assert "P0.3 re-exploration eligible entries" in text
+    assert "architect_delegation_t655_tool_use_axis_bug" in text
+    assert "Recent enforced entries" in text
+    assert '{"file":"frontdoor.md","type":"prompt_mutation"}' in text
+
+
+def test_p0_3_retryable_blacklist_match_excludes_manual_freeze() -> None:
+    blacklist = [
+        {
+            "pattern": {
+                "type": "structural_experiment",
+                "flags": {"specialist_routing": True},
+            },
+            "reason": "Auto-blacklisted: 3 consecutive failures ending at trial 664",
+            "source_trial": 664,
+        },
+        {
+            "pattern": {"type": "gepa_optimize", "file": "frontdoor.md"},
+            "reason": "MANUAL FREEZE companion",
+            "source_trial": -1,
+        },
+    ]
+
+    retry = autopilot._p0_3_retryable_blacklist_match(
+        {"type": "structural_experiment", "flags": {"specialist_routing": True}},
+        blacklist,
+    )
+
+    assert retry is not None
+    assert retry["target_key"] == "specialist_routing_t664_tool_use_axis_bug"
+    assert (
+        autopilot._p0_3_retryable_blacklist_match(
+            {"type": "gepa_optimize", "file": "frontdoor.md", "max_evals": 50},
+            blacklist,
+        )
+        is None
+    )
+
+
 def test_structural_experiment_invalid_flags_returns_skip_outcome() -> None:
     """Invalid flag dependency surfaces the validator reason as a SkipOutcome,
     not a bare None — this is the graph_router-deadlock fix."""
@@ -1942,7 +2002,7 @@ def test_mutation_context_prefers_critic_trace_ir_prompt() -> None:
             state={
                 "critic_trace_ir_prompt": (
                     "## Harness Trace IR (MH-11 observe-only)\n"
-                    "{\"schema_version\":\"harness_trace_ir.v1\"}"
+                    '{"schema_version":"harness_trace_ir.v1"}'
                 ),
                 "contrastive_traces": "## Contrastive Execution Traces\nLEGACY STRUCTURED",
                 "last_traces": "ROLE=frontdoor\nRESPONSE:\nlegacy",
@@ -2130,6 +2190,41 @@ def test_w8_blacklisted_candidate_replacement_is_pressure_gated() -> None:
 
     assert action == requested
     assert rationale == {"falsifier": "original"}
+
+
+def test_w8_preserves_p0_3_retryable_structural_candidate() -> None:
+    requested = {
+        "type": "structural_experiment",
+        "flags": {"architect_delegation": True},
+    }
+
+    action, rationale = autopilot._replace_blacklisted_w8_candidate_action(
+        requested,
+        [
+            {
+                "pattern": {
+                    "type": "structural_experiment",
+                    "flags": {"architect_delegation": True},
+                },
+                "reason": "Auto-blacklisted: 3 consecutive failures ending at trial 655",
+                "source_trial": 655,
+            }
+        ],
+        {"falsifier": "original"},
+        trial_counter=0,
+        w8_replay_pressure_text=(
+            "W8 replay pressure: 0/1 accumulating candidate(s) are replayable "
+            "(blocked=unreplayable_action=seed_batch:1)."
+        ),
+    )
+
+    assert action == requested
+    assert rationale["falsifier"] == "original"
+    assert rationale["p0_3_blacklist_reexploration"] is True
+    assert (
+        rationale["p0_3_blacklist_reexploration_target"]
+        == "architect_delegation_t655_tool_use_axis_bug"
+    )
 
 
 def test_autonomous_blacklisted_action_reselects_seed_fallback() -> None:

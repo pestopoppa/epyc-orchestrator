@@ -66,6 +66,34 @@ DEFAULT_TARGETS: tuple[PurgeTarget, ...] = (
 )
 
 
+def retryable_reexploration_target(
+    entry: dict[str, Any],
+    *,
+    targets: tuple[PurgeTarget, ...] = DEFAULT_TARGETS,
+) -> dict[str, Any] | None:
+    """Return P0.3 retry metadata for automated instrument-era targets.
+
+    Manual freeze entries still require the explicit purge approval token. This
+    helper only marks source-trial-backed automated entries as eligible for live
+    re-exploration while the destructive YAML rewrite remains operator-gated.
+    """
+    if not isinstance(entry, dict):
+        return None
+    for target in targets:
+        if target.source_trial is None or target.source_trial < 0:
+            continue
+        if not _entry_matches_target(entry, target):
+            continue
+        return {
+            "target_key": target.key,
+            "pattern": target.pattern,
+            "source_trial": target.source_trial,
+            "rationale": target.rationale,
+            "retry_scope": "p0_3_auto_instrument_era",
+        }
+    return None
+
+
 def _utc_stamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
@@ -99,6 +127,7 @@ def build_purge_report(
     applied: bool = False,
 ) -> dict[str, Any]:
     removable: list[dict[str, Any]] = []
+    retryable: list[dict[str, Any]] = []
     matched_keys: set[str] = set()
     removable_indices: set[int] = set()
     for index, entry in enumerate(entries):
@@ -119,6 +148,15 @@ def build_purge_report(
                     }
                 )
                 break
+        retry_target = retryable_reexploration_target(entry, targets=targets)
+        if retry_target is not None:
+            retryable.append(
+                {
+                    "index": index,
+                    "reason": entry.get("reason", ""),
+                    **retry_target,
+                }
+            )
 
     unmatched = [
         {
@@ -140,6 +178,8 @@ def build_purge_report(
         "removable_count": len(removable_indices),
         "preserved_count": len(entries) - len(removable_indices),
         "removable_entries": removable,
+        "retryable_count": len(retryable),
+        "retryable_entries": retryable,
         "unmatched_targets": unmatched,
     }
 
@@ -206,6 +246,32 @@ def render_markdown(report: dict[str, Any]) -> str:
         lines.append("")
     else:
         lines.append("No matching purge-scoped blacklist entries were found.")
+        lines.append("")
+
+    if report.get("retryable_entries"):
+        lines.extend(
+            [
+                "## Retryable Re-Exploration Entries",
+                "",
+                (
+                    "These automated instrument-era entries may be retried without "
+                    "rewriting the blacklist file. Manual freeze entries still require "
+                    "the approval token above."
+                ),
+                "",
+                "| index | target | source_trial | pattern |",
+                "|---:|---|---:|---|",
+            ]
+        )
+        for item in report["retryable_entries"]:
+            lines.append(
+                "| {index} | {target} | {trial} | `{pattern}` |".format(
+                    index=item["index"],
+                    target=item["target_key"],
+                    trial=item["source_trial"],
+                    pattern=json.dumps(item["pattern"], sort_keys=True),
+                )
+            )
         lines.append("")
 
     if report["unmatched_targets"]:

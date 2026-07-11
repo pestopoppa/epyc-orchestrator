@@ -105,6 +105,7 @@ from state_store import (
     load_state as _load_state_impl,
     save_state as _save_state_impl,
 )
+from blacklist_purge_plan import retryable_reexploration_target
 from actions import dispatch_action, SkipOutcome, _structural_noop_reason
 from paired_stats import QuestionOutcome, mcnemar_from_vectors
 from src.autopilot_core.action_identity import (
@@ -1585,6 +1586,16 @@ def _replace_blacklisted_w8_candidate_action(
     blocked = check_blacklist(action, blacklist)
     if not blocked:
         return action, rationale
+    retry_meta = _p0_3_retryable_blacklist_match(action, blacklist)
+    if retry_meta is not None:
+        next_rationale = _record_p0_3_reexploration_rationale(rationale, retry_meta)
+        log.warning(
+            "W8 candidate action %s matches P0.3 retryable blacklist target %s; "
+            "dispatching for audit-scoped re-exploration.",
+            json.dumps(action, default=str),
+            retry_meta.get("target_key", "unknown"),
+        )
+        return action, next_rationale
 
     replacement, fallback_reason = _first_unblacklisted_numeric_trial_action(
         blacklist,
@@ -1628,6 +1639,10 @@ def _replace_blacklisted_autonomous_action(
     """Keep no-controller mode from burning trials on known-blocked/meta actions."""
     blocked = check_blacklist(action, blacklist)
     is_meta_noop = action.get("type") in META_NOOP_ACTIONS
+    if blocked and not is_meta_noop:
+        retry_meta = _p0_3_retryable_blacklist_match(action, blacklist)
+        if retry_meta is not None:
+            return action, _record_p0_3_reexploration_rationale(rationale, retry_meta)
     if not blocked and not is_meta_noop:
         return action, rationale
     reason = blocked or "autonomous meta action does not collect metrics"
@@ -2655,13 +2670,40 @@ def _format_blacklist_for_prompt(blacklist: list[dict[str, Any]]) -> str:
     if not blacklist:
         return "  (none)"
 
+    retryable = [
+        (entry, retry_meta)
+        for entry in blacklist
+        if (retry_meta := _p0_3_retryable_blacklist_entry(entry)) is not None
+    ]
+    enforced = [entry for entry in blacklist if _p0_3_retryable_blacklist_entry(entry) is None]
     cap = max(0, BLACKLIST_RENDER_CAP)
-    shown = blacklist[-cap:] if cap else []
-    older = blacklist[:-cap] if cap else list(blacklist)
+    shown = enforced[-cap:] if cap else []
+    older = enforced[:-cap] if cap else list(enforced)
     lines: list[str] = []
 
+    if retryable:
+        lines.append(
+            "  P0.3 re-exploration eligible entries "
+            f"({len(retryable)} automated instrument-era patterns; manual purge "
+            "still approval-token gated):"
+        )
+        for entry, retry_meta in retryable:
+            reason = str(entry.get("reason", ""))
+            if len(reason) > 80:
+                reason = reason[:79] + "..."
+            lines.append(
+                "  - {pattern} (target={target}; source_trial={trial}) -- {reason}".format(
+                    pattern=_format_blacklist_pattern(entry.get("pattern", {})),
+                    target=retry_meta.get("target_key", "unknown"),
+                    trial=retry_meta.get("source_trial", "unknown"),
+                    reason=reason,
+                )
+            )
+
     if shown:
-        lines.append(f"  Recent entries ({len(shown)} newest; all {len(blacklist)} enforced):")
+        lines.append(
+            f"  Recent enforced entries ({len(shown)} newest; all {len(enforced)} enforced):"
+        )
         for entry in shown:
             reason = str(entry.get("reason", ""))
             if len(reason) > 80:
@@ -2676,7 +2718,57 @@ def _format_blacklist_for_prompt(blacklist: list[dict[str, Any]]) -> str:
                 suffix = f" (source_trial={entry['source_trial']})"
             lines.append(f"    - {_format_blacklist_pattern(entry.get('pattern', {}))}{suffix}")
 
+    if not shown and not older:
+        lines.append("  Enforced entries: (none)")
+
     return "\n".join(lines)
+
+
+def _p0_3_retryable_blacklist_entry(entry: dict[str, Any]) -> dict[str, Any] | None:
+    try:
+        return retryable_reexploration_target(entry)
+    except Exception:
+        log.debug("P0.3 retryable blacklist classification failed", exc_info=True)
+        return None
+
+
+def _p0_3_retryable_blacklist_match(
+    action: dict[str, Any],
+    blacklist: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    if not isinstance(action, dict):
+        return None
+    for entry in reversed(blacklist):
+        retry_meta = _p0_3_retryable_blacklist_entry(entry)
+        if retry_meta is None:
+            continue
+        pattern = entry.get("pattern", {})
+        if not isinstance(pattern, dict):
+            continue
+        if pattern and all(action.get(k) == v for k, v in pattern.items()):
+            return {
+                "reason": entry.get("reason", "blacklisted"),
+                **retry_meta,
+            }
+    return None
+
+
+def _record_p0_3_reexploration_rationale(
+    rationale: dict[str, Any] | None,
+    retry_meta: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        **(rationale or {}),
+        "p0_3_blacklist_reexploration": True,
+        "p0_3_blacklist_reexploration_target": retry_meta.get("target_key"),
+        "p0_3_blacklist_reexploration_source_trial": retry_meta.get("source_trial"),
+        "p0_3_blacklist_reexploration_reason": retry_meta.get("reason", ""),
+        "p0_3_blacklist_reexploration_scope": retry_meta.get("retry_scope"),
+        "falsifier": (
+            (rationale or {}).get("falsifier")
+            or "P0.3 instrument-era blacklist re-exploration fails the current safety gate"
+        ),
+    }
 
 
 def _is_observational_feedback_action(action: Any) -> bool:
@@ -6533,6 +6625,12 @@ def _run_loop_inner(
             _gate_is_bl = bool(
                 isinstance(_gate_action, dict) and check_blacklist(_gate_action, blacklist)
             )
+            if (
+                _gate_is_bl
+                and isinstance(_gate_action, dict)
+                and _p0_3_retryable_blacklist_match(_gate_action, blacklist) is not None
+            ):
+                _gate_is_bl = False
             _gate_is_rep = bool(
                 isinstance(_gate_action, dict)
                 and _action_signature(_gate_action)
@@ -6855,12 +6953,22 @@ def _run_loop_inner(
             )
             blocked_reason = check_blacklist(action, blacklist)
             if blocked_reason:
-                log.warning(
-                    "Trial %d: action blacklisted (%s), recording invalid skip",
-                    trial_counter,
-                    blocked_reason,
-                )
-                pre_dispatch_skip = _blacklisted_action_skip(action, blocked_reason)
+                retry_meta = _p0_3_retryable_blacklist_match(action, blacklist)
+                if retry_meta is not None:
+                    rationale = _record_p0_3_reexploration_rationale(rationale, retry_meta)
+                    log.warning(
+                        "Trial %d: action matches P0.3 retryable blacklist target %s; "
+                        "dispatching audit-scoped re-exploration instead of invalid skip",
+                        trial_counter,
+                        retry_meta.get("target_key", "unknown"),
+                    )
+                else:
+                    log.warning(
+                        "Trial %d: action blacklisted (%s), recording invalid skip",
+                        trial_counter,
+                        blocked_reason,
+                    )
+                    pre_dispatch_skip = _blacklisted_action_skip(action, blocked_reason)
 
         log.info("Trial %d: %s", trial_counter, json.dumps(action))
         current_action = action

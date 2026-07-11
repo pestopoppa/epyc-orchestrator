@@ -77,6 +77,13 @@ def test_build_purge_report_targets_only_p0_3_entries() -> None:
         664,
         864,
     }
+    assert report["retryable_count"] == 3
+    assert {item["target_key"] for item in report["retryable_entries"]} == {
+        "architect_delegation_t655_tool_use_axis_bug",
+        "specialist_routing_t664_tool_use_axis_bug",
+        "specialist_routing_t864_tool_use_axis_bug",
+    }
+    assert all(item["source_trial"] != -1 for item in report["retryable_entries"])
     assert "lookup_cache" not in json.dumps(report["removable_entries"])
     assert "seed_batch" not in json.dumps(report["removable_entries"])
 
