@@ -21,7 +21,7 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Iterable
 
 from controller_io import validate_single_variable
 from safety_gate import EvalResult, SafetyGate
@@ -2010,6 +2010,7 @@ def dispatch_action(
     strategy_store: "StrategyStore | None" = None,
     evo: "EvolutionManager | None" = None,
     watcher: Any | None = None,
+    allowed_action_types: Iterable[str] | None = None,
 ) -> tuple[EvalResult | SkipOutcome | None, str]:
     """Execute an action and return (eval_result, species_name).
 
@@ -2024,6 +2025,16 @@ def dispatch_action(
     preserves pre-Phase-5 behavior exactly.
     """
     action_type = action.get("type", "")
+    if allowed_action_types is not None:
+        allowed = {str(item) for item in allowed_action_types if str(item)}
+        if action_type not in allowed:
+            reason = (
+                f"action type {action_type!r} is not in the active live-loop "
+                "allowlist; keep it in the shadow lane until action availability "
+                "promotes it for dispatch"
+            )
+            log.warning("Live-loop allowlist: %s", reason)
+            return SkipOutcome("skipped", reason, action_type), action_type
 
     # AP-9: Single-variable scope enforcement. Forced W8 candidate replays are
     # exact re-measurements of a journaled NumericSwarm candidate, not a new

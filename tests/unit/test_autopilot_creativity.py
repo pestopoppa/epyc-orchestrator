@@ -452,6 +452,38 @@ def test_action_availability_blocks_deferrals_during_w8_replay_pressure(
     assert "structural_prune" not in selectable
 
 
+def test_dispatch_allowlist_applies_only_to_planner_selected_actions() -> None:
+    assert autopilot._dispatch_allowed_action_types(
+        ["seed_batch", "numeric_trial"],
+        seq_due_bypassed_planner=False,
+        seq_fresh_eval_context=None,
+        seq_baseline_draw_reference=None,
+        seq_candidate_replay_context=None,
+    ) == ["seed_batch", "numeric_trial"]
+
+    assert (
+        autopilot._dispatch_allowed_action_types(
+            ["seed_batch", "numeric_trial"],
+            seq_due_bypassed_planner=True,
+            seq_fresh_eval_context=None,
+            seq_baseline_draw_reference=None,
+            seq_candidate_replay_context=None,
+        )
+        is None
+    )
+
+    assert (
+        autopilot._dispatch_allowed_action_types(
+            ["seed_batch", "numeric_trial"],
+            seq_due_bypassed_planner=False,
+            seq_fresh_eval_context={"candidate": "candidate-a"},
+            seq_baseline_draw_reference=None,
+            seq_candidate_replay_context=None,
+        )
+        is None
+    )
+
+
 def test_w8_candidate_generation_replaces_deferral_with_numeric(monkeypatch) -> None:
     monkeypatch.setattr(autopilot, "_configured_numeric_surfaces", lambda: ("monitor",))
 

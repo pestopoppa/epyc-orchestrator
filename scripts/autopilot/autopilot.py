@@ -4642,6 +4642,33 @@ def _build_action_availability(
     return "\n".join(lines), viable_tail_actions, selectable_actions
 
 
+def _dispatch_allowed_action_types(
+    selectable_action_types: list[str] | None,
+    *,
+    seq_due_bypassed_planner: bool,
+    seq_fresh_eval_context: dict[str, Any] | None,
+    seq_baseline_draw_reference: dict[str, Any] | None,
+    seq_candidate_replay_context: dict[str, Any] | None,
+) -> list[str] | None:
+    """Return the final dispatch allowlist for ordinary planner-selected actions.
+
+    The planner prompt uses ``selectable_action_types`` as the active/shadow
+    boundary. Final dispatch must enforce the same boundary, but existing
+    sequential due actions and forced replays/fresh evals are internal policy
+    actions governed by their own gates rather than planner availability text.
+    """
+    if (
+        seq_due_bypassed_planner
+        or seq_fresh_eval_context is not None
+        or seq_baseline_draw_reference is not None
+        or seq_candidate_replay_context is not None
+    ):
+        return None
+    if selectable_action_types is None:
+        return None
+    return list(selectable_action_types)
+
+
 def _w8_candidate_generation_pressure(text: str) -> bool:
     """Return True when W8 has no replayable accumulating candidate."""
     normalized = str(text or "").lower()
@@ -5987,6 +6014,7 @@ def _run_loop_inner(
         seq_baseline_draw_reference: dict[str, Any] | None = None
         seq_candidate_replay_context: dict[str, Any] | None = None
         seq_due_bypassed_planner = False
+        selectable_action_types: list[str] | None = None
         planner_evidence_text = ""
         outcome_progress_pressure_text = ""
         if action is None:
@@ -6839,6 +6867,13 @@ def _run_loop_inner(
                 strategy_store=strategy_store,
                 evo=evo,
                 watcher=watcher,
+                allowed_action_types=_dispatch_allowed_action_types(
+                    selectable_action_types,
+                    seq_due_bypassed_planner=seq_due_bypassed_planner,
+                    seq_fresh_eval_context=seq_fresh_eval_context,
+                    seq_baseline_draw_reference=seq_baseline_draw_reference,
+                    seq_candidate_replay_context=seq_candidate_replay_context,
+                ),
             )
             phase.set(
                 "dispatch_complete",

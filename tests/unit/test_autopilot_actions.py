@@ -192,6 +192,33 @@ def test_dispatcher_unknown_action_type() -> None:
     assert species == "unknown"
 
 
+def test_dispatcher_rejects_action_outside_live_allowlist(monkeypatch) -> None:
+    def fail_handler(action, ctx):  # noqa: ANN001, ARG001
+        raise AssertionError("unpromoted action handler should not run")
+
+    monkeypatch.setitem(actions._ACTION_HANDLERS, "code_mutation", fail_handler)
+
+    result, species = actions.dispatch_action(
+        {"type": "code_mutation", "target": "shadow"},
+        seeder=None,
+        swarm=None,
+        forge=None,
+        lab=None,
+        tower=None,
+        gate=None,
+        archive=None,
+        journal=None,
+        state={},
+        allowed_action_types=["seed_batch", "numeric_trial"],
+    )
+
+    assert isinstance(result, actions.SkipOutcome)
+    assert result.status == "skipped"
+    assert "active live-loop allowlist" in result.reason
+    assert "shadow lane" in result.reason
+    assert species == "code_mutation"
+
+
 def test_blacklisted_action_becomes_invalid_skip() -> None:
     result = autopilot._blacklisted_action_skip(
         {"type": "seed_batch", "n_questions": 10},
