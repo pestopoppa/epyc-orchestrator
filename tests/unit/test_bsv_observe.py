@@ -436,3 +436,35 @@ def test_conflict_report_ignores_disjoint_mutations():
     report = build_conflict_report(new, [prior])
     assert report["severity"] == "none"
     assert report["conflict_count"] == 0
+
+
+def test_conflict_report_skips_same_trial_archive_member_duplicate():
+    prior = {
+        "trial_id": 10,
+        "archive_member_id": "trial:10",
+        "action_type": "prompt_mutation",
+        "subsystem": "prompt",
+        "files_touched": ["prompts/frontdoor.md"],
+        "prompt_sections_touched": ["rubric"],
+        "feature_flags": {},
+        "behavior_signature_delta": {
+            "severity": "watch",
+            "changed_fields": ["route_path_hash"],
+            "improved_sentinels": ["q1"],
+            "regressed_sentinels": [],
+        },
+    }
+    new = {
+        **prior,
+        "behavior_signature_delta": {
+            "severity": "watch",
+            "changed_fields": ["token_bucket"],
+            "improved_sentinels": ["q2"],
+            "regressed_sentinels": [],
+        },
+    }
+
+    report = build_conflict_report(new, [prior])
+
+    assert report["severity"] == "none"
+    assert report["conflict_count"] == 0

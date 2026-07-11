@@ -418,6 +418,39 @@ def test_action_schema_surfaces_new_file_memory_schema_root() -> None:
     assert "memory schema-evolution files must be default-inert" in rendered
 
 
+def test_bsv3_conflict_policy_default_off_allows_state_promotion(monkeypatch) -> None:
+    monkeypatch.delenv("AUTOPILOT_BSV3_CONFLICT_POLICY", raising=False)
+
+    decision = autopilot._bsv3_conflict_policy_decision(
+        {"severity": "blocking", "conflict_count": 2}
+    )
+
+    assert decision["enabled"] is False
+    assert decision["policy"] == "off"
+    assert decision["ledger_update_allowed"] is True
+    assert decision["scope"] == "bsv_ledger_incumbent_state_only"
+
+
+def test_bsv3_conflict_policy_blocks_only_configured_severities() -> None:
+    block_watch = autopilot._bsv3_conflict_policy_decision(
+        {"severity": "watch", "conflict_count": 1},
+        policy="block",
+    )
+    block_blocking = autopilot._bsv3_conflict_policy_decision(
+        {"severity": "blocking", "conflict_count": 1},
+        policy="block",
+    )
+    review_watch = autopilot._bsv3_conflict_policy_decision(
+        {"severity": "watch", "conflict_count": 1},
+        policy="review",
+    )
+
+    assert block_watch["ledger_update_allowed"] is True
+    assert block_blocking["ledger_update_allowed"] is False
+    assert block_blocking["incumbent_update_allowed"] is False
+    assert review_watch["ledger_update_allowed"] is False
+
+
 def test_w8_candidate_generation_pressure_ignores_replayable_candidates() -> None:
     assert autopilot._w8_candidate_generation_pressure(
         "W8 replay pressure: 1/1 accumulating candidate(s) are replayable"

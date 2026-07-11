@@ -589,6 +589,14 @@ def build_conflict_report(
     for prior in existing_ledger or []:
         if not isinstance(prior, dict):
             continue
+        same_trial = prior.get("trial_id") is not None and (
+            prior.get("trial_id") == new_entry.get("trial_id")
+        )
+        same_archive_member = bool(prior.get("archive_member_id")) and (
+            prior.get("archive_member_id") == new_entry.get("archive_member_id")
+        )
+        if same_trial and same_archive_member:
+            continue
         severity, reasons = _conflict_severity(new_entry, prior)
         if severity == "none":
             continue

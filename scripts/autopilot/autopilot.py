@@ -200,6 +200,7 @@ PLANNER_JOURNAL_SUMMARY_LIMIT = int(os.environ.get("AUTOPILOT_PLANNER_JOURNAL_SU
 PLANNER_STRUCTURED_INSIGHTS_LIMIT = int(
     os.environ.get("AUTOPILOT_PLANNER_STRUCTURED_INSIGHTS_LIMIT", "18")
 )
+BSV3_CONFLICT_POLICY_ENV = "AUTOPILOT_BSV3_CONFLICT_POLICY"
 ORCHESTRATOR_URL = "http://localhost:8000"
 SEQ_BASELINE_PROFILE_LIMIT = int(os.environ.get("AUTOPILOT_SEQ_BASELINE_PROFILE_LIMIT", "120"))
 SEQ_PRIOR_OBS_LIMIT = int(os.environ.get("AUTOPILOT_SEQ_PRIOR_OBS_LIMIT", "120"))
@@ -5266,6 +5267,55 @@ def _contrastive_trace_outcome(
     return ""
 
 
+def _bsv3_conflict_policy() -> str:
+    """Default-off policy for BSV-3 ledger/incumbent state promotion."""
+    raw = os.environ.get(BSV3_CONFLICT_POLICY_ENV, "").strip().lower()
+    if raw in {"", "0", "false", "no", "off", "none"}:
+        return "off"
+    if raw in {"observe", "block", "review"}:
+        return raw
+    log.warning("Invalid %s=%r; using off", BSV3_CONFLICT_POLICY_ENV, raw)
+    return "off"
+
+
+def _bsv3_conflict_policy_decision(
+    conflict_report: Mapping[str, Any] | None,
+    *,
+    policy: str | None = None,
+) -> dict[str, Any]:
+    """Decide whether BSV-3 may promote its ledger/incumbent state.
+
+    This deliberately governs only BSV diagnostic state. It does not alter the
+    SafetyGate verdict, ParetoArchive admission, blacklists, baseline updates,
+    or action dispatch.
+    """
+    normalized_policy = (policy or _bsv3_conflict_policy()).strip().lower()
+    if normalized_policy not in {"off", "observe", "block", "review"}:
+        normalized_policy = "off"
+    severity = str((conflict_report or {}).get("severity") or "none")
+    conflict_count = int((conflict_report or {}).get("conflict_count") or 0)
+    withhold = False
+    if normalized_policy == "block":
+        withhold = severity == "blocking"
+    elif normalized_policy == "review":
+        withhold = severity in {"watch", "blocking"}
+    return {
+        "version": "bsv-3-conflict-policy-v1",
+        "enabled": normalized_policy != "off",
+        "policy": normalized_policy,
+        "severity": severity,
+        "conflict_count": conflict_count,
+        "ledger_update_allowed": not withhold,
+        "incumbent_update_allowed": not withhold,
+        "scope": "bsv_ledger_incumbent_state_only",
+        "reason": (
+            f"policy={normalized_policy} withheld BSV state promotion for severity={severity}"
+            if withhold
+            else f"policy={normalized_policy} allows BSV state promotion for severity={severity}"
+        ),
+    }
+
+
 def _update_contrastive_trace_state(
     state: dict[str, Any],
     tower: Any,
@@ -7561,10 +7611,11 @@ def _run_loop_inner(
                 if old_val != new_val:
                     config_diff[key] = {"old": old_val, "new": new_val}
 
-        # J11/BSV-2: observe-only behavior-signature differential vs the last frontier-accepted
-        # incumbent. Flag-gated (AUTOPILOT_BSV_OBSERVE=1), default-OFF. Same observe-only zone as
-        # HLE (after SafetyGate + ParetoArchive) so it CANNOT affect trial acceptance, Pareto
-        # promotion, routing, or baseline mutation — it only journals diagnostics.
+        # J11/BSV-2/BSV-3: observe-only behavior-signature differential vs the last
+        # frontier-accepted incumbent. Flag-gated (AUTOPILOT_BSV_OBSERVE=1), default-OFF.
+        # Same observe-only zone as HLE (after SafetyGate + ParetoArchive) so it CANNOT affect
+        # trial acceptance, Pareto promotion, routing, blacklists, or baseline mutation. Optional
+        # BSV-3 conflict policy only governs BSV ledger/incumbent diagnostic-state promotion.
         bsv_payload: dict = {}
         if os.environ.get("AUTOPILOT_BSV_OBSERVE") == "1":
             try:
@@ -7603,6 +7654,9 @@ def _run_loop_inner(
                     conflict_report = build_conflict_report(dependency_entry, existing_ledger)
                     bsv_payload["mutation_dependency"] = dependency_entry
                     bsv_payload["conflict_report"] = conflict_report
+                    conflict_policy = _bsv3_conflict_policy_decision(conflict_report)
+                    if conflict_policy["enabled"]:
+                        bsv_payload["conflict_policy"] = conflict_policy
                     if conflict_report.get("severity") in {"watch", "blocking"}:
                         log.warning(
                             "BSV-3 conflict review signal for trial %d: severity=%s conflicts=%s",
@@ -7610,28 +7664,38 @@ def _run_loop_inner(
                             conflict_report.get("severity"),
                             conflict_report.get("conflict_count"),
                         )
-                    state["bsv_mutation_dependency_ledger"] = [
-                        *existing_ledger[-499:],
-                        dependency_entry,
-                    ]
-                    state["bsv_incumbent_signature"] = signature
-                    state["bsv_incumbent_archive_member_id"] = archive_member_id
-                    if archive_member_id and signature:
-                        archive_signatures = state.setdefault("bsv_archive_signatures", {})
-                        archive_signatures[archive_member_id] = {
-                            "trial_id": trial_counter,
-                            "signature_hash": bsv_payload.get("signature_hash"),
-                            "signature_confidence": bsv_payload.get("signature_confidence"),
-                            "severity_vs_previous_incumbent": bsv_payload.get("severity"),
-                            "reasons": list(bsv_payload.get("reasons") or [])[:8],
-                            "conflict_severity": (bsv_payload.get("conflict_report") or {}).get(
-                                "severity"
-                            ),
-                            "conflict_count": (bsv_payload.get("conflict_report") or {}).get(
-                                "conflict_count"
-                            ),
-                            "signature": signature,
-                        }
+                    if conflict_policy["ledger_update_allowed"]:
+                        state["bsv_mutation_dependency_ledger"] = [
+                            *existing_ledger[-499:],
+                            dependency_entry,
+                        ]
+                        state["bsv_incumbent_signature"] = signature
+                        state["bsv_incumbent_archive_member_id"] = archive_member_id
+                        if archive_member_id and signature:
+                            archive_signatures = state.setdefault("bsv_archive_signatures", {})
+                            archive_signatures[archive_member_id] = {
+                                "trial_id": trial_counter,
+                                "signature_hash": bsv_payload.get("signature_hash"),
+                                "signature_confidence": bsv_payload.get("signature_confidence"),
+                                "severity_vs_previous_incumbent": bsv_payload.get("severity"),
+                                "reasons": list(bsv_payload.get("reasons") or [])[:8],
+                                "conflict_severity": (
+                                    bsv_payload.get("conflict_report") or {}
+                                ).get("severity"),
+                                "conflict_count": (
+                                    bsv_payload.get("conflict_report") or {}
+                                ).get("conflict_count"),
+                                "signature": signature,
+                            }
+                    else:
+                        log.warning(
+                            "BSV-3 conflict policy withheld ledger/incumbent update "
+                            "for trial %d: policy=%s severity=%s conflicts=%s",
+                            trial_counter,
+                            conflict_policy["policy"],
+                            conflict_policy["severity"],
+                            conflict_policy["conflict_count"],
+                        )
             except Exception as _bsv_err:  # observe-only must never disrupt the trial loop
                 log.debug("BSV observe skipped (trial %s): %s", trial_counter, _bsv_err)
 
