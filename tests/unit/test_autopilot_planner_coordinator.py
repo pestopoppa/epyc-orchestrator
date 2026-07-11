@@ -374,11 +374,16 @@ def test_selectable_deep_eval_tier3_local_draft_and_critic_is_accepted() -> None
     assert [call["role"] for call in local_worker.calls] == ["critique"]
     critique_prompt = local_worker.calls[0]["prompt"]
     assert "parsed_action_type: `deep_eval`" in critique_prompt
-    assert "currently_selectable_action_types: `deep_eval, numeric_trial, structural_experiment`" in critique_prompt
+    assert (
+        "currently_selectable_action_types: `deep_eval, numeric_trial, structural_experiment`"
+        in critique_prompt
+    )
     assert "`seed_batch` and `deep_eval` are valid known action types" in critique_prompt
 
 
-def test_trial_planning_banner_only_writes_for_live_trial_id(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_trial_planning_banner_only_writes_for_live_trial_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     writes: list[str] = []
 
     class Tap:
@@ -633,6 +638,64 @@ def _fake_economics_ledger(*, triggered: bool) -> SimpleNamespace:
         ),
         rules=SimpleNamespace(planner_monthly_spend_threshold_usd=250.0),
     )
+
+
+def test_spend_breaker_defaults_off_when_env_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from scripts.economics import ledger as ledger_mod
+
+    monkeypatch.delenv("AUTOPILOT_PLANNER_SPEND_BREAKER", raising=False)
+
+    def _unexpected_ledger(*, days: int = 7) -> SimpleNamespace:
+        raise AssertionError("spend breaker should stay off unless explicitly enabled")
+
+    monkeypatch.setattr(ledger_mod, "summarize_economics", _unexpected_ledger)
+    claude = FakeProvider(
+        "claude",
+        [
+            PlannerProviderResult(
+                provider="claude",
+                role="draft",
+                ok=True,
+                text=_action_text({"type": "numeric_trial", "surface": "repl_executor"}),
+            )
+        ],
+    )
+    codex = FakeProvider(
+        "codex",
+        [
+            PlannerProviderResult(
+                provider="codex",
+                role="critique",
+                ok=True,
+                text=_critique_text({"decision": "approve", "confidence": 0.8}),
+            )
+        ],
+    )
+    state: dict[str, Any] = {"_spend_breaker": {"active": True}}
+
+    decision = planner_coordinator.plan_with_providers(
+        "prompt",
+        session_id=None,
+        planner_state=state,
+        settings=PlannerSettings(
+            primary="claude",
+            critic="codex",
+            mode="draft_critique",
+            critique_policy="always",
+        ),
+        provider_factory=_factory(
+            {
+                "claude": claude,
+                "codex": codex,
+            }
+        ),
+    )
+
+    assert decision.draft_provider == "claude"
+    assert decision.critic_provider == "codex"
+    assert "_spend_breaker" not in state
 
 
 def test_spend_breaker_forces_cloud_primary_to_local_providers(

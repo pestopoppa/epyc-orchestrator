@@ -169,7 +169,7 @@ def _apply_planner_spend_breaker(
     settings: PlannerSettings,
     planner_state: dict[str, Any],
 ) -> tuple[PlannerSettings, bool]:
-    if not _env_bool("AUTOPILOT_PLANNER_SPEND_BREAKER", True):
+    if not _env_bool("AUTOPILOT_PLANNER_SPEND_BREAKER", False):
         planner_state.pop("_spend_breaker", None)
         return settings, False
 
@@ -253,10 +253,7 @@ def _write_trial_planning_banner(trial_id: int | None) -> None:
         return
     label = f"TRIAL {trial_id}"
     ts = datetime.now().isoformat(timespec="seconds")
-    banner = (
-        f"\n{'>' * 24} {label} {'<' * 24}\n"
-        f"[{ts}] planning cycle start\n"
-    )
+    banner = f"\n{'>' * 24} {label} {'<' * 24}\n[{ts}] planning cycle start\n"
     tap = _open_planner_tap()
     if tap is None:
         return
@@ -1098,7 +1095,9 @@ def _structural_noop_revision_error(
     if live_state is None:
         return None
     if live_state is value:
-        return f"structural_experiment would not change live flag state: {flag}={str(value).lower()}"
+        return (
+            f"structural_experiment would not change live flag state: {flag}={str(value).lower()}"
+        )
     return None
 
 
@@ -1157,10 +1156,13 @@ def _draft_unusable_reason(
         return result.error or "provider error / empty response"
     if action is None:
         return "no parseable json:autopilot_actions block"
-    return _action_validation_error(
-        action,
-        allowed_action_types=allowed_action_types,
-    ) or ""
+    return (
+        _action_validation_error(
+            action,
+            allowed_action_types=allowed_action_types,
+        )
+        or ""
+    )
 
 
 def _action_validation_error(
