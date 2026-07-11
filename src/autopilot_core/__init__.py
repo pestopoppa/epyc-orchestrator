@@ -18,6 +18,13 @@ from src.autopilot_core.learning_exclusions import (
     classify_learning_exclusion,
 )
 from src.autopilot_core.pareto_math import dominates, hypervolume, median_objectives
+from src.autopilot_core.rlvr_tiers import (
+    RLVR_REWARD_POLICY,
+    RLVRReward,
+    RLVRTierSpec,
+    rlvr_reward_from_result,
+    spec_for_rlvr_tier,
+)
 from src.autopilot_core.sequential_verdict import (
     CandidateSequentialView,
     DEFAULT_POLICY,
@@ -55,6 +62,9 @@ __all__ = [
     "EPHEMERAL_ACTION_KEYS",
     "LEGACY_OBJECTIVE_POLICY",
     "NON_CORRUPT_LEARNING_EXCLUSIONS",
+    "RLVR_REWARD_POLICY",
+    "RLVRReward",
+    "RLVRTierSpec",
     "STATE_ACCUMULATING",
     "STATE_CONFIRMED",
     "STATE_REFUTED",
@@ -80,6 +90,8 @@ __all__ = [
     "rate_noninferiority_z",
     "rebuild_candidate_view",
     "reconstruct_archive_from_journal_rows",
+    "rlvr_reward_from_result",
+    "spec_for_rlvr_tier",
     "task_rate_objectives_from",
     "task_rate_objectives_from_row",
     "task_rate_qph_from",
