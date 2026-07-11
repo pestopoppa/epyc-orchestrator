@@ -54,15 +54,19 @@ def test_port_hints_follow_current_full_mode_priors() -> None:
     assert 8082 not in dashboard_topology._PORT_HINTS
 
 
-def test_active_stack_numa_mode_defaults_to_full(monkeypatch) -> None:
+def test_active_stack_numa_mode_defaults_to_both(monkeypatch) -> None:
+    # Nothing exports ORCHESTRATOR_STACK_NUMA_MODE and the stack runs every
+    # instance (full + 4 quarters per multi-instance role), so the dashboard
+    # defaults to "both" to reflect the running instances rather than hiding them.
     monkeypatch.delenv("ORCHESTRATOR_STACK_NUMA_MODE", raising=False)
-    assert dashboard_topology.active_stack_numa_mode() == "full"
+    assert dashboard_topology.active_stack_numa_mode() == "both"
 
     monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "quarter")
     assert dashboard_topology.active_stack_numa_mode() == "quarter"
 
+    # Unknown values fall back to the "both" default.
     monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "stale-quarter")
-    assert dashboard_topology.active_stack_numa_mode() == "full"
+    assert dashboard_topology.active_stack_numa_mode() == "both"
 
 
 def test_expected_stack_services_are_numa_mode_filtered(monkeypatch) -> None:
@@ -2707,8 +2711,10 @@ def test_snapshot_uses_fresh_region_lock_scan(monkeypatch) -> None:
     assert payload["region_locks"] == fresh
     assert payload["topology_activity"] == activity
     assert payload["display_activity"] == {}
-    assert payload["stack_numa_mode"] == "full"
-    assert payload["topology"]["stack_numa_mode"] == "full"
+    # active_stack_numa_mode() now defaults to "both" (env unset) so the dashboard
+    # reflects the running full + quarter instances.
+    assert payload["stack_numa_mode"] == "both"
+    assert payload["topology"]["stack_numa_mode"] == "both"
 
 
 def test_coherent_display_activity_suppresses_uncorroborated_cpu_slots() -> None:

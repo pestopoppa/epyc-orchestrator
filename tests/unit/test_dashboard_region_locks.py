@@ -366,7 +366,10 @@ class TestRegionLocksSnapshot:
 
         worker = payload["by_role"]["worker_general"]
         assert payload["stack_numa_mode"] == "quarter"
-        assert [inst["shape"] for inst in worker["instances"]] == ["q0", "q1"]
+        # Visible shapes follow the role's CONFIGURED quarter instances (all four),
+        # not the matrix's co-placement pairs — every quarter server is a real
+        # dispatch target. active_instance_idxs still reflects the single held lock.
+        assert [inst["shape"] for inst in worker["instances"]] == ["q0", "q1", "q2", "q3"]
         assert worker["active_instance_idxs"] == [1]
 
     @pytest.mark.asyncio
@@ -442,8 +445,11 @@ class TestRegionLocksSnapshot:
 
         ingest = payload["by_role"]["ingest_long_context"]
         assert ingest["active_instance_idxs"] == [3]
+        # The held q2 quarter resolves to idx 3 and appears as a first-class
+        # configured instance now that visible shapes follow the role's configured
+        # instances (it is no longer an "outside-matrix" runtime_only-only holder).
         assert any(
-            inst["idx"] == 3 and inst["shape"] == "q2" and inst["runtime_only"]
+            inst["idx"] == 3 and inst["shape"] == "q2"
             for inst in ingest["instances"]
         )
         held = [r for r in ingest["regions"] if r["held"]]

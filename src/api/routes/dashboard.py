@@ -694,9 +694,12 @@ def _shape_for_regions(regs: "frozenset[str] | set[str] | list[str]") -> str:
 
 
 def _panel_shapes_from_matrix(sr, primary_shape: str) -> set[str]:
-    """Canonical shapes a role's region-locks-panel row should display, per
-    the contention matrix `same_role` entry (the operator-blessed source of
-    truth for which within-role shapes are usable).
+    """Within-role shapes the contention matrix marks CO-PLACEABLE for a role.
+
+    NOTE: as of the 2026-07-10 region-locks-grid fix this no longer gates the
+    panel's visible shapes — the grid shows every configured instance so live
+    heavy-role quarters (no co-placement pairs) still appear. Retained as the
+    canonical reader of `same_role` co-placement semantics for future use.
 
     Strict interpretation:
       - sr is None                       → empty set (role not in matrix → hide)
@@ -835,13 +838,18 @@ def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
         topology = {}
         all_regions = ["q0", "q1", "q2", "q3"]
 
-    # Source of truth for which roles/shapes appear in the panel: the
-    # operator-curated contention matrix (`orchestration/contention_matrix.yaml`).
-    # A role appears iff it has a `same_role` entry. Its visible shapes come
-    # from `_panel_shapes_from_matrix()` (strict: union of a/b labels in
-    # instance_pairs, with "full" → role's primary idx=0 shape; n/a or no
-    # pairs → only the primary shape). Lock-file existence is NO LONGER used
-    # to gate "wiring" — it's just a runtime hot/cold signal (cells stay
+    # Role INCLUSION source of truth: the operator-curated contention matrix
+    # (`orchestration/contention_matrix.yaml`) — a role appears iff it has a
+    # `same_role` entry (keeps non-CPU-lock roles like eval_batch_frontdoor out).
+    # Visible SHAPES, however, are the role's actual configured/running instances
+    # (built below), NOT the matrix `same_role.instance_pairs`. Those pairs encode
+    # which within-role shapes can CO-PLACE (a measured contention property) —
+    # narrower than "which instances exist and are dispatchable". The heavy roles
+    # (ingest_long_context 80B, architect_general) run quarter servers that are
+    # live one-at-a-time dispatch targets yet have no co-placement pairs; gating
+    # visibility on pairs wrongly hid them. The matrix still drives the ×-blocking
+    # colouring below via `_region_lock_blocked_by_roles`. Lock-file existence is
+    # NOT used to gate wiring — it's just a runtime hot/cold signal (cells stay
     # ✅ Ready until the backend first acquires a lock).
     matrix = None
     try:
@@ -865,30 +873,27 @@ def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
     for role in instance_topology_all:
         instance_topology_all[role].sort(key=lambda x: (-x["span"], x["regions"]))
 
-    # Determine the panel rows + per-role allowed shapes.
+    # Determine the panel rows + per-role visible shapes. A role is INCLUDED iff
+    # the matrix lists it (`same_role`); its VISIBLE SHAPES are its configured
+    # instances (numa-mode-filtered above), so every dispatchable instance shows —
+    # including heavy-role quarters that have no co-placement pairs.
     panel_roles: set[str] = set()
     role_allowed_shapes: dict[str, set[str]] = {}
     if matrix is not None and matrix.same_role:
-        for role, sr in matrix.same_role.items():
+        for role in matrix.same_role:
             insts = instance_topology_all.get(role) or []
-            # primary = idx=0 (NUMA_CONFIG convention); fall back to span-sort first.
-            primary = next((i for i in insts if i["idx"] == 0), insts[0] if insts else None)
-            if primary is None:
+            if not insts:
                 continue  # matrix mentions a role we have no NUMA_CONFIG for
-            allowed = _panel_shapes_from_matrix(sr, primary["shape"])
-            if not allowed:
-                continue
-            role_allowed_shapes[role] = allowed
+            role_allowed_shapes[role] = {i["shape"] for i in insts}
             panel_roles.add(role)
     else:
-        # Fallback: matrix missing/unreadable → fall back to the prior
-        # NUMA_CONFIG-based behavior (every multi-instance + multi-region role).
+        # Fallback: matrix missing/unreadable → every multi-instance role.
         for role, insts in instance_topology_all.items():
             if len(insts) >= 2:
                 panel_roles.add(role)
                 role_allowed_shapes[role] = {i["shape"] for i in insts}
 
-    # Filter the per-role instance list to just the matrix-allowed shapes.
+    # Filter the per-role instance list to the role's visible (configured) shapes.
     instance_topology: dict[str, list[dict[str, Any]]] = {}
     for role in panel_roles:
         allowed = role_allowed_shapes[role]

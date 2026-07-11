@@ -114,17 +114,28 @@ _PORT_HINTS: dict[int, str] = _build_port_hints()
 
 
 def active_stack_numa_mode() -> str:
-    """Return the stack NUMA mode this API process should render.
+    """Return the stack NUMA mode the dashboard surfaces should render.
 
-    The launcher exports ORCHESTRATOR_STACK_NUMA_MODE when starting the API.
-    Defaulting to ``full`` matches the current production launcher default and
-    prevents the dashboard from advertising quarter replicas unless the stack
-    was explicitly launched in quarter/both mode.
+    Honors an explicit ORCHESTRATOR_STACK_NUMA_MODE override (full/quarter/both).
+    Nothing in the codebase actually exports that env var, so when it is unset we
+    default to ``both``: the production stack launches EVERY configured instance —
+    each role's full/primary server PLUS its 4 NUMA-quarter servers (verified live:
+    all quarter ports up and healthy) — so ``both`` reflects reality. The prior
+    ``full`` default made the region-locks grid, topology strip, and
+    ``expected_stack_services`` health checks believe the stack was full-only,
+    hiding the running quarter instances and under-checking them. Set the env
+    explicitly to render a genuinely full-only or quarter-only stack.
+
+    NOTE: this drives only the dashboard/health family. The config compiler's
+    template↔prior parity is a SEPARATE mode system — ``stack_templates`` reads
+    the env directly (its own ``full`` default) and ``live_stack_role_records``
+    reads the generated ``stack_priors.yaml`` file — so this default does not
+    touch that path.
     """
     import os
 
-    mode = os.environ.get("ORCHESTRATOR_STACK_NUMA_MODE", "full").strip().lower()
-    return mode if mode in {"full", "quarter", "both"} else "full"
+    mode = os.environ.get("ORCHESTRATOR_STACK_NUMA_MODE", "both").strip().lower()
+    return mode if mode in {"full", "quarter", "both"} else "both"
 
 
 def _manifest_server_label(server: dict[str, Any]) -> str:
