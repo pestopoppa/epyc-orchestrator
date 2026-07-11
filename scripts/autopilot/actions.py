@@ -190,6 +190,7 @@ _PLANNER_HINTS_ENABLED = os.environ.get("AUTOPILOT_PLANNER_HINTS", "").strip().l
     "yes",
     "on",
 }
+_MUTATION_DIVERSITY_COVERAGE_STATE_KEY = "_mutation_diversity_coverage"
 
 
 @dataclass
@@ -343,6 +344,8 @@ def _mutation_diversity_coverage_pressure(
         )
         return None
 
+    ctx.state[_MUTATION_DIVERSITY_COVERAGE_STATE_KEY] = result
+
     density = float(result.get("density") or 0.0)
     negative_log_density = float(result.get("negative_log_density") or 0.0)
     lines = [
@@ -377,6 +380,43 @@ def _mutation_diversity_coverage_pressure(
             lines.append(f"  - {source_text} ({species}) score={score:.6f}: {summary}")
 
     return "\n".join(lines)
+
+
+def _discard_mutation_diversity_coverage(ctx: _ActionContext) -> None:
+    ctx.state.pop(_MUTATION_DIVERSITY_COVERAGE_STATE_KEY, None)
+
+
+def _record_mutation_diversity_coverage(
+    eval_result: EvalResult,
+    ctx: _ActionContext,
+    *,
+    artifact_kind: str,
+    target: str,
+    mutation_type: str,
+    decision: str,
+) -> None:
+    coverage = ctx.state.pop(_MUTATION_DIVERSITY_COVERAGE_STATE_KEY, None)
+    if not isinstance(coverage, dict):
+        return
+
+    payload = {
+        "schema_version": "mutation_diversity_coverage.v1",
+        "artifact_kind": artifact_kind,
+        "target": target,
+        "mutation_type": mutation_type,
+        "decision": decision,
+        "acceptance_effect": "none_observe_only",
+        "status": coverage.get("status"),
+        "reason": coverage.get("reason"),
+        "query_text": coverage.get("query_text"),
+        "density": coverage.get("density"),
+        "negative_log_density": coverage.get("negative_log_density"),
+        "penalty": coverage.get("penalty"),
+        "similar_count": coverage.get("similar_count"),
+        "top_matches": list(coverage.get("top_matches") or [])[:3],
+        "interpretation": coverage.get("interpretation"),
+    }
+    eval_result.details["mutation_diversity_coverage"] = payload
 
 
 def _seed_batch_strategy_hints(
@@ -654,6 +694,8 @@ def _build_mutation_context(
     ctx: _ActionContext,
 ) -> tuple[str, dict | None]:
     """Shared failure-context + per-suite-quality assembly used by mutation handlers."""
+    _discard_mutation_diversity_coverage(ctx)
+
     target = action.get("file", "")
     mutation_type = action.get("mutation", "targeted_fix")
     description = action.get("description", "")
@@ -1087,12 +1129,14 @@ def _action_prompt_mutation(action: dict[str, Any], ctx: _ActionContext):
         )
     except FileNotFoundError:
         log.warning("Prompt file not found: %s (may have been removed in refactoring)", target)
+        _discard_mutation_diversity_coverage(ctx)
         return None, "prompt_forge"
     if not getattr(mutation, "safety_valid", True):
         log.warning(
             "Prompt mutation failed transfer safety, skipping: %s",
             getattr(mutation, "safety_reason", "unsafe"),
         )
+        _discard_mutation_diversity_coverage(ctx)
         return None, "prompt_forge"
     skill_without = _skill_efficacy_without_result(ctx)
     bsv2_baseline = _bsv2_baseline_result(ctx)
@@ -1102,6 +1146,14 @@ def _action_prompt_mutation(action: dict[str, Any], ctx: _ActionContext):
     # Revert if quality drops
     verdict = _action_gate_check(action, ctx, eval_result)
     if not verdict:
+        _record_mutation_diversity_coverage(
+            eval_result,
+            ctx,
+            artifact_kind="prompt",
+            target=target,
+            mutation_type=mutation_type,
+            decision="reverted_safety_gate",
+        )
         log.warning("Prompt mutation failed safety gate, reverting")
         ctx.forge.revert_mutation(mutation)
         return eval_result, "prompt_forge"
@@ -1115,6 +1167,14 @@ def _action_prompt_mutation(action: dict[str, Any], ctx: _ActionContext):
         log_label="Simplicity criterion:",
     )
     if not passed:
+        _record_mutation_diversity_coverage(
+            eval_result,
+            ctx,
+            artifact_kind="prompt",
+            target=target,
+            mutation_type=mutation_type,
+            decision=f"reverted_simplicity:{deficiency or 'unknown'}",
+        )
         ctx.forge.revert_mutation(mutation)
         if deficiency == "shrinkage":
             ctx.state["_dispatch_deficiency"] = "shrinkage"  # AP-14
@@ -1127,6 +1187,14 @@ def _action_prompt_mutation(action: dict[str, Any], ctx: _ActionContext):
         target=target,
         mutation_type=mutation_type,
     ):
+        _record_mutation_diversity_coverage(
+            eval_result,
+            ctx,
+            artifact_kind="prompt",
+            target=target,
+            mutation_type=mutation_type,
+            decision="reverted_skill_efficacy",
+        )
         ctx.forge.revert_mutation(mutation)
         return eval_result, "prompt_forge"
 
@@ -1137,9 +1205,25 @@ def _action_prompt_mutation(action: dict[str, Any], ctx: _ActionContext):
         target=target,
         mutation_type=mutation_type,
     ):
+        _record_mutation_diversity_coverage(
+            eval_result,
+            ctx,
+            artifact_kind="prompt",
+            target=target,
+            mutation_type=mutation_type,
+            decision="reverted_bsv2_accept_gate",
+        )
         ctx.forge.revert_mutation(mutation)
         return eval_result, "prompt_forge"
 
+    _record_mutation_diversity_coverage(
+        eval_result,
+        ctx,
+        artifact_kind="prompt",
+        target=target,
+        mutation_type=mutation_type,
+        decision="kept",
+    )
     # AP-7: Prompt change accepted — invalidate stale Optuna trials
     ctx.swarm.mark_epoch(f"prompt_mutation:{target}/{mutation_type}")
     return eval_result, "prompt_forge"
@@ -1238,19 +1322,23 @@ def _action_code_mutation(action: dict[str, Any], ctx: _ActionContext):
         )
     except (ValueError, FileNotFoundError, FileExistsError) as e:
         log.error("Code mutation blocked: %s", e)
+        _discard_mutation_diversity_coverage(ctx)
         return None, "prompt_forge"
 
     if not mutation.syntax_valid:
         log.warning("Code mutation failed syntax validation, skipping")
+        _discard_mutation_diversity_coverage(ctx)
         return None, "prompt_forge"
     if not getattr(mutation, "safety_valid", True):
         log.warning(
             "Code mutation failed transfer safety, skipping: %s",
             getattr(mutation, "safety_reason", "unsafe"),
         )
+        _discard_mutation_diversity_coverage(ctx)
         return None, "prompt_forge"
     if getattr(mutation, "mutated_content", None) == getattr(mutation, "original_content", None):
         log.warning("Code mutation produced no file changes, skipping eval")
+        _discard_mutation_diversity_coverage(ctx)
         return (
             SkipOutcome(
                 "skipped",
@@ -1267,6 +1355,14 @@ def _action_code_mutation(action: dict[str, Any], ctx: _ActionContext):
 
     verdict = _action_gate_check(action, ctx, eval_result)
     if not verdict:
+        _record_mutation_diversity_coverage(
+            eval_result,
+            ctx,
+            artifact_kind="code",
+            target=target,
+            mutation_type=mutation_type,
+            decision="reverted_safety_gate",
+        )
         log.warning("Code mutation failed safety gate, reverting")
         ctx.forge.revert_code_mutation(mutation)
         return eval_result, "prompt_forge"
@@ -1280,6 +1376,14 @@ def _action_code_mutation(action: dict[str, Any], ctx: _ActionContext):
         log_label="Simplicity criterion:",
     )
     if not passed:
+        _record_mutation_diversity_coverage(
+            eval_result,
+            ctx,
+            artifact_kind="code",
+            target=target,
+            mutation_type=mutation_type,
+            decision=f"reverted_simplicity:{deficiency or 'unknown'}",
+        )
         ctx.forge.revert_code_mutation(mutation)
         if deficiency == "shrinkage":
             ctx.state["_dispatch_deficiency"] = "shrinkage"  # AP-14
@@ -1292,6 +1396,14 @@ def _action_code_mutation(action: dict[str, Any], ctx: _ActionContext):
         target=target,
         mutation_type=mutation_type,
     ):
+        _record_mutation_diversity_coverage(
+            eval_result,
+            ctx,
+            artifact_kind="code",
+            target=target,
+            mutation_type=mutation_type,
+            decision="reverted_skill_efficacy",
+        )
         ctx.forge.revert_code_mutation(mutation)
         return eval_result, "prompt_forge"
 
@@ -1302,9 +1414,25 @@ def _action_code_mutation(action: dict[str, Any], ctx: _ActionContext):
         target=target,
         mutation_type=mutation_type,
     ):
+        _record_mutation_diversity_coverage(
+            eval_result,
+            ctx,
+            artifact_kind="code",
+            target=target,
+            mutation_type=mutation_type,
+            decision="reverted_bsv2_accept_gate",
+        )
         ctx.forge.revert_code_mutation(mutation)
         return eval_result, "prompt_forge"
 
+    _record_mutation_diversity_coverage(
+        eval_result,
+        ctx,
+        artifact_kind="code",
+        target=target,
+        mutation_type=mutation_type,
+        decision="kept",
+    )
     ctx.swarm.mark_epoch(f"code_mutation:{target}/{mutation_type}")
     return eval_result, "prompt_forge"
 

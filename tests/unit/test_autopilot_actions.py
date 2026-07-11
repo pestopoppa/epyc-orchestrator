@@ -1136,6 +1136,98 @@ def test_prompt_mutation_skill_gate_default_off_single_eval(monkeypatch) -> None
     assert swarm.epochs == ["prompt_mutation:frontdoor.md/targeted_fix"]
 
 
+def test_prompt_mutation_records_diversity_coverage_detail_observe_only(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("AUTOPILOT_SKILL_EFFICACY_GATE", raising=False)
+    monkeypatch.delenv("AUTOPILOT_BSV2_ACCEPT_GATE", raising=False)
+
+    class FakeForge:
+        def __init__(self):
+            self.failure_context = ""
+            self.applied = 0
+            self.reverted = 0
+
+        def propose_mutation(self, **kwargs):
+            self.failure_context = kwargs["failure_context"]
+            return SimpleNamespace(
+                file=kwargs["target_file"],
+                mutation_type=kwargs["mutation_type"],
+                description="test",
+                original_content="old",
+                mutated_content="new",
+                safety_valid=True,
+            )
+
+        def apply_mutation(self, mutation):
+            self.applied += 1
+
+        def revert_mutation(self, mutation):
+            self.reverted += 1
+
+    class FakeStrategyStore:
+        def __init__(self):
+            self.calls = []
+
+        def retrieve_for_journal(self, query, *, journal, k, species=None):
+            self.calls.append((query, journal, k, species))
+            if k == 8:
+                return [
+                    SimpleNamespace(
+                        id="strategy-coverage-1",
+                        source_trial_id=77,
+                        species="prompt_forge",
+                        description="frontdoor retry loop fix",
+                        insight="prefer narrow retry-loop edits",
+                        similarity_score=0.5,
+                    )
+                ]
+            return []
+
+    journal = _FakeJournal()
+    store = FakeStrategyStore()
+    tower = _QueuedTower([_eval_result(per_suite_quality={"math": 1.1})])
+    forge = FakeForge()
+    swarm = _FakeSwarm()
+    result, species = actions._action_prompt_mutation(
+        {
+            "type": "prompt_mutation",
+            "file": "frontdoor.md",
+            "mutation": "targeted_fix",
+            "description": "retry loop",
+        },
+        _ctx(
+            forge=forge,
+            tower=tower,
+            gate=_AlwaysPassGate(),
+            swarm=swarm,
+            journal=journal,
+            strategy_store=store,
+            state={},
+        ),
+    )
+
+    assert species == "prompt_forge"
+    assert tower.calls == 1
+    assert forge.applied == 1
+    assert forge.reverted == 0
+    assert "Diversity Coverage Pressure (AP-35/AP-36 observe-only)" in forge.failure_context
+    assert store.calls == [
+        ("frontdoor.md targeted_fix retry loop", journal, 3, None),
+        ("frontdoor.md targeted_fix retry loop", journal, 8, "prompt_forge"),
+    ]
+    detail = result.details["mutation_diversity_coverage"]
+    assert detail["schema_version"] == "mutation_diversity_coverage.v1"
+    assert detail["artifact_kind"] == "prompt"
+    assert detail["target"] == "frontdoor.md"
+    assert detail["mutation_type"] == "targeted_fix"
+    assert detail["decision"] == "kept"
+    assert detail["acceptance_effect"] == "none_observe_only"
+    assert detail["density"] == pytest.approx(0.5)
+    assert detail["negative_log_density"] == pytest.approx(0.6931471805599453)
+    assert detail["top_matches"][0]["source_trial_id"] == 77
+
+
 def test_prompt_mutation_bsv2_gate_rejects_behavior_regression(monkeypatch) -> None:
     monkeypatch.delenv("AUTOPILOT_SKILL_EFFICACY_GATE", raising=False)
     monkeypatch.setenv("AUTOPILOT_BSV2_ACCEPT_GATE", "1")
