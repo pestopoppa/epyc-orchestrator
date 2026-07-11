@@ -1890,6 +1890,8 @@ def test_autopilot_progress_surfaces_eval_label_from_log_tail(
     ]) + "\n")
     monkeypatch.setattr(dashboard, "_AUTOPILOT_STATE_PATH", state_path)
     monkeypatch.setattr(dashboard, "_AUTOPILOT_LOG_DIR", log_dir)
+    monkeypatch.setattr(dashboard, "_AUTOPILOT_TMP_LOG_DIR", tmp_path / "tmp")
+    monkeypatch.setattr(dashboard, "AUTOPILOT_LOG", tmp_path / "missing.log")
     monkeypatch.setattr(dashboard, "_AUTOPILOT_JOURNAL_PATH", tmp_path / "missing.jsonl")
 
     response = asyncio.run(dashboard.autopilot_progress())
@@ -2191,6 +2193,7 @@ def test_autopilot_progress_prefers_active_autopilot_log_over_stale_restart_log(
     os.utime(active_log, (now, now))
     monkeypatch.setattr(dashboard, "_AUTOPILOT_STATE_PATH", state_path)
     monkeypatch.setattr(dashboard, "_AUTOPILOT_LOG_DIR", log_dir)
+    monkeypatch.setattr(dashboard, "_AUTOPILOT_TMP_LOG_DIR", tmp_path / "tmp")
     monkeypatch.setattr(dashboard, "AUTOPILOT_LOG", active_log)
     monkeypatch.setattr(dashboard, "_AUTOPILOT_JOURNAL_PATH", tmp_path / "missing.jsonl")
 

@@ -2020,6 +2020,7 @@ _PLANNER_HINT_SEEDS_PATH = (
     Path(__file__).resolve().parents[3] / "scripts" / "autopilot" / "operator_seed_strategies.yaml"
 )
 _AUTOPILOT_LOG_DIR = Path(__file__).resolve().parents[3] / "logs"
+_AUTOPILOT_TMP_LOG_DIR = Path("/mnt/raid0/llm/tmp")
 _AUTOPILOT_CONTROL_AUDIT_PATH = _AUTOPILOT_LOG_DIR / "autopilot_operator_control.jsonl"
 _EPHEMERAL_ACTION_KEYS = EPHEMERAL_ACTION_KEYS
 _WITHIN_NOISE_EXCL = WITHIN_NOISE_EXCLUSIONS
@@ -3396,8 +3397,8 @@ def _newest_autopilot_log() -> Path | None:
         if AUTOPILOT_LOG.exists():
             candidates.append(AUTOPILOT_LOG)
         candidates.extend(_AUTOPILOT_LOG_DIR.glob("autopilot_restart_*.log"))
-        candidates.extend(Path("/mnt/raid0/llm/tmp").glob("autopilot_restart_*.log"))
-        candidates.extend(Path("/mnt/raid0/llm/tmp").glob("autopilot_fable_authority_*.log"))
+        candidates.extend(_AUTOPILOT_TMP_LOG_DIR.glob("autopilot_restart_*.log"))
+        candidates.extend(_AUTOPILOT_TMP_LOG_DIR.glob("autopilot_fable_authority_*.log"))
         candidates = sorted(
             (p for p in candidates if p.exists()),
             key=lambda p: p.stat().st_mtime,
