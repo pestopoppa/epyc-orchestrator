@@ -410,6 +410,9 @@ def _compact_question_result(r: "QuestionResult") -> dict[str, Any]:
         compact_covariates = _compact_host_covariates(r.host_covariates)
         if compact_covariates:
             item["host_covariates"] = compact_covariates
+    answer_hash = normalized_answer_hash(r.answer)
+    if answer_hash and not r.error:
+        item["answer_hash"] = answer_hash
     if r.scoring_method and r.scoring_method != "exact_match":
         item["scoring_method"] = r.scoring_method
     if r.route_used:
@@ -680,6 +683,7 @@ from rubric_scoring import (  # noqa: E402
 from src.autopilot_core.instrument_era_guard import (  # noqa: E402
     designed_core_activation_guard,
 )
+from src.behavior_signature import normalized_answer_hash  # noqa: E402
 
 DEFAULT_CORE_DIR = _orch_root / "benchmarks" / "prompts"
 
@@ -2334,7 +2338,9 @@ class EvalTower:
         return "[trace truncated]\n" + text[-max_chars:]
 
     @staticmethod
-    def _trace_ir_steps(trace_text: str, *, max_steps: int = 12, preview_chars: int = 240) -> list[dict[str, Any]]:
+    def _trace_ir_steps(
+        trace_text: str, *, max_steps: int = 12, preview_chars: int = 240
+    ) -> list[dict[str, Any]]:
         """Convert a tap tail into compact ROLE/PROMPT/RESPONSE steps."""
         text = str(trace_text or "").strip()
         if not text:
@@ -2458,7 +2464,9 @@ class EvalTower:
             "acceptance_effect": "none_observe_only",
             "trial_id": trial_id,
             "failure_summary": str(failure_summary or "")[:500],
-            "source": "contrastive_trace_bank" if trace_bank and examples and not raw_tail else "raw_recent_traces",
+            "source": "contrastive_trace_bank"
+            if trace_bank and examples and not raw_tail
+            else "raw_recent_traces",
             "trace_examples": examples,
         }
 

@@ -407,6 +407,7 @@ def test_aggregate_emits_compact_stable_question_results() -> None:
             "latency_ms": 1234,
             "tokens_generated": 5,
             "tools_used": 2,
+            "answer_hash": eval_tower.normalized_answer_hash("4"),
         }
     ]
     assert "prompt" not in out.question_results[0]
@@ -465,6 +466,7 @@ def test_aggregate_emits_truthy_question_provenance_flags() -> None:
     ]
     assert "prompt" not in out.question_results[0]
     assert "answer" not in out.question_results[0]
+    assert "answer_hash" not in out.question_results[0]
 
 
 def test_eval_result_grep_lines_include_concurrency_metrics() -> None:
