@@ -41,12 +41,8 @@ PLANNER_TAP_PATH = Path("/mnt/raid0/llm/tmp/planner_tap.log")
 # is queryable for reasoning-trace research. One line per session with
 # the full event list. Lives alongside other autopilot logs so it's
 # included in the same backup/retention scheme.
-PLANNER_ARCHIVE_PATH = Path(
-    "/mnt/raid0/llm/epyc-orchestrator/logs/planner_archive.jsonl"
-)
-PLANNER_SUBPROCESS_STATUS_PATH = Path(
-    "/mnt/raid0/llm/tmp/autopilot_planner_subprocess.json"
-)
+PLANNER_ARCHIVE_PATH = Path("/mnt/raid0/llm/epyc-orchestrator/logs/planner_archive.jsonl")
+PLANNER_SUBPROCESS_STATUS_PATH = Path("/mnt/raid0/llm/tmp/autopilot_planner_subprocess.json")
 
 # Do not inherit the operator's last interactive Claude model. Fable access is
 # metered/temporary, and a stale global default can brick AutoPilot planning.
@@ -86,11 +82,7 @@ def _configured_numeric_surfaces() -> set[str]:
     except Exception:
         return set(_FALLBACK_NUMERIC_SURFACES)
 
-    surfaces = {
-        surface
-        for surface in _NS_SURFACES
-        if isinstance(surface, str) and surface.strip()
-    }
+    surfaces = {surface for surface in _NS_SURFACES if isinstance(surface, str) and surface.strip()}
     return surfaces or set(_FALLBACK_NUMERIC_SURFACES)
 
 
@@ -98,7 +90,7 @@ _RAW_NUMERIC_SURFACES = _configured_numeric_surfaces()
 _SUPPRESSED_NUMERIC_SURFACES: set[str] = set()
 _NUMERIC_SURFACES = set(_RAW_NUMERIC_SURFACES)
 _PROMPT_MUTATIONS = {"targeted_fix", "compress", "few_shot_evolution"}
-_CODE_MUTATIONS = {"targeted_fix"}
+_CODE_MUTATIONS = {"targeted_fix", "new_file"}
 _SLOT_SCORERS = {"expected_attention", "knorm"}
 DEEP_EVAL_TIERS = (0, 1, 2, 3)
 
@@ -149,6 +141,7 @@ def _write_planner_subprocess_status(
         )
     except Exception:
         log.debug("planner subprocess heartbeat write failed", exc_info=True)
+
 
 _ACTION_SCHEMAS: dict[str, dict[str, Any]] = {
     "seed_batch": {
@@ -313,8 +306,7 @@ def _summarize_event(line: str) -> str:
                 content = c.get("content", "")
                 if isinstance(content, list):
                     content = " ".join(
-                        (b.get("text", "") if isinstance(b, dict) else str(b))
-                        for b in content
+                        (b.get("text", "") if isinstance(b, dict) else str(b)) for b in content
                     )
                 is_error = c.get("is_error", False)
                 # 1500c (was 240c) — tool results are the planner's evidence;
@@ -361,18 +353,25 @@ def invoke_controller(
     can watch the planner reason in real time.
     """
     cmd = [
-        "claude", "-p", prompt,
-        "--output-format", "stream-json",
+        "claude",
+        "-p",
+        prompt,
+        "--output-format",
+        "stream-json",
         "--verbose",  # required by claude CLI for stream-json output
         # This is a JSON controller call, not Claude Code's interactive Plan
         # Mode. Plan mode can steer the CLI toward writing ~/.claude/plans/*
         # when it wants to escalate, which wastes a planner turn and returns an
         # empty action. Keep the available tool surface explicitly read-only.
-        "--permission-mode", "default",
+        "--permission-mode",
+        "default",
         "--safe-mode",
-        "--tools", "Read,Grep,Glob",
-        "--allowedTools", "Read,Grep,Glob",
-        "--disallowedTools", ",".join(sorted(PLANNER_CLI_DISALLOWED_TOOLS)),
+        "--tools",
+        "Read,Grep,Glob",
+        "--allowedTools",
+        "Read,Grep,Glob",
+        "--disallowedTools",
+        ",".join(sorted(PLANNER_CLI_DISALLOWED_TOOLS)),
     ]
     planner_model = os.environ.get("AUTOPILOT_CLAUDE_MODEL", DEFAULT_CLAUDE_MODEL).strip()
     if planner_model:
@@ -389,7 +388,9 @@ def invoke_controller(
     tap = _open_planner_tap()
     if tap is not None:
         try:
-            tap.write(f"\n{'=' * 72}\n[{datetime.now().isoformat(timespec='seconds')}] PLANNER session start\n")
+            tap.write(
+                f"\n{'=' * 72}\n[{datetime.now().isoformat(timespec='seconds')}] PLANNER session start\n"
+            )
             if session_id:
                 tap.write(f"resume_session: {session_id}\n")
             tap.write(f"prompt_chars: {len(prompt)}\n")
@@ -418,28 +419,28 @@ def invoke_controller(
     ) -> None:
         import hashlib
 
-        _append_planner_archive({
-            "ts": session_start_ts,
-            "ts_iso": datetime.fromtimestamp(session_start_ts).isoformat(
-                timespec="seconds"
-            ),
-            "type": "planner_provider_call",
-            "provider": "claude",
-            "role": "draft",
-            "status": status,
-            "ok": ok,
-            "error": error,
-            "duration_s": time.time() - session_start_ts,
-            "session_id": final_session_id,
-            "resume_session_id": session_id,
-            "prompt_chars": len(prompt),
-            "prompt_sha256_16": hashlib.sha256(prompt.encode()).hexdigest()[:16],
-            "result_chars": len(result_text),
-            "result_preview": (result_text or "")[:500],
-            "n_events": len(archive_events),
-            "events": archive_events[-200:],
-            **archive_meta,
-        })
+        _append_planner_archive(
+            {
+                "ts": session_start_ts,
+                "ts_iso": datetime.fromtimestamp(session_start_ts).isoformat(timespec="seconds"),
+                "type": "planner_provider_call",
+                "provider": "claude",
+                "role": "draft",
+                "status": status,
+                "ok": ok,
+                "error": error,
+                "duration_s": time.time() - session_start_ts,
+                "session_id": final_session_id,
+                "resume_session_id": session_id,
+                "prompt_chars": len(prompt),
+                "prompt_sha256_16": hashlib.sha256(prompt.encode()).hexdigest()[:16],
+                "result_chars": len(result_text),
+                "result_preview": (result_text or "")[:500],
+                "n_events": len(archive_events),
+                "events": archive_events[-200:],
+                **archive_meta,
+            }
+        )
 
     def _drain_stdout(p: subprocess.Popen):
         """Read p.stdout line-by-line; tee each line to tap; capture result."""
@@ -570,13 +571,11 @@ def invoke_controller(
                 "could not resume",
                 "session has been deleted",
             )
-            _stale_id_combo = (
-                "session id" in _stderr_low and (
-                    "not found" in _stderr_low
-                    or "expired" in _stderr_low
-                    or "invalid" in _stderr_low
-                    or "no such" in _stderr_low
-                )
+            _stale_id_combo = "session id" in _stderr_low and (
+                "not found" in _stderr_low
+                or "expired" in _stderr_low
+                or "invalid" in _stderr_low
+                or "no such" in _stderr_low
             )
             if _stale_id_combo or any(p in _stderr_low for p in _stale_session_phrases):
                 log.warning(
@@ -625,7 +624,9 @@ def invoke_controller(
 
         if tap is not None:
             try:
-                tap.write(f"[END] result_chars={len(result_text)} session={(final_session_id or '')[:8]}…\n{'=' * 72}\n")
+                tap.write(
+                    f"[END] result_chars={len(result_text)} session={(final_session_id or '')[:8]}…\n{'=' * 72}\n"
+                )
                 tap.flush()
             except Exception:
                 pass
@@ -816,10 +817,7 @@ def _validate_action_schema(action: dict[str, Any]) -> str | None:
     allowed = schema.get("allowed", set())
     extra = sorted(set(action) - allowed)
     if extra:
-        return (
-            f"{action_type} unsupported keys: {extra}; "
-            f"allowed keys: {sorted(allowed)}"
-        )
+        return f"{action_type} unsupported keys: {extra}; allowed keys: {sorted(allowed)}"
 
     missing = sorted(schema.get("required", set()) - set(action))
     if missing:
@@ -836,10 +834,7 @@ def _validate_action_schema(action: dict[str, Any]) -> str | None:
             continue
         value = action[key]
         if isinstance(value, bool) or value not in values:
-            return (
-                f"{action_type} {key} must be one of {sorted(values)}; "
-                f"got {value!r}"
-            )
+            return f"{action_type} {key} must be one of {sorted(values)}; got {value!r}"
 
     return None
 
@@ -865,15 +860,9 @@ def _validate_int_range(
     if not _is_int(value):
         return f"{action.get('type', 'action')} {key} must be an integer; got {value!r}"
     if min_value is not None and value < min_value:
-        return (
-            f"{action.get('type', 'action')} {key} must be >= {min_value}; "
-            f"got {value!r}"
-        )
+        return f"{action.get('type', 'action')} {key} must be >= {min_value}; got {value!r}"
     if max_value is not None and value > max_value:
-        return (
-            f"{action.get('type', 'action')} {key} must be <= {max_value}; "
-            f"got {value!r}"
-        )
+        return f"{action.get('type', 'action')} {key} must be <= {max_value}; got {value!r}"
     return None
 
 
@@ -914,10 +903,7 @@ def _validate_str_list(action: dict[str, Any], key: str) -> str | None:
     if key not in action:
         return None
     value = action[key]
-    if (
-        not isinstance(value, list)
-        or any(not isinstance(item, str) for item in value)
-    ):
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
         return f"{action.get('type', 'action')} {key} must be a list of strings"
     return None
 
@@ -941,9 +927,7 @@ def validate_single_variable(action: dict[str, Any]) -> str | None:
         if "," in target or ";" in target:
             return f"{action_type} targets multiple files: {target}"
         if action_type == "gepa_optimize":
-            range_err = _validate_int_range(
-                action, "max_evals", min_value=1, max_value=100
-            )
+            range_err = _validate_int_range(action, "max_evals", min_value=1, max_value=100)
             if range_err:
                 return range_err
 
@@ -980,14 +964,10 @@ def validate_single_variable(action: dict[str, Any]) -> str | None:
             )
 
     elif action_type == "consult_gate_probe":
-        range_err = _validate_int_range(
-            action, "tier", min_value=1, max_value=3
-        )
+        range_err = _validate_int_range(action, "tier", min_value=1, max_value=3)
         if range_err:
             return range_err
-        range_err = _validate_int_range(
-            action, "turns", min_value=3, max_value=50
-        )
+        range_err = _validate_int_range(action, "turns", min_value=3, max_value=50)
         if range_err:
             return range_err
 
@@ -998,9 +978,7 @@ def validate_single_variable(action: dict[str, Any]) -> str | None:
             ("keep_first", 0, None),
             ("n_future", 1, 8192),
         ):
-            range_err = _validate_int_range(
-                action, key, min_value=min_value, max_value=max_value
-            )
+            range_err = _validate_int_range(action, key, min_value=min_value, max_value=max_value)
             if range_err:
                 return range_err
         for key in ("keep_ratio", "threshold"):
@@ -1022,9 +1000,7 @@ def validate_single_variable(action: dict[str, Any]) -> str | None:
                 return "slot_compact layer_weights must be a non-empty numeric list"
 
     elif action_type == "seed_batch":
-        range_err = _validate_int_range(
-            action, "n_questions", min_value=1, max_value=50
-        )
+        range_err = _validate_int_range(action, "n_questions", min_value=1, max_value=50)
         if range_err:
             return range_err
         list_err = _validate_str_list(action, "suites")
@@ -1032,9 +1008,7 @@ def validate_single_variable(action: dict[str, Any]) -> str | None:
             return list_err
 
     elif action_type == "train_routing_models":
-        range_err = _validate_int_range(
-            action, "min_memories", min_value=1, max_value=100000
-        )
+        range_err = _validate_int_range(action, "min_memories", min_value=1, max_value=100000)
         if range_err:
             return range_err
 

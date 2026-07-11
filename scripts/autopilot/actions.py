@@ -1165,7 +1165,7 @@ def _action_code_mutation(action: dict[str, Any], ctx: _ActionContext):
             per_suite_quality=last_per_suite,
             description=description,
         )
-    except (ValueError, FileNotFoundError) as e:
+    except (ValueError, FileNotFoundError, FileExistsError) as e:
         log.error("Code mutation blocked: %s", e)
         return None, "prompt_forge"
 
@@ -1879,6 +1879,8 @@ _ACTION_HANDLERS = {
 #
 # The forge stages differently per path, so the guard scope differs:
 #   * code_mutation -> `git add <single file>`  => check that one file
+#     or, for mutation=new_file, check the parent directory that will receive
+#     the untracked file (the target itself does not exist yet)
 #   * prompt_mutation / gepa_optimize
 #                   -> `git add <prompts dir>`  => check the WHOLE prompts dir
 #     (a dirty *sibling* prompt would otherwise be swept into the commit).
@@ -1943,7 +1945,8 @@ def _mutation_dirty_target_reason(action: dict[str, Any]) -> str | None:
         if not target:
             return None  # missing-file is handled by the scope validator
         path = (_REPO_ROOT / target).resolve()
-        is_dirty, evidence = _pathspec_pending_change_report(path)
+        pathspec = path.parent if action.get("mutation") == "new_file" else path
+        is_dirty, evidence = _pathspec_pending_change_report(pathspec)
         if is_dirty:
             return (
                 f"{action_type} target '{target}' has pre-existing uncommitted "

@@ -167,21 +167,33 @@ def test_validate_prompt_mutation_requires_file() -> None:
 
 
 def test_validate_prompt_mutation_rejects_multi_file() -> None:
-    err = controller_io.validate_single_variable(
-        {"type": "prompt_mutation", "file": "a.md,b.md"}
-    )
+    err = controller_io.validate_single_variable({"type": "prompt_mutation", "file": "a.md,b.md"})
     assert err and "multiple files" in err
 
 
 def test_validate_prompt_mutation_accepts_single_file() -> None:
-    assert controller_io.validate_single_variable(
-        {"type": "prompt_mutation", "file": "frontdoor.md"}
-    ) is None
+    assert (
+        controller_io.validate_single_variable({"type": "prompt_mutation", "file": "frontdoor.md"})
+        is None
+    )
 
 
 def test_validate_code_mutation_requires_file() -> None:
     err = controller_io.validate_single_variable({"type": "code_mutation"})
     assert err and "must specify a single target file" in err
+
+
+def test_validate_code_mutation_accepts_new_file() -> None:
+    assert (
+        controller_io.validate_single_variable(
+            {
+                "type": "code_mutation",
+                "file": "src/generated/new_module.py",
+                "mutation": "new_file",
+            }
+        )
+        is None
+    )
 
 
 def test_validate_structural_experiment_blocks_multi_flag() -> None:
@@ -192,15 +204,21 @@ def test_validate_structural_experiment_blocks_multi_flag() -> None:
 
 
 def test_validate_structural_experiment_accepts_single_flag() -> None:
-    assert controller_io.validate_single_variable(
-        {"type": "structural_experiment", "flags": {"a": True}}
-    ) is None
+    assert (
+        controller_io.validate_single_variable(
+            {"type": "structural_experiment", "flags": {"a": True}}
+        )
+        is None
+    )
 
 
 def test_validate_consult_gate_probe_accepts_tiered_hard_lane() -> None:
-    assert controller_io.validate_single_variable(
-        {"type": "consult_gate_probe", "task_suite": "targeted", "turns": 10, "tier": 3}
-    ) is None
+    assert (
+        controller_io.validate_single_variable(
+            {"type": "consult_gate_probe", "task_suite": "targeted", "turns": 10, "tier": 3}
+        )
+        is None
+    )
 
 
 def test_validate_consult_gate_probe_blocks_bad_tier() -> None:
@@ -226,18 +244,19 @@ def test_validate_numeric_trial_blocks_multi_param() -> None:
 
 def test_validate_numeric_trial_accepts_empty_params_for_optuna() -> None:
     # Empty params = Optuna will suggest; exempt from single-variable rule
-    assert controller_io.validate_single_variable(
-        {"type": "numeric_trial", "params": {}}
-    ) is None
+    assert controller_io.validate_single_variable({"type": "numeric_trial", "params": {}}) is None
 
 
 def test_validate_numeric_trial_accepts_all_configured_surfaces() -> None:
     from species.numeric_swarm import SURFACES
 
     assert set(SURFACES) == controller_io._NUMERIC_SURFACES
-    assert controller_io.validate_single_variable(
-        {"type": "numeric_trial", "surface": "kv_compaction", "params": {}}
-    ) is None
+    assert (
+        controller_io.validate_single_variable(
+            {"type": "numeric_trial", "surface": "kv_compaction", "params": {}}
+        )
+        is None
+    )
 
 
 def test_validate_numeric_trial_rejects_unknown_surface() -> None:
@@ -289,18 +308,21 @@ def test_validate_gepa_rejects_unbounded_max_evals() -> None:
 
 
 def test_validate_slot_compact_schema_matches_handler() -> None:
-    assert controller_io.validate_single_variable(
-        {
-            "type": "slot_compact",
-            "port": 8070,
-            "slot_id": 0,
-            "keep_ratio": 0.3,
-            "scorer": "expected_attention",
-            "keep_first": 5,
-            "n_future": 128,
-            "use_covariance": True,
-        }
-    ) is None
+    assert (
+        controller_io.validate_single_variable(
+            {
+                "type": "slot_compact",
+                "port": 8070,
+                "slot_id": 0,
+                "keep_ratio": 0.3,
+                "scorer": "expected_attention",
+                "keep_first": 5,
+                "n_future": 128,
+                "use_covariance": True,
+            }
+        )
+        is None
+    )
 
     err = controller_io.validate_single_variable(
         {
@@ -333,9 +355,7 @@ def test_validate_slot_compact_rejects_bad_ranges() -> None:
     )
     assert err and "n_future must be >=" in err
 
-    err = controller_io.validate_single_variable(
-        {"type": "slot_compact", "port": 0}
-    )
+    err = controller_io.validate_single_variable({"type": "slot_compact", "port": 0})
     assert err and "port must be >=" in err
 
 
@@ -360,12 +380,8 @@ def test_validate_deep_eval_rejects_ignored_schema_fields() -> None:
 def test_validate_deep_eval_requires_valid_tier() -> None:
     assert tuple(controller_io.DEEP_EVAL_TIERS) == (0, 1, 2, 3)
     assert controller_io._ACTION_SCHEMAS["deep_eval"]["enums"]["tier"] == {0, 1, 2, 3}
-    assert controller_io.validate_single_variable(
-        {"type": "deep_eval", "tier": 2}
-    ) is None
-    assert controller_io.validate_single_variable(
-        {"type": "deep_eval", "tier": 3}
-    ) is None
+    assert controller_io.validate_single_variable({"type": "deep_eval", "tier": 2}) is None
+    assert controller_io.validate_single_variable({"type": "deep_eval", "tier": 3}) is None
     assert controller_io.validate_single_variable({"type": "deep_eval"})
     assert controller_io.validate_single_variable({"type": "deep_eval", "tier": 4})
     assert controller_io.validate_single_variable({"type": "deep_eval", "tier": "2"})
@@ -473,14 +489,9 @@ def test_invoke_controller_pins_planner_model_args(monkeypatch) -> None:
     assert "--tools" in captured["cmd"]
     assert captured["cmd"][captured["cmd"].index("--tools") + 1] == "Read,Grep,Glob"
     assert "--allowedTools" in captured["cmd"]
-    assert (
-        captured["cmd"][captured["cmd"].index("--allowedTools") + 1]
-        == "Read,Grep,Glob"
-    )
+    assert captured["cmd"][captured["cmd"].index("--allowedTools") + 1] == "Read,Grep,Glob"
     assert "--disallowedTools" in captured["cmd"]
-    disallowed = set(
-        captured["cmd"][captured["cmd"].index("--disallowedTools") + 1].split(",")
-    )
+    disallowed = set(captured["cmd"][captured["cmd"].index("--disallowedTools") + 1].split(","))
     assert {"Bash", "Edit", "Task", "Write"}.issubset(disallowed)
     assert "MultiEdit" not in disallowed
     assert "MultiEdit" in controller_io.PLANNER_DISALLOWED_TOOLS
@@ -506,7 +517,7 @@ def test_invoke_controller_rejects_disallowed_tool_use(monkeypatch) -> None:
                 (
                     '{"type":"assistant","message":{"content":['
                     '{"type":"tool_use","name":"Write","input":{"file_path":"x"}}'
-                    ']}}\n'
+                    "]}}\n"
                 ),
                 (
                     '{"type":"result","subtype":"success","session_id":"new-session",'

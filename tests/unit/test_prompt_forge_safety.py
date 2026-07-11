@@ -5,11 +5,13 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 AUTOPILOT_DIR = ROOT / "scripts" / "autopilot"
 sys.path.insert(0, str(AUTOPILOT_DIR))
 
+import species.prompt_forge as prompt_forge_mod  # noqa: E402
 from species.prompt_forge import PromptForge  # noqa: E402
 
 
@@ -141,6 +143,122 @@ def test_resolve_prompt_rejects_absolute_path_escape(tmp_path: Path) -> None:
         raise AssertionError("expected absolute path to be rejected")
 
 
+def test_new_file_code_mutation_accepts_sanctioned_empty_path(tmp_path: Path, monkeypatch) -> None:
+    src_dir = tmp_path / "src"
+    generated_dir = src_dir / "generated"
+    generated_dir.mkdir(parents=True)
+    (src_dir / "__init__.py").write_text("")
+    (generated_dir / "__init__.py").write_text("")
+    monkeypatch.setattr(prompt_forge_mod, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(prompt_forge_mod, "NEW_FILE_MUTATION_ROOT", src_dir)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    for module_name in [
+        name for name in list(sys.modules) if name == "src" or name.startswith("src.")
+    ]:
+        monkeypatch.delitem(sys.modules, module_name, raising=False)
+
+    forge = PromptForge(prompts_dir=tmp_path / "prompts", auto_commit=False)
+    monkeypatch.setattr(
+        forge,
+        "_invoke_claude",
+        lambda _prompt: "```python\nVALUE = 1\n```",
+    )
+
+    mutation = forge.propose_code_mutation(
+        target_file="src/generated/new_module.py",
+        mutation_type="new_file",
+    )
+
+    assert mutation.syntax_valid is True
+    assert mutation.original_content == ""
+    assert mutation.mutated_content == "VALUE = 1"
+    assert mutation.safety_valid is True
+
+
+def test_new_file_code_mutation_apply_and_revert(tmp_path: Path, monkeypatch) -> None:
+    src_dir = tmp_path / "src"
+    generated_dir = src_dir / "generated"
+    generated_dir.mkdir(parents=True)
+    (src_dir / "__init__.py").write_text("")
+    (generated_dir / "__init__.py").write_text("")
+    monkeypatch.setattr(prompt_forge_mod, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(prompt_forge_mod, "NEW_FILE_MUTATION_ROOT", src_dir)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    for module_name in [
+        name for name in list(sys.modules) if name == "src" or name.startswith("src.")
+    ]:
+        monkeypatch.delitem(sys.modules, module_name, raising=False)
+
+    forge = PromptForge(prompts_dir=tmp_path / "prompts", auto_commit=False)
+    monkeypatch.setattr(
+        forge,
+        "_invoke_claude",
+        lambda _prompt: "```python\nVALUE = 1\n```",
+    )
+    target = generated_dir / "new_module.py"
+
+    mutation = forge.propose_code_mutation(
+        target_file="src/generated/new_module.py",
+        mutation_type="new_file",
+    )
+    result = forge.apply_code_mutation(mutation)
+
+    assert result["status"] == "applied"
+    assert target.read_text() == "VALUE = 1"
+    assert "--- /dev/null" in mutation.git_diff
+    assert "+++ " in mutation.git_diff
+
+    forge.revert_code_mutation(mutation)
+
+    assert not target.exists()
+    assert mutation.accepted is False
+
+
+def test_new_file_code_mutation_rejects_traversal_and_absolute_paths(
+    tmp_path: Path, monkeypatch
+) -> None:
+    src_dir = tmp_path / "src"
+    (src_dir / "generated").mkdir(parents=True)
+    (src_dir / "__init__.py").write_text("")
+    (src_dir / "generated" / "__init__.py").write_text("")
+    monkeypatch.setattr(prompt_forge_mod, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(prompt_forge_mod, "NEW_FILE_MUTATION_ROOT", src_dir)
+
+    forge = PromptForge(prompts_dir=tmp_path / "prompts", auto_commit=False)
+
+    with pytest.raises(FileNotFoundError):
+        forge.propose_code_mutation(
+            target_file="../escape.py",
+            mutation_type="new_file",
+        )
+
+    with pytest.raises(FileNotFoundError):
+        forge.propose_code_mutation(
+            target_file=str(tmp_path / "escape.py"),
+            mutation_type="new_file",
+        )
+
+
+def test_new_file_code_mutation_rejects_collision(tmp_path: Path, monkeypatch) -> None:
+    src_dir = tmp_path / "src"
+    generated_dir = src_dir / "generated"
+    generated_dir.mkdir(parents=True)
+    (src_dir / "__init__.py").write_text("")
+    (generated_dir / "__init__.py").write_text("")
+    target = generated_dir / "new_module.py"
+    target.write_text("VALUE = 0\n")
+    monkeypatch.setattr(prompt_forge_mod, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(prompt_forge_mod, "NEW_FILE_MUTATION_ROOT", src_dir)
+
+    forge = PromptForge(prompts_dir=tmp_path / "prompts", auto_commit=False)
+
+    with pytest.raises(FileExistsError):
+        forge.propose_code_mutation(
+            target_file="src/generated/new_module.py",
+            mutation_type="new_file",
+        )
+
+
 def test_resolve_prompt_rejects_symlink_escape(tmp_path: Path) -> None:
     prompts_dir = tmp_path / "prompts"
     prompts_dir.mkdir()
@@ -157,9 +275,7 @@ def test_resolve_prompt_rejects_symlink_escape(tmp_path: Path) -> None:
         raise AssertionError("expected symlink escape to be rejected")
 
 
-def test_frontdoor_prompt_integrity_rejects_agent_commentary(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_frontdoor_prompt_integrity_rejects_agent_commentary(tmp_path: Path, monkeypatch) -> None:
     forge = _forge_with_prompt(
         tmp_path,
         "# Front Door Orchestrator\nTaskIR mode\nDirect-answer mode\nAnswer tags (scoped)\n",
@@ -278,10 +394,7 @@ def test_rejects_mismatched_suite_anchor_introduced_by_mutation(
         forge,
         "_invoke_claude",
         lambda _prompt: (
-            "```markdown\n"
-            "Base prompt\n"
-            "Add a USACO contest tactic for these coder failures.\n"
-            "```"
+            "```markdown\nBase prompt\nAdd a USACO contest tactic for these coder failures.\n```"
         ),
     )
 

@@ -1385,6 +1385,30 @@ def test_code_mutation_transfer_safety_skip_stops_before_apply_or_eval() -> None
     assert swarm.epochs == []
 
 
+def test_code_mutation_file_exists_block_does_not_raise() -> None:
+    class FakeForge:
+        def propose_code_mutation(self, **_kwargs):
+            raise FileExistsError("new file already exists")
+
+    result, species = actions._action_code_mutation(
+        {
+            "type": "code_mutation",
+            "file": "src/generated/new_module.py",
+            "mutation": "new_file",
+        },
+        _ctx(
+            forge=FakeForge(),
+            tower=_QueuedTower([]),
+            gate=_AlwaysPassGate(),
+            swarm=_FakeSwarm(),
+            journal=_FakeJournal(),
+        ),
+    )
+
+    assert result is None
+    assert species == "prompt_forge"
+
+
 def test_code_mutation_noop_skips_eval() -> None:
     class FakeForge:
         def __init__(self):
