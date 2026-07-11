@@ -129,6 +129,82 @@ def test_topology_emits_expected_unloaded_stack_servers(monkeypatch) -> None:
     assert embedder["running"] is False
 
 
+def test_topology_parity_smoke_for_expected_listener_ports(monkeypatch) -> None:
+    from scripts.server import stack_commands
+
+    mode = "both"
+    expected_services = dashboard_topology.expected_stack_services(mode)
+    expected_by_port = {
+        int(s["port"]): s
+        for s in expected_services
+        if isinstance(s.get("port"), int)
+    }
+    assert expected_by_port
+
+    def port_for_base_role(base: str) -> int:
+        for port, service in sorted(expected_by_port.items()):
+            if dashboard_topology.base_role(str(service.get("role") or "")) == base:
+                return port
+        raise AssertionError(f"expected stack service missing for base role {base}")
+
+    listener_ports = {
+        port_for_base_role("frontdoor"),
+        port_for_base_role("worker_general"),
+        port_for_base_role("embedder"),
+    }
+    scan_inputs: list[list[int]] = []
+
+    def fake_scan_known_ports(ports):
+        scanned = sorted(int(port) for port in ports)
+        scan_inputs.append(scanned)
+        return {
+            port: [100_000 + port]
+            for port in sorted(listener_ports)
+            if port in scanned
+        }
+
+    monkeypatch.setattr(
+        stack_commands._stack_processes,
+        "scan_known_ports",
+        fake_scan_known_ports,
+    )
+    discovered_listeners = stack_commands._scan_known_ports()
+
+    assert scan_inputs
+    assert set(expected_by_port).issubset(set(scan_inputs[0]))
+    assert set(discovered_listeners) == listener_ports
+
+    monkeypatch.setattr(
+        dashboard,
+        "_discover_llama_ports",
+        lambda: {
+            port: str(expected_by_port[port]["role"])
+            for port in sorted(discovered_listeners)
+        },
+    )
+    monkeypatch.setattr(dashboard, "_discover_llama_models", lambda: {})
+    monkeypatch.setattr(dashboard, "_load_state_services", lambda: [])
+
+    topology_by_port = {
+        node["port"]: node
+        for node in dashboard._build_topology_nodes(mode)
+        if isinstance(node.get("port"), int)
+    }
+
+    assert set(expected_by_port).issubset(set(topology_by_port))
+    for port, service in expected_by_port.items():
+        node = topology_by_port[port]
+        assert node["expected"] is True
+        assert node["role"] == service["role"]
+        assert node["manifest_roles"] == service["roles"]
+        if port in listener_ports:
+            assert node["running"] is True
+            assert node["kind"] == "llama-server"
+        else:
+            assert node["running"] is False
+            assert node["kind"] == "expected-stack-server"
+
+
 def test_topology_activity_initializes_expected_embedder_bucket(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(dashboard, "_read_tail", lambda *a, **kw: "")
     monkeypatch.setattr(dashboard, "_read_tap_events_tail", lambda *a, **kw: "")
