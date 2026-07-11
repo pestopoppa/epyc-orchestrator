@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 # Bumped only on additive, backward-compatible schema changes.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class GovernanceLevel:
@@ -119,6 +119,7 @@ class BehaviorSignature:
 
     archive_member_id: str | None = None
     trial_id: int | None = None
+    event_id: int | None = None
     sentinel_outcomes: list | dict | str | None = None
     answer_hash: str | None = None
     route_path_hash: str | None = None
@@ -236,6 +237,7 @@ CREATE TABLE IF NOT EXISTS behavior_signature (
   id INTEGER PRIMARY KEY,
   archive_member_id TEXT,
   trial_id INTEGER,
+  event_id INTEGER,
   sentinel_outcomes TEXT,
   answer_hash TEXT,
   route_path_hash TEXT,
@@ -332,9 +334,17 @@ CREATE INDEX IF NOT EXISTS ws_state_id ON working_state(state_id);
 def ensure_harness_schema(conn: sqlite3.Connection) -> sqlite3.Connection:
     """Create the harness/memory record tables if absent. Idempotent."""
     conn.executescript(_HARNESS_SCHEMA)
+    _ensure_column(conn, "behavior_signature", "event_id", "INTEGER")
+    conn.execute("CREATE INDEX IF NOT EXISTS bs_event ON behavior_signature(event_id)")
     conn.execute("INSERT INTO failure_case_fts(failure_case_fts) VALUES('rebuild')")
     conn.commit()
     return conn
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, column_type: str) -> None:
+    columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in columns:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_type}")
 
 
 # ─── insert helpers ─────────────────────────────────────────────────────────────
@@ -354,14 +364,34 @@ def insert_harness_metrics(conn: sqlite3.Connection, m: HarnessMetrics) -> int:
     return _insert(
         conn,
         "harness_metrics",
-        ["event_id", "trial_id", "suite", "execution_fidelity",
-         "feedback_interpretation", "planning_stability", "memory_coherence",
-         "recovery_rate", "evidence_event_ids", "confidence",
-         "schema_version", "created_ts_utc"],
-        [m.event_id, m.trial_id, m.suite, m.execution_fidelity,
-         m.feedback_interpretation, m.planning_stability, m.memory_coherence,
-         m.recovery_rate, _jdump(m.evidence_event_ids), m.confidence,
-         m.schema_version, m.created_ts_utc],
+        [
+            "event_id",
+            "trial_id",
+            "suite",
+            "execution_fidelity",
+            "feedback_interpretation",
+            "planning_stability",
+            "memory_coherence",
+            "recovery_rate",
+            "evidence_event_ids",
+            "confidence",
+            "schema_version",
+            "created_ts_utc",
+        ],
+        [
+            m.event_id,
+            m.trial_id,
+            m.suite,
+            m.execution_fidelity,
+            m.feedback_interpretation,
+            m.planning_stability,
+            m.memory_coherence,
+            m.recovery_rate,
+            _jdump(m.evidence_event_ids),
+            m.confidence,
+            m.schema_version,
+            m.created_ts_utc,
+        ],
     )
 
 
@@ -369,14 +399,30 @@ def insert_oracle_adequacy(conn: sqlite3.Connection, o: OracleAdequacy) -> int:
     return _insert(
         conn,
         "oracle_adequacy",
-        ["suite", "oracle_type", "coverage_claim", "known_blind_spots",
-         "shortcut_risk", "requires_external_answer", "deterministic",
-         "reviewed_by", "schema_version", "created_ts_utc"],
-        [o.suite, o.oracle_type, o.coverage_claim, _jdump(o.known_blind_spots),
-         o.shortcut_risk,
-         None if o.requires_external_answer is None else int(o.requires_external_answer),
-         None if o.deterministic is None else int(o.deterministic),
-         o.reviewed_by, o.schema_version, o.created_ts_utc],
+        [
+            "suite",
+            "oracle_type",
+            "coverage_claim",
+            "known_blind_spots",
+            "shortcut_risk",
+            "requires_external_answer",
+            "deterministic",
+            "reviewed_by",
+            "schema_version",
+            "created_ts_utc",
+        ],
+        [
+            o.suite,
+            o.oracle_type,
+            o.coverage_claim,
+            _jdump(o.known_blind_spots),
+            o.shortcut_risk,
+            None if o.requires_external_answer is None else int(o.requires_external_answer),
+            None if o.deterministic is None else int(o.deterministic),
+            o.reviewed_by,
+            o.schema_version,
+            o.created_ts_utc,
+        ],
     )
 
 
@@ -384,16 +430,42 @@ def insert_behavior_signature(conn: sqlite3.Connection, b: BehaviorSignature) ->
     return _insert(
         conn,
         "behavior_signature",
-        ["archive_member_id", "trial_id", "sentinel_outcomes", "answer_hash",
-         "route_path_hash", "tool_sequence_hash", "escalation_path_hash",
-         "latency_bucket", "token_bucket", "harness_metrics_id",
-         "oracle_adequacy_version", "signature_hash", "signature_confidence",
-         "schema_version", "created_ts_utc"],
-        [b.archive_member_id, b.trial_id, _jdump(b.sentinel_outcomes), b.answer_hash,
-         b.route_path_hash, b.tool_sequence_hash, b.escalation_path_hash,
-         b.latency_bucket, b.token_bucket, b.harness_metrics_id,
-         b.oracle_adequacy_version, b.signature_hash, b.signature_confidence,
-         b.schema_version, b.created_ts_utc],
+        [
+            "archive_member_id",
+            "trial_id",
+            "event_id",
+            "sentinel_outcomes",
+            "answer_hash",
+            "route_path_hash",
+            "tool_sequence_hash",
+            "escalation_path_hash",
+            "latency_bucket",
+            "token_bucket",
+            "harness_metrics_id",
+            "oracle_adequacy_version",
+            "signature_hash",
+            "signature_confidence",
+            "schema_version",
+            "created_ts_utc",
+        ],
+        [
+            b.archive_member_id,
+            b.trial_id,
+            b.event_id,
+            _jdump(b.sentinel_outcomes),
+            b.answer_hash,
+            b.route_path_hash,
+            b.tool_sequence_hash,
+            b.escalation_path_hash,
+            b.latency_bucket,
+            b.token_bucket,
+            b.harness_metrics_id,
+            b.oracle_adequacy_version,
+            b.signature_hash,
+            b.signature_confidence,
+            b.schema_version,
+            b.created_ts_utc,
+        ],
     )
 
 
@@ -401,14 +473,42 @@ def insert_approval_record(conn: sqlite3.Connection, a: ApprovalRecord) -> int:
     return _insert(
         conn,
         "approval_record",
-        ["request_id", "event_id", "task_signature", "selected_role",
-         "selected_model", "alternatives", "quality_score", "uncertainty_score",
-         "uncertainty_components", "trigger_reason", "approval_boundary", "actor",
-         "downstream_outcome", "behavior_signature_id", "schema_version", "created_ts_utc"],
-        [a.request_id, a.event_id, a.task_signature, a.selected_role,
-         a.selected_model, _jdump(a.alternatives), a.quality_score, a.uncertainty_score,
-         _jdump(a.uncertainty_components), a.trigger_reason, a.approval_boundary, a.actor,
-         a.downstream_outcome, a.behavior_signature_id, a.schema_version, a.created_ts_utc],
+        [
+            "request_id",
+            "event_id",
+            "task_signature",
+            "selected_role",
+            "selected_model",
+            "alternatives",
+            "quality_score",
+            "uncertainty_score",
+            "uncertainty_components",
+            "trigger_reason",
+            "approval_boundary",
+            "actor",
+            "downstream_outcome",
+            "behavior_signature_id",
+            "schema_version",
+            "created_ts_utc",
+        ],
+        [
+            a.request_id,
+            a.event_id,
+            a.task_signature,
+            a.selected_role,
+            a.selected_model,
+            _jdump(a.alternatives),
+            a.quality_score,
+            a.uncertainty_score,
+            _jdump(a.uncertainty_components),
+            a.trigger_reason,
+            a.approval_boundary,
+            a.actor,
+            a.downstream_outcome,
+            a.behavior_signature_id,
+            a.schema_version,
+            a.created_ts_utc,
+        ],
     )
 
 
@@ -418,14 +518,40 @@ def insert_failure_case(conn: sqlite3.Connection, f: FailureCase) -> int:
     row_id = _insert(
         conn,
         "failure_case",
-        ["failure_id", "task_signature", "suite", "role_path", "tool_sequence_hash",
-         "files_touched", "error_class", "root_cause_label", "avoidance_advice",
-         "evidence_event_ids", "resolved_by_event_id", "governance_level",
-         "validity_score", "schema_version", "created_ts_utc"],
-        [f.failure_id, f.task_signature, f.suite, f.role_path, f.tool_sequence_hash,
-         _jdump(f.files_touched), f.error_class, f.root_cause_label, f.avoidance_advice,
-         _jdump(f.evidence_event_ids), f.resolved_by_event_id, f.governance_level,
-         f.validity_score, f.schema_version, f.created_ts_utc],
+        [
+            "failure_id",
+            "task_signature",
+            "suite",
+            "role_path",
+            "tool_sequence_hash",
+            "files_touched",
+            "error_class",
+            "root_cause_label",
+            "avoidance_advice",
+            "evidence_event_ids",
+            "resolved_by_event_id",
+            "governance_level",
+            "validity_score",
+            "schema_version",
+            "created_ts_utc",
+        ],
+        [
+            f.failure_id,
+            f.task_signature,
+            f.suite,
+            f.role_path,
+            f.tool_sequence_hash,
+            _jdump(f.files_touched),
+            f.error_class,
+            f.root_cause_label,
+            f.avoidance_advice,
+            _jdump(f.evidence_event_ids),
+            f.resolved_by_event_id,
+            f.governance_level,
+            f.validity_score,
+            f.schema_version,
+            f.created_ts_utc,
+        ],
     )
     _index_failure_case_fts(conn, row_id, f)
     return row_id
@@ -448,10 +574,32 @@ def set_working_state(conn: sqlite3.Connection, w: WorkingState) -> int:
     return _insert(
         conn,
         "working_state",
-        ["state_id", "scope", "owner", "key", "value_json", "created_from_event_id",
-         "expires_at", "supersedes_state_id", "superseded", "schema_version", "created_ts_utc"],
-        [w.state_id, w.scope, w.owner, w.key, _jdump(w.value_json), w.created_from_event_id,
-         w.expires_at, w.supersedes_state_id, w.superseded, w.schema_version, w.created_ts_utc],
+        [
+            "state_id",
+            "scope",
+            "owner",
+            "key",
+            "value_json",
+            "created_from_event_id",
+            "expires_at",
+            "supersedes_state_id",
+            "superseded",
+            "schema_version",
+            "created_ts_utc",
+        ],
+        [
+            w.state_id,
+            w.scope,
+            w.owner,
+            w.key,
+            _jdump(w.value_json),
+            w.created_from_event_id,
+            w.expires_at,
+            w.supersedes_state_id,
+            w.superseded,
+            w.schema_version,
+            w.created_ts_utc,
+        ],
     )
 
 
@@ -475,7 +623,9 @@ def find_failure_cases(
     clauses = ["(task_signature = ?"]
     params: list = [task_signature]
     if fts_query:
-        clauses[0] += " OR id IN (SELECT rowid FROM failure_case_fts WHERE failure_case_fts MATCH ?)"
+        clauses[0] += (
+            " OR id IN (SELECT rowid FROM failure_case_fts WHERE failure_case_fts MATCH ?)"
+        )
         params.append(fts_query)
     clauses[0] += ")"
     if suite is not None:
@@ -499,8 +649,7 @@ def find_failure_cases(
     ).fetchall()
     cols = [d[0] for d in conn.execute("SELECT * FROM failure_case LIMIT 0").description]
     annotated_rows = [
-        _annotate_failure_case_match(dict(zip(cols, row)), task_signature)
-        for row in rows
+        _annotate_failure_case_match(dict(zip(cols, row)), task_signature) for row in rows
     ]
     return _annotate_failure_case_governance(annotated_rows)
 
@@ -611,13 +760,10 @@ def _expire_working_state(conn: sqlite3.Connection, now_iso: str | None = None) 
     return int(cur.rowcount)
 
 
-def latest_behavior_signature(
-    conn: sqlite3.Connection, archive_member_id: str
-) -> dict | None:
+def latest_behavior_signature(conn: sqlite3.Connection, archive_member_id: str) -> dict | None:
     """Most-recent behavior signature for an archive member (for BSV-2 diffing)."""
     row = conn.execute(
-        "SELECT * FROM behavior_signature WHERE archive_member_id = ? "
-        "ORDER BY id DESC LIMIT 1",
+        "SELECT * FROM behavior_signature WHERE archive_member_id = ? ORDER BY id DESC LIMIT 1",
         (archive_member_id,),
     ).fetchone()
     if row is None:
@@ -629,7 +775,11 @@ def latest_behavior_signature(
 def table_counts(conn: sqlite3.Connection) -> dict[str, int]:
     """Row counts for every harness table (diagnostics / tests)."""
     tables = [
-        "harness_metrics", "oracle_adequacy", "behavior_signature",
-        "approval_record", "failure_case", "working_state",
+        "harness_metrics",
+        "oracle_adequacy",
+        "behavior_signature",
+        "approval_record",
+        "failure_case",
+        "working_state",
     ]
     return {t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in tables}

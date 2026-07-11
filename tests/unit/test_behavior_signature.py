@@ -119,14 +119,38 @@ def test_compute_signature_aggregates_per_question_answer_hashes() -> None:
     assert sig.signature_hash != changed.signature_hash
 
 
+def test_trace_ids_do_not_change_behavior_hash() -> None:
+    base = dict(
+        archive_member_id="A",
+        trial_id=5,
+        sentinel_outcomes={"q1": "pass"},
+        route_path=["frontdoor"],
+        latency_ms=1000,
+        total_tokens=1000,
+    )
+
+    s1 = compute_behavior_signature(**base, event_id=101, harness_metrics_id=201)
+    s2 = compute_behavior_signature(**base, event_id=102, harness_metrics_id=202)
+
+    assert s1.event_id == 101
+    assert s2.event_id == 102
+    assert s1.signature_hash == s2.signature_hash
+
+
 def test_signature_persists_via_shared_schema(tmp_path) -> None:
     conn = ensure_schema(tmp_path / "e.sqlite")
     sig = compute_behavior_signature(
-        archive_member_id="cfg-Z", trial_id=5, sentinel_outcomes={"q": "pass"}, latency_ms=2000
+        archive_member_id="cfg-Z",
+        trial_id=5,
+        event_id=99,
+        sentinel_outcomes={"q": "pass"},
+        latency_ms=2000,
     )
     rid = insert_behavior_signature(conn, sig)
     assert rid > 0
-    assert latest_behavior_signature(conn, "cfg-Z")["latency_bucket"] == "1-5s"
+    latest = latest_behavior_signature(conn, "cfg-Z")
+    assert latest["event_id"] == 99
+    assert latest["latency_bucket"] == "1-5s"
     conn.close()
 
 

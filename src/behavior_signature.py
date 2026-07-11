@@ -104,6 +104,7 @@ def compute_behavior_signature(
     *,
     archive_member_id: str,
     trial_id: int | None = None,
+    event_id: int | None = None,
     sentinel_outcomes: dict[str, str] | None = None,
     answer_text: str | None = None,
     answer_hashes: dict[str, str] | None = None,
@@ -146,6 +147,7 @@ def compute_behavior_signature(
     return BehaviorSignature(
         archive_member_id=archive_member_id,
         trial_id=trial_id,
+        event_id=event_id,
         sentinel_outcomes=outcomes,
         answer_hash=answer_h,
         route_path_hash=route_h,
@@ -178,6 +180,7 @@ def _as_dict(sig) -> dict:
         return {
             "archive_member_id": sig.archive_member_id,
             "trial_id": sig.trial_id,
+            "event_id": sig.event_id,
             "sentinel_outcomes": sig.sentinel_outcomes or {},
             "answer_hash": sig.answer_hash,
             "route_path_hash": sig.route_path_hash,

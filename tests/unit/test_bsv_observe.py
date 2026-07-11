@@ -319,15 +319,24 @@ def test_routing_weight_drift_flags_change():
 
 
 def test_diagnostics_are_named_not_fake_signature_ids():
-    # finding #2: schema/count live under explicit diagnostic keys, NOT as fake IDs in the signature.
+    # finding #2: schema/count live under explicit diagnostic keys, not fake IDs in the signature.
     p = compute_bsv_observe_payload(
-        _er(oracle_adequacy={"a": 1, "b": 2}, metric_schema_version=3),
+        _er(
+            oracle_adequacy={"a": 1, "b": 2},
+            metric_schema_version=3,
+            details={"trace_event_id": 42, "harness_metrics_id": 7},
+        ),
         species_name="s",
         trial_id=1,
         incumbent_signature=None,
     )
     assert p["metric_schema_version"] == 3
     assert p["oracle_adequacy_count"] == 2
+    assert p["trace_event_id"] == 42
+    assert p["trace_event_id_source"] == "details.trace_event_id"
+    assert p["harness_metrics_id"] == 7
+    assert p["harness_metrics_id_source"] == "details.harness_metrics_id"
+    assert p["signature"]["event_id"] == 42
     assert "harness_metrics_id" not in p["signature"]  # signature is the diffable subset only
 
 

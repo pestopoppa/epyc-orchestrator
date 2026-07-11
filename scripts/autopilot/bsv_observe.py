@@ -124,6 +124,14 @@ def _float_or_none(value: Any) -> float | None:
     return out
 
 
+def _int_or_none(value: Any) -> int | None:
+    try:
+        out = int(value)
+    except (TypeError, ValueError):
+        return None
+    return out if out >= 0 else None
+
+
 def _details(eval_result: Any) -> dict[str, Any]:
     details = getattr(eval_result, "details", {}) or {}
     return details if isinstance(details, dict) else {}
@@ -261,6 +269,18 @@ def _latency_ms(
     return None, "none"
 
 
+def _first_int_id(eval_result: Any, keys: tuple[str, ...]) -> tuple[int | None, str]:
+    details = _details(eval_result)
+    for key in keys:
+        value = _int_or_none(getattr(eval_result, key, None))
+        if value is not None:
+            return value, f"eval_result.{key}"
+        value = _int_or_none(details.get(key))
+        if value is not None:
+            return value, f"details.{key}"
+    return None, "none"
+
+
 def compute_bsv_observe_payload(
     eval_result: Any,
     *,
@@ -300,10 +320,17 @@ def compute_bsv_observe_payload(
     tool_sequence, tool_sequence_source = _tool_sequence(eval_result, question_rows)
     escalation_path, escalation_path_source = _escalation_path(question_rows)
     latency_ms, latency_source = _latency_ms(eval_result, question_rows)
+    event_id, event_id_source = _first_int_id(
+        eval_result, ("event_id", "trace_event_id", "trial_event_id")
+    )
+    harness_metrics_id, harness_metrics_id_source = _first_int_id(
+        eval_result, ("harness_metrics_id", "trace_harness_metrics_id")
+    )
 
     sig = compute_behavior_signature(
         archive_member_id=str(archive_member_id or species_name or "?"),
         trial_id=trial_id,
+        event_id=event_id,
         sentinel_outcomes=sentinel_outcomes,
         answer_hashes=answer_hashes,
         route_path=_route_path(routing),
@@ -311,7 +338,7 @@ def compute_bsv_observe_payload(
         escalation_path=escalation_path,
         latency_ms=latency_ms,
         total_tokens=avg_tokens or None,
-        harness_metrics_id=None,  # no real trace-store ID yet (finding #2); see diagnostics below
+        harness_metrics_id=harness_metrics_id,
         oracle_adequacy_version=None,  # len(oracle) is a count, not a version (finding #2)
         signature_confidence="partial",  # trial-level aggregate, not per-request evidence
     )
@@ -335,6 +362,10 @@ def compute_bsv_observe_payload(
         "sentinel_outcome_count": len(sentinel_outcomes),
         "answer_hash_source": "question_results.answer_hash" if answer_hashes else "none",
         "answer_hash_count": len(answer_hashes),
+        "trace_event_id": event_id,
+        "trace_event_id_source": event_id_source,
+        "harness_metrics_id": harness_metrics_id,
+        "harness_metrics_id_source": harness_metrics_id_source,
         "process_signal_sources": {
             "tool_sequence": tool_sequence_source,
             "escalation_path": escalation_path_source,
