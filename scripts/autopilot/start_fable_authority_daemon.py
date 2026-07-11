@@ -201,7 +201,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--preflight",
         action="store_true",
-        help="Print read-only stale-daemon restart advice and exit without starting.",
+        help=(
+            "Print read-only stale-daemon restart advice and exit nonzero "
+            "unless the live PID is age-verified against current code."
+        ),
     )
     parser.add_argument(
         "autopilot_args",
@@ -224,7 +227,7 @@ def main(argv: list[str] | None = None) -> int:
             max_trials=args.max_trials,
         )
         print(json.dumps(advice, indent=2, sort_keys=True))
-        return 0
+        return 0 if advice.get("pid_age_verified_landed") else 1
 
     env = authority_env()
     extra_args = list(args.autopilot_args or [])

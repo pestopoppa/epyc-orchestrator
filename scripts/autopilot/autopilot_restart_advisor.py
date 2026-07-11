@@ -76,6 +76,16 @@ WAIT_FOR_BOUNDARY_PHASES = frozenset(
 )
 
 
+def _stamp_landed_gate(advice: dict[str, Any]) -> dict[str, Any]:
+    advice["pid_age_verified_landed"] = (
+        advice.get("ok") is True
+        and advice.get("status") == "no_action"
+        and advice.get("restart_needed") is False
+        and advice.get("pid_alive") is True
+    )
+    return advice
+
+
 def _recommended_start_command(max_trials: int) -> list[str]:
     return [
         "uv",
@@ -150,7 +160,7 @@ def build_restart_advice(
                 "blockers": blockers or ["phase heartbeat missing"],
             }
         )
-        return advice
+        return _stamp_landed_gate(advice)
 
     if pid_alive is False or phase == "stopped":
         advice.update(
@@ -161,10 +171,10 @@ def build_restart_advice(
                 "reason": "AutoPilot is stopped or its heartbeat PID is dead",
             }
         )
-        return advice
+        return _stamp_landed_gate(advice)
 
     if not code_stale:
-        return advice
+        return _stamp_landed_gate(advice)
 
     advice["restart_needed"] = True
     if _phase_is_safe_boundary(phase_report):
@@ -198,7 +208,7 @@ def build_restart_advice(
     pid = advice.get("pid")
     if advice["safe_to_restart_now"] and isinstance(pid, int) and pid > 0:
         advice["stop_command"] = ["kill", "-TERM", str(pid)]
-    return advice
+    return _stamp_landed_gate(advice)
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -233,7 +243,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--strict",
         action="store_true",
-        help="Exit nonzero for manual-attention statuses.",
+        help=(
+            "Exit nonzero unless the live AutoPilot PID is age-verified "
+            "against current runtime sources."
+        ),
     )
     return parser.parse_args(argv)
 
@@ -264,7 +277,7 @@ def main(argv: list[str] | None = None) -> int:
             print("blockers:")
             for blocker in advice["blockers"]:
                 print(f"- {blocker}")
-    if args.strict and not advice["ok"]:
+    if args.strict and not advice.get("pid_age_verified_landed"):
         return 1
     return 0
 

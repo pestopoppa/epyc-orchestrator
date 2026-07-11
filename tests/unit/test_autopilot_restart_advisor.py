@@ -34,6 +34,7 @@ def test_restart_advice_no_action_when_runtime_current() -> None:
     assert advice["status"] == "no_action"
     assert advice["restart_needed"] is False
     assert advice["safe_to_restart_now"] is False
+    assert advice["pid_age_verified_landed"] is True
 
 
 def test_restart_advice_waits_for_active_eval_boundary() -> None:
@@ -52,6 +53,7 @@ def test_restart_advice_waits_for_active_eval_boundary() -> None:
     assert advice["restart_needed"] is True
     assert advice["safe_to_restart_now"] is False
     assert advice["stop_command"] == []
+    assert advice["pid_age_verified_landed"] is False
 
 
 def test_restart_advice_recommends_restart_at_loop_boundary() -> None:
@@ -70,6 +72,7 @@ def test_restart_advice_recommends_restart_at_loop_boundary() -> None:
     assert advice["safe_to_restart_now"] is True
     assert advice["stop_command"] == ["kill", "-TERM", "123"]
     assert advice["start_command"][-1] == "3000"
+    assert advice["pid_age_verified_landed"] is False
 
 
 def test_restart_advice_honors_explicit_max_trials_override() -> None:
@@ -103,3 +106,4 @@ def test_restart_advice_manual_attention_when_heartbeat_missing() -> None:
     assert advice["ok"] is False
     assert advice["status"] == "manual_attention"
     assert advice["blockers"] == ["phase heartbeat missing or unreadable"]
+    assert advice["pid_age_verified_landed"] is False

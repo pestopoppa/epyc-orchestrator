@@ -172,6 +172,7 @@ def test_preflight_prints_restart_advice_without_starting(monkeypatch, tmp_path,
                 "blockers": [],
                 "phase": report["phase"],
                 "max_trials": max_trials,
+                "pid_age_verified_landed": False,
             }
 
     class FakePhase:
@@ -184,8 +185,48 @@ def test_preflight_prints_restart_advice_without_starting(monkeypatch, tmp_path,
 
     rc = launcher.main(["--preflight", "--log-dir", str(tmp_path), "--max-trials", "1234"])
 
-    assert rc == 0
+    assert rc == 1
     payload = json.loads(capsys.readouterr().out)
     assert payload["status"] == "restart_recommended"
     assert payload["phase"] == "loop_start"
     assert payload["max_trials"] == 1234
+
+
+def test_preflight_exits_zero_only_for_pid_age_verified_landed(
+    monkeypatch,
+    tmp_path,
+    capsys,
+) -> None:
+    class FakeAdvisor:
+        @staticmethod
+        def build_restart_advice(report, *, max_trials):
+            return {
+                "advisor_version": "autopilot_restart_advisor.v1",
+                "ok": True,
+                "status": "no_action",
+                "restart_needed": False,
+                "safe_to_restart_now": False,
+                "reason": "current",
+                "blockers": [],
+                "phase": report["phase"],
+                "max_trials": max_trials,
+                "pid_age_verified_landed": True,
+            }
+
+    class FakePhase:
+        @staticmethod
+        def build_phase_health_report(**kwargs):
+            return {
+                "phase": "planner_prompt_build",
+                "require_current_code": kwargs["require_current_code"],
+            }
+
+    monkeypatch.setitem(sys.modules, "autopilot_restart_advisor", FakeAdvisor)
+    monkeypatch.setitem(sys.modules, "phase_status", FakePhase)
+
+    rc = launcher.main(["--preflight", "--log-dir", str(tmp_path), "--max-trials", "1234"])
+
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "no_action"
+    assert payload["pid_age_verified_landed"] is True
