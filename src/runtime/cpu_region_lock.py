@@ -23,8 +23,9 @@ concurrently because their lock sets don't intersect.
 
 Lock files live under `tmp_dir/cpu_region.{role}.{region}.lock` (the
 orchestrator's configured tmp_dir, defaulting to /mnt/raid0/llm/tmp).
-Files are created on-demand on first acquisition. They're zero-content;
-the flock state is what matters.
+Files are created on-demand on first acquisition. They are empty when
+idle, and while held carry a small JSON attribution payload; the flock
+state remains the source of liveness truth.
 
 Behavior modeled on `src.runtime.inference_lock`:
 - Honors a `deadline_s` absolute deadline + per-acquire `timeout_s`.
@@ -48,6 +49,7 @@ from __future__ import annotations
 
 import errno
 import fcntl
+import json
 import logging
 import os
 import time
@@ -78,6 +80,7 @@ def _tmp_dir() -> Path:
         return Path(env_override)
     try:
         from src.config import get_config  # type: ignore[import-not-found]
+
         return Path(get_config().paths.tmp_dir)
     except Exception:
         return Path("/mnt/raid0/llm/tmp")
@@ -133,9 +136,12 @@ def _cross_role_mutex_enabled() -> bool:
     """A-1: gate the global cross-role region mutex behind the same flag as the
     placement-side change. Off by default → byte-identical legacy behavior
     (per-role locks only; cross-role same-region overlap remains possible)."""
-    return os.environ.get(
-        "ORCHESTRATOR_CROSS_ROLE_DISJOINT_PLACEMENT", "0"
-    ).strip() in {"1", "true", "yes", "on"}
+    return os.environ.get("ORCHESTRATOR_CROSS_ROLE_DISJOINT_PLACEMENT", "0").strip() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 class CpuRegionLockTimeout(RuntimeError):
@@ -189,8 +195,7 @@ def _acquire_one_with_timeout(
             )
         if deadline_s is not None and time.perf_counter() >= deadline_s:
             raise CpuRegionLockTimeout(
-                f"region lock deadline exceeded (role={role}, region={region}, "
-                f"tag={request_tag})"
+                f"region lock deadline exceeded (role={role}, region={region}, tag={request_tag})"
             )
         now = time.perf_counter()
         if abs_deadline is not None and now >= abs_deadline:
@@ -203,9 +208,11 @@ def _acquire_one_with_timeout(
             holder_tuple = tuple(holders)
             if holder_tuple != last_holders_logged:
                 logger.info(
-                    "still waiting for region lock role=%s region=%s "
-                    "elapsed=%.1fs holders=%s",
-                    role, region, now - start, ",".join(holders) or "(unknown)",
+                    "still waiting for region lock role=%s region=%s elapsed=%.1fs holders=%s",
+                    role,
+                    region,
+                    now - start,
+                    ",".join(holders) or "(unknown)",
                 )
                 last_holders_logged = holder_tuple
             last_log = now
@@ -236,6 +243,62 @@ def _current_lock_owner_pids(lock_file: Path) -> list[str]:
     return sorted(owners)
 
 
+def _lock_payload_for_region(
+    *,
+    role: str,
+    region: str,
+    regions: list[str],
+    instance_idx: Optional[int],
+    request_tag: Optional[str],
+    started_at: float,
+) -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "pid": os.getpid(),
+        "role": role,
+        "region": region,
+        "regions": list(regions),
+        "instance_idx": instance_idx,
+        "request_tag": request_tag,
+        "started_at": started_at,
+    }
+
+
+def _write_lock_payload(fh: IO[bytes], payload: dict[str, object]) -> None:
+    try:
+        fh.seek(0)
+        fh.truncate(0)
+        fh.write(json.dumps(payload, sort_keys=True).encode("utf-8"))
+        fh.write(b"\n")
+        fh.flush()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("could not write cpu-region lock payload for %s: %s", fh.name, exc)
+
+
+def _clear_lock_payload(fh: IO[bytes]) -> None:
+    try:
+        fh.seek(0)
+        fh.truncate(0)
+        fh.flush()
+    except Exception:
+        pass
+
+
+def read_region_lock_payload(lock_file: Path) -> dict[str, object] | None:
+    """Read the JSON payload from a region lock file, if present and valid."""
+    try:
+        raw = lock_file.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not raw:
+        return None
+    try:
+        loaded = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return loaded if isinstance(loaded, dict) else None
+
+
 def active_region_holders(
     instance_regions: dict[tuple[str, int], frozenset[str]] | None = None,
 ) -> dict[str, list[int]]:
@@ -257,6 +320,7 @@ def active_region_holders(
     if instance_regions is None:
         try:
             from src.runtime.instance_topology import get_instance_regions
+
             instance_regions = get_instance_regions()
         except Exception:
             return {}
@@ -314,6 +378,7 @@ def active_region_holder_instances(
     if instance_regions is None:
         try:
             from src.runtime.instance_topology import get_instance_regions
+
             instance_regions = get_instance_regions()
         except Exception:
             return {}
@@ -372,6 +437,7 @@ def held_regions_by_role(
     if instance_regions is None:
         try:
             from src.runtime.instance_topology import get_instance_regions
+
             instance_regions = get_instance_regions()
         except Exception:
             return {}
@@ -391,8 +457,7 @@ def held_regions_by_role(
         held = {
             region
             for region in regions
-            if (lp := region_lock_path(role, region)).exists()
-            and _current_lock_owner_pids(lp)
+            if (lp := region_lock_path(role, region)).exists() and _current_lock_owner_pids(lp)
         }
         if held:
             out[role] = frozenset(held)
@@ -404,6 +469,7 @@ def cpu_region_lock(
     role: str,
     regions: frozenset[str] | set[str] | list[str] | tuple[str, ...],
     *,
+    instance_idx: Optional[int] = None,
     timeout_s: Optional[float] = None,
     deadline_s: Optional[float] = None,
     cancel_check: Optional[Callable[[], bool]] = None,
@@ -455,6 +521,7 @@ def cpu_region_lock(
         timeout_s = _default_timeout_s()
 
     sorted_regions = sorted(regions)
+    started_at = time.time()
     handles: list[tuple[str, Path, IO[bytes]]] = []
     acquired_paths: dict[str, Path] = {}
 
@@ -476,6 +543,18 @@ def cpu_region_lock(
         except BaseException:
             fh.close()
             raise
+        if lock_role != _GLOBAL_MUTEX_ROLE:
+            _write_lock_payload(
+                fh,
+                _lock_payload_for_region(
+                    role=lock_role,
+                    region=region,
+                    regions=sorted_regions,
+                    instance_idx=instance_idx,
+                    request_tag=request_tag,
+                    started_at=started_at,
+                ),
+            )
         handles.append((region, path, fh))
 
     cross_role_mutex = _cross_role_mutex_enabled()
@@ -500,6 +579,7 @@ def cpu_region_lock(
         # descriptor releases the fcntl lock automatically.
         for _region, _path, fh in reversed(handles):
             try:
+                _clear_lock_payload(fh)
                 fh.close()
             except Exception:
                 pass
@@ -525,10 +605,15 @@ def cpu_region_lock_for_instance(
     directly and assemble `regions` themselves.
     """
     from src.runtime.instance_topology import get_instance_regions
+
     regions = get_instance_regions().get((role, instance_idx), frozenset())
     with cpu_region_lock(
-        role, regions,
-        timeout_s=timeout_s, deadline_s=deadline_s,
-        cancel_check=cancel_check, request_tag=request_tag,
+        role,
+        regions,
+        instance_idx=instance_idx,
+        timeout_s=timeout_s,
+        deadline_s=deadline_s,
+        cancel_check=cancel_check,
+        request_tag=request_tag,
     ) as paths:
         yield paths

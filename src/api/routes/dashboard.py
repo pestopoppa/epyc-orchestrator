@@ -261,7 +261,9 @@ def _enrich_structured_tap_requests(
                 port = int(out.get("port")) if out.get("port") not in (None, "") else None
             except (TypeError, ValueError):
                 port = None
-            port_role, port_shape = _port_role_shape(port_roles.get(port, "")) if port is not None else ("", "")
+            port_role, port_shape = (
+                _port_role_shape(port_roles.get(port, "")) if port is not None else ("", "")
+            )
             logical_role = base_role(str(out.get("role") or ""))
             topology_role = (
                 str(out.get("topology_role") or "")
@@ -571,6 +573,7 @@ def _structured_tap_requests_for_dashboard(
 # and gives us the full token stream + REPL history for free.
 # ---------------------------------------------------------------------------
 
+
 @router.get("/dashboard/api/inference_tap")
 async def inference_tap_snapshot(max_sections: int = 20) -> JSONResponse:
     """Return parsed inference sections + current prompt + REPL tail.
@@ -597,19 +600,25 @@ async def inference_tap_snapshot(max_sections: int = 20) -> JSONResponse:
         except Exception:
             return None
 
-    return JSONResponse(_stamp({
-        "tap_active": tap_active,
-        "tap_sentinel_active": _TAP_SENTINEL_PATH.exists(),
-        "inference_sections": sections,
-        "structured_requests": structured_requests,
-        "inference_tap_mtime": mtime(_INFERENCE_TAP_PATH),
-        # Shard-aware: right after a 512MB rotation the base file is missing
-        # until the next append; the newest shard's mtime is the truth.
-        "structured_tap_mtime": _latest_tap_events_mtime(),
-        "repl_tail": repl_tail,
-        "repl_tap_mtime": mtime(_REPL_TAP_PATH),
-        "now": now_epoch,
-    }, "inference_tap", now=now_epoch))
+    return JSONResponse(
+        _stamp(
+            {
+                "tap_active": tap_active,
+                "tap_sentinel_active": _TAP_SENTINEL_PATH.exists(),
+                "inference_sections": sections,
+                "structured_requests": structured_requests,
+                "inference_tap_mtime": mtime(_INFERENCE_TAP_PATH),
+                # Shard-aware: right after a 512MB rotation the base file is missing
+                # until the next append; the newest shard's mtime is the truth.
+                "structured_tap_mtime": _latest_tap_events_mtime(),
+                "repl_tail": repl_tail,
+                "repl_tap_mtime": mtime(_REPL_TAP_PATH),
+                "now": now_epoch,
+            },
+            "inference_tap",
+            now=now_epoch,
+        )
+    )
 
 
 @router.get("/dashboard/api/contention")
@@ -628,8 +637,10 @@ async def contention_gate_snapshot(request: Request) -> JSONResponse:
       - generated_at: time.time() for client cache-busting
     """
     import time as _time
+
     try:
         from src.scheduling.contention_gate import get_gate
+
         snap = get_gate().metrics_snapshot()
     except Exception as exc:  # noqa: BLE001
         snap = {"error": str(exc), "matrix_status": "unavailable"}
@@ -644,14 +655,17 @@ async def contention_gate_snapshot(request: Request) -> JSONResponse:
         # with the full:-prefixed server_urls), NOT the startup state.llm_primitives (constructed
         # without server_urls → no backends). Prefer the real one so per_role_scheduling actually
         # reflects live CAB placement/migrations (J2/J3 observability fix, 2026-05-27).
-        primitives = (getattr(request.app.state, "_real_primitives", None)
-                      or getattr(request.app.state, "llm_primitives", None))
+        primitives = getattr(request.app.state, "_real_primitives", None) or getattr(
+            request.app.state, "llm_primitives", None
+        )
         if primitives is not None:
             for role, backend in getattr(primitives, "_backends", {}).items():
                 if not hasattr(backend, "_quarter_preference_order"):
                     continue
                 per_role[role] = {
-                    "quarter_preference_order": list(getattr(backend, "_quarter_preference_order", [])),
+                    "quarter_preference_order": list(
+                        getattr(backend, "_quarter_preference_order", [])
+                    ),
                     "migrations_started": int(getattr(backend, "_migrations", 0)),
                     "migration_failures": int(getattr(backend, "_migration_failures", 0)),
                     # WP-4 reverse migration (quarter→full on load drop) — surfaced for J2/J3
@@ -673,6 +687,7 @@ async def contention_gate_snapshot(request: Request) -> JSONResponse:
 
 
 # ── region_locks helpers (module-scope so tests can import) ─────────────
+
 
 def _shape_for_regions(regs: "frozenset[str] | set[str] | list[str]") -> str:
     """Canonical column-bucket name for an instance covering `regs`.
@@ -821,17 +836,26 @@ def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
 
     active_mode = numa_mode or active_stack_numa_mode()
     try:
-        from src.runtime.cpu_region_lock import _tmp_dir, _current_lock_owner_pids
+        from src.runtime.cpu_region_lock import (
+            _current_lock_owner_pids,
+            _tmp_dir,
+            read_region_lock_payload,
+        )
+
         tmp_dir = _tmp_dir()
     except Exception:
         tmp_dir = Path("/mnt/raid0/llm/tmp")
         from src.runtime.cpu_region_lock import _current_lock_owner_pids
+
+        def read_region_lock_payload(_path: Path) -> None:  # type: ignore[no-redef]
+            return None
 
     # Pull the live (role, idx) → {regions} map. Anything with >1 instance OR
     # an instance pinned to a strict subset of {q0..q3} is a candidate for
     # region-locking — those are the rows the panel should always show.
     try:
         from src.runtime.instance_topology import get_instance_regions, ATOMIC_REGIONS
+
         topology = _filter_instance_regions_for_mode(get_instance_regions(), active_mode)
         all_regions = list(ATOMIC_REGIONS)
     except Exception:
@@ -854,6 +878,7 @@ def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
     matrix = None
     try:
         from src.scheduling.contention import load_contention_matrix
+
         matrix = load_contention_matrix()
     except Exception:
         matrix = None  # fail-open: panel still renders with NUMA-only fallback below
@@ -863,13 +888,15 @@ def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
     for (role, idx), regs in topology.items():
         if not regs:
             continue
-        instance_topology_all.setdefault(role, []).append({
-            "idx": idx,
-            "regions": sorted(regs),
-            "span": len(regs),
-            "shape": _shape_for_regions(regs),
-            "is_full": len(regs) >= 2,  # deprecated
-        })
+        instance_topology_all.setdefault(role, []).append(
+            {
+                "idx": idx,
+                "regions": sorted(regs),
+                "span": len(regs),
+                "shape": _shape_for_regions(regs),
+                "is_full": len(regs) >= 2,  # deprecated
+            }
+        )
     for role in instance_topology_all:
         instance_topology_all[role].sort(key=lambda x: (-x["span"], x["regions"]))
 
@@ -898,8 +925,7 @@ def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
     for role in panel_roles:
         allowed = role_allowed_shapes[role]
         instance_topology[role] = [
-            i for i in (instance_topology_all.get(role) or [])
-            if i["shape"] in allowed
+            i for i in (instance_topology_all.get(role) or []) if i["shape"] in allowed
         ]
 
     # Per-role: held-region-set → instance idx, used to attribute lock holders
@@ -908,14 +934,40 @@ def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
     # can be on a shape the matrix omits for idle display, and unresolved holders
     # make the panel report "no locks held" while regions are visibly occupied.
     role_instances_by_regions: dict[str, dict[frozenset[str], int]] = {
-        role: {frozenset(inst["regions"]): inst["idx"] for inst in (instance_topology_all.get(role) or [])}
+        role: {
+            frozenset(inst["regions"]): inst["idx"]
+            for inst in (instance_topology_all.get(role) or [])
+        }
         for role in panel_roles
     }
 
+    def _payload_instance_idx(
+        payload: dict[str, Any] | None,
+        *,
+        role: str,
+        region: str,
+        holders: list[str],
+    ) -> int | None:
+        if not payload:
+            return None
+        if str(payload.get("role") or "") != role:
+            return None
+        if str(payload.get("region") or "") != region:
+            return None
+        pid = payload.get("pid")
+        if holders and str(pid) not in {str(holder) for holder in holders}:
+            return None
+        try:
+            idx = int(payload.get("instance_idx"))
+        except (TypeError, ValueError):
+            return None
+        return idx if idx >= 0 else None
+
     # Pass 1a: collect raw lock-holder PIDs per (role, region) for matrix-included
     # roles only. Locks are acquired by orchestrator uvicorn workers (not by
-    # llama-server processes) so the only reliable identification is the SET of
-    # regions a worker is currently holding.
+    # llama-server processes). Newer lock holders also write a JSON payload under
+    # the flock with direct instance_idx attribution; older/no-payload holders
+    # fall back to the SET of regions a worker is currently holding.
     out: list[dict[str, Any]] = []
     role_pid_regions: dict[str, dict[str, set[str]]] = {}  # role → pid → held regions
     try:
@@ -928,16 +980,26 @@ def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
             if role not in panel_roles:
                 continue  # role isn't in the matrix → don't surface lock state for it
             holders = _current_lock_owner_pids(p)
-            out.append({
-                "role": role,
-                "region": region,
-                "lock_path": str(p),
-                "holder_pids": holders,
-                "holder_instance_idxs": [],  # populated in Pass 1b
-                "held": bool(holders),
-                "wired": True,
-            })
-            if holders:
+            payload = read_region_lock_payload(p) if holders else None
+            payload_idx = _payload_instance_idx(
+                payload,
+                role=role,
+                region=region,
+                holders=holders,
+            )
+            out.append(
+                {
+                    "role": role,
+                    "region": region,
+                    "lock_path": str(p),
+                    "holder_pids": holders,
+                    "holder_instance_idxs": [payload_idx] if payload_idx is not None else [],
+                    "lock_payload": payload if payload_idx is not None else None,
+                    "held": bool(holders),
+                    "wired": True,
+                }
+            )
+            if holders and payload_idx is None:
                 role_pid_regions.setdefault(role, {})
                 for pid in holders:
                     role_pid_regions[role].setdefault(pid, set()).add(region)
@@ -947,11 +1009,13 @@ def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
     # Pass 1b: resolve held-region SET per PID to a NUMA_CONFIG instance idx.
     pid_to_instance = _resolve_pid_to_instance_idx(role_pid_regions, role_instances_by_regions)
     for entry in out:
-        if not entry["holder_pids"]:
+        if not entry["holder_pids"] or entry["holder_instance_idxs"]:
             continue
-        idxs = {pid_to_instance[(entry["role"], pid)]
-                for pid in entry["holder_pids"]
-                if (entry["role"], pid) in pid_to_instance}
+        idxs = {
+            pid_to_instance[(entry["role"], pid)]
+            for pid in entry["holder_pids"]
+            if (entry["role"], pid) in pid_to_instance
+        }
         entry["holder_instance_idxs"] = sorted(idxs)
 
     visible_instances: dict[str, list[dict[str, Any]]] = {
@@ -979,32 +1043,41 @@ def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
         for region in all_regions:
             if (role, region) in seen_role_regions:
                 continue
-            out.append({
-                "role": role,
-                "region": region,
-                "lock_path": str(tmp_dir / f"cpu_region.{role}.{region}.lock"),
-                "holder_pids": [],
-                "holder_instance_idxs": [],
-                "held": False,
-                "wired": True,   # matrix-membership = wired; lock files appear lazily
-            })
+            out.append(
+                {
+                    "role": role,
+                    "region": region,
+                    "lock_path": str(tmp_dir / f"cpu_region.{role}.{region}.lock"),
+                    "holder_pids": [],
+                    "holder_instance_idxs": [],
+                    "lock_payload": None,
+                    "held": False,
+                    "wired": True,  # matrix-membership = wired; lock files appear lazily
+                }
+            )
 
     # Group by role for easier dashboard rendering.
     by_role: dict[str, dict[str, Any]] = {}
     for entry in out:
-        bucket = by_role.setdefault(entry["role"], {
-            "wired": True,
-            "regions": [],
-            "instances": visible_instances.get(entry["role"], []),
-            "active_instance_idxs": set(),
-            "blocked_by_roles": [],
-        })
-        bucket["regions"].append({
+        bucket = by_role.setdefault(
+            entry["role"],
+            {
+                "wired": True,
+                "regions": [],
+                "instances": visible_instances.get(entry["role"], []),
+                "active_instance_idxs": set(),
+                "blocked_by_roles": [],
+            },
+        )
+        region_item = {
             "region": entry["region"],
             "held": entry["held"],
             "holder_pids": entry["holder_pids"],
             "holder_instance_idxs": entry["holder_instance_idxs"],
-        })
+        }
+        if entry.get("lock_payload"):
+            region_item["lock_payload"] = entry["lock_payload"]
+        bucket["regions"].append(region_item)
         for idx in entry["holder_instance_idxs"]:
             bucket["active_instance_idxs"].add(idx)
 
@@ -1043,17 +1116,21 @@ def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
                 continue
             for idx in region.get("holder_instance_idxs", []):
                 inst = inst_by_idx.get(int(idx))
-                held_by_region.setdefault(str(region.get("region")), []).append({
-                    "role": role,
-                    "idx": int(idx),
-                    "shape": (inst or {}).get("shape", f"idx{idx}"),
-                })
+                held_by_region.setdefault(str(region.get("region")), []).append(
+                    {
+                        "role": role,
+                        "idx": int(idx),
+                        "shape": (inst or {}).get("shape", f"idx{idx}"),
+                    }
+                )
             if not region.get("holder_instance_idxs"):
-                held_by_region.setdefault(str(region.get("region")), []).append({
-                    "role": role,
-                    "idx": None,
-                    "shape": "?",
-                })
+                held_by_region.setdefault(str(region.get("region")), []).append(
+                    {
+                        "role": role,
+                        "idx": None,
+                        "shape": "?",
+                    }
+                )
 
     display_rows: list[dict[str, Any]] = []
     for role in sorted(by_role):
@@ -1065,16 +1142,20 @@ def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
         for col in display_columns:
             inst = next((i for i in insts if i.get("shape") == col["key"]), None)
             if inst is None:
-                cells.append({"state": "na", "label": "—", "title": f"{role} has no {col['label']} shape"})
+                cells.append(
+                    {"state": "na", "label": "—", "title": f"{role} has no {col['label']} shape"}
+                )
                 continue
             idx = int(inst["idx"])
             regions = [str(r) for r in inst.get("regions", [])]
             if idx in active_idxs:
-                cells.append({
-                    "state": "active",
-                    "label": "⚡",
-                    "title": f"{role}.{col['label']} ACTIVE — instance idx={idx} holding {{{','.join(regions)}}}",
-                })
+                cells.append(
+                    {
+                        "state": "active",
+                        "label": "⚡",
+                        "title": f"{role}.{col['label']} ACTIVE — instance idx={idx} holding {{{','.join(regions)}}}",
+                    }
+                )
                 continue
             blocking: list[str] = []
             for region in regions:
@@ -1086,20 +1167,24 @@ def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
                 if blockers:
                     blocking.append(f"{region}←{','.join(blockers)}")
             if blocking:
-                cells.append({
-                    "state": "blocked",
-                    "label": "×",
-                    "title": (
-                        f"{role}.{col['label']} WAITING — physical cores "
-                        f"{','.join(regions)} occupied by {' · '.join(blocking)}"
-                    ),
-                })
+                cells.append(
+                    {
+                        "state": "blocked",
+                        "label": "×",
+                        "title": (
+                            f"{role}.{col['label']} WAITING — physical cores "
+                            f"{','.join(regions)} occupied by {' · '.join(blocking)}"
+                        ),
+                    }
+                )
             else:
-                cells.append({
-                    "state": "ready",
-                    "label": "✅",
-                    "title": f"{role}.{col['label']} READY — regions {{{','.join(regions)}}}",
-                })
+                cells.append(
+                    {
+                        "state": "ready",
+                        "label": "✅",
+                        "title": f"{role}.{col['label']} READY — regions {{{','.join(regions)}}}",
+                    }
+                )
         display_rows.append({"role": role, "cells": cells})
 
     feature_flag = os.environ.get("ORCHESTRATOR_PER_REGION_LOCKS", "0").strip()
@@ -1113,7 +1198,9 @@ def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
         "display_matrix": {
             "columns": display_columns,
             "rows": display_rows,
-            "active_holder_count": sum(len(bucket.get("active_instance_idxs", [])) for bucket in by_role.values()),
+            "active_holder_count": sum(
+                len(bucket.get("active_instance_idxs", [])) for bucket in by_role.values()
+            ),
             "held_regions": sorted(held_by_region),
         },
         "topology_quartered_roles": sorted(panel_roles),  # back-compat field
@@ -1198,17 +1285,19 @@ async def dashboard_health(probe: str | None = None) -> JSONResponse:
         cls = env["staleness_class"]
         if _HEALTH_SEVERITY[cls] > _HEALTH_SEVERITY[worst]:
             worst = cls
-        panels_out.append({
-            "key": spec.key,
-            "title": spec.title,
-            "endpoint": spec.endpoint,
-            "mechanism": spec.mechanism,
-            "live": spec.live,
-            "staleness_class": cls,
-            "worst_age_s": env["worst_age_s"],
-            "reason": env["reason"],
-            "sources": env["sources"],
-        })
+        panels_out.append(
+            {
+                "key": spec.key,
+                "title": spec.title,
+                "endpoint": spec.endpoint,
+                "mechanism": spec.mechanism,
+                "live": spec.live,
+                "staleness_class": cls,
+                "worst_age_s": env["worst_age_s"],
+                "reason": env["reason"],
+                "sources": env["sources"],
+            }
+        )
 
     serve_path = _serve_path_health(now)
     if _HEALTH_SEVERITY[serve_path["staleness_class"]] > _HEALTH_SEVERITY[worst]:
@@ -1224,7 +1313,8 @@ async def dashboard_health(probe: str | None = None) -> JSONResponse:
             probe_result = {"ok": False, "timeout_s": 10.0}
         except Exception as exc:
             probe_result = {
-                "ok": False, "error": str(exc),
+                "ok": False,
+                "error": str(exc),
                 "duration_s": round(time.time() - t0, 3),
             }
         if not probe_result.get("ok") and _HEALTH_SEVERITY["stale"] > _HEALTH_SEVERITY[worst]:
@@ -1235,7 +1325,9 @@ async def dashboard_health(probe: str | None = None) -> JSONResponse:
         "worst_class": worst,
         "generated_at": now,
         "panel_count": len(panels_out),
-        "degraded_panels": [p["key"] for p in panels_out if p["staleness_class"] in ("stale", "dead")],
+        "degraded_panels": [
+            p["key"] for p in panels_out if p["staleness_class"] in ("stale", "dead")
+        ],
         "serve_path": serve_path,
         "panels": panels_out,
     }
@@ -1336,13 +1428,15 @@ async def structured_tap_stream(request: Request) -> StreamingResponse:
                     now_epoch=now_epoch,
                 )
                 enriched_requests = _enrich_structured_tap_requests(structured_requests)
-                payload = json.dumps({
-                    "tap_active": _structured_tap_active(enriched_requests),
-                    "tap_sentinel_active": _TAP_SENTINEL_PATH.exists(),
-                    "structured_requests": enriched_requests,
-                    "structured_tap_mtime": mtime or None,
-                    "now": now_epoch,
-                })
+                payload = json.dumps(
+                    {
+                        "tap_active": _structured_tap_active(enriched_requests),
+                        "tap_sentinel_active": _TAP_SENTINEL_PATH.exists(),
+                        "structured_requests": enriched_requests,
+                        "structured_tap_mtime": mtime or None,
+                        "now": now_epoch,
+                    }
+                )
                 yield f"data: {payload}\n\n"
             await asyncio.sleep(0.5)
 
@@ -1521,7 +1615,9 @@ async def inference_tap_stream(request: Request) -> StreamingResponse:
                 # Build the payload — same shape as the snapshot endpoint
                 inference_tail = _read_tail(_INFERENCE_TAP_PATH, max_bytes=256 * 1024)
                 sections = _parse_inference_sections(inference_tail, max_sections=10)
-                structured_tail = _read_tap_events_tail(_INFERENCE_TAP_EVENTS_PATH, max_bytes=1024 * 1024)
+                structured_tail = _read_tap_events_tail(
+                    _INFERENCE_TAP_EVENTS_PATH, max_bytes=1024 * 1024
+                )
                 now_epoch = time.time()
                 structured_requests = _parse_structured_tap_requests(
                     structured_tail,
@@ -1529,15 +1625,17 @@ async def inference_tap_stream(request: Request) -> StreamingResponse:
                     now_epoch=now_epoch,
                 )
                 enriched_requests = _enrich_structured_tap_requests(structured_requests)
-                payload = json.dumps({
-                    "tap_active": _structured_tap_active(enriched_requests),
-                    "tap_sentinel_active": _TAP_SENTINEL_PATH.exists(),
-                    "inference_sections": sections,
-                    "structured_requests": enriched_requests,
-                    "inference_tap_mtime": inf_m,
-                    "structured_tap_mtime": structured_m,
-                    "repl_tap_mtime": rpl_m,
-                })
+                payload = json.dumps(
+                    {
+                        "tap_active": _structured_tap_active(enriched_requests),
+                        "tap_sentinel_active": _TAP_SENTINEL_PATH.exists(),
+                        "inference_sections": sections,
+                        "structured_requests": enriched_requests,
+                        "inference_tap_mtime": inf_m,
+                        "structured_tap_mtime": structured_m,
+                        "repl_tap_mtime": rpl_m,
+                    }
+                )
                 yield f"data: {payload}\n\n"
             await asyncio.sleep(0.5)
 
@@ -1548,6 +1646,7 @@ async def inference_tap_stream(request: Request) -> StreamingResponse:
 # Process status — autopilot alive/dead + orchestrator uptime
 # ---------------------------------------------------------------------------
 
+
 @router.get("/dashboard/api/process_status")
 async def process_status() -> JSONResponse:
     """Aliveness check for autopilot + count of GEPA worker subprocesses."""
@@ -1555,9 +1654,12 @@ async def process_status() -> JSONResponse:
     # Count spawn_main children (GEPA workers + reembed workers)
     try:
         import subprocess
+
         out = subprocess.run(
             ["pgrep", "-cf", "spawn_main"],
-            capture_output=True, text=True, timeout=2,
+            capture_output=True,
+            text=True,
+            timeout=2,
         ).stdout.strip()
         n_workers = int(out) if out else 0
     except Exception:
@@ -1577,6 +1679,7 @@ async def process_status() -> JSONResponse:
             recent_lines = [line for line in tail.splitlines() if line.strip()][-5:]
         except Exception:
             pass
+
     # Stream-source mtimes — drive the live-dot activity-state badges in the
     # left-column panels. The browser computes its own age from the timestamp
     # plus a freshness threshold; we just report mtimes (None when missing).
@@ -1585,9 +1688,12 @@ async def process_status() -> JSONResponse:
             return time.time() - p.stat().st_mtime
         except Exception:
             return None
+
     phase = _read_autopilot_phase()
     phase_health = _autopilot_phase_health()
-    outcome_progress = phase_health.get("outcome_progress") if isinstance(phase_health, dict) else None
+    outcome_progress = (
+        phase_health.get("outcome_progress") if isinstance(phase_health, dict) else None
+    )
     if not isinstance(outcome_progress, dict):
         outcome_progress = {}
     phase_age_s = phase_health.get("heartbeat_age_s")
@@ -1609,21 +1715,27 @@ async def process_status() -> JSONResponse:
     except OSError:
         pass
 
-    return JSONResponse(_stamp({
-        "autopilot": autopilot,
-        "gepa_worker_count": n_workers,
-        "last_autopilot_log_age_s": last_log_age_s,
-        "autopilot_recent_lines": recent_lines,
-        "autopilot_phase": phase,
-        "autopilot_phase_health": phase_health,
-        "autopilot_outcome_progress": outcome_progress,
-        "autopilot_state": _autopilot_state_summary(),
-        "autopilot_phase_age_s": phase_age_s,
-        "inference_tap_age_s": _age_s(_INFERENCE_TAP_PATH),
-        "planner_tap_age_s": _age_s(planner_tap_path),
-        "planner_tap_mtime_s": planner_tap_mtime_s,
-        "planner_tap_precedes_autopilot_start": planner_tap_precedes_process,
-    }, "process_status"), headers=_NO_STORE_HEADERS)
+    return JSONResponse(
+        _stamp(
+            {
+                "autopilot": autopilot,
+                "gepa_worker_count": n_workers,
+                "last_autopilot_log_age_s": last_log_age_s,
+                "autopilot_recent_lines": recent_lines,
+                "autopilot_phase": phase,
+                "autopilot_phase_health": phase_health,
+                "autopilot_outcome_progress": outcome_progress,
+                "autopilot_state": _autopilot_state_summary(),
+                "autopilot_phase_age_s": phase_age_s,
+                "inference_tap_age_s": _age_s(_INFERENCE_TAP_PATH),
+                "planner_tap_age_s": _age_s(planner_tap_path),
+                "planner_tap_mtime_s": planner_tap_mtime_s,
+                "planner_tap_precedes_autopilot_start": planner_tap_precedes_process,
+            },
+            "process_status",
+        ),
+        headers=_NO_STORE_HEADERS,
+    )
 
 
 @router.post("/dashboard/api/autopilot_control")
@@ -1706,6 +1818,7 @@ async def optimization_brief() -> JSONResponse:
 # Per-node detail (for topology click)
 # ---------------------------------------------------------------------------
 
+
 @router.get("/dashboard/api/node/{port}")
 async def node_detail(port: int) -> JSONResponse:
     """Full detail for one topology node: health, slots, recent decisions routed to it."""
@@ -1714,9 +1827,12 @@ async def node_detail(port: int) -> JSONResponse:
     proc_info: dict[str, Any] = {}
     try:
         import subprocess
+
         out = subprocess.run(
             ["ps", "-eo", "pid,etime,pcpu,pmem,rss,cmd"],
-            capture_output=True, text=True, timeout=2,
+            capture_output=True,
+            text=True,
+            timeout=2,
         ).stdout
         port_arg = f"--port {port}"
         for line in out.splitlines()[1:]:
@@ -1752,16 +1868,18 @@ async def node_detail(port: int) -> JSONResponse:
                             content = s.get("content", "") or ""
                             if isinstance(content, list):
                                 content = " ".join(str(x) for x in content)
-                            slots_data.append({
-                                "id": s.get("id"),
-                                "id_task": s.get("id_task"),
-                                "is_processing": s.get("is_processing"),
-                                "n_decoded": s.get("n_decoded"),
-                                "n_prompt_tokens": s.get("n_prompt_tokens"),
-                                "prompt_preview": prompt[:180],
-                                "content_preview": content[:200],
-                                "content_len": len(content),
-                            })
+                            slots_data.append(
+                                {
+                                    "id": s.get("id"),
+                                    "id_task": s.get("id_task"),
+                                    "is_processing": s.get("is_processing"),
+                                    "n_decoded": s.get("n_decoded"),
+                                    "n_prompt_tokens": s.get("n_prompt_tokens"),
+                                    "prompt_preview": prompt[:180],
+                                    "content_preview": content[:200],
+                                    "content_len": len(content),
+                                }
+                            )
                     health_status = "ok"
                 else:
                     health_status = f"http {resp.status_code}"
@@ -1790,30 +1908,34 @@ async def node_detail(port: int) -> JSONResponse:
                         continue
                     data = e.get("data", {})
                     if data.get("chosen_action") == role_base:
-                        recent_routed.append({
-                            "task_id": e.get("task_id"),
-                            "timestamp": e.get("timestamp", ""),
-                            "decision_source": data.get("decision_source"),
-                            "classifier_confidence": data.get("classifier_confidence"),
-                            "verifier_p_success": data.get("verifier_p_success"),
-                        })
+                        recent_routed.append(
+                            {
+                                "task_id": e.get("task_id"),
+                                "timestamp": e.get("timestamp", ""),
+                                "decision_source": data.get("decision_source"),
+                                "classifier_confidence": data.get("classifier_confidence"),
+                                "verifier_p_success": data.get("verifier_p_success"),
+                            }
+                        )
             recent_routed = recent_routed[-15:]
         except Exception:
             pass
 
-    return JSONResponse({
-        "port": port,
-        "label": label,
-        "role": role_base,
-        "color": _role_color(label),
-        "process": proc_info,
-        "health_status": health_status,
-        "slots": slots_data,
-        "n_slots": len(slots_data),
-        "n_processing": sum(1 for s in slots_data if s.get("is_processing")),
-        "recent_routed_count": len(recent_routed),
-        "recent_routed": recent_routed,
-    })
+    return JSONResponse(
+        {
+            "port": port,
+            "label": label,
+            "role": role_base,
+            "color": _role_color(label),
+            "process": proc_info,
+            "health_status": health_status,
+            "slots": slots_data,
+            "n_slots": len(slots_data),
+            "n_processing": sum(1 for s in slots_data if s.get("is_processing")),
+            "recent_routed_count": len(recent_routed),
+            "recent_routed": recent_routed,
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1845,13 +1967,10 @@ try:
     from scripts.server.fleet_markers import (
         read_orchestrator_marker_metadata as _read_orch_marker_metadata,
     )
+
     _marker_meta = _read_orch_marker_metadata()
-    _SERVER_STARTED_AT = (
-        _marker_meta["started_at"] if _marker_meta is not None else time.time()
-    )
-    _SERVER_LAUNCH_GIT_SHA = (
-        _marker_meta.get("git_sha") if _marker_meta is not None else None
-    )
+    _SERVER_STARTED_AT = _marker_meta["started_at"] if _marker_meta is not None else time.time()
+    _SERVER_LAUNCH_GIT_SHA = _marker_meta.get("git_sha") if _marker_meta is not None else None
 except Exception:
     _SERVER_STARTED_AT = time.time()
     _SERVER_LAUNCH_GIT_SHA = None
@@ -1888,10 +2007,18 @@ def _read_git_short_sha() -> str | None:
         return None
 
 
-_AUTOPILOT_STATE_PATH = Path(__file__).resolve().parents[3] / "orchestration" / "autopilot_state.json"
-_AUTOPILOT_JOURNAL_PATH = Path(__file__).resolve().parents[3] / "orchestration" / "autopilot_journal.jsonl"
-_STRATEGY_STORE_PATH = Path(__file__).resolve().parents[3] / "orchestration" / "repl_memory" / "strategies"
-_PLANNER_HINT_SEEDS_PATH = Path(__file__).resolve().parents[3] / "scripts" / "autopilot" / "operator_seed_strategies.yaml"
+_AUTOPILOT_STATE_PATH = (
+    Path(__file__).resolve().parents[3] / "orchestration" / "autopilot_state.json"
+)
+_AUTOPILOT_JOURNAL_PATH = (
+    Path(__file__).resolve().parents[3] / "orchestration" / "autopilot_journal.jsonl"
+)
+_STRATEGY_STORE_PATH = (
+    Path(__file__).resolve().parents[3] / "orchestration" / "repl_memory" / "strategies"
+)
+_PLANNER_HINT_SEEDS_PATH = (
+    Path(__file__).resolve().parents[3] / "scripts" / "autopilot" / "operator_seed_strategies.yaml"
+)
 _AUTOPILOT_LOG_DIR = Path(__file__).resolve().parents[3] / "logs"
 _AUTOPILOT_CONTROL_AUDIT_PATH = _AUTOPILOT_LOG_DIR / "autopilot_operator_control.jsonl"
 _EPHEMERAL_ACTION_KEYS = EPHEMERAL_ACTION_KEYS
@@ -2164,24 +2291,26 @@ def _autopilot_era_regions() -> tuple[list[dict[str, Any]], str | None]:
         return [], "no autopilot-scoped era rows with a from boundary in registry"
 
     ordered = sorted(boundaries.items())
-    first_label = "+".join(
-        sorted({_era_short_label(i) for i in ordered[0][1]})
-    )
-    regions: list[dict[str, Any]] = [{
-        "index": 0,
-        "id": f"pre-{first_label}",
-        "era_ids": [],
-        "from_ts": None,
-        "until_ts": ordered[0][0],
-    }]
+    first_label = "+".join(sorted({_era_short_label(i) for i in ordered[0][1]}))
+    regions: list[dict[str, Any]] = [
+        {
+            "index": 0,
+            "id": f"pre-{first_label}",
+            "era_ids": [],
+            "from_ts": None,
+            "until_ts": ordered[0][0],
+        }
+    ]
     for i, (ts, ids) in enumerate(ordered):
-        regions.append({
-            "index": i + 1,
-            "id": "+".join(sorted({_era_short_label(era_id) for era_id in ids})),
-            "era_ids": ids,
-            "from_ts": ts,
-            "until_ts": ordered[i + 1][0] if i + 1 < len(ordered) else None,
-        })
+        regions.append(
+            {
+                "index": i + 1,
+                "id": "+".join(sorted({_era_short_label(era_id) for era_id in ids})),
+                "era_ids": ids,
+                "from_ts": ts,
+                "until_ts": ordered[i + 1][0] if i + 1 < len(ordered) else None,
+            }
+        )
     return regions, None
 
 
@@ -2367,11 +2496,11 @@ def _read_planner_hint_seed_rows(path: Path | None = None) -> list[dict[str, Any
                 except (TypeError, ValueError):
                     continue
         bind_identifiers_raw = item.get("bind_identifiers")
-        bind_identifiers = [
-            str(value).strip()
-            for value in bind_identifiers_raw
-            if str(value).strip()
-        ] if isinstance(bind_identifiers_raw, list) else []
+        bind_identifiers = (
+            [str(value).strip() for value in bind_identifiers_raw if str(value).strip()]
+            if isinstance(bind_identifiers_raw, list)
+            else []
+        )
         rows.append(
             {
                 "id": f"seed:{slug}",
@@ -2418,7 +2547,9 @@ def _insight_graph_payload(
 
     journal_rows = _read_autopilot_journal_rows()
     journal_rows = journal_rows or []
-    journal_rows, journal_meta = _latest_journal_run_rows(_effective_journal_trial_rows(journal_rows))
+    journal_rows, journal_meta = _latest_journal_run_rows(
+        _effective_journal_trial_rows(journal_rows)
+    )
     strategy_rows = _read_strategy_store_rows() or []
     planner_hint_rows = _read_planner_hint_seed_rows() or []
     if strategy_rows:
@@ -2510,7 +2641,13 @@ def _insight_graph_payload(
         return node["id"]
 
     def _node_sort_key(node: dict[str, Any]) -> tuple[Any, ...]:
-        kind_rank = {"planner_hint": 0, "strategy": 1, "campaign": 2, "handoff": 3, "journal": 4}.get(node["kind"], 5)
+        kind_rank = {
+            "planner_hint": 0,
+            "strategy": 1,
+            "campaign": 2,
+            "handoff": 3,
+            "journal": 4,
+        }.get(node["kind"], 5)
         if node["kind"] == "journal":
             try:
                 recency = -int(node.get("trial_id") or 0)
@@ -2518,7 +2655,13 @@ def _insight_graph_payload(
                 recency = 0
         else:
             recency = str(node.get("created_at") or "")
-        return (kind_rank, node.get("distance", 99), -node.get("degree", 0), recency, node.get("label", ""))
+        return (
+            kind_rank,
+            node.get("distance", 99),
+            -node.get("degree", 0),
+            recency,
+            node.get("label", ""),
+        )
 
     def _node_matches_focus(node: dict[str, Any], focus_text: str) -> bool:
         haystack: list[str] = [
@@ -2547,12 +2690,12 @@ def _insight_graph_payload(
         if source_trial_id is not None:
             haystack.append(str(source_trial_id))
         return any(
-            focus_text == text.lower() or focus_text in text.lower()
-            for text in haystack
-            if text
+            focus_text == text.lower() or focus_text in text.lower() for text in haystack if text
         )
 
-    def _focus_match_key(node_id: str, node: dict[str, Any], focus_text: str) -> tuple[int, tuple[Any, ...]]:
+    def _focus_match_key(
+        node_id: str, node: dict[str, Any], focus_text: str
+    ) -> tuple[int, tuple[Any, ...]]:
         exact_fields = [
             node_id,
             node.get("slug", ""),
@@ -2562,7 +2705,13 @@ def _insight_graph_payload(
             node.get("source_handoff", ""),
         ]
         exact = any(focus_text == str(field).lower() for field in exact_fields if field)
-        kind_rank = {"campaign": 0, "handoff": 1, "planner_hint": 2, "strategy": 3, "journal": 4}.get(node.get("kind"), 5)
+        kind_rank = {
+            "campaign": 0,
+            "handoff": 1,
+            "planner_hint": 2,
+            "strategy": 3,
+            "journal": 4,
+        }.get(node.get("kind"), 5)
         return (0 if exact else 1, (kind_rank, *_node_sort_key(node)))
 
     nodes: dict[str, dict[str, Any]] = {}
@@ -2582,7 +2731,9 @@ def _insight_graph_payload(
         else:
             existing.update({k: v for k, v in node.items() if v not in (None, "", [], {}, ())})
 
-    def _add_edge(source: str, target: str, kind: str, label: str = "", weight: float = 1.0) -> None:
+    def _add_edge(
+        source: str, target: str, kind: str, label: str = "", weight: float = 1.0
+    ) -> None:
         if not source or not target or source == target:
             return
         key = (source, target, kind)
@@ -2618,7 +2769,9 @@ def _insight_graph_payload(
         journal_by_trial[trial_id_int] = row
         status, state_group = _journal_status(row)
         summary_parts = [
-            _compact(row.get("hypothesis") or row.get("reasoning") or row.get("expected_mechanism") or ""),
+            _compact(
+                row.get("hypothesis") or row.get("reasoning") or row.get("expected_mechanism") or ""
+            ),
             _compact(row.get("failure_analysis") or row.get("self_criticism") or ""),
         ]
         summary = " · ".join(part for part in summary_parts if part)
@@ -2664,7 +2817,11 @@ def _insight_graph_payload(
         campaign = str(metadata.get("seed_campaign") or "").strip()
         source_handoff = str(metadata.get("source_handoff") or "").strip()
         bind_status = str(metadata.get("bind_status") or "").strip().lower()
-        bind_identifiers = metadata.get("bind_identifiers") if isinstance(metadata.get("bind_identifiers"), list) else []
+        bind_identifiers = (
+            metadata.get("bind_identifiers")
+            if isinstance(metadata.get("bind_identifiers"), list)
+            else []
+        )
         title = _compact((metadata.get("insight_format") or {}).get("title"))
         if not title:
             title = _compact(row.get("description") or row["id"], max_chars=72)
@@ -2729,8 +2886,16 @@ def _insight_graph_payload(
     # operator seeds explorable without needing to visualize every seed row as a
     # separate cluster head.
     for campaign, ids in strategy_ids_by_campaign.items():
-        members = [strategy_by_id.get(strategy_id) for strategy_id in ids if strategy_by_id.get(strategy_id)]
-        cluster_label = "planner hint rows" if any((member or {}).get("kind") == "planner_hint" for member in members) else "strategy rows"
+        members = [
+            strategy_by_id.get(strategy_id)
+            for strategy_id in ids
+            if strategy_by_id.get(strategy_id)
+        ]
+        cluster_label = (
+            "planner hint rows"
+            if any((member or {}).get("kind") == "planner_hint" for member in members)
+            else "strategy rows"
+        )
         node_id = f"campaign:{campaign}"
         _add_node(
             {
@@ -2760,7 +2925,13 @@ def _insight_graph_payload(
         )
         for strategy_id in ids:
             strategy_node = strategy_by_id.get(strategy_id) or {}
-            _add_edge(node_id, strategy_node.get("id", f"strategy:{strategy_id}"), "campaign", label="seed campaign", weight=1.4)
+            _add_edge(
+                node_id,
+                strategy_node.get("id", f"strategy:{strategy_id}"),
+                "campaign",
+                label="seed campaign",
+                weight=1.4,
+            )
             source_trial_id = strategy_node.get("source_trial_id")
             if source_trial_id is not None and source_trial_id in journal_by_trial:
                 _add_edge(
@@ -2772,8 +2943,16 @@ def _insight_graph_payload(
                 )
 
     for handoff, ids in strategy_ids_by_handoff.items():
-        members = [strategy_by_id.get(strategy_id) for strategy_id in ids if strategy_by_id.get(strategy_id)]
-        cluster_label = "planner hint rows" if any((member or {}).get("kind") == "planner_hint" for member in members) else "strategy rows"
+        members = [
+            strategy_by_id.get(strategy_id)
+            for strategy_id in ids
+            if strategy_by_id.get(strategy_id)
+        ]
+        cluster_label = (
+            "planner hint rows"
+            if any((member or {}).get("kind") == "planner_hint" for member in members)
+            else "strategy rows"
+        )
         node_id = f"handoff:{handoff}"
         _add_node(
             {
@@ -2803,7 +2982,13 @@ def _insight_graph_payload(
         )
         for strategy_id in ids:
             strategy_node = strategy_by_id.get(strategy_id) or {}
-            _add_edge(node_id, strategy_node.get("id", f"strategy:{strategy_id}"), "handoff", label="source handoff", weight=1.2)
+            _add_edge(
+                node_id,
+                strategy_node.get("id", f"strategy:{strategy_id}"),
+                "handoff",
+                label="source handoff",
+                weight=1.2,
+            )
             source_trial_id = strategy_node.get("source_trial_id")
             if source_trial_id is not None and source_trial_id in journal_by_trial:
                 _add_edge(
@@ -2818,21 +3003,39 @@ def _insight_graph_payload(
     for node in strategy_by_id.values():
         source_trial_id = node.get("source_trial_id")
         if source_trial_id is not None and source_trial_id in journal_by_trial:
-            _add_edge(f"journal:{source_trial_id}", node["id"], "projection", label="source trial", weight=1.6)
+            _add_edge(
+                f"journal:{source_trial_id}",
+                node["id"],
+                "projection",
+                label="source trial",
+                weight=1.6,
+            )
         for evidence_trial_id in node.get("evidence_trial_ids") or []:
             if evidence_trial_id in journal_by_trial:
-                _add_edge(f"journal:{evidence_trial_id}", node["id"], "evidence", label="evidence", weight=1.0)
+                _add_edge(
+                    f"journal:{evidence_trial_id}",
+                    node["id"],
+                    "evidence",
+                    label="evidence",
+                    weight=1.0,
+                )
         if node.get("bind_identifiers"):
-            node["summary"] = node.get("summary") or _compact(", ".join(str(x) for x in node["bind_identifiers"]))
+            node["summary"] = node.get("summary") or _compact(
+                ", ".join(str(x) for x in node["bind_identifiers"])
+            )
 
     # Journal lineage edges from append-only supersessions and parent links.
     supersession_targets = {}
     for row in journal_rows:
         if row.get("type") == "supersession":
-            targets = row.get("target_trial_ids") if isinstance(row.get("target_trial_ids"), list) else []
+            targets = (
+                row.get("target_trial_ids") if isinstance(row.get("target_trial_ids"), list) else []
+            )
             for target in targets:
                 try:
-                    supersession_targets[int(target)] = int(row.get("trial_id")) if row.get("trial_id") is not None else None
+                    supersession_targets[int(target)] = (
+                        int(row.get("trial_id")) if row.get("trial_id") is not None else None
+                    )
                 except (TypeError, ValueError):
                     continue
     for trial_id, row in journal_by_trial.items():
@@ -2842,10 +3045,22 @@ def _insight_graph_payload(
         except (TypeError, ValueError):
             parent_trial_id = None
         if parent_trial_id is not None and parent_trial_id in journal_by_trial:
-            _add_edge(f"journal:{parent_trial_id}", f"journal:{trial_id}", "parent", label="parent", weight=0.8)
+            _add_edge(
+                f"journal:{parent_trial_id}",
+                f"journal:{trial_id}",
+                "parent",
+                label="parent",
+                weight=0.8,
+            )
         superseded_by = supersession_targets.get(trial_id)
         if superseded_by is not None and superseded_by in journal_by_trial:
-            _add_edge(f"journal:{trial_id}", f"journal:{superseded_by}", "supersedes", label="supersession", weight=0.8)
+            _add_edge(
+                f"journal:{trial_id}",
+                f"journal:{superseded_by}",
+                "supersedes",
+                label="supersession",
+                weight=0.8,
+            )
 
     # Pick root nodes. If the caller asked for a focus, prefer those matches;
     # otherwise center the graph on the active understanding: live/pending
@@ -2870,7 +3085,11 @@ def _insight_graph_payload(
                 key=lambda item: _node_sort_key(item[1]),
             )
             if (
-                (node["kind"] in {"strategy", "planner_hint"} and node.get("state_group") in {"applied", "pending", "context", "guardrail", "frozen", "live"})
+                (
+                    node["kind"] in {"strategy", "planner_hint"}
+                    and node.get("state_group")
+                    in {"applied", "pending", "context", "guardrail", "frozen", "live"}
+                )
                 or (node["kind"] == "journal" and node.get("state_group") in {"frontier", "audit"})
             )
         ][:16]
@@ -3028,10 +3247,7 @@ def _baseline_promotion_summary(
             continue
         if latest_trial_id is None or trial_id > latest_trial_id:
             latest_trial_id = trial_id
-    events = [
-        row for row in selected_rows
-        if row.get("type") == _BASELINE_PROMOTION_EVENT_TYPE
-    ]
+    events = [row for row in selected_rows if row.get("type") == _BASELINE_PROMOTION_EVENT_TYPE]
     events.sort(key=lambda row: _parse_journal_ts(row.get("timestamp")) or 0)
     recent = [_shape_baseline_promotion_event(row) for row in events[-limit:]]
     latest_promotion_trial_id = recent[-1].get("source_trial_id") if recent else None
@@ -3266,18 +3482,18 @@ async def autopilot_progress() -> JSONResponse:
         "eval_label": None,
         "started_at": None,
         "elapsed_s": None,
-        "expected_s": None,                # log_tail: extrapolated projected total; others: p50 (legacy meta label)
-        "percent": None,                   # elapsed/p90 * 100 (action_p50/aggregate_p50); X/Y * 100 (log_tail)
+        "expected_s": None,  # log_tail: extrapolated projected total; others: p50 (legacy meta label)
+        "percent": None,  # elapsed/p90 * 100 (action_p50/aggregate_p50); X/Y * 100 (log_tail)
         "recent_avg_duration_s": None,
-        "recent_p25": None,                # distribution quantiles used by the tick-style bar
+        "recent_p25": None,  # distribution quantiles used by the tick-style bar
         "recent_p50": None,
         "recent_p75": None,
-        "recent_p90": None,                # bar denominator for action_p50/aggregate_p50
-        "now_percentile": None,            # CDF rank of elapsed within same-action history, 0.0..1.0
-        "slow_tail": False,                # True when elapsed > p90 — bar saturates, signals genuine tail
-        "percent_source": None,            # "log_tail" | "action_p50" | "aggregate_p50" | "fallback"
+        "recent_p90": None,  # bar denominator for action_p50/aggregate_p50
+        "now_percentile": None,  # CDF rank of elapsed within same-action history, 0.0..1.0
+        "slow_tail": False,  # True when elapsed > p90 — bar saturates, signals genuine tail
+        "percent_source": None,  # "log_tail" | "action_p50" | "aggregate_p50" | "fallback"
         "n_action_type_samples": None,
-        "log_tail_progress": None,         # {"completed": X, "total": Y} when percent_source=log_tail
+        "log_tail_progress": None,  # {"completed": X, "total": Y} when percent_source=log_tail
         "baseline_promotions": {
             "count": 0,
             "recent": [],
@@ -3328,13 +3544,15 @@ async def autopilot_progress() -> JSONResponse:
             if in_flight and in_flight.get("trial_id") is not None:
                 started_at = float(in_flight.get("started_at", 0)) or None
                 elapsed = (time.time() - started_at) if started_at else None
-                out.update({
-                    "in_flight": True,
-                    "trial_id": in_flight.get("trial_id"),
-                    "action_type": (in_flight.get("action") or {}).get("type"),
-                    "started_at": started_at,
-                    "elapsed_s": elapsed,
-                })
+                out.update(
+                    {
+                        "in_flight": True,
+                        "trial_id": in_flight.get("trial_id"),
+                        "action_type": (in_flight.get("action") or {}).get("type"),
+                        "started_at": started_at,
+                        "elapsed_s": elapsed,
+                    }
+                )
         except Exception:
             pass
 
@@ -3361,7 +3579,7 @@ async def autopilot_progress() -> JSONResponse:
             entries.sort(key=lambda e: _parse_journal_ts(e.get("timestamp")) or 0)
             for i in range(1, len(entries)):
                 a = _parse_journal_ts(entries[i].get("timestamp"))
-                b = _parse_journal_ts(entries[i-1].get("timestamp"))
+                b = _parse_journal_ts(entries[i - 1].get("timestamp"))
                 if a is None or b is None:
                     continue
                 dt = a - b
@@ -3388,10 +3606,18 @@ async def autopilot_progress() -> JSONResponse:
             return None
         ss = sorted(durs)
         n = len(ss)
+
         def q(p: float) -> float:
             return ss[min(n - 1, int(n * p))]
-        return {"p25": q(0.25), "p50": q(0.5), "p75": q(0.75),
-                "p90": q(0.9), "avg": sum(ss) / n, "n": n}
+
+        return {
+            "p25": q(0.25),
+            "p50": q(0.5),
+            "p75": q(0.75),
+            "p90": q(0.9),
+            "avg": sum(ss) / n,
+            "n": n,
+        }
 
     def _cdf_rank(value: float, durs: list[float]) -> float | None:
         # Fraction of past durations <= value. Used so the bar can answer
@@ -3470,11 +3696,7 @@ async def autopilot_progress() -> JSONResponse:
     #     saturates only when we're genuinely in the tail. Allowed to exceed
     #     100 (slow_tail=True) so the JS can render "p93+" without lying.
     #   - fallback: elapsed/1200, clamped at 100.
-    if (
-        out["percent"] is None
-        and out["in_flight"]
-        and out["elapsed_s"] is not None
-    ):
+    if out["percent"] is None and out["in_flight"] and out["elapsed_s"] is not None:
         denom = out["recent_p90"] if out["recent_p90"] else out["expected_s"]
         if denom:
             pct = (out["elapsed_s"] / denom) * 100.0
@@ -3615,7 +3837,9 @@ async def pareto(max_dominated: int = 600, scope: str = "current") -> JSONRespon
             rows=journal_rows,
         )
         source = "journal_current_run"
-        source_reason = "reconstructed from latest trial-id reset segment in autopilot_journal.jsonl"
+        source_reason = (
+            "reconstructed from latest trial-id reset segment in autopilot_journal.jsonl"
+        )
 
     stale_state_warning = None
     if journal_archive:
@@ -3643,13 +3867,19 @@ async def pareto(max_dominated: int = 600, scope: str = "current") -> JSONRespon
         source = "state_archive"
         source_reason = "journal unavailable or no trusted current-run entries"
     else:
-        return JSONResponse(_stamp({
-            "available": False,
-            "reason": state_error or "autopilot_state.json and autopilot_journal.jsonl not found",
-            "frontier": [],
-            "dominated": [],
-            "hypervolume_history": [],
-        }, "pareto"))
+        return JSONResponse(
+            _stamp(
+                {
+                    "available": False,
+                    "reason": state_error
+                    or "autopilot_state.json and autopilot_journal.jsonl not found",
+                    "frontier": [],
+                    "dominated": [],
+                    "hypervolume_history": [],
+                },
+                "pareto",
+            )
+        )
 
     legacy_state_archive_warning = None
     if source == "state_archive":
@@ -3690,7 +3920,7 @@ async def pareto(max_dominated: int = 600, scope: str = "current") -> JSONRespon
 
     # Dominated entries: newest first, trimmed to max_dominated to bound payload.
     dominated_only = [e for e in all_raw if e.get("trial_id") not in frontier_ids]
-    dominated_only.sort(key=lambda e: (e.get("trial_id") or 0), reverse=True)
+    dominated_only.sort(key=lambda e: e.get("trial_id") or 0, reverse=True)
     dominated_shaped = [_shape_pareto_entry(e) for e in dominated_only[:max_dominated]]
 
     hv_shaped: list[list[float]] = []
@@ -3743,51 +3973,58 @@ async def pareto(max_dominated: int = 600, scope: str = "current") -> JSONRespon
             for region in era_regions
         ]
 
-    return JSONResponse(_stamp({
-        "available": True,
-        "source": source,
-        "source_reason": source_reason,
-        "scope": "all_eras" if all_eras else "current",
-        "eras": eras_payload,
-        "era_registry_error": era_registry_error if all_eras else None,
-        # Visibility into why trials may be missing from the frontier, so the
-        # operator never has to guess whether the plot is stale or the data is.
-        "stale_state_warning": stale_state_warning,
-        "legacy_state_archive_warning": legacy_state_archive_warning,
-        "archive_authority": {
-            "source": source,
-            "journal_rows_available": len(journal_rows),
-            "state_archive_present": state_archive_present,
-            "state_error": state_error,
-            "using_legacy_state_archive": source == "state_archive",
-        },
-        "state_trial_counter": state_trial_counter,
-        "journal_max_trial_id": archive.get("journal_max_trial_id") if isinstance(archive, dict) else None,
-        "exclusions": archive.get("exclusions") if isinstance(archive, dict) else None,
-        "baseline_promotions": baseline_promotions,
-        "frontier": frontier,
-        "frontiers_by_tier": frontiers_by_tier,
-        "dominated": dominated_shaped,
-        "t0_audit": t0_audit_shaped,
-        "hypervolume_history": hv_shaped,
-        "hv_history_by_tier": hv_history_by_tier_raw,
-        "totals": {
-            "frontier_size": len(frontier),
-            "all_entries": len(all_raw),
-            "hv_points": len(hv_shaped),
-        },
-        "canonical_tier": canonical_tier,
-        "session_start_ts": archive.get("session_start_ts"),
-        "journal_run_start_index": archive.get("journal_run_start_index"),
-        "journal_run_start_trial_id": archive.get("journal_run_start_trial_id"),
-        "journal_run_start_ts": archive.get("journal_run_start_ts"),
-        "objective_axes": [
-            {"key": "quality", "index": 0, "direction": "max", "label": "quality"},
-            {"key": "speed", "index": 1, "direction": "max", "label": "speed (t/s)"},
-            {"key": "neg_cost", "index": 2, "direction": "max", "label": "-cost"},
-            {"key": "reliability", "index": 3, "direction": "max", "label": "reliability"},
-        ],
-    }, "pareto"))
+    return JSONResponse(
+        _stamp(
+            {
+                "available": True,
+                "source": source,
+                "source_reason": source_reason,
+                "scope": "all_eras" if all_eras else "current",
+                "eras": eras_payload,
+                "era_registry_error": era_registry_error if all_eras else None,
+                # Visibility into why trials may be missing from the frontier, so the
+                # operator never has to guess whether the plot is stale or the data is.
+                "stale_state_warning": stale_state_warning,
+                "legacy_state_archive_warning": legacy_state_archive_warning,
+                "archive_authority": {
+                    "source": source,
+                    "journal_rows_available": len(journal_rows),
+                    "state_archive_present": state_archive_present,
+                    "state_error": state_error,
+                    "using_legacy_state_archive": source == "state_archive",
+                },
+                "state_trial_counter": state_trial_counter,
+                "journal_max_trial_id": archive.get("journal_max_trial_id")
+                if isinstance(archive, dict)
+                else None,
+                "exclusions": archive.get("exclusions") if isinstance(archive, dict) else None,
+                "baseline_promotions": baseline_promotions,
+                "frontier": frontier,
+                "frontiers_by_tier": frontiers_by_tier,
+                "dominated": dominated_shaped,
+                "t0_audit": t0_audit_shaped,
+                "hypervolume_history": hv_shaped,
+                "hv_history_by_tier": hv_history_by_tier_raw,
+                "totals": {
+                    "frontier_size": len(frontier),
+                    "all_entries": len(all_raw),
+                    "hv_points": len(hv_shaped),
+                },
+                "canonical_tier": canonical_tier,
+                "session_start_ts": archive.get("session_start_ts"),
+                "journal_run_start_index": archive.get("journal_run_start_index"),
+                "journal_run_start_trial_id": archive.get("journal_run_start_trial_id"),
+                "journal_run_start_ts": archive.get("journal_run_start_ts"),
+                "objective_axes": [
+                    {"key": "quality", "index": 0, "direction": "max", "label": "quality"},
+                    {"key": "speed", "index": 1, "direction": "max", "label": "speed (t/s)"},
+                    {"key": "neg_cost", "index": 2, "direction": "max", "label": "-cost"},
+                    {"key": "reliability", "index": 3, "direction": "max", "label": "reliability"},
+                ],
+            },
+            "pareto",
+        )
+    )
 
 
 @router.get("/dashboard/api/version")
@@ -3807,19 +4044,25 @@ async def version() -> JSONResponse:
         server_started_at: float epoch seconds; bumps on orchestrator restart
         server_launch_git_sha: short SHA stamped by the launcher at restart
     """
+
     def mtime(p: Path) -> float | None:
         try:
             return p.stat().st_mtime
         except Exception:
             return None
 
-    return JSONResponse(_stamp({
-        "git_sha": _read_git_short_sha(),
-        "dashboard_html_mtime": mtime(_DASHBOARD_HTML_FOR_VERSION),
-        "dashboard_py_mtime": mtime(_DASHBOARD_PY_FOR_VERSION),
-        "server_started_at": _SERVER_STARTED_AT,
-        "server_launch_git_sha": _SERVER_LAUNCH_GIT_SHA,
-    }, "build_rev"))
+    return JSONResponse(
+        _stamp(
+            {
+                "git_sha": _read_git_short_sha(),
+                "dashboard_html_mtime": mtime(_DASHBOARD_HTML_FOR_VERSION),
+                "dashboard_py_mtime": mtime(_DASHBOARD_PY_FOR_VERSION),
+                "server_started_at": _SERVER_STARTED_AT,
+                "server_launch_git_sha": _SERVER_LAUNCH_GIT_SHA,
+            },
+            "build_rev",
+        )
+    )
 
 
 @router.get("/dashboard/api/llama_fleet_ids")
@@ -3844,14 +4087,17 @@ async def llama_fleet_ids() -> JSONResponse:
     """
     try:
         from scripts.server.fleet_markers import discover_llama_markers
+
         per_port = discover_llama_markers()
     except Exception as exc:
         return JSONResponse({"error": str(exc), "per_port": {}, "now": time.time()})
     # JSON keys must be strings; convert int ports to strings for transport.
-    return JSONResponse({
-        "per_port": {str(p): m for p, m in per_port.items()},
-        "now": time.time(),
-    })
+    return JSONResponse(
+        {
+            "per_port": {str(p): m for p, m in per_port.items()},
+            "now": time.time(),
+        }
+    )
 
 
 def _topology_activity_payload(
@@ -3902,18 +4148,21 @@ def _topology_activity_payload(
         if not role:
             continue
         port = svc.get("port")
-        bucket = per_role.setdefault(role, {
-            "n_recent": 0,
-            "n_completed": 0,
-            "last_activity_age_s": None,
-            "_tps_samples": [],
-            "_live_tps_samples": [],
-            "_duration_samples": [],
-            "expected": True,
-            "expected_ports": [],
-            "running_ports": [],
-            "running": False,
-        })
+        bucket = per_role.setdefault(
+            role,
+            {
+                "n_recent": 0,
+                "n_completed": 0,
+                "last_activity_age_s": None,
+                "_tps_samples": [],
+                "_live_tps_samples": [],
+                "_duration_samples": [],
+                "expected": True,
+                "expected_ports": [],
+                "running_ports": [],
+                "running": False,
+            },
+        )
         if isinstance(port, int):
             if port not in bucket["expected_ports"]:
                 bucket["expected_ports"].append(port)
@@ -3925,17 +4174,20 @@ def _topology_activity_payload(
         role = base_role(req.get("topology_role") or req.get("role") or "")
         if not role:
             continue
-        bucket = per_role.setdefault(role, {
-            "n_recent": 0,
-            "n_completed": 0,
-            "last_activity_age_s": None,
-            "_tps_samples": [],
-            "_live_tps_samples": [],
-            "_duration_samples": [],
-            "expected_ports": [],
-            "running_ports": [],
-            "running": False,
-        })
+        bucket = per_role.setdefault(
+            role,
+            {
+                "n_recent": 0,
+                "n_completed": 0,
+                "last_activity_age_s": None,
+                "_tps_samples": [],
+                "_live_tps_samples": [],
+                "_duration_samples": [],
+                "expected_ports": [],
+                "running_ports": [],
+                "running": False,
+            },
+        )
         try:
             updated_epoch = float(req.get("updated_at_epoch") or req.get("started_at_epoch") or 0.0)
         except (TypeError, ValueError):
@@ -3994,17 +4246,20 @@ def _topology_activity_payload(
         role = base_role(t.get("final_role") or t.get("chosen_action") or "")
         if not role:
             continue
-        bucket = per_role.setdefault(role, {
-            "n_recent": 0,
-            "n_completed": 0,
-            "last_activity_age_s": None,
-            "_tps_samples": [],
-            "_live_tps_samples": [],
-            "_duration_samples": [],
-            "expected_ports": [],
-            "running_ports": [],
-            "running": False,
-        })
+        bucket = per_role.setdefault(
+            role,
+            {
+                "n_recent": 0,
+                "n_completed": 0,
+                "last_activity_age_s": None,
+                "_tps_samples": [],
+                "_live_tps_samples": [],
+                "_duration_samples": [],
+                "expected_ports": [],
+                "running_ports": [],
+                "running": False,
+            },
+        )
         bucket["n_completed"] += 1
         dur = t.get("duration_s")
         if isinstance(dur, (int, float)) and dur > 0:
@@ -4030,7 +4285,9 @@ def _topology_activity_payload(
         # Live in-flight decode rate (mean of running instances' estimates),
         # kept distinct from avg_tps_recent (completed-request average) so the
         # strip can show a real-time number mid-generation instead of blank.
-        b["live_tps"] = (sum(live_tps_samples) / len(live_tps_samples)) if live_tps_samples else None
+        b["live_tps"] = (
+            (sum(live_tps_samples) / len(live_tps_samples)) if live_tps_samples else None
+        )
         b["live_tps_n"] = len(live_tps_samples)
         b["avg_duration_s"] = (sum(dur_samples) / len(dur_samples)) if dur_samples else None
         out[role] = b
@@ -4058,22 +4315,22 @@ def _build_topology_nodes(numa_mode: str | None = None) -> list[dict[str, Any]]:
     services = _load_state_services()
     expected_services = expected_stack_services(active_mode)
     expected_by_port = {
-        svc["port"]: svc
-        for svc in expected_services
-        if isinstance(svc.get("port"), int)
+        svc["port"]: svc for svc in expected_services if isinstance(svc.get("port"), int)
     }
     seen_ports: set[int] = set()
     nodes: list[dict[str, Any]] = []
 
     # Orchestrator at the center.
-    nodes.append({
-        "id": "orchestrator",
-        "label": "orchestrator",
-        "role": "orchestrator",
-        "port": 8000,
-        "color": _role_color("orchestrator"),
-        "kind": "orchestrator",
-    })
+    nodes.append(
+        {
+            "id": "orchestrator",
+            "label": "orchestrator",
+            "role": "orchestrator",
+            "port": 8000,
+            "color": _role_color("orchestrator"),
+            "kind": "orchestrator",
+        }
+    )
     seen_ports.add(8000)
 
     # Llama-servers from /proc scan.
@@ -4092,25 +4349,27 @@ def _build_topology_nodes(numa_mode: str | None = None) -> list[dict[str, Any]]:
             node_kind = "external-llama-server"
         else:
             node_kind = "llama-server"
-        nodes.append({
-            "id": f"port_{port}",
-            "label": role,
-            "role": role,
-            "port": port,
-            "color": _role_color(role),
-            "kind": node_kind,
-            # Model actually loaded by this llama-server (-m GGUF basename,
-            # vendor-prefix + shard-suffix stripped). Surfaced so the topology
-            # strip can label each role with its backing model + quant.
-            "model": llama_models.get(port, ""),
-            # Alias roles served by the same process (e.g. frontdoor port 8070
-            # also serves coder_escalation + worker_summarize). Surfaced so the
-            # dashboard can render them under the primary role label.
-            "aliases": role_aliases(role),
-            "expected": bool(expected),
-            "running": True,
-            "manifest_roles": expected.get("roles", []),
-        })
+        nodes.append(
+            {
+                "id": f"port_{port}",
+                "label": role,
+                "role": role,
+                "port": port,
+                "color": _role_color(role),
+                "kind": node_kind,
+                # Model actually loaded by this llama-server (-m GGUF basename,
+                # vendor-prefix + shard-suffix stripped). Surfaced so the topology
+                # strip can label each role with its backing model + quant.
+                "model": llama_models.get(port, ""),
+                # Alias roles served by the same process (e.g. frontdoor port 8070
+                # also serves coder_escalation + worker_summarize). Surfaced so the
+                # dashboard can render them under the primary role label.
+                "aliases": role_aliases(role),
+                "expected": bool(expected),
+                "running": True,
+                "manifest_roles": expected.get("roles", []),
+            }
+        )
 
     # Auxiliary services not already covered.
     for svc in services:
@@ -4119,18 +4378,20 @@ def _build_topology_nodes(numa_mode: str | None = None) -> list[dict[str, Any]]:
             continue
         expected = expected_by_port.get(port, {})
         seen_ports.add(port)
-        nodes.append({
-            "id": svc["name"],
-            "label": svc["name"],
-            "role": svc["role"],
-            "port": port,
-            "color": _role_color(svc["role"]),
-            "kind": "service",
-            "model": _clean_model_name(svc.get("model", "")),
-            "expected": bool(expected),
-            "running": bool(svc.get("running")),
-            "manifest_roles": expected.get("roles", []),
-        })
+        nodes.append(
+            {
+                "id": svc["name"],
+                "label": svc["name"],
+                "role": svc["role"],
+                "port": port,
+                "color": _role_color(svc["role"]),
+                "kind": "service",
+                "model": _clean_model_name(svc.get("model", "")),
+                "expected": bool(expected),
+                "running": bool(svc.get("running")),
+                "manifest_roles": expected.get("roles", []),
+            }
+        )
 
     # Expected stack servers that are not currently visible via /proc or the
     # state file still get topology rows so the activity panel can show them as
@@ -4141,22 +4402,24 @@ def _build_topology_nodes(numa_mode: str | None = None) -> list[dict[str, Any]]:
         if not port or port in seen_ports or not role:
             continue
         seen_ports.add(port)
-        nodes.append({
-            "id": f"expected_{port}",
-            "label": svc.get("name") or role,
-            "role": role,
-            "port": port,
-            "color": _role_color(role),
-            "kind": "expected-stack-server",
-            "model": "",
-            "aliases": [r for r in svc.get("roles", [])[1:] if isinstance(r, str)],
-            "expected": True,
-            "running": False,
-            "manifest_roles": svc.get("roles", []),
-            "embedding": bool(svc.get("embedding")),
-            "vision": bool(svc.get("vision")),
-            "worker_pool": bool(svc.get("worker_pool")),
-        })
+        nodes.append(
+            {
+                "id": f"expected_{port}",
+                "label": svc.get("name") or role,
+                "role": role,
+                "port": port,
+                "color": _role_color(role),
+                "kind": "expected-stack-server",
+                "model": "",
+                "aliases": [r for r in svc.get("roles", [])[1:] if isinstance(r, str)],
+                "expected": True,
+                "running": False,
+                "manifest_roles": svc.get("roles", []),
+                "embedding": bool(svc.get("embedding")),
+                "vision": bool(svc.get("vision")),
+                "worker_pool": bool(svc.get("worker_pool")),
+            }
+        )
 
     return nodes
 
@@ -4254,19 +4517,23 @@ async def topology() -> JSONResponse:
     """
     _topo_now = time.time()
     active_mode = active_stack_numa_mode()
-    return JSONResponse(_stamp(
-        {
-            "nodes": _build_topology_nodes(active_mode),
-            "generated_at": _topo_now,
-            "stack_numa_mode": active_mode,
-        },
-        "topology", now=_topo_now,
-    ))
+    return JSONResponse(
+        _stamp(
+            {
+                "nodes": _build_topology_nodes(active_mode),
+                "generated_at": _topo_now,
+                "stack_numa_mode": active_mode,
+            },
+            "topology",
+            now=_topo_now,
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
 # Snapshot endpoint — point-in-time state of all slots + counters
 # ---------------------------------------------------------------------------
+
 
 async def _poll_slot(client: httpx.AsyncClient, port: int) -> list[dict[str, Any]]:
     """Fetch /slots from a single llama-server. Returns empty on failure."""
@@ -4308,9 +4575,7 @@ async def _poll_all_slots() -> tuple[dict[int, list[dict[str, Any]]], dict[str, 
     if not ports:
         return out, {"ports": 0, "answered": 0, "timed_out": 0, "duration_s": 0.0}
     async with httpx.AsyncClient() as client:
-        tasks = {
-            port: asyncio.ensure_future(_poll_slot(client, port)) for port in ports
-        }
+        tasks = {port: asyncio.ensure_future(_poll_slot(client, port)) for port in ports}
         await asyncio.wait(tasks.values(), timeout=_SLOTS_FANOUT_DEADLINE_S)
         answered = 0
         for port, task in tasks.items():
@@ -4338,7 +4603,9 @@ def _todays_progress_log() -> Path:
 
 
 def _scan_recent_decisions(
-    path: Path, window_s: float = 600.0, max_items: int = 200,
+    path: Path,
+    window_s: float = 600.0,
+    max_items: int = 200,
 ) -> tuple[list[dict[str, Any]], dict[str, int], dict[str, int]]:
     # 2026-05-25: window widened 50 → 200 — at typical chat traffic the
     # last-50 cut was overwhelmingly frontdoor (~93% of all chat hits today),
@@ -4459,7 +4726,9 @@ def _coherent_display_activity(
         if not role:
             continue
         info = locks_by_role.get(role) or {}
-        active_idxs = {int(i) for i in info.get("active_instance_idxs", []) if str(i).lstrip("-").isdigit()}
+        active_idxs = {
+            int(i) for i in info.get("active_instance_idxs", []) if str(i).lstrip("-").isdigit()
+        }
         if not active_idxs:
             continue
         instances = info.get("instances") if isinstance(info.get("instances"), list) else []
@@ -4497,7 +4766,9 @@ def _coherent_display_activity(
 
 
 def _count_log_events(
-    path: Path, patterns: dict[str, str], window_s: float = 600.0,
+    path: Path,
+    patterns: dict[str, str],
+    window_s: float = 600.0,
 ) -> dict[str, int]:
     return _count_log_events_impl(path, patterns, window_s=window_s)
 
@@ -4542,12 +4813,15 @@ async def _snapshot_impl() -> JSONResponse:
     progress_log = _todays_progress_log()
     recent, rolling, cumulative = _scan_recent_decisions(progress_log)
     orch_log = ORCHESTRATOR_LOG_DIR / "orchestrator.log"
-    log_counts = _count_log_events(orch_log, {
-        "inference_aborted": r"Inference aborted",
-        "inference_lock_timeout": r"Inference lock timeout",
-        "slot_erase": r"erasing slots on holder port",
-        "watchdog_force_release": r"Lock hold watchdog: force-releasing",
-    })
+    log_counts = _count_log_events(
+        orch_log,
+        {
+            "inference_aborted": r"Inference aborted",
+            "inference_lock_timeout": r"Inference lock timeout",
+            "slot_erase": r"erasing slots on holder port",
+            "watchdog_force_release": r"Lock hold watchdog: force-releasing",
+        },
+    )
 
     # Derive per-node activity from slot states + live busy slots per base role.
     port_roles = _discover_llama_ports()
@@ -4578,13 +4852,15 @@ async def _snapshot_impl() -> JSONResponse:
             # v6 /slots dropped prompt/content — those fields are permanently
             # empty. Token text lives in the structured tap; slots carry only
             # occupancy + token counts.
-            active_slots.append({
-                "slot_id": s.get("id"),
-                "task_id": s.get("id_task") if s.get("id_task", -1) >= 0 else None,
-                "tokens_decoded": s.get("n_decoded"),
-                "prompt_tokens": s.get("n_prompt_tokens"),
-                "next_token": s.get("next_token"),
-            })
+            active_slots.append(
+                {
+                    "slot_id": s.get("id"),
+                    "task_id": s.get("id_task") if s.get("id_task", -1) >= 0 else None,
+                    "tokens_decoded": s.get("n_decoded"),
+                    "prompt_tokens": s.get("n_prompt_tokens"),
+                    "next_token": s.get("next_token"),
+                }
+            )
         activity[port] = {
             "n_total": n_total,
             "n_active": n_active,
@@ -4625,39 +4901,46 @@ async def _snapshot_impl() -> JSONResponse:
         now=_snap_now,
         structured_requests=structured_requests,
     )
-    return JSONResponse(_stamp({
-        "generated_at": _snap_now,
-        # Coherent live correlation: topology + region locks + activity are all
-        # built within THIS single snapshot() call and stamped with one
-        # generated_at, so the strip, the region-lock grid, and the slot/activity
-        # dots the frontend renders from this one object can never reflect
-        # different instants. This is the keystone that kills the "tap shows
-        # active inference beside a 'no locks held' grid" inconsistency.
-        "stack_numa_mode": active_mode,
-        "topology": {"nodes": topology_nodes, "stack_numa_mode": active_mode},
-        "activity": activity,
-        "display_activity": display_activity,
-        # Fan-out degradation is data, not a silent gap: timed_out > 0 means
-        # some ports' slots are missing from `activity` this frame.
-        "slots_poll_meta": slots_poll_meta,
-        "in_flight_tasks": in_flight_tasks,
-        "recent_completed_tasks": recent_completed_tasks,
-        "structured_requests": structured_requests,
-        "tap_active": _structured_tap_active(structured_requests),
-        "structured_tap_mtime": _latest_tap_events_mtime(),
-        "topology_activity": topology_activity_payload,
-        "live_busy_by_role": role_busy,
-        "region_locks": region_locks,
-        "recent_decisions": recent,
-        "source_counts_rolling": rolling,
-        "source_counts_cumulative": cumulative,
-        "log_counts": log_counts,
-    }, "snapshot", now=_snap_now))
+    return JSONResponse(
+        _stamp(
+            {
+                "generated_at": _snap_now,
+                # Coherent live correlation: topology + region locks + activity are all
+                # built within THIS single snapshot() call and stamped with one
+                # generated_at, so the strip, the region-lock grid, and the slot/activity
+                # dots the frontend renders from this one object can never reflect
+                # different instants. This is the keystone that kills the "tap shows
+                # active inference beside a 'no locks held' grid" inconsistency.
+                "stack_numa_mode": active_mode,
+                "topology": {"nodes": topology_nodes, "stack_numa_mode": active_mode},
+                "activity": activity,
+                "display_activity": display_activity,
+                # Fan-out degradation is data, not a silent gap: timed_out > 0 means
+                # some ports' slots are missing from `activity` this frame.
+                "slots_poll_meta": slots_poll_meta,
+                "in_flight_tasks": in_flight_tasks,
+                "recent_completed_tasks": recent_completed_tasks,
+                "structured_requests": structured_requests,
+                "tap_active": _structured_tap_active(structured_requests),
+                "structured_tap_mtime": _latest_tap_events_mtime(),
+                "topology_activity": topology_activity_payload,
+                "live_busy_by_role": role_busy,
+                "region_locks": region_locks,
+                "recent_decisions": recent,
+                "source_counts_rolling": rolling,
+                "source_counts_cumulative": cumulative,
+                "log_counts": log_counts,
+            },
+            "snapshot",
+            now=_snap_now,
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
 # SSE stream
 # ---------------------------------------------------------------------------
+
 
 @router.get("/dashboard/events/stream")
 async def stream(request: Request) -> StreamingResponse:
@@ -4737,20 +5020,26 @@ async def _structured_tap_payloads():
             # holders (so this stream stops flagging tapped autopilot-eval
             # traffic as "off-tap"), and enriches — same frame as the snapshot.
             enriched_requests = _structured_tap_requests_for_dashboard(
-                max_requests=40, now_epoch=now_epoch,
+                max_requests=40,
+                now_epoch=now_epoch,
             )
-            yield json.dumps({
-                "tap_active": _structured_tap_active(enriched_requests),
-                "tap_sentinel_active": _TAP_SENTINEL_PATH.exists(),
-                "structured_requests": enriched_requests,
-                "structured_tap_mtime": mtime or None,
-                "now": now_epoch,
-            })
+            yield json.dumps(
+                {
+                    "tap_active": _structured_tap_active(enriched_requests),
+                    "tap_sentinel_active": _TAP_SENTINEL_PATH.exists(),
+                    "structured_requests": enriched_requests,
+                    "structured_tap_mtime": mtime or None,
+                    "now": now_epoch,
+                }
+            )
         await asyncio.sleep(0.5)
 
 
 async def _tail_file_payloads(
-    path: Path, tail_bytes: int, *, create: bool = False,
+    path: Path,
+    tail_bytes: int,
+    *,
+    create: bool = False,
 ):
     """Yield byte-tail JSON payloads ({chunk, initial}) for a growing text file.
 
@@ -4776,10 +5065,12 @@ async def _tail_file_payloads(
         while True:
             raw = fh.read(8192)
             if raw:
-                yield json.dumps({
-                    "chunk": raw.decode("utf-8", errors="replace"),
-                    "initial": False,
-                })
+                yield json.dumps(
+                    {
+                        "chunk": raw.decode("utf-8", errors="replace"),
+                        "initial": False,
+                    }
+                )
             else:
                 await asyncio.sleep(0.1)
     except Exception as exc:
@@ -4809,7 +5100,9 @@ async def multiplex_stream(request: Request) -> StreamingResponse:
             "raw_tap": _tail_file_payloads(_INFERENCE_TAP_PATH, 8192),
             "autopilot_log": _tail_file_payloads(AUTOPILOT_LOG, 16384),
             "planner_tap": _tail_file_payloads(
-                _PLANNER_TAP_PATH, 16384, create=True,
+                _PLANNER_TAP_PATH,
+                16384,
+                create=True,
             ),
         }
         queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
@@ -4858,6 +5151,7 @@ async def multiplex_stream(request: Request) -> StreamingResponse:
 # Task detail
 # ---------------------------------------------------------------------------
 
+
 @router.get("/dashboard/api/task/{task_id}.txt")
 async def task_text(task_id: str) -> Any:
     """Return a plain-text snapshot of a task — for clipboard, curl, downstream LLMs.
@@ -4870,10 +5164,9 @@ async def task_text(task_id: str) -> Any:
     events = _task_events(task_id, log_path)
     structured_tap = _find_structured_request_by_id(task_id)
     if structured_tap is not None and task_id.startswith("tap_"):
-        text = _task_text_snapshot(
-            task_id, events, None, tap_section=structured_tap
-        )
+        text = _task_text_snapshot(task_id, events, None, tap_section=structured_tap)
         from fastapi.responses import PlainTextResponse
+
         return PlainTextResponse(text)
 
     slots_by_port, _slots_meta = await _poll_all_slots()
@@ -4907,12 +5200,11 @@ async def task_text(task_id: str) -> Any:
                     if ev.get("event_type") == "routing_decision":
                         producer_role = (ev.get("data") or {}).get("chosen_action")
                         break
-            tap_section = _find_section_by_objective(
-                objective, expected_role=producer_role
-            )
+            tap_section = _find_section_by_objective(objective, expected_role=producer_role)
 
     text = _task_text_snapshot(task_id, events, found_slot, tap_section=tap_section)
     from fastapi.responses import PlainTextResponse
+
     return PlainTextResponse(text)
 
 
@@ -4929,15 +5221,17 @@ async def task_detail(task_id: str) -> JSONResponse:
     events = _task_events(task_id, log_path)
     structured_tap = _find_structured_request_by_id(task_id)
     if structured_tap is not None and task_id.startswith("tap_"):
-        return JSONResponse({
-            "task_id": task_id,
-            "objective": structured_tap.get("prompt") or "",
-            "events": events,
-            "active_slot_port": None,
-            "active_slot_id": None,
-            "slot": None,
-            "tap_section": structured_tap,
-        })
+        return JSONResponse(
+            {
+                "task_id": task_id,
+                "objective": structured_tap.get("prompt") or "",
+                "events": events,
+                "active_slot_port": None,
+                "active_slot_id": None,
+                "slot": None,
+                "tap_section": structured_tap,
+            }
+        )
 
     objective = _objective_for_task(events)
 
@@ -4962,19 +5256,19 @@ async def task_detail(task_id: str) -> JSONResponse:
                 if ev.get("event_type") == "routing_decision":
                     producer_role = (ev.get("data") or {}).get("chosen_action")
                     break
-        tap_section = _find_section_by_objective(
-            objective, expected_role=producer_role
-        )
+        tap_section = _find_section_by_objective(objective, expected_role=producer_role)
 
-    return JSONResponse({
-        "task_id": task_id,
-        "objective": objective,
-        "events": events,
-        "active_slot_port": None,
-        "active_slot_id": None,
-        "slot": None,
-        "tap_section": tap_section,
-    })
+    return JSONResponse(
+        {
+            "task_id": task_id,
+            "objective": objective,
+            "events": events,
+            "active_slot_port": None,
+            "active_slot_id": None,
+            "slot": None,
+            "tap_section": tap_section,
+        }
+    )
 
 
 @router.get("/dashboard/events/task/{task_id}")
@@ -5012,7 +5306,11 @@ async def task_stream(task_id: str, request: Request) -> StreamingResponse:
             for e in events
         )
         if terminal_seen:
-            yield "data: " + json.dumps({"delta": "", "done": True, "reason": "task_completed_already"}) + "\n\n"
+            yield (
+                "data: "
+                + json.dumps({"delta": "", "done": True, "reason": "task_completed_already"})
+                + "\n\n"
+            )
             return
 
         idle_ticks = 0
@@ -5036,35 +5334,56 @@ async def task_stream(task_id: str, request: Request) -> StreamingResponse:
                 if len(response) > emitted:
                     delta = response[emitted:]
                     emitted = len(response)
-                    payload = json.dumps({
-                        "delta": delta,
-                        "content_len": len(response),
-                        "tokens_decoded": (req.get("timings_raw") or {}).get("tokens"),
-                        "matched_port": req.get("port"),
-                        "reset": first_content_frame,
-                        "done": False,
-                    })
+                    payload = json.dumps(
+                        {
+                            "delta": delta,
+                            "content_len": len(response),
+                            "tokens_decoded": (req.get("timings_raw") or {}).get("tokens"),
+                            "matched_port": req.get("port"),
+                            "reset": first_content_frame,
+                            "done": False,
+                        }
+                    )
                     first_content_frame = False
                     yield f"data: {payload}\n\n"
                 # A completed structured request (end/timings event) is authoritative.
                 if req.get("status") == "complete":
-                    yield "data: " + json.dumps({"delta": "", "done": True, "reason": "tap_complete"}) + "\n\n"
+                    yield (
+                        "data: "
+                        + json.dumps({"delta": "", "done": True, "reason": "tap_complete"})
+                        + "\n\n"
+                    )
                     return
             else:
                 idle_ticks += 1
                 # Re-check terminal state every few ticks
                 if idle_ticks % 20 == 0:
                     fresh_events = _task_events(task_id, log_path)
-                    if any(e.get("event_type") in ("task_completed", "task_failed", "escalation_triggered")
-                           for e in fresh_events):
-                        yield "data: " + json.dumps({"delta": "", "done": True, "reason": "task_completed"}) + "\n\n"
+                    if any(
+                        e.get("event_type")
+                        in ("task_completed", "task_failed", "escalation_triggered")
+                        for e in fresh_events
+                    ):
+                        yield (
+                            "data: "
+                            + json.dumps({"delta": "", "done": True, "reason": "task_completed"})
+                            + "\n\n"
+                        )
                         return
                 if idle_ticks >= IDLE_GIVEUP:
-                    yield "data: " + json.dumps({"delta": "", "done": True, "reason": "idle_timeout"}) + "\n\n"
+                    yield (
+                        "data: "
+                        + json.dumps({"delta": "", "done": True, "reason": "idle_timeout"})
+                        + "\n\n"
+                    )
                     return
                 # Heartbeat so the client knows we're still searching
                 if idle_ticks % 5 == 0:
-                    yield "data: " + json.dumps({"delta": "", "searching": True, "idle_ticks": idle_ticks}) + "\n\n"
+                    yield (
+                        "data: "
+                        + json.dumps({"delta": "", "searching": True, "idle_ticks": idle_ticks})
+                        + "\n\n"
+                    )
             await asyncio.sleep(0.25)
 
     return StreamingResponse(
@@ -5099,9 +5418,13 @@ async def gepa_status() -> JSONResponse:
 
     lines = tail.splitlines()
     gepa_lines = [
-        line for line in lines
-        if "gepa" in line.lower() or "Trial" in line or "sentinel" in line.lower()
-        or "Dispatching action" in line or "prompt_forge" in line
+        line
+        for line in lines
+        if "gepa" in line.lower()
+        or "Trial" in line
+        or "sentinel" in line.lower()
+        or "Dispatching action" in line
+        or "prompt_forge" in line
     ][-30:]
     trial_state = _parse_trial_state(tail)
 
@@ -5115,9 +5438,7 @@ async def gepa_status() -> JSONResponse:
             m = re.match(r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})", line)
             if m:
                 try:
-                    trial_start_ts = datetime.strptime(
-                        m.group(1), "%Y-%m-%d %H:%M:%S"
-                    ).timestamp()
+                    trial_start_ts = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S").timestamp()
                 except Exception:
                     pass
     if trial_start_ts is not None and trial_state.get("baseline_score") is None:
@@ -5165,53 +5486,72 @@ async def gepa_status() -> JSONResponse:
             # trial simply vanished with no signal it had died. The client greys +
             # tags these rows so recent activity is always visible.
             for j in _effective_journal_trial_rows(journal_rows)[-15:]:
-                eval_details = j.get("eval_details") if isinstance(j.get("eval_details"), dict) else {}
-                learning_exclusion = eval_details.get("learning_exclusion") if isinstance(eval_details, dict) else {}
+                eval_details = (
+                    j.get("eval_details") if isinstance(j.get("eval_details"), dict) else {}
+                )
+                learning_exclusion = (
+                    eval_details.get("learning_exclusion") if isinstance(eval_details, dict) else {}
+                )
                 if not isinstance(learning_exclusion, dict):
                     learning_exclusion = {}
                 learning_excluded_by = str(learning_exclusion.get("by") or "").strip()
                 keep_revert_decision = str(j.get("keep_revert_decision") or "").strip()
                 bug_corrupted_by = str(j.get("bug_corrupted_by") or "").strip()
-                recent_trials.append({
-                    "trial_id": j.get("trial_id"),
-                    "timestamp": j.get("timestamp", ""),
-                    "species": j.get("species"),
-                    # Tier is REQUIRED context here: quality is scored per-tier and
-                    # is NOT comparable across tiers (T3 expert/hard rows sit well
-                    # below T1 by design), so a tier-less trajectory row reads a
-                    # healthy T3 eval as a quality regression. Default to the
-                    # canonical tier when absent (legacy rows predate the field).
-                    "tier": j.get("tier", DEFAULT_FRONTIER_TIER),
-                    "quality": j.get("quality"),
-                    "speed": j.get("speed"),
-                    "cost": j.get("cost"),
-                    "reliability": j.get("reliability"),
-                    "pareto_status": j.get("pareto_status"),
-                    "real_suite_v1": _suite_metric_for_dashboard(j, "real_suite_v1"),
-                    # Non-empty when the trial was killed mid-flight or otherwise
-                    # quarantined; the client renders these muted + tagged.
-                    "bug_corrupted_by": bug_corrupted_by or None,
-                    "quarantine_label": (
-                        "killed" if "killed" in bug_corrupted_by else "corrupted"
-                    ) if bug_corrupted_by else None,
-                    "learning_excluded_by": learning_excluded_by or None,
-                    "keep_revert_decision": keep_revert_decision or None,
-                    "exclusion_label": (
-                        "seq-refuted"
-                        if learning_excluded_by == "seq_refuted"
-                        else ("excluded" if learning_excluded_by or keep_revert_decision == "excluded" else None)
-                    ),
-                    "description": (j.get("config_snapshot", {}).get("description") or "")[:140],
-                })
+                recent_trials.append(
+                    {
+                        "trial_id": j.get("trial_id"),
+                        "timestamp": j.get("timestamp", ""),
+                        "species": j.get("species"),
+                        # Tier is REQUIRED context here: quality is scored per-tier and
+                        # is NOT comparable across tiers (T3 expert/hard rows sit well
+                        # below T1 by design), so a tier-less trajectory row reads a
+                        # healthy T3 eval as a quality regression. Default to the
+                        # canonical tier when absent (legacy rows predate the field).
+                        "tier": j.get("tier", DEFAULT_FRONTIER_TIER),
+                        "quality": j.get("quality"),
+                        "speed": j.get("speed"),
+                        "cost": j.get("cost"),
+                        "reliability": j.get("reliability"),
+                        "pareto_status": j.get("pareto_status"),
+                        "real_suite_v1": _suite_metric_for_dashboard(j, "real_suite_v1"),
+                        # Non-empty when the trial was killed mid-flight or otherwise
+                        # quarantined; the client renders these muted + tagged.
+                        "bug_corrupted_by": bug_corrupted_by or None,
+                        "quarantine_label": (
+                            "killed" if "killed" in bug_corrupted_by else "corrupted"
+                        )
+                        if bug_corrupted_by
+                        else None,
+                        "learning_excluded_by": learning_excluded_by or None,
+                        "keep_revert_decision": keep_revert_decision or None,
+                        "exclusion_label": (
+                            "seq-refuted"
+                            if learning_excluded_by == "seq_refuted"
+                            else (
+                                "excluded"
+                                if learning_excluded_by or keep_revert_decision == "excluded"
+                                else None
+                            )
+                        ),
+                        "description": (j.get("config_snapshot", {}).get("description") or "")[
+                            :140
+                        ],
+                    }
+                )
         except Exception:
             pass
 
-    return JSONResponse(_stamp({
-        "active": bool(gepa_lines),
-        "lines": gepa_lines,
-        "state": trial_state,
-        "recent_trials": recent_trials,
-    }, "gepa"))
+    return JSONResponse(
+        _stamp(
+            {
+                "active": bool(gepa_lines),
+                "lines": gepa_lines,
+                "state": trial_state,
+                "recent_trials": recent_trials,
+            },
+            "gepa",
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
