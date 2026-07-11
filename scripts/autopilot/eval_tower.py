@@ -41,6 +41,29 @@ PROMOTION_EVAL_DEFAULT_N = 500
 PROMOTION_EVAL_SUITE_HEALTH_GLOB = "item_analytics*.json"
 _EXPECTED_FREE_SCORERS = {"programmatic"}
 _CORE_METADATA_KEY = "__core_metadata__"
+_SPEED_ANALYTICS_MIN_TOKENS = 128
+_HOST_COVARIATE_COMPACT_KEYS = (
+    "min_core_mhz",
+    "mean_cur_mhz",
+    "base_mhz",
+    "host_inflight",
+    "numa_balancing",
+    "cache_warm_state",
+    "page_cache_mb",
+    "mem_available_mb",
+)
+_HOST_COVARIATE_NUMERIC_KEYS = (
+    "min_core_mhz",
+    "mean_cur_mhz",
+    "base_mhz",
+    "host_inflight",
+    "numa_balancing",
+    "page_cache_mb",
+    "mem_available_mb",
+    "loadavg_1min",
+    "loadavg_per_core",
+)
+_HOST_COVARIATE_CATEGORICAL_KEYS = ("cache_warm_state",)
 
 
 def _eval_no_progress_timeout_s(request_timeout_s: int) -> float:
@@ -253,6 +276,126 @@ def _question_qid(q: dict[str, Any]) -> str:
     return _stable_question_qid(str(q.get("suite", "unknown")), str(q.get("prompt", "")))
 
 
+def _nonnegative_int(value: Any, default: int = 0) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _finite_float(value: Any) -> float | None:
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    return out if math.isfinite(out) else None
+
+
+def _upper_median(values: list[float]) -> float:
+    return sorted(values)[len(values) // 2] if values else 0.0
+
+
+def _compact_host_covariates(covariates: dict[str, Any]) -> dict[str, Any]:
+    compact: dict[str, Any] = {}
+    for key in _HOST_COVARIATE_COMPACT_KEYS:
+        value = covariates.get(key)
+        if value is None:
+            continue
+        if isinstance(value, bool):
+            compact[key] = value
+        elif isinstance(value, int):
+            compact[key] = value
+        elif isinstance(value, float):
+            if math.isfinite(value):
+                compact[key] = round(value, 4)
+        elif isinstance(value, str):
+            compact[key] = value[:80]
+    return compact
+
+
+def _capture_host_timing_covariates(
+    *,
+    tokens_generated: int,
+    elapsed_s: float,
+) -> dict[str, Any]:
+    try:
+        from host_health import host_timing_covariates  # type: ignore
+
+        covariates = host_timing_covariates(
+            event="question_complete",
+            tokens_generated=tokens_generated,
+            elapsed_s=elapsed_s,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.debug("host timing covariates unavailable: %s", exc)
+        return {}
+    return _compact_host_covariates(covariates)
+
+
+def _speed_analytics_ge_128(
+    results: list["QuestionResult"],
+    *,
+    eval_wall_s: float,
+) -> dict[str, Any]:
+    eligible = [
+        r
+        for r in results
+        if not r.error and r.tokens_generated >= _SPEED_ANALYTICS_MIN_TOKENS and r.elapsed_s > 0
+    ]
+    short_timing_samples = sum(
+        1 for r in results if not r.error and 0 < r.tokens_generated < _SPEED_ANALYTICS_MIN_TOKENS
+    )
+    request_speeds = [r.tokens_generated / r.elapsed_s for r in eligible]
+    eligible_tokens = sum(r.tokens_generated for r in eligible)
+    aggregate_tps = (
+        eligible_tokens / eval_wall_s if eligible_tokens > 0 and eval_wall_s > 0 else 0.0
+    )
+    return {
+        "speed_analytics_min_tokens": _SPEED_ANALYTICS_MIN_TOKENS,
+        "speed_analytics_filter": f"tokens_generated>={_SPEED_ANALYTICS_MIN_TOKENS}",
+        "speed_analytics_n_ge_128": len(eligible),
+        "speed_analytics_n_lt_128": short_timing_samples,
+        "speed_analytics_tokens_ge_128": eligible_tokens,
+        "speed_analytics_median_request_tps_ge_128": _upper_median(request_speeds),
+        "speed_analytics_aggregate_tps_ge_128": aggregate_tps,
+    }
+
+
+def _summarize_host_timing_covariates(
+    results: list["QuestionResult"],
+) -> dict[str, Any]:
+    samples = [r.host_covariates for r in results if r.host_covariates]
+    summary: dict[str, Any] = {"samples": len(samples)}
+    if not samples:
+        return summary
+
+    for key in _HOST_COVARIATE_NUMERIC_KEYS:
+        values = [
+            value
+            for value in (_finite_float(sample.get(key)) for sample in samples)
+            if value is not None
+        ]
+        if values:
+            summary[key] = {
+                "min": min(values),
+                "median": _upper_median(values),
+                "max": max(values),
+            }
+
+    for key in _HOST_COVARIATE_CATEGORICAL_KEYS:
+        counts: dict[str, int] = {}
+        for sample in samples:
+            raw = sample.get(key)
+            if raw is None:
+                continue
+            value = str(raw)
+            counts[value] = counts.get(value, 0) + 1
+        if counts:
+            summary[key] = max(counts.items(), key=lambda item: (item[1], item[0]))[0]
+            summary[f"{key}_counts"] = dict(sorted(counts.items()))
+    return summary
+
+
 def _compact_question_result(r: "QuestionResult") -> dict[str, Any]:
     item: dict[str, Any] = {
         "qid": r.qid or _stable_question_qid(str(r.suite), str(r.prompt)),
@@ -260,8 +403,13 @@ def _compact_question_result(r: "QuestionResult") -> dict[str, Any]:
         "partition": r.eval_partition or "core",
         "correct": bool(r.correct),
         "latency_ms": int(round(max(0.0, r.elapsed_s) * 1000)),
+        "tokens_generated": int(r.tokens_generated or 0),
         "tools_used": int(r.tools_used or 0),
     }
+    if r.host_covariates:
+        compact_covariates = _compact_host_covariates(r.host_covariates)
+        if compact_covariates:
+            item["host_covariates"] = compact_covariates
     if r.scoring_method and r.scoring_method != "exact_match":
         item["scoring_method"] = r.scoring_method
     if r.route_used:
@@ -615,6 +763,7 @@ class QuestionResult:
     retry_count: int = 0
     eval_partition: str = "core"
     rubric_scores: dict[str, float] = field(default_factory=dict)
+    host_covariates: dict[str, Any] = field(default_factory=dict)
 
 
 # EV-6: Cross-family verification constraint.
@@ -1054,7 +1203,11 @@ class EvalTower:
             elapsed = time.time() - start
             answer = resp.get("answer", "")
             error = resp.get("error")
-            tokens = resp.get("tokens_generated", 0)
+            tokens = _nonnegative_int(resp.get("tokens_generated", 0))
+            host_covariates = _capture_host_timing_covariates(
+                tokens_generated=tokens,
+                elapsed_s=elapsed,
+            )
 
             correct = False
             rubric_scores: dict[str, float] = {}
@@ -1119,9 +1272,14 @@ class EvalTower:
                 retry_count=int(meta.get("retry_count", 0)),
                 eval_partition=eval_partition,
                 rubric_scores=rubric_scores,
+                host_covariates=host_covariates,
             )
         except Exception as e:
             elapsed = time.time() - start
+            host_covariates = _capture_host_timing_covariates(
+                tokens_generated=0,
+                elapsed_s=elapsed,
+            )
             return QuestionResult(
                 question_id=qid,
                 suite=suite,
@@ -1131,6 +1289,7 @@ class EvalTower:
                 error=str(e),
                 elapsed_s=elapsed,
                 eval_partition=eval_partition,
+                host_covariates=host_covariates,
             )
 
     def _failed_question_result(
@@ -1145,6 +1304,10 @@ class EvalTower:
         stable_qid = str(q.get("qid") or q.get("stable_qid") or "").strip()
         if not stable_qid:
             stable_qid = _stable_question_qid(str(suite), str(prompt))
+        host_covariates = _capture_host_timing_covariates(
+            tokens_generated=0,
+            elapsed_s=elapsed_s,
+        )
         return QuestionResult(
             question_id=q.get("id", q.get("question_id", "unknown")),
             suite=suite,
@@ -1154,6 +1317,7 @@ class EvalTower:
             error=error,
             elapsed_s=elapsed_s,
             eval_partition=str(q.get("eval_partition") or "core"),
+            host_covariates=host_covariates,
         )
 
     def _eval_batch(
@@ -1364,6 +1528,8 @@ class EvalTower:
             if total_tokens_generated > 0 and eval_wall_s > 0
             else 0.0
         )
+        speed_analytics = _speed_analytics_ge_128(results, eval_wall_s=eval_wall_s)
+        host_timing_covariates = _summarize_host_timing_covariates(results)
         task_rate_qph = (len(results) / (eval_wall_s / 3600.0)) if eval_wall_s > 0 else 0.0
         goodput_qph = (quality / 3.0) * task_rate_qph
         tokens_per_solved_task = (
@@ -1565,10 +1731,12 @@ class EvalTower:
                 "objective_speed_tps": speed,
                 "median_request_tps": median_request_speed,
                 "aggregate_tps": aggregate_speed,
+                **speed_analytics,
                 "eval_concurrency": eval_concurrency,
                 "eval_wall_s": eval_wall_s,
                 "sum_request_elapsed_s": sum_request_elapsed_s,
                 "tokens_generated": total_tokens_generated,
+                "host_timing_covariates": host_timing_covariates,
                 "task_rate_qph": task_rate_qph,
                 "goodput_qph": goodput_qph,
                 "tokens_per_solved_task": tokens_per_solved_task,

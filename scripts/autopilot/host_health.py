@@ -32,6 +32,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Callable
 
 from src.registry.stack_priors import (
     DEFAULT_OUTPUT as STACK_PRIORS_PATH,
@@ -49,14 +50,14 @@ _CANONICAL_FLUSH_HELPER = "/usr/local/sbin/autopilot-flush-cache"
 # unnecessarily) costs ~5 s of bench time; false-negative (let throttled host
 # poison data) costs trial integrity.
 _LOADAVG_FRACTION_OF_CORES_OK = 1.5  # loadavg/n_cores must stay below this when no
-                                      # active inference is expected; >1.5× = throttle suspect
+# active inference is expected; >1.5× = throttle suspect
 _CPU_FREQ_FRACTION_OF_BASE_OK = 0.80  # mean cur_freq must stay above 80% of base_freq;
-                                      # below = thermal/power throttling
-_MIN_PAGE_CACHE_AVAILABLE_MB = 4096   # arbitrary lower bound; if Cached drops below this
-                                      # under sustained load, fragmentation is likely
-_MIN_MEM_AVAILABLE_MB = 128 * 1024    # below this, long evals can run into real memory pressure
+# below = thermal/power throttling
+_MIN_PAGE_CACHE_AVAILABLE_MB = 4096  # arbitrary lower bound; if Cached drops below this
+# under sustained load, fragmentation is likely
+_MIN_MEM_AVAILABLE_MB = 128 * 1024  # below this, long evals can run into real memory pressure
 _HIGH_LLAMA_PRIVATE_DIRTY_MB = 384 * 1024  # retained llama-server KV/context arenas
-_HIGH_LLAMA_LOCKED_MB = 192 * 1024    # mlocked model pages; drop_caches cannot reclaim these
+_HIGH_LLAMA_LOCKED_MB = 192 * 1024  # mlocked model pages; drop_caches cannot reclaim these
 
 
 @dataclass(frozen=True)
@@ -188,7 +189,9 @@ def _read_meminfo_mb(field: str) -> float:
     return 0.0
 
 
-def _read_llama_server_memory_mb(proc_root: Path = Path("/proc")) -> tuple[int, float, float, float]:
+def _read_llama_server_memory_mb(
+    proc_root: Path = Path("/proc"),
+) -> tuple[int, float, float, float]:
     """Return (processes, PSS MB, Private_Dirty MB, Locked MB) for llama-server."""
     process_count = 0
     pss_kb = 0
@@ -226,6 +229,24 @@ def _read_llama_server_memory_mb(proc_root: Path = Path("/proc")) -> tuple[int, 
     )
 
 
+def _read_cur_mhz_values(cpu_root: Path = Path("/sys/devices/system/cpu")) -> list[float]:
+    """Return per-core scaling_cur_freq values in MHz."""
+    vals: list[float] = []
+    for cpu_dir in sorted(cpu_root.glob("cpu[0-9]*")):
+        f = cpu_dir / "cpufreq" / "scaling_cur_freq"
+        if f.exists():
+            try:
+                vals.append(int(f.read_text().strip()) / 1000.0)
+            except (OSError, ValueError):
+                continue
+    return vals
+
+
+def _read_min_cur_mhz(cpu_root: Path = Path("/sys/devices/system/cpu")) -> float | None:
+    vals = _read_cur_mhz_values(cpu_root)
+    return min(vals) if vals else None
+
+
 def _read_mean_cur_mhz() -> float | None:
     """Median of per-core scaling_cur_freq, in MHz.
 
@@ -234,15 +255,7 @@ def _read_mean_cur_mhz() -> float | None:
     across all online CPUs (HT siblings included — they ramp identically
     on AMD).
     """
-    base = Path("/sys/devices/system/cpu")
-    vals = []
-    for cpu_dir in sorted(base.glob("cpu[0-9]*")):
-        f = cpu_dir / "cpufreq" / "scaling_cur_freq"
-        if f.exists():
-            try:
-                vals.append(int(f.read_text().strip()) / 1000.0)
-            except (OSError, ValueError):
-                continue
+    vals = _read_cur_mhz_values()
     if not vals:
         return None
     vals.sort()
@@ -277,6 +290,123 @@ def _read_base_mhz() -> float | None:
     return None
 
 
+def _read_numa_balancing(
+    path: Path = Path("/proc/sys/kernel/numa_balancing"),
+) -> int | None:
+    try:
+        raw = path.read_text().strip()
+    except OSError:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+def _read_host_inflight() -> tuple[int | None, dict[str, list[int]]]:
+    """Return active decoding instances from CPU-region locks, best effort."""
+    try:
+        from src.runtime.cpu_region_lock import active_region_holder_instances
+
+        holders = active_region_holder_instances()
+    except Exception:
+        try:
+            from src.runtime.cpu_region_lock import active_region_holders
+
+            holders = active_region_holders()
+        except Exception:
+            return None, {}
+    normalized = {
+        str(role): sorted(int(idx) for idx in indices)
+        for role, indices in sorted((holders or {}).items())
+    }
+    return sum(len(indices) for indices in normalized.values()), normalized
+
+
+def _cache_warm_state(page_cache_mb: float, mem_available_mb: float) -> str:
+    if 0 < mem_available_mb < _MIN_MEM_AVAILABLE_MB:
+        return "memory_pressure"
+    if page_cache_mb < _MIN_PAGE_CACHE_AVAILABLE_MB:
+        return "cold"
+    return "warm"
+
+
+def _safe_covariate_read(label: str, reader: Callable[[], Any], default: Any) -> Any:
+    try:
+        return reader()
+    except Exception as exc:  # noqa: BLE001
+        log.debug("host timing covariate %s unavailable: %s", label, exc)
+        return default
+
+
+def host_timing_covariates(
+    *,
+    event: str = "",
+    tokens_generated: int | None = None,
+    elapsed_s: float | None = None,
+) -> dict[str, object]:
+    """Best-effort host covariates for eval timing events.
+
+    These are observe-only journal fields. They must never fail an eval or
+    alter planner behavior; missing kernel/lock data is represented as None.
+    """
+    timestamp = _safe_covariate_read("timestamp", time.time, 0.0)
+    loadavg_1min = _safe_covariate_read("loadavg_1min", _read_loadavg_1min, 0.0)
+    n_cores_online = max(1, _safe_covariate_read("n_cores_online", _read_online_cores, 1))
+    page_cache_mb = _safe_covariate_read(
+        "page_cache_mb",
+        lambda: _read_meminfo_mb("Cached"),
+        0.0,
+    )
+    mem_available_mb = _safe_covariate_read(
+        "mem_available_mb",
+        lambda: _read_meminfo_mb("MemAvailable"),
+        0.0,
+    )
+    host_inflight, active_region_holders = _safe_covariate_read(
+        "host_inflight",
+        _read_host_inflight,
+        (None, {}),
+    )
+    loadavg_per_core = loadavg_1min / max(1, n_cores_online)
+
+    out: dict[str, object] = {
+        "timestamp": timestamp,
+        "event": event or "eval_timing",
+        "min_core_mhz": _safe_covariate_read("min_core_mhz", _read_min_cur_mhz, None),
+        "mean_cur_mhz": _safe_covariate_read("mean_cur_mhz", _read_mean_cur_mhz, None),
+        "base_mhz": _safe_covariate_read("base_mhz", _read_base_mhz, None),
+        "host_inflight": host_inflight,
+        "active_region_holders": active_region_holders,
+        "numa_balancing": _safe_covariate_read(
+            "numa_balancing",
+            _read_numa_balancing,
+            None,
+        ),
+        "cache_warm_state": _cache_warm_state(page_cache_mb, mem_available_mb),
+        "page_cache_mb": page_cache_mb,
+        "mem_available_mb": mem_available_mb,
+        "unevictable_mb": _safe_covariate_read(
+            "unevictable_mb",
+            lambda: _read_meminfo_mb("Unevictable"),
+            0.0,
+        ),
+        "mlocked_mb": _safe_covariate_read(
+            "mlocked_mb",
+            lambda: _read_meminfo_mb("Mlocked"),
+            0.0,
+        ),
+        "loadavg_1min": loadavg_1min,
+        "n_cores_online": n_cores_online,
+        "loadavg_per_core": loadavg_per_core,
+    }
+    if tokens_generated is not None:
+        out["tokens_generated"] = max(0, int(tokens_generated))
+    if elapsed_s is not None:
+        out["elapsed_s"] = max(0.0, float(elapsed_s))
+    return out
+
+
 def remediate() -> bool:
     """Run the canonical sync + drop_caches via passwordless sudo helper.
 
@@ -286,8 +416,10 @@ def remediate() -> bool:
         log.warning("sudo not found; cannot remediate")
         return False
     if not Path(_CANONICAL_FLUSH_HELPER).exists():
-        log.warning("flush helper not installed at %s — see "
-                    "scripts/autopilot/host_health_install.md", _CANONICAL_FLUSH_HELPER)
+        log.warning(
+            "flush helper not installed at %s — see scripts/autopilot/host_health_install.md",
+            _CANONICAL_FLUSH_HELPER,
+        )
         return False
     try:
         result = subprocess.run(
@@ -299,8 +431,9 @@ def remediate() -> bool:
         if result.returncode == 0:
             log.info("drop_caches OK (helper output: %s)", result.stdout.strip()[:120])
             return True
-        log.error("drop_caches helper failed (rc=%d): %s",
-                  result.returncode, result.stderr.strip()[:200])
+        log.error(
+            "drop_caches helper failed (rc=%d): %s", result.returncode, result.stderr.strip()[:200]
+        )
         return False
     except subprocess.TimeoutExpired:
         log.error("drop_caches helper timed out after 30 s")
@@ -333,6 +466,7 @@ def is_throttled() -> tuple[bool, list[str]]:
 # (parallel rewarm would defeat the interleave benefit), restore paused state.
 # Any trial that DID complete during the window gets tagged with
 # DeficiencyCategory.EXOGENOUS_CACHE_FLUSH by the safety_gate wire-in.
+
 
 def _fallback_rewarm_ggufs_from_stack_priors(
     stack_priors_path: Path = STACK_PRIORS_PATH,
@@ -392,7 +526,9 @@ def _default_rewarm_ggufs(
     else:
         if ggufs:
             return ggufs
-        log.warning("using fallback rewarm GGUF list; launcher target resolution returned no targets")
+        log.warning(
+            "using fallback rewarm GGUF list; launcher target resolution returned no targets"
+        )
 
     fallback = _fallback_rewarm_ggufs_from_stack_priors(stack_priors_path)
     if fallback:
@@ -402,8 +538,9 @@ def _default_rewarm_ggufs(
     return ()
 
 
-def _numa_interleave_rewarm(gguf_paths: tuple[str, ...] | None = None,
-                            timeout_per_gguf: int = 120) -> dict[str, bool]:
+def _numa_interleave_rewarm(
+    gguf_paths: tuple[str, ...] | None = None, timeout_per_gguf: int = 120
+) -> dict[str, bool]:
     """Warm each GGUF back into the page cache with `numactl --interleave=all`.
 
     Serial, not parallel — running multiple `numactl --interleave=all cat`
@@ -437,11 +574,16 @@ def _numa_interleave_rewarm(gguf_paths: tuple[str, ...] | None = None,
                 timeout=timeout_per_gguf,
             )
             elapsed = time.monotonic() - t0
-            ok = (proc.returncode == 0)
-            size_gb = Path(gguf).stat().st_size / (1024 ** 3)
-            log.info("rewarm %s: %.1f GB in %.1fs (%.1f GB/s) %s",
-                     Path(gguf).name, size_gb, elapsed,
-                     size_gb / max(elapsed, 0.001), "OK" if ok else "FAIL")
+            ok = proc.returncode == 0
+            size_gb = Path(gguf).stat().st_size / (1024**3)
+            log.info(
+                "rewarm %s: %.1f GB in %.1fs (%.1f GB/s) %s",
+                Path(gguf).name,
+                size_gb,
+                elapsed,
+                size_gb / max(elapsed, 0.001),
+                "OK" if ok else "FAIL",
+            )
             results[gguf] = ok
         except subprocess.TimeoutExpired:
             log.error("rewarm timed out after %ds: %s", timeout_per_gguf, gguf)
@@ -474,6 +616,7 @@ def flush_cache_with_pause(
     default under orchestration/).
     """
     import json
+
     if state_path is None:
         # Resolve via the same path the autopilot CLI uses, without importing
         # the heavy autopilot module here.
@@ -483,10 +626,17 @@ def flush_cache_with_pause(
         else:
             # Default: <repo>/orchestration/autopilot_state.json. host_health
             # lives at scripts/autopilot/, so go two parents up + orchestration.
-            state_path = Path(__file__).resolve().parents[2] / "orchestration" / "autopilot_state.json"
+            state_path = (
+                Path(__file__).resolve().parents[2] / "orchestration" / "autopilot_state.json"
+            )
 
     started = time.monotonic()
-    result: dict[str, object] = {"paused_pre": None, "flush_ok": False, "rewarm": {}, "elapsed_s": 0.0}
+    result: dict[str, object] = {
+        "paused_pre": None,
+        "flush_ok": False,
+        "rewarm": {},
+        "elapsed_s": 0.0,
+    }
 
     # Step 1: set paused=True via atomic write (mirror AP-39 atomic state pattern).
     paused_pre = None
@@ -502,7 +652,9 @@ def flush_cache_with_pause(
             os.replace(tmp, state_path)
             log.info("autopilot paused via state.json (pre=%s)", paused_pre)
         else:
-            log.warning("state file %s does not exist; flush will proceed without pause", state_path)
+            log.warning(
+                "state file %s does not exist; flush will proceed without pause", state_path
+            )
     except Exception as exc:
         log.error("could not set paused=True on %s: %s", state_path, exc)
     result["paused_pre"] = paused_pre
@@ -537,14 +689,18 @@ def flush_cache_with_pause(
         log.error("could not restore paused state: %s", exc)
 
     result["elapsed_s"] = time.monotonic() - started
-    log.info("flush_cache_with_pause done in %.1fs (flush=%s, %d/%d gguf rewarmed)",
-             result["elapsed_s"], flush_ok,
-             sum(1 for v in result["rewarm"].values() if v),
-             len(result["rewarm"]))
+    log.info(
+        "flush_cache_with_pause done in %.1fs (flush=%s, %d/%d gguf rewarmed)",
+        result["elapsed_s"],
+        flush_ok,
+        sum(1 for v in result["rewarm"].values() if v),
+        len(result["rewarm"]),
+    )
     return result
 
 
 # --- CLI -------------------------------------------------------------------
+
 
 def _format_state(state: HostHealthState) -> str:
     ff = state.cpu_freq_fraction
@@ -561,8 +717,8 @@ def _format_state(state: HostHealthState) -> str:
         f"loadavg/cores={state.loadavg_per_core:.2f}  "
         f"cpu_freq={state.mean_cur_mhz:.0f}/{state.base_mhz:.0f} MHz ({ff_pct})  "
         f"{memory}"
-        if state.mean_cur_mhz and state.base_mhz else
-        f"loadavg(1m)={state.loadavg_1min:.2f}  "
+        if state.mean_cur_mhz and state.base_mhz
+        else f"loadavg(1m)={state.loadavg_1min:.2f}  "
         f"loadavg/cores={state.loadavg_per_core:.2f}  "
         f"cpu_freq=N/A  "
         f"{memory}"
@@ -571,14 +727,16 @@ def _format_state(state: HostHealthState) -> str:
 
 def _main() -> int:
     import argparse
+
     p = argparse.ArgumentParser(description="Host health check + drop_caches remediation")
-    p.add_argument("--remediate", action="store_true",
-                   help="run drop_caches if throttle detected")
+    p.add_argument("--remediate", action="store_true", help="run drop_caches if throttle detected")
     p.add_argument("--verbose", "-v", action="store_true")
     args = p.parse_args()
 
-    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
-                        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+    )
 
     state = HostHealthState.snapshot()
     print(_format_state(state))
