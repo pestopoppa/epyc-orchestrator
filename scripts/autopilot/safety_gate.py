@@ -20,6 +20,7 @@ from src.autopilot_core.tier_specs import (
     DEFAULT_FRONTIER_TIER,
     MIN_FRONTIER_EVAL_TIER,
 )
+from src.autopilot_core.rlvr_tiers import rlvr_reward_from_result
 
 log = logging.getLogger("autopilot.safety")
 
@@ -27,6 +28,7 @@ log = logging.getLogger("autopilot.safety")
 def _env_truthy(name: str) -> bool:
     """Return True when env var ``name`` is set to a truthy token."""
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
 
 DEFAULT_BASELINE_PATH = (
     Path(__file__).resolve().parents[2] / "orchestration" / "autopilot_baseline.yaml"
@@ -69,9 +71,7 @@ PER_SUITE_LOW_SUPPORT_CATASTROPHIC_DROP = 2.5
 TOOL_USE_CATASTROPHIC_REGRESSION = 3.0  # magnitude; delta <= -this is hard-fail for tool_use
 
 
-def per_suite_regression_threshold(
-    result_n: int | None, baseline_n: int | None
-) -> float:
+def per_suite_regression_threshold(result_n: int | None, baseline_n: int | None) -> float:
     """Resolution-aware per-suite regression threshold (a negative number).
 
     A suite delta must be MORE negative than this to count as a violation. The
@@ -184,10 +184,14 @@ def _normalize_suite_by_tier(raw: Any, path: Path) -> dict[int, dict[str, float 
         try:
             t = int(tier)
         except (TypeError, ValueError):
-            log.error("Ignoring per-suite baseline tier key %r in %s; expected integer tier", tier, path)
+            log.error(
+                "Ignoring per-suite baseline tier key %r in %s; expected integer tier", tier, path
+            )
             continue
         normalized[t] = {
-            suite: Baseline._validate_quality(q, None, f"per_suite_quality_by_tier[{t}][{suite}]", path)
+            suite: Baseline._validate_quality(
+                q, None, f"per_suite_quality_by_tier[{t}][{suite}]", path
+            )
             for suite, q in (suites or {}).items()
         }
     return normalized
@@ -200,7 +204,9 @@ def _normalize_counts_by_tier(raw: Any, path: Path) -> dict[int, dict[str, int]]
         try:
             t = int(tier)
         except (TypeError, ValueError):
-            log.error("Ignoring per-suite count tier key %r in %s; expected integer tier", tier, path)
+            log.error(
+                "Ignoring per-suite count tier key %r in %s; expected integer tier", tier, path
+            )
             continue
         tier_counts: dict[str, int] = {}
         for suite, n in (suites or {}).items():
@@ -233,9 +239,12 @@ class SafetyVerdict:
 @dataclass
 class EvalResult:
     """Evaluation result from EvalTower."""
+
     tier: int
     quality: float  # Average quality 0-3
-    speed: float  # Objective speed t/s: median request in serial, aggregate batch in concurrent evals.
+    speed: (
+        float  # Objective speed t/s: median request in serial, aggregate batch in concurrent evals.
+    )
     cost: float  # Normalized cost 0-1
     reliability: float  # Fraction of non-error responses
     per_suite_quality: dict[str, float] = field(default_factory=dict)
@@ -376,6 +385,16 @@ class EvalResult:
             lines.append(f"METRIC auroc: {self.auroc:.4f}")
         if self.calibration_violations > 0:
             lines.append(f"METRIC calibration_violations: {self.calibration_violations}")
+        # AP-27: report-only RLVR reward view. This is deliberately log-only;
+        # EvalResult.objectives, SafetyGate verdicts, Pareto archive state, and
+        # journal schema remain unchanged.
+        rlvr = rlvr_reward_from_result(self)
+        lines.append(f"METRIC rlvr_policy: {rlvr.policy}")
+        lines.append(f"METRIC rlvr_signal: {rlvr.reward_signal}")
+        lines.append(f"METRIC rlvr_reward: {rlvr.reward:.6f}")
+        lines.append(f"METRIC rlvr_ready: {int(rlvr.ready_for_training)}")
+        if rlvr.blockers:
+            lines.append(f"METRIC rlvr_blockers: {','.join(rlvr.blockers)}")
         # Branching density (intake-378)
         if self.branching_density > 0:
             lines.append(f"METRIC branching_density: {self.branching_density:.4f}")
@@ -391,8 +410,7 @@ class EvalResult:
             ("diversity_distinct2", self.diversity_distinct2),
             ("diversity_self_bleu", self.diversity_self_bleu),
             ("diversity_ttr", self.diversity_ttr),
-            ("diversity_semantic_embedding_agreement",
-             self.diversity_semantic_embedding_agreement),
+            ("diversity_semantic_embedding_agreement", self.diversity_semantic_embedding_agreement),
         ):
             if not math.isnan(_div_val):
                 lines.append(f"METRIC {_div_key}: {_div_val:.4f}")
@@ -453,13 +471,19 @@ class Baseline:
         # Fall back to the default floor and log loudly; the operator must recompute. Skipped
         # when the archive is empty/unreadable (fresh start) so bootstrap is never blocked.
         archive_max = _pareto_frontier_best_quality(DEFAULT_FRONTIER_TIER)
-        if (quality is not None and archive_max is not None
-                and quality > archive_max + BASELINE_ARCHIVE_TOLERANCE):
+        if (
+            quality is not None
+            and archive_max is not None
+            and quality > archive_max + BASELINE_ARCHIVE_TOLERANCE
+        ):
             log.error(
                 "Persisted baseline quality %.3f in %s exceeds Pareto archive max %.3f — "
                 "unachievable/corrupt; it would gate-lock the loop. Falling back to %.3f. "
                 "Recompute the baseline from a real eval (autopilot.py checkpoint --production-best).",
-                quality, path, archive_max, defaults.quality,
+                quality,
+                path,
+                archive_max,
+                defaults.quality,
             )
             quality = defaults.quality
         per_suite = {
@@ -475,7 +499,10 @@ class Baseline:
                 log.error(
                     "Persisted T%d baseline quality %.3f in %s exceeds same-tier Pareto "
                     "archive max %.3f — unachievable/corrupt; dropping tier baseline.",
-                    tier, tier_quality, path, tier_archive_max,
+                    tier,
+                    tier_quality,
+                    path,
+                    tier_archive_max,
                 )
                 del baselines_by_tier[tier]
         per_suite_by_tier = _normalize_suite_by_tier(
@@ -488,7 +515,10 @@ class Baseline:
         if reliability is not None and not 0.0 <= reliability <= RELIABILITY_MAX:
             log.error(
                 "Corrupt baseline reliability %.3f in %s (valid 0..%.1f); using default %.3f",
-                reliability, path, RELIABILITY_MAX, defaults.reliability,
+                reliability,
+                path,
+                RELIABILITY_MAX,
+                defaults.reliability,
             )
             reliability = defaults.reliability
         baseline = cls(
@@ -524,7 +554,11 @@ class Baseline:
                 "Corrupt baseline %s=%.3f in %s exceeds valid quality scale [0, %.1f] — "
                 "this would force-revert every trial via the regression gate; "
                 "falling back to %s. Recompute the baseline from a real 0-3 eval.",
-                label, value, path, QUALITY_MAX, fallback,
+                label,
+                value,
+                path,
+                QUALITY_MAX,
+                fallback,
             )
             return fallback
         return value
@@ -645,9 +679,7 @@ class SafetyGate:
         # ~120 trusted vectors); flipping the env alone never changes behavior unless
         # the caller also threads per-question results into check().
         self.use_sequential = (
-            _env_truthy("AUTOPILOT_SEQ_VERDICT")
-            if use_sequential is None
-            else bool(use_sequential)
+            _env_truthy("AUTOPILOT_SEQ_VERDICT") if use_sequential is None else bool(use_sequential)
         )
         self._consecutive_failures = consecutive_failures
         self._quality_history_by_tier: dict[int, deque[float]] = {}
@@ -687,9 +719,7 @@ class SafetyGate:
         return list(self._quality_history_by_tier.get(int(tier), deque()))
 
     def _history_for_tier(self, tier: int) -> deque[float]:
-        return self._quality_history_by_tier.setdefault(
-            int(tier), deque(maxlen=MAD_HISTORY_DEPTH)
-        )
+        return self._quality_history_by_tier.setdefault(int(tier), deque(maxlen=MAD_HISTORY_DEPTH))
 
     def _mad_significance(self, new_quality: float, tier: int) -> tuple[bool, float, float, float]:
         """Decide whether ``new_quality`` is statistically significant vs history.
@@ -753,18 +783,12 @@ class SafetyGate:
         q_view = rebuild_candidate_view(
             candidate=cand, core_id=core, observations=prior_quality_obs, policy=policy
         )
-        q_state, q_update = q_view.quality_state.update(
-            stat.z, policy=policy, trial_id=trial_id
-        )
+        q_state, q_update = q_view.quality_state.update(stat.z, policy=policy, trial_id=trial_id)
 
         # Rate-non-inferiority axis (only when a task_rate + positive baseline exist).
         rate_state = None
         rate_update = None
-        if (
-            task_rate is not None
-            and baseline_task_rate is not None
-            and baseline_task_rate > 0
-        ):
+        if task_rate is not None and baseline_task_rate is not None and baseline_task_rate > 0:
             z_rate = rate_noninferiority_z(
                 float(task_rate),
                 float(baseline_task_rate),
@@ -788,9 +812,7 @@ class SafetyGate:
 
         if q_name == STATE_REFUTED or rate_name == STATE_REFUTED:
             state = "refuted"
-        elif e_quality >= policy.confirm_e and (
-            e_rate is not None and e_rate >= policy.confirm_e
-        ):
+        elif e_quality >= policy.confirm_e and (e_rate is not None and e_rate >= policy.confirm_e):
             state = "confirmed"
         else:
             state = "accumulating"
@@ -833,9 +855,7 @@ class SafetyGate:
         is inert unless both the flag and the per-question inputs are present.
         """
         seq_inputs_ready = (
-            self.use_sequential
-            and question_results is not None
-            and bool(baseline_profile)
+            self.use_sequential and question_results is not None and bool(baseline_profile)
         )
         cached_verdict = result.gate_verdict
         record_side_effects = cached_verdict is None
@@ -931,9 +951,7 @@ class SafetyGate:
                 # journals the trial but skips archive.update + AP-22 short-term
                 # memory so noise-level improvements don't poison the Pareto
                 # frontier or strategy memory.
-                is_sig, z_mad, median_q, mad = self._mad_significance(
-                    result.quality, result.tier
-                )
+                is_sig, z_mad, median_q, mad = self._mad_significance(result.quality, result.tier)
                 if not is_sig and not math.isnan(z_mad):
                     categories.append("mad_noise")
                     # Convergence-vs-corruption disambiguation (2026-05-31).
@@ -955,8 +973,7 @@ class SafetyGate:
                         and base_q > 0
                         and not math.isnan(median_q)
                         and mad > 0
-                        and (median_q - base_q)
-                        > MAD_Z_THRESHOLD * mad * MAD_CONSISTENCY
+                        and (median_q - base_q) > MAD_Z_THRESHOLD * mad * MAD_CONSISTENCY
                     )
                     if reproduction_confirmed:
                         categories.append("reproduction_confirmed")
@@ -964,9 +981,7 @@ class SafetyGate:
                         " Reproduces an established above-baseline level "
                         "(history median {:.3f} >> baseline {:.3f}): this is a "
                         "convergence/confirmation of an existing gain, NOT "
-                        "instrument noise or a corrupted trial.".format(
-                            median_q, base_q
-                        )
+                        "instrument noise or a corrupted trial.".format(median_q, base_q)
                         if reproduction_confirmed
                         else ""
                     )
@@ -995,9 +1010,7 @@ class SafetyGate:
                 suite_delta = quality - baseline_q
                 result_n = result_counts.get(suite)
                 baseline_n = baseline_counts.get(suite)
-                threshold = per_suite_regression_threshold(
-                    result_n, baseline_n
-                )
+                threshold = per_suite_regression_threshold(result_n, baseline_n)
                 if suite_delta < threshold:
                     msg = (
                         f"Suite '{suite}' regression: {suite_delta:+.3f} "
@@ -1009,8 +1022,7 @@ class SafetyGate:
                     # failed, delta <= -3.0) are hard violations. Moderate drops are
                     # advisory to prevent blocking quality-positive config changes.
                     is_tool_use_advisory = (
-                        suite == "tool_use"
-                        and suite_delta > -TOOL_USE_CATASTROPHIC_REGRESSION
+                        suite == "tool_use" and suite_delta > -TOOL_USE_CATASTROPHIC_REGRESSION
                     )
                     if is_tool_use_advisory:
                         warnings.append(
@@ -1020,9 +1032,7 @@ class SafetyGate:
                         )
                         if "tool_use_regression_advisory" not in categories:
                             categories.append("tool_use_regression_advisory")
-                    elif _per_suite_regression_binding(
-                        suite_delta, result_n, baseline_n
-                    ):
+                    elif _per_suite_regression_binding(suite_delta, result_n, baseline_n):
                         violations.append(msg)
                         if "per_suite_regression" not in categories:
                             categories.append("per_suite_regression")
@@ -1063,6 +1073,7 @@ class SafetyGate:
                     remediate as _hh_remediate,
                     _numa_interleave_rewarm,
                 )
+
                 _hh_state = HostHealthState.snapshot()
                 host_throttled, host_triggers = _hh_state.is_throttled()
                 if host_throttled:
@@ -1185,8 +1196,7 @@ class SafetyGate:
             imp_str = ", ".join(f"{s} +{d:.2f}" for s, d in improved)
             dec_str = ", ".join(f"{s} {d:+.2f}" for s, d in declined)
             warnings.append(
-                f"Proxy-only improvement: gains in [{imp_str}] "
-                f"but declines in [{dec_str}]"
+                f"Proxy-only improvement: gains in [{imp_str}] but declines in [{dec_str}]"
             )
         return warnings
 
@@ -1200,8 +1210,10 @@ class SafetyGate:
         topology (matrix_status==OK with the live hash). Fail-closed: if the live topology/matrix
         cannot be determined we are NOT eligible — a baseline must never be written on unknown
         state (operator audit #3, 2026-05-27). No env override by design (hard gate)."""
-        proof: dict[str, Any] = {"speed_metric_mode": getattr(result, "speed_metric_mode", None),
-                                 "eval_concurrency": getattr(result, "eval_concurrency", None)}
+        proof: dict[str, Any] = {
+            "speed_metric_mode": getattr(result, "speed_metric_mode", None),
+            "eval_concurrency": getattr(result, "eval_concurrency", None),
+        }
         if proof["speed_metric_mode"] not in {"median_request_tps", "aggregate_batch_tps"}:
             return False, f"unrecognized speed_metric_mode={proof['speed_metric_mode']!r}", proof
         try:
@@ -1212,6 +1224,7 @@ class SafetyGate:
                 MatrixStatus,
                 topology_fingerprint_for_matrix,
             )
+
             matrix = load_contention_matrix()
             live = topology_fingerprint_for_matrix(NUMA_CONFIG, matrix)
             status = matrix_status(current_topology_hash=live)
@@ -1300,9 +1313,12 @@ class SafetyGate:
         previous_quality = self.baseline.quality_for_tier(tier)
         eligible, reason, proof = self._baseline_eligible(result)
         if not eligible:
-            log.warning("Baseline update REFUSED — baseline_eligible=false (%s) | proof=%s",
-                        reason, proof)
-            return BaselineUpdateResult(False, reason, tier, previous_quality, result.quality, proof)
+            log.warning(
+                "Baseline update REFUSED — baseline_eligible=false (%s) | proof=%s", reason, proof
+            )
+            return BaselineUpdateResult(
+                False, reason, tier, previous_quality, result.quality, proof
+            )
         # LEDGER-W4 (01c §3): when the sequential path is active, a promotion requires
         # a CONFIRMED joint e-process verdict (E_quality >= confirm_e AND
         # E_rate_noninf >= confirm_e). This is the anti-ratchet: a monotonic quality
@@ -1315,15 +1331,22 @@ class SafetyGate:
                 "confirm threshold); baseline promotion blocked (LEDGER-W4)"
             )
             log.info("Baseline update skipped — %s", reason)
-            return BaselineUpdateResult(False, reason, tier, previous_quality, result.quality, proof)
+            return BaselineUpdateResult(
+                False, reason, tier, previous_quality, result.quality, proof
+            )
         if tier < MIN_FRONTIER_EVAL_TIER:
             reason = f"tier {tier} is audit-only and cannot update production baselines"
             log.warning("Baseline update REFUSED — %s", reason)
-            return BaselineUpdateResult(False, reason, tier, previous_quality, result.quality, proof)
+            return BaselineUpdateResult(
+                False, reason, tier, previous_quality, result.quality, proof
+            )
         if not 0.0 <= result.quality <= QUALITY_MAX:
-            log.error("Baseline update REFUSED — result.quality %.3f outside valid scale "
-                      "[0, %.1f]; refusing to persist a corrupt/wrong-scale baseline",
-                      result.quality, QUALITY_MAX)
+            log.error(
+                "Baseline update REFUSED — result.quality %.3f outside valid scale "
+                "[0, %.1f]; refusing to persist a corrupt/wrong-scale baseline",
+                result.quality,
+                QUALITY_MAX,
+            )
             return BaselineUpdateResult(
                 False, "quality outside valid scale", tier, previous_quality, result.quality, proof
             )
@@ -1333,7 +1356,9 @@ class SafetyGate:
                 f"<= baseline {previous_quality:.3f}"
             )
             log.info("Baseline update skipped — %s", reason)
-            return BaselineUpdateResult(False, reason, tier, previous_quality, result.quality, proof)
+            return BaselineUpdateResult(
+                False, reason, tier, previous_quality, result.quality, proof
+            )
         archive_max = self._archive_best_quality(tier)
         if archive_max is not None and result.quality > archive_max + BASELINE_ARCHIVE_TOLERANCE:
             # Above the frontier max. A genuine new-best must be archived FIRST (archive-first
@@ -1346,15 +1371,24 @@ class SafetyGate:
                 and source_trial_id in self._archive_frontier_trial_ids(tier)
             )
             if not on_frontier:
-                log.error("Baseline update REFUSED — result.quality %.3f exceeds Pareto archive "
-                          "max %.3f for T%d and source_trial_id=%s is not on the frontier. Promote only "
-                          "AFTER archive.update() admits the trial; an above-max value with no "
-                          "archived source is a phantom/contaminated measurement that would "
-                          "force-revert every honest trial and gate-lock the loop.",
-                          result.quality, archive_max, tier, source_trial_id)
+                log.error(
+                    "Baseline update REFUSED — result.quality %.3f exceeds Pareto archive "
+                    "max %.3f for T%d and source_trial_id=%s is not on the frontier. Promote only "
+                    "AFTER archive.update() admits the trial; an above-max value with no "
+                    "archived source is a phantom/contaminated measurement that would "
+                    "force-revert every honest trial and gate-lock the loop.",
+                    result.quality,
+                    archive_max,
+                    tier,
+                    source_trial_id,
+                )
                 return BaselineUpdateResult(
-                    False, "quality exceeds same-tier archive max", tier,
-                    previous_quality, result.quality, proof,
+                    False,
+                    "quality exceeds same-tier archive max",
+                    tier,
+                    previous_quality,
+                    result.quality,
+                    proof,
                 )
         promotion_result = result
         if archive_max is not None:
@@ -1411,8 +1445,14 @@ class SafetyGate:
                 reliability=float(objectives[3]),
             )
         self.baseline.update_tier(promotion_result)
-        log.info("Baseline state updated — baseline_eligible=true (%s) | proof=%s | T%d q=%.3f s=%.1f",
-                 reason, proof, tier, promotion_result.quality, promotion_result.speed)
+        log.info(
+            "Baseline state updated — baseline_eligible=true (%s) | proof=%s | T%d q=%.3f s=%.1f",
+            reason,
+            proof,
+            tier,
+            promotion_result.quality,
+            promotion_result.speed,
+        )
         return BaselineUpdateResult(
             True, reason, tier, previous_quality, promotion_result.quality, proof
         )
@@ -1441,9 +1481,7 @@ class SafetyGate:
         # DEGRADED SUITES (per-suite quality below floor)
         quality_floor = QUALITY_FLOOR_T0 if result.tier == 0 else QUALITY_FLOOR_T1
         degraded = [
-            (suite, q)
-            for suite, q in result.per_suite_quality.items()
-            if q < quality_floor
+            (suite, q) for suite, q in result.per_suite_quality.items() if q < quality_floor
         ]
         if degraded:
             lines = ["DEGRADED SUITES:"]
@@ -1454,9 +1492,7 @@ class SafetyGate:
         # ROUTING IMBALANCE (>60% to one tier)
         for tier_name, frac in result.routing_distribution.items():
             if frac > 0.6:
-                sections.append(
-                    f"ROUTING IMBALANCE:\n  - {tier_name}: {frac:.1%} of requests"
-                )
+                sections.append(f"ROUTING IMBALANCE:\n  - {tier_name}: {frac:.1%} of requests")
 
         # WARNINGS
         if verdict.warnings:
