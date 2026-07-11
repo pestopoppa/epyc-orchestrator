@@ -1990,6 +1990,8 @@ def test_autopilot_progress_surfaces_outcome_kpis_and_current_code_health(
             "timestamp": "2026-07-05T00:01:00+00:00",
             "action_type": "seed_batch",
             "keep_revert_decision": "revert",
+            "deficiency_category": "regression",
+            "failure_analysis": "VIOLATIONS: regression vs baseline",
         },
         {
             "trial_id": 3,
@@ -2047,6 +2049,17 @@ def test_autopilot_progress_surfaces_outcome_kpis_and_current_code_health(
         "count": 1,
         "total": 3,
         "rate": 0.333,
+    }
+    assert payload["outcome_kpis"]["active_trial_count"] == 4
+    assert payload["outcome_kpis"]["regression_per_active_trial"] == {
+        "count": 1,
+        "total": 4,
+        "rate": 0.25,
+    }
+    assert payload["outcome_kpis"]["promotions_per_100_active_trials"] == {
+        "count": 1,
+        "total": 4,
+        "per_100": 25.0,
     }
     assert payload["current_code_health"] == {
         "ok": True,
@@ -2160,6 +2173,17 @@ def test_autopilot_progress_leaves_outcome_kpis_unknown_without_source_data(
         "count": 0,
         "total": 0,
         "rate": None,
+    }
+    assert payload["outcome_kpis"]["active_trial_count"] == 3
+    assert payload["outcome_kpis"]["regression_per_active_trial"] == {
+        "count": 0,
+        "total": 3,
+        "rate": 0.0,
+    }
+    assert payload["outcome_kpis"]["promotions_per_100_active_trials"] == {
+        "count": 0,
+        "total": 3,
+        "per_100": 0.0,
     }
     assert payload["current_code_health"] is None
 

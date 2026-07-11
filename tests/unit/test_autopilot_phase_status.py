@@ -227,9 +227,109 @@ def test_phase_health_report_surfaces_outcome_stall_without_blocking_by_default(
         "total": 2,
         "rate": 0.5,
     }
+    assert report["outcome_progress"]["rates"]["regression_per_active_trial"] == {
+        "count": 0,
+        "total": 2,
+        "rate": 0.0,
+    }
+    assert report["outcome_progress"]["rates"]["promotions_per_100_active_trials"] == {
+        "count": 0,
+        "total": 2,
+        "per_100": 0.0,
+    }
     formatted = "\n".join(format_phase_health_report(report))
     assert "Outcome progress status: attention" in formatted
     assert "frontier admission stale" in formatted
+    assert "regression_per_active_trial=0.0" in formatted
+    assert "promotions_per_100_active_trials=0.0" in formatted
+
+
+def test_phase_health_outcome_rates_report_regressions_and_promotions_per_active_trial(
+    tmp_path,
+    monkeypatch,
+):
+    snapshot = tmp_path / "phase.json"
+    journal_dir = tmp_path / "journal"
+    journal_dir.mkdir()
+    (journal_dir / "autopilot_journal.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "trial_id": 10,
+                        "timestamp": "2026-07-05T00:10:00+00:00",
+                        "action_type": "numeric_trial",
+                        "pareto_status": "frontier",
+                        "keep_revert_decision": "keep",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "trial_id": 11,
+                        "timestamp": "2026-07-05T00:11:00+00:00",
+                        "action_type": "prompt_mutation",
+                        "pareto_status": "dominated",
+                        "keep_revert_decision": "revert",
+                        "deficiency_category": "regression",
+                        "failure_analysis": "VIOLATIONS: regression vs baseline",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "trial_id": 12,
+                        "timestamp": "2026-07-05T00:12:00+00:00",
+                        "action_type": "structural_experiment",
+                        "outcome_status": "invalid",
+                        "pareto_status": "dominated",
+                        "deficiency_category": "regression",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "baseline_promotion",
+                        "source_trial_id": 11,
+                        "timestamp": "2026-07-05T00:13:00+00:00",
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    snapshot.write_text(
+        json.dumps(
+            {
+                "phase": "dispatch_action",
+                "pid": 123,
+                "trial_id": 13,
+                "action_type": "numeric_trial",
+                "updated_at": 100.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("phase_status._process_exists", lambda pid: True)
+
+    report = build_phase_health_report(
+        path=snapshot,
+        journal_dir=journal_dir,
+        recent_window_trials=10,
+        now=120.0,
+        stale_after_s=60.0,
+    )
+
+    rates = report["outcome_progress"]["rates"]
+    assert rates["active_trial_count"] == 2
+    assert rates["regression_per_active_trial"] == {
+        "count": 1,
+        "total": 2,
+        "rate": 0.5,
+    }
+    assert rates["promotions_per_100_active_trials"] == {
+        "count": 1,
+        "total": 2,
+        "per_100": 50.0,
+    }
 
 
 def test_phase_health_report_can_block_on_outcome_stall(tmp_path, monkeypatch):

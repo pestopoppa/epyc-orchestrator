@@ -1884,13 +1884,21 @@ function renderAutopilotRunStrip() {
         const keepable = outcome.keepable_rate || {};
         const wasted = outcome.wasted_eval_rate || {};
         const excluded = outcome.learning_excluded_rate || {};
+        const regressions = outcome.regression_per_active_trial || {};
+        const promotionsPer100 = outcome.promotions_per_100_active_trials || {};
         const fmtRate = (metric) => {
             if (!metric || metric.total == null || metric.total <= 0 || metric.rate == null) return 'unknown';
             return `${Math.round(metric.rate * 100)}% (${metric.count}/${metric.total})`;
         };
+        const fmtPer100 = (metric) => {
+            if (!metric || metric.total == null || metric.total <= 0 || metric.per_100 == null) return 'unknown';
+            return `${Number(metric.per_100).toFixed(1)}/100 (${metric.count}/${metric.total})`;
+        };
         if (outcome.keepable_rate) bits.push(`keepable ${fmtRate(keepable)}`);
         if (outcome.wasted_eval_rate) bits.push(`wasted-eval ${fmtRate(wasted)}`);
         if (outcome.learning_excluded_rate) bits.push(`learning-excluded ${fmtRate(excluded)}`);
+        if (outcome.regression_per_active_trial) bits.push(`regression/active ${fmtRate(regressions)}`);
+        if (outcome.promotions_per_100_active_trials) bits.push(`promotions/100 active ${fmtPer100(promotionsPer100)}`);
         trialSub = bits.join(' · ');
     } else if (phase.trial_id != null) {
         trialValue = `#${escapeHTML(String(phase.trial_id))}`;
@@ -5625,6 +5633,14 @@ function _autopilotOutcomeProgressLabel(progress) {
     if (rates.keepable_rate) bits.push(`keepable ${fmtRate(rates.keepable_rate)}`);
     if (rates.wasted_eval_rate) bits.push(`wasted-eval ${fmtRate(rates.wasted_eval_rate)}`);
     if (rates.learning_excluded_rate) bits.push(`learning-excluded ${fmtRate(rates.learning_excluded_rate)}`);
+    if (rates.regression_per_active_trial) bits.push(`regression/active ${fmtRate(rates.regression_per_active_trial)}`);
+    if (rates.promotions_per_100_active_trials) {
+        const metric = rates.promotions_per_100_active_trials;
+        const text = (!metric || metric.total == null || metric.total <= 0 || metric.per_100 == null)
+            ? 'unknown'
+            : `${Number(metric.per_100).toFixed(1)}/100 (${metric.count}/${metric.total})`;
+        bits.push(`promotions/100 active ${text}`);
+    }
     if (Array.isArray(progress.blockers) && progress.blockers.length) {
         bits.push(...progress.blockers.slice(0, 3));
     }
@@ -6260,11 +6276,19 @@ function startDashboard() {
             const keepable = outcome.keepable_rate || {};
             const wasted = outcome.wasted_eval_rate || {};
             const excluded = outcome.learning_excluded_rate || {};
+            const regressions = outcome.regression_per_active_trial || {};
+            const promotionsPer100 = outcome.promotions_per_100_active_trials || {};
             const fmtRate = (metric) => {
                 if (!metric || metric.total == null || metric.total <= 0 || metric.rate == null) {
                     return 'unknown';
                 }
                 return `${Math.round(metric.rate * 100)}% (${metric.count}/${metric.total})`;
+            };
+            const fmtPer100 = (metric) => {
+                if (!metric || metric.total == null || metric.total <= 0 || metric.per_100 == null) {
+                    return 'unknown';
+                }
+                return `${Number(metric.per_100).toFixed(1)}/100 (${metric.count}/${metric.total})`;
             };
             if (promotions.count != null) {
                 metaBits.push(`baseline promotions ${promotions.count}`);
@@ -6276,6 +6300,8 @@ function startDashboard() {
             if (outcome.keepable_rate) metaBits.push(`keepable ${fmtRate(keepable)}`);
             if (outcome.wasted_eval_rate) metaBits.push(`wasted-eval ${fmtRate(wasted)}`);
             if (outcome.learning_excluded_rate) metaBits.push(`learning-excluded ${fmtRate(excluded)}`);
+            if (outcome.regression_per_active_trial) metaBits.push(`regression/active ${fmtRate(regressions)}`);
+            if (outcome.promotions_per_100_active_trials) metaBits.push(`promotions/100 active ${fmtPer100(promotionsPer100)}`);
             if (!d.autopilot_alive) metaBits.push('⚠ autopilot process not running');
             meta.textContent = metaBits.join(' · ');
         } catch (e) {

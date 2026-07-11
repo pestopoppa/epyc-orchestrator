@@ -1218,6 +1218,12 @@ def test_outcome_progress_pressure_reports_stall_and_rates(monkeypatch) -> None:
                 "keepable_rate": {"count": 1, "total": 20, "rate": 0.05},
                 "wasted_eval_rate": {"count": 15, "total": 20, "rate": 0.75},
                 "learning_excluded_rate": {"count": 4, "total": 20, "rate": 0.2},
+                "regression_per_active_trial": {"count": 3, "total": 20, "rate": 0.15},
+                "promotions_per_100_active_trials": {
+                    "count": 1,
+                    "total": 20,
+                    "per_100": 5.0,
+                },
             },
             "blockers": ["frontier admission stale"],
         }
@@ -1236,6 +1242,8 @@ def test_outcome_progress_pressure_reports_stall_and_rates(monkeypatch) -> None:
 
     assert "status=attention" in text
     assert "trials_since_frontier=175/5" in text
+    assert "regression_per_active_trial=3/20 (15.0%)" in text
+    assert "promotions_per_100_active_trials=1/20 (5.0/100)" in text
     assert "trials_since_promotion=211/10" in text
     assert "keepable=1/20 (5.0%)" in text
     assert "wasted_eval=15/20 (75.0%)" in text

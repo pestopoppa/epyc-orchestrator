@@ -1078,6 +1078,14 @@ def _format_outcome_rate(metric: Mapping[str, Any]) -> str:
     return f"{count}/{total} ({rate_text})"
 
 
+def _format_outcome_per_100(metric: Mapping[str, Any]) -> str:
+    count = metric.get("count", 0)
+    total = metric.get("total", 0)
+    per_100 = metric.get("per_100")
+    per_100_text = "n/a" if per_100 is None else f"{float(per_100):.1f}/100"
+    return f"{count}/{total} ({per_100_text})"
+
+
 def _build_outcome_progress_pressure(
     journal_dir: Path | None = None,
     *,
@@ -1106,6 +1114,12 @@ def _build_outcome_progress_pressure(
     keepable = _format_outcome_rate(rates.get("keepable_rate") or {})
     wasted = _format_outcome_rate(rates.get("wasted_eval_rate") or {})
     excluded = _format_outcome_rate(rates.get("learning_excluded_rate") or {})
+    regressions = _format_outcome_rate(
+        rates.get("regression_per_active_trial") or {}
+    )
+    promotions_per_100 = _format_outcome_per_100(
+        rates.get("promotions_per_100_active_trials") or {}
+    )
     blockers = [str(item) for item in report.get("blockers") or [] if str(item)]
     lines = [
         (
@@ -1123,7 +1137,9 @@ def _build_outcome_progress_pressure(
         (
             f"Recent outcome rates over {recent_window_trials} trials: "
             f"keepable={keepable}, wasted_eval={wasted}, "
-            f"learning_excluded={excluded}."
+            f"learning_excluded={excluded}, "
+            f"regression_per_active_trial={regressions}, "
+            f"promotions_per_100_active_trials={promotions_per_100}."
         ),
     ]
     if blockers:

@@ -3281,15 +3281,39 @@ def _trial_outcome_summary(
     selected_rows = list(rows or [])
     if current_run_only:
         selected_rows, _meta = _latest_journal_run_rows(selected_rows)
+    promotion_trial_ids = [
+        int(row["source_trial_id"])
+        for row in selected_rows
+        if row.get("type") == _BASELINE_PROMOTION_EVENT_TYPE
+        if str(row.get("source_trial_id") or "").isdigit()
+    ]
     selected_rows = _effective_journal_trial_rows(selected_rows)
 
     keep_revert_total = 0
     keepable_count = 0
     wasted_eval_count = 0
     learning_excluded_count = 0
+    active_trial_count = 0
+    regression_count = 0
 
     for row in selected_rows:
         bug = str(row.get("bug_corrupted_by") or "").strip()
+        outcome_rate_eligible = not bug or bug == "mad_noise"
+        outcome_status = str(row.get("outcome_status") or "ok").strip().lower()
+        action_type = str(row.get("action_type") or "").strip()
+        is_active_trial = (
+            outcome_rate_eligible
+            and outcome_status not in {"invalid", "skipped"}
+            and action_type not in {"distill_knowledge", "reset_memories"}
+        )
+        if is_active_trial:
+            active_trial_count += 1
+            deficiency = str(row.get("deficiency_category") or "").strip().lower()
+            failure_analysis = str(row.get("failure_analysis") or "").lower()
+            if deficiency in {"regression", "per_suite_regression"} or (
+                "regression" in failure_analysis
+            ):
+                regression_count += 1
         if bug and bug != "mad_noise":
             continue
         decision = str(row.get("keep_revert_decision") or "").strip()
@@ -3314,6 +3338,11 @@ def _trial_outcome_summary(
             return None
         return round(count / total, 3)
 
+    def _per_100(count: int, total: int) -> float | None:
+        if total <= 0:
+            return None
+        return round((count / total) * 100.0, 3)
+
     return {
         "keepable_rate": {
             "count": keepable_count,
@@ -3329,6 +3358,17 @@ def _trial_outcome_summary(
             "count": learning_excluded_count,
             "total": keep_revert_total,
             "rate": _rate(learning_excluded_count, keep_revert_total),
+        },
+        "active_trial_count": active_trial_count,
+        "regression_per_active_trial": {
+            "count": regression_count,
+            "total": active_trial_count,
+            "rate": _rate(regression_count, active_trial_count),
+        },
+        "promotions_per_100_active_trials": {
+            "count": len(promotion_trial_ids),
+            "total": active_trial_count,
+            "per_100": _per_100(len(promotion_trial_ids), active_trial_count),
         },
     }
 
@@ -3517,6 +3557,17 @@ async def autopilot_progress() -> JSONResponse:
                 "count": 0,
                 "total": 0,
                 "rate": None,
+            },
+            "active_trial_count": 0,
+            "regression_per_active_trial": {
+                "count": 0,
+                "total": 0,
+                "rate": None,
+            },
+            "promotions_per_100_active_trials": {
+                "count": 0,
+                "total": 0,
+                "per_100": None,
             },
         },
         "current_code_health": None,
