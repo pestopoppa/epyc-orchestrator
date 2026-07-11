@@ -169,8 +169,10 @@ def test_dashboard_html_region_lock_grid_uses_backend_display_matrix() -> None:
     assert "function renderRegionLocksDisplayMatrix(grid, d)" in body
     assert "const matrix = d && d.display_matrix ? d.display_matrix : null;" in body
     assert "if (!renderRegionLocksDisplayMatrix(grid, d))" in body
-    assert "backend display_matrix unavailable; using by_role fallback" in body
-    assert "display-matrix render failed" in body
+    assert "backend display_matrix unavailable; lock-grid rendering is intentionally disabled" in body
+    assert "using by_role fallback" not in body
+    assert "display_matrix render failed" in body
+    assert "renderRegionLocksBasicGrid(grid," not in body
     assert "pickInstForCol" not in body
     assert "SLOT ACTIVE" not in body
 
@@ -329,7 +331,7 @@ def test_dashboard_live_panel_refreshes_ignore_stale_responses_where_possible() 
     assert "function updateTopologyInflight(inflight, snapshotSeq = null)" in body
     assert "const safeInflight = snapshotSeq == null ? [] : (inflight || []);" in body
     assert "let _lastRegionLocksPayload = null;" in body
-    assert "display-matrix render failed" in body
+    assert "display_matrix render failed" in body
     assert "fetchJSON('/dashboard/api/snapshot'" in body
     assert "timeoutMs: _SNAPSHOT_POLL_TIMEOUT_MS" in body
     assert "setInterval(updateSnapshotPoll, 2500)" in body
@@ -554,7 +556,7 @@ def test_dashboard_folds_devices_into_regions_lock_and_tap_panels() -> None:
     assert "regions lock" in body
     assert "cpu region locks" not in body
     assert "function gpuDeviceRegionRows()" in body
-    assert body.count("rows.push(...gpuRows);") >= 2  # basic fallback + display matrix
+    assert body.count("rows.push(...gpuRows);") == 1  # display matrix only
     assert "device occupancy from /slots, not a CPU region lock" in body
 
     # Orphan (off-pipeline) inference cards in the live tap panel.
