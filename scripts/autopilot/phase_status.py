@@ -55,6 +55,12 @@ EVAL_PROGRESS_FIELDS = (
 AUTOPILOT_ENV_FLAGS = (
     "AUTOPILOT_PLANNER_HINTS",
     "AUTOPILOT_SEQ_VERDICT",
+    "AUTOPILOT_TOOL_SENTINELS",
+    "AUTOPILOT_STEPPING_STONES",
+    "AUTOPILOT_PLANNER_PRIMARY",
+    "AUTOPILOT_PLANNER_CRITIC",
+    "AUTOPILOT_PLANNER_CRITIC_FALLBACK",
+    "AUTOPILOT_PLANNER_SPEND_BREAKER",
     "AUTOPILOT_W6_AUDIT_BLOCK",
     "AUTOPILOT_W6_AUDIT_N",
     "AUTOPILOT_W6_AUDIT_EVERY_N_TRIALS",
@@ -693,6 +699,20 @@ def build_phase_health_report(
         "seq_verdict_enabled": _env_enabled(
             None if env_flags is None else env_flags.get("AUTOPILOT_SEQ_VERDICT")
         ),
+        "tool_sentinels_enabled": _env_enabled(
+            None if env_flags is None else env_flags.get("AUTOPILOT_TOOL_SENTINELS")
+        ),
+        "stepping_stones_enabled": _env_enabled(
+            None if env_flags is None else env_flags.get("AUTOPILOT_STEPPING_STONES")
+        ),
+        "planner_primary": None if env_flags is None else env_flags.get("AUTOPILOT_PLANNER_PRIMARY"),
+        "planner_critic": None if env_flags is None else env_flags.get("AUTOPILOT_PLANNER_CRITIC"),
+        "planner_critic_fallback": (
+            None if env_flags is None else env_flags.get("AUTOPILOT_PLANNER_CRITIC_FALLBACK")
+        ),
+        "planner_spend_breaker_enabled": _env_enabled(
+            None if env_flags is None else env_flags.get("AUTOPILOT_PLANNER_SPEND_BREAKER")
+        ),
         "w6_audit_accrual_enabled": _env_enabled(
             None if env_flags is None else env_flags.get("AUTOPILOT_W6_AUDIT_BLOCK")
         ),
@@ -762,6 +782,15 @@ def format_phase_health_report(report: dict[str, Any]) -> list[str]:
         f"- Outcome progress status: {(report.get('outcome_progress') or {}).get('status')}",
         f"- Planner hints env: {report.get('planner_hints_enabled')}",
         f"- Seq verdict env: {report.get('seq_verdict_enabled')}",
+        f"- Tool sentinels env: {report.get('tool_sentinels_enabled')}",
+        f"- Stepping stones env: {report.get('stepping_stones_enabled')}",
+        (
+            "- Planner providers: "
+            f"primary={report.get('planner_primary')}, "
+            f"critic={report.get('planner_critic')}, "
+            f"fallback={report.get('planner_critic_fallback')}"
+        ),
+        f"- Planner spend breaker env: {report.get('planner_spend_breaker_enabled')}",
         (
             "- W6 audit env: "
             f"{report.get('w6_audit_accrual_enabled')} "

@@ -29,6 +29,7 @@ import argparse
 from collections import deque
 from dataclasses import asdict
 import fcntl
+import hashlib
 import json
 import logging
 import math
@@ -123,6 +124,7 @@ from src.autopilot_core.planner_evidence import (
 from src.autopilot_core.sequential_verdict import (
     DEFAULT_POLICY as SEQ_DEFAULT_POLICY,
     baseline_profile_from_trials,
+    rate_noninferiority_z,
 )
 from src.autopilot_core.tier_specs import (
     DEFAULT_FRONTIER_TIER,
@@ -238,6 +240,12 @@ SEQ_CANDIDATE_REPLAY_MIN_QUALITY_E = float(
 SEQ_CANDIDATE_REPLAY_MAX_K = int(
     os.environ.get("AUTOPILOT_SEQ_CANDIDATE_REPLAY_MAX_K", "12")
 )
+AUTOPILOT_REQUIRED_GATE_ENV = {
+    "AUTOPILOT_SEQ_VERDICT": "1",
+    "AUTOPILOT_W6_AUDIT_BLOCK": "1",
+    "AUTOPILOT_PLANNER_HINTS": "1",
+    "AUTOPILOT_TOOL_SENTINELS": "1",
+}
 SAFE_FALLBACK_SEED_N = 14
 FALLBACK_SEED_CANDIDATES = (14, 16, 18, 20, 24, 30, 40, 50, 10)
 
@@ -302,6 +310,25 @@ OUTCOME_PROGRESS_ACTIONS = {
     "structural_experiment",
     "train_routing_models",
 }
+SEQ_PROMOTION_DEPENDENT_ACTIONS = {
+    "code_mutation",
+    "gepa_optimize",
+    "numeric_trial",
+    "prompt_mutation",
+    "structural_experiment",
+}
+SEQ_GATE_PREFLIGHT_ENABLED = os.environ.get(
+    "AUTOPILOT_SEQ_GATE_PREFLIGHT", "1"
+).strip().lower() not in {"0", "false", "no", "off"}
+SEQ_GATE_PREFLIGHT_MIN_SEQ_ROWS = int(
+    os.environ.get("AUTOPILOT_SEQ_GATE_PREFLIGHT_MIN_SEQ_ROWS", "20")
+)
+SEQ_GATE_PREFLIGHT_RECENT_WINDOW = int(
+    os.environ.get("AUTOPILOT_SEQ_GATE_PREFLIGHT_RECENT_WINDOW", "40")
+)
+SEQ_GATE_PREFLIGHT_MAX_RATE_E = float(
+    os.environ.get("AUTOPILOT_SEQ_GATE_PREFLIGHT_MAX_RATE_E", "2.0")
+)
 QUOTA_MEMORY_THRESHOLD = int(
     os.environ.get("AUTOPILOT_QUOTA_MEMORY_THRESHOLD", "2000")
 )
@@ -1766,6 +1793,249 @@ def _seq_combined_e(seq: dict[str, Any] | None) -> float | None:
     except (KeyError, TypeError, ValueError):
         return None
     return min(e_quality, e_rate)
+
+
+def _median(values: list[float]) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[mid]
+    return (ordered[mid - 1] + ordered[mid]) / 2.0
+
+
+def _seq_gate_reachability_report(
+    journal: ExperimentJournal | None,
+    *,
+    tier: int,
+    min_seq_rows: int | None = None,
+    recent_window: int | None = None,
+    max_rate_e: float | None = None,
+) -> dict[str, Any]:
+    """Model whether new seq candidates can currently reach the promotion gate.
+
+    This is a loop-side burn guard only. It does not alter SafetyGate semantics
+    or promotion thresholds; it prevents new promotion-dependent candidates from
+    consuming eval wall when recent rate evidence says the rate axis is not
+    growing toward confirmation.
+    """
+    min_rows = SEQ_GATE_PREFLIGHT_MIN_SEQ_ROWS if min_seq_rows is None else min_seq_rows
+    window = SEQ_GATE_PREFLIGHT_RECENT_WINDOW if recent_window is None else recent_window
+    max_rate = SEQ_GATE_PREFLIGHT_MAX_RATE_E if max_rate_e is None else max_rate_e
+
+    entries = [
+        entry
+        for entry in _iter_journal_entries(journal)
+        if not getattr(entry, "bug_corrupted_by", "")
+        and getattr(entry, "outcome_status", "ok") not in {"invalid", "skipped"}
+        and _entry_action_tier(entry) == tier
+    ]
+    seq_rows: list[dict[str, Any]] = []
+    latest_by_candidate: dict[str, dict[str, Any]] = {}
+    task_rates: list[tuple[int, float]] = []
+    for entry in entries:
+        eval_details = getattr(entry, "eval_details", {}) or {}
+        if isinstance(eval_details, dict):
+            outcome_map = _question_outcome_map(eval_details.get("question_results"))
+            row = {
+                "quality": getattr(entry, "quality", 0.0),
+                "n_questions": len(outcome_map),
+                "eval_details": eval_details,
+            }
+            task_rate = task_rate_qph_from_row(row)
+            if task_rate > 0.0:
+                try:
+                    task_rates.append((int(getattr(entry, "trial_id", 0) or 0), task_rate))
+                except (TypeError, ValueError):
+                    task_rates.append((0, task_rate))
+
+        seq = getattr(entry, "seq", {}) or {}
+        if not isinstance(seq, dict):
+            continue
+        if str(seq.get("core_id") or DEFAULT_EVIDENCE_CORE_ID) != DEFAULT_EVIDENCE_CORE_ID:
+            continue
+        candidate = str(seq.get("candidate") or "")
+        if not candidate:
+            continue
+        seq_rows.append(seq)
+        try:
+            trial_id = int(getattr(entry, "trial_id", 0) or 0)
+        except (TypeError, ValueError):
+            trial_id = 0
+        previous = latest_by_candidate.get(candidate)
+        if previous is None or trial_id >= int(previous.get("trial_id", -1)):
+            latest_by_candidate[candidate] = {"trial_id": trial_id, "seq": seq}
+
+    e_rates: list[float] = []
+    e_qualities: list[float] = []
+    combined_values: list[float] = []
+    confirmed_candidates = 0
+    for row in latest_by_candidate.values():
+        seq = row["seq"]
+        if seq.get("confirmed") is True or str(seq.get("state") or "") == "confirmed":
+            confirmed_candidates += 1
+        try:
+            e_rates.append(float(seq.get("E_rate_noninf")))
+        except (TypeError, ValueError):
+            pass
+        try:
+            e_qualities.append(float(seq.get("E_quality")))
+        except (TypeError, ValueError):
+            pass
+        combined = _seq_combined_e(seq)
+        if combined is not None:
+            combined_values.append(float(combined))
+
+    task_rates.sort(key=lambda item: item[0])
+    recent_rates = [rate for _, rate in task_rates[-max(1, window):]]
+    baseline_rates = [rate for _, rate in task_rates[-SEQ_BASELINE_PROFILE_LIMIT:]]
+    baseline_task_rate = (
+        sum(baseline_rates) / len(baseline_rates)
+        if baseline_rates
+        else None
+    )
+    recent_median_rate = _median(recent_rates)
+    recent_rate_z: float | None = None
+    if baseline_task_rate and recent_median_rate is not None:
+        try:
+            recent_rate_z = rate_noninferiority_z(
+                recent_median_rate,
+                baseline_task_rate,
+                margin=SEQ_DEFAULT_POLICY.rate_noninferiority_margin,
+            )
+        except ValueError:
+            recent_rate_z = None
+
+    max_e_rate = max(e_rates) if e_rates else None
+    max_e_quality = max(e_qualities) if e_qualities else None
+    max_combined_e = max(combined_values) if combined_values else None
+    insufficient = len(seq_rows) < max(0, min_rows) or recent_rate_z is None
+    rate_axis_flat = (
+        not insufficient
+        and confirmed_candidates == 0
+        and max_e_rate is not None
+        and max_e_rate < min(SEQ_DEFAULT_POLICY.confirm_e, max_rate)
+        and recent_rate_z <= 0.0
+    )
+    status = (
+        "insufficient_evidence"
+        if insufficient
+        else "rate_axis_unreachable"
+        if rate_axis_flat
+        else "reachable"
+    )
+    return {
+        "status": status,
+        "ok_to_dispatch_candidates": status != "rate_axis_unreachable",
+        "tier": tier,
+        "policy_version": SEQ_DEFAULT_POLICY.version,
+        "confirm_e": SEQ_DEFAULT_POLICY.confirm_e,
+        "promotion_required_e": SEQ_PROMOTION_FINAL_CONFIRM_E,
+        "seq_rows": len(seq_rows),
+        "candidate_count": len(latest_by_candidate),
+        "confirmed_candidates": confirmed_candidates,
+        "max_E_rate_noninf": None if max_e_rate is None else round(max_e_rate, 6),
+        "max_E_quality": None if max_e_quality is None else round(max_e_quality, 6),
+        "max_combined_E": None if max_combined_e is None else round(max_combined_e, 6),
+        "baseline_task_rate": (
+            None if baseline_task_rate is None else round(baseline_task_rate, 6)
+        ),
+        "recent_median_task_rate": (
+            None if recent_median_rate is None else round(recent_median_rate, 6)
+        ),
+        "recent_rate_z": None if recent_rate_z is None else round(recent_rate_z, 6),
+        "recent_window": window,
+        "min_seq_rows": min_rows,
+        "max_rate_e_for_block": max_rate,
+    }
+
+
+def _is_seq_promotion_dependent_action(action: Mapping[str, Any] | None) -> bool:
+    if not isinstance(action, Mapping):
+        return False
+    return str(action.get("type") or "") in SEQ_PROMOTION_DEPENDENT_ACTIONS
+
+
+def _maybe_defer_seq_unreachable_candidate_action(
+    action: dict[str, Any],
+    *,
+    state: dict[str, Any],
+    journal: ExperimentJournal,
+    blacklist: list[dict[str, Any]],
+    rationale: dict[str, Any] | None,
+    trial_counter: int,
+    tier: int,
+    enabled: bool,
+) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any] | None]:
+    """Replace promotion-dependent work when seq preflight says it cannot promote."""
+    if not enabled or not SEQ_GATE_PREFLIGHT_ENABLED:
+        return action, rationale, None
+    if not _is_seq_promotion_dependent_action(action):
+        return action, rationale, None
+
+    candidate_inputs = _seq_inputs_for_trial(journal=journal, action=action, tier=tier)
+    alpha_wealth = candidate_inputs.get("alpha_wealth") or {}
+    alpha_blocked = (
+        bool(alpha_wealth.get("candidate_is_new"))
+        and alpha_wealth.get("new_fingerprint_confirmations_allowed") is False
+    )
+    reachability = _seq_gate_reachability_report(journal, tier=tier)
+    should_defer = alpha_blocked or not bool(
+        reachability.get("ok_to_dispatch_candidates", True)
+    )
+    if not should_defer:
+        state["seq_gate_reachability_preflight"] = {
+            "trial_id": trial_counter,
+            "status": "passed",
+            "action": dict(action),
+            "reachability": reachability,
+            "alpha_wealth": alpha_wealth,
+        }
+        return action, rationale, None
+
+    replacement, fallback_reason = _first_unblacklisted_seed_action(
+        blacklist,
+        preferred=_seq_baseline_draw_action(),
+    )
+    reason = "alpha_wealth_exhausted" if alpha_blocked else str(reachability["status"])
+    payload = {
+        "trial_id": trial_counter,
+        "status": "deferred" if replacement is not None else "blocked_no_fallback",
+        "reason": reason,
+        "original_action": dict(action),
+        "replacement_action": replacement,
+        "fallback_reason": fallback_reason,
+        "reachability": reachability,
+        "alpha_wealth": alpha_wealth,
+    }
+    state["seq_gate_reachability_preflight"] = payload
+    if replacement is None:
+        log.warning(
+            "Seq gate preflight would defer %s (%s), but no seed/reference fallback "
+            "is available: %s",
+            json.dumps(action, default=str),
+            reason,
+            fallback_reason,
+        )
+        return action, rationale, payload
+
+    next_rationale = {
+        **(rationale or {}),
+        "seq_gate_preflight_deferred": True,
+        "seq_gate_preflight_reason": reason,
+        "seq_gate_preflight_original": dict(action),
+        "seq_gate_preflight_report": reachability,
+    }
+    log.warning(
+        "Seq gate preflight deferring promotion-dependent action at trial %d: "
+        "%s -> %s (%s)",
+        trial_counter,
+        json.dumps(action, default=str),
+        json.dumps(replacement, default=str),
+        reason,
+    )
+    return replacement, next_rationale, payload
 
 
 def _seq_promotion_delta_ci(seq: dict[str, Any] | None) -> dict[str, Any]:
@@ -3838,6 +4108,12 @@ CONSTITUTION_PATH = SCRIPT_DIR / "constitution.md"
 SYSTEM_CARD_PATH = SCRIPT_DIR / "system_card.md"
 STACK_PRIORS_PATH = ORCH_ROOT / "orchestration" / "derived" / "stack_priors.yaml"
 REPO_READINESS_PICKUP_ENV = "AUTOPILOT_REPO_READINESS_PICKUP"
+STARTUP_ATTESTATION_PATHS = (
+    ORCH_ROOT / "orchestration" / "model_registry.yaml",
+    ORCH_ROOT / "orchestration" / "tool_registry.yaml",
+    STACK_PRIORS_PATH,
+    BLACKLIST_PATH,
+)
 FABLE_GATE_REPORT_GLOBS = (
     "fable5_gate_report_*.json",
     "fable5_gate_*.json",
@@ -3845,6 +4121,51 @@ FABLE_GATE_REPORT_GLOBS = (
 FABLE_GATE_ADVISORY_MAX_AGE_S = int(
     os.environ.get("AUTOPILOT_FABLE_GATE_ADVISORY_MAX_AGE_S", "14400")
 )
+
+
+def _file_digest(path: Path) -> str | None:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def _startup_attestation_payload() -> dict[str, Any]:
+    """Return the effective gate env and runtime config hash at process boot."""
+    file_hashes: dict[str, str | None] = {
+        str(path): _file_digest(path) for path in STARTUP_ATTESTATION_PATHS
+    }
+    digest = hashlib.sha256()
+    for path, value in sorted(file_hashes.items()):
+        digest.update(path.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update((value or "missing").encode("utf-8"))
+        digest.update(b"\0")
+    gate_env = {
+        key: os.environ.get(key, "")
+        for key in sorted(
+            set(AUTOPILOT_REQUIRED_GATE_ENV)
+            | {
+                "AUTOPILOT_PLANNER_PRIMARY",
+                "AUTOPILOT_PLANNER_CRITIC",
+                "AUTOPILOT_PLANNER_SPEND_BREAKER",
+                "AUTOPILOT_STEPPING_STONES",
+            }
+        )
+    }
+    missing_or_mismatch = {
+        key: {"expected": expected, "actual": os.environ.get(key, "")}
+        for key, expected in AUTOPILOT_REQUIRED_GATE_ENV.items()
+        if os.environ.get(key) != expected
+    }
+    return {
+        "schema_version": 1,
+        "pid": os.getpid(),
+        "gate_env": gate_env,
+        "missing_or_mismatch": missing_or_mismatch,
+        "config_hash": digest.hexdigest(),
+        "file_hashes": file_hashes,
+    }
 
 
 def _format_deep_eval_tier_options() -> str:
@@ -5485,7 +5806,23 @@ def _run_loop_inner(
     log.info("AutoPilot starting (trial=%d, dry_run=%s)", trial_counter, dry_run)
     phase = PhaseTracker()
     async_tasks = AsyncTaskRunner()
-    phase.set("starting", trial_id=trial_counter, dry_run=dry_run)
+    startup_attestation = _startup_attestation_payload()
+    if startup_attestation["missing_or_mismatch"]:
+        log.error(
+            "AutoPilot startup gate env mismatch: %s",
+            json.dumps(startup_attestation["missing_or_mismatch"], sort_keys=True),
+        )
+    log.info(
+        "AutoPilot startup attestation: config_hash=%s gate_env=%s",
+        startup_attestation["config_hash"],
+        json.dumps(startup_attestation["gate_env"], sort_keys=True),
+    )
+    phase.set(
+        "starting",
+        trial_id=trial_counter,
+        dry_run=dry_run,
+        startup_attestation=startup_attestation,
+    )
     current_action: dict[str, Any] | None = None
     eval_progress_callback = _make_eval_progress_callback(
         phase=phase,
@@ -6350,6 +6687,30 @@ def _run_loop_inner(
                 rationale=rationale,
                 trial_counter=trial_counter,
             )
+
+        if critic_repeat_skip is None:
+            action, rationale, seq_gate_preflight = (
+                _maybe_defer_seq_unreachable_candidate_action(
+                    action,
+                    state=state,
+                    journal=journal,
+                    blacklist=blacklist,
+                    rationale=rationale,
+                    trial_counter=trial_counter,
+                    tier=DEFAULT_FRONTIER_TIER,
+                    enabled=gate.use_sequential,
+                )
+            )
+            if seq_gate_preflight is not None:
+                seq_fresh_eval_context = None
+                seq_candidate_replay_context = None
+                phase.set(
+                    "seq_gate_preflight",
+                    trial_id=trial_counter,
+                    action_type=action.get("type", ""),
+                    seq_gate_preflight_status=seq_gate_preflight.get("status"),
+                    seq_gate_preflight_reason=seq_gate_preflight.get("reason"),
+                )
 
         # ── 3. Act ───────────────────────────────────────────────
         # B2: Check failure blacklist before dispatch

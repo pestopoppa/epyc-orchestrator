@@ -251,6 +251,93 @@ def test_seq_paired_baseline_diagnostics_reports_missing_reference(
     }
 
 
+def test_seq_gate_preflight_defers_rate_axis_unreachable_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(autopilot, "SEQ_GATE_PREFLIGHT_MIN_SEQ_ROWS", 2)
+    monkeypatch.setattr(autopilot, "SEQ_GATE_PREFLIGHT_RECENT_WINDOW", 2)
+    monkeypatch.setattr(autopilot, "SEQ_GATE_PREFLIGHT_MAX_RATE_E", 2.0)
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    base_action = {"type": "numeric_trial", "surface": "memrl_retrieval", "params": {"x": 1}}
+    for trial_id, wall_s in enumerate([60.0, 60.0, 1800.0, 1800.0], start=1):
+        journal.record(
+            _entry(
+                trial_id,
+                {**base_action, "params": {"x": trial_id}},
+                eval_details_extra={"eval_wall_s": wall_s},
+                seq={
+                    "candidate": f"candidate-{trial_id}",
+                    "core_id": "core_v1",
+                    "z": 0.1,
+                    "z_rate": -0.9,
+                    "E_quality": 2.0,
+                    "E_rate_noninf": 1.05,
+                    "state": "accumulating",
+                    "policy_version": "seq-v1",
+                },
+            )
+        )
+
+    action, rationale, payload = autopilot._maybe_defer_seq_unreachable_candidate_action(
+        {"type": "numeric_trial", "surface": "new_surface", "params": {"x": 99}},
+        state={},
+        journal=journal,
+        blacklist=[],
+        rationale={},
+        trial_counter=10,
+        tier=1,
+        enabled=True,
+    )
+
+    assert payload is not None
+    assert payload["reason"] == "rate_axis_unreachable"
+    assert action["type"] == "seed_batch"
+    assert rationale is not None
+    assert rationale["seq_gate_preflight_deferred"] is True
+
+
+def test_seq_gate_preflight_defers_alpha_exhausted_new_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(autopilot, "SEQ_GATE_PREFLIGHT_MIN_SEQ_ROWS", 1000)
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    for trial_id in range(1, 23):
+        journal.record(
+            _entry(
+                trial_id,
+                {"type": "numeric_trial", "surface": "memrl_retrieval", "params": {"x": trial_id}},
+                seq={
+                    "candidate": f"candidate-{trial_id}",
+                    "core_id": "core_v1",
+                    "z": 0.1,
+                    "z_rate": 0.1,
+                    "E_quality": 1.2,
+                    "E_rate_noninf": 1.2,
+                    "state": "accumulating",
+                    "policy_version": "seq-v1",
+                },
+            )
+        )
+
+    action, _rationale, payload = autopilot._maybe_defer_seq_unreachable_candidate_action(
+        {"type": "prompt_mutation", "file": "frontdoor.md", "mutation": "new"},
+        state={},
+        journal=journal,
+        blacklist=[],
+        rationale={},
+        trial_counter=30,
+        tier=1,
+        enabled=True,
+    )
+
+    assert payload is not None
+    assert payload["reason"] == "alpha_wealth_exhausted"
+    assert payload["alpha_wealth"]["new_fingerprint_confirmations_allowed"] is False
+    assert action["type"] == "seed_batch"
+
+
 def test_seq_baseline_reference_state_tracks_cadence_and_staleness(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

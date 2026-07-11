@@ -29,6 +29,11 @@ class TestRegisterBuiltinTools:
             "write_json",
             "read_file",
             "list_files",
+            "search_files",
+            "get_time",
+            "fetch_stock_price",
+            "translate_text",
+            "start_service",
         ]
         for tool_name in expected_tools:
             assert tool_name in registry._tools, f"Tool {tool_name} not registered"
@@ -50,6 +55,14 @@ class TestRegisterBuiltinTools:
         # FILE tools
         assert registry._tools["read_file"].category == ToolCategory.FILE
         assert registry._tools["list_files"].category == ToolCategory.FILE
+        assert registry._tools["search_files"].category == ToolCategory.FILE
+
+        # Compatibility stubs are read-only data tools, including the dry-run
+        # service stub so eval prompts cannot mutate host state.
+        assert registry._tools["get_time"].category == ToolCategory.DATA
+        assert registry._tools["fetch_stock_price"].category == ToolCategory.DATA
+        assert registry._tools["translate_text"].category == ToolCategory.DATA
+        assert registry._tools["start_service"].category == ToolCategory.DATA
 
     def test_register_builtin_tools_has_descriptions(self):
         """Registered tools should have descriptions."""
@@ -458,6 +471,60 @@ class TestListFilesTool:
         assert result["success"] is False
         assert "error" in result
         assert "Not a directory" in result["error"]
+
+
+class TestCompatibilityTools:
+    """Tests for prompt-advertised compatibility tools."""
+
+    def test_search_files_finds_matching_files(self, tmp_path):
+        """search_files should return matching file paths and line numbers."""
+        registry = ToolRegistry()
+        register_builtin_tools(registry)
+
+        (tmp_path / "a.py").write_text("print('TODO: one')\n")
+        (tmp_path / "b.txt").write_text("no match\n")
+
+        result = registry._tools["search_files"].handler(
+            directory=str(tmp_path),
+            content="TODO",
+            pattern="*.py",
+        )
+
+        assert result["success"] is True
+        assert result["count"] == 1
+        assert result["matches"][0]["path"].endswith("a.py")
+        assert result["matches"][0]["line_numbers"] == [1]
+
+    def test_get_time_returns_structured_time(self):
+        """get_time should return structured current time data."""
+        registry = ToolRegistry()
+        register_builtin_tools(registry)
+
+        result = registry._tools["get_time"].handler(timezone="UTC")
+
+        assert result["success"] is True
+        assert result["timezone"] == "UTC"
+        assert "datetime" in result
+
+    def test_unconfigured_compatibility_tools_do_not_raise(self):
+        """Compatibility stubs should return descriptive unavailable results."""
+        registry = ToolRegistry()
+        register_builtin_tools(registry)
+
+        stock = registry._tools["fetch_stock_price"].handler(ticker="AAPL")
+        translated = registry._tools["translate_text"].handler(
+            text="Hello",
+            source_lang="English",
+            target_lang="Spanish",
+        )
+        service = registry._tools["start_service"].handler(name="nginx")
+
+        assert stock["success"] is False
+        assert "not configured" in stock["error"]
+        assert translated["success"] is False
+        assert "not configured" in translated["error"]
+        assert service["success"] is False
+        assert service["dry_run"] is True
 
 
 class TestToolParameters:

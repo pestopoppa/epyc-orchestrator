@@ -23,6 +23,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 ORCH_ROOT = SCRIPT_DIR.parents[1]
 DEFAULT_LOG_DIR = Path("/mnt/raid0/llm/tmp")
 LIVE_PROCESS_PATTERN = "scripts/autopilot/autopilot.py start"
+LIVE_SUPERVISOR_PATTERN = "scripts/autopilot/autopilot_supervisor.py"
 RUNNING_REFUSAL_EXIT = 75
 REPO_READINESS_PICKUP_ENV = "AUTOPILOT_REPO_READINESS_PICKUP"
 REPO_READINESS_DIR_ENV = "AUTOPILOT_REPO_READINESS_DIR"
@@ -110,15 +111,37 @@ def build_command(max_trials: int, extra_args: list[str] | None = None) -> list[
     return command
 
 
+def build_supervisor_command(
+    child_command: list[str],
+    *,
+    max_restarts: int = 3,
+    restart_delay_s: float = 30.0,
+) -> list[str]:
+    """Return the bounded supervisor command for a child AutoPilot command."""
+    return [
+        python_executable(),
+        "scripts/autopilot/autopilot_supervisor.py",
+        "--max-restarts",
+        str(max_restarts),
+        "--restart-delay-s",
+        str(restart_delay_s),
+        "--",
+        *child_command,
+    ]
+
+
 def live_autopilot_processes() -> list[str]:
-    result = subprocess.run(
-        ["pgrep", "-af", LIVE_PROCESS_PATTERN],
-        cwd=ORCH_ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    live: list[str] = []
+    for pattern in (LIVE_PROCESS_PATTERN, LIVE_SUPERVISOR_PATTERN):
+        result = subprocess.run(
+            ["pgrep", "-af", pattern],
+            cwd=ORCH_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        live.extend(line.strip() for line in result.stdout.splitlines() if line.strip())
+    return sorted(set(live))
 
 
 def _timestamp() -> str:
@@ -138,11 +161,15 @@ def _payload(
     env: dict[str, str],
     log_path: Path,
     pid: int | None = None,
+    child_command: list[str] | None = None,
+    supervised: bool = False,
 ) -> dict[str, Any]:
     return {
         "pid": pid,
         "cwd": str(ORCH_ROOT),
         "command": command,
+        "child_command": child_command or command,
+        "supervised": supervised,
         "log_path": str(log_path),
         "env": _env_subset(env),
     }
@@ -164,6 +191,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Print the command/env payload without starting a process.",
     )
+    parser.add_argument(
+        "--no-supervisor",
+        action="store_true",
+        help="Start autopilot.py directly without the bounded supervisor/death ledger.",
+    )
+    parser.add_argument("--supervisor-max-restarts", type=int, default=3)
+    parser.add_argument("--supervisor-restart-delay-s", type=float, default=30.0)
     parser.add_argument(
         "--preflight",
         action="store_true",
@@ -196,7 +230,16 @@ def main(argv: list[str] | None = None) -> int:
     extra_args = list(args.autopilot_args or [])
     if extra_args and extra_args[0] == "--":
         extra_args = extra_args[1:]
-    command = build_command(args.max_trials, extra_args)
+    child_command = build_command(args.max_trials, extra_args)
+    command = (
+        child_command
+        if args.no_supervisor
+        else build_supervisor_command(
+            child_command,
+            max_restarts=args.supervisor_max_restarts,
+            restart_delay_s=args.supervisor_restart_delay_s,
+        )
+    )
     log_path = args.log_dir / f"autopilot_fable_authority_{_timestamp()}.log"
 
     live = live_autopilot_processes()
@@ -207,7 +250,14 @@ def main(argv: list[str] | None = None) -> int:
         )
         return RUNNING_REFUSAL_EXIT
 
-    payload = _payload(command=command, env=env, log_path=log_path)
+    supervised = not args.no_supervisor
+    payload = _payload(
+        command=command,
+        child_command=child_command,
+        supervised=supervised,
+        env=env,
+        log_path=log_path,
+    )
     if args.dry_run:
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
@@ -228,7 +278,14 @@ def main(argv: list[str] | None = None) -> int:
 
     print(
         json.dumps(
-            _payload(command=command, env=env, log_path=log_path, pid=proc.pid),
+            _payload(
+                command=command,
+                child_command=child_command,
+                supervised=supervised,
+                env=env,
+                log_path=log_path,
+                pid=proc.pid,
+            ),
             indent=2,
             sort_keys=True,
         )

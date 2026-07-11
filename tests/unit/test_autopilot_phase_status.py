@@ -325,6 +325,12 @@ def test_phase_health_report_exposes_allowlisted_autopilot_env_flags(tmp_path, m
         lambda pid: {
             "AUTOPILOT_PLANNER_HINTS": "1",
             "AUTOPILOT_SEQ_VERDICT": "1",
+            "AUTOPILOT_TOOL_SENTINELS": "1",
+            "AUTOPILOT_STEPPING_STONES": "1",
+            "AUTOPILOT_PLANNER_PRIMARY": "local_ingest",
+            "AUTOPILOT_PLANNER_CRITIC": "local_frontdoor",
+            "AUTOPILOT_PLANNER_CRITIC_FALLBACK": "claude",
+            "AUTOPILOT_PLANNER_SPEND_BREAKER": "0",
             "AUTOPILOT_W6_AUDIT_BLOCK": "1",
             "AUTOPILOT_W6_AUDIT_N": "10",
             "AUTOPILOT_W6_AUDIT_EVERY_N_TRIALS": "1",
@@ -338,6 +344,12 @@ def test_phase_health_report_exposes_allowlisted_autopilot_env_flags(tmp_path, m
     assert report["ok"] is True
     assert report["planner_hints_enabled"] is True
     assert report["seq_verdict_enabled"] is True
+    assert report["tool_sentinels_enabled"] is True
+    assert report["stepping_stones_enabled"] is True
+    assert report["planner_primary"] == "local_ingest"
+    assert report["planner_critic"] == "local_frontdoor"
+    assert report["planner_critic_fallback"] == "claude"
+    assert report["planner_spend_breaker_enabled"] is False
     assert report["w6_audit_accrual_enabled"] is True
     assert report["w6_audit_shadow_only"] is True
     assert report["w6_audit_n"] == "10"
@@ -346,6 +358,12 @@ def test_phase_health_report_exposes_allowlisted_autopilot_env_flags(tmp_path, m
     assert set(report["autopilot_env_flags"]) == {
         "AUTOPILOT_PLANNER_HINTS",
         "AUTOPILOT_SEQ_VERDICT",
+        "AUTOPILOT_TOOL_SENTINELS",
+        "AUTOPILOT_STEPPING_STONES",
+        "AUTOPILOT_PLANNER_PRIMARY",
+        "AUTOPILOT_PLANNER_CRITIC",
+        "AUTOPILOT_PLANNER_CRITIC_FALLBACK",
+        "AUTOPILOT_PLANNER_SPEND_BREAKER",
         "AUTOPILOT_W6_AUDIT_BLOCK",
         "AUTOPILOT_W6_AUDIT_N",
         "AUTOPILOT_W6_AUDIT_EVERY_N_TRIALS",
@@ -355,6 +373,10 @@ def test_phase_health_report_exposes_allowlisted_autopilot_env_flags(tmp_path, m
     formatted = "\n".join(format_phase_health_report(report))
     assert "Planner hints env: True" in formatted
     assert "Seq verdict env: True" in formatted
+    assert "Tool sentinels env: True" in formatted
+    assert "Stepping stones env: True" in formatted
+    assert "Planner providers: primary=local_ingest, critic=local_frontdoor, fallback=claude" in formatted
+    assert "Planner spend breaker env: False" in formatted
     assert "W6 audit env: True (shadow_only=True, n=10, every_n=1)" in formatted
     assert "Planner timeout env: 600" in formatted
 

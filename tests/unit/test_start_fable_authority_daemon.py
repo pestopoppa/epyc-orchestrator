@@ -29,7 +29,9 @@ def test_authority_env_forces_required_flags() -> None:
     assert env["AUTOPILOT_SEQ_VERDICT"] == "1"
     assert env["AUTOPILOT_W6_AUDIT_BLOCK"] == "1"
     assert env["AUTOPILOT_PLANNER_TIMEOUT"] == "600"
-    assert env["AUTOPILOT_PLANNER_SPEND_BREAKER"] == "1"
+    # The planner runs on local models by default; forcing the spend breaker on
+    # has historically stopped AutoPilot even when no cloud spend was at risk.
+    assert env["AUTOPILOT_PLANNER_SPEND_BREAKER"] == "0"
 
 
 def test_authority_env_defaults_to_long_context_local_planner_without_overriding() -> None:
@@ -97,6 +99,28 @@ def test_build_command_uses_autopilot_start_and_default_trials(monkeypatch) -> N
     ]
 
 
+def test_build_supervisor_command_wraps_autopilot_child(monkeypatch) -> None:
+    monkeypatch.setattr(launcher, "python_executable", lambda: "/venv/bin/python3")
+    child = launcher.build_command(3000)
+
+    command = launcher.build_supervisor_command(
+        child,
+        max_restarts=2,
+        restart_delay_s=5.0,
+    )
+
+    assert command == [
+        "/venv/bin/python3",
+        "scripts/autopilot/autopilot_supervisor.py",
+        "--max-restarts",
+        "2",
+        "--restart-delay-s",
+        "5.0",
+        "--",
+        *child,
+    ]
+
+
 def test_dry_run_prints_authority_payload(monkeypatch, tmp_path, capsys) -> None:
     monkeypatch.setattr(launcher, "python_executable", lambda: "/venv/bin/python3")
     monkeypatch.setattr(launcher, "live_autopilot_processes", lambda: ["123 live"])
@@ -105,13 +129,24 @@ def test_dry_run_prints_authority_payload(monkeypatch, tmp_path, capsys) -> None
 
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
-    assert payload["command"] == [
+    assert payload["child_command"] == [
         "/venv/bin/python3",
         "scripts/autopilot/autopilot.py",
         "start",
         "--max-trials",
         "1234",
     ]
+    assert payload["command"] == [
+        "/venv/bin/python3",
+        "scripts/autopilot/autopilot_supervisor.py",
+        "--max-restarts",
+        "3",
+        "--restart-delay-s",
+        "30.0",
+        "--",
+        *payload["child_command"],
+    ]
+    assert payload["supervised"] is True
     assert payload["env"]["AUTOPILOT_TOOL_SENTINELS"] == "1"
     assert payload["env"]["AUTOPILOT_SEQ_VERDICT"] == "1"
     assert payload["pid"] is None
