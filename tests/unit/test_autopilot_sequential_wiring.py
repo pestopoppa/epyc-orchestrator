@@ -149,6 +149,9 @@ def test_update_contrastive_trace_state_labels_frontier_success() -> None:
         def capture_contrastive_traces(self, **kwargs):
             return autopilot.EvalTower().capture_contrastive_traces(**kwargs)
 
+        build_critic_trace_ir = staticmethod(autopilot.EvalTower.build_critic_trace_ir)
+        format_critic_trace_ir = staticmethod(autopilot.EvalTower.format_critic_trace_ir)
+
     autopilot._update_contrastive_trace_state(
         state,
         FakeTower(),
@@ -164,6 +167,9 @@ def test_update_contrastive_trace_state_labels_frontier_success() -> None:
     assert state["contrastive_trace_bank"][0]["outcome"] == "success"
     assert state["contrastive_trace_bank"][0]["trial_id"] == 21
     assert "## Contrastive Execution Traces" in state["contrastive_traces"]
+    assert state["critic_trace_ir"]["schema_version"] == "harness_trace_ir.v1"
+    assert state["critic_trace_ir"]["trace_examples"][0]["outcome"] == "success"
+    assert "## Harness Trace IR (MH-11 observe-only)" in state["critic_trace_ir_prompt"]
 
 
 def test_update_contrastive_trace_state_skips_bug_corrupted_rows() -> None:

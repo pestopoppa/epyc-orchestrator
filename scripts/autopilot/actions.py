@@ -742,9 +742,23 @@ def _build_mutation_context(
         if convention_guardrails:
             failure_context = f"{convention_guardrails}\n\n{failure_context}"
 
+    # MH-11: Prefer structured trace IR when available. This is diagnostic
+    # context only; mutation acceptance still uses the existing gates.
+    critic_trace_ir_prompt = str(ctx.state.get("critic_trace_ir_prompt") or "").strip()
+    if not critic_trace_ir_prompt and ctx.tower is not None:
+        ir_formatter = getattr(ctx.tower, "format_critic_trace_ir", None)
+        if callable(ir_formatter):
+            try:
+                critic_trace_ir_prompt = ir_formatter(ctx.state.get("critic_trace_ir"))
+            except Exception as exc:  # trace feedback must never block mutation dispatch
+                log.debug("Could not format critic trace IR: %s", exc)
+                critic_trace_ir_prompt = ""
+
     # MH-7: Prefer labeled success/failure trace examples when available.
-    contrastive_traces = ctx.state.get("contrastive_traces", "")
-    if not contrastive_traces and ctx.tower is not None:
+    contrastive_traces = ""
+    if not critic_trace_ir_prompt:
+        contrastive_traces = ctx.state.get("contrastive_traces", "")
+    if not critic_trace_ir_prompt and not contrastive_traces and ctx.tower is not None:
         formatter = getattr(ctx.tower, "capture_contrastive_traces", None)
         if callable(formatter):
             try:
@@ -756,7 +770,9 @@ def _build_mutation_context(
             except Exception as exc:  # trace feedback must never block mutation dispatch
                 log.debug("Could not format contrastive traces: %s", exc)
                 contrastive_traces = ""
-    if contrastive_traces:
+    if critic_trace_ir_prompt:
+        failure_context = f"{critic_trace_ir_prompt}\n\n{failure_context}"
+    elif contrastive_traces:
         failure_context = f"{contrastive_traces}\n\n{failure_context}"
     else:
         # B3 fallback: raw recent inference traces.

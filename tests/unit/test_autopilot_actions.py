@@ -1925,6 +1925,60 @@ def test_mutation_context_prefers_contrastive_traces_from_tower() -> None:
     assert "LEGACY TRACE" not in failure_context
 
 
+def test_mutation_context_prefers_critic_trace_ir_prompt() -> None:
+    class FakeTower:
+        def capture_contrastive_traces(self, *, k_success, k_failure, trace_bank):
+            raise AssertionError("legacy contrastive trace formatter should not run")
+
+    failure_context, _ = actions._build_mutation_context(
+        {
+            "file": "src/example.py",
+            "mutation": "targeted_fix",
+            "description": "example",
+        },
+        _ctx(
+            journal=_FakeJournal(),
+            tower=FakeTower(),
+            state={
+                "critic_trace_ir_prompt": (
+                    "## Harness Trace IR (MH-11 observe-only)\n"
+                    "{\"schema_version\":\"harness_trace_ir.v1\"}"
+                ),
+                "contrastive_traces": "## Contrastive Execution Traces\nLEGACY STRUCTURED",
+                "last_traces": "ROLE=frontdoor\nRESPONSE:\nlegacy",
+            },
+        ),
+    )
+
+    assert "## Harness Trace IR (MH-11 observe-only)" in failure_context
+    assert "harness_trace_ir.v1" in failure_context
+    assert "LEGACY STRUCTURED" not in failure_context
+    assert "ROLE=frontdoor" not in failure_context
+
+
+def test_mutation_context_formats_critic_trace_ir_from_state() -> None:
+    class FakeTower:
+        def format_critic_trace_ir(self, trace_ir):
+            assert trace_ir == {"trace_examples": [{"outcome": "success"}]}
+            return "## Harness Trace IR (MH-11 observe-only)\nFORMATTED"
+
+    failure_context, _ = actions._build_mutation_context(
+        {
+            "file": "src/example.py",
+            "mutation": "targeted_fix",
+            "description": "example",
+        },
+        _ctx(
+            journal=_FakeJournal(),
+            tower=FakeTower(),
+            state={"critic_trace_ir": {"trace_examples": [{"outcome": "success"}]}},
+        ),
+    )
+
+    assert "## Harness Trace IR (MH-11 observe-only)" in failure_context
+    assert "FORMATTED" in failure_context
+
+
 def test_mutation_context_falls_back_to_recent_traces() -> None:
     failure_context, _ = actions._build_mutation_context(
         {

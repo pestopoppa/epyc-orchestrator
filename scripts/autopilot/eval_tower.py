@@ -2333,6 +2333,149 @@ class EvalTower:
             return text
         return "[trace truncated]\n" + text[-max_chars:]
 
+    @staticmethod
+    def _trace_ir_steps(trace_text: str, *, max_steps: int = 12, preview_chars: int = 240) -> list[dict[str, Any]]:
+        """Convert a tap tail into compact ROLE/PROMPT/RESPONSE steps."""
+        text = str(trace_text or "").strip()
+        if not text:
+            return []
+
+        sections: list[tuple[str, str]] = []
+        current_kind = "trace"
+        current_lines: list[str] = []
+        for raw_line in text.splitlines():
+            line = raw_line.rstrip()
+            upper = line.upper()
+            if upper.startswith("ROLE"):
+                if current_lines:
+                    sections.append((current_kind, "\n".join(current_lines).strip()))
+                sections.append(("role", line.strip()))
+                current_kind = "trace"
+                current_lines = []
+            elif upper in {"PROMPT:", "PROMPT"}:
+                if current_lines:
+                    sections.append((current_kind, "\n".join(current_lines).strip()))
+                current_kind = "prompt"
+                current_lines = []
+            elif upper in {"RESPONSE:", "RESPONSE"}:
+                if current_lines:
+                    sections.append((current_kind, "\n".join(current_lines).strip()))
+                current_kind = "response"
+                current_lines = []
+            else:
+                current_lines.append(line)
+        if current_lines:
+            sections.append((current_kind, "\n".join(current_lines).strip()))
+
+        steps: list[dict[str, Any]] = []
+        for kind, content in sections:
+            cleaned = content.strip()
+            if not cleaned:
+                continue
+            steps.append(
+                {
+                    "step_id": f"s{len(steps) + 1}",
+                    "kind": kind,
+                    "line_count": len(cleaned.splitlines()),
+                    "content_hash": hashlib.sha256(cleaned.encode("utf-8")).hexdigest()[:12],
+                    "content_preview": cleaned[:preview_chars],
+                }
+            )
+            if len(steps) >= max_steps:
+                break
+        return steps
+
+    @classmethod
+    def build_critic_trace_ir(
+        cls,
+        *,
+        trace_bank: list[dict[str, Any]] | None = None,
+        raw_trace_text: str = "",
+        trial_id: int | None = None,
+        failure_summary: str = "",
+        k_success: int = 2,
+        k_failure: int = 2,
+        max_trace_chars: int = 1600,
+    ) -> dict[str, Any]:
+        """Build a deterministic, observe-only trace IR for critic/prompt context.
+
+        This is a structured companion to the legacy formatted trace text. It is
+        intentionally not consumed by any score, safety, or acceptance gate.
+        """
+
+        def selected(outcome: str, limit: int) -> list[dict[str, Any]]:
+            if limit <= 0:
+                return []
+            matches = [
+                item
+                for item in trace_bank or []
+                if isinstance(item, dict)
+                and str(item.get("outcome") or "").lower() == outcome
+                and str(item.get("trace") or "").strip()
+            ]
+            return matches[-limit:]
+
+        examples: list[dict[str, Any]] = []
+        for outcome, limit in (("success", int(k_success)), ("failure", int(k_failure))):
+            for raw in selected(outcome, limit):
+                trace = cls._trim_trace_text(raw.get("trace", ""), max_trace_chars)
+                if not trace:
+                    continue
+                examples.append(
+                    {
+                        "outcome": outcome,
+                        "trial_id": raw.get("trial_id"),
+                        "species": str(raw.get("species") or ""),
+                        "action_type": str(raw.get("action_type") or ""),
+                        "reason": str(raw.get("reason") or "")[:500],
+                        "trace_hash": str(
+                            raw.get("trace_hash")
+                            or hashlib.sha256(trace.encode("utf-8")).hexdigest()[:12]
+                        ),
+                        "steps": cls._trace_ir_steps(trace),
+                    }
+                )
+
+        raw_tail = ""
+        if not examples:
+            raw_tail = cls._trim_trace_text(raw_trace_text, max_trace_chars)
+            if raw_tail:
+                examples.append(
+                    {
+                        "outcome": "unlabeled",
+                        "trial_id": trial_id,
+                        "species": "",
+                        "action_type": "",
+                        "reason": "raw_recent_trace_fallback",
+                        "trace_hash": hashlib.sha256(raw_tail.encode("utf-8")).hexdigest()[:12],
+                        "steps": cls._trace_ir_steps(raw_tail),
+                    }
+                )
+
+        return {
+            "schema_version": "harness_trace_ir.v1",
+            "observe_only": True,
+            "acceptance_effect": "none_observe_only",
+            "trial_id": trial_id,
+            "failure_summary": str(failure_summary or "")[:500],
+            "source": "contrastive_trace_bank" if trace_bank and examples and not raw_tail else "raw_recent_traces",
+            "trace_examples": examples,
+        }
+
+    @staticmethod
+    def format_critic_trace_ir(trace_ir: dict[str, Any] | None) -> str:
+        """Render critic trace IR as a prompt-safe JSON block."""
+        if not isinstance(trace_ir, dict) or not trace_ir.get("trace_examples"):
+            return ""
+        return (
+            "## Harness Trace IR (MH-11 observe-only)\n"
+            "This structured trace evidence is diagnostic context only; it is not "
+            "an acceptance score or quality gate.\n"
+            "```json\n"
+            f"{json.dumps(trace_ir, sort_keys=True, indent=2)}\n"
+            "```"
+        )
+
     @classmethod
     def update_contrastive_trace_bank(
         cls,

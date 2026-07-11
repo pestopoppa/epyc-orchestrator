@@ -5179,6 +5179,20 @@ def _update_contrastive_trace_state(
                 k_failure=2,
                 trace_bank=bank,
             )
+        ir_builder = getattr(tower, "build_critic_trace_ir", None)
+        if callable(ir_builder):
+            trace_ir = ir_builder(
+                trace_bank=bank,
+                trial_id=trial_id,
+                failure_summary=failure_analysis if outcome == "failure" else "",
+                k_success=2,
+                k_failure=2,
+            )
+            if trace_ir.get("trace_examples"):
+                state["critic_trace_ir"] = trace_ir
+                ir_formatter = getattr(tower, "format_critic_trace_ir", None)
+                if callable(ir_formatter):
+                    state["critic_trace_ir_prompt"] = ir_formatter(trace_ir)
     except Exception as exc:  # trace feedback must never disrupt trial completion
         log.debug("Contrastive trace update skipped for trial %d: %s", trial_id, exc)
 
