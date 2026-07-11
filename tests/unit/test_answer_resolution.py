@@ -1,7 +1,5 @@
 """Tests for graph/answer_resolution.py — answer extraction helpers."""
 
-import os
-import pytest
 
 from src.graph.answer_resolution import (
     _looks_like_prompt_echo,

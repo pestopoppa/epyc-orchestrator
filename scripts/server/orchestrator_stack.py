@@ -32,13 +32,10 @@ Examples:
 from __future__ import annotations
 
 import argparse
-import json
 import os
-import shutil
 import subprocess
 import sys
 import time
-from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 from typing import Any, MutableMapping
@@ -59,30 +56,9 @@ if (
     os.environ["ORCHESTRATOR_STACK_REEXEC"] = "1"
     os.execv(str(_PROJECT_VENV_PY), [str(_PROJECT_VENV_PY), __file__, *sys.argv[1:]])
 
-from scripts.server import stack_checkpoint as _stack_checkpoint
 from scripts.server import stack_processes as _stack_processes
 from scripts.server.stack_env import (
-    _CANONICAL_OMP_ENV,
-    _LLVM20_LIBDIR,
-    _ROLE_ENV_BLOCKS,
-    _role_env_overrides,
     build_launch_env,
-)
-from scripts.server.stack_host import (
-    _HOST_PREREQ_GOVERNOR,
-    _HOST_PREREQ_SYSCTLS,
-    _HOST_PREREQ_THP,
-    _read_governor,
-    _read_sysctl,
-    _read_thp_active,
-    apply_host_prerequisites,
-    check_host_prerequisites,
-)
-from scripts.server.stack_docker import (
-    _docker_available,
-    docker_container_running,
-    start_docker_container,
-    stop_docker_container,
 )
 from scripts.server.stack_health import wait_for_health as _wait_for_health
 from scripts.server.fleet_markers import (
@@ -98,32 +74,20 @@ from scripts.server.stack_manifest import (
     DEV_MODEL_PATH,
     DEFAULT_EFFECTIVE_CONTEXT_TOKENS,
     DEFAULT_UBATCH_TOKENS,
-    DOCKER_SERVICES,
     EMBEDDER_PORTS,
     EMBEDDING_MODEL_PATH,
     EMBEDDING_SERVER_RECIPES,
     EXPLORE_DRAFT_MODEL,
-    HOT_ROLES,
-    HOT_SERVERS,
     LAUNCH_CONTEXT_TOKENS,
     LAUNCH_KV_QUANT_CONFIGS,
-    NUMA_REPLICA_PORTS,
     NO_SPEC_DECODE_ROLES,
     ORCHESTRATOR_PROFILES,
-    PORT_MAP,
-    ROLE_LAUNCH_META,
     SERIAL_ROLES,
     VISION_ESCALATION_MMPROJ,
     VISION_ESCALATION_MODEL,
     VISION_WORKER_MMPROJ,
     VISION_WORKER_MODEL,
-    WARM_SERVERS,
     WORKER_POOL_MODELS,
-    _build_servers_from_classification,
-    _filter_by_numa_mode,
-    _validate_role_classification,
-    validate_against_registry,
-    validate_model_paths,
 )
 from scripts.server.stack_paths import (
     _HEALTH_SERVER_STARTUP,
@@ -131,24 +95,15 @@ from scripts.server.stack_paths import (
     _HEALTH_WORKER_SERVER,
     _PATHS,
     _V2_ROLES,
-    LLAMA_MATH_TOOLS,
     LLAMA_SERVER,
     LLAMA_SERVER_V2,
     LOG_DIR,
     SLOT_SAVE_DIR,
     STATE_FILE,
-    _get_paths,
 )
 from scripts.server.stack_numa import (
     MLOCK_ROLES,
     NUMA_CONFIG,
-    NUMA_FULL,
-    NUMA_NODE0,
-    NUMA_NODE1,
-    NUMA_Q0A,
-    NUMA_Q0B,
-    NUMA_Q1A,
-    NUMA_Q1B,
     _numa_prefix,
 )
 from scripts.server.stack_state import (
@@ -1213,7 +1168,7 @@ def start_server(
             )
 
         print(f"    PID: {proc.pid}")
-        print(f"    Waiting for health...")
+        print("    Waiting for health...")
 
         # VL models take longer to load (mmproj + main model)
         timeout = _HEALTH_VISION_SERVER if vision_type == "escalation" else _HEALTH_WORKER_SERVER
@@ -1266,7 +1221,7 @@ def start_server(
             )
 
         print(f"    PID: {proc.pid}")
-        print(f"    Waiting for health...")
+        print("    Waiting for health...")
 
         if wait_for_health(port, timeout=60):  # Faster timeout for small model
             print(f"    [OK] Embedder #{instance_idx} ready")
@@ -1386,7 +1341,7 @@ def start_server(
             )
 
         print(f"    PID: {proc.pid}")
-        print(f"    Waiting for health...")
+        print("    Waiting for health...")
 
         # Faster timeout for smaller models (quick_check for fast workers)
         timeout = (
@@ -1469,9 +1424,9 @@ def start_server(
     print(f"    PID: {proc.pid}")
 
     # Wait for health
-    print(f"    Waiting for health...")
+    print("    Waiting for health...")
     if wait_for_health(port, timeout=180):
-        print(f"    [OK] Server ready")
+        print("    [OK] Server ready")
         return ProcessInfo(
             role=primary_role,
             pid=proc.pid,
@@ -1481,7 +1436,7 @@ def start_server(
             log_file=str(log_file),
         )
     else:
-        print(f"    [FAIL] Server did not become healthy")
+        print("    [FAIL] Server did not become healthy")
         print(f"    Check log: {log_file}")
         kill_process(proc.pid)
         return None
@@ -1693,10 +1648,10 @@ def start_orchestrator(profile: str | None = None) -> ProcessInfo | None:
         )
 
     print(f"    PID: {proc.pid}")
-    print(f"    Waiting for health...")
+    print("    Waiting for health...")
 
     if wait_for_health(8000, timeout=60):
-        print(f"    [OK] Orchestrator ready")
+        print("    [OK] Orchestrator ready")
         # Durable earlyoom control-plane protection. The API master + its uvicorn
         # workers are comm=python and cannot be earlyoom --ignore'd by name (they
         # collide with runaway python evals), so set oom_score_adj=-1000 (earlyoom
@@ -1728,7 +1683,7 @@ def start_orchestrator(profile: str | None = None) -> ProcessInfo | None:
             log_file=str(log_file),
         )
 
-    print(f"    [FAIL] Orchestrator did not start")
+    print("    [FAIL] Orchestrator did not start")
     print(f"    Check log: {log_file}")
     kill_process(proc.pid)
     return None
@@ -1767,10 +1722,10 @@ def start_document_formalizer() -> ProcessInfo | None:
         )
 
     print(f"    PID: {proc.pid}")
-    print(f"    Waiting for health...")
+    print("    Waiting for health...")
 
     if wait_for_health(port, timeout=60):
-        print(f"    [OK] Document formalizer ready")
+        print("    [OK] Document formalizer ready")
         return ProcessInfo(
             role="document_formalizer",
             pid=proc.pid,
@@ -1780,7 +1735,7 @@ def start_document_formalizer() -> ProcessInfo | None:
             log_file=str(log_file),
         )
     else:
-        print(f"    [FAIL] Document formalizer did not start")
+        print("    [FAIL] Document formalizer did not start")
         print(f"    Check log: {log_file}")
         kill_process(proc.pid)
         return None
@@ -1823,10 +1778,10 @@ def start_sd_server() -> ProcessInfo | None:
         )
 
     print(f"    PID: {proc.pid}")
-    print(f"    Waiting for health (path=/sdapi/v1/samplers, timeout=120s)...")
+    print("    Waiting for health (path=/sdapi/v1/samplers, timeout=120s)...")
 
     if wait_for_health(port, timeout=120, path="/sdapi/v1/samplers"):
-        print(f"    [OK] sd-server ready")
+        print("    [OK] sd-server ready")
         return ProcessInfo(
             role="sd_server",
             pid=proc.pid,
@@ -1836,7 +1791,7 @@ def start_sd_server() -> ProcessInfo | None:
             log_file=str(log_file),
         )
     else:
-        print(f"    [FAIL] sd-server did not start")
+        print("    [FAIL] sd-server did not start")
         print(f"    Check log: {log_file}")
         kill_process(proc.pid)
         return None
@@ -1876,10 +1831,10 @@ def start_whisper() -> ProcessInfo | None:
         )
 
     print(f"    PID: {proc.pid}")
-    print(f"    Waiting for health (path=/health, timeout=60s)...")
+    print("    Waiting for health (path=/health, timeout=60s)...")
 
     if wait_for_health(port, timeout=60, path="/health"):
-        print(f"    [OK] Whisper ready")
+        print("    [OK] Whisper ready")
         return ProcessInfo(
             role="whisper",
             pid=proc.pid,
@@ -1889,7 +1844,7 @@ def start_whisper() -> ProcessInfo | None:
             log_file=str(log_file),
         )
     else:
-        print(f"    [FAIL] Whisper did not start")
+        print("    [FAIL] Whisper did not start")
         print(f"    Check log: {log_file}")
         kill_process(proc.pid)
         return None
@@ -1932,10 +1887,10 @@ def start_handoff_dashboard() -> ProcessInfo | None:
         )
 
     print(f"    PID: {proc.pid}")
-    print(f"    Waiting for health (path=/health, timeout=30s)...")
+    print("    Waiting for health (path=/health, timeout=30s)...")
 
     if wait_for_health(port, timeout=30, path="/health"):
-        print(f"    [OK] handoff dashboard ready")
+        print("    [OK] handoff dashboard ready")
         return ProcessInfo(
             role="handoff_dashboard",
             pid=proc.pid,
@@ -1945,7 +1900,7 @@ def start_handoff_dashboard() -> ProcessInfo | None:
             log_file=str(log_file),
         )
     else:
-        print(f"    [FAIL] handoff dashboard did not start")
+        print("    [FAIL] handoff dashboard did not start")
         print(f"    Check log: {log_file}")
         kill_process(proc.pid)
         return None

@@ -523,6 +523,8 @@ class ServerURLsConfig:
     # compatibility aliases where stack priors do not expose that exact label.
     worker: str = field(default_factory=lambda: _server_url_default("worker"))
     worker_general: str = field(default_factory=lambda: _server_url_default("worker_general"))
+    # toolrunner is a logical alias over worker_general (shared Gemma-4 backend)
+    toolrunner: str = field(default_factory=lambda: _server_url_default("worker_general"))
     worker_explore: str = field(default_factory=lambda: _server_url_default("worker_explore"))
     worker_math: str = field(default_factory=lambda: _server_url_default("worker_math"))
     worker_vision: str = field(default_factory=lambda: _server_url_default("worker_vision"))

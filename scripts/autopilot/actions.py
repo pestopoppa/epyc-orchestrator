@@ -13,9 +13,11 @@ handler signatures pack the autopilot's many species/state objects into an
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import subprocess
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -23,6 +25,8 @@ from typing import TYPE_CHECKING, Any
 
 from controller_io import validate_single_variable
 from safety_gate import EvalResult, SafetyGate
+
+ORCH_ROOT = Path(__file__).resolve().parents[2]
 
 SEQ_PROMOTION_RECENT_QID_TRIALS = int(
     os.environ.get("AUTOPILOT_SEQ_PROMOTION_RECENT_QID_TRIALS", "100")
@@ -112,6 +116,7 @@ def _numeric_apply_error_skip(
     reason = "; ".join(str(error) for error in errors) or str(apply_result)
     unknown = apply_result.get("unknown_params") or []
     status = "invalid" if unknown or "unknown_params:" in reason else "skipped"
+    infra = _numeric_apply_error_is_infra(reason, apply_result)
     return SkipOutcome(
         status,
         (
@@ -119,7 +124,20 @@ def _numeric_apply_error_skip(
             f"params={dict(params)}"
         ),
         "numeric_trial",
+        bug_corrupted_by="env_restart_apply_failure" if infra else "",
+        bug_corrupted_reason=(
+            "numeric_trial params were not applied because API/env restart failed"
+            if infra
+            else ""
+        ),
     )
+
+
+def _numeric_apply_error_is_infra(reason: str, apply_result: dict[str, Any]) -> bool:
+    """True when params failed because orchestration reload infrastructure failed."""
+    if apply_result.get("unknown_params") or "unknown_params:" in reason:
+        return False
+    return "env_restart:" in reason
 
 
 def _numeric_apply_no_changes(apply_result: dict[str, Any]) -> bool:
@@ -200,6 +218,8 @@ class SkipOutcome:
     status: str
     reason: str
     action_type: str = ""
+    bug_corrupted_by: str = ""
+    bug_corrupted_reason: str = ""
 
 
 @dataclass
@@ -431,7 +451,10 @@ def _action_seed_batch(action: dict[str, Any], ctx: _ActionContext):
     }
     strategy_hints = _seed_batch_strategy_hints(action, ctx)
     if strategy_hints:
-        run_kwargs["strategy_hints"] = strategy_hints
+        log.info(
+            "Seed-batch StrategyStore hints available for planner context; "
+            "not injecting them into sampled question prompts."
+        )
     seeder_result = ctx.seeder.run_batch(**run_kwargs)
     _batch_elapsed = _time.perf_counter() - _batch_start
 
@@ -521,7 +544,8 @@ def _action_numeric_trial(action: dict[str, Any], ctx: _ActionContext):
             )
         if apply_result.get("status") == "error":
             reason = "; ".join(apply_result.get("errors", [])) or str(apply_result)
-            ctx.swarm.mark_failed(surface, trial["trial_number"], reason)
+            if not _numeric_apply_error_is_infra(reason, apply_result):
+                ctx.swarm.mark_failed(surface, trial["trial_number"], reason)
             log.warning(
                 "Skipping numeric trial eval; suggested params were not applied: %s",
                 reason,
@@ -1235,6 +1259,132 @@ def _action_structural_experiment(action: dict[str, Any], ctx: _ActionContext):
     return eval_result, "structural_lab"
 
 
+def _consult_gate_result_from_summary(
+    summary: dict[str, Any],
+    *,
+    elapsed_s: float,
+    tier: int,
+) -> EvalResult:
+    """Convert a J17 three-arm summary into a tiered EvalResult."""
+    arms = summary.get("summary", {}) if isinstance(summary, dict) else {}
+    gated = arms.get("gated", {}) if isinstance(arms, dict) else {}
+    turns = int(gated.get("turns") or summary.get("turns_requested_per_arm") or 0)
+    quality_0_1 = float(gated.get("quality") or 0.0)
+    quality_0_3 = round(3.0 * quality_0_1, 4)
+    elapsed_s = max(float(elapsed_s), 0.001)
+    total_turns = sum(
+        int(value.get("turns") or 0)
+        for key, value in arms.items()
+        if isinstance(value, dict) and key not in {"comparison", "gated_comparison"}
+    )
+    tasks_per_hour = round(3600.0 * total_turns / elapsed_s, 4) if total_turns else 0.0
+    consult_calls = int(gated.get("consult_calls") or 0)
+    consult_skips = int(gated.get("consult_skips") or 0)
+    reruns = int(gated.get("rerun_requests") or 0)
+    gate_reason_counts = gated.get("gate_reason_counts") or {}
+    consult_decisions = max(1, consult_calls + consult_skips)
+    cost = round(min(1.0, consult_calls / consult_decisions), 4)
+    reliability = round((int(gated.get("passes") or 0) / max(1, turns)), 4)
+
+    return EvalResult(
+        tier=tier,
+        quality=quality_0_3,
+        speed=tasks_per_hour,
+        cost=cost,
+        reliability=reliability,
+        per_suite_quality={"consult_gate_targeted": quality_0_3},
+        per_suite_counts={"consult_gate_targeted": turns},
+        n_questions=turns,
+        core_id="internal_interaction_j17_targeted_gate_v1",
+        details={
+            "kind": "consult_gate_probe",
+            "tier": tier,
+            "summary": arms,
+            "artifact_dir": summary.get("artifact_dir"),
+            "rows_path": summary.get("rows_path"),
+            "consult_calls": consult_calls,
+            "consult_skips": consult_skips,
+            "rerun_requests": reruns,
+            "gate_reason_counts": gate_reason_counts if isinstance(gate_reason_counts, dict) else {},
+            "quality_0_1": quality_0_1,
+        },
+        eval_wall_s=elapsed_s,
+        speed_metric_mode="consult_gate_tasks_per_hour",
+    )
+
+
+def _action_consult_gate_probe(action: dict[str, Any], ctx: _ActionContext):
+    task_suite = str(action.get("task_suite") or "targeted")
+    turns = int(action.get("turns") or 10)
+    tier = max(1, min(3, int(action.get("tier") or 3)))
+    if task_suite not in {"targeted", "bep"}:
+        return (
+            SkipOutcome("invalid", f"unsupported consult_gate_probe task_suite={task_suite!r}", "consult_gate_probe"),
+            "consult_gate",
+        )
+    turns = max(3, min(50, turns))
+    script = ORCH_ROOT / "scripts" / "benchmark" / "internal_interaction_j17_live_ab.py"
+    if not script.exists():
+        return (
+            SkipOutcome("skipped", f"missing consult gate harness: {script}", "consult_gate_probe"),
+            "consult_gate",
+        )
+    started = datetime.now(timezone.utc)
+    cmd = [
+        sys.executable,
+        str(script),
+        "--apply",
+        "--confirm-clean-window",
+        "--allow-autopilot-active",
+        "--task-suite",
+        task_suite,
+        "--turns",
+        str(turns),
+        "--arms",
+        "baseline,consult,gated",
+    ]
+    timeout_s = max(900, turns * 240)
+    proc = subprocess.run(
+        cmd,
+        cwd=str(ORCH_ROOT),
+        capture_output=True,
+        text=True,
+        timeout=timeout_s,
+    )
+    elapsed_s = (datetime.now(timezone.utc) - started).total_seconds()
+    if proc.returncode != 0:
+        return (
+            SkipOutcome(
+                "skipped",
+                "consult_gate_probe harness failed "
+                f"rc={proc.returncode}: {(proc.stderr or proc.stdout)[-1000:]}",
+                "consult_gate_probe",
+            ),
+            "consult_gate",
+        )
+
+    artifact_dir: Path | None = None
+    for line in reversed(proc.stdout.splitlines()):
+        if line.startswith("wrote "):
+            artifact_dir = Path(line.removeprefix("wrote ").strip())
+            break
+    if artifact_dir is None:
+        return (
+            SkipOutcome("skipped", "consult_gate_probe did not report artifact directory", "consult_gate_probe"),
+            "consult_gate",
+        )
+    summary_path = artifact_dir / "summary.json"
+    try:
+        summary = json.loads(summary_path.read_text())
+    except Exception as exc:
+        return (
+            SkipOutcome("skipped", f"consult_gate_probe summary unreadable: {exc}", "consult_gate_probe"),
+            "consult_gate",
+        )
+    summary["artifact_dir"] = str(artifact_dir)
+    return _consult_gate_result_from_summary(summary, elapsed_s=elapsed_s, tier=tier), "consult_gate"
+
+
 def _structural_noop_reason(flags: dict[str, Any], lab: Any) -> str | None:
     if not flags or lab is None or not hasattr(lab, "current_flags"):
         return None
@@ -1655,6 +1805,7 @@ _ACTION_HANDLERS = {
     "gepa_optimize":          _action_gepa_optimize,
     "code_mutation":          _action_code_mutation,
     "structural_experiment":  _action_structural_experiment,
+    "consult_gate_probe":     _action_consult_gate_probe,
     "structural_prune":       _action_structural_prune,
     "train_routing_models":   _action_train_routing_models,
     "distill_skillbank":      _action_distill_skillbank,

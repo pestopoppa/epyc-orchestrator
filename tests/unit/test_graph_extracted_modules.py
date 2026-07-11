@@ -6,9 +6,8 @@ extracted modules with the lowest test coverage.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import MagicMock, patch
 
-import pytest
 
 from src.escalation import ErrorCategory
 

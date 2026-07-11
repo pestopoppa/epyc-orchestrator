@@ -225,3 +225,67 @@ def test_write_baseline_yaml_tiers_roundtrips_counts(tmp_path):
     _write_baseline_yaml_tiers(path, b)  # existing-file drop+reappend branch
     assert Baseline.load(path).per_suite_counts_for_tier(1) == {"hotpotqa": 50}
     assert path.read_text().count("per_suite_counts_by_tier:") == 1, "no stale duplicate block"
+
+
+# ── tool_use advisory regression gate ─────────────────────────────────────────
+
+
+def test_tool_use_moderate_regression_is_advisory(tmp_path):
+    """A -0.6 drop on tool_use (1 question missed of 5) is advisory, not terminal."""
+    g = _gate(tmp_path)
+    g.baseline.per_suite_quality_by_tier = {1: {"tool_use": 3.0}}
+    g.baseline.per_suite_counts_by_tier = {1: {"tool_use": 5}}
+    # 4/5 correct → 2.4, delta = -0.6 (typical single-question flakiness)
+    verdict = g.check(_trial({"tool_use": 2.4}, {"tool_use": 5}))
+    assert verdict.passed
+    assert "per_suite_regression" not in verdict.categories
+    assert "tool_use_regression_advisory" in verdict.categories
+    assert any("tool_use" in w for w in verdict.warnings)
+
+
+def test_tool_use_catastrophic_regression_still_blocks(tmp_path):
+    """A -3.0 drop on tool_use (all 5 questions wrong) IS a hard violation."""
+    g = _gate(tmp_path)
+    g.baseline.per_suite_quality_by_tier = {1: {"tool_use": 3.0}}
+    g.baseline.per_suite_counts_by_tier = {1: {"tool_use": 5}}
+    # 0/5 correct → 0.0, delta = -3.0
+    verdict = g.check(_trial({"tool_use": 0.0}, {"tool_use": 5}))
+    assert not verdict.passed
+    assert "per_suite_regression" in verdict.categories
+    assert "tool_use_regression_advisory" not in verdict.categories
+
+
+def test_tool_use_severely_bad_regression_blocks(tmp_path):
+    """A -2.4 drop on tool_use (only 1 of 5 correct) is NOT catastrophic, so advisory."""
+    g = _gate(tmp_path)
+    g.baseline.per_suite_quality_by_tier = {1: {"tool_use": 3.0}}
+    g.baseline.per_suite_counts_by_tier = {1: {"tool_use": 5}}
+    # 1/5 correct → 0.6, delta = -2.4 (> -3.0, so still advisory)
+    verdict = g.check(_trial({"tool_use": 0.6}, {"tool_use": 5}))
+    assert verdict.passed
+    assert "per_suite_regression" not in verdict.categories
+    assert "tool_use_regression_advisory" in verdict.categories
+
+
+def test_non_tool_use_suites_unaffected_by_tool_use_gate(tmp_path):
+    """Non-tool_use suites still follow the standard binding rules."""
+    g = _gate(tmp_path)
+    g.baseline.per_suite_quality_by_tier = {1: {"coder": 2.4}}
+    g.baseline.per_suite_counts_by_tier = {1: {"coder": 50}}
+    # Small drop at high n → hard violation (standard behavior preserved)
+    verdict = g.check(_trial({"coder": 2.1}, {"coder": 50}))
+    assert "per_suite_regression" in verdict.categories
+    assert "tool_use_regression_advisory" not in verdict.categories
+
+
+def test_tool_use_and_other_suite_regression_combined(tmp_path):
+    """tool_use advisory + other-suite violation → verdict still fails (other suite)."""
+    g = _gate(tmp_path)
+    g.baseline.per_suite_quality_by_tier = {1: {"tool_use": 3.0, "coder": 2.4}}
+    g.baseline.per_suite_counts_by_tier = {1: {"tool_use": 5, "coder": 50}}
+    verdict = g.check(
+        _trial({"tool_use": 2.4, "coder": 2.0}, {"tool_use": 5, "coder": 50})
+    )
+    assert not verdict.passed  # coder regression is a hard violation
+    assert "per_suite_regression" in verdict.categories  # from coder
+    assert "tool_use_regression_advisory" in verdict.categories  # tool_use is advisory

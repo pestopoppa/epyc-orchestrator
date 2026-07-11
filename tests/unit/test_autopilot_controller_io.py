@@ -197,6 +197,26 @@ def test_validate_structural_experiment_accepts_single_flag() -> None:
     ) is None
 
 
+def test_validate_consult_gate_probe_accepts_tiered_hard_lane() -> None:
+    assert controller_io.validate_single_variable(
+        {"type": "consult_gate_probe", "task_suite": "targeted", "turns": 10, "tier": 3}
+    ) is None
+
+
+def test_validate_consult_gate_probe_blocks_bad_tier() -> None:
+    err = controller_io.validate_single_variable(
+        {"type": "consult_gate_probe", "task_suite": "targeted", "turns": 10, "tier": 4}
+    )
+    assert err and "tier must be <= 3" in err
+
+
+def test_validate_consult_gate_probe_blocks_oversized_run() -> None:
+    err = controller_io.validate_single_variable(
+        {"type": "consult_gate_probe", "task_suite": "targeted", "turns": 80, "tier": 3}
+    )
+    assert err and "turns must be <= 50" in err
+
+
 def test_validate_numeric_trial_blocks_multi_param() -> None:
     err = controller_io.validate_single_variable(
         {"type": "numeric_trial", "params": {"x": 1, "y": 2}}

@@ -8,13 +8,11 @@ they're only used here.
 
 from __future__ import annotations
 
-import csv
 import json
 import logging
 import os
 import subprocess
 import time
-from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -23,13 +21,10 @@ from feature_validation_profiles import (
     ComparisonReport,
     FeatureProfile,
     MetricSnapshot,
-    TestSpec,
-    _build_profiles,
 )
 
 logger = logging.getLogger("feature_validation")
 
-import os
 import sys
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent

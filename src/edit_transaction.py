@@ -157,6 +157,7 @@ class EditResult:
 
 Verifier = Callable[[Path], bool | tuple[bool, str] | None]
 ReviewBeforeCommit = Callable[[str], tuple[dict[str, Any], dict[str, Any]]]
+ReviewBeforeCommitGate = Callable[[dict[str, Any]], bool | tuple[bool, list[str] | tuple[str, ...]] | dict[str, Any]]
 
 
 def _run_verifier(verify_fn: Verifier | None, root: Path) -> None:
@@ -290,6 +291,26 @@ def _format_advisory_for_rerun(advisory: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _review_gate_decision(
+    review_before_commit_gate: ReviewBeforeCommitGate | None,
+    context: dict[str, Any],
+) -> tuple[bool, list[str]]:
+    if review_before_commit_gate is None:
+        return True, []
+    decision = review_before_commit_gate(context)
+    if isinstance(decision, bool):
+        return decision, []
+    if isinstance(decision, tuple):
+        enabled, reasons = decision
+        return bool(enabled), [str(reason) for reason in reasons]
+    if isinstance(decision, dict):
+        reasons = decision.get("reasons", ())
+        if not isinstance(reasons, (list, tuple)):
+            reasons = [reasons]
+        return bool(decision.get("enabled")), [str(reason) for reason in reasons]
+    return bool(decision), []
+
+
 def run_edit_transaction(
     llm_call: Callable[[str], str],
     task_prompt: str,
@@ -299,6 +320,7 @@ def run_edit_transaction(
     verify_fn: Verifier | None = None,
     review_before_commit: ReviewBeforeCommit | None = None,
     enable_review_before_commit: bool = False,
+    review_before_commit_gate: ReviewBeforeCommitGate | None = None,
 ) -> tuple[EditResult, str]:
     """End-to-end: assemble -> one-shot prompt -> single model call -> parse -> transactional apply.
     `llm_call` is any prompt->text callable (orchestrator primitives, or a direct chat client).
@@ -311,6 +333,34 @@ def run_edit_transaction(
     new_files, deletes = parse_edit_response(raw)
     consult_events: list[dict[str, Any]] = []
     if enable_review_before_commit and review_before_commit is not None:
+        gate_context = {
+            "task_prompt": task_prompt,
+            "current_paths": sorted(files_ctx),
+            "draft_paths": sorted(new_files),
+            "delete_paths": sorted(deletes),
+            "raw_model_output": raw,
+        }
+        consult_allowed, gate_reasons = _review_gate_decision(review_before_commit_gate, gate_context)
+        if not consult_allowed:
+            consult_events.append(
+                {
+                    "interaction_type": "consult",
+                    "skill": "review_before_commit",
+                    "success": True,
+                    "skipped": True,
+                    "reason": "targeted_gate_skip",
+                    "gate_reasons": gate_reasons,
+                }
+            )
+            result = apply_edit_transaction(
+                root,
+                new_files,
+                deletes,
+                self_check=self_check,
+                verify_fn=verify_fn,
+            )
+            result.consult_events.extend(consult_events)
+            return result, raw
         review_context = _draft_review_context(
             task_prompt,
             files_ctx,
@@ -321,25 +371,27 @@ def run_edit_transaction(
         try:
             advisory, stats = review_before_commit(review_context)
         except Exception as exc:
-            consult_events.append(
-                {
-                    "interaction_type": "consult",
-                    "skill": "review_before_commit",
-                    "success": False,
-                    "reason": getattr(exc, "reason", type(exc).__name__),
-                }
-            )
+            event = {
+                "interaction_type": "consult",
+                "skill": "review_before_commit",
+                "success": False,
+                "reason": getattr(exc, "reason", type(exc).__name__),
+            }
+            if review_before_commit_gate is not None:
+                event["gate_reasons"] = gate_reasons
+            consult_events.append(event)
         else:
             rerun = _advisory_requests_rerun(advisory)
-            consult_events.append(
-                {
-                    "interaction_type": "consult",
-                    "skill": "review_before_commit",
-                    "success": True,
-                    "rerun_requested": rerun,
-                    **dict(stats or {}),
-                }
-            )
+            event = {
+                "interaction_type": "consult",
+                "skill": "review_before_commit",
+                "success": True,
+                "rerun_requested": rerun,
+                **dict(stats or {}),
+            }
+            if review_before_commit_gate is not None:
+                event["gate_reasons"] = gate_reasons
+            consult_events.append(event)
             if rerun:
                 rerun_prompt = (
                     f"{task_prompt.strip()}\n\n"

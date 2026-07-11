@@ -17,11 +17,9 @@ import asyncio
 import logging
 import os
 import re
-import tempfile
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from pydantic_graph import End, GraphRunContext
+from pydantic_graph import GraphRunContext
 
 from src.escalation import ErrorCategory
 from src.exceptions import InferenceError
@@ -29,7 +27,7 @@ from src.graph.error_classifier import classify_error as _classify_error_impl
 from src.graph.escalation_helpers import detect_role_cycle as _detect_role_cycle_impl
 from src.graph.repl_tap import tap_write_repl_exec as _tap_write_repl_exec_impl
 from src.graph.repl_tap import tap_write_repl_result as _tap_write_repl_result_impl
-from src.graph.answer_resolution import (
+from src.graph.answer_resolution import (  # noqa: F401
     _FINAL_RE,
     _extract_final_from_raw,
     _extract_prose_answer,
@@ -38,26 +36,16 @@ from src.graph.answer_resolution import (
     _resolve_answer,
     _should_attempt_prose_rescue,
 )
-from src.graph.observability import (
-    _add_evidence,
-    _log_escalation,
-    _record_failure,
-    _record_mitigation,
-)
 from src.graph.file_artifacts import (
     _persist_solution_file,
     _solution_file_path,
     _spill_if_truncated,
 )
-from src.graph.compaction import (
-    _context_externalization_path,
-    _estimate_context_tokens,
-    _get_model_max_context,
+from src.graph.compaction import (  # noqa: F401
     _maybe_compact_context,
     _resolve_compaction_prompt,
 )
-from src.graph.budgets import (
-    _BAND_TOKEN_BUDGETS,
+from src.graph.budgets import (  # noqa: F401
     _REASONING_LENGTH_ALARM_MULTIPLIER,
     _budget_pressure_warnings,
     _check_budget_exceeded,
@@ -65,28 +53,18 @@ from src.graph.budgets import (
     _frontdoor_repl_non_tool_token_cap,
     _frontdoor_turn_token_cap,
     _repl_turn_token_cap,
-    _task_token_budget_cap,
-    _worker_call_budget_cap,
 )
 from src.graph.session_summary import (
     _get_exploration_tool_calls,
     _init_session_log,
     _maybe_refresh_session_summary,
     _record_session_turn,
-    _refresh_two_level_summary,
     _session_log_prompt_block,
 )
-from src.graph.workspace import (
+from src.graph.workspace import (  # noqa: F401
     _select_and_broadcast_workspace_delta,
     _update_workspace_from_turn,
     _workspace_prompt_block,
-)
-from src.graph.think_harder import (
-    _build_think_harder_config,
-    _expected_think_harder_roi,
-    _should_think_harder,
-    _think_harder_cfg,
-    _update_think_harder_stats,
 )
 from src.graph.task_ir_helpers import (
     _auto_gather_context,
@@ -94,19 +72,27 @@ from src.graph.task_ir_helpers import (
     _check_anti_pattern,
     _extract_candidate_files_from_task_ir,
 )
-from src.graph.decision_gates import (
+from src.graph.observability import (  # noqa: F401
+    _add_evidence,
+    _log_escalation,
+    _record_failure,
+    _record_mitigation,
+)
+from src.graph.decision_gates import (  # noqa: F401
     _check_approval_gate,
     _make_end_result,
     _should_escalate,
     _should_retry,
     _timeout_skip,
 )
+from src.graph.think_harder import (  # noqa: F401
+    _build_think_harder_config,
+    _should_think_harder,
+)
 from src.roles import Role
-from src.env_parsing import env_bool as _env_bool
 
 from src.graph.state import (
     TaskDeps,
-    TaskResult,
     TaskState,
 )
 

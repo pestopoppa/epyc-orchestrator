@@ -436,7 +436,7 @@ def _inject_rewards(
                 )
                 if resp.status_code == 200:
                     injected += 1
-            except Exception as e:
+            except Exception:
                 continue
     except ImportError:
         logger.error("httpx not available for HTTP injection")

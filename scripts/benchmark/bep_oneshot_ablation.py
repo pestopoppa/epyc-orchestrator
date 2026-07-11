@@ -6,14 +6,19 @@ new files it outputs; verify with the SAME task checkers. Isolates 'can the mode
   PASS one-shot but fails REPL  -> protocol/tooling problem.
   FAIL one-shot too             -> model capability / distribution shift more plausible.
 """
-import json, subprocess, time, re, shutil
+import json
+import subprocess
+import time
+import re
+import shutil
 from pathlib import Path
 import httpx
 
 ORCH = "/mnt/raid0/llm/epyc-orchestrator"
-TASKS = [json.loads(l) for l in open(f"{ORCH}/data/bep_sandbox/tasks.jsonl") if l.strip()]
+TASKS = [json.loads(line) for line in open(f"{ORCH}/data/bep_sandbox/tasks.jsonl") if line.strip()]
 SCRATCH = Path("/mnt/raid0/llm/tmp/bep_oneshot/work")
-OUTDIR = Path("/mnt/raid0/llm/tmp/bep_oneshot"); OUTDIR.mkdir(parents=True, exist_ok=True)
+OUTDIR = Path("/mnt/raid0/llm/tmp/bep_oneshot")
+OUTDIR.mkdir(parents=True, exist_ok=True)
 
 def _safe(rel: str):
     """Resolve a model-supplied path UNDER scratch, PRESERVING nested dirs; reject escapes
@@ -27,11 +32,13 @@ def _safe(rel: str):
     return p
 
 def reset_scratch(files):
-    if SCRATCH.exists(): shutil.rmtree(SCRATCH)
+    if SCRATCH.exists():
+        shutil.rmtree(SCRATCH)
     SCRATCH.mkdir(parents=True)
     for rel, content in (files or {}).items():
         p = _safe(rel)
-        if p is None: continue
+        if p is None:
+            continue
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content)
 
@@ -68,26 +75,32 @@ for task in TASKS:
     try:
         out, meta = chat_direct(build_prompt(task))
     except Exception as e:
-        print(f"{tid}: CHAT-ERROR {type(e).__name__}: {e}"); continue
+        print(f"{tid}: CHAT-ERROR {type(e).__name__}: {e}")
+        continue
     (OUTDIR/f"out_{tid}.txt").write_text(out)
     files, deletes = parse_files(out)
     rejected = []
     for rel, content in files.items():
         p = _safe(rel)
-        if p is None: rejected.append(rel); continue
+        if p is None:
+            rejected.append(rel)
+            continue
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content)
     for d in deletes:
         p = _safe(d)
-        if p is not None: p.unlink(missing_ok=True)
-        else: rejected.append(d)
+        if p is not None:
+            p.unlink(missing_ok=True)
+        else:
+            rejected.append(d)
     try:
         res = subprocess.run(task['verifier_cmd'], shell=True, cwd=SCRATCH,
                              capture_output=True, text=True, timeout=30)
         ok = ('PASS' in (res.stdout+res.stderr)) or (res.returncode == 0 and res.stdout.strip())
         vnote = (res.stdout.strip() or res.stderr.strip())[:50]
     except Exception as e:
-        ok = False; vnote = f"verifier-error {e}"
+        ok = False
+        vnote = f"verifier-error {e}"
     print(f"{tid}: files={list(files.keys())} del={deletes}"
           f"{' REJECTED='+str(rejected) if rejected else ''} -> {'PASS' if ok else 'FAIL'} "
           f"think={'<think' in out} raw_len={len(out)} :: {vnote}")

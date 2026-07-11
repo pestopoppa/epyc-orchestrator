@@ -63,7 +63,6 @@ class BackendMixin:
             # whose chat template needs server-side jinja application
             # (gemma-4 multi-channel format, etc.). Comma-separated names.
             # Default: worker_general (gemma-4-26B-A4B-it).
-            import os as _os
             # J12 (2026-05-26): frontdoor/coder_escalation/architect_general route through
             # /v1/chat/completions so their registry chat_template_kwargs.enable_thinking=false
             # applies (load-bearing, feedback_qwen3x_enable_thinking_false). On /completion the

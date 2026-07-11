@@ -10,7 +10,6 @@ import pytest
 from src.scheduling.migration_transaction import (
     MigrationState,
     MigrationTransaction,
-    TERMINAL_STATES,
 )
 
 

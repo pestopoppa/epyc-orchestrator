@@ -11,7 +11,7 @@ import pytest
 sys.path.insert(0, "/mnt/raid0/llm/epyc-orchestrator")
 
 from src.features import Features, set_features, reset_features
-from src.graph.helpers import _check_reasoning_length_alarm, _BAND_TOKEN_BUDGETS
+from src.graph.helpers import _check_reasoning_length_alarm
 
 
 @pytest.fixture(autouse=True)

@@ -11,17 +11,17 @@ This module is shared with the orchestrator project.
 """
 
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Optional
 
 try:
     from .executor import Executor, Config
     from .output_parser import parse_output
-    from .scorer import score_response, ScoreResult
+    from .scorer import score_response
     from .registry import load_registry
 except ImportError:
     from executor import Executor, Config
     from output_parser import parse_output
-    from scorer import score_response, ScoreResult
+    from scorer import score_response
     from registry import load_registry
 
 
@@ -33,7 +33,7 @@ def _read_registry_timeout(category: str, key: str, fallback: int) -> int:
             timeouts = reg._raw.get("runtime_defaults", {}).get("timeouts", {})
             cat_data = timeouts.get(category, {})
             return cat_data.get(key, timeouts.get("default", fallback))
-    except Exception as e:
+    except Exception:
         pass
     return fallback
 

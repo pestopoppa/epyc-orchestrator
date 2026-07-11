@@ -11,11 +11,9 @@ Uses 8 parallel embedding servers for speed.
 from __future__ import annotations
 
 import concurrent.futures
-import json
 import random
 import re
 import sys
-from datetime import datetime
 from itertools import cycle
 from pathlib import Path
 from typing import Iterator, List
@@ -198,7 +196,7 @@ def seed_patterns(patterns: List[dict], embedder: ParallelEmbedder,
                         initial_q=p.get("q_value", 0.85),
                     )
                     stats["seeded"] += 1
-                except Exception as e:
+                except Exception:
                     stats["failed"] += 1
         except Exception as e:
             print(f"  Batch failed: {e}")
@@ -247,7 +245,7 @@ def main():
 
     # Final stats
     final = store.get_stats()
-    print(f"\n=== Results ===")
+    print("\n=== Results ===")
     print(f"Seeded: {stats['seeded']}")
     print(f"Failed: {stats['failed']}")
     print(f"Total memories: {final['total_memories']}")

@@ -1,9 +1,7 @@
 """Tests for REPL contextual suggestions (S3a)."""
 
-import os
 from unittest.mock import MagicMock
 
-import pytest
 
 from src.repl_environment.suggestions import (
     _SuggestionsMixin,
@@ -76,13 +74,13 @@ class TestMaxSuggestions:
         result = generate_suggestions("peek")
         # peek has 3 co-occurrences, max default is 3
         # Count suggestion lines (indented with 2 spaces in the raw output)
-        lines = [l for l in result.split("\n") if l.startswith("  ")]
+        lines = [line for line in result.split("\n") if line.startswith("  ")]
         assert len(lines) <= 3
 
     def test_max_suggestions_1(self, monkeypatch):
         monkeypatch.setenv("REPL_SUGGESTIONS", "1")
         result = generate_suggestions("peek", max_suggestions=1)
-        lines = [l for l in result.split("\n") if l.startswith("  ")]
+        lines = [line for line in result.split("\n") if line.startswith("  ")]
         assert len(lines) == 1
 
 
@@ -109,7 +107,7 @@ class TestFrecencyIntegration:
         monkeypatch.setenv("REPL_SUGGESTIONS", "1")
         store = MagicMock()
         store.top_k.return_value = ["/path/to/foo.py"]
-        result = generate_suggestions("web_search", frecency_store=store)
+        _result = generate_suggestions("web_search", frecency_store=store)
         # web_search is not a file-oriented tool
         store.top_k.assert_not_called()
 

@@ -9,6 +9,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from src.autopilot_core.learning_exclusions import NON_CORRUPT_LEARNING_EXCLUSIONS
 from src.autopilot_core.tier_specs import DEFAULT_FRONTIER_TIER
 
 log = logging.getLogger("autopilot.plots")
@@ -120,6 +121,7 @@ def plot_pareto_frontier_2d(
     *,
     frontiers_by_tier: dict[int | str, list[dict]] | None = None,
     dominated_by_tier: dict[int | str, list[dict]] | None = None,
+    excluded_by_tier: dict[int | str, list[dict]] | None = None,
 ) -> Path:
     """Scatter: Quality vs Speed, segregated by eval tier."""
     plt = ensure_matplotlib()
@@ -130,6 +132,8 @@ def plot_pareto_frontier_2d(
         frontiers_by_tier = {DEFAULT_FRONTIER_TIER: frontier}
     if dominated_by_tier is None:
         dominated_by_tier = {DEFAULT_FRONTIER_TIER: dominated}
+    if excluded_by_tier is None:
+        excluded_by_tier = {}
 
     tier_keys = sorted(
         {
@@ -137,6 +141,7 @@ def plot_pareto_frontier_2d(
             for tier, pts in {
                 **frontiers_by_tier,
                 **dominated_by_tier,
+                **excluded_by_tier,
             }.items()
             if pts
         }
@@ -148,6 +153,7 @@ def plot_pareto_frontier_2d(
         color = _tier_color(tier)
         tier_frontier = frontiers_by_tier.get(tier) or frontiers_by_tier.get(str(tier)) or []
         tier_dominated = dominated_by_tier.get(tier) or dominated_by_tier.get(str(tier)) or []
+        tier_excluded = excluded_by_tier.get(tier) or excluded_by_tier.get(str(tier)) or []
 
         if tier_dominated:
             d_q = [p["objectives"][0] for p in tier_dominated]
@@ -160,6 +166,20 @@ def plot_pareto_frontier_2d(
                 alpha=0.22,
                 marker="x",
                 label=f"T{tier} dominated",
+            )
+        if tier_excluded:
+            x_q = [p["objectives"][0] for p in tier_excluded]
+            x_s = [p["objectives"][1] for p in tier_excluded]
+            ax.scatter(
+                x_s,
+                x_q,
+                facecolors="none",
+                edgecolors=color,
+                s=54,
+                alpha=0.8,
+                marker="D",
+                linewidth=1.0,
+                label=f"T{tier} excluded/refuted",
             )
 
         # Draw each tier's 2D quality/speed envelope over all shown rows for
@@ -395,6 +415,63 @@ def _current_archive_trial_ids(archive: Any) -> set[int]:
     return ids
 
 
+def _plot_journal_entries(journal: Any) -> list[Any]:
+    entries_with_supersessions = getattr(journal, "entries_with_supersessions", None)
+    if callable(entries_with_supersessions):
+        return list(entries_with_supersessions())
+    return list(journal.all_entries())
+
+
+def _learning_exclusion_by(entry: Any) -> str:
+    details = getattr(entry, "eval_details", {}) or {}
+    if not isinstance(details, dict):
+        return ""
+    exclusion = details.get("learning_exclusion") or {}
+    if not isinstance(exclusion, dict):
+        return ""
+    return str(exclusion.get("by") or "").strip()
+
+
+def _excluded_plot_point(entry: Any) -> dict[str, Any] | None:
+    try:
+        objectives = [
+            float(getattr(entry, "quality")),
+            float(getattr(entry, "speed")),
+            -float(getattr(entry, "cost")),
+            float(getattr(entry, "reliability")),
+        ]
+    except (TypeError, ValueError):
+        return None
+    return {
+        "trial_id": getattr(entry, "trial_id", None),
+        "eval_tier": int(getattr(entry, "tier", DEFAULT_FRONTIER_TIER) or DEFAULT_FRONTIER_TIER),
+        "objectives": objectives,
+        "species": getattr(entry, "species", ""),
+        "learning_excluded_by": _learning_exclusion_by(entry),
+    }
+
+
+def _non_corrupt_excluded_points_by_tier(
+    entries: list[Any], current_archive_ids: set[int]
+) -> dict[int, list[dict[str, Any]]]:
+    del current_archive_ids  # Excluded rows get a distinct marker even if archive-reconstructed.
+    points: dict[int, list[dict[str, Any]]] = {}
+    for entry in entries:
+        try:
+            tier = int(getattr(entry, "tier", DEFAULT_FRONTIER_TIER) or DEFAULT_FRONTIER_TIER)
+        except (TypeError, ValueError):
+            continue
+        if tier <= 0 or getattr(entry, "bug_corrupted_by", ""):
+            continue
+        excluded_by = _learning_exclusion_by(entry)
+        if excluded_by not in NON_CORRUPT_LEARNING_EXCLUSIONS:
+            continue
+        point = _excluded_plot_point(entry)
+        if point is not None:
+            points.setdefault(tier, []).append(point)
+    return points
+
+
 def _archive_eval_tiers(archive: Any) -> list[int]:
     """Eval tiers present in the current archive, excluding sentinel/audit tiers."""
     tiers: set[int] = set()
@@ -467,9 +544,10 @@ def generate_all_plots(
 
     try:
         current_archive_ids = _current_archive_trial_ids(archive)
+        journal_entries = _plot_journal_entries(journal)
         trustworthy_tiered_entries = [
             e
-            for e in journal.all_entries()
+            for e in journal_entries
             if e.tier > 0
             and not getattr(e, "bug_corrupted_by", "")
             and (not current_archive_ids or e.trial_id in current_archive_ids)
@@ -490,6 +568,15 @@ def generate_all_plots(
         frontiers_by_tier: dict[int, list[dict]] = {}
         dominated_by_tier: dict[int, list[dict]] = {}
         archive_entries = getattr(archive, "_all_entries", None) or []
+        excluded_by_tier = _non_corrupt_excluded_points_by_tier(
+            journal_entries, current_archive_ids
+        )
+        excluded_trial_ids = {
+            int(point["trial_id"])
+            for points in excluded_by_tier.values()
+            for point in points
+            if point.get("trial_id") is not None
+        }
         for tier in tiers:
             frontier_entries = archive.frontier(tier=tier)
             frontier_ids = {e.trial_id for e in frontier_entries}
@@ -501,6 +588,7 @@ def generate_all_plots(
                     archive.is_frontier_eligible(e)
                     and int(e.eval_tier) == tier
                     and e.trial_id not in frontier_ids
+                    and e.trial_id not in excluded_trial_ids
                 )
             ]
         paths.append(
@@ -510,6 +598,7 @@ def generate_all_plots(
                 output_dir,
                 frontiers_by_tier=frontiers_by_tier,
                 dominated_by_tier=dominated_by_tier,
+                excluded_by_tier=excluded_by_tier,
             )
         )
 

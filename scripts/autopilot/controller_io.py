@@ -176,6 +176,10 @@ _ACTION_SCHEMAS: dict[str, dict[str, Any]] = {
         "allowed": {"type", "flags"},
         "required": {"flags"},
     },
+    "consult_gate_probe": {
+        "allowed": {"type", "task_suite", "turns", "tier"},
+        "enums": {"task_suite": {"targeted", "bep"}},
+    },
     "structural_prune": {
         "allowed": {"type", "file", "block", "description"},
         "required": {"file", "block"},
@@ -974,6 +978,18 @@ def validate_single_variable(action: dict[str, Any]) -> str | None:
                 f"numeric_trial sets {len(params)} params explicitly; "
                 "limit to 1 for clean attribution (Optuna suggestions exempt)"
             )
+
+    elif action_type == "consult_gate_probe":
+        range_err = _validate_int_range(
+            action, "tier", min_value=1, max_value=3
+        )
+        if range_err:
+            return range_err
+        range_err = _validate_int_range(
+            action, "turns", min_value=3, max_value=50
+        )
+        if range_err:
+            return range_err
 
     elif action_type == "slot_compact":
         for key, min_value, max_value in (

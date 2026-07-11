@@ -15,7 +15,6 @@ from __future__ import annotations
 import logging
 
 from src.user_modeling.profile_store import (
-    ProfileStore,
     UserFact,
     get_profile_store,
 )

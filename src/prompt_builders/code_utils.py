@@ -193,6 +193,41 @@ def extract_code_from_response(response: str) -> str:
     """
     response = response.strip()
 
+    # Strip <end_prompt> tokens (Gemma-3/4 emits before thinking tags)
+    response = re.sub(r'<end_prompt>', '', response)
+
+    # Strip thinking channel tags (Gemma-4 uses <|channel>thought\n<channel|>)
+    # Remove ^ anchor so it also matches when <end_prompt> consumed the line start
+    response = re.sub(r'<\|channel>thought\n<channel\|>', '', response, flags=re.MULTILINE)
+
+    # Strip Qwen3 thinking tags (</thinking> or </anthinking> markers)
+    response = re.sub(r'</(?:an)?thinking>\s*\n?', '', response, flags=re.MULTILINE)
+
+    # Intercept Gemma-4 <|tool_call>...<tool_call|> format and translate to TOOL() syntax.
+    # Format: <|tool_call>call:tool_use:tool_name{json_args}<tool_call|>
+    gemma_tool_calls = re.findall(r'<\|tool_call>(.*?)<tool_call\|>', response)
+    if gemma_tool_calls:
+        translated = []
+        for tc in gemma_tool_calls:
+            # Parse: call:tool_use:get_eval_secret{name: 'alpha'}
+            m = re.match(r'call:tool_use:(\w+)\s*\{(.*)\}', tc.strip(), re.DOTALL)
+            if m:
+                tool_name = m.group(1)
+                args_str = m.group(2)
+                # Convert JSON-like args to Python kwargs
+                kwargs = []
+                for kv in re.findall(r"(\w+)\s*:\s*'([^']*)'", args_str):
+                    kwargs.append(f'{kv[0]}="{kv[1]}"')
+                for kv in re.findall(r'(\w+)\s*:\s*"([^"]*)"', args_str):
+                    kwargs.append(f'{kv[0]}="{kv[1]}"')
+                for kv in re.findall(r'(\w+)\s*:\s*(\d+)', args_str):
+                    kwargs.append(f'{kv[0]}={kv[1]}')
+                if kwargs:
+                    translated.append(f'result = TOOL("{tool_name}", {", ".join(kwargs)})')
+                    translated.append('FINAL(result)')
+        if translated:
+            response = "\n".join(translated)
+
     # Intercept OpenAI-format tool_call JSON (Qwen3-Coder instruct artifact)
     # and translate to CALL() syntax before normal code extraction.
     translated = translate_openai_tool_calls(response)

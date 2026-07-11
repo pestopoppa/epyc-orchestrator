@@ -24,8 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
-from collections import Counter, defaultdict
+from collections import Counter
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -83,7 +82,8 @@ def _brier(p: np.ndarray, y: np.ndarray) -> float:
 
 
 def _roc_auc(scores: np.ndarray, labels: np.ndarray) -> float:
-    pos = int(labels.sum()); neg = len(labels) - pos
+    pos = int(labels.sum())
+    neg = len(labels) - pos
     if pos == 0 or neg == 0:
         return float("nan")
     ranks = np.argsort(np.argsort(scores))

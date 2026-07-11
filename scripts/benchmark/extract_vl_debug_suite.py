@@ -23,7 +23,6 @@ Usage:
 
 import argparse
 import io
-import os
 import random
 import sys
 from dataclasses import dataclass, field
@@ -302,7 +301,7 @@ def extract_image(q: VLQuestion, base_dir: Path) -> str:
             out_path = out_dir / filename
             img.save(str(out_path))
             return str(out_path)
-        except Exception as e:
+        except Exception:
             ext = ".png"
 
     with open(out_path, "wb") as f:
@@ -443,7 +442,7 @@ class VLDatasetAdapter:
         {id, suite, prompt, expected, image_path, scoring_method, ...}
         """
         self._ensure_loaded()
-        all_qs = self._ocrbench + self._chartqa
+        _all_qs = self._ocrbench + self._chartqa
 
         # Split sampling: ~55% OCRBench, ~45% ChartQA
         n_ocr = int(n * 0.55)
@@ -529,11 +528,11 @@ def main():
         tier_counts[q.tier] = tier_counts.get(q.tier, 0) + 1
         type_counts[q.question_type] = type_counts.get(q.question_type, 0) + 1
 
-    print(f"\nTier distribution:")
+    print("\nTier distribution:")
     for t in sorted(tier_counts):
         print(f"  Tier {t}: {tier_counts[t]}")
 
-    print(f"\nQuestion type distribution:")
+    print("\nQuestion type distribution:")
     for qt in sorted(type_counts):
         print(f"  {qt}: {type_counts[qt]}")
 
@@ -566,7 +565,7 @@ def main():
 
     # Summary
     print(f"\n{'='*60}")
-    print(f"VL Debug Suite Generated")
+    print("VL Debug Suite Generated")
     print(f"  Questions: {len(sampled)}")
     print(f"  Sources: OCRBench ({n_ocr}), ChartQA ({n_chart})")
     print(f"  Images: {IMAGE_DIR}/")

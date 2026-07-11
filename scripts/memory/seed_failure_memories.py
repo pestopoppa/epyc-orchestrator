@@ -7,8 +7,6 @@ These teach the system what NOT to do - critical for learned routing.
 Low Q-values (0.0-0.3) signal these strategies should be avoided.
 """
 
-import json
-import random
 import sys
 from pathlib import Path
 
@@ -360,13 +358,13 @@ def main():
 
     seeded = seed_failure_memories(store, embedder, count_per_pattern)
 
-    print(f"\n=== Results ===")
+    print("\n=== Results ===")
     print(f"Seeded: {seeded} failure memories")
     stats = store.get_stats()
     print(f"Total memories: {stats['total_memories']}")
 
     # Show Q-value distribution
-    print(f"\nBy action type:")
+    print("\nBy action type:")
     for action_type, info in stats['by_action_type'].items():
         print(f"  {action_type}: {info['count']} memories, avg Q={info['avg_q']:.4f}")
 

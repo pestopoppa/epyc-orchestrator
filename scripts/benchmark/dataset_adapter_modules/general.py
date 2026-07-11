@@ -7,11 +7,8 @@ compatibility — existing imports keep working.
 
 from __future__ import annotations
 
-import json
 import random
 import re
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
 
 from .base import BaseAdapter
 
@@ -309,7 +306,7 @@ class HotpotQAAdapter(BaseAdapter):
         answer = row.get("answer", "")
         q_id = row.get("id", f"hotpot_{idx:05d}")
         q_type = row.get("type", "bridge")
-        supporting_facts = row.get("supporting_facts", {})
+        _supporting_facts = row.get("supporting_facts", {})
         context = row.get("context", {})
 
         # Build context from supporting paragraphs

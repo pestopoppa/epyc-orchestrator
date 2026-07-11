@@ -170,8 +170,8 @@ def test_format_architect_result_with_tools_delegates_chain_and_infra():
     assert "ARCHITECT → PASS" in lines[0]
     assert "tools: peek" in lines[1]
     assert "delegates: 3 (2x worker_math, coder_escalation)" in lines[3]
-    assert any("delegate: worker_math" in l for l in lines)
-    assert any("chain: architect_general → worker_math → coder_escalation" in l for l in lines)
+    assert any("delegate: worker_math" in line for line in lines)
+    assert any("chain: architect_general → worker_math → coder_escalation" in line for line in lines)
 
     infra_line = _MOD.format_architect_result(
         "ARCHITECT",

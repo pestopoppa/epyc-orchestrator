@@ -31,7 +31,6 @@ import logging
 import os
 import re
 import sqlite3
-import sys
 import time
 from pathlib import Path
 
@@ -136,7 +135,7 @@ def extract_snippets_from_content(
     split_re = SPLIT_PATTERNS.get(language)
     snippets = []
     current: list[str] = []
-    current_start = 0
+    _current_start = 0
 
     def flush():
         if len(current) >= MIN_SNIPPET_LINES:
@@ -153,13 +152,13 @@ def extract_snippets_from_content(
         if split_re and split_re.match(line) and not line.startswith((" ", "\t")):
             flush()
             current = [line]
-            current_start = i
+            _current_start = i
         else:
             current.append(line)
             if len(current) >= MAX_SNIPPET_LINES:
                 flush()
                 current = []
-                current_start = i + 1
+                _current_start = i + 1
 
     flush()
     return snippets
@@ -470,7 +469,7 @@ def main():
         log.info("Resuming: %d existing snippets loaded", len(seen_hashes))
 
     # Process languages
-    languages = [l.strip() for l in args.languages.split(",")]
+    languages = [lang.strip() for lang in args.languages.split(",")]
     all_stats: dict[str, dict] = {}
 
     for lang in languages:

@@ -120,6 +120,30 @@ class TestExtractCodeFromResponse:
         result = extract_code_from_response(response)
         assert result == "FINAL('B')"
 
+    def test_strips_gemma_thinking_channel(self):
+        """Gemma-4 wraps output in <|channel>thought\n<channel|> tags."""
+        response = '<|channel>thought\n<channel|>secret = TOOL("get_eval_secret", name="alpha")\nFINAL(secret)'
+        result = extract_code_from_response(response)
+        assert 'TOOL("get_eval_secret"' in result
+        assert "FINAL(secret)" in result
+        assert "<|channel>" not in result
+
+    def test_strips_qwen_thinking_tags(self):
+        """Qwen3 uses </think> closing tags after thinking."""
+        response = '</anthinking>\n\nresult = compute()\nFINAL(result)'
+        result = extract_code_from_response(response)
+        assert "result = compute()" in result
+        assert "FINAL(result)" in result
+        assert "</anthinking>" not in result
+
+    def test_translates_gemma_tool_call_format(self):
+        """Gemma-4 emits <|tool_call>call:tool_use:tool_name{args}<tool_call|>."""
+        response = '<|channel>thought\n<channel|><|tool_call>call:tool_use:get_eval_secret{name: "alpha"}<tool_call|>'
+        result = extract_code_from_response(response)
+        assert 'TOOL("get_eval_secret"' in result
+        assert 'FINAL(result)' in result
+        assert '<|tool_call>' not in result
+
 
 # ── auto_wrap_final ───────────────────────────────────────────────────────
 

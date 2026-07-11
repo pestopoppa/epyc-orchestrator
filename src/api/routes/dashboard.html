@@ -2811,6 +2811,36 @@ function renderRegionLocksBasicGrid(grid, d, note = '') {
     grid.innerHTML = rows.join('') + suffix;
 }
 
+function renderRegionLocksDisplayMatrix(grid, d) {
+    const matrix = d && d.display_matrix ? d.display_matrix : null;
+    const columns = matrix && Array.isArray(matrix.columns) ? matrix.columns : [];
+    const rowsIn = matrix && Array.isArray(matrix.rows) ? matrix.rows : [];
+    if (!grid || !columns.length || !rowsIn.length) return false;
+    grid.dataset.regionLocksPainted = '1';
+    const rows = [];
+    rows.push(`<div style="color:var(--muted);font-size:10px">role / instance shape</div>`);
+    for (const col of columns) {
+        rows.push(`<div style="color:var(--muted);font-size:10px;text-align:center;font-weight:600">${escapeHTML(col.label || col.key || '')}</div>`);
+    }
+    const stateClass = { active: 'rl-active', blocked: 'rl-blocked', ready: 'rl-ready', na: 'rl-na' };
+    for (const row of rowsIn) {
+        rows.push(`<div style="overflow:hidden;color:var(--fg);font-size:11px;line-height:1.3">${escapeHTML(row.role || '')}</div>`);
+        for (const cell of (row.cells || [])) {
+            const state = String(cell.state || 'na');
+            const cls = stateClass[state] || 'rl-na';
+            rows.push(`<div class="rl-cell ${cls}" title="${escapeHTML(cell.title || '')}">${escapeHTML(cell.label || '—')}</div>`);
+        }
+    }
+    const gpuRows = gpuDeviceRegionRows();
+    rows.push(...gpuRows);
+    grid.innerHTML = rows.join('');
+    const footer = document.createElement('div');
+    footer.style.cssText = 'grid-column:1/-1;color:var(--dim);font-size:10px;font-family:var(--font-ui);margin-top:6px;line-height:1.5';
+    footer.innerHTML = `${rowsIn.length} role(s) from backend display matrix · Legend: <span style="color:#fbbf24">⚡ active holder</span> · <span style="color:#f87171">× waiting on occupied CPU regions</span> · <span style="color:var(--good,#34d399)">✅ ready to dispatch</span> · <span style="color:var(--dim)">— shape not in this role's same_role matrix</span>.`;
+    grid.appendChild(footer);
+    return true;
+}
+
 function rememberStructuredTapAccordion(detailsEl) {
     const requestId = detailsEl && detailsEl.dataset ? detailsEl.dataset.structuredRequestId : '';
     if (!requestId) return;
@@ -2905,7 +2935,7 @@ function renderLockOnlyTapHolderCard(holder, i) {
             <span style="color:var(--dim)"> · holder pid=${escapeHTML(pids)} · ${escapeHTML(holder.shape || '?')} · regions ${escapeHTML(regions)}</span>
         </div>
         ${concurrent ? `<div class="meta" style="color:#c084fc">${escapeHTML(concurrent)}</div>` : ''}
-        <div class="prompt">/proc shows this CPU-region holder, but no matching structured /chat tap request is open.</div>
+        <div class="prompt">/proc shows this CPU-region holder, but no recent structured /chat tap event is in view — likely a long prompt-prefill, a non-streaming dispatch, or a stalled request (the CPU-region lock itself is real).</div>
     </div>`;
 }
 
@@ -3019,8 +3049,8 @@ function openLockOnlyTapDetail(idx) {
     const regions = holder.regions && holder.regions.length ? holder.regions.join(', ') : '?';
     const concurrent = lockHolderConcurrentSummary(holder);
     const body = [
-        `**${lockHolderLabel(holder)}** is holding CPU regions from /proc, but no matching structured /chat tap request is open.`,
-        `This usually means off-tap-route traffic such as seed_batch, probe, eval, or other internal dispatch is running through the seeding/autopilot harness rather than the /chat tap path.`,
+        `**${lockHolderLabel(holder)}** holds CPU regions (from /proc/locks — the instance is genuinely occupied), but no structured /chat tap request for it is currently in view.`,
+        `The dashboard already folds back holders whose tap events aged out of the live window, so one still shown here has produced no recent tap event: a long prompt-prefill that has not streamed a token yet, a non-streaming internal dispatch, or a stalled request. This does NOT by itself mean off-tap traffic — autopilot eval / numeric_trial dispatch IS tapped, and its holder is normally reconciled automatically.`,
         `Holder pid: ${pids}`,
         `Instance shape: ${holder.shape || '?'}`,
         `Regions: ${regions}`,
@@ -3830,13 +3860,20 @@ function _plannerTapStatusText(lines) {
     const ap = proc.autopilot || {};
     const phase = proc.autopilot_phase || {};
     const phaseName = String(phase.phase || '');
+    const actionType = String(phase.action_type || '');
     const age = proc.planner_tap_age_s;
     const ageText = age != null ? ` · last event ${Math.round(age)}s ago` : '';
     if (!ap.running) {
         return `— planner history · autopilot stopped${ageText} · ${lines} lines`;
     }
+    if (proc.planner_tap_precedes_autopilot_start) {
+        return `— planner history from previous daemon${ageText} · current ${actionType || phaseName || 'phase'} has no planner trace · ${lines} lines`;
+    }
     if (_phaseFocus(proc, ap) === 'planner') {
         return `— planner active · ${phaseName || 'phase unknown'}${ageText} · ${lines} lines`;
+    }
+    if (phaseName === 'dispatch_action' && actionType && actionType !== 'planner_coordinator') {
+        return `— no planner trace for current ${actionType}${ageText} · ${lines} history lines`;
     }
     return `— planner history${ageText} · ${lines} lines`;
 }
@@ -4182,14 +4219,22 @@ async function updateGepa() {
                 // the pareto column so a mid-trial kill is visible instead of the
                 // row silently vanishing (which read as a frozen panel).
                 const killed = !!t.bug_corrupted_by;
+                const excluded = !killed && (!!t.learning_excluded_by || t.keep_revert_decision === 'excluded');
+                const quarantineLabel = String(t.quarantine_label || '');
+                const exclusionLabel = String(t.exclusion_label || '');
                 const paretoColor = killed ? '#f87171' :
+                                     excluded ? '#fbbf24' :
                                      t.pareto_status === 'pareto_frontier' ? '#34d399' :
                                      t.pareto_status === 'dominated' ? '#94a3b8' : '#fcd34d';
                 const statusText = killed
-                    ? (String(t.bug_corrupted_by).includes('killed') ? 'killed' : 'corrupted')
+                    ? (quarantineLabel || (String(t.bug_corrupted_by).includes('killed') ? 'killed' : 'corrupted'))
+                    : excluded
+                    ? (exclusionLabel || 'excluded')
                     : (t.pareto_status||'').replace('pareto_','');
                 const tierColor = (t.tier != null && !paretoIsAuditTier(t.tier)) ? paretoTierColor(t.tier) : '#64748b';
                 const rowStyle = killed ? 'opacity:0.5' : '';
+                const statusTitle = killed ? String(t.bug_corrupted_by) :
+                                    excluded ? String(t.learning_excluded_by || t.keep_revert_decision || '') : '';
                 trialsTable += `<div style="display:grid;grid-template-columns:${gepaCols};gap:6px;padding:1px 0;${rowStyle}">
                     <div>${t.trial_id||'-'}</div>
                     <div style="color:${tierColor};font-weight:600">${t.tier!=null?('T'+t.tier):'-'}</div>
@@ -4198,7 +4243,7 @@ async function updateGepa() {
                     <div>${(!killed && t.quality!=null)?t.quality.toFixed(2):'-'}</div>
                     <div>${(!killed && t.speed!=null)?t.speed.toFixed(1):'-'}</div>
                     <div>${(!killed && t.cost!=null)?t.cost.toFixed(2):'-'}</div>
-                    <div style="color:${paretoColor}" title="${killed?escapeHTML(String(t.bug_corrupted_by)):''}">${statusText}</div>
+                    <div style="color:${paretoColor}" title="${escapeHTML(statusTitle)}">${statusText}</div>
                     <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHTML(t.description||'')}">${escapeHTML((t.description||'').slice(0,80))}</div>
                 </div>`;
             });
@@ -4214,6 +4259,12 @@ async function updateGepa() {
         }
         const all = header + trialsTable + recentLines;
         el.innerHTML = all || '<div style="color:var(--muted)">no recent GEPA activity</div>';
+        setPanelFreshness('gepa', d._freshness || {
+            generated_at: Date.now() / 1000,
+            staleness_class: 'fresh',
+            worst_age_s: 0,
+            reason: 'GEPA panel rendered successfully',
+        });
     } catch (e) { renderPanelErrorChip('gepa', e); }
 }
 
@@ -4294,6 +4345,12 @@ async function updatePareto() {
         }
         renderParetoScatter(d);
         renderHypervolumeTimeline(d);
+        setPanelFreshness('pareto', d._freshness || {
+            generated_at: Date.now() / 1000,
+            staleness_class: 'fresh',
+            worst_age_s: 0,
+            reason: 'Pareto panel rendered successfully',
+        });
     } catch (e) { renderPanelErrorChip('pareto', e); }
 }
 
@@ -4901,6 +4958,16 @@ function renderOptimizationBrief(b) {
         if (churn.length) {
             const churnTxt = churn.slice(0, 6).map(c => `${escapeHTML(c.label)} ${c.count}×`).join(' · ');
             parts.push(`<div class="ob-why" style="margin-top:4px">malformed-proposal churn by surface: ${churnTxt}</div>`);
+        }
+        const corrupted = Array.isArray(roe.corrupted_by_surface) ? roe.corrupted_by_surface : [];
+        if (corrupted.length) {
+            const corrTxt = corrupted.slice(0, 6).map(c => `${escapeHTML(c.label)} ${c.count}×`).join(' · ');
+            parts.push(`<div class="ob-why" style="margin-top:4px">exogenous corruption / teardown by surface: ${corrTxt}</div>`);
+        }
+        const stale = Array.isArray(roe.stale_fenced_by_surface) ? roe.stale_fenced_by_surface : [];
+        if (stale.length) {
+            const staleTxt = stale.slice(0, 6).map(c => `${escapeHTML(c.label)} ${c.count}×`).join(' · ');
+            parts.push(`<div class="ob-why" style="margin-top:4px">stale critic fences hidden from main list: ${staleTxt}</div>`);
         }
     }
     const ruled = Array.isArray(b.ruled_out) ? b.ruled_out : [];
@@ -6442,6 +6509,7 @@ async function updateRegionLocks(
                     : '— DISABLED (legacy global lock; set ORCHESTRATOR_PER_REGION_LOCKS=1)';
                 status.style.color = enabled ? 'var(--muted)' : 'var(--warn, #fbbf24)';
             }
+            const backendMatrix = d.display_matrix || null;
             // by_role from the server is { role: { wired, regions, instances[], active_instance_idxs[] } }.
             const byRole = d.by_role || {};
             const roleEntries = Object.entries(byRole).sort((a, b) => {
@@ -6449,7 +6517,6 @@ async function updateRegionLocks(
                 if (wa !== wb) return wa - wb;
                 return a[0].localeCompare(b[0]);
             });
-            renderRegionLocksBasicGrid(grid, d);
             // Column schema: each column corresponds to one canonical instance
             // SHAPE in NUMA_CONFIG. The backend tags each instance with a
             // `shape` field that exactly matches one of REGION_LOCK_COLS.
@@ -6669,6 +6736,12 @@ async function updateRegionLocks(
                     'active',
                     `${titleBits.join(' · ')} across ${globalHeldRegions.size} CPU region(s): ${heldBySummary || 'unknown'}`
                 );
+            } else if (tapLiveRequestCount > 0) {
+                _setDotState(
+                    regionDot,
+                    'standby',
+                    `${tapLiveRequestCount} live tap request(s), but no CPU lock holder correlated in this frame`
+                );
             } else {
                 _setDotState(regionDot, 'idle', 'no CPU region locks currently held; grid shows dispatch readiness');
             }
@@ -6685,10 +6758,26 @@ async function updateRegionLocks(
                 const slotInferredSuffix = slotInferredMissing.length
                     ? `; +${slotInferredMissing.length} slot-inferred active instance(s): ${slotInferredMissing.join(', ')}`
                     : '';
-                status.textContent = activeLockCount > 0
-                    ? `— ${actualActiveLockCount} /proc holder instance(s)${tapInferredCountSuffix}: ${displayHeldBySummary || 'none'}${liveTapSuffix}${tapInferredUnmatchedSuffix}${slotInferredSuffix}; × cells are same-role or matrix-blocked waits; per-region locks ENABLED`
-                    : '— no locks held; per-region locks ENABLED';
-                status.style.color = activeLockCount > 0 ? '#fbbf24' : 'var(--muted)';
+                if (activeLockCount > 0) {
+                    status.textContent = `— ${actualActiveLockCount} /proc holder instance(s)${tapInferredCountSuffix}: ${displayHeldBySummary || 'none'}${liveTapSuffix}${tapInferredUnmatchedSuffix}${slotInferredSuffix}; × cells are same-role or matrix-blocked waits; per-region locks ENABLED`;
+                    status.style.color = '#fbbf24';
+                } else if (tapLiveRequestCount > 0) {
+                    status.textContent = `— no /proc holder correlated; ${tapLiveRequestCount} live tap request(s) visible${tapLiveStateBits.length ? ` (${tapLiveStateBits.join(' · ')})` : ''}; waiting for coherent lock metadata; per-region locks ENABLED`;
+                    status.style.color = 'var(--warn,#fbbf24)';
+                } else {
+                    status.textContent = '— no locks held; per-region locks ENABLED';
+                    status.style.color = 'var(--muted)';
+                }
+            }
+
+            if (backendMatrix && renderRegionLocksDisplayMatrix(grid, d)) {
+                if (typeof updateTopologyInflight === 'function') {
+                    const overlayInflight = snapshotSeq != null
+                        ? ((Array.isArray(snapshotInflightTasks) ? snapshotInflightTasks : ((_latestSnapshot && _latestSnapshot.in_flight_tasks) || [])))
+                        : [];
+                    updateTopologyInflight(overlayInflight, snapshotSeq);
+                }
+                return;
             }
 
             let nRoles = 0;
@@ -6799,7 +6888,6 @@ async function updateRegionLocks(
         try {
             const d = await fetchJSON('/dashboard/api/region_locks');
             _lastRegionLocksPayload = d;
-            renderRegionLocksBasicGrid(grid, d, 'basic matrix fallback; rich overlay still initializing');
             await updateRegionLocks(++_regionLocksRefreshSeq, d);
         } catch (err) {
             const msg = err && err.message ? err.message : String(err);

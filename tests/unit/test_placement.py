@@ -6,12 +6,9 @@ integration is exercised separately via test_concurrency_aware_*.
 
 from __future__ import annotations
 
-import pytest
 
 from src.scheduling.placement import (
     Place,
-    PlacementResult,
-    Queue,
     QueueReason,
     evaluate_placement,
 )

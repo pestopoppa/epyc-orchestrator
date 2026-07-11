@@ -12,7 +12,6 @@ Covers:
 
 from __future__ import annotations
 
-import os
 import sys
 import time
 from pathlib import Path
@@ -28,8 +27,6 @@ from scripts.server.fleet_markers import (  # noqa: E402
     LAUNCH_SOURCE_EXTERNAL,
     LAUNCH_SOURCE_STACK_COMMANDS,
     discover_llama_markers,
-    llama_marker_path,
-    orchestrator_marker_path,
     read_llama_marker,
     read_orchestrator_marker,
     read_orchestrator_marker_metadata,

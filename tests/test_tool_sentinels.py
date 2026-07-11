@@ -28,9 +28,6 @@ from src.tools.eval_secret import (  # noqa: E402
     SECRET_NAMES,
     SECRETS_PATH,
     _SECRETS,
-    generate_and_persist_secrets,
-    get_eval_secret,
-    load_persisted_secrets,
 )
 
 # read_file's allowed roots (src/tools/file/read.py). The runtime secret file

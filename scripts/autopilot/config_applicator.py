@@ -959,7 +959,7 @@ def _reload_role_via_stack(
 
     try:
         subprocess.run(
-            [sys.executable, str(stack_script), "reload", role],
+            [_stack_reload_python(), str(stack_script), "reload", role],
             cwd=str(ORCH_ROOT),
             env=env,
             timeout=180,
@@ -999,7 +999,7 @@ def _reload_api_via_stack(
 
     try:
         subprocess.run(
-            [sys.executable, str(stack_script), "reload", "orchestrator"],
+            [_stack_reload_python(), str(stack_script), "reload", "orchestrator"],
             cwd=str(ORCH_ROOT),
             env=env,
             timeout=90,
@@ -1023,6 +1023,67 @@ def _reload_api_via_stack(
     except Exception as e:
         log.error("Stack reload failed: %s", e)
         return {"status": "error", "error": str(e), "method": "stack_reload"}
+
+
+def _stack_reload_python() -> str:
+    """Return a stable Python executable for orchestrator_stack reloads.
+
+    AutoPilot is often launched as ``.venv/bin/python``. If another session
+    recreates the venv while AutoPilot is running, ``sys.executable`` can become
+    a stale symlink even though the current process remains alive. Conversely,
+    resolving a healthy venv symlink to its base interpreter drops site-packages
+    and makes reloads fail on imports such as ``yaml``. Prefer an explicit
+    override, then a live repo venv entrypoint, and only then base interpreters.
+    """
+    import os
+
+    path_candidates = [
+        os.environ.get("AUTOPILOT_STACK_RELOAD_PYTHON"),
+        ORCH_ROOT / ".venv" / "bin" / "python",
+        ORCH_ROOT / ".venv" / "bin" / "python3",
+        sys.executable,
+    ]
+    for candidate in path_candidates:
+        if not candidate:
+            continue
+        path = Path(str(candidate))
+        if _stack_reload_python_usable(path):
+            return str(path)
+
+    base_candidates = [
+        getattr(sys, "_base_executable", None),
+        "/home/node/.local/share/uv/python/cpython-3.12-linux-x86_64-gnu/bin/python3.12",
+        "/home/node/.local/share/uv/python/cpython-3.12.13-linux-x86_64-gnu/bin/python3.12",
+        "/usr/bin/python3",
+    ]
+    for candidate in base_candidates:
+        if not candidate:
+            continue
+        path = Path(str(candidate))
+        try:
+            resolved = path.resolve(strict=True)
+        except OSError:
+            continue
+        if _stack_reload_python_usable(resolved):
+            return str(resolved)
+    return sys.executable
+
+
+def _stack_reload_python_usable(path: Path) -> bool:
+    """Return true when ``path`` can import stack reload dependencies."""
+    if not path.exists():
+        return False
+    try:
+        proc = subprocess.Popen(
+            [str(path), "-c", "import yaml"],
+            cwd=str(ORCH_ROOT),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        proc.communicate(timeout=10)
+        return proc.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
 
 
 class HealthCheckResult:

@@ -22,6 +22,7 @@ from safety_gate import EvalResult, SafetyGate  # type: ignore[import-not-found]
 
 from src.autopilot_core.learning_exclusions import (
     BENIGN_LEARNING_EXCLUSIONS,
+    NON_CORRUPT_LEARNING_EXCLUSIONS,
     classify_learning_exclusion,
 )
 
@@ -298,8 +299,9 @@ def test_learning_exclusion_seq_confirmed_includes_normally():
     assert by == "", "a confirmed improvement is learned from, not excluded"
 
 
-def test_learning_exclusion_seq_refuted_is_non_benign_quarantine():
+def test_learning_exclusion_seq_refuted_is_non_corrupt_negative_evidence():
     assert "seq_refuted" not in BENIGN_LEARNING_EXCLUSIONS
+    assert "seq_refuted" in NON_CORRUPT_LEARNING_EXCLUSIONS
     by, reason, override = classify_learning_exclusion(_Verdict(["seq_refuted"]), _Eval())
     assert by == "seq_refuted"
     assert override == "seq_refuted"

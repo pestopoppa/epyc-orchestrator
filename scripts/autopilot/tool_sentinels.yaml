@@ -26,7 +26,7 @@
 - id: tool_use_secret_alpha
   suite: tool_use
   force_mode: "repl"
-  prompt: "You are in a Python REPL. Write executable Python, not prose. The value exists ONLY inside the tool; it is not in this prompt and not in any file. Run exactly this pattern with the requested name, then stop: secret = TOOL(\"get_eval_secret\", name=\"alpha\"); FINAL(secret). Do not print or explain anything after FINAL."
+  prompt: "Return executable Python only. No comments, no prose. Use exactly these two lines:\nsecret = TOOL(\"get_eval_secret\", name=\"alpha\")\nFINAL(secret)"
   expected: "__resolved_at_runtime__"
   scoring_method: substring
   scoring_config: {}
@@ -34,7 +34,7 @@
 - id: tool_use_secret_bravo
   suite: tool_use
   force_mode: "repl"
-  prompt: "You are in a Python REPL. Write executable Python, not prose. The secret token is held only in server memory and only get_eval_secret can return it. Run exactly this pattern with the requested name, then stop: secret = TOOL(\"get_eval_secret\", name=\"bravo\"); FINAL(secret). Do not print or explain anything after FINAL."
+  prompt: "Return executable Python only. No comments, no prose. Use exactly these two lines:\nsecret = TOOL(\"get_eval_secret\", name=\"bravo\")\nFINAL(secret)"
   expected: "__resolved_at_runtime__"
   scoring_method: substring
   scoring_config: {}
@@ -42,7 +42,7 @@
 - id: tool_use_secret_charlie
   suite: tool_use
   force_mode: "repl"
-  prompt: "You are in a Python REPL. Write executable Python, not prose. The value for name=\"charlie\" is not provided in this prompt and is not in any file; only the tool can produce it. Run exactly this pattern, then stop: secret = TOOL(\"get_eval_secret\", name=\"charlie\"); FINAL(secret). Do not print or explain anything after FINAL."
+  prompt: "Return executable Python only. No comments, no prose. Use exactly these two lines:\nsecret = TOOL(\"get_eval_secret\", name=\"charlie\")\nFINAL(secret)"
   expected: "__resolved_at_runtime__"
   scoring_method: substring
   scoring_config: {}
@@ -50,7 +50,7 @@
 - id: tool_use_secret_delta
   suite: tool_use
   force_mode: "repl"
-  prompt: "You are in a Python REPL. Write executable Python, not prose. Use get_eval_secret with name=\"delta\"; do not use web_research or any other tool. Run exactly this pattern, then stop: secret = TOOL(\"get_eval_secret\", name=\"delta\"); FINAL(secret). Do not print or explain anything after FINAL."
+  prompt: "Return executable Python only. No comments, no prose. Use exactly these two lines:\nsecret = TOOL(\"get_eval_secret\", name=\"delta\")\nFINAL(secret)"
   expected: "__resolved_at_runtime__"
   scoring_method: substring
   scoring_config: {}
@@ -58,7 +58,7 @@
 - id: tool_use_secret_echo
   suite: tool_use
   force_mode: "repl"
-  prompt: "You are in a Python REPL. Write executable Python, not prose. The echo secret exists only in server memory and only get_eval_secret can return it. Run exactly this pattern with the requested name, then stop: secret = TOOL(\"get_eval_secret\", name=\"echo\"); FINAL(secret). Do not print or explain anything after FINAL."
+  prompt: "Return executable Python only. No comments, no prose. Use exactly these two lines:\nsecret = TOOL(\"get_eval_secret\", name=\"echo\")\nFINAL(secret)"
   expected: "__resolved_at_runtime__"
   scoring_method: substring
   scoring_config: {}

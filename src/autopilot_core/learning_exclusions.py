@@ -7,6 +7,7 @@ from typing import Any
 BENIGN_LEARNING_EXCLUSIONS = frozenset(
     {"reproduction_confirmed", "mad_noise", "seq_accumulating", "seq_stale_reference"}
 )
+NON_CORRUPT_LEARNING_EXCLUSIONS = frozenset({"seq_refuted"})
 WITHIN_NOISE_EXCLUSIONS = BENIGN_LEARNING_EXCLUSIONS
 
 
@@ -67,10 +68,11 @@ def classify_learning_exclusion(verdict: Any, eval_result: Any) -> tuple[str, st
     #   seq_confirmed — a confirmed improvement (E_quality>=20 AND E_rate_noninf>=20):
     #     include normally (falls through to the empty include path below).
     #   seq_refuted — e-process evidence refuted the claimed improvement. If the
-    #     broader safety verdict otherwise passed, quarantine it explicitly so the
-    #     refuted hypothesis cannot enter Pareto/frontier/strategy learning. If a
-    #     real safety failure also fired, let the normal failed-trial path preserve
-    #     the primary deficiency instead of relabelling it as a seq artifact.
+    #     broader safety verdict otherwise passed, treat it as valid negative
+    #     evidence: exclude it from promotion and positive strategy distillation,
+    #     but do not mark it as measurement corruption. If a real safety failure
+    #     also fired, let the normal failed-trial path preserve the primary
+    #     deficiency instead of relabelling it as a seq artifact.
     if "seq_stale_reference" in categories and verdict_passed:
         return (
             "seq_stale_reference",
@@ -90,8 +92,8 @@ def classify_learning_exclusion(verdict: Any, eval_result: Any) -> tuple[str, st
         return (
             "seq_refuted",
             "sequential e-process refuted the candidate improvement; excluded "
-            "from Pareto, planner memory, and strategy distillation so the "
-            "refuted hypothesis cannot be re-injected (LEDGER-W4, "
+            "from promotion and positive strategy distillation so the refuted "
+            "hypothesis cannot be re-injected as a winning pattern (LEDGER-W4, "
             "AUTOPILOT_SEQ_VERDICT)",
             "seq_refuted",
         )

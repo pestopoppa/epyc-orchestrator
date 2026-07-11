@@ -61,6 +61,7 @@ class TestFeaturesDefaults:
         assert f.binding_routing is False
         assert f.eval_batch_serving is False
         assert f.review_before_commit_consult is False
+        assert f.review_before_commit_targeted_gate is False
 
         # Explicitly True by default
         assert f.tools is True

@@ -19,14 +19,6 @@ blacklist:
 - pattern:
     type: structural_experiment
     flags:
-      graph_router: true
-  reason: 'Auto-blacklisted: 3× critic-rejected — critic rejected: Draft action exactly
-    matches a Blacklisted Configurations entry'
-  added: '2026-06-05T19:16:24.457198+00:00'
-  source_trial: 669
-- pattern:
-    type: structural_experiment
-    flags:
       parallel_execution: true
   reason: 'Auto-blacklisted: 2× invalid — parallel_execution feature requires architect_delegation
     feature'
@@ -172,3 +164,251 @@ blacklist:
   reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 889'
   added: '2026-06-20T10:51:17.866830+00:00'
   source_trial: 889
+- pattern:
+    type: distill_skillbank
+  reason: 'Auto-blacklisted: 3× critic-rejected — critic rejected: Draft selects a
+    metric-free knowledge/maintenance action to bre'
+  added: '2026-06-21T18:59:42.560917+00:00'
+  source_trial: 936
+- pattern:
+    type: structural_experiment
+    flags:
+      user_modeling: true
+  reason: 'Auto-blacklisted: 2× critic-rejected — critic rejected: Draft asserts user_modeling
+    is eligible and dependency-met, but'
+  added: '2026-06-27T11:10:59.904808+00:00'
+  source_trial: 975
+- pattern:
+    type: deep_eval
+    tier: 0
+  reason: 'Auto-blacklisted: 3× critic-rejected — critic rejected: Draft weakly attributes
+    surface exhaustion: selected context sh'
+  added: '2026-06-27T15:16:20.813432+00:00'
+  source_trial: 981
+- pattern:
+    type: deep_eval
+    tier: 2
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1063'
+  added: '2026-07-03T05:50:18.986249+00:00'
+  source_trial: 1063
+- pattern:
+    type: numeric_trial
+    surface: escalation
+  reason: 'Auto-blacklisted: 2× critic-rejected — critic rejected: Draft falsely states
+    every eligible true-direction structural f'
+  added: '2026-07-03T05:52:08.110419+00:00'
+  source_trial: 1064
+- pattern:
+    type: numeric_trial
+    surface: think_harder
+  reason: 'Auto-blacklisted: 2× critic-rejected — critic rejected: Draft frames the
+    trial as evidence for an operator-domain basel'
+  added: '2026-07-03T05:53:06.586673+00:00'
+  source_trial: 1065
+- pattern:
+    type: seed_batch
+    n_questions: 16
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1067'
+  added: '2026-07-03T07:39:34.808504+00:00'
+  source_trial: 1067
+- pattern:
+    type: structural_experiment
+    flags:
+      depth_model_overrides: false
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1071'
+  added: '2026-07-03T10:04:36.016160+00:00'
+  source_trial: 1071
+- pattern:
+    type: numeric_trial
+    surface: monitor
+  reason: 'Auto-blacklisted: 5× critic-rejected — critic rejected: Draft relies on
+    an unsupported attribution that the repeated ge'
+  added: '2026-07-03T11:01:30.125683+00:00'
+  source_trial: 1074
+- pattern:
+    type: seed_batch
+    n_questions: 18
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1074'
+  added: '2026-07-03T11:30:26.817126+00:00'
+  source_trial: 1074
+- pattern:
+    type: structural_experiment
+    flags:
+      reasoning_length_alarm: false
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1080'
+  added: '2026-07-03T12:50:43.229975+00:00'
+  source_trial: 1080
+- pattern:
+    type: numeric_trial
+    surface: repl_budget
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1083'
+  added: '2026-07-03T14:10:47.551444+00:00'
+  source_trial: 1083
+- pattern:
+    type: numeric_trial
+    surface: chat_pipeline
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1087'
+  added: '2026-07-03T15:36:01.329974+00:00'
+  source_trial: 1087
+- pattern:
+    type: numeric_trial
+    surface: repl_executor
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1090'
+  added: '2026-07-03T17:09:21.659718+00:00'
+  source_trial: 1090
+- pattern:
+    type: numeric_trial
+    surface: kv_compaction
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1093'
+  added: '2026-07-03T18:27:29.134210+00:00'
+  source_trial: 1093
+- pattern:
+    type: structural_experiment
+    flags:
+      session_compaction: false
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1096'
+  added: '2026-07-03T20:55:39.657033+00:00'
+  source_trial: 1096
+- pattern:
+    type: seed_batch
+    n_questions: 20
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1099'
+  added: '2026-07-03T23:33:32.873587+00:00'
+  source_trial: 1099
+- pattern:
+    type: structural_experiment
+    flags:
+      escalation_compression: false
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1104'
+  added: '2026-07-04T01:07:44.577431+00:00'
+  source_trial: 1104
+- pattern:
+    type: seed_batch
+    n_questions: 24
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1107'
+  added: '2026-07-04T02:26:02.231455+00:00'
+  source_trial: 1107
+- pattern:
+    type: distill_knowledge
+    last_n: 30
+  reason: 'MANUAL recovery @1111: critic_reject_loop from repeated metric-free distill_knowledge
+    last_n=30 drafts; exact blacklist after df22c9fe preserved last_n patterns.'
+  added: '2026-07-04T03:40:16.513147+00:00'
+  source_trial: 1111
+- pattern:
+    type: structural_experiment
+    flags:
+      cascading_tool_policy: false
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1114'
+  added: '2026-07-04T08:56:01.873781+00:00'
+  source_trial: 1114
+- pattern:
+    type: seed_batch
+    n_questions: 30
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1117'
+  added: '2026-07-04T10:46:54.098326+00:00'
+  source_trial: 1117
+- pattern:
+    type: structural_experiment
+    flags:
+      parallel_tools: false
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1120'
+  added: '2026-07-04T12:15:43.597335+00:00'
+  source_trial: 1120
+- pattern:
+    type: structural_experiment
+    flags:
+      scripts: false
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1125'
+  added: '2026-07-04T13:51:31.743633+00:00'
+  source_trial: 1125
+- pattern:
+    type: structural_experiment
+    flags:
+      structured_tool_output: false
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1131'
+  added: '2026-07-04T17:32:30.422094+00:00'
+  source_trial: 1131
+- pattern:
+    type: numeric_trial
+    surface: chat_pipeline
+    params:
+      chat.try_cheap_first_quality_threshold: 0.8742715026951258
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1194'
+  added: '2026-07-05T23:51:52.304736+00:00'
+  source_trial: 1194
+  reason_class: safety_failure
+  ttl_days: 30
+  expires_at: '2026-08-04T23:51:52.304736+00:00'
+- pattern:
+    type: consult_gate_probe
+    tier: 3
+  reason: 'Auto-blacklisted: 2× invalid — exact action signature was previously critic-rejected
+    at trial 1291: critic reje'
+  added: '2026-07-08T17:48:32.308697+00:00'
+  source_trial: 1292
+  reason_class: invalid_repeat
+  ttl_days: 14
+  expires_at: '2026-07-22T17:48:32.308697+00:00'
+- pattern:
+    type: seed_batch
+    n_questions: 40
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1294'
+  added: '2026-07-08T19:07:56.029480+00:00'
+  source_trial: 1294
+  reason_class: safety_failure
+  ttl_days: 30
+  expires_at: '2026-08-07T19:07:56.029480+00:00'
+- pattern:
+    type: numeric_trial
+    surface: memrl_retrieval
+    params:
+      memrl_retrieval.q_weight: 0.7675438676097692
+      memrl_retrieval.min_similarity: 0.2415865485848426
+      memrl_retrieval.min_q_value: 0.40706101193797406
+      memrl_retrieval.confidence_threshold: 0.6027165056990965
+      memrl_retrieval.semantic_k: 10
+      memrl_retrieval.prior_strength: 0.14807952660937118
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1297'
+  added: '2026-07-08T20:02:08.643192+00:00'
+  source_trial: 1297
+  reason_class: safety_failure
+  ttl_days: 30
+  expires_at: '2026-08-07T20:02:08.643192+00:00'
+- pattern:
+    type: structural_experiment
+    flags:
+      graph_router: true
+  reason: 'Auto-blacklisted: 3× critic-rejected — critic rejected: The draft proposes
+    enabling graph_router via structural_experim'
+  added: '2026-07-08T21:16:04.193631+00:00'
+  source_trial: 1301
+  reason_class: critic_rejected
+  ttl_days: 14
+  expires_at: '2026-07-22T21:16:04.193631+00:00'
+- pattern:
+    type: structural_experiment
+    flags:
+      langgraph_coder: false
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1302'
+  added: '2026-07-10T10:50:39.751114+00:00'
+  source_trial: 1302
+  reason_class: safety_failure
+  ttl_days: 30
+  expires_at: '2026-08-09T10:50:39.751114+00:00'
+- pattern:
+    type: numeric_trial
+    surface: memrl_retrieval
+    params:
+      memrl_retrieval.q_weight: 0.8822226350498095
+      memrl_retrieval.min_similarity: 0.533080180723579
+      memrl_retrieval.min_q_value: 0.5201044797430083
+      memrl_retrieval.confidence_threshold: 0.6804060170702582
+      memrl_retrieval.semantic_k: 8
+      memrl_retrieval.prior_strength: 0.46704307761466823
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1303'
+  added: '2026-07-10T11:16:44.953224+00:00'
+  source_trial: 1303
+  reason_class: safety_failure
+  ttl_days: 30
+  expires_at: '2026-08-09T11:16:44.953224+00:00'

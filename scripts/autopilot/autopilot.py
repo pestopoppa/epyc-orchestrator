@@ -103,7 +103,7 @@ from state_store import (
     load_state as _load_state_impl,
     save_state as _save_state_impl,
 )
-from actions import dispatch_action, SkipOutcome
+from actions import dispatch_action, SkipOutcome, _structural_noop_reason
 from paired_stats import QuestionOutcome, mcnemar_from_vectors
 from src.autopilot_core.action_identity import (
     EPHEMERAL_ACTION_KEYS,
@@ -113,6 +113,7 @@ from src.autopilot_core.action_identity import (
 )
 from src.autopilot_core.learning_exclusions import (
     BENIGN_LEARNING_EXCLUSIONS,
+    NON_CORRUPT_LEARNING_EXCLUSIONS,
     classify_learning_exclusion,
 )
 from src.autopilot_core.planner_evidence import (
@@ -2081,6 +2082,7 @@ def _maybe_force_seq_candidate_replay(
     rationale: dict[str, Any] | None,
     trial_counter: int,
     enabled: bool,
+    lab: Any | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any] | None]:
     """Replay an accumulating W8 candidate before it is abandoned underpowered."""
     if not enabled or not SEQ_CANDIDATE_REPLAY_ENABLED:
@@ -2092,6 +2094,8 @@ def _maybe_force_seq_candidate_replay(
         return action, rationale, None
     forced = dict(payload["action"])
     blocked_reason = check_blacklist(forced, blacklist)
+    if not blocked_reason and forced.get("type") == "structural_experiment":
+        blocked_reason = _structural_noop_reason(forced.get("flags", {}), lab)
     if blocked_reason:
         state["seq_candidate_replay_blocked"] = {
             "trial_id": trial_counter,
@@ -2137,6 +2141,7 @@ def _maybe_force_seq_due_action(
     blacklist: list[dict[str, Any]],
     trial_counter: int,
     enabled: bool,
+    lab: Any | None = None,
 ) -> tuple[
     dict[str, Any] | None,
     dict[str, Any] | None,
@@ -2187,6 +2192,7 @@ def _maybe_force_seq_due_action(
         rationale=placeholder_rationale,
         trial_counter=trial_counter,
         enabled=enabled,
+        lab=lab,
     )
     if replay_context is not None:
         return action, rationale, None, None, replay_context
@@ -3599,6 +3605,9 @@ def _record_skip_trial(
     status: str,
     reason: str,
     memory_count: int,
+    *,
+    bug_corrupted_by: str = "",
+    bug_corrupted_reason: str = "",
 ) -> None:
     """Journal a non-executing trial so it leaves durable residue (audit + planner).
 
@@ -3630,6 +3639,8 @@ def _record_skip_trial(
         failure_analysis=reason,
         deficiency_category=deficiency,
         outcome_status=status,
+        bug_corrupted_by=bug_corrupted_by,
+        bug_corrupted_reason=bug_corrupted_reason,
     )
     journal.record(entry)
 
@@ -4048,6 +4059,13 @@ def _format_available_action_schemas(action_types: list[str]) -> str:
         "structural_experiment": (
             '- Structural: {{"type": "structural_experiment", '
             '"flags": {{"feature_name": true/false}}}}'
+        ),
+        "consult_gate_probe": (
+            '- Consult gate probe: {{"type": "consult_gate_probe", '
+            '"task_suite": "targeted", "turns": 10, "tier": 3}}\n'
+            "  (Runs baseline vs blanket consult vs targeted-gate edit-transaction "
+            "turns; records consult calls/skips/reruns/quality/latency. Use this "
+            "to optimize review_before_commit gating on hard workflow tiers.)"
         ),
         "structural_prune": (
             '- Prune: {{"type": "structural_prune", "file": "frontdoor.md", '
@@ -5643,6 +5661,7 @@ def _run_loop_inner(
                 blacklist=blacklist,
                 trial_counter=trial_counter,
                 enabled=gate.use_sequential,
+                lab=lab,
             )
         if action is None:
             preplanner_action, preplanner_rationale = _maybe_force_frontier_rerun_action(
@@ -5899,7 +5918,7 @@ def _run_loop_inner(
                 _known_actions = [
                     "seed_batch", "numeric_trial", "prompt_mutation",
                     "gepa_optimize", "code_mutation", "structural_experiment",
-                    "structural_prune", "slot_compact", "train_routing_models",
+                    "consult_gate_probe", "structural_prune", "slot_compact", "train_routing_models",
                     "distill_skillbank", "reset_memories", "deep_eval",
                     "rollback", "distill_knowledge",
                 ]
@@ -6277,6 +6296,7 @@ def _run_loop_inner(
                     rationale=rationale,
                     trial_counter=trial_counter,
                     enabled=gate.use_sequential,
+                    lab=lab,
                 )
             if (
                 seq_fresh_eval_context is None
@@ -6501,32 +6521,53 @@ def _run_loop_inner(
             if isinstance(eval_result, SkipOutcome):
                 skip_status = eval_result.status
                 skip_reason = eval_result.reason
+                skip_bug_corrupted_by = getattr(eval_result, "bug_corrupted_by", "") or ""
+                skip_bug_corrupted_reason = (
+                    getattr(eval_result, "bug_corrupted_reason", "") or ""
+                )
             else:
                 skip_status = "skipped"
                 skip_reason = f"{action_type} returned no eval result (handler no-op)"
+                skip_bug_corrupted_by = ""
+                skip_bug_corrupted_reason = ""
 
             sig = _action_signature(action)
             sig_counts = state.setdefault("invalid_signature_counts", {})
-            sig_counts[sig] = int(sig_counts.get(sig, 0)) + 1
-            skip_streak = int(state.get("consecutive_skip_actions", 0)) + 1
-            state["consecutive_skip_actions"] = skip_streak
-            state["last_invalid_action"] = action
-            state["last_invalid_reason"] = skip_reason
-            state["last_invalid_status"] = skip_status
+            if skip_bug_corrupted_by:
+                sig_seen = int(sig_counts.get(sig, 0))
+                skip_streak = int(state.get("consecutive_skip_actions", 0))
+            else:
+                sig_counts[sig] = int(sig_counts.get(sig, 0)) + 1
+                sig_seen = sig_counts[sig]
+                skip_streak = int(state.get("consecutive_skip_actions", 0)) + 1
+                state["consecutive_skip_actions"] = skip_streak
+                state["last_invalid_action"] = action
+                state["last_invalid_reason"] = skip_reason
+                state["last_invalid_status"] = skip_status
 
             try:
                 _record_skip_trial(
                     journal, trial_counter, action, species_name,
                     skip_status, skip_reason, memory_count,
+                    bug_corrupted_by=skip_bug_corrupted_by,
+                    bug_corrupted_reason=skip_bug_corrupted_reason,
                 )
             except Exception:
                 log.debug("skip-trial journal write failed", exc_info=True)
 
-            log.warning(
-                "Trial %d %s (%s): %s [signature seen %d×, consecutive skips=%d]",
-                trial_counter, skip_status, action_type, skip_reason,
-                sig_counts[sig], skip_streak,
-            )
+            if skip_bug_corrupted_by:
+                log.warning(
+                    "Trial %d %s (%s): %s [bug_corrupted_by=%s; not counted "
+                    "against planner signature pressure]",
+                    trial_counter, skip_status, action_type, skip_reason,
+                    skip_bug_corrupted_by,
+                )
+            else:
+                log.warning(
+                    "Trial %d %s (%s): %s [signature seen %d×, consecutive skips=%d]",
+                    trial_counter, skip_status, action_type, skip_reason,
+                    sig_seen, skip_streak,
+                )
             phase.set(
                 "dispatch_skip",
                 trial_id=trial_counter,
@@ -6539,12 +6580,14 @@ def _run_loop_inner(
             # blacklisted: their coarse pattern would over-match (e.g. one
             # scope-violating numeric_trial would ban all numeric_trials).
             if (
+                not skip_bug_corrupted_by
+                and
                 skip_status == "invalid"
-                and sig_counts[sig] >= INVALID_SIGNATURE_BLACKLIST_THRESHOLD
+                and sig_seen >= INVALID_SIGNATURE_BLACKLIST_THRESHOLD
             ):
                 append_blacklist(
                     action, trial_counter,
-                    f"Auto-blacklisted: {sig_counts[sig]}× invalid — {skip_reason[:80]}",
+                    f"Auto-blacklisted: {sig_seen}× invalid — {skip_reason[:80]}",
                     reason_class="invalid_repeat",
                 )
                 blacklist = load_blacklist()
@@ -6558,7 +6601,7 @@ def _run_loop_inner(
             # non-executing actions means a stuck planner / impossible action
             # space. Latch paused=True so a supervisor restart cannot re-enter
             # the loop (same durable-halt semantics as the meta-action guard).
-            if skip_streak >= MAX_CONSECUTIVE_SKIP:
+            if not skip_bug_corrupted_by and skip_streak >= MAX_CONSECUTIVE_SKIP:
                 state["paused"] = True
                 state["_dispatch_deficiency"] = "skip_action_loop"
                 save_state(state)
@@ -6847,6 +6890,8 @@ def _run_loop_inner(
                 hypothesis = f"Optimize {action.get('surface', 'unknown')} surface"
             elif action_type == "structural_experiment":
                 hypothesis = f"Toggle flags: {action.get('flags', {})}"
+            elif action_type == "consult_gate_probe":
+                hypothesis = "Probe targeted review-before-commit consult gate"
             elif action_type in ("train_routing_models", "distill_skillbank", "rollback"):
                 hypothesis = action_type.replace("_", " ").title()
         expected_mechanism = (
@@ -7004,18 +7049,22 @@ def _run_loop_inner(
         if not deficiency_category:
             deficiency_category = state.pop("_dispatch_deficiency", "")
 
-        # Apply the learning-exclusion decision computed above. Both exogenous
-        # reload and mad_noise produce a single bug_corrupted_by tag + an
-        # eval_details["learning_exclusion"] audit record. The deficiency
-        # category is overridden so the planner can distinguish exclusion
-        # reasons from genuine safety-gate failures.
+        # Apply the learning-exclusion decision computed above. True measurement
+        # contamination (exogenous reload, prompt leak, kill/reload artifacts)
+        # produces bug_corrupted_by + eval_details["learning_exclusion"]. Valid
+        # negative evidence such as seq_refuted remains a learning exclusion but
+        # must not be hidden as corrupted data.
         # Benign convergence exclusions (reproduction_confirmed) skip the Pareto
         # archive (via learning_excluded_by above) but must NOT populate
         # bug_corrupted_by — otherwise trustworthiness_score() and the journal
         # trust render would treat a valid confirmation like a kill / reload /
         # commit-invalidation, and the planner would narrate a "noisy instrument"
         # (2026-05-31 incident → meta-action loop).
-        if learning_excluded_by and learning_excluded_by not in BENIGN_LEARNING_EXCLUSIONS:
+        if (
+            learning_excluded_by
+            and learning_excluded_by not in BENIGN_LEARNING_EXCLUSIONS
+            and learning_excluded_by not in NON_CORRUPT_LEARNING_EXCLUSIONS
+        ):
             bug_corrupted_by = learning_excluded_by
             bug_corrupted_reason = learning_excluded_reason
         else:
@@ -7148,6 +7197,8 @@ def _run_loop_inner(
         if strategy_store is not None:
             try:
                 strategy_store.store_frontier_journal_entry(journal_entry)
+                if hasattr(strategy_store, "store_consult_gate_journal_entry"):
+                    strategy_store.store_consult_gate_journal_entry(journal_entry)
             except Exception as e:
                 log.warning("Strategy store journal projection failed: %s", e)
 

@@ -54,15 +54,19 @@ def test_port_hints_follow_current_full_mode_priors() -> None:
     assert 8082 not in dashboard_topology._PORT_HINTS
 
 
-def test_active_stack_numa_mode_defaults_to_full(monkeypatch) -> None:
+def test_active_stack_numa_mode_defaults_to_both(monkeypatch) -> None:
+    # Nothing exports ORCHESTRATOR_STACK_NUMA_MODE and the stack runs every
+    # instance (full + 4 quarters per multi-instance role), so the dashboard
+    # defaults to "both" to reflect the running instances rather than hiding them.
     monkeypatch.delenv("ORCHESTRATOR_STACK_NUMA_MODE", raising=False)
-    assert dashboard_topology.active_stack_numa_mode() == "full"
+    assert dashboard_topology.active_stack_numa_mode() == "both"
 
     monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "quarter")
     assert dashboard_topology.active_stack_numa_mode() == "quarter"
 
+    # Unknown values fall back to the "both" default.
     monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "stale-quarter")
-    assert dashboard_topology.active_stack_numa_mode() == "full"
+    assert dashboard_topology.active_stack_numa_mode() == "both"
 
 
 def test_expected_stack_services_are_numa_mode_filtered(monkeypatch) -> None:
@@ -491,6 +495,112 @@ def test_structured_tap_requests_for_dashboard_uses_shared_region_lock_frame(mon
     assert req["instance_idx"] == 0
     assert req["instance_shape"] == "half0"
     assert req["instance_regions"] == ["q0", "q1"]
+
+
+def test_offwindow_lock_holder_recovered_from_wide_tail(monkeypatch) -> None:
+    """A live CPU-region holder whose `start` event aged out of the 1 MB tail
+    must be recovered from the wider reverse window so it is NOT mis-rendered as
+    a false "off-tap holder". Regression for the recurring worker_general.full /
+    autopilot:numeric_trial warning."""
+    now = 1_000.0
+    held_event = json.dumps({
+        "event": "start",
+        "request_id": "chat-HELD:1",
+        "task_id": "chat-HELD",
+        "role": "worker_general",
+        "topology_role": "worker_general",
+        "lock_role": "worker_general",
+        "instance_idx": 0,
+        "instance_shape": "full",
+        "port": 8072,
+        "pid": 999,
+        "ts": "2026-07-10T11:00:00+00:00",
+        "ts_epoch": now - 3,  # recent → status "running", not complete
+        "prompt": "eval prompt",
+    })
+
+    # 1 MB tail: holder absent (aged out). Wider recovery read: holder present.
+    def fake_tail(_path, max_bytes=1024 * 1024):
+        return held_event if max_bytes > 1024 * 1024 else ""
+
+    monkeypatch.setattr(dashboard, "_read_tap_events_tail", fake_tail)
+
+    region_locks = {
+        "by_role": {
+            "worker_general": {
+                "instances": [
+                    {"idx": 0, "shape": "full", "regions": ["q0", "q1", "q2", "q3"]},
+                ],
+                "regions": [
+                    {"region": r, "held": True,
+                     "holder_pids": ["999"], "holder_instance_idxs": [0]}
+                    for r in ("q0", "q1", "q2", "q3")
+                ],
+            },
+        },
+    }
+
+    recovered = dashboard._structured_tap_requests_for_dashboard(
+        max_requests=20,
+        now_epoch=now,
+        region_locks=region_locks,
+        port_roles={8072: "worker_general"},
+    )
+
+    assert [r["request_id"] for r in recovered] == ["chat-HELD:1"]
+    assert recovered[0]["instance_idx"] == 0
+    assert recovered[0]["status"] == "running"
+
+
+def test_offwindow_recovery_skipped_when_holder_already_in_window(monkeypatch) -> None:
+    """When the holder's request is already in the 1 MB tail, no wider read is
+    issued and no duplicate row is injected (the common streaming path)."""
+    now = 2_000.0
+    live_event = json.dumps({
+        "event": "start",
+        "request_id": "chat-LIVE:1",
+        "role": "worker_general",
+        "topology_role": "worker_general",
+        "lock_role": "worker_general",
+        "instance_idx": 0,
+        "port": 8072,
+        "pid": 999,
+        "ts": "2026-07-10T12:00:00+00:00",
+        "ts_epoch": now - 2,
+        "prompt": "live prompt",
+    })
+
+    wide_reads: list[int] = []
+
+    def fake_tail(_path, max_bytes=1024 * 1024):
+        if max_bytes > 1024 * 1024:
+            wide_reads.append(max_bytes)
+            return live_event  # would duplicate if erroneously merged
+        return live_event
+
+    monkeypatch.setattr(dashboard, "_read_tap_events_tail", fake_tail)
+
+    region_locks = {
+        "by_role": {
+            "worker_general": {
+                "instances": [{"idx": 0, "shape": "full",
+                               "regions": ["q0", "q1", "q2", "q3"]}],
+                "regions": [
+                    {"region": r, "held": True,
+                     "holder_pids": ["999"], "holder_instance_idxs": [0]}
+                    for r in ("q0", "q1", "q2", "q3")
+                ],
+            },
+        },
+    }
+
+    out = dashboard._structured_tap_requests_for_dashboard(
+        max_requests=20, now_epoch=now, region_locks=region_locks,
+        port_roles={8072: "worker_general"},
+    )
+
+    assert [r["request_id"] for r in out] == ["chat-LIVE:1"]  # no duplicate
+    assert wide_reads == []  # holder already visible → no wider read
 
 
 def test_topology_activity_uses_structured_tap_not_legacy_sections(monkeypatch) -> None:
@@ -2142,6 +2252,49 @@ def test_gepa_status_uses_superseded_journal_rows(
     assert set(by_trial) == {1, 2}
     assert by_trial[1]["bug_corrupted_by"] is None
     assert by_trial[2]["bug_corrupted_by"] == "resource_contention"
+    assert by_trial[2]["quarantine_label"] == "corrupted"
+
+
+def test_gepa_status_recent_trials_labels_seq_refuted_without_corruption(
+    tmp_path: Path, monkeypatch
+) -> None:
+    log_path = tmp_path / "autopilot.log"
+    journal_path = tmp_path / "autopilot_journal.jsonl"
+    log_path.write_text("2026-07-08 00:00:00,000 GEPA: Trial active\n")
+    rows = [
+        {
+            "trial_id": 10,
+            "timestamp": "2026-07-08T00:00:00+00:00",
+            "species": "seeder",
+            "action_type": "seed_batch",
+            "tier": 1,
+            "quality": 2.0,
+            "speed": 25.0,
+            "cost": 0.5,
+            "reliability": 0.9,
+            "pareto_status": "dominated",
+            "keep_revert_decision": "excluded",
+            "eval_details": {
+                "learning_exclusion": {
+                    "by": "seq_refuted",
+                    "reason": "sequential e-process refuted the candidate improvement",
+                }
+            },
+        }
+    ]
+    journal_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+    monkeypatch.setattr(dashboard, "AUTOPILOT_LOG", log_path)
+    monkeypatch.setattr(dashboard, "_AUTOPILOT_JOURNAL_PATH", journal_path)
+
+    response = asyncio.run(dashboard.gepa_status())
+    payload = json.loads(response.body)
+
+    row = payload["recent_trials"][0]
+    assert row["bug_corrupted_by"] is None
+    assert row["quarantine_label"] is None
+    assert row["learning_excluded_by"] == "seq_refuted"
+    assert row["keep_revert_decision"] == "excluded"
+    assert row["exclusion_label"] == "seq-refuted"
 
 
 def test_gepa_status_recent_trials_carry_tier(tmp_path: Path, monkeypatch) -> None:
@@ -2558,8 +2711,10 @@ def test_snapshot_uses_fresh_region_lock_scan(monkeypatch) -> None:
     assert payload["region_locks"] == fresh
     assert payload["topology_activity"] == activity
     assert payload["display_activity"] == {}
-    assert payload["stack_numa_mode"] == "full"
-    assert payload["topology"]["stack_numa_mode"] == "full"
+    # active_stack_numa_mode() now defaults to "both" (env unset) so the dashboard
+    # reflects the running full + quarter instances.
+    assert payload["stack_numa_mode"] == "both"
+    assert payload["topology"]["stack_numa_mode"] == "both"
 
 
 def test_coherent_display_activity_suppresses_uncorroborated_cpu_slots() -> None:

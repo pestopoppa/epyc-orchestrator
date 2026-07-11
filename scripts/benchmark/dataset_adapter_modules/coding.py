@@ -7,11 +7,8 @@ compatibility — existing imports keep working.
 
 from __future__ import annotations
 
-import json
 import random
 import re
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
 
 from .base import BaseAdapter
 
@@ -68,8 +65,8 @@ class CoderAdapter(BaseAdapter):
     def _humaneval_prompt(self, idx: int) -> dict:
         row = self._humaneval[idx]
         prompt_text = row["prompt"]
-        canonical = row["canonical_solution"]
-        test_code = row["test"]
+        _ = row["canonical_solution"]  # kept for schema completeness
+        _ = row["test"]  # kept for schema completeness
         entry_point = row["entry_point"]
         task_id = row["task_id"]
 
@@ -255,7 +252,7 @@ class BigCodeBenchAdapter(BaseAdapter):
             self._dataset = hf.load_dataset(
                 "bigcode/bigcodebench", split="v0.1.2",
             )
-        except Exception as e:
+        except Exception:
             try:
                 import datasets as hf
                 # Fallback to default split
@@ -271,7 +268,7 @@ class BigCodeBenchAdapter(BaseAdapter):
         instruct_prompt = row.get("instruct_prompt", "")
         complete_prompt = row.get("complete_prompt", "")
         test_code = row.get("test", "")
-        canonical = row.get("canonical_solution", "")
+        _canonical = row.get("canonical_solution", "")
         entry_point = row.get("entry_point", "")
         libs = row.get("libs", [])
 
@@ -386,7 +383,7 @@ class LiveCodeBenchAdapter(BaseAdapter):
     def _row_to_prompt(self, idx: int, row: dict) -> dict:
         title = row.get("title", f"Problem {idx}")
         content = row.get("content", "")
-        difficulty = row.get("difficulty", "Medium")
+        _difficulty = row.get("difficulty", "Medium")
         slug = row.get("slug", f"problem-{idx}")
         python_solution = row.get("python", "")
 
@@ -537,7 +534,7 @@ class DebugBenchAdapter(BaseAdapter):
         examples = row.get("examples", [])
         constraints = row.get("constraints", "")
         language = row.get("language", "python3")
-        level = row.get("level", "medium")
+        _level = row.get("level", "medium")
         slug = row.get("slug", f"debug_{idx:04d}")
         category = row.get("category", "")
 
@@ -549,7 +546,7 @@ class DebugBenchAdapter(BaseAdapter):
         prompt_lines = [
             f"# Bug Fixing Task ({lang.upper()})",
             "",
-            f"## Problem Description",
+            "## Problem Description",
             question[:500] if len(question) > 500 else question,
             "",
         ]
@@ -557,18 +554,18 @@ class DebugBenchAdapter(BaseAdapter):
         if examples:
             prompt_lines.append("## Examples")
             for i, ex in enumerate(examples[:2]):
-                prompt_lines.append(f"```")
+                prompt_lines.append("```")
                 prompt_lines.append(str(ex)[:200])
-                prompt_lines.append(f"```")
+                prompt_lines.append("```")
             prompt_lines.append("")
 
         if constraints:
-            prompt_lines.append(f"## Constraints")
+            prompt_lines.append("## Constraints")
             prompt_lines.append(constraints[:200])
             prompt_lines.append("")
 
         prompt_lines.extend([
-            f"## Buggy Code",
+            "## Buggy Code",
             f"```{lang}",
             buggy_code[:1000] if len(buggy_code) > 1000 else buggy_code,
             "```",
@@ -702,7 +699,7 @@ class USACOAdapter(BaseAdapter):
         problem = row.get("problem", row.get("question", row.get("prompt", "")))
         problem_id = row.get("problem_id", row.get("id", f"usaco_{idx:04d}"))
         division = row.get("division", row.get("level", "silver"))
-        solution = row.get("solution", row.get("code", ""))
+        _solution = row.get("solution", row.get("code", ""))
         test_cases = row.get("test_cases", row.get("tests", []))
 
         # Build prompt

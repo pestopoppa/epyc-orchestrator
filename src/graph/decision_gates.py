@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Any
 
 from pydantic_graph import End, GraphRunContext
 

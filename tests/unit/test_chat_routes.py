@@ -953,6 +953,75 @@ class TestEditModeFailClosed:
         assert events[0]["rerun_requested"] is True
         assert events[0]["schema_hash"] == "schema123"
 
+    @pytest.mark.asyncio
+    async def test_force_mode_edit_targeted_gate_skips_plain_edit(
+        self, mock_state, mock_primitives, base_routing, monkeypatch, tmp_path
+    ):
+        from contextlib import nullcontext
+        from unittest.mock import AsyncMock
+
+        from src.api.models import ChatResponse
+        from src.features import reset_features
+
+        edit_root = tmp_path / "task-root"
+        edit_root.mkdir()
+        target_file = edit_root / "calc.py"
+        target_file.write_text("VALUE = 1\n")
+
+        monkeypatch.setenv("ORCHESTRATOR_EDIT_TRANSACTION", "1")
+        monkeypatch.setenv("ORCHESTRATOR_EDIT_ROOT", str(edit_root))
+        monkeypatch.setenv("ORCHESTRATOR_FEATURE_REVIEW_BEFORE_COMMIT_CONSULT", "1")
+        monkeypatch.setenv("ORCHESTRATOR_FEATURE_REVIEW_BEFORE_COMMIT_TARGETED_GATE", "1")
+        monkeypatch.setenv("ORCHESTRATOR_RUNTIME_FLAGS_PATH", str(tmp_path / "runtime_flags.json"))
+        reset_features()
+        mock_primitives.request_context = MagicMock(return_value=nullcontext())
+
+        req = ChatRequest(
+            prompt="update calc.py",
+            mock_mode=False,
+            real_mode=True,
+            force_mode="edit",
+            force_role="coder_escalation",
+        )
+        base_routing.routing_decision = ["coder_escalation"]
+
+        def _fake_execute_direct(request, routing, primitives, state, start_time, initial_role):
+            assert "Current file contents:" in request.prompt
+            return ChatResponse(
+                answer="<<<FILE: calc.py>>>\nVALUE = 2\n<<<END>>>",
+                turns=1,
+                elapsed_seconds=0.01,
+                mock_mode=False,
+                real_mode=True,
+                routed_to=str(initial_role),
+                role_history=[str(initial_role)],
+                routing_strategy=routing.routing_strategy,
+                mode="edit",
+            )
+
+        try:
+            with patch("src.api.routes.chat._route_request", return_value=base_routing), \
+                 patch("src.api.routes.chat._preprocess", return_value=None), \
+                 patch("src.api.routes.chat._init_primitives", return_value=mock_primitives), \
+                 patch("src.api.routes.chat._plan_review_gate", return_value=None), \
+                 patch("src.api.routes.chat._execute_vision", new=AsyncMock(return_value=None)), \
+                 patch("src.api.routes.chat._execute_vision_multimodal", new=AsyncMock(return_value=None)), \
+                 patch("src.api.routes.chat._execute_proactive", new=AsyncMock(return_value=None)), \
+                 patch("src.api.routes.chat._try_cheap_first", new=AsyncMock(return_value=None)), \
+                 patch("src.api.routes.chat._execute_direct", side_effect=_fake_execute_direct) as mock_execute_direct, \
+                 patch("src.orchestration.consultation.consult") as mock_consult:
+                result = await _handle_chat(req, mock_state)
+        finally:
+            reset_features()
+
+        assert mock_execute_direct.call_count == 1
+        assert mock_consult.call_count == 0
+        assert result.mode == "edit"
+        assert target_file.read_text() == "VALUE = 2"
+        events = result.delegation_diagnostics["edit_transaction_consult_events"]
+        assert events[0]["skipped"] is True
+        assert events[0]["reason"] == "targeted_gate_skip"
+
 
 class TestHandleChatXmasCheapFirst:
     """X-MAS enforce should not suppress cheap-first for the cheap role itself."""

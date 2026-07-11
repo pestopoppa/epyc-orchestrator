@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import sys
 
-import pytest
 
 sys.path.insert(0, "/mnt/raid0/llm/epyc-orchestrator")
 
@@ -40,9 +39,9 @@ class TestTruncateToBudget:
         text = "line one\nline two\nline three\nline four"
         out = truncate_to_budget(text, budget_tokens=5)
         # Every retained line should be intact
-        retained = [l for l in out.split("\n") if not l.strip().startswith("…")]
-        for l in retained:
-            assert l in text
+        retained = [line for line in out.split("\n") if not line.strip().startswith("…")]
+        for line in retained:
+            assert line in text
 
 
 class TestApplySectionBudget:

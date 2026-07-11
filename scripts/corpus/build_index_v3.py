@@ -501,8 +501,8 @@ def main():
     args = parser.parse_args()
 
     t_total = time.perf_counter()
-    languages = [l.strip() for l in args.languages.split(",")]
-    languages = [l for l in languages if l in LANGUAGE_MAP]
+    languages = [lang.strip() for lang in args.languages.split(",")]
+    languages = [lang for lang in languages if lang in LANGUAGE_MAP]
     output_dir = args.output
     num_shards = args.shards
     temp_dir = os.path.join(output_dir, "temp")

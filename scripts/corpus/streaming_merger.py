@@ -20,7 +20,6 @@ import logging
 import os
 import sqlite3
 import time
-from pathlib import Path
 
 logging.basicConfig(
     level=logging.INFO,

@@ -18,7 +18,7 @@ import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, Iterator
+from typing import Iterator
 
 from src.trace.store import Event, EventCategory, EventSource, detail_to_json
 

@@ -87,6 +87,10 @@ def _journal_frontier_strategy_id(trial_id: int) -> str:
     return f"journal-frontier-trial-{int(trial_id)}"
 
 
+def _journal_consult_gate_strategy_id(trial_id: int) -> str:
+    return f"journal-consult-gate-trial-{int(trial_id)}"
+
+
 def _metric_text(value: Any, precision: int) -> str:
     try:
         return f"{float(value):.{precision}f}"
@@ -178,6 +182,26 @@ def _journal_entry_is_projectable_frontier_strategy(entry: Any) -> bool:
     return not _journal_entry_excludes_strategy_evidence(entry)
 
 
+def _journal_consult_gate_details(entry: Any) -> dict[str, Any]:
+    eval_details = getattr(entry, "eval_details", {}) or {}
+    if not isinstance(eval_details, dict):
+        return {}
+    details = eval_details.get("details") or {}
+    if not isinstance(details, dict):
+        return {}
+    return details if details.get("kind") == "consult_gate_probe" else {}
+
+
+def _journal_entry_is_projectable_consult_gate_strategy(entry: Any) -> bool:
+    if _journal_trial_id(entry) is None:
+        return False
+    if getattr(entry, "action_type", "") != "consult_gate_probe":
+        return False
+    if _journal_entry_excludes_strategy_evidence(entry):
+        return False
+    return bool(_journal_consult_gate_details(entry))
+
+
 def excluded_strategy_evidence_trial_ids(journal: Any) -> set[int]:
     """Return trial IDs whose strategy evidence should not be retrieved.
 
@@ -214,9 +238,12 @@ def _journal_entries_for_strategy_projection(journal: Any) -> list[Any]:
     return list(entries)
 
 
-def _projection_trial_id_from_row(row: sqlite3.Row) -> int | None:
+def _projection_trial_id_from_row(
+    row: sqlite3.Row,
+    *,
+    prefix: str = "journal-frontier-trial-",
+) -> int | None:
     row_id = str(row["id"])
-    prefix = "journal-frontier-trial-"
     if row_id.startswith(prefix):
         try:
             return int(row_id[len(prefix):])
@@ -1064,6 +1091,123 @@ class StrategyStore:
             valid_evidence_trial_ids={trial_id},
         )
 
+    def store_consult_gate_journal_entry(self, entry: Any) -> str | None:
+        """Project a consult-gate probe row into conditional strategy memory.
+
+        Unlike frontier projections, consult-gate projections intentionally keep
+        dominated rows: a slow or quality-negative consult policy is still
+        useful evidence about when orchestration should skip consultation. The
+        normal journal trust filters still exclude skipped, corrupted, reverted,
+        and learning-excluded rows.
+        """
+        try:
+            trial_id = int(getattr(entry, "trial_id"))
+        except (TypeError, ValueError):
+            return None
+        if not _journal_entry_is_projectable_consult_gate_strategy(entry):
+            return None
+
+        details = _journal_consult_gate_details(entry)
+        summary = details.get("summary") if isinstance(details.get("summary"), dict) else {}
+        gated = summary.get("gated") if isinstance(summary.get("gated"), dict) else {}
+        baseline = summary.get("baseline") if isinstance(summary.get("baseline"), dict) else {}
+        blanket = summary.get("consult") if isinstance(summary.get("consult"), dict) else {}
+        gated_comparison = (
+            summary.get("gated_comparison")
+            if isinstance(summary.get("gated_comparison"), dict)
+            else {}
+        )
+        action = getattr(entry, "config_snapshot", {}) or {}
+        if not isinstance(action, dict):
+            action = {}
+        task_suite = _compact_text(action.get("task_suite") or "targeted")
+        tier = getattr(entry, "tier", details.get("tier", 0))
+        quality_delta_pp = gated_comparison.get("quality_delta_pp")
+        if quality_delta_pp is None:
+            try:
+                quality_delta_pp = round(
+                    100.0 * (float(gated.get("quality", 0.0)) - float(baseline.get("quality", 0.0))),
+                    3,
+                )
+            except (TypeError, ValueError):
+                quality_delta_pp = 0.0
+        consult_calls = int(details.get("consult_calls") or gated.get("consult_calls") or 0)
+        consult_skips = int(details.get("consult_skips") or gated.get("consult_skips") or 0)
+        consult_decisions = max(1, consult_calls + consult_skips)
+        consult_call_rate = round(consult_calls / consult_decisions, 4)
+        gate_reason_counts = details.get("gate_reason_counts") or gated.get("gate_reason_counts") or {}
+        if not isinstance(gate_reason_counts, dict):
+            gate_reason_counts = {}
+        top_gate_reasons = ", ".join(
+            f"{key}:{value}" for key, value in sorted(
+                gate_reason_counts.items(),
+                key=lambda item: (-int(item[1]), str(item[0])),
+            )[:5]
+        ) or "none"
+        try:
+            quality_delta = float(quality_delta_pp)
+        except (TypeError, ValueError):
+            quality_delta = 0.0
+        recommendation = (
+            "prefer targeted consult gate"
+            if quality_delta > 0.0
+            else "avoid or retune consult gate"
+        )
+        if consult_calls == 0:
+            recommendation = "gate skipped all consults; collect harder triggered rows"
+
+        description = (
+            f"consult_gate_probe T{tier} {task_suite}: {recommendation}; "
+            f"quality_delta_pp={_metric_text(quality_delta, 2)} "
+            f"call_rate={consult_call_rate:.2f} reasons={top_gate_reasons}"
+        )
+        insight = (
+            f"review_before_commit targeted gate trial={trial_id} tier={tier} "
+            f"task_suite={task_suite} q={_metric_text(getattr(entry, 'quality', 0.0), 3)} "
+            f"tasks_per_hour={_metric_text(getattr(entry, 'speed', 0.0), 1)} "
+            f"baseline_quality={_metric_text(baseline.get('quality'), 3)} "
+            f"blanket_quality={_metric_text(blanket.get('quality'), 3)} "
+            f"gated_quality={_metric_text(gated.get('quality'), 3)} "
+            f"consult_calls={consult_calls} consult_skips={consult_skips} "
+            f"reruns={int(details.get('rerun_requests') or gated.get('rerun_requests') or 0)} "
+            f"gate_reasons={top_gate_reasons}"
+        )
+        generalized = (
+            f"{recommendation} for review_before_commit on T{tier} {task_suite} "
+            f"when gate reasons resemble {top_gate_reasons}; optimize for solved-task "
+            "quality per wall-clock task throughput, not raw consult usage."
+        )
+        return self.store(
+            description=description,
+            insight=insight,
+            source_trial_id=trial_id,
+            species="consult_gate",
+            metadata={
+                "generated_from": "journal_consult_gate",
+                "journal_trial_id": trial_id,
+                "journal_timestamp": _compact_text(getattr(entry, "timestamp", "")),
+                "tier": tier,
+                "task_suite": task_suite,
+                "quality_delta_pp": quality_delta_pp,
+                "consult_call_rate": consult_call_rate,
+                "consult_calls": consult_calls,
+                "consult_skips": consult_skips,
+                "gate_reason_counts": gate_reason_counts,
+                "pareto_status": _compact_text(getattr(entry, "pareto_status", "")),
+                "speed_metric_mode": _compact_text(
+                    (getattr(entry, "eval_details", {}) or {}).get("speed_metric_mode", "")
+                    if isinstance(getattr(entry, "eval_details", {}) or {}, dict)
+                    else ""
+                ),
+            },
+            entry_type="pattern",
+            evidence_trial_ids=[trial_id],
+            title=f"Consult gate T{tier} {task_suite}: {recommendation}",
+            generalized_content=generalized,
+            entry_id=_journal_consult_gate_strategy_id(trial_id),
+            valid_evidence_trial_ids={trial_id},
+        )
+
     def frontier_journal_projection_report(self, journal: Any) -> dict[str, Any]:
         """Compare journal-derived frontier strategy projections with SQLite rows.
 
@@ -1161,6 +1305,101 @@ class StrategyStore:
             "mismatches": mismatches,
         }
 
+    def consult_gate_journal_projection_report(self, journal: Any) -> dict[str, Any]:
+        """Compare consult-gate journal projections with SQLite rows."""
+        entries = _journal_entries_for_strategy_projection(journal)
+        expected_entries: dict[int, Any] = {}
+        skipped_trial_ids: list[int] = []
+        for entry in entries:
+            trial_id = _journal_trial_id(entry)
+            if trial_id is None:
+                continue
+            if _journal_entry_is_projectable_consult_gate_strategy(entry):
+                expected_entries[trial_id] = entry
+            else:
+                skipped_trial_ids.append(trial_id)
+
+        rows = self._conn.execute(
+            "SELECT id, source_trial_id, metadata_json, evidence_trial_ids "
+            "FROM strategies WHERE id LIKE 'journal-consult-gate-trial-%' "
+            "ORDER BY source_trial_id ASC"
+        ).fetchall()
+        projected_by_trial = {
+            trial_id: row
+            for row in rows
+            if (
+                trial_id := _projection_trial_id_from_row(
+                    row,
+                    prefix="journal-consult-gate-trial-",
+                )
+            ) is not None
+        }
+
+        missing = [
+            {
+                "trial_id": trial_id,
+                "strategy_id": _journal_consult_gate_strategy_id(trial_id),
+            }
+            for trial_id in sorted(set(expected_entries) - set(projected_by_trial))
+        ]
+        unexpected = [
+            {
+                "trial_id": trial_id,
+                "strategy_id": row["id"],
+            }
+            for trial_id, row in sorted(projected_by_trial.items())
+            if trial_id not in expected_entries
+        ]
+        mismatches: list[dict[str, Any]] = []
+        for trial_id in sorted(set(expected_entries) & set(projected_by_trial)):
+            row = projected_by_trial[trial_id]
+            problems: list[str] = []
+            if row["id"] != _journal_consult_gate_strategy_id(trial_id):
+                problems.append("id")
+            try:
+                source_trial_id = int(row["source_trial_id"])
+            except (TypeError, ValueError):
+                source_trial_id = None
+            if source_trial_id != trial_id:
+                problems.append("source_trial_id")
+            try:
+                evidence_trial_ids = json.loads(row["evidence_trial_ids"] or "[]")
+            except (TypeError, json.JSONDecodeError):
+                evidence_trial_ids = []
+            if evidence_trial_ids != [trial_id]:
+                problems.append("evidence_trial_ids")
+            try:
+                metadata = json.loads(row["metadata_json"] or "{}")
+            except (TypeError, json.JSONDecodeError):
+                metadata = {}
+            if not isinstance(metadata, dict):
+                metadata = {}
+            if metadata.get("generated_from") != "journal_consult_gate":
+                problems.append("metadata.generated_from")
+            if metadata.get("journal_trial_id") != trial_id:
+                problems.append("metadata.journal_trial_id")
+            if problems:
+                mismatches.append(
+                    {
+                        "trial_id": trial_id,
+                        "strategy_id": row["id"],
+                        "problems": problems,
+                    }
+                )
+        return {
+            "ok": not missing and not unexpected and not mismatches,
+            "journal_entries": len(entries),
+            "expected_count": len(expected_entries),
+            "projected_count": len(projected_by_trial),
+            "skipped_count": len(skipped_trial_ids),
+            "missing_count": len(missing),
+            "unexpected_count": len(unexpected),
+            "mismatch_count": len(mismatches),
+            "missing": missing,
+            "unexpected": unexpected,
+            "mismatches": mismatches,
+        }
+
     def sync_frontier_journal_entries(
         self,
         journal: Any,
@@ -1201,6 +1440,48 @@ class StrategyStore:
             before
             if dry_run
             else self.frontier_journal_projection_report(journal)
+        )
+        return {
+            **after,
+            "dry_run": dry_run,
+            "would_insert_count": before["missing_count"],
+            "inserted_count": len(inserted),
+            "inserted": inserted,
+        }
+
+    def sync_consult_gate_journal_entries(
+        self,
+        journal: Any,
+        *,
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
+        """Optionally insert missing consult-gate policy projections."""
+        before = self.consult_gate_journal_projection_report(journal)
+        entries_by_id = {
+            _journal_consult_gate_strategy_id(trial_id): entry
+            for entry in _journal_entries_for_strategy_projection(journal)
+            if (trial_id := _journal_trial_id(entry)) is not None
+            and _journal_entry_is_projectable_consult_gate_strategy(entry)
+        }
+        inserted: list[dict[str, Any]] = []
+        if not dry_run:
+            for item in before["missing"]:
+                strategy_id = str(item["strategy_id"])
+                entry = entries_by_id.get(strategy_id)
+                if entry is None:
+                    continue
+                projected_id = self.store_consult_gate_journal_entry(entry)
+                if projected_id:
+                    inserted.append(
+                        {
+                            "trial_id": item["trial_id"],
+                            "strategy_id": projected_id,
+                        }
+                    )
+        after = (
+            before
+            if dry_run
+            else self.consult_gate_journal_projection_report(journal)
         )
         return {
             **after,

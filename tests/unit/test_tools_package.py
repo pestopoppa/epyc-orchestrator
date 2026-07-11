@@ -818,7 +818,6 @@ class TestWebSearchTool:
     def test_web_search_error(self):
         """Test web search with error (curl fails)."""
         from src.tools.web.search import web_search
-        import subprocess
 
         with patch("subprocess.run", side_effect=FileNotFoundError("curl not found")):
             result = web_search(query="test query")

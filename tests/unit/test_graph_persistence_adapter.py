@@ -12,7 +12,6 @@ from src.graph.persistence import (
     SQLiteStatePersistence,
     _state_to_dict,
     _state_to_dict_full,
-    _state_to_dict_minimal,
 )
 from src.graph.nodes import FrontdoorNode, CoderNode
 from src.graph.state import TaskState, TaskResult

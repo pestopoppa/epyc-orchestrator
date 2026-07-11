@@ -4,7 +4,6 @@ Verifies imports, field definitions, and module creation.
 Does NOT require a running LM backend.
 """
 
-import pytest
 
 
 def test_import_signatures():
@@ -18,7 +17,6 @@ def test_import_signatures():
 def test_frontdoor_fields():
     """FrontdoorClassifier has expected input/output fields."""
     from src.dspy_signatures.frontdoor import FrontdoorClassifier
-    import dspy
 
     sig = FrontdoorClassifier
     # Check input fields

@@ -288,9 +288,9 @@ class WatchTUI:
             total_h = self._console.height - 1
             stream_h = max(8, total_h * 7 // 10 - 2)
             repl_h = max(3, total_h * 3 // 10 - 2)
-            side_w = max(20, self._console.width * 3 // 10 - 4)
+            _side_w = max(20, self._console.width * 3 // 10 - 4)
         except Exception:
-            stream_h, repl_h, side_w = 20, 8, 30
+            stream_h, repl_h, _side_w = 20, 8, 30
 
         # Inference panel
         raw_section = self._tailer.get_current_section()
@@ -317,16 +317,17 @@ class WatchTUI:
             for h in filtered[:hidden]:
                 if h.lstrip().startswith("```"):
                     in_code_init = not in_code_init
-        display = [_sanitize_display(l) for l in filtered[-stream_vis:]]
+        display = [_sanitize_display(line) for line in filtered[-stream_vis:]]
         stream_text = _style_stream_lines(display, in_code_init) if display else Text("(waiting for inference tap...)")
 
-        stream_title = f"Inference ({' \u2192 '.join(role_chain)})" if role_chain else "Inference Stream"
+        _role_arrow = " \u2192 "
+        stream_title = f"Inference ({_role_arrow.join(role_chain)})" if role_chain else "Inference Stream"
         layout["stream"].update(Panel(stream_text, title=stream_title, border_style="cyan"))
 
         # REPL panel
         repl_vis = max(3, repl_h - 2)
         repl_lines = self._repl_tailer.get_current_section()
-        repl_display = [_sanitize_display(l) for l in repl_lines[-repl_vis:]]
+        repl_display = [_sanitize_display(line) for line in repl_lines[-repl_vis:]]
         repl_text = _style_repl_lines(repl_display) if repl_display else Text("(no REPL activity)")
         layout["repl"].update(Panel(repl_text, title="REPL Execution", border_style="magenta"))
 

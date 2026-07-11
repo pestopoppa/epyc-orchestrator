@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import sys
 
-import pytest
 
 sys.path.insert(0, "/mnt/raid0/llm/epyc-orchestrator")
 
@@ -12,7 +11,6 @@ from scripts.autopilot.safety_gate import (
     EvalResult,
     SafetyGate,
     SafetyVerdict,
-    QUALITY_FLOOR_T0 as QUALITY_FLOOR,
 )
 
 

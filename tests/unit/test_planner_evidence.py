@@ -189,6 +189,53 @@ def test_w8_replay_pressure_names_structural_prune_as_unreplayable() -> None:
     assert "replayable=no(unreplayable_action=structural_prune)" in text
 
 
+def test_w8_replay_pressure_counts_concrete_consult_gate_probe_as_replayable() -> None:
+    row = _row(
+        24,
+        config={
+            "type": "consult_gate_probe",
+            "task_suite": "targeted",
+            "turns": 10,
+            "tier": 3,
+        },
+        seq={
+            "candidate": "candidate-consult",
+            "core_id": "core_v1",
+            "state": "accumulating",
+            "z": 1.0,
+            "E_quality": 1.2,
+            "E_rate_noninf": 1.0,
+            "k": 1,
+        },
+    )
+
+    text = format_planner_evidence_section([row])
+
+    assert "W8 replay pressure: 1/1 accumulating candidate(s) are replayable" in text
+    assert "replayable=yes" in text
+
+
+def test_w8_replay_pressure_blocks_vague_consult_gate_probe() -> None:
+    row = _row(
+        24,
+        config={"type": "consult_gate_probe", "task_suite": "targeted"},
+        seq={
+            "candidate": "candidate-consult-vague",
+            "core_id": "core_v1",
+            "state": "accumulating",
+            "z": 1.0,
+            "E_quality": 1.2,
+            "E_rate_noninf": 1.0,
+            "k": 1,
+        },
+    )
+
+    text = format_planner_evidence_section([row])
+
+    assert "blocked=consult_gate_probe_missing_replay_fields:1" in text
+    assert "replayable=no(consult_gate_probe_missing_replay_fields)" in text
+
+
 def test_w8_replay_pressure_enforces_quality_floor() -> None:
     row = _row(
         25,

@@ -1265,10 +1265,7 @@ def test_simulated_ingest_swap_updates_generated_consumers_with_approval(
     }
     port_hints = _stack_prior_port_hints(config.stack_priors)
     assert port_hints[8085] == "ingest_long_context"
-    assert port_hints[8185] == "ingest_long_context.q0"
-    assert port_hints[8285] == "ingest_long_context.q1"
-    assert port_hints[8385] == "ingest_long_context.q2"
-    assert port_hints[8485] == "ingest_long_context.q3"
+    assert not ({8185, 8285, 8385, 8485} & set(port_hints))
 
     q_priors = stack_prior_q_scorer_priors_by_role(config.stack_priors)
     assert q_priors.baseline_tps_by_role["ingest_long_context"] == 14.2

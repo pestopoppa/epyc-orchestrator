@@ -24,7 +24,7 @@ def test_retriever_re_exports_retrieval_config_dataclasses() -> None:
 def test_retrieval_config_can_be_imported_directly() -> None:
     """The new module path should also work."""
     from orchestration.repl_memory.retrieval_config import (
-        RetrievalConfig, RetrievalResult, ScoreComponents,
+        RetrievalConfig,
     )
     assert RetrievalConfig is RetrievalConfig  # sanity
 

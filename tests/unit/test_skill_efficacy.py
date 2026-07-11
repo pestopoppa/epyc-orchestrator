@@ -8,12 +8,10 @@ cross-family guard). Pure-function tests; no inference, no model loading.
 
 from __future__ import annotations
 
-import math
 
 import pytest
 
 from scripts.autopilot.skill_efficacy import (
-    EfficacyVerdict,
     SurrogateFeedback,
     evaluate_skill_efficacy,
     evaluate_skill_efficacy_split,

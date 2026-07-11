@@ -7,8 +7,6 @@ Covers: research, writing, data analysis, planning, medical, legal,
 financial, creative, support, education, and more.
 """
 
-import json
-import random
 import sys
 from pathlib import Path
 
@@ -582,12 +580,12 @@ def main():
     print(f"\nSeeding diverse failures ({len(DIVERSE_FAILURES)} patterns, {count} each)...")
     seeded = seed_diverse_failures(store, embedder, count)
 
-    print(f"\n=== Results ===")
+    print("\n=== Results ===")
     print(f"Seeded: {seeded} diverse failure memories")
 
     stats = store.get_stats()
     print(f"Total memories: {stats['total_memories']}")
-    print(f"\nBy action type:")
+    print("\nBy action type:")
     for action_type, info in stats['by_action_type'].items():
         print(f"  {action_type}: {info['count']} memories, avg Q={info['avg_q']:.4f}")
 

@@ -388,6 +388,149 @@ def _structured_tap_active(structured_requests: list[dict[str, Any]]) -> bool:
     return False
 
 
+# Widen the tail read only for lock-holder recovery (below). The live panel
+# parses a fixed ~1 MB tail; under autopilot-eval load inference_tap_events.jsonl
+# rotates at 512 MB every day or two, so 1 MB spans only seconds. A request that
+# holds a CPU-region lock but is briefly between visible tap events (a long
+# prompt-prefill emitting no chunks yet, while concurrent cross-role chunk
+# traffic pushes its `start` event past the tail) is genuinely live yet absent
+# from the parsed set, and the dashboard mis-renders it as an "off-tap holder".
+_OFFWINDOW_RECOVERY_BYTES = 8 * 1024 * 1024
+
+
+def _tap_request_role_keys(req: dict[str, Any]) -> set[str]:
+    """Role identifiers a parsed tap request can match a lock holder on.
+
+    Mirrors the client's `structuredTapMatchesLockHolder`: a holder role matches
+    if it equals the request's lock_role, topology_role, role, or base_role(role).
+    """
+    keys: set[str] = set()
+    for key in (req.get("lock_role"), req.get("topology_role"), req.get("role")):
+        if key:
+            keys.add(str(key))
+    role = req.get("role")
+    if role:
+        keys.add(base_role(str(role)))
+    return keys
+
+
+def _lock_holder_identities(
+    region_locks: dict[str, Any] | None,
+) -> list[tuple[str, int, tuple[str, ...]]]:
+    """(role, instance_idx, holder_pids) for every instance currently holding a
+    CPU-region lock, read from the /proc-derived region_locks payload.
+
+    Region locks are fcntl.flock locks surfaced via /proc/locks (see
+    src.runtime.cpu_region_lock), so the kernel drops them the instant the owning
+    process exits — a holder here is ALWAYS a live dispatch, never an orphan.
+    """
+    by_role = region_locks.get("by_role") if isinstance(region_locks, dict) else None
+    if not isinstance(by_role, dict):
+        return []
+    out: list[tuple[str, int, tuple[str, ...]]] = []
+    for role, bucket in by_role.items():
+        if not isinstance(bucket, dict):
+            continue
+        pids_by_idx: dict[int, set[str]] = {}
+        for region in bucket.get("regions", []) or []:
+            if not isinstance(region, dict) or not region.get("held"):
+                continue
+            pids = [str(p) for p in (region.get("holder_pids") or [])]
+            for idx in region.get("holder_instance_idxs") or []:
+                if str(idx).lstrip("-").isdigit():
+                    pids_by_idx.setdefault(int(idx), set()).update(pids)
+        for idx, pids in pids_by_idx.items():
+            out.append((str(role), idx, tuple(sorted(pids))))
+    return out
+
+
+def _recover_offwindow_lock_holder_requests(
+    parsed_requests: list[dict[str, Any]],
+    region_locks: dict[str, Any] | None,
+    *,
+    max_requests: int,
+    now_epoch: float,
+) -> list[dict[str, Any]]:
+    """Fold genuinely-running lock holders that aged out of the live tail back in.
+
+    Matches the client's holder↔request rule (role AND (instance_idx OR pid)):
+    for any active region-lock holder with no matching parsed request, read a
+    wider reverse window (`_OFFWINDOW_RECOVERY_BYTES`) once and merge its newest
+    still-running request. This is what stops the false "off-tap CPU-region
+    holder" cards for autopilot eval / numeric_trial traffic — which IS tapped,
+    but whose `start` event scrolls out of the 1 MB window during a long prefill
+    (tap events stamp os.getpid(), the same process that holds the flock, so the
+    holder pid and the tap pid are the same worker).
+
+    Bounded on purpose: the wider read runs only when a holder is otherwise
+    invisible (rare — a streaming holder stays in the 1 MB window via its chunk
+    events), so the common path pays nothing beyond a couple of set builds.
+    """
+    holders = _lock_holder_identities(region_locks)
+    if not holders:
+        return parsed_requests
+
+    represented: set[tuple[str, int]] = set()
+    represented_pids: set[str] = set()
+    for req in parsed_requests:
+        pid = req.get("pid")
+        if pid not in (None, ""):
+            represented_pids.add(str(pid))
+        idx_raw = req.get("instance_idx")
+        if not str(idx_raw if idx_raw is not None else "").lstrip("-").isdigit():
+            continue
+        idx = int(idx_raw)
+        for role_key in _tap_request_role_keys(req):
+            represented.add((role_key, idx))
+
+    unmatched = {
+        (role, idx)
+        for role, idx, pids in holders
+        if (role, idx) not in represented and not (set(pids) & represented_pids)
+    }
+    if not unmatched:
+        return parsed_requests
+
+    wide_tail = _read_tap_events_tail(
+        _INFERENCE_TAP_EVENTS_PATH, max_bytes=_OFFWINDOW_RECOVERY_BYTES
+    )
+    if not wide_tail:
+        return parsed_requests
+
+    seen_ids = {str(r.get("request_id") or "") for r in parsed_requests}
+    recovered: list[dict[str, Any]] = []
+    # _parse_structured_tap_requests returns most-recent-updated first, so the
+    # first running match for a holder is its newest request.
+    for req in _parse_structured_tap_requests(
+        wide_tail, max_requests=max_requests, now_epoch=now_epoch
+    ):
+        if not unmatched:
+            break
+        if req.get("status") == "complete":
+            continue
+        rid = str(req.get("request_id") or "")
+        if rid in seen_ids:
+            continue
+        idx_raw = req.get("instance_idx")
+        if not str(idx_raw if idx_raw is not None else "").lstrip("-").isdigit():
+            continue
+        idx = int(idx_raw)
+        matched = next(
+            (
+                (role_key, idx)
+                for role_key in _tap_request_role_keys(req)
+                if (role_key, idx) in unmatched
+            ),
+            None,
+        )
+        if matched is None:
+            continue
+        recovered.append(req)
+        seen_ids.add(rid)
+        unmatched.discard(matched)
+    return recovered + parsed_requests if recovered else parsed_requests
+
+
 def _structured_tap_requests_for_dashboard(
     *,
     max_requests: int,
@@ -403,10 +546,21 @@ def _structured_tap_requests_for_dashboard(
         max_requests=max_requests,
         now_epoch=now,
     )
+    # Resolve the region-lock frame once, then reconcile it against the parsed
+    # window: recover live holders whose tap events aged out of the fixed tail
+    # (else they surface as false "off-tap holder" cards) before enriching with
+    # lock metadata off that same frame.
+    resolved_locks = region_locks if region_locks is not None else _region_locks_cached()
+    structured_requests = _recover_offwindow_lock_holder_requests(
+        structured_requests,
+        resolved_locks,
+        max_requests=max_requests,
+        now_epoch=now,
+    )
     return _enrich_structured_tap_requests(
         structured_requests,
         port_roles=port_roles,
-        region_locks=region_locks,
+        region_locks=resolved_locks,
     )
 
 
@@ -540,9 +694,12 @@ def _shape_for_regions(regs: "frozenset[str] | set[str] | list[str]") -> str:
 
 
 def _panel_shapes_from_matrix(sr, primary_shape: str) -> set[str]:
-    """Canonical shapes a role's region-locks-panel row should display, per
-    the contention matrix `same_role` entry (the operator-blessed source of
-    truth for which within-role shapes are usable).
+    """Within-role shapes the contention matrix marks CO-PLACEABLE for a role.
+
+    NOTE: as of the 2026-07-10 region-locks-grid fix this no longer gates the
+    panel's visible shapes — the grid shows every configured instance so live
+    heavy-role quarters (no co-placement pairs) still appear. Retained as the
+    canonical reader of `same_role` co-placement semantics for future use.
 
     Strict interpretation:
       - sr is None                       → empty set (role not in matrix → hide)
@@ -681,13 +838,18 @@ def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
         topology = {}
         all_regions = ["q0", "q1", "q2", "q3"]
 
-    # Source of truth for which roles/shapes appear in the panel: the
-    # operator-curated contention matrix (`orchestration/contention_matrix.yaml`).
-    # A role appears iff it has a `same_role` entry. Its visible shapes come
-    # from `_panel_shapes_from_matrix()` (strict: union of a/b labels in
-    # instance_pairs, with "full" → role's primary idx=0 shape; n/a or no
-    # pairs → only the primary shape). Lock-file existence is NO LONGER used
-    # to gate "wiring" — it's just a runtime hot/cold signal (cells stay
+    # Role INCLUSION source of truth: the operator-curated contention matrix
+    # (`orchestration/contention_matrix.yaml`) — a role appears iff it has a
+    # `same_role` entry (keeps non-CPU-lock roles like eval_batch_frontdoor out).
+    # Visible SHAPES, however, are the role's actual configured/running instances
+    # (built below), NOT the matrix `same_role.instance_pairs`. Those pairs encode
+    # which within-role shapes can CO-PLACE (a measured contention property) —
+    # narrower than "which instances exist and are dispatchable". The heavy roles
+    # (ingest_long_context 80B, architect_general) run quarter servers that are
+    # live one-at-a-time dispatch targets yet have no co-placement pairs; gating
+    # visibility on pairs wrongly hid them. The matrix still drives the ×-blocking
+    # colouring below via `_region_lock_blocked_by_roles`. Lock-file existence is
+    # NOT used to gate wiring — it's just a runtime hot/cold signal (cells stay
     # ✅ Ready until the backend first acquires a lock).
     matrix = None
     try:
@@ -711,30 +873,27 @@ def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
     for role in instance_topology_all:
         instance_topology_all[role].sort(key=lambda x: (-x["span"], x["regions"]))
 
-    # Determine the panel rows + per-role allowed shapes.
+    # Determine the panel rows + per-role visible shapes. A role is INCLUDED iff
+    # the matrix lists it (`same_role`); its VISIBLE SHAPES are its configured
+    # instances (numa-mode-filtered above), so every dispatchable instance shows —
+    # including heavy-role quarters that have no co-placement pairs.
     panel_roles: set[str] = set()
     role_allowed_shapes: dict[str, set[str]] = {}
     if matrix is not None and matrix.same_role:
-        for role, sr in matrix.same_role.items():
+        for role in matrix.same_role:
             insts = instance_topology_all.get(role) or []
-            # primary = idx=0 (NUMA_CONFIG convention); fall back to span-sort first.
-            primary = next((i for i in insts if i["idx"] == 0), insts[0] if insts else None)
-            if primary is None:
+            if not insts:
                 continue  # matrix mentions a role we have no NUMA_CONFIG for
-            allowed = _panel_shapes_from_matrix(sr, primary["shape"])
-            if not allowed:
-                continue
-            role_allowed_shapes[role] = allowed
+            role_allowed_shapes[role] = {i["shape"] for i in insts}
             panel_roles.add(role)
     else:
-        # Fallback: matrix missing/unreadable → fall back to the prior
-        # NUMA_CONFIG-based behavior (every multi-instance + multi-region role).
+        # Fallback: matrix missing/unreadable → every multi-instance role.
         for role, insts in instance_topology_all.items():
             if len(insts) >= 2:
                 panel_roles.add(role)
                 role_allowed_shapes[role] = {i["shape"] for i in insts}
 
-    # Filter the per-role instance list to just the matrix-allowed shapes.
+    # Filter the per-role instance list to the role's visible (configured) shapes.
     instance_topology: dict[str, list[dict[str, Any]]] = {}
     for role in panel_roles:
         allowed = role_allowed_shapes[role]
@@ -863,6 +1022,86 @@ def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
             matrix,
         )
 
+    display_columns = [
+        {"key": "full", "label": "Full"},
+        {"key": "half0", "label": "Half0"},
+        {"key": "half1", "label": "Half1"},
+        {"key": "q0", "label": "q0"},
+        {"key": "q1", "label": "q1"},
+        {"key": "q2", "label": "q2"},
+        {"key": "q3", "label": "q3"},
+    ]
+    held_by_region: dict[str, list[dict[str, Any]]] = {}
+    for role, bucket in by_role.items():
+        inst_by_idx = {
+            int(inst["idx"]): inst
+            for inst in bucket.get("instances", [])
+            if str(inst.get("idx", "")).lstrip("-").isdigit()
+        }
+        for region in bucket.get("regions", []):
+            if not region.get("held"):
+                continue
+            for idx in region.get("holder_instance_idxs", []):
+                inst = inst_by_idx.get(int(idx))
+                held_by_region.setdefault(str(region.get("region")), []).append({
+                    "role": role,
+                    "idx": int(idx),
+                    "shape": (inst or {}).get("shape", f"idx{idx}"),
+                })
+            if not region.get("holder_instance_idxs"):
+                held_by_region.setdefault(str(region.get("region")), []).append({
+                    "role": role,
+                    "idx": None,
+                    "shape": "?",
+                })
+
+    display_rows: list[dict[str, Any]] = []
+    for role in sorted(by_role):
+        bucket = by_role[role]
+        insts = list(bucket.get("instances", []))
+        active_idxs = {int(idx) for idx in bucket.get("active_instance_idxs", [])}
+        blocked_by = {str(r) for r in bucket.get("blocked_by_roles", [])}
+        cells: list[dict[str, Any]] = []
+        for col in display_columns:
+            inst = next((i for i in insts if i.get("shape") == col["key"]), None)
+            if inst is None:
+                cells.append({"state": "na", "label": "—", "title": f"{role} has no {col['label']} shape"})
+                continue
+            idx = int(inst["idx"])
+            regions = [str(r) for r in inst.get("regions", [])]
+            if idx in active_idxs:
+                cells.append({
+                    "state": "active",
+                    "label": "⚡",
+                    "title": f"{role}.{col['label']} ACTIVE — instance idx={idx} holding {{{','.join(regions)}}}",
+                })
+                continue
+            blocking: list[str] = []
+            for region in regions:
+                blockers = [
+                    f"{h['role']}.{h['shape']}"
+                    for h in held_by_region.get(region, [])
+                    if h.get("role") == role or str(h.get("role")) in blocked_by
+                ]
+                if blockers:
+                    blocking.append(f"{region}←{','.join(blockers)}")
+            if blocking:
+                cells.append({
+                    "state": "blocked",
+                    "label": "×",
+                    "title": (
+                        f"{role}.{col['label']} WAITING — physical cores "
+                        f"{','.join(regions)} occupied by {' · '.join(blocking)}"
+                    ),
+                })
+            else:
+                cells.append({
+                    "state": "ready",
+                    "label": "✅",
+                    "title": f"{role}.{col['label']} READY — regions {{{','.join(regions)}}}",
+                })
+        display_rows.append({"role": role, "cells": cells})
+
     feature_flag = os.environ.get("ORCHESTRATOR_PER_REGION_LOCKS", "0").strip()
     return {
         "per_region_locks_enabled": feature_flag in {"1", "true", "yes", "on"},
@@ -871,6 +1110,12 @@ def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
         "tmp_dir": str(tmp_dir),
         "entries": out,
         "by_role": by_role,
+        "display_matrix": {
+            "columns": display_columns,
+            "rows": display_rows,
+            "active_holder_count": sum(len(bucket.get("active_instance_idxs", [])) for bucket in by_role.values()),
+            "held_regions": sorted(held_by_region),
+        },
         "topology_quartered_roles": sorted(panel_roles),  # back-compat field
         "now": time.time(),
     }
@@ -1352,6 +1597,18 @@ async def process_status() -> JSONResponse:
         phase = dict(phase)
         phase.setdefault("idle_reason", "autopilot process not running")
 
+    planner_tap_path = Path("/mnt/raid0/llm/tmp/planner_tap.log")
+    planner_tap_mtime_s: float | None = None
+    planner_tap_precedes_process = False
+    try:
+        planner_tap_mtime_s = planner_tap_path.stat().st_mtime
+        phase_health_dict = phase_health if isinstance(phase_health, dict) else {}
+        process_started_at_s = phase_health_dict.get("process_started_at_s")
+        if isinstance(process_started_at_s, (int, float)):
+            planner_tap_precedes_process = planner_tap_mtime_s < float(process_started_at_s)
+    except OSError:
+        pass
+
     return JSONResponse(_stamp({
         "autopilot": autopilot,
         "gepa_worker_count": n_workers,
@@ -1363,7 +1620,9 @@ async def process_status() -> JSONResponse:
         "autopilot_state": _autopilot_state_summary(),
         "autopilot_phase_age_s": phase_age_s,
         "inference_tap_age_s": _age_s(_INFERENCE_TAP_PATH),
-        "planner_tap_age_s": _age_s(Path("/mnt/raid0/llm/tmp/planner_tap.log")),
+        "planner_tap_age_s": _age_s(planner_tap_path),
+        "planner_tap_mtime_s": planner_tap_mtime_s,
+        "planner_tap_precedes_autopilot_start": planner_tap_precedes_process,
     }, "process_status"), headers=_NO_STORE_HEADERS)
 
 
@@ -4474,11 +4733,12 @@ async def _structured_tap_payloads():
         if mtime != last_mtime or (now_epoch - last_emit) >= 2.0:
             last_mtime = mtime
             last_emit = now_epoch
-            tail = _read_tap_events_tail(_INFERENCE_TAP_EVENTS_PATH, max_bytes=1024 * 1024)
-            structured_requests = _parse_structured_tap_requests(
-                tail, max_requests=40, now_epoch=now_epoch,
+            # Shared helper: parses the live tail, recovers off-window lock
+            # holders (so this stream stops flagging tapped autopilot-eval
+            # traffic as "off-tap"), and enriches — same frame as the snapshot.
+            enriched_requests = _structured_tap_requests_for_dashboard(
+                max_requests=40, now_epoch=now_epoch,
             )
-            enriched_requests = _enrich_structured_tap_requests(structured_requests)
             yield json.dumps({
                 "tap_active": _structured_tap_active(enriched_requests),
                 "tap_sentinel_active": _TAP_SENTINEL_PATH.exists(),
@@ -4905,6 +5165,13 @@ async def gepa_status() -> JSONResponse:
             # trial simply vanished with no signal it had died. The client greys +
             # tags these rows so recent activity is always visible.
             for j in _effective_journal_trial_rows(journal_rows)[-15:]:
+                eval_details = j.get("eval_details") if isinstance(j.get("eval_details"), dict) else {}
+                learning_exclusion = eval_details.get("learning_exclusion") if isinstance(eval_details, dict) else {}
+                if not isinstance(learning_exclusion, dict):
+                    learning_exclusion = {}
+                learning_excluded_by = str(learning_exclusion.get("by") or "").strip()
+                keep_revert_decision = str(j.get("keep_revert_decision") or "").strip()
+                bug_corrupted_by = str(j.get("bug_corrupted_by") or "").strip()
                 recent_trials.append({
                     "trial_id": j.get("trial_id"),
                     "timestamp": j.get("timestamp", ""),
@@ -4923,7 +5190,17 @@ async def gepa_status() -> JSONResponse:
                     "real_suite_v1": _suite_metric_for_dashboard(j, "real_suite_v1"),
                     # Non-empty when the trial was killed mid-flight or otherwise
                     # quarantined; the client renders these muted + tagged.
-                    "bug_corrupted_by": j.get("bug_corrupted_by") or None,
+                    "bug_corrupted_by": bug_corrupted_by or None,
+                    "quarantine_label": (
+                        "killed" if "killed" in bug_corrupted_by else "corrupted"
+                    ) if bug_corrupted_by else None,
+                    "learning_excluded_by": learning_excluded_by or None,
+                    "keep_revert_decision": keep_revert_decision or None,
+                    "exclusion_label": (
+                        "seq-refuted"
+                        if learning_excluded_by == "seq_refuted"
+                        else ("excluded" if learning_excluded_by or keep_revert_decision == "excluded" else None)
+                    ),
                     "description": (j.get("config_snapshot", {}).get("description") or "")[:140],
                 })
         except Exception:

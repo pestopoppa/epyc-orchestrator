@@ -15,7 +15,6 @@ This module is shared with the orchestrator project.
 
 import re
 from dataclasses import dataclass
-from typing import Any
 
 
 @dataclass

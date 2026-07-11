@@ -192,6 +192,7 @@ def _role_result(*, passed: bool = True) -> SimpleNamespace:
         tool_results_cleared=False,
         compaction_triggered=False,
         compaction_tokens_saved=0,
+        tool_chains=[],
         think_harder_expected_roi=0.0,
         compression_metrics={},
     )
