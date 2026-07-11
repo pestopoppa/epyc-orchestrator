@@ -52,6 +52,7 @@ from scripts.server.stack_paths import (
     STATE_FILE,
 )
 from scripts.server.stack_prewarm import prewarm_all as _prewarm_all
+from scripts.server.runtime_facts_manifest import write_runtime_facts_manifest
 from scripts.server.stack_state import ProcessInfo
 from src.roles import Role
 from src.registry.stack_priors import (
@@ -305,6 +306,25 @@ def _stack_prior_launch_contracts(path: Path | None = None) -> dict[str, dict[st
             "ports": stack_prior_serving_ports(serving),
         }
     return contracts_by_role
+
+
+def _refresh_runtime_facts_manifest(source: str, state: dict[str, ProcessInfo]) -> Path | None:
+    """Best-effort derived runtime facts cache for operators and autopilot."""
+    stack_priors_path = _PATHS["project_root"] / "orchestration/derived/stack_priors.yaml"
+    try:
+        path = write_runtime_facts_manifest(
+            state=state,
+            launch_contracts=_stack_prior_launch_contracts(stack_priors_path),
+            stack_priors_path=stack_priors_path,
+            tmp_dir=_PATHS["tmp_dir"],
+            repo_short_sha=_orchestrator_stack()._repo_short_sha(),
+            source=source,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[runtime-facts] WARN: failed to write runtime facts manifest: {exc}")
+        return None
+    print(f"[runtime-facts] Wrote {path}")
+    return path
 
 
 def _model_path_attestation(info: ProcessInfo, alive: bool, cmdline: list[str]) -> str:
@@ -1309,6 +1329,7 @@ def cmd_start(args: argparse.Namespace) -> int:
     # Save state
     save_state(state)
     print(f"[i] State saved to {STATE_FILE}")
+    _refresh_runtime_facts_manifest("stack_start", state)
     print()
 
     # Final status
@@ -1588,6 +1609,8 @@ def cmd_reload(args: argparse.Namespace) -> int:
                 print(f"  [?] Unknown component: {component}")
 
     save_state(state)
+    if "orchestrator" in args.components:
+        _refresh_runtime_facts_manifest("orchestrator_reload", state)
     return 0
 
 
