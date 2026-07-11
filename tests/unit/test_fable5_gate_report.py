@@ -823,6 +823,49 @@ xmas_routing:
     assert report["summary"]["p0_2_eval_discriminability_status"] == "low_coverage"
 
 
+def test_phase_recovery_next_action_uses_current_code_preflight() -> None:
+    phase = report_mod.GateSection(
+        key="phase_health",
+        status="blocked",
+        summary="AutoPilot phase heartbeat is code_stale.",
+        blockers=[
+            "autopilot process predates runtime source changes: autopilot.py",
+        ],
+        details={
+            "status": "code_stale",
+            "phase": "dispatch_action",
+            "pid": 1039446,
+            "code_stale": True,
+        },
+    )
+
+    actions = report_mod.build_next_actions([phase])
+
+    assert actions == [
+        {
+            "key": "recover_autopilot_phase",
+            "priority": "P0",
+            "status": "blocked",
+            "reason": (
+                "AutoPilot phase health is not ready; do not trust "
+                "evidence accrual until recovered."
+            ),
+            "blocked_by": [
+                "autopilot process predates runtime source changes: autopilot.py",
+            ],
+            "command": (
+                "uv run python "
+                "scripts/autopilot/start_fable_authority_daemon.py --preflight"
+            ),
+            "follow_up": (
+                "Use the preflight/advisor output as the recovery authority; "
+                "if it reports wait_for_boundary, do not restart until the "
+                "active trial reaches a safe boundary."
+            ),
+        }
+    ]
+
+
 def test_tool_use_next_action_requires_controlled_restart() -> None:
     phase = report_mod.GateSection(
         key="phase_health",

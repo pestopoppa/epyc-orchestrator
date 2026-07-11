@@ -1873,7 +1873,12 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
                 "status": "blocked",
                 "reason": "AutoPilot phase health is not ready; do not trust evidence accrual until recovered.",
                 "blocked_by": phase.blockers,
-                "command": "uv run python scripts/autopilot/phase_health_report.py --json",
+                "command": "uv run python scripts/autopilot/start_fable_authority_daemon.py --preflight",
+                "follow_up": (
+                    "Use the preflight/advisor output as the recovery authority; "
+                    "if it reports wait_for_boundary, do not restart until the "
+                    "active trial reaches a safe boundary."
+                ),
             }
         )
         return actions
