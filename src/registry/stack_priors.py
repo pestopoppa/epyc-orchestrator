@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 import copy
 import hashlib
-import os
 import re
 import subprocess
 import sys
@@ -775,9 +774,9 @@ def _stack_manifest_info() -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
     except Exception:
         return {}, {}
 
-    numa_mode = os.environ.get("ORCHESTRATOR_STACK_NUMA_MODE", "full").strip().lower()
-    if numa_mode not in {"full", "quarter", "both"}:
-        numa_mode = "full"
+    from scripts.server.stack_numa_mode import env_stack_numa_mode
+
+    numa_mode = env_stack_numa_mode()
     active_servers = _filter_by_numa_mode(HOT_SERVERS + WARM_SERVERS, numa_mode)
 
     launch_ports_by_role: dict[str, list[int]] = {}

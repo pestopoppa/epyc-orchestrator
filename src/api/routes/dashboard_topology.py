@@ -126,16 +126,17 @@ def active_stack_numa_mode() -> str:
     hiding the running quarter instances and under-checking them. Set the env
     explicitly to render a genuinely full-only or quarter-only stack.
 
-    NOTE: this drives only the dashboard/health family. The config compiler's
-    template↔prior parity is a SEPARATE mode system — ``stack_templates`` reads
-    the env directly (its own ``full`` default) and ``live_stack_role_records``
-    reads the generated ``stack_priors.yaml`` file — so this default does not
-    touch that path.
+    NOTE: this drives only the dashboard/health family. The config compiler and
+    launcher still use the shared ``full`` fallback; this dashboard runtime
+    fallback remains ``both`` until the runtime facts manifest is the default
+    display authority for already-running stacks.
     """
-    import os
+    from scripts.server.stack_numa_mode import (
+        DASHBOARD_RUNTIME_FALLBACK_NUMA_MODE,
+        env_stack_numa_mode,
+    )
 
-    mode = os.environ.get("ORCHESTRATOR_STACK_NUMA_MODE", "both").strip().lower()
-    return mode if mode in {"full", "quarter", "both"} else "both"
+    return env_stack_numa_mode(default=DASHBOARD_RUNTIME_FALLBACK_NUMA_MODE)
 
 
 def _manifest_server_label(server: dict[str, Any]) -> str:

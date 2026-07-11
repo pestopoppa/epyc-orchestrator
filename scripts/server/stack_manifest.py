@@ -460,9 +460,12 @@ def _filter_by_numa_mode(servers: list[dict], mode: str) -> list[dict]:
     if mode == "both":
         return servers
     out: list[dict] = []
+    dropped_full_aliases: dict[str, list[str]] = {}
+    first_kept_by_role: dict[str, dict] = {}
     for srv in servers:
         # The primary role is roles[0]; aliases share its NUMA_CONFIG.
-        role = srv["roles"][0]
+        roles = srv["roles"]
+        role = roles[0]
         cfg = NUMA_CONFIG.get(role)
         if not cfg or "full_instance_idx" not in cfg or len(cfg["instances"]) <= 1:
             out.append(srv)
@@ -472,7 +475,23 @@ def _filter_by_numa_mode(servers: list[dict], mode: str) -> list[dict]:
         if mode == "full" and srv_idx == full_idx:
             out.append(srv)
         elif mode == "quarter" and srv_idx != full_idx:
-            out.append(srv)
+            kept = dict(srv)
+            kept["roles"] = list(roles)
+            out.append(kept)
+            first_kept_by_role.setdefault(role, kept)
+        elif mode == "quarter" and srv_idx == full_idx and len(roles) > 1:
+            dropped_full_aliases.setdefault(role, []).extend(str(alias) for alias in roles[1:])
+    if mode == "quarter":
+        for role, aliases in dropped_full_aliases.items():
+            target = first_kept_by_role.get(role)
+            if not target:
+                continue
+            roles = target.get("roles")
+            if not isinstance(roles, list):
+                continue
+            for alias in aliases:
+                if alias not in roles:
+                    roles.append(alias)
     return out
 
 

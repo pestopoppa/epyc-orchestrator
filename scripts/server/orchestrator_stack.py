@@ -1921,12 +1921,40 @@ def start_handoff_dashboard() -> ProcessInfo | None:
 # `from scripts.server import orchestrator_stack as stack`).
 # =============================================================================
 
+_STACK_MANIFEST_EXPORTS = {
+    "PORT_MAP",
+    "ROLE_LAUNCH_META",
+    "HOT_ROLES",
+    "NUMA_REPLICA_PORTS",
+    "HOT_SERVERS",
+    "WARM_SERVERS",
+    "DOCKER_SERVICES",
+    "validate_model_paths",
+    "validate_against_registry",
+    "_build_servers_from_classification",
+    "_validate_role_classification",
+    "_filter_by_numa_mode",
+}
+
+_STACK_PATH_EXPORTS = {
+    "_get_paths",
+    "LLAMA_MATH_TOOLS",
+}
+
 
 def __getattr__(name: str):
     if name in ("cmd_start", "cmd_stop", "cmd_reload", "cmd_status"):
         from scripts.server import stack_commands
 
         return getattr(stack_commands, name)
+    if name in _STACK_MANIFEST_EXPORTS:
+        from scripts.server import stack_manifest
+
+        return getattr(stack_manifest, name)
+    if name in _STACK_PATH_EXPORTS:
+        from scripts.server import stack_paths
+
+        return getattr(stack_paths, name)
     raise AttributeError(f"module 'scripts.server.orchestrator_stack' has no attribute {name!r}")
 
 
