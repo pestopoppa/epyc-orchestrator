@@ -1573,6 +1573,7 @@ def _run_loop_inner_seq_harness(
     learning_exclusion: tuple[str | None, str, Any] = (None, "", None),
     use_controller: bool = False,
     planner_should_not_run: bool = False,
+    journal_entries_out: list[JournalEntry] | None = None,
 ) -> tuple[dict[str, Any], list[tuple[bool, int]]]:
     baseline_update_calls: list[tuple[bool, int]] = []
 
@@ -1583,6 +1584,8 @@ def _run_loop_inner_seq_harness(
 
         def record(self, entry: JournalEntry) -> None:
             self._entries.append(entry)
+            if journal_entries_out is not None:
+                journal_entries_out.append(entry)
 
         def all_entries(self) -> list[JournalEntry]:
             return list(self._entries)
@@ -1687,6 +1690,15 @@ def _run_loop_inner_seq_harness(
 
         def rebalance(self, *args: Any, **kwargs: Any) -> None:
             return None
+
+        def restore_diversity_state(self, _raw: dict[str, Any] | None) -> None:
+            return None
+
+        def observe_diversity(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+            return {"status": "signal_missing"}
+
+        def export_diversity_state(self) -> dict[str, Any]:
+            return {"schema_version": "ap37_diversity_stall.v1"}
 
     class FakeSeeder:
         def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -1971,6 +1983,41 @@ def _run_loop_inner_seq_harness(
     )
 
     return state, baseline_update_calls
+
+
+def test_run_loop_inner_journals_report_only_rlvr_reward(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state: dict[str, Any] = {
+        "trial_counter": 0,
+        "paused": False,
+        "td_errors": [],
+        "seeder_state": {},
+        "consecutive_failures": 0,
+        "quality_history": [],
+        "quality_history_by_tier": {},
+        "baseline_state": {},
+    }
+    journal_entries: list[JournalEntry] = []
+
+    _run_loop_inner_seq_harness(
+        monkeypatch,
+        state=state,
+        verdict_seq={
+            "candidate": "candidate-a",
+            "confirmed": False,
+            "state": "accumulating",
+        },
+        journal_entries_out=journal_entries,
+    )
+
+    assert len(journal_entries) == 1
+    rlvr = journal_entries[0].eval_details["rlvr_reward"]
+    assert rlvr["policy"] == "ap27_rlvr_tier_reward_v1"
+    assert rlvr["reward_signal"] == "process_attributed"
+    assert rlvr["ready_for_training"] is False
+    assert "auroc_missing_or_degenerate" in rlvr["blockers"]
+    assert "question_results_missing" in rlvr["blockers"]
 
 
 def test_run_loop_inner_forwards_finalized_seq_to_gate_and_clears_pending(

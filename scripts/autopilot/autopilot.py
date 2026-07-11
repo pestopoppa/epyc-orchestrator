@@ -61,6 +61,7 @@ from src.autopilot_core.journal_reconstruction import (
     reconstruct_archive_from_journal_rows,
 )
 from src.autopilot_core.journal_snapshot_replay import archive_payload_from_verified_snapshot
+from src.autopilot_core.rlvr_tiers import rlvr_reward_from_result
 from experiment_journal import ExperimentJournal, JournalEntry, scrub_legacy_scale_text
 from pareto_archive import (
     ParetoArchive,
@@ -7639,6 +7640,7 @@ def _run_loop_inner(
             "routing_distribution": eval_result.routing_distribution,
             "question_results": list(getattr(eval_result, "question_results", []) or []),
             "details": eval_result.details,
+            "rlvr_reward": rlvr_reward_from_result(eval_result).as_dict(),
             "ap37_diversity_stall": ap37_diversity_report,
             "metric_schema_version": metric_schema_version,
             "harness_metrics": harness_metrics,
