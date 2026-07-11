@@ -104,7 +104,14 @@ def test_journal_round_trips_hle_fields_in_jsonl(tmp_path: Path) -> None:
         },
         metric_schema_version=1,
         harness_metrics={"planning_stability": {"score": 0.6, "evidence_event_ids": [42]}},
-        oracle_adequacy={"coding_sentinel": {"oracle_type": "pytest", "deterministic": True}},
+        oracle_adequacy={
+            "coding_sentinel": {"oracle_type": "pytest", "deterministic": True},
+            "control_attestation": {
+                "metric_version": "w5-control-pair-report-v1",
+                "observe_only": True,
+                "status": "passed",
+            },
+        },
         seq={
             "candidate": "fp-a",
             "core_id": "core_v1",
@@ -122,6 +129,7 @@ def test_journal_round_trips_hle_fields_in_jsonl(tmp_path: Path) -> None:
     assert raw["eval_details"]["question_results"][0]["qid"] == "q-stable"
     assert raw["harness_metrics"]["planning_stability"]["score"] == 0.6
     assert raw["oracle_adequacy"]["coding_sentinel"]["oracle_type"] == "pytest"
+    assert raw["oracle_adequacy"]["control_attestation"]["status"] == "passed"
     assert raw["seq"]["candidate"] == "fp-a"
     assert raw["seq"]["z_rate"] == 0.1
 
