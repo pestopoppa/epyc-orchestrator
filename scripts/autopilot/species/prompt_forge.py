@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 
 import ast
 import importlib
+import math
 
 ORCH_ROOT = Path(__file__).resolve().parents[3]
 PROMPTS_DIR = ORCH_ROOT / "orchestration" / "prompts"
@@ -90,6 +91,155 @@ _FRONTDOOR_CORRUPTION_MARKERS = (
     "i should **not** edit the file directly",
     "one note worth flagging",
 )
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return default
+    if math.isnan(result) or math.isinf(result):
+        return default
+    return result
+
+
+def _coverage_retrieve(
+    strategy_store: Any,
+    query_text: str,
+    *,
+    journal: Any | None,
+    k: int,
+    species: str | None,
+) -> list[Any]:
+    if journal is not None and hasattr(strategy_store, "retrieve_for_journal"):
+        try:
+            return list(
+                strategy_store.retrieve_for_journal(
+                    query_text,
+                    journal=journal,
+                    k=k,
+                    species=species,
+                )
+            )
+        except TypeError:
+            return list(
+                strategy_store.retrieve_for_journal(
+                    query_text,
+                    journal=journal,
+                    k=k,
+                )
+            )
+
+    if hasattr(strategy_store, "retrieve"):
+        try:
+            return list(strategy_store.retrieve(query_text, k=k, species=species))
+        except TypeError:
+            return list(strategy_store.retrieve(query_text, k=k))
+
+    raise AttributeError("strategy_store has neither retrieve_for_journal() nor retrieve()")
+
+
+def diversity_coverage_penalty(
+    query_text: str,
+    strategy_store: Any | None,
+    *,
+    journal: Any | None = None,
+    k: int = 8,
+    species: str | None = "prompt_forge",
+    min_density: float = 1e-6,
+) -> dict[str, Any]:
+    """Estimate mutation-neighborhood density from StrategyStore retrieval.
+
+    AP-35 uses the existing strategy-memory index as an observe-only density
+    proxy. ``negative_log_density`` is high in sparse neighborhoods and low
+    near already-covered strategy clusters; callers decide how to present it.
+    """
+    query = str(query_text or "").strip()
+    if strategy_store is None:
+        return {
+            "status": "unavailable",
+            "reason": "missing_strategy_store",
+            "query_text": query,
+            "density": 0.0,
+            "negative_log_density": 0.0,
+            "penalty": 0.0,
+            "similar_count": 0,
+            "top_matches": [],
+        }
+    if not query:
+        return {
+            "status": "unavailable",
+            "reason": "empty_query",
+            "query_text": query,
+            "density": 0.0,
+            "negative_log_density": 0.0,
+            "penalty": 0.0,
+            "similar_count": 0,
+            "top_matches": [],
+        }
+
+    k = max(1, int(k))
+    floor = max(_safe_float(min_density, 1e-6), 1e-12)
+    try:
+        entries = _coverage_retrieve(
+            strategy_store,
+            query,
+            journal=journal,
+            k=k,
+            species=species,
+        )
+    except Exception as exc:  # noqa: BLE001 - density hints must not block mutation dispatch
+        return {
+            "status": "error",
+            "reason": f"{type(exc).__name__}: {exc}",
+            "query_text": query,
+            "density": 0.0,
+            "negative_log_density": 0.0,
+            "penalty": 0.0,
+            "similar_count": 0,
+            "top_matches": [],
+        }
+
+    top_matches: list[dict[str, Any]] = []
+    scores: list[float] = []
+    for entry in entries:
+        score = max(0.0, _safe_float(getattr(entry, "similarity_score", 0.0)))
+        scores.append(score)
+        top_matches.append(
+            {
+                "id": str(getattr(entry, "id", "") or ""),
+                "source_trial_id": getattr(entry, "source_trial_id", None),
+                "species": str(getattr(entry, "species", "") or ""),
+                "description": str(getattr(entry, "description", "") or ""),
+                "insight": str(
+                    getattr(entry, "generalized_content", "") or getattr(entry, "insight", "") or ""
+                ),
+                "similarity_score": score,
+            }
+        )
+
+    if scores:
+        density = sum(scores) / len(scores)
+        status = "ok"
+    else:
+        density = 0.0
+        status = "sparse"
+
+    negative_log_density = -math.log(max(density, floor))
+    return {
+        "status": status,
+        "reason": "ok" if scores else "no_nearby_strategy_entries",
+        "query_text": query,
+        "density": density,
+        "negative_log_density": negative_log_density,
+        "penalty": negative_log_density,
+        "similar_count": len(scores),
+        "top_matches": top_matches[:k],
+        "interpretation": (
+            "Higher negative_log_density means the mutation target is less covered "
+            "by strategy memory; use as exploration pressure, not as an acceptance gate."
+        ),
+    }
 
 
 @dataclass(frozen=True)

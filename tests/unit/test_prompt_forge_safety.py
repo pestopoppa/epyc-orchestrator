@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import math
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -358,6 +360,48 @@ def test_mutation_prompt_includes_negative_transfer_safety_block(tmp_path: Path)
     assert "Negative-transfer safety (AP-33)" in prompt
     assert "fewer than 5 trial IDs" in prompt
     assert "suite-specific fixes" in prompt
+
+
+def test_diversity_coverage_penalty_uses_strategy_density() -> None:
+    class FakeStore:
+        def __init__(self):
+            self.calls = []
+
+        def retrieve(self, query_text, *, k, species):
+            self.calls.append((query_text, k, species))
+            return [
+                SimpleNamespace(
+                    id="strategy-1",
+                    source_trial_id=11,
+                    species="prompt_forge",
+                    description="frontdoor targeted fix",
+                    generalized_content="prefer narrow edits",
+                    similarity_score=0.25,
+                ),
+                SimpleNamespace(
+                    id="strategy-2",
+                    source_trial_id=12,
+                    species="prompt_forge",
+                    description="frontdoor retry fix",
+                    insight="avoid broad retries",
+                    similarity_score=0.75,
+                ),
+            ]
+
+    store = FakeStore()
+    result = prompt_forge_mod.diversity_coverage_penalty(
+        "frontdoor targeted_fix retry loop",
+        store,
+        k=2,
+        species="prompt_forge",
+    )
+
+    assert store.calls == [("frontdoor targeted_fix retry loop", 2, "prompt_forge")]
+    assert result["status"] == "ok"
+    assert result["density"] == pytest.approx(0.5)
+    assert result["negative_log_density"] == pytest.approx(-math.log(0.5))
+    assert result["penalty"] == result["negative_log_density"]
+    assert result["top_matches"][0]["source_trial_id"] == 11
 
 
 def test_code_mutation_prompt_includes_mh6_proposer_prior_contract(

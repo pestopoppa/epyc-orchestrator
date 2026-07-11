@@ -1614,14 +1614,10 @@ def test_mutation_context_filters_strategy_trials_superseded_by_journal() -> Non
 
     class FakeStrategyStore:
         def __init__(self):
-            self.journal = None
-            self.query = ""
-            self.k = 0
+            self.calls = []
 
         def retrieve_for_journal(self, query, *, journal, k):
-            self.query = query
-            self.journal = journal
-            self.k = k
+            self.calls.append((query, journal, k))
             return []
 
     store = FakeStrategyStore()
@@ -1635,9 +1631,10 @@ def test_mutation_context_filters_strategy_trials_superseded_by_journal() -> Non
         _ctx(journal=FakeJournal(), strategy_store=store, state={}),
     )
 
-    assert store.journal is not None
-    assert store.k == 3
-    assert "src/example.py" in store.query
+    assert store.calls[0][1] is not None
+    assert store.calls[0][2] == 3
+    assert "src/example.py" in store.calls[0][0]
+    assert store.calls[1][2] == 8
 
 
 def test_mutation_context_promptforge_conventions_are_default_off(monkeypatch) -> None:
@@ -1715,11 +1712,62 @@ def test_mutation_context_injects_promptforge_conventions_when_enabled(monkeypat
     )
 
     assert calls[0][0] == "retrieve_for_journal"
-    assert calls[1] == ("retrieve_conventions", "prompt_forge", journal, 8)
+    assert calls[1][0] == "retrieve_for_journal"
+    assert calls[2] == ("retrieve_conventions", "prompt_forge", journal, 8)
     assert "## PromptForge Convention Guardrails" in failure_context
     assert "Batch-1 decode exhausted" in failure_context
     assert "Do not propose decode-kernel mutations for batch=1." in failure_context
     assert "Past Strategy Insights" not in failure_context
+
+
+def test_mutation_context_injects_diversity_coverage_pressure() -> None:
+    class FakeJournal:
+        def recent_failures(self, species, n):
+            return []
+
+        def insights_text(self, n):
+            return "(no insights yet)"
+
+        def recent(self, n):
+            return []
+
+    class FakeStrategyStore:
+        def __init__(self):
+            self.calls = []
+
+        def retrieve_for_journal(self, query, *, journal, k, species=None):
+            self.calls.append((query, journal, k, species))
+            return [
+                SimpleNamespace(
+                    id="strategy-1",
+                    source_trial_id=88,
+                    species="prompt_forge",
+                    description="frontdoor retry loop fix",
+                    insight="Prefer a narrow retry-loop guard over global routing edits.",
+                    similarity_score=0.5,
+                )
+            ]
+
+    journal = FakeJournal()
+    store = FakeStrategyStore()
+    failure_context, _ = actions._build_mutation_context(
+        {
+            "file": "frontdoor.md",
+            "mutation": "targeted_fix",
+            "description": "retry loop",
+        },
+        _ctx(journal=journal, strategy_store=store, state={}),
+    )
+
+    assert store.calls == [
+        ("frontdoor.md targeted_fix retry loop", journal, 3, None),
+        ("frontdoor.md targeted_fix retry loop", journal, 8, "prompt_forge"),
+    ]
+    assert "Diversity Coverage Pressure (AP-35/AP-36 observe-only)" in failure_context
+    assert "strategy_density: 0.500000" in failure_context
+    assert "negative_log_density: 0.693" in failure_context
+    assert "not an acceptance score or quality gate" in failure_context
+    assert "Trial #88 (prompt_forge) score=0.500000" in failure_context
 
 
 def test_mutation_context_skips_legacy_strategy_store_without_journal_view(caplog) -> None:

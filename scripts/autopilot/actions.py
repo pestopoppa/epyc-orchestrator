@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any, Iterable
 
 from controller_io import validate_single_variable
 from safety_gate import EvalResult, SafetyGate
+from species.prompt_forge import diversity_coverage_penalty
 
 ORCH_ROOT = Path(__file__).resolve().parents[2]
 
@@ -310,6 +311,72 @@ def _prompt_forge_convention_guardrails(
         "them as hard guidance for proposal generation; do not reinterpret them "
         "as positive evidence for unrelated mutations."
     )
+
+
+def _mutation_diversity_coverage_pressure(
+    action: dict[str, Any],
+    ctx: _ActionContext,
+    *,
+    k: int = 8,
+) -> str | None:
+    if ctx.strategy_store is None:
+        return None
+    if not hasattr(ctx.strategy_store, "retrieve_for_journal"):
+        return None
+
+    target = action.get("file", "")
+    mutation_type = action.get("mutation", "targeted_fix")
+    description = action.get("description", "")
+    query = f"{target} {mutation_type} {description}".strip()
+    result = diversity_coverage_penalty(
+        query,
+        ctx.strategy_store,
+        journal=ctx.journal,
+        k=k,
+        species="prompt_forge",
+    )
+    status = str(result.get("status") or "unknown")
+    if status not in {"ok", "sparse"}:
+        log.debug(
+            "Skipping PromptForge diversity coverage pressure: %s",
+            result.get("reason") or status,
+        )
+        return None
+
+    density = float(result.get("density") or 0.0)
+    negative_log_density = float(result.get("negative_log_density") or 0.0)
+    lines = [
+        "## Diversity Coverage Pressure (AP-35/AP-36 observe-only)",
+        (
+            f"- strategy_density: {density:.6f}; "
+            f"negative_log_density: {negative_log_density:.3f}; "
+            f"nearby_strategy_count: {int(result.get('similar_count') or 0)}"
+        ),
+        (
+            "- Use this as proposal-shaping pressure only: higher "
+            "negative_log_density means this mutation target is under-covered "
+            "in strategy memory. It is not an acceptance score or quality gate."
+        ),
+    ]
+    if status == "sparse":
+        lines.append("- No nearby folded strategy-memory entries were found for this target.")
+
+    matches = result.get("top_matches")
+    if isinstance(matches, list) and matches:
+        lines.append("- Nearby strategy-memory entries:")
+        for match in matches[:3]:
+            if not isinstance(match, dict):
+                continue
+            source = match.get("source_trial_id")
+            species = str(match.get("species") or "unknown")
+            score = float(match.get("similarity_score") or 0.0)
+            summary = str(match.get("description") or match.get("insight") or "").strip()
+            if len(summary) > 160:
+                summary = f"{summary[:157]}..."
+            source_text = f"Trial #{source}" if source not in (None, "") else "strategy"
+            lines.append(f"  - {source_text} ({species}) score={score:.6f}: {summary}")
+
+    return "\n".join(lines)
 
 
 def _seed_batch_strategy_hints(
@@ -624,6 +691,10 @@ def _build_mutation_context(
                 for s in strategies
             )
             failure_context = f"## Past Strategy Insights\n{strategy_lines}\n\n" + failure_context
+
+        diversity_pressure = _mutation_diversity_coverage_pressure(action, ctx)
+        if diversity_pressure:
+            failure_context = f"{diversity_pressure}\n\n{failure_context}"
 
         convention_guardrails = _prompt_forge_convention_guardrails(ctx)
         if convention_guardrails:
