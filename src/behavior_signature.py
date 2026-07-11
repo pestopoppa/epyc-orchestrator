@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Sequence
 
 from src.trace.harness_schema import BehaviorSignature
@@ -27,10 +28,20 @@ FAIL_LIKE = {"fail", "error"}
 SHORTCUT = "pass_via_shortcut"
 
 # Ordered bucket thresholds (upper bound inclusive); index = position.
-_LATENCY_MS = [("<1s", 1_000), ("1-5s", 5_000), ("5-30s", 30_000),
-               ("30-120s", 120_000), (">120s", float("inf"))]
-_TOKENS = [("<1k", 1_000), ("1-4k", 4_000), ("4-16k", 16_000),
-           ("16-64k", 64_000), (">64k", float("inf"))]
+_LATENCY_MS = [
+    ("<1s", 1_000),
+    ("1-5s", 5_000),
+    ("5-30s", 30_000),
+    ("30-120s", 120_000),
+    (">120s", float("inf")),
+]
+_TOKENS = [
+    ("<1k", 1_000),
+    ("1-4k", 4_000),
+    ("4-16k", 16_000),
+    ("16-64k", 64_000),
+    (">64k", float("inf")),
+]
 
 
 def _bucket(value: float | None, table: list[tuple[str, float]]) -> tuple[int, str]:
@@ -57,9 +68,36 @@ def _hash_seq(seq: Sequence[str] | None) -> str | None:
 
 
 def _hash_obj(obj: object) -> str:
-    return hashlib.sha256(
-        json.dumps(obj, sort_keys=True, default=str).encode("utf-8")
-    ).hexdigest()[:16]
+    return hashlib.sha256(json.dumps(obj, sort_keys=True, default=str).encode("utf-8")).hexdigest()[
+        :16
+    ]
+
+
+def normalize_answer_text(answer_text: str | None) -> str:
+    """Normalize answer text before hashing; never persist the raw answer."""
+    if answer_text is None:
+        return ""
+    return re.sub(r"\s+", " ", str(answer_text).casefold().strip())
+
+
+def normalized_answer_hash(answer_text: str | None) -> str | None:
+    normalized = normalize_answer_text(answer_text)
+    if not normalized:
+        return None
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
+
+
+def _answer_hash_map_hash(answer_hashes: dict[str, str] | None) -> str | None:
+    if not isinstance(answer_hashes, dict):
+        return None
+    cleaned = {
+        str(qid).strip(): str(answer_hash).strip()
+        for qid, answer_hash in answer_hashes.items()
+        if str(qid).strip() and str(answer_hash).strip()
+    }
+    if not cleaned:
+        return None
+    return _hash_obj(cleaned)
 
 
 def compute_behavior_signature(
@@ -68,6 +106,7 @@ def compute_behavior_signature(
     trial_id: int | None = None,
     sentinel_outcomes: dict[str, str] | None = None,
     answer_text: str | None = None,
+    answer_hashes: dict[str, str] | None = None,
     route_path: Sequence[str] | None = None,
     tool_sequence: Sequence[str] | None = None,
     escalation_path: Sequence[str] | None = None,
@@ -88,13 +127,21 @@ def compute_behavior_signature(
     route_h = _hash_seq(list(route_path) if route_path else None)
     tool_h = _hash_seq(list(tool_sequence) if tool_sequence else None)
     esc_h = _hash_seq(list(escalation_path) if escalation_path else None)
-    answer_h = None if answer_text is None else hashlib.sha256(
-        answer_text.strip().encode("utf-8")).hexdigest()[:16]
+    answer_h = _answer_hash_map_hash(answer_hashes)
+    if answer_h is None:
+        answer_h = normalized_answer_hash(answer_text)
 
-    signature_hash = _hash_obj({
-        "outcomes": outcomes, "route": route_h, "tool": tool_h, "esc": esc_h,
-        "answer": answer_h, "lat": lat_b, "tok": tok_b,
-    })
+    signature_hash = _hash_obj(
+        {
+            "outcomes": outcomes,
+            "route": route_h,
+            "tool": tool_h,
+            "esc": esc_h,
+            "answer": answer_h,
+            "lat": lat_b,
+            "tok": tok_b,
+        }
+    )
 
     return BehaviorSignature(
         archive_member_id=archive_member_id,
@@ -117,9 +164,11 @@ def compute_behavior_signature(
 
 
 class DiffSeverity:
-    BENIGN = "benign"     # format-only / unchanged buckets — safe to auto-accept
-    WATCH = "watch"       # route/tool/escalation path changed but outcomes equal — log + accept
-    BLOCKING = "blocking"  # prior-pass sentinel regressed, shortcut appeared, or cost guardrail crossed
+    BENIGN = "benign"  # format-only / unchanged buckets — safe to auto-accept
+    WATCH = "watch"  # route/tool/escalation path changed but outcomes equal — log + accept
+    BLOCKING = (
+        "blocking"  # prior-pass sentinel regressed, shortcut appeared, or cost guardrail crossed
+    )
 
     RANK = {BENIGN: 0, WATCH: 1, BLOCKING: 2}
 
@@ -186,7 +235,10 @@ def diff_signatures(old, new, *, cost_guardrail_buckets: int = 2) -> tuple[str, 
         if oi >= 0 and ni >= 0 and ni > oi:
             delta = ni - oi
             if delta >= cost_guardrail_buckets:
-                bump(DiffSeverity.BLOCKING, f"{field} regressed {o.get(field)}->{n.get(field)} ({delta} buckets)")
+                bump(
+                    DiffSeverity.BLOCKING,
+                    f"{field} regressed {o.get(field)}->{n.get(field)} ({delta} buckets)",
+                )
             else:
                 bump(DiffSeverity.WATCH, f"{field} worsened {o.get(field)}->{n.get(field)}")
 
