@@ -164,6 +164,10 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         worker_general: str = PydanticField(
             default_factory=lambda: _server_url_settings_default("worker_general")
         )
+        # toolrunner is a logical alias over worker_general (shared Gemma-4 backend)
+        toolrunner: str = PydanticField(
+            default_factory=lambda: _server_url_settings_default("worker_general")
+        )
         worker_explore: str = PydanticField(
             default_factory=lambda: _server_url_settings_default("worker_explore")
         )
