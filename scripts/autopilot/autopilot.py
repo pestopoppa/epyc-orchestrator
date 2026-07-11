@@ -70,7 +70,7 @@ from pareto_archive import (
 )
 from safety_gate import Baseline, DEFAULT_BASELINE_PATH, EvalResult, SafetyGate
 from eval_tower import EvalTower
-from config_applicator import apply_params  # re-exported for actions.py monkeypatch compatibility  # noqa: F401
+from config_applicator import apply_params  # noqa: F401 - re-export for actions.py tests
 from config_applicator import health_check
 from meta_optimizer import MetaOptimizer, SpeciesBudget
 from progress_plots import PLOTS_DIR, generate_all_plots
@@ -159,8 +159,10 @@ from orchestration.repl_memory.strategy_store import StrategyStore
 try:
     from scripts.server.stack_processes import set_oom_score_adj as _set_oom_score_adj
 except Exception:  # pragma: no cover - import-path fallback
+
     def _set_oom_score_adj(pids: Any, adj: int = -1000) -> int:
         return 0
+
 
 log = logging.getLogger("autopilot")
 
@@ -190,26 +192,16 @@ OPERATOR_OUTBOX_PATH = ORCH_ROOT / "orchestration" / "autopilot_operator_outbox.
 # by check_blacklist()). Keeps the unbounded-growth blacklist from dominating the
 # ~80KB prompt. Operator-tunable.
 BLACKLIST_RENDER_CAP = int(os.environ.get("AUTOPILOT_BLACKLIST_RENDER_CAP", "18"))
-OPERATOR_OUTBOX_RENDER_CAP = int(
-    os.environ.get("AUTOPILOT_OPERATOR_OUTBOX_RENDER_CAP", "5")
-)
-PRIOR_DECISION_DIGEST_CAP = int(
-    os.environ.get("AUTOPILOT_PRIOR_DECISION_DIGEST_CAP", "4")
-)
-PLANNER_JOURNAL_SUMMARY_LIMIT = int(
-    os.environ.get("AUTOPILOT_PLANNER_JOURNAL_SUMMARY_LIMIT", "12")
-)
+OPERATOR_OUTBOX_RENDER_CAP = int(os.environ.get("AUTOPILOT_OPERATOR_OUTBOX_RENDER_CAP", "5"))
+PRIOR_DECISION_DIGEST_CAP = int(os.environ.get("AUTOPILOT_PRIOR_DECISION_DIGEST_CAP", "4"))
+PLANNER_JOURNAL_SUMMARY_LIMIT = int(os.environ.get("AUTOPILOT_PLANNER_JOURNAL_SUMMARY_LIMIT", "12"))
 PLANNER_STRUCTURED_INSIGHTS_LIMIT = int(
     os.environ.get("AUTOPILOT_PLANNER_STRUCTURED_INSIGHTS_LIMIT", "18")
 )
 ORCHESTRATOR_URL = "http://localhost:8000"
-SEQ_BASELINE_PROFILE_LIMIT = int(
-    os.environ.get("AUTOPILOT_SEQ_BASELINE_PROFILE_LIMIT", "120")
-)
+SEQ_BASELINE_PROFILE_LIMIT = int(os.environ.get("AUTOPILOT_SEQ_BASELINE_PROFILE_LIMIT", "120"))
 SEQ_PRIOR_OBS_LIMIT = int(os.environ.get("AUTOPILOT_SEQ_PRIOR_OBS_LIMIT", "120"))
-SEQ_BASELINE_REFRESH_CADENCE = int(
-    os.environ.get("AUTOPILOT_SEQ_BASELINE_REFRESH_CADENCE", "10")
-)
+SEQ_BASELINE_REFRESH_CADENCE = int(os.environ.get("AUTOPILOT_SEQ_BASELINE_REFRESH_CADENCE", "10"))
 SEQ_BASELINE_BLOCK_RETRY_CADENCE = int(
     os.environ.get("AUTOPILOT_SEQ_BASELINE_BLOCK_RETRY_CADENCE", "5")
 )
@@ -222,12 +214,8 @@ SEQ_PROMOTION_FINAL_CONFIRM_E = float(
 SEQ_PROMOTION_DELTA_CI_ALPHA = float(
     os.environ.get("AUTOPILOT_SEQ_PROMOTION_DELTA_CI_ALPHA", "0.05")
 )
-SEQ_ALPHA_WEALTH_BUDGET = float(
-    os.environ.get("AUTOPILOT_SEQ_ALPHA_WEALTH_BUDGET", "1.0")
-)
-SEQ_PROMOTION_FRESH_EVAL_TIER = int(
-    os.environ.get("AUTOPILOT_SEQ_PROMOTION_FRESH_EVAL_TIER", "2")
-)
+SEQ_ALPHA_WEALTH_BUDGET = float(os.environ.get("AUTOPILOT_SEQ_ALPHA_WEALTH_BUDGET", "1.0"))
+SEQ_PROMOTION_FRESH_EVAL_TIER = int(os.environ.get("AUTOPILOT_SEQ_PROMOTION_FRESH_EVAL_TIER", "2"))
 SEQ_CANDIDATE_REPLAY_ENABLED = os.environ.get(
     "AUTOPILOT_SEQ_CANDIDATE_REPLAY", "1"
 ).strip().lower() not in {"0", "false", "no", "off"}
@@ -237,9 +225,7 @@ SEQ_CANDIDATE_REPLAY_MIN_COMBINED_E = float(
 SEQ_CANDIDATE_REPLAY_MIN_QUALITY_E = float(
     os.environ.get("AUTOPILOT_SEQ_CANDIDATE_REPLAY_MIN_QUALITY_E", "1.0")
 )
-SEQ_CANDIDATE_REPLAY_MAX_K = int(
-    os.environ.get("AUTOPILOT_SEQ_CANDIDATE_REPLAY_MAX_K", "12")
-)
+SEQ_CANDIDATE_REPLAY_MAX_K = int(os.environ.get("AUTOPILOT_SEQ_CANDIDATE_REPLAY_MAX_K", "12"))
 AUTOPILOT_REQUIRED_GATE_ENV = {
     "AUTOPILOT_SEQ_VERDICT": "1",
     "AUTOPILOT_W6_AUDIT_BLOCK": "1",
@@ -253,11 +239,11 @@ FALLBACK_SEED_CANDIDATES = (14, 16, 18, 20, 24, 30, 40, 50, 10)
 # Lean prompt is the default; the rich rubric+synthesis fragment activates
 # only when one of the stagnation signals fires, to avoid spending prompt
 # budget when autopilot is mid-exploit on a working lead.
-CREATIVITY_N = 3            # candidates the rich prompt asks the controller to generate
-TAIL_WINDOW = 30            # lookback for action_distribution "under-used" classification
-TAIL_SEED_COUNT = 3         # seeds (not candidates) passed to LLM as inspiration
-STAGNATION_HV_EPS = 1e-3    # hv_slope_10 strictly below this triggers rich prompt
-STAGNATION_STREAK = 3       # N consecutive same-action_type trials triggers rich prompt
+CREATIVITY_N = 3  # candidates the rich prompt asks the controller to generate
+TAIL_WINDOW = 30  # lookback for action_distribution "under-used" classification
+TAIL_SEED_COUNT = 3  # seeds (not candidates) passed to LLM as inspiration
+STAGNATION_HV_EPS = 1e-3  # hv_slope_10 strictly below this triggers rich prompt
+STAGNATION_STREAK = 3  # N consecutive same-action_type trials triggers rich prompt
 PLOT_INTERVAL = 10  # Generate plots every N trials
 # Plots also refresh on a wall-clock timer so a long mid-decade gap (e.g. a
 # multi-hour tier-2 eval) doesn't leave the dashboard stale, and a blocking
@@ -329,12 +315,8 @@ SEQ_GATE_PREFLIGHT_RECENT_WINDOW = int(
 SEQ_GATE_PREFLIGHT_MAX_RATE_E = float(
     os.environ.get("AUTOPILOT_SEQ_GATE_PREFLIGHT_MAX_RATE_E", "2.0")
 )
-QUOTA_MEMORY_THRESHOLD = int(
-    os.environ.get("AUTOPILOT_QUOTA_MEMORY_THRESHOLD", "2000")
-)
-MAX_CONSECUTIVE_PASSIVE = int(
-    os.environ.get("AUTOPILOT_MAX_CONSECUTIVE_PASSIVE", "3")
-)
+QUOTA_MEMORY_THRESHOLD = int(os.environ.get("AUTOPILOT_QUOTA_MEMORY_THRESHOLD", "2000"))
+MAX_CONSECUTIVE_PASSIVE = int(os.environ.get("AUTOPILOT_MAX_CONSECUTIVE_PASSIVE", "3"))
 HIGHER_TIER_PROBE_GUARD = os.environ.get(
     "AUTOPILOT_HIGHER_TIER_PROBE_GUARD", "1"
 ).strip().lower() not in {"0", "false", "no", "off"}
@@ -355,9 +337,12 @@ HIGHER_TIER_PROBE_MIN_TRIALS_PER_TIER = int(
 # numeric_trial with empty params is the safest self-configuring frontier action
 # (Optuna suggests the values; no file/flag dependency to get wrong).
 _FALLBACK_NUMERIC_SURFACES = ("think_harder", "escalation", "monitor", "memrl_retrieval")
-_PLANNER_HINTS_ENABLED = os.environ.get(
-    "AUTOPILOT_PLANNER_HINTS", ""
-).strip().lower() in {"1", "true", "yes", "on"}
+_PLANNER_HINTS_ENABLED = os.environ.get("AUTOPILOT_PLANNER_HINTS", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 _PLANNER_SUPPRESSED_NUMERIC_SURFACES: set[str] = set()
 _PLANNER_DENYLISTED_FEATURE_FLAGS: set[str] = set()
 _PLANNER_STRATEGY_HINT_QUERIES: tuple[tuple[str, str], ...] = (
@@ -387,11 +372,12 @@ def _configured_numeric_surfaces() -> tuple[str, ...]:
     except Exception:
         surfaces = _FALLBACK_NUMERIC_SURFACES
     else:
-        surfaces = tuple(
-            surface
-            for surface in _NS_SURFACES
-            if isinstance(surface, str) and surface.strip()
-        ) or _FALLBACK_NUMERIC_SURFACES
+        surfaces = (
+            tuple(
+                surface for surface in _NS_SURFACES if isinstance(surface, str) and surface.strip()
+            )
+            or _FALLBACK_NUMERIC_SURFACES
+        )
 
     suppressed = _PLANNER_SUPPRESSED_NUMERIC_SURFACES
     if not suppressed:
@@ -410,8 +396,7 @@ def _planner_convention_bindings(
         return set()
     if not hasattr(strategy_store, "retrieve_conventions"):
         log.warning(
-            "Skipping %s planner convention bindings: StrategyStore lacks "
-            "retrieve_conventions()",
+            "Skipping %s planner convention bindings: StrategyStore lacks retrieve_conventions()",
             species,
         )
         return set()
@@ -442,9 +427,7 @@ def _planner_convention_bindings(
         if not isinstance(identifiers, list):
             continue
         bindings.update(
-            str(identifier).strip()
-            for identifier in identifiers
-            if str(identifier).strip()
+            str(identifier).strip() for identifier in identifiers if str(identifier).strip()
         )
     return bindings
 
@@ -548,8 +531,7 @@ def _planner_strategy_entry_line(entry: Any) -> str:
         joined = ",".join(str(item) for item in identifiers[:4])
         tags.append(f"orchestrator_ids={joined}")
         if any(
-            str(item).strip().lower()
-            in {"tool", "tools", "tool_use", "repl", "react_mode", "call"}
+            str(item).strip().lower() in {"tool", "tools", "tool_use", "repl", "react_mode", "call"}
             for item in identifiers
         ):
             tags.append("scope=orchestrator_eval_tools_not_planner_tools")
@@ -593,11 +575,7 @@ def _operator_seed_planner_entries(
     entries: list[dict[str, Any]] = []
     for row in rows:
         try:
-            metadata = (
-                json.loads(row["metadata_json"])
-                if row["metadata_json"]
-                else {}
-            )
+            metadata = json.loads(row["metadata_json"]) if row["metadata_json"] else {}
         except (TypeError, json.JSONDecodeError):
             metadata = {}
         if not isinstance(metadata, dict):
@@ -686,18 +664,20 @@ def _build_planner_strategy_hints(
         if callable(health_fn):
             health = health_fn()
             if not health.get("healthy", True):
-                add_entries([
-                    {
-                        "id": "strategy-search-index-degraded",
-                        "species": "system",
-                        "entry_type": "warning",
-                        "title": "StrategyStore search index degraded",
-                        "generalized_content": (
-                            f"{health.get('summary', 'search mirror degraded')}; "
-                            f"repair={health.get('repair_hint', 'rebuild search indexes')}"
-                        ),
-                    }
-                ])
+                add_entries(
+                    [
+                        {
+                            "id": "strategy-search-index-degraded",
+                            "species": "system",
+                            "entry_type": "warning",
+                            "title": "StrategyStore search index degraded",
+                            "generalized_content": (
+                                f"{health.get('summary', 'search mirror degraded')}; "
+                                f"repair={health.get('repair_hint', 'rebuild search indexes')}"
+                            ),
+                        }
+                    ]
+                )
     except Exception as exc:
         rows.append(
             {
@@ -766,10 +746,7 @@ def _build_planner_strategy_hints(
     if not rows:
         return "(no StrategyStore rows matched the current planner hint queries)"
 
-    return "\n".join(
-        _planner_strategy_entry_line(entry)
-        for entry in rows[:max_rows]
-    )
+    return "\n".join(_planner_strategy_entry_line(entry) for entry in rows[:max_rows])
 
 
 def _build_higher_tier_planner_pressure(
@@ -839,17 +816,13 @@ def _build_higher_tier_planner_pressure(
         best_quality = float(summary.get("best_quality") or 0.0)
         try:
             baseline_quality = (
-                float(baseline.quality_for_tier(tier))
-                if baseline is not None
-                else None
+                float(baseline.quality_for_tier(tier)) if baseline is not None else None
             )
         except Exception:
             baseline_quality = None
         if frontier_size <= 0:
             baseline_text = (
-                f"; baseline_q={baseline_quality:.3f}"
-                if baseline_quality is not None
-                else ""
+                f"; baseline_q={baseline_quality:.3f}" if baseline_quality is not None else ""
             )
             if w8_candidate_generation_active:
                 lines.append(
@@ -891,10 +864,7 @@ def _pool_question_count_summary() -> tuple[int | None, dict[int, int]]:
         except OSError:
             continue
         global _POOL_QUESTION_COUNT_CACHE
-        if (
-            _POOL_QUESTION_COUNT_CACHE
-            and _POOL_QUESTION_COUNT_CACHE.get("cache_key") == cache_key
-        ):
+        if _POOL_QUESTION_COUNT_CACHE and _POOL_QUESTION_COUNT_CACHE.get("cache_key") == cache_key:
             return (
                 _POOL_QUESTION_COUNT_CACHE.get("total"),
                 dict(_POOL_QUESTION_COUNT_CACHE.get("tier_counts") or {}),
@@ -978,10 +948,7 @@ def _build_eval_coverage_pressure(
         tier_trials[tier] = tier_trials.get(tier, 0) + 1
         for result in results:
             qid = str(
-                result.get("qid")
-                or result.get("question_id")
-                or result.get("id")
-                or ""
+                result.get("qid") or result.get("question_id") or result.get("id") or ""
             ).strip()
             if not qid:
                 continue
@@ -1023,9 +990,9 @@ def _build_eval_coverage_pressure(
     coverage_text = ""
     if total:
         coverage_text = f", pool_coverage<={distinct_count * 100.0 / total:.2f}% of {total}"
-    tier_text = ", ".join(
-        f"T{tier}={count}" for tier, count in sorted(tier_trials.items())
-    ) or "none"
+    tier_text = (
+        ", ".join(f"T{tier}={count}" for tier, count in sorted(tier_trials.items())) or "none"
+    )
     detail_tiers = sorted(
         set(tier_trials) | set(tier_question_rows) | set(tier_distinct) | set(tier_pool_counts)
     )
@@ -1042,14 +1009,11 @@ def _build_eval_coverage_pressure(
             part += f",pool={pool_count},coverage<={distinct_for_tier * 100.0 / pool_count:.2f}%"
         tier_detail_parts.append(part)
     tier_detail_text = ", ".join(tier_detail_parts) or "none"
-    under_sampled_higher_tiers = [
-        tier for tier in (2, 3) if tier_trials.get(tier, 0) < 5
-    ]
+    under_sampled_higher_tiers = [tier for tier in (2, 3) if tier_trials.get(tier, 0) < 5]
     under_sampled_text = ""
     if under_sampled_higher_tiers:
         tier_list = ", ".join(
-            f"T{tier}={tier_trials.get(tier, 0)} trial(s)"
-            for tier in under_sampled_higher_tiers
+            f"T{tier}={tier_trials.get(tier, 0)} trial(s)" for tier in under_sampled_higher_tiers
         )
         if w8_candidate_generation_active:
             under_sampled_text = (
@@ -1073,9 +1037,11 @@ def _build_eval_coverage_pressure(
     )[:5]
     suite_text = ""
     if least_covered_suites:
-        suite_text = " Least-covered non-sentinel suites: " + ", ".join(
-            f"{suite}={count}" for suite, count in least_covered_suites
-        ) + "."
+        suite_text = (
+            " Least-covered non-sentinel suites: "
+            + ", ".join(f"{suite}={count}" for suite, count in least_covered_suites)
+            + "."
+        )
     if w8_candidate_generation_active:
         guidance = (
             "If repeat_factor is high or coverage is low, keep the coverage "
@@ -1372,29 +1338,18 @@ def _seq_baseline_reference_state(
         if latest_profile_trial_id is None:
             latest_profile_trial_id = getattr(entry, "trial_id", None)
 
-        if latest_reference_trial_id is None and eval_details.get(
-            "seq_baseline_reference_draw"
-        ):
+        if latest_reference_trial_id is None and eval_details.get("seq_baseline_reference_draw"):
             latest_reference_trial_id = getattr(entry, "trial_id", None)
             latest_reference_ts = entry_ts
         elif latest_reference_trial_id is None:
             trials_since_reference += 1
 
-    age_s = (
-        max(0.0, now - latest_reference_ts)
-        if latest_reference_ts is not None
-        else None
-    )
-    stale_reference = (
-        age_s is not None and age_s > SEQ_BASELINE_REFERENCE_STALE_AFTER_S
-    )
-    due = (
-        SEQ_BASELINE_REFRESH_CADENCE > 0
-        and (
-            latest_reference_trial_id is None
-            or trials_since_reference >= SEQ_BASELINE_REFRESH_CADENCE
-            or stale_reference
-        )
+    age_s = max(0.0, now - latest_reference_ts) if latest_reference_ts is not None else None
+    stale_reference = age_s is not None and age_s > SEQ_BASELINE_REFERENCE_STALE_AFTER_S
+    due = SEQ_BASELINE_REFRESH_CADENCE > 0 and (
+        latest_reference_trial_id is None
+        or trials_since_reference >= SEQ_BASELINE_REFRESH_CADENCE
+        or stale_reference
     )
     reason = ""
     if latest_reference_trial_id is None:
@@ -1402,10 +1357,7 @@ def _seq_baseline_reference_state(
     elif stale_reference:
         reason = f"baseline reference age {age_s:.0f}s exceeds stale threshold"
     elif trials_since_reference >= SEQ_BASELINE_REFRESH_CADENCE:
-        reason = (
-            f"{trials_since_reference} trusted profile trials since baseline "
-            "reference draw"
-        )
+        reason = f"{trials_since_reference} trusted profile trials since baseline reference draw"
 
     return {
         "tier": int(tier),
@@ -1536,8 +1488,7 @@ def _replace_exhausted_critic_seed_fallback(
         "critic_seed_fallback_replacement": dict(replacement),
     }
     log.warning(
-        "Critic seed fallback is unavailable (%s); using metric-bearing "
-        "numeric_trial fallback %s.",
+        "Critic seed fallback is unavailable (%s); using metric-bearing numeric_trial fallback %s.",
         seed_skip.reason,
         json.dumps(replacement, default=str),
     )
@@ -1552,10 +1503,7 @@ def _first_unblacklisted_numeric_trial_action(
     last_blocked = ""
     surfaces = _configured_numeric_surfaces()
     if not surfaces:
-        return None, (
-            "all quota numeric_trial surfaces are suppressed by planner "
-            "conventions"
-        )
+        return None, ("all quota numeric_trial surfaces are suppressed by planner conventions")
     for offset in range(len(surfaces)):
         surface = surfaces[(trial_counter + offset) % len(surfaces)]
         candidate = {"type": "numeric_trial", "surface": surface, "params": {}}
@@ -1649,8 +1597,7 @@ def _replace_blacklisted_w8_candidate_action(
         ),
     }
     log.warning(
-        "W8 candidate action %s is blacklisted (%s); using replayable "
-        "numeric_trial fallback %s.",
+        "W8 candidate action %s is blacklisted (%s); using replayable numeric_trial fallback %s.",
         json.dumps(action, default=str),
         blocked,
         json.dumps(replacement, default=str),
@@ -1888,13 +1835,9 @@ def _seq_gate_reachability_report(
             combined_values.append(float(combined))
 
     task_rates.sort(key=lambda item: item[0])
-    recent_rates = [rate for _, rate in task_rates[-max(1, window):]]
+    recent_rates = [rate for _, rate in task_rates[-max(1, window) :]]
     baseline_rates = [rate for _, rate in task_rates[-SEQ_BASELINE_PROFILE_LIMIT:]]
-    baseline_task_rate = (
-        sum(baseline_rates) / len(baseline_rates)
-        if baseline_rates
-        else None
-    )
+    baseline_task_rate = sum(baseline_rates) / len(baseline_rates) if baseline_rates else None
     recent_median_rate = _median(recent_rates)
     recent_rate_z: float | None = None
     if baseline_task_rate and recent_median_rate is not None:
@@ -1981,9 +1924,7 @@ def _maybe_defer_seq_unreachable_candidate_action(
         and alpha_wealth.get("new_fingerprint_confirmations_allowed") is False
     )
     reachability = _seq_gate_reachability_report(journal, tier=tier)
-    should_defer = alpha_blocked or not bool(
-        reachability.get("ok_to_dispatch_candidates", True)
-    )
+    should_defer = alpha_blocked or not bool(reachability.get("ok_to_dispatch_candidates", True))
     if not should_defer:
         state["seq_gate_reachability_preflight"] = {
             "trial_id": trial_counter,
@@ -2028,8 +1969,7 @@ def _maybe_defer_seq_unreachable_candidate_action(
         "seq_gate_preflight_report": reachability,
     }
     log.warning(
-        "Seq gate preflight deferring promotion-dependent action at trial %d: "
-        "%s -> %s (%s)",
+        "Seq gate preflight deferring promotion-dependent action at trial %d: %s -> %s (%s)",
         trial_counter,
         json.dumps(action, default=str),
         json.dumps(replacement, default=str),
@@ -2100,9 +2040,7 @@ def _annotate_seq_promotion_finalization(
         "trials_since_reference": reference.get("trials_since_reference"),
         "stale_reference": stale_reference,
     }
-    seq["baseline_reference_state"] = (
-        "stale-reference" if stale_reference else "fresh"
-    )
+    seq["baseline_reference_state"] = "stale-reference" if stale_reference else "fresh"
     seq["baseline_promotion_required_E"] = SEQ_PROMOTION_FINAL_CONFIRM_E
     seq["baseline_promotion_fresh_eval"] = bool(is_fresh_eval)
     if combined_e is not None:
@@ -2331,12 +2269,16 @@ def _seq_candidate_replay_payload(
         }
         key = (-k, combined_f, e_quality, e_rate, payload["source_trial_id"])
         best_key = (
-            -int(best.get("k", 0)),
-            float(best.get("combined_E", 0.0)),
-            float(best.get("E_quality", 0.0)),
-            float(best.get("E_rate_noninf", 0.0)),
-            int(best.get("source_trial_id", 0)),
-        ) if best else None
+            (
+                -int(best.get("k", 0)),
+                float(best.get("combined_E", 0.0)),
+                float(best.get("E_quality", 0.0)),
+                float(best.get("E_rate_noninf", 0.0)),
+                int(best.get("source_trial_id", 0)),
+            )
+            if best
+            else None
+        )
         if best is None or key > best_key:
             best = payload
     return best
@@ -2575,11 +2517,7 @@ def _seq_alpha_wealth_state(
     alpha: float = SEQ_DEFAULT_POLICY.alpha,
 ) -> dict[str, Any]:
     """Bound the free multiple-testing channel across seq candidate fingerprints."""
-    existing = {
-        str(item)
-        for item in (candidates or [])
-        if str(item or "").strip()
-    }
+    existing = {str(item) for item in (candidates or []) if str(item or "").strip()}
     candidate = str(candidate or "").strip()
     including_candidate = set(existing)
     if candidate:
@@ -2598,13 +2536,9 @@ def _seq_alpha_wealth_state(
         "candidate": candidate,
         "candidate_is_new": candidate_is_new,
         "alpha_spent": round(alpha_spent, 6),
-        "alpha_spent_including_candidate": round(
-            alpha_spent_including_candidate, 6
-        ),
+        "alpha_spent_including_candidate": round(alpha_spent_including_candidate, 6),
         "expected_false_confirms": round(alpha_spent, 6),
-        "expected_false_confirms_including_candidate": round(
-            alpha_spent_including_candidate, 6
-        ),
+        "expected_false_confirms_including_candidate": round(alpha_spent_including_candidate, 6),
         "budget_remaining": round(max(0.0, budget - alpha_spent), 6),
         "budget_remaining_including_candidate": round(
             max(0.0, budget - alpha_spent_including_candidate), 6
@@ -2681,9 +2615,7 @@ def _seq_inputs_for_trial(
 
     baseline_profile = baseline_profile_from_trials(reversed(baseline_trials))
     baseline_task_rate = (
-        sum(baseline_task_rates) / len(baseline_task_rates)
-        if baseline_task_rates
-        else None
+        sum(baseline_task_rates) / len(baseline_task_rates) if baseline_task_rates else None
     )
     return {
         "candidate": candidate,
@@ -2714,36 +2646,27 @@ def _format_blacklist_for_prompt(blacklist: list[dict[str, Any]]) -> str:
     lines: list[str] = []
 
     if shown:
-        lines.append(
-            f"  Recent entries ({len(shown)} newest; all {len(blacklist)} enforced):"
-        )
+        lines.append(f"  Recent entries ({len(shown)} newest; all {len(blacklist)} enforced):")
         for entry in shown:
             reason = str(entry.get("reason", ""))
             if len(reason) > 80:
                 reason = reason[:79] + "..."
-            lines.append(
-                f"  - {_format_blacklist_pattern(entry.get('pattern', {}))} -- {reason}"
-            )
+            lines.append(f"  - {_format_blacklist_pattern(entry.get('pattern', {}))} -- {reason}")
 
     if older:
-        lines.append(
-            f"  Older enforced patterns ({len(older)}; reasons omitted, still blocked):"
-        )
+        lines.append(f"  Older enforced patterns ({len(older)}; reasons omitted, still blocked):")
         for entry in older:
             suffix = ""
             if entry.get("source_trial") is not None:
                 suffix = f" (source_trial={entry['source_trial']})"
-            lines.append(
-                f"    - {_format_blacklist_pattern(entry.get('pattern', {}))}{suffix}"
-            )
+            lines.append(f"    - {_format_blacklist_pattern(entry.get('pattern', {}))}{suffix}")
 
     return "\n".join(lines)
 
 
 def _is_observational_feedback_action(action: Any) -> bool:
     return bool(
-        isinstance(action, dict)
-        and action.get("type") in OBSERVATIONAL_ACTION_BLACKLIST_DENYLIST
+        isinstance(action, dict) and action.get("type") in OBSERVATIONAL_ACTION_BLACKLIST_DENYLIST
     )
 
 
@@ -2801,7 +2724,11 @@ def _enforce_experiment_quota(
             "Experiment quota: %d consecutive passive actions with memory_count=%d "
             ">= %d threshold; forcing frontier-moving numeric_trial(surface=%s) "
             "instead of another '%s'.",
-            streak, memory_count, QUOTA_MEMORY_THRESHOLD, surface, atype,
+            streak,
+            memory_count,
+            QUOTA_MEMORY_THRESHOLD,
+            surface,
+            atype,
         )
         state["consecutive_passive_actions"] = 0
         state["experiment_quota_blocked"] = None
@@ -3053,8 +2980,7 @@ def _maybe_force_outcome_progress_action(
         return action, rationale
 
     log.warning(
-        "Outcome progress is frontier-stalled; forcing numeric_trial(surface=%s) "
-        "instead of '%s'.",
+        "Outcome progress is frontier-stalled; forcing numeric_trial(surface=%s) instead of '%s'.",
         forced["surface"],
         action.get("type", "unknown"),
     )
@@ -3269,8 +3195,7 @@ def _force_frontier_rerun_numeric_action(
     )
     if forced is None:
         log.warning(
-            "Frontier rerun required, but all numeric_trial surfaces are "
-            "blacklisted: %s",
+            "Frontier rerun required, but all numeric_trial surfaces are blacklisted: %s",
             blocked_reason,
         )
         state["frontier_rerun_blocked"] = {
@@ -3418,8 +3343,10 @@ def _build_last_invalid_feedback(state: dict[str, Any]) -> str:
         # repeatedly-rejected/invalid signature still surfaces even after the
         # single-turn last_invalid_action has been cleared by a good trial.
         if repeated:
-            lines.append("  Repeatedly non-executing signatures this run "
-                         f"(auto-blacklisted at {INVALID_SIGNATURE_BLACKLIST_THRESHOLD}×):")
+            lines.append(
+                "  Repeatedly non-executing signatures this run "
+                f"(auto-blacklisted at {INVALID_SIGNATURE_BLACKLIST_THRESHOLD}×):"
+            )
             for c, s in repeated:
                 lines.append(f"    {c}×  {s[:160]}")
         return "\n".join(lines)
@@ -3435,9 +3362,7 @@ def _build_last_invalid_feedback(state: dict[str, Any]) -> str:
         return "\n".join(lines)
     if not act:
         if repeated:
-            return _repeated_block(
-                ["  (last action executed; but these signatures keep failing:)"]
-            )
+            return _repeated_block(["  (last action executed; but these signatures keep failing:)"])
         return "  (none — the last action executed and produced metrics)"
     reason = state.get("last_invalid_reason", "")
     status = state.get("last_invalid_status", "skipped")
@@ -3596,9 +3521,7 @@ def _build_operator_outbox_feedback(
     for row in rows:
         issue = "; ".join(str(x) for x in (row.get("critic_issues") or [])[:2])
         action_text = json.dumps(row.get("action", {}), sort_keys=True, default=str)
-        lines.append(
-            f"  - trial {row.get('source_trial', '?')}: {action_text[:180]}"
-        )
+        lines.append(f"  - trial {row.get('source_trial', '?')}: {action_text[:180]}")
         if issue:
             lines.append(f"    critic: {issue[:220]}")
     lines.append(
@@ -3726,8 +3649,7 @@ def _build_repo_readiness_advisory(
         item_id = str(item.get("id") or f"{repo}:{criterion}")
         objective_text = objective[:140] if objective else "(no objective)"
         lines.append(
-            f"  - {priority} {item_id}: repo={repo} criterion={criterion}; "
-            f"{objective_text}"
+            f"  - {priority} {item_id}: repo={repo} criterion={criterion}; {objective_text}"
         )
 
     rules = payload.get("pickup_rules")
@@ -3935,13 +3857,12 @@ def _record_rejected_draft(
     feedback residue so the rejected draft cannot bypass the loop.
     """
     issues = _critique_issues(critique)
-    reason = "critic rejected: " + ("; ".join(issues) if issues else
-                                    getattr(critique, "decision", "rejected"))
+    reason = "critic rejected: " + (
+        "; ".join(issues) if issues else getattr(critique, "decision", "rejected")
+    )
     sig = _action_signature(draft_action)
     if _is_observational_feedback_action(draft_action):
-        rejected_observational = state.setdefault(
-            "critic_rejected_observational_signatures", {}
-        )
+        rejected_observational = state.setdefault("critic_rejected_observational_signatures", {})
         rejected_observational[sig] = {
             "trial_id": trial_id,
             "action": draft_action,
@@ -3970,14 +3891,13 @@ def _record_rejected_draft(
     state["last_invalid_action"] = draft_action
     state["last_invalid_reason"] = reason
     state["last_invalid_status"] = "critic_rejected"
-    state["consecutive_rejected_drafts"] = (
-        int(state.get("consecutive_rejected_drafts", 0)) + 1
-    )
+    state["consecutive_rejected_drafts"] = int(state.get("consecutive_rejected_drafts", 0)) + 1
 
     blacklisted = False
     if sig_counts[sig] >= INVALID_SIGNATURE_BLACKLIST_THRESHOLD:
         append_blacklist(
-            draft_action, trial_id,
+            draft_action,
+            trial_id,
             f"Auto-blacklisted: {sig_counts[sig]}× critic-rejected — {reason[:80]}",
             reason_class="critic_rejected",
         )
@@ -3990,7 +3910,8 @@ def _record_rejected_draft(
         "[signature seen %d×, consecutive rejected drafts=%d]%s%s",
         getattr(critique, "decision", "rejected"),
         json.dumps(draft_action, default=str),
-        sig_counts[sig], state["consecutive_rejected_drafts"],
+        sig_counts[sig],
+        state["consecutive_rejected_drafts"],
         " — BLACKLISTED" if blacklisted else "",
         " — OPERATOR_OUTBOXED" if outboxed else "",
     )
@@ -4084,10 +4005,7 @@ def _stream_points_to_path(stream: Any, path: Path) -> bool:
     try:
         stream_stat = os.fstat(stream.fileno())
         path_stat = path.stat()
-        return (
-            stream_stat.st_dev == path_stat.st_dev
-            and stream_stat.st_ino == path_stat.st_ino
-        )
+        return stream_stat.st_dev == path_stat.st_dev and stream_stat.st_ino == path_stat.st_ino
     except OSError:
         return False
 
@@ -4101,6 +4019,7 @@ def _autopilot_logging_handlers(
     if not _stream_points_to_path(stream, log_path):
         handlers.append(logging.FileHandler(log_path, mode="a"))
     return handlers
+
 
 # ── Controller Prompt Template ───────────────────────────────────
 
@@ -4352,8 +4271,7 @@ def _format_available_action_schemas(action_types: list[str]) -> str:
     deep_eval_tier_options = _format_deep_eval_tier_options()
     schemas = {
         "seed_batch": (
-            '- Seed: {{"type": "seed_batch", "n_questions": 10-50, '
-            '"suites": ["coder","math",...]}}'
+            '- Seed: {{"type": "seed_batch", "n_questions": 10-50, "suites": ["coder","math",...]}}'
         ),
         "numeric_trial": (
             '- Numeric: {{"type": "numeric_trial", "surface": "'
@@ -4414,8 +4332,7 @@ def _format_available_action_schemas(action_types: list[str]) -> str:
             '"teacher": "claude", "categories": ["routing"]}}'
         ),
         "reset_memories": (
-            '- Reset: {{"type": "reset_memories", "keep_seen": true, '
-            '"keep_skills": true}}'
+            '- Reset: {{"type": "reset_memories", "keep_seen": true, "keep_skills": true}}'
         ),
         "deep_eval": (
             '- Deep eval: {{"type": "deep_eval", "tier": 3}}\n'
@@ -4425,9 +4342,7 @@ def _format_available_action_schemas(action_types: list[str]) -> str:
             "Do NOT include target_trial, suites, baseline_recheck, or "
             "instrumentation fields.)"
         ),
-        "rollback": (
-            '- Rollback: {{"type": "rollback", "to_checkpoint": "production_best"}}'
-        ),
+        "rollback": ('- Rollback: {{"type": "rollback", "to_checkpoint": "production_best"}}'),
         "distill_knowledge": (
             '- Distill knowledge: {{"type": "distill_knowledge", "last_n": 10}}\n'
             "  (Run every ~5 trials to extract insights from recent outcomes "
@@ -4528,8 +4443,7 @@ _RECOVERY_ONLY_ACTIONS = {
 def _slot_compaction_viable(slot_memory_text: str) -> bool:
     """True when any production slot currently has cached tokens."""
     return any(
-        int(m.group(1)) > 0
-        for m in re.finditer(r"(\d+)\s+tokens cached", slot_memory_text or "")
+        int(m.group(1)) > 0 for m in re.finditer(r"(\d+)\s+tokens cached", slot_memory_text or "")
     )
 
 
@@ -4561,9 +4475,7 @@ def _build_action_availability(
     cautions: dict[str, str] = {}
     priority: list[str] = []
 
-    w8_candidate_generation_active = _w8_candidate_generation_pressure(
-        w8_replay_pressure_text
-    )
+    w8_candidate_generation_active = _w8_candidate_generation_pressure(w8_replay_pressure_text)
     w8_replay_pressure_active = _w8_replay_pressure_active(w8_replay_pressure_text)
     if w8_candidate_generation_active:
         priority.append(
@@ -4603,8 +4515,7 @@ def _build_action_availability(
             "and should wait for the seq-specific fresh-eval path"
         )
         blocked["structural_prune"] = (
-            "W8 replay pressure is active; structural_prune is not replayable "
-            "W8 candidate evidence"
+            "W8 replay pressure is active; structural_prune is not replayable W8 candidate evidence"
         )
 
     blocked.update(_type_only_blacklisted_actions(blacklist))
@@ -4628,9 +4539,7 @@ def _build_action_availability(
             f"memory_count ({memory_count}); valid range 1-100000 (default 500)"
         )
         _existing = cautions.get("train_routing_models")
-        cautions["train_routing_models"] = (
-            f"{_existing}; {_cap_note}" if _existing else _cap_note
-        )
+        cautions["train_routing_models"] = f"{_existing}; {_cap_note}" if _existing else _cap_note
 
     if not _slot_compaction_viable(slot_memory_text):
         blocked["slot_compact"] = (
@@ -4660,9 +4569,7 @@ def _build_action_availability(
                 + ", ".join(sorted(suppressed_numeric_surfaces))
             )
 
-    cautions["reset_memories"] = (
-        "destructive recovery action; do not use for ordinary stagnation"
-    )
+    cautions["reset_memories"] = "destructive recovery action; do not use for ordinary stagnation"
     cautions["rollback"] = (
         "recovery-only action; use only after a concrete regression from a known-good point"
     )
@@ -4724,13 +4631,10 @@ def _w8_candidate_generation_pressure(text: str) -> bool:
     normalized = str(text or "").lower()
     if "w8 replay pressure:" not in normalized:
         return False
-    return (
-        "no accumulating candidate exists" in normalized
-        or (
-            "accumulating candidate" in normalized
-            and "0/" in normalized
-            and "are replayable" in normalized
-        )
+    return "no accumulating candidate exists" in normalized or (
+        "accumulating candidate" in normalized
+        and "0/" in normalized
+        and "are replayable" in normalized
     )
 
 
@@ -4801,8 +4705,7 @@ def _replace_w8_candidate_generation_deferral(
         ),
     }
     log.warning(
-        "W8 candidate generation pressure replaced %s action %s with numeric_trial "
-        "fallback %s.",
+        "W8 candidate generation pressure replaced %s action %s with numeric_trial fallback %s.",
         reason,
         json.dumps(action, default=str),
         json.dumps(replacement, default=str),
@@ -4923,8 +4826,7 @@ def _build_exploration_block(
         unfalsified = []
     if unfalsified:
         unfalsified_text = "\n".join(
-            f"  #{tid}: {hyp[:160]}\n     falsifier: {fal[:160]}"
-            for tid, hyp, fal in unfalsified
+            f"  #{tid}: {hyp[:160]}\n     falsifier: {fal[:160]}" for tid, hyp, fal in unfalsified
         )
     else:
         unfalsified_text = "  (no recent trials with explicit falsifiers yet)"
@@ -4984,7 +4886,8 @@ def _maybe_reimport_pareto_from_journal(
     if entry.bug_corrupted_by:
         log.info(
             "Pareto re-import: trial %d is bug_corrupted_by=%s, skipping",
-            trial_id, entry.bug_corrupted_by,
+            trial_id,
+            entry.bug_corrupted_by,
         )
         return False
     # Trusted within-noise rows (mad_noise / reproduction_confirmed) are managed as
@@ -4996,7 +4899,8 @@ def _maybe_reimport_pareto_from_journal(
         log.info(
             "Pareto re-import: trial %d is a trusted within-noise exclusion (%s) — "
             "representative-managed, not raw-re-imported.",
-            trial_id, excl_by,
+            trial_id,
+            excl_by,
         )
         return False
     # Already in archive? (use the private _all_entries list — it's the
@@ -5009,12 +4913,15 @@ def _maybe_reimport_pareto_from_journal(
         return False
     p_entry = ParetoEntry(
         trial_id=entry.trial_id,
-        objectives=spec_for(entry.tier).objectives_from_row({
-            "quality": entry.quality,
-            "speed": entry.speed,
-            "cost": entry.cost,
-            "reliability": entry.reliability,
-        }) or (entry.quality, entry.speed, -entry.cost, entry.reliability),
+        objectives=spec_for(entry.tier).objectives_from_row(
+            {
+                "quality": entry.quality,
+                "speed": entry.speed,
+                "cost": entry.cost,
+                "reliability": entry.reliability,
+            }
+        )
+        or (entry.quality, entry.speed, -entry.cost, entry.reliability),
         config_snapshot=entry.config_snapshot,
         git_tag=entry.git_tag,
         eval_tier=entry.tier,
@@ -5026,9 +4933,7 @@ def _maybe_reimport_pareto_from_journal(
         timestamp=entry.timestamp,
     )
     new_status = archive.update(p_entry)
-    log.info(
-        "Pareto re-import: trial %d added (status=%s)", trial_id, new_status
-    )
+    log.info("Pareto re-import: trial %d added (status=%s)", trial_id, new_status)
     # The startup journal-authority sync persists the reconstructed archive
     # after recovery finishes. Do not write a one-off archive snapshot here;
     # it can diverge from the folded append-only journal view.
@@ -5078,9 +4983,10 @@ def _recover_from_in_flight_trial(
     if journal_max >= prior_tid:
         new_counter = max(trial_counter, journal_max + 1)
         log.info(
-            "Recovery: trial %d was journaled before crash; "
-            "bumping trial_counter %d → %d",
-            prior_tid, trial_counter, new_counter,
+            "Recovery: trial %d was journaled before crash; bumping trial_counter %d → %d",
+            prior_tid,
+            trial_counter,
+            new_counter,
         )
         trial_counter = new_counter
         state["trial_counter"] = trial_counter
@@ -5090,8 +4996,7 @@ def _recover_from_in_flight_trial(
             log.warning("Pareto re-import for trial %d failed: %s", prior_tid, exc)
     else:
         log.warning(
-            "Recovery: trial %d died BEFORE journal.record. Writing "
-            "AUTOPILOT_KILLED placeholder.",
+            "Recovery: trial %d died BEFORE journal.record. Writing AUTOPILOT_KILLED placeholder.",
             prior_tid,
         )
         try:
@@ -5101,7 +5006,10 @@ def _recover_from_in_flight_trial(
                 species="(killed)",
                 action_type=(prior_in_flight.get("action") or {}).get("type", "unknown"),
                 tier=0,
-                quality=0.0, speed=0.0, cost=0.0, reliability=0.0,
+                quality=0.0,
+                speed=0.0,
+                cost=0.0,
+                reliability=0.0,
                 pareto_status="dominated",
                 failure_analysis=(
                     f"Autopilot process killed before journal.record() "
@@ -5119,7 +5027,8 @@ def _recover_from_in_flight_trial(
         except Exception as exc:
             log.error(
                 "Failed to write AUTOPILOT_KILLED placeholder for trial %d: %s",
-                prior_tid, exc,
+                prior_tid,
+                exc,
             )
     state["in_flight_trial"] = None
     return trial_counter
@@ -5155,6 +5064,80 @@ def load_state() -> dict[str, Any]:
 def _normalize_state_before_save(state: dict[str, Any]) -> None:
     if not state.get("paused"):
         state.pop("pause_reason", None)
+
+
+def _contrastive_trace_outcome(
+    *,
+    pareto_status: str,
+    verdict: Any,
+    bug_corrupted_by: str = "",
+    outcome_status: str = "ok",
+) -> str:
+    """Return the MH-7 contrastive label for a completed trial, or empty."""
+    if bug_corrupted_by or outcome_status != "ok":
+        return ""
+    passed = bool(getattr(verdict, "passed", verdict))
+    if not passed:
+        return "failure"
+    if pareto_status == "frontier":
+        return "success"
+    return ""
+
+
+def _update_contrastive_trace_state(
+    state: dict[str, Any],
+    tower: Any,
+    *,
+    trace_text: str,
+    trial_id: int,
+    species: str,
+    action_type: str,
+    pareto_status: str,
+    verdict: Any,
+    bug_corrupted_by: str = "",
+    failure_analysis: str = "",
+    eval_result: Any = None,
+    outcome_status: str = "ok",
+) -> None:
+    """Store labeled trace examples for the next PromptForge mutation context."""
+    outcome = _contrastive_trace_outcome(
+        pareto_status=pareto_status,
+        verdict=verdict,
+        bug_corrupted_by=bug_corrupted_by,
+        outcome_status=outcome_status,
+    )
+    if not outcome or not str(trace_text or "").strip():
+        return
+    updater = getattr(tower, "update_contrastive_trace_bank", None)
+    if not callable(updater):
+        return
+    if outcome == "failure":
+        reason = failure_analysis
+    else:
+        tier = getattr(eval_result, "tier", "?")
+        quality = getattr(eval_result, "quality", 0.0)
+        speed = getattr(eval_result, "speed", 0.0)
+        reason = f"T{tier} frontier q={quality:.3f} s={speed:.1f}"
+    try:
+        bank = updater(
+            state.get("contrastive_trace_bank"),
+            trace_text=trace_text,
+            outcome=outcome,
+            trial_id=trial_id,
+            species=species,
+            action_type=action_type,
+            reason=reason,
+        )
+        state["contrastive_trace_bank"] = bank
+        formatter = getattr(tower, "capture_contrastive_traces", None)
+        if callable(formatter):
+            state["contrastive_traces"] = formatter(
+                k_success=2,
+                k_failure=2,
+                trace_bank=bank,
+            )
+    except Exception as exc:  # trace feedback must never disrupt trial completion
+        log.debug("Contrastive trace update skipped for trial %d: %s", trial_id, exc)
 
 
 def save_state(state: dict[str, Any]) -> None:
@@ -5244,9 +5227,7 @@ def _archive_epoch_params_from_state(
         if strict_epoch:
             raise ValueError("invalid pareto_exclude_before_ts for active speed era") from exc
     if strict_epoch and (deinflate_before_ts is None or exclude_before_ts is None):
-        raise ValueError(
-            "active speed era requires pareto_epoch_ts and pareto_exclude_before_ts"
-        )
+        raise ValueError("active speed era requires pareto_epoch_ts and pareto_exclude_before_ts")
     return deinflate_before_ts, deinflate_factor, exclude_before_ts
 
 
@@ -5273,8 +5254,8 @@ def _apply_journal_archive_authority(
     Returns True when cached state changed, False when it already matched, and
     None when the journal has no archive-bearing rows.
     """
-    deinflate_before_ts, deinflate_factor, exclude_before_ts = (
-        _archive_epoch_params_from_state(state)
+    deinflate_before_ts, deinflate_factor, exclude_before_ts = _archive_epoch_params_from_state(
+        state
     )
     archive_payload = _journal_archive_payload_for_authority(
         journal,
@@ -5305,8 +5286,8 @@ def _sync_startup_archive_from_journal_authority(
     if state.get("_allow_empty_frontier_rebase"):
         return False
     before_count = _archive_entry_count(state.get("pareto_archive"))
-    deinflate_before_ts, deinflate_factor, exclude_before_ts = (
-        _archive_epoch_params_from_state(state)
+    deinflate_before_ts, deinflate_factor, exclude_before_ts = _archive_epoch_params_from_state(
+        state
     )
     journal_count = _archive_entry_count(
         _journal_archive_payload_for_authority(
@@ -5444,8 +5425,7 @@ def _classify_meta_halt(journal: Any) -> str:
     except Exception:  # noqa: BLE001 — never let classification crash the halt
         return "stuck"
     repro = sum(
-        1 for e in recent
-        if getattr(e, "deficiency_category", "") == "reproduction_confirmed"
+        1 for e in recent if getattr(e, "deficiency_category", "") == "reproduction_confirmed"
     )
     corrupt = sum(1 for e in recent if getattr(e, "bug_corrupted_by", ""))
     return "converged" if (repro >= 1 and corrupt == 0) else "stuck"
@@ -5519,9 +5499,7 @@ def _query_slot_memory() -> str:
     for role, ports in _slot_query_ports().items():
         for port in ports:
             try:
-                resp = httpx.get(
-                    f"http://localhost:{port}/slots", timeout=3.0
-                )
+                resp = httpx.get(f"http://localhost:{port}/slots", timeout=3.0)
                 if resp.status_code != 200:
                     unavailable_ports.append(f"{role}:{port} http {resp.status_code}")
                     continue
@@ -5544,13 +5522,9 @@ def _query_slot_memory() -> str:
                 unavailable_ports.append(f"{role}:{port}")
     lines = list(cached_lines)
     if empty_ports:
-        lines.append(
-            "  healthy queried ports with empty KV cache: " + ", ".join(empty_ports)
-        )
+        lines.append("  healthy queried ports with empty KV cache: " + ", ".join(empty_ports))
     if unavailable_ports:
-        lines.append(
-            "  unavailable configured replica ports: " + ", ".join(unavailable_ports)
-        )
+        lines.append("  unavailable configured replica ports: " + ", ".join(unavailable_ports))
         lines.append(
             "  note: unavailable replicas only affect slot_compact targeting; "
             "do not infer eval-instrument contamination from this line"
@@ -5580,7 +5554,6 @@ def invoke_controller(
 # public name + signature are preserved for callers (run_loop, tests).
 
 
-
 # ── Main Loop ────────────────────────────────────────────────────
 
 
@@ -5596,6 +5569,7 @@ def run_loop(
     if use_tui:
         try:
             from autopilot_tui import AutoPilotTUI
+
             tui = AutoPilotTUI()
             tui.__enter__()
         except Exception as e:
@@ -5680,10 +5654,15 @@ def _run_loop_inner(
     # still empty would re-arm the frontier-lost guard before the bootstrap lands —
     # crash-looping any restart that happens before the first trial is admitted. Once
     # a point exists the guard never fires anyway, so this safely re-arms it.
-    if state.get("_allow_empty_frontier_rebase") and archive.frontier_size(DEFAULT_FRONTIER_TIER) > 0:
+    if (
+        state.get("_allow_empty_frontier_rebase")
+        and archive.frontier_size(DEFAULT_FRONTIER_TIER) > 0
+    ):
         state.pop("_allow_empty_frontier_rebase", None)
         save_state(state)
-        log.info("Rebase complete (frontier rebuilt) — cleared _allow_empty_frontier_rebase; guard re-armed.")
+        log.info(
+            "Rebase complete (frontier rebuilt) — cleared _allow_empty_frontier_rebase; guard re-armed."
+        )
     gate = SafetyGate(
         consecutive_failures=state.get("consecutive_failures", 0),
         quality_history=state.get("quality_history", []),
@@ -5701,6 +5680,7 @@ def _run_loop_inner(
     # without fleet markers; in that mode all methods no-op safely.
     try:
         from orchestrator_watch import OrchestratorWatcher
+
         watcher = OrchestratorWatcher(api_url=ORCHESTRATOR_URL)
         # Attach to the tower so its _eval_question call can pass it down
         # into call_orchestrator_forced (Phase 4 reads via
@@ -5711,7 +5691,9 @@ def _run_loop_inner(
             watcher.disabled,
         )
     except Exception as exc:
-        log.warning("OrchestratorWatcher init failed (%s); falling back to legacy retry-less path", exc)
+        log.warning(
+            "OrchestratorWatcher init failed (%s); falling back to legacy retry-less path", exc
+        )
         watcher = None
 
     seeder = Seeder(
@@ -5764,10 +5746,7 @@ def _run_loop_inner(
     # Restore seeder convergence state. Prefer the explicit state shape; fall
     # back to legacy td_errors-only persistence so existing state files still
     # reconstruct batch_count + convergence streak sensibly.
-    seeder.restore_state(
-        state.get("seeder_state")
-        or {"td_errors": state.get("td_errors", [])}
-    )
+    seeder.restore_state(state.get("seeder_state") or {"td_errors": state.get("td_errors", [])})
 
     trial_counter = state.get("trial_counter", 0)
     plot_paths: list[str] = []
@@ -5783,7 +5762,10 @@ def _run_loop_inner(
     #       bug_corrupted_by=autopilot_killed_mid_trial so the planner sees
     #       the gap and excludes it from hypothesis chains. Skip gate + archive.
     trial_counter = _recover_from_in_flight_trial(
-        state, journal, archive, trial_counter,
+        state,
+        journal,
+        archive,
+        trial_counter,
     )
     _sync_startup_archive_from_journal_authority(state, journal, archive)
     # Bump the fleet-startup timestamp on every start (recovery path or
@@ -5940,7 +5922,8 @@ def _run_loop_inner(
         if not dry_run and not _health:
             log.error(
                 "Orchestrator unhealthy [%s]: %s — waiting %.1fs...",
-                _health.failure_reason, _health.failure_detail,
+                _health.failure_reason,
+                _health.failure_detail,
                 HEALTH_BACKOFF_S,
             )
             phase.set(
@@ -5991,7 +5974,13 @@ def _run_loop_inner(
         planner_evidence_text = ""
         outcome_progress_pressure_text = ""
         if action is None:
-            action, rationale, seq_fresh_eval_context, seq_baseline_draw_reference, seq_candidate_replay_context = _maybe_force_seq_due_action(
+            (
+                action,
+                rationale,
+                seq_fresh_eval_context,
+                seq_baseline_draw_reference,
+                seq_candidate_replay_context,
+            ) = _maybe_force_seq_due_action(
                 state=state,
                 journal=journal,
                 tier=DEFAULT_FRONTIER_TIER,
@@ -6055,6 +6044,7 @@ def _run_loop_inner(
             # scaled to 3 by _action_seed_batch's adaptive_batch_size().
             try:
                 import sys as _sys
+
                 _sys.path.insert(
                     0,
                     "/mnt/raid0/llm/epyc-orchestrator/scripts/benchmark",
@@ -6063,6 +6053,7 @@ def _run_loop_inner(
                     batch_summary as _batch_summary,
                     adaptive_batch_size as _adaptive_n,
                 )
+
                 _bs = _batch_summary()
                 _rate = _bs.get("median_s_per_q")
                 if _rate is None:
@@ -6127,7 +6118,8 @@ def _run_loop_inner(
                 try:
                     _recent = journal.recent(10)
                     _repro = sum(
-                        1 for e in _recent
+                        1
+                        for e in _recent
                         if getattr(e, "deficiency_category", "") == "reproduction_confirmed"
                     )
                 except Exception:
@@ -6158,15 +6150,18 @@ def _run_loop_inner(
                 )
                 try:
                     from host_health import HostHealthState  # type: ignore
+
                     _hh = HostHealthState.snapshot()
                     _throttled, _trig = _hh.is_throttled()
                     _mem_warnings = _hh.memory_residency_warnings()
                     trust_lines.append(
                         "host-health: "
-                        + ("THROTTLED — " + "; ".join(_trig)
-                           if _throttled else
-                           "nominal (no CPU-throttle / page-cache / load signal "
-                           "→ a host-noise narrative is UNSUPPORTED)")
+                        + (
+                            "THROTTLED — " + "; ".join(_trig)
+                            if _throttled
+                            else "nominal (no CPU-throttle / page-cache / load signal "
+                            "→ a host-noise narrative is UNSUPPORTED)"
+                        )
                     )
                     if _mem_warnings:
                         trust_lines.append(
@@ -6190,14 +6185,16 @@ def _run_loop_inner(
                 else:
                     hyp_lines: list[str] = []
                     for e in hyps:
-                        outcome = (
-                            f"q={e.quality:.3f} sp={e.speed:.1f} → {e.pareto_status}"
-                        )
+                        outcome = f"q={e.quality:.3f} sp={e.speed:.1f} → {e.pareto_status}"
                         hyp_lines.append(
                             f"#{e.trial_id} ({e.species}/{e.action_type}):\n"
                             f"  Hypothesis: {(e.hypothesis or '(none)')[:240]}\n"
                             f"  Outcome:    {outcome}"
-                            + (f"\n  Self-criticism: {scrub_legacy_scale_text(e.self_criticism)[:200]}" if e.self_criticism else "")
+                            + (
+                                f"\n  Self-criticism: {scrub_legacy_scale_text(e.self_criticism)[:200]}"
+                                if e.self_criticism
+                                else ""
+                            )
                         )
                     hypotheses_text = "\n\n".join(hyp_lines)
             except Exception as _exc:
@@ -6236,14 +6233,11 @@ def _run_loop_inner(
 
             try:
                 planner_evidence_text = format_planner_evidence_section(
-                    asdict(entry)
-                    for entry in journal.entries_with_supersessions()
+                    asdict(entry) for entry in journal.entries_with_supersessions()
                 )
             except Exception as _exc:
                 planner_evidence_text = f"(planner evidence unavailable: {_exc})"
-            w8_replay_pressure_active = _w8_replay_pressure_active(
-                planner_evidence_text
-            )
+            w8_replay_pressure_active = _w8_replay_pressure_active(planner_evidence_text)
 
             _refresh_planner_convention_bindings(
                 strategy_store,
@@ -6253,11 +6247,21 @@ def _run_loop_inner(
 
             try:
                 _known_actions = [
-                    "seed_batch", "numeric_trial", "prompt_mutation",
-                    "gepa_optimize", "code_mutation", "structural_experiment",
-                    "consult_gate_probe", "structural_prune", "slot_compact", "train_routing_models",
-                    "distill_skillbank", "reset_memories", "deep_eval",
-                    "rollback", "distill_knowledge",
+                    "seed_batch",
+                    "numeric_trial",
+                    "prompt_mutation",
+                    "gepa_optimize",
+                    "code_mutation",
+                    "structural_experiment",
+                    "consult_gate_probe",
+                    "structural_prune",
+                    "slot_compact",
+                    "train_routing_models",
+                    "distill_skillbank",
+                    "reset_memories",
+                    "deep_eval",
+                    "rollback",
+                    "distill_knowledge",
                 ]
                 (
                     action_availability_text,
@@ -6303,52 +6307,53 @@ def _run_loop_inner(
             )
             outcome_progress_pressure_text = _build_outcome_progress_pressure()
 
-            prompt = CONTROLLER_PROMPT_TEMPLATE.format(
-                constitution=constitution_text,
-                system_card=system_card_text,
-                pareto_summary=archive.summary_text(tier=DEFAULT_FRONTIER_TIER),
-                pareto_geometry=pareto_geometry_text,
-                planner_evidence=planner_evidence_text,
-                journal_trustworthiness=journal_trustworthiness_text,
-                hypotheses_under_test=hypotheses_text,
-                journal_summary=journal.summary_text(PLANNER_JOURNAL_SUMMARY_LIMIT),
-                seeder_status=json.dumps(seeder.convergence_status(), indent=2),
-                batch_telemetry=batch_telemetry_text,
-                species_effectiveness=json.dumps(
-                    journal.species_effectiveness(), indent=2
-                ),
-                health_status="OK" if not dry_run else "dry_run",
-                memory_count=memory_count,
-                converged=converged,
-                slot_memory=slot_memory_text,
-                action_availability=action_availability_text,
-                available_action_schemas=_format_available_action_schemas(
-                    selectable_action_types
-                ),
-                fable_gate_advisory=_build_fable_gate_advisory(),
-                higher_tier_pressure=higher_tier_pressure_text,
-                eval_coverage_pressure=eval_coverage_pressure_text,
-                outcome_progress_pressure=outcome_progress_pressure_text,
-                planner_strategy_hints=planner_strategy_hints_text,
-                repo_readiness_advisory=_build_repo_readiness_advisory(),
-                budget=json.dumps(meta.budget.as_dict(), indent=2),
-                suite_quality_trends=_format_suite_trends(journal.suite_quality_trend(10)),
-                insights_structured=insights_structured_text,
-                stagnation_signal=stagnation_signal,
-                exploration_block=exploration_block,
-                short_term_memory=memory.refresh_from_journal(journal),  # W5 generated STM
-                prior_planner_decisions=_build_prior_planner_decision_digest(),
-                last_criticism=last_criticism_text,  # AP-23
-                model_signatures=model_signatures_text,
-                blacklist_text=blacklist_text,
-                operator_outbox_feedback=_build_operator_outbox_feedback(),
-                feature_flags_block=_build_feature_flags_block(
-                    lab,
-                    denylisted_flags=_PLANNER_DENYLISTED_FEATURE_FLAGS,
-                ),
-                last_invalid_feedback=_build_last_invalid_feedback(state),
-                plot_paths="\n".join(f"  - {p}" for p in plot_paths) or "  (none yet)",
-            ) + peaf.peaf_prompt_addendum()
+            prompt = (
+                CONTROLLER_PROMPT_TEMPLATE.format(
+                    constitution=constitution_text,
+                    system_card=system_card_text,
+                    pareto_summary=archive.summary_text(tier=DEFAULT_FRONTIER_TIER),
+                    pareto_geometry=pareto_geometry_text,
+                    planner_evidence=planner_evidence_text,
+                    journal_trustworthiness=journal_trustworthiness_text,
+                    hypotheses_under_test=hypotheses_text,
+                    journal_summary=journal.summary_text(PLANNER_JOURNAL_SUMMARY_LIMIT),
+                    seeder_status=json.dumps(seeder.convergence_status(), indent=2),
+                    batch_telemetry=batch_telemetry_text,
+                    species_effectiveness=json.dumps(journal.species_effectiveness(), indent=2),
+                    health_status="OK" if not dry_run else "dry_run",
+                    memory_count=memory_count,
+                    converged=converged,
+                    slot_memory=slot_memory_text,
+                    action_availability=action_availability_text,
+                    available_action_schemas=_format_available_action_schemas(
+                        selectable_action_types
+                    ),
+                    fable_gate_advisory=_build_fable_gate_advisory(),
+                    higher_tier_pressure=higher_tier_pressure_text,
+                    eval_coverage_pressure=eval_coverage_pressure_text,
+                    outcome_progress_pressure=outcome_progress_pressure_text,
+                    planner_strategy_hints=planner_strategy_hints_text,
+                    repo_readiness_advisory=_build_repo_readiness_advisory(),
+                    budget=json.dumps(meta.budget.as_dict(), indent=2),
+                    suite_quality_trends=_format_suite_trends(journal.suite_quality_trend(10)),
+                    insights_structured=insights_structured_text,
+                    stagnation_signal=stagnation_signal,
+                    exploration_block=exploration_block,
+                    short_term_memory=memory.refresh_from_journal(journal),  # W5 generated STM
+                    prior_planner_decisions=_build_prior_planner_decision_digest(),
+                    last_criticism=last_criticism_text,  # AP-23
+                    model_signatures=model_signatures_text,
+                    blacklist_text=blacklist_text,
+                    operator_outbox_feedback=_build_operator_outbox_feedback(),
+                    feature_flags_block=_build_feature_flags_block(
+                        lab,
+                        denylisted_flags=_PLANNER_DENYLISTED_FEATURE_FLAGS,
+                    ),
+                    last_invalid_feedback=_build_last_invalid_feedback(state),
+                    plot_paths="\n".join(f"  - {p}" for p in plot_paths) or "  (none yet)",
+                )
+                + peaf.peaf_prompt_addendum()
+            )
 
             phase.set(
                 "planner_invoke",
@@ -6415,8 +6420,7 @@ def _run_loop_inner(
             # Mirrors the critic_reject_loop / meta / skip durable halts.
             _gate_action = planner_decision.action
             _gate_is_bl = bool(
-                isinstance(_gate_action, dict)
-                and check_blacklist(_gate_action, blacklist)
+                isinstance(_gate_action, dict) and check_blacklist(_gate_action, blacklist)
             )
             _gate_is_rep = bool(
                 isinstance(_gate_action, dict)
@@ -6601,7 +6605,12 @@ def _run_loop_inner(
             # (seed/distill) actions so the planner cannot rationalize no-op work
             # forever — force a frontier-moving experiment instead.
             action, rationale = _enforce_experiment_quota(
-                action, state, memory_count, rationale, trial_counter, blacklist,
+                action,
+                state,
+                memory_count,
+                rationale,
+                trial_counter,
+                blacklist,
             )
 
             action, rationale, seq_fresh_eval_context = _maybe_force_seq_promotion_fresh_eval(
@@ -6689,17 +6698,15 @@ def _run_loop_inner(
             )
 
         if critic_repeat_skip is None:
-            action, rationale, seq_gate_preflight = (
-                _maybe_defer_seq_unreachable_candidate_action(
-                    action,
-                    state=state,
-                    journal=journal,
-                    blacklist=blacklist,
-                    rationale=rationale,
-                    trial_counter=trial_counter,
-                    tier=DEFAULT_FRONTIER_TIER,
-                    enabled=gate.use_sequential,
-                )
+            action, rationale, seq_gate_preflight = _maybe_defer_seq_unreachable_candidate_action(
+                action,
+                state=state,
+                journal=journal,
+                blacklist=blacklist,
+                rationale=rationale,
+                trial_counter=trial_counter,
+                tier=DEFAULT_FRONTIER_TIER,
+                enabled=gate.use_sequential,
             )
             if seq_gate_preflight is not None:
                 seq_fresh_eval_context = None
@@ -6739,7 +6746,8 @@ def _run_loop_inner(
             if blocked_reason:
                 log.warning(
                     "Trial %d: action blacklisted (%s), recording invalid skip",
-                    trial_counter, blocked_reason,
+                    trial_counter,
+                    blocked_reason,
                 )
                 pre_dispatch_skip = _blacklisted_action_skip(action, blocked_reason)
 
@@ -6789,10 +6797,10 @@ def _run_loop_inner(
             eval_result = pre_dispatch_skip
             species_name = pre_dispatch_skip.action_type or action.get("type", "unknown")
         elif dry_run:
-            phase.set("dispatch_dry_run", trial_id=trial_counter, action_type=action.get("type", ""))
-            eval_result = EvalResult(
-                tier=0, quality=2.5, speed=15.0, cost=0.3, reliability=0.95
+            phase.set(
+                "dispatch_dry_run", trial_id=trial_counter, action_type=action.get("type", "")
             )
+            eval_result = EvalResult(tier=0, quality=2.5, speed=15.0, cost=0.3, reliability=0.95)
             species_name = action.get("type", "unknown").split("_")[0]
         else:
             phase.set(
@@ -6802,8 +6810,18 @@ def _run_loop_inner(
                 idle_reason="running selected action",
             )
             eval_result, species_name = dispatch_action(
-                action, seeder, swarm, forge, lab, tower, gate, archive,
-                journal, state, strategy_store=strategy_store, evo=evo,
+                action,
+                seeder,
+                swarm,
+                forge,
+                lab,
+                tower,
+                gate,
+                archive,
+                journal,
+                state,
+                strategy_store=strategy_store,
+                evo=evo,
                 watcher=watcher,
             )
             phase.set(
@@ -6829,7 +6847,9 @@ def _run_loop_inner(
                 log.info(
                     "Meta action '%s' executed (no eval, no metrics) — not counted "
                     "as a trial (consecutive meta=%d, trial stays at %d)",
-                    action_type, meta_streak, trial_counter,
+                    action_type,
+                    meta_streak,
+                    trial_counter,
                 )
                 if meta_streak >= MAX_CONSECUTIVE_META:
                     # Durable, terminal-until-operator-resume halt. Previously
@@ -6883,9 +6903,7 @@ def _run_loop_inner(
                 skip_status = eval_result.status
                 skip_reason = eval_result.reason
                 skip_bug_corrupted_by = getattr(eval_result, "bug_corrupted_by", "") or ""
-                skip_bug_corrupted_reason = (
-                    getattr(eval_result, "bug_corrupted_reason", "") or ""
-                )
+                skip_bug_corrupted_reason = getattr(eval_result, "bug_corrupted_reason", "") or ""
             else:
                 skip_status = "skipped"
                 skip_reason = f"{action_type} returned no eval result (handler no-op)"
@@ -6908,8 +6926,13 @@ def _run_loop_inner(
 
             try:
                 _record_skip_trial(
-                    journal, trial_counter, action, species_name,
-                    skip_status, skip_reason, memory_count,
+                    journal,
+                    trial_counter,
+                    action,
+                    species_name,
+                    skip_status,
+                    skip_reason,
+                    memory_count,
                     bug_corrupted_by=skip_bug_corrupted_by,
                     bug_corrupted_reason=skip_bug_corrupted_reason,
                 )
@@ -6920,14 +6943,21 @@ def _run_loop_inner(
                 log.warning(
                     "Trial %d %s (%s): %s [bug_corrupted_by=%s; not counted "
                     "against planner signature pressure]",
-                    trial_counter, skip_status, action_type, skip_reason,
+                    trial_counter,
+                    skip_status,
+                    action_type,
+                    skip_reason,
                     skip_bug_corrupted_by,
                 )
             else:
                 log.warning(
                     "Trial %d %s (%s): %s [signature seen %d×, consecutive skips=%d]",
-                    trial_counter, skip_status, action_type, skip_reason,
-                    sig_seen, skip_streak,
+                    trial_counter,
+                    skip_status,
+                    action_type,
+                    skip_reason,
+                    sig_seen,
+                    skip_streak,
                 )
             phase.set(
                 "dispatch_skip",
@@ -6942,12 +6972,12 @@ def _run_loop_inner(
             # scope-violating numeric_trial would ban all numeric_trials).
             if (
                 not skip_bug_corrupted_by
-                and
-                skip_status == "invalid"
+                and skip_status == "invalid"
                 and sig_seen >= INVALID_SIGNATURE_BLACKLIST_THRESHOLD
             ):
                 append_blacklist(
-                    action, trial_counter,
+                    action,
+                    trial_counter,
                     f"Auto-blacklisted: {sig_seen}× invalid — {skip_reason[:80]}",
                     reason_class="invalid_repeat",
                 )
@@ -6970,7 +7000,9 @@ def _run_loop_inner(
                     "Planner emitted %d consecutive non-executing actions "
                     "(last: %s — %s); pausing for operator review (stuck planner "
                     "or impossible action space).",
-                    skip_streak, action_type, skip_reason,
+                    skip_streak,
+                    action_type,
+                    skip_reason,
                 )
                 phase.set(
                     "skip_loop_halt",
@@ -6996,12 +7028,8 @@ def _run_loop_inner(
         # Trials that detected exogenous reloads but RECOVERED via retry are
         # sound — they just carry audit metadata in eval_details so the
         # operator can see this trial weathered a reload cleanly.
-        has_exo_unrecovered = (
-            getattr(eval_result, "n_exogenous_unrecovered", 0) > 0
-        )
-        has_exo_recovered = (
-            getattr(eval_result, "n_exogenous_recovered", 0) > 0
-        )
+        has_exo_unrecovered = getattr(eval_result, "n_exogenous_unrecovered", 0) > 0
+        has_exo_recovered = getattr(eval_result, "n_exogenous_recovered", 0) > 0
         seq_finalized = False
         seq_inputs: dict[str, Any] | None = None
 
@@ -7010,6 +7038,7 @@ def _run_loop_inner(
             # as a bug-corrupted placeholder for audit; the planner's
             # trustworthiness gate excludes it from learning surfaces.
             from safety_gate import SafetyVerdict  # type: ignore
+
             verdict = SafetyVerdict(passed=True)
             failure_analysis = (
                 f"Excluded: unrecovered operator/service reload during trial "
@@ -7018,7 +7047,8 @@ def _run_loop_inner(
             )
             log.warning(
                 "Trial %d skipped safety gate + archive: %s",
-                trial_counter, failure_analysis,
+                trial_counter,
+                failure_analysis,
             )
         else:
             # Safety gate
@@ -7027,9 +7057,7 @@ def _run_loop_inner(
                 action=action,
                 tier=eval_result.tier,
                 candidate_override=(
-                    str(seq_fresh_eval_context.get("candidate"))
-                    if seq_fresh_eval_context
-                    else None
+                    str(seq_fresh_eval_context.get("candidate")) if seq_fresh_eval_context else None
                 ),
             )
             verdict = gate.check(
@@ -7051,21 +7079,21 @@ def _run_loop_inner(
                 is_fresh_eval=seq_fresh_eval_context is not None,
                 fresh_eval_context=seq_fresh_eval_context,
             )
-            if verdict.seq is not None and verdict.seq.get(
-                "baseline_reference_state"
-            ) == "stale-reference":
+            if (
+                verdict.seq is not None
+                and verdict.seq.get("baseline_reference_state") == "stale-reference"
+            ):
                 verdict.categories.append("seq_stale_reference")
             failure_analysis = gate.analyze_failure(eval_result, verdict)
             if not verdict:
-                log.warning(
-                    "Safety violations: %s", "; ".join(verdict.violations)
-                )
+                log.warning("Safety violations: %s", "; ".join(verdict.violations))
                 if gate.should_rollback():
                     log.error("Consecutive failure limit reached, rolling back")
                     state["_dispatch_deficiency"] = "consecutive_failures"  # AP-14
                     # B2: Auto-append failing config to blacklist
                     append_blacklist(
-                        action, trial_counter,
+                        action,
+                        trial_counter,
                         f"Auto-blacklisted: 3 consecutive failures ending at trial {trial_counter}",
                         reason_class="safety_failure",
                     )
@@ -7074,7 +7102,9 @@ def _run_loop_inner(
                         try:
                             strategy_store.close()
                         except Exception as exc:
-                            log.warning("StrategyStore close before rollback restore failed: %s", exc)
+                            log.warning(
+                                "StrategyStore close before rollback restore failed: %s", exc
+                            )
                     restore_result = lab.restore_checkpoint()
                     memory = ShortTermMemory()
                     try:
@@ -7160,22 +7190,23 @@ def _run_loop_inner(
             log.info(
                 "Trial %d: Pareto representative admission %s (T%d fp=%s n=%d) "
                 "median_objs=%s — AP-22/strategy learning still excluded (%s)",
-                trial_counter, pareto_status, eval_result.tier, fingerprint,
+                trial_counter,
+                pareto_status,
+                eval_result.tier,
+                fingerprint,
                 archive.reproduction_count(eval_result.tier, fingerprint),
-                [round(float(x), 3) for x in rep_objs], learning_excluded_by,
+                [round(float(x), 3) for x in rep_objs],
+                learning_excluded_by,
             )
-            criticism = learning_exclusion_criticism(
-                learning_excluded_by, learning_excluded_reason
-            )
+            criticism = learning_exclusion_criticism(learning_excluded_by, learning_excluded_reason)
         elif learning_excluded_by:
             pareto_status = "dominated"  # placeholder for JournalEntry only
             log.info(
                 "Trial %d: archive.update SKIPPED (learning_excluded_by=%s)",
-                trial_counter, learning_excluded_by,
+                trial_counter,
+                learning_excluded_by,
             )
-            criticism = learning_exclusion_criticism(
-                learning_excluded_by, learning_excluded_reason
-            )
+            criticism = learning_exclusion_criticism(learning_excluded_by, learning_excluded_reason)
         elif not verdict.passed:
             # Safety verdict FAILED and this is not a benign within-noise exclusion
             # (e.g. a genuine per-suite regression at adequate n, possibly co-tagged
@@ -7188,7 +7219,8 @@ def _run_loop_inner(
             pareto_status = "dominated"  # placeholder for JournalEntry only
             log.info(
                 "Trial %d: archive.update SKIPPED (safety verdict failed: %s)",
-                trial_counter, ", ".join(verdict.categories) or "unspecified",
+                trial_counter,
+                ", ".join(verdict.categories) or "unspecified",
             )
         else:
             pareto_status = archive.update(
@@ -7362,8 +7394,12 @@ def _run_loop_inner(
                             "signature_confidence": bsv_payload.get("signature_confidence"),
                             "severity_vs_previous_incumbent": bsv_payload.get("severity"),
                             "reasons": list(bsv_payload.get("reasons") or [])[:8],
-                            "conflict_severity": (bsv_payload.get("conflict_report") or {}).get("severity"),
-                            "conflict_count": (bsv_payload.get("conflict_report") or {}).get("conflict_count"),
+                            "conflict_severity": (bsv_payload.get("conflict_report") or {}).get(
+                                "severity"
+                            ),
+                            "conflict_count": (bsv_payload.get("conflict_report") or {}).get(
+                                "conflict_count"
+                            ),
                             "signature": signature,
                         }
             except Exception as _bsv_err:  # observe-only must never disrupt the trial loop
@@ -7399,9 +7435,9 @@ def _run_loop_inner(
 
         # Build active_flags from action context
         active_flags_dict = action.get("flags", {})
-        active_flags_list = [
-            f"{k}={v}" for k, v in active_flags_dict.items()
-        ] if active_flags_dict else []
+        active_flags_list = (
+            [f"{k}={v}" for k, v in active_flags_dict.items()] if active_flags_dict else []
+        )
 
         # AP-14: Extract deficiency category from safety verdict + dispatch side channel
         deficiency_category = ""
@@ -7431,6 +7467,19 @@ def _run_loop_inner(
         else:
             bug_corrupted_by = ""
             bug_corrupted_reason = ""
+        _update_contrastive_trace_state(
+            state,
+            tower,
+            trace_text=recent_trace_text,
+            trial_id=trial_counter,
+            species=species_name,
+            action_type=action.get("type", ""),
+            pareto_status=pareto_status,
+            verdict=verdict,
+            bug_corrupted_by=bug_corrupted_by,
+            failure_analysis=failure_analysis,
+            eval_result=eval_result,
+        )
         metric_schema_version = getattr(eval_result, "metric_schema_version", 1)
         harness_metrics = getattr(eval_result, "harness_metrics", {}) or {}
         oracle_adequacy = getattr(eval_result, "oracle_adequacy", {}) or {}
@@ -7496,8 +7545,8 @@ def _run_loop_inner(
             }
         if seq_baseline_draw_reference is not None:
             eval_details_dict["seq_baseline_reference_draw"] = True
-            eval_details_dict["seq_baseline_reference_reason"] = (
-                seq_baseline_draw_reference.get("reason", "")
+            eval_details_dict["seq_baseline_reference_reason"] = seq_baseline_draw_reference.get(
+                "reason", ""
             )
         if seq_fresh_eval_context is not None:
             eval_details_dict["seq_promotion_fresh_eval"] = {
@@ -7787,6 +7836,7 @@ def _auto_action(
         # Default 0.30 (30% GEPA). Tunable via autopilot_state["gepa_ratio"].
         # Set to 1.0 after AR-3 data confirms GEPA dominance on Pareto frontier.
         import random
+
         _state = load_state()
         gepa_ratio = float(_state.get("gepa_ratio", 0.30))
         if random.random() < gepa_ratio:
@@ -7806,7 +7856,8 @@ def _git_tag(tag: str, message: str) -> None:
     try:
         subprocess.run(
             ["git", "tag", "-a", tag, "-m", message],
-            capture_output=True, timeout=10,
+            capture_output=True,
+            timeout=10,
             cwd=str(ORCH_ROOT),
         )
     except Exception:
@@ -7865,8 +7916,8 @@ def _archive_for_read_command(
         raise ValueError(f"unknown archive source: {source}")
 
     state = load_state()
-    deinflate_before_ts, deinflate_factor, exclude_before_ts = (
-        _archive_epoch_params_from_state(state)
+    deinflate_before_ts, deinflate_factor, exclude_before_ts = _archive_epoch_params_from_state(
+        state
     )
     archive = pareto_archive_from_journal_rows(
         _journal_rows_for_archive(journal),
@@ -7915,7 +7966,8 @@ def _append_baseline_promotion_event(
 
 
 def _baseline_promotion_summary_lines(
-    state: dict[str, Any], journal: ExperimentJournal,
+    state: dict[str, Any],
+    journal: ExperimentJournal,
 ) -> list[str]:
     """Read-only baseline-as-ledger preview for operator commands."""
     reconciliation = reconcile_baseline_ledger(
@@ -7926,7 +7978,8 @@ def _baseline_promotion_summary_lines(
 
 
 def _frontier_rerun_summary_lines(
-    state: dict[str, Any], journal: ExperimentJournal,
+    state: dict[str, Any],
+    journal: ExperimentJournal,
 ) -> list[str]:
     """Read-only frontier-rerun marker summary for operator commands."""
     marker = state.get("frontier_rerun_required")
@@ -7950,9 +8003,7 @@ def _frontier_rerun_summary_lines(
         action_type = action.get("type", "unknown")
         surface = action.get("surface")
         action_label = f"{action_type}/{surface}" if surface else str(action_type)
-        lines.append(
-            f"Frontier rerun pending: trial #{pending.get('trial_id')} {action_label}"
-        )
+        lines.append(f"Frontier rerun pending: trial #{pending.get('trial_id')} {action_label}")
 
     blocked = state.get("frontier_rerun_blocked")
     if isinstance(blocked, dict):
@@ -8128,7 +8179,11 @@ def cmd_peaf(args: argparse.Namespace) -> None:
     """
     journal = ExperimentJournal()
     report = peaf.journal_peaf_correlation(journal.all_entries(), min_n=args.min_n)
-    enabled = "ON (default)" if peaf.is_peaf_enabled() else "OFF (EPYC_AUTOPILOT_PEAF explicitly disabled — set to 1 to re-enable)"
+    enabled = (
+        "ON (default)"
+        if peaf.is_peaf_enabled()
+        else "OFF (EPYC_AUTOPILOT_PEAF explicitly disabled — set to 1 to re-enable)"
+    )
     print(f"PEAF status: {enabled}")
     print(f"Total journal entries: {journal.count()}")
     print(f"Entries with PEAF prediction + parent: {report['n_predicted']}")
@@ -8140,9 +8195,13 @@ def cmd_peaf(args: argparse.Namespace) -> None:
         print(f"r² (surprise vs Δquality from parent): {report['r_squared']:.4f}")
     print(f"Decision: {report['decision']}")
     if report["decision"] == "abandon":
-        print("  → r² < 0.10 — PEAF signal does not correlate with config-quality gradient; consider abandoning.")
+        print(
+            "  → r² < 0.10 — PEAF signal does not correlate with config-quality gradient; consider abandoning."
+        )
     elif report["decision"] == "continue":
-        print("  → r² ≥ 0.10 — PEAF signal correlates; consider promoting surprise as Pareto co-objective.")
+        print(
+            "  → r² ≥ 0.10 — PEAF signal correlates; consider promoting surprise as Pareto co-objective."
+        )
     else:
         print("  → keep collecting.")
 
@@ -8165,12 +8224,10 @@ def _format_baseline_tier_yaml(baseline: Baseline) -> str:
             int(tier): quality for tier, quality in sorted(baseline.baselines_by_tier.items())
         },
         "per_suite_quality_by_tier": {
-            int(tier): suites
-            for tier, suites in sorted(baseline.per_suite_quality_by_tier.items())
+            int(tier): suites for tier, suites in sorted(baseline.per_suite_quality_by_tier.items())
         },
         "per_suite_counts_by_tier": {
-            int(tier): counts
-            for tier, counts in sorted(baseline.per_suite_counts_by_tier.items())
+            int(tier): counts for tier, counts in sorted(baseline.per_suite_counts_by_tier.items())
         },
     }
     return yaml.safe_dump(data, sort_keys=False, allow_unicode=True).rstrip()
@@ -8305,8 +8362,7 @@ def cmd_calibrate_baseline(args: argparse.Namespace) -> None:
     print(
         "  baselines_by_tier: "
         + ", ".join(
-            f"T{tier}={quality:.3f}"
-            for tier, quality in sorted(baseline.baselines_by_tier.items())
+            f"T{tier}={quality:.3f}" for tier, quality in sorted(baseline.baselines_by_tier.items())
         )
     )
 
@@ -8327,19 +8383,21 @@ def main() -> None:
         force=True,
     )
 
-    parser = argparse.ArgumentParser(
-        description="AutoPilot: Continuous recursive optimization"
-    )
+    parser = argparse.ArgumentParser(description="AutoPilot: Continuous recursive optimization")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     # start
     p_start = subparsers.add_parser("start")
     p_start.add_argument("--dry-run", action="store_true")
     p_start.add_argument("--max-trials", type=int, default=None)
-    p_start.add_argument("--no-controller", action="store_true",
-                         help="Use autonomous species selection instead of Claude CLI")
-    p_start.add_argument("--tui", action="store_true",
-                         help="Live Rich TUI for inference monitoring (hang detection)")
+    p_start.add_argument(
+        "--no-controller",
+        action="store_true",
+        help="Use autonomous species selection instead of Claude CLI",
+    )
+    p_start.add_argument(
+        "--tui", action="store_true", help="Live Rich TUI for inference monitoring (hang detection)"
+    )
     p_start.set_defaults(func=cmd_start)
 
     # status
@@ -8504,6 +8562,7 @@ def cmd_reset_memory(args: argparse.Namespace) -> None:
 def cmd_monitor(args: argparse.Namespace) -> None:
     """Launch standalone TUI monitor (read-only)."""
     from autopilot_tui import AutoPilotTUI
+
     print("Starting standalone TUI monitor (read-only)...")
     print("Press Ctrl+C to exit.\n")
     with AutoPilotTUI():

@@ -138,6 +138,57 @@ def _entry(
     )
 
 
+def test_update_contrastive_trace_state_labels_frontier_success() -> None:
+    state: dict[str, Any] = {}
+
+    class FakeTower:
+        update_contrastive_trace_bank = staticmethod(
+            autopilot.EvalTower.update_contrastive_trace_bank
+        )
+
+        def capture_contrastive_traces(self, **kwargs):
+            return autopilot.EvalTower().capture_contrastive_traces(**kwargs)
+
+    autopilot._update_contrastive_trace_state(
+        state,
+        FakeTower(),
+        trace_text="ROLE=worker_general\nRESPONSE:\nok",
+        trial_id=21,
+        species="prompt_forge",
+        action_type="prompt_mutation",
+        pareto_status="frontier",
+        verdict=SimpleNamespace(passed=True),
+        eval_result=SimpleNamespace(tier=1, quality=2.2, speed=33.0),
+    )
+
+    assert state["contrastive_trace_bank"][0]["outcome"] == "success"
+    assert state["contrastive_trace_bank"][0]["trial_id"] == 21
+    assert "## Contrastive Execution Traces" in state["contrastive_traces"]
+
+
+def test_update_contrastive_trace_state_skips_bug_corrupted_rows() -> None:
+    state: dict[str, Any] = {}
+
+    class FakeTower:
+        def update_contrastive_trace_bank(self, *args, **kwargs):  # pragma: no cover
+            raise AssertionError("bug-corrupted trace should not be stored")
+
+    autopilot._update_contrastive_trace_state(
+        state,
+        FakeTower(),
+        trace_text="ROLE=worker_general\nRESPONSE:\npartial",
+        trial_id=22,
+        species="prompt_forge",
+        action_type="prompt_mutation",
+        pareto_status="dominated",
+        verdict=SimpleNamespace(passed=False),
+        bug_corrupted_by="resource_contention",
+        failure_analysis="Excluded reload",
+    )
+
+    assert "contrastive_trace_bank" not in state
+
+
 def test_seq_inputs_use_trusted_same_tier_prior_rows(tmp_path: Path) -> None:
     action = {"type": "seed_batch", "n_questions": 10}
     candidate = autopilot._config_fingerprint(action)
@@ -971,9 +1022,7 @@ def test_maybe_force_seq_baseline_draw_uses_alternate_when_default_blacklisted(
         state=state,
         journal=journal,
         tier=1,
-        blacklist=[
-            {"pattern": {"type": "seed_batch", "n_questions": 14}, "reason": "test"}
-        ],
+        blacklist=[{"pattern": {"type": "seed_batch", "n_questions": 14}, "reason": "test"}],
         rationale=None,
         trial_counter=9,
         enabled=True,
@@ -1010,9 +1059,7 @@ def test_maybe_force_seq_baseline_draw_suppresses_recent_blocked_latch(
         state=state,
         journal=journal,
         tier=1,
-        blacklist=[
-            {"pattern": forced_default, "reason": "default still blocked"}
-        ],
+        blacklist=[{"pattern": forced_default, "reason": "default still blocked"}],
         rationale={"planner": "kept"},
         trial_counter=12,
         enabled=True,
@@ -1046,9 +1093,7 @@ def test_maybe_force_seq_baseline_draw_retries_old_blocked_latch(
         state=state,
         journal=journal,
         tier=1,
-        blacklist=[
-            {"pattern": forced_default, "reason": "default still blocked"}
-        ],
+        blacklist=[{"pattern": forced_default, "reason": "default still blocked"}],
         rationale=None,
         trial_counter=14,
         enabled=True,
@@ -1744,9 +1789,7 @@ def _run_loop_inner_seq_harness(
 
     fake_journal = FakeJournal()
 
-    def fake_check_blacklist(
-        action: dict[str, Any], _blacklist: list[dict[str, Any]]
-    ) -> None:
+    def fake_check_blacklist(action: dict[str, Any], _blacklist: list[dict[str, Any]]) -> None:
         return None
 
     def fake_replace_blacklisted_seed_fallback(
@@ -1878,13 +1921,17 @@ def _run_loop_inner_seq_harness(
         "_journal_archive_payload_for_authority",
         lambda *args, **kwargs: None,
     )
-    monkeypatch.setattr(autopilot, "_sync_startup_archive_from_journal_authority", lambda *args, **kwargs: False)
+    monkeypatch.setattr(
+        autopilot, "_sync_startup_archive_from_journal_authority", lambda *args, **kwargs: False
+    )
     monkeypatch.setattr(
         autopilot,
         "_recover_from_in_flight_trial",
         lambda _state, _journal, _archive, trial_counter: trial_counter,
     )
-    monkeypatch.setattr(autopilot, "_save_state_with_journal_archive_authority", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        autopilot, "_save_state_with_journal_archive_authority", lambda *args, **kwargs: None
+    )
     monkeypatch.setattr(autopilot, "_append_baseline_promotion_event", lambda *args, **kwargs: None)
     monkeypatch.setattr(autopilot, "health_check", lambda *args, **kwargs: object())
     monkeypatch.setattr(autopilot, "should_generate_today", lambda _state: False)
@@ -2005,9 +2052,7 @@ def test_run_loop_inner_forced_seq_fresh_eval_bypasses_controller_planner(
     )
 
     assert baseline_update_calls == [(True, 0)]
-    assert returned_state["seq_last_promotion_finalized"]["candidate"] == (
-        "candidate-controller"
-    )
+    assert returned_state["seq_last_promotion_finalized"]["candidate"] == ("candidate-controller")
     assert "session_id" not in returned_state
 
 
@@ -2047,9 +2092,7 @@ def test_run_loop_inner_forced_frontier_rerun_bypasses_controller_planner(
         planner_should_not_run=True,
     )
 
-    assert returned_state["frontier_rerun_forced"]["forced_action"]["type"] == (
-        "numeric_trial"
-    )
+    assert returned_state["frontier_rerun_forced"]["forced_action"]["type"] == ("numeric_trial")
 
 
 def test_run_loop_inner_nonfinalized_seq_does_not_promote_and_leaves_pending(

@@ -151,9 +151,7 @@ def _sample_scoreable_eval_questions(
     excluded_suites = exclude_suites or set()
     filtered_pool = {
         suite: [
-            q
-            for q in suite_qs
-            if _question_qid(q) not in excluded and _is_scoreable_question(q)
+            q for q in suite_qs if _question_qid(q) not in excluded and _is_scoreable_question(q)
         ]
         for suite, suite_qs in pool.items()
         if suite not in excluded_suites
@@ -224,11 +222,7 @@ def _sample_scoreable_eval_questions_for_pool_tier(
     if not pool or n <= 0:
         return []
     filtered_pool = {
-        suite: [
-            q
-            for q in suite_qs
-            if _question_pool_tier(q) == int(pool_tier)
-        ]
+        suite: [q for q in suite_qs if _question_pool_tier(q) == int(pool_tier)]
         for suite, suite_qs in pool.items()
     }
     return _sample_scoreable_eval_questions(
@@ -378,9 +372,7 @@ def _promotion_excluded_suites_from_health() -> tuple[set[str], dict[str, Any]]:
 
 
 def _read_registry_timeout(category: str, key: str, fallback: int) -> int:
-    registry_path = (
-        Path(__file__).resolve().parents[2] / "orchestration" / "model_registry.yaml"
-    )
+    registry_path = Path(__file__).resolve().parents[2] / "orchestration" / "model_registry.yaml"
     try:
         data = yaml.safe_load(registry_path.read_text()) or {}
         timeouts = data.get("runtime_defaults", {}).get("timeouts", {})
@@ -397,6 +389,7 @@ def _default_eval_timeout() -> int:
 
 
 DEFAULT_TIMEOUT = _default_eval_timeout()
+
 
 # Concurrent fan-out for sentinel/pool evaluations.
 #
@@ -429,10 +422,7 @@ def _same_role_matrix_allows_eval_fanout(role: str) -> bool:
         current_hash = topology_fingerprint_for_matrix(NUMA_CONFIG, matrix)
         if matrix_status(current_topology_hash=current_hash) != MatrixStatus.OK:
             return False
-        return (
-            pair_policy(role, role, TrafficClass.BACKGROUND, matrix=matrix)
-            == PairDecision.ALLOW
-        )
+        return pair_policy(role, role, TrafficClass.BACKGROUND, matrix=matrix) == PairDecision.ALLOW
     except Exception:
         return False
 
@@ -502,6 +492,7 @@ def _eval_concurrency() -> int:
     bottleneck = os.environ.get("AUTOPILOT_EVAL_BOTTLENECK_ROLE", "frontdoor")
     try:
         from src.runtime.instance_topology import max_safe_concurrency
+
         topology_cap = max(1, max_safe_concurrency(bottleneck))
         if topology_cap <= 1:
             return 1
@@ -514,8 +505,7 @@ def _eval_concurrency() -> int:
 
 def _eval_batch_id(*, label: str, n_questions: int, started_at_s: float) -> str:
     safe_label = "".join(
-        ch if ch.isalnum() or ch in {"-", "_"} else "-"
-        for ch in str(label or "eval").strip()
+        ch if ch.isalnum() or ch in {"-", "_"} else "-" for ch in str(label or "eval").strip()
     ).strip("-_")
     if not safe_label:
         safe_label = "eval"
@@ -646,6 +636,7 @@ def check_cross_family(generator_model: str, verifier_model: str) -> bool:
     Returns True if cross-family constraint is satisfied (safe to proceed).
     Returns True if either model family is unknown (permissive default).
     """
+
     def _get_family(model_name: str) -> str:
         for family, patterns in VERIFICATION_FAMILIES.items():
             if any(p.lower() in model_name.lower() for p in patterns):
@@ -783,6 +774,7 @@ class EvalTower:
         loaded = yaml.safe_load(TOOL_SENTINEL_PATH.read_text()) or []
         try:
             from src.tools.eval_secret import load_persisted_secrets
+
             secrets = load_persisted_secrets()
         except Exception as e:  # noqa: BLE001
             log.warning("tool_sentinels: could not load runtime secrets: %s", e)
@@ -810,6 +802,7 @@ class EvalTower:
             _research_root = Path("/mnt/raid0/llm/epyc-inference-research")
             sys.path.insert(0, str(_research_root / "scripts" / "benchmark"))
             from question_pool import load_pool
+
             self._pool = load_pool()
         except Exception as e:
             log.warning("Could not load question pool: %s", e)
@@ -1011,9 +1004,7 @@ class EvalTower:
                 combined[dim] = sum(values) / len(values)
         return combined
 
-    def _eval_question(
-        self, q: dict, client: httpx.Client
-    ) -> QuestionResult:
+    def _eval_question(self, q: dict, client: httpx.Client) -> QuestionResult:
         """Evaluate a single question through the orchestrator."""
         prompt = q.get("prompt", "")
         expected = q.get("expected", "")
@@ -1076,9 +1067,7 @@ class EvalTower:
                         tool_events=list(resp.get("tools_called") or []),
                         client=client,
                     )
-                    threshold = float(
-                        (scoring_config or {}).get("rubric_pass_threshold", 0.60)
-                    )
+                    threshold = float((scoring_config or {}).get("rubric_pass_threshold", 0.60))
                     correct = aggregate_rubric_score(rubric_scores).score >= threshold
                     scoring_method = "rubric"
                 else:
@@ -1205,7 +1194,10 @@ class EvalTower:
                     correct_so_far = sum(1 for r in results if r and r.correct)
                     log.info(
                         "%s progress: %d/%d (%.0f%% correct)",
-                        label, i + 1, n, 100 * correct_so_far / (i + 1),
+                        label,
+                        i + 1,
+                        n,
+                        100 * correct_so_far / (i + 1),
                     )
                     self._emit_progress(
                         label=label,
@@ -1273,7 +1265,11 @@ class EvalTower:
                         correct_so_far = sum(1 for r in results if r and r.correct)
                         log.info(
                             "%s progress: %d/%d (%.0f%% correct, concurrency=%d)",
-                            label, done, n, 100 * correct_so_far / done, workers,
+                            label,
+                            done,
+                            n,
+                            100 * correct_so_far / done,
+                            workers,
                         )
                         self._emit_progress(
                             label=label,
@@ -1375,9 +1371,7 @@ class EvalTower:
         )
         eval_concurrency = max((r.eval_concurrency for r in results), default=1)
         concurrent_eval = eval_concurrency > 1 and aggregate_speed > 0
-        speed_metric_mode = (
-            "aggregate_batch_tps" if concurrent_eval else "median_request_tps"
-        )
+        speed_metric_mode = "aggregate_batch_tps" if concurrent_eval else "median_request_tps"
         speed = aggregate_speed if concurrent_eval else median_request_speed
 
         # Cost: average cost tier normalized to 0-1 (tier 4 = 1.0)
@@ -1392,10 +1386,7 @@ class EvalTower:
         suite_correct: dict[str, list[bool]] = {}
         for r in results:
             suite_correct.setdefault(r.suite, []).append(r.correct)
-        per_suite = {
-            suite: (sum(vals) / len(vals)) * 3.0
-            for suite, vals in suite_correct.items()
-        }
+        per_suite = {suite: (sum(vals) / len(vals)) * 3.0 for suite, vals in suite_correct.items()}
         # Per-suite question counts (2026-06-06). The per-suite regression gate is
         # otherwise blind to sample size: on a hybrid eval each suite draws only
         # ~2 questions, so the score is quantized to {0.0, 1.5, 3.0} and a single
@@ -1410,21 +1401,16 @@ class EvalTower:
         for r in results:
             partition = r.eval_partition or "core"
             partition_correct.setdefault(partition, []).append(r.correct)
-            partition_suite_correct.setdefault(partition, {}).setdefault(
-                r.suite, []
-            ).append(r.correct)
+            partition_suite_correct.setdefault(partition, {}).setdefault(r.suite, []).append(
+                r.correct
+            )
         partition_quality = {
             partition: (sum(vals) / len(vals)) * 3.0
             for partition, vals in partition_correct.items()
         }
-        partition_counts = {
-            partition: len(vals) for partition, vals in partition_correct.items()
-        }
+        partition_counts = {partition: len(vals) for partition, vals in partition_correct.items()}
         partition_suite_quality = {
-            partition: {
-                suite: (sum(vals) / len(vals)) * 3.0
-                for suite, vals in suites.items()
-            }
+            partition: {suite: (sum(vals) / len(vals)) * 3.0 for suite, vals in suites.items()}
             for partition, suites in partition_suite_correct.items()
         }
 
@@ -1465,6 +1451,7 @@ class EvalTower:
             if distinct_conf > 2 and len(set(correctness_vals)) > 1:
                 try:
                     from sklearn.metrics import roc_auc_score
+
                     auroc = roc_auc_score(correctness_vals, confidences)
                 except (ImportError, ValueError):
                     auroc = 0.0
@@ -1477,9 +1464,7 @@ class EvalTower:
         instruction_tokens = self._count_instruction_tokens(results)
         avg_prompt_tokens = sum(len(r.prompt) // 4 for r in results) / len(results)
         total_per_request = instruction_tokens + avg_prompt_tokens
-        instruction_ratio = (
-            instruction_tokens / total_per_request if total_per_request > 0 else 0.0
-        )
+        instruction_ratio = instruction_tokens / total_per_request if total_per_request > 0 else 0.0
         if instruction_ratio > 0.20:
             log.warning(
                 "AP-16: Instruction token ratio %.1f%% exceeds 20%% threshold "
@@ -1505,7 +1490,7 @@ class EvalTower:
         )
         tool_name_counts: dict[str, int] = {}
         for r in results:
-            for name in (r.tools_called or []):
+            for name in r.tools_called or []:
                 tool_name_counts[name] = tool_name_counts.get(name, 0) + 1
         # Conditional credit — MARGINAL usefulness of tools, computed PER SUITE then
         # averaged, so a trivially-correct no-tool suite cannot anchor the baseline
@@ -1532,8 +1517,8 @@ class EvalTower:
                 _p_wo = sum(1 for r in _wo if r.correct) / len(_wo)
                 per_suite_tool_helpfulness[_suite] = _p_w - _p_wo
         if per_suite_tool_helpfulness:
-            tool_helpfulness = (
-                sum(per_suite_tool_helpfulness.values()) / len(per_suite_tool_helpfulness)
+            tool_helpfulness = sum(per_suite_tool_helpfulness.values()) / len(
+                per_suite_tool_helpfulness
             )
         else:
             tool_helpfulness = float("nan")
@@ -1553,8 +1538,7 @@ class EvalTower:
             if values
         }
         rubric_process_means = {
-            dim: rubric_dimension_means.get(dim, float("nan"))
-            for dim in MINDDR_PROCESS_DIMENSIONS
+            dim: rubric_dimension_means.get(dim, float("nan")) for dim in MINDDR_PROCESS_DIMENSIONS
         }
 
         return EvalResult(
@@ -1620,9 +1604,7 @@ class EvalTower:
             auroc=auroc,
             calibration_violations=cal_violations,
             branching_density=avg_branching,
-            rubric_reasoning_trajectory=rubric_process_means[
-                "reasoning_trajectory"
-            ],
+            rubric_reasoning_trajectory=rubric_process_means["reasoning_trajectory"],
             rubric_tool_calls=rubric_process_means["tool_calls"],
             rubric_outline=rubric_process_means["outline"],
             rubric_content_stage=rubric_process_means["content_stage"],
@@ -1631,8 +1613,7 @@ class EvalTower:
             n_exogenous_unrecovered=sum(1 for r in results if r.exogenous_unrecovered),
             n_external_restart=sum(1 for r in results if r.external_restart),
             exogenous_question_ids=[
-                r.question_id for r in results
-                if (r.exogenous_recovered or r.exogenous_unrecovered)
+                r.question_id for r in results if (r.exogenous_recovered or r.exogenous_unrecovered)
             ],
         )
 
@@ -1726,7 +1707,8 @@ class EvalTower:
         for r in results:
             log.info(
                 "T0 [%s/%s] %s → %s",
-                r.suite, r.question_id,
+                r.suite,
+                r.question_id,
                 "PASS" if r.correct else "FAIL",
                 r.error or "",
             )
@@ -1750,11 +1732,8 @@ class EvalTower:
         audit_policy: dict[str, Any] = {
             "enabled": os.environ.get("AUTOPILOT_W6_AUDIT_BLOCK") == "1",
             "requested_n": max(0, _env_int("AUTOPILOT_W6_AUDIT_N", 10)),
-            "every_n_trials": max(
-                1, _env_int("AUTOPILOT_W6_AUDIT_EVERY_N_TRIALS", 1)
-            ),
-            "shadow_only": os.environ.get("AUTOPILOT_W6_AUDIT_SHADOW_ONLY", "1")
-            != "0",
+            "every_n_trials": max(1, _env_int("AUTOPILOT_W6_AUDIT_EVERY_N_TRIALS", 1)),
+            "shadow_only": os.environ.get("AUTOPILOT_W6_AUDIT_SHADOW_ONLY", "1") != "0",
         }
 
         if configured_core_path and not configured_core_id:
@@ -1903,9 +1882,7 @@ class EvalTower:
         # W6 audit rows are an overfit/generalization signal. Keep them in the
         # per-question ledger, but keep decision metrics paired-core-only by default.
         if audit_policy["active"] and audit_policy["shadow_only"]:
-            decision_results = [
-                r for r in results if (r.eval_partition or "core") != "audit"
-            ]
+            decision_results = [r for r in results if (r.eval_partition or "core") != "audit"]
             result = self._aggregate(decision_results, tier=1)
             result.question_results = full_result.question_results
             for key in (
@@ -2029,9 +2006,8 @@ class EvalTower:
             )
         # Tool-use sentinels also join T2 (the journaled deep eval) for the same
         # reason as T1. Inert ([]) unless AUTOPILOT_TOOL_SENTINELS=1.
-        questions = (
-            _annotate_partition(questions, "core")
-            + _annotate_partition(self._load_tool_sentinels(), "tool_sentinel")
+        questions = _annotate_partition(questions, "core") + _annotate_partition(
+            self._load_tool_sentinels(), "tool_sentinel"
         )
 
         with httpx.Client(timeout=self.timeout) as client:
@@ -2043,9 +2019,7 @@ class EvalTower:
                 [q for q in questions if q.get("eval_partition") == "core"]
             )
             result.details["promotion_eval_policy"] = promotion_policy
-            result.core_id = (
-                f"w8_promotion_eval_v1_trial_{resolved_trial_id}_n{requested_n}"
-            )
+            result.core_id = f"w8_promotion_eval_v1_trial_{resolved_trial_id}_n{requested_n}"
         return result
 
     def eval_t3(
@@ -2182,6 +2156,159 @@ class EvalTower:
             log.warning("Could not capture traces: %s", e)
             return ""
 
+    @staticmethod
+    def _trim_trace_text(trace_text: Any, max_chars: int) -> str:
+        text = str(trace_text or "").strip()
+        if not text or max_chars <= 0:
+            return ""
+        if len(text) <= max_chars:
+            return text
+        return "[trace truncated]\n" + text[-max_chars:]
+
+    @classmethod
+    def update_contrastive_trace_bank(
+        cls,
+        trace_bank: list[dict[str, Any]] | None,
+        *,
+        trace_text: str,
+        outcome: str,
+        trial_id: int | None = None,
+        species: str = "",
+        action_type: str = "",
+        reason: str = "",
+        max_examples_per_outcome: int = 8,
+        max_trace_chars: int = 1600,
+    ) -> list[dict[str, Any]]:
+        """Append one labeled trace example and cap the in-state contrastive bank.
+
+        The raw tap file has no success/failure label, so callers add labels only
+        after the trial verdict is known. The returned bank is JSON-serializable
+        for autopilot_state.json.
+        """
+        normalized_outcome = str(outcome or "").strip().lower()
+        if normalized_outcome not in {"success", "failure"}:
+            return list(trace_bank or [])
+        trace = cls._trim_trace_text(trace_text, max_trace_chars)
+        if not trace:
+            return list(trace_bank or [])
+
+        normalized: list[dict[str, Any]] = []
+        for raw in trace_bank or []:
+            if not isinstance(raw, dict):
+                continue
+            raw_outcome = str(raw.get("outcome") or "").strip().lower()
+            if raw_outcome not in {"success", "failure"}:
+                continue
+            raw_trace = cls._trim_trace_text(raw.get("trace", ""), max_trace_chars)
+            if not raw_trace:
+                continue
+            normalized.append(
+                {
+                    "outcome": raw_outcome,
+                    "trial_id": raw.get("trial_id"),
+                    "species": str(raw.get("species") or ""),
+                    "action_type": str(raw.get("action_type") or ""),
+                    "reason": str(raw.get("reason") or ""),
+                    "trace": raw_trace,
+                    "trace_hash": str(
+                        raw.get("trace_hash")
+                        or hashlib.sha256(raw_trace.encode("utf-8")).hexdigest()[:12]
+                    ),
+                }
+            )
+
+        trace_hash = hashlib.sha256(trace.encode("utf-8")).hexdigest()[:12]
+        normalized = [
+            item
+            for item in normalized
+            if not (
+                item.get("outcome") == normalized_outcome
+                and item.get("trial_id") == trial_id
+                and item.get("trace_hash") == trace_hash
+            )
+        ]
+        normalized.append(
+            {
+                "outcome": normalized_outcome,
+                "trial_id": trial_id,
+                "species": str(species or ""),
+                "action_type": str(action_type or ""),
+                "reason": str(reason or ""),
+                "trace": trace,
+                "trace_hash": trace_hash,
+            }
+        )
+
+        capped: list[dict[str, Any]] = []
+        for bucket in ("success", "failure"):
+            capped.extend(
+                [item for item in normalized if item.get("outcome") == bucket][
+                    -max_examples_per_outcome:
+                ]
+            )
+        return capped
+
+    def capture_contrastive_traces(
+        self,
+        *,
+        k_success: int = 2,
+        k_failure: int = 2,
+        trace_bank: list[dict[str, Any]] | None = None,
+    ) -> str:
+        """Format labeled success/failure trace examples for PromptForge.
+
+        This intentionally reads only a caller-maintained trace bank. Raw tap
+        tails are still available through capture_recent_traces() as the fallback
+        when labeled examples are not available yet.
+        """
+        if not trace_bank:
+            return ""
+
+        def selected(outcome: str, limit: int) -> list[dict[str, Any]]:
+            if limit <= 0:
+                return []
+            matches = [
+                item
+                for item in trace_bank
+                if isinstance(item, dict)
+                and str(item.get("outcome") or "").lower() == outcome
+                and str(item.get("trace") or "").strip()
+            ]
+            return matches[-limit:]
+
+        success_examples = selected("success", int(k_success))
+        failure_examples = selected("failure", int(k_failure))
+        if not success_examples and not failure_examples:
+            return ""
+
+        def append_entry(lines: list[str], idx: int, entry: dict[str, Any]) -> None:
+            trial = entry.get("trial_id")
+            label_parts = []
+            if trial is not None:
+                label_parts.append(f"trial #{trial}")
+            species = str(entry.get("species") or "").strip()
+            action_type = str(entry.get("action_type") or "").strip()
+            if species or action_type:
+                label_parts.append("/".join(part for part in (species, action_type) if part))
+            label = ", ".join(label_parts) or "unlabeled trial"
+            lines.append(f"[{idx}] {label}")
+            reason = str(entry.get("reason") or "").strip()
+            if reason:
+                lines.append(f"Reason: {reason}")
+            lines.append("Trace:")
+            lines.append(str(entry.get("trace") or "").strip())
+
+        lines: list[str] = ["## Contrastive Execution Traces"]
+        if success_examples:
+            lines.append("### Success Examples")
+            for idx, entry in enumerate(success_examples, start=1):
+                append_entry(lines, idx, entry)
+        if failure_examples:
+            lines.append("### Failure Examples")
+            for idx, entry in enumerate(failure_examples, start=1):
+                append_entry(lines, idx, entry)
+        return "\n".join(lines)
+
     def hybrid_eval(
         self,
         seed: int = 42,
@@ -2209,8 +2336,7 @@ class EvalTower:
             log.info("Hybrid eval: T0 failed (q=%.3f), fast-reject", t0.quality)
             return t0
 
-        log.info("Hybrid eval: T0 passed (q=%.3f), running T1 (%d questions)...",
-                 t0.quality, t1_n)
+        log.info("Hybrid eval: T0 passed (q=%.3f), running T1 (%d questions)...", t0.quality, t1_n)
         if trial_id is None:
             t1 = self.eval_t1(n=t1_n, seed=seed)
         else:

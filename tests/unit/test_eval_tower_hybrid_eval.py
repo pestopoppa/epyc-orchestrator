@@ -1,4 +1,5 @@
 """Hybrid eval should default to the decision-grade T1 instrument."""
+
 from __future__ import annotations
 
 import sys
@@ -78,3 +79,62 @@ def test_evaluate_t3_uses_server_side_hard_question_spec() -> None:
 
     assert result.tier == 3
     assert tower.calls == [("t3", 160, 42)]
+
+
+def test_contrastive_trace_bank_formats_success_and_failure_examples() -> None:
+    bank = EvalTower.update_contrastive_trace_bank(
+        None,
+        trace_text="ROLE=worker_general\nPROMPT:\nok prompt\nRESPONSE:\nok",
+        outcome="success",
+        trial_id=10,
+        species="prompt_forge",
+        action_type="prompt_mutation",
+        reason="T1 frontier q=2.100 s=42.0",
+    )
+    bank = EvalTower.update_contrastive_trace_bank(
+        bank,
+        trace_text="ROLE=frontdoor\nPROMPT:\nbad prompt\nRESPONSE:\nbad",
+        outcome="failure",
+        trial_id=11,
+        species="prompt_forge",
+        action_type="prompt_mutation",
+        reason="VIOLATIONS: quality floor",
+    )
+
+    text = FakeTower().capture_contrastive_traces(
+        k_success=2,
+        k_failure=2,
+        trace_bank=bank,
+    )
+
+    assert "## Contrastive Execution Traces" in text
+    assert "### Success Examples" in text
+    assert "trial #10" in text
+    assert "T1 frontier q=2.100 s=42.0" in text
+    assert "### Failure Examples" in text
+    assert "trial #11" in text
+    assert "VIOLATIONS: quality floor" in text
+
+
+def test_contrastive_trace_bank_caps_per_outcome() -> None:
+    bank = None
+    for trial_id in range(5):
+        bank = EvalTower.update_contrastive_trace_bank(
+            bank,
+            trace_text=f"ROLE=worker_general\nRESPONSE:\n{trial_id}",
+            outcome="success",
+            trial_id=trial_id,
+            max_examples_per_outcome=2,
+        )
+
+    text = FakeTower().capture_contrastive_traces(
+        k_success=5,
+        k_failure=0,
+        trace_bank=bank,
+    )
+
+    assert "trial #0" not in text
+    assert "trial #1" not in text
+    assert "trial #2" not in text
+    assert "trial #3" in text
+    assert "trial #4" in text

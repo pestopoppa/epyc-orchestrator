@@ -31,9 +31,7 @@ ORCH_ROOT = Path(__file__).resolve().parents[2]
 SEQ_PROMOTION_RECENT_QID_TRIALS = int(
     os.environ.get("AUTOPILOT_SEQ_PROMOTION_RECENT_QID_TRIALS", "100")
 )
-SEQ_PROMOTION_RECENT_QID_DAYS = int(
-    os.environ.get("AUTOPILOT_SEQ_PROMOTION_RECENT_QID_DAYS", "60")
-)
+SEQ_PROMOTION_RECENT_QID_DAYS = int(os.environ.get("AUTOPILOT_SEQ_PROMOTION_RECENT_QID_DAYS", "60"))
 
 
 def _apply_params(*args, **kwargs):
@@ -45,6 +43,7 @@ def _apply_params(*args, **kwargs):
     bottom of autopilot's imports, by which time `apply_params` is bound).
     """
     import sys
+
     # autopilot is imported as either 'autopilot' (normal load mode),
     # 'scripts.autopilot.autopilot' (package-path tests), or '__main__'
     # (direct script execution). Prefer the package path when both aliases are
@@ -57,6 +56,7 @@ def _apply_params(*args, **kwargs):
 
     # Fallback: import config_applicator directly (no monkeypatch in play).
     from config_applicator import apply_params as _ap
+
     return _ap(*args, **kwargs)
 
 
@@ -126,9 +126,7 @@ def _numeric_apply_error_skip(
         "numeric_trial",
         bug_corrupted_by="env_restart_apply_failure" if infra else "",
         bug_corrupted_reason=(
-            "numeric_trial params were not applied because API/env restart failed"
-            if infra
-            else ""
+            "numeric_trial params were not applied because API/env restart failed" if infra else ""
         ),
     )
 
@@ -149,9 +147,7 @@ def _numeric_apply_no_changes(apply_result: dict[str, Any]) -> bool:
         apply_result.get("kv_compact_result"),
     ]
     present = [result for result in nested_results if isinstance(result, dict)]
-    return bool(present) and all(
-        result.get("status") == "no_changes" for result in present
-    )
+    return bool(present) and all(result.get("status") == "no_changes" for result in present)
 
 
 def _numeric_no_change_skip(
@@ -187,9 +183,12 @@ _SKILL_EFFICACY_GATE_ENV = "AUTOPILOT_SKILL_EFFICACY_GATE"
 _BSV2_ACCEPT_GATE_ENV = "AUTOPILOT_BSV2_ACCEPT_GATE"
 _BSV2_MIN_SHARED_QIDS_ENV = "AUTOPILOT_BSV2_MIN_SHARED_QIDS"
 _BSV2_MAX_ACCURACY_REGRESSION_ENV = "AUTOPILOT_BSV2_MAX_ACCURACY_REGRESSION"
-_PLANNER_HINTS_ENABLED = os.environ.get(
-    "AUTOPILOT_PLANNER_HINTS", ""
-).strip().lower() in {"1", "true", "yes", "on"}
+_PLANNER_HINTS_ENABLED = os.environ.get("AUTOPILOT_PLANNER_HINTS", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 
 @dataclass
@@ -215,6 +214,7 @@ class SkipOutcome:
                           would over-match, e.g. blacklisting all numeric_trials).
     reason:  human/planner-readable explanation (the validator/guard message).
     """
+
     status: str
     reason: str
     action_type: str = ""
@@ -225,6 +225,7 @@ class SkipOutcome:
 @dataclass
 class _ActionContext:
     """Dependency bundle passed to each action handler."""
+
     seeder: "Seeder"
     swarm: "NumericSwarm"
     forge: "PromptForge"
@@ -283,8 +284,7 @@ def _prompt_forge_convention_guardrails(
         return None
     if not hasattr(ctx.strategy_store, "retrieve_conventions"):
         log.warning(
-            "Skipping PromptForge convention guardrails: StrategyStore lacks "
-            "retrieve_conventions()"
+            "Skipping PromptForge convention guardrails: StrategyStore lacks retrieve_conventions()"
         )
         return None
     try:
@@ -372,8 +372,7 @@ def _planner_convention_bindings(
         return set()
     if not hasattr(ctx.strategy_store, "retrieve_conventions"):
         log.warning(
-            "Skipping %s convention bindings: StrategyStore lacks "
-            "retrieve_conventions()",
+            "Skipping %s convention bindings: StrategyStore lacks retrieve_conventions()",
             species,
         )
         return set()
@@ -401,9 +400,7 @@ def _planner_convention_bindings(
         if not isinstance(raw_identifiers, list):
             continue
         bindings.update(
-            str(identifier).strip()
-            for identifier in raw_identifiers
-            if str(identifier).strip()
+            str(identifier).strip() for identifier in raw_identifiers if str(identifier).strip()
         )
     return bindings
 
@@ -419,26 +416,33 @@ def _action_seed_batch(action: dict[str, Any], ctx: _ActionContext):
     # ~40-min batches that crowd out other trials.
     try:
         import sys
+
         sys.path.insert(0, "/mnt/raid0/llm/epyc-orchestrator/scripts/benchmark")
         from seeding_telemetry import (
             adaptive_batch_size as _adaptive_n,
             record_batch_duration as _record_batch,
         )
+
         adapted_n, reason = _adaptive_n(requested_n)
         if adapted_n != requested_n:
             log.warning(
                 "[adaptive-batch] scaling seed_batch from %d → %d (%s)",
-                requested_n, adapted_n, reason,
+                requested_n,
+                adapted_n,
+                reason,
             )
         else:
             log.info("[adaptive-batch] keeping seed_batch n=%d (%s)", requested_n, reason)
         n = adapted_n
     except Exception as exc:
-        log.warning("[adaptive-batch] telemetry import failed (%s) — using requested n=%d", exc, requested_n)
+        log.warning(
+            "[adaptive-batch] telemetry import failed (%s) — using requested n=%d", exc, requested_n
+        )
         n = requested_n
         _record_batch = None  # type: ignore[assignment]
 
     import time as _time
+
     _batch_start = _time.perf_counter()
     # 2026-05-23 Phase 4: pass the watcher (if ctx supplies one) so the
     # seeder's per-role calls can detect exogenous service reloads. Phase 5
@@ -464,7 +468,9 @@ def _action_seed_batch(action: dict[str, Any], ctx: _ActionContext):
             _record_batch(n, _batch_elapsed)
             log.info(
                 "[adaptive-batch] recorded duration: %dq in %.0fs (%.0fs/q)",
-                n, _batch_elapsed, _batch_elapsed / max(n, 1),
+                n,
+                _batch_elapsed,
+                _batch_elapsed / max(n, 1),
             )
         except Exception:
             pass
@@ -566,18 +572,19 @@ def _action_numeric_trial(action: dict[str, Any], ctx: _ActionContext):
 
     eval_result = ctx.tower.hybrid_eval()
     if eval_result:
-        eval_result.details.setdefault("numeric_trial_applied_params", dict(action.get("params") or {}))
+        eval_result.details.setdefault(
+            "numeric_trial_applied_params", dict(action.get("params") or {})
+        )
     # Report to Optuna if we have a trial
     if "_current_optuna_trial" in ctx.state and eval_result:
         t = ctx.state.pop("_current_optuna_trial")
-        ctx.swarm.report_result(
-            t["surface"], t["trial_number"], eval_result.objectives
-        )
+        ctx.swarm.report_result(t["surface"], t["trial_number"], eval_result.objectives)
     return eval_result, "numeric_swarm"
 
 
 def _build_mutation_context(
-    action: dict[str, Any], ctx: _ActionContext,
+    action: dict[str, Any],
+    ctx: _ActionContext,
 ) -> tuple[str, dict | None]:
     """Shared failure-context + per-suite-quality assembly used by mutation handlers."""
     target = action.get("file", "")
@@ -587,18 +594,14 @@ def _build_mutation_context(
     # Gather failure context from recent journal entries (AP-1)
     recent_failures = ctx.journal.recent_failures(species="prompt_forge", n=5)
     failure_context = "\n\n".join(
-        f"Trial #{f.trial_id} ({f.action_type}):\n"
-        f"{ctx.journal.failure_analysis_for_prompt(f)}"
+        f"Trial #{f.trial_id} ({f.action_type}):\n{ctx.journal.failure_analysis_for_prompt(f)}"
         for f in recent_failures
     )
 
     # B5: Cross-species fertilization — prepend insights from all species
     cross_insights = ctx.journal.insights_text(n=5)
     if cross_insights and cross_insights != "(no insights yet)":
-        failure_context = (
-            f"## Cross-Species Insights\n{cross_insights}\n\n"
-            + failure_context
-        )
+        failure_context = f"## Cross-Species Insights\n{cross_insights}\n\n" + failure_context
 
     # B1: Strategy store retrieval — add past strategy insights
     if ctx.strategy_store is not None:
@@ -620,28 +623,38 @@ def _build_mutation_context(
                 f"- Trial #{s.source_trial_id} ({s.species}): {s.description} → {s.insight}"
                 for s in strategies
             )
-            failure_context = (
-                f"## Past Strategy Insights\n{strategy_lines}\n\n"
-                + failure_context
-            )
+            failure_context = f"## Past Strategy Insights\n{strategy_lines}\n\n" + failure_context
 
         convention_guardrails = _prompt_forge_convention_guardrails(ctx)
         if convention_guardrails:
             failure_context = f"{convention_guardrails}\n\n{failure_context}"
 
-    # B3: Execution trace feedback — add recent inference traces
-    last_traces = ctx.state.get("last_traces", "")
-    if last_traces:
-        failure_context = (
-            f"## Recent Execution Traces\n{last_traces}\n\n"
-            + failure_context
-        )
+    # MH-7: Prefer labeled success/failure trace examples when available.
+    contrastive_traces = ctx.state.get("contrastive_traces", "")
+    if not contrastive_traces and ctx.tower is not None:
+        formatter = getattr(ctx.tower, "capture_contrastive_traces", None)
+        if callable(formatter):
+            try:
+                contrastive_traces = formatter(
+                    k_success=2,
+                    k_failure=2,
+                    trace_bank=ctx.state.get("contrastive_trace_bank"),
+                )
+            except Exception as exc:  # trace feedback must never block mutation dispatch
+                log.debug("Could not format contrastive traces: %s", exc)
+                contrastive_traces = ""
+    if contrastive_traces:
+        failure_context = f"{contrastive_traces}\n\n{failure_context}"
+    else:
+        # B3 fallback: raw recent inference traces.
+        last_traces = ctx.state.get("last_traces", "")
+        if last_traces:
+            failure_context = f"## Recent Execution Traces\n{last_traces}\n\n" + failure_context
 
     # Get per-suite quality from most recent eval
     last_entries = ctx.journal.recent(1)
     last_per_suite = (
-        last_entries[-1].eval_details.get("per_suite_quality")
-        if last_entries else None
+        last_entries[-1].eval_details.get("per_suite_quality") if last_entries else None
     )
 
     return failure_context, last_per_suite
@@ -737,7 +750,12 @@ def _action_gate_check(
 
 
 def _simplicity_check(
-    mutation, eval_result, ctx: _ActionContext, *, kind: str, log_label: str,
+    mutation,
+    eval_result,
+    ctx: _ActionContext,
+    *,
+    kind: str,
+    log_label: str,
 ) -> tuple[bool, str | None]:
     """AP-10 simplicity criterion. Returns (passed, deficiency_marker).
 
@@ -757,13 +775,18 @@ def _simplicity_check(
     if size_change > 0.20 and quality_delta < 0.02:
         log.warning(
             "%s simplicity criterion: %s grew %.0f%% for %.3f quality gain, reverting",
-            log_label, kind, size_change * 100, quality_delta,
+            log_label,
+            kind,
+            size_change * 100,
+            quality_delta,
         )
         return False, None
     if size_change < -0.50:
         log.warning(
             "%s simplicity criterion: %s shrank %.0f%% — likely destructive, reverting",
-            log_label, kind, abs(size_change) * 100,
+            log_label,
+            kind,
+            abs(size_change) * 100,
         )
         return False, "shrinkage"
     return True, None
@@ -866,7 +889,9 @@ def _bsv2_eval_payload(
 ) -> dict[str, Any]:
     details = dict(getattr(result, "details", {}) or {})
     details.setdefault("question_results", list(getattr(result, "question_results", []) or []))
-    details.setdefault("archive_member_id", f"bsv2:{label}:{artifact_kind}:{target}:{mutation_type}")
+    details.setdefault(
+        "archive_member_id", f"bsv2:{label}:{artifact_kind}:{target}:{mutation_type}"
+    )
     return {
         "tier": result.tier,
         "quality": result.quality,
@@ -936,12 +961,14 @@ def _bsv2_accepts(
             max_accuracy_regression=_env_float(_BSV2_MAX_ACCURACY_REGRESSION_ENV, 0.0),
         )
     except Exception as exc:  # pragma: no cover - exact exception type is backend-owned
-        detail.update({
-            "accept": False,
-            "gate_decision": "block",
-            "blockers": [f"paired report failed: {exc}"],
-            "error": str(exc),
-        })
+        detail.update(
+            {
+                "accept": False,
+                "gate_decision": "block",
+                "blockers": [f"paired report failed: {exc}"],
+                "error": str(exc),
+            }
+        )
         log.warning(
             "BSV-2 accept gate failed closed for %s mutation on %s: %s",
             artifact_kind,
@@ -953,14 +980,16 @@ def _bsv2_accepts(
     signature_diff = dict(report.get("signature_diff") or {})
     blockers = list(report.get("blockers") or [])
     accept = report.get("gate_decision") == "pass" and signature_diff.get("severity") != "blocking"
-    detail.update({
-        "accept": accept,
-        "gate_decision": report.get("gate_decision"),
-        "blockers": blockers,
-        "paired_stats": report.get("paired_stats"),
-        "signature_diff": signature_diff,
-        "thresholds": report.get("thresholds"),
-    })
+    detail.update(
+        {
+            "accept": accept,
+            "gate_decision": report.get("gate_decision"),
+            "blockers": blockers,
+            "paired_stats": report.get("paired_stats"),
+            "signature_diff": signature_diff,
+            "thresholds": report.get("thresholds"),
+        }
+    )
     if not accept:
         log.warning(
             "BSV-2 accept gate rejected %s mutation on %s: %s",
@@ -1008,7 +1037,11 @@ def _action_prompt_mutation(action: dict[str, Any], ctx: _ActionContext):
 
     # AP-10 simplicity criterion
     passed, deficiency = _simplicity_check(
-        mutation, eval_result, ctx, kind="prompt", log_label="Simplicity criterion:",
+        mutation,
+        eval_result,
+        ctx,
+        kind="prompt",
+        log_label="Simplicity criterion:",
     )
     if not passed:
         ctx.forge.revert_mutation(mutation)
@@ -1081,7 +1114,11 @@ def _action_gepa_optimize(action: dict[str, Any], ctx: _ActionContext):
 
     # AP-10 simplicity criterion
     passed, deficiency = _simplicity_check(
-        mutation, eval_result, ctx, kind="prompt", log_label="GEPA",
+        mutation,
+        eval_result,
+        ctx,
+        kind="prompt",
+        log_label="GEPA",
     )
     if not passed:
         ctx.forge.revert_mutation(mutation)
@@ -1141,9 +1178,7 @@ def _action_code_mutation(action: dict[str, Any], ctx: _ActionContext):
             getattr(mutation, "safety_reason", "unsafe"),
         )
         return None, "prompt_forge"
-    if getattr(mutation, "mutated_content", None) == getattr(
-        mutation, "original_content", None
-    ):
+    if getattr(mutation, "mutated_content", None) == getattr(mutation, "original_content", None):
         log.warning("Code mutation produced no file changes, skipping eval")
         return (
             SkipOutcome(
@@ -1167,7 +1202,11 @@ def _action_code_mutation(action: dict[str, Any], ctx: _ActionContext):
 
     # AP-10 simplicity check (for code)
     passed, deficiency = _simplicity_check(
-        mutation, eval_result, ctx, kind="code", log_label="Simplicity criterion:",
+        mutation,
+        eval_result,
+        ctx,
+        kind="code",
+        log_label="Simplicity criterion:",
     )
     if not passed:
         ctx.forge.revert_code_mutation(mutation)
@@ -1207,8 +1246,7 @@ def _action_structural_experiment(action: dict[str, Any], ctx: _ActionContext):
         return (
             SkipOutcome(
                 "invalid",
-                "planner convention denies feature flag(s): "
-                + ", ".join(denied),
+                "planner convention denies feature flag(s): " + ", ".join(denied),
                 "structural_experiment",
             ),
             "structural_lab",
@@ -1305,7 +1343,9 @@ def _consult_gate_result_from_summary(
             "consult_calls": consult_calls,
             "consult_skips": consult_skips,
             "rerun_requests": reruns,
-            "gate_reason_counts": gate_reason_counts if isinstance(gate_reason_counts, dict) else {},
+            "gate_reason_counts": gate_reason_counts
+            if isinstance(gate_reason_counts, dict)
+            else {},
             "quality_0_1": quality_0_1,
         },
         eval_wall_s=elapsed_s,
@@ -1319,7 +1359,11 @@ def _action_consult_gate_probe(action: dict[str, Any], ctx: _ActionContext):
     tier = max(1, min(3, int(action.get("tier") or 3)))
     if task_suite not in {"targeted", "bep"}:
         return (
-            SkipOutcome("invalid", f"unsupported consult_gate_probe task_suite={task_suite!r}", "consult_gate_probe"),
+            SkipOutcome(
+                "invalid",
+                f"unsupported consult_gate_probe task_suite={task_suite!r}",
+                "consult_gate_probe",
+            ),
             "consult_gate",
         )
     turns = max(3, min(50, turns))
@@ -1370,7 +1414,11 @@ def _action_consult_gate_probe(action: dict[str, Any], ctx: _ActionContext):
             break
     if artifact_dir is None:
         return (
-            SkipOutcome("skipped", "consult_gate_probe did not report artifact directory", "consult_gate_probe"),
+            SkipOutcome(
+                "skipped",
+                "consult_gate_probe did not report artifact directory",
+                "consult_gate_probe",
+            ),
             "consult_gate",
         )
     summary_path = artifact_dir / "summary.json"
@@ -1378,11 +1426,15 @@ def _action_consult_gate_probe(action: dict[str, Any], ctx: _ActionContext):
         summary = json.loads(summary_path.read_text())
     except Exception as exc:
         return (
-            SkipOutcome("skipped", f"consult_gate_probe summary unreadable: {exc}", "consult_gate_probe"),
+            SkipOutcome(
+                "skipped", f"consult_gate_probe summary unreadable: {exc}", "consult_gate_probe"
+            ),
             "consult_gate",
         )
     summary["artifact_dir"] = str(artifact_dir)
-    return _consult_gate_result_from_summary(summary, elapsed_s=elapsed_s, tier=tier), "consult_gate"
+    return _consult_gate_result_from_summary(
+        summary, elapsed_s=elapsed_s, tier=tier
+    ), "consult_gate"
 
 
 def _structural_noop_reason(flags: dict[str, Any], lab: Any) -> str | None:
@@ -1448,9 +1500,7 @@ def _action_structural_prune(action: dict[str, Any], ctx: _ActionContext):
     # Save deleted block in action for journal rollback
     deleted_lines = original_content.split("\n")
     pruned_lines = pruned_content.split("\n")
-    action["_deleted_block"] = "\n".join(
-        line for line in deleted_lines if line not in pruned_lines
-    )
+    action["_deleted_block"] = "\n".join(line for line in deleted_lines if line not in pruned_lines)
 
     # Apply pruning
     target_path.write_text(pruned_content)
@@ -1468,8 +1518,7 @@ def _action_structural_prune(action: dict[str, Any], ctx: _ActionContext):
             reasons.append(f"safety gate: {verdict_result.violations}")
         if not ratio_decreased:
             reasons.append(
-                f"ratio not decreased: {eval_result.instruction_token_ratio:.4f} "
-                f">= {pre_ratio:.4f}"
+                f"ratio not decreased: {eval_result.instruction_token_ratio:.4f} >= {pre_ratio:.4f}"
             )
         log.warning("Structural prune rejected: %s", "; ".join(reasons))
         target_path.write_text(original_content)
@@ -1597,11 +1646,7 @@ def _recent_eval_qids(
 def _action_deep_eval(action: dict[str, Any], ctx: _ActionContext):
     tier = action.get("tier", 2)
     replay_marker = ctx.state.pop("_seq_promotion_candidate_replay", None)
-    candidate_action = (
-        replay_marker.get("action")
-        if isinstance(replay_marker, dict)
-        else None
-    )
+    candidate_action = replay_marker.get("action") if isinstance(replay_marker, dict) else None
     replay_detail: dict[str, Any] | None = None
     if isinstance(candidate_action, dict):
         candidate_type = str(candidate_action.get("type") or "")
@@ -1740,9 +1785,7 @@ def _action_slot_compact(action: dict[str, Any], ctx: _ActionContext):
     # Expected Attention KV Compression: score and evict KV cache entries
     # Uses the kv_compress module for telemetry, gap guardrails, and structured results.
     port = action.get("port")
-    if port is not None and (
-        isinstance(port, bool) or not isinstance(port, int) or port <= 0
-    ):
+    if port is not None and (isinstance(port, bool) or not isinstance(port, int) or port <= 0):
         return (
             SkipOutcome(
                 "invalid",
@@ -1766,14 +1809,24 @@ def _action_slot_compact(action: dict[str, Any], ctx: _ActionContext):
     if port:
         # Single-port compression
         result = compress_slot(
-            port=port, slot_id=slot_id, keep_ratio=keep_ratio,
-            scorer=scorer, keep_first=keep_first, n_future=n_future,
-            use_covariance=use_covariance, layer_weights=layer_weights,
+            port=port,
+            slot_id=slot_id,
+            keep_ratio=keep_ratio,
+            scorer=scorer,
+            keep_first=keep_first,
+            n_future=n_future,
+            use_covariance=use_covariance,
+            layer_weights=layer_weights,
         )
         if result.success:
             log.info(
                 "KV compact port=%d slot=%d: evicted=%d keep=%.0f%% scorer=%s time=%.1fms",
-                port, slot_id, result.n_evicted, keep_ratio * 100, scorer, result.elapsed_ms,
+                port,
+                slot_id,
+                result.n_evicted,
+                keep_ratio * 100,
+                scorer,
+                result.elapsed_ms,
             )
         else:
             log.warning("KV compact failed on port %d: %s", port, result.error)
@@ -1781,8 +1834,11 @@ def _action_slot_compact(action: dict[str, Any], ctx: _ActionContext):
         # Compress all production slots
         results = auto_compress_all(
             threshold=action.get("threshold", 0.80),
-            keep_ratio=keep_ratio, scorer=scorer, keep_first=keep_first,
-            n_future=n_future, use_covariance=use_covariance,
+            keep_ratio=keep_ratio,
+            scorer=scorer,
+            keep_first=keep_first,
+            n_future=n_future,
+            use_covariance=use_covariance,
             layer_weights=layer_weights,
         )
         for role, r in results.items():
@@ -1799,21 +1855,21 @@ def _action_slot_compact(action: dict[str, Any], ctx: _ActionContext):
 # -----------------------------------------------------------------------------
 
 _ACTION_HANDLERS = {
-    "seed_batch":             _action_seed_batch,
-    "numeric_trial":          _action_numeric_trial,
-    "prompt_mutation":        _action_prompt_mutation,
-    "gepa_optimize":          _action_gepa_optimize,
-    "code_mutation":          _action_code_mutation,
-    "structural_experiment":  _action_structural_experiment,
-    "consult_gate_probe":     _action_consult_gate_probe,
-    "structural_prune":       _action_structural_prune,
-    "train_routing_models":   _action_train_routing_models,
-    "distill_skillbank":      _action_distill_skillbank,
-    "reset_memories":         _action_reset_memories,
-    "deep_eval":              _action_deep_eval,
-    "rollback":               _action_rollback,
-    "distill_knowledge":      _action_distill_knowledge,
-    "slot_compact":           _action_slot_compact,
+    "seed_batch": _action_seed_batch,
+    "numeric_trial": _action_numeric_trial,
+    "prompt_mutation": _action_prompt_mutation,
+    "gepa_optimize": _action_gepa_optimize,
+    "code_mutation": _action_code_mutation,
+    "structural_experiment": _action_structural_experiment,
+    "consult_gate_probe": _action_consult_gate_probe,
+    "structural_prune": _action_structural_prune,
+    "train_routing_models": _action_train_routing_models,
+    "distill_skillbank": _action_distill_skillbank,
+    "reset_memories": _action_reset_memories,
+    "deep_eval": _action_deep_eval,
+    "rollback": _action_rollback,
+    "distill_knowledge": _action_distill_knowledge,
+    "slot_compact": _action_slot_compact,
 }
 
 
@@ -1971,15 +2027,16 @@ def dispatch_action(
     # planner-proposed multi-knob experiment.
     if _is_forced_seq_candidate_replay(action, state):
         log.info(
-            "AP-9 scope check bypassed for forced seq candidate replay "
-            "(trial=%s)",
+            "AP-9 scope check bypassed for forced seq candidate replay (trial=%s)",
             state.get("trial_counter"),
         )
     else:
         scope_err = validate_single_variable(action)
         if scope_err:
             log.warning("AP-9 scope violation: %s — skipping trial", scope_err)
-            return SkipOutcome("skipped", f"AP-9 scope violation: {scope_err}", action_type), action_type
+            return SkipOutcome(
+                "skipped", f"AP-9 scope violation: {scope_err}", action_type
+            ), action_type
     # Dirty-tree fence (see _mutation_dirty_target_reason): a file-mutating
     # action must never commit — or write over — pre-existing uncommitted work.
     dirty_reason = _mutation_dirty_target_reason(action)
@@ -1995,9 +2052,18 @@ def dispatch_action(
         return SkipOutcome("skipped", f"unknown action type: {action_type}", action_type), "unknown"
 
     ctx = _ActionContext(
-        seeder=seeder, swarm=swarm, forge=forge, lab=lab, tower=tower,
-        gate=gate, archive=archive, journal=journal, state=state,
-        strategy_store=strategy_store, evo=evo, watcher=watcher,
+        seeder=seeder,
+        swarm=swarm,
+        forge=forge,
+        lab=lab,
+        tower=tower,
+        gate=gate,
+        archive=archive,
+        journal=journal,
+        state=state,
+        strategy_store=strategy_store,
+        evo=evo,
+        watcher=watcher,
     )
     if hasattr(ctx.tower, "set_trial_context"):
         ctx.tower.set_trial_context(ctx.state.get("trial_counter"))
