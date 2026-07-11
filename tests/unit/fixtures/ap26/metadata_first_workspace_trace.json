@@ -1,0 +1,57 @@
+{
+  "schema_version": "ap26_metadata_first_workspace_trace.v1",
+  "name": "routing_regression_metadata_first_scan",
+  "task": "Diagnose a routing regression in a long-horizon autopilot run without burning turns on broad directory exploration.",
+  "query": "routing",
+  "limit": 4,
+  "access_history": [
+    {
+      "path": "src/api/routes/chat_pipeline/direct_stage.py",
+      "access_count": 10,
+      "role": "high_frecency_distractor"
+    },
+    {
+      "path": "orchestration/model_registry.yaml",
+      "access_count": 7,
+      "role": "high_frecency_distractor"
+    },
+    {
+      "path": "src/api/routes/chat_pipeline/routing.py",
+      "access_count": 2,
+      "role": "expected_metadata_hit"
+    },
+    {
+      "path": "src/api/services/routing_models.py",
+      "access_count": 1,
+      "role": "expected_metadata_hit"
+    },
+    {
+      "path": "orchestration/repl_memory/routing_classifier.py",
+      "access_count": 1,
+      "role": "expected_metadata_hit"
+    },
+    {
+      "path": "tests/unit/test_routing_bindings.py",
+      "access_count": 1,
+      "role": "expected_metadata_hit"
+    }
+  ],
+  "expected_first_path": "src/api/routes/chat_pipeline/routing.py",
+  "expected_required_paths": [
+    "src/api/routes/chat_pipeline/routing.py",
+    "src/api/services/routing_models.py",
+    "orchestration/repl_memory/routing_classifier.py",
+    "tests/unit/test_routing_bindings.py"
+  ],
+  "distractor_paths": [
+    "src/api/routes/chat_pipeline/direct_stage.py",
+    "orchestration/model_registry.yaml"
+  ],
+  "win_condition": {
+    "metadata_first": true,
+    "max_scan_files": 4,
+    "expected_paths_visible": 4,
+    "baseline_orientation_turns": 3,
+    "expected_orientation_turns_with_scan": 1
+  }
+}
