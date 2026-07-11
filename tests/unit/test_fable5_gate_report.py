@@ -600,6 +600,137 @@ def test_eval_task_coverage_section_is_advisory_attention() -> None:
     ]
 
 
+def test_p0_2_amendment_bundle_section_surfaces_ready_inputs() -> None:
+    restart = report_mod.GateSection(
+        key="w4_w6_restart_cutover",
+        status="ready",
+        summary="ready",
+        blockers=[],
+        details={
+            "w8_latest_combined_E": 24.0,
+            "w8_latest_required_E": 20.0,
+            "w8_latest_seq_state": "confirmed",
+            "w8_latest_fresh_eval": True,
+            "w8_promotion_status": "confirmed_waiting_fresh_eval",
+        },
+    )
+    ds_e1 = report_mod.GateSection(
+        key="ds_e1_dynamic_stack",
+        status="ready",
+        summary="ready",
+        blockers=[],
+        details={"section_statuses": {"ri10_canary": "ready"}},
+    )
+    eval_coverage = report_mod.GateSection(
+        key="eval_task_coverage",
+        status="ready",
+        summary="ok",
+        blockers=[],
+        details={
+            "coverage_status": "ok",
+            "distinct_vs_pool_stable_upper_bound_pct": 18.0,
+            "repeat_factor": 1.5,
+            "tier_coverage": {
+                "3": {
+                    "eval_bearing_trials": 2,
+                    "question_result_rows": 160,
+                    "distinct_journal_question_keys": 120,
+                    "pool_question_keys": 300,
+                    "distinct_vs_pool_pct": 40.0,
+                }
+            },
+        },
+    )
+
+    section = report_mod.p0_2_amendment_bundle_section(
+        restart=restart,
+        ds_e1=ds_e1,
+        journal_rows=[
+            {
+                "trial_id": 1315,
+                "oracle_adequacy": {
+                    "control_attestation": {
+                        "status": "passed",
+                        "enabled": True,
+                        "eligible_for_evidence": False,
+                        "controls_seen": {"known_good": 1, "known_bad": 1},
+                        "suites": ["humaneval"],
+                    }
+                },
+            }
+        ],
+        eval_coverage=eval_coverage,
+    )
+
+    assert section.key == "p0_2_amendment_bundle_inputs"
+    assert section.status == "ready"
+    assert section.blockers == []
+    assert section.details["operator_signing_required"] is True
+    assert section.details["rate_axis_status"] == "ready"
+    assert section.details["control_attestation_status"] == "passed"
+    assert section.details["eval_discriminability_status"] == "ok"
+    assert section.details["t3_hard_lane_status"] == "visible"
+    assert section.details["ri10_canary_status"] == "ready"
+    assert section.details["evidence_gaps"] == []
+
+
+def test_p0_2_amendment_bundle_section_is_advisory_attention() -> None:
+    restart = report_mod.GateSection(
+        key="w4_w6_restart_cutover",
+        status="blocked",
+        summary="blocked",
+        blockers=["rate axis below threshold"],
+        details={
+            "w8_latest_combined_E": 1.1,
+            "w8_latest_required_E": 20.0,
+            "w8_latest_seq_state": "seq_accumulating",
+            "w8_latest_fresh_eval": False,
+        },
+    )
+    ds_e1 = report_mod.GateSection(
+        key="ds_e1_dynamic_stack",
+        status="blocked",
+        summary="blocked",
+        blockers=["ri10_canary: insufficient"],
+        details={
+            "section_statuses": {"ri10_canary": "insufficient_data"},
+            "ri10_telemetry_collection_blocker": "canary_arm_volume_insufficient",
+        },
+    )
+    eval_coverage = report_mod.GateSection(
+        key="eval_task_coverage",
+        status="attention",
+        summary="low",
+        blockers=[],
+        details={
+            "coverage_status": "low_coverage",
+            "tier_coverage": {"3": {"eval_bearing_trials": 0}},
+        },
+    )
+
+    section = report_mod.p0_2_amendment_bundle_section(
+        restart=restart,
+        ds_e1=ds_e1,
+        journal_rows=[],
+        eval_coverage=eval_coverage,
+    )
+
+    assert section.status == "attention"
+    assert section.blockers == []
+    assert section.details["rate_axis_status"] == "below_required"
+    assert section.details["control_attestation_status"] == "missing"
+    assert section.details["eval_discriminability_status"] == "low_coverage"
+    assert section.details["t3_hard_lane_status"] == "missing"
+    assert section.details["ri10_canary_status"] == "insufficient_data"
+    assert section.details["evidence_gaps"] == [
+        "rate_axis_below_required",
+        "control_attestation_missing",
+        "eval_discriminability_low_coverage",
+        "t3_hard_lane_coverage_missing",
+        "ri10_canary_insufficient_data",
+    ]
+
+
 def test_eval_task_coverage_does_not_block_fable_readiness(monkeypatch, tmp_path: Path) -> None:
     config = tmp_path / "classifier_config.yaml"
     config.write_text(
@@ -683,7 +814,13 @@ xmas_routing:
     assert report["ready"] is True
     assert report["blockers"] == []
     assert report["summary"]["section_statuses"]["eval_task_coverage"] == "attention"
+    assert (
+        report["summary"]["section_statuses"]["p0_2_amendment_bundle_inputs"]
+        == "attention"
+    )
     assert report["summary"]["eval_task_coverage_status"] == "low_coverage"
+    assert report["summary"]["p0_2_amendment_bundle_status"] == "attention"
+    assert report["summary"]["p0_2_eval_discriminability_status"] == "low_coverage"
 
 
 def test_tool_use_next_action_requires_controlled_restart() -> None:
