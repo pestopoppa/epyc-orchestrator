@@ -129,6 +129,43 @@ def timing_rows(responses: list[dict], tool: str) -> list[dict]:
     return rows
 
 
+def _web_research_relevance_issue(results: list[dict]) -> str | None:
+    """Return a short reason when web_research looks irrelevant."""
+    relevance_flags: list[bool] = []
+    total_pages_synthesized = 0
+    total_pages_irrelevant = 0
+
+    for wr in results:
+        if not isinstance(wr, dict):
+            continue
+        total_pages_synthesized += int(wr.get("pages_synthesized") or 0)
+        total_pages_irrelevant += int(wr.get("pages_irrelevant") or 0)
+
+        if "relevant" in wr:
+            relevance_flags.append(bool(wr.get("relevant")))
+        for src in wr.get("sources") or []:
+            if isinstance(src, dict) and "relevant" in src:
+                relevance_flags.append(bool(src.get("relevant")))
+
+    if relevance_flags and not any(relevance_flags):
+        return "web_research results all marked irrelevant (relevant=False)"
+
+    if total_pages_synthesized:
+        irrelevant_rate = total_pages_irrelevant / total_pages_synthesized
+        if total_pages_irrelevant >= total_pages_synthesized:
+            return (
+                "web_research pages_irrelevant == pages_synthesized "
+                f"({total_pages_irrelevant}/{total_pages_synthesized})"
+            )
+        if irrelevant_rate >= 0.20:
+            return (
+                "web_research irrelevant_rate too high "
+                f"({irrelevant_rate:.2f} >= 0.20)"
+            )
+
+    return None
+
+
 def check_get_eval_secret_contract(responses: list[dict]) -> tuple[bool, list[str]]:
     """HARD: counted >= 3 AND every get_eval_secret timing row success is True."""
     counts = tool_name_counts(responses)
@@ -159,7 +196,8 @@ def classify_web_research(resp: dict) -> tuple[str, list[str]]:
 
     Verifies the structured-output unwrap on the live path: when web_research
     succeeds, its timing row is success=True AND web_research_results is non-empty
-    (i.e. inv.result is the raw dict, not a ToolOutput envelope)."""
+    (i.e. inv.result is the raw dict, not a ToolOutput envelope). Relevance
+    metadata can still downgrade the soft probe out of PASS."""
     tc = resp.get("tools_called") or []
     if "web_research" not in tc:
         if resp.get("error") or resp.get("error_code"):
@@ -181,10 +219,15 @@ def classify_web_research(resp: dict) -> tuple[str, list[str]]:
             "web_research success but web_research_results EMPTY — empty query result "
             "OR structured-unwrap regression (inv.result not dict). Infra-bucketed."
         ]
-    lines = [f"web_research ok: success rows + {len(results)} result(s)"]
+    relevance_issue = _web_research_relevance_issue(results)
+    if relevance_issue:
+        return "INFRA_FAIL", [relevance_issue]
     if resp.get("error") or resp.get("error_code"):
         err = resp.get("error") or resp.get("error_code")
-        lines.append(f"response carried post-tool error {err!r}; ignored for soft telemetry")
+        return "INFRA_FAIL", [
+            f"web_research returned results but response carried post-tool error {err!r}"
+        ]
+    lines = [f"web_research ok: success rows + {len(results)} result(s)"]
     return "PASS", lines
 
 

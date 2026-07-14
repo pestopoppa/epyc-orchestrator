@@ -300,6 +300,51 @@ class TestSourceQuarantine:
         assert result["pages_synthesized"] == 1
         assert result["synthesis_failures"] == 0
 
+    def test_web_research_all_irrelevant_pages_fail_closed(self, monkeypatch):
+        def fake_web_search(query, max_results=5, domain_filter=None):
+            return {
+                "success": True,
+                "backend": "fake",
+                "elapsed_ms": 1,
+                "results": [
+                    {"url": "https://example.test/one", "title": "One", "snippet": "Snippet one"},
+                    {"url": "https://example.test/two", "title": "Two", "snippet": "Snippet two"},
+                ],
+            }
+
+        def fake_fetch_page(url, max_length=6000):
+            return {
+                "url": url,
+                "content": "Useful source content about the query. " * 8,
+                "success": True,
+                "retrieved": "2026-06-12T00:00:00Z",
+                "content_sha256": "abcdef1234567890",
+            }
+
+        def fake_synthesize_page(url, title, content, query):
+            return {
+                "url": url,
+                "title": title,
+                "synthesis": "No relevant information found.",
+                "success": True,
+            }
+
+        monkeypatch.setattr(research_mod, "web_search", fake_web_search)
+        monkeypatch.setattr(research_mod, "_fetch_page", fake_fetch_page)
+        monkeypatch.setattr(research_mod, "_synthesize_page", fake_synthesize_page)
+
+        result = _web_research_impl("test query", max_results=2, max_pages=2)
+
+        assert result["success"] is False
+        assert result["degraded"] is True
+        assert result["error"] == "All synthesized pages were classified irrelevant."
+        assert result["no_results_reason"] == "all_synthesized_pages_irrelevant"
+        assert result["pages_fetched_successful"] == 2
+        assert result["pages_synthesized"] == 2
+        assert result["pages_irrelevant"] == 2
+        assert result["irrelevant_rate"] == 1.0
+        assert all(source["relevant"] is False for source in result["sources"])
+
     def test_web_research_synthesis_failures_are_counted(self, monkeypatch):
         def fake_web_search(query, max_results=5, domain_filter=None):
             return {
