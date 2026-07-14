@@ -274,6 +274,7 @@ def test_blacklist_prompt_includes_older_enforced_patterns(monkeypatch) -> None:
     assert "Older enforced patterns" in text
     assert '{"flags":{"skillbank":true},"type":"structural_experiment"}' in text
     assert "source_trial=505" in text
+    assert "no-expiry-metadata" in text
 
 
 def test_blacklist_prompt_separates_p0_3_retryable_entries(monkeypatch) -> None:
@@ -299,7 +300,11 @@ def test_blacklist_prompt_separates_p0_3_retryable_entries(monkeypatch) -> None:
 
     assert "P0.3 re-exploration eligible entries" in text
     assert "architect_delegation_t655_tool_use_axis_bug" in text
+    assert "target=architect_delegation_t655_tool_use_axis_bug; source_trial=655" in text
     assert "Recent enforced entries" in text
+    assert "non-expiring" in text
+    assert "purge-scoped=frontdoor_prompt_mutation_restart_freeze" in text
+    assert "manual-purge-approval-required" in text
     assert '{"file":"frontdoor.md","type":"prompt_mutation"}' in text
 
 

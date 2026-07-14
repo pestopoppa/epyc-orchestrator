@@ -97,6 +97,9 @@ from controller_io import PLANNER_ARCHIVE_PATH, invoke_controller as _invoke_con
 from planner_coordinator import plan_with_providers, uncritiqued_dispatch_block_reason
 from state_store import (
     OBSERVATIONAL_ACTION_BLACKLIST_DENYLIST,
+    _auto_blacklist_reason_class,
+    _blacklist_expires_at,
+    _entry_is_non_expiring_blacklist,
     append_blacklist as _append_blacklist_impl,
     check_blacklist,
     format_model_signatures,
@@ -105,7 +108,7 @@ from state_store import (
     load_state as _load_state_impl,
     save_state as _save_state_impl,
 )
-from blacklist_purge_plan import retryable_reexploration_target
+from blacklist_purge_plan import purge_scoped_target, retryable_reexploration_target
 from actions import dispatch_action, SkipOutcome, _structural_noop_reason
 from paired_stats import QuestionOutcome, mcnemar_from_vectors
 from src.autopilot_core.action_identity import (
@@ -2669,6 +2672,27 @@ def _format_blacklist_pattern(pattern: Any) -> str:
     return json.dumps(pattern, sort_keys=True, separators=(",", ":"), default=str)
 
 
+def _format_blacklist_entry_status(entry: dict[str, Any]) -> str:
+    """Return planner-facing freshness metadata for an enforced blacklist row."""
+    parts: list[str] = []
+    purge_target = purge_scoped_target(entry)
+    if purge_target is not None:
+        parts.append(f"purge-scoped={purge_target.get('target_key', 'unknown')}")
+        if entry.get("source_trial", 0) == -1:
+            parts.append("manual-purge-approval-required")
+    reason_class = _auto_blacklist_reason_class(entry)
+    if reason_class:
+        parts.append(f"class={reason_class}")
+    expires_at = _blacklist_expires_at(entry)
+    if expires_at is not None:
+        parts.append(f"expires={expires_at.date().isoformat()}")
+    elif _entry_is_non_expiring_blacklist(entry):
+        parts.append("non-expiring")
+    else:
+        parts.append("no-expiry-metadata")
+    return "; ".join(parts)
+
+
 def _format_blacklist_for_prompt(blacklist: list[dict[str, Any]]) -> str:
     """Render blacklist prompt context without hiding older enforced patterns."""
     if not blacklist:
@@ -2696,31 +2720,42 @@ def _format_blacklist_for_prompt(blacklist: list[dict[str, Any]]) -> str:
             if len(reason) > 80:
                 reason = reason[:79] + "..."
             lines.append(
-                "  - {pattern} (target={target}; source_trial={trial}) -- {reason}".format(
+                "  - {pattern} (target={target}; source_trial={trial}; {status}) -- {reason}".format(
                     pattern=_format_blacklist_pattern(entry.get("pattern", {})),
                     target=retry_meta.get("target_key", "unknown"),
                     trial=retry_meta.get("source_trial", "unknown"),
+                    status=_format_blacklist_entry_status(entry),
                     reason=reason,
                 )
             )
 
     if shown:
         lines.append(
-            f"  Recent enforced entries ({len(shown)} newest; all {len(enforced)} enforced):"
+            f"  Recent enforced entries ({len(shown)} newest; all {len(enforced)} enforced; "
+            "expired/observational/broad numeric rows are loader-filtered):"
         )
         for entry in shown:
             reason = str(entry.get("reason", ""))
             if len(reason) > 80:
                 reason = reason[:79] + "..."
-            lines.append(f"  - {_format_blacklist_pattern(entry.get('pattern', {}))} -- {reason}")
+            lines.append(
+                "  - {pattern} ({status}) -- {reason}".format(
+                    pattern=_format_blacklist_pattern(entry.get("pattern", {})),
+                    status=_format_blacklist_entry_status(entry),
+                    reason=reason,
+                )
+            )
 
     if older:
         lines.append(f"  Older enforced patterns ({len(older)}; reasons omitted, still blocked):")
         for entry in older:
-            suffix = ""
+            suffix_parts = [_format_blacklist_entry_status(entry)]
             if entry.get("source_trial") is not None:
-                suffix = f" (source_trial={entry['source_trial']})"
-            lines.append(f"    - {_format_blacklist_pattern(entry.get('pattern', {}))}{suffix}")
+                suffix_parts.append(f"source_trial={entry['source_trial']}")
+            suffix = "; ".join(part for part in suffix_parts if part)
+            lines.append(
+                f"    - {_format_blacklist_pattern(entry.get('pattern', {}))} ({suffix})"
+            )
 
     if not shown and not older:
         lines.append("  Enforced entries: (none)")

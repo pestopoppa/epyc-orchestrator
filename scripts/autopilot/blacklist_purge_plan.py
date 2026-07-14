@@ -120,6 +120,27 @@ def _entry_matches_target(entry: dict[str, Any], target: PurgeTarget) -> bool:
     return entry.get("source_trial") == target.source_trial
 
 
+def purge_scoped_target(
+    entry: dict[str, Any],
+    *,
+    targets: tuple[PurgeTarget, ...] = DEFAULT_TARGETS,
+) -> dict[str, Any] | None:
+    """Return purge metadata for any configured target, including manual freezes."""
+    if not isinstance(entry, dict):
+        return None
+    for target in targets:
+        if not _entry_matches_target(entry, target):
+            continue
+        return {
+            "target_key": target.key,
+            "pattern": target.pattern,
+            "source_trial": target.source_trial,
+            "rationale": target.rationale,
+            "approval_token_required": APPROVAL_TOKEN,
+        }
+    return None
+
+
 def build_purge_report(
     entries: list[dict[str, Any]],
     *,
