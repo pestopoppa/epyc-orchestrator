@@ -310,10 +310,16 @@ def test_reload_embedders_uses_listener_pid_helper(monkeypatch) -> None:
     killed: list[int] = []
     pid_helper_calls: list[int] = []
     saved: list[dict[str, stack.ProcessInfo]] = []
+    refreshed: list[tuple[str, dict[str, stack.ProcessInfo]]] = []
 
     monkeypatch.setattr(stack, "EMBEDDER_PORTS", [8090])
     monkeypatch.setattr(stack, "load_state", lambda: state)
     monkeypatch.setattr(stack, "save_state", lambda value: saved.append(dict(value)))
+    monkeypatch.setattr(
+        stack_commands,
+        "_refresh_runtime_facts_manifest",
+        lambda source, state, **_kw: refreshed.append((source, dict(state))),
+    )
     monkeypatch.setattr(stack, "RegistryLoader", lambda: object())
     monkeypatch.setattr(stack, "kill_process", lambda pid: killed.append(pid))
     monkeypatch.setattr(stack, "is_port_in_use", lambda port: port == 8090)
@@ -337,6 +343,7 @@ def test_reload_embedders_uses_listener_pid_helper(monkeypatch) -> None:
     assert pid_helper_calls == [8090]
     assert saved[-1]["server_8090"] == replacement_info
     assert saved[-1]["embedder"] == replacement_info
+    assert refreshed == [("stack_reload", saved[-1])]
 
 
 def test_reload_document_formalizer_uses_auxiliary_starter(monkeypatch) -> None:
@@ -360,9 +367,15 @@ def test_reload_document_formalizer_uses_auxiliary_starter(monkeypatch) -> None:
     killed: list[int] = []
     pid_helper_calls: list[int] = []
     saved: list[dict[str, stack.ProcessInfo]] = []
+    refreshed: list[tuple[str, dict[str, stack.ProcessInfo]]] = []
 
     monkeypatch.setattr(stack, "load_state", lambda: state)
     monkeypatch.setattr(stack, "save_state", lambda value: saved.append(dict(value)))
+    monkeypatch.setattr(
+        stack_commands,
+        "_refresh_runtime_facts_manifest",
+        lambda source, state, **_kw: refreshed.append((source, dict(state))),
+    )
     monkeypatch.setattr(
         stack,
         "RegistryLoader",
@@ -384,9 +397,13 @@ def test_reload_document_formalizer_uses_auxiliary_starter(monkeypatch) -> None:
     assert killed == [333]
     assert pid_helper_calls == [9001]
     assert saved[-1] == {"document_formalizer": new_info}
+    assert refreshed == [("stack_reload", {"document_formalizer": new_info})]
 
 
-def test_reload_orchestrator_refreshes_runtime_facts_manifest(monkeypatch, tmp_path: Path) -> None:
+def test_reload_refreshes_runtime_facts_manifest_after_successful_state_save(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
     new_info = stack.ProcessInfo(
         role="orchestrator",
         pid=222,
@@ -408,7 +425,8 @@ def test_reload_orchestrator_refreshes_runtime_facts_manifest(monkeypatch, tmp_p
     monkeypatch.setattr(
         stack_commands,
         "_refresh_runtime_facts_manifest",
-        lambda source, state: refreshed.append((source, dict(state))) or tmp_path / "facts.json",
+        lambda source, state, **_kw: refreshed.append((source, dict(state)))
+        or tmp_path / "facts.json",
     )
 
     rc = stack.cmd_reload(Namespace(components=["orchestrator"], profile="production"))
@@ -416,7 +434,7 @@ def test_reload_orchestrator_refreshes_runtime_facts_manifest(monkeypatch, tmp_p
     assert rc == 0
     assert killed == [111]
     assert saved[-1] == {"orchestrator": new_info}
-    assert refreshed == [("orchestrator_reload", {"orchestrator": new_info})]
+    assert refreshed == [("stack_reload", {"orchestrator": new_info})]
 
 
 def test_preserved_process_info_records_listener_pid(monkeypatch) -> None:

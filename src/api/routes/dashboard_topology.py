@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import subprocess
 from pathlib import Path
 from typing import Any
 
+from scripts.server.runtime_facts_manifest import read_runtime_stack_selected_servers
 from src.roles import Role
 from src.registry.stack_priors import (
     live_stack_role_records,
@@ -368,6 +370,11 @@ def _load_state_services(state_path: Path) -> list[dict[str, Any]]:
 
 def expected_stack_services(numa_mode: str | None = None) -> list[dict[str, Any]]:
     """Expected stack servers from the launch manifest, including unloaded ports."""
+    if numa_mode is None and "ORCHESTRATOR_STACK_NUMA_MODE" not in os.environ:
+        runtime_servers = read_runtime_stack_selected_servers()
+        if runtime_servers is not None:
+            return _expected_services_from_manifest_servers(runtime_servers)
+
     try:
         from scripts.server.stack_manifest import HOT_SERVERS, WARM_SERVERS, _filter_by_numa_mode
     except Exception as exc:
@@ -375,13 +382,16 @@ def expected_stack_services(numa_mode: str | None = None) -> list[dict[str, Any]
         return []
 
     mode = numa_mode or active_stack_numa_mode()
-    services: list[dict[str, Any]] = []
     try:
         servers = _filter_by_numa_mode(HOT_SERVERS + WARM_SERVERS, mode)
     except Exception as exc:
         logger.debug("Failed to filter stack manifest services by NUMA mode %s: %s", mode, exc)
         servers = HOT_SERVERS + WARM_SERVERS
+    return _expected_services_from_manifest_servers(servers)
 
+
+def _expected_services_from_manifest_servers(servers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    services: list[dict[str, Any]] = []
     for server in servers:
         if not isinstance(server, dict):
             continue

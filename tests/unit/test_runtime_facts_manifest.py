@@ -14,6 +14,7 @@ from scripts.server.fleet_markers import (
 from scripts.server.runtime_facts_manifest import (
     RUNTIME_FACTS_MANIFEST_NAME,
     build_runtime_facts_manifest,
+    read_runtime_stack_selected_servers,
     runtime_facts_manifest_path,
     write_runtime_facts_manifest,
 )
@@ -68,6 +69,7 @@ roles:
             }
         },
         stack_priors_path=stack_priors_path,
+        stack_numa_mode="quarter",
         tmp_dir=tmp_path,
         repo_short_sha="abc1234",
         source="unit-test",
@@ -77,6 +79,16 @@ roles:
     assert manifest["schema_version"] == 1
     assert manifest["source"] == "unit-test"
     assert manifest["repo"] == {"short_sha": "abc1234"}
+    assert manifest["runtime_stack"]["stack_numa_mode"] == "quarter"
+    assert 8080 in manifest["runtime_stack"]["selected_ports"]
+    assert 8070 not in manifest["runtime_stack"]["selected_ports"]
+    assert manifest["runtime_stack"]["paths"] == {
+        "tmp_dir": str(tmp_path),
+        "state_file": str(manifest["runtime_stack"]["paths"]["state_file"]),
+        "stack_priors_path": str(stack_priors_path),
+        "log_dir": str(manifest["runtime_stack"]["paths"]["log_dir"]),
+        "llama_server": str(manifest["runtime_stack"]["paths"]["llama_server"]),
+    }
     assert manifest["launch_contracts"]["frontdoor"]["ports"] == [8070]
     assert manifest["state"]["frontdoor"] == asdict(process)
     assert manifest["stack_priors"] == {
@@ -129,6 +141,7 @@ def test_write_runtime_facts_manifest_writes_valid_json_and_handles_missing_inpu
             "frontdoor": {"ports": [8070], "launch": {"entries": []}}
         },
         stack_priors_path=malformed_stack_priors_path,
+        stack_numa_mode="full",
         tmp_dir=tmp_path,
         repo_short_sha=None,
         source="unit-test",
@@ -143,6 +156,7 @@ def test_write_runtime_facts_manifest_writes_valid_json_and_handles_missing_inpu
     assert manifest["schema_version"] == 1
     assert manifest["source"] == "unit-test"
     assert manifest["repo"] == {"short_sha": None}
+    assert manifest["runtime_stack"]["stack_numa_mode"] == "full"
     assert manifest["launch_contracts"]["frontdoor"]["ports"] == [8070]
     assert manifest["state"]["frontdoor"]["pid"] == 123
     assert manifest["stack_priors"] == {
@@ -174,6 +188,7 @@ roles: {}
         state={},
         launch_contracts={},
         stack_priors_path=stack_priors_path,
+        stack_numa_mode="both",
         tmp_dir=tmp_path,
         repo_short_sha="abc1234",
         source="unit-test",
@@ -183,3 +198,86 @@ roles: {}
     leftover = [entry for entry in tmp_path.iterdir() if ".tmp." in entry.name]
     assert leftover == []
 
+
+def test_read_runtime_stack_selected_servers_rejects_malformed_or_stale_manifest(
+    tmp_path: Path,
+) -> None:
+    manifest_path = tmp_path / "facts.json"
+    state_file = tmp_path / "orchestrator_state.json"
+
+    manifest_path.write_text("{}", encoding="utf-8")
+    assert read_runtime_stack_selected_servers(
+        manifest_path=manifest_path,
+        state_file=state_file,
+    ) is None
+
+    manifest_path.write_text(
+        json.dumps({
+            "schema": "epyc.orchestrator.runtime_facts",
+            "schema_version": 1,
+            "runtime_stack": {
+                "stack_numa_mode": "full",
+                "selected_ports": [8070],
+                "selected_servers": [
+                    {"port": 8070, "roles": ["frontdoor"]},
+                    {"port": 8070, "roles": ["duplicate"]},
+                ],
+            },
+        }),
+        encoding="utf-8",
+    )
+    assert read_runtime_stack_selected_servers(
+        manifest_path=manifest_path,
+        state_file=state_file,
+    ) is None
+
+    manifest_path.write_text(
+        json.dumps({
+            "schema": "epyc.orchestrator.runtime_facts",
+            "schema_version": 1,
+            "runtime_stack": {
+                "stack_numa_mode": "full",
+                "selected_ports": [8070],
+                "selected_servers": [{"port": 8070, "roles": ["frontdoor"]}],
+            },
+        }),
+        encoding="utf-8",
+    )
+    state_file.write_text("{}", encoding="utf-8")
+    assert read_runtime_stack_selected_servers(
+        manifest_path=manifest_path,
+        state_file=state_file,
+    ) is None
+
+
+def test_read_runtime_stack_selected_servers_accepts_valid_manifest(tmp_path: Path) -> None:
+    stack_priors_path = _write_yaml(
+        tmp_path / "stack_priors.yaml",
+        """
+stack_priors_version: 4
+compiled_at: "2026-07-11T00:00:00Z"
+status: live
+source_artifacts: {}
+roles: {}
+""".strip()
+        + "\n",
+    )
+    manifest_path = write_runtime_facts_manifest(
+        state={},
+        launch_contracts={},
+        stack_priors_path=stack_priors_path,
+        stack_numa_mode="full",
+        tmp_dir=tmp_path,
+        repo_short_sha="abc1234",
+        source="unit-test",
+    )
+
+    servers = read_runtime_stack_selected_servers(
+        manifest_path=manifest_path,
+        state_file=tmp_path / "missing-state.json",
+    )
+
+    assert servers is not None
+    ports = {server["port"] for server in servers}
+    assert 8070 in ports
+    assert 8080 not in ports

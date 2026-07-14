@@ -84,6 +84,53 @@ def test_expected_stack_services_are_numa_mode_filtered(monkeypatch) -> None:
     assert by_port[8182]["role"] == "worker_general.q1"
 
 
+def test_expected_stack_services_uses_runtime_facts_manifest(monkeypatch) -> None:
+    monkeypatch.delenv("ORCHESTRATOR_STACK_NUMA_MODE", raising=False)
+    monkeypatch.setattr(
+        dashboard_topology,
+        "read_runtime_stack_selected_servers",
+        lambda: [{
+            "port": 18070,
+            "roles": ["eval_batch_frontdoor"],
+            "embedding": False,
+            "vision": False,
+            "worker_pool": False,
+            "numa_instance": 0,
+        }],
+    )
+
+    services = dashboard_topology.expected_stack_services()
+
+    assert services == [{
+        "name": "eval_batch_frontdoor",
+        "role": "eval_batch_frontdoor",
+        "port": 18070,
+        "roles": ["eval_batch_frontdoor"],
+        "embedding": False,
+        "vision": False,
+        "worker_pool": False,
+        "numa_instance": 0,
+    }]
+
+
+def test_expected_stack_services_env_override_skips_runtime_facts_manifest(monkeypatch) -> None:
+    monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "full")
+
+    def fail_reader():
+        raise AssertionError("env override should use static manifest")
+
+    monkeypatch.setattr(
+        dashboard_topology,
+        "read_runtime_stack_selected_servers",
+        fail_reader,
+    )
+
+    ports = {service["port"] for service in dashboard_topology.expected_stack_services()}
+
+    assert 8070 in ports
+    assert 8080 not in ports
+
+
 def test_port_hint_uses_active_manifest_mode_for_quarters(monkeypatch) -> None:
     monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "full")
     assert dashboard_topology._port_hint(8080) == "port_8080"

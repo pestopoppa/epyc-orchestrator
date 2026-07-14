@@ -308,7 +308,12 @@ def _stack_prior_launch_contracts(path: Path | None = None) -> dict[str, dict[st
     return contracts_by_role
 
 
-def _refresh_runtime_facts_manifest(source: str, state: dict[str, ProcessInfo]) -> Path | None:
+def _refresh_runtime_facts_manifest(
+    source: str,
+    state: dict[str, ProcessInfo],
+    *,
+    stack_numa_mode: str | None = None,
+) -> Path | None:
     """Best-effort derived runtime facts cache for operators and autopilot."""
     stack_priors_path = _PATHS["project_root"] / "orchestration/derived/stack_priors.yaml"
     try:
@@ -316,6 +321,7 @@ def _refresh_runtime_facts_manifest(source: str, state: dict[str, ProcessInfo]) 
             state=state,
             launch_contracts=_stack_prior_launch_contracts(stack_priors_path),
             stack_priors_path=stack_priors_path,
+            stack_numa_mode=stack_numa_mode,
             tmp_dir=_PATHS["tmp_dir"],
             repo_short_sha=_orchestrator_stack()._repo_short_sha(),
             source=source,
@@ -1329,7 +1335,7 @@ def cmd_start(args: argparse.Namespace) -> int:
     # Save state
     save_state(state)
     print(f"[i] State saved to {STATE_FILE}")
-    _refresh_runtime_facts_manifest("stack_start", state)
+    _refresh_runtime_facts_manifest("stack_start", state, stack_numa_mode=numa_mode)
     print()
 
     # Final status
@@ -1364,6 +1370,7 @@ def cmd_stop(args: argparse.Namespace) -> int:
                     print("    [!] Failed to stop")
         print(f"Stopped {killed} orphaned processes")
         save_state({})
+        _refresh_runtime_facts_manifest("stack_stop", {})
         return 0
 
     if not state:
@@ -1417,6 +1424,7 @@ def cmd_stop(args: argparse.Namespace) -> int:
                     else:
                         print("    [!] Failed to stop")
 
+    _refresh_runtime_facts_manifest("stack_stop", state)
     return 0
 
 
@@ -1609,8 +1617,7 @@ def cmd_reload(args: argparse.Namespace) -> int:
                 print(f"  [?] Unknown component: {component}")
 
     save_state(state)
-    if "orchestrator" in args.components:
-        _refresh_runtime_facts_manifest("orchestrator_reload", state)
+    _refresh_runtime_facts_manifest("stack_reload", state)
     return 0
 
 
