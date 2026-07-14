@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import argparse
 import sys
 from pathlib import Path
+
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -34,3 +37,41 @@ def test_startup_attestation_marks_bare_start_gate_gaps(monkeypatch) -> None:
     payload = autopilot._startup_attestation_payload()
 
     assert set(payload["missing_or_mismatch"]) == set(autopilot.AUTOPILOT_REQUIRED_GATE_ENV)
+
+
+def test_startup_attestation_marks_spend_breaker_on_as_mismatch(monkeypatch) -> None:
+    for key, value in autopilot.AUTOPILOT_REQUIRED_GATE_ENV.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("AUTOPILOT_PLANNER_SPEND_BREAKER", "1")
+
+    payload = autopilot._startup_attestation_payload()
+
+    assert payload["missing_or_mismatch"] == {
+        "AUTOPILOT_PLANNER_SPEND_BREAKER": {"expected": "0", "actual": "1"}
+    }
+
+
+def test_cmd_start_refuses_bare_start_before_lock(monkeypatch, tmp_path, capsys) -> None:
+    for key in autopilot.AUTOPILOT_REQUIRED_GATE_ENV:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(autopilot, "LOCK_PATH", tmp_path / ".autopilot.lock")
+    monkeypatch.setattr(
+        autopilot.fcntl,
+        "flock",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("lock should not be taken")),
+    )
+    monkeypatch.setattr(
+        autopilot,
+        "run_loop",
+        lambda **_k: (_ for _ in ()).throw(AssertionError("loop should not start")),
+    )
+
+    args = argparse.Namespace(max_trials=1, dry_run=False, no_controller=True, tui=False)
+    with pytest.raises(SystemExit) as exc:
+        autopilot.cmd_start(args)
+
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert "AutoPilot authority gate env mismatch" in err
+    assert "start_fable_authority_daemon.py" in err
+    assert "AUTOPILOT_SEQ_VERDICT" in err

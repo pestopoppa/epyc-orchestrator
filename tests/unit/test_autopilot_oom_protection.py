@@ -32,6 +32,8 @@ def test_cmd_start_self_protects_via_oom_score_adj(monkeypatch, tmp_path) -> Non
         return len(captured)
 
     # Don't touch the real lock or run the loop; just exercise cmd_start's wiring.
+    for key, value in autopilot.AUTOPILOT_REQUIRED_GATE_ENV.items():
+        monkeypatch.setenv(key, value)
     monkeypatch.setattr(autopilot, "LOCK_PATH", tmp_path / ".autopilot.lock")
     monkeypatch.setattr(autopilot.fcntl, "flock", lambda *_a, **_k: None)
     monkeypatch.setattr(autopilot, "run_loop", lambda **_k: None)

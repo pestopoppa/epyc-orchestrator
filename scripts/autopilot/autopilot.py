@@ -234,7 +234,10 @@ AUTOPILOT_REQUIRED_GATE_ENV = {
     "AUTOPILOT_W6_AUDIT_BLOCK": "1",
     "AUTOPILOT_PLANNER_HINTS": "1",
     "AUTOPILOT_TOOL_SENTINELS": "1",
+    "AUTOPILOT_STEPPING_STONES": "1",
+    "AUTOPILOT_PLANNER_SPEND_BREAKER": "0",
 }
+AUTOPILOT_AUTHORITY_LAUNCHER = "scripts/autopilot/start_fable_authority_daemon.py"
 SAFE_FALLBACK_SEED_N = 14
 FALLBACK_SEED_CANDIDATES = (14, 16, 18, 20, 24, 30, 40, 50, 10)
 
@@ -4193,6 +4196,27 @@ def _startup_attestation_payload() -> dict[str, Any]:
         "config_hash": digest.hexdigest(),
         "file_hashes": file_hashes,
     }
+
+
+def _startup_gate_error(payload: Mapping[str, Any]) -> str:
+    mismatches = payload.get("missing_or_mismatch") or {}
+    rendered = json.dumps(mismatches, sort_keys=True)
+    return (
+        "ERROR: AutoPilot authority gate env mismatch; refusing direct start.\n"
+        f"Use `{AUTOPILOT_AUTHORITY_LAUNCHER}` so the daemon starts with the "
+        "supervisor and required authority environment.\n"
+        f"Missing or mismatched env: {rendered}"
+    )
+
+
+def _enforce_startup_gate_env() -> None:
+    """Fail closed before starting the daemon with incomplete authority env."""
+    startup_attestation = _startup_attestation_payload()
+    if not startup_attestation["missing_or_mismatch"]:
+        return
+    message = _startup_gate_error(startup_attestation)
+    print(message, file=sys.stderr)
+    raise SystemExit(2)
 
 
 def _format_deep_eval_tier_options() -> str:
@@ -8200,6 +8224,8 @@ def _git_tag(tag: str, message: str) -> None:
 
 def cmd_start(args: argparse.Namespace) -> None:
     """Start the optimization loop."""
+    _enforce_startup_gate_env()
+
     # Process lock
     lock_file = open(LOCK_PATH, "w")
     try:
