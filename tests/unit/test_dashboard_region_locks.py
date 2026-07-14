@@ -300,7 +300,9 @@ class TestRegionLocksSnapshot:
         }
 
     @pytest.mark.asyncio
-    async def test_region_lock_grid_shapes_follow_full_mode(self, tmp_path, monkeypatch) -> None:
+    async def test_region_lock_grid_keeps_configured_quarters_visible_in_full_mode(
+        self, tmp_path, monkeypatch
+    ) -> None:
         monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "full")
         for region in ("q0", "q1", "q2", "q3"):
             (tmp_path / f"cpu_region.worker_general.{region}.lock").write_text("")
@@ -336,14 +338,31 @@ class TestRegionLocksSnapshot:
 
         worker = payload["by_role"]["worker_general"]
         assert payload["stack_numa_mode"] == "full"
-        assert [inst["shape"] for inst in worker["instances"]] == ["full"]
+        assert [inst["shape"] for inst in worker["instances"]] == [
+            "full",
+            "q0",
+            "q1",
+            "q2",
+            "q3",
+        ]
+        assert [inst["launch_selected"] for inst in worker["instances"]] == [
+            True,
+            False,
+            False,
+            False,
+            False,
+        ]
         assert worker["active_instance_idxs"] == [0]
         assert payload["display_matrix"]["active_holder_count"] == 1
+        assert payload["display_matrix"]["topology_mode"] == "all_configured"
+        assert payload["display_matrix"]["launch_mode"] == "full"
         worker_display = next(
             row for row in payload["display_matrix"]["rows"] if row["role"] == "worker_general"
         )
-        assert worker_display["cells"][0]["state"] == "active"
-        assert worker_display["cells"][0]["label"] == "⚡"
+        states = [cell["state"] for cell in worker_display["cells"]]
+        labels = [cell["label"] for cell in worker_display["cells"]]
+        assert states == ["active", "na", "na", "inactive", "inactive", "inactive", "inactive"]
+        assert labels == ["⚡", "—", "—", "○", "○", "○", "○"]
 
     @pytest.mark.asyncio
     async def test_region_lock_grid_shapes_follow_quarter_mode(self, tmp_path, monkeypatch) -> None:
@@ -386,9 +405,22 @@ class TestRegionLocksSnapshot:
         worker = payload["by_role"]["worker_general"]
         assert payload["stack_numa_mode"] == "quarter"
         # Visible shapes follow the role's CONFIGURED quarter instances (all four),
-        # not the matrix's co-placement pairs — every quarter server is a real
-        # dispatch target. active_instance_idxs still reflects the single held lock.
-        assert [inst["shape"] for inst in worker["instances"]] == ["q0", "q1", "q2", "q3"]
+        # plus the inactive full instance. The matrix's co-placement pairs are
+        # not a visibility filter — every configured server is shown.
+        assert [inst["shape"] for inst in worker["instances"]] == [
+            "full",
+            "q0",
+            "q1",
+            "q2",
+            "q3",
+        ]
+        assert [inst["launch_selected"] for inst in worker["instances"]] == [
+            False,
+            True,
+            True,
+            True,
+            True,
+        ]
         assert worker["active_instance_idxs"] == [1]
 
     @pytest.mark.asyncio

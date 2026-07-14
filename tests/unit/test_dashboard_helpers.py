@@ -150,9 +150,9 @@ def test_expected_stack_services_env_override_skips_runtime_facts_manifest(monke
     assert 8080 not in ports
 
 
-def test_port_hint_uses_active_manifest_mode_for_quarters(monkeypatch) -> None:
+def test_port_hint_labels_known_numa_ports_independent_of_expected_mode(monkeypatch) -> None:
     monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "full")
-    assert dashboard_topology._port_hint(8080) == "port_8080"
+    assert dashboard_topology._port_hint(8080) == "frontdoor.q0"
 
     monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "quarter")
     assert dashboard_topology._port_hint(8080) == "frontdoor.q0"
@@ -172,7 +172,7 @@ def test_port_hint_uses_runtime_selected_servers_when_env_unset(monkeypatch) -> 
     )
 
     assert dashboard_topology._port_hint(18070) == "eval_batch_frontdoor"
-    assert dashboard_topology._port_hint(8080) == "port_8080"
+    assert dashboard_topology._port_hint(8080) == "frontdoor.q0"
 
 
 def test_expected_stack_services_include_embedder_fleet(monkeypatch) -> None:
@@ -445,6 +445,24 @@ def test_discover_llama_ports_parses_ps_output(monkeypatch) -> None:
     # MI210 HIP builds are the GPU testbed (operator-decided first-class role).
     assert ports[8802] == "mi210_gpu"
     assert 1234 not in ports  # filtered out (no llama-server in cmd)
+
+
+def test_discover_llama_ports_labels_live_quarters_as_configured_instances(monkeypatch) -> None:
+    fake_ps = (
+        "1234 /opt/llama-server --port 8080 -m /m/frontdoor-quarter.gguf\n"
+        "5678 /opt/llama-server --port 8182 -m /m/worker-quarter.gguf\n"
+    )
+    monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "full")
+    monkeypatch.setattr(
+        dashboard_topology.subprocess, "run",
+        lambda *a, **kw: SimpleNamespace(stdout=fake_ps),
+    )
+
+    ports = dashboard_topology._discover_llama_ports()
+
+    assert ports[8080] == "frontdoor.q0"
+    assert ports[8182] == "worker_general.q1"
+    assert all(not role.startswith("extern_") for role in ports.values())
 
 
 # ----- dashboard_tap -----

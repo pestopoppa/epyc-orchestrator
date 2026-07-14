@@ -850,16 +850,21 @@ def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
         def read_region_lock_payload(_path: Path) -> None:  # type: ignore[no-redef]
             return None
 
-    # Pull the live (role, idx) → {regions} map. Anything with >1 instance OR
-    # an instance pinned to a strict subset of {q0..q3} is a candidate for
-    # region-locking — those are the rows the panel should always show.
+    # Pull the configured (role, idx) → {regions} map. Region-lock observability
+    # must stay structural: even when the active launch mode is "full", the
+    # operator still needs to see quarter shapes and whether they are merely not
+    # selected by this stack run. Runtime holders are still sourced from /proc
+    # below; this topology is only the display/attribution map.
     try:
         from src.runtime.instance_topology import get_instance_regions, ATOMIC_REGIONS
 
-        topology = _filter_instance_regions_for_mode(get_instance_regions(), active_mode)
+        topology = get_instance_regions()
+        launch_topology = _filter_instance_regions_for_mode(topology, active_mode)
+        launch_selected_instances = set(launch_topology)
         all_regions = list(ATOMIC_REGIONS)
     except Exception:
         topology = {}
+        launch_selected_instances = set()
         all_regions = ["q0", "q1", "q2", "q3"]
 
     # Role INCLUSION source of truth: the operator-curated contention matrix
@@ -895,6 +900,7 @@ def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
                 "span": len(regs),
                 "shape": _shape_for_regions(regs),
                 "is_full": len(regs) >= 2,  # deprecated
+                "launch_selected": (role, idx) in launch_selected_instances,
             }
         )
     for role in instance_topology_all:
@@ -1157,6 +1163,19 @@ def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
                     }
                 )
                 continue
+            if not bool(inst.get("launch_selected", True)):
+                cells.append(
+                    {
+                        "state": "inactive",
+                        "label": "○",
+                        "title": (
+                            f"{role}.{col['label']} NOT SELECTED — current "
+                            f"stack_numa_mode={active_mode}; configured regions "
+                            f"{{{','.join(regions)}}}"
+                        ),
+                    }
+                )
+                continue
             blocking: list[str] = []
             for region in regions:
                 blockers = [
@@ -1198,6 +1217,8 @@ def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
         "display_matrix": {
             "columns": display_columns,
             "rows": display_rows,
+            "launch_mode": active_mode,
+            "topology_mode": "all_configured",
             "active_holder_count": sum(
                 len(bucket.get("active_instance_idxs", [])) for bucket in by_role.values()
             ),

@@ -189,8 +189,47 @@ def _manifest_port_hints(numa_mode: str | None = None) -> dict[int, str]:
     return hints
 
 
+def _configured_numa_port_hints() -> dict[int, str]:
+    """Labels for every statically configured NUMA llama-server port.
+
+    This is deliberately independent of the active launch mode. A quarter
+    listener that is already running must be labeled as `role.qN` in topology
+    and lock surfaces even if the current manifest mode says that quarter was
+    not expected for this run.
+    """
+    try:
+        from scripts.server.stack_numa import NUMA_CONFIG
+    except Exception:
+        return {}
+
+    hints: dict[int, str] = {}
+    for role, cfg in (NUMA_CONFIG or {}).items():
+        if not isinstance(cfg, dict):
+            continue
+        instances = cfg.get("instances")
+        if not isinstance(instances, list):
+            continue
+        full_idx = cfg.get("full_instance_idx")
+        for idx, entry in enumerate(instances):
+            if not isinstance(entry, (tuple, list)) or len(entry) < 2:
+                continue
+            port = entry[1]
+            if not isinstance(port, int):
+                continue
+            label = role
+            if isinstance(full_idx, int) and idx != full_idx:
+                label = f"{role}.q{idx - 1 if idx > full_idx else idx}"
+            hints[port] = label
+    return hints
+
+
 def _port_hint(port: int) -> str:
-    return _PORT_HINTS.get(port) or _manifest_port_hints().get(port, f"port_{port}")
+    return (
+        _PORT_HINTS.get(port)
+        or _manifest_port_hints().get(port)
+        or _configured_numa_port_hints().get(port)
+        or f"port_{port}"
+    )
 
 # Per-role display colors (CSS hex).
 _ROLE_COLORS: dict[str, str] = {

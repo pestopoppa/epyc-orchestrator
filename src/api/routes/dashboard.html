@@ -951,6 +951,7 @@ body.insight-fullscreen-open { overflow: hidden; }
         .rl-inferred { outline: 1px dashed rgba(251,191,36,0.75); outline-offset: -2px; }
         .rl-blocked { background: rgba(248,113,113,0.30); color: #f87171; }
         .rl-ready   { background: rgba(52,211,153,0.18); color: var(--good, #34d399); }
+        .rl-inactive { background: rgba(148,163,184,0.12); color: var(--muted, #94a3b8); }
         .rl-na      { background: rgba(100,100,100,0.10); color: var(--dim, #6b7280); font-style: italic; }
         /* Uniform per-panel freshness badge (dashboard_freshness contract). */
         .freshness-badge { display:inline-block; margin-left:8px; padding:1px 6px; border-radius:8px;
@@ -2680,7 +2681,7 @@ function renderRegionLocksDisplayMatrix(grid, d) {
     for (const col of columns) {
         rows.push(`<div style="color:var(--muted);font-size:10px;text-align:center;font-weight:600">${escapeHTML(col.label || col.key || '')}</div>`);
     }
-    const stateClass = { active: 'rl-active', blocked: 'rl-blocked', ready: 'rl-ready', na: 'rl-na' };
+    const stateClass = { active: 'rl-active', blocked: 'rl-blocked', ready: 'rl-ready', inactive: 'rl-inactive', na: 'rl-na' };
     for (const row of rowsIn) {
         rows.push(`<div style="overflow:hidden;color:var(--fg);font-size:11px;line-height:1.3">${escapeHTML(row.role || '')}</div>`);
         for (const cell of (row.cells || [])) {
@@ -2694,7 +2695,8 @@ function renderRegionLocksDisplayMatrix(grid, d) {
     grid.innerHTML = rows.join('');
     const footer = document.createElement('div');
     footer.style.cssText = 'grid-column:1/-1;color:var(--dim);font-size:10px;font-family:var(--font-ui);margin-top:6px;line-height:1.5';
-    footer.innerHTML = `${rowsIn.length} role(s) from backend display matrix · Legend: <span style="color:#fbbf24">⚡ active holder</span> · <span style="color:#f87171">× waiting on occupied CPU regions</span> · <span style="color:var(--good,#34d399)">✅ ready to dispatch</span> · <span style="color:var(--dim)">— shape not in this role's same_role matrix</span>.`;
+    const launchMode = matrix && matrix.launch_mode ? ` · launch ${escapeHTML(matrix.launch_mode)}` : '';
+    footer.innerHTML = `${rowsIn.length} role(s) from backend display matrix${launchMode} · Legend: <span style="color:#fbbf24">⚡ active holder</span> · <span style="color:#f87171">× selected shape waiting on occupied CPU regions</span> · <span style="color:var(--good,#34d399)">✅ selected and free</span> · <span style="color:var(--muted,#94a3b8)">○ configured but not selected by this launch mode</span> · <span style="color:var(--dim)">— shape not configured for this role</span>.`;
     grid.appendChild(footer);
     return true;
 }
@@ -6537,7 +6539,7 @@ async function updateRegionLocks(
                     `${tapLiveRequestCount} live tap request(s), but no CPU lock holder correlated in this frame`
                 );
             } else {
-                _setDotState(regionDot, 'idle', 'no CPU region locks currently held; grid shows dispatch readiness');
+                _setDotState(regionDot, 'idle', 'no CPU region locks currently held; grid shows selected vs inactive configured shapes');
             }
             if (status && enabled) {
                 const liveTapSuffix = tapLiveRequestCount
@@ -6550,7 +6552,7 @@ async function updateRegionLocks(
                     status.textContent = `— no /proc holder correlated; ${tapLiveRequestCount} live tap request(s) visible${tapLiveStateBits.length ? ` (${tapLiveStateBits.join(' · ')})` : ''}; waiting for coherent lock metadata; per-region locks ENABLED`;
                     status.style.color = 'var(--warn,#fbbf24)';
                 } else {
-                    status.textContent = '— no locks held; per-region locks ENABLED';
+                    status.textContent = '— no locks held; grid shows selected vs inactive configured CPU shapes; per-region locks ENABLED';
                     status.style.color = 'var(--muted)';
                 }
             }
