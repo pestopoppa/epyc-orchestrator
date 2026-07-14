@@ -89,6 +89,24 @@ def test_dashboard_html_distinguishes_waiting_tap_from_active_locks() -> None:
     assert "TAP ACTIVE" not in body
 
 
+def test_dashboard_html_live_tap_ignores_stale_region_lock_frames() -> None:
+    """Aborted lock refreshes must not leave stale blockers on newer tap rows."""
+    html_path = (
+        Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    )
+    body = html_path.read_text()
+
+    assert "let _latestRegionLockFrame = { valid: false" in body
+    assert "const _REGION_LOCK_TAP_FRESH_S = 5;" in body
+    assert "function latestRegionLockFrameUsableForTap(req = null)" in body
+    assert "if (!req || !_latestRegionLocksByRole || !latestRegionLockFrameUsableForTap(req)) return false;" in body
+    assert "if (!req || !_latestRegionLocksByRole || !latestRegionLockFrameUsableForTap(req)) return [];" in body
+    assert "if (!latestRegionLockFrameUsableForTap()) return [];" in body
+    assert "generatedAt: regionLockPayloadFrameEpoch(d)" in body
+    assert "source: regionLocks ? 'snapshot' : 'direct'" in body
+    assert "_latestRegionLockFrame = { valid: false, generatedAt: 0, appliedAtMs: Date.now(), source: 'error' };" in body
+
+
 def test_dashboard_html_copy_snapshot_stays_on_the_click_activation_path() -> None:
     """Copy should build synchronously and fall back to execCommand when needed."""
     html_path = (

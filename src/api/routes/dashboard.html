@@ -1742,6 +1742,9 @@ let _latestAutopilotProgress = null;
 let _latestRegionLockSummary = { activeLockCount: 0, heldRegions: 0, enabled: null };
 let _latestRegionLockActivitySignature = null;
 let _lastRegionLocksPayload = null;
+let _latestRegionLockFrame = { valid: false, generatedAt: 0, appliedAtMs: 0, source: '' };
+const _REGION_LOCK_TAP_FRESH_S = 5;
+const _REGION_LOCK_TAP_REQ_SKEW_S = 0.75;
 
 function formatShortDuration(s) {
     if (s == null || Number.isNaN(Number(s))) return '?';
@@ -1749,6 +1752,41 @@ function formatShortDuration(s) {
     if (n < 60) return `${Math.round(n)}s`;
     if (n < 3600) return `${(n / 60).toFixed(n < 600 ? 1 : 0)}m`;
     return `${(n / 3600).toFixed(n < 10 * 3600 ? 1 : 0)}h`;
+}
+
+function structuredTapRequestStartEpoch(req) {
+    if (!req) return null;
+    if (req.started_at_epoch != null && Number.isFinite(Number(req.started_at_epoch))) {
+        return Number(req.started_at_epoch);
+    }
+    if (req.started_at) {
+        const parsed = Date.parse(String(req.started_at));
+        if (Number.isFinite(parsed)) return parsed / 1000;
+    }
+    return null;
+}
+
+function regionLockPayloadFrameEpoch(d) {
+    if (!d) return Date.now() / 1000;
+    if (d.now != null && Number.isFinite(Number(d.now))) return Number(d.now);
+    if (d.generated_at != null && Number.isFinite(Number(d.generated_at))) return Number(d.generated_at);
+    const fresh = d._freshness || {};
+    if (fresh.generated_at != null && Number.isFinite(Number(fresh.generated_at))) {
+        return Number(fresh.generated_at);
+    }
+    return Date.now() / 1000;
+}
+
+function latestRegionLockFrameUsableForTap(req = null) {
+    const frame = _latestRegionLockFrame || {};
+    if (!frame.valid || !frame.generatedAt) return false;
+    const nowS = Date.now() / 1000;
+    if (nowS - Number(frame.generatedAt) > _REGION_LOCK_TAP_FRESH_S) return false;
+    const reqStartS = structuredTapRequestStartEpoch(req);
+    if (reqStartS != null && Number(frame.generatedAt) + _REGION_LOCK_TAP_REQ_SKEW_S < reqStartS) {
+        return false;
+    }
+    return true;
 }
 
 function topStripCard(label, value, sub, valueClass = '') {
@@ -2181,7 +2219,7 @@ let _lastLockOnlyTapHolders = [];
 let _openStructuredTapRequestId = null;
 
 function structuredTapHasActiveCpuLock(req) {
-    if (!req || !_latestRegionLocksByRole) return false;
+    if (!req || !_latestRegionLocksByRole || !latestRegionLockFrameUsableForTap(req)) return false;
     const roleKeys = [
         req.lock_role,
         req.topology_role,
@@ -2216,6 +2254,7 @@ function structuredTapHasActiveCpuLock(req) {
 function structuredTapRequestedRegions(req) {
     const explicit = (req && req.instance_regions || []).map(String).filter(Boolean);
     if (explicit.length) return explicit;
+    if (!latestRegionLockFrameUsableForTap(req)) return [];
     const roleKeys = [
         req && req.lock_role,
         req && req.topology_role,
@@ -2238,7 +2277,7 @@ function structuredTapRequestedRegions(req) {
 }
 
 function structuredTapCpuBlockers(req) {
-    if (!req || !_latestRegionLocksByRole) return [];
+    if (!req || !_latestRegionLocksByRole || !latestRegionLockFrameUsableForTap(req)) return [];
     const needed = new Set(structuredTapRequestedRegions(req));
     if (!needed.size) return [];
     const ownPid = req.pid != null ? String(req.pid) : '';
@@ -2496,6 +2535,7 @@ function structuredTapMatchesLockHolder(req, holder) {
 }
 
 function procRegionLockHolders() {
+    if (!latestRegionLockFrameUsableForTap()) return [];
     const holders = [];
     for (const [role, active] of Object.entries(_latestRegionLocksByRole || {})) {
         if (!active) continue;
@@ -6376,6 +6416,12 @@ async function updateRegionLocks(
             if (!grid) return;
             const enabled = d.per_region_locks_enabled;
             _lastRegionLocksPayload = d;
+            _latestRegionLockFrame = {
+                valid: true,
+                generatedAt: regionLockPayloadFrameEpoch(d),
+                appliedAtMs: Date.now(),
+                source: regionLocks ? 'snapshot' : 'direct',
+            };
             if (status) {
                 status.textContent = enabled
                     ? '— per-region cross-process locks ENABLED'
@@ -6539,6 +6585,7 @@ async function updateRegionLocks(
             return;
 
         } catch (err) {
+            _latestRegionLockFrame = { valid: false, generatedAt: 0, appliedAtMs: Date.now(), source: 'error' };
             const status = document.getElementById('region-locks-status');
             const grid = document.getElementById('region-locks-grid');
             const msg = err && err.message ? err.message : String(err);
