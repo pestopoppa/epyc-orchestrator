@@ -15,7 +15,10 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from scripts.server.runtime_facts_manifest import read_runtime_stack_selected_servers
+from scripts.server.runtime_facts_manifest import (
+    read_runtime_stack_numa_mode,
+    read_runtime_stack_selected_servers,
+)
 from src.roles import Role
 from src.registry.stack_priors import (
     live_stack_role_records,
@@ -118,25 +121,27 @@ _PORT_HINTS: dict[int, str] = _build_port_hints()
 def active_stack_numa_mode() -> str:
     """Return the stack NUMA mode the dashboard surfaces should render.
 
-    Honors an explicit ORCHESTRATOR_STACK_NUMA_MODE override (full/quarter/both).
-    Nothing in the codebase actually exports that env var, so when it is unset we
-    default to ``both``: the production stack launches EVERY configured instance —
-    each role's full/primary server PLUS its 4 NUMA-quarter servers (verified live:
-    all quarter ports up and healthy) — so ``both`` reflects reality. The prior
-    ``full`` default made the region-locks grid, topology strip, and
-    ``expected_stack_services`` health checks believe the stack was full-only,
-    hiding the running quarter instances and under-checking them. Set the env
-    explicitly to render a genuinely full-only or quarter-only stack.
+    Honors an explicit ORCHESTRATOR_STACK_NUMA_MODE override (full/quarter/both),
+    then uses the launcher-regenerated runtime facts manifest when it is present
+    and non-stale. Without either, keep the dashboard's historical ``both``
+    fallback: production commonly launches each role's full/primary server plus
+    its NUMA-quarter servers, and the older ``full`` default hid running quarter
+    instances from health and topology surfaces.
 
     NOTE: this drives only the dashboard/health family. The config compiler and
-    launcher still use the shared ``full`` fallback; this dashboard runtime
-    fallback remains ``both`` until the runtime facts manifest is the default
-    display authority for already-running stacks.
+    launcher still use the shared ``full`` fallback for spawn-time planning.
     """
     from scripts.server.stack_numa_mode import (
         DASHBOARD_RUNTIME_FALLBACK_NUMA_MODE,
         env_stack_numa_mode,
     )
+
+    if os.environ.get("ORCHESTRATOR_STACK_NUMA_MODE") is not None:
+        return env_stack_numa_mode(default=DASHBOARD_RUNTIME_FALLBACK_NUMA_MODE)
+
+    runtime_mode = read_runtime_stack_numa_mode()
+    if runtime_mode is not None:
+        return runtime_mode
 
     return env_stack_numa_mode(default=DASHBOARD_RUNTIME_FALLBACK_NUMA_MODE)
 
@@ -153,6 +158,17 @@ def _manifest_server_label(server: dict[str, Any]) -> str:
 
 
 def _manifest_port_hints(numa_mode: str | None = None) -> dict[int, str]:
+    if numa_mode is None and os.environ.get("ORCHESTRATOR_STACK_NUMA_MODE") is None:
+        runtime_servers = read_runtime_stack_selected_servers()
+        if runtime_servers is not None:
+            hints: dict[int, str] = {}
+            for server in runtime_servers:
+                port = server.get("port")
+                label = _manifest_server_label(server)
+                if isinstance(port, int) and label:
+                    hints[port] = label
+            return hints
+
     try:
         from scripts.server.stack_manifest import HOT_SERVERS, WARM_SERVERS, _filter_by_numa_mode
     except Exception:

@@ -59,6 +59,7 @@ def test_active_stack_numa_mode_defaults_to_both(monkeypatch) -> None:
     # instance (full + 4 quarters per multi-instance role), so the dashboard
     # defaults to "both" to reflect the running instances rather than hiding them.
     monkeypatch.delenv("ORCHESTRATOR_STACK_NUMA_MODE", raising=False)
+    monkeypatch.setattr(dashboard_topology, "read_runtime_stack_numa_mode", lambda: None)
     assert dashboard_topology.active_stack_numa_mode() == "both"
 
     monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "quarter")
@@ -67,6 +68,24 @@ def test_active_stack_numa_mode_defaults_to_both(monkeypatch) -> None:
     # Unknown values fall back to the "both" default.
     monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "stale-quarter")
     assert dashboard_topology.active_stack_numa_mode() == "both"
+
+
+def test_active_stack_numa_mode_uses_runtime_facts_manifest(monkeypatch) -> None:
+    monkeypatch.delenv("ORCHESTRATOR_STACK_NUMA_MODE", raising=False)
+    monkeypatch.setattr(dashboard_topology, "read_runtime_stack_numa_mode", lambda: "quarter")
+
+    assert dashboard_topology.active_stack_numa_mode() == "quarter"
+
+
+def test_active_stack_numa_mode_env_override_skips_runtime_facts_manifest(monkeypatch) -> None:
+    monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "full")
+
+    def fail_reader():
+        raise AssertionError("env override should use explicit NUMA mode")
+
+    monkeypatch.setattr(dashboard_topology, "read_runtime_stack_numa_mode", fail_reader)
+
+    assert dashboard_topology.active_stack_numa_mode() == "full"
 
 
 def test_expected_stack_services_are_numa_mode_filtered(monkeypatch) -> None:
@@ -140,7 +159,24 @@ def test_port_hint_uses_active_manifest_mode_for_quarters(monkeypatch) -> None:
     assert dashboard_topology._port_hint(8182) == "worker_general.q1"
 
 
-def test_expected_stack_services_include_embedder_fleet() -> None:
+def test_port_hint_uses_runtime_selected_servers_when_env_unset(monkeypatch) -> None:
+    monkeypatch.delenv("ORCHESTRATOR_STACK_NUMA_MODE", raising=False)
+    monkeypatch.setattr(
+        dashboard_topology,
+        "read_runtime_stack_selected_servers",
+        lambda: [{
+            "port": 18070,
+            "roles": ["eval_batch_frontdoor"],
+            "numa_instance": 0,
+        }],
+    )
+
+    assert dashboard_topology._port_hint(18070) == "eval_batch_frontdoor"
+    assert dashboard_topology._port_hint(8080) == "port_8080"
+
+
+def test_expected_stack_services_include_embedder_fleet(monkeypatch) -> None:
+    monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "both")
     services = dashboard_topology.expected_stack_services()
     embedders = [s for s in services if s.get("embedding")]
 
@@ -2854,6 +2890,7 @@ def test_snapshot_uses_fresh_region_lock_scan(monkeypatch) -> None:
     monkeypatch.setattr(dashboard, "_structured_tap_requests_for_dashboard", lambda **_k: [])
     monkeypatch.setattr(dashboard, "_topology_activity_payload", lambda **_k: activity)
     monkeypatch.setattr(dashboard, "_topology_nodes_cached", lambda _numa_mode=None: [])
+    monkeypatch.setattr(dashboard_topology, "read_runtime_stack_numa_mode", lambda: None)
 
     response = asyncio.run(dashboard._snapshot_impl())
     payload = json.loads(response.body)

@@ -14,6 +14,7 @@ from scripts.server.fleet_markers import (
 from scripts.server.runtime_facts_manifest import (
     RUNTIME_FACTS_MANIFEST_NAME,
     build_runtime_facts_manifest,
+    read_runtime_stack_numa_mode,
     read_runtime_stack_selected_servers,
     runtime_facts_manifest_path,
     write_runtime_facts_manifest,
@@ -250,6 +251,46 @@ def test_read_runtime_stack_selected_servers_rejects_malformed_or_stale_manifest
     ) is None
 
 
+def test_read_runtime_stack_numa_mode_rejects_malformed_stale_or_unknown_mode(
+    tmp_path: Path,
+) -> None:
+    manifest_path = tmp_path / "facts.json"
+    state_file = tmp_path / "orchestrator_state.json"
+
+    manifest_path.write_text("{}", encoding="utf-8")
+    assert read_runtime_stack_numa_mode(
+        manifest_path=manifest_path,
+        state_file=state_file,
+    ) is None
+
+    manifest_path.write_text(
+        json.dumps({
+            "schema": "epyc.orchestrator.runtime_facts",
+            "schema_version": 1,
+            "runtime_stack": {"stack_numa_mode": "bogus"},
+        }),
+        encoding="utf-8",
+    )
+    assert read_runtime_stack_numa_mode(
+        manifest_path=manifest_path,
+        state_file=state_file,
+    ) is None
+
+    manifest_path.write_text(
+        json.dumps({
+            "schema": "epyc.orchestrator.runtime_facts",
+            "schema_version": 1,
+            "runtime_stack": {"stack_numa_mode": "quarter"},
+        }),
+        encoding="utf-8",
+    )
+    state_file.write_text("{}", encoding="utf-8")
+    assert read_runtime_stack_numa_mode(
+        manifest_path=manifest_path,
+        state_file=state_file,
+    ) is None
+
+
 def test_read_runtime_stack_selected_servers_accepts_valid_manifest(tmp_path: Path) -> None:
     stack_priors_path = _write_yaml(
         tmp_path / "stack_priors.yaml",
@@ -281,3 +322,31 @@ roles: {}
     ports = {server["port"] for server in servers}
     assert 8070 in ports
     assert 8080 not in ports
+
+
+def test_read_runtime_stack_numa_mode_accepts_valid_manifest(tmp_path: Path) -> None:
+    stack_priors_path = _write_yaml(
+        tmp_path / "stack_priors.yaml",
+        """
+stack_priors_version: 4
+compiled_at: "2026-07-11T00:00:00Z"
+status: live
+source_artifacts: {}
+roles: {}
+""".strip()
+        + "\n",
+    )
+    manifest_path = write_runtime_facts_manifest(
+        state={},
+        launch_contracts={},
+        stack_priors_path=stack_priors_path,
+        stack_numa_mode="quarter",
+        tmp_dir=tmp_path,
+        repo_short_sha="abc1234",
+        source="unit-test",
+    )
+
+    assert read_runtime_stack_numa_mode(
+        manifest_path=manifest_path,
+        state_file=tmp_path / "missing-state.json",
+    ) == "quarter"

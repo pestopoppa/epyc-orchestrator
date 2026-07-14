@@ -183,7 +183,8 @@ def write_runtime_facts_manifest(
     """Write the runtime facts manifest atomically and return its path."""
     path = runtime_facts_manifest_path(tmp_dir)
     effective_stack_numa_mode = stack_numa_mode or read_runtime_stack_numa_mode(
-        manifest_path=path
+        manifest_path=path,
+        state_file=None,
     )
     payload = build_runtime_facts_manifest(
         state=state,
@@ -222,11 +223,17 @@ def _manifest_is_stale(manifest_path: Path, state_file: Path | None) -> bool:
         return True
 
 
-def read_runtime_stack_numa_mode(*, manifest_path: Path | None = None) -> str | None:
+def read_runtime_stack_numa_mode(
+    *,
+    manifest_path: Path | None = None,
+    state_file: Path | None = STATE_FILE,
+) -> str | None:
     """Return the manifest's recorded stack NUMA mode when structurally valid."""
     path = manifest_path or runtime_facts_manifest_path()
     payload = _load_manifest_payload(path)
     if not payload or not _manifest_header_is_valid(payload):
+        return None
+    if _manifest_is_stale(path, state_file):
         return None
     runtime_stack = payload.get("runtime_stack")
     if not isinstance(runtime_stack, Mapping):
@@ -298,6 +305,9 @@ def read_runtime_stack_selected_servers(
     if not isinstance(runtime_stack, Mapping):
         return None
     mode = runtime_stack.get("stack_numa_mode")
-    if not isinstance(mode, str) or read_runtime_stack_numa_mode(manifest_path=path) is None:
+    if not isinstance(mode, str) or read_runtime_stack_numa_mode(
+        manifest_path=path,
+        state_file=state_file,
+    ) is None:
         return None
     return _normalized_selected_servers(runtime_stack)
