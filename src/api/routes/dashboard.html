@@ -305,6 +305,7 @@ h2 .live-dot.down    { background: var(--bad);  box-shadow: 0 0 4px rgba(248, 11
     vertical-align: middle;
 }
 .topology-row .active-badge.zero {
+    display: none;
     background: rgba(148,163,184,0.08); color: var(--dim);
     border-color: var(--border);
 }
@@ -1305,8 +1306,8 @@ function renderTopologyStrip() {
             ? `<div class="role-model" title="${escapeHTML(modelName)}">${escapeHTML(modelName)}</div>`
             : '';
         label.innerHTML =
-            `<div class="role-line"><span class="role-expand-chev">▸</span>${labelText}${aliasChip}` +
-            `<span class="active-badge zero" id="active_badge_${g.base}" title="${g.base}: priority chat-XXX tasks (cyan) > proc/payload CPU region-lock holders (violet 'N active') > tap-only fallback (violet 'N tap')">0</span></div>` +
+            `<div class="role-line"><span class="role-expand-chev">▸</span>${labelText} ` +
+            `<span class="active-badge zero" id="active_badge_${g.base}" title="${g.base}: priority chat-XXX tasks (cyan) > proc/payload CPU region-lock holders (violet 'N active') > tap-only fallback (violet 'N tap')">0</span>${aliasChip}</div>` +
             modelLine;
 
         const port = document.createElement('div');

@@ -341,6 +341,23 @@ def test_dashboard_topology_activity_stats_refresh_with_live_age_tick() -> None:
     assert "logical ${escapeHTML(req.role)}" in body
 
 
+def test_dashboard_topology_active_badge_does_not_create_fake_counts() -> None:
+    """Grouped rows must not render as `x50` or append active text to aliases."""
+    html_path = (
+        Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    )
+    body = html_path.read_text()
+
+    assert ".topology-row .active-badge.zero {\n    display: none;" in body
+    assert (
+        '<span class="active-badge zero" id="active_badge_${g.base}" '
+        'title="${g.base}: priority chat-XXX tasks'
+        in body
+    )
+    assert ">0</span>${aliasChip}</div>`" in body
+    assert "${aliasChip}` +\n            `<span class=\"active-badge zero\"" not in body
+
+
 def test_dashboard_live_panel_refreshes_ignore_stale_responses_where_possible() -> None:
     """Live inference and CPU-lock refreshes should not repaint older responses."""
     html_path = (
