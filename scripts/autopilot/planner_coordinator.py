@@ -932,13 +932,17 @@ def _extract_markdown_section(text: str, heading: str) -> str:
 
 def extract_critique(text: str) -> PlannerCritique:
     raw = text or ""
+    if "```json:autopilot_critique" not in raw:
+        return PlannerCritique(raw_text=raw, parse_error="autopilot_critique fence missing")
     data, error = _extract_json_payload(raw, "```json:autopilot_critique")
     if data is None:
         return PlannerCritique(raw_text=raw, parse_error=error or "no critique JSON")
 
-    decision = str(data.get("decision", "approve")).strip().lower()
+    if "decision" not in data:
+        return PlannerCritique(raw_text=raw, parse_error="critique decision missing")
+    decision = str(data.get("decision", "")).strip().lower()
     if decision not in {"approve", "revise", "reject"}:
-        decision = "approve"
+        return PlannerCritique(raw_text=raw, parse_error=f"invalid critique decision: {decision}")
 
     try:
         confidence = float(data.get("confidence", 0.0))

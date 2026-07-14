@@ -1302,6 +1302,35 @@ def test_extract_critique_recovers_trailing_bracket_noise() -> None:
     assert critique.parse_error == ""
 
 
+def test_extract_critique_requires_named_fence_not_incidental_json() -> None:
+    text = """This draft seems acceptable.
+
+Draft action mentioned in prose:
+{"type": "numeric_trial", "surface": "chat_pipeline", "params": {"x": 1}}
+"""
+
+    critique = planner_coordinator.extract_critique(text)
+
+    assert critique.parse_error == "autopilot_critique fence missing"
+    assert critique.decision == "approve"  # dataclass default, not a parsed approval
+
+
+def test_extract_critique_requires_explicit_valid_decision() -> None:
+    missing = planner_coordinator.extract_critique(
+        """```json:autopilot_critique
+{"confidence": 0.9, "issues": []}
+```"""
+    )
+    invalid = planner_coordinator.extract_critique(
+        """```json:autopilot_critique
+{"decision": "maybe", "confidence": 0.9, "issues": []}
+```"""
+    )
+
+    assert missing.parse_error == "critique decision missing"
+    assert invalid.parse_error == "invalid critique decision: maybe"
+
+
 def test_failed_critique_invoke_fails_closed_not_open() -> None:
     """A critic process failure (timeout, nonzero exit, empty response) on a
     HIGH-risk draft must fail closed: keep the trusted draft + verdict
