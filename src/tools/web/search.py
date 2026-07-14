@@ -35,6 +35,7 @@ _QUERY_STOPWORDS = {
     "after",
     "and",
     "are",
+    "current",
     "for",
     "from",
     "how",

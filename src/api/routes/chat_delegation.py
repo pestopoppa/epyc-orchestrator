@@ -634,8 +634,11 @@ def _run_specialist_loop(
                             "irrelevant_rate": wr.get("irrelevant_rate", 0.0),
                             "total_elapsed_ms": wr.get("total_elapsed_ms", 0.0),
                             "sources": [
-                                {"url": s.get("url", ""), "title": s.get("title", ""),
-                                 "relevant": s.get("relevant", True)}
+                                {
+                                    "url": s.get("url", ""),
+                                    "title": s.get("title", ""),
+                                    **({"relevant": s["relevant"]} if "relevant" in s else {}),
+                                }
                                 for s in wr.get("sources", [])
                                 if isinstance(s, dict)
                             ],

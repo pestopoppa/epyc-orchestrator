@@ -32,6 +32,26 @@ def test_searxng_relevance_guard_rejects_off_topic_bing_junk():
     )
 
 
+def test_searxng_relevance_guard_rejects_current_only_python_release_junk():
+    results = [
+        {
+            "title": "Current | Future of Banking",
+            "url": "https://current.com/",
+            "snippet": "Mobile banking and credit-building services for Current members.",
+        },
+        {
+            "title": "Electric current - Wikipedia",
+            "url": "https://en.wikipedia.org/wiki/Electric_current",
+            "snippet": "Electric current is the flow of charged particles.",
+        },
+    ]
+
+    assert not search_mod._results_pass_relevance_guard(
+        "current Python 3.13.5 release date",
+        results,
+    )
+
+
 def test_searxng_relevance_guard_accepts_on_topic_results():
     results = [
         {
