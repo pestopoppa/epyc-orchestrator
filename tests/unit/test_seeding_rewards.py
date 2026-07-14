@@ -577,8 +577,8 @@ def test_extract_web_research_telemetry_and_rewards():
             "not-a-dict",
         ]
     )
-    # call_count uses raw tool_results length by design
-    assert telemetry.call_count == 3
+    # call_count tracks valid web_research result dicts.
+    assert telemetry.call_count == 2
     assert telemetry.total_pages_fetched == 4
     assert telemetry.total_pages_synthesized == 2
     assert math.isclose(telemetry.total_elapsed_ms, 120.5)
@@ -643,6 +643,34 @@ def test_source_level_relevance_metadata_downweights_rewards_without_page_counts
     assert rewards["wr_accuracy"] == 0.0
     assert rewards["wr_completeness"] == 0.0
     assert rewards["wr_source_diversity"] == 0.0
+
+
+def test_failed_web_research_results_are_not_rewarded():
+    telemetry = _MOD.extract_web_research_telemetry(
+        [
+            {
+                "success": False,
+                "error": "Search failed",
+                "no_results_reason": "search_failed",
+                "query": "q1",
+                "pages_fetched": 0,
+                "sources": [],
+            }
+        ]
+    )
+
+    assert telemetry.call_count == 0
+    assert _MOD.compute_web_research_rewards(telemetry, passed=True, f1_score=1.0) == {}
+
+    strategy = _MOD.score_query_strategy([
+        {
+            "success": False,
+            "query": "q1",
+            "sources": [{"url": "https://irrelevant.example.com/a"}],
+        }
+    ])
+    assert strategy["query_count"] == 1.0
+    assert strategy["source_yield"] == 0.0
 
 
 def test_compute_web_research_rewards_zeroes_out_all_irrelevant_pages():
@@ -768,6 +796,15 @@ def test_compute_scratchpad_rewards_branches():
         True,
     )
     assert rewards_irrelevant_web["sp_web_insight_ratio"] == 0.0
+
+    failed_web = [{"success": False, "query": "q", "no_results_reason": "search_failed"}]
+    rewards_failed_web = _MOD.compute_scratchpad_rewards(
+        insights,
+        failed_web,
+        "The final value is 42.",
+        True,
+    )
+    assert rewards_failed_web["sp_web_insight_ratio"] == 0.0
 
     # insights present but empty answer => containment forced to 0
     rewards_no_answer = _MOD.compute_scratchpad_rewards(insights, [], "", False)

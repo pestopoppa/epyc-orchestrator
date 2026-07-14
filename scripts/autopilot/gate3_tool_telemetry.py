@@ -138,6 +138,9 @@ def _web_research_relevance_issue(results: list[dict]) -> str | None:
     for wr in results:
         if not isinstance(wr, dict):
             continue
+        if wr.get("success") is False:
+            reason = wr.get("no_results_reason") or wr.get("error") or "success=False"
+            return f"web_research result failed ({reason})"
         total_pages_synthesized += int(wr.get("pages_synthesized") or 0)
         total_pages_irrelevant += int(wr.get("pages_irrelevant") or 0)
 

@@ -671,12 +671,18 @@ def _web_research_relevance_counts(result: dict[str, Any]) -> tuple[int, int]:
 def _web_research_results_relevance_scale(web_research_results: list[dict]) -> float:
     total_pages_synthesized = 0
     total_pages_irrelevant = 0
+    valid_results = 0
     for wr in web_research_results:
         if not isinstance(wr, dict):
             continue
+        if wr.get("success") is False:
+            continue
+        valid_results += 1
         pages_synthesized, pages_irrelevant = _web_research_relevance_counts(wr)
         total_pages_synthesized += pages_synthesized
         total_pages_irrelevant += pages_irrelevant
+    if web_research_results and valid_results == 0:
+        return 0.0
     return _web_research_relevance_scale(
         total_pages_synthesized=total_pages_synthesized,
         total_pages_irrelevant=total_pages_irrelevant,
@@ -719,10 +725,14 @@ def extract_web_research_telemetry(
     queries: list[str] = []
     source_urls: list[str] = []
     relevant_source_urls: list[str] = []
+    valid_call_count = 0
 
     for wr in tool_results:
         if not isinstance(wr, dict):
             continue
+        if wr.get("success") is False:
+            continue
+        valid_call_count += 1
         total_pages_fetched += _nonnegative_int(wr.get("pages_fetched"))
         pages_synthesized, pages_irrelevant = _web_research_relevance_counts(wr)
         total_pages_synthesized += pages_synthesized
@@ -746,7 +756,7 @@ def extract_web_research_telemetry(
             pass
 
     return WebResearchTelemetry(
-        call_count=len(tool_results),
+        call_count=valid_call_count,
         total_pages_fetched=total_pages_fetched,
         total_pages_synthesized=total_pages_synthesized,
         total_pages_irrelevant=total_pages_irrelevant,
@@ -877,6 +887,8 @@ def score_query_strategy(
     total_pages_irrelevant = 0
     for wr in web_research_results:
         if not isinstance(wr, dict):
+            continue
+        if wr.get("success") is False:
             continue
         pages_synthesized, pages_irrelevant = _web_research_relevance_counts(wr)
         total_pages_synthesized += pages_synthesized

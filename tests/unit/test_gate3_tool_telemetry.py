@@ -103,6 +103,24 @@ def test_web_research_all_marked_irrelevant_is_infra_not_pass():
     assert "relevant=False" in " ".join(lines)
 
 
+def test_web_research_result_success_false_is_infra_not_pass():
+    status, lines = classify_web_research({
+        "tools_called": ["web_research"],
+        "tool_timings": [{"tool_name": "web_research", "success": True}],
+        "web_research_results": [
+            {
+                "success": False,
+                "query": "q",
+                "error": "Search failed",
+                "no_results_reason": "search_failed",
+                "sources": [],
+            }
+        ],
+    })
+    assert status == "INFRA_FAIL"
+    assert "search_failed" in " ".join(lines)
+
+
 def test_web_research_all_irrelevant_pages_is_infra_not_pass():
     status, lines = classify_web_research({
         "tools_called": ["web_research"],

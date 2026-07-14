@@ -627,7 +627,12 @@ def _run_specialist_loop(
                     phase_tool_timings.append({
                         "tool_name": "_web_research_result",
                         "web_research_data": {
+                            "success": wr.get("success", True),
+                            "error": wr.get("error", ""),
+                            "no_results_reason": wr.get("no_results_reason", ""),
                             "query": wr.get("query", ""),
+                            "search_backend": wr.get("search_backend", ""),
+                            "search_result_count": wr.get("search_result_count", 0),
                             "pages_fetched": wr.get("pages_fetched", 0),
                             "pages_synthesized": wr.get("pages_synthesized", 0),
                             "pages_irrelevant": wr.get("pages_irrelevant", 0),
