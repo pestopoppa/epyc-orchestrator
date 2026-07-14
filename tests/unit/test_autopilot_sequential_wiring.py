@@ -354,6 +354,71 @@ def test_seq_gate_preflight_defers_rate_axis_unreachable_candidate(
     assert rationale["seq_gate_preflight_deferred"] is True
 
 
+def test_seq_gate_preflight_uses_retryable_seed_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(autopilot, "SEQ_GATE_PREFLIGHT_MIN_SEQ_ROWS", 2)
+    monkeypatch.setattr(autopilot, "SEQ_GATE_PREFLIGHT_RECENT_WINDOW", 2)
+    monkeypatch.setattr(autopilot, "SEQ_GATE_PREFLIGHT_MAX_RATE_E", 2.0)
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    base_action = {"type": "numeric_trial", "surface": "memrl_retrieval", "params": {"x": 1}}
+    for trial_id, wall_s in enumerate([60.0, 60.0, 1800.0, 1800.0], start=1):
+        journal.record(
+            _entry(
+                trial_id,
+                {**base_action, "params": {"x": trial_id}},
+                eval_details_extra={"eval_wall_s": wall_s},
+                seq={
+                    "candidate": f"candidate-{trial_id}",
+                    "core_id": "core_v1",
+                    "z": 0.1,
+                    "z_rate": -0.9,
+                    "E_quality": 2.0,
+                    "E_rate_noninf": 1.05,
+                    "state": "accumulating",
+                    "policy_version": "seq-v1",
+                },
+            )
+        )
+    blacklist = [
+        {
+            "pattern": {"type": "seed_batch", "n_questions": n_questions},
+            "reason": f"blocked {n_questions}",
+        }
+        for n_questions in (14, 16, 18, 20, 24, 30, 40)
+    ]
+    blacklist.append(
+        {
+            "pattern": {"type": "seed_batch", "n_questions": 50},
+            "reason": "Auto-blacklisted: 3 consecutive failures ending at trial 1317",
+            "source_trial": 1317,
+        }
+    )
+
+    action, rationale, payload = autopilot._maybe_defer_seq_unreachable_candidate_action(
+        {"type": "numeric_trial", "surface": "new_surface", "params": {"x": 99}},
+        state={},
+        journal=journal,
+        blacklist=blacklist,
+        rationale={},
+        trial_counter=10,
+        tier=1,
+        enabled=True,
+    )
+
+    assert payload is not None
+    assert action == {"type": "seed_batch", "n_questions": 50}
+    assert payload["retryable_blacklist_target"] == "seed_batch_n50_t1317_no_progress_infra"
+    assert rationale is not None
+    assert rationale["seq_gate_preflight_deferred"] is True
+    assert rationale["seq_gate_preflight_retryable_blacklist"] is True
+    assert (
+        rationale["p0_3_blacklist_reexploration_target"]
+        == "seed_batch_n50_t1317_no_progress_infra"
+    )
+
+
 def test_seq_gate_preflight_defers_alpha_exhausted_new_candidate(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1040,6 +1105,51 @@ def test_maybe_force_seq_baseline_draw_uses_alternate_when_default_blacklisted(
         "seq_baseline_reference_reason": "no marked seq baseline-reference draw",
     }
     assert reference is not None
+    assert state["seq_baseline_draw_forced"]["action"] == forced
+
+
+def test_maybe_force_seq_baseline_draw_uses_retryable_infra_seed(
+    tmp_path: Path,
+) -> None:
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    action = {"type": "noop"}
+    state: dict = {}
+    blacklist = [
+        {
+            "pattern": {"type": "seed_batch", "n_questions": n_questions},
+            "reason": f"blocked {n_questions}",
+        }
+        for n_questions in (14, 16, 18, 20, 24, 30, 40)
+    ]
+    blacklist.append(
+        {
+            "pattern": {"type": "seed_batch", "n_questions": 50},
+            "reason": "Auto-blacklisted: 3 consecutive failures ending at trial 1317",
+            "source_trial": 1317,
+        }
+    )
+
+    forced, rationale, reference = autopilot._maybe_force_seq_baseline_draw(
+        action,
+        state=state,
+        journal=journal,
+        tier=1,
+        blacklist=blacklist,
+        rationale=None,
+        trial_counter=9,
+        enabled=True,
+    )
+
+    assert forced == {"type": "seed_batch", "n_questions": 50}
+    assert reference is not None
+    assert rationale is not None
+    assert rationale["seq_baseline_reference_draw"] is True
+    assert rationale["seq_baseline_reference_retryable_blacklist"] is True
+    assert (
+        rationale["p0_3_blacklist_reexploration_target"]
+        == "seed_batch_n50_t1317_no_progress_infra"
+    )
+    assert state["seq_baseline_draw_blocked"] is None
     assert state["seq_baseline_draw_forced"]["action"] == forced
 
 

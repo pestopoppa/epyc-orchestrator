@@ -1452,6 +1452,24 @@ def _first_unblacklisted_seed_action(
     return None, last_blocked or "all measured seed fallbacks are blacklisted"
 
 
+def _first_dispatchable_seed_action(
+    blacklist: list[dict[str, Any]],
+    *,
+    preferred: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any] | None, str, dict[str, Any] | None]:
+    """Return an unblocked seed action, or an audit-scoped retryable seed action."""
+    last_blocked = ""
+    for candidate in _seed_action_candidates(preferred):
+        blocked = check_blacklist(candidate, blacklist)
+        if not blocked:
+            return candidate, "", None
+        retry_meta = _p0_3_retryable_blacklist_match(candidate, blacklist)
+        if retry_meta is not None:
+            return candidate, blocked, retry_meta
+        last_blocked = blocked
+    return None, last_blocked or "all measured seed fallbacks are blacklisted", None
+
+
 def _seed_fallback_exhaustion_reason(blacklist: list[dict[str, Any]]) -> str | None:
     """Return a planner-facing reason when every measured seed fallback is blocked."""
     candidate, reason = _first_unblacklisted_seed_action(blacklist)
@@ -1733,8 +1751,9 @@ def _maybe_force_seq_baseline_draw(
         ):
             return action, rationale, None
     blocked_reason = check_blacklist(forced, blacklist)
+    retry_meta: dict[str, Any] | None = None
     if blocked_reason:
-        fallback, fallback_reason = _first_unblacklisted_seed_action(
+        fallback, fallback_reason, retry_meta = _first_dispatchable_seed_action(
             blacklist,
             preferred=forced,
         )
@@ -1757,6 +1776,9 @@ def _maybe_force_seq_baseline_draw(
     next_rationale = dict(rationale or {})
     next_rationale["seq_baseline_reference_draw"] = True
     next_rationale["seq_baseline_reference_reason"] = reference["reason"]
+    if retry_meta is not None:
+        next_rationale = _record_p0_3_reexploration_rationale(next_rationale, retry_meta)
+        next_rationale["seq_baseline_reference_retryable_blacklist"] = True
     state["seq_baseline_draw_blocked"] = None
     state["seq_baseline_draw_forced"] = {
         "trial_id": trial_counter,
@@ -1975,7 +1997,7 @@ def _maybe_defer_seq_unreachable_candidate_action(
         }
         return action, rationale, None
 
-    replacement, fallback_reason = _first_unblacklisted_seed_action(
+    replacement, fallback_reason, retry_meta = _first_dispatchable_seed_action(
         blacklist,
         preferred=_seq_baseline_draw_action(),
     )
@@ -1987,6 +2009,9 @@ def _maybe_defer_seq_unreachable_candidate_action(
         "original_action": dict(action),
         "replacement_action": replacement,
         "fallback_reason": fallback_reason,
+        "retryable_blacklist_target": (
+            retry_meta.get("target_key") if retry_meta is not None else None
+        ),
         "reachability": reachability,
         "alpha_wealth": alpha_wealth,
     }
@@ -2008,6 +2033,9 @@ def _maybe_defer_seq_unreachable_candidate_action(
         "seq_gate_preflight_original": dict(action),
         "seq_gate_preflight_report": reachability,
     }
+    if retry_meta is not None:
+        next_rationale = _record_p0_3_reexploration_rationale(next_rationale, retry_meta)
+        next_rationale["seq_gate_preflight_retryable_blacklist"] = True
     log.warning(
         "Seq gate preflight deferring promotion-dependent action at trial %d: %s -> %s (%s)",
         trial_counter,
