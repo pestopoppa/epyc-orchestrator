@@ -298,7 +298,7 @@ def test_blacklist_prompt_separates_p0_3_retryable_entries(monkeypatch) -> None:
         ]
     )
 
-    assert "P0.3 re-exploration eligible entries" in text
+    assert "Retryable blacklist re-exploration entries" in text
     assert "architect_delegation_t655_tool_use_axis_bug" in text
     assert "target=architect_delegation_t655_tool_use_axis_bug; source_trial=655" in text
     assert "Recent enforced entries" in text
@@ -338,6 +338,29 @@ def test_p0_3_retryable_blacklist_match_excludes_manual_freeze() -> None:
             blacklist,
         )
         is None
+    )
+
+
+def test_retryable_infra_seed_blacklist_is_not_replaced() -> None:
+    requested = {"type": "seed_batch", "n_questions": 50}
+    action, rationale = autopilot._replace_blacklisted_seed_fallback(
+        requested,
+        [
+            {
+                "pattern": {"type": "seed_batch", "n_questions": 50},
+                "reason": "Auto-blacklisted: 3 consecutive failures ending at trial 1317",
+                "source_trial": 1317,
+            }
+        ],
+        {"falsifier": "original"},
+    )
+
+    assert action == requested
+    assert rationale["falsifier"] == "original"
+    assert rationale["p0_3_blacklist_reexploration"] is True
+    assert (
+        rationale["p0_3_blacklist_reexploration_scope"]
+        == "infra_contaminated_blacklist_recheck"
     )
 
 

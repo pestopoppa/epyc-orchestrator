@@ -1549,6 +1549,9 @@ def _replace_blacklisted_seed_fallback(
     blocked = check_blacklist(action, blacklist)
     if not blocked:
         return action, rationale
+    retry_meta = _p0_3_retryable_blacklist_match(action, blacklist)
+    if retry_meta is not None:
+        return action, _record_p0_3_reexploration_rationale(rationale, retry_meta)
     replacement, _ = _first_unblacklisted_seed_action(
         blacklist,
         preferred=action,
@@ -2711,9 +2714,9 @@ def _format_blacklist_for_prompt(blacklist: list[dict[str, Any]]) -> str:
 
     if retryable:
         lines.append(
-            "  P0.3 re-exploration eligible entries "
-            f"({len(retryable)} automated instrument-era patterns; manual purge "
-            "still approval-token gated):"
+            "  Retryable blacklist re-exploration entries "
+            f"({len(retryable)} automated era/infra-contaminated patterns; manual "
+            "purge still approval-token gated):"
         )
         for entry, retry_meta in retryable:
             reason = str(entry.get("reason", ""))

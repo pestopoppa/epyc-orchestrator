@@ -65,21 +65,42 @@ DEFAULT_TARGETS: tuple[PurgeTarget, ...] = (
     ),
 )
 
+RETRY_ONLY_TARGETS: tuple[PurgeTarget, ...] = (
+    PurgeTarget(
+        key="langgraph_coder_t1302_connection_refused",
+        pattern={"type": "structural_experiment", "flags": {"langgraph_coder": False}},
+        source_trial=1302,
+        rationale="Source trial had 65/65 connection-refused eval failures; treat as infra-contaminated recheck, not a settled hypothesis failure.",
+    ),
+    PurgeTarget(
+        key="seed_batch_n50_t1317_no_progress_infra",
+        pattern={"type": "seed_batch", "n_questions": 50},
+        source_trial=1317,
+        rationale="Source trial had heavy no-progress/tool-runner failures; retry suite-qualified or controlled draws instead of treating the size as permanently bad.",
+    ),
+    PurgeTarget(
+        key="seed_batch_n10_t1320_no_progress_infra",
+        pattern={"type": "seed_batch", "n_questions": 10},
+        source_trial=1320,
+        rationale="Source trial had heavy no-progress/tool-runner failures; retry suite-qualified or controlled draws instead of treating the size as permanently bad.",
+    ),
+)
+
 
 def retryable_reexploration_target(
     entry: dict[str, Any],
     *,
     targets: tuple[PurgeTarget, ...] = DEFAULT_TARGETS,
 ) -> dict[str, Any] | None:
-    """Return P0.3 retry metadata for automated instrument-era targets.
+    """Return retry metadata for automated era or infra-contaminated targets.
 
     Manual freeze entries still require the explicit purge approval token. This
-    helper only marks source-trial-backed automated entries as eligible for live
-    re-exploration while the destructive YAML rewrite remains operator-gated.
+    helper marks only source-trial-backed automated entries as eligible for live
+    re-exploration while destructive YAML rewrite remains operator-gated.
     """
     if not isinstance(entry, dict):
         return None
-    for target in targets:
+    for target in (*targets, *RETRY_ONLY_TARGETS):
         if target.source_trial is None or target.source_trial < 0:
             continue
         if not _entry_matches_target(entry, target):
@@ -89,7 +110,11 @@ def retryable_reexploration_target(
             "pattern": target.pattern,
             "source_trial": target.source_trial,
             "rationale": target.rationale,
-            "retry_scope": "p0_3_auto_instrument_era",
+            "retry_scope": (
+                "p0_3_auto_instrument_era"
+                if target in targets
+                else "infra_contaminated_blacklist_recheck"
+            ),
         }
     return None
 
@@ -275,7 +300,7 @@ def render_markdown(report: dict[str, Any]) -> str:
                 "## Retryable Re-Exploration Entries",
                 "",
                 (
-                    "These automated instrument-era entries may be retried without "
+                    "These automated era/infra-contaminated entries may be retried without "
                     "rewriting the blacklist file. Manual freeze entries still require "
                     "the approval token above."
                 ),
