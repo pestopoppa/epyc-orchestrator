@@ -1743,8 +1743,7 @@ let _latestRegionLockSummary = { activeLockCount: 0, heldRegions: 0, enabled: nu
 let _latestRegionLockActivitySignature = null;
 let _lastRegionLocksPayload = null;
 let _latestRegionLockFrame = { valid: false, generatedAt: 0, appliedAtMs: 0, source: '' };
-const _REGION_LOCK_TAP_FRESH_S = 5;
-const _REGION_LOCK_TAP_REQ_SKEW_S = 0.75;
+const _REGION_LOCK_TAP_FRESH_S = 20;
 
 function formatShortDuration(s) {
     if (s == null || Number.isNaN(Number(s))) return '?';
@@ -1752,18 +1751,6 @@ function formatShortDuration(s) {
     if (n < 60) return `${Math.round(n)}s`;
     if (n < 3600) return `${(n / 60).toFixed(n < 600 ? 1 : 0)}m`;
     return `${(n / 3600).toFixed(n < 10 * 3600 ? 1 : 0)}h`;
-}
-
-function structuredTapRequestStartEpoch(req) {
-    if (!req) return null;
-    if (req.started_at_epoch != null && Number.isFinite(Number(req.started_at_epoch))) {
-        return Number(req.started_at_epoch);
-    }
-    if (req.started_at) {
-        const parsed = Date.parse(String(req.started_at));
-        if (Number.isFinite(parsed)) return parsed / 1000;
-    }
-    return null;
 }
 
 function regionLockPayloadFrameEpoch(d) {
@@ -1782,10 +1769,6 @@ function latestRegionLockFrameUsableForTap(req = null) {
     if (!frame.valid || !frame.generatedAt) return false;
     const nowS = Date.now() / 1000;
     if (nowS - Number(frame.generatedAt) > _REGION_LOCK_TAP_FRESH_S) return false;
-    const reqStartS = structuredTapRequestStartEpoch(req);
-    if (reqStartS != null && Number(frame.generatedAt) + _REGION_LOCK_TAP_REQ_SKEW_S < reqStartS) {
-        return false;
-    }
     return true;
 }
 
@@ -2439,6 +2422,16 @@ function structuredTapActivity(req) {
             reason: `required CPU regions occupied by ${structuredTapCpuBlockerSummary(cpuBlockers)}`,
         };
     }
+    if (!hasOutput && lockActive) {
+        return {
+            state: 'prefill_decode_pending',
+            label: 'prefill/decode pending',
+            color: 'var(--good,#34d399)',
+            live: true,
+            show: true,
+            reason: 'CPU lock is held for this request; long prompt prefill may produce no tap chunks until the first token',
+        };
+    }
     if (quietS >= _STRUCTURED_TAP_STALLED_S) {
         return {
             state: 'stalled',
@@ -2462,16 +2455,6 @@ function structuredTapActivity(req) {
         };
     }
     if (!hasOutput) {
-        if (lockActive) {
-            return {
-                state: 'prefill_decode_pending',
-                label: 'prefill/decode pending',
-                color: 'var(--good,#34d399)',
-                live: true,
-                show: true,
-                reason: 'CPU lock is held for this request; model may be evaluating prompt or decoding before first token',
-            };
-        }
         return {
             state: 'queued',
             label: 'queued',

@@ -97,11 +97,17 @@ def test_dashboard_html_live_tap_ignores_stale_region_lock_frames() -> None:
     body = html_path.read_text()
 
     assert "let _latestRegionLockFrame = { valid: false" in body
-    assert "const _REGION_LOCK_TAP_FRESH_S = 5;" in body
+    assert "const _REGION_LOCK_TAP_FRESH_S = 20;" in body
     assert "function latestRegionLockFrameUsableForTap(req = null)" in body
+    assert "_REGION_LOCK_TAP_REQ_SKEW_S" not in body
+    assert "structuredTapRequestStartEpoch" not in body
     assert "if (!req || !_latestRegionLocksByRole || !latestRegionLockFrameUsableForTap(req)) return false;" in body
     assert "if (!req || !_latestRegionLocksByRole || !latestRegionLockFrameUsableForTap(req)) return [];" in body
     assert "if (!latestRegionLockFrameUsableForTap()) return [];" in body
+    assert body.index("if (!hasOutput && lockActive)") < body.index(
+        "if (quietS >= _STRUCTURED_TAP_STALLED_S)"
+    )
+    assert "long prompt prefill may produce no tap chunks until the first token" in body
     assert "generatedAt: regionLockPayloadFrameEpoch(d)" in body
     assert "source: regionLocks ? 'snapshot' : 'direct'" in body
     assert "_latestRegionLockFrame = { valid: false, generatedAt: 0, appliedAtMs: Date.now(), source: 'error' };" in body
