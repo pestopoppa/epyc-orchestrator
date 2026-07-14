@@ -606,6 +606,97 @@ def compute_tool_value(
 
 # ── Search-R1: Web research quality rewards ──────────────────────────
 
+_WEB_RESEARCH_IRRELEVANCE_REWARD_THRESHOLD = 0.20
+
+
+def _nonnegative_int(value: Any) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _is_relevant_source(source: dict[str, Any]) -> bool:
+    """Return True when source relevance is not explicitly negated."""
+    return source.get("relevant") is not False
+
+
+def _web_research_relevance_scale(
+    *,
+    total_pages_synthesized: int,
+    total_pages_irrelevant: int,
+) -> float:
+    """Downweight reward when synthesized pages are mostly irrelevant."""
+    if total_pages_synthesized <= 0:
+        return 1.0
+    if total_pages_irrelevant >= total_pages_synthesized:
+        return 0.0
+
+    irrelevant_rate = total_pages_irrelevant / total_pages_synthesized
+    if irrelevant_rate >= _WEB_RESEARCH_IRRELEVANCE_REWARD_THRESHOLD:
+        return max(0.0, 1.0 - irrelevant_rate)
+    return 1.0
+
+
+def _source_relevance_counts(sources: Any) -> tuple[int, int]:
+    """Return explicit source relevance metadata as (total, irrelevant)."""
+    if not isinstance(sources, list):
+        return 0, 0
+    total = 0
+    irrelevant = 0
+    for src in sources:
+        if not isinstance(src, dict) or "relevant" not in src:
+            continue
+        total += 1
+        if src.get("relevant") is False:
+            irrelevant += 1
+    return total, irrelevant
+
+
+def _web_research_relevance_counts(result: dict[str, Any]) -> tuple[int, int]:
+    """Merge page counters with source-level relevance flags."""
+    sources = result.get("sources", [])
+    source_total, source_irrelevant = _source_relevance_counts(sources)
+    total_pages_synthesized = max(
+        _nonnegative_int(result.get("pages_synthesized")),
+        source_total,
+    )
+    total_pages_irrelevant = max(
+        _nonnegative_int(result.get("pages_irrelevant")),
+        source_irrelevant,
+    )
+    return total_pages_synthesized, total_pages_irrelevant
+
+
+def _web_research_results_relevance_scale(web_research_results: list[dict]) -> float:
+    total_pages_synthesized = 0
+    total_pages_irrelevant = 0
+    for wr in web_research_results:
+        if not isinstance(wr, dict):
+            continue
+        pages_synthesized, pages_irrelevant = _web_research_relevance_counts(wr)
+        total_pages_synthesized += pages_synthesized
+        total_pages_irrelevant += pages_irrelevant
+    return _web_research_relevance_scale(
+        total_pages_synthesized=total_pages_synthesized,
+        total_pages_irrelevant=total_pages_irrelevant,
+    )
+
+
+def _relevant_source_urls(sources: Any) -> list[str]:
+    relevant_urls: list[str] = []
+    if not isinstance(sources, list):
+        return relevant_urls
+    for src in sources:
+        if not isinstance(src, dict):
+            continue
+        if not _is_relevant_source(src):
+            continue
+        url = src.get("url", "")
+        if url:
+            relevant_urls.append(url)
+    return relevant_urls
+
 
 def extract_web_research_telemetry(
     tool_results: list[dict],
@@ -627,26 +718,26 @@ def extract_web_research_telemetry(
     total_elapsed_ms = 0.0
     queries: list[str] = []
     source_urls: list[str] = []
+    relevant_source_urls: list[str] = []
 
     for wr in tool_results:
         if not isinstance(wr, dict):
             continue
-        total_pages_fetched += int(wr.get("pages_fetched", 0) or 0)
-        total_pages_synthesized += int(wr.get("pages_synthesized", 0) or 0)
-        total_pages_irrelevant += int(wr.get("pages_irrelevant", 0) or 0)
+        total_pages_fetched += _nonnegative_int(wr.get("pages_fetched"))
+        pages_synthesized, pages_irrelevant = _web_research_relevance_counts(wr)
+        total_pages_synthesized += pages_synthesized
+        total_pages_irrelevant += pages_irrelevant
         total_elapsed_ms += float(wr.get("total_elapsed_ms", 0.0) or 0.0)
         q = wr.get("query", "")
         if q:
             queries.append(q)
-        for src in wr.get("sources", []):
-            if isinstance(src, dict):
-                url = src.get("url", "")
-                if url:
-                    source_urls.append(url)
+        sources = wr.get("sources", [])
+        relevant_source_urls.extend(_relevant_source_urls(sources))
+        source_urls.extend(_relevant_source_urls(sources))
 
     # Compute unique domains
     domains: set[str] = set()
-    for url in source_urls:
+    for url in relevant_source_urls:
         try:
             parsed = urlparse(url)
             if parsed.hostname:
@@ -693,16 +784,23 @@ def compute_web_research_rewards(
         return {}
 
     rewards: dict[str, float] = {}
-    rewards["wr_accuracy"] = 1.0 if passed else 0.0
-    rewards["wr_completeness"] = max(0.0, min(1.0, f1_score))
+    relevance_scale = _web_research_relevance_scale(
+        total_pages_synthesized=telemetry.total_pages_synthesized,
+        total_pages_irrelevant=telemetry.total_pages_irrelevant,
+    )
+    rewards["wr_accuracy"] = (1.0 if passed else 0.0) * relevance_scale
+    rewards["wr_completeness"] = max(0.0, min(1.0, f1_score)) * relevance_scale
 
     if telemetry.total_pages_fetched > 0:
-        rewards["wr_source_diversity"] = min(
-            1.0, telemetry.unique_domains / telemetry.total_pages_fetched
+        rewards["wr_source_diversity"] = (
+            min(1.0, telemetry.unique_domains / telemetry.total_pages_fetched)
+            * relevance_scale
         )
         # Efficiency: fewer pages for a correct answer = better
         if passed:
-            rewards["wr_efficiency"] = min(1.0, 1.0 / telemetry.total_pages_fetched)
+            rewards["wr_efficiency"] = (
+                min(1.0, 1.0 / telemetry.total_pages_fetched) * relevance_scale
+            )
         else:
             rewards["wr_efficiency"] = 0.0
     else:
@@ -775,22 +873,24 @@ def score_query_strategy(
 
     queries: list[str] = []
     all_domains: set[str] = set()
+    total_pages_synthesized = 0
+    total_pages_irrelevant = 0
     for wr in web_research_results:
         if not isinstance(wr, dict):
             continue
+        pages_synthesized, pages_irrelevant = _web_research_relevance_counts(wr)
+        total_pages_synthesized += pages_synthesized
+        total_pages_irrelevant += pages_irrelevant
         q = wr.get("query", "")
         if q:
             queries.append(q)
-        for src in wr.get("sources", []):
-            if isinstance(src, dict):
-                url = src.get("url", "")
-                if url:
-                    try:
-                        parsed = urlparse(url)
-                        if parsed.hostname:
-                            all_domains.add(parsed.hostname)
-                    except Exception:
-                        pass
+        for url in _relevant_source_urls(wr.get("sources", [])):
+            try:
+                parsed = urlparse(url)
+                if parsed.hostname:
+                    all_domains.add(parsed.hostname)
+            except Exception:
+                pass
 
     n_calls = len(web_research_results)
     strategy: dict[str, float] = {
@@ -812,7 +912,12 @@ def score_query_strategy(
         strategy["query_diversity"] = 0.0
 
     # Source yield: unique domains per call
-    strategy["source_yield"] = len(all_domains) / n_calls if n_calls > 0 else 0.0
+    strategy["source_yield"] = (
+        len(all_domains) / n_calls if n_calls > 0 else 0.0
+    ) * _web_research_relevance_scale(
+        total_pages_synthesized=total_pages_synthesized,
+        total_pages_irrelevant=total_pages_irrelevant,
+    )
 
     return strategy
 
@@ -851,6 +956,7 @@ def compute_scratchpad_rewards(
 
     insights = [e for e in scratchpad_insights if isinstance(e, dict)]
     rewards["sp_insight_count"] = float(len(insights))
+    web_relevance_scale = _web_research_results_relevance_scale(web_research_results)
 
     # sp_web_insight_ratio: only meaningful when web_research was used
     if web_research_results and insights:
@@ -859,7 +965,7 @@ def compute_scratchpad_rewards(
             text = str(entry.get("insight", "")).lower()
             if any(kw in text for kw in _WEB_INSIGHT_KEYWORDS):
                 web_related += 1
-        rewards["sp_web_insight_ratio"] = web_related / len(insights)
+        rewards["sp_web_insight_ratio"] = (web_related / len(insights)) * web_relevance_scale
     elif web_research_results:
         # Web research used but no insights extracted
         rewards["sp_web_insight_ratio"] = 0.0

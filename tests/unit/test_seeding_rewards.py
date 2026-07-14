@@ -595,6 +595,96 @@ def test_extract_web_research_telemetry_and_rewards():
     assert 0.0 < rewards["wr_efficiency"] <= 1.0
 
 
+def test_extract_web_research_telemetry_ignores_explicitly_irrelevant_sources():
+    telemetry = _MOD.extract_web_research_telemetry(
+        [
+            {
+                "pages_fetched": 2,
+                "pages_synthesized": 2,
+                "pages_irrelevant": 0,
+                "query": "q1",
+                "sources": [
+                    {"url": "https://irrelevant.example.com/a", "relevant": False},
+                    {"url": "https://relevant.example.com/b", "relevant": True},
+                    {"url": "https://implicit.example.com/c"},
+                ],
+            }
+        ]
+    )
+
+    assert telemetry.call_count == 1
+    assert telemetry.source_urls == [
+        "https://relevant.example.com/b",
+        "https://implicit.example.com/c",
+    ]
+    assert telemetry.unique_domains == 2
+
+
+def test_source_level_relevance_metadata_downweights_rewards_without_page_counts():
+    telemetry = _MOD.extract_web_research_telemetry(
+        [
+            {
+                "pages_fetched": 2,
+                "query": "q1",
+                "sources": [
+                    {"url": "https://irrelevant.example.com/a", "relevant": False},
+                    {"url": "https://also-irrelevant.example.com/b", "relevant": False},
+                ],
+            }
+        ]
+    )
+
+    rewards = _MOD.compute_web_research_rewards(telemetry, passed=True, f1_score=1.0)
+
+    assert telemetry.total_pages_synthesized == 2
+    assert telemetry.total_pages_irrelevant == 2
+    assert telemetry.source_urls == []
+    assert telemetry.unique_domains == 0
+    assert rewards["wr_accuracy"] == 0.0
+    assert rewards["wr_completeness"] == 0.0
+    assert rewards["wr_source_diversity"] == 0.0
+
+
+def test_compute_web_research_rewards_zeroes_out_all_irrelevant_pages():
+    rewards = _MOD.compute_web_research_rewards(
+        _MOD.WebResearchTelemetry(
+            call_count=1,
+            total_pages_fetched=4,
+            total_pages_synthesized=4,
+            total_pages_irrelevant=4,
+            unique_domains=9,
+        ),
+        passed=True,
+        f1_score=1.0,
+    )
+
+    assert rewards == {
+        "wr_accuracy": 0.0,
+        "wr_completeness": 0.0,
+        "wr_source_diversity": 0.0,
+        "wr_efficiency": 0.0,
+    }
+
+
+def test_compute_web_research_rewards_downweights_high_irrelevant_rate():
+    rewards = _MOD.compute_web_research_rewards(
+        _MOD.WebResearchTelemetry(
+            call_count=1,
+            total_pages_fetched=10,
+            total_pages_synthesized=10,
+            total_pages_irrelevant=3,
+            unique_domains=5,
+        ),
+        passed=True,
+        f1_score=1.0,
+    )
+
+    assert rewards["wr_accuracy"] == 0.7
+    assert rewards["wr_completeness"] == 0.7
+    assert rewards["wr_source_diversity"] == 0.35
+    assert math.isclose(rewards["wr_efficiency"], 0.07)
+
+
 def test_aggregate_web_research_reward_and_strategy_scoring():
     assert _MOD.aggregate_web_research_reward({}) == 0.0
     assert _MOD.aggregate_web_research_reward({"x": 1.0}, weights={"x": 0.0}) == 0.0
@@ -628,6 +718,25 @@ def test_aggregate_web_research_reward_and_strategy_scoring():
     assert _MOD.score_query_strategy([]) == {}
 
 
+def test_score_query_strategy_filters_relevant_sources_and_downweights_irrelevance():
+    strategy = _MOD.score_query_strategy(
+        [
+            {
+                "query": "capital of france",
+                "pages_synthesized": 6,
+                "pages_irrelevant": 5,
+                "sources": [
+                    {"url": "https://irrelevant.example.com/a", "relevant": False},
+                    {"url": "https://relevant.example.com/b", "relevant": True},
+                ],
+            }
+        ]
+    )
+
+    assert strategy["query_count"] == 1.0
+    assert 0.0 < strategy["source_yield"] < 1.0
+
+
 def test_compute_scratchpad_rewards_branches():
     assert _MOD.compute_scratchpad_rewards([], [], "answer", True) == {}
 
@@ -643,6 +752,22 @@ def test_compute_scratchpad_rewards_branches():
     assert rewards["sp_insight_count"] == 2.0
     assert 0.0 <= rewards["sp_web_insight_ratio"] <= 1.0
     assert 0.0 <= rewards["sp_answer_containment"] <= 1.0
+
+    irrelevant_web = [
+        {
+            "query": "q",
+            "pages_synthesized": 2,
+            "pages_irrelevant": 2,
+            "sources": [{"url": "https://irrelevant.example.com/a", "relevant": False}],
+        }
+    ]
+    rewards_irrelevant_web = _MOD.compute_scratchpad_rewards(
+        insights,
+        irrelevant_web,
+        "The final value is 42.",
+        True,
+    )
+    assert rewards_irrelevant_web["sp_web_insight_ratio"] == 0.0
 
     # insights present but empty answer => containment forced to 0
     rewards_no_answer = _MOD.compute_scratchpad_rewards(insights, [], "", False)
