@@ -40,6 +40,7 @@ _LOCAL_TRANSIENT_HTTP_ERRORS = (
 _LOCAL_ACTION_OUTPUT_CONTRACT = """\
 CRITICAL OUTPUT CONTRACT FOR THIS LOCAL AUTOPILOT DRAFT:
 - Return exactly one fenced ```json:autopilot_actions block followed by one fenced ```json:autopilot_rationale block.
+- The ```json:autopilot_actions payload must be one JSON object, not a list or array.
 - Do not write analysis, caveats, summaries, or prose before the first fence.
 - Use only action types and fields explicitly allowed in the prompt.
 - Do not invent flags, surfaces, suites, dependencies, or evidence.
@@ -893,10 +894,11 @@ You are the AutoPilot meta-reasoning controller. A long-context local role has
 compressed the live controller prompt into the brief below.
 
 Return exactly one fenced ```json:autopilot_actions block followed by one fenced
-```json:autopilot_rationale block. Use only action types, fields, surfaces,
-flags, suites, and evidence explicitly present in the brief. If the brief is
-missing information needed for a higher-risk action, emit the safest valid
-fallback action named in the brief.
+```json:autopilot_rationale block. The action block payload must be one JSON
+object, not a list or array. Use only action types, fields, surfaces, flags,
+suites, and evidence explicitly present in the brief. If the brief is missing
+information needed for a higher-risk action, emit the safest valid fallback
+action named in the brief.
 
 Original controller prompt length: {original_prompt_chars} chars.
 
