@@ -89,6 +89,23 @@ def test_dashboard_html_distinguishes_waiting_tap_from_active_locks() -> None:
     assert "TAP ACTIVE" not in body
 
 
+def test_dashboard_html_copy_snapshot_stays_on_the_click_activation_path() -> None:
+    """Copy should build synchronously and fall back to execCommand when needed."""
+    html_path = (
+        Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    )
+    body = html_path.read_text()
+    start = body.index("function copySnapshotFallback(text) {")
+    end = body.index("async function downloadSnapshot() {")
+    copy_body = body[start:end]
+
+    assert "const text = buildTextSnapshot();" in copy_body
+    assert "await navigator.clipboard.writeText(text);" in copy_body
+    assert "document.execCommand('copy')" in copy_body
+    assert "fetch(`/dashboard/api/task/" not in copy_body
+    assert "clipboard write failed:" in copy_body
+
+
 def test_dashboard_html_separates_proc_holders_from_live_tap_requests() -> None:
     """The lock panel should distinguish real /proc holders from tap inference."""
     html_path = (

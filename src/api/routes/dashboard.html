@@ -5010,27 +5010,47 @@ function buildTextSnapshot() {
     return lines.join('\n');
 }
 
-async function copySnapshotToClipboard() {
-    // Prefer the server-side filtered .txt endpoint (it strips stack_state
-    // and other noisy keys). Fall back to the local builder if the fetch fails.
-    let text;
+function copySnapshotFallback(text) {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.setAttribute('readonly', '');
+    textarea.style.position = 'fixed';
+    textarea.style.top = '-9999px';
+    textarea.style.left = '-9999px';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    let copied = false;
     try {
-        const r = await fetch(`/dashboard/api/task/${encodeURIComponent(_currentTaskRawText.taskId)}.txt`);
-        if (r.ok) {
-            text = await r.text();
-        } else {
-            text = buildTextSnapshot();
-        }
-    } catch {
-        text = buildTextSnapshot();
+        copied = document.execCommand('copy');
+    } catch (e) {
+        copied = false;
+    } finally {
+        textarea.remove();
     }
+    return copied;
+}
+
+async function copySnapshotToClipboard() {
+    const text = buildTextSnapshot();
+    const fb = document.getElementById('copy-feedback');
     try {
-        await navigator.clipboard.writeText(text);
-        const fb = document.getElementById('copy-feedback');
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(text);
+        } else if (!copySnapshotFallback(text)) {
+            throw new Error('clipboard API unavailable');
+        }
         fb.textContent = `copied ${text.length}c`;
         fb.classList.add('shown');
         setTimeout(() => fb.classList.remove('shown'), 1500);
     } catch (e) {
+        if (copySnapshotFallback(text)) {
+            fb.textContent = `copied ${text.length}c`;
+            fb.classList.add('shown');
+            setTimeout(() => fb.classList.remove('shown'), 1500);
+            return;
+        }
         alert('clipboard write failed: ' + e.message);
     }
 }
