@@ -605,14 +605,18 @@ def audit_blacklist() -> bool:
     auto = [e for e in entries if e.get("source_trial", 0) != -1]
     manual = [e for e in entries if e.get("source_trial", 0) == -1]
     corrupted_trials = set()
-    if journal_path.exists():
-        journal_rows: list[dict] = []
-        for line_num, line in enumerate(open(journal_path), 1):
-            try:
-                journal_rows.append(json.loads(line))
-            except Exception:
-                log.debug("Skipping malformed journal line %d", line_num)
-                continue
+    journal_rows: list[dict] = []
+    for path in _jsonl_paths(journal_path):
+        if not path.exists():
+            continue
+        with open(path) as fh:
+            for line_num, line in enumerate(fh, 1):
+                try:
+                    journal_rows.append(json.loads(line))
+                except Exception:
+                    log.debug("Skipping malformed journal line %s:%d", path, line_num)
+                    continue
+    if journal_rows:
         folded_rows, _ = fold_supersession_events(journal_rows)
         for entry in folded_rows:
             if entry.get("bug_corrupted_by"):
