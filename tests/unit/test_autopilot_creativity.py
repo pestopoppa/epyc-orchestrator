@@ -505,6 +505,33 @@ def test_dispatch_allowlist_applies_only_to_planner_selected_actions() -> None:
 
     assert (
         autopilot._dispatch_allowed_action_types(
+            ["numeric_trial"],
+            seq_due_bypassed_planner=False,
+            seq_fresh_eval_context=None,
+            seq_baseline_draw_reference=None,
+            seq_candidate_replay_context=None,
+            seq_gate_preflight={
+                "status": "deferred",
+                "replacement_action": {"type": "seed_batch", "n_questions": 50},
+            },
+        )
+        is None
+    )
+
+    assert autopilot._dispatch_allowed_action_types(
+        ["numeric_trial"],
+        seq_due_bypassed_planner=False,
+        seq_fresh_eval_context=None,
+        seq_baseline_draw_reference=None,
+        seq_candidate_replay_context=None,
+        seq_gate_preflight={
+            "status": "blocked_no_fallback",
+            "replacement_action": None,
+        },
+    ) == ["numeric_trial"]
+
+    assert (
+        autopilot._dispatch_allowed_action_types(
             ["seed_batch", "numeric_trial"],
             seq_due_bypassed_planner=True,
             seq_fresh_eval_context=None,

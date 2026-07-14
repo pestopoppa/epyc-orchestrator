@@ -4835,19 +4835,26 @@ def _dispatch_allowed_action_types(
     seq_fresh_eval_context: dict[str, Any] | None,
     seq_baseline_draw_reference: dict[str, Any] | None,
     seq_candidate_replay_context: dict[str, Any] | None,
+    seq_gate_preflight: dict[str, Any] | None = None,
 ) -> list[str] | None:
     """Return the final dispatch allowlist for ordinary planner-selected actions.
 
     The planner prompt uses ``selectable_action_types`` as the active/shadow
     boundary. Final dispatch must enforce the same boundary, but existing
-    sequential due actions and forced replays/fresh evals are internal policy
-    actions governed by their own gates rather than planner availability text.
+    sequential due actions, forced replays/fresh evals, and seq-gate deferral
+    replacements are internal policy actions governed by their own gates rather
+    than planner availability text.
     """
     if (
         seq_due_bypassed_planner
         or seq_fresh_eval_context is not None
         or seq_baseline_draw_reference is not None
         or seq_candidate_replay_context is not None
+        or (
+            isinstance(seq_gate_preflight, dict)
+            and seq_gate_preflight.get("status") == "deferred"
+            and isinstance(seq_gate_preflight.get("replacement_action"), dict)
+        )
     ):
         return None
     if selectable_action_types is None:
@@ -7192,6 +7199,7 @@ def _run_loop_inner(
                     seq_fresh_eval_context=seq_fresh_eval_context,
                     seq_baseline_draw_reference=seq_baseline_draw_reference,
                     seq_candidate_replay_context=seq_candidate_replay_context,
+                    seq_gate_preflight=seq_gate_preflight,
                 ),
             )
             phase.set(
