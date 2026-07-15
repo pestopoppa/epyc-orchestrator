@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,6 +15,18 @@ sys.path.insert(0, str(REPO_ROOT / "scripts" / "autopilot"))
 
 import autopilot  # type: ignore[import-not-found]  # noqa: E402
 from experiment_journal import ExperimentJournal, JournalEntry  # noqa: E402
+from src.autopilot_core.authority_consent import (  # noqa: E402
+    SEQ_P0_2_BRIDGE_CONSENT,
+    SEQ_P0_2_BRIDGE_ENV,
+    SEQ_P0_2_BRIDGE_MODE,
+)
+
+
+def _enable_seq_p0_2_bridge(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    grant = tmp_path / "authority_consent.json"
+    grant.write_text(json.dumps({SEQ_P0_2_BRIDGE_CONSENT: "allow"}), encoding="utf-8")
+    monkeypatch.setenv("AUTOPILOT_AUTHORITY_CONSENT_PATH", str(grant))
+    monkeypatch.setenv(SEQ_P0_2_BRIDGE_ENV, "1")
 
 
 def test_eval_progress_callback_refreshes_dispatch_heartbeat() -> None:
@@ -356,6 +369,58 @@ def test_seq_gate_preflight_blocks_rate_axis_unreachable_candidate(
     assert rationale == {}
 
 
+def test_seq_gate_preflight_bridge_allows_rate_axis_advisory_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _enable_seq_p0_2_bridge(monkeypatch, tmp_path)
+    monkeypatch.setattr(autopilot, "SEQ_GATE_PREFLIGHT_MIN_SEQ_ROWS", 2)
+    monkeypatch.setattr(autopilot, "SEQ_GATE_PREFLIGHT_RECENT_WINDOW", 2)
+    monkeypatch.setattr(autopilot, "SEQ_GATE_PREFLIGHT_MAX_RATE_E", 2.0)
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    base_action = {"type": "numeric_trial", "surface": "memrl_retrieval", "params": {"x": 1}}
+    for trial_id, wall_s in enumerate([60.0, 60.0, 1800.0, 1800.0], start=1):
+        journal.record(
+            _entry(
+                trial_id,
+                {**base_action, "params": {"x": trial_id}},
+                eval_details_extra={"eval_wall_s": wall_s},
+                seq={
+                    "candidate": f"candidate-{trial_id}",
+                    "core_id": "core_v1",
+                    "z": 0.1,
+                    "z_rate": -0.9,
+                    "E_quality": 2.0,
+                    "E_rate_noninf": 1.05,
+                    "state": "accumulating",
+                    "policy_version": "seq-v1",
+                },
+            )
+        )
+    state: dict[str, Any] = {}
+    proposed = {"type": "numeric_trial", "surface": "new_surface", "params": {"x": 99}}
+
+    action, rationale, payload = autopilot._maybe_defer_seq_unreachable_candidate_action(
+        proposed,
+        state=state,
+        journal=journal,
+        blacklist=[],
+        rationale={},
+        trial_counter=10,
+        tier=1,
+        enabled=True,
+    )
+
+    assert payload is None
+    assert action == proposed
+    assert rationale == {}
+    preflight = state["seq_gate_reachability_preflight"]
+    assert preflight["status"] == "passed"
+    assert preflight["reachability"]["status"] == "rate_axis_advisory_bridge"
+    assert preflight["reachability"]["rate_axis_mode"] == SEQ_P0_2_BRIDGE_MODE
+    assert preflight["reachability"]["rate_axis_binding"] is False
+
+
 def test_seq_gate_preflight_does_not_use_retryable_seed_fallback(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -462,6 +527,77 @@ def test_seq_gate_preflight_blocks_alpha_exhausted_new_candidate(
     assert payload["replacement_action"] is None
     assert action == proposed
     assert rationale == {}
+
+
+def test_seq_gate_preflight_bridge_reprices_alpha_at_confirmation_stage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _enable_seq_p0_2_bridge(monkeypatch, tmp_path)
+    monkeypatch.setattr(autopilot, "SEQ_GATE_PREFLIGHT_MIN_SEQ_ROWS", 1000)
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    for trial_id in range(1, 23):
+        journal.record(
+            _entry(
+                trial_id,
+                {"type": "numeric_trial", "surface": "memrl_retrieval", "params": {"x": trial_id}},
+                seq={
+                    "candidate": f"candidate-{trial_id}",
+                    "core_id": "core_v1",
+                    "z": 0.1,
+                    "z_rate": 0.1,
+                    "E_quality": 1.2,
+                    "E_rate_noninf": 1.2,
+                    "state": "accumulating",
+                    "confirmed": False,
+                    "policy_version": "seq-v1",
+                },
+            )
+        )
+
+    proposed = {"type": "prompt_mutation", "file": "frontdoor.md", "mutation": "new"}
+    action, rationale, payload = autopilot._maybe_defer_seq_unreachable_candidate_action(
+        proposed,
+        state={},
+        journal=journal,
+        blacklist=[],
+        rationale={},
+        trial_counter=30,
+        tier=1,
+        enabled=True,
+    )
+
+    assert payload is None
+    assert action == proposed
+    assert rationale == {}
+    alpha = autopilot._seq_inputs_for_trial(journal=journal, action=proposed, tier=1)[
+        "alpha_wealth"
+    ]
+    assert alpha["alpha_wealth_mode"] == "confirmed_fresh_eval_stage"
+    assert alpha["fingerprints_tested"] == 22
+    assert alpha["fingerprints_charged"] == 0
+    assert alpha["legacy_tested_fingerprint_alpha_spent"] > alpha["budget"]
+    assert alpha["new_fingerprint_dispatch_allowed"] is True
+    assert alpha["new_fingerprint_confirmations_allowed"] is True
+
+
+def test_seq_alpha_bridge_still_blocks_when_confirmed_stage_budget_exhausted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _enable_seq_p0_2_bridge(monkeypatch, tmp_path)
+
+    alpha = autopilot._seq_alpha_wealth_state(
+        {f"candidate-{idx}" for idx in range(25)},
+        candidate="candidate-new",
+        confirmed_candidates={f"candidate-{idx}" for idx in range(20)},
+    )
+
+    assert alpha["alpha_wealth_mode"] == "confirmed_fresh_eval_stage"
+    assert alpha["fingerprints_charged"] == 20
+    assert alpha["budget_exhausted"] is True
+    assert alpha["new_fingerprint_confirmations_allowed"] is False
+    assert alpha["new_fingerprint_dispatch_allowed"] is False
 
 
 def test_seq_gate_preflight_dispatch_block_reason() -> None:
@@ -1354,6 +1490,37 @@ def test_seq_promotion_finalization_requires_fresh_eval_fresh_reference_and_e() 
         )
         is False
     )
+
+
+def test_seq_promotion_finalization_uses_quality_when_rate_axis_advisory() -> None:
+    seq = {
+        "confirmed": True,
+        "E_quality": 120.0,
+        "E_rate_noninf": 1.05,
+        "rate_axis_mode": SEQ_P0_2_BRIDGE_MODE,
+        "rate_axis_binding": False,
+        "z": 0.2,
+        "r_eff": 200,
+    }
+    reference = {
+        "tier": 2,
+        "latest_reference_trial_id": 4,
+        "latest_reference_age_s": 120.0,
+        "trials_since_reference": 1,
+        "stale_reference": False,
+    }
+
+    finalized = autopilot._annotate_seq_promotion_finalization(
+        seq,
+        baseline_reference=reference,
+        is_fresh_eval=True,
+    )
+
+    assert finalized is True
+    assert seq["baseline_promotion_finalized"] is True
+    assert seq["baseline_promotion_combined_E"] == pytest.approx(120.0)
+    assert seq["baseline_promotion_rate_axis_mode"] == SEQ_P0_2_BRIDGE_MODE
+    assert seq["baseline_promotion_combined_E_mode"] == "quality_only_rate_advisory"
 
 
 def test_seq_promotion_finalization_requires_delta_ci_excluding_regression() -> None:

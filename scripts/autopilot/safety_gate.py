@@ -21,6 +21,10 @@ from src.autopilot_core.tier_specs import (
     MIN_FRONTIER_EVAL_TIER,
 )
 from src.autopilot_core.rlvr_tiers import rlvr_reward_from_result
+from src.autopilot_core.authority_consent import (
+    SEQ_P0_2_BRIDGE_MODE,
+    seq_p0_2_bridge_status,
+)
 
 log = logging.getLogger("autopilot.safety")
 
@@ -762,6 +766,11 @@ class SafetyGate:
         ``accumulating``. When no rate evidence is available the verdict can never be
         ``confirmed`` (E_rate is absent) — conservative by design: a candidate cannot
         ratchet the baseline on quality alone.
+
+        OP-1/P0.2 bridge: when the operator-owned consent file and restart env
+        both enable ``SEQ_P0_2_BRIDGE_MODE``, the rate axis is recorded as
+        advisory while quality remains binding. This is a temporary era-fence
+        bridge, not the default measurement rule.
         """
         from src.autopilot_core.sequential_verdict import (
             DEFAULT_POLICY,
@@ -809,10 +818,14 @@ class SafetyGate:
         e_rate = rate_state.wealth if rate_state is not None else None
         q_name = q_state.state_name(policy)
         rate_name = rate_state.state_name(policy) if rate_state is not None else None
+        bridge = seq_p0_2_bridge_status()
+        rate_axis_advisory = bool(bridge["enabled"])
 
-        if q_name == STATE_REFUTED or rate_name == STATE_REFUTED:
+        if q_name == STATE_REFUTED or (not rate_axis_advisory and rate_name == STATE_REFUTED):
             state = "refuted"
-        elif e_quality >= policy.confirm_e and (e_rate is not None and e_rate >= policy.confirm_e):
+        elif e_quality >= policy.confirm_e and (
+            rate_axis_advisory or (e_rate is not None and e_rate >= policy.confirm_e)
+        ):
             state = "confirmed"
         else:
             state = "accumulating"
@@ -826,6 +839,13 @@ class SafetyGate:
             rate_noninf_update=rate_update,
         )
         block["r_eff"] = stat.r_eff
+        if rate_axis_advisory:
+            block["rate_axis_mode"] = SEQ_P0_2_BRIDGE_MODE
+            block["rate_axis_binding"] = False
+            block["p0_2_bridge"] = bridge
+        else:
+            block["rate_axis_mode"] = "binding_joint"
+            block["rate_axis_binding"] = True
         # journal_seq_block records the QUALITY-only state; override with the joint
         # verdict so consumers (categories, update_baseline gate) read one decision.
         block["state"] = state
@@ -900,13 +920,16 @@ class SafetyGate:
             )
             categories.append("seq_" + seq_block["state"])
             e_rate = seq_block.get("E_rate_noninf")
+            rate_axis_mode = seq_block.get("rate_axis_mode", "binding_joint")
             warnings.append(
                 "Sequential verdict ({state}): E_quality={eq:.3f}, "
-                "E_rate_noninf={er}, k={k} (LEDGER-W4, AUTOPILOT_SEQ_VERDICT); "
+                "E_rate_noninf={er}, rate_axis_mode={rate_axis_mode}, "
+                "k={k} (LEDGER-W4, AUTOPILOT_SEQ_VERDICT); "
                 "baseline promotion {gate}.".format(
                     state=seq_block["state"],
                     eq=seq_block.get("E_quality", float("nan")),
                     er=f"{e_rate:.3f}" if e_rate is not None else "n/a",
+                    rate_axis_mode=rate_axis_mode,
                     k=seq_block.get("k"),
                     gate=(
                         "permitted (confirmed)"

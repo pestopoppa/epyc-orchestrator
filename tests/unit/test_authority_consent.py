@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import json
 
-from src.autopilot_core.authority_consent import authority_consent
+from src.autopilot_core.authority_consent import (
+    SEQ_P0_2_BRIDGE_CONSENT,
+    SEQ_P0_2_BRIDGE_ENV,
+    seq_p0_2_bridge_enabled,
+    seq_p0_2_bridge_status,
+    authority_consent,
+)
 from src.autopilot_core.baseline_ledger import baseline_ledger_authority_enabled
 
 
@@ -51,3 +57,35 @@ def test_baseline_authority_requires_both_flag_and_consent(tmp_path, monkeypatch
     assert baseline_ledger_authority_enabled(
         {"baseline_ledger_authority_enabled": True}
     ) is False
+
+
+def test_seq_p0_2_bridge_requires_restart_env_and_consent(tmp_path):
+    grant = tmp_path / "c.json"
+    grant.write_text(json.dumps({SEQ_P0_2_BRIDGE_CONSENT: "allow"}))
+
+    assert (
+        seq_p0_2_bridge_enabled(
+            env={SEQ_P0_2_BRIDGE_ENV: "1"},
+            path=grant,
+        )
+        is True
+    )
+    assert (
+        seq_p0_2_bridge_enabled(
+            env={SEQ_P0_2_BRIDGE_ENV: "0"},
+            path=grant,
+        )
+        is False
+    )
+    assert (
+        seq_p0_2_bridge_enabled(
+            env={SEQ_P0_2_BRIDGE_ENV: "1"},
+            path=tmp_path / "missing.json",
+        )
+        is False
+    )
+
+    status = seq_p0_2_bridge_status(env={SEQ_P0_2_BRIDGE_ENV: "1"}, path=grant)
+    assert status["enabled"] is True
+    assert status["env_enabled"] is True
+    assert status["consent_enabled"] is True

@@ -27,6 +27,7 @@ def test_authority_env_forces_required_flags() -> None:
     assert env["AUTOPILOT_TOOL_SENTINELS"] == "1"
     assert env["AUTOPILOT_PLANNER_HINTS"] == "1"
     assert env["AUTOPILOT_SEQ_VERDICT"] == "1"
+    assert env["AUTOPILOT_SEQ_P0_2_BRIDGE"] == "1"
     assert env["AUTOPILOT_W6_AUDIT_BLOCK"] == "1"
     assert env["AUTOPILOT_PLANNER_TIMEOUT"] == "600"
     # The planner runs on local models by default; forcing the spend breaker on
@@ -149,6 +150,7 @@ def test_dry_run_prints_authority_payload(monkeypatch, tmp_path, capsys) -> None
     assert payload["supervised"] is True
     assert payload["env"]["AUTOPILOT_TOOL_SENTINELS"] == "1"
     assert payload["env"]["AUTOPILOT_SEQ_VERDICT"] == "1"
+    assert payload["env"]["AUTOPILOT_SEQ_P0_2_BRIDGE"] == "1"
     assert payload["pid"] is None
 
 

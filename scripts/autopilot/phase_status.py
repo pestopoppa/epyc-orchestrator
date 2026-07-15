@@ -55,6 +55,7 @@ EVAL_PROGRESS_FIELDS = (
 AUTOPILOT_ENV_FLAGS = (
     "AUTOPILOT_PLANNER_HINTS",
     "AUTOPILOT_SEQ_VERDICT",
+    "AUTOPILOT_SEQ_P0_2_BRIDGE",
     "AUTOPILOT_TOOL_SENTINELS",
     "AUTOPILOT_STEPPING_STONES",
     "AUTOPILOT_PLANNER_PRIMARY",
@@ -85,6 +86,7 @@ AUTOPILOT_RUNTIME_SOURCE_PATHS = (
     ORCH_ROOT / "scripts" / "autopilot" / "species" / "evolution_manager.py",
     ORCH_ROOT / "scripts" / "autopilot" / "safety_gate.py",
     ORCH_ROOT / "scripts" / "autopilot" / "phase_status.py",
+    ORCH_ROOT / "src" / "autopilot_core" / "authority_consent.py",
     ORCH_ROOT / "src" / "autopilot_core" / "planner_evidence.py",
     RESEARCH_ROOT / "scripts" / "benchmark" / "debug_scorer.py",
 )
@@ -752,6 +754,9 @@ def build_phase_health_report(
         "seq_verdict_enabled": _env_enabled(
             None if env_flags is None else env_flags.get("AUTOPILOT_SEQ_VERDICT")
         ),
+        "seq_p0_2_bridge_env_enabled": _env_enabled(
+            None if env_flags is None else env_flags.get("AUTOPILOT_SEQ_P0_2_BRIDGE")
+        ),
         "tool_sentinels_enabled": _env_enabled(
             None if env_flags is None else env_flags.get("AUTOPILOT_TOOL_SENTINELS")
         ),
@@ -835,6 +840,7 @@ def format_phase_health_report(report: dict[str, Any]) -> list[str]:
         f"- Outcome progress status: {(report.get('outcome_progress') or {}).get('status')}",
         f"- Planner hints env: {report.get('planner_hints_enabled')}",
         f"- Seq verdict env: {report.get('seq_verdict_enabled')}",
+        f"- Seq P0.2 bridge env: {report.get('seq_p0_2_bridge_env_enabled')}",
         f"- Tool sentinels env: {report.get('tool_sentinels_enabled')}",
         f"- Stepping stones env: {report.get('stepping_stones_enabled')}",
         (

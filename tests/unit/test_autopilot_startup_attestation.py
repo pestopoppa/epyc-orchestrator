@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -12,9 +13,13 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "autopilot"))
 
 import autopilot  # type: ignore[import-not-found]  # noqa: E402
+from src.autopilot_core.authority_consent import SEQ_P0_2_BRIDGE_CONSENT  # noqa: E402
 
 
-def test_startup_attestation_reports_gate_env_and_config_hash(monkeypatch) -> None:
+def test_startup_attestation_reports_gate_env_and_config_hash(monkeypatch, tmp_path) -> None:
+    grant = tmp_path / "consent.json"
+    grant.write_text(json.dumps({SEQ_P0_2_BRIDGE_CONSENT: "allow"}), encoding="utf-8")
+    monkeypatch.setenv("AUTOPILOT_AUTHORITY_CONSENT_PATH", str(grant))
     for key, value in autopilot.AUTOPILOT_REQUIRED_GATE_ENV.items():
         monkeypatch.setenv(key, value)
     monkeypatch.setenv("AUTOPILOT_PLANNER_PRIMARY", "local_ingest")
@@ -28,6 +33,7 @@ def test_startup_attestation_reports_gate_env_and_config_hash(monkeypatch) -> No
     assert payload["gate_env"]["AUTOPILOT_TOOL_SENTINELS"] == "1"
     assert payload["gate_env"]["AUTOPILOT_PLANNER_PRIMARY"] == "local_ingest"
     assert payload["gate_env"]["AUTOPILOT_PLANNER_SPEND_BREAKER"] == "0"
+    assert payload["p0_2_bridge"]["enabled"] is True
 
 
 def test_startup_attestation_marks_bare_start_gate_gaps(monkeypatch) -> None:

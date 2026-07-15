@@ -35,6 +35,7 @@ REPO_READINESS_PICKUP_GLOB = "repo_readiness_autopilot_pickup_*.json"
 
 FABLE_AUTHORITY_ENV: dict[str, str] = {
     "AUTOPILOT_SEQ_VERDICT": "1",
+    "AUTOPILOT_SEQ_P0_2_BRIDGE": "1",
     "AUTOPILOT_W6_AUDIT_BLOCK": "1",
     "AUTOPILOT_W6_AUDIT_N": "10",
     "AUTOPILOT_W6_AUDIT_EVERY_N_TRIALS": "1",

@@ -131,6 +131,10 @@ from src.autopilot_core.sequential_verdict import (
     baseline_profile_from_trials,
     rate_noninferiority_z,
 )
+from src.autopilot_core.authority_consent import (
+    SEQ_P0_2_BRIDGE_MODE,
+    seq_p0_2_bridge_status,
+)
 from src.autopilot_core.tier_specs import (
     DEFAULT_FRONTIER_TIER,
     LEGACY_OBJECTIVE_POLICY,
@@ -234,6 +238,7 @@ SEQ_CANDIDATE_REPLAY_MIN_QUALITY_E = float(
 SEQ_CANDIDATE_REPLAY_MAX_K = int(os.environ.get("AUTOPILOT_SEQ_CANDIDATE_REPLAY_MAX_K", "12"))
 AUTOPILOT_REQUIRED_GATE_ENV = {
     "AUTOPILOT_SEQ_VERDICT": "1",
+    "AUTOPILOT_SEQ_P0_2_BRIDGE": "1",
     "AUTOPILOT_W6_AUDIT_BLOCK": "1",
     "AUTOPILOT_PLANNER_HINTS": "1",
     "AUTOPILOT_TOOL_SENTINELS": "1",
@@ -1794,15 +1799,38 @@ def _maybe_force_seq_baseline_draw(
     return forced, next_rationale, reference
 
 
+def _seq_rate_axis_is_advisory(seq: Mapping[str, Any] | None) -> bool:
+    if not isinstance(seq, Mapping):
+        return False
+    return str(seq.get("rate_axis_mode") or "") == SEQ_P0_2_BRIDGE_MODE
+
+
 def _seq_combined_e(seq: dict[str, Any] | None) -> float | None:
     if not isinstance(seq, dict):
         return None
     try:
         e_quality = float(seq["E_quality"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if _seq_rate_axis_is_advisory(seq):
+        return e_quality
+    try:
         e_rate = float(seq["E_rate_noninf"])
     except (KeyError, TypeError, ValueError):
         return None
     return min(e_quality, e_rate)
+
+
+def _seq_alpha_confirmation_blocked(alpha_wealth: Mapping[str, Any] | None) -> bool:
+    if not isinstance(alpha_wealth, Mapping):
+        return False
+    charge_is_new = alpha_wealth.get(
+        "candidate_confirmation_charge_is_new",
+        alpha_wealth.get("candidate_is_new"),
+    )
+    return bool(charge_is_new) and (
+        alpha_wealth.get("new_fingerprint_confirmations_allowed") is False
+    )
 
 
 def _median(values: list[float]) -> float | None:
@@ -1833,6 +1861,8 @@ def _seq_gate_reachability_report(
     min_rows = SEQ_GATE_PREFLIGHT_MIN_SEQ_ROWS if min_seq_rows is None else min_seq_rows
     window = SEQ_GATE_PREFLIGHT_RECENT_WINDOW if recent_window is None else recent_window
     max_rate = SEQ_GATE_PREFLIGHT_MAX_RATE_E if max_rate_e is None else max_rate_e
+    bridge = seq_p0_2_bridge_status()
+    rate_axis_advisory = bool(bridge["enabled"])
 
     entries = [
         entry
@@ -1924,18 +1954,22 @@ def _seq_gate_reachability_report(
         and max_e_rate < min(SEQ_DEFAULT_POLICY.confirm_e, max_rate)
         and recent_rate_z <= 0.0
     )
-    status = (
-        "insufficient_evidence"
-        if insufficient
-        else "rate_axis_unreachable"
-        if rate_axis_flat
-        else "reachable"
-    )
+    if insufficient:
+        status = "insufficient_evidence"
+    elif rate_axis_flat and not rate_axis_advisory:
+        status = "rate_axis_unreachable"
+    elif rate_axis_flat and rate_axis_advisory:
+        status = "rate_axis_advisory_bridge"
+    else:
+        status = "reachable"
     return {
         "status": status,
         "ok_to_dispatch_candidates": status != "rate_axis_unreachable",
         "tier": tier,
         "policy_version": SEQ_DEFAULT_POLICY.version,
+        "rate_axis_mode": SEQ_P0_2_BRIDGE_MODE if rate_axis_advisory else "binding_joint",
+        "rate_axis_binding": not rate_axis_advisory,
+        "p0_2_bridge": bridge,
         "confirm_e": SEQ_DEFAULT_POLICY.confirm_e,
         "promotion_required_e": SEQ_PROMOTION_FINAL_CONFIRM_E,
         "seq_rows": len(seq_rows),
@@ -1982,9 +2016,13 @@ def _maybe_defer_seq_unreachable_candidate_action(
 
     candidate_inputs = _seq_inputs_for_trial(journal=journal, action=action, tier=tier)
     alpha_wealth = candidate_inputs.get("alpha_wealth") or {}
+    alpha_dispatch_allowed = alpha_wealth.get(
+        "new_fingerprint_dispatch_allowed",
+        alpha_wealth.get("new_fingerprint_confirmations_allowed"),
+    )
     alpha_blocked = (
         bool(alpha_wealth.get("candidate_is_new"))
-        and alpha_wealth.get("new_fingerprint_confirmations_allowed") is False
+        and alpha_dispatch_allowed is False
     )
     reachability = _seq_gate_reachability_report(journal, tier=tier)
     should_defer = alpha_blocked or not bool(reachability.get("ok_to_dispatch_candidates", True))
@@ -2101,6 +2139,12 @@ def _annotate_seq_promotion_finalization(
     seq["baseline_reference_state"] = "stale-reference" if stale_reference else "fresh"
     seq["baseline_promotion_required_E"] = SEQ_PROMOTION_FINAL_CONFIRM_E
     seq["baseline_promotion_fresh_eval"] = bool(is_fresh_eval)
+    seq["baseline_promotion_rate_axis_mode"] = seq.get("rate_axis_mode") or "binding_joint"
+    seq["baseline_promotion_combined_E_mode"] = (
+        "quality_only_rate_advisory"
+        if _seq_rate_axis_is_advisory(seq)
+        else "joint_min_quality_rate"
+    )
     if combined_e is not None:
         seq["baseline_promotion_combined_E"] = round(combined_e, 6)
     if delta_ci is not None:
@@ -2542,10 +2586,7 @@ def _update_seq_promotion_fresh_eval_state(
     if not seq.get("confirmed"):
         return
     alpha_wealth = seq_alpha_wealth or {}
-    if (
-        alpha_wealth.get("candidate_is_new")
-        and alpha_wealth.get("new_fingerprint_confirmations_allowed") is False
-    ):
+    if _seq_alpha_confirmation_blocked(alpha_wealth):
         state.pop("_seq_promotion_candidate_replay", None)
         state.pop("seq_pending_promotion_fresh_eval", None)
         state["seq_last_promotion_blocked"] = {
@@ -2571,11 +2612,15 @@ def _seq_alpha_wealth_state(
     candidates: Any,
     *,
     candidate: str,
+    confirmed_candidates: Any = None,
     budget: float = SEQ_ALPHA_WEALTH_BUDGET,
     alpha: float = SEQ_DEFAULT_POLICY.alpha,
 ) -> dict[str, Any]:
     """Bound the free multiple-testing channel across seq candidate fingerprints."""
     existing = {str(item) for item in (candidates or []) if str(item or "").strip()}
+    confirmed_existing = {
+        str(item) for item in (confirmed_candidates or []) if str(item or "").strip()
+    }
     candidate = str(candidate or "").strip()
     including_candidate = set(existing)
     if candidate:
@@ -2583,18 +2628,42 @@ def _seq_alpha_wealth_state(
     candidate_is_new = bool(candidate and candidate not in existing)
     alpha = max(0.0, float(alpha))
     budget = max(0.0, float(budget))
-    alpha_spent = len(existing) * alpha
-    alpha_spent_including_candidate = len(including_candidate) * alpha
+    bridge = seq_p0_2_bridge_status()
+    bridge_enabled = bool(bridge["enabled"])
+    charged_existing = set(confirmed_existing if bridge_enabled else existing)
+    charged_including_candidate = set(charged_existing)
+    if candidate:
+        charged_including_candidate.add(candidate)
+    candidate_confirmation_charge_is_new = bool(candidate and candidate not in charged_existing)
+    alpha_spent = len(charged_existing) * alpha
+    alpha_spent_including_candidate = len(charged_including_candidate) * alpha
+    legacy_alpha_spent = len(existing) * alpha
+    legacy_alpha_spent_including_candidate = len(including_candidate) * alpha
+    confirmations_allowed = (
+        not candidate_confirmation_charge_is_new or alpha_spent_including_candidate <= budget
+    )
     return {
         "policy_version": SEQ_DEFAULT_POLICY.version,
+        "alpha_wealth_mode": (
+            "confirmed_fresh_eval_stage" if bridge_enabled else "tested_fingerprint"
+        ),
+        "p0_2_bridge": bridge,
         "alpha": round(alpha, 6),
         "budget": round(budget, 6),
         "fingerprints_tested": len(existing),
         "fingerprints_tested_including_candidate": len(including_candidate),
+        "fingerprints_confirmed": len(confirmed_existing),
+        "fingerprints_charged": len(charged_existing),
+        "fingerprints_charged_including_candidate": len(charged_including_candidate),
         "candidate": candidate,
         "candidate_is_new": candidate_is_new,
+        "candidate_confirmation_charge_is_new": candidate_confirmation_charge_is_new,
         "alpha_spent": round(alpha_spent, 6),
         "alpha_spent_including_candidate": round(alpha_spent_including_candidate, 6),
+        "legacy_tested_fingerprint_alpha_spent": round(legacy_alpha_spent, 6),
+        "legacy_tested_fingerprint_alpha_spent_including_candidate": round(
+            legacy_alpha_spent_including_candidate, 6
+        ),
         "expected_false_confirms": round(alpha_spent, 6),
         "expected_false_confirms_including_candidate": round(alpha_spent_including_candidate, 6),
         "budget_remaining": round(max(0.0, budget - alpha_spent), 6),
@@ -2602,9 +2671,8 @@ def _seq_alpha_wealth_state(
             max(0.0, budget - alpha_spent_including_candidate), 6
         ),
         "budget_exhausted": alpha_spent >= budget if budget > 0.0 else bool(existing),
-        "new_fingerprint_confirmations_allowed": (
-            not candidate_is_new or alpha_spent_including_candidate <= budget
-        ),
+        "new_fingerprint_confirmations_allowed": confirmations_allowed,
+        "new_fingerprint_dispatch_allowed": confirmations_allowed,
     }
 
 
@@ -2622,6 +2690,7 @@ def _seq_inputs_for_trial(
     baseline_trials: list[dict[str, bool]] = []
     baseline_task_rates: list[float] = []
     seq_candidates: set[str] = set()
+    seq_confirmed_candidates: set[str] = set()
 
     for entry in reversed(journal.entries_with_supersessions()):
         if getattr(entry, "bug_corrupted_by", ""):
@@ -2658,6 +2727,8 @@ def _seq_inputs_for_trial(
         seq_candidate = str(seq.get("candidate") or "")
         if seq_candidate:
             seq_candidates.add(seq_candidate)
+            if seq.get("confirmed") is True or str(seq.get("state") or "") == "confirmed":
+                seq_confirmed_candidates.add(seq_candidate)
         if seq_candidate != candidate:
             continue
         if len(prior_quality_obs) < SEQ_PRIOR_OBS_LIMIT and "z" in seq:
@@ -2683,7 +2754,11 @@ def _seq_inputs_for_trial(
         "prior_quality_obs": list(reversed(prior_quality_obs)),
         "prior_rate_obs": list(reversed(prior_rate_obs)),
         "baseline_reference": _seq_baseline_reference_state(journal, tier=tier),
-        "alpha_wealth": _seq_alpha_wealth_state(seq_candidates, candidate=candidate),
+        "alpha_wealth": _seq_alpha_wealth_state(
+            seq_candidates,
+            candidate=candidate,
+            confirmed_candidates=seq_confirmed_candidates,
+        ),
     }
 
 
@@ -4249,6 +4324,7 @@ def _startup_attestation_payload() -> dict[str, Any]:
         "pid": os.getpid(),
         "gate_env": gate_env,
         "missing_or_mismatch": missing_or_mismatch,
+        "p0_2_bridge": seq_p0_2_bridge_status(),
         "config_hash": digest.hexdigest(),
         "file_hashes": file_hashes,
     }

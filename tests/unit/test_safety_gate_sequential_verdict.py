@@ -11,6 +11,7 @@ mechanism, tested.
 """
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -24,6 +25,11 @@ from src.autopilot_core.learning_exclusions import (
     BENIGN_LEARNING_EXCLUSIONS,
     NON_CORRUPT_LEARNING_EXCLUSIONS,
     classify_learning_exclusion,
+)
+from src.autopilot_core.authority_consent import (
+    SEQ_P0_2_BRIDGE_CONSENT,
+    SEQ_P0_2_BRIDGE_ENV,
+    SEQ_P0_2_BRIDGE_MODE,
 )
 
 
@@ -191,6 +197,33 @@ def test_check_seq_confirmed_blocked_without_rate(tmp_path):
     assert verdict.seq["E_quality"] >= 20.0
     assert verdict.seq["confirmed"] is False
     assert verdict.seq["state"] == "accumulating"
+
+
+def test_check_seq_p0_2_bridge_confirms_quality_with_rate_advisory(
+    tmp_path,
+    monkeypatch,
+):
+    grant = tmp_path / "consent.json"
+    grant.write_text(json.dumps({SEQ_P0_2_BRIDGE_CONSENT: "allow"}), encoding="utf-8")
+    monkeypatch.setenv("AUTOPILOT_AUTHORITY_CONSENT_PATH", str(grant))
+    monkeypatch.setenv(SEQ_P0_2_BRIDGE_ENV, "1")
+    g = SafetyGate(baseline_path=tmp_path / "absent.yaml", use_sequential=True)
+
+    verdict = g.check(
+        _improvement_result(),
+        question_results={"q1": True},
+        baseline_profile={"q1": 0.0},
+        prior_quality_obs=[(i, 1.2) for i in range(10)],
+    )
+
+    assert verdict.seq["E_quality"] >= 20.0
+    assert verdict.seq.get("E_rate_noninf") is None
+    assert verdict.seq["confirmed"] is True
+    assert verdict.seq["state"] == "confirmed"
+    assert verdict.seq["rate_axis_mode"] == SEQ_P0_2_BRIDGE_MODE
+    assert verdict.seq["rate_axis_binding"] is False
+    assert verdict.seq["p0_2_bridge"]["enabled"] is True
+    assert "seq_confirmed" in verdict.categories
 
 
 def test_check_seq_refuted_via_budget(tmp_path):
