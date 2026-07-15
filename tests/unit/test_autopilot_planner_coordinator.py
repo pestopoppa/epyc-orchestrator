@@ -22,6 +22,16 @@ planner_providers = importlib.import_module("planner_providers")
 
 PlannerProviderResult = planner_providers.PlannerProviderResult
 PlannerSettings = planner_coordinator.PlannerSettings
+MEMRL_NUMERIC_ACTION = {
+    "type": "numeric_trial",
+    "surface": "memrl_retrieval",
+    "params": {"memrl_retrieval.semantic_k": 15},
+}
+REPL_NUMERIC_ACTION = {
+    "type": "numeric_trial",
+    "surface": "repl_executor",
+    "params": {"repl.turn_token_cap": 1024},
+}
 
 
 @pytest.fixture(autouse=True)
@@ -221,7 +231,7 @@ def test_fallback_draft_gets_independent_primary_critique() -> None:
                 provider="codex",
                 role="draft",
                 ok=True,
-                text=_action_text({"type": "numeric_trial", "surface": "memrl_retrieval"}),
+                text=_action_text(MEMRL_NUMERIC_ACTION),
             )
         ],
     )
@@ -274,7 +284,7 @@ def test_currently_unavailable_primary_draft_falls_back_before_critique() -> Non
                 provider="local_worker",
                 role="draft",
                 ok=True,
-                text=_action_text({"type": "numeric_trial", "surface": "memrl_retrieval"}),
+                text=_action_text(MEMRL_NUMERIC_ACTION),
             )
         ],
     )
@@ -293,7 +303,7 @@ def test_currently_unavailable_primary_draft_falls_back_before_critique() -> Non
         allowed_action_types=["numeric_trial", "structural_experiment"],
     )
 
-    assert decision.action == {"type": "numeric_trial", "surface": "memrl_retrieval"}
+    assert decision.action == MEMRL_NUMERIC_ACTION
     assert decision.draft_provider == "local_worker"
     assert decision.critic_provider == "local_frontdoor"
     assert decision.critique is not None
@@ -426,7 +436,7 @@ def test_planner_archive_records_provider_trace(monkeypatch: pytest.MonkeyPatch)
     records: list[dict[str, Any]] = []
     monkeypatch.setattr(planner_coordinator, "_append_planner_archive", records.append)
 
-    draft_text = _action_text({"type": "numeric_trial", "surface": "memrl_retrieval"})
+    draft_text = _action_text(MEMRL_NUMERIC_ACTION)
     claude = FakeProvider(
         "claude",
         [
@@ -464,7 +474,7 @@ def test_planner_archive_records_provider_trace(monkeypatch: pytest.MonkeyPatch)
     )
 
     assert decision.provider_trace == records[-1]["provider_trace"]
-    assert records[-1]["draft_action"] == {"type": "numeric_trial", "surface": "memrl_retrieval"}
+    assert records[-1]["draft_action"] == MEMRL_NUMERIC_ACTION
     assert records[-1]["final_action"] == decision.action
     assert records[-1]["provider_trace"][0] == {
         "stage": "draft_primary",
@@ -480,6 +490,70 @@ def test_planner_archive_records_provider_trace(monkeypatch: pytest.MonkeyPatch)
     assert records[-1]["provider_trace"][1]["stage"] == "critique_primary"
     assert records[-1]["provider_trace"][1]["parse_ok"] is True
     assert records[-1]["provider_trace"][1]["critique_decision"] == "approve"
+
+
+def test_empty_numeric_planner_action_is_deterministically_blocked() -> None:
+    claude = FakeProvider(
+        "claude",
+        [
+            PlannerProviderResult(
+                provider="claude",
+                role="draft",
+                ok=True,
+                text=_action_text(
+                    {"type": "numeric_trial", "surface": "memrl_retrieval", "params": {}}
+                ),
+            )
+        ],
+    )
+
+    decision = planner_coordinator.plan_with_providers(
+        "prompt",
+        session_id=None,
+        planner_state={},
+        settings=PlannerSettings(primary="claude", mode="single"),
+        provider_factory=_factory({"claude": claude}),
+    )
+
+    assert decision.action is None
+    assert "exactly one explicit params entry" in decision.deterministic_block_reason
+    assert "claude draft failed" in decision.fallback_reason
+
+
+def test_prior_critic_rejected_signature_is_deterministically_blocked() -> None:
+    signature = planner_coordinator.action_signature(MEMRL_NUMERIC_ACTION)
+    state = {
+        "critic_rejected_signatures": {
+            signature: {
+                "trial_id": 1326,
+                "reason": "critic rejected: stale exact proposal",
+            }
+        }
+    }
+    claude = FakeProvider(
+        "claude",
+        [
+            PlannerProviderResult(
+                provider="claude",
+                role="draft",
+                ok=True,
+                text=_action_text(MEMRL_NUMERIC_ACTION),
+            )
+        ],
+    )
+
+    decision = planner_coordinator.plan_with_providers(
+        "prompt",
+        session_id=None,
+        planner_state={},
+        settings=PlannerSettings(primary="claude", mode="single"),
+        provider_factory=_factory({"claude": claude}),
+        action_feedback_state=state,
+    )
+
+    assert decision.action is None
+    assert "previously critic-rejected at trial 1326" in decision.deterministic_block_reason
+    assert "claude draft failed" in decision.fallback_reason
 
 
 def test_fallback_draft_gets_primary_critique_even_when_draft_failure_opens_circuit() -> None:
@@ -559,7 +633,7 @@ def test_fallback_draft_pauses_when_independent_primary_critique_fails() -> None
                 provider="codex",
                 role="draft",
                 ok=True,
-                text=_action_text({"type": "numeric_trial", "surface": "memrl_retrieval"}),
+                text=_action_text(MEMRL_NUMERIC_ACTION),
             )
         ],
     )
@@ -599,7 +673,7 @@ def test_local_failure_codex_fallback_can_dispatch_without_external_critic() -> 
                 provider="codex",
                 role="draft",
                 ok=True,
-                text=_action_text({"type": "numeric_trial", "surface": "memrl_retrieval"}),
+                text=_action_text(MEMRL_NUMERIC_ACTION),
             )
         ],
     )
@@ -658,7 +732,7 @@ def test_spend_breaker_defaults_off_when_env_absent(
                 provider="claude",
                 role="draft",
                 ok=True,
-                text=_action_text({"type": "numeric_trial", "surface": "repl_executor"}),
+                text=_action_text(REPL_NUMERIC_ACTION),
             )
         ],
     )
@@ -716,7 +790,7 @@ def test_spend_breaker_forces_cloud_primary_to_local_providers(
                 provider="local_ingest",
                 role="draft",
                 ok=True,
-                text=_action_text({"type": "numeric_trial", "surface": "repl_executor"}),
+                text=_action_text(REPL_NUMERIC_ACTION),
             )
         ],
     )
@@ -753,7 +827,7 @@ def test_spend_breaker_forces_cloud_primary_to_local_providers(
 
     assert decision.draft_provider == "local_ingest"
     assert decision.critic_provider == "local_frontdoor"
-    assert decision.action == {"type": "numeric_trial", "surface": "repl_executor"}
+    assert decision.action == REPL_NUMERIC_ACTION
     assert state["_spend_breaker"]["active"] is True
     assert state["_spend_breaker"]["local_primary"] == "local_ingest"
     assert state["_spend_breaker"]["local_critic"] == "local_frontdoor"
@@ -841,7 +915,7 @@ def test_spend_breaker_replaces_cloud_critic_for_local_primary(
                 provider="local_ingest",
                 role="draft",
                 ok=True,
-                text=_action_text({"type": "numeric_trial", "surface": "repl_executor"}),
+                text=_action_text(REPL_NUMERIC_ACTION),
             )
         ],
     )
@@ -900,7 +974,7 @@ def test_spend_breaker_preserves_configured_local_critic(
                 provider="local_ingest",
                 role="draft",
                 ok=True,
-                text=_action_text({"type": "numeric_trial", "surface": "repl_executor"}),
+                text=_action_text(REPL_NUMERIC_ACTION),
             )
         ],
     )
@@ -945,7 +1019,7 @@ def test_local_role_primary_falls_back_to_local_critic_role(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("AUTOPILOT_PLANNER_SPEND_BREAKER", "0")
-    action = {"type": "numeric_trial", "surface": "repl_executor"}
+    action = REPL_NUMERIC_ACTION
     local_frontdoor = FakeProvider(
         "local_frontdoor",
         [
@@ -1021,7 +1095,7 @@ def test_spend_breaker_keeps_config_when_under_threshold(
                 provider="claude",
                 role="draft",
                 ok=True,
-                text=_action_text({"type": "numeric_trial", "surface": "repl_executor"}),
+                text=_action_text(REPL_NUMERIC_ACTION),
             )
         ],
     )
@@ -1224,7 +1298,7 @@ def test_active_reject_without_revision_uses_numeric_fallback() -> None:
     assert decision.action == {
         "type": "numeric_trial",
         "surface": planner_coordinator.SAFE_FALLBACK_NUMERIC_SURFACE,
-        "params": {},
+        "params": planner_coordinator.SAFE_FALLBACK_NUMERIC_PARAMS,
     }
     assert decision.rationale["critic_reject_numeric_fallback"] is True
     assert decision.rationale["critic_reject_issues"] == ["unsupported rollback"]
@@ -1384,7 +1458,7 @@ def test_failed_critique_invoke_fails_closed_not_open() -> None:
 
 
 def test_codex_critic_failure_falls_back_to_claude_for_local_draft() -> None:
-    original = {"type": "numeric_trial", "surface": "memrl_retrieval"}
+    original = MEMRL_NUMERIC_ACTION
     local_ingest = FakeProvider(
         "local_ingest",
         [
@@ -1452,7 +1526,7 @@ def test_codex_critic_failure_falls_back_to_claude_for_local_draft() -> None:
     assert [call["role"] for call in claude.calls] == ["critique"]
 
 
-def test_critique_prompt_allows_empty_numeric_optuna_request() -> None:
+def test_critique_prompt_rejects_empty_numeric_planner_request() -> None:
     prompt = "### Evidence Power and Sequential Candidate Status\nW8 replay pressure"
     text = planner_coordinator.build_critique_prompt(
         prompt,
@@ -1461,10 +1535,9 @@ def test_critique_prompt_allows_empty_numeric_optuna_request() -> None:
         {"falsifier": "x"},
     )
 
-    assert 'Do NOT reject a `numeric_trial` solely because `"params": {}`' in text
-    assert "NumericSwarm/Optuna" in text
-    assert "Historical logged rows that stayed empty" in text
-    assert "are not replayable" in text
+    assert 'Reject or revise a `numeric_trial` with missing or empty `"params"`' in text
+    assert "exactly one explicit parameter" in text
+    assert "internal deterministic fallbacks" in text
 
 
 def test_unparseable_critique_shadow_mode_keeps_draft() -> None:
@@ -1550,14 +1623,19 @@ def test_reconcile_active_revise_applies_valid_revision() -> None:
     assert out_text.startswith("```json:autopilot_actions")
 
 
-def test_reconcile_active_revise_with_invalid_revision_keeps_original() -> None:
-    """A revise whose revised_action fails validation must not be dispatched;
-    the original draft stands (it is still subject to dispatch-time validation)."""
+def test_reconcile_active_revise_with_invalid_revision_uses_fallback() -> None:
+    """A revise whose revised_action fails validation must not leave the rejected
+    draft unchanged."""
     action = {"type": "seed_batch", "n_questions": 10}
     bad_revision = {"type": "not_a_real_action"}
     crit = PlannerCritique(decision="revise", revised_action=bad_revision)
-    out_action, _, _ = _reconcile(action, {}, "draft", crit, active=True)
-    assert out_action == action  # invalid revision rejected, original retained
+    out_action, out_rat, _ = _reconcile(action, {}, "draft", crit, active=True)
+    assert out_action == {
+        "type": "numeric_trial",
+        "surface": planner_coordinator.SAFE_FALLBACK_NUMERIC_SURFACE,
+        "params": planner_coordinator.SAFE_FALLBACK_NUMERIC_PARAMS,
+    }
+    assert out_rat["critic_reject_numeric_fallback"] is True
 
 
 def test_reconcile_active_reject_without_revision_is_numeric_fallback() -> None:
@@ -1567,7 +1645,7 @@ def test_reconcile_active_reject_without_revision_is_numeric_fallback() -> None:
     assert out_action == {
         "type": "numeric_trial",
         "surface": planner_coordinator.SAFE_FALLBACK_NUMERIC_SURFACE,
-        "params": {},
+        "params": planner_coordinator.SAFE_FALLBACK_NUMERIC_PARAMS,
     }
     assert out_rat["critic_reject_numeric_fallback"] is True
     assert out_rat["critic_reject_issues"] == ["unsupported"]
@@ -1601,7 +1679,7 @@ def test_reconcile_reject_ignores_noop_structural_revision() -> None:
     assert out_action == {
         "type": "numeric_trial",
         "surface": planner_coordinator.SAFE_FALLBACK_NUMERIC_SURFACE,
-        "params": {},
+        "params": planner_coordinator.SAFE_FALLBACK_NUMERIC_PARAMS,
     }
     assert out_rat["critic_reject_numeric_fallback"] is True
     assert out_rat["critic_reject_original_action"] == action
@@ -1641,7 +1719,7 @@ def test_decision_carries_original_draft_action_after_substitution() -> None:
     assert decision.action == {
         "type": "numeric_trial",
         "surface": planner_coordinator.SAFE_FALLBACK_NUMERIC_SURFACE,
-        "params": {},
+        "params": planner_coordinator.SAFE_FALLBACK_NUMERIC_PARAMS,
     }  # substituted
     assert decision.draft_action == original  # original preserved
 

@@ -343,8 +343,9 @@ HIGHER_TIER_PROBE_STALE_TRIALS = int(
 HIGHER_TIER_PROBE_MIN_TRIALS_PER_TIER = int(
     os.environ.get("AUTOPILOT_HIGHER_TIER_PROBE_MIN_TRIALS_PER_TIER", "3")
 )
-# numeric_trial with empty params is the safest self-configuring frontier action
-# (Optuna suggests the values; no file/flag dependency to get wrong).
+# Internal numeric_trial fallbacks may omit params so Optuna suggests values.
+# Model-authored planner actions must carry one explicit param; the coordinator
+# blocks empty-param planner output before dispatch.
 _FALLBACK_NUMERIC_SURFACES = ("think_harder", "escalation", "monitor", "memrl_retrieval")
 _PLANNER_HINTS_ENABLED = os.environ.get("AUTOPILOT_PLANNER_HINTS", "").strip().lower() in {
     "1",
@@ -1997,53 +1998,42 @@ def _maybe_defer_seq_unreachable_candidate_action(
         }
         return action, rationale, None
 
-    replacement, fallback_reason, retry_meta = _first_dispatchable_seed_action(
-        blacklist,
-        preferred=_seq_baseline_draw_action(),
-    )
     reason = "alpha_wealth_exhausted" if alpha_blocked else str(reachability["status"])
     payload = {
         "trial_id": trial_counter,
-        "status": "deferred" if replacement is not None else "blocked_no_fallback",
+        "status": "blocked_unreachable",
         "reason": reason,
         "original_action": dict(action),
-        "replacement_action": replacement,
-        "fallback_reason": fallback_reason,
-        "retryable_blacklist_target": (
-            retry_meta.get("target_key") if retry_meta is not None else None
+        "replacement_action": None,
+        "fallback_reason": (
+            "seq preflight blocked promotion-dependent action; seed fallback disabled "
+            "because it cannot repair exhausted alpha wealth or a rate-axis-unreachable gate"
         ),
+        "retryable_blacklist_target": None,
         "reachability": reachability,
         "alpha_wealth": alpha_wealth,
     }
     state["seq_gate_reachability_preflight"] = payload
-    if replacement is None:
-        log.warning(
-            "Seq gate preflight would defer %s (%s), but no seed/reference fallback "
-            "is available: %s",
-            json.dumps(action, default=str),
-            reason,
-            fallback_reason,
-        )
-        return action, rationale, payload
-
-    next_rationale = {
-        **(rationale or {}),
-        "seq_gate_preflight_deferred": True,
-        "seq_gate_preflight_reason": reason,
-        "seq_gate_preflight_original": dict(action),
-        "seq_gate_preflight_report": reachability,
-    }
-    if retry_meta is not None:
-        next_rationale = _record_p0_3_reexploration_rationale(next_rationale, retry_meta)
-        next_rationale["seq_gate_preflight_retryable_blacklist"] = True
     log.warning(
-        "Seq gate preflight deferring promotion-dependent action at trial %d: %s -> %s (%s)",
+        "Seq gate preflight blocking promotion-dependent action at trial %d: %s (%s); "
+        "not substituting seed fallback",
         trial_counter,
         json.dumps(action, default=str),
-        json.dumps(replacement, default=str),
         reason,
     )
-    return replacement, next_rationale, payload
+    return action, rationale, payload
+
+
+def _seq_gate_preflight_dispatch_block_reason(payload: dict[str, Any] | None) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    if str(payload.get("status") or "") not in {
+        "blocked_unreachable",
+        "blocked_no_fallback",
+    }:
+        return ""
+    reason = str(payload.get("reason") or "unknown")
+    return f"seq_gate_preflight_{reason}"
 
 
 def _seq_promotion_delta_ci(seq: dict[str, Any] | None) -> dict[str, Any]:
@@ -4474,9 +4464,9 @@ def _format_available_action_schemas(action_types: list[str]) -> str:
         ),
         "numeric_trial": (
             '- Numeric: {{"type": "numeric_trial", "surface": "'
-            f'{numeric_surface_options}", "params": {{}}}}\n'
-            "  (Leave params empty to let Optuna suggest; provide params to "
-            "test specific values)"
+            f'{numeric_surface_options}", "params": {{"surface.param": value}}}}\n'
+            "  (Model-authored planner actions must include exactly one explicit "
+            "param. Empty params are reserved for internal deterministic fallbacks.)"
         ),
         "prompt_mutation": (
             '- Prompt: {{"type": "prompt_mutation", "file": "frontdoor.md", '
@@ -6727,6 +6717,7 @@ def _run_loop_inner(
                 planner_state=planner_provider_state,
                 stagnation_signal=stagnation_signal,
                 allowed_action_types=selectable_action_types,
+                action_feedback_state=state,
                 trial_id=trial_counter,
             )
             phase.set(
@@ -6944,6 +6935,19 @@ def _run_loop_inner(
                     )
                     phase.set("planners_offline_halt", trial_id=trial_counter)
                     break
+            elif getattr(planner_decision, "deterministic_block_reason", ""):
+                state["paused"] = True
+                state["_dispatch_deficiency"] = "planner_deterministic_guard"
+                state["last_invalid_action"] = planner_decision.draft_action
+                state["last_invalid_reason"] = planner_decision.deterministic_block_reason
+                state["last_invalid_status"] = "planner_deterministic_guard"
+                save_state(state)
+                log.error(
+                    "Planner action blocked deterministically before dispatch: %s",
+                    planner_decision.deterministic_block_reason,
+                )
+                phase.set("planner_deterministic_guard_halt", trial_id=trial_counter)
+                break
             else:
                 log.warning("No action proposed, defaulting to seed_batch")
                 action = {"type": "seed_batch", "n_questions": SAFE_FALLBACK_SEED_N}
@@ -7078,6 +7082,32 @@ def _run_loop_inner(
                     seq_gate_preflight_status=seq_gate_preflight.get("status"),
                     seq_gate_preflight_reason=seq_gate_preflight.get("reason"),
                 )
+                seq_gate_block_reason = _seq_gate_preflight_dispatch_block_reason(
+                    seq_gate_preflight
+                )
+                if seq_gate_block_reason:
+                    state["paused"] = True
+                    state["_dispatch_deficiency"] = "seq_gate_preflight_blocked"
+                    state["last_invalid_action"] = seq_gate_preflight.get(
+                        "original_action",
+                        action,
+                    )
+                    state["last_invalid_reason"] = seq_gate_block_reason
+                    state["last_invalid_status"] = "seq_gate_preflight_blocked"
+                    save_state(state)
+                    log.error(
+                        "Seq gate preflight blocked trial %d before dispatch (%s): %s",
+                        trial_counter,
+                        seq_gate_block_reason,
+                        json.dumps(seq_gate_preflight, default=str),
+                    )
+                    phase.set(
+                        "seq_gate_preflight_halt",
+                        trial_id=trial_counter,
+                        seq_gate_preflight_status=seq_gate_preflight.get("status"),
+                        seq_gate_preflight_reason=seq_gate_preflight.get("reason"),
+                    )
+                    break
 
         # ── 3. Act ───────────────────────────────────────────────
         # B2: Check failure blacklist before dispatch

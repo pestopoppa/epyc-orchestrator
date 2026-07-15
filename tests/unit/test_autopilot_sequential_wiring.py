@@ -308,7 +308,7 @@ def test_seq_paired_baseline_diagnostics_reports_missing_reference(
     }
 
 
-def test_seq_gate_preflight_defers_rate_axis_unreachable_candidate(
+def test_seq_gate_preflight_blocks_rate_axis_unreachable_candidate(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -336,8 +336,9 @@ def test_seq_gate_preflight_defers_rate_axis_unreachable_candidate(
             )
         )
 
+    proposed = {"type": "numeric_trial", "surface": "new_surface", "params": {"x": 99}}
     action, rationale, payload = autopilot._maybe_defer_seq_unreachable_candidate_action(
-        {"type": "numeric_trial", "surface": "new_surface", "params": {"x": 99}},
+        proposed,
         state={},
         journal=journal,
         blacklist=[],
@@ -348,13 +349,14 @@ def test_seq_gate_preflight_defers_rate_axis_unreachable_candidate(
     )
 
     assert payload is not None
+    assert payload["status"] == "blocked_unreachable"
     assert payload["reason"] == "rate_axis_unreachable"
-    assert action["type"] == "seed_batch"
-    assert rationale is not None
-    assert rationale["seq_gate_preflight_deferred"] is True
+    assert payload["replacement_action"] is None
+    assert action == proposed
+    assert rationale == {}
 
 
-def test_seq_gate_preflight_uses_retryable_seed_fallback(
+def test_seq_gate_preflight_does_not_use_retryable_seed_fallback(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -396,8 +398,9 @@ def test_seq_gate_preflight_uses_retryable_seed_fallback(
         }
     )
 
+    proposed = {"type": "numeric_trial", "surface": "new_surface", "params": {"x": 99}}
     action, rationale, payload = autopilot._maybe_defer_seq_unreachable_candidate_action(
-        {"type": "numeric_trial", "surface": "new_surface", "params": {"x": 99}},
+        proposed,
         state={},
         journal=journal,
         blacklist=blacklist,
@@ -408,18 +411,15 @@ def test_seq_gate_preflight_uses_retryable_seed_fallback(
     )
 
     assert payload is not None
-    assert action == {"type": "seed_batch", "n_questions": 50}
-    assert payload["retryable_blacklist_target"] == "seed_batch_n50_t1317_no_progress_infra"
-    assert rationale is not None
-    assert rationale["seq_gate_preflight_deferred"] is True
-    assert rationale["seq_gate_preflight_retryable_blacklist"] is True
-    assert (
-        rationale["p0_3_blacklist_reexploration_target"]
-        == "seed_batch_n50_t1317_no_progress_infra"
-    )
+    assert payload["status"] == "blocked_unreachable"
+    assert payload["reason"] == "rate_axis_unreachable"
+    assert payload["replacement_action"] is None
+    assert payload["retryable_blacklist_target"] is None
+    assert action == proposed
+    assert rationale == {}
 
 
-def test_seq_gate_preflight_defers_alpha_exhausted_new_candidate(
+def test_seq_gate_preflight_blocks_alpha_exhausted_new_candidate(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -443,8 +443,9 @@ def test_seq_gate_preflight_defers_alpha_exhausted_new_candidate(
             )
         )
 
-    action, _rationale, payload = autopilot._maybe_defer_seq_unreachable_candidate_action(
-        {"type": "prompt_mutation", "file": "frontdoor.md", "mutation": "new"},
+    proposed = {"type": "prompt_mutation", "file": "frontdoor.md", "mutation": "new"}
+    action, rationale, payload = autopilot._maybe_defer_seq_unreachable_candidate_action(
+        proposed,
         state={},
         journal=journal,
         blacklist=[],
@@ -455,9 +456,27 @@ def test_seq_gate_preflight_defers_alpha_exhausted_new_candidate(
     )
 
     assert payload is not None
+    assert payload["status"] == "blocked_unreachable"
     assert payload["reason"] == "alpha_wealth_exhausted"
     assert payload["alpha_wealth"]["new_fingerprint_confirmations_allowed"] is False
-    assert action["type"] == "seed_batch"
+    assert payload["replacement_action"] is None
+    assert action == proposed
+    assert rationale == {}
+
+
+def test_seq_gate_preflight_dispatch_block_reason() -> None:
+    assert (
+        autopilot._seq_gate_preflight_dispatch_block_reason(
+            {"status": "blocked_unreachable", "reason": "alpha_wealth_exhausted"}
+        )
+        == "seq_gate_preflight_alpha_wealth_exhausted"
+    )
+    assert (
+        autopilot._seq_gate_preflight_dispatch_block_reason(
+            {"status": "deferred", "reason": "rate_axis_unreachable"}
+        )
+        == ""
+    )
 
 
 def test_seq_baseline_reference_state_tracks_cadence_and_staleness(
@@ -1680,10 +1699,12 @@ def _run_loop_inner_seq_harness(
     state: dict[str, Any],
     verdict_seq: dict[str, Any],
     force_fresh_eval_context: dict[str, Any] | None = None,
+    seq_gate_preflight_payload: dict[str, Any] | None = None,
     learning_exclusion: tuple[str | None, str, Any] = (None, "", None),
     use_controller: bool = False,
     planner_should_not_run: bool = False,
     journal_entries_out: list[JournalEntry] | None = None,
+    dispatch_actions_out: list[dict[str, Any]] | None = None,
 ) -> tuple[dict[str, Any], list[tuple[bool, int]]]:
     baseline_update_calls: list[tuple[bool, int]] = []
 
@@ -1980,6 +2001,8 @@ def _run_loop_inner_seq_harness(
         return action, rationale, None
 
     def fake_dispatch_action(*args: Any, **kwargs: Any) -> tuple[Any, str]:
+        if dispatch_actions_out is not None and args:
+            dispatch_actions_out.append(dict(args[0]))
         return (
             autopilot.EvalResult(
                 tier=2,
@@ -2043,6 +2066,29 @@ def _run_loop_inner_seq_harness(
         "_maybe_force_seq_baseline_draw",
         fake_maybe_force_seq_baseline_draw,
     )
+    if seq_gate_preflight_payload is not None:
+
+        def fake_maybe_defer_seq_unreachable_candidate_action(
+            action: dict[str, Any],
+            *,
+            state: dict[str, Any],
+            journal: Any,  # noqa: ARG001
+            blacklist: list[dict[str, Any]],  # noqa: ARG001
+            rationale: dict[str, Any] | None,
+            trial_counter: int,  # noqa: ARG001
+            tier: int,  # noqa: ARG001
+            enabled: bool,  # noqa: ARG001
+        ) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any] | None]:
+            payload = dict(seq_gate_preflight_payload)
+            payload.setdefault("original_action", dict(action))
+            state["seq_gate_reachability_preflight"] = payload
+            return action, rationale, payload
+
+        monkeypatch.setattr(
+            autopilot,
+            "_maybe_defer_seq_unreachable_candidate_action",
+            fake_maybe_defer_seq_unreachable_candidate_action,
+        )
     monkeypatch.setattr(autopilot, "dispatch_action", fake_dispatch_action)
     monkeypatch.setattr(
         autopilot,
@@ -2128,6 +2174,49 @@ def test_run_loop_inner_journals_report_only_rlvr_reward(
     assert rlvr["ready_for_training"] is False
     assert "auroc_missing_or_degenerate" in rlvr["blockers"]
     assert "question_results_missing" in rlvr["blockers"]
+
+
+def test_run_loop_inner_halts_on_blocked_seq_gate_preflight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state: dict[str, Any] = {
+        "trial_counter": 0,
+        "paused": False,
+        "td_errors": [],
+        "seeder_state": {},
+        "consecutive_failures": 0,
+        "quality_history": [],
+        "quality_history_by_tier": {},
+        "baseline_state": {},
+    }
+    journal_entries: list[JournalEntry] = []
+    dispatched: list[dict[str, Any]] = []
+
+    returned_state, _ = _run_loop_inner_seq_harness(
+        monkeypatch,
+        state=state,
+        verdict_seq={
+            "candidate": "candidate-a",
+            "confirmed": False,
+            "state": "accumulating",
+        },
+        seq_gate_preflight_payload={
+            "status": "blocked_unreachable",
+            "reason": "alpha_wealth_exhausted",
+            "original_action": {"type": "numeric_trial", "surface": "think_harder"},
+            "replacement_action": None,
+        },
+        journal_entries_out=journal_entries,
+        dispatch_actions_out=dispatched,
+    )
+
+    assert returned_state["paused"] is True
+    assert returned_state["_dispatch_deficiency"] == "seq_gate_preflight_blocked"
+    assert returned_state["last_invalid_reason"] == "seq_gate_preflight_alpha_wealth_exhausted"
+    assert returned_state["last_invalid_status"] == "seq_gate_preflight_blocked"
+    assert "in_flight_trial" not in returned_state
+    assert journal_entries == []
+    assert dispatched == []
 
 
 def test_run_loop_inner_forwards_finalized_seq_to_gate_and_clears_pending(

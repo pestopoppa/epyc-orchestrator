@@ -34,7 +34,7 @@ def test_authority_env_forces_required_flags() -> None:
     assert env["AUTOPILOT_PLANNER_SPEND_BREAKER"] == "0"
 
 
-def test_authority_env_defaults_to_frontdoor_local_planner_without_overriding() -> None:
+def test_authority_env_defaults_to_claude_codex_planner_without_overriding() -> None:
     env = launcher.authority_env(
         {
             "AUTOPILOT_PLANNER_PRIMARY": "claude",
@@ -43,7 +43,7 @@ def test_authority_env_defaults_to_frontdoor_local_planner_without_overriding() 
     )
 
     assert env["AUTOPILOT_PLANNER_PRIMARY"] == "claude"
-    assert env["AUTOPILOT_PLANNER_CRITIC"] == "local_ingest"
+    assert env["AUTOPILOT_PLANNER_CRITIC"] == "codex_critic"
     assert env["AUTOPILOT_PLANNER_CRITIC_FALLBACK"] == "claude"
     assert env["AUTOPILOT_PLANNER_SPEND_BREAKER_PRIMARY"] == "local_frontdoor"
     assert env["AUTOPILOT_PLANNER_SPEND_BREAKER_CRITIC"] == "local_ingest"
@@ -53,8 +53,8 @@ def test_authority_env_defaults_to_frontdoor_local_planner_without_overriding() 
     assert env["AUTOPILOT_LOCAL_PLANNER_MAX_TOKENS"] == "4096"
 
     default_env = launcher.authority_env({})
-    assert default_env["AUTOPILOT_PLANNER_PRIMARY"] == "local_frontdoor"
-    assert default_env["AUTOPILOT_PLANNER_CRITIC"] == "local_ingest"
+    assert default_env["AUTOPILOT_PLANNER_PRIMARY"] == "claude"
+    assert default_env["AUTOPILOT_PLANNER_CRITIC"] == "codex_critic"
 
 
 def test_authority_env_sets_latest_repo_readiness_pickup(
