@@ -1576,6 +1576,43 @@ def test_planner_hard_block_rejects_numeric_param_type_and_range() -> None:
     )
 
 
+def test_planner_hard_block_rejects_incoherent_review_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        planner_coordinator,
+        "_current_chat_review_thresholds",
+        lambda: (0.6, 0.6),
+    )
+    action = {
+        "type": "numeric_trial",
+        "surface": "chat_review_low",
+        "params": {"chat.review_low_q_threshold": 0.7},
+    }
+
+    reason = planner_coordinator._planner_action_hard_block_reason(action)
+
+    assert reason is not None
+    assert "review_low_q_threshold <= chat.review_skip_q_threshold" in reason
+
+
+def test_planner_hard_block_allows_coherent_review_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        planner_coordinator,
+        "_current_chat_review_thresholds",
+        lambda: (0.6, 0.6),
+    )
+    action = {
+        "type": "numeric_trial",
+        "surface": "chat_review_skip",
+        "params": {"chat.review_skip_q_threshold": 0.7},
+    }
+
+    assert planner_coordinator._planner_action_hard_block_reason(action) is None
+
+
 def test_unparseable_critique_shadow_mode_keeps_draft() -> None:
     """In shadow_critique (non-binding) mode, an unparseable critique still must
     not crash or fabricate approval — the draft stands (shadow never revises),

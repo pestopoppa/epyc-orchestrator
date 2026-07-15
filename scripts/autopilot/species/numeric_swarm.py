@@ -47,6 +47,18 @@ SURFACES: dict[str, list[ParamSpec]] = {
     "chat_pipeline": [
         ParamSpec("chat.try_cheap_first_q_threshold", 0.3, 0.9),
     ],
+    "chat_long_context": [
+        ParamSpec("chat.long_context_threshold_chars", 12000, 80000, "int"),
+    ],
+    "chat_summarization": [
+        ParamSpec("chat.summarization_threshold_tokens", 3000, 30000, "int"),
+    ],
+    "chat_review_low": [
+        ParamSpec("chat.review_low_q_threshold", 0.45, 0.80),
+    ],
+    "chat_review_skip": [
+        ParamSpec("chat.review_skip_q_threshold", 0.45, 0.80),
+    ],
     "monitor": [
         ParamSpec("monitor.entropy_threshold", 2.0, 6.0),
         ParamSpec("monitor.repetition_threshold", 0.1, 0.6),

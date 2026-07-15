@@ -46,6 +46,28 @@ def test_chat_pipeline_numeric_surface_uses_runtime_q_threshold() -> None:
     assert "chat.try_cheap_first_quality_threshold" not in names
 
 
+def test_approved_chat_threshold_surfaces_have_operator_ranges() -> None:
+    surfaces = numeric_swarm.SURFACES
+
+    long_context = surfaces["chat_long_context"][0]
+    assert long_context.name == "chat.long_context_threshold_chars"
+    assert long_context.param_type == "int"
+    assert (long_context.low, long_context.high) == (12000, 80000)
+
+    summarization = surfaces["chat_summarization"][0]
+    assert summarization.name == "chat.summarization_threshold_tokens"
+    assert summarization.param_type == "int"
+    assert (summarization.low, summarization.high) == (3000, 30000)
+
+    review_low = surfaces["chat_review_low"][0]
+    assert review_low.name == "chat.review_low_q_threshold"
+    assert (review_low.low, review_low.high) == (0.45, 0.80)
+
+    review_skip = surfaces["chat_review_skip"][0]
+    assert review_skip.name == "chat.review_skip_q_threshold"
+    assert (review_skip.low, review_skip.high) == (0.45, 0.80)
+
+
 def test_suggested_numeric_trial_env_restart_skips_without_marking_failed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
