@@ -209,6 +209,8 @@ def test_dashboard_html_region_lock_grid_uses_backend_display_matrix() -> None:
 
     assert "function renderRegionLocksDisplayMatrix(grid, d)" in body
     assert "const matrix = d && d.display_matrix ? d.display_matrix : null;" in body
+    assert "row.label || row.role" in body
+    assert "matrix.row_kind === 'instance'" in body
     assert "if (!renderRegionLocksDisplayMatrix(grid, d))" in body
     assert "backend display_matrix unavailable; lock-grid rendering is intentionally disabled" in body
     assert "using by_role fallback" not in body

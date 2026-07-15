@@ -356,13 +356,25 @@ class TestRegionLocksSnapshot:
         assert payload["display_matrix"]["active_holder_count"] == 1
         assert payload["display_matrix"]["topology_mode"] == "all_configured"
         assert payload["display_matrix"]["launch_mode"] == "full"
-        worker_display = next(
+        assert payload["display_matrix"]["row_kind"] == "instance"
+        assert payload["display_matrix"]["role_count"] == 1
+        worker_rows = [
             row for row in payload["display_matrix"]["rows"] if row["role"] == "worker_general"
-        )
-        states = [cell["state"] for cell in worker_display["cells"]]
-        labels = [cell["label"] for cell in worker_display["cells"]]
-        assert states == ["active", "na", "na", "inactive", "inactive", "inactive", "inactive"]
-        assert labels == ["⚡", "—", "—", "○", "○", "○", "○"]
+        ]
+        assert [row["label"] for row in worker_rows] == [
+            "worker_general.full",
+            "worker_general.q0",
+            "worker_general.q1",
+            "worker_general.q2",
+            "worker_general.q3",
+        ]
+        assert [[cell["state"] for cell in row["cells"]] for row in worker_rows] == [
+            ["active", "na", "na", "na", "na", "na", "na"],
+            ["na", "na", "na", "inactive", "na", "na", "na"],
+            ["na", "na", "na", "na", "inactive", "na", "na"],
+            ["na", "na", "na", "na", "na", "inactive", "na"],
+            ["na", "na", "na", "na", "na", "na", "inactive"],
+        ]
 
     @pytest.mark.asyncio
     async def test_region_lock_grid_shapes_follow_quarter_mode(self, tmp_path, monkeypatch) -> None:
