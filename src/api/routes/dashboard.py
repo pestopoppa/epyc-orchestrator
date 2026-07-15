@@ -1138,96 +1138,69 @@ def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
                     }
                 )
 
-    def _display_cell_for_instance(
-        *,
-        role: str,
-        column: dict[str, str],
-        inst: dict[str, Any],
-        active_idxs: set[int],
-        blocked_by: set[str],
-    ) -> dict[str, Any]:
-        shape = str(inst.get("shape") or "")
-        if shape != column["key"]:
-            return {
-                "state": "na",
-                "label": "—",
-                "title": f"{role}.{shape or 'unknown'} is not a {column['label']} shape",
-            }
-        idx = int(inst["idx"])
-        regions = [str(r) for r in inst.get("regions", [])]
-        label = column["label"]
-        if idx in active_idxs:
-            return {
-                "state": "active",
-                "label": "⚡",
-                "title": (
-                    f"{role}.{label} ACTIVE — instance idx={idx} "
-                    f"holding {{{','.join(regions)}}}"
-                ),
-            }
-        if not bool(inst.get("launch_selected", True)):
-            return {
-                "state": "inactive",
-                "label": "○",
-                "title": (
-                    f"{role}.{label} NOT SELECTED — current "
-                    f"stack_numa_mode={active_mode}; configured regions "
-                    f"{{{','.join(regions)}}}"
-                ),
-            }
-        blocking: list[str] = []
-        for region in regions:
-            blockers = [
-                f"{h['role']}.{h['shape']}"
-                for h in held_by_region.get(region, [])
-                if h.get("role") == role or str(h.get("role")) in blocked_by
-            ]
-            if blockers:
-                blocking.append(f"{region}←{','.join(blockers)}")
-        if blocking:
-            return {
-                "state": "blocked",
-                "label": "×",
-                "title": (
-                    f"{role}.{label} WAITING — physical cores "
-                    f"{','.join(regions)} occupied by {' · '.join(blocking)}"
-                ),
-            }
-        return {
-            "state": "ready",
-            "label": "✅",
-            "title": f"{role}.{label} READY — regions {{{','.join(regions)}}}",
-        }
-
     display_rows: list[dict[str, Any]] = []
     for role in sorted(by_role):
         bucket = by_role[role]
         insts = list(bucket.get("instances", []))
         active_idxs = {int(idx) for idx in bucket.get("active_instance_idxs", [])}
         blocked_by = {str(r) for r in bucket.get("blocked_by_roles", [])}
-        for inst in insts:
-            shape = str(inst.get("shape") or f"idx{inst.get('idx', '?')}")
-            display_rows.append(
-                {
-                    "role": role,
-                    "label": f"{role}.{shape}",
-                    "shape": shape,
-                    "idx": inst.get("idx"),
-                    "regions": inst.get("regions", []),
-                    "launch_selected": bool(inst.get("launch_selected", True)),
-                    "runtime_only": bool(inst.get("runtime_only", False)),
-                    "cells": [
-                        _display_cell_for_instance(
-                            role=role,
-                            column=col,
-                            inst=inst,
-                            active_idxs=active_idxs,
-                            blocked_by=blocked_by,
-                        )
-                        for col in display_columns
-                    ],
-                }
-            )
+        cells: list[dict[str, Any]] = []
+        for col in display_columns:
+            inst = next((i for i in insts if i.get("shape") == col["key"]), None)
+            if inst is None:
+                cells.append(
+                    {"state": "na", "label": "—", "title": f"{role} has no {col['label']} shape"}
+                )
+                continue
+            idx = int(inst["idx"])
+            regions = [str(r) for r in inst.get("regions", [])]
+            if idx in active_idxs:
+                cells.append(
+                    {
+                        "state": "active",
+                        "label": "⚡",
+                        "title": f"{role}.{col['label']} ACTIVE — instance idx={idx} holding {{{','.join(regions)}}}",
+                    }
+                )
+                continue
+            blocking: list[str] = []
+            for region in regions:
+                blockers = [
+                    f"{h['role']}.{h['shape']}"
+                    for h in held_by_region.get(region, [])
+                    if h.get("role") == role or str(h.get("role")) in blocked_by
+                ]
+                if blockers:
+                    blocking.append(f"{region}←{','.join(blockers)}")
+            if blocking:
+                cells.append(
+                    {
+                        "state": "blocked",
+                        "label": "×",
+                        "title": (
+                            f"{role}.{col['label']} WAITING — physical cores "
+                            f"{','.join(regions)} occupied by {' · '.join(blocking)}"
+                        ),
+                    }
+                )
+            else:
+                selected = bool(inst.get("launch_selected", True))
+                mode_note = (
+                    ""
+                    if selected
+                    else f" — configured but not selected by stack_numa_mode={active_mode}"
+                )
+                cells.append(
+                    {
+                        "state": "ready",
+                        "label": "✅",
+                        "title": (
+                            f"{role}.{col['label']} FREE — regions "
+                            f"{{{','.join(regions)}}}{mode_note}"
+                        ),
+                    }
+                )
+        display_rows.append({"role": role, "cells": cells})
 
     feature_flag = os.environ.get("ORCHESTRATOR_PER_REGION_LOCKS", "0").strip()
     return {
@@ -1240,9 +1213,9 @@ def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
         "display_matrix": {
             "columns": display_columns,
             "rows": display_rows,
-            "row_kind": "instance",
+            "row_kind": "role",
             "role_count": len(by_role),
-            "instance_count": len(display_rows),
+            "instance_count": sum(len(bucket.get("instances", [])) for bucket in by_role.values()),
             "launch_mode": active_mode,
             "topology_mode": "all_configured",
             "active_holder_count": sum(

@@ -932,7 +932,7 @@ body.insight-fullscreen-open { overflow: hidden; }
         regions lock
         <span class="count-suffix" id="region-locks-status">— CPU region locks + device occupancy</span>
       </h2>
-      <div id="region-locks-grid" style="display:grid;grid-template-columns:minmax(190px,1.35fr) repeat(7,1fr);gap:4px;font-size:11px;font-family:var(--font-mono,ui-monospace,monospace);align-items:center">
+      <div id="region-locks-grid" style="display:grid;grid-template-columns:160px repeat(7,1fr);gap:4px;font-size:11px;font-family:var(--font-mono,ui-monospace,monospace);align-items:center">
         <div style="grid-column:1/-1;color:var(--dim);font-size:11px">loading CPU region-lock matrix…</div>
       </div>
       <!-- Contention gate: merged in (2026-05-27) as a compact strip rather than
@@ -2675,7 +2675,7 @@ function renderRegionLocksDisplayMatrix(grid, d) {
     const rowsIn = matrix && Array.isArray(matrix.rows) ? matrix.rows : [];
     if (!grid || !columns.length || !rowsIn.length) return false;
     grid.dataset.regionLocksPainted = '1';
-    grid.style.gridTemplateColumns = `minmax(190px,1.35fr) repeat(${columns.length},1fr)`;
+    grid.style.gridTemplateColumns = `160px repeat(${columns.length},1fr)`;
     const rows = [];
     rows.push(`<div style="color:var(--muted);font-size:10px">role / instance shape</div>`);
     for (const col of columns) {
@@ -2697,8 +2697,8 @@ function renderRegionLocksDisplayMatrix(grid, d) {
     footer.style.cssText = 'grid-column:1/-1;color:var(--dim);font-size:10px;font-family:var(--font-ui);margin-top:6px;line-height:1.5';
     const launchMode = matrix && matrix.launch_mode ? ` · launch ${escapeHTML(matrix.launch_mode)}` : '';
     const rowKind = matrix && matrix.row_kind === 'instance' ? 'instance' : 'role';
-    const roleCount = matrix && Number.isFinite(Number(matrix.role_count)) ? ` across ${Number(matrix.role_count)} role(s)` : '';
-    footer.innerHTML = `${rowsIn.length} ${rowKind}(s) from backend display matrix${roleCount}${launchMode} · Legend: <span style="color:#fbbf24">⚡ active holder</span> · <span style="color:#f87171">× selected shape waiting on occupied CPU regions</span> · <span style="color:var(--good,#34d399)">✅ selected and free</span> · <span style="color:var(--muted,#94a3b8)">○ configured but not selected by this launch mode</span> · <span style="color:var(--dim)">— other shape column for this instance</span>.`;
+    const roleCount = rowKind === 'instance' && matrix && Number.isFinite(Number(matrix.role_count)) ? ` across ${Number(matrix.role_count)} role(s)` : '';
+    footer.innerHTML = `${rowsIn.length} ${rowKind}(s) from backend display matrix${roleCount}${launchMode} · Legend: <span style="color:#fbbf24">⚡ active holder</span> · <span style="color:#f87171">× waiting on occupied CPU regions</span> · <span style="color:var(--good,#34d399)">✅ configured and free</span> · <span style="color:var(--dim)">— shape not configured for this role</span>.`;
     grid.appendChild(footer);
     return true;
 }
@@ -6541,7 +6541,7 @@ async function updateRegionLocks(
                     `${tapLiveRequestCount} live tap request(s), but no CPU lock holder correlated in this frame`
                 );
             } else {
-                _setDotState(regionDot, 'idle', 'no CPU region locks currently held; grid shows selected vs inactive configured shapes');
+                _setDotState(regionDot, 'idle', 'no CPU region locks currently held; grid shows configured free CPU shapes');
             }
             if (status && enabled) {
                 const liveTapSuffix = tapLiveRequestCount
@@ -6554,7 +6554,7 @@ async function updateRegionLocks(
                     status.textContent = `— no /proc holder correlated; ${tapLiveRequestCount} live tap request(s) visible${tapLiveStateBits.length ? ` (${tapLiveStateBits.join(' · ')})` : ''}; waiting for coherent lock metadata; per-region locks ENABLED`;
                     status.style.color = 'var(--warn,#fbbf24)';
                 } else {
-                    status.textContent = '— no locks held; grid shows selected vs inactive configured CPU shapes; per-region locks ENABLED';
+                    status.textContent = '— no locks held; grid shows configured free CPU shapes; per-region locks ENABLED';
                     status.style.color = 'var(--muted)';
                 }
             }

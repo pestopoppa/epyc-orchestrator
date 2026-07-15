@@ -356,24 +356,71 @@ class TestRegionLocksSnapshot:
         assert payload["display_matrix"]["active_holder_count"] == 1
         assert payload["display_matrix"]["topology_mode"] == "all_configured"
         assert payload["display_matrix"]["launch_mode"] == "full"
-        assert payload["display_matrix"]["row_kind"] == "instance"
+        assert payload["display_matrix"]["row_kind"] == "role"
         assert payload["display_matrix"]["role_count"] == 1
-        worker_rows = [
+        worker_display = next(
             row for row in payload["display_matrix"]["rows"] if row["role"] == "worker_general"
+        )
+        states = [cell["state"] for cell in worker_display["cells"]]
+        labels = [cell["label"] for cell in worker_display["cells"]]
+        assert states == ["active", "na", "na", "blocked", "blocked", "blocked", "blocked"]
+        assert labels == ["⚡", "—", "—", "×", "×", "×", "×"]
+
+    @pytest.mark.asyncio
+    async def test_region_lock_grid_renders_unselected_free_quarters_as_ready(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "full")
+
+        monkeypatch.setattr("src.runtime.cpu_region_lock._tmp_dir", lambda: tmp_path)
+        monkeypatch.setattr(
+            "src.runtime.cpu_region_lock._current_lock_owner_pids", lambda _path: []
+        )
+        monkeypatch.setattr(
+            "src.runtime.instance_topology.get_instance_regions",
+            lambda: {
+                ("worker_general", 0): frozenset({"q0", "q1", "q2", "q3"}),
+                ("worker_general", 1): frozenset({"q0"}),
+                ("worker_general", 2): frozenset({"q1"}),
+                ("worker_general", 3): frozenset({"q2"}),
+                ("worker_general", 4): frozenset({"q3"}),
+            },
+        )
+        monkeypatch.setattr(
+            "src.scheduling.contention.load_contention_matrix",
+            lambda: type(
+                "Matrix",
+                (),
+                {
+                    "same_role": {
+                        "worker_general": SameRole(role="worker_general", verdict="allow"),
+                    },
+                },
+            )(),
+        )
+
+        payload = json.loads((await region_locks_snapshot()).body)
+
+        worker_display = next(
+            row for row in payload["display_matrix"]["rows"] if row["role"] == "worker_general"
+        )
+        assert [cell["state"] for cell in worker_display["cells"]] == [
+            "ready",
+            "na",
+            "na",
+            "ready",
+            "ready",
+            "ready",
+            "ready",
         ]
-        assert [row["label"] for row in worker_rows] == [
-            "worker_general.full",
-            "worker_general.q0",
-            "worker_general.q1",
-            "worker_general.q2",
-            "worker_general.q3",
-        ]
-        assert [[cell["state"] for cell in row["cells"]] for row in worker_rows] == [
-            ["active", "na", "na", "na", "na", "na", "na"],
-            ["na", "na", "na", "inactive", "na", "na", "na"],
-            ["na", "na", "na", "na", "inactive", "na", "na"],
-            ["na", "na", "na", "na", "na", "inactive", "na"],
-            ["na", "na", "na", "na", "na", "na", "inactive"],
+        assert [cell["label"] for cell in worker_display["cells"]] == [
+            "✅",
+            "—",
+            "—",
+            "✅",
+            "✅",
+            "✅",
+            "✅",
         ]
 
     @pytest.mark.asyncio
