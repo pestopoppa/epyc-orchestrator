@@ -4531,6 +4531,7 @@ def _format_available_action_schemas(action_types: list[str]) -> str:
     """Render only currently selectable action schemas for the controller prompt."""
     ordered = [action_type for action_type in action_types if action_type]
     numeric_surface_options = "|".join(_configured_numeric_surfaces()) or "(none)"
+    numeric_param_options = _format_numeric_surface_param_options()
     code_targets = ", ".join(CODE_MUTATION_ALLOWLIST)
     new_file_roots = ", ".join(new_file_mutation_root_labels())
     deep_eval_tier_options = _format_deep_eval_tier_options()
@@ -4542,7 +4543,10 @@ def _format_available_action_schemas(action_types: list[str]) -> str:
             '- Numeric: {{"type": "numeric_trial", "surface": "'
             f'{numeric_surface_options}", "params": {{"surface.param": value}}}}\n'
             "  (Model-authored planner actions must include exactly one explicit "
-            "param. Empty params are reserved for internal deterministic fallbacks.)"
+            "param. Empty params are reserved for internal deterministic fallbacks.\n"
+            f"  Valid params by surface: {numeric_param_options}\n"
+            "  There is no numeric_trial tool_activation_threshold knob; do not "
+            "invent one.)"
         ),
         "prompt_mutation": (
             '- Prompt: {{"type": "prompt_mutation", "file": "frontdoor.md", '
@@ -4621,6 +4625,28 @@ def _format_available_action_schemas(action_types: list[str]) -> str:
     if lines:
         return "\n".join(lines).replace("{{", "{").replace("}}", "}")
     return "- Pause: no currently selectable autonomous action schema is available."
+
+
+def _format_numeric_surface_param_options() -> str:
+    try:
+        from species.numeric_swarm import SURFACES as _NS_SURFACES
+    except Exception:
+        return "unavailable (use only params already visible in prior valid numeric_trial rows)"
+
+    parts: list[str] = []
+    for surface in _configured_numeric_surfaces():
+        specs = _NS_SURFACES.get(surface, [])
+        labels: list[str] = []
+        for spec in specs:
+            name = str(getattr(spec, "name", "") or "")
+            if not name:
+                continue
+            ptype = str(getattr(spec, "param_type", "float") or "float")
+            low = getattr(spec, "low", "?")
+            high = getattr(spec, "high", "?")
+            labels.append(f"{name} {ptype}[{low},{high}]")
+        parts.append(f"{surface}: {', '.join(labels) if labels else '(no params discovered)'}")
+    return "; ".join(parts) if parts else "(none)"
 
 
 def _read_guidance_file(path: Path, missing_label: str) -> str:

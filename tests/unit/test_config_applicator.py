@@ -18,6 +18,22 @@ from scripts.autopilot import config_applicator as applicator
 from scripts.autopilot import kv_compress
 
 
+def test_try_cheap_first_q_threshold_maps_to_live_env_alias() -> None:
+    env_changes = applicator.EnvRestartApplicator(restart=False).env_changes_for(
+        {"chat.try_cheap_first_q_threshold": 0.78}
+    )
+
+    assert env_changes == {"ORCHESTRATOR_CHAT_TRY_CHEAP_FIRST_Q_THRESHOLD": "0.78"}
+
+
+def test_legacy_try_cheap_first_quality_threshold_maps_to_live_env_alias() -> None:
+    env_changes = applicator.EnvRestartApplicator(restart=False).env_changes_for(
+        {"chat.try_cheap_first_quality_threshold": 0.78}
+    )
+
+    assert env_changes == {"ORCHESTRATOR_CHAT_TRY_CHEAP_FIRST_Q_THRESHOLD": "0.78"}
+
+
 def test_restart_api_with_env_uses_stack_reload(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[dict[str, object]] = []
 

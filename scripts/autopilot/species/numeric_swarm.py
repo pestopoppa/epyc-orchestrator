@@ -45,7 +45,7 @@ SURFACES: dict[str, list[ParamSpec]] = {
         ParamSpec("think_harder.cot_roi_threshold", 0.1, 0.7),
     ],
     "chat_pipeline": [
-        ParamSpec("chat.try_cheap_first_quality_threshold", 0.3, 0.9),
+        ParamSpec("chat.try_cheap_first_q_threshold", 0.3, 0.9),
     ],
     "monitor": [
         ParamSpec("monitor.entropy_threshold", 2.0, 6.0),

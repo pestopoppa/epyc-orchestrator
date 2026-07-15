@@ -1240,6 +1240,84 @@ def _safe_numeric_fallback_action() -> dict[str, Any]:
     }
 
 
+def _numeric_surface_specs() -> dict[str, list[Any]]:
+    try:
+        from species.numeric_swarm import SURFACES
+    except Exception:
+        return {}
+    if not isinstance(SURFACES, dict):
+        return {}
+    return {
+        str(surface): list(specs)
+        for surface, specs in SURFACES.items()
+        if isinstance(surface, str) and isinstance(specs, list)
+    }
+
+
+def _numeric_param_label(spec: Any) -> str:
+    name = str(getattr(spec, "name", "") or "")
+    ptype = str(getattr(spec, "param_type", "float") or "float")
+    low = getattr(spec, "low", "?")
+    high = getattr(spec, "high", "?")
+    return f"{name} ({ptype}, {low}-{high})"
+
+
+def _numeric_param_validation_error(action: dict[str, Any]) -> str | None:
+    if action.get("type") != "numeric_trial":
+        return None
+    params = action.get("params")
+    if not isinstance(params, dict) or not params:
+        return None
+    if len(params) != 1:
+        return None
+    surface = str(action.get("surface") or "")
+    specs_by_surface = _numeric_surface_specs()
+    specs = specs_by_surface.get(surface)
+    if not specs:
+        return None
+
+    key, value = next(iter(params.items()))
+    key_s = str(key)
+    full_names = {str(getattr(spec, "name", "") or ""): spec for spec in specs}
+    short_names: dict[str, Any] = {}
+    ambiguous: set[str] = set()
+    for spec in specs:
+        name = str(getattr(spec, "name", "") or "")
+        if "." not in name:
+            continue
+        short = name.split(".", 1)[1]
+        if short in short_names:
+            ambiguous.add(short)
+            short_names.pop(short, None)
+        elif short not in ambiguous:
+            short_names[short] = spec
+
+    spec = full_names.get(key_s) or short_names.get(key_s)
+    if spec is None:
+        valid = ", ".join(_numeric_param_label(item) for item in specs)
+        return (
+            f"numeric_trial param {key_s!r} is not valid for surface {surface!r}; "
+            f"valid params: {valid}. There is no numeric_trial "
+            "tool_activation_threshold knob; tool-required routing is controlled "
+            "by chat_routing.detect_tool_requirement(), not NumericSwarm."
+        )
+
+    ptype = str(getattr(spec, "param_type", "float") or "float")
+    low = getattr(spec, "low", None)
+    high = getattr(spec, "high", None)
+    if ptype == "int":
+        if not isinstance(value, int) or isinstance(value, bool):
+            return f"numeric_trial param {key_s!r} must be int; got {value!r}"
+    elif not isinstance(value, (int, float)) or isinstance(value, bool):
+        return f"numeric_trial param {key_s!r} must be numeric; got {value!r}"
+
+    if low is not None and value < low:
+        return f"numeric_trial param {key_s!r} must be >= {low}; got {value!r}"
+    if high is not None and value > high:
+        return f"numeric_trial param {key_s!r} must be <= {high}; got {value!r}"
+    return None
+
+
 def _planner_action_hard_block_reason(
     action: dict[str, Any],
     *,
@@ -1254,6 +1332,9 @@ def _planner_action_hard_block_reason(
                 "numeric_trial planner output must include exactly one explicit "
                 "params entry; empty params are reserved for internal sampler fallbacks"
             )
+        param_error = _numeric_param_validation_error(action)
+        if param_error:
+            return param_error
 
     state = action_feedback_state if isinstance(action_feedback_state, dict) else {}
     signature = action_signature(action)

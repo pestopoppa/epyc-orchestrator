@@ -64,7 +64,10 @@ ENV_PARAMS = {
         "entropy_spike_threshold": "ORCHESTRATOR_MONITOR_ENTROPY_SPIKE_THRESHOLD",
     },
     "chat": {
-        "try_cheap_first_quality_threshold": "ORCHESTRATOR_CHAT_TRY_CHEAP_FIRST_QUALITY_THRESHOLD",
+        "try_cheap_first_q_threshold": "ORCHESTRATOR_CHAT_TRY_CHEAP_FIRST_Q_THRESHOLD",
+        # Back-compat for historical rows/blacklists emitted before the live
+        # Phase-B/C gate name was corrected.
+        "try_cheap_first_quality_threshold": "ORCHESTRATOR_CHAT_TRY_CHEAP_FIRST_Q_THRESHOLD",
     },
     "escalation": {
         "max_retries": "ORCHESTRATOR_ESCALATION_MAX_RETRIES",

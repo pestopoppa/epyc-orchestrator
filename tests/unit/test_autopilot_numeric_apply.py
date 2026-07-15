@@ -16,6 +16,7 @@ sys.path.insert(0, str(AUTOPILOT_DIR))
 
 autopilot = importlib.import_module("scripts.autopilot.autopilot")
 experiment_journal = importlib.import_module("scripts.autopilot.experiment_journal")
+numeric_swarm = importlib.import_module("scripts.autopilot.species.numeric_swarm")
 
 
 class FailingTower:
@@ -36,6 +37,13 @@ class FakeSwarm:
 
     def mark_failed(self, surface: str, trial_number: int, reason: str = "") -> None:
         self.failed = (surface, trial_number, reason)
+
+
+def test_chat_pipeline_numeric_surface_uses_runtime_q_threshold() -> None:
+    names = [spec.name for spec in numeric_swarm.SURFACES["chat_pipeline"]]
+
+    assert names == ["chat.try_cheap_first_q_threshold"]
+    assert "chat.try_cheap_first_quality_threshold" not in names
 
 
 def test_suggested_numeric_trial_env_restart_skips_without_marking_failed(

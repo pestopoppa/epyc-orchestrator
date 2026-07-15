@@ -396,6 +396,27 @@ class TestChatPipelineDefaults:
         cfg = ChatPipelineConfig()
         assert cfg.try_cheap_first_role == "worker_general"
 
+    def test_try_cheap_first_q_threshold_default(self):
+        cfg = ChatPipelineConfig()
+        assert cfg.try_cheap_first_q_threshold == 0.65
+
+    def test_get_config_reads_try_cheap_first_q_threshold(self, monkeypatch):
+        monkeypatch.setenv("ORCHESTRATOR_CHAT_TRY_CHEAP_FIRST_Q_THRESHOLD", "0.78")
+        reset_config()
+
+        cfg = get_config()
+
+        assert cfg.chat.try_cheap_first_q_threshold == 0.78
+
+    def test_get_config_reads_legacy_quality_threshold_alias_for_q_threshold(self, monkeypatch):
+        monkeypatch.delenv("ORCHESTRATOR_CHAT_TRY_CHEAP_FIRST_Q_THRESHOLD", raising=False)
+        monkeypatch.setenv("ORCHESTRATOR_CHAT_TRY_CHEAP_FIRST_QUALITY_THRESHOLD", "0.74")
+        reset_config()
+
+        cfg = get_config()
+
+        assert cfg.chat.try_cheap_first_q_threshold == 0.74
+
 
 # ── VisionConfig defaults match src/vision/config.py ─────────────────────
 

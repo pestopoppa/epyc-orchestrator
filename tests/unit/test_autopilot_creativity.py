@@ -393,6 +393,10 @@ def test_action_availability_surfaces_w8_candidate_generation_priority(
 
     rendered = autopilot._format_available_action_schemas(selectable)
     assert '- Numeric: {"type": "numeric_trial"' in rendered
+    assert "Valid params by surface:" in rendered
+    assert "memrl_retrieval.semantic_k" in rendered
+    assert "repl.turn_token_cap" in rendered
+    assert "tool_activation_threshold" in rendered
     assert '- Structural: {"type": "structural_experiment"' in rendered
     assert "- Seed:" not in rendered
     assert "- Deep eval:" not in rendered

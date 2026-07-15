@@ -1540,6 +1540,42 @@ def test_critique_prompt_rejects_empty_numeric_planner_request() -> None:
     assert "internal deterministic fallbacks" in text
 
 
+def test_planner_hard_block_rejects_unknown_numeric_param() -> None:
+    action = {
+        "type": "numeric_trial",
+        "surface": "repl_executor",
+        "params": {"repl_executor.tool_activation_threshold": 0.35},
+    }
+
+    reason = planner_coordinator._planner_action_hard_block_reason(action)
+
+    assert reason is not None
+    assert "not valid for surface 'repl_executor'" in reason
+    assert "repl.turn_token_cap" in reason
+    assert "tool_activation_threshold" in reason
+    assert "detect_tool_requirement" in reason
+
+
+def test_planner_hard_block_rejects_numeric_param_type_and_range() -> None:
+    wrong_type = {
+        "type": "numeric_trial",
+        "surface": "repl_executor",
+        "params": {"repl.turn_token_cap": 0.35},
+    }
+    too_large = {
+        "type": "numeric_trial",
+        "surface": "repl_executor",
+        "params": {"repl.turn_token_cap": 5000},
+    }
+
+    assert "must be int" in (
+        planner_coordinator._planner_action_hard_block_reason(wrong_type) or ""
+    )
+    assert "must be <= 4096" in (
+        planner_coordinator._planner_action_hard_block_reason(too_large) or ""
+    )
+
+
 def test_unparseable_critique_shadow_mode_keeps_draft() -> None:
     """In shadow_critique (non-binding) mode, an unparseable critique still must
     not crash or fabricate approval — the draft stands (shadow never revises),

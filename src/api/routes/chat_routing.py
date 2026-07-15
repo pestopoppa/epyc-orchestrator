@@ -60,6 +60,19 @@ _TOOL_REQUIRED_KEYWORDS = {
     "compute": None,
     "run the": "run_shell",
 }
+_EXPLICIT_TOOL_CALL_RE = re.compile(
+    r"\b(?:TOOL|CALL)\s*\(\s*['\"]([A-Za-z_][A-Za-z0-9_.:-]*)['\"]"
+)
+_EXPLICIT_TOOL_FORCE_CONTEXT_RE = re.compile(
+    r"\b("
+    r"return executable python only|"
+    r"use exactly (?:these )?(?:two )?lines|"
+    r"must (?:call|invoke|use)|"
+    r"call the (?:required )?tool|"
+    r"only available from the tool"
+    r")\b",
+    re.IGNORECASE,
+)
 
 _EMERGENCY_HEURISTIC_PRIOR_ROLES = ("frontdoor",)
 
@@ -70,6 +83,10 @@ def detect_tool_requirement(prompt: str) -> tuple[bool, str | None]:
     Returns:
         (tool_required, tool_hint) — tool_hint is a specific tool name or None.
     """
+    explicit_tool = _EXPLICIT_TOOL_CALL_RE.search(prompt)
+    if explicit_tool and _EXPLICIT_TOOL_FORCE_CONTEXT_RE.search(prompt):
+        return True, explicit_tool.group(1)
+
     prompt_lower = prompt.lower()
     for keyword, hint in _TOOL_REQUIRED_KEYWORDS.items():
         if keyword in prompt_lower:
