@@ -35,6 +35,7 @@ from src.api.routes.chat_review import (
     _apply_plan_review,
     _architect_plan_review,
     _needs_plan_review,
+    _plan_review_should_abort,
     _store_plan_review_episode,
 )
 from src.api.routes.chat_routing import _classify_and_route
@@ -533,7 +534,11 @@ def _plan_review_gate(
         plan_review_result = _architect_plan_review(
             routing.task_ir, routing.routing_decision, primitives, state, routing.task_id
         )
-        if plan_review_result and plan_review_result.decision != "ok":
+        if (
+            plan_review_result
+            and plan_review_result.decision != "ok"
+            and not _plan_review_should_abort(plan_review_result)
+        ):
             routing.routing_decision = _apply_plan_review(
                 routing.routing_decision, plan_review_result
             )

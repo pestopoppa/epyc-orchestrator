@@ -335,6 +335,19 @@ def _apply_plan_review(
     return updated
 
 
+def _plan_review_should_abort(review: "PlanReviewResult | None") -> bool:
+    """Return True when architect review explicitly rejects execution."""
+    return bool(review and str(review.decision).strip().lower() == "drop")
+
+
+def _plan_review_abort_message(review: "PlanReviewResult") -> str:
+    """Human-readable message for a terminal plan-review rejection."""
+    feedback = str(review.feedback or "").strip()
+    if feedback:
+        return f"Plan rejected by architect review: {feedback}"
+    return "Plan rejected by architect review."
+
+
 def _store_plan_review_episode(
     state: "AppState",
     task_id: str,

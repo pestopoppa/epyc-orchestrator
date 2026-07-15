@@ -24,6 +24,7 @@ from src.api.routes.chat_pipeline.routing_decision import (
 )
 from src.api.routes.chat_utils import RoutingResult
 from src.config import reset_config
+from src.proactive_delegation.types import PlanReviewResult
 from src.roles import Role
 
 _RETIRED_ARCHITECT_ROLE = "architect_" "coding"
@@ -1064,6 +1065,44 @@ class TestPlanReviewGate:
 
         mock_apply.assert_called_once()
         assert routing.routing_decision == ["architect_general"]
+
+    def test_plan_review_drop_does_not_rewrite_route(self):
+        """Drop is terminal for callers and should not be converted into a reroute."""
+        request = ChatRequest(prompt="test", real_mode=True)
+        routing = MagicMock()
+        routing.task_ir = {"task_type": "code"}
+        routing.routing_decision = ["worker_general"]
+        routing.task_id = "test-123"
+        primitives = MagicMock()
+        state = MagicMock()
+
+        review_result = PlanReviewResult(
+            decision="drop",
+            score=0.9,
+            feedback="Plan incomplete",
+            patches=[],
+        )
+
+        with patch("src.api.routes.chat_pipeline.routing.features") as mock_features:
+            mock_features.return_value.plan_review = True
+            with patch("src.api.routes.chat_pipeline.routing._needs_plan_review") as mock_needs:
+                mock_needs.return_value = True
+                with patch(
+                    "src.api.routes.chat_pipeline.routing._architect_plan_review"
+                ) as mock_review:
+                    mock_review.return_value = review_result
+                    with patch(
+                        "src.api.routes.chat_pipeline.routing._apply_plan_review"
+                    ) as mock_apply:
+                        with patch(
+                            "src.api.routes.chat_pipeline.routing._store_plan_review_episode"
+                        ) as mock_store:
+                            result = _plan_review_gate(request, routing, primitives, state)
+
+        assert result is review_result
+        assert routing.routing_decision == ["worker_general"]
+        mock_apply.assert_not_called()
+        mock_store.assert_called_once()
 
     def test_plan_review_stores_episode(self):
         """Plan review stores episode when result exists."""

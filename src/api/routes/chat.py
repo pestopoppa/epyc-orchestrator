@@ -80,6 +80,8 @@ from src.api.routes.chat_review import (
     _should_review,
     _architect_verdict,
     _fast_revise,
+    _plan_review_abort_message,
+    _plan_review_should_abort,
 )
 from src.api.routes.chat_routing import (
     _select_mode,
@@ -665,7 +667,50 @@ async def _handle_chat(
             )
 
         # Stage 5: Architect plan review gate
-        _plan_review_gate(request, routing, primitives, state)
+        plan_review_result = _plan_review_gate(request, routing, primitives, state)
+        if _plan_review_should_abort(plan_review_result):
+            assert plan_review_result is not None
+            answer = _plan_review_abort_message(plan_review_result)
+            elapsed = time.perf_counter() - start_time
+            state.increment_request(mock_mode=False, turns=1)
+            if state.progress_logger:
+                state.progress_logger.log_task_completed(
+                    routing.task_id,
+                    success=False,
+                    details=answer,
+                    completion_meta={
+                        "producer_role": "architect_general",
+                        "delegation_lineage": ["architect_general"],
+                        "final_answer_role": "architect_general",
+                    },
+                )
+                score_completed_task(
+                    state,
+                    routing.task_id,
+                    force_role=request.force_role,
+                    real_mode=request.real_mode,
+                )
+            return _finalize(
+                ChatResponse(
+                    answer=answer,
+                    turns=1,
+                    tokens_used=int(getattr(primitives, "total_tokens_generated", 0) or 0),
+                    elapsed_seconds=elapsed,
+                    mock_mode=False,
+                    real_mode=request.real_mode,
+                    routed_to="architect_general",
+                    role_history=["architect_general"],
+                    routing_strategy=f"plan_review_drop:{routing.routing_strategy}",
+                    mode="plan_review_drop",
+                    tokens_generated=int(getattr(primitives, "total_tokens_generated", 0) or 0),
+                    formalization_applied=routing.formalization_applied,
+                    generation_ms=float(getattr(primitives, "total_generation_ms", 0.0) or 0.0),
+                    error_code=422,
+                    error_detail=answer,
+                    skills_retrieved=len(routing.skill_ids) if routing.skill_ids else None,
+                    skill_ids=routing.skill_ids,
+                )
+            )
 
         # Stage 6: Vision pipeline (early return if image/file present)
         vision_result = await _execute_vision(request, routing, primitives, state, start_time)

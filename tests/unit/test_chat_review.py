@@ -14,8 +14,11 @@ from src.api.routes.chat_review import (
     _detect_output_quality_issue,
     _fast_revise,
     _needs_plan_review,
+    _plan_review_abort_message,
+    _plan_review_should_abort,
     _should_review,
 )
+from src.proactive_delegation.types import PlanReviewResult
 
 
 # ── _detect_output_quality_issue ─────────────────────────────────────────
@@ -193,6 +196,36 @@ class TestApplyPlanReview:
         review = MagicMock(patches=[{"op": "add_step", "step": "S2"}])
         result = _apply_plan_review(["frontdoor"], review)
         assert result == ["frontdoor"]
+
+
+class TestPlanReviewAbort:
+    """Test terminal plan-review rejection helpers."""
+
+    def test_drop_aborts_even_without_patches(self):
+        review = PlanReviewResult(
+            decision="drop",
+            score=0.9,
+            feedback="Plan incomplete; missing problem logic.",
+            patches=[],
+        )
+
+        assert _plan_review_should_abort(review) is True
+        assert _plan_review_abort_message(review) == (
+            "Plan rejected by architect review: Plan incomplete; missing problem logic."
+        )
+
+    def test_reroute_does_not_abort(self):
+        review = PlanReviewResult(
+            decision="reroute",
+            score=0.7,
+            feedback="Use coder.",
+            patches=[{"op": "reroute", "step": "S1", "v": "coder_escalation"}],
+        )
+
+        assert _plan_review_should_abort(review) is False
+
+    def test_none_does_not_abort(self):
+        assert _plan_review_should_abort(None) is False
 
 
 # ── _compute_plan_review_phase ───────────────────────────────────────────
