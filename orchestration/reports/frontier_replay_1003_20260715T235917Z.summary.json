@@ -1,0 +1,20 @@
+{
+  "aggregate_tps": 35.309929890347824,
+  "artifact": "/mnt/raid0/llm/epyc-orchestrator/orchestration/reports/frontier_replay_1003_20260715T235917Z.json",
+  "core_id": "legacy_pool_seed_42_n50",
+  "error": null,
+  "errors": 7,
+  "eval_concurrency": 3,
+  "eval_wall_s": 609.6018900871277,
+  "label": "trial-1003-memrl_retrieval-legacy-t1n50",
+  "median_request_tps": 8.870620074729047,
+  "n_questions": 50,
+  "protocol": "legacy_t1_n50_seed42_w6_off_tool_sentinels_off",
+  "quality": 1.7999999999999998,
+  "reliability": 0.86,
+  "restore_status": "ok",
+  "speed": 35.309929890347824,
+  "speed_metric_mode": "aggregate_batch_tps",
+  "tokens_generated": 21525,
+  "trial": 1003
+}
