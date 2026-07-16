@@ -304,10 +304,9 @@ def test_build_worker_general_command_engages_mtp_path() -> None:
     cmd = oss._build_worker_general_command(
         port=8072, model_path="/m/gemma4.gguf", binary_override=None,
     )
-    # MTP-specific flags must all be present
-    # 2026-06-26 v6 cutover: --spec-type token is 'draft-mtp' (not bare 'mtp');
-    # n-max value emitted via --spec-draft-n-max (v6 removed --draft-max).
-    assert cmd[cmd.index("--spec-type") + 1] == "draft-mtp"
+    # MTP-specific flags must all be present. The worker launch now uses one
+    # combined v7 speculative stack: ngram-mod first, draft-mtp fallback.
+    assert cmd[cmd.index("--spec-type") + 1] == "ngram-mod,draft-mtp"
     assert cmd[cmd.index("--spec-draft-n-max") + 1] == "2"
     assert cmd[cmd.index("--draft-p-min") + 1] == "0.0"
     assert cmd[cmd.index("--threads-draft") + 1] == "16"
@@ -522,8 +521,7 @@ def test_build_worker_explore_command_keeps_compatibility_wrapper() -> None:
     cmd = oss._build_worker_explore_command(
         port=8072, model_path="/m/gemma4.gguf", binary_override=None,
     )
-    # 2026-06-26 v6 cutover: spec type token is now 'draft-mtp' (bare 'mtp' removed).
-    assert cmd[cmd.index("--spec-type") + 1] == "draft-mtp"
+    assert cmd[cmd.index("--spec-type") + 1] == "ngram-mod,draft-mtp"
 
 
 # -----------------------------------------------------------------------------
@@ -828,7 +826,7 @@ def test_eval_batch_frontdoor_command_uses_pbench3_serving_shape() -> None:
 def test_dispatcher_routes_vision_mode() -> None:
     with patch.object(oss, "_build_vision_command", return_value=["VISION"]) as m:
         out = oss.build_server_command(None, 8087, vision_mode=True, vision_type="escalation")
-    assert out == ["VISION"]
+    assert out == ["VISION", "--device", "none"]
     # numa_instance defaults to 0 (full) and is forwarded post-da1aed6 so quarters
     # get NUMA_CONFIG -t (was always -t 96).
     m.assert_called_once_with(8087, "escalation", 0)
@@ -837,14 +835,14 @@ def test_dispatcher_routes_vision_mode() -> None:
 def test_dispatcher_routes_embedding_mode() -> None:
     with patch.object(oss, "_build_embedding_command", return_value=["EMB"]) as m:
         out = oss.build_server_command(None, 8090, embedding_mode=True)
-    assert out == ["EMB"]
+    assert out == ["EMB", "--device", "none"]
     m.assert_called_once_with(8090)
 
 
 def test_dispatcher_routes_eval_batch_frontdoor_mode() -> None:
     with patch.object(oss, "_build_eval_batch_frontdoor_command", return_value=["EVAL"]) as m:
         out = oss.build_server_command(None, 18070, eval_batch_frontdoor_mode=True)
-    assert out == ["EVAL"]
+    assert out == ["EVAL", "--device", "none"]
     m.assert_called_once_with(18070, 0)
 
 
@@ -853,7 +851,7 @@ def test_dispatcher_routes_worker_fast() -> None:
         out = oss.build_server_command(
             None, 8102, worker_pool_mode=True, worker_type="fast",
         )
-    assert out == ["FAST"]
+    assert out == ["FAST", "--device", "none"]
     m.assert_called_once()
     assert m.call_args.args[0] == 8102
 
@@ -866,7 +864,7 @@ def test_dispatcher_routes_worker_general_with_binary_override() -> None:
             None, 8072, worker_pool_mode=True, worker_type="explore",
             binary_override="/opt/llama.cpp/llama-server",
         )
-    assert out == ["GEMMA"]
+    assert out == ["GEMMA", "--device", "none"]
     m.assert_called_once()
     # signature: (port, model_path, binary_override)
     assert m.call_args.args[0] == 8072
@@ -883,7 +881,7 @@ def test_dispatcher_raises_on_unknown_worker_type() -> None:
 def test_dispatcher_routes_dev_mode() -> None:
     with patch.object(oss, "_build_dev_command", return_value=["DEV"]) as m:
         out = oss.build_server_command(None, 9999, dev_mode=True)
-    assert out == ["DEV"]
+    assert out == ["DEV", "--device", "none"]
     m.assert_called_once_with(9999)
 
 
@@ -891,7 +889,7 @@ def test_dispatcher_routes_default_to_role_builder() -> None:
     fake_role = SimpleNamespace(name="frontdoor")
     with patch.object(oss, "_build_role_command", return_value=["ROLE"]) as m:
         out = oss.build_server_command(fake_role, 8070)
-    assert out == ["ROLE"]
+    assert out == ["ROLE", "--device", "none"]
     # numa_instance (default 0) forwarded post-da1aed6.
     m.assert_called_once_with(fake_role, 8070, 0)
 

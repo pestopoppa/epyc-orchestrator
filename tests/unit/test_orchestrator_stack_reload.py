@@ -821,6 +821,71 @@ def test_worker_general_builder_keeps_separate_draft_model(monkeypatch) -> None:
     assert cmd[cmd.index("--spec-type") + 1] == "draft-mtp"
 
 
+def test_worker_general_launch_pins_target_and_draft_devices_to_cpu(monkeypatch) -> None:
+    monkeypatch.setattr(
+        stack,
+        "_stack_prior_launch",
+        lambda _role: _worker_general_launch_contract(
+            "/models/gemma-target.gguf",
+            "/models/gemma-assistant.gguf",
+        ),
+    )
+    monkeypatch.setattr(stack, "_resolve_thread_count", lambda _role, _idx: "96")
+
+    cmd = stack.build_server_command(
+        None,
+        8072,
+        worker_pool_mode=True,
+        worker_type="explore",
+    )
+
+    assert cmd[cmd.index("--device") + 1] == "none"
+    assert cmd[cmd.index("--device-draft") + 1] == "none"
+
+
+def test_generic_spec_launch_pins_target_and_draft_devices_to_cpu(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(stack, "SLOT_SAVE_DIR", tmp_path)
+    monkeypatch.setattr(stack, "_resolve_thread_count", lambda _role, _idx: "96")
+    monkeypatch.setattr(
+        stack,
+        "_stack_prior_launch",
+        lambda _role: (
+            {"model_path": "/models/frontdoor.gguf"},
+            {
+                "binary_path": "/opt/llama/bin/llama-server",
+                "cache": {
+                    "context_tokens": 32768,
+                    "slots": 1,
+                    "ubatch": 8192,
+                    "kv_type_k": "q8_0",
+                    "kv_type_v": "q8_0",
+                    "slot_save_path": str(tmp_path / "frontdoor"),
+                },
+                "flags": {
+                    "flash_attn": False,
+                    "jinja": False,
+                    "spec": {
+                        "enabled": True,
+                        "type": "draft-mtp",
+                        "draft_model_path": "/models/frontdoor.gguf",
+                        "draft_max": 4,
+                    },
+                },
+            },
+        ),
+    )
+    role_config = Namespace(
+        name="frontdoor",
+        model=Namespace(full_path="/models/frontdoor.gguf"),
+        acceleration=Namespace(type="none"),
+    )
+
+    cmd = stack.build_server_command(role_config, 8070)
+
+    assert cmd[cmd.index("--device") + 1] == "none"
+    assert cmd[cmd.index("--device-draft") + 1] == "none"
+
+
 def test_runtime_attestation_accepts_embedded_nextn_without_md() -> None:
     info = stack_commands.ProcessInfo(
         role="frontdoor",

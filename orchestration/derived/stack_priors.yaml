@@ -48,39 +48,39 @@ contract:
   - quality_overall
   - memory_cost
   fallback_policy: Consumers may use local fallback values only as explicit degraded mode when this generated contract is missing or invalid.
-compiled_at: '2026-07-06T21:22:59Z'
+compiled_at: '2026-07-16T15:01:21Z'
 status: compiled
 coverage_scope: descriptor_role_bindings
 precedence_spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
 source_artifacts:
   registry:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
-    sha256: d37ae875864dc027f0ddc28c0fb09f0effc93fc9dd8c84c76123581e8f434370
-    repo_commit: d184e665
+    sha256: c1eed88d86739eb4d8999795c1728abedbbc7efc64e245341980609697c68386
+    repo_commit: 716ce223
   descriptors:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_descriptors.yaml
-    sha256: 2898c84816078e5d52c92f4d0370935812132b652c554c95a05de88152a16977
-    repo_commit: d184e665
+    sha256: f261668668e888898c5a814f0abf3e440f93d673bd405d357033533ebeb9587d
+    repo_commit: 716ce223
   stack_manifest:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_manifest.py
-    sha256: 90d455fcb6fa4cc2e95bc9980653827545f78cf6f43e42ee3dd6de82f6d1b93f
-    repo_commit: d184e665
+    sha256: e454a53e797e42fe7d886a3e40c8e51efc407d268b2a59de258b2068982a3f50
+    repo_commit: 716ce223
   stack_numa:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_numa.py
     sha256: 63ef5ec660d987fd0c2e2b9de311536c90044fe1cd938f0c072ac5a159b5ff34
-    repo_commit: d184e665
+    repo_commit: 716ce223
   orchestrator_stack:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/orchestrator_stack.py
-    sha256: 02b0e10877143039795751c99f5fd1e1ffac5602532a65edeeffd4cbdce19688
-    repo_commit: d184e665
+    sha256: 83fa83f854ded17071a0248ee571a8782248d70f7b6c849b6bffa06b0d9dff42
+    repo_commit: 716ce223
   stack_paths:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_paths.py
     sha256: 7eee8576101dbb827ec8e94a228beedb401d7cad80841e1a18aab9c03db4206b
-    repo_commit: d184e665
+    repo_commit: 716ce223
   stack_runtime:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_runtime.py
     sha256: f749047dde702b21759f67dcc81bf6cd64f1157e8a1fdf250b317301c1b6d32c
-    repo_commit: d184e665
+    repo_commit: 716ce223
 roles:
   architect_general:
     role: architect_general
@@ -777,18 +777,18 @@ roles:
             override_kv: []
             spec:
               enabled: true
-              type: draft-mtp
+              type: ngram-mod,draft-mtp
               disabled_by: null
               draft_model_path: /mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-v6-Q8_0.gguf
               draft_max: 2
               draft_p_min: 0.0
               threads_draft: 16
     priors:
-      throughput_tps: 60.7
+      throughput_tps: 38.46
       quality_overall: 0.9
       memory_cost: 1.0
     acceleration:
-      spec_type: draft-mtp
+      spec_type: ngram-mod,draft-mtp
       draft_compat:
       - draft_gemma4_26b_a4b_assistant_q8
       enable_thinking: false
@@ -832,28 +832,28 @@ roles:
       - date: null
         protocol: registry performance block
         value:
-          baseline_tps: 44.7
-          optimized_tps: 60.7
+          baseline_tps: 38.46
+          optimized_tps: 38.46
           quality_pct: 90
           tool_compliance_pct: 96
       - date: null
         protocol: registry performance block
         value:
-          baseline_tps: 44.7
-          optimized_tps: 60.7
+          baseline_tps: 38.46
+          optimized_tps: 38.46
           quality_pct: 90
           tool_compliance_pct: 96
       - date: null
         protocol: registry performance block
         value:
-          baseline_tps: 44.7
-          optimized_tps: 60.7
+          baseline_tps: 38.46
+          optimized_tps: 38.46
           quality_pct: 90
           tool_compliance_pct: 96
       speed:
       - date: null
         protocol: server_mode throughput
-        value_tps: 60.7
+        value_tps: 38.46
     known_gaps: []
   vision_escalation:
     role: vision_escalation
@@ -1029,18 +1029,18 @@ roles:
             override_kv: []
             spec:
               enabled: true
-              type: draft-mtp
+              type: ngram-mod,draft-mtp
               disabled_by: null
               draft_model_path: /mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-v6-Q8_0.gguf
               draft_max: 2
               draft_p_min: 0.0
               threads_draft: 16
     priors:
-      throughput_tps: 60.7
+      throughput_tps: 38.46
       quality_overall: 0.9
       memory_cost: 1.0
     acceleration:
-      spec_type: draft-mtp
+      spec_type: ngram-mod,draft-mtp
       draft_compat:
       - draft_gemma4_26b_a4b_assistant_q8
       enable_thinking: false
@@ -1084,28 +1084,28 @@ roles:
       - date: null
         protocol: registry performance block
         value:
-          baseline_tps: 44.7
-          optimized_tps: 60.7
+          baseline_tps: 38.46
+          optimized_tps: 38.46
           quality_pct: 90
           tool_compliance_pct: 96
       - date: null
         protocol: registry performance block
         value:
-          baseline_tps: 44.7
-          optimized_tps: 60.7
+          baseline_tps: 38.46
+          optimized_tps: 38.46
           quality_pct: 90
           tool_compliance_pct: 96
       - date: null
         protocol: registry performance block
         value:
-          baseline_tps: 44.7
-          optimized_tps: 60.7
+          baseline_tps: 38.46
+          optimized_tps: 38.46
           quality_pct: 90
           tool_compliance_pct: 96
       speed:
       - date: null
         protocol: server_mode throughput
-        value_tps: 60.7
+        value_tps: 38.46
     known_gaps: []
   worker_math:
     role: worker_math
@@ -1165,18 +1165,18 @@ roles:
             override_kv: []
             spec:
               enabled: true
-              type: draft-mtp
+              type: ngram-mod,draft-mtp
               disabled_by: null
               draft_model_path: /mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-v6-Q8_0.gguf
               draft_max: 2
               draft_p_min: 0.0
               threads_draft: 16
     priors:
-      throughput_tps: 60.7
+      throughput_tps: 38.46
       quality_overall: 0.9
       memory_cost: 1.0
     acceleration:
-      spec_type: draft-mtp
+      spec_type: ngram-mod,draft-mtp
       draft_compat:
       - draft_gemma4_26b_a4b_assistant_q8
       enable_thinking: false
@@ -1220,28 +1220,28 @@ roles:
       - date: null
         protocol: registry performance block
         value:
-          baseline_tps: 44.7
-          optimized_tps: 60.7
+          baseline_tps: 38.46
+          optimized_tps: 38.46
           quality_pct: 90
           tool_compliance_pct: 96
       - date: null
         protocol: registry performance block
         value:
-          baseline_tps: 44.7
-          optimized_tps: 60.7
+          baseline_tps: 38.46
+          optimized_tps: 38.46
           quality_pct: 90
           tool_compliance_pct: 96
       - date: null
         protocol: registry performance block
         value:
-          baseline_tps: 44.7
-          optimized_tps: 60.7
+          baseline_tps: 38.46
+          optimized_tps: 38.46
           quality_pct: 90
           tool_compliance_pct: 96
       speed:
       - date: null
         protocol: server_mode throughput
-        value_tps: 60.7
+        value_tps: 38.46
     known_gaps: []
   worker_summarize:
     role: worker_summarize

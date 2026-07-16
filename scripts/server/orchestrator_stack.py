@@ -128,6 +128,29 @@ _WORKER_GENERAL_DEGRADED_FALLBACK = {
     "context_tokens": 16384,
 }
 
+_CPU_ONLY_DEVICE_FLAGS = ("--device", "-dev")
+_CPU_ONLY_DRAFT_DEVICE_FLAGS = ("--device-draft", "-devd")
+
+
+def _has_any_flag(cmd: list[str], flags: tuple[str, ...]) -> bool:
+    return any(flag in cmd for flag in flags)
+
+
+def _append_cpu_only_device_args(cmd: list[str]) -> None:
+    """Pin stack-launched llama-server roles to CPU devices.
+
+    The production stack's text roles are CPU roles. A HIP-capable v7 binary will
+    otherwise auto-select ROCm0 for host op offload / draft sampling and regress
+    worker_general ngram+MTP throughput on CPU-only launches.
+    """
+    if not _has_any_flag(cmd, _CPU_ONLY_DEVICE_FLAGS):
+        cmd.extend(["--device", "none"])
+    if (
+        ("--spec-type" in cmd or "-md" in cmd)
+        and not _has_any_flag(cmd, _CPU_ONLY_DRAFT_DEVICE_FLAGS)
+    ):
+        cmd.extend(["--device-draft", "none"])
+
 
 def _repo_short_sha(path: Path | None = None) -> str | None:
     repo = path or _PATHS["project_root"]
@@ -1032,21 +1055,25 @@ def build_server_command(
     care about quarters (vision, embedding, dev, worker_pool) are unaffected.
     """
     if vision_mode:
-        return _build_vision_command(port, vision_type, numa_instance)
-    if embedding_mode:
-        return _build_embedding_command(port)
-    if eval_batch_frontdoor_mode:
-        return _build_eval_batch_frontdoor_command(port, numa_instance)
-    if worker_pool_mode and worker_type:
+        cmd = _build_vision_command(port, vision_type, numa_instance)
+    elif embedding_mode:
+        cmd = _build_embedding_command(port)
+    elif eval_batch_frontdoor_mode:
+        cmd = _build_eval_batch_frontdoor_command(port, numa_instance)
+    elif worker_pool_mode and worker_type:
         model_path = WORKER_POOL_MODELS.get(worker_type)
         if not model_path:
             raise ValueError(f"Unknown worker type: {worker_type}")
         if worker_type == "fast":
-            return _build_worker_fast_command(port, model_path)
-        return _build_worker_general_command(port, model_path, binary_override, numa_instance)
-    if dev_mode:
-        return _build_dev_command(port)
-    return _build_role_command(role_config, port, numa_instance)
+            cmd = _build_worker_fast_command(port, model_path)
+        else:
+            cmd = _build_worker_general_command(port, model_path, binary_override, numa_instance)
+    elif dev_mode:
+        cmd = _build_dev_command(port)
+    else:
+        cmd = _build_role_command(role_config, port, numa_instance)
+    _append_cpu_only_device_args(cmd)
+    return cmd
 
 
 def start_server(
