@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 
 from src.config import get_config as _get_config
 from src.constants import TASK_IR_OBJECTIVE_LEN
-from src.roles import Role
+from src.roles import Role, chain_name_to_role
 from src.task_ir import canonicalize_task_ir
 from src.prompt_builders import (
     build_review_verdict_prompt,
@@ -316,7 +316,7 @@ def _apply_plan_review(
     for patch in review.patches:
         op = patch.get("op", "")
         if op == "reroute":
-            new_role = patch.get("v", "")
+            new_role = _normalize_plan_review_reroute_role(patch.get("v", ""))
             step_id = patch.get("step", "")
             if new_role:
                 # Map step index to routing decision index
@@ -333,6 +333,24 @@ def _apply_plan_review(
                         updated[0] = new_role
 
     return updated
+
+
+def _normalize_plan_review_reroute_role(value: object) -> str:
+    """Return a canonical role for a plan-review reroute target, or "".
+
+    Architect patches are model output, so the ``v`` field can contain free-form
+    task guidance instead of a backend role. Letting that text overwrite
+    ``routing_decision`` later turns it into ``force_role`` and fails at
+    inference time with "No backend configured for role ...".
+    """
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    role = Role.from_string(raw) or chain_name_to_role(raw)
+    if role is None:
+        log.warning("Ignoring invalid plan-review reroute target: %r", raw[:120])
+        return ""
+    return str(role)
 
 
 def _plan_review_should_abort(review: "PlanReviewResult | None") -> bool:

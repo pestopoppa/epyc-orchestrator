@@ -192,6 +192,19 @@ class TestApplyPlanReview:
         assert result[0] == "coder_escalation"
         assert result[1] == "worker"
 
+    def test_reroute_patch_ignores_non_role_value(self):
+        review = MagicMock(
+            patches=[
+                {
+                    "op": "reroute",
+                    "step": "S1",
+                    "v": "Complete filtering, add KMeans, handle column count",
+                }
+            ]
+        )
+        result = _apply_plan_review(["frontdoor"], review)
+        assert result == ["frontdoor"]
+
     def test_ignores_non_reroute_ops(self):
         review = MagicMock(patches=[{"op": "add_step", "step": "S2"}])
         result = _apply_plan_review(["frontdoor"], review)
