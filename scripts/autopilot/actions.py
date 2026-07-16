@@ -1492,8 +1492,73 @@ def _action_structural_experiment(action: dict[str, Any], ctx: _ActionContext):
         reason = str(validation.get("error", "flag experiment error"))
         return SkipOutcome("skipped", reason, "structural_experiment"), "structural_lab"
 
+    try:
+        prior_flags = ctx.lab.current_flags()
+    except Exception as exc:  # noqa: BLE001
+        return (
+            SkipOutcome(
+                "skipped",
+                f"live flag state unavailable before structural_experiment: {exc}",
+                "structural_experiment",
+            ),
+            "structural_lab",
+        )
+    if not isinstance(prior_flags, dict):
+        return (
+            SkipOutcome(
+                "skipped",
+                "live flag state unavailable before structural_experiment",
+                "structural_experiment",
+            ),
+            "structural_lab",
+        )
+
+    restore_flags: dict[str, bool] = {}
+    missing_restore: list[str] = []
+    for name in flags:
+        prior_value = _coerce_bool(prior_flags.get(name))
+        if prior_value is None:
+            missing_restore.append(str(name))
+        else:
+            restore_flags[str(name)] = prior_value
+    if missing_restore:
+        return (
+            SkipOutcome(
+                "skipped",
+                "refusing structural_experiment without exact flag restore snapshot: "
+                + ", ".join(sorted(missing_restore)),
+                "structural_experiment",
+            ),
+            "structural_lab",
+        )
+
     apply_result = ctx.lab.apply_flag_experiment(flags)
+    apply_attestation = apply_result.get("attestation") if isinstance(apply_result, dict) else {}
+    apply_ok = (
+        isinstance(apply_result, dict)
+        and apply_result.get("status") == "ok"
+        and isinstance(apply_attestation, dict)
+        and apply_attestation.get("status") == "ok"
+    )
+    if not apply_ok:
+        restore_result = ctx.lab.apply_flag_experiment(restore_flags)
+        reason = (
+            f"structural flag apply/attestation failed: {apply_result}; "
+            f"restore_result={restore_result}"
+        )
+        return (
+            SkipOutcome(
+                "skipped",
+                reason,
+                "structural_experiment",
+                bug_corrupted_by="structural_flag_apply_failure",
+                bug_corrupted_reason=reason,
+            ),
+            "structural_lab",
+        )
+
     eval_result = ctx.tower.hybrid_eval()
+    eval_result.details.setdefault("flag_prior_values", restore_flags)
     eval_result.details.setdefault("flag_attestation", apply_result.get("attestation"))
     eval_result.details.setdefault("flag_apply_result", apply_result)
 
@@ -1501,10 +1566,25 @@ def _action_structural_experiment(action: dict[str, Any], ctx: _ActionContext):
     verdict = _action_gate_check(action, ctx, eval_result)
     if not verdict:
         log.warning("Structural experiment failed safety gate, reverting")
-        # Revert flags
-        reverted = {k: not v for k, v in flags.items()}
-        revert_result = ctx.lab.apply_flag_experiment(reverted)
+        revert_result = ctx.lab.apply_flag_experiment(restore_flags)
         eval_result.details["flag_revert_result"] = revert_result
+        revert_attestation = (
+            revert_result.get("attestation") if isinstance(revert_result, dict) else {}
+        )
+        revert_ok = (
+            isinstance(revert_result, dict)
+            and revert_result.get("status") == "ok"
+            and isinstance(revert_attestation, dict)
+            and revert_attestation.get("status") == "ok"
+        )
+        if not revert_ok:
+            reason = (
+                "structural flag revert failed after eval; trial and following "
+                f"runtime state may be contaminated: {revert_result}"
+            )
+            setattr(eval_result, "bug_corrupted_by", "structural_flag_revert_failure")
+            setattr(eval_result, "bug_corrupted_reason", reason)
+            eval_result.details["flag_revert_failed"] = True
     else:
         # AP-7: Structural change accepted — invalidate stale Optuna trials
         ctx.swarm.mark_epoch(f"structural_experiment:{flags}")

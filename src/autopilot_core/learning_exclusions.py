@@ -18,6 +18,13 @@ def classify_learning_exclusion(verdict: Any, eval_result: Any) -> tuple[str, st
     deficiency_category_override)``. An empty first value means "include
     normally."
     """
+    bug_corrupted_by = str(getattr(eval_result, "bug_corrupted_by", "") or "").strip()
+    if bug_corrupted_by:
+        reason = str(getattr(eval_result, "bug_corrupted_reason", "") or "").strip()
+        if not reason:
+            reason = f"eval result marked bug-corrupted by {bug_corrupted_by}"
+        return bug_corrupted_by, reason, bug_corrupted_by
+
     has_exo_unrecovered = getattr(eval_result, "n_exogenous_unrecovered", 0) > 0
     if has_exo_unrecovered:
         preview_ids = list(getattr(eval_result, "exogenous_question_ids", []))[:10]

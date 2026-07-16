@@ -54,6 +54,8 @@ class _FakeEvalResult:
     exogenous_question_ids: list[str] = field(default_factory=list)
     n_questions: int = 0
     oracle_adequacy: dict = field(default_factory=dict)
+    bug_corrupted_by: str = ""
+    bug_corrupted_reason: str = ""
 
 
 def test_no_signals_returns_empty():
@@ -61,6 +63,24 @@ def test_no_signals_returns_empty():
     assert by == ""
     assert reason == ""
     assert def_cat == ""
+
+
+def test_eval_result_bug_corruption_takes_priority():
+    result = _FakeEvalResult(
+        bug_corrupted_by="structural_flag_revert_failure",
+        bug_corrupted_reason="connection refused while restoring plan_review=false",
+        n_exogenous_unrecovered=2,
+        n_questions=10,
+    )
+
+    by, reason, def_cat = classify_learning_exclusion(
+        _FakeVerdict(categories=["mad_noise"]),
+        result,
+    )
+
+    assert by == "structural_flag_revert_failure"
+    assert "connection refused" in reason
+    assert def_cat == "structural_flag_revert_failure"
 
 
 def test_report_only_control_attestation_does_not_exclude_learning():

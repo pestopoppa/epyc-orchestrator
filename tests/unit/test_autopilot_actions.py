@@ -467,6 +467,169 @@ def test_structural_experiment_noop_skips_before_validation_or_eval() -> None:
     assert species == "structural_lab"
 
 
+def test_structural_experiment_failed_revert_marks_eval_corrupted() -> None:
+    class FakeLab:
+        def __init__(self):
+            self.applied = []
+
+        def current_flags(self):
+            return {"plan_review": False}
+
+        def propose_flag_experiment(self, flags):
+            return {"status": "valid", "flags": flags}
+
+        def apply_flag_experiment(self, flags):
+            self.applied.append(dict(flags))
+            if flags == {"plan_review": True}:
+                return {
+                    "status": "ok",
+                    "attestation": {"status": "ok", "expected": flags},
+                }
+            return {"status": "error", "error": "connection refused"}
+
+    class FakeTower:
+        def hybrid_eval(self):
+            return actions.EvalResult(
+                tier=1,
+                quality=0.5,
+                speed=10.0,
+                cost=0.5,
+                reliability=1.0,
+            )
+
+    class FakeGate:
+        use_sequential = False
+
+        def check(self, _eval_result):
+            return False
+
+    lab = FakeLab()
+    result, species = actions._action_structural_experiment(
+        {"type": "structural_experiment", "flags": {"plan_review": True}},
+        _ctx(lab=lab, tower=FakeTower(), gate=FakeGate()),
+    )
+
+    assert isinstance(result, actions.EvalResult)
+    assert species == "structural_lab"
+    assert lab.applied == [{"plan_review": True}, {"plan_review": False}]
+    assert result.details["flag_prior_values"] == {"plan_review": False}
+    assert result.details["flag_revert_failed"] is True
+    assert result.bug_corrupted_by == "structural_flag_revert_failure"
+    assert "connection refused" in result.bug_corrupted_reason
+
+
+def test_structural_experiment_requires_apply_attestation() -> None:
+    class FakeLab:
+        def __init__(self):
+            self.applied = []
+
+        def current_flags(self):
+            return {"plan_review": False}
+
+        def propose_flag_experiment(self, flags):
+            return {"status": "valid", "flags": flags}
+
+        def apply_flag_experiment(self, flags):
+            self.applied.append(dict(flags))
+            if flags == {"plan_review": True}:
+                return {"status": "ok"}
+            return {
+                "status": "ok",
+                "attestation": {"status": "ok", "expected": flags},
+            }
+
+    class FakeTower:
+        def hybrid_eval(self):  # pragma: no cover
+            raise AssertionError("must not eval without apply attestation")
+
+    lab = FakeLab()
+    result, species = actions._action_structural_experiment(
+        {"type": "structural_experiment", "flags": {"plan_review": True}},
+        _ctx(lab=lab, tower=FakeTower()),
+    )
+
+    assert isinstance(result, actions.SkipOutcome)
+    assert species == "structural_lab"
+    assert lab.applied == [{"plan_review": True}, {"plan_review": False}]
+    assert result.bug_corrupted_by == "structural_flag_apply_failure"
+    assert "attestation failed" in result.reason
+
+
+def test_structural_experiment_requires_revert_attestation() -> None:
+    class FakeLab:
+        def __init__(self):
+            self.applied = []
+
+        def current_flags(self):
+            return {"plan_review": False}
+
+        def propose_flag_experiment(self, flags):
+            return {"status": "valid", "flags": flags}
+
+        def apply_flag_experiment(self, flags):
+            self.applied.append(dict(flags))
+            if flags == {"plan_review": True}:
+                return {
+                    "status": "ok",
+                    "attestation": {"status": "ok", "expected": flags},
+                }
+            return {"status": "ok"}
+
+    class FakeTower:
+        def hybrid_eval(self):
+            return actions.EvalResult(
+                tier=1,
+                quality=0.5,
+                speed=10.0,
+                cost=0.5,
+                reliability=1.0,
+            )
+
+    class FakeGate:
+        use_sequential = False
+
+        def check(self, _eval_result):
+            return False
+
+    lab = FakeLab()
+    result, species = actions._action_structural_experiment(
+        {"type": "structural_experiment", "flags": {"plan_review": True}},
+        _ctx(lab=lab, tower=FakeTower(), gate=FakeGate()),
+    )
+
+    assert isinstance(result, actions.EvalResult)
+    assert species == "structural_lab"
+    assert lab.applied == [{"plan_review": True}, {"plan_review": False}]
+    assert result.details["flag_revert_failed"] is True
+    assert result.bug_corrupted_by == "structural_flag_revert_failure"
+
+
+def test_structural_experiment_refuses_eval_without_restore_snapshot() -> None:
+    class FakeLab:
+        def current_flags(self):
+            return {}
+
+        def propose_flag_experiment(self, flags):
+            return {"status": "valid", "flags": flags}
+
+        def apply_flag_experiment(self, _flags):  # pragma: no cover
+            raise AssertionError("must not apply without a restore snapshot")
+
+    class FakeTower:
+        def hybrid_eval(self):  # pragma: no cover
+            raise AssertionError("must not eval without a restore snapshot")
+
+    result, species = actions._action_structural_experiment(
+        {"type": "structural_experiment", "flags": {"plan_review": True}},
+        _ctx(lab=FakeLab(), tower=FakeTower()),
+    )
+
+    assert isinstance(result, actions.SkipOutcome)
+    assert result.status == "skipped"
+    assert "restore snapshot" in result.reason
+    assert species == "structural_lab"
+
+
 def test_planner_convention_bindings_are_default_off(monkeypatch) -> None:
     monkeypatch.setattr(actions, "_PLANNER_HINTS_ENABLED", False)
 
