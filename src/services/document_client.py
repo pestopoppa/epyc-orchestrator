@@ -102,6 +102,7 @@ def _ocr_result_from_pdf_extraction(result: object) -> OCRResult:
         elapsed_sec=elapsed_sec,
         pages_per_sec=(page_count / elapsed_sec) if elapsed_sec > 0 else 0.0,
         structured_data=getattr(result, "structured_data", None),
+        extraction_method=getattr(result, "method", None),
     )
 
 

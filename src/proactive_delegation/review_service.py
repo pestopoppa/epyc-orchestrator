@@ -28,6 +28,20 @@ from src.proactive_delegation.types import (
     SubtaskResult,
 )
 
+# CP1: the RD-3 mechanical verifier-precedence + reject-admissibility constants now
+# live in the deterministic reducer (policy_reducer), which SUBSUMES this precedence.
+# review_service emits recommendations + findings and DELEGATES the precedence
+# decision to the reducer; the constants are re-exported here for back-compat
+# (existing importers and tests read them off this module).
+from src.proactive_delegation.policy_reducer import (
+    FA_CANDIDATE,
+    FR_CANDIDATE,  # noqa: F401 — re-exported for back-compat (tests/consumers import it off this module)
+    OBJECTIVE_EVIDENCE_KINDS,
+    conclusive_verdict as _reducer_conclusive_verdict,
+    fail_certificates as _reducer_fail_certificates,
+    verifier_precedence_recommendation,
+)
+
 if TYPE_CHECKING:
     from src.llm_primitives import LLMPrimitives
 
@@ -45,15 +59,14 @@ CAT_REVIEW_DECISION = "review_decision"
 CAT_REVIEW_ESCALATION = "review_escalation"
 CAT_PLAN_REMINDER = "plan_reminder"
 
-# RD-3 verifier-precedence disagreement categories. Conclusive objective verdicts
-# override reviewer claims; the disagreement is logged as a FA/FR *candidate* for the
-# calibration ledger (H4). They land in the decision_chain "review" phase by default.
-FA_CANDIDATE = "fa_candidate"  # reviewer APPROVED but a conclusive gate FAILED
-FR_CANDIDATE = "fr_candidate"  # reviewer REJECTED but a conclusive gate PASSED
-
-# RD-8 objective-evidence kinds that make a REJECT admissible (an evidence-free
-# reject is inadmissible as enforcement — overcorrection runs 10:1–440:1).
-OBJECTIVE_EVIDENCE_KINDS = frozenset({"gate_result", "test_result", "scorer_result"})
+# RD-3 verifier-precedence disagreement categories (FA_CANDIDATE/FR_CANDIDATE) and
+# the RD-8 objective-evidence kinds (OBJECTIVE_EVIDENCE_KINDS) are defined in
+# policy_reducer and imported above. A conclusive objective verdict overrides the
+# reviewer; the disagreement is logged as a FA/FR *candidate* for the calibration
+# ledger (H4). An evidence-free reject is inadmissible as enforcement (overcorrection
+# runs 10:1–440:1). The DECISION about which precedence branch applies is the
+# reducer's (verifier_precedence_recommendation); this service only composes the
+# resulting ArchitectReview + shadow trace emission.
 
 # RD-5 env gate mirroring safety_gate.SAFETY_GATE_WARN_ONLY (default ON): a would-be
 # BLOCKING decision is downgraded + logged rather than enforced.
@@ -815,39 +828,19 @@ Rules:
         conclusive_verdict`` when present, else derives from required checks
         (any required inconclusive → inconclusive; else any required fail → fail;
         else ≥1 required pass and none fail/inconclusive → pass; else inconclusive).
+
+        CP1: delegates to ``policy_reducer.conclusive_verdict`` — the reducer subsumes
+        this precedence mechanic. Behavior is byte-identical (same algorithm).
         """
-        summary = report.get("summary") or {}
-        v = summary.get("conclusive_verdict")
-        if v in ("pass", "fail", "inconclusive"):
-            return v
-        checks = report.get("checks") or []
-        required = [c for c in checks if c.get("required", True)]
-        pool = required or checks
-        if not pool:
-            return "inconclusive"
-        outcomes = [c.get("outcome") for c in pool]
-        if any(o == "inconclusive" for o in outcomes):
-            return "inconclusive"
-        if any(o == "fail" for o in outcomes):
-            return "fail"
-        if outcomes and all(o == "pass" for o in outcomes):
-            return "pass"
-        return "inconclusive"
+        return _reducer_conclusive_verdict(report)
 
     @staticmethod
     def _fail_certificates(report: dict[str, Any]) -> list[dict[str, Any]]:
-        """Collect failing checks' certificates — the request_evidence payload."""
-        out: list[dict[str, Any]] = []
-        for c in report.get("checks") or []:
-            if c.get("outcome") == "fail" and c.get("certificate"):
-                out.append(
-                    {
-                        "check_id": c.get("check_id"),
-                        "kind": c.get("kind"),
-                        "certificate": c.get("certificate"),
-                    }
-                )
-        return out
+        """Collect failing checks' certificates — the request_evidence payload.
+
+        CP1: delegates to ``policy_reducer.fail_certificates`` (subsumed).
+        """
+        return _reducer_fail_certificates(report)
 
     def apply_verifier_precedence(
         self,
@@ -870,53 +863,55 @@ Rules:
 
         Emits a disagreement trace event on override. Returns the (possibly adjusted)
         review; whether it is ACTED on is the shadow/enforce split (RD-5), not here.
+
+        CP1: the precedence DECISION (which disagreement class, what adjusted verdict)
+        is now the reducer's — ``policy_reducer.verifier_precedence_recommendation``.
+        This method only composes the resulting ``ArchitectReview`` + shadow trace so
+        the return value and emitted event stay byte-identical to the RD-3 behavior.
         """
         verdict = self._conclusive_verdict(report or {})
-        if verdict == "inconclusive":  # rule 4
+        adjusted_decision, trace_cat = verifier_precedence_recommendation(
+            review.decision.value, verdict
+        )
+        if trace_cat is None:  # inconclusive verdict, or reviewer/verifier agreement
             return review
 
         fail_certs = self._fail_certificates(report or {})
-        trace_cat: str | None = None
-        adjusted: ArchitectReview | None = None
+        adjusted: ArchitectReview
 
-        if verdict == "fail" and review.decision == ReviewDecision.APPROVE:  # rule 1
-            trace_cat = FA_CANDIDATE
+        if trace_cat == FA_CANDIDATE:  # rule 1: reviewer-approve + conclusive-fail
             evidence = list(review.evidence or []) + [
                 {"kind": "gate_result", "ref": fc.get("check_id"), "summary": "conclusive FAIL certificate"}
                 for fc in fail_certs
             ]
             adjusted = replace(
                 review,
-                decision=ReviewDecision.REQUEST_EVIDENCE,
+                decision=ReviewDecision(adjusted_decision),
                 approved_output=None,
                 evidence=evidence,
             )
-        elif verdict == "pass" and review.decision in (
-            ReviewDecision.REJECT,
-            ReviewDecision.REJECT_TO_EMPTY,
-        ):  # rules 2 + 3
-            trace_cat = FR_CANDIDATE
-            adjusted = replace(review, decision=ReviewDecision.REQUEST_EVIDENCE, tripwire=False)
-
-        if trace_cat and adjusted is not None:
-            self._emit_review_event(
-                category=trace_cat,
-                summary=f"verifier precedence {trace_cat}: "
-                f"{review.decision.value}->{adjusted.decision.value}",
-                status=verdict,
-                detail={
-                    "kind": trace_cat,
-                    "conclusive_verdict": verdict,
-                    "original_decision": review.decision.value,
-                    "adjusted_decision": adjusted.decision.value,
-                    "report_id": (report or {}).get("report_id"),
-                    "certificates": fail_certs,
-                },
-                session_id=session_id,
-                trial_id=trial_id,
+        else:  # FR_CANDIDATE — rules 2 + 3: reviewer-reject + conclusive-pass
+            adjusted = replace(
+                review, decision=ReviewDecision(adjusted_decision), tripwire=False
             )
-            return adjusted
-        return review
+
+        self._emit_review_event(
+            category=trace_cat,
+            summary=f"verifier precedence {trace_cat}: "
+            f"{review.decision.value}->{adjusted.decision.value}",
+            status=verdict,
+            detail={
+                "kind": trace_cat,
+                "conclusive_verdict": verdict,
+                "original_decision": review.decision.value,
+                "adjusted_decision": adjusted.decision.value,
+                "report_id": (report or {}).get("report_id"),
+                "certificates": fail_certs,
+            },
+            session_id=session_id,
+            trial_id=trial_id,
+        )
+        return adjusted
 
     # ── RD-5: warn-only shadow downgrade ──────────────────────────────────────
 

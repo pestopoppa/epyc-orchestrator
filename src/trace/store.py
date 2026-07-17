@@ -73,6 +73,17 @@ class EventCategory:
     REVIEW_ESCALATION = "review_escalation"
     PLAN_REMINDER = "plan_reminder"
 
+    # --- CP2 semantics-layer categories (spec §12.2) ---
+    # Additive: only the §12.2 categories not already present above. The
+    # immutable-decision invariant (§5.5) is realized as APPEND-ONLY events —
+    # a material-input change appends DECISION_INVALIDATED referencing the
+    # superseded decision; history is never rewritten in place (§12.3).
+    DECISION_INVALIDATED = "decision_invalidated"
+    ESCALATION_CREATED = "escalation_created"
+    ESCALATION_RESOLVED = "escalation_resolved"
+    EVIDENCE_REQUESTED = "evidence_requested"
+    EVIDENCE_RESULT = "evidence_result"
+
 
 @dataclass
 class Event:
@@ -225,6 +236,73 @@ def ensure_review_ledger_schema(conn: sqlite3.Connection) -> sqlite3.Connection:
     return conn
 
 
+# --- CP2: append-only DecisionEnvelope ledger (spec §6.6 / §12) ----------------
+# One row per policy decision emitted by the deterministic reducer (immutable-
+# decision invariant §5.5). Content-addressed material inputs (subject +
+# governance + inputs hashes) are stored so a decision is replayable (§12.4) and
+# a material change is detectable (§12.3). `idempotency_key` (= material hash)
+# collapses byte-identical re-decisions (§20.1.7); `sequence_no` gives monotonic
+# causal order. Corrections/appeals INSERT a NEW row that `supersedes` a prior
+# one; invalidation is recorded as a DECISION_INVALIDATED *event* (never an
+# UPDATE of this row). Writer/reader/invalidation/replay API live in
+# `src/trace/review_ledger.py`; this module owns only the idempotent DDL so a
+# single `ensure_schema()` yields the full store.
+_DECISION_ENVELOPE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS decision_envelope (
+  id INTEGER PRIMARY KEY,
+  decision_event_id TEXT NOT NULL,
+  sequence_no INTEGER,
+  created_at TEXT,
+  idempotency_key TEXT NOT NULL,
+  -- subject (content-addressed)
+  task_id TEXT,
+  artifact_hash TEXT,
+  specification_hash TEXT,
+  candidate_package_hash TEXT,
+  -- governance (content-addressed)
+  assurance_profile_hash TEXT,
+  policy_hash TEXT,
+  rubric_hash TEXT,
+  verifier_registry_hash TEXT,
+  -- inputs (content-addressed)
+  review_decision_hash TEXT,
+  verification_report_hash TEXT,
+  -- calibration snapshot
+  cohort_id TEXT,
+  sample_count INTEGER,
+  estimated_error_rate REAL,
+  upper_risk_bound REAL,
+  -- policy_result
+  action TEXT,
+  blocking_reason_codes TEXT,          -- JSON array
+  -- validity lineage (set at write time only; never back-edited)
+  supersedes TEXT,
+  invalidated_by TEXT,
+  valid_until_material_change INTEGER,
+  -- combined content hash of ALL §12.3 material inputs (invalidation key)
+  material_hash TEXT,
+  -- full envelope payload as emitted (JSON), for replay
+  envelope_json TEXT,
+  schema_version TEXT,
+  created_ts_utc TEXT NOT NULL,
+  UNIQUE(idempotency_key)
+);
+CREATE INDEX IF NOT EXISTS de_decision ON decision_envelope(decision_event_id);
+CREATE INDEX IF NOT EXISTS de_seq ON decision_envelope(sequence_no);
+CREATE INDEX IF NOT EXISTS de_task ON decision_envelope(task_id);
+CREATE INDEX IF NOT EXISTS de_artifact ON decision_envelope(artifact_hash);
+CREATE INDEX IF NOT EXISTS de_material ON decision_envelope(material_hash);
+CREATE INDEX IF NOT EXISTS de_supersedes ON decision_envelope(supersedes);
+"""
+
+
+def ensure_decision_envelope_schema(conn: sqlite3.Connection) -> sqlite3.Connection:
+    """Create the CP2 `decision_envelope` table if absent. Idempotent + additive."""
+    conn.executescript(_DECISION_ENVELOPE_SCHEMA)
+    conn.commit()
+    return conn
+
+
 def ensure_schema(db_path: Path | str = DEFAULT_DB_PATH) -> sqlite3.Connection:
     """Create the schema if absent, return an open connection.
 
@@ -242,6 +320,8 @@ def ensure_schema(db_path: Path | str = DEFAULT_DB_PATH) -> sqlite3.Connection:
     ensure_harness_schema(conn)
     # H4 RC-1: additive reviewer calibration ledger (co-located in the same store).
     ensure_review_ledger_schema(conn)
+    # CP2: additive append-only DecisionEnvelope ledger (co-located in the same store).
+    ensure_decision_envelope_schema(conn)
     return conn
 
 

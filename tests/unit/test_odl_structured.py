@@ -133,6 +133,42 @@ def test_ocr_result_preserves_structured_data_payload() -> None:
     assert OCRResult.from_cache_dict(result.to_cache_dict()).structured_data == payload
 
 
+def test_ocr_result_extraction_method_is_backward_compatible() -> None:
+    """New OCRResult.extraction_method defaults None and round-trips through
+    dict/cache without breaking older payloads that omit it."""
+    # Legacy payloads without the field still parse.
+    legacy = OCRResult.from_dict(
+        {"pages": [], "total_pages": 0, "elapsed_sec": 0.0, "pages_per_sec": 0.0}
+    )
+    assert legacy.extraction_method is None
+    assert "extraction_method" in legacy.to_cache_dict()
+
+    # A stamped method survives dict + cache round-trips.
+    stamped = OCRResult.from_dict(
+        {
+            "pages": [{"page": 1, "text": "Intro", "bboxes": []}],
+            "total_pages": 1,
+            "elapsed_sec": 0.0,
+            "pages_per_sec": 0.0,
+            "extraction_method": "opendataloader",
+        }
+    )
+    assert stamped.extraction_method == "opendataloader"
+    assert OCRResult.from_cache_dict(stamped.to_cache_dict()).extraction_method == (
+        "opendataloader"
+    )
+
+
+def test_ocr_result_adapter_stamps_extraction_method() -> None:
+    """document_client adapter carries PDFExtractionResult.method into OCRResult."""
+    from src.services.document_client import _ocr_result_from_pdf_extraction
+
+    ocr = _ocr_result_from_pdf_extraction(
+        PDFExtractionResult(text="Body", method="opendataloader_structured")
+    )
+    assert ocr.extraction_method == "opendataloader_structured"
+
+
 def test_document_preprocessor_extracts_structured_data_from_ocr_result() -> None:
     from src.services.document_preprocessor import DocumentPreprocessor
 

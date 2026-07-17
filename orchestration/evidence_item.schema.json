@@ -1,0 +1,178 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/pestopoppa/amd-epyc-inference/schemas/evidence_item.schema.json",
+  "title": "EvidenceItem",
+  "description": "One criterion-scoped piece of evidence produced by a verifier/prover/checker/human (spec §6.2). The atom of the evidence-authority model: it records WHAT was established (criterion_id), by WHOM (producer + implementation_hash), over WHAT scope + assumptions, with what LOGICAL vs EXECUTION status, and under which AUTHORITY class — so the deterministic reducer can decide precedence (§7.3) without trusting reviewer rhetoric. Authority applies ONLY to the recorded criterion, coverage, assumptions, and implication direction (§5.2 criterion-scoped-authority invariant): a unit test establishes observed behavior for its executed cases, not universal correctness; a sound counterexample conclusively disproves a property even when passing runs cannot prove it. Immutable + content-addressed; evidence accumulates until invalidated by a material artifact change (§10.1).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["evidence_id", "criterion_id", "producer", "status", "authority"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+      "description": "Artifact schema version (semver). Optional on emission — stamped by the emission layer."
+    },
+    "evidence_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Unique id for this evidence item; referenced by ReviewDecision.evidence_refs and VerificationReport."
+    },
+    "criterion_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The single criterion this evidence bears on (keys into AssuranceProfile.criteria). Authority is scoped to this criterion — nothing else."
+    },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "id"],
+      "description": "What produced the evidence (a specific verifier/prover/checker/model/human), pinned by version + implementation hash so replay can rerun the exact producer.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["verifier", "prover", "checker", "test", "static_analysis", "retrieval", "llm_judge", "human"],
+          "description": "Producer family."
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Producer identifier (e.g. 'migration_property_test', 'z3', 'ruff', 'nli_entailment')."
+        },
+        "version": {
+          "type": "string",
+          "description": "Producer version — a change materially invalidates prior decisions (§12.3 verifier implementation/version)."
+        },
+        "implementation_hash": {
+          "type": "string",
+          "description": "Content address of the producer implementation, so 'same version' cannot silently drift."
+        }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "What this evidence actually covered — the bound on its authority (§5.2/§7.3 rule 2). A reviewer may only override conclusive scoped evidence by showing assumptions or scope differ.",
+      "properties": {
+        "artifact_hash": {
+          "type": "string",
+          "description": "Content address of the exact artifact the producer ran against."
+        },
+        "coverage": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "What was exercised (modules, cases, branches, sources...).",
+          "properties": {
+            "modules": { "type": "array", "items": { "type": "string" } },
+            "cases": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "assumptions": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Explicit assumptions under which the verdict holds."
+        }
+      }
+    },
+    "status": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["logical", "execution"],
+      "description": "The two-valued outcome (spec §7.2): do NOT collapse tool failure into epistemic uncertainty.",
+      "properties": {
+        "logical": {
+          "type": "string",
+          "enum": ["pass", "fail", "unknown", "conflict"],
+          "description": "Epistemic verdict. solver UNKNOWN -> unknown; counterexample -> fail; two sound producers disagree -> conflict."
+        },
+        "execution": {
+          "type": "string",
+          "enum": ["ok", "error", "timeout", "unavailable"],
+          "description": "Operational health. A crash is logical=unknown/execution=error — never a proof of logical failure (§7.3 rule 5)."
+        }
+      }
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["class"],
+      "description": "The criterion-scoped authority this evidence carries (spec §7.1). Governs whether it may approve and/or block.",
+      "properties": {
+        "class": {
+          "type": "string",
+          "enum": [
+            "proof",
+            "complete_decider",
+            "sound_refutation",
+            "sound_acceptance",
+            "bounded_test",
+            "statistical_evidence",
+            "heuristic_static",
+            "llm_judgment",
+            "human_attestation"
+          ],
+          "description": "Authority class. proof/complete_decider approve+block; sound_refutation blocks only; sound_acceptance approves only; bounded_test/statistical_evidence policy-dependent; heuristic_static/llm_judgment normally neither (llm_judgment only after calibration + policy grant); human_attestation policy-dependent."
+        },
+        "valid_for": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Criterion_ids this authority is valid for. Absent/empty = the item's own criterion_id."
+        },
+        "may_block": {
+          "type": "boolean",
+          "description": "Whether a failing verdict here may block the decision."
+        },
+        "may_approve": {
+          "type": "boolean",
+          "description": "Whether a passing verdict here may approve the decision."
+        }
+      }
+    },
+    "certificate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "description": "Machine-checkable witness backing the verdict (counterexample trace, unsat core, proof term, failing assertion, source-span). Content-addressed.",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "counterexample_trace",
+            "failing_assertion",
+            "unsat_core",
+            "proof_term",
+            "diff",
+            "stack_trace",
+            "scorer_detail",
+            "source_span",
+            "constraint_violation"
+          ]
+        },
+        "ref": {
+          "type": "string",
+          "description": "Content address of the witness, e.g. 'blob:sha256:<hex>'."
+        },
+        "payload": {
+          "description": "Inline witness content when small (else use ref).",
+          "type": ["string", "object", "array"]
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Reproducibility record for the evidence run (spec §6.2).",
+      "properties": {
+        "environment_hash": {
+          "type": "string",
+          "description": "Content address of the environment/dependency lockfile — a change invalidates prior decisions (§12.3)."
+        },
+        "command_hash": {
+          "type": "string",
+          "description": "Content address of the exact command/invocation."
+        },
+        "started_at": { "type": "string", "format": "date-time" },
+        "completed_at": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}

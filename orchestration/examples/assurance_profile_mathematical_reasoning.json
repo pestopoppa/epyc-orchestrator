@@ -1,0 +1,37 @@
+{
+  "schema_version": "1.0.0",
+  "profile_id": "math_proof:v1",
+  "domain": "mathematical_reasoning",
+  "risk_class": "high",
+  "criteria": {
+    "answer_correctness": { "severity": "critical", "mandatory": true },
+    "proof_validity": { "severity": "critical", "mandatory": true },
+    "assumption_use": { "severity": "high", "mandatory": true },
+    "completeness": { "severity": "medium", "mandatory": false }
+  },
+  "verifier_registry": {
+    "answer_correctness": ["symbolic_algebra", "numerical_substitution"],
+    "proof_validity": ["theorem_prover", "proof_checker"],
+    "assumption_use": ["assumption_tracker", "reviewer_rubric"],
+    "completeness": ["reviewer_rubric"]
+  },
+  "policy": {
+    "reviewer_required_at": ["plan_approval", "final_release"],
+    "unknown_on_critical": "escalate",
+    "reviewer_timeout": "abstain",
+    "schema_error": "abstain",
+    "no_reviewer_available": "defer",
+    "conflict": "escalate",
+    "evidence_budget_exhausted": "abstain",
+    "max_review_rounds": 2,
+    "max_evidence_rounds": 3,
+    "max_reviewer_risk": 0.05
+  },
+  "calibration_cohort": {
+    "architect_family": "qwen",
+    "reviewer_family": "glm",
+    "domain": "mathematical_reasoning",
+    "context_band": "8k-32k",
+    "quantization": "iq2"
+  }
+}

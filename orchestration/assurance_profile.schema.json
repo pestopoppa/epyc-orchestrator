@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/pestopoppa/amd-epyc-inference/schemas/assurance_profile.schema.json",
+  "title": "AssuranceProfile",
+  "description": "The domain-specific policy the domain-general control plane is parameterized by (spec §6.5 / §16). Binds, for one task domain + risk class: the criteria and their severity/mandatoriness, the criterion->verifier registry, the enforcement policy (when a reviewer is required, and the TERMINAL action for every failure mode — unknown-on-critical, reviewer timeout, schema error, no-reviewer, evidence-budget exhaustion, conflict), the review/evidence round budgets (bounded-loop invariant §5.6), the calibrated reviewer-risk threshold that gates blocking authority (§8 step 5 / §11.4), and the calibration cohort. §10.2 is load-bearing: NO profile may leave the evidence-budget terminal action unspecified. Immutable + content-addressed; a change invalidates prior decisions taken under it (§12.3).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["profile_id", "domain", "risk_class", "criteria", "policy"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+      "description": "Artifact schema version (semver)."
+    },
+    "profile_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable id, e.g. 'swe_release:v3'. Part of the rubric cache key (§15.3) and the DecisionEnvelope governance hash."
+    },
+    "domain": {
+      "type": "string",
+      "enum": [
+        "software_engineering",
+        "mathematical_reasoning",
+        "retrieval_grounded",
+        "summarization",
+        "tool_use",
+        "vision_multimodal",
+        "general"
+      ],
+      "description": "Task domain (spec §16). The transport/schemas/ledger/reducer are domain-general; evidence semantics + tolerances are not."
+    },
+    "risk_class": {
+      "type": "string",
+      "enum": ["critical", "high", "medium", "low"],
+      "description": "Overall risk class of tasks under this profile — governs how conservative the fail-open/fail-closed policy must be."
+    },
+    "criteria": {
+      "type": "object",
+      "minProperties": 1,
+      "description": "Map of criterion_id -> {severity, mandatory}. Criterion_ids key VerificationReport.checks[].criterion_id, EvidenceItem.criterion_id, and ReviewDecision finding.criterion_id.",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["severity", "mandatory"],
+        "properties": {
+          "severity": {
+            "type": "string",
+            "enum": ["critical", "high", "medium", "low"]
+          },
+          "mandatory": {
+            "type": "boolean",
+            "description": "A mandatory criterion must be conclusively satisfied for auto-approval; an unresolved mandatory critical criterion cannot be auto-approved absent an explicit bounded fail-open policy (§7.3 rule 6)."
+          }
+        }
+      }
+    },
+    "verifier_registry": {
+      "type": "object",
+      "description": "Map of criterion_id -> ordered list of verifier ids that can produce evidence for it (spec §6.5). Its content hash is a DecisionEnvelope governance input; a verifier version change invalidates prior decisions (§12.3).",
+      "additionalProperties": {
+        "type": "array",
+        "items": { "type": "string" }
+      }
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidence_budget_exhausted", "max_review_rounds", "max_evidence_rounds"],
+      "description": "Enforcement policy. Every failure mode has a TERMINAL action so no state can create an unbounded loop (§5.6) and no profile leaves the evidence-budget terminal unspecified (§10.2).",
+      "properties": {
+        "reviewer_required_at": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "plan_approval",
+              "task_graph_freeze",
+              "integration_complete",
+              "interface_change",
+              "verifier_conflict",
+              "release_candidate",
+              "final_release",
+              "random_audit"
+            ]
+          },
+          "description": "Gates at which the heavyweight reviewer is invoked (spec §4.2/§23.2). Empty = fast-path only."
+        },
+        "unknown_on_critical": {
+          "type": "string",
+          "enum": ["escalate", "abstain", "defer", "fail_closed", "fail_open"],
+          "description": "Action when a critical criterion is logically unknown (spec §6.5)."
+        },
+        "reviewer_timeout": {
+          "type": "string",
+          "enum": ["abstain", "escalate", "defer", "fail_closed", "fail_open"],
+          "description": "Action when the reviewer times out (spec §6.5/§9.3)."
+        },
+        "schema_error": {
+          "type": "string",
+          "enum": ["abstain", "escalate", "defer", "fail_closed", "fail_open"],
+          "description": "Action when reviewer output fails schema validation after the one bounded correction attempt (§9.3 terminal ABSTAIN_SCHEMA_ERROR)."
+        },
+        "no_reviewer_available": {
+          "type": "string",
+          "enum": ["defer", "escalate", "abstain", "fail_closed", "fail_open"],
+          "description": "Action when no reviewer backend is available (spec §6.5)."
+        },
+        "conflict": {
+          "type": "string",
+          "enum": ["escalate", "defer", "abstain", "fail_closed"],
+          "description": "Action on conflicting authoritative evidence (§7.3 rule 4 — must not silently auto-approve; default escalate)."
+        },
+        "evidence_budget_exhausted": {
+          "type": "string",
+          "enum": ["abstain", "escalate", "defer", "fail_closed", "fail_open"],
+          "description": "REQUIRED terminal action when the REQUEST_EVIDENCE budget is exhausted (spec §10.2 — no profile may leave this unspecified). fail_open permitted only for explicitly low-risk profiles."
+        },
+        "max_review_rounds": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Bounded-loop budget: max reviewer rounds per decision (§5.6/§6.5)."
+        },
+        "max_evidence_rounds": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Bounded-loop budget: max REQUEST_EVIDENCE rounds per decision (§5.6/§10.1)."
+        },
+        "max_reviewer_risk": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "The calibrated upper_risk_bound threshold: the reviewer is granted blocking authority only when its cohort DecisionEnvelope.calibration.upper_risk_bound <= this value (§8 step 5 / §11.4). Absent = reviewer never authorized to block (advisory only)."
+        }
+      }
+    },
+    "calibration_cohort": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "The cohort key under which reviewer risk is measured for this profile (spec §6.5/§11.2). Decisions are never pooled across materially different conditions.",
+      "properties": {
+        "architect_family": { "type": "string" },
+        "reviewer_family": { "type": "string" },
+        "domain": { "type": "string" },
+        "context_band": { "type": "string", "description": "e.g. '32k-128k'." },
+        "quantization": { "type": "string", "description": "e.g. 'iq2'." }
+      }
+    }
+  }
+}

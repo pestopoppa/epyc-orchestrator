@@ -39,9 +39,11 @@ NO inference happens here — pure functions over ledger data.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import sqlite3
-from collections.abc import Iterable, Iterator, Mapping
-from dataclasses import dataclass, field
+from collections.abc import Callable, Iterable, Iterator, Mapping
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from typing import Any
 
@@ -51,7 +53,14 @@ from src.autopilot_core.sequential_verdict import (
     EProcessState,
     SequentialPolicy,
 )
-from src.trace.store import ensure_review_ledger_schema
+from src.trace.store import (
+    Event,
+    EventCategory,
+    EventSource,
+    detail_to_json,
+    ensure_decision_envelope_schema,
+    ensure_review_ledger_schema,
+)
 
 # --------------------------------------------------------------------------- #
 # Versioning / RA-10 stamp
@@ -506,3 +515,564 @@ class ReviewerDemotionMonitor:
             "thresholds_are_placeholders": True,
             "pending_protocol": "P-REV-1 (draft; observation-grade)",
         }
+
+
+# =========================================================================== #
+# CP2 — DecisionEnvelope ledger + hash-bound automatic invalidation + replay
+# (spec §6.6 / §12). Additive: co-located in the same store, disjoint from the
+# review_ledger table, written by the deterministic reducer (CP1), never mutated.
+# =========================================================================== #
+
+#: Default DecisionEnvelope schema_version stamp (decision_envelope.schema.json).
+DECISION_ENVELOPE_SCHEMA_VERSION = "1.0.0"
+
+
+@dataclass(frozen=True)
+class MaterialInputs:
+    """The material inputs a decision is valid for (spec §12.3).
+
+    A DecisionEnvelope is valid ONLY for the exact artifact, task, plan, profile,
+    policy, rubric, verifier set, environment, reviewer model, prompt, decoding
+    parameters, retrieved evidence, security policy, and evidence assumptions
+    recorded here (§2.1 goal 8). A change to ANY field yields a different
+    ``material_hash`` (:meth:`hash`), which is how automatic invalidation (§12.3)
+    detects that a prior decision no longer holds. Every field is a content
+    address (hash string) or ``None`` when not applicable.
+    """
+
+    artifact_hash: str | None = None
+    specification_hash: str | None = None
+    plan_hash: str | None = None
+    assurance_profile_hash: str | None = None
+    policy_hash: str | None = None
+    rubric_hash: str | None = None
+    verifier_registry_hash: str | None = None
+    environment_hash: str | None = None
+    reviewer_model_hash: str | None = None
+    prompt_hash: str | None = None
+    decoding_parameters_hash: str | None = None
+    retrieved_evidence_hash: str | None = None
+    security_policy_hash: str | None = None
+    evidence_assumptions_hash: str | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    def hash(self) -> str:
+        return compute_material_hash(self)
+
+
+#: Ordered material-input field names (the §12.3 invalidation primitives).
+MATERIAL_INPUT_FIELDS: tuple[str, ...] = tuple(f.name for f in fields(MaterialInputs))
+
+
+def _canonical_hash(obj: Any) -> str:
+    """sha256 over canonical (sorted-key) JSON. ``sha256:<hex>``."""
+    blob = json.dumps(obj, sort_keys=True, default=str, separators=(",", ":"))
+    return "sha256:" + hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def compute_material_hash(material: MaterialInputs | Mapping[str, Any]) -> str:
+    """Deterministic content hash over ALL §12.3 material-input fields.
+
+    Two decisions with byte-identical material inputs share this hash (so they
+    are idempotent — §20.1.7); any material change flips it (so invalidation
+    fires — §12.3). All declared fields are included in fixed order (including
+    ``None``) so the hash is stable across callers.
+    """
+    if isinstance(material, MaterialInputs):
+        ordered = material.as_dict()
+    else:
+        ordered = {name: material.get(name) for name in MATERIAL_INPUT_FIELDS}
+    return _canonical_hash(ordered)
+
+
+def detect_material_change(
+    old: MaterialInputs | Mapping[str, Any],
+    new: MaterialInputs | Mapping[str, Any],
+) -> list[str]:
+    """Return the material-input field names whose value differs old→new.
+
+    This is the audit trail behind an invalidation: *which* input changed
+    (§12.4 "audit which input change invalidated approval"). Empty list == no
+    material change == the prior decision still holds.
+    """
+    def _get(src: Any, name: str) -> Any:
+        return getattr(src, name) if isinstance(src, MaterialInputs) else src.get(name)
+
+    return [name for name in MATERIAL_INPUT_FIELDS if _get(old, name) != _get(new, name)]
+
+
+# --------------------------------------------------------------------------- #
+# DecisionEnvelope row model (mirrors the store.py DDL column order)
+# --------------------------------------------------------------------------- #
+@dataclass
+class DecisionEnvelopeRow:
+    """One immutable policy decision as recorded in ``decision_envelope``.
+
+    ``material`` carries the §12.3 primitives; ``material_hash`` /
+    ``idempotency_key`` default to ``material.hash()`` so re-recording an
+    identical decision is an ``INSERT OR IGNORE`` no-op. If ``material`` is left
+    default-empty it is auto-derived from the overlapping subject/governance
+    hashes, so a caller that only sets those still gets meaningful invalidation.
+    """
+
+    decision_event_id: str
+    idempotency_key: str | None = None
+    sequence_no: int | None = None
+    created_at: str | None = None
+    # subject
+    task_id: str | None = None
+    artifact_hash: str | None = None
+    specification_hash: str | None = None
+    candidate_package_hash: str | None = None
+    # governance
+    assurance_profile_hash: str | None = None
+    policy_hash: str | None = None
+    rubric_hash: str | None = None
+    verifier_registry_hash: str | None = None
+    # inputs
+    review_decision_hash: str | None = None
+    verification_report_hash: str | None = None
+    # calibration
+    cohort_id: str | None = None
+    sample_count: int | None = None
+    estimated_error_rate: float | None = None
+    upper_risk_bound: float | None = None
+    # policy_result
+    action: str | None = None
+    blocking_reason_codes: list[str] = field(default_factory=list)
+    # validity lineage (write-time only; never back-edited — §5.5)
+    supersedes: str | None = None
+    invalidated_by: str | None = None
+    valid_until_material_change: bool | None = True
+    # material invalidation key + payload
+    material: MaterialInputs = field(default_factory=MaterialInputs)
+    material_hash: str | None = None
+    envelope_json: str | None = None
+    schema_version: str = DECISION_ENVELOPE_SCHEMA_VERSION
+    created_ts_utc: str = field(default_factory=_now_iso)
+
+    def __post_init__(self) -> None:
+        if not self.created_at:
+            self.created_at = self.created_ts_utc
+        # Auto-derive material from overlapping flat hashes if caller left it empty.
+        if self.material == MaterialInputs():
+            self.material = MaterialInputs(
+                artifact_hash=self.artifact_hash,
+                specification_hash=self.specification_hash,
+                assurance_profile_hash=self.assurance_profile_hash,
+                policy_hash=self.policy_hash,
+                rubric_hash=self.rubric_hash,
+                verifier_registry_hash=self.verifier_registry_hash,
+            )
+        if self.material_hash is None:
+            self.material_hash = self.material.hash()
+        if self.idempotency_key is None:
+            self.idempotency_key = self.material_hash
+
+    def to_envelope(self) -> dict[str, Any]:
+        """The schema-valid DecisionEnvelope artifact (decision_envelope.schema.json)."""
+        return {
+            "schema_version": self.schema_version,
+            "decision_event_id": self.decision_event_id,
+            "sequence_no": self.sequence_no,
+            "created_at": self.created_at,
+            "idempotency_key": self.idempotency_key,
+            "subject": {
+                "task_id": self.task_id,
+                "artifact_hash": self.artifact_hash,
+                "specification_hash": self.specification_hash,
+                "candidate_package_hash": self.candidate_package_hash,
+            },
+            "governance": {
+                "assurance_profile_hash": self.assurance_profile_hash,
+                "policy_hash": self.policy_hash,
+                "rubric_hash": self.rubric_hash,
+                "verifier_registry_hash": self.verifier_registry_hash,
+            },
+            "inputs": {
+                "review_decision_hash": self.review_decision_hash,
+                "verification_report_hash": self.verification_report_hash,
+            },
+            "calibration": {
+                "cohort_id": self.cohort_id,
+                "sample_count": self.sample_count,
+                "estimated_error_rate": self.estimated_error_rate,
+                "upper_risk_bound": self.upper_risk_bound,
+            },
+            "policy_result": {
+                "action": self.action,
+                "blocking_reason_codes": list(self.blocking_reason_codes),
+            },
+            "validity": {
+                "supersedes": self.supersedes,
+                "invalidated_by": self.invalidated_by,
+                "valid_until_material_change": self.valid_until_material_change,
+            },
+        }
+
+
+_ENVELOPE_COLUMNS = (
+    "decision_event_id",
+    "sequence_no",
+    "created_at",
+    "idempotency_key",
+    "task_id",
+    "artifact_hash",
+    "specification_hash",
+    "candidate_package_hash",
+    "assurance_profile_hash",
+    "policy_hash",
+    "rubric_hash",
+    "verifier_registry_hash",
+    "review_decision_hash",
+    "verification_report_hash",
+    "cohort_id",
+    "sample_count",
+    "estimated_error_rate",
+    "upper_risk_bound",
+    "action",
+    "blocking_reason_codes",
+    "supersedes",
+    "invalidated_by",
+    "valid_until_material_change",
+    "material_hash",
+    "envelope_json",
+    "schema_version",
+    "created_ts_utc",
+)
+
+
+def next_sequence_no(conn: sqlite3.Connection) -> int:
+    """Next monotonic ``sequence_no`` for the append-only envelope ledger."""
+    ensure_decision_envelope_schema(conn)
+    row = conn.execute("SELECT COALESCE(MAX(sequence_no), -1) FROM decision_envelope").fetchone()
+    return int(row[0]) + 1
+
+
+def record_decision_envelope(
+    conn: sqlite3.Connection, row: DecisionEnvelopeRow
+) -> tuple[int, int]:
+    """Append one DecisionEnvelope. Returns ``(inserted, skipped_dup)``.
+
+    Append-only + idempotent: ``INSERT OR IGNORE`` on ``UNIQUE(idempotency_key)``
+    makes re-recording an identical decision a no-op (§20.1.7). ``sequence_no``
+    is auto-assigned if absent. The stored ``envelope_json`` carries the
+    schema-valid envelope plus the material-input payload for replay/invalidation.
+    """
+    ensure_decision_envelope_schema(conn)
+    if row.sequence_no is None:
+        row.sequence_no = next_sequence_no(conn)
+    if row.envelope_json is None:
+        row.envelope_json = json.dumps(
+            {
+                "envelope": row.to_envelope(),
+                "material": row.material.as_dict(),
+                "material_hash": row.material_hash,
+            },
+            sort_keys=True,
+            default=str,
+        )
+    values = [
+        row.decision_event_id,
+        row.sequence_no,
+        row.created_at,
+        row.idempotency_key,
+        row.task_id,
+        row.artifact_hash,
+        row.specification_hash,
+        row.candidate_package_hash,
+        row.assurance_profile_hash,
+        row.policy_hash,
+        row.rubric_hash,
+        row.verifier_registry_hash,
+        row.review_decision_hash,
+        row.verification_report_hash,
+        row.cohort_id,
+        row.sample_count,
+        row.estimated_error_rate,
+        row.upper_risk_bound,
+        row.action,
+        json.dumps(list(row.blocking_reason_codes)),
+        row.supersedes,
+        row.invalidated_by,
+        _as_int_bool(row.valid_until_material_change),
+        row.material_hash,
+        row.envelope_json,
+        row.schema_version or DECISION_ENVELOPE_SCHEMA_VERSION,
+        row.created_ts_utc,
+    ]
+    placeholders = ", ".join("?" for _ in _ENVELOPE_COLUMNS)
+    cur = conn.execute(
+        f"INSERT OR IGNORE INTO decision_envelope ({', '.join(_ENVELOPE_COLUMNS)}) "
+        f"VALUES ({placeholders})",
+        values,
+    )
+    conn.commit()
+    inserted = 1 if cur.rowcount == 1 else 0
+    return inserted, 1 - inserted
+
+
+def _decode_envelope_row(raw: Mapping[str, Any]) -> dict[str, Any]:
+    """Decode a stored envelope row: parse JSON columns + recover material."""
+    out = dict(raw)
+    try:
+        out["blocking_reason_codes"] = json.loads(raw.get("blocking_reason_codes") or "[]")
+    except (json.JSONDecodeError, TypeError):
+        out["blocking_reason_codes"] = []
+    if raw.get("valid_until_material_change") is not None:
+        out["valid_until_material_change"] = bool(raw["valid_until_material_change"])
+    payload: dict[str, Any] = {}
+    if raw.get("envelope_json"):
+        try:
+            payload = json.loads(raw["envelope_json"])
+        except json.JSONDecodeError:
+            payload = {}
+    out["envelope"] = payload.get("envelope", {})
+    out["material"] = payload.get("material", {})
+    return out
+
+
+def get_decision_envelope(
+    conn: sqlite3.Connection, decision_event_id: str
+) -> dict[str, Any] | None:
+    """Fetch the (latest, by sequence_no) envelope for a ``decision_event_id``."""
+    ensure_decision_envelope_schema(conn)
+    cur = conn.execute(
+        "SELECT * FROM decision_envelope WHERE decision_event_id = ? "
+        "ORDER BY sequence_no DESC, id DESC LIMIT 1",
+        (decision_event_id,),
+    )
+    cols = [d[0] for d in cur.description]
+    hit = cur.fetchone()
+    return _decode_envelope_row(dict(zip(cols, hit))) if hit else None
+
+
+def iter_decision_envelopes(
+    conn: sqlite3.Connection,
+    *,
+    task_id: str | None = None,
+    order_by: str = "sequence_no",
+) -> Iterator[dict[str, Any]]:
+    """Yield decoded envelope rows, optionally filtered by ``task_id``."""
+    ensure_decision_envelope_schema(conn)
+    clauses: list[str] = []
+    params: list[Any] = []
+    if task_id is not None:
+        clauses.append("task_id = ?")
+        params.append(task_id)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    safe_order = order_by if order_by in _ENVELOPE_COLUMNS or order_by == "id" else "sequence_no"
+    cur = conn.execute(
+        f"SELECT * FROM decision_envelope {where} ORDER BY {safe_order}, id", params
+    )
+    cols = [d[0] for d in cur.description]
+    for raw in cur.fetchall():
+        yield _decode_envelope_row(dict(zip(cols, raw)))
+
+
+def decision_envelope_count(conn: sqlite3.Connection) -> int:
+    ensure_decision_envelope_schema(conn)
+    return conn.execute("SELECT COUNT(*) FROM decision_envelope").fetchone()[0]
+
+
+def _material_from_stored(env: Mapping[str, Any]) -> MaterialInputs:
+    """Recover a MaterialInputs from a decoded envelope row's material payload."""
+    m = env.get("material") or {}
+    return MaterialInputs(**{k: m.get(k) for k in MATERIAL_INPUT_FIELDS})
+
+
+# --------------------------------------------------------------------------- #
+# Automatic invalidation (§12.3) — append DECISION_INVALIDATED, never rewrite.
+# --------------------------------------------------------------------------- #
+def invalidate_decision(
+    conn: sqlite3.Connection,
+    superseded_decision_event_id: str,
+    *,
+    changed_inputs: Iterable[str] | None = None,
+    old_material_hash: str | None = None,
+    new_material_hash: str | None = None,
+    new_decision_event_id: str | None = None,
+    reason: str | None = None,
+    session_id: str | None = None,
+    trial_id: int | None = None,
+    ts: str | None = None,
+) -> dict[str, Any]:
+    """Append a ``DECISION_INVALIDATED`` event referencing a superseded decision.
+
+    Realizes the immutable-decision invariant (§5.5): NEVER rewrites the envelope
+    row — the invalidation is a new append-only event in the ``event`` table
+    (§12.3). Idempotent: the synthetic source key is derived from
+    ``(superseded_id, new_material_hash)`` so re-invalidating on the same new
+    state is a no-op. Returns the invalidation record (with the event key).
+    """
+    # Local import avoids any import-time coupling with the emit push layer.
+    from src.trace.emit import emit, synthetic_source_path
+
+    changed = list(changed_inputs) if changed_inputs is not None else []
+    detail = {
+        "superseded_decision_event_id": superseded_decision_event_id,
+        "changed_inputs": changed,
+        "old_material_hash": old_material_hash,
+        "new_material_hash": new_material_hash,
+        "new_decision_event_id": new_decision_event_id,
+        "reason": reason,
+    }
+    key = synthetic_source_path(
+        EventSource.REVIEW_PLANE,
+        "invalidation",
+        superseded_decision_event_id,
+        new_material_hash or _canonical_hash(detail),
+    )
+    ev = Event(
+        ts_utc=ts or _now_iso(),
+        source=EventSource.REVIEW_PLANE,
+        source_path=key,
+        source_line=0,
+        session_id=session_id,
+        trial_id=trial_id,
+        category=EventCategory.DECISION_INVALIDATED,
+        status="invalidated",
+        summary=(
+            f"decision {superseded_decision_event_id} invalidated"
+            + (f" ({', '.join(changed)})" if changed else "")
+        ),
+        detail_json=detail_to_json(detail),
+    )
+    inserted, skipped = emit(ev, conn=conn)
+    return {**detail, "event_source_path": key, "inserted": inserted, "skipped": skipped}
+
+
+def invalidate_on_material_change(
+    conn: sqlite3.Connection,
+    superseded_decision_event_id: str,
+    new_material: MaterialInputs | Mapping[str, Any],
+    *,
+    new_decision_event_id: str | None = None,
+    reason: str | None = None,
+    session_id: str | None = None,
+    trial_id: int | None = None,
+) -> dict[str, Any] | None:
+    """Invalidate a decision IFF a material input actually changed (§12.3).
+
+    Diffs the stored material inputs against ``new_material``; if identical,
+    returns ``None`` (the decision still holds). Otherwise appends a
+    DECISION_INVALIDATED event recording exactly which fields changed.
+    """
+    env = get_decision_envelope(conn, superseded_decision_event_id)
+    if env is None:
+        raise KeyError(f"no decision_envelope for {superseded_decision_event_id!r}")
+    old_material = _material_from_stored(env)
+    old_hash = env.get("material_hash")
+    new_hash = compute_material_hash(new_material)
+    if new_hash == old_hash:
+        return None
+    changed = detect_material_change(old_material, new_material)
+    return invalidate_decision(
+        conn,
+        superseded_decision_event_id,
+        changed_inputs=changed,
+        old_material_hash=old_hash,
+        new_material_hash=new_hash,
+        new_decision_event_id=new_decision_event_id,
+        reason=reason,
+        session_id=session_id,
+        trial_id=trial_id,
+    )
+
+
+def invalidations_for(
+    conn: sqlite3.Connection, decision_event_id: str
+) -> list[dict[str, Any]]:
+    """All DECISION_INVALIDATED events referencing ``decision_event_id`` (ts order)."""
+    cur = conn.execute(
+        "SELECT ts_utc, source_path, detail_json FROM event "
+        "WHERE category = ? ORDER BY ts_utc, id",
+        (EventCategory.DECISION_INVALIDATED,),
+    )
+    out: list[dict[str, Any]] = []
+    for ts_utc, source_path, detail_json in cur.fetchall():
+        try:
+            detail = json.loads(detail_json or "{}")
+        except json.JSONDecodeError:
+            continue
+        if detail.get("superseded_decision_event_id") == decision_event_id:
+            out.append({**detail, "ts_utc": ts_utc, "event_source_path": source_path})
+    return out
+
+
+def is_decision_valid(conn: sqlite3.Connection, decision_event_id: str) -> bool:
+    """True iff no DECISION_INVALIDATED event references this decision (§12.3)."""
+    return not invalidations_for(conn, decision_event_id)
+
+
+# --------------------------------------------------------------------------- #
+# Replay (§12.4) — reconstruct the reviewed package from content-addressed refs.
+# --------------------------------------------------------------------------- #
+def replay_review_package(
+    conn: sqlite3.Connection,
+    decision_event_id: str,
+    *,
+    blob_resolver: Callable[[str], Any] | Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Reconstruct everything needed to replay a decision (spec §12.4).
+
+    Given a decision envelope + a content-addressed blob resolver, returns the
+    pieces to (a) reconstruct the exact package shown to the reviewer,
+    (b) rerun deterministic reduction (``reduction_inputs``), (c) audit which
+    input change invalidated approval (``invalidations`` + ``valid``), and
+    (d) compute counterfactual model tournaments. ``blob_resolver`` may be a
+    mapping ``{hash: content}`` or a callable ``hash -> content``; absent, refs
+    are returned unresolved (ref-only replay).
+    """
+    env = get_decision_envelope(conn, decision_event_id)
+    if env is None:
+        raise KeyError(f"no decision_envelope for {decision_event_id!r}")
+
+    # The content-addressed refs needed to rebuild the reviewed package.
+    content_addressed_refs = {
+        "candidate_package_hash": env.get("candidate_package_hash"),
+        "artifact_hash": env.get("artifact_hash"),
+        "specification_hash": env.get("specification_hash"),
+        "review_decision_hash": env.get("review_decision_hash"),
+        "verification_report_hash": env.get("verification_report_hash"),
+        "assurance_profile_hash": env.get("assurance_profile_hash"),
+        "policy_hash": env.get("policy_hash"),
+        "rubric_hash": env.get("rubric_hash"),
+        "verifier_registry_hash": env.get("verifier_registry_hash"),
+    }
+
+    def _resolve(h: str) -> Any:
+        if blob_resolver is None:
+            return None
+        if isinstance(blob_resolver, Mapping):
+            return blob_resolver.get(h)
+        return blob_resolver(h)
+
+    resolved = {
+        name: _resolve(h)
+        for name, h in content_addressed_refs.items()
+        if h is not None and _resolve(h) is not None
+    }
+
+    invalids = invalidations_for(conn, decision_event_id)
+    return {
+        "decision_event_id": decision_event_id,
+        "sequence_no": env.get("sequence_no"),
+        "envelope": env.get("envelope", {}),
+        "content_addressed_refs": content_addressed_refs,
+        "resolved": resolved,
+        # The exact inputs to rerun the pure reducer (§8) for this decision.
+        "reduction_inputs": {
+            "candidate_package_hash": env.get("candidate_package_hash"),
+            "review_decision_hash": env.get("review_decision_hash"),
+            "verification_report_hash": env.get("verification_report_hash"),
+            "assurance_profile_hash": env.get("assurance_profile_hash"),
+            "policy_hash": env.get("policy_hash"),
+        },
+        "material_inputs": env.get("material", {}),
+        "material_hash": env.get("material_hash"),
+        "valid": not invalids,
+        "invalidations": invalids,
+    }

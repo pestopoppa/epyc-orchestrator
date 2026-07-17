@@ -42,9 +42,10 @@
         "reject_to_empty",
         "request_changes",
         "request_evidence",
+        "abstain",
         "escalate"
       ],
-      "description": "Bounded-authority verdict. reject_to_empty = a bad plan/output is worse than none, discard rather than iterate. request_evidence = verdict withheld pending verifier_requests. escalate = defer to a higher tier / human."
+      "description": "Bounded-authority verdict. reject_to_empty = a bad plan/output is worse than none, discard rather than iterate. request_evidence = verdict withheld pending verifier_requests. abstain (v1.1, spec §9.2) = the package is insufficient AND no permitted evidence request can resolve it — the reviewer declines to decide (distinct from escalate). escalate = defer to a higher tier / human for a policy-defined case."
     },
     "confidence": {
       "type": "number",
@@ -96,6 +97,22 @@
         }
       }
     },
+    "telemetry": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "v1.1 (spec §5.4 raw-confidence invariant / §6.4 / §11.1). TELEMETRY ONLY. Nothing in this block may independently trigger approval, blocking, or escalation — enforcement authority derives from empirically calibrated cohort risk (see DecisionEnvelope.calibration + AssuranceProfile), never from what the model says about itself. Recorded for calibration/monitoring; the deterministic policy reducer MUST ignore it as an enforcement signal.",
+      "properties": {
+        "raw_model_confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "The reviewer model's self-reported (verbalized) confidence. TELEMETRY-ONLY — distinct from the top-level `confidence` (verdict-calibration input) and from calibrated cohort risk. Models are systematically overconfident (R8/R9); this number never gates."
+        },
+        "tokens_in": { "type": "integer", "minimum": 0 },
+        "tokens_out": { "type": "integer", "minimum": 0 },
+        "wall_ms": { "type": "number", "minimum": 0 }
+      }
+    },
     "evidence": {
       "type": "array",
       "description": "Links grounding the verdict. Domain-general evidence kinds (answer spans and scorer/retrieval results, not only file_span/test_result).",
@@ -137,6 +154,19 @@
         "evidence_ref": {
           "type": "string",
           "description": "Points into evidence[] (by index or ref) grounding this issue."
+        },
+        "criterion_id": {
+          "type": "string",
+          "description": "v1.1 (spec §5.2/§6.4/§9.2). Criterion this finding is scoped to (keys into the AssuranceProfile.criteria / verifier_registry). A blocking finding SHOULD map to exactly one criterion; the reducer's `has_grounded_blocking_finding()` reads this + `evidence_ref`/`unsupported`."
+        },
+        "remediation_target": {
+          "type": "string",
+          "description": "v1.1 (spec §6.4). Who owns the repair: 'architect' | 'worker' | 'author' | role id. The reviewer never mutates the authoritative artifact (§5.1); repair routes here.",
+          "enum": ["architect", "worker", "author", "integrator", "reviewer", "human"]
+        },
+        "unsupported": {
+          "type": "boolean",
+          "description": "v1.1 (spec §9.2). True = this finding carries NO evidence reference (the reviewer is asserting it without grounding). An unsupported blocking finding cannot ground a calibrated rejection in the reducer (§8 step 5)."
         }
       }
     },

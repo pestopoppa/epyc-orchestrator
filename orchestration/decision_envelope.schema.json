@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/pestopoppa/amd-epyc-inference/schemas/decision_envelope.schema.json",
+  "title": "DecisionEnvelope",
+  "description": "The immutable, append-only record of ONE policy decision (spec §6.6 / §5.5 immutable-decision invariant). Emitted by the deterministic policy reducer (CP1), NOT by a model — the reducer is the sole enforcement authority (§5.3). A decision is valid only for the EXACT artifact, task, rubric, policy, verifier set, reviewer model, prompt, and environment recorded in the governance/subject/inputs hashes here (§2.1 goal 8). Corrections never rewrite this row: they append a NEW envelope that `supersedes` it, and a material-input change appends a DECISION_INVALIDATED event referencing it (§12.3). The `idempotency_key` collapses byte-identical re-decisions to one row (§20.1.7); `sequence_no` gives monotonic causal order. Content-addressed refs make the decision replayable (§12.4): reconstruct the reviewed package, rerun reduction, and audit which input change invalidated approval.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["decision_event_id", "idempotency_key", "subject", "governance", "policy_result"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+      "description": "Artifact schema version (semver). Optional on emission — stamped by the emission layer."
+    },
+    "decision_event_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Unique id for this decision event."
+    },
+    "sequence_no": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Monotonic sequence number in the append-only ledger (causal ordering, spec §12.1)."
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Content hash over the material decision inputs. Two reductions on identical material inputs share this key and collapse to one row (idempotent, §20.1.7). Any material-input change yields a different key = a distinct decision."
+    },
+    "subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Content-addressed identity of what was decided.",
+      "properties": {
+        "task_id": { "type": "string" },
+        "artifact_hash": { "type": "string", "description": "sha256 of the decided artifact." },
+        "specification_hash": { "type": "string", "description": "sha256 of the task spec / acceptance criteria." },
+        "candidate_package_hash": { "type": "string", "description": "sha256 of the CandidatePackage shown to the reviewer (replay anchor, §12.4)." }
+      }
+    },
+    "governance": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Content addresses of the governance artifacts in force at decision time. A change to any of these invalidates the decision (§12.3).",
+      "properties": {
+        "assurance_profile_hash": { "type": "string" },
+        "policy_hash": { "type": "string", "description": "Hash of the versioned enforcement policy the reducer applied (CP1's policy artifact)." },
+        "rubric_hash": { "type": "string" },
+        "verifier_registry_hash": { "type": "string" }
+      }
+    },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Content addresses of the typed artifacts the reduction consumed.",
+      "properties": {
+        "review_decision_hash": { "type": "string", "description": "Hash of the ReviewDecision fed to the reducer (may be absent for no-review fast-path decisions)." },
+        "verification_report_hash": { "type": "string", "description": "Hash of the VerificationReport fed to the reducer." }
+      }
+    },
+    "calibration": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The cohort-scoped calibration snapshot (spec §11) that governed reviewer authority for this decision. EMPIRICAL risk — NOT raw model confidence (§5.4).",
+      "properties": {
+        "cohort_id": {
+          "type": "string",
+          "description": "Calibration cohort (domain:architect:reviewer:quant:context-band:...) — decisions are never pooled across materially different conditions (§11.2)."
+        },
+        "sample_count": { "type": "integer", "minimum": 0, "description": "Adjudicated samples in the cohort." },
+        "estimated_error_rate": { "type": "number", "minimum": 0, "maximum": 1, "description": "Empirical decision-error rate for the cohort." },
+        "upper_risk_bound": { "type": "number", "minimum": 0, "maximum": 1, "description": "Conservative upper confidence bound on risk — compared against the profile threshold to grant/deny authority (§11.4)." }
+      }
+    },
+    "policy_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action"],
+      "description": "The system action the reducer produced (spec §8). This — not any model output — is the enforced decision.",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": ["continue", "replan", "rework", "defer", "escalate", "abort", "collect_evidence", "advisory"],
+          "description": "Enforced action. continue/replan/rework/defer/escalate/abort per §6.6; collect_evidence + advisory per the §8 reducer branches."
+        },
+        "blocking_reason_codes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Machine-readable reason codes (e.g. CONCLUSIVE_HIGH_SEVERITY_FAILURE, CONFLICTING_AUTHORITATIVE_EVIDENCE, VERIFIER_OPERATIONAL_ERROR)."
+        }
+      }
+    },
+    "validity": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Supersession + invalidation lineage (append-only — populated at write time; never back-edited onto a prior row, §5.5).",
+      "properties": {
+        "supersedes": {
+          "type": ["string", "null"],
+          "description": "decision_event_id this decision replaces (an appeal / re-review), or null."
+        },
+        "invalidated_by": {
+          "type": ["string", "null"],
+          "description": "decision_event_id or invalidation-event id that invalidated THIS decision, or null. Authoritative invalidation lives in the DECISION_INVALIDATED event log; this field is a convenience pointer set only when known at write time."
+        },
+        "valid_until_material_change": {
+          "type": "boolean",
+          "description": "True = this decision holds only until any material input changes (the default runtime-assurance contract)."
+        }
+      }
+    }
+  }
+}

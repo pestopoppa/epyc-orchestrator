@@ -35,8 +35,44 @@
         "inconclusive": { "type": "integer", "minimum": 0 },
         "conclusive_verdict": {
           "type": "string",
-          "enum": ["pass", "fail", "inconclusive"],
-          "description": "Aggregate verdict; 'inconclusive' whenever any required check is inconclusive."
+          "enum": ["pass", "fail", "inconclusive", "conflict"],
+          "description": "Aggregate verdict; 'inconclusive' whenever any required check is inconclusive. v1.1: 'conflict' whenever two conclusive checks disagree under identical assumptions (spec §7.2/§7.3 rule 4 — escalates automatic approval)."
+        },
+        "unknown": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "v1.1 (spec §6.3). Count of checks with logical_status=unknown (epistemic unknown, distinct from operational error)."
+        },
+        "operational_error": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "v1.1 (spec §6.3/§7.2). Count of checks with execution_status in {error,timeout,unavailable} — tool failure, NOT proof of logical failure. The reducer applies the profile's failure policy, never treats these as fail."
+        },
+        "conflicts": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "v1.1 (spec §6.3/§7.3). Count of criteria where conclusive checks disagree — triggers escalation in the reducer."
+        },
+        "mandatory_criteria": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "v1.1 (spec §6.3). Rollup the reducer's `mandatory_criteria_satisfied()` reads.",
+          "properties": {
+            "satisfied": {
+              "type": "boolean",
+              "description": "True only when every mandatory criterion has a conclusive pass with adequate authority."
+            },
+            "unresolved": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Mandatory criterion_ids left unknown/unavailable (not conclusively passed or failed)."
+            },
+            "failed": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Mandatory criterion_ids with a conclusive failure."
+            }
+          }
         }
       }
     },
@@ -109,6 +145,27 @@
           "type": "string",
           "description": "Why the verifier could not conclude (timeout, unsupported construct, formalization gap)."
         },
+        "logical_status": {
+          "type": "string",
+          "enum": ["pass", "fail", "unknown", "conflict"],
+          "description": "v1.1 (spec §6.2/§7.2). Epistemic verdict, SEPARATE from execution_status: a solver returning UNKNOWN is logical=unknown/execution=ok; two sound verifiers disagreeing is logical=conflict. Do not collapse tool failure into epistemic uncertainty. When present, supersedes `outcome` for reducer logic (outcome kept for v1 back-compat: pass↔pass, fail↔fail, inconclusive↔unknown)."
+        },
+        "execution_status": {
+          "type": "string",
+          "enum": ["ok", "error", "timeout", "unavailable"],
+          "description": "v1.1 (spec §6.2/§7.2). Operational health of the verifier run. An error/timeout/unavailable is NOT proof of failure (§7.3 rule 5) — the reducer applies the profile's operational-error policy."
+        },
+        "criterion_id": {
+          "type": "string",
+          "description": "v1.1 (spec §5.2). The criterion this check decides — scopes its authority (keys into AssuranceProfile.criteria / verifier_registry)."
+        },
+        "severity": {
+          "type": "string",
+          "enum": ["critical", "high", "medium", "low"],
+          "description": "v1.1. Severity of the criterion this check covers (mirror of AssuranceProfile.criteria[criterion_id].severity), surfaced here so the reducer's `has_conclusive_failure(minimum_severity=...)` can read it directly."
+        },
+        "authority": { "$ref": "#/$defs/authority" },
+        "scope": { "$ref": "#/$defs/scope" },
         "elapsed_seconds": { "type": "number", "minimum": 0 },
         "exit_code": { "type": "integer" },
         "output": { "type": "string" },
@@ -137,6 +194,67 @@
           "then": { "required": ["inconclusive_reason"] }
         }
       ]
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["class"],
+      "description": "v1.1 (spec §5.2/§7.1). Criterion-scoped authority of a check. No check has global authority merely because it is 'objective' — authority applies only to the recorded class, criteria, and implication direction. Precedence rules (§7.3): a sound_refutation FAIL blocks but its pass proves nothing; a sound_acceptance PASS establishes but its fail may be incomplete; heuristic_static/llm_judgment cannot override conclusive evidence.",
+      "properties": {
+        "class": {
+          "type": "string",
+          "enum": [
+            "proof",
+            "complete_decider",
+            "sound_refutation",
+            "sound_acceptance",
+            "bounded_test",
+            "statistical_evidence",
+            "heuristic_static",
+            "llm_judgment",
+            "human_attestation"
+          ],
+          "description": "Authority class governing whether this check may approve and/or block."
+        },
+        "valid_for": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Criterion_ids this authority is scoped to. Empty/absent = the check's own criterion_id."
+        },
+        "may_block": {
+          "type": "boolean",
+          "description": "Whether a failure of this check may block (sound_refutation/proof/complete_decider: true; sound_acceptance: false; others: policy-dependent)."
+        },
+        "may_approve": {
+          "type": "boolean",
+          "description": "Whether a pass of this check may approve (proof/complete_decider/sound_acceptance: true; sound_refutation: false; others: policy-dependent)."
+        }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "v1.1 (spec §5.2/§6.2). What the check actually established — the coverage and assumptions bounding its authority. A reviewer may only override conclusive scoped evidence by showing assumptions or scope differ (§7.3 rule 2).",
+      "properties": {
+        "artifact_hash": {
+          "type": "string",
+          "description": "Content address of the exact artifact this check ran against."
+        },
+        "coverage": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "What was actually exercised (e.g. modules, cases, branches).",
+          "properties": {
+            "modules": { "type": "array", "items": { "type": "string" } },
+            "cases": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "assumptions": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Explicit assumptions under which the verdict holds (e.g. 'db transaction semantics match test env')."
+        }
+      }
     },
     "certificate": {
       "type": "object",

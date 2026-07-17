@@ -110,6 +110,27 @@ def _has_code_execution_oracle(q: dict) -> bool:
     return bool(config.get("entry_point") and has_expected)
 
 
+def _require_math_verify() -> None:
+    """EV-11 hard-fail: math_verify scoring must NEVER silently degrade.
+
+    ``debug_scorer._score_math_verify`` swallows ``ImportError`` and returns an
+    ``exact_match`` result when the ``math-verify`` package is absent. On the math
+    suites (whose answers are boxed/LaTeX expressions) exact_match scores almost
+    everything wrong, so a missing install silently no-ops the entire suite — the
+    0/1,819-question EV-11 bug. We refuse to run a ``math_verify``-scored question
+    when the library cannot be imported: fail loud, never fall back.
+    """
+    try:
+        import math_verify  # noqa: F401
+    except ImportError as exc:  # pragma: no cover - exercised via monkeypatch in tests
+        raise RuntimeError(
+            "EV-11: scoring_method='math_verify' requires the 'math-verify' package, "
+            "which is not importable in this interpreter. Refusing to silently fall "
+            "back to exact_match (that fallback no-ops the whole math suite). Install "
+            "it into the eval venv with `pip install math-verify`."
+        ) from exc
+
+
 def _is_rubric_scored_question(q: dict) -> bool:
     scoring_method = str(q.get("scoring_method", ""))
     if scoring_method == "rubric":
@@ -684,6 +705,7 @@ from src.autopilot_core.instrument_era_guard import (  # noqa: E402
     designed_core_activation_guard,
 )
 from src.behavior_signature import normalized_answer_hash  # noqa: E402
+from src.llm_primitives.stat_tests import roc_auc  # noqa: E402
 
 DEFAULT_CORE_DIR = _orch_root / "benchmarks" / "prompts"
 
@@ -1228,6 +1250,10 @@ class EvalTower:
                     correct = aggregate_rubric_score(rubric_scores).score >= threshold
                     scoring_method = "rubric"
                 else:
+                    if scoring_method == "math_verify":
+                        # EV-11: guarantee math_verify actually runs; never let a
+                        # missing library silently degrade to exact_match.
+                        _require_math_verify()
                     correct = score_answer_deterministic(
                         answer=answer,
                         expected=expected,
@@ -1606,6 +1632,19 @@ class EvalTower:
         auroc = 0.0
         cal_violations = 0
         if confidences:
+            # NOTE (B1/EV-consolidation 2026-07-17): the ECE below is deliberately
+            # NOT swapped to src/llm_primitives/stat_tests.expected_calibration_error.
+            # This inline loop makes EVERY bin half-open [lo, hi) — including the top
+            # bin — so a confidence of exactly 1.0 falls in NO bin (dropped from the
+            # numerator, kept in the denominator). stat_tests closes the top bin
+            # (<= hi) and counts c==1.0. Because the default confidence here is
+            # float(correct) in {0.0, 1.0}, that edge is the COMMON case on the math
+            # suites, and the two differ by 0.15-0.40 absolute (measured). The
+            # canonical stat_tests binning is the correct one, but adopting it shifts
+            # a serialized metric consumed by safety_gate/journal/RLVR export on a
+            # CRITICAL-blast-radius path, so it is a behavior CHANGE, not a
+            # behavior-preserving consolidation — deferred to an operator-gated fix
+            # bundled with the EV-11 math re-baseline. Do NOT "helpfully" swap it.
             n_bins = 10
             for i in range(n_bins):
                 lo = i / n_bins
@@ -1616,15 +1655,19 @@ class EvalTower:
                     bin_acc = sum(cr for cr, m in zip(correctness_vals, mask) if m) / bin_count
                     bin_conf = sum(c for c, m in zip(confidences, mask) if m) / bin_count
                     ece += (bin_count / len(confidences)) * abs(bin_acc - bin_conf)
-            # AUC: only meaningful with non-degenerate confidence (>2 distinct values)
+            # AUC: only meaningful with non-degenerate confidence (>2 distinct values).
+            # B1/EV-consolidation (2026-07-17): compute ROC-AUC via the stdlib
+            # clean-room roc_auc() in src/llm_primitives/stat_tests.py instead of
+            # sklearn. stat_tests.roc_auc is the tie-averaged Mann-Whitney U
+            # estimator and is numerically identical to sklearn.metrics
+            # .roc_auc_score (verified to 6 d.p. on this path), so this swap is
+            # behavior-preserving and removes the sklearn dependency for the
+            # calibration metric. roc_auc() returns None only when a class is
+            # absent — already excluded by the guard below — and `or 0.0`
+            # preserves the prior ImportError/ValueError -> 0.0 convention.
             distinct_conf = len(set(round(c, 6) for c in confidences))
             if distinct_conf > 2 and len(set(correctness_vals)) > 1:
-                try:
-                    from sklearn.metrics import roc_auc_score
-
-                    auroc = roc_auc_score(correctness_vals, confidences)
-                except (ImportError, ValueError):
-                    auroc = 0.0
+                auroc = roc_auc(confidences, correctness_vals) or 0.0
             cal_violations = sum(
                 1 for c, cr in zip(confidences, correctness_vals) if abs(c - cr) > 0.5
             )

@@ -14,6 +14,9 @@ Usage:
   python orchestration/validate_ir.py candidate path/to/candidate_package.json
   python orchestration/validate_ir.py verification path/to/verification_report.json
   python orchestration/validate_ir.py rubric path/to/review_rubric.json
+  python orchestration/validate_ir.py evidence path/to/evidence_item.json
+  python orchestration/validate_ir.py envelope path/to/decision_envelope.json
+  python orchestration/validate_ir.py profile path/to/assurance_profile.json
   echo '{"task_id": ...}' | python orchestration/validate_ir.py task -
 
 Exit codes:
@@ -48,6 +51,10 @@ SCHEMA_REVIEW = ROOT / "review_decision.schema.json"
 SCHEMA_CANDIDATE = ROOT / "candidate_package.schema.json"
 SCHEMA_VERIFICATION = ROOT / "verification_report.schema.json"
 SCHEMA_RUBRIC = ROOT / "review_rubric.schema.json"
+# CP2 semantics-layer additions (spec §6.2/§6.5/§6.6).
+SCHEMA_EVIDENCE = ROOT / "evidence_item.schema.json"
+SCHEMA_ENVELOPE = ROOT / "decision_envelope.schema.json"
+SCHEMA_PROFILE = ROOT / "assurance_profile.schema.json"
 
 # Ordered map of validator kind -> schema path (single source of truth).
 SCHEMA_MAP = {
@@ -58,6 +65,9 @@ SCHEMA_MAP = {
     "candidate": SCHEMA_CANDIDATE,
     "verification": SCHEMA_VERIFICATION,
     "rubric": SCHEMA_RUBRIC,
+    "evidence": SCHEMA_EVIDENCE,
+    "envelope": SCHEMA_ENVELOPE,
+    "profile": SCHEMA_PROFILE,
 }
 
 

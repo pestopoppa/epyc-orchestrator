@@ -1,0 +1,41 @@
+{
+  "schema_version": "1.0.0",
+  "profile_id": "swe_release:v3",
+  "domain": "software_engineering",
+  "risk_class": "high",
+  "criteria": {
+    "functional_correctness": { "severity": "critical", "mandatory": true },
+    "backward_compatibility": { "severity": "high", "mandatory": true },
+    "migration_idempotence": { "severity": "high", "mandatory": true },
+    "security_boundary_preservation": { "severity": "critical", "mandatory": true },
+    "regression_freedom": { "severity": "high", "mandatory": true },
+    "maintainability": { "severity": "low", "mandatory": false }
+  },
+  "verifier_registry": {
+    "functional_correctness": ["unit_tests", "property_tests"],
+    "backward_compatibility": ["api_diff_checker"],
+    "migration_idempotence": ["migration_property_test"],
+    "security_boundary_preservation": ["static_analysis", "policy_check"],
+    "regression_freedom": ["regression_suite", "type_check"],
+    "maintainability": ["static_complexity", "reviewer_rubric"]
+  },
+  "policy": {
+    "reviewer_required_at": ["plan_approval", "integration_complete", "release_candidate"],
+    "unknown_on_critical": "escalate",
+    "reviewer_timeout": "abstain",
+    "schema_error": "abstain",
+    "no_reviewer_available": "defer",
+    "conflict": "escalate",
+    "evidence_budget_exhausted": "fail_closed",
+    "max_review_rounds": 2,
+    "max_evidence_rounds": 2,
+    "max_reviewer_risk": 0.05
+  },
+  "calibration_cohort": {
+    "architect_family": "qwen",
+    "reviewer_family": "glm",
+    "domain": "software_engineering",
+    "context_band": "32k-128k",
+    "quantization": "iq2"
+  }
+}

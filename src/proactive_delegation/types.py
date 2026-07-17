@@ -57,6 +57,7 @@ class ReviewDecision(Enum):
     # RA-6 additions (evidence-linked control plane):
     REQUEST_EVIDENCE = "request_evidence"  # verdict withheld pending verifier_requests
     REJECT_TO_EMPTY = "reject_to_empty"  # bad plan/output worse than none; discard, don't iterate
+    ABSTAIN = "abstain"  # (CP2/spec §9.2) package insufficient + no permitted evidence request resolves it
 
 
 class TaskComplexity(Enum):

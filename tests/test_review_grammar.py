@@ -25,6 +25,7 @@ DECISION_ENUM = [
     "request_changes",
     "request_evidence",
     "escalate",
+    "abstain",  # CP2/spec §9.2 — grammar auto-sources from review_decision.schema.json
 ]
 
 

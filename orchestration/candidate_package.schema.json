@@ -63,6 +63,18 @@
       "description": "OPTIONAL author labels (e.g. 'refined', 'final', 'expert'). MUST be stripped from sanitized_view.",
       "items": { "type": "string" }
     },
+    "subject": { "$ref": "#/$defs/subject" },
+    "untrusted_content_policy": { "$ref": "#/$defs/untrusted_content_policy" },
+    "context_refs": {
+      "type": "array",
+      "description": "v1.1 (spec §4.3/§6.1/§13.3). Content-addressed pointers to the ONLY context the reviewer is shown: relevant source spans, IRs, prior reports. Each ref is a `blob:sha256:...` hash (optionally with a span suffix) — full history is retrieved only via a typed evidence request, shrinking context cost + prompt-injection surface. Enables the §12.4 replay query to reconstruct the exact reviewed package from hashes.",
+      "items": { "$ref": "#/$defs/context_ref" }
+    },
+    "verification_report_refs": {
+      "type": "array",
+      "description": "v1.1 (spec §6.1). report_ids / content addresses of the VerificationReports attached to this package.",
+      "items": { "type": "string" }
+    },
     "sanitized_view": { "$ref": "#/$defs/sanitized_view" }
   },
   "$defs": {
@@ -95,6 +107,75 @@
           "type": "string",
           "description": "Objective verifier that can decide this check (gate/scorer/checker id), if any."
         }
+      }
+    },
+    "subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "v1.1 (spec §6.1). Content-addressed identity of what is under review. These hashes are the material inputs the DecisionEnvelope binds to (§6.6 subject) and that automatic invalidation (§12.3) watches — a change to any of them invalidates a prior decision.",
+      "properties": {
+        "task_id": { "type": "string" },
+        "task_type": { "type": "string" },
+        "artifact_type": { "type": "string" },
+        "artifact_hash": {
+          "type": "string",
+          "description": "sha256 of the produced artifact under review (the integrated patch / answer / proof)."
+        },
+        "specification_hash": {
+          "type": "string",
+          "description": "sha256 of the task specification / acceptance criteria."
+        },
+        "plan_hash": {
+          "type": "string",
+          "description": "sha256 of the plan / ArchitectureIR the candidate was produced under."
+        }
+      }
+    },
+    "untrusted_content_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "v1.1 (spec §5-security / §6.1 / §13). The candidate artifact is attacker-controlled input from the reviewer's perspective, EVEN when produced by a trusted local model. This block declares the control/data separation contract the package builder enforces: candidate text is data, embedded instructions are ignored, and any authority claim ('tests passed', 'a human approved') has ZERO weight without a trusted ledger evidence id.",
+      "properties": {
+        "candidate_text_is_data": {
+          "type": "boolean",
+          "description": "Candidate content is placed in explicitly delimited data fields; it is never interpreted as reviewer instructions (§13.1 control/data separation)."
+        },
+        "candidate_instructions_ignored": {
+          "type": "boolean",
+          "description": "Any 'ignore the reviewer policy'-style instruction embedded in the candidate/retrieved text is inert (§13.1)."
+        },
+        "authority_claims_require_ledger_proof": {
+          "type": "boolean",
+          "description": "Textual claims of prior verification/approval resolve to authority ONLY through a hash-verified ledger evidence id (§13.1 evidence-must-resolve-through-the-ledger)."
+        }
+      }
+    },
+    "context_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "ref"],
+      "description": "v1.1 (spec §6.1). A single content-addressed context pointer.",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "source_span",
+            "architecture_ir",
+            "task_ir",
+            "trace_event",
+            "evidence_item",
+            "verification_report",
+            "retrieval_doc",
+            "diff"
+          ],
+          "description": "What the ref points at."
+        },
+        "ref": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Content address, e.g. 'blob:sha256:<hex>' or 'blob:sha256:<hex>#L20-L150'. Bound to a hash so the reviewer cannot be shown different bytes than were decided on (§13.3)."
+        },
+        "label": { "type": "string" }
       }
     },
     "provenance": {
@@ -138,6 +219,13 @@
           "type": "array",
           "items": { "$ref": "#/$defs/acceptance_check" }
         },
+        "subject": { "$ref": "#/$defs/subject" },
+        "context_refs": {
+          "type": "array",
+          "description": "v1.1. Content-addressed context the reviewer is shown (mirror of the top-level field — this is the reviewer-visible projection).",
+          "items": { "$ref": "#/$defs/context_ref" }
+        },
+        "untrusted_content_policy": { "$ref": "#/$defs/untrusted_content_policy" },
         "sanitization": {
           "type": "object",
           "additionalProperties": false,

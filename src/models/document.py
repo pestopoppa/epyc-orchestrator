@@ -167,6 +167,11 @@ class OCRResult:
     job_id: str | None = None
     status: ProcessingStatus = ProcessingStatus.COMPLETED
     structured_data: object | None = None
+    # Attribution for the backend that produced this text, e.g. "pdftotext",
+    # "opendataloader", "opendataloader_structured", "opendataloader_hybrid",
+    # or "lightonocr". Optional + default None keeps the Document contract
+    # backward-compatible; older callers/caches simply omit it.
+    extraction_method: str | None = None
 
     @property
     def success_rate(self) -> float:
@@ -212,6 +217,7 @@ class OCRResult:
             job_id=data.get("job_id"),
             status=status,
             structured_data=data.get("structured_data"),
+            extraction_method=data.get("extraction_method"),
         )
 
     def to_cache_dict(self) -> dict[str, Any]:
@@ -225,6 +231,7 @@ class OCRResult:
             "job_id": self.job_id,
             "status": self.status.value,
             "structured_data": self.structured_data,
+            "extraction_method": self.extraction_method,
         }
 
     @classmethod
@@ -239,6 +246,7 @@ class OCRResult:
             job_id=data.get("job_id"),
             status=ProcessingStatus(data.get("status", "completed")),
             structured_data=data.get("structured_data"),
+            extraction_method=data.get("extraction_method"),
         )
 
 
