@@ -243,6 +243,83 @@
             "policy_version": {
               "type": "string",
               "description": "Version of the sanitization policy applied."
+            },
+            "path_allowlist": {
+              "type": "array",
+              "description": "CP3 §13.2 control 6. Repo-relative prefixes a candidate output `ref` file locator may point at; an output ref outside this set is dropped from the reviewer view (recorded in `redactions`).",
+              "items": { "type": "string" }
+            },
+            "redactions": {
+              "type": "array",
+              "description": "CP3 §13.2 control 6. Audit trail of content the assembly sanitizer withheld from the reviewer view: out-of-allowlist file locators DROPPED, and secret-like tokens MASKED in retained inline content. Redaction is FLAGGED here, never silent. Only the redaction category is recorded — never the secret value.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["category", "reason"],
+                "properties": {
+                  "index": {
+                    "type": "integer",
+                    "description": "Index of the affected output in the original (pre-sanitization) outputs array."
+                  },
+                  "category": {
+                    "type": "string",
+                    "enum": ["path_allowlist", "secret"],
+                    "description": "path_allowlist = out-of-package file locator dropped; secret = secret-like token masked in retained content."
+                  },
+                  "reason": { "type": "string" },
+                  "original_type": {
+                    "type": "string",
+                    "description": "output_ref type of a dropped out-of-allowlist output."
+                  },
+                  "patterns": {
+                    "type": "array",
+                    "description": "Secret-pattern categories matched (e.g. private_key, openai_key). Never the secret value.",
+                    "items": { "type": "string" }
+                  }
+                }
+              }
+            },
+            "truncation_manifest": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "CP3 §13.2 controls 5,7. Present only when the reviewer-output retention cap dropped material — records what was dropped so nothing critical is SILENTLY truncated. Material/risk-flagged outputs are prioritized into the retained set; the manifest is the audit trail for the remainder.",
+              "required": ["output_cap", "total_outputs", "retained", "dropped"],
+              "properties": {
+                "output_cap": {
+                  "type": "integer",
+                  "description": "Retention cap applied (matches the downstream reviewer render cap)."
+                },
+                "total_outputs": {
+                  "type": "integer",
+                  "description": "Number of outputs before the retention cap."
+                },
+                "retained": {
+                  "type": "integer",
+                  "description": "Number of outputs kept in the reviewer view."
+                },
+                "dropped": {
+                  "type": "array",
+                  "description": "Outputs dropped by the retention cap (lowest materiality first-dropped).",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["index", "reason"],
+                    "properties": {
+                      "index": { "type": "integer" },
+                      "type": { "type": "string" },
+                      "reason": { "type": "string" },
+                      "digest": {
+                        "type": "string",
+                        "description": "Truncated sha256 of the dropped output ref (retrievable via a typed evidence request)."
+                      },
+                      "ref_preview": {
+                        "type": "string",
+                        "description": "Short, redaction-safe preview of the dropped output ref."
+                      }
+                    }
+                  }
+                }
+              }
             }
           }
         }

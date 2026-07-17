@@ -26,11 +26,12 @@ Probe schema
 }
 ```
 
-The ``sanitize_candidate_package`` reference below models the *landed* Wave-1
-sanitization contract expressed by ``orchestration/candidate_package.schema.json``
-(strip author framing FIELDS into ``sanitized_view``; project the rest verbatim).
-It is deliberately faithful — including the fact that it does NOT scrub in-content
-injection — so the runner can distinguish neutralized attacks from real gaps.
+The corpus exercises the PRODUCTION assembly sanitizer directly: ``sanitize_candidate_package``
+is re-exported from ``src.proactive_delegation.candidate_sanitizer`` (the standalone,
+freeze-safe assembly-time sanitizer that BUILDS the reviewer-visible ``sanitized_view``).
+The runner distinguishes neutralized attacks from real gaps by running that production
+sanitizer and, where a gap is render-layer (review_service's prompt renderer, FROZEN),
+observing that the payload still reaches the captured reviewer prompt.
 """
 
 from __future__ import annotations
@@ -39,17 +40,19 @@ import json
 from pathlib import Path
 from typing import Any
 
-_HERE = Path(__file__).resolve().parent
-
-#: Framing fields the schema forbids inside ``sanitized_view`` (intake-837/838).
-BANNED_FRAMING_FIELDS = (
-    "author_self_assessment",
-    "author_confidence_assertion",
-    "quality_labels",
+# Re-export the PRODUCTION assembly sanitizer so the security corpus tests the real
+# assembly-time contract, not a divergent test copy.
+from src.proactive_delegation.candidate_sanitizer import (  # noqa: F401
+    BANNED_FRAMING_FIELDS,
+    SANITIZER_POLICY_VERSION,
+    sanitize_candidate_package,
+    sanitized_view_text,
 )
 
-#: Sanitization policy version stamped by this reference contract.
-REFERENCE_POLICY_VERSION = "wave1-sanitizer"
+_HERE = Path(__file__).resolve().parent
+
+#: Back-compat alias for the sanitization policy version stamped by the contract.
+REFERENCE_POLICY_VERSION = SANITIZER_POLICY_VERSION
 
 
 def load_probes() -> list[dict[str, Any]]:
@@ -58,42 +61,3 @@ def load_probes() -> list[dict[str, Any]]:
     for path in sorted(_HERE.glob("*.json")):
         probes.append(json.loads(path.read_text(encoding="utf-8")))
     return probes
-
-
-def sanitize_candidate_package(full_pkg: dict[str, Any]) -> dict[str, Any]:
-    """Reference implementation of the landed Wave-1 sanitization contract.
-
-    Mirrors ``candidate_package.schema.json``: the reviewer-visible projection
-    strips author self-assessment / confidence / quality labels, and projects the
-    neutral fields verbatim. Content of ``outputs`` / ``objective`` is NOT scrubbed
-    (that is the current contract — and the source of the documented gaps).
-    """
-    removed = [f for f in BANNED_FRAMING_FIELDS if f in full_pkg]
-    sanitized_view: dict[str, Any] = {
-        "task_ref": full_pkg["task_ref"],
-        "outputs": list(full_pkg.get("outputs", [])),
-        "sanitization": {
-            "applied": True,
-            "removed_fields": removed,
-            "policy_version": REFERENCE_POLICY_VERSION,
-        },
-    }
-    if "objective" in full_pkg:
-        sanitized_view["objective"] = full_pkg["objective"]
-    if "acceptance_checks" in full_pkg:
-        sanitized_view["acceptance_checks"] = list(full_pkg["acceptance_checks"])
-
-    out = {k: v for k, v in full_pkg.items() if k != "sanitized_view"}
-    out["sanitized_view"] = sanitized_view
-    return out
-
-
-def sanitized_view_text(sanitized_view: dict[str, Any]) -> str:
-    """Flatten the reviewer-visible content the way the reviewer prompt would see it."""
-    parts: list[str] = [str(sanitized_view.get("objective", ""))]
-    for o in sanitized_view.get("outputs", []) or []:
-        parts.append(str(o.get("ref", "")))
-        parts.append(str(o.get("label", "")))
-    for c in sanitized_view.get("acceptance_checks", []) or []:
-        parts.append(str(c.get("statement", "")))
-    return "\n".join(parts)
