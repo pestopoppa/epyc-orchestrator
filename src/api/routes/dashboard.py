@@ -44,7 +44,11 @@ from src.api.routes.dashboard_snapshot import (
     scan_recent_decisions as _scan_recent_decisions_impl,
     todays_progress_log as _todays_progress_log_impl,
 )
-from src.api.routes.dashboard_freshness import envelope as _freshness_envelope
+from src.api.routes.dashboard_freshness import (
+    Source as _FreshnessSource,
+    envelope as _freshness_envelope,
+    value_consistency as _value_consistency,
+)
 from src.api.routes.dashboard_panels import (
     PANELS as _PANELS,
     PANELS_BY_KEY as _PANELS_BY_KEY,
@@ -111,6 +115,7 @@ from scripts.autopilot.phase_status import (
 from scripts.autopilot.autopilot_restart_advisor import (
     build_restart_advice as _build_autopilot_restart_advice,
 )
+from scripts.autopilot.state_lock import state_write_lock
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -1746,6 +1751,9 @@ async def process_status() -> JSONResponse:
                 "autopilot_phase_health": phase_health,
                 "autopilot_outcome_progress": outcome_progress,
                 "autopilot_state": _autopilot_state_summary(),
+                # H2: shared autopilot-plane epoch so a client can cross-check
+                # this panel against the other three and discard a torn set.
+                "state_generation": _autopilot_state_generation(),
                 "autopilot_phase_age_s": phase_age_s,
                 "inference_tap_age_s": _age_s(_INFERENCE_TAP_PATH),
                 "planner_tap_age_s": _age_s(planner_tap_path),
@@ -1812,6 +1820,8 @@ async def insight_graph(
 ) -> JSONResponse:
     """Return a bounded, read-only graph of StrategyStore and journal insights."""
     payload = _insight_graph_payload(focus=focus, depth=depth, limit=limit)
+    # H2: shared autopilot-plane epoch (cross-panel coherence cross-check).
+    payload["state_generation"] = _autopilot_state_generation()
     return JSONResponse(_stamp(payload, "insight_graph"), headers=_NO_STORE_HEADERS)
 
 
@@ -2106,26 +2116,35 @@ def _apply_autopilot_control_action(
     if action not in {"pause", "resume"}:
         raise ValueError("action must be 'pause' or 'resume'")
     note = str(note or "").strip()[:240]
-    state = _read_json_object(state_path)
-    paused_pre = bool(state.get("paused", False))
-    reason_pre = state.get("pause_reason")
+    # H4: this dashboard write is one of 5+ processes doing a whole-file
+    # read-modify-write of autopilot_state.json under `uvicorn --workers 6`.
+    # Atomic tmp+replace prevents torn reads but NOT lost updates: without mutual
+    # exclusion this pause/resume, based on a stale read, can clobber (or be
+    # clobbered by) the autopilot daemon's per-trial save or host_health's
+    # cache-flush. Serialize the ENTIRE read→modify→write across processes with
+    # the shared flock. Kept short (no sleeps/inference inside) per the lock
+    # contract; the audit append below runs OUTSIDE the lock. Fails open.
+    with state_write_lock(state_path):
+        state = _read_json_object(state_path)
+        paused_pre = bool(state.get("paused", False))
+        reason_pre = state.get("pause_reason")
 
-    if action == "pause":
-        state["paused"] = True
-        state["pause_reason"] = note or "dashboard operator pause"
-    else:
-        state["paused"] = False
-        state.pop("pause_reason", None)
-        if state.get("_dispatch_deficiency") == "skip_action_loop":
-            state["consecutive_skip_actions"] = 0
-            state["last_invalid_action"] = None
-            state["last_invalid_reason"] = None
-            state["last_invalid_status"] = None
-        state.pop("_dispatch_deficiency", None)
-        state.pop("_meta_halt_reason", None)
-        state["consecutive_meta_actions"] = 0
+        if action == "pause":
+            state["paused"] = True
+            state["pause_reason"] = note or "dashboard operator pause"
+        else:
+            state["paused"] = False
+            state.pop("pause_reason", None)
+            if state.get("_dispatch_deficiency") == "skip_action_loop":
+                state["consecutive_skip_actions"] = 0
+                state["last_invalid_action"] = None
+                state["last_invalid_reason"] = None
+                state["last_invalid_status"] = None
+            state.pop("_dispatch_deficiency", None)
+            state.pop("_meta_halt_reason", None)
+            state["consecutive_meta_actions"] = 0
 
-    _atomic_write_json(state_path, state)
+        _atomic_write_json(state_path, state)
     row = {
         "ts": _utc_iso(),
         "source": "dashboard",
@@ -2416,6 +2435,110 @@ def _read_autopilot_journal_rows(path: Path | None = None) -> list[dict[str, Any
         except Exception:
             continue
     return rows if any_read else None
+
+
+# ── H2: shared snapshot epoch for the autopilot-state plane ──────────────────
+# The pareto / autopilot_progress / process_status / insight_graph panels each
+# INDEPENDENTLY re-read autopilot_state.json + the rotating journal at their OWN
+# request instant, with no shared generation token — so panel A (trial N) can
+# render beside panel B (trial N-1): a cross-panel tear. The prior "coherent
+# snapshot" fix (_snapshot_impl) covered only the LIVE-INFERENCE plane. These
+# helpers give the autopilot plane a single, cheap, stat-based generation token
+# so the four panels can be cross-checked / assembled into one coherent frame.
+
+
+def _newest_journal_shard_stat() -> tuple[Path, int, int] | None:
+    """``(path, st_size, st_mtime_ns)`` of the newest journal shard, or ``None``.
+
+    Picks the shard with the newest mtime across the base file + every
+    ``autopilot_journal_<n>.jsonl`` rotation (the live run appends to the
+    highest-suffix shard, but choosing by mtime is robust to a base file touched
+    after a rotation). Pure ``stat()`` — no file-content read.
+    """
+    best: tuple[Path, int, int] | None = None
+    for p in _autopilot_journal_shards():
+        try:
+            st = p.stat()
+        except OSError:
+            continue
+        if best is None or st.st_mtime_ns > best[2]:
+            best = (p, st.st_size, st.st_mtime_ns)
+    return best
+
+
+def _autopilot_state_generation(*, state_path: Path | None = None) -> str:
+    """Shared coherence token for the autopilot-state plane (H2).
+
+    Combines ``autopilot_state.json``'s ``(st_mtime_ns, st_size)`` with the
+    NEWEST journal shard's ``(name, size, st_mtime_ns)`` into one opaque string.
+    Any write to state.json OR any append/rotation of the journal changes the
+    token, so the four autopilot panels — which each re-read these files
+    independently — can be cross-checked: a client holding two panels whose
+    ``state_generation`` tokens DIFFER knows it has a TORN set (panel A at trial
+    N beside panel B at trial N-1) and must discard/refetch. Cheap: pure
+    ``stat()``, never reads the file bodies. ``state_path`` resolves the module
+    global at CALL time so tests (and any future path override) take effect.
+    """
+    state_path = state_path if state_path is not None else _AUTOPILOT_STATE_PATH
+    try:
+        st = state_path.stat()
+        state_tok = f"{st.st_mtime_ns}:{st.st_size}"
+    except OSError:
+        state_tok = "absent"
+    shard = _newest_journal_shard_stat()
+    if shard is None:
+        journal_tok = "absent"
+    else:
+        p, size, mtime_ns = shard
+        journal_tok = f"{p.name}:{size}:{mtime_ns}"
+    return f"state={state_tok}|journal={journal_tok}"
+
+
+def _journal_max_trial_id(rows: list[dict[str, Any]] | None) -> int | None:
+    """Highest integer ``trial_id`` across ``rows`` (the append-only journal)."""
+    best: int | None = None
+    for row in rows or []:
+        try:
+            tid = int(row.get("trial_id"))
+        except (TypeError, ValueError):
+            continue
+        if best is None or tid > best:
+            best = tid
+    return best
+
+
+def _state_trial_counter(*, state_path: Path | None = None) -> int | None:
+    """``trial_counter`` from autopilot_state.json as an int, or ``None``.
+
+    Resolves the module global at CALL time so a monkeypatched path takes effect.
+    """
+    state_path = state_path if state_path is not None else _AUTOPILOT_STATE_PATH
+    try:
+        state = _read_json_object(state_path)
+    except Exception:
+        return None
+    try:
+        return int(state.get("trial_counter"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _autopilot_snapshot_sources() -> list["_FreshnessSource"]:
+    """Freshness sources for the combined autopilot frame: state + journal.
+
+    Thresholds mirror the ``autopilot_progress`` / ``gepa`` panel specs so the
+    combined frame's staleness badge agrees with the per-panel ones.
+    """
+    try:
+        state_m: float | None = _AUTOPILOT_STATE_PATH.stat().st_mtime
+    except OSError:
+        state_m = None
+    shard = _newest_journal_shard_stat()
+    journal_m = (shard[2] / 1e9) if shard is not None else None
+    return [
+        _FreshnessSource("autopilot_state", state_m, 300, 1800),
+        _FreshnessSource("autopilot_journal", journal_m, 600, 3600),
+    ]
 
 
 def _read_strategy_store_rows(path: Path | None = None) -> list[dict[str, Any]] | None:
@@ -3777,6 +3900,8 @@ async def autopilot_progress() -> JSONResponse:
             # the precise number is in elapsed_s if anyone needs it.
             out["percent"] = round(min(150.0, max(0.0, pct)), 1)
 
+    # H2: shared autopilot-plane epoch (cross-panel coherence cross-check).
+    out["state_generation"] = _autopilot_state_generation()
     return JSONResponse(_stamp(out, "autopilot_progress"), headers=_NO_STORE_HEADERS)
 
 
@@ -3943,6 +4068,7 @@ async def pareto(max_dominated: int = 600, scope: str = "current") -> JSONRespon
             _stamp(
                 {
                     "available": False,
+                    "state_generation": _autopilot_state_generation(),
                     "reason": state_error
                     or "autopilot_state.json and autopilot_journal.jsonl not found",
                     "frontier": [],
@@ -4049,6 +4175,8 @@ async def pareto(max_dominated: int = 600, scope: str = "current") -> JSONRespon
         _stamp(
             {
                 "available": True,
+                # H2: shared autopilot-plane epoch (cross-panel coherence check).
+                "state_generation": _autopilot_state_generation(),
                 "source": source,
                 "source_reason": source_reason,
                 "scope": "all_eras" if all_eras else "current",
@@ -4097,6 +4225,99 @@ async def pareto(max_dominated: int = 600, scope: str = "current") -> JSONRespon
             "pareto",
         )
     )
+
+
+_AUTOPILOT_SNAPSHOT_MAX_COHERENCE_ATTEMPTS = 2
+
+
+@router.get("/dashboard/api/autopilot_snapshot")
+async def autopilot_snapshot(scope: str = "current") -> JSONResponse:
+    """One coherent frame of the four autopilot-state panels (H2).
+
+    The pareto / autopilot_progress / process_status / insight_graph panels each
+    re-read autopilot_state.json + the rotating journal at their OWN request
+    instant, so a client polling them separately can splice panel A (trial N)
+    beside panel B (trial N-1). This endpoint builds all four inside ONE call,
+    stamps them with ONE shared ``state_generation`` token, and re-checks the
+    token after the build: if the underlying state advanced mid-build the frame
+    is rebuilt (bounded retries) so the returned set is coherent
+    (``coherent: true``). A client should prefer this endpoint; if it still
+    polls the four panels individually it cross-checks their ``state_generation``
+    and discards any set whose tokens disagree. Also carries the H5
+    ``value_consistency`` verdict (state ``trial_counter`` vs journal max trial).
+    """
+    return await _autopilot_snapshot_impl(scope=scope)
+
+
+async def _autopilot_snapshot_impl(scope: str = "current") -> JSONResponse:
+    now = time.time()
+    frame: dict[str, Any] = {}
+    attempts = 0
+    while attempts < _AUTOPILOT_SNAPSHOT_MAX_COHERENCE_ATTEMPTS:
+        attempts += 1
+        gen_before = _autopilot_state_generation()
+        # ONE shared read of the journal shards for the frame-level summary
+        # (reusing the existing rotation-aware reader); the per-panel logic is
+        # reused unchanged via the endpoint calls below rather than duplicated.
+        journal_rows = _read_autopilot_journal_rows() or []
+        journal_max_trial = _journal_max_trial_id(journal_rows)
+        state_trial_counter = _state_trial_counter()
+        process = json.loads((await process_status()).body)
+        progress = json.loads((await autopilot_progress()).body)
+        pareto_body = json.loads((await pareto(scope=scope)).body)
+        insight = json.loads((await insight_graph()).body)
+        gen_after = _autopilot_state_generation()
+        frame = {
+            "gen_before": gen_before,
+            "gen_after": gen_after,
+            "journal_rows_available": len(journal_rows),
+            "journal_max_trial": journal_max_trial,
+            "state_trial_counter": state_trial_counter,
+            "panels": {
+                "process_status": process,
+                "autopilot_progress": progress,
+                "pareto": pareto_body,
+                "insight_graph": insight,
+            },
+        }
+        # gen_before == gen_after ⇒ nothing wrote state.json / the journal while
+        # the four panels were built ⇒ they reflect ONE instant. A mismatch is a
+        # detected tear; rebuild once more before giving up.
+        if gen_before == gen_after:
+            break
+
+    gen = frame["gen_before"]
+    coherent = frame["gen_before"] == frame["gen_after"]
+    panels = frame["panels"]
+    # Normalize every panel to the frame's single token so the assembled set is
+    # self-consistent even in the (flagged) incoherent case.
+    for panel in panels.values():
+        if isinstance(panel, dict):
+            panel["state_generation"] = gen
+    consistency = _value_consistency(
+        frame["state_trial_counter"], frame["journal_max_trial"]
+    )
+    body: dict[str, Any] = {
+        "generated_at": now,
+        "state_generation": gen,
+        "coherent": coherent,
+        "coherence_attempts": attempts,
+        "state_trial_counter": frame["state_trial_counter"],
+        "journal_max_trial_id": frame["journal_max_trial"],
+        "journal_rows_available": frame["journal_rows_available"],
+        "value_consistency": consistency,
+        "panels": panels,
+    }
+    # Freshness envelope built inline from the autopilot-plane sources (state +
+    # journal) with the H5 value-consistency verdict attached — no dashboard_panels
+    # registry key required, so this stays additive.
+    body["_freshness"] = _freshness_envelope(
+        _autopilot_snapshot_sources(),
+        now=now,
+        generated_at=now,
+        consistency=consistency,
+    )
+    return JSONResponse(body, headers=_NO_STORE_HEADERS)
 
 
 @router.get("/dashboard/api/version")

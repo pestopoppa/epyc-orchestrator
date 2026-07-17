@@ -47,6 +47,67 @@ DEAD = "dead"
 # panel-level class.
 _SEVERITY = {FRESH: 0, AGING: 1, STALE: 2, DEAD: 3}
 
+# VALUE-consistency classes — a SEPARATE axis from the age-based staleness
+# classes above. Staleness only asks "is this file's mtime advancing?"; two
+# sources can BOTH be freshly written (both ``fresh``) yet hold DISAGREEING
+# values, and age-classification renders both current, hiding the incoherence.
+# ``divergent`` names exactly that: representations that disagree in VALUE, not
+# in age. Kept as its own class set so the frontend can badge value-divergence
+# independently of (and simultaneously with) a staleness badge.
+COHERENT = "coherent"
+DIVERGENT = "divergent"
+
+
+def value_consistency(
+    trial_counter: int | None,
+    journal_max_trial: int | None,
+    *,
+    tolerance: int = 1,
+) -> dict[str, Any]:
+    """Cross-source VALUE-consistency check for the autopilot-state plane.
+
+    Compares ``autopilot_state.json``'s ``trial_counter`` against the
+    append-only journal's max trial id. When the journal is AHEAD of the state
+    counter by more than ``tolerance`` trials, the state file is stale relative
+    to the journal (a crash / rewind between saves) and the two on-disk
+    representations DIVERGE — a distinct failure from age-staleness: both files
+    can be freshly written yet disagree, so both read ``fresh`` under the
+    age-only contract and the incoherence is otherwise invisible.
+
+    Direction matters. The journal is appended only on metric-bearing trials, so
+    ``trial_counter`` legitimately RUNS AHEAD of ``journal_max_trial`` (trials
+    that produced no journal row). Only journal-ahead-of-state is flagged
+    ``divergent``; the reverse is expected and stays ``coherent``. A small
+    ``tolerance`` absorbs the one-trial race where the journal row for trial N
+    is appended a moment before the state counter is bumped to N.
+
+    Returns a dict whose ``class`` is ``coherent`` or ``divergent`` (plus the
+    raw values, the ``trial_lag`` = journal − state, and the ``tolerance``),
+    kept separate from the staleness envelope's classes so the UI can badge
+    value-divergence independently of age.
+    """
+    lag: int | None = None
+    cls = COHERENT
+    reason = ""
+    if trial_counter is not None and journal_max_trial is not None:
+        lag = journal_max_trial - trial_counter
+        if lag > tolerance:
+            cls = DIVERGENT
+            reason = (
+                f"autopilot_state.json trial_counter ({trial_counter}) lags the "
+                f"journal max trial ({journal_max_trial}) by {lag} > tolerance "
+                f"{tolerance}: state file is stale relative to the append-only "
+                f"journal (values disagree though both files may be fresh)."
+            )
+    return {
+        "class": cls,
+        "trial_counter": trial_counter,
+        "journal_max_trial": journal_max_trial,
+        "trial_lag": lag,
+        "tolerance": tolerance,
+        "reason": reason,
+    }
+
 
 @dataclass(frozen=True)
 class Source:
@@ -134,6 +195,7 @@ def envelope(
     *,
     now: float,
     generated_at: float | None = None,
+    consistency: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Fold ``sources`` into one panel-level freshness envelope.
 
@@ -145,6 +207,13 @@ def envelope(
     ``now`` is a required argument (rather than defaulting to ``time.time()``)
     so callers pass a single coherent timestamp shared with the payload they
     are stamping, and so this stays deterministic under test.
+
+    ``consistency`` (optional) is a VALUE-consistency verdict from
+    :func:`value_consistency` — a distinct axis from age-staleness. When
+    provided it is attached as ``value_consistency`` and its class is surfaced
+    as ``consistency_class`` so a client keying only off ``staleness_class``
+    still sees a value-divergence badge. Omitted for panels that have no
+    cross-source value to reconcile (their envelope shape is unchanged).
     """
     statuses = [source_status(s, now) for s in sources]
     # Only GATING sources drive the panel-level class / reason / worst-age.
@@ -163,13 +232,17 @@ def envelope(
         age = st["age_s"]
         if age is not None and (worst_age is None or age > worst_age):
             worst_age = age
-    return {
+    env: dict[str, Any] = {
         "generated_at": generated_at if generated_at is not None else now,
         "sources": statuses,
         "worst_age_s": round(worst_age, 3) if worst_age is not None else None,
         "staleness_class": worst,
         "reason": worst_reason,
     }
+    if consistency is not None:
+        env["value_consistency"] = consistency
+        env["consistency_class"] = consistency.get("class", COHERENT)
+    return env
 
 
 def mtime(path: Any) -> float | None:

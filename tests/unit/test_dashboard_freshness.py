@@ -3,7 +3,9 @@ from __future__ import annotations
 
 from src.api.routes.dashboard_freshness import (
     AGING,
+    COHERENT,
     DEAD,
+    DIVERGENT,
     FRESH,
     STALE,
     Source,
@@ -11,6 +13,7 @@ from src.api.routes.dashboard_freshness import (
     envelope,
     source_status,
     stamp,
+    value_consistency,
 )
 
 NOW = 1_000_000.0
@@ -147,3 +150,63 @@ def test_stamp_is_additive_and_preserves_generated_at():
     assert out["nodes"] == [1, 2, 3]  # untouched
     assert out["_freshness"]["generated_at"] == NOW
     assert out["_freshness"]["staleness_class"] == FRESH
+
+
+# --- H5: VALUE-consistency (a separate axis from age-staleness) ---------------
+
+
+def test_value_consistency_journal_ahead_is_divergent():
+    # trial_counter=100 while the journal already holds trial 105 -> the state
+    # file is stale relative to the append-only journal: DIVERGENT.
+    vc = value_consistency(100, 105)
+    assert vc["class"] == DIVERGENT
+    assert vc["trial_counter"] == 100
+    assert vc["journal_max_trial"] == 105
+    assert vc["trial_lag"] == 5
+    assert "lags" in vc["reason"]
+
+
+def test_value_consistency_equal_is_coherent():
+    vc = value_consistency(100, 100)
+    assert vc["class"] == COHERENT
+    assert vc["trial_lag"] == 0
+    assert vc["reason"] == ""
+
+
+def test_value_consistency_state_ahead_of_journal_is_coherent():
+    # The journal is sparse (metric-bearing trials only), so trial_counter
+    # legitimately runs AHEAD of the journal max -> NOT flagged.
+    vc = value_consistency(105, 100)
+    assert vc["class"] == COHERENT
+    assert vc["trial_lag"] == -5
+
+
+def test_value_consistency_within_tolerance_is_coherent():
+    # A one-trial journal-ahead race (row appended just before the counter bump)
+    # is absorbed by the default tolerance.
+    assert value_consistency(100, 101)["class"] == COHERENT
+    # ...but a two-trial journal-ahead lag exceeds the default tolerance of 1.
+    assert value_consistency(100, 102)["class"] == DIVERGENT
+
+
+def test_value_consistency_missing_values_are_coherent():
+    assert value_consistency(None, 105)["class"] == COHERENT
+    assert value_consistency(100, None)["class"] == COHERENT
+    assert value_consistency(None, None)["class"] == COHERENT
+
+
+def test_envelope_attaches_value_consistency_when_provided():
+    vc = value_consistency(100, 105)
+    env = envelope([Source("state", NOW - 1.0, 300, 1800)], now=NOW, consistency=vc)
+    # A DIVERGENT value verdict is a SEPARATE axis: the age class stays FRESH
+    # (the file was just written) while consistency_class flags the divergence.
+    assert env["staleness_class"] == FRESH
+    assert env["consistency_class"] == DIVERGENT
+    assert env["value_consistency"]["trial_lag"] == 5
+
+
+def test_envelope_omits_consistency_keys_by_default():
+    # Existing panels that pass no consistency verdict keep their envelope shape.
+    env = envelope([Source("a", NOW - 1, 10, 60)], now=NOW)
+    assert "value_consistency" not in env
+    assert "consistency_class" not in env
