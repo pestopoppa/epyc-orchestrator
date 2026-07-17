@@ -8,6 +8,12 @@ hook contract consumed by Wave-2 B1.
 
 from __future__ import annotations
 
+from src.verification.patch_pre_gate import (
+    ESCALATE_ON_VERDICT,
+    PreGateSignal,
+    evaluate_patch_pre_gate,
+    should_escalate_patch,
+)
 from src.verification.patch_verifier import (
     FAIL,
     INCONCLUSIVE,
@@ -30,4 +36,9 @@ __all__ = [
     "PASS",
     "FAIL",
     "INCONCLUSIVE",
+    # EV-12 pre-gate signal (pure static policy over verify_patch)
+    "evaluate_patch_pre_gate",
+    "should_escalate_patch",
+    "PreGateSignal",
+    "ESCALATE_ON_VERDICT",
 ]
