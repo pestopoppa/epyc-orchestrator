@@ -41,6 +41,11 @@ import numpy as np
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from src.llm_primitives.stat_tests import (  # noqa: E402
+    expected_calibration_error as _stat_ece,
+    roc_auc as _stat_roc_auc,
+)
+
 from orchestration.repl_memory.routing_classifier import RoutingClassifier
 from orchestration.repl_memory.verifier_head import VerifierHead
 
@@ -52,26 +57,17 @@ def _brier(p, y): return float(np.mean((p - y) ** 2))
 
 
 def _roc_auc(scores, labels):
-    pos = int(labels.sum())
-    neg = len(labels) - pos
-    if pos == 0 or neg == 0:
-        return float("nan")
-    ranks = np.argsort(np.argsort(scores))
-    rp = ranks[labels == 1].sum()
-    u = rp - pos * (pos - 1) / 2
-    return float(u / (pos * neg))
+    """Consolidated onto ``stat_tests.roc_auc`` (tie-averaged, == sklearn);
+    ``float('nan')`` on a single-class input preserved."""
+    auc = _stat_roc_auc(scores, labels)
+    return float("nan") if auc is None else float(auc)
 
 
 def _ece(p, y, nb=10):
-    bins = np.linspace(0.0, 1.0, nb + 1)
-    e, N = 0.0, len(p)
-    for i in range(nb):
-        lo, hi = bins[i], bins[i + 1]
-        m = (p >= lo) & (p < hi if i < nb - 1 else p <= hi)
-        if not m.any():
-            continue
-        e += (m.sum() / N) * abs(p[m].mean() - y[m].mean())
-    return float(e)
+    """Consolidated onto ``stat_tests.expected_calibration_error`` (identical
+    binning); ``0.0`` on empty input preserved."""
+    e = _stat_ece(p, y, n_bins=nb)
+    return 0.0 if e is None else float(e)
 
 
 def _reliability(p, y, nb=10):

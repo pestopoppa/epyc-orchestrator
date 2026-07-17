@@ -19,14 +19,15 @@ keep/revert/deploy/promote decision. Directions are stamped in the output
 (FA/FR/parse lower-better; acceptance/yield/CR higher-better).
 
 Metric provenance (EV-tier reuse — RC-4 "reuse ... do not duplicate"):
-  * ECE / Brier / ROC-AUC MIRROR the eval-tower EV-2 calibration block
-    (``scripts/autopilot/eval_tower.py`` ~lines 1602-1630, ``ece``/``auroc``) and
-    the pure-numpy ``scripts/maintenance/analyze_verifier_shadow.py::_ece/_brier/
-    _roc_auc``. The eval-tower ECE is INLINE (not an importable function) and its
-    AUC needs optional ``sklearn``; per RC-4 they are replicated here in stdlib
-    (no numpy/sklearn dep) WITH this origin note — not silently duplicated.
-  * Wilson interval MIRRORS
-    ``scripts/graph_router/extract_journal_soft_labels.py::_wilson_lower/_wilson_upper``.
+  * ECE / ROC-AUC / Wilson interval are CONSOLIDATED into the single clean-room
+    stdlib module ``src.llm_primitives.stat_tests`` (no numpy/sklearn dep); the
+    thin ``wilson_interval``/``ece``/``roc_auc`` wrappers below delegate to it.
+    That module also subsumes the prior duplicate copies in
+    ``scripts/graph_router/*`` and ``scripts/maintenance/analyze_verifier_shadow.py``.
+    The eval-tower EV-2 inline ECE/AUC (``scripts/autopilot/eval_tower.py``) is a
+    separate Wave-2 swap and is intentionally NOT touched here.
+  * Brier stays a local one-liner — it was never the source of drift and is out
+    of ``stat_tests`` scope.
   * FA/FR classification is IMPORTED (not duplicated) from
     ``src.trace.review_ledger`` — the single polarity source of truth.
 
@@ -37,7 +38,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import sqlite3
 import sys
 from collections import defaultdict
@@ -51,6 +51,11 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from src.llm_primitives.stat_tests import (  # noqa: E402
+    expected_calibration_error as _stat_ece,
+    roc_auc as _stat_roc_auc,
+    wilson_interval as _stat_wilson_interval,
+)
 from src.trace.review_ledger import (  # noqa: E402
     decision_correct,
     gold_is_bad,
@@ -94,16 +99,11 @@ GROUP_FIELDS = ("reviewer_model_quant", "grading_model", "rubric_version", "corp
 def wilson_interval(successes: int, n: int, z: float = 1.96) -> tuple[float, float]:
     """Wilson score interval for a binomial proportion.
 
-    MIRRORS scripts/graph_router/extract_journal_soft_labels.py::
-    _wilson_lower/_wilson_upper (stdlib math; reused, not re-derived).
+    Consolidated: delegates to ``src.llm_primitives.stat_tests.wilson_interval``.
+    ``z=1.96`` (this report's historical constant) is passed through explicitly,
+    so the returned bounds are bit-for-bit identical to the prior inline copy.
     """
-    if n <= 0:
-        return (0.0, 1.0)
-    p = successes / n
-    denom = 1 + z * z / n
-    centre = p + z * z / (2 * n)
-    margin = z * math.sqrt((p * (1 - p) + z * z / (4 * n)) / n)
-    return (max(0.0, (centre - margin) / denom), min(1.0, (centre + margin) / denom))
+    return _stat_wilson_interval(successes, n, z)
 
 
 def rate(successes: int, n: int) -> float | None:
@@ -123,54 +123,21 @@ def brier(confidences: list[float], correct: list[float]) -> float | None:
 def ece(confidences: list[float], correct: list[float], n_bins: int = 10) -> float | None:
     """Expected Calibration Error (equal-width bins).
 
-    MIRRORS the eval-tower EV-2 inline ECE (eval_tower.py ~1605-1618) and
-    analyze_verifier_shadow._ece: sum over bins of (bin_frac * |acc - conf|).
-    Last bin is closed on the right so confidence==1.0 lands in it.
+    Consolidated: delegates to
+    ``src.llm_primitives.stat_tests.expected_calibration_error``. Identical
+    equal-width binning (final bin closed on the right so confidence==1.0 lands
+    in it); returns ``None`` on empty input as before.
     """
-    n = len(confidences)
-    if n == 0:
-        return None
-    total = 0.0
-    for i in range(n_bins):
-        lo = i / n_bins
-        hi = (i + 1) / n_bins
-        if i < n_bins - 1:
-            mask = [lo <= c < hi for c in confidences]
-        else:
-            mask = [lo <= c <= hi for c in confidences]
-        bin_count = sum(mask)
-        if bin_count:
-            bin_acc = sum(y for y, m in zip(correct, mask) if m) / bin_count
-            bin_conf = sum(c for c, m in zip(confidences, mask) if m) / bin_count
-            total += (bin_count / n) * abs(bin_acc - bin_conf)
-    return total
+    return _stat_ece(confidences, correct, n_bins)
 
 
 def roc_auc(scores: list[float], labels: list[float]) -> float | None:
-    """Rank-based ROC-AUC (Mann–Whitney).
+    """Rank-based ROC-AUC (Mann–Whitney) with tie averaging.
 
-    MIRRORS analyze_verifier_shadow._roc_auc / mc_dropout_eval._roc_auc in stdlib
-    (the eval-tower path uses sklearn.roc_auc_score; equivalent, no dep here).
-    Returns None when one class is absent (AUC undefined).
+    Consolidated: delegates to ``src.llm_primitives.stat_tests.roc_auc``.
+    Returns ``None`` when one class is absent (AUC undefined), as before.
     """
-    pos = sum(1 for y in labels if y >= 0.5)
-    neg = len(labels) - pos
-    if pos == 0 or neg == 0:
-        return None
-    # average ranks (1-based), ties share the mean rank
-    order = sorted(range(len(scores)), key=lambda i: scores[i])
-    ranks = [0.0] * len(scores)
-    i = 0
-    while i < len(order):
-        j = i
-        while j + 1 < len(order) and scores[order[j + 1]] == scores[order[i]]:
-            j += 1
-        avg_rank = (i + j) / 2.0 + 1.0  # 1-based mean rank for the tie block
-        for k in range(i, j + 1):
-            ranks[order[k]] = avg_rank
-        i = j + 1
-    rank_pos = sum(ranks[i] for i in range(len(labels)) if labels[i] >= 0.5)
-    return (rank_pos - pos * (pos + 1) / 2.0) / (pos * neg)
+    return _stat_roc_auc(scores, labels)
 
 
 # --------------------------------------------------------------------------- #

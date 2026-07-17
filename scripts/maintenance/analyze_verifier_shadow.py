@@ -24,11 +24,21 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from collections import Counter
 from datetime import date, timedelta
 from pathlib import Path
 
 import numpy as np
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from src.llm_primitives.stat_tests import (  # noqa: E402
+    expected_calibration_error as _stat_ece,
+    roc_auc as _stat_roc_auc,
+)
 
 DEFAULT_LOG_DIR = Path("/mnt/raid0/llm/epyc-orchestrator/logs/progress")
 
@@ -82,25 +92,19 @@ def _brier(p: np.ndarray, y: np.ndarray) -> float:
 
 
 def _roc_auc(scores: np.ndarray, labels: np.ndarray) -> float:
-    pos = int(labels.sum())
-    neg = len(labels) - pos
-    if pos == 0 or neg == 0:
-        return float("nan")
-    ranks = np.argsort(np.argsort(scores))
-    rp = ranks[labels == 1].sum()
-    return float((rp - pos * (pos - 1) / 2) / (pos * neg))
+    """Consolidated onto the clean-room stdlib ``stat_tests.roc_auc``
+    (tie-averaged Mann-Whitney U, == sklearn); the historical ``float('nan')``
+    on a single-class input is preserved here."""
+    auc = _stat_roc_auc(scores, labels)
+    return float("nan") if auc is None else float(auc)
 
 
 def _ece(p: np.ndarray, y: np.ndarray, nb: int = 10) -> float:
-    bins = np.linspace(0.0, 1.0, nb + 1)
-    e, N = 0.0, len(p)
-    for i in range(nb):
-        lo, hi = bins[i], bins[i + 1]
-        m = (p >= lo) & (p < hi if i < nb - 1 else p <= hi)
-        if not m.any():
-            continue
-        e += (m.sum() / N) * abs(p[m].mean() - y[m].mean())
-    return float(e)
+    """Consolidated onto the clean-room stdlib
+    ``stat_tests.expected_calibration_error`` (identical equal-width binning);
+    the historical ``0.0`` on empty input is preserved here."""
+    ece = _stat_ece(p, y, n_bins=nb)
+    return 0.0 if ece is None else float(ece)
 
 
 def main() -> int:

@@ -59,6 +59,20 @@ _STATE_ASSIGNED_QUARTER = "assigned_quarter"
 _STATE_MIGRATION_FAILED_COLD = "migration_failed_cold"
 
 
+def _record_thrash_skip(reason: str) -> None:
+    """Best-effort ``kv_migration_thrash_skipped_total`` increment (WP-4).
+
+    A metrics failure must never break a dispatch/migration decision, so the
+    counter import + increment are fully swallowed.
+    """
+    try:
+        from src.metrics import migration_counters
+
+        migration_counters.record_thrash_skip(reason)
+    except Exception:  # pragma: no cover - metrics must never break dispatch
+        pass
+
+
 def _get_base_url(backend: Any) -> str | None:
     """Extract the base URL from a CachingBackend or LlamaServerBackend."""
     # CachingBackend wraps LlamaServerBackend
@@ -616,6 +630,9 @@ class ConcurrencyAwareBackend:
             if self._full_active or self._full_idle_since is None:
                 return
             if (now - self._full_idle_since) < cooldown_s:
+                # Anti-thrash guard ("avoids thrashing", handoff Phase 4): full
+                # released too recently to warm a session back onto it.
+                _record_thrash_skip("cooldown")
                 return
 
             # Guard 2: session has had a recent request (within window).
@@ -627,6 +644,9 @@ class ConcurrencyAwareBackend:
             # Guard 3: per-session migration cap (avoid ping-pong).
             cap = self._reverse_migration_session_cap()
             if self._reverse_migration_counts.get(session_id, 0) >= cap:
+                # Anti-thrash guard ("avoids ping-pong", handoff Phase 4): this
+                # session already hit its per-session reverse-migration cap.
+                _record_thrash_skip("session_cap")
                 return
 
             # Guard 4: don't double-fire.

@@ -14,7 +14,7 @@ import hashlib
 import json
 import math
 from collections import Counter, defaultdict
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -176,6 +176,84 @@ def _exact_two_sided_binomial_p(b: int, c: int) -> float:
         return 1.0
     tail = sum(math.comb(n, i) for i in range(0, min(b, c) + 1)) / (2**n)
     return round(min(1.0, 2.0 * tail), 8)
+
+
+# --------------------------------------------------------------------------- #
+# Paired-comparison input gate (ADDITIVE — does not touch mcnemar_from_vectors)
+#
+# A paired McNemar test is only valid when both arms were scored on the SAME
+# question set under the SAME evaluation profile. This gate encodes the
+# intake-802 discipline (research/deep-dives/
+# 2026-07-11-paired-significance-eval-methodology.md, "Guardrails": "Gate on
+# dataset_sha256 + test_profile equality before comparing ... the source refuses
+# to compare mismatched inputs"). Call it before pairing two arms into
+# ``mcnemar_from_vectors`` / ``compare_fingerprints`` when their provenance is
+# known.
+# --------------------------------------------------------------------------- #
+class PairedComparisonMismatchError(ValueError):
+    """Raised when two paired-comparison arms disagree on dataset identity or
+    test profile (or lack that identity), so a McNemar comparison between them
+    would be statistically invalid."""
+
+
+@dataclass(frozen=True)
+class ComparisonProfile:
+    """Identity of one arm of a paired comparison.
+
+    ``dataset_sha256`` pins the exact scored question set; ``test_profile`` pins
+    the evaluation conditions (scoring method, sampling/seed policy, prompt
+    template, decode params, ...). Two arms may be paired ONLY when both fields
+    match — see :func:`require_matched_comparison`.
+    """
+
+    dataset_sha256: str
+    test_profile: str
+
+
+def _coerce_profile(value: "ComparisonProfile | Mapping[str, Any]") -> ComparisonProfile:
+    if isinstance(value, ComparisonProfile):
+        profile = value
+    else:
+        try:
+            profile = ComparisonProfile(
+                dataset_sha256=str(value["dataset_sha256"]),
+                test_profile=str(value["test_profile"]),
+            )
+        except (KeyError, TypeError) as exc:
+            raise PairedComparisonMismatchError(
+                f"comparison arm is missing dataset_sha256/test_profile: {value!r}"
+            ) from exc
+    if not profile.dataset_sha256.strip() or not profile.test_profile.strip():
+        raise PairedComparisonMismatchError(
+            f"comparison arm has empty dataset_sha256/test_profile: {profile!r}"
+        )
+    return profile
+
+
+def require_matched_comparison(
+    arm_a: "ComparisonProfile | Mapping[str, Any]",
+    arm_b: "ComparisonProfile | Mapping[str, Any]",
+) -> ComparisonProfile:
+    """Refuse to run a paired comparison across mismatched (or unidentified) arms.
+
+    Accepts either :class:`ComparisonProfile` instances or mappings carrying
+    ``dataset_sha256`` and ``test_profile`` keys. On success returns the shared
+    profile; otherwise raises :class:`PairedComparisonMismatchError`. Empty or
+    missing identity on either arm is itself a refusal — two arms with no dataset
+    hash must not be silently treated as comparable.
+    """
+    a = _coerce_profile(arm_a)
+    b = _coerce_profile(arm_b)
+    mismatches: list[str] = []
+    if a.dataset_sha256 != b.dataset_sha256:
+        mismatches.append(f"dataset_sha256 {a.dataset_sha256!r} != {b.dataset_sha256!r}")
+    if a.test_profile != b.test_profile:
+        mismatches.append(f"test_profile {a.test_profile!r} != {b.test_profile!r}")
+    if mismatches:
+        raise PairedComparisonMismatchError(
+            "refusing to compare mismatched paired arms: " + "; ".join(mismatches)
+        )
+    return a
 
 
 def majority_vector(rows: list[dict[str, Any]]) -> dict[str, QuestionOutcome]:

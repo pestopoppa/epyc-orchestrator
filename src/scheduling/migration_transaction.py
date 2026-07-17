@@ -102,7 +102,30 @@ class MigrationTransaction:
             if new_state is MigrationState.VERIFIED or new_state is MigrationState.ABORTED:
                 # Wake any placement waiters.
                 self.event.set()
+            if new_state is MigrationState.COMMITTED:
+                # WP-4 telemetry: count each committed migration once, keyed by
+                # direction. Both the forward (_migrate_kv, target_quarter >= 0)
+                # and reverse (_reverse_migrate_kv, target_quarter == -1) paths
+                # funnel through this terminal-success transition, so wiring the
+                # counter here needs no backend edits. Best-effort — see helper.
+                self._record_committed_direction()
             return True
+
+    def _record_committed_direction(self) -> None:
+        """Increment ``kv_migration_direction_total`` on COMMITTED (best-effort).
+
+        A metrics failure must never break a migration commit, so the counter
+        import + increment are fully swallowed. Lazy import keeps this pure
+        state module structurally decoupled from the metrics surface.
+        """
+        try:
+            from src.metrics import migration_counters
+
+            migration_counters.record_migration_direction(
+                migration_counters.direction_for_target_quarter(self.target_quarter)
+            )
+        except Exception:  # pragma: no cover - metrics must never break migration
+            pass
 
     @staticmethod
     def _is_legal_transition(current: MigrationState, target: MigrationState) -> bool:
