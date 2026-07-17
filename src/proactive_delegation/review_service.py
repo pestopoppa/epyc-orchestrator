@@ -59,6 +59,15 @@ OBJECTIVE_EVIDENCE_KINDS = frozenset({"gate_result", "test_result", "scorer_resu
 # BLOCKING decision is downgraded + logged rather than enforced.
 REVIEW_WARN_ONLY_ENV = "REVIEW_DECISION_WARN_ONLY"
 
+# RD-7 Trinity tri-role axis: a review-decision turn IS a Verifier turn. Tag every
+# emitted review-plane trace event's detail with the Trinity ``assigned_role`` so the
+# tri-role shadow telemetry (scripts/analysis/trinity_shadow_telemetry.py, which scans
+# the telemetry detail/``data`` for ``assigned_role``) can correlate review dispatches
+# with Verifier-role semantics. This axis is ORTHOGONAL to the model role carried in
+# ``Event.role`` (e.g. ``architect_general``); it mirrors the convention in
+# routing_decision.routing_meta()'s ``assigned_role`` field. Value == TrinityRole.VERIFIER.value.
+REVIEW_ASSIGNED_ROLE = "verifier"
+
 
 def _estimate_tokens(text: str | None) -> int:
     """Cheap local token estimate (~4 chars/token) for decisions with no usage data."""
@@ -321,6 +330,12 @@ Rules:
         """
         try:
             from src.trace.store import Event, EventSource, detail_to_json
+
+            # RD-7: tag the emitted detail with the Trinity Verifier-role axis (mirror of
+            # routing_meta()'s ``assigned_role``). Non-mutating shallow merge — the
+            # caller's dict is untouched and the service's returns stay byte-identical.
+            if isinstance(detail, dict) and "assigned_role" not in detail:
+                detail = {**detail, "assigned_role": REVIEW_ASSIGNED_ROLE}
 
             ev = Event(
                 ts_utc="",  # emit() stamps 'now' when empty

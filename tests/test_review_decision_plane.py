@@ -218,6 +218,34 @@ class TestAlwaysOnEmission:
 
         assert json.loads(events[0].detail_json)["parse_ok"] is False
 
+    def test_review_event_tags_verifier_assigned_role(self):
+        """RD-7: a review-decision turn IS a Verifier turn — the emitted review event
+        carries the Trinity ``assigned_role=verifier`` axis (orthogonal to the model
+        role) so tri-role shadow telemetry can capture review dispatches."""
+        import json
+
+        svc, events = _capturing_service('{"d":"approve","s":0.9,"f":"ok"}')
+        svc.review(spec={}, subtask={"id": "S1", "action": "a"}, output="hello world")
+        assert len(events) == 1
+        detail = json.loads(events[0].detail_json)
+        assert detail["assigned_role"] == "verifier"
+
+    def test_all_review_dispatches_tag_verifier_role(self):
+        """RD-7: every review-plane dispatch (review / candidate / escalate) tags the
+        Trinity Verifier role, keeping the axis distinct from the model ``Event.role``."""
+        import json
+
+        svc, events = _capturing_service(
+            '{"decision":"approve","confidence":0.8,"blocking":{"tripwire":false},"advisory":{"score":0.9,"feedback":"ok"}}'
+        )
+        svc.review_candidate({"task_ref": "T1", "objective": "x", "outputs": []}, subtask_id="C1")
+        svc.escalate(_review(decision=ReviewDecision.ESCALATE))
+        assert events
+        for ev in events:
+            assert json.loads(ev.detail_json)["assigned_role"] == "verifier"
+            # Orthogonality: the model role stays the reviewer's model binding.
+            assert ev.role == "architect_general"
+
     def test_write_through_to_temp_db(self, tmp_path):
         """Real emit.py write-through lands a durable row (no injected sink)."""
         db = tmp_path / "trace.sqlite"
