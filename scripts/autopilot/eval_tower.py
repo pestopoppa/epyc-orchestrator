@@ -12,7 +12,7 @@ import math
 import os
 import random
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 import hashlib
@@ -707,8 +707,22 @@ from src.autopilot_core.instrument_era_guard import (  # noqa: E402
 )
 from src.behavior_signature import normalized_answer_hash  # noqa: E402
 from src.llm_primitives.stat_tests import (  # noqa: E402
+    DEFAULT_WILSON_Z,
     expected_calibration_error,
     roc_auc,
+    wilson_interval,
+)
+
+# Paired-significance screening for A/B arm comparisons (config/quant A/B). These
+# are the LANDED clean-room stats primitives — the screening hook below only
+# orchestrates them onto eval_tower's own comparison output; it does NOT
+# reimplement any statistic. ``paired_stats`` lives beside this module in
+# ``scripts/autopilot/``.
+from paired_stats import (  # noqa: E402
+    PairedComparisonMismatchError,
+    QuestionOutcome,
+    mcnemar_from_vectors,
+    require_matched_comparison,
 )
 
 DEFAULT_CORE_DIR = _orch_root / "benchmarks" / "prompts"
@@ -976,6 +990,152 @@ def dataset_content_sha256(questions: Sequence[dict[str, Any]]) -> str:
             h.update(b"\x00")
         h.update(b"\x1e")
     return h.hexdigest()
+
+
+# ── paired-significance screening (config/quant A/B) ─────────────────────────
+#
+# When eval_tower scores two (or more) arms of a config/quant A/B on the SAME
+# question set under the SAME test profile, a raw accuracy delta is not a verdict:
+# a 1-2pp gap on a few hundred questions is routinely inside the noise band. This
+# hook screens each arm pair with the LANDED clean-room stats primitives —
+#   * the exact paired McNemar sign-test over discordant (flip) pairs
+#     (paired_stats.mcnemar_from_vectors), and
+#   * a per-arm Wilson score interval on the shared question set
+#     (stat_tests.wilson_interval)
+# — after gating provenance with paired_stats.require_matched_comparison so two
+# arms are only ever paired when their dataset_sha256 + test_profile match. It
+# REUSES those functions verbatim and reimplements no statistic; it only shapes
+# eval_tower's own per-arm outcome vectors into their inputs and collects the
+# outputs. Attach the returned dict to an A/B result so downstream verdicts are
+# statistically grounded instead of raw-delta.
+
+
+def _arm_outcome_vector(outcomes: "Mapping[str, Any]") -> dict[str, QuestionOutcome]:
+    """Coerce a ``{qid: correct}`` mapping into paired_stats QuestionOutcome form.
+
+    Accepts bare booleans or objects exposing ``.correct``/``["correct"]`` so an
+    arm can be fed either raw per-question correctness or richer result records.
+    """
+    vector: dict[str, QuestionOutcome] = {}
+    for qid, value in outcomes.items():
+        if isinstance(value, QuestionOutcome):
+            vector[str(qid)] = value
+            continue
+        if isinstance(value, Mapping):
+            correct = bool(value.get("correct"))
+            suite = str(value.get("suite", ""))
+        elif hasattr(value, "correct"):
+            correct = bool(getattr(value, "correct"))
+            suite = str(getattr(value, "suite", ""))
+        else:
+            correct = bool(value)
+            suite = ""
+        vector[str(qid)] = QuestionOutcome(qid=str(qid), suite=suite, correct=correct, trial_id=-1)
+    return vector
+
+
+def screen_paired_arms(
+    arms: "Sequence[Mapping[str, Any]]",
+    *,
+    z: float = DEFAULT_WILSON_Z,
+    alpha: float = 0.05,
+) -> dict[str, Any]:
+    """Paired-significance screen over a set of A/B arms.
+
+    Each ``arm`` is a mapping with:
+      * ``label``    — arm identity (e.g. an EV-11 ``arm`` stamp or a role name);
+      * ``outcomes`` — ``{qid: correct}`` (bool, ``{"correct": ...}``, a
+                       ``QuestionResult``-like object, or a ``QuestionOutcome``);
+      * ``profile``  — optional ``{dataset_sha256, test_profile}`` (or a
+                       :class:`ComparisonProfile`) used to gate pairing.
+
+    For every unordered arm pair whose profiles match (per
+    :func:`require_matched_comparison`) it computes the exact paired McNemar p
+    over the discordant/flip pairs and a per-arm Wilson interval on the shared
+    question set. Pairs whose provenance disagrees are recorded under
+    ``mismatched_pairs`` rather than silently compared. Pure/deterministic — no
+    inference, no I/O.
+
+    Returns a JSON-serializable dict with keys ``z``, ``alpha``, ``n_arms``,
+    ``arms`` (per-arm accuracy + Wilson CI over that arm's own outcomes),
+    ``pairs`` (the paired screen, one record per matched pair), and
+    ``mismatched_pairs``.
+    """
+    prepared: list[dict[str, Any]] = []
+    for arm in arms:
+        label = str(arm.get("label", f"arm{len(prepared)}"))
+        vector = _arm_outcome_vector(arm.get("outcomes") or {})
+        prepared.append({"label": label, "vector": vector, "profile": arm.get("profile")})
+
+    per_arm: dict[str, Any] = {}
+    for arm in prepared:
+        vector = arm["vector"]
+        total = len(vector)
+        correct = sum(1 for o in vector.values() if o.correct)
+        lo, hi = wilson_interval(correct, total, z=z)
+        per_arm[arm["label"]] = {
+            "n": total,
+            "correct": correct,
+            "accuracy": (correct / total) if total else None,
+            "wilson_lower": round(lo, 6),
+            "wilson_upper": round(hi, 6),
+        }
+
+    pairs: list[dict[str, Any]] = []
+    mismatched: list[dict[str, Any]] = []
+    for i in range(len(prepared)):
+        for j in range(i + 1, len(prepared)):
+            arm_a = prepared[i]
+            arm_b = prepared[j]
+            # Provenance gate — only pair arms scored on the same dataset+profile.
+            if arm_a["profile"] is not None and arm_b["profile"] is not None:
+                try:
+                    require_matched_comparison(arm_a["profile"], arm_b["profile"])
+                except PairedComparisonMismatchError as exc:
+                    mismatched.append(
+                        {"arm_a": arm_a["label"], "arm_b": arm_b["label"], "reason": str(exc)}
+                    )
+                    continue
+            result = mcnemar_from_vectors(
+                arm_a["vector"], arm_b["vector"], arm_a["label"], arm_b["label"]
+            )
+            shared = sorted(set(arm_a["vector"]) & set(arm_b["vector"]))
+            a_correct = sum(1 for qid in shared if arm_a["vector"][qid].correct)
+            b_correct = sum(1 for qid in shared if arm_b["vector"][qid].correct)
+            wa_lo, wa_hi = wilson_interval(a_correct, len(shared), z=z)
+            wb_lo, wb_hi = wilson_interval(b_correct, len(shared), z=z)
+            p = result.p_value_two_sided
+            pairs.append(
+                {
+                    "arm_a": arm_a["label"],
+                    "arm_b": arm_b["label"],
+                    "shared_qids": result.shared_qids,
+                    "a_correct_b_wrong": result.a_correct_b_wrong,
+                    "a_wrong_b_correct": result.a_wrong_b_correct,
+                    "same_correct": result.same_correct,
+                    "same_wrong": result.same_wrong,
+                    "mcnemar_p_two_sided": p,
+                    "odds_ratio_b_over_a": result.odds_ratio_b_over_a,
+                    "accuracy_a": result.accuracy_a,
+                    "accuracy_b": result.accuracy_b,
+                    "delta_b_minus_a": result.delta_b_minus_a,
+                    # Per-arm Wilson CI on the SHARED set (the McNemar denominator).
+                    "wilson_a": [round(wa_lo, 6), round(wa_hi, 6)],
+                    "wilson_b": [round(wb_lo, 6), round(wb_hi, 6)],
+                    # Screening signals for a grounded verdict:
+                    "significant": (p < alpha),
+                    "wilson_ci_overlap": not (wa_hi < wb_lo or wb_hi < wa_lo),
+                }
+            )
+
+    return {
+        "z": z,
+        "alpha": alpha,
+        "n_arms": len(prepared),
+        "arms": per_arm,
+        "pairs": pairs,
+        "mismatched_pairs": mismatched,
+    }
 
 
 def score_math_rebaseline_answers(
@@ -2699,6 +2859,15 @@ class EvalTower:
             "dataset_sha256": dataset_sha256,
         }
         per_role: dict[str, Any] = {}
+        # Provenance stamp shared by every arm of this re-baseline: all arms drew
+        # the identical question set (dataset_sha256) under the identical
+        # test_profile, so require_matched_comparison inside screen_paired_arms
+        # will pair them. A canonical JSON string pins the profile identity.
+        profile_stamp = {
+            "dataset_sha256": dataset_sha256,
+            "test_profile": json.dumps(test_profile, sort_keys=True, default=str),
+        }
+        arm_screens: list[dict[str, Any]] = []
         with httpx.Client(timeout=self.timeout) as client:
             for role in roles:
                 role_qs = [self._with_forced_role(q, role) for q in questions]
@@ -2706,9 +2875,10 @@ class EvalTower:
                 agg = self._aggregate(results, tier=2)
                 scored = [r for r in results if not r.error]
                 correct = sum(1 for r in scored if r.correct)
+                arm_label = f"ev11-math-rebaseline::{role}::seed{int(seed)}::{dataset_sha256[:12]}"
                 per_role[role] = {
                     "role": role,
-                    "arm": f"ev11-math-rebaseline::{role}::seed{int(seed)}::{dataset_sha256[:12]}",
+                    "arm": arm_label,
                     "n_questions": len(results),
                     "n_scored": len(scored),
                     "correct": correct,
@@ -2719,6 +2889,17 @@ class EvalTower:
                     "auroc": agg.auroc,
                     "test_profile": test_profile,
                 }
+                # Per-question correctness vector for the paired screen. Keyed by
+                # the stable qid so the same question aligns across arms (only the
+                # forced role differs). Errored questions are dropped, matching the
+                # accuracy denominator above.
+                arm_screens.append(
+                    {
+                        "label": arm_label,
+                        "profile": profile_stamp,
+                        "outcomes": {r.qid: r.correct for r in scored if r.qid},
+                    }
+                )
         return {
             "mode": "math_rebaseline",
             "suite": "math",
@@ -2730,6 +2911,10 @@ class EvalTower:
             "dataset_sha256": dataset_sha256,
             "test_profile": test_profile,
             "per_role": per_role,
+            # Paired-significance screen over the arms: exact McNemar p on the
+            # flip pairs + per-arm Wilson CIs, gated on matched dataset+profile.
+            # Empty ``pairs`` when fewer than two arms were scored.
+            "paired_significance": screen_paired_arms(arm_screens),
         }
 
     def evaluate(

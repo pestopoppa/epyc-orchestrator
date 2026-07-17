@@ -16,6 +16,6 @@
     ]
   },
   "desired_property": "Directive text in the objective field is treated as inert data, not as reviewer control instructions (§13.2 control 1).",
-  "landed_defense": "none for in-content text: objective is projected verbatim into the reviewer prompt with no explicit data delimiter.",
+  "landed_defense": "FREEZE-BLOCKED render-layer: the objective is projected verbatim as DATA (untrusted_content_policy.candidate_text_is_data). Treating it as inert requires an explicit prompt data-delimiter in review_service's renderer (FROZEN); the assembly sanitizer will not delete the objective, so the directive text still reaches the prompt.",
   "expected": "gap"
 }
