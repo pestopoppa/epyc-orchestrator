@@ -26,7 +26,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from src.trace.store import DEFAULT_DB_PATH
+from src.trace.store import DEFAULT_DB_PATH, EventCategory
 
 
 _BASE_COLUMNS = (
@@ -196,6 +196,94 @@ def trial_context(
             "context_events": len(context_rows),
             "timeline": len(timeline),
         },
+    }
+
+
+# Ordered phase map for review-plane decision-chain replay (TM-5).
+# Each phase groups one or more EventCategory values; a decision chain is the
+# ts-ordered sequence of these events for a given session_id / trial_id.
+_CHAIN_PHASE_ORDER = ("task", "plan", "reminder", "review", "gate", "escalation", "outcome")
+_CHAIN_PHASE_CATEGORIES: dict[str, tuple[str, ...]] = {
+    "task": (EventCategory.TASK_START,),
+    "plan": (EventCategory.CANDIDATE_PACKAGE,),
+    "reminder": (EventCategory.PLAN_REMINDER,),
+    "review": (EventCategory.REVIEW_DECISION,),
+    "gate": (EventCategory.VERIFICATION_REPORT, EventCategory.SAFETY_VERDICT),
+    "escalation": (EventCategory.REVIEW_ESCALATION,),
+    "outcome": (EventCategory.TASK_END,),
+}
+# category -> phase reverse index
+_CATEGORY_PHASE: dict[str, str] = {
+    cat: phase for phase, cats in _CHAIN_PHASE_CATEGORIES.items() for cat in cats
+}
+
+
+def decision_chain(
+    db_path: Path | str = DEFAULT_DB_PATH,
+    session_id: str | None = None,
+    trial_id: int | None = None,
+    categories: list[str] | None = None,
+    limit: int = 1000,
+) -> dict[str, Any]:
+    """Reconstruct a review-plane decision chain by session_id / trial_id.
+
+    Replays the control-plane sequence ``task -> plan -> review decision ->
+    gate results -> outcome`` (plus plan reminders and escalations) as an
+    ordered list of events. Works over the TM-2 REVIEW_* categories emitted by
+    the live push path (``src/trace/emit.py``), but also picks up ``task_start``
+    / ``task_end`` / ``safety_verdict`` rows that share the same session/trial
+    so the chain is anchored to the task and its outcome.
+
+    At least one of ``session_id`` / ``trial_id`` must be given. Returns::
+
+        {
+          "session_id", "trial_id",
+          "chain":    [events ordered by (ts_utc, id)],
+          "by_phase": {phase: [events]},   # task/plan/reminder/review/gate/escalation/outcome
+          "counts":   {"chain": N, per-phase counts...},
+        }
+    """
+    if session_id is None and trial_id is None:
+        raise ValueError("decision_chain requires session_id and/or trial_id")
+
+    wanted = list(categories) if categories else [
+        cat for cats in _CHAIN_PHASE_CATEGORIES.values() for cat in cats
+    ]
+
+    # One query per category (query() filters a single category), then merge.
+    merged: dict[int, dict[str, Any]] = {}
+    for cat in wanted:
+        for row in query(
+            db_path=db_path,
+            session_id=session_id,
+            trial_id=trial_id,
+            category=cat,
+            limit=limit,
+        ):
+            merged[row["id"]] = row
+
+    chain = sorted(
+        merged.values(),
+        key=lambda row: (
+            _parse_ts(str(row.get("ts_utc") or "")) or datetime.min.replace(tzinfo=timezone.utc),
+            row.get("id") or 0,
+        ),
+    )
+
+    by_phase: dict[str, list[dict[str, Any]]] = {phase: [] for phase in _CHAIN_PHASE_ORDER}
+    for row in chain:
+        phase = _CATEGORY_PHASE.get(row.get("category") or "", "review")
+        by_phase.setdefault(phase, []).append(row)
+
+    counts = {"chain": len(chain)}
+    counts.update({phase: len(rows) for phase, rows in by_phase.items()})
+
+    return {
+        "session_id": session_id,
+        "trial_id": trial_id,
+        "chain": chain,
+        "by_phase": by_phase,
+        "counts": counts,
     }
 
 

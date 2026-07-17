@@ -36,12 +36,22 @@ class StepExecutionError(DelegationError):
 
 
 class ReviewDecision(Enum):
-    """Architect's review decision."""
+    """Reviewer's bounded-authority decision.
+
+    Mirrors the ``decision`` enum in ``orchestration/review_decision.schema.json``.
+    REQUEST_EVIDENCE and REJECT_TO_EMPTY (RA-6) are additive — existing consumers
+    that branch on APPROVE/REJECT/REQUEST_CHANGES/ESCALATE keep working; unhandled
+    members fall through their else-branches (verified in delegator.py /
+    parallel_step_executor.py).
+    """
 
     APPROVE = "approve"
     REQUEST_CHANGES = "request_changes"
     ESCALATE = "escalate"
     REJECT = "reject"
+    # RA-6 additions (evidence-linked control plane):
+    REQUEST_EVIDENCE = "request_evidence"  # verdict withheld pending verifier_requests
+    REJECT_TO_EMPTY = "reject_to_empty"  # bad plan/output worse than none; discard, don't iterate
 
 
 class TaskComplexity(Enum):
@@ -134,7 +144,23 @@ class IterationContext:
 
 @dataclass
 class ArchitectReview:
-    """Result of architect reviewing specialist output."""
+    """Result of a reviewer adjudicating specialist output.
+
+    RA-6 extends this with the evidence-linked control-plane fields while keeping
+    every legacy field/default so existing consumers (review_service.py,
+    delegator.py, parallel_step_executor.py, chat_review.py) are unaffected.
+
+    Score vs confidence semantics (score-vs-confidence is an open operator
+    decision, documented here for now):
+      * ``score``      — advisory quality of the candidate in [0, 1]
+                         (how good is the output). Legacy field, kept for compat.
+      * ``confidence`` — the reviewer's calibrated confidence in its own VERDICT
+                         in [0, 1] (how sure am I this decision is correct). Feeds
+                         the FA/FR calibration ledger, not the quality signal.
+
+    ``tripwire`` is the hard-stop channel (orthogonal to ``score``): a violated
+    invariant blocks regardless of advisory score (safety_gate.py semantics).
+    """
 
     subtask_id: str
     decision: ReviewDecision
@@ -142,9 +168,18 @@ class ArchitectReview:
     score: float = 0.0
     suggested_changes: list[str] = field(default_factory=list)
     approved_output: str | None = None
+    # RA-6 evidence-linked control-plane fields (all optional / defaulted):
+    confidence: float = 0.0
+    tripwire: bool = False
+    evidence: list[dict[str, Any]] = field(default_factory=list)
+    verifier_requests: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for JSON serialization."""
+        """Convert to dictionary for JSON serialization.
+
+        Legacy keys are preserved verbatim; the new keys are additive so existing
+        readers of the dict are unaffected.
+        """
         return {
             "subtask_id": self.subtask_id,
             "decision": self.decision.value,
@@ -152,6 +187,10 @@ class ArchitectReview:
             "score": self.score,
             "suggested_changes": self.suggested_changes,
             "approved_output": self.approved_output,
+            "confidence": self.confidence,
+            "tripwire": self.tripwire,
+            "evidence": self.evidence,
+            "verifier_requests": self.verifier_requests,
         }
 
 

@@ -34,6 +34,9 @@ class EventSource:
     AUTOPILOT_JOURNAL = "autopilot_journal"
     AUTOPILOT_STATE = "autopilot_state"
     HERMES_SESSION = "hermes_session"
+    # Live in-process push source (TM-4). Rows carry a synthetic source_path
+    # (see src/trace/emit.py) so they never collide with file-ingested rows.
+    REVIEW_PLANE = "review_plane"
 
 
 class EventCategory:
@@ -60,6 +63,15 @@ class EventCategory:
     SAFETY_VERDICT = "safety_verdict"
     CONTROLLER_SNAPSHOT = "controller_snapshot"
     SOURCE_UNAVAILABLE = "source_unavailable"
+
+    # --- Architect->Reviewer control-plane categories (TM-2) ---
+    # Emitted live via the review-plane push path (src/trace/emit.py) and
+    # consumed by the decision-chain replay (src/trace/query.py::decision_chain).
+    REVIEW_DECISION = "review_decision"
+    CANDIDATE_PACKAGE = "candidate_package"
+    VERIFICATION_REPORT = "verification_report"
+    REVIEW_ESCALATION = "review_escalation"
+    PLAN_REMINDER = "plan_reminder"
 
 
 @dataclass

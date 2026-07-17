@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/pestopoppa/amd-epyc-inference/schemas/review_rubric.schema.json",
+  "title": "ReviewRubric",
+  "description": "Cacheable, versioned rubric a heavyweight author writes once and a cheap grader applies per candidate (two-turn reviewer economics). Items are {text, axis, weight in {1,2,3}}. Axes follow per-domain templates (code: file-change/spec-alignment/integrity/runtime; QA: grounding/question-alignment/integrity-no-fabrication/completeness; math: answer/method/integrity/coverage) but the schema is domain-general (intake-834). Immutable once published; new versions are new artifacts.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "rubric_id", "version", "domain", "items"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+      "description": "Artifact schema version (semver)."
+    },
+    "rubric_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable identifier; (rubric_id, version) is the cache key."
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+      "description": "Rubric content version (semver). Bump = new cacheable artifact."
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "domain": {
+      "type": "string",
+      "enum": ["code", "qa", "math", "summarize", "reasoning", "tool_use", "vision", "general"],
+      "description": "Domain template the axes are drawn from."
+    },
+    "title": {
+      "type": "string",
+      "description": "Human-readable rubric name."
+    },
+    "grading_scale": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Optional pointwise grading scale each item is scored on (default 0-1).",
+      "properties": {
+        "min": { "type": "number" },
+        "max": { "type": "number" },
+        "kind": {
+          "type": "string",
+          "enum": ["binary", "likert", "unit_interval"]
+        }
+      }
+    },
+    "items": {
+      "type": "array",
+      "minItems": 1,
+      "description": "The rubric criteria.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "text", "axis", "weight"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^R[0-9]+$",
+            "description": "Item id (R1, R2, ...); referenced by rubric-grading responses."
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The criterion, phrased as a checkable question."
+          },
+          "axis": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Grading axis (per-domain template, e.g. spec-alignment, grounding, integrity, method)."
+          },
+          "weight": {
+            "type": "integer",
+            "enum": [1, 2, 3],
+            "description": "Importance weight (1=minor, 2=standard, 3=critical)."
+          }
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Which author/model wrote the rubric.",
+      "properties": {
+        "author_model": { "type": "string" },
+        "role": { "type": "string" }
+      }
+    }
+  }
+}

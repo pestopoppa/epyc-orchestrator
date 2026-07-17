@@ -26,7 +26,7 @@ from src.trace.navigation import (
     search_conversation,
     search_records,
 )
-from src.trace.query import query, stats, trial_context
+from src.trace.query import decision_chain, query, stats, trial_context
 
 
 def _cmd_ingest(args: argparse.Namespace) -> int:
@@ -134,6 +134,27 @@ def _cmd_trial_context(args: argparse.Namespace) -> int:
     for row in ctx["timeline"]:
         print(_format_row(row))
     print(f"\n{len(ctx['timeline'])} rows")
+    return 0
+
+
+def _cmd_decision_chain(args: argparse.Namespace) -> int:
+    chain = decision_chain(
+        db_path=args.db or DEFAULT_DB_PATH,
+        session_id=args.session,
+        trial_id=args.trial,
+        limit=args.limit,
+    )
+    if args.json:
+        print(json.dumps(chain, indent=2, default=str))
+        return 0
+    print(
+        f"session={chain['session_id'] or '-'} trial={chain['trial_id'] if chain['trial_id'] is not None else '-'} "
+        f"counts={json.dumps(chain['counts'], sort_keys=True)}"
+    )
+    print("\nDecision chain:")
+    for row in chain["chain"]:
+        print(_format_row(row))
+    print(f"\n{len(chain['chain'])} rows")
     return 0
 
 
@@ -265,6 +286,16 @@ def main(argv: list[str] | None = None) -> int:
     pt.add_argument("--limit", type=int, default=200)
     pt.add_argument("--json", action="store_true")
     pt.set_defaults(func=_cmd_trial_context)
+
+    pdc = sub.add_parser(
+        "decision-chain",
+        help="replay a review-plane decision chain (task->plan->review->gate->outcome)",
+    )
+    pdc.add_argument("--session")
+    pdc.add_argument("--trial", type=int)
+    pdc.add_argument("--limit", type=int, default=1000)
+    pdc.add_argument("--json", action="store_true")
+    pdc.set_defaults(func=_cmd_decision_chain)
 
     psr = sub.add_parser("search-records", help="NapMem read tool: FTS search records")
     psr.add_argument("--text", required=True, help="FTS5 query against summary + detail_json")

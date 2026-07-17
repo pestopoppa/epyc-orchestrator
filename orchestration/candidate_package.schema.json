@@ -1,0 +1,164 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/pestopoppa/amd-epyc-inference/schemas/candidate_package.schema.json",
+  "title": "CandidatePackage",
+  "description": "The unit a Reviewer adjudicates: a task ref, the plan it was produced under, the produced outputs, declared acceptance checks, and provenance. Carries a SANITIZATION CONTRACT: the reviewer-visible projection (`sanitized_view`) MUST exclude author self-assessment prose, confidence assertions, and 'refined/final/expert' labels, because those framings shift verdicts ~18-29pp (intake-837/838). Sanitization is applied at package-assembly time, not at reviewer-prompt time. Immutable once assembled; only `status` mutates.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "package_id", "task_ref", "provenance", "sanitized_view"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+      "description": "Artifact schema version (semver)."
+    },
+    "package_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Unique identifier for this candidate package."
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["assembled", "in_review", "reviewed", "withdrawn"],
+      "description": "Mutable status field (immutable-structure/mutable-status, intake-846). All other fields are append/versioned."
+    },
+    "task_ref": {
+      "type": "string",
+      "minLength": 1,
+      "description": "task_id of the TaskIR this candidate answers."
+    },
+    "plan_ref": {
+      "type": "string",
+      "description": "Reference to the plan/ArchitectureIR the candidate was produced under (task_id or arch name@version)."
+    },
+    "objective": {
+      "type": "string",
+      "description": "Neutral restatement of the objective (safe for the reviewer view)."
+    },
+    "outputs": {
+      "type": "array",
+      "description": "The produced artifacts under review (domain-general: diffs, files, answers, summaries).",
+      "items": { "$ref": "#/$defs/output_ref" }
+    },
+    "acceptance_checks": {
+      "type": "array",
+      "description": "Declared, checkable acceptance criteria (mirror of TaskIR.definition_of_done).",
+      "items": { "$ref": "#/$defs/acceptance_check" }
+    },
+    "provenance": { "$ref": "#/$defs/provenance" },
+    "author_self_assessment": {
+      "type": "string",
+      "description": "OPTIONAL author-supplied self-assessment prose. MUST be stripped from sanitized_view — retained on the full package for audit only."
+    },
+    "author_confidence_assertion": {
+      "description": "OPTIONAL author-asserted confidence. MUST be stripped from sanitized_view (framing-neutrality, intake-837).",
+      "type": ["number", "string"]
+    },
+    "quality_labels": {
+      "type": "array",
+      "description": "OPTIONAL author labels (e.g. 'refined', 'final', 'expert'). MUST be stripped from sanitized_view.",
+      "items": { "type": "string" }
+    },
+    "sanitized_view": { "$ref": "#/$defs/sanitized_view" }
+  },
+  "$defs": {
+    "output_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "ref"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["diff", "file", "text", "answer", "summary", "artifact"]
+        },
+        "ref": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Locator or inline content id for the output."
+        },
+        "content_type": { "type": "string" },
+        "label": { "type": "string" }
+      }
+    },
+    "acceptance_check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "statement"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "statement": { "type": "string", "minLength": 1 },
+        "verifier": {
+          "type": "string",
+          "description": "Objective verifier that can decide this check (gate/scorer/checker id), if any."
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model", "role"],
+      "description": "Reproducibility record for the AUTHOR of the candidate.",
+      "properties": {
+        "model": { "type": "string", "minLength": 1 },
+        "quant": {
+          "type": "string",
+          "description": "Quantization (e.g. Q4_K_M, UD-IQ2_M)."
+        },
+        "role": { "type": "string", "minLength": 1 },
+        "flag_state": {
+          "type": "object",
+          "description": "Relevant runtime-flag values at generation time.",
+          "additionalProperties": true
+        },
+        "instrument_era": {
+          "type": "string",
+          "description": "instrument_eras.yaml era label active at generation time."
+        },
+        "server": { "type": "string" },
+        "generated_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "sanitized_view": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "REVIEWER-VISIBLE PROJECTION. This is the ONLY view a Reviewer is shown. It MUST NOT contain author self-assessment prose, confidence assertions, or 'refined/final/expert' quality labels (the fields author_self_assessment / author_confidence_assertion / quality_labels are excluded by construction). Framing-neutral by contract.",
+      "required": ["task_ref", "outputs", "sanitization"],
+      "properties": {
+        "task_ref": { "type": "string", "minLength": 1 },
+        "objective": { "type": "string" },
+        "outputs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/output_ref" }
+        },
+        "acceptance_checks": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/acceptance_check" }
+        },
+        "sanitization": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["applied"],
+          "properties": {
+            "applied": {
+              "type": "boolean",
+              "description": "True once the sanitization projection has been applied at assembly time."
+            },
+            "removed_fields": {
+              "type": "array",
+              "description": "Field names stripped from the full package (audit trail).",
+              "items": { "type": "string" }
+            },
+            "policy_version": {
+              "type": "string",
+              "description": "Version of the sanitization policy applied."
+            }
+          }
+        }
+      }
+    }
+  }
+}
