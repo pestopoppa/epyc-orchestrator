@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 import json
 import os
 from pathlib import Path
+import re
 import sys
 import time
 from typing import Any
@@ -375,6 +376,261 @@ def build_report(args: argparse.Namespace, *, output_dir: Path) -> tuple[dict[st
     return report, rc
 
 
+# ── verifier-mode (EV-4 / EV-5/7/8 / EV-11) additive surface ─────────────────
+# BUILD-evalbatch-verifier-mode. --mode {calibration,math_rebaseline} runs the
+# EvalTower verifier-mode entrypoints instead of the tier A/B path. Execution is
+# gated identically to the tier path (needs --apply --confirm-clean-window, and
+# an inactive AutoPilot unless --allow-autopilot-active). The verifier-MODEL pass
+# (EV-5/7/8) is additionally MODEL-DOWNLOAD gated: --verifier <model> is accepted,
+# but if the model is not on disk the run refuses with a MODEL-DOWNLOAD-<x> error
+# rather than fabricating verifier scores.
+
+MODEL_ROOTS = (Path("/mnt/raid0/llm/models"),)
+
+# Known cross-family verifier candidates → stable MODEL-DOWNLOAD tokens.
+KNOWN_VERIFIER_TOKENS = {
+    "thinkprm": "THINKPRM-1.5B",
+    "thinkprm-1.5b": "THINKPRM-1.5B",
+    "aletheia": "ALETHEIA-1.5B",
+    "aletheia-1.5b": "ALETHEIA-1.5B",
+    "ouro": "OURO-2.6B",
+    "ouro-2.6b": "OURO-2.6B",
+    "sae": "QWEN-SCOPE-SAE",
+    "qwen-scope": "QWEN-SCOPE-SAE",
+    "qwen-scope-sae": "QWEN-SCOPE-SAE",
+}
+
+
+def _verifier_token(model: str) -> str:
+    key = str(model).strip().lower()
+    if key in KNOWN_VERIFIER_TOKENS:
+        return KNOWN_VERIFIER_TOKENS[key]
+    sanitized = re.sub(r"[^A-Za-z0-9]+", "-", str(model).strip()).strip("-").upper()
+    return sanitized or "VERIFIER"
+
+
+def _verifier_on_disk(model: str) -> bool:
+    key = str(model).strip().lower()
+    if not key:
+        return False
+    for root in MODEL_ROOTS:
+        if not root.exists():
+            continue
+        for entry in root.iterdir():
+            if key in entry.name.lower():
+                return True
+    return False
+
+
+def verifier_download_gate(model: str | None) -> dict[str, Any] | None:
+    """Report whether a requested verifier model is on disk (None ⇒ none requested)."""
+    if not model:
+        return None
+    on_disk = _verifier_on_disk(model)
+    token = _verifier_token(model)
+    return {
+        "verifier": model,
+        "on_disk": on_disk,
+        "token": token,
+        "status": "on_disk" if on_disk else "download_required",
+        "required_download": None if on_disk else f"MODEL-DOWNLOAD-{token}",
+        "model_roots": [str(root) for root in MODEL_ROOTS],
+    }
+
+
+def require_verifier_on_disk(model: str) -> None:
+    """Raise a MODEL-DOWNLOAD-<x> error unless the verifier model is on disk."""
+    if not _verifier_on_disk(model):
+        token = _verifier_token(model)
+        raise RuntimeError(
+            f"MODEL-DOWNLOAD-{token} required: verifier model {model!r} is not present "
+            f"under {MODEL_ROOTS[0]}. EV-5/7/8 verifier-model validation is download-gated; "
+            "download + quantize the model before running the verifier pass. Refusing to "
+            "fabricate verifier scores."
+        )
+
+
+def verifier_pin_command(args: argparse.Namespace) -> str:
+    """The exact runnable pin command for this verifier-mode arm."""
+    parts = [
+        "scripts/benchmark/eval_batch_serving_evaltower_window.py",
+        f"--mode {args.mode}",
+    ]
+    if args.suite:
+        parts.append(f"--suite {args.suite}")
+    if args.split:
+        parts.append(f"--split {args.split}")
+    if args.roles:
+        parts.append(f"--roles {args.roles}")
+    if args.mode == "math_rebaseline":
+        parts.append(f"--scoring {args.scoring}")
+    if args.full:
+        parts.append("--full")
+    if args.verifier:
+        parts.append(f"--verifier {args.verifier}")
+    if args.n is not None and not args.full:
+        parts.append(f"--n {args.n}")
+    parts.append(f"--seed {args.seed}")
+    parts.append(f"--api-url {args.api_url.rstrip('/')}")
+    parts.append("--apply --confirm-clean-window")
+    return ".venv/bin/python " + " ".join(parts)
+
+
+def build_verifier_report(
+    args: argparse.Namespace, *, output_dir: Path
+) -> tuple[dict[str, Any], int]:
+    """Plan (default) or run an EV-4 / EV-11 verifier-mode arm.
+
+    Plan-only unless ``--apply --confirm-clean-window`` (and AutoPilot inactive
+    unless overridden). The verifier-model pass stays MODEL-DOWNLOAD gated.
+    """
+    mode = args.mode
+    roles = [part.strip() for part in (args.roles or "").split(",") if part.strip()] or [
+        "worker_general"
+    ]
+    gate = verifier_download_gate(args.verifier)
+    pin_command = verifier_pin_command(args)
+    n_arg = None if args.full else args.n
+
+    preflight = activation_window.build_preflight(_activation_args(args))
+    autopilot_active = bool(preflight.get("autopilot_active"))
+
+    blockers: list[str] = []
+    status = "plan_only"
+    rc = 0
+    result: dict[str, Any] | None = None
+
+    if not args.apply:
+        status = "plan_only"
+    else:
+        if not args.confirm_clean_window:
+            blockers.append("verifier-mode execution requires --confirm-clean-window")
+        if autopilot_active and not args.allow_autopilot_active:
+            blockers.append(
+                "AutoPilot appears active; pass --allow-autopilot-active to override"
+            )
+        if args.verifier and gate and not gate["on_disk"]:
+            blockers.append(
+                f"{gate['required_download']} required: verifier model "
+                f"{args.verifier!r} is not on disk"
+            )
+        if blockers:
+            status = "blocked"
+            rc = _bool_blocker_rc(blockers)
+        else:
+            try:
+                if args.verifier:
+                    require_verifier_on_disk(args.verifier)
+                tower = EvalTower(
+                    url=args.api_url.rstrip("/"),
+                    timeout=args.evaltower_timeout_s,
+                )
+                if mode == "calibration":
+                    if not args.suite:
+                        raise ValueError("--mode calibration requires --suite")
+                    result = tower.eval_calibration(
+                        suite=args.suite,
+                        split=args.split,
+                        roles=roles,
+                        seed=args.seed,
+                        n=n_arg,
+                        full=bool(args.full),
+                    )
+                else:  # math_rebaseline
+                    result = tower.eval_math_rebaseline(
+                        full=bool(args.full),
+                        scoring=args.scoring,
+                        roles=roles,
+                        seed=args.seed,
+                        n=n_arg,
+                        production_sampling=True,
+                    )
+                status = "complete"
+            except Exception as exc:  # noqa: BLE001 - report artifact captures failures
+                blockers.append(f"verifier-mode eval failed: {exc}")
+                status = "eval_failed"
+                rc = 75
+
+    decision_grade = bool(
+        args.apply
+        and args.confirm_clean_window
+        and not args.allow_autopilot_active
+        and not blockers
+        and result is not None
+    )
+    report = {
+        "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        "mode": mode,
+        "status": status,
+        "decision_grade": decision_grade,
+        "applied": bool(args.apply),
+        "confirm_clean_window": bool(args.confirm_clean_window),
+        "allow_autopilot_active": bool(args.allow_autopilot_active),
+        "suite": args.suite,
+        "split": args.split,
+        "roles": roles,
+        "scoring": args.scoring,
+        "full": bool(args.full),
+        "n": n_arg,
+        "seed": args.seed,
+        "api_url": args.api_url.rstrip("/"),
+        "verifier": args.verifier,
+        "verifier_gate": gate,
+        "pin_command": pin_command,
+        "blockers": blockers,
+        "preflight": {"autopilot_active": autopilot_active},
+        "result": result,
+        "decision_grade_notes": [
+            "requires --apply --confirm-clean-window",
+            "requires AutoPilot inactive unless --allow-autopilot-active",
+            "verifier-model pass (EV-5/7/8) is MODEL-DOWNLOAD gated",
+        ],
+    }
+    return report, rc
+
+
+def _write_verifier_markdown(path: Path, report: dict[str, Any]) -> None:
+    lines = [
+        "# Eval-Batch Serving Verifier-Mode Window",
+        "",
+        f"- mode: `{report['mode']}`",
+        f"- status: `{report['status']}`",
+        f"- decision_grade: `{report['decision_grade']}`",
+        f"- applied: `{report['applied']}`",
+        f"- suite/split: `{report['suite']} / {report['split']}`",
+        f"- roles: `{', '.join(report['roles'])}`",
+        f"- scoring: `{report['scoring']}`  full: `{report['full']}`  n: `{report['n']}`  seed: `{report['seed']}`",
+        f"- autopilot_active: `{report['preflight'].get('autopilot_active')}`",
+    ]
+    gate = report.get("verifier_gate")
+    if isinstance(gate, dict):
+        lines.append(
+            f"- verifier: `{gate.get('verifier')}` status: `{gate.get('status')}`"
+            + (f" ({gate.get('required_download')})" if gate.get("required_download") else "")
+        )
+    lines.extend(["", "## Pin Command", "", f"```bash\n{report['pin_command']}\n```"])
+    if report.get("blockers"):
+        lines.extend(["", "## Blockers", ""])
+        lines.extend(f"- {blocker}" for blocker in report["blockers"])
+    result = report.get("result")
+    if isinstance(result, dict):
+        lines.extend(
+            ["", "## Result", "", f"- dataset_sha256: `{result.get('dataset_sha256')}`"]
+        )
+        for role, payload in (result.get("per_role") or {}).items():
+            lines.append(f"- `{role}`: `{json.dumps(payload, sort_keys=True)}`")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def write_verifier_report(report: dict[str, Any], output_dir: Path) -> tuple[Path, Path]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    json_path = output_dir / "summary.json"
+    md_path = output_dir / "summary.md"
+    json_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    _write_verifier_markdown(md_path, report)
+    return json_path, md_path
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--api-url", default=os.environ.get("ORCHESTRATOR_API_URL", DEFAULT_API_URL))
@@ -393,6 +649,47 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--tier", type=int, choices=(1, 2, 3), default=1)
     parser.add_argument("--n", type=int, default=50)
     parser.add_argument("--seed", type=int, default=42)
+    # ── verifier-mode (EV-4 / EV-11 / EV-5/7/8) additive flags ───────────────
+    # Default --mode tier keeps the existing tier-based A/B path byte-identical.
+    parser.add_argument(
+        "--mode",
+        choices=("tier", "calibration", "math_rebaseline"),
+        default="tier",
+        help="tier = existing eval-batch A/B (default); calibration = EV-4 "
+        "per-role calibration baseline; math_rebaseline = EV-11 GSM8K+MATH-500.",
+    )
+    parser.add_argument(
+        "--suite",
+        default=None,
+        help="Verifier-mode suite (e.g. scoring_verifiers for EV-4 HE-R+).",
+    )
+    parser.add_argument(
+        "--split",
+        default=None,
+        help="Verifier-mode split/subset selector (e.g. HE-R+, gsm8k, math500).",
+    )
+    parser.add_argument(
+        "--roles",
+        default=None,
+        help="Comma-separated roles to force per arm (default: worker_general).",
+    )
+    parser.add_argument(
+        "--scoring",
+        default="math_verify",
+        help="Scoring method for math_rebaseline (default: math_verify).",
+    )
+    parser.add_argument(
+        "--full",
+        action="store_true",
+        help="Use the whole split (EV-4) / full 1,819-question math set (EV-11); "
+        "ignores --n.",
+    )
+    parser.add_argument(
+        "--verifier",
+        default=None,
+        help="EV-5/7/8 cross-family verifier model selector (PRM/Ouro/SAE). The "
+        "MODE exists but the verifier-model pass is MODEL-DOWNLOAD gated.",
+    )
     parser.add_argument("--attest-samples", type=int, default=12)
     parser.add_argument("--http-timeout-s", type=float, default=5.0)
     parser.add_argument("--command-timeout-s", type=float, default=900.0)
@@ -409,8 +706,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     output_dir = args.output_dir or default_output_dir()
-    report, rc = build_report(args, output_dir=output_dir)
-    json_path, md_path = write_report(report, output_dir)
+    if args.mode != "tier":
+        report, rc = build_verifier_report(args, output_dir=output_dir)
+        json_path, md_path = write_verifier_report(report, output_dir)
+    else:
+        report, rc = build_report(args, output_dir=output_dir)
+        json_path, md_path = write_report(report, output_dir)
     if not args.summary_only:
         print(json.dumps(report, indent=2, sort_keys=True))
         print(f"\nwrote {json_path}")

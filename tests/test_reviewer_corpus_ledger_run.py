@@ -311,3 +311,180 @@ def test_main_errors_on_missing_corpus(tmp_path, capsys):
     code = driver.main(["--corpus", str(tmp_path / "nope.jsonl")])
     assert code == 2
     assert "not found" in capsys.readouterr().out
+
+
+# --------------------------------------------------------------------------- #
+# 4. RA-8 field-order A/B (additive; single-arm path above stays intact)
+# --------------------------------------------------------------------------- #
+def _field_order_stub_factory(field_order):
+    """Return a NO-inference stub probe for one arm.
+
+    default arm  -> the canonical _VERDICT pattern (FA=1/2, FR=1/2).
+    reversed arm -> approve everything (FA=2/2=1.0, FR=0/2=0.0) so the two arms
+    yield DISTINCT FA/FR the calibration report can separate by rubric_version.
+    """
+    def _probe(job, row, tower):
+        assert tower is None, "stub factory must never receive a real EvalTower"
+        rid = row["row_id"]
+        decision = "approve" if field_order == "reversed" else _VERDICT[rid]
+        return {
+            "decision": decision,
+            "gate": runner.gate_from_gold_label(row["gold_label"]),
+            "latency_ms": 7.0,
+            "row_id": rid,
+            "field_order": field_order,
+        }
+    return _probe
+
+
+def test_field_order_resolve_and_prompt_ordering():
+    # The two arms present the SAME rubric fields in opposite order.
+    assert driver.resolve_field_order("default") == [("TASK", "task"), ("CANDIDATE", "candidate")]
+    assert driver.resolve_field_order("reversed") == [("CANDIDATE", "candidate"), ("TASK", "task")]
+    assert driver.FIELD_ORDERS == ("default", "reversed")
+    with pytest.raises(ValueError):
+        driver.resolve_field_order("sideways")
+
+    row = {"task": "TASK_BODY", "candidate": "CAND_BODY"}
+    p_def = driver.build_reviewer_prompt(row, "default")
+    p_rev = driver.build_reviewer_prompt(row, "reversed")
+    # Same content present in both; only the ORDER of the field blocks differs.
+    for p in (p_def, p_rev):
+        assert "TASK_BODY" in p and "CAND_BODY" in p
+    assert p_def.index("TASK_BODY") < p_def.index("CAND_BODY")   # TASK first
+    assert p_rev.index("CAND_BODY") < p_rev.index("TASK_BODY")   # CANDIDATE first
+    assert p_def != p_rev
+
+
+def test_rubric_version_tag_values():
+    assert driver.rubric_version_for("default") == "field_order:default"
+    assert driver.rubric_version_for("reversed") == "field_order:reversed"
+    assert driver.rubric_version_for("default", base="rubric_v3") == "rubric_v3+field_order:default"
+
+
+def test_decision_id_field_order_distinct_and_backcompat():
+    # Arm tag makes the id distinct so the ledger's UNIQUE(decision_id) does NOT
+    # collapse the reversed arm into the default arm's row.
+    d = driver.decision_id_for(REVIEWER, "nearmiss-v1", "r1", 0, field_order="default")
+    r = driver.decision_id_for(REVIEWER, "nearmiss-v1", "r1", 0, field_order="reversed")
+    assert d != r
+    # field_order=None is byte-identical to the legacy single-arm id (no regression).
+    legacy = driver.decision_id_for(REVIEWER, "nearmiss-v1", "r1", 0)
+    assert driver.decision_id_for(REVIEWER, "nearmiss-v1", "r1", 0, field_order=None) == legacy
+
+
+def test_mapper_field_order_defaults_rubric_version():
+    from src.trace.review_ledger import ReviewLedgerRow
+
+    row = _corpus_rows()[0]  # r1
+    pr = {"decision": "reject", "latency_ms": 3.0}
+    led = driver.map_decision_to_ledger_row(
+        REVIEWER, row, pr, corpus_id="nearmiss-v1", field_order="reversed"
+    )
+    assert led["rubric_version"] == "field_order:reversed"
+    # arm-distinct id vs the single-arm mapping of the same row.
+    plain = driver.map_decision_to_ledger_row(REVIEWER, row, pr, corpus_id="nearmiss-v1")
+    assert led["decision_id"] != plain["decision_id"]
+    valid = {f.name for f in __import__("dataclasses").fields(ReviewLedgerRow)}
+    assert set(led).issubset(valid)
+    ReviewLedgerRow(**led)  # must not raise
+
+
+def test_run_field_order_ab_tags_rows_and_report_compares(tmp_path):
+    corpus = _write_corpus(tmp_path / "corpus.jsonl")
+    out = tmp_path / "out"
+    result = driver.run_field_order_ab(
+        corpus, reviewer=REVIEWER, n=10, seed=42, domain=None,
+        emit="decisions-jsonl", output_dir=out,
+        field_orders=("default", "reversed"),
+        reviewer_probe_factory=_field_order_stub_factory, tower=None,
+    )
+    assert result["mode"] == "execute" and result["inference_ran"] is True
+    assert result["n_arms"] == 2
+    # 2 arms x 4 judgeable rows, every decision_id distinct (no arm collapse).
+    assert result["n_scored"] == 8
+    assert len({r["decision_id"] for r in result["rows"]}) == 8
+    tags = {r["rubric_version"] for r in result["rows"]}
+    assert tags == {"field_order:default", "field_order:reversed"}
+    # RM-3 transport discipline: placement queue, never /chat.
+    dpath = out / "decisions.jsonl"
+    assert dpath.exists()
+    assert result["manifest"]["transport"] == runner.PLACEMENT_QUEUE_TRANSPORT
+    assert result["manifest"]["uses_chat_endpoint"] is False
+    assert result["manifest"]["result_index"] == ["reviewer_model_quant", "rubric_version"]
+    assert "/chat" not in dpath.read_text()
+
+    rows = report.load_decisions_jsonl(dpath)
+    # The report separates the two arms by rubric_version (its GROUP_FIELDS).
+    full = report.build_report(rows, k=2)
+    assert {g["group"]["rubric_version"] for g in full["groups"]} == {
+        "field_order:default", "field_order:reversed"
+    }
+    # Per-arm FA/FR differ -> the A/B actually measures a field-order effect.
+    by_arm = {}
+    for tag in ("field_order:default", "field_order:reversed"):
+        arm_rows = [r for r in rows if r["rubric_version"] == tag]
+        by_arm[tag] = report.build_report(arm_rows, k=2)["overall"]
+    assert by_arm["field_order:default"]["fa_rate"]["rate"] == pytest.approx(0.5)
+    assert by_arm["field_order:default"]["fr_rate"]["rate"] == pytest.approx(0.5)
+    assert by_arm["field_order:reversed"]["fa_rate"]["rate"] == pytest.approx(1.0)
+    assert by_arm["field_order:reversed"]["fr_rate"]["rate"] == pytest.approx(0.0)
+
+
+def test_run_field_order_ab_sqlite_does_not_collapse_arms(tmp_path):
+    corpus = _write_corpus(tmp_path / "corpus.jsonl")
+    out = tmp_path / "out"
+    result = driver.run_field_order_ab(
+        corpus, reviewer=REVIEWER, n=10, seed=42, domain=None,
+        emit="ledger-sqlite", output_dir=out,
+        reviewer_probe_factory=_field_order_stub_factory, tower=None,
+    )
+    # 8 distinct rows land in the ledger (arms are NOT deduped into 4).
+    assert result["emit_summary"]["inserted"] == 8
+    db = out / "events.sqlite"
+    assert db.exists()
+    m = report.build_report(report.load_ledger_sqlite(db), k=2)
+    assert m["n_groups"] >= 2  # at least one group per rubric_version arm
+
+
+def test_main_field_order_both_dry_run_plan(tmp_path, capsys, monkeypatch):
+    monkeypatch.delenv(ENV, raising=False)
+    corpus = _write_corpus(tmp_path / "corpus.jsonl", extra_nonjudgeable=True)
+    out = tmp_path / "out"
+
+    def _boom(*a, **k):
+        raise AssertionError("run_field_order_ab called in dry-run (inference leaked!)")
+
+    monkeypatch.setattr(driver, "run_field_order_ab", _boom)
+
+    code = driver.main([
+        "--corpus", str(corpus), "--output", str(out), "--field-order", "both", "--n", "3",
+    ])
+    assert code == 0
+    plan = json.loads(capsys.readouterr().out)
+    assert plan["kind"] == "reviewer_corpus_ledger_field_order_plan"
+    assert plan["mode"] == "dry_run" and plan["inference_ran"] is False
+    assert plan["n_arms"] == 2
+    assert plan["rubric_versions"] == ["field_order:default", "field_order:reversed"]
+    assert plan["n_judgeable_available"] == 4  # observation row filtered out
+    assert plan["n_selected_per_arm"] == 3
+    assert plan["arms"][0]["prompt_field_order"] == ["TASK", "CANDIDATE"]
+    assert plan["arms"][1]["prompt_field_order"] == ["CANDIDATE", "TASK"]
+    assert plan["transport"]["uses_chat_endpoint"] is False
+    assert plan["result_index"] == ["reviewer_model_quant", "rubric_version"]
+    assert not out.exists()  # dry-run writes no files
+
+
+def test_main_field_order_single_arm_dry_run(tmp_path, capsys, monkeypatch):
+    monkeypatch.delenv(ENV, raising=False)
+    corpus = _write_corpus(tmp_path / "corpus.jsonl")
+    code = driver.main([
+        "--corpus", str(corpus), "--output", str(tmp_path / "o"),
+        "--field-order", "reversed", "--domain", "code", "--n", "50",
+    ])
+    assert code == 0
+    plan = json.loads(capsys.readouterr().out)
+    assert plan["n_arms"] == 1
+    assert plan["rubric_versions"] == ["field_order:reversed"]
+    assert plan["arms"][0]["prompt_field_order"] == ["CANDIDATE", "TASK"]
+    assert plan["n_judgeable_available"] == 2  # domain=code -> r1 + r2

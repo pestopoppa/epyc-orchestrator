@@ -525,3 +525,75 @@ def test_ap8_renders_dogfood_emission_stats() -> None:
     )
     text = "\n".join(section)
     assert "codex dogfood emission: emitted=1, parse_failures=1" in text
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# B2 — digest pre-materialize hook (events -> review_ledger refresh)
+# ══════════════════════════════════════════════════════════════════════════════
+def _seed_review_event(db_path, subtask_id, decision, gold, ts):
+    """Emit ONE REVIEW_DECISION event via the REAL emit path (no inference)."""
+    from src.trace.store import Event, EventCategory, EventSource, detail_to_json
+    from src.trace.emit import emit
+
+    detail = {
+        "mode": "review", "subtask_id": subtask_id, "decision": decision,
+        "confidence": 0.8, "tripwire": False, "latency_ms": 100.0,
+        "tokens": {"tokens_out": 20, "chars_out": 80},
+    }
+    emit(
+        Event(
+            ts_utc=ts, source=EventSource.REVIEW_PLANE, source_path="", source_line=None,
+            session_id="sess-b2", trial_id=1, role="architect_general",
+            category=EventCategory.REVIEW_DECISION, status=decision,
+            summary=f"review {subtask_id}", detail_json=detail_to_json(detail),
+        ),
+        db_path=db_path,
+    )
+
+
+def test_b2_refresh_swallows_raising_materializer(tmp_path):
+    from src.trace.store import ensure_schema
+
+    events_db = tmp_path / "events.sqlite"
+    ensure_schema(events_db).close()  # exists so we reach the (raising) materializer
+
+    class RaisingMaterializer:
+        @staticmethod
+        def read_review_events(*a, **k):
+            raise RuntimeError("materializer exploded")
+
+    # Best-effort: the raising materializer is swallowed, digest hook returns False.
+    assert digest._refresh_review_ledger(
+        events_db=events_db, ledger_path=tmp_path / "review_ledger.sqlite",
+        materializer=RaisingMaterializer,
+    ) is False
+
+
+def test_b2_refresh_missing_events_db_is_noop(tmp_path):
+    assert digest._refresh_review_ledger(
+        events_db=tmp_path / "nope.sqlite", ledger_path=tmp_path / "review_ledger.sqlite"
+    ) is False
+
+
+def test_b2_refresh_materializes_events(tmp_path):
+    events_db = tmp_path / "events.sqlite"
+    _seed_review_event(events_db, "cand-A", "approve", "fail", "2026-07-16T10:00:00+00:00")
+    ledger_path = tmp_path / "review_ledger.sqlite"
+    assert digest._refresh_review_ledger(events_db=events_db, ledger_path=ledger_path) is True
+    # write_ledger_sqlite writes <ledger dir>/review_ledger.sqlite
+    from src.trace.review_ledger import calibration_summary
+
+    s = calibration_summary(db_path=ledger_path)
+    assert s["n_decisions"] == 1
+
+
+def test_b2_render_digest_survives_refresh_failure(monkeypatch):
+    def _boom(*a, **k):
+        raise RuntimeError("refresh hook exploded")
+
+    monkeypatch.setattr(digest, "_refresh_review_ledger", _boom)
+    out = digest.render_digest(
+        swarm=object(), lab=object(), archive=object(), state={}, journal=None
+    )
+    assert isinstance(out, str)
+    assert "Reviewer calibration" in out

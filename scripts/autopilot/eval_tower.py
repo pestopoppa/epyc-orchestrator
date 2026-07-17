@@ -12,6 +12,7 @@ import math
 import os
 import random
 import time
+from collections.abc import Sequence
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 import hashlib
@@ -705,7 +706,10 @@ from src.autopilot_core.instrument_era_guard import (  # noqa: E402
     designed_core_activation_guard,
 )
 from src.behavior_signature import normalized_answer_hash  # noqa: E402
-from src.llm_primitives.stat_tests import roc_auc  # noqa: E402
+from src.llm_primitives.stat_tests import (  # noqa: E402
+    expected_calibration_error,
+    roc_auc,
+)
 
 DEFAULT_CORE_DIR = _orch_root / "benchmarks" / "prompts"
 
@@ -821,6 +825,188 @@ def check_cross_family(generator_model: str, verifier_model: str) -> bool:
     gen_family = _get_family(generator_model)
     ver_family = _get_family(verifier_model)
     return gen_family != ver_family or gen_family == "unknown"
+
+
+# ── EV-4 / EV-11 verifier-mode metric primitives (additive, 2026-07-17) ──────
+# BUILD-evalbatch-verifier-mode. These are PURE, inference-free helpers.
+# EvalTower.eval_calibration (EV-4) and EvalTower.eval_math_rebaseline (EV-11)
+# below reuse the existing _eval_batch dispatch/scoring for GENERATION, then feed
+# the resulting (confidence, correctness) vectors through these functions. They
+# are unit-tested on synthetic vectors WITHOUT any inference. ECE + AUROC delegate
+# to the clean-room src/llm_primitives/stat_tests implementations (already the
+# consolidated impls the tower uses); the remaining four calibration metrics are
+# computed here because stat_tests does not carry them.
+
+# The six per-role EV-4 calibration metrics, in report order.
+CALIBRATION_METRIC_KEYS = (
+    "ece",
+    "auroc",
+    "top1_accuracy",
+    "bottom1_accuracy",
+    "spearman_rho",
+    "mae",
+)
+
+
+def _average_ranks(values: Sequence[float]) -> list[float]:
+    """1-based tie-averaged ranks (same convention as stat_tests.roc_auc)."""
+    order = sorted(range(len(values)), key=lambda i: values[i])
+    ranks = [0.0] * len(values)
+    i = 0
+    while i < len(order):
+        j = i
+        while j + 1 < len(order) and values[order[j + 1]] == values[order[i]]:
+            j += 1
+        avg = (i + j) / 2.0 + 1.0
+        for k in range(i, j + 1):
+            ranks[order[k]] = avg
+        i = j + 1
+    return ranks
+
+
+def _pearson(xs: Sequence[float], ys: Sequence[float]) -> float | None:
+    n = len(xs)
+    if n < 2 or n != len(ys):
+        return None
+    mean_x = sum(xs) / n
+    mean_y = sum(ys) / n
+    cov = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys))
+    var_x = sum((x - mean_x) ** 2 for x in xs)
+    var_y = sum((y - mean_y) ** 2 for y in ys)
+    if var_x <= 0.0 or var_y <= 0.0:
+        return None
+    return cov / math.sqrt(var_x * var_y)
+
+
+def _spearman_rho(xs: Sequence[float], ys: Sequence[float]) -> float | None:
+    """Spearman rank correlation (tie-averaged).
+
+    None when undefined: fewer than 2 paired points, a length mismatch, or a
+    constant vector on either axis (rank variance is 0).
+    """
+    if len(xs) < 2 or len(xs) != len(ys):
+        return None
+    return _pearson(_average_ranks(xs), _average_ranks(ys))
+
+
+def _cohort_accuracy(
+    confidences: Sequence[float],
+    labels: Sequence[float],
+    *,
+    pick_max: bool,
+) -> float | None:
+    """Accuracy of the max- (or min-) confidence cohort.
+
+    Ties are averaged: when several items share the extreme confidence the metric
+    is the mean label over that whole cohort, so with distinct confidences this
+    reduces to exactly the single top-1 / bottom-1 item. A discriminative
+    confidence signal shows top1_accuracy high and bottom1_accuracy low.
+    """
+    if not confidences:
+        return None
+    target = max(confidences) if pick_max else min(confidences)
+    cohort = [lab for conf, lab in zip(confidences, labels) if conf == target]
+    if not cohort:
+        return None
+    return sum(cohort) / len(cohort)
+
+
+def compute_calibration_metrics(
+    confidences: Sequence[float],
+    labels: Sequence[float],
+) -> dict[str, float | None]:
+    """EV-4 calibration metrics from paired (confidence, correctness) vectors.
+
+    ``confidences`` — model confidence proxy in [0, 1]
+    (EvalTower ``QuestionResult.confidence``).
+    ``labels`` — ground-truth correctness (0/1 or float in [0, 1]).
+
+    Returns a dict carrying every key in ``CALIBRATION_METRIC_KEYS`` plus ``n``.
+    Every metric is None-safe (returns None where undefined — empty input, a
+    single class / <3 distinct confidences for AUROC, a constant vector for
+    Spearman). No inference is performed.
+
+    Definitions:
+      * ece             — Expected Calibration Error (10-bin) via stat_tests.
+      * auroc           — ROC-AUC (tie-averaged Mann-Whitney U) via stat_tests.
+      * top1_accuracy   — accuracy of the most-confident cohort (see
+                          ``_cohort_accuracy``).
+      * bottom1_accuracy— accuracy of the least-confident cohort.
+      * spearman_rho    — rank correlation of confidence vs correctness.
+      * mae             — mean |confidence - label| (sample-level calibration error).
+    """
+    conf = [float(c) for c in confidences]
+    lab = [float(y) for y in labels]
+    if len(conf) != len(lab):
+        raise ValueError(
+            f"confidences/labels length mismatch: {len(conf)} != {len(lab)}"
+        )
+    n = len(conf)
+    ece = expected_calibration_error(conf, lab, n_bins=10) if n else None
+    # AUROC is only meaningful with both classes present AND >2 distinct
+    # confidences — the same guard EvalTower._aggregate applies. roc_auc() itself
+    # already returns None when a single class is present.
+    auroc: float | None = None
+    if n and len({round(c, 6) for c in conf}) > 2 and len({round(y) for y in lab}) > 1:
+        auroc = roc_auc(conf, lab)
+    mae = (sum(abs(c - y) for c, y in zip(conf, lab)) / n) if n else None
+    return {
+        "n": n,
+        "ece": ece,
+        "auroc": auroc,
+        "top1_accuracy": _cohort_accuracy(conf, lab, pick_max=True),
+        "bottom1_accuracy": _cohort_accuracy(conf, lab, pick_max=False),
+        "spearman_rho": _spearman_rho(conf, lab),
+        "mae": mae,
+    }
+
+
+def dataset_content_sha256(questions: Sequence[dict[str, Any]]) -> str:
+    """Stable SHA-256 over an ordered question set (EV-11 reproducibility stamp).
+
+    Hashes ``(id, prompt, expected, scoring_method)`` per question, in order, with
+    field and record separators. Order-sensitive by design: the drawn arm's exact
+    question sequence is part of its identity, so two arms that sampled different
+    orderings get different digests.
+    """
+    h = hashlib.sha256()
+    for q in questions:
+        for field_name in ("id", "prompt", "expected", "scoring_method"):
+            h.update(str(q.get(field_name, "")).encode("utf-8", "replace"))
+            h.update(b"\x00")
+        h.update(b"\x1e")
+    return h.hexdigest()
+
+
+def score_math_rebaseline_answers(
+    questions: Sequence[dict[str, Any]],
+    answers: Sequence[str],
+) -> list[bool]:
+    """Pure math_verify scoring of (question, model_answer) pairs — no inference.
+
+    EV-11: hard-fails via ``_require_math_verify`` when math-verify is not
+    importable rather than silently degrading to exact_match (the 0/1,819-question
+    no-op). Reuses ``score_answer_deterministic`` — the exact scoring path
+    ``_eval_question`` takes — so a fixture test exercises the real scorer.
+    """
+    if len(questions) != len(answers):
+        raise ValueError(
+            f"questions/answers length mismatch: {len(questions)} != {len(answers)}"
+        )
+    _require_math_verify()
+    out: list[bool] = []
+    for q, answer in zip(questions, answers):
+        out.append(
+            bool(
+                score_answer_deterministic(
+                    answer=answer,
+                    expected=str(q.get("expected", "")),
+                    scoring_method=str(q.get("scoring_method", "math_verify")),
+                    scoring_config=q.get("scoring_config") or {},
+                )
+            )
+        )
+    return out
 
 
 def _configured_rubric_judge_roles() -> list[str]:
@@ -2297,6 +2483,254 @@ class EvalTower:
         # label changed from "hard-only" to "expert/hard workflow".
         result.core_id = f"t3_hard_only_v1_seed_{draw_seed}_n{requested_n}"
         return result
+
+    # ── verifier-mode entrypoints (EV-4 / EV-11, additive 2026-07-17) ────────
+    # BUILD-evalbatch-verifier-mode. These are new ENTRYPOINTS, not new
+    # generation engines: they draw a suite, then reuse the existing _eval_batch
+    # dispatch + _eval_question scoring per role, and roll the per-question
+    # (confidence, correctness) vectors into the pure metric helpers above.
+    # Surfaced on eval_batch_serving_evaltower_window.py under the same
+    # --confirm-clean-window execution gate as the tier path.
+
+    @staticmethod
+    def _normalize_roles(roles: "list[str] | str | None") -> list[str]:
+        """Coerce a roles selector into a deduped ordered list; warn on unknowns.
+
+        Defaults to the live production worker when unset. Unknown role strings
+        are kept (the orchestrator is the authority on force_role) but logged.
+        """
+        if isinstance(roles, str):
+            roles = [part.strip() for part in roles.split(",")]
+        items = [str(r).strip() for r in (roles or []) if str(r).strip()]
+        deduped: list[str] = []
+        for role in items:
+            if role not in deduped:
+                deduped.append(role)
+        if not deduped:
+            deduped = ["worker_general"]
+        try:
+            from src.roles import Role
+
+            for role in deduped:
+                if Role.from_string(role) is None:
+                    log.warning("verifier-mode: role %r is not a known Role", role)
+        except Exception as exc:  # noqa: BLE001
+            log.debug("verifier-mode role validation unavailable: %s", exc)
+        return deduped
+
+    @staticmethod
+    def _with_forced_role(q: dict[str, Any], role: str) -> dict[str, Any]:
+        forced = dict(q)
+        forced["force_role"] = str(role)
+        return forced
+
+    def _load_dataset_adapter(self, suite: str):
+        """Return a research-repo dataset adapter INSTANCE for a named suite.
+
+        Reuses the same research ``scripts/benchmark`` sys.path insertion as
+        ``_load_pool`` so the canonical suite→adapter registry (``get_adapter``)
+        is the single source of truth for what each suite contains.
+        """
+        research_bench = str(
+            Path("/mnt/raid0/llm/epyc-inference-research") / "scripts" / "benchmark"
+        )
+        if research_bench not in sys.path:
+            sys.path.insert(0, research_bench)
+        from dataset_adapters import get_adapter  # research suite registry
+
+        adapter = get_adapter(suite)
+        if adapter is None:
+            raise ValueError(f"no dataset adapter registered for suite {suite!r}")
+        return adapter
+
+    @staticmethod
+    def _filter_questions_by_split(
+        questions: list[dict[str, Any]],
+        split: str | None,
+    ) -> list[dict[str, Any]]:
+        """Filter adapter questions to a named split/subset.
+
+        For scoring_verifiers the subset is carried in ``metadata.subset`` and the
+        id prefix (``sv_<subset>_...``); for math it is the id prefix
+        (``gsm8k_...`` / ``math500_...``). ``None`` / ``all`` / ``*`` keep everything.
+        """
+        split_l = str(split or "").strip().lower()
+        if not split_l or split_l in ("all", "*"):
+            return list(questions)
+        needle = split_l.replace("-", "_")
+
+        def _matches(q: dict[str, Any]) -> bool:
+            meta = q.get("metadata") or {}
+            subset = str(meta.get("subset", "")).strip().lower()
+            qid = str(q.get("id", "")).strip().lower()
+            return split_l == subset or split_l in qid or needle in qid
+
+        return [q for q in questions if _matches(q)]
+
+    def _load_verifier_suite_questions(
+        self,
+        suite: str,
+        split: str | None,
+        *,
+        n: int | None,
+        seed: int,
+        full: bool,
+    ) -> list[dict[str, Any]]:
+        adapter = self._load_dataset_adapter(suite)
+        questions = adapter.extract_all()
+        questions = self._filter_questions_by_split(questions, split)
+        if not full and n is not None and len(questions) > int(n):
+            rng = random.Random(int(seed))
+            questions = rng.sample(questions, int(n))
+        for q in questions:
+            q.setdefault("suite", suite)
+        return questions
+
+    def eval_calibration(
+        self,
+        suite: str,
+        split: str | None = None,
+        roles: "list[str] | str | None" = None,
+        seed: int = EVAL_SPEC_SEED,
+        *,
+        n: int | None = None,
+        full: bool = False,
+    ) -> dict[str, Any]:
+        """EV-4 calibration baseline: per-role calibration metrics over a suite/split.
+
+        Runs the suite over the split for each role (reusing ``_eval_batch``), then
+        computes the six per-role calibration metrics (ECE, AUROC, Top-1, Bottom-1,
+        Spearman rho, MAE) via ``compute_calibration_metrics``. Returns a plain,
+        JSON-serializable dict — the window runner embeds it in its report.
+
+        Execution here calls the orchestrator (generation); the caller (window
+        runner) gates that behind ``--confirm-clean-window``.
+        """
+        roles = self._normalize_roles(roles)
+        questions = self._load_verifier_suite_questions(
+            suite, split, n=n, seed=int(seed), full=full
+        )
+        if not questions:
+            raise ValueError(
+                f"calibration suite {suite!r} split {split!r} yielded 0 questions"
+            )
+        dataset_sha256 = dataset_content_sha256(questions)
+        per_role: dict[str, Any] = {}
+        with httpx.Client(timeout=self.timeout) as client:
+            for role in roles:
+                role_qs = [self._with_forced_role(q, role) for q in questions]
+                results = self._eval_batch(role_qs, client, log_every=25, label=f"cal-{role}")
+                scored = [r for r in results if not r.error]
+                confidences = [r.confidence for r in scored]
+                labels = [float(r.correct) for r in scored]
+                metrics = compute_calibration_metrics(confidences, labels)
+                correct = sum(1 for r in scored if r.correct)
+                per_role[role] = {
+                    "role": role,
+                    "n_questions": len(results),
+                    "n_scored": len(scored),
+                    "accuracy": (correct / len(scored)) if scored else None,
+                    **{key: metrics.get(key) for key in CALIBRATION_METRIC_KEYS},
+                }
+        return {
+            "mode": "calibration",
+            "suite": suite,
+            "split": split,
+            "seed": int(seed),
+            "roles": roles,
+            "n_questions": len(questions),
+            "dataset_sha256": dataset_sha256,
+            "metric_keys": list(CALIBRATION_METRIC_KEYS),
+            "per_role": per_role,
+        }
+
+    def eval_math_rebaseline(
+        self,
+        full: bool = True,
+        scoring: str = "math_verify",
+        roles: "list[str] | str | None" = None,
+        seed: int = EVAL_SPEC_SEED,
+        production_sampling: bool = True,
+        *,
+        n: int | None = None,
+    ) -> dict[str, Any]:
+        """EV-11 math re-baseline: GSM8K(1,319)+MATH-500(500)=1,819/arm under math_verify.
+
+        Per role, runs the math suite (full=1,819 or a subsample of ``n``) through
+        the existing dispatch/scoring with ``scoring_method`` forced to ``scoring``,
+        recording ``dataset_sha256`` and a ``test_profile``/arm stamp per role.
+        Hard-fails up front when ``scoring == "math_verify"`` and math-verify is not
+        importable (reuses the landed ``_require_math_verify`` guard). Returns a
+        plain JSON-serializable dict.
+        """
+        if str(scoring) == "math_verify":
+            _require_math_verify()
+        roles = self._normalize_roles(roles)
+        adapter = self._load_dataset_adapter("math")
+        if full or n is None:
+            questions = adapter.extract_all()
+        else:
+            questions = adapter.sample(n=int(n), seed=int(seed))
+        for q in questions:
+            q.setdefault("suite", "math")
+            if scoring:
+                q["scoring_method"] = str(scoring)
+        if not questions:
+            raise ValueError(
+                "math re-baseline drew 0 questions — GSM8K/MATH-500 datasets "
+                "unavailable (MODEL-DOWNLOAD/data required)"
+            )
+        dataset_sha256 = dataset_content_sha256(questions)
+        n_gsm8k = sum(1 for q in questions if str(q.get("id", "")).startswith("gsm8k"))
+        n_math500 = sum(1 for q in questions if str(q.get("id", "")).startswith("math500"))
+        test_profile = {
+            "version": "ev11-math-rebaseline-v1",
+            "scoring": str(scoring),
+            "seed": int(seed),
+            "production_sampling": bool(production_sampling),
+            # Per feedback_production_sampling_seed_not_temp0: sampling-sensitive
+            # (math_verify/spec-dec) arms record production temp + seed42 intent.
+            "sampling_profile": "production_temp_seed42"
+            if production_sampling
+            else "greedy_temp0",
+            "n_questions": len(questions),
+            "n_gsm8k": n_gsm8k,
+            "n_math500": n_math500,
+            "dataset_sha256": dataset_sha256,
+        }
+        per_role: dict[str, Any] = {}
+        with httpx.Client(timeout=self.timeout) as client:
+            for role in roles:
+                role_qs = [self._with_forced_role(q, role) for q in questions]
+                results = self._eval_batch(role_qs, client, log_every=100, label=f"ev11-{role}")
+                agg = self._aggregate(results, tier=2)
+                scored = [r for r in results if not r.error]
+                correct = sum(1 for r in scored if r.correct)
+                per_role[role] = {
+                    "role": role,
+                    "arm": f"ev11-math-rebaseline::{role}::seed{int(seed)}::{dataset_sha256[:12]}",
+                    "n_questions": len(results),
+                    "n_scored": len(scored),
+                    "correct": correct,
+                    "accuracy": (correct / len(scored)) if scored else None,
+                    "quality": agg.quality,
+                    "reliability": agg.reliability,
+                    "ece": agg.ece,
+                    "auroc": agg.auroc,
+                    "test_profile": test_profile,
+                }
+        return {
+            "mode": "math_rebaseline",
+            "suite": "math",
+            "scoring": str(scoring),
+            "full": bool(full),
+            "seed": int(seed),
+            "roles": roles,
+            "production_sampling": bool(production_sampling),
+            "dataset_sha256": dataset_sha256,
+            "test_profile": test_profile,
+            "per_role": per_role,
+        }
 
     def evaluate(
         self,

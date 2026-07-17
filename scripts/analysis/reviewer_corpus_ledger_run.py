@@ -85,15 +85,88 @@ def load_runner():
     return _RUNNER
 
 
+# ── PURE: rubric field-ordering lever (RA-8 field-order A/B) ─────────────────
+# The reviewer prompt presents a fixed set of rubric fields. RA-8 asks whether the
+# ORDER those fields appear in biases the reviewer's FA/FR — so we render the same
+# corpus rows under two orderings and tag each decision set by arm. This lever is
+# expressed ENTIRELY here (prompt construction + a placement-queue probe that
+# reuses screening_tier_runner's transport constants) — it touches NO serving-path
+# / production module (review_service.py, delegator.py, backends, features.py) and
+# does not modify screening_tier_runner.py.
+
+#: Canonical ("default") rubric fields shown to the reviewer, as (prompt LABEL,
+#: corpus-row key). The "reversed" arm shows the SAME fields in reverse order.
+RUBRIC_FIELDS: tuple[tuple[str, str], ...] = (
+    ("TASK", "task"),
+    ("CANDIDATE", "candidate"),
+)
+
+#: The two field-ordering arms of the A/B.
+FIELD_ORDERS: tuple[str, ...] = ("default", "reversed")
+
+_REVIEWER_PROMPT_HEADER = (
+    "You are a strict reviewer. Decide whether the CANDIDATE answer to the TASK "
+    "is acceptable. Reply with a single token: APPROVE or REJECT."
+)
+
+
+def resolve_field_order(field_order: str) -> list[tuple[str, str]]:
+    """Return the ordered ``(label, row_key)`` rubric fields for one arm (pure)."""
+    if field_order == "default":
+        return list(RUBRIC_FIELDS)
+    if field_order == "reversed":
+        return list(reversed(RUBRIC_FIELDS))
+    raise ValueError(
+        f"unknown field order {field_order!r}; expected one of {FIELD_ORDERS}"
+    )
+
+
+def rubric_version_for(field_order: str, base: str | None = None) -> str:
+    """Ledger ``rubric_version`` tag for a field-order arm (the report group key).
+
+    This is what ``reviewer_calibration_report.py`` groups on (``rubric_version``
+    is one of its GROUP_FIELDS), so tagging each arm ``field_order:<name>`` makes
+    the two orderings distinct rows the report compares FA/FR across.
+    """
+    tag = f"field_order:{field_order}"
+    return f"{base}+{tag}" if base else tag
+
+
+def build_reviewer_prompt(corpus_row: dict[str, Any], field_order: str = "default") -> str:
+    """Render the reviewer prompt with rubric fields in the arm's order (pure).
+
+    Same instruction header + same field CONTENT under both arms — only the ORDER
+    of the rubric field blocks changes. This is the sole difference the A/B varies.
+    """
+    fields = resolve_field_order(field_order)
+    blocks = [f"{label}:\n{corpus_row.get(key) or ''}" for label, key in fields]
+    return _REVIEWER_PROMPT_HEADER + "\n\n" + "\n\n".join(blocks) + "\n\nDECISION:"
+
+
 # ── PURE: per-decision row mapping (the fixture-tested core) ──────────────────
-def decision_id_for(reviewer: str, corpus_id: str | None, row_id: str, attempt: int = 0) -> str:
-    """Deterministic, unique-per-(reviewer,corpus,row,attempt) decision id.
+def decision_id_for(
+    reviewer: str,
+    corpus_id: str | None,
+    row_id: str,
+    attempt: int = 0,
+    *,
+    field_order: str | None = None,
+) -> str:
+    """Deterministic, unique-per-(reviewer,corpus,row,attempt[,field_order]) decision id.
 
     Stable across re-runs (so a re-emit is an INSERT OR IGNORE no-op in the
     ledger) yet distinct per test-retest ``attempt`` (so repeated scoring of one
     candidate yields the >=2 terminal runs the report's Consistency Rate needs).
+
+    ``field_order`` (RA-8 field-order A/B) is folded in ONLY when supplied, so the
+    two field-ordering arms produce DISTINCT ids for the same candidate — without
+    it the ledger's ``UNIQUE(decision_id)`` would silently collapse the reversed
+    arm into the default arm's row. When ``field_order`` is None the key is
+    byte-identical to the single-arm form, so legacy ids are unchanged.
     """
     key = f"{reviewer}\x00{corpus_id or ''}\x00{row_id}\x00{attempt}"
+    if field_order:
+        key += f"\x00{field_order}"
     return "rev-" + hashlib.sha1(key.encode("utf-8")).hexdigest()[:24]
 
 
@@ -107,6 +180,7 @@ def map_decision_to_ledger_row(
     rubric_version: str | None = None,
     grading_model: str | None = None,
     era: str | None = None,
+    field_order: str | None = None,
 ) -> dict[str, Any]:
     """Map one (corpus row, reviewer decision) → a ledger-shaped dict.
 
@@ -115,11 +189,19 @@ def map_decision_to_ledger_row(
     report mode) OR splatted into ``ReviewLedgerRow(**row)`` for the SQLite ledger
     (``--ledger`` report mode). ``confidence`` / ``tokens`` are null — the probe
     captures no confidence signal yet (see module caveat).
+
+    ``field_order`` (RA-8) tags the field-ordering arm: it distinguishes the
+    ``decision_id`` between arms and, when ``rubric_version`` is not supplied
+    explicitly, defaults it to the arm's ``field_order:<name>`` tag — which is the
+    ``rubric_version`` grouping key ``reviewer_calibration_report.py`` compares
+    FA/FR across (never a role key; the arm axis is the rubric ordering).
     """
     row_id = str(corpus_row.get("row_id") or corpus_row.get("candidate_id") or "")
     cid = corpus_id if corpus_id is not None else corpus_row.get("corpus_id")
+    if field_order and rubric_version is None:
+        rubric_version = rubric_version_for(field_order)
     return {
-        "decision_id": decision_id_for(reviewer, cid, row_id, attempt),
+        "decision_id": decision_id_for(reviewer, cid, row_id, attempt, field_order=field_order),
         "reviewer_model_quant": reviewer,
         "grading_model": grading_model,
         "rubric_version": rubric_version,
@@ -216,6 +298,131 @@ def resolve_plan(
     }
 
 
+# ── PURE: field-order A/B plan resolution (dry-run; no inference) ─────────────
+def resolve_field_order_plan(
+    corpus_path: Path,
+    *,
+    reviewer: str,
+    n: int,
+    seed: int,
+    domain: str | None,
+    emit: str,
+    output_dir: Path,
+    field_orders: tuple[str, ...] = FIELD_ORDERS,
+    rubric_base: str | None = None,
+) -> dict[str, Any]:
+    """Describe the RA-8 field-order A/B run: one sub-plan per ordering arm (no model).
+
+    Each arm re-uses the single-arm :func:`resolve_plan` (so the judgeable-row
+    count / transport / null-field caveats stay identical) and is stamped with its
+    ``field_order`` + distinct ``rubric_version`` tag and the actual prompt field
+    label order the reviewer will see. Both arms share ONE combined output file so
+    the calibration report reads it once and groups FA/FR by ``rubric_version``.
+    """
+    out_name = "decisions.jsonl" if emit == "decisions-jsonl" else "events.sqlite"
+    arms: list[dict[str, Any]] = []
+    for fo in field_orders:
+        arm = resolve_plan(
+            corpus_path, reviewer=reviewer, n=n, seed=seed,
+            domain=domain, emit=emit, output_dir=output_dir,
+        )
+        arm["field_order"] = fo
+        arm["rubric_version"] = rubric_version_for(fo, rubric_base)
+        arm["prompt_field_order"] = [label for label, _ in resolve_field_order(fo)]
+        arm["output"] = str(output_dir / out_name)  # combined, tagged by rubric_version
+        arms.append(arm)
+    n_available = arms[0]["n_judgeable_available"] if arms else 0
+    n_selected = arms[0]["n_selected"] if arms else 0
+    return {
+        "kind": "reviewer_corpus_ledger_field_order_plan",
+        "mode": "dry_run",
+        "inference_ran": False,
+        "reviewer_model_quant": reviewer,
+        "corpus_path": str(corpus_path),
+        "domain_filter": domain or "all",
+        "seed": seed,
+        "n_requested": n,
+        "n_judgeable_available": n_available,
+        "n_selected_per_arm": n_selected,
+        "n_arms": len(arms),
+        "field_orders": list(field_orders),
+        "rubric_versions": [a["rubric_version"] for a in arms],
+        "emit": emit,
+        "output": str(output_dir / out_name),
+        "transport": {
+            "transport": load_runner().PLACEMENT_QUEUE_TRANSPORT,
+            "request_priority": load_runner().PLACEMENT_REQUEST_PRIORITY,
+            "workload_class": load_runner().PLACEMENT_WORKLOAD_CLASS,
+            "force_role": reviewer,
+            "uses_chat_endpoint": False,
+        },
+        "arms": arms,
+        # Results are indexed by (reviewer_model_quant, rubric_version) — model/quant
+        # x rubric ordering — NEVER by role.
+        "result_index": ["reviewer_model_quant", "rubric_version"],
+        "null_fields": ["confidence", "tokens"],
+        "observation_only": True,
+        "measurement_note": (
+            "RA-8 field-order A/B; pre-P-REV-1 observation. Compare FA/FR across "
+            "rubric_version arms; ECE/AUC/Brier null (no confidence signal). "
+            "Non-decision-gating (MEASUREMENT.md)."
+        ),
+    }
+
+
+# ── field-order-aware placement-queue probe (RA-8 inference seam) ─────────────
+def make_field_order_probe(
+    field_order: str,
+) -> Callable[[Any, dict[str, Any], Any], dict[str, Any]]:
+    """Build a reviewer probe that renders the rubric in ``field_order``.
+
+    Mirrors ``screening_tier_runner._default_reviewer_probe`` transport EXACTLY —
+    ``call_orchestrator_forced`` with ``request_priority=background`` +
+    ``workload_class=eval_batch`` + ``force_role=<reviewer>`` (the placement queue,
+    NEVER a foreground ``/chat`` call) — and varies ONLY the prompt field ordering.
+    Reuses the screening_tier_runner transport constants; touches no serving-path
+    module. Never exercised by the unit tests (execution is env/--execute gated).
+    """
+
+    def _probe(job: Any, row: dict[str, Any], tower: Any) -> dict[str, Any]:  # pragma: no cover - inference path
+        import time as _time
+
+        runner = load_runner()
+        _bench = str(Path("/mnt/raid0/llm/epyc-inference-research") / "scripts" / "benchmark")
+        if _bench not in sys.path:
+            sys.path.insert(0, _bench)
+        from seeding_orchestrator import call_orchestrator_forced  # type: ignore
+
+        prompt = build_reviewer_prompt(row, field_order)
+        start = _time.time()
+        resp = call_orchestrator_forced(
+            prompt=prompt,
+            force_role=job.reviewer or "",
+            force_mode="",
+            url=getattr(tower, "url", "http://localhost:8000"),
+            timeout=getattr(tower, "timeout", 300),
+            request_priority=runner.PLACEMENT_REQUEST_PRIORITY,  # placement queue, not /chat
+            workload_class=runner.PLACEMENT_WORKLOAD_CLASS,
+        )
+        latency_ms = (_time.time() - start) * 1000.0
+        answer = str(resp.get("answer") or "").strip().lower()
+        if "approve" in answer or "accept" in answer:
+            decision = "approve"
+        elif "reject" in answer:
+            decision = "reject"
+        else:
+            decision = "abstain"
+        return {
+            "decision": decision,
+            "gate": runner.gate_from_gold_label(row.get("gold_label")),
+            "latency_ms": latency_ms,
+            "row_id": row.get("row_id"),
+            "field_order": field_order,
+        }
+
+    return _probe
+
+
 # ── Execution bridge (env/--execute gated; reuses the probe seam) ────────────
 def run_corpus_ledger(
     corpus_path: Path,
@@ -283,6 +490,98 @@ def run_corpus_ledger(
     }
 
 
+# ── Execution bridge — RA-8 field-order A/B (env/--execute gated) ─────────────
+def run_field_order_ab(
+    corpus_path: Path,
+    *,
+    reviewer: str,
+    n: int,
+    seed: int,
+    domain: str | None,
+    emit: str,
+    output_dir: Path,
+    field_orders: tuple[str, ...] = FIELD_ORDERS,
+    rubric_base: str | None = None,
+    reviewer_probe_factory: Callable[[str], Callable[[Any, dict[str, Any], Any], dict[str, Any]]] | None = None,
+    tower: Any | None = None,
+) -> dict[str, Any]:
+    """Score ONE fixed corpus slice under EACH field ordering, tag rows by arm, emit.
+
+    Runs the reviewer over the SAME deterministic sample once per ordering (so the
+    only variable is the rubric field order), maps each decision to a ledger row
+    tagged with the arm's ``rubric_version`` (and an arm-distinct ``decision_id``),
+    then emits ONE combined decisions.jsonl / events.sqlite the calibration report
+    groups by ``rubric_version``. Tests inject ``reviewer_probe_factory`` (no model).
+    """
+    runner = load_runner()
+    factory = reviewer_probe_factory or make_field_order_probe
+    rows = list(runner.iter_judgeable_rows(corpus_path, domain=domain))
+    corpus_id = rows[0].get("corpus_id") if rows else None
+    sample = runner.select_rows_for_job(rows, n=n, seed_key=f"{seed}:{reviewer}")
+
+    job = runner.TrialJobSpec(
+        pairing_id=f"corpus-ledger-fieldorder::{reviewer}",
+        architect=None, reviewer=reviewer, grader=None, anchor_arm=None,
+        self_review=False, cross_family=False, staged_involved=False,
+        n=n, eval_tier="T0", corpus_id=str(corpus_id) if corpus_id else "unknown",
+        domain=domain or "all", corpus_content_sha256="",
+        corpus_n_rows=len(rows), coresidency_fits=None, priority_rank=0,
+    )
+    # Only build a real EvalTower when actually using the default (inference) factory.
+    if factory is make_field_order_probe and tower is None:
+        tower = runner._default_tower()
+
+    all_rows: list[dict[str, Any]] = []
+    arms: list[dict[str, Any]] = []
+    for fo in field_orders:
+        rubric_version = rubric_version_for(fo, rubric_base)
+        probe = factory(fo)
+        arm_rows = [
+            map_decision_to_ledger_row(
+                reviewer, row, probe(job, row, tower),
+                corpus_id=job.corpus_id, rubric_version=rubric_version, field_order=fo,
+            )
+            for row in sample
+        ]
+        all_rows.extend(arm_rows)
+        arms.append({
+            "field_order": fo, "rubric_version": rubric_version,
+            "n_scored": len(arm_rows),
+            "prompt_field_order": [label for label, _ in resolve_field_order(fo)],
+        })
+
+    out_name = "decisions.jsonl" if emit == "decisions-jsonl" else "events.sqlite"
+    out_path = output_dir / out_name
+    if emit == "decisions-jsonl":
+        emit_decisions_jsonl(all_rows, out_path)
+        emit_summary: Any = {"decisions_written": len(all_rows)}
+    else:
+        inserted, skipped = emit_ledger_sqlite(all_rows, out_path)
+        emit_summary = {"inserted": inserted, "skipped_dup": skipped}
+
+    manifest = {
+        "kind": "reviewer_corpus_ledger_field_order_run",
+        "reviewer_model_quant": reviewer, "corpus_path": str(corpus_path),
+        "corpus_id": job.corpus_id, "domain_filter": domain or "all",
+        "seed": seed, "n_requested": n, "n_scored": len(all_rows),
+        "n_arms": len(arms), "arms": arms,
+        "field_orders": list(field_orders),
+        "rubric_versions": [a["rubric_version"] for a in arms],
+        "emit": emit, "output": str(out_path), "observation_only": True,
+        "transport": job.transport, "uses_chat_endpoint": False,
+        "result_index": ["reviewer_model_quant", "rubric_version"],
+        "null_fields": ["confidence", "tokens"],
+    }
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "run_manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True))
+
+    return {
+        "mode": "execute", "inference_ran": True, "n_scored": len(all_rows),
+        "n_arms": len(arms), "arms": arms, "output": str(out_path),
+        "emit_summary": emit_summary, "rows": all_rows, "manifest": manifest,
+    }
+
+
 # ── CLI ──────────────────────────────────────────────────────────────────────
 def build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
@@ -306,6 +605,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="decisions.jsonl (default; no sqlite handle) or events.sqlite review_ledger",
     )
     p.add_argument(
+        "--field-order", choices=["default", "reversed", "both"], default=None,
+        help="RA-8 field-order A/B: render the rubric under one ordering "
+        "(default/reversed) or 'both' to run the full A/B and emit both decision "
+        "sets tagged by rubric_version. Omit for the single-arm path (unchanged).",
+    )
+    p.add_argument(
         "--execute", action="store_true",
         help="run inference (ALSO gated by AUTOPILOT_SCREENING_TIER_INFERENCE=1); "
         "default is a pure dry-run plan with no model",
@@ -326,6 +631,26 @@ def main(argv: list[str] | None = None) -> int:
     execute = bool(args.execute) or runner._env_flag_enabled(
         runner.SCREENING_TIER_INFERENCE_ENV
     )
+
+    # RA-8 field-order A/B arm (opt-in; the single-arm path below is unchanged).
+    if args.field_order is not None:
+        field_orders = FIELD_ORDERS if args.field_order == "both" else (args.field_order,)
+        if not execute:
+            plan = resolve_field_order_plan(
+                corpus_path, reviewer=args.reviewer, n=args.n, seed=args.seed,
+                domain=args.domain, emit=args.emit, output_dir=output_dir,
+                field_orders=field_orders,
+            )
+            print(json.dumps(plan, indent=2, sort_keys=True, default=str))
+            return 0
+        ab = run_field_order_ab(
+            corpus_path, reviewer=args.reviewer, n=args.n, seed=args.seed,
+            domain=args.domain, emit=args.emit, output_dir=output_dir,
+            field_orders=field_orders,
+        )
+        printed_ab = {k: v for k, v in ab.items() if k != "rows"}
+        print(json.dumps(printed_ab, indent=2, sort_keys=True, default=str))
+        return 0
 
     if not execute:
         plan = resolve_plan(

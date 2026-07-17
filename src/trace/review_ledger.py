@@ -45,6 +45,7 @@ import sqlite3
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from src.autopilot_core.sequential_verdict import (
@@ -233,6 +234,95 @@ def insert_review_ledger_rows(
     return inserted, skipped
 
 
+def _synth_decision_id(obj: Mapping[str, Any], source: str | None, role: str | None) -> str:
+    """Deterministic decision_id when a ReviewDecision carries none of its own.
+
+    Content-addressed over the decision payload + provenance so re-recording the
+    same decision is an ``INSERT OR IGNORE`` no-op (idempotent, like every other
+    ledger write). Stable across processes.
+    """
+    blob = json.dumps({"obj": obj, "source": source, "role": role}, sort_keys=True, default=str)
+    return "revdec-" + hashlib.sha256(blob.encode("utf-8")).hexdigest()[:24]
+
+
+def review_decision_to_ledger_row(
+    obj: Mapping[str, Any], *, source: str | None = None, role: str | None = None
+) -> ReviewLedgerRow:
+    """Map a schema-valid ``ReviewDecision`` dict (review_decision.schema.json) to a
+    :class:`ReviewLedgerRow`.
+
+    Reads the blocking/advisory/telemetry/provenance channels of the artifact:
+      * ``decision`` / ``confidence`` (top-level required fields)
+      * ``blocking.tripwire`` -> ``tripwire``
+      * ``telemetry.wall_ms`` / ``telemetry.tokens_out`` -> ``latency_ms`` / ``tokens``
+      * ``provenance.{model,quant,role,instrument_era}`` -> ``reviewer_model_quant`` / ``era``
+      * ``subtask_id`` (or ``candidate_ref``) -> ``candidate_id``
+    ``source`` (planner provider) and ``role`` are provenance hints; ``role`` is
+    the ``reviewer_model_quant`` fallback when provenance carries no model/quant.
+    """
+    blocking = obj.get("blocking") or {}
+    telemetry = obj.get("telemetry") or {}
+    provenance = obj.get("provenance") or {}
+    model = provenance.get("model")
+    quant = provenance.get("quant")
+    if model and quant:
+        reviewer_mq: str | None = f"{model}/{quant}"
+    else:
+        reviewer_mq = model or provenance.get("role") or role
+    return ReviewLedgerRow(
+        decision_id=obj.get("decision_id") or _synth_decision_id(obj, source, role),
+        ts=obj.get("reviewed_at"),
+        reviewer_model_quant=reviewer_mq,
+        candidate_id=obj.get("subtask_id") or obj.get("candidate_ref"),
+        decision=obj.get("decision"),
+        tripwire=blocking.get("tripwire"),
+        confidence=obj.get("confidence"),
+        latency_ms=telemetry.get("wall_ms"),
+        tokens=telemetry.get("tokens_out"),
+        era=provenance.get("instrument_era"),
+        schema_version=obj.get("schema_version") or REVIEW_DECISION_SCHEMA_VERSION,
+    )
+
+
+def record_review_decision(
+    obj: Mapping[str, Any],
+    *,
+    source: str | None = None,
+    role: str | None = None,
+    conn: sqlite3.Connection | None = None,
+    db_path: str | Path | None = None,
+) -> tuple[int, int] | None:
+    """Convenience sink: map a ``ReviewDecision`` dict to a ledger row and insert it.
+
+    This is the safe writer the AP-6 dogfood seam
+    (``scripts/autopilot/planner_providers._route_review_decision_to_ledger``)
+    imports; its mere EXISTENCE is what un-deads that seam (previously the import
+    failed, so the except-guard swallowed the call forever).
+
+    Zero-live-write by default (enabling the planner's live write path is a parked
+    operator decision — feedback_use_orchestrator_stack / RCP): a call with NEITHER
+    ``conn`` NOR ``db_path`` performs NO write and returns ``None`` — which is
+    exactly the passive planner call ``record_review_decision(obj, source=…,
+    role=…)``. Supply ``conn`` (an open store) or ``db_path`` (an explicit ledger
+    file — operator-configured, or a test) to actually persist. Returns
+    ``(inserted, skipped_dup)`` when a write target is given, else ``None``.
+    """
+    if not isinstance(obj, Mapping):
+        return None
+    row = review_decision_to_ledger_row(obj, source=source, role=role)
+    if conn is not None:
+        return insert_review_ledger_row(conn, row)
+    if db_path is not None:
+        path = Path(db_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        c = sqlite3.connect(str(path))
+        try:
+            return insert_review_ledger_row(c, row)
+        finally:
+            c.close()
+    return None
+
+
 def iter_review_ledger_rows(
     conn: sqlite3.Connection,
     *,
@@ -323,6 +413,87 @@ def decision_correct(row: Mapping[str, Any]) -> bool | None:
     if is_accept_like(row):
         return gold_is_good(row)
     return gold_is_bad(row)
+
+
+# --------------------------------------------------------------------------- #
+# AP-8 — digest-facing calibration summary
+# --------------------------------------------------------------------------- #
+#: Default review-ledger DB path — co-located with the trace store's
+#: ``events.sqlite`` under ``data/trace/`` (gitignored). This is the exact file
+#: the events→ledger materializer (``scripts/analysis/reviewer_events_to_ledger``
+#: ``write_ledger_sqlite`` -> ``<dir>/review_ledger.sqlite``) writes, so the
+#: digest refresh + this summary agree on one location.
+DEFAULT_REVIEW_LEDGER_PATH = Path(__file__).resolve().parents[2] / "data" / "trace" / "review_ledger.sqlite"
+
+
+def _fa_fr_rates(
+    rows: Iterable[Mapping[str, Any]],
+) -> tuple[float | None, float | None, float | None]:
+    """FA rate, FR rate, FA/FR ratio over ledger rows.
+
+    Mirrors ``reviewer_calibration_report.compute_group_metrics`` FA/FR block
+    exactly, but built from THIS module's polarity primitives (``is_false_accept``
+    / ``is_false_reject`` / ``is_terminal`` / ``has_gold`` / ``gold_is_bad``) —
+    the single polarity source of truth the report itself imports — so the two
+    paths cannot diverge. FA rate = false-accepts / actually-bad golded-terminal;
+    FR rate = false-rejects / actually-good golded-terminal (both lower-better).
+    """
+    terminal = [r for r in rows if is_terminal(r)]
+    golded = [r for r in terminal if has_gold(r)]
+    n_bad = sum(1 for r in golded if gold_is_bad(r))
+    n_good = sum(1 for r in golded if gold_is_good(r))
+    fa = sum(1 for r in golded if is_false_accept(r))
+    fr = sum(1 for r in golded if is_false_reject(r))
+    fa_rate = (fa / n_bad) if n_bad else None
+    fr_rate = (fr / n_good) if n_good else None
+    if fa_rate is not None and fr_rate not in (None, 0.0):
+        ratio: float | None = fa_rate / fr_rate
+    else:
+        ratio = None
+    return fa_rate, fr_rate, ratio
+
+
+def calibration_summary(
+    db_path: str | Path | None = None, *, conn: sqlite3.Connection | None = None
+) -> dict[str, Any]:
+    """Compact reviewer FA/FR calibration summary for the autopilot digest (AP-8).
+
+    Returns ``{n_decisions, reviewer_fa_rate, reviewer_fr_rate,
+    reviewer_fa_fr_ratio, review_decision_latency_ms}`` computed over a
+    ``review_ledger`` table. FA/FR reuse the shared polarity primitives (see
+    :func:`_fa_fr_rates`); latency is the mean of populated ``latency_ms``.
+
+    Reads ``conn`` if given, else opens ``db_path`` (default
+    :data:`DEFAULT_REVIEW_LEDGER_PATH`). Empty/missing ledger → ``{}`` (a clean
+    "no data" signal the digest renders as "no reviewer-calibration data yet");
+    rates whose denominator is zero come back ``None``. NEVER raises on a missing
+    file or absent table. Observation-grade (pre-P-REV-1); never decision-gating.
+    """
+    own_conn: sqlite3.Connection | None = None
+    if conn is None:
+        path = Path(db_path) if db_path is not None else DEFAULT_REVIEW_LEDGER_PATH
+        if not path.exists():
+            return {}
+        own_conn = conn = sqlite3.connect(str(path))
+    try:
+        rows = list(iter_review_ledger_rows(conn))
+    except sqlite3.Error:
+        return {}
+    finally:
+        if own_conn is not None:
+            own_conn.close()
+    if not rows:
+        return {}
+    fa_rate, fr_rate, ratio = _fa_fr_rates(rows)
+    latencies = [float(r["latency_ms"]) for r in rows if r.get("latency_ms") is not None]
+    mean_latency = (sum(latencies) / len(latencies)) if latencies else None
+    return {
+        "n_decisions": len(rows),
+        "reviewer_fa_rate": fa_rate,
+        "reviewer_fr_rate": fr_rate,
+        "reviewer_fa_fr_ratio": ratio,
+        "review_decision_latency_ms": mean_latency,
+    }
 
 
 # --------------------------------------------------------------------------- #

@@ -299,6 +299,80 @@ def _economics_section(now: datetime, repo_root: Path | None = None) -> list[str
     ]
 
 
+def _refresh_review_ledger_subprocess(events_db: Path, ledger_path: Path) -> bool:
+    """Fallback for :func:`_refresh_review_ledger` when the materializer is not
+    importable: shell out to the CLI. Best-effort; never raises."""
+    try:
+        import subprocess
+        import sys
+
+        script = (
+            Path(__file__).resolve().parents[2]
+            / "scripts" / "analysis" / "reviewer_events_to_ledger.py"
+        )
+        if not script.exists():
+            return False
+        subprocess.run(
+            [
+                sys.executable, str(script),
+                "--events", str(events_db),
+                "--output", str(ledger_path.parent),
+                "--emit", "ledger-sqlite",
+            ],
+            capture_output=True, timeout=120, check=False,
+        )
+        return True
+    except Exception:  # noqa: BLE001 — best-effort; digest must never break
+        return False
+
+
+def _refresh_review_ledger(
+    events_db: Path | str | None = None,
+    ledger_path: Path | str | None = None,
+    *,
+    materializer: Any | None = None,
+) -> bool:
+    """Best-effort pre-digest refresh: materialize REVIEW_DECISION trace events into
+    the review ledger right before the calibration section reads it (B2).
+
+    Chains the offline, NON-INFERENCE events→ledger materializer
+    (``scripts/analysis/reviewer_events_to_ledger``): read events → map to ledger
+    rows → write ``<ledger dir>/review_ledger.sqlite`` (the file
+    ``review_ledger.calibration_summary`` then reads). Defaults:
+    ``src.trace.store.DEFAULT_DB_PATH`` → ``review_ledger.DEFAULT_REVIEW_LEDGER_PATH``.
+
+    NEVER raises — every failure (missing events DB, unimportable materializer,
+    0 events, write error) is swallowed so the digest always completes. A clean
+    no-op when the trace store has zero REVIEW_DECISION events (the materializer
+    yields nothing on empty). ``materializer`` is injectable for tests. Returns
+    ``True`` iff rows were materialized.
+    """
+    try:
+        from src.trace.review_ledger import DEFAULT_REVIEW_LEDGER_PATH
+        from src.trace.store import DEFAULT_DB_PATH
+
+        events_db = Path(events_db) if events_db else DEFAULT_DB_PATH
+        ledger_path = Path(ledger_path) if ledger_path else DEFAULT_REVIEW_LEDGER_PATH
+        if not events_db.exists():
+            return False
+        if materializer is None:
+            try:
+                from scripts.analysis import reviewer_events_to_ledger as materializer
+            except Exception:  # noqa: BLE001 — namespace import unavailable
+                return _refresh_review_ledger_subprocess(events_db, ledger_path)
+        events = materializer.read_review_events(events_db)
+        if not events:
+            return False
+        rows = materializer.materialize_rows(events)
+        if not rows:
+            return False
+        materializer.write_ledger_sqlite(rows, ledger_path.parent)
+        return True
+    except Exception:  # noqa: BLE001 — best-effort; digest must never break
+        log.debug("review-ledger pre-digest refresh skipped", exc_info=True)
+        return False
+
+
 def _reviewer_calibration_section(
     now: datetime,
     *,
@@ -404,6 +478,13 @@ def render_digest(
     body.append("")
     body.extend(_economics_section(now))
     body.append("")
+    # B2: best-effort refresh of the review ledger from trace events BEFORE the
+    # calibration section reads it. Double-guarded (the hook itself never raises)
+    # so a materializer failure can never break digest generation.
+    try:
+        _refresh_review_ledger()
+    except Exception:  # noqa: BLE001 — belt-and-suspenders; digest must never break
+        log.debug("review-ledger refresh hook raised; ignored", exc_info=True)
     body.extend(_reviewer_calibration_section(now))
     body.append("")
     body.append("### NumericSwarm surfaces")
