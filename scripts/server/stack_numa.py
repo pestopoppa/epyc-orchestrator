@@ -190,24 +190,13 @@ NUMA_CONFIG: dict[str, dict] = {
         "instances": [(NUMA_Q0B[0], 8086, 24)],
         "mlock": True,    # ~4 GB — minimal footprint
     },
-    # Qwen3-VL-30B-A3B MoE (~17 GB) — pre-warm: 1×96t full + 4×48t quarters
-    # Phase 0.5 bench (2026-05-24): 48t/quarter = 20.09 t/s — best quarter
-    # throughput of any role (small Q4 active params + healthy BW). Quartering
-    # gives ~80 t/s aggregate for concurrent vision-escalation requests.
-    # Full anchor: NUMA_NODE1 (the historical pre-2026-05-24 choice, on the
-    # node 1 half-socket — frees node 0 for frontdoor's heavier load). An
-    # earlier 2026-05-24 commit migrated this to NUMA_FULL+interleave=all
-    # without supporting head-to-head data — reverted.
+    # Temporary 2026-07-17 safety alias: vision_escalation serves the same
+    # Qwen2.5-VL model as worker_vision until a replacement VL escalation A/B
+    # beats it. Keep a distinct 24t quarter so ports 8086 and 8087 can coexist
+    # without overlapping CPU masks.
     "vision_escalation": {
-        "instances": [
-            (NUMA_NODE1[0], 8087, NUMA_NODE1[1]),    # full: 1×96t on node 1 half-socket
-            (NUMA_Q0A[0], 8187, NUMA_Q0A[1]),        # quarter 0
-            (NUMA_Q0B[0], 8287, NUMA_Q0B[1]),        # quarter 1
-            (NUMA_Q1A[0], 8387, NUMA_Q1A[1]),        # quarter 2
-            (NUMA_Q1B[0], 8487, NUMA_Q1B[1]),        # quarter 3
-        ],
-        "full_instance_idx": 0,
-        "mlock": True,    # ~17 GB per instance — fits in 1.13 TB budget
+        "instances": [(NUMA_Q1B[0], 8087, 24)],
+        "mlock": True,    # ~4 GB — temporary Qwen2.5-VL alias
     },
 }
 

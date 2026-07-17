@@ -10,8 +10,8 @@
 # temporarily skip the compile (e.g. during a master schema change), set
 # ORCHESTRATOR_REGISTRY_NO_COMPILE=1.
 #
-# Compiled at: 2026-07-17T12:51:45+00:00
-# Cache key:   5a89dcb9edc8b77d...
+# Compiled at: 2026-07-17T14:24:40+00:00
+# Cache key:   cb94cc912fe4da34...
 # Active roles: architect_general, coder_escalation, embedder, embedder_1, embedder_2, embedder_3, embedder_4, embedder_5, embedder_bge_m3, embedder_granite_97m_r2, embedder_multilingual_e5_base, frontdoor, ingest_long_context, toolrunner, vision_escalation, worker_explore, worker_fast, worker_general, worker_math, worker_summarize, worker_vision
 # =============================================================================
 
@@ -82,7 +82,7 @@ runtime_defaults:
       worker_fast: 30
       frontdoor: 180
       coder_escalation: 120
-      vision_escalation: 120
+      vision_escalation: 60
       ingest_long_context: 300
       architect_general: 600
     server:
@@ -1763,37 +1763,39 @@ roles:
 
       '
   vision_escalation:
-    tier: B
+    tier: C
     port: 8087
-    description: Complex vision - dedicated VL MoE server with mmproj
+    description: Temporary safe vision escalation alias - Qwen2.5-VL server with mmproj
     model:
-      name: Qwen3-VL-30B-A3B-Instruct
-      path: lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/Qwen3-VL-30B-A3B-Instruct-Q4_K_M.gguf
-      mmproj_path: lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/mmproj-Qwen3-VL-30B-A3B-Instruct-F16.gguf
+      name: Qwen2.5-VL-7B-Instruct
+      path: lmstudio-community/Qwen2.5-VL-7B-Instruct-GGUF/Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf
+      mmproj_path: lmstudio-community/Qwen2.5-VL-7B-Instruct-GGUF/mmproj-model-f16.gguf
       quant: Q4_K_M
-      size_gb: 18.0
-      architecture: qwen3vlmoe
-      ctx_max: 262144
+      size_gb: 4.4
+      architecture: dense
+      ctx_max: 128000
     thinking_control:
       mode: native_no_thinking_toggle
       effective_mode: native_no_think_tags
-      evidence_strength: model_variant_inferred
-      evidence: Qwen3-VL-30B-A3B-Instruct is the non-thinking VL variant; multimodal role follows native VL chat behavior rather than a text-model enable_thinking toggle.
+      evidence_strength: model_family_inferred
+      evidence: Qwen2.5-VL Instruct predates Qwen3 thinking controls; multimodal role has no chat-template thinking toggle.
     candidate_roles:
     - vision
     acceleration:
-      type: moe_expert_reduction
-      baseline_experts: 8
-      experts: 4
-      override_key: qwen3vlmoe.expert_used_count
+      type: baseline
+      disallowed:
+      - speculative_decoding
+      - prompt_lookup
+      reason: VL models with mmproj not supported by llama-speculative binary
     performance:
-      baseline_tps: 19.0
-      optimized_tps: 27.6
-      speedup: 1.45x
+      baseline_tps: 16.91
+      optimized_tps: 21.32
+      speedup: 1.0x
       vl_score:
-        pct: 92.0
-        raw: 11/12
-      benchmark_date: 2026-03-04
+        pct: 100.0
+        raw: 4/4 K35 fixed fixtures
+      benchmark_date: 2026-07-17
+      evidence: /mnt/raid0/llm/tmp/k35-vision-matrix-20260717T1500Z/summary.json
     memory:
       residency: hot
       pinned: false
@@ -1810,18 +1812,19 @@ roles:
       - GUI automation failure
       - cross-reference multiple image regions
     paged_attention:
-      recommended: true
-      block_size: 64
-      reason: 30B VL MoE benefits from paged attention for image-heavy workloads
-    notes: '75% accuracy - LOWER than 4B (94%) due to OCR issues ("Centric" error).
+      recommended: false
+      reason: temporary alias uses Qwen2.5-VL dense worker model
+    notes: 'Temporary 2026-07-17 safety alias to worker_vision. K35 fixed-fixture
 
-      Faster than 4B (27.6 t/s vs 18 t/s) but less accurate.
+      matrix showed worker_vision passed 4/4 while the former Qwen3-VL-30B MoE4
 
-      Consider vision_qwen3_vl_8b (86%) as alternative escalation target.
+      escalation lane passed only 3/4 and missed the chart fixture. Diagnostic
 
-      Good for: extended reasoning on complex diagrams, multi-image comparison.
+      probes with --image-min/max-tokens 1024 and default experts also failed.
 
-      WARNING: 0% agentic - cannot do tool calls.
+      Keep port 8087 for call-site stability, but do not treat this as a true
+
+      higher-quality escalation model until a replacement A/B wins.
 
       '
   worker_summarize:

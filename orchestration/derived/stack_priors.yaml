@@ -48,39 +48,39 @@ contract:
   - quality_overall
   - memory_cost
   fallback_policy: Consumers may use local fallback values only as explicit degraded mode when this generated contract is missing or invalid.
-compiled_at: '2026-07-17T12:51:46Z'
+compiled_at: '2026-07-17T14:31:37Z'
 status: compiled
 coverage_scope: descriptor_role_bindings
 precedence_spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
 source_artifacts:
   registry:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
-    sha256: 965c91a05481453565ab059e8f928b69a721006c0470b3b7a894bf370468fea1
-    repo_commit: 43a77eaf
+    sha256: 1b15929a011285a469f23046dfb8a1d87e802d3bd4fce101a0acdfb280b69e6c
+    repo_commit: d9f0d148
   descriptors:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_descriptors.yaml
-    sha256: d6b5052257a59daca4037a8a785a4fe3753769242ae7ef9cda71261b40ed8754
-    repo_commit: 43a77eaf
+    sha256: dce099c51b086e5a7aa546cd11ab95ab725a8e0dc33be0dd6b971a4b2b441203
+    repo_commit: d9f0d148
   stack_manifest:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_manifest.py
-    sha256: e454a53e797e42fe7d886a3e40c8e51efc407d268b2a59de258b2068982a3f50
-    repo_commit: 43a77eaf
+    sha256: 0ff2cc3c1a0370ee59cee401d60ec483b5bede4cc7a8287074f16a58e52560c1
+    repo_commit: d9f0d148
   stack_numa:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_numa.py
-    sha256: 63ef5ec660d987fd0c2e2b9de311536c90044fe1cd938f0c072ac5a159b5ff34
-    repo_commit: 43a77eaf
+    sha256: 3b8b0a304fed4f4351bd336b089b9ff628e398ce7862fb6589d8795632da6930
+    repo_commit: d9f0d148
   orchestrator_stack:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/orchestrator_stack.py
-    sha256: 83fa83f854ded17071a0248ee571a8782248d70f7b6c849b6bffa06b0d9dff42
-    repo_commit: 43a77eaf
+    sha256: 3463a165d8781edc204e976ede6526acdafcc7c0d47f8d7d036303b171a40c94
+    repo_commit: d9f0d148
   stack_paths:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_paths.py
     sha256: 7eee8576101dbb827ec8e94a228beedb401d7cad80841e1a18aab9c03db4206b
-    repo_commit: 43a77eaf
+    repo_commit: d9f0d148
   stack_runtime:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_runtime.py
     sha256: f749047dde702b21759f67dcc81bf6cd64f1157e8a1fdf250b317301c1b6d32c
-    repo_commit: 43a77eaf
+    repo_commit: d9f0d148
 roles:
   architect_general:
     role: architect_general
@@ -858,8 +858,8 @@ roles:
     role: vision_escalation
     deployment_status: live_stack
     status: compiled
-    model_id: qwen3-vl-30b-a3b-q4_k_m
-    display_name: Qwen3-VL-30B-A3B-Instruct
+    model_id: qwen2.5-vl-7b-q4_k_m
+    display_name: Qwen2.5-VL-7B-Instruct
     serving:
       endpoint: http://localhost:8087
       server_role: vision_escalation
@@ -868,7 +868,7 @@ roles:
       - 8087
       slots: 1
       tier: hot
-      effective_context_tokens: 16384
+      effective_context_tokens: 8192
       binary: llama.cpp
       binary_dir: null
       numa_policy: role_endpoint_binding
@@ -879,15 +879,14 @@ roles:
           primary_role: vision_escalation
           mode: vision
           alias: false
-          numa_instance: 0
           vision_type: escalation
         primary_roles:
         - vision_escalation
         modes:
         - vision
         requirements:
-          mmproj_path: /mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/mmproj-Qwen3-VL-30B-A3B-Instruct-F16.gguf
-          model_path: /mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/Qwen3-VL-30B-A3B-Instruct-Q4_K_M.gguf
+          mmproj_path: /mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen2.5-VL-7B-Instruct-GGUF/mmproj-model-f16.gguf
+          model_path: /mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen2.5-VL-7B-Instruct-GGUF/Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf
         runtime:
           binary_family: llama.cpp
           binary_path: /mnt/raid0/llm/llama.cpp/build/bin/llama-server
@@ -896,7 +895,7 @@ roles:
           env_policy: canonical
           kmp_blocktime: null
           cache:
-            context_tokens: 16384
+            context_tokens: 8192
             slots: 1
             ubatch: null
             kv_type_k: null
@@ -909,8 +908,7 @@ roles:
             flash_attn: true
             jinja: false
             reasoning: null
-            override_kv:
-            - qwen3vlmoe.expert_used_count=int:4
+            override_kv: []
             spec:
               enabled: false
               type: null
@@ -920,29 +918,29 @@ roles:
               draft_p_min: null
               threads_draft: null
     priors:
-      throughput_tps: 27.6
-      quality_overall: 0.92
+      throughput_tps: 21.32
+      quality_overall: 0.9167
       memory_cost: 1.0
     acceleration:
-      spec_type: moe_expert_reduction
+      spec_type: baseline
       draft_compat: []
       enable_thinking: null
       thinking_control:
         mode: native_no_thinking_toggle
         effective_mode: native_no_think_tags
-        evidence_strength: model_variant_inferred
-        evidence: Qwen3-VL-30B-A3B-Instruct is the non-thinking VL variant; multimodal role follows native VL chat behavior rather than a text-model enable_thinking toggle.
+        evidence_strength: model_family_inferred
+        evidence: Qwen2.5-VL Instruct predates Qwen3 thinking controls; multimodal role has no chat-template thinking toggle.
       kv:
         k: null
         v: null
     model:
-      family: qwen3-vl
-      arch: qwen3vlmoe
-      params_b: 30.0
-      active_b: 3.0
+      family: qwen2.5-vl
+      arch: dense
+      params_b: 7.0
+      active_b: 7.0
       quant: Q4_K_M
-      mem_gb: 18.0
-      ctx_max: 262144
+      mem_gb: 4.4
+      ctx_max: 128000
       modalities:
       - text
       - vision
@@ -954,21 +952,30 @@ roles:
       descriptor_server_roles: []
       alias_overrides: []
       quality:
+      - date: '2026-07-17'
+        protocol: registry performance block
+        value:
+          baseline_tps: 16.91
+          optimized_tps: 21.32
+          speedup: 1.0x
+          vl_score:
+            pct: 100.0
+            raw: 4/4 K35 fixed fixtures
+          benchmark_date: '2026-07-17'
+          evidence: /mnt/raid0/llm/tmp/k35-vision-matrix-20260717T1500Z/summary.json
       - date: '2026-03-04'
         protocol: registry performance block
         value:
-          baseline_tps: 19.0
-          optimized_tps: 27.6
-          speedup: 1.45x
-          vl_score:
-            pct: 92.0
-            raw: 11/12
+          baseline_tps: 15.28
+          optimized_tps: 20.0
+          speedup: 1.3x
+          vl_score: 11/12 (92%)
           benchmark_date: '2026-03-04'
       speed:
-      - date: '2026-03-04'
+      - date: '2026-07-17'
         protocol: registry performance block
-        baseline_tps: 19.0
-        optimized_tps: 27.6
+        baseline_tps: 16.91
+        optimized_tps: 21.32
     known_gaps: []
   worker_general:
     role: worker_general
@@ -1428,7 +1435,7 @@ roles:
               draft_p_min: null
               threads_draft: null
     priors:
-      throughput_tps: 20.0
+      throughput_tps: 21.32
       quality_overall: 0.9167
       memory_cost: 1.0
     acceleration:
@@ -1462,6 +1469,17 @@ roles:
       descriptor_server_roles: []
       alias_overrides: []
       quality:
+      - date: '2026-07-17'
+        protocol: registry performance block
+        value:
+          baseline_tps: 16.91
+          optimized_tps: 21.32
+          speedup: 1.0x
+          vl_score:
+            pct: 100.0
+            raw: 4/4 K35 fixed fixtures
+          benchmark_date: '2026-07-17'
+          evidence: /mnt/raid0/llm/tmp/k35-vision-matrix-20260717T1500Z/summary.json
       - date: '2026-03-04'
         protocol: registry performance block
         value:
@@ -1471,9 +1489,9 @@ roles:
           vl_score: 11/12 (92%)
           benchmark_date: '2026-03-04'
       speed:
-      - date: '2026-03-04'
+      - date: '2026-07-17'
         protocol: registry performance block
-        baseline_tps: 15.28
-        optimized_tps: 20.0
+        baseline_tps: 16.91
+        optimized_tps: 21.32
     known_gaps: []
 known_global_gaps: {}

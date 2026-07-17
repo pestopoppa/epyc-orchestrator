@@ -1125,8 +1125,7 @@ def _launch_runtime_record(
         LAUNCH_KV_QUANT_CONFIGS.get(canonical_primary_role)
         or LAUNCH_KV_QUANT_CONFIGS.get(canonical_role)
     )
-    override_kv = ["qwen3vlmoe.expert_used_count=int:4"] if vision_type == "escalation" else []
-    override_kv.extend(_override_kv_args(acceleration))
+    override_kv = _override_kv_args(acceleration)
     override_kv = sorted(set(override_kv))
 
     spec: dict[str, Any] = {

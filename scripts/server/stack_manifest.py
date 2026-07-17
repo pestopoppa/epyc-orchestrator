@@ -33,7 +33,7 @@ PORT_MAP = {
     "worker_math": 8072,  # Shares with worker_general
     "toolrunner": 8072,  # Shares with worker_general
     "worker_vision": 8086,  # Dedicated VL server
-    "vision_escalation": 8087,  # VL escalation (Qwen3-VL-30B MoE)
+    "vision_escalation": 8087,  # Temporary VL escalation alias -> Qwen2.5-VL
     "eval_batch_frontdoor": 18070,  # Warm eval-batch Qwen3.6 frontdoor lane (-np 8)
     "worker_coder": 8102,  # Fast coding worker semantic role (1.5B backend) — DEPRECATED (worker_pool)
     "worker_fast": 8102,  # Fast worker (1.5B, WARM, 4 slots) — DEPRECATED (worker_pool)
@@ -296,11 +296,10 @@ VISION_WORKER_MMPROJ = str(
 )
 VISION_ESCALATION_MODEL = str(
     _PATHS["model_base"]
-    / "lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/Qwen3-VL-30B-A3B-Instruct-Q4_K_M.gguf"
+    / "lmstudio-community/Qwen2.5-VL-7B-Instruct-GGUF/Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf"
 )
 VISION_ESCALATION_MMPROJ = str(
-    _PATHS["model_base"]
-    / "lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/mmproj-Qwen3-VL-30B-A3B-Instruct-F16.gguf"
+    _PATHS["model_base"] / "lmstudio-community/Qwen2.5-VL-7B-Instruct-GGUF/mmproj-model-f16.gguf"
 )
 
 DEFAULT_EFFECTIVE_CONTEXT_TOKENS = 32768
@@ -308,7 +307,7 @@ LAUNCH_CONTEXT_TOKENS = {
     "worker_general": 16384,
     "worker_fast": 16384,
     "worker_vision": 8192,
-    "vision_escalation": 16384,
+    "vision_escalation": 8192,
     "architect_general": 16384,
     "ingest_long_context": 32768,
 }

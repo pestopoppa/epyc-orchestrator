@@ -179,13 +179,14 @@ def test_descriptor_active_roles_are_canonical_launch_roles() -> None:
 # -----------------------------------------------------------------------------
 
 
-def test_build_vision_command_escalation_emits_expert_reduction() -> None:
+def test_build_vision_command_escalation_uses_temporary_safe_alias() -> None:
     cmd = oss._build_vision_command(port=8087, vision_type="escalation")
+    assert oss.VISION_ESCALATION_MODEL == oss.VISION_WORKER_MODEL
+    assert oss.VISION_ESCALATION_MMPROJ == oss.VISION_WORKER_MMPROJ
     assert "--mmproj" in cmd
-    assert "--override-kv" in cmd
-    assert "qwen3vlmoe.expert_used_count=int:4" in cmd
-    assert cmd[cmd.index("-c") + 1] == "16384"
-    assert cmd[cmd.index("-t") + 1] == "96"
+    assert "--override-kv" not in cmd
+    assert cmd[cmd.index("-c") + 1] == "8192"
+    assert cmd[cmd.index("-t") + 1] == "24"
 
 
 def test_build_vision_command_worker_uses_small_model() -> None:

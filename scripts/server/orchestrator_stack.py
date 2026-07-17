@@ -451,19 +451,17 @@ def wait_for_health(
 
 
 def _build_vision_command(port: int, vision_type: str | None, numa_instance: int = 0) -> list[str]:
-    """VL launch: Qwen3-VL-30B MoE (escalation) or Qwen2.5-VL-7B (worker).
+    """VL launch: production worker or escalation multimodal server.
 
     Thread count comes from NUMA_CONFIG per (role, numa_instance) — added
     2026-05-24 along with the per-instance fix for `_build_role_command`, so
     that the newly-quartered vision roles get the correct -t per instance.
-    Pre-fix: vision_escalation = hardcoded 96, worker_vision = hardcoded 24.
     """
     if vision_type == "escalation":
         role_name = "vision_escalation"
         requirements, runtime = _stack_prior_launch(role_name)
         cache = _runtime_cache(runtime)
         flags = _runtime_flags(runtime)
-        # Qwen3-VL-30B MoE - larger model, expert reduction
         thread_count = _resolve_thread_count(role_name, numa_instance)
         cmd = [
             _runtime_string(runtime, "binary_path", str(LLAMA_SERVER)),
@@ -472,7 +470,7 @@ def _build_vision_command(port: int, vision_type: str | None, numa_instance: int
             "--mmproj",
             _runtime_string(requirements, "mmproj_path", VISION_ESCALATION_MMPROJ),
         ]
-        for override in flags.get("override_kv") or ["qwen3vlmoe.expert_used_count=int:4"]:
+        for override in flags.get("override_kv") or []:
             if isinstance(override, str) and override:
                 cmd.extend(["--override-kv", override])
         cmd.extend(
@@ -1160,7 +1158,7 @@ def start_server(
 
         if vision_type == "escalation":
             model_path = VISION_ESCALATION_MODEL
-            model_name = "Qwen3-VL-30B-A3B (vision escalation)"
+            model_name = "Qwen2.5-VL-7B (vision escalation temporary alias)"
         else:
             model_path = VISION_WORKER_MODEL
             model_name = "Qwen2.5-VL-7B (vision worker)"
