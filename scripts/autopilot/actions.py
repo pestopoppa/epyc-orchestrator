@@ -2146,6 +2146,140 @@ def _action_slot_compact(action: dict[str, Any], ctx: _ActionContext):
 
 
 # -----------------------------------------------------------------------------
+# Reviewer control-plane actions (H8 AP-5). Plan-generation now; execution is
+# inference-gated. The default (and un-flagged) path enumerates the trial plan
+# WITHOUT calling any backend and returns a SkipOutcome carrying the summary; the
+# full plan dict is stashed on ctx.state for inspection/tests. A live run only
+# attempts inference when the operator explicitly sets the documented env flag,
+# and even then raises NotImplementedError (the eval-tower execution is not
+# wired — zero-inference by construction).
+# -----------------------------------------------------------------------------
+
+_REVIEW_POLICY_TRIAL_INFERENCE_ENV = "AUTOPILOT_REVIEW_POLICY_TRIAL_INFERENCE"
+_SCREENING_TIER_INFERENCE_ENV = "AUTOPILOT_SCREENING_TIER_INFERENCE"
+
+
+def _action_review_policy_trial(action: dict[str, Any], ctx: _ActionContext):
+    from review_policy_trials import plan_review_policy_trial
+
+    plan, error = plan_review_policy_trial(action)
+    if error is not None or plan is None:
+        return (
+            SkipOutcome("invalid", error or "review_policy_trial: no plan", "review_policy_trial"),
+            "review_plane",
+        )
+
+    ctx.state["_review_policy_trial_plan"] = plan.to_dict()
+    summary = (
+        f"review_policy_trial plan: {plan.n_trials} trials over knobs "
+        f"{plan.knobs} on corpus slice {plan.corpus_slice.get('corpus_id')}"
+        f"/{plan.corpus_slice.get('domain')} (n={plan.corpus_slice.get('n_rows')}); "
+        "execution inference-gated"
+    )
+    log.info("%s", summary)
+
+    dry_run = bool(action.get("dry_run", True))
+    if dry_run:
+        return SkipOutcome("skipped", summary, "review_policy_trial"), "review_plane"
+
+    if not _env_flag_enabled(_REVIEW_POLICY_TRIAL_INFERENCE_ENV):
+        return (
+            SkipOutcome(
+                "skipped",
+                "review_policy_trial live execution is inference-gated; set "
+                f"{_REVIEW_POLICY_TRIAL_INFERENCE_ENV}=1 to attempt (still unimplemented). "
+                f"Plan enumerated: {summary}",
+                "review_policy_trial",
+            ),
+            "review_plane",
+        )
+
+    raise NotImplementedError(
+        "review_policy_trial live eval-tower execution is not wired (H8 AP-5 is "
+        f"plan-generation only). {_REVIEW_POLICY_TRIAL_INFERENCE_ENV} was set but the "
+        "inference path is intentionally unimplemented under the zero-inference "
+        "constraint; the enumerated plan is on ctx.state['_review_policy_trial_plan']."
+    )
+
+
+def _action_screening_tier_driver(action: dict[str, Any], ctx: _ActionContext):
+    from review_policy_trials import (
+        load_corpus_manifest,
+        load_pool_gen_output,
+        plan_screening_tier,
+    )
+
+    pool_gen_path = action.get("pool_gen_path")
+    if not pool_gen_path:
+        return (
+            SkipOutcome(
+                "invalid",
+                "screening_tier_driver requires 'pool_gen_path' (reviewer_pool_gen.py output)",
+                "screening_tier_driver",
+            ),
+            "review_plane",
+        )
+    pool_gen_output = load_pool_gen_output(Path(str(pool_gen_path)))
+    if not pool_gen_output.get("pairings"):
+        return (
+            SkipOutcome(
+                "invalid",
+                f"screening_tier_driver: no pairings loadable from {pool_gen_path!r}",
+                "screening_tier_driver",
+            ),
+            "review_plane",
+        )
+
+    corpus_path = action.get("corpus_manifest_path")
+    manifest = load_corpus_manifest(Path(str(corpus_path)) if corpus_path else None)
+    plan, error = plan_screening_tier(
+        pool_gen_output,
+        corpus_manifest=manifest,
+        per_pairing_n=int(action.get("per_pairing_n", 12)),
+        eval_tier=str(action.get("tier", "T0")),
+        max_pairings=int(action.get("max_pairings", 0)),
+        domain=action.get("domain"),
+    )
+    if error is not None or plan is None:
+        return (
+            SkipOutcome("invalid", error or "screening_tier_driver: no plan", "screening_tier_driver"),
+            "review_plane",
+        )
+
+    ctx.state["_screening_tier_plan"] = plan.to_dict()
+    summary = (
+        f"screening_tier plan: {len(plan.queue)} pairings queued (of "
+        f"{plan.pairings_considered}) at n={plan.per_pairing_n} {plan.eval_tier} "
+        f"on {plan.corpus_slice.get('corpus_id')}/{plan.corpus_slice.get('domain')}; "
+        "placement-queue dispatch, inference-gated"
+    )
+    log.info("%s", summary)
+
+    dry_run = bool(action.get("dry_run", True))
+    if dry_run:
+        return SkipOutcome("skipped", summary, "screening_tier_driver"), "review_plane"
+
+    if not _env_flag_enabled(_SCREENING_TIER_INFERENCE_ENV):
+        return (
+            SkipOutcome(
+                "skipped",
+                "screening_tier_driver live execution is inference-gated; set "
+                f"{_SCREENING_TIER_INFERENCE_ENV}=1 to attempt (still unimplemented). "
+                f"Plan enumerated: {summary}",
+                "screening_tier_driver",
+            ),
+            "review_plane",
+        )
+
+    raise NotImplementedError(
+        "screening_tier_driver live eval-tower execution is not wired (H8 AP-5 / "
+        f"RM-3 is plan-generation only). {_SCREENING_TIER_INFERENCE_ENV} was set but the "
+        "inference path is intentionally unimplemented under the zero-inference "
+        "constraint; the queue is on ctx.state['_screening_tier_plan']."
+    )
+
+
+# -----------------------------------------------------------------------------
 # Dispatcher — maps action_type → handler
 # -----------------------------------------------------------------------------
 
@@ -2165,6 +2299,9 @@ _ACTION_HANDLERS = {
     "rollback": _action_rollback,
     "distill_knowledge": _action_distill_knowledge,
     "slot_compact": _action_slot_compact,
+    # Reviewer control-plane actions (H8 AP-5) — plan-generation, inference-gated.
+    "review_policy_trial": _action_review_policy_trial,
+    "screening_tier_driver": _action_screening_tier_driver,
 }
 
 

@@ -1,0 +1,527 @@
+"""Reviewer control-plane <-> autopilot integration tests (H8 AP-1/4/5/6/7/8).
+
+All synthetic/stubbed — zero inference, no live autopilot, no network. Every
+assertion targets the additive + default-behavior-preserving contract: absent
+review-plane data must leave existing autopilot behavior byte-identical.
+"""
+
+from __future__ import annotations
+
+import importlib
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+AUTOPILOT_DIR = ROOT / "scripts" / "autopilot"
+for _p in (str(ROOT), str(AUTOPILOT_DIR)):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
+config_applicator = importlib.import_module("config_applicator")
+review_policy_trials = importlib.import_module("review_policy_trials")
+safety_gate = importlib.import_module("safety_gate")
+actions = importlib.import_module("actions")
+planner_providers = importlib.import_module("planner_providers")
+digest = importlib.import_module("digest")
+
+ca = config_applicator
+rpt = review_policy_trials
+EvalResult = safety_gate.EvalResult
+
+
+def _review_grammar_available() -> bool:
+    return rpt._load_review_grammar() is not None
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# AP-1 — knob registration + apply_params plumbing
+# ══════════════════════════════════════════════════════════════════════════════
+
+_EXPECTED_KNOBS = {
+    "review_trigger_complexity_threshold",
+    "max_review_iterations",
+    "reminder_cadence",
+    "per_subtask_review_enabled",
+    "review_majority_k",
+    "request_evidence_round_budget",
+    "review_token_multiplier",
+}
+
+
+def test_ap1_all_class1_knobs_registered_with_bounds_and_restart_cost() -> None:
+    assert set(ca.REVIEW_PLANE_KNOB_SPECS) == _EXPECTED_KNOBS
+    for name, spec in ca.REVIEW_PLANE_KNOB_SPECS.items():
+        assert spec.restart_cost in {"none", "api_restart", "role_restart"}
+        assert spec.apply_key == f"delegation.{name}"
+        if spec.kind != "bool":
+            assert spec.lo is not None and spec.hi is not None
+            assert spec.lo <= spec.hi
+
+
+def test_ap1_normalize_translates_bare_knob_to_dotted_apply_key() -> None:
+    out = ca.normalize_review_plane_params({"max_review_iterations": 4})
+    assert out == {"delegation.max_review_iterations": 4}
+
+
+def test_ap1_normalize_is_noop_for_non_review_params_regression() -> None:
+    legacy = {"memrl_retrieval.q_weight": 0.5}
+    out = ca.normalize_review_plane_params(legacy)
+    # Same object returned (identity) => zero disturbance to legacy callers.
+    assert out is legacy
+
+
+def test_ap1_classify_routes_knob_to_env_restart_surface() -> None:
+    dotted = ca.normalize_review_plane_params({"review_majority_k": 3})
+    classified = ca.classify_params(dotted)
+    assert classified["env_restart"] == {"delegation.review_majority_k": 3}
+    assert classified["unknown"] == {}
+
+
+def test_ap1_env_changes_map_to_orchestrator_env_var() -> None:
+    dotted = ca.normalize_review_plane_params({"reminder_cadence": 7})
+    env = ca.EnvRestartApplicator(restart=False).env_changes_for(dotted)
+    assert env == {"ORCHESTRATOR_DELEGATION_REMINDER_CADENCE": "7"}
+
+
+def test_ap1_validate_accepts_in_bounds_rejects_out_of_bounds() -> None:
+    assert ca.validate_review_plane_params({"max_review_iterations": 4}) is None
+    err = ca.validate_review_plane_params({"max_review_iterations": 99})
+    assert err and "max 5" in err
+    # dotted form validates too
+    assert ca.validate_review_plane_params({"delegation.review_majority_k": 0}) is not None
+
+
+def test_ap1_apply_params_dry_run_out_of_bounds_errors_without_applying() -> None:
+    res = ca.apply_params({"max_review_iterations": 99}, dry_run=True)
+    assert res["status"] == "error"
+    assert any("review_plane" in e for e in res["errors"])
+    # never classified/applied
+    assert "classified" in res
+
+
+def test_ap1_apply_params_dry_run_in_bounds_classifies_env_restart() -> None:
+    res = ca.apply_params({"review_token_multiplier": 2.0}, dry_run=True)
+    assert res["status"] == "ok"
+    assert res["classified"]["env_restart"] == {"delegation.review_token_multiplier": 2.0}
+
+
+def test_ap1_apply_params_regression_legacy_param_unaffected() -> None:
+    res = ca.apply_params({"memrl_retrieval.q_weight": 0.5}, dry_run=True)
+    assert res["status"] == "ok"
+    assert res["classified"]["env_restart"] == {"memrl_retrieval.q_weight": 0.5}
+
+
+def test_ap1_manifest_loader_graceful_missing_file_returns_builtins() -> None:
+    merged = ca.load_review_plane_knob_manifest(Path("/does/not/exist.yaml"))
+    assert set(merged) == _EXPECTED_KNOBS
+    # built-in bounds aligned to W2c manifest v1
+    assert merged["max_review_iterations"]["hi"] == 5
+
+
+def test_ap1_manifest_loader_overlays_bounds_dict_form(tmp_path: Path) -> None:
+    manifest = tmp_path / "review_plane_knobs.yaml"
+    manifest.write_text(
+        "knobs:\n  max_review_iterations:\n    hi: 20\n    default: 4\n",
+        encoding="utf-8",
+    )
+    merged = ca.load_review_plane_knob_manifest(manifest)
+    assert merged["max_review_iterations"]["hi"] == 20
+    assert merged["max_review_iterations"]["default"] == 4
+    # untouched knobs keep built-in bounds
+    assert merged["review_majority_k"]["hi"] == 5
+
+
+def test_ap1_manifest_loader_parses_w2c_list_format(tmp_path: Path) -> None:
+    """Real W2c convention: list entries, review_plane. prefix, low/high/param_type."""
+    manifest = tmp_path / "review_plane_knobs.yaml"
+    manifest.write_text(
+        "knobs:\n"
+        "  - name: review_plane.review_majority_k\n"
+        "    param_type: int\n"
+        "    low: 1\n"
+        "    high: 7\n"
+        "    default: 1\n"
+        "    restart_cost: none\n",
+        encoding="utf-8",
+    )
+    merged = ca.load_review_plane_knob_manifest(manifest)
+    # prefix stripped, low/high -> lo/hi, restart_cost declared "none"
+    assert merged["review_majority_k"]["lo"] == 1
+    assert merged["review_majority_k"]["hi"] == 7
+    assert merged["review_majority_k"]["restart_cost"] == "none"
+
+
+def test_ap1_loader_reads_real_w2c_manifest_if_present() -> None:
+    real = ca.DEFAULT_REVIEW_PLANE_KNOB_MANIFEST
+    if not real.exists():
+        pytest.skip("W2c manifest not present in this tree")
+    merged = ca.load_review_plane_knob_manifest()
+    # every built-in AP-1 knob is represented; W2c declares restart_cost none.
+    for knob in _EXPECTED_KNOBS:
+        assert knob in merged
+
+
+def test_ap1_seed_fixture_shape_not_written_to_store() -> None:
+    entries = rpt.review_plane_seed_strategies()
+    assert len(entries) == len(_EXPECTED_KNOBS)
+    for entry in entries:
+        assert entry["species"] == "numeric_swarm"
+        assert entry["slug"].startswith("review-plane-")
+        assert entry["bind_identifiers"][0].startswith("delegation.")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# AP-4 — optional Pareto/quality axes
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def _base_eval() -> "EvalResult":
+    return EvalResult(tier=1, quality=2.0, speed=10.0, cost=0.5, reliability=0.9)
+
+
+def test_ap4_absent_axes_leave_objectives_and_grep_identical() -> None:
+    r = _base_eval()
+    assert r.objectives == (2.0, 10.0, -0.5, 0.9)
+    grep = r.to_grep_lines(trial_id=1)
+    for axis in rpt.REVIEW_PARETO_AXES:
+        assert axis not in grep
+    assert rpt.reviewer_quality_axes(r) == {}
+
+
+def test_ap4_present_axes_surface_in_extractor_and_grep() -> None:
+    r = EvalResult(
+        tier=1, quality=2.0, speed=10.0, cost=0.5, reliability=0.9,
+        reviewer_fa_rate=0.1, reviewer_fr_rate=0.2, review_decision_latency_ms=250.0,
+    )
+    axes = rpt.reviewer_quality_axes(r)
+    assert axes == {
+        "reviewer_fa_rate": 0.1,
+        "reviewer_fr_rate": 0.2,
+        "review_decision_latency_ms": 250.0,
+    }
+    # objectives 4-tuple still unchanged (axes are NOT folded into it)
+    assert r.objectives == (2.0, 10.0, -0.5, 0.9)
+    grep = r.to_grep_lines(trial_id=2)
+    assert "METRIC reviewer_fa_rate: 0.1000" in grep
+    assert "METRIC reviewer_fa_fr_ratio" not in grep  # never set -> absent
+
+
+def test_ap4_calibration_from_decisions() -> None:
+    cal = rpt.reviewer_calibration_from_decisions(
+        [
+            {"decision": "approve", "gate": "fail", "latency_ms": 100},  # FA
+            {"decision": "reject", "gate": "pass", "latency_ms": 200},   # FR
+            {"decision": "approve", "gate": "pass"},                      # correct
+            {"decision": "reject", "gate": None},                         # inconclusive
+        ]
+    )
+    assert cal["reviewer_fa_rate"] == 1.0  # 1 FA / 1 gate-fail
+    assert cal["reviewer_fr_rate"] == 0.5  # 1 FR / 2 gate-pass
+    assert cal["reviewer_fa_fr_ratio"] == 2.0
+    assert cal["review_decision_latency_ms"] == 150.0
+
+
+def test_ap4_instrument_era_row_is_observation_only() -> None:
+    row = rpt.instrument_era_row()
+    assert row["protocol_id"] == "P-REV-1"
+    assert list(rpt.REVIEW_PARETO_AXES) == row["axes"]
+    assert "observation" in row["status"]
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# AP-5 — new actions (plan-generation, inference-gated)
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def _ctx(state: dict | None = None):
+    return actions._ActionContext(
+        seeder=None, swarm=None, forge=None, lab=None, tower=None,
+        gate=None, archive=None, journal=None, state=state if state is not None else {},
+    )
+
+
+def test_ap5_actions_registered_in_dispatch_table() -> None:
+    assert actions._ACTION_HANDLERS["review_policy_trial"] is actions._action_review_policy_trial
+    assert actions._ACTION_HANDLERS["screening_tier_driver"] is actions._action_screening_tier_driver
+
+
+def test_ap5_review_policy_trial_dry_run_enumerates_plan() -> None:
+    plan, err = rpt.plan_review_policy_trial(
+        {"knobs": ["review_majority_k"], "grid_points": 3},
+        corpus_manifest={"corpus_id": "nearmiss-v1", "total_rows": 100, "counts": {}},
+    )
+    assert err is None
+    d = plan.to_dict()
+    assert d["kind"] == "review_policy_trial_plan"
+    assert d["surface"] == "review_plane"
+    assert d["n_trials"] == len(d["grid"]) >= 2
+    assert d["inference_required"] is True
+    assert all("delegation.review_majority_k" in combo for combo in d["grid"])
+
+
+def test_ap5_review_policy_trial_rejects_unknown_knob() -> None:
+    plan, err = rpt.plan_review_policy_trial({"knobs": ["not_a_knob"]})
+    assert plan is None and "unknown knobs" in err
+
+
+def test_ap5_review_policy_trial_rejects_out_of_bounds_override() -> None:
+    plan, err = rpt.plan_review_policy_trial(
+        {"knobs": ["max_review_iterations"], "params": {"max_review_iterations": 99}}
+    )
+    assert plan is None and "max 5" in err
+
+
+def test_ap5_review_policy_trial_handler_dry_run_stashes_plan() -> None:
+    ctx = _ctx()
+    res, species = actions._action_review_policy_trial(
+        {"knobs": ["review_majority_k"], "grid_points": 2}, ctx
+    )
+    assert species == "review_plane"
+    assert isinstance(res, actions.SkipOutcome)
+    assert res.status == "skipped"
+    assert "_review_policy_trial_plan" in ctx.state
+    assert ctx.state["_review_policy_trial_plan"]["n_trials"] >= 2
+
+
+def test_ap5_review_policy_trial_handler_live_gated_no_flag() -> None:
+    ctx = _ctx()
+    res, _ = actions._action_review_policy_trial(
+        {"knobs": ["review_majority_k"], "dry_run": False}, ctx
+    )
+    assert res.status == "skipped"
+    assert "inference-gated" in res.reason
+
+
+def test_ap5_review_policy_trial_handler_live_with_flag_raises(monkeypatch) -> None:
+    monkeypatch.setenv("AUTOPILOT_REVIEW_POLICY_TRIAL_INFERENCE", "1")
+    ctx = _ctx()
+    with pytest.raises(NotImplementedError):
+        actions._action_review_policy_trial(
+            {"knobs": ["review_majority_k"], "dry_run": False}, ctx
+        )
+
+
+def test_ap5_review_policy_trial_handler_invalid_knob() -> None:
+    ctx = _ctx()
+    res, _ = actions._action_review_policy_trial({"knobs": ["bogus"]}, ctx)
+    assert res.status == "invalid"
+
+
+def test_ap5_screening_tier_plan_from_synthetic_pool() -> None:
+    pool = {
+        "pairings": [
+            {
+                "pairing_id": "arch__rev__grad",
+                "architect": "arch", "reviewer": "rev", "grader": "grad",
+                "cross_family_preferred": True, "self_review": False, "anchor_arm": None,
+            }
+        ],
+        "provenance": {"schema_version": "1", "registry_sha256": "abc"},
+    }
+    plan, err = rpt.plan_screening_tier(
+        pool,
+        corpus_manifest={"corpus_id": "nearmiss-v1", "total_rows": 100, "counts": {}},
+        per_pairing_n=8,
+    )
+    assert err is None
+    d = plan.to_dict()
+    assert d["n_queued"] == 1
+    assert d["queue"][0]["dispatch"] == "placement_queue"  # NOT /chat
+    assert d["queue"][0]["n"] == 8
+    assert d["inference_required"] is True
+
+
+def test_ap5_screening_tier_rejects_empty_corpus() -> None:
+    pool = {"pairings": [{"pairing_id": "a__b__c"}]}
+    plan, err = rpt.plan_screening_tier(
+        pool, corpus_manifest={"corpus_id": "x", "total_rows": 0, "counts": {}}
+    )
+    assert plan is None and "empty" in err
+
+
+def test_ap5_screening_handler_dry_run_stashes_plan(tmp_path: Path) -> None:
+    pool = {
+        "pairings": [
+            {"pairing_id": "a__b__c", "architect": "a", "reviewer": "b", "grader": "c"}
+        ],
+        "provenance": {"schema_version": "1"},
+    }
+    pool_file = tmp_path / "pool.json"
+    pool_file.write_text(json.dumps(pool), encoding="utf-8")
+    corpus = tmp_path / "manifest.json"
+    corpus.write_text(json.dumps({"corpus_id": "c1", "total_rows": 50, "counts": {}}), encoding="utf-8")
+
+    ctx = _ctx()
+    res, species = actions._action_screening_tier_driver(
+        {"pool_gen_path": str(pool_file), "corpus_manifest_path": str(corpus)}, ctx
+    )
+    assert species == "review_plane"
+    assert res.status == "skipped"
+    assert ctx.state["_screening_tier_plan"]["n_queued"] == 1
+
+
+def test_ap5_screening_handler_requires_pool_path() -> None:
+    ctx = _ctx()
+    res, _ = actions._action_screening_tier_driver({}, ctx)
+    assert res.status == "invalid" and "pool_gen_path" in res.reason
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# AP-6 — codex-critic dogfooding
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def test_ap6_planner_result_has_optional_review_decision_field() -> None:
+    r = planner_providers.PlannerProviderResult(provider="codex", role="critique")
+    assert r.review_decision is None
+
+
+@pytest.mark.skipif(not _review_grammar_available(), reason="review_grammar unavailable")
+@pytest.mark.parametrize(
+    "native,expected",
+    [("approve", "approve"), ("revise", "request_changes"), ("reject", "reject")],
+)
+def test_ap6_critique_decision_maps_to_review_decision(native, expected) -> None:
+    text = json.dumps({"decision": native, "confidence": 0.6, "issues": ["x"]})
+    obj, failure = rpt.derive_review_decision_from_critique(text)
+    assert failure is None
+    assert obj["decision"] == expected
+    assert obj["blocking"]["tripwire"] is False  # advisory reviewer never hard-stops
+
+
+@pytest.mark.skipif(not _review_grammar_available(), reason="review_grammar unavailable")
+def test_ap6_native_review_decision_passes_through() -> None:
+    text = '{"decision":"approve","confidence":0.9,"blocking":{"tripwire":false}}'
+    obj, failure = rpt.derive_review_decision_from_critique(text)
+    assert failure is None and obj["decision"] == "approve"
+
+
+def test_ap6_parse_failure_counted_on_garbage() -> None:
+    obj, failure = rpt.derive_review_decision_from_critique("no json anywhere")
+    assert obj is None and failure is not None
+
+
+@pytest.mark.skipif(not _review_grammar_available(), reason="review_grammar unavailable")
+def test_ap6_emit_attaches_and_counts_success() -> None:
+    stats = rpt.CritiqueEmissionStats()
+    planner_providers.CODEX_REVIEW_DECISION_STATS = stats
+    result = planner_providers.PlannerProviderResult(
+        provider="codex_critic", role="critique", ok=True,
+        text=json.dumps({"decision": "approve", "confidence": 0.8, "issues": []}),
+    )
+    planner_providers._emit_codex_review_decision(result)
+    assert result.review_decision is not None
+    assert stats.emitted == 1 and stats.parse_failures == 0
+
+
+def test_ap6_emit_counts_parse_failure_and_preserves_behavior() -> None:
+    stats = rpt.CritiqueEmissionStats()
+    planner_providers.CODEX_REVIEW_DECISION_STATS = stats
+    result = planner_providers.PlannerProviderResult(
+        provider="codex", role="critique", ok=True, text="totally not json",
+    )
+    planner_providers._emit_codex_review_decision(result)
+    assert result.review_decision is None  # fell back, unchanged
+    assert stats.parse_failures == 1
+
+
+def test_ap6_emit_disabled_by_flag(monkeypatch) -> None:
+    monkeypatch.setenv("AUTOPILOT_CODEX_REVIEW_DECISION_EMIT", "0")
+    stats = rpt.CritiqueEmissionStats()
+    planner_providers.CODEX_REVIEW_DECISION_STATS = stats
+    result = planner_providers.PlannerProviderResult(
+        provider="codex", role="critique", ok=True,
+        text=json.dumps({"decision": "approve", "confidence": 0.8, "issues": []}),
+    )
+    planner_providers._emit_codex_review_decision(result)
+    assert result.review_decision is None
+    assert stats.emitted == 0 and stats.parse_failures == 0
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# AP-7 — journal schema + checkpoint compatibility
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def test_ap7_event_type_constants() -> None:
+    assert rpt.REVIEW_DECISION_EVENT_TYPE == "review_decision"
+    assert rpt.REVIEW_POLICY_TRIAL_EVENT_TYPE == "review_policy_trial"
+    assert set(rpt.REVIEW_JOURNAL_EVENT_TYPES) == {
+        "review_decision", "review_policy_trial"
+    }
+
+
+def test_ap7_review_decision_event_to_event_shape() -> None:
+    ev = rpt.ReviewDecisionEvent(
+        decision="approve", confidence=0.8, tripwire=False, source="codex_critic",
+        latency_ms=120.0,
+    ).to_event()
+    assert ev["type"] == "review_decision"
+    assert ev["decision"] == "approve"
+    assert ev["latency_ms"] == 120.0
+
+
+def test_ap7_review_decision_event_omits_nan_latency() -> None:
+    ev = rpt.ReviewDecisionEvent(
+        decision="reject", confidence=0.5, tripwire=False, source="x"
+    ).to_event()
+    assert "latency_ms" not in ev
+
+
+def test_ap7_checkpoint_compat_minimal_state_gains_defaults() -> None:
+    state: dict = {}
+    rpt.ensure_review_state_defaults(state)
+    assert set(rpt.REVIEW_STATE_DEFAULTS).issubset(state)
+    assert state["review_policy_trial_count"] == 0
+
+
+def test_ap7_checkpoint_compat_does_not_overwrite_existing() -> None:
+    state = {"review_policy_trial_count": 5, "trial_counter": 42}
+    rpt.ensure_review_state_defaults(state)
+    assert state["review_policy_trial_count"] == 5  # preserved
+    assert state["trial_counter"] == 42  # untouched
+    assert state["review_decision_shadow_count"] == 0  # default injected
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# AP-8 — digest reviewer-calibration section
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def test_ap8_no_ledger_renders_no_data_gracefully() -> None:
+    section = digest._reviewer_calibration_section(
+        datetime.now(timezone.utc),
+        ledger_module=None,
+        emission_stats=rpt.CritiqueEmissionStats(),  # fresh/empty => no dogfood line
+    )
+    assert section[0].startswith("### Reviewer calibration")
+    assert any("no reviewer-calibration data yet" in line for line in section)
+
+
+def test_ap8_renders_ledger_summary() -> None:
+    class FakeLedger:
+        @staticmethod
+        def calibration_summary():
+            return {"n_decisions": 12, "reviewer_fa_rate": 0.05, "reviewer_fr_rate": 0.11}
+
+    section = digest._reviewer_calibration_section(
+        datetime.now(timezone.utc), ledger_module=FakeLedger, emission_stats=rpt.CritiqueEmissionStats()
+    )
+    text = "\n".join(section)
+    assert "n decisions" in text and "reviewer fa rate" in text
+    assert "no reviewer-calibration data yet" not in text
+
+
+def test_ap8_renders_dogfood_emission_stats() -> None:
+    stats = rpt.CritiqueEmissionStats()
+    stats.record_success()
+    stats.record_failure("no_json")
+    section = digest._reviewer_calibration_section(
+        datetime.now(timezone.utc), ledger_module=None, emission_stats=stats
+    )
+    text = "\n".join(section)
+    assert "codex dogfood emission: emitted=1, parse_failures=1" in text

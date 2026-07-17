@@ -985,6 +985,9 @@ def test_action_handlers_registered_for_all_known_types() -> None:
         "rollback",
         "distill_knowledge",
         "slot_compact",
+        # Reviewer control-plane actions (H8 AP-5) — plan-generation, inference-gated.
+        "review_policy_trial",
+        "screening_tier_driver",
     }
     assert expected == set(actions._ACTION_HANDLERS.keys())
 

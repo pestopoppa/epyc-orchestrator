@@ -168,6 +168,63 @@ END;
 """
 
 
+# --- H4 RC-1: reviewer FA/FR calibration ledger --------------------------------
+# Additive, append-only table living alongside `event` in the same store. One row
+# per reviewer DECISION (decision ≈ question — RC-7 evidence-plane alignment). The
+# column list is exactly the handoff's, plus provenance links back to the trace
+# `event` rows (`event_source_path` = the emit:// synthetic path a live review
+# verdict was written under; `event_id` = that row's integer id) and an RA-10
+# `schema_version` stamp threaded through from the review-artifact schema.
+#
+# Writer/reader API + the sequential demotion monitor live in
+# `src/trace/review_ledger.py`; this module owns only the DDL (idempotent
+# CREATE TABLE IF NOT EXISTS) so a single `ensure_schema()` yields the full store.
+_REVIEW_LEDGER_SCHEMA = """
+CREATE TABLE IF NOT EXISTS review_ledger (
+  id INTEGER PRIMARY KEY,
+  decision_id TEXT NOT NULL,
+  ts TEXT NOT NULL,
+  reviewer_model_quant TEXT,
+  grading_model TEXT,
+  rubric_version TEXT,
+  corpus_id TEXT,
+  candidate_id TEXT,
+  domain TEXT,
+  decision TEXT,
+  tripwire INTEGER,
+  confidence REAL,
+  gold_label TEXT,
+  gold_source TEXT,
+  gold_instrument_version TEXT,
+  rationale_cause_match INTEGER,
+  latency_ms REAL,
+  tokens INTEGER,
+  family_match_flag INTEGER,
+  era TEXT,
+  event_source_path TEXT,
+  event_id INTEGER,
+  schema_version TEXT,
+  created_ts_utc TEXT NOT NULL,
+  UNIQUE(decision_id)
+);
+CREATE INDEX IF NOT EXISTS rl_ts ON review_ledger(ts);
+CREATE INDEX IF NOT EXISTS rl_reviewer ON review_ledger(reviewer_model_quant);
+CREATE INDEX IF NOT EXISTS rl_corpus ON review_ledger(corpus_id);
+CREATE INDEX IF NOT EXISTS rl_candidate ON review_ledger(candidate_id);
+CREATE INDEX IF NOT EXISTS rl_domain ON review_ledger(domain);
+CREATE INDEX IF NOT EXISTS rl_group ON review_ledger(
+  reviewer_model_quant, grading_model, rubric_version, corpus_id, domain
+);
+"""
+
+
+def ensure_review_ledger_schema(conn: sqlite3.Connection) -> sqlite3.Connection:
+    """Create the H4 `review_ledger` table if absent. Idempotent + additive."""
+    conn.executescript(_REVIEW_LEDGER_SCHEMA)
+    conn.commit()
+    return conn
+
+
 def ensure_schema(db_path: Path | str = DEFAULT_DB_PATH) -> sqlite3.Connection:
     """Create the schema if absent, return an open connection.
 
@@ -183,6 +240,8 @@ def ensure_schema(db_path: Path | str = DEFAULT_DB_PATH) -> sqlite3.Connection:
     from src.trace.harness_schema import ensure_harness_schema
 
     ensure_harness_schema(conn)
+    # H4 RC-1: additive reviewer calibration ledger (co-located in the same store).
+    ensure_review_ledger_schema(conn)
     return conn
 
 

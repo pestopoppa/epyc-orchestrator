@@ -87,6 +87,265 @@ ENV_PARAMS = {
 }
 
 
+# ── Reviewer control-plane governance knobs (AP-1 / RD-11, class 1) ────────────
+#
+# The "class-1 tuning surface" declared by the reviewer decision plane
+# (reviewer-decision-plane.md RD-11) and consumed by the autopilot (H8 AP-1).
+# These are env-backed delegation-config knobs, so classify_params routes them
+# through the env_restart surface (an API reload picks up the new environment).
+#
+# COORDINATE-BY-CONVENTION: a parallel effort (W2c) declares the SAME knob set in
+# the guarded numeric-surface manifest (`orchestration/review_plane_knobs.yaml`).
+# This module owns only the apply_params PLUMBING that maps the manifest's bare
+# knob names -> the concrete env/config write. `load_review_plane_knob_manifest`
+# reads that manifest if it exists and overlays its bounds/defaults; when the file
+# is absent the built-in `REVIEW_PLANE_KNOB_SPECS` below are the source of truth.
+#
+# restart-cost annotation: today every knob is env-backed => "api_restart" (a
+# cheap orchestrator-only reload, NOT a model-server restart). The decision plane
+# intends these to become no-restart runtime flags once RD-5's decoupled
+# activation path lands; at that point flip the affected specs' restart_cost to
+# "none" and their apply_surface to "hot_swap". The annotation is honest now and
+# is what the species budget reads to price a review-policy trial.
+ENV_PARAMS["delegation"] = {
+    "review_trigger_complexity_threshold": (
+        "ORCHESTRATOR_DELEGATION_REVIEW_TRIGGER_COMPLEXITY_THRESHOLD"
+    ),
+    "max_review_iterations": "ORCHESTRATOR_DELEGATION_MAX_REVIEW_ITERATIONS",
+    "reminder_cadence": "ORCHESTRATOR_DELEGATION_REMINDER_CADENCE",
+    "per_subtask_review_enabled": "ORCHESTRATOR_DELEGATION_PER_SUBTASK_REVIEW_ENABLED",
+    "review_majority_k": "ORCHESTRATOR_DELEGATION_REVIEW_MAJORITY_K",
+    "request_evidence_round_budget": "ORCHESTRATOR_DELEGATION_REQUEST_EVIDENCE_ROUND_BUDGET",
+    "review_token_multiplier": "ORCHESTRATOR_DELEGATION_REVIEW_TOKEN_MULTIPLIER",
+}
+
+_REVIEW_PLANE_SECTION = "delegation"
+DEFAULT_REVIEW_PLANE_KNOB_MANIFEST = (
+    ORCH_ROOT / "orchestration" / "review_plane_knobs.yaml"
+)
+
+
+@dataclass(frozen=True)
+class ReviewPlaneKnob:
+    """One class-1 governance knob: bounds + restart-cost + apply target.
+
+    ``apply_key`` is the dotted key ``classify_params`` understands (e.g.
+    ``delegation.max_review_iterations``); ``name`` is the bare manifest/action
+    name the controller emits. ``validate`` returns an error string or ``None``.
+    """
+
+    name: str
+    kind: str  # "float" | "int" | "bool"
+    default: Any
+    lo: float | None = None
+    hi: float | None = None
+    restart_cost: str = "api_restart"  # "none" | "api_restart" | "role_restart"
+    apply_surface: str = "env_restart"  # classify_params bucket the value lands in
+    doc: str = ""
+
+    @property
+    def apply_key(self) -> str:
+        return f"{_REVIEW_PLANE_SECTION}.{self.name}"
+
+    def coerce(self, value: Any) -> Any:
+        if self.kind == "bool":
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, (int, float)):
+                return bool(value)
+            return str(value).strip().lower() in {"1", "true", "yes", "on"}
+        if self.kind == "int":
+            return int(value)
+        return float(value)
+
+    def validate(self, value: Any) -> str | None:
+        try:
+            coerced = self.coerce(value)
+        except (TypeError, ValueError):
+            return f"{self.name}: value {value!r} is not a valid {self.kind}"
+        if self.kind == "bool":
+            return None
+        if self.lo is not None and coerced < self.lo:
+            return f"{self.name}: {coerced} < min {self.lo}"
+        if self.hi is not None and coerced > self.hi:
+            return f"{self.name}: {coerced} > max {self.hi}"
+        return None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "kind": self.kind,
+            "default": self.default,
+            "lo": self.lo,
+            "hi": self.hi,
+            "restart_cost": self.restart_cost,
+            "apply_surface": self.apply_surface,
+            "apply_key": self.apply_key,
+            "doc": self.doc,
+        }
+
+
+# Built-in specs. Bounds/defaults/kinds are aligned to the W2c numeric-surface
+# manifest (orchestration/review_plane_knobs.yaml v1); all defaults are the
+# behavior-preserving values (NOT the LB-2 `proposed` targets). ``restart_cost``
+# here is the REALIZED cost of THIS module's apply surface (env_restart =>
+# "api_restart"); the manifest DECLARES these as "none"/runtime (RD-5's future
+# no-restart surface). load_review_plane_knob_manifest() surfaces the declared view.
+REVIEW_PLANE_KNOB_SPECS: dict[str, ReviewPlaneKnob] = {
+    knob.name: knob
+    for knob in (
+        ReviewPlaneKnob(
+            "review_trigger_complexity_threshold", "int", 0, 0, 3,
+            doc="TaskComplexity rank (TRIVIAL=0..COMPLEX=3) at/above which a "
+            "subtask is reviewed; below routes to final-aggregate review (RD-10).",
+        ),
+        ReviewPlaneKnob(
+            "max_review_iterations", "int", 3, 1, 5,
+            doc="Max review->revise cycles per subtask before giving up (RD-9).",
+        ),
+        ReviewPlaneKnob(
+            "reminder_cadence", "int", 0, 0, 50,
+            doc="Re-inject the plan reminder every N steps/tool-calls (0=off; "
+            "RD-9, preferred over re-review).",
+        ),
+        ReviewPlaneKnob(
+            "per_subtask_review_enabled", "bool", True,
+            doc="Review every subtask output (True) vs single final-aggregate "
+            "review (False) (RD-10). Default True preserves current behavior.",
+        ),
+        ReviewPlaneKnob(
+            "review_majority_k", "int", 1, 1, 5,
+            doc="Grade each candidate k times and take the majority near band "
+            "edges (RD-2; judge flakiness 2-9%).",
+        ),
+        ReviewPlaneKnob(
+            "request_evidence_round_budget", "int", 0, 0, 3,
+            doc="How many request_evidence -> verifier rounds are allowed before "
+            "falling back (RD-3/RD-4).",
+        ),
+        ReviewPlaneKnob(
+            "review_token_multiplier", "float", 2.0, 1.0, 2.0,
+            doc="Scales the reviewer's token budget relative to the base "
+            "grading budget (H-LB latency lever).",
+        ),
+    )
+}
+
+# dotted apply_key -> spec, for validating already-qualified params.
+_REVIEW_PLANE_BY_APPLY_KEY: dict[str, ReviewPlaneKnob] = {
+    knob.apply_key: knob for knob in REVIEW_PLANE_KNOB_SPECS.values()
+}
+
+
+def load_review_plane_knob_manifest(
+    path: Path | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Load the W2c numeric-surface manifest, overlaying built-in knob specs.
+
+    Graceful missing-file behavior: when the manifest does not exist (the common
+    case while W2c is still authoring it) the built-in ``REVIEW_PLANE_KNOB_SPECS``
+    are returned verbatim. When it exists, per-knob ``lo``/``hi``/``default``/
+    ``restart_cost`` overrides are overlaid onto the built-ins. Unknown manifest
+    knobs are surfaced under their name so the caller can see drift, but never
+    crash the loader. The manifest is READ-ONLY here — W2c owns the file.
+
+    Accepts the W2c list convention (``{"knobs": [{"name": "review_plane.X",
+    "low": .., "high": .., "param_type": ..}]}`` — ParamSpec field names, the
+    ``review_plane.`` name prefix stripped to the bare knob name), as well as the
+    simpler ``{"knobs": {name: {...}}}`` / bare ``{name: {...}}`` mapping forms.
+    """
+    resolved = path or DEFAULT_REVIEW_PLANE_KNOB_MANIFEST
+    merged: dict[str, dict[str, Any]] = {
+        name: knob.to_dict() for name, knob in REVIEW_PLANE_KNOB_SPECS.items()
+    }
+    try:
+        if not resolved.exists():
+            return merged
+        raw = _load_yaml_mapping(resolved)
+    except Exception as exc:  # noqa: BLE001 — never let a bad manifest break apply
+        log.warning("review_plane knob manifest unreadable (%s); using built-ins", exc)
+        return merged
+
+    entries = raw.get("knobs", raw) if isinstance(raw, dict) else raw
+    items: list[tuple[str, dict[str, Any]]] = []
+    if isinstance(entries, dict):
+        items = [(str(k), v) for k, v in entries.items() if isinstance(v, dict)]
+    elif isinstance(entries, list):
+        for entry in entries:
+            if isinstance(entry, dict) and entry.get("name"):
+                items.append((str(entry["name"]), entry))
+
+    for raw_name, override in items:
+        name = raw_name.split(".", 1)[1] if raw_name.startswith("review_plane.") else raw_name
+        base = merged.get(name, {"name": name, "manifest_only": True})
+        for spec_field, value in _normalize_manifest_knob_fields(override).items():
+            base[spec_field] = value
+        merged[name] = base
+    return merged
+
+
+# W2c ParamSpec field aliases -> ReviewPlaneKnob field names.
+_MANIFEST_FIELD_ALIASES: dict[str, str] = {
+    "low": "lo",
+    "high": "hi",
+    "lo": "lo",
+    "hi": "hi",
+    "param_type": "kind",
+    "dtype": "kind",
+    "kind": "kind",
+    "default": "default",
+    "restart_cost": "restart_cost",
+    "doc": "doc",
+    "semantics": "doc",
+}
+
+
+def _normalize_manifest_knob_fields(override: dict[str, Any]) -> dict[str, Any]:
+    """Map a manifest knob entry's fields onto ReviewPlaneKnob's field names."""
+    out: dict[str, Any] = {}
+    for key, value in override.items():
+        target = _MANIFEST_FIELD_ALIASES.get(key)
+        # Prefer param_type over dtype; don't let a later doc-source clobber doc.
+        if target is None or (target in out and key in {"dtype", "semantics"}):
+            continue
+        out[target] = value
+    return out
+
+
+def normalize_review_plane_params(params: dict[str, Any]) -> dict[str, Any]:
+    """Translate bare review-plane knob names to their dotted apply keys.
+
+    Additive + regression-safe: if ``params`` contains no bare review-plane knob
+    name the input dict is returned unchanged (same object), so every existing
+    ``apply_params`` caller is unaffected.
+    """
+    if not any(key in REVIEW_PLANE_KNOB_SPECS for key in params):
+        return params
+    out: dict[str, Any] = {}
+    for key, value in params.items():
+        spec = REVIEW_PLANE_KNOB_SPECS.get(key)
+        out[spec.apply_key if spec is not None else key] = value
+    return out
+
+
+def validate_review_plane_params(params: dict[str, Any]) -> str | None:
+    """Bounds-check any review-plane knobs in ``params`` (bare or dotted).
+
+    Returns a ``"; "``-joined error string, or ``None`` when every review-plane
+    knob is in range (or none are present). Non-review keys are ignored so the
+    validator is a no-op for legacy callers.
+    """
+    errors: list[str] = []
+    for key, value in params.items():
+        spec = REVIEW_PLANE_KNOB_SPECS.get(key) or _REVIEW_PLANE_BY_APPLY_KEY.get(key)
+        if spec is None:
+            continue
+        err = spec.validate(value)
+        if err:
+            errors.append(err)
+    return "; ".join(errors) if errors else None
+
+
 # Tier 2 (2026-05-20): KV compression knobs applied at runtime via
 # kv_compress.compress_slot() — NOT env-restart, NOT POST /config.
 # Keys here are the NumericSwarm param names (e.g. "kv.keep_ratio"); values
@@ -1205,9 +1464,22 @@ def apply_params(
 
     Returns summary of what was applied.
     """
+    # AP-1: translate bare review-plane knob names to their dotted apply keys and
+    # bounds-check them. Both are no-ops (identical behavior) when no review-plane
+    # knob is present, so every legacy caller is unaffected.
+    params = normalize_review_plane_params(params)
+    review_plane_error = validate_review_plane_params(params)
+
     classified = classify_params(params)
     results: dict[str, Any] = {"classified": classified, "status": "ok"}
     errors: list[str] = []
+
+    if review_plane_error:
+        # Reject out-of-bounds knobs before touching the live surface: an invalid
+        # review-plane value must never trigger an API reload.
+        results["status"] = "error"
+        results["errors"] = [f"review_plane: {review_plane_error}"]
+        return results
 
     if dry_run:
         results["dry_run"] = True

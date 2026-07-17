@@ -275,11 +275,20 @@ def _architect_plan_review(
     if not plan_steps:
         return None
 
+    # RD-1/RD-5/TM-3: the reviewer role is resolved via the config-level binding
+    # inside the service (default → architect_general, so no behavior change).
+    # review_plan() emits an always-on shadow trace event regardless of whether the
+    # plan_review feature acts — this is the DECOUPLED shadow-emission path: the
+    # trace flows even though the plan_review flag itself requires memrl (features.py
+    # validate()), because emission lives on the review_service seam, not the flag.
+    # We anchor emitted rows to this task via session_id so decision_chain replay
+    # (src/trace/query.py) can reconstruct task → plan → review → gate → outcome.
     review_service = ArchitectReviewService(primitives)
     result = review_service.review_plan(
         objective=objective,
         task_type=task_type,
         plan_steps=plan_steps,
+        session_id=task_id,
     )
 
     if result:

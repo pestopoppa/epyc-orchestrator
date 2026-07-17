@@ -299,6 +299,86 @@ def _economics_section(now: datetime, repo_root: Path | None = None) -> list[str
     ]
 
 
+def _reviewer_calibration_section(
+    now: datetime,
+    *,
+    ledger_module: Any | None = None,
+    emission_stats: Any | None = None,
+) -> list[str]:
+    """Reviewer-calibration trends (H8 AP-8, observe-only).
+
+    Reads the review ledger via ``src.trace.review_ledger`` when present — a
+    parallel agent (H4) is building it, so the import is guarded and a missing or
+    empty ledger renders a graceful "no data yet" line. Also surfaces the codex
+    dogfooding emission counters (AP-6) as a proxy signal when the ledger is not
+    yet wired. Pure/observe-only: no planner, gate, or archive authority.
+    """
+    lines = ["### Reviewer calibration (H8 AP-8, observe-only)"]
+    rendered_any = False
+
+    ledger = ledger_module
+    if ledger is None:
+        try:
+            from src.trace import review_ledger as ledger  # type: ignore
+        except Exception:  # noqa: BLE001 — parallel agent may not have landed it
+            ledger = None
+
+    if ledger is not None:
+        summary: Any = None
+        for attr in ("calibration_summary", "summarize", "summary", "recent_summary"):
+            fn = getattr(ledger, attr, None)
+            if callable(fn):
+                try:
+                    summary = fn()
+                    break
+                except Exception:  # noqa: BLE001
+                    continue
+        if isinstance(summary, dict) and summary:
+            preferred = (
+                "n_decisions",
+                "reviewer_fa_rate",
+                "reviewer_fr_rate",
+                "reviewer_fa_fr_ratio",
+                "review_decision_latency_ms",
+            )
+            shown: set[str] = set()
+            for key in preferred:
+                if key in summary:
+                    lines.append(f"- {key.replace('_', ' ')}: **{_fmt_num(summary[key])}**")
+                    shown.add(key)
+                    rendered_any = True
+            for key, val in summary.items():
+                if key in shown or isinstance(val, (dict, list)):
+                    continue
+                lines.append(f"- {key.replace('_', ' ')}: {_fmt_num(val)}")
+                rendered_any = True
+
+    stats = emission_stats
+    if stats is None:
+        try:
+            from planner_providers import CODEX_REVIEW_DECISION_STATS as stats  # type: ignore
+        except Exception:  # noqa: BLE001
+            try:
+                from scripts.autopilot.planner_providers import (  # type: ignore
+                    CODEX_REVIEW_DECISION_STATS as stats,
+                )
+            except Exception:  # noqa: BLE001
+                stats = None
+    if stats is not None:
+        data = stats.to_dict() if hasattr(stats, "to_dict") else stats
+        if isinstance(data, dict) and (data.get("emitted") or data.get("parse_failures")):
+            lines.append(
+                "- codex dogfood emission: "
+                f"emitted={data.get('emitted', 0)}, "
+                f"parse_failures={data.get('parse_failures', 0)}"
+            )
+            rendered_any = True
+
+    if not rendered_any:
+        lines.append("- no reviewer-calibration data yet (review_ledger absent or empty)")
+    return lines
+
+
 def render_digest(
     *,
     swarm: Any,
@@ -323,6 +403,8 @@ def render_digest(
     body.extend(_structural_lab_section(lab))
     body.append("")
     body.extend(_economics_section(now))
+    body.append("")
+    body.extend(_reviewer_calibration_section(now))
     body.append("")
     body.append("### NumericSwarm surfaces")
     body.append("")

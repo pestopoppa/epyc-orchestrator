@@ -29,6 +29,7 @@ Usage:
 
 from __future__ import annotations
 
+import os
 from enum import Enum
 from typing import TYPE_CHECKING
 
@@ -261,6 +262,26 @@ class Role(str, Enum):
         return self.tier == Tier.D
 
 
+# ── RD-1: Reviewer role binding ───────────────────────────────────────────────
+#
+# Historically the reviewer WAS the architect: the strings "reviewer" /
+# "reviewer_agent" were hardcoded aliases to ARCHITECT_GENERAL. RD-1 replaces that
+# alias-only coupling with a CONFIG-LEVEL binding so the reviewer can target a
+# model DIFFERENT from architect_general WITHOUT touching the escalation chain or
+# routing classifier. ``resolve_reviewer_role()`` is the authoritative resolver;
+# the string aliases below survive only so ``Role("reviewer")`` remains a stable
+# enum-resolution fallback (they point at the same default the resolver returns).
+#
+# The default binding is ARCHITECT_GENERAL → resolving with no override / no env /
+# no config attribute yields exactly the pre-RD-1 behavior (zero behavior change).
+DEFAULT_REVIEWER_ROLE: Role = Role.ARCHITECT_GENERAL
+
+# Operator/stack-level binding knob. Kept as an env var (+ a forward-compatible
+# ``delegation.reviewer_role`` config attribute read via ``getattr``) so the
+# binding is config-level without editing the config dataclass here.
+REVIEWER_ROLE_ENV = "ORCHESTRATOR_REVIEWER_ROLE"
+
+
 # Role -> Tier mapping
 _LEGACY_ROLE_ALIASES: dict[str, Role] = {
     # Split the retired literal so production hardcoded-surface scans keep their signal.
@@ -269,8 +290,10 @@ _LEGACY_ROLE_ALIASES: dict[str, Role] = {
     "coder_agent": Role.CODER_ESCALATION,
     "researcher_agent": Role.WORKER_GENERAL,
     "researcher": Role.WORKER_GENERAL,
-    "reviewer_agent": Role.ARCHITECT_GENERAL,
-    "reviewer": Role.ARCHITECT_GENERAL,
+    # reviewer aliases resolve to the DEFAULT reviewer binding (config-overridable
+    # via resolve_reviewer_role); kept for stable Role("reviewer") enum resolution.
+    "reviewer_agent": DEFAULT_REVIEWER_ROLE,
+    "reviewer": DEFAULT_REVIEWER_ROLE,
     "math_agent": Role.WORKER_MATH,
     "vision_agent": Role.WORKER_VISION,
     "summarizer_agent": Role.WORKER_SUMMARIZE,
@@ -278,6 +301,52 @@ _LEGACY_ROLE_ALIASES: dict[str, Role] = {
     "worker_explore": Role.WORKER_GENERAL,
     "worker_fast": Role.WORKER_GENERAL,
 }
+
+
+def resolve_reviewer_role(
+    override: "Role | str | None" = None,
+    config: object | None = None,
+) -> Role:
+    """Resolve the configured reviewer role binding (RD-1).
+
+    Binding precedence (highest first):
+      1. explicit ``override`` argument (caller/test injection)
+      2. ``ORCHESTRATOR_REVIEWER_ROLE`` env var (operator/stack-level binding)
+      3. ``config.delegation.reviewer_role`` attribute, if present (forward-compatible
+         with a future ``DelegationConfig.reviewer_role`` field — read via ``getattr``
+         so no config-schema edit is required in this module)
+      4. ``DEFAULT_REVIEWER_ROLE`` (``architect_general``)
+
+    Returns a valid :class:`Role`; an unknown binding string falls back to the
+    default rather than raising, so a misconfiguration never breaks review.
+    """
+    candidate: "Role | str | None" = override
+
+    if candidate is None:
+        env_val = os.environ.get(REVIEWER_ROLE_ENV)
+        if env_val:
+            candidate = env_val.strip()
+
+    if candidate is None:
+        if config is None:
+            try:
+                from src.config import get_config
+
+                config = get_config()
+            except Exception:
+                config = None
+        deleg = getattr(config, "delegation", None) if config is not None else None
+        cfg_val = getattr(deleg, "reviewer_role", None)
+        if cfg_val:
+            candidate = cfg_val
+
+    if candidate is None:
+        return DEFAULT_REVIEWER_ROLE
+    if isinstance(candidate, Role):
+        return candidate
+
+    role = Role.from_string(str(candidate))
+    return role if role is not None else DEFAULT_REVIEWER_ROLE
 
 
 _TIER_MAP: dict[Role, Tier] = {

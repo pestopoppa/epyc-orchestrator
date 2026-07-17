@@ -340,6 +340,19 @@ class EvalResult:
     n_external_restart: int = 0
     exogenous_question_ids: list[str] = field(default_factory=list)
     exogenous_marker_log: list[dict] = field(default_factory=list)
+    # AP-4: reviewer-calibration Pareto axes (reviewer-control-plane H8). Optional
+    # quality axes carried alongside task quality/throughput. All default to NaN
+    # ("unavailable this trial") so an EvalResult produced WITHOUT a reviewer in
+    # the loop is byte-for-byte behavior-identical: the objectives 4-tuple below
+    # is unchanged, SafetyGate/Pareto never see these, and to_grep_lines emits
+    # nothing for them. They become live axes only once a review_policy_trial or a
+    # shadow reviewer actually populates them. reviewer_fa_rate = P(reviewer
+    # approved | gate FAIL) = false-accept; reviewer_fr_rate = P(reviewer rejected
+    # | gate PASS) = false-reject; ratio + per-decision latency feed H-LB.
+    reviewer_fa_rate: float = math.nan
+    reviewer_fr_rate: float = math.nan
+    reviewer_fa_fr_ratio: float = math.nan
+    review_decision_latency_ms: float = math.nan
     # SafetyGate.check() is called by several action handlers and again by the
     # main loop. Cache the first verdict on the result so one trial mutates MAD
     # history / consecutive-failure state exactly once.
@@ -426,6 +439,16 @@ class EvalResult:
         ):
             if not math.isnan(_rubric_val):
                 lines.append(f"METRIC {_rubric_key}: {_rubric_val:.4f}")
+        # AP-4: reviewer-calibration axes (NaN-gated — identical output when a
+        # trial had no reviewer in the loop).
+        for _rev_key, _rev_val in (
+            ("reviewer_fa_rate", self.reviewer_fa_rate),
+            ("reviewer_fr_rate", self.reviewer_fr_rate),
+            ("reviewer_fa_fr_ratio", self.reviewer_fa_fr_ratio),
+            ("review_decision_latency_ms", self.review_decision_latency_ms),
+        ):
+            if not math.isnan(_rev_val):
+                lines.append(f"METRIC {_rev_key}: {_rev_val:.4f}")
         return "\n".join(lines)
 
 

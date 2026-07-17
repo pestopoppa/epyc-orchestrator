@@ -1,0 +1,54 @@
+# Quality-gate configuration for src/gate_runner.py (RD-4).
+#
+# WHY THIS FILE EXISTS
+# --------------------
+# Until now `config/gates.yaml` was ABSENT, so GateRunner silently fell back to
+# `GateRunner._get_default_gates()`. That default behaviour was correct but
+# implicit — nothing on disk declared which gates run, their commands, timeouts,
+# or required-ness. The verifier-request adapter (RD-4) maps `verifier_requests[]`
+# onto named gates, so the gate set must be an explicit, inspectable artifact.
+#
+# PARITY CONTRACT (do not "improve" casually)
+# -------------------------------------------
+# The gates below are a byte-for-behaviour reproduction of the in-code defaults:
+# same names, commands, timeouts, required flags, parallelizable flags, and
+# retry_count. Introducing this file MUST NOT change GateRunner's effective
+# behaviour. `tests/test_verifier_adapter.py::TestGatesYamlParity` proves the
+# YAML-loaded gate list is field-for-field equal to `_get_default_gates()`.
+# Change a value here only as a deliberate, tested behaviour change.
+#
+# Timeouts mirror model_registry.yaml runtime_defaults.timeouts.gates.* :
+#   format=30 lint=60 typecheck=120 unit=180  (as of 2026-07-17).
+
+gates:
+  - name: format
+    command: make format-check
+    timeout: 30
+    required: true
+    retry_count: 0
+    description: Check code formatting
+    parallelizable: true
+
+  - name: lint
+    command: make lint
+    timeout: 60
+    required: true
+    retry_count: 0
+    description: Run linters
+    parallelizable: true
+
+  - name: typecheck
+    command: make typecheck
+    timeout: 120
+    required: false
+    retry_count: 0
+    description: Run type checker
+    parallelizable: false
+
+  - name: unit
+    command: make test-unit
+    timeout: 180
+    required: true
+    retry_count: 0
+    description: Run unit tests
+    parallelizable: false
