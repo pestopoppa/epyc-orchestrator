@@ -8,17 +8,28 @@ decides later whether any axis has enough signal to promote.
 from __future__ import annotations
 
 import json
+import os
 import re
 from typing import Any
 
 METRIC_SCHEMA_VERSION = 1
 HARNESS_METRIC_VERSION = "hle-1-rule-v1"
 ORACLE_METRIC_VERSION = "hle-2-oracle-defaults-v1"
+CONTROL_ATTESTATION_VERSION = "w5-control-pair-report-v1"
+CONTROL_ATTESTATION_ENV = "AUTOPILOT_ORACLE_CONTROL_ATTESTATION"
 
 _KEYWORD_RE = re.compile(r"[a-zA-Z_][a-zA-Z0-9_]{3,}")
 _STOPWORDS = {
-    "action", "analysis", "because", "config", "failure", "quality",
-    "should", "trial", "unknown", "without",
+    "action",
+    "analysis",
+    "because",
+    "config",
+    "failure",
+    "quality",
+    "should",
+    "trial",
+    "unknown",
+    "without",
 }
 _MEMORY_FAILURE_TERMS = (
     "forgot",
@@ -50,6 +61,10 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _env_truthy(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _axis(
     *,
     score: float | None,
@@ -72,11 +87,7 @@ def _axis(
 
 
 def _keywords(text: str) -> set[str]:
-    return {
-        tok.lower()
-        for tok in _KEYWORD_RE.findall(text or "")
-        if tok.lower() not in _STOPWORDS
-    }
+    return {tok.lower() for tok in _KEYWORD_RE.findall(text or "") if tok.lower() not in _STOPWORDS}
 
 
 def _keyword_overlap(reference: str, candidate: str) -> float:
@@ -234,7 +245,121 @@ def infer_oracle_adequacy(eval_result: Any) -> dict[str, Any]:
         "schema_version": METRIC_SCHEMA_VERSION,
         "observe_only": True,
         "suites": {suite: _oracle_profile(suite) for suite in suites},
+        "control_attestation": infer_control_attestation(eval_result),
     }
+
+
+def infer_control_attestation(eval_result: Any) -> dict[str, Any]:
+    """Report-only W5 control-pair attestation for eval-axis trust.
+
+    This does not gate SafetyGate, Pareto admission, blacklists, or learning
+    exclusion. It only records whether a caller supplied known-good and
+    known-bad controls whose scorer outcomes match their expected polarity.
+    """
+    payload: dict[str, Any] = {
+        "metric_version": CONTROL_ATTESTATION_VERSION,
+        "schema_version": METRIC_SCHEMA_VERSION,
+        "observe_only": True,
+        "env_flag": CONTROL_ATTESTATION_ENV,
+        "enabled": _env_truthy(CONTROL_ATTESTATION_ENV),
+        "status": "disabled",
+        "eligible_for_evidence": False,
+        "controls_seen": {"known_good": 0, "known_bad": 0},
+        "failures": [],
+        "suites": [],
+    }
+    if not payload["enabled"]:
+        payload["reason"] = "control-pair attestation disabled"
+        return payload
+
+    controls = _control_rows(eval_result)
+    if not controls:
+        payload["status"] = "no_controls"
+        payload["reason"] = "no oracle control-pair rows supplied"
+        return payload
+
+    failures: list[dict[str, Any]] = []
+    suites: set[str] = set()
+    counts = {"known_good": 0, "known_bad": 0}
+    for row in controls:
+        kind = _control_kind(row)
+        if kind not in counts:
+            failures.append({"kind": kind or "unknown", "reason": "unsupported control kind"})
+            continue
+        counts[kind] += 1
+        suite = str(row.get("suite") or row.get("axis") or "unknown")
+        suites.add(suite)
+        expected_accept = kind == "known_good"
+        observed_accept = _control_observed_accept(row)
+        if observed_accept is None:
+            failures.append(
+                {
+                    "kind": kind,
+                    "suite": suite,
+                    "reason": "missing observed acceptance boolean",
+                }
+            )
+        elif bool(observed_accept) != expected_accept:
+            failures.append(
+                {
+                    "kind": kind,
+                    "suite": suite,
+                    "expected_accept": expected_accept,
+                    "observed_accept": bool(observed_accept),
+                }
+            )
+
+    payload["controls_seen"] = counts
+    payload["failures"] = failures
+    payload["suites"] = sorted(suites)
+    if counts["known_good"] == 0 or counts["known_bad"] == 0:
+        payload["status"] = "incomplete"
+        payload["reason"] = "both known_good and known_bad controls are required"
+    elif failures:
+        payload["status"] = "failed"
+        payload["reason"] = "one or more control rows disagreed with expected polarity"
+    else:
+        payload["status"] = "passed"
+        payload["reason"] = "known-good and known-bad controls matched expected polarity"
+    return payload
+
+
+def _control_rows(eval_result: Any) -> list[dict[str, Any]]:
+    details = getattr(eval_result, "details", {}) or {}
+    if not isinstance(details, dict):
+        return []
+    raw = (
+        details.get("oracle_control_pairs")
+        or details.get("control_attestation")
+        or details.get("control_pair_results")
+    )
+    if isinstance(raw, dict):
+        rows: list[dict[str, Any]] = []
+        for kind in ("known_good", "known_bad"):
+            for item in raw.get(kind) or []:
+                if isinstance(item, dict):
+                    rows.append({"kind": kind, **item})
+        if rows:
+            return rows
+        raw_rows = raw.get("controls") or raw.get("rows")
+        if isinstance(raw_rows, list):
+            return [row for row in raw_rows if isinstance(row, dict)]
+    if isinstance(raw, list):
+        return [row for row in raw if isinstance(row, dict)]
+    return []
+
+
+def _control_kind(row: dict[str, Any]) -> str:
+    raw = row.get("kind") or row.get("control_kind") or row.get("type")
+    return str(raw or "").strip().lower().replace("-", "_")
+
+
+def _control_observed_accept(row: dict[str, Any]) -> bool | None:
+    for key in ("observed_accept", "accepted", "scorer_passed", "passed", "correct"):
+        value = row.get(key)
+        if isinstance(value, bool):
+            return value
+    return None
 
 
 def _oracle_profile(suite: str) -> dict[str, Any]:

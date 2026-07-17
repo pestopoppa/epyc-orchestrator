@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 # ── Custom Exceptions ─────────────────────────────────────────────────
@@ -36,12 +41,23 @@ class StepExecutionError(DelegationError):
 
 
 class ReviewDecision(Enum):
-    """Architect's review decision."""
+    """Reviewer's bounded-authority decision.
+
+    Mirrors the ``decision`` enum in ``orchestration/review_decision.schema.json``.
+    REQUEST_EVIDENCE and REJECT_TO_EMPTY (RA-6) are additive — existing consumers
+    that branch on APPROVE/REJECT/REQUEST_CHANGES/ESCALATE keep working; unhandled
+    members fall through their else-branches (verified in delegator.py /
+    parallel_step_executor.py).
+    """
 
     APPROVE = "approve"
     REQUEST_CHANGES = "request_changes"
     ESCALATE = "escalate"
     REJECT = "reject"
+    # RA-6 additions (evidence-linked control plane):
+    REQUEST_EVIDENCE = "request_evidence"  # verdict withheld pending verifier_requests
+    REJECT_TO_EMPTY = "reject_to_empty"  # bad plan/output worse than none; discard, don't iterate
+    ABSTAIN = "abstain"  # (CP2/spec §9.2) package insufficient + no permitted evidence request resolves it
 
 
 class TaskComplexity(Enum):
@@ -92,6 +108,16 @@ class IterationContext:
     total_iterations: int = 0
     subtask_iterations: dict[str, int] = field(default_factory=dict)
     iteration_history: list[dict[str, Any]] = field(default_factory=list)
+    # RD-10c sticky decision cache + RD-11/LB-5 shadow budget seam.
+    # ``max_iterations`` / ``max_total_iterations`` above ARE the wire-points for
+    # the ``max_review_iterations`` / ``max_total_review_iterations`` knobs
+    # (LB-2 reuses IterationContext semantics — review turns count on the same
+    # ledger, so a runaway Architect<->Reviewer handshake trips the existing cap).
+    # All fields below default to inert so behavior is byte-identical until a knob
+    # flips them on.
+    decision_cache_enabled: bool = False
+    decision_cache: dict[str, str] = field(default_factory=dict)
+    budget_violations: list[dict[str, Any]] = field(default_factory=list)
 
     def can_iterate(self, subtask_id: str) -> bool:
         """Check if another iteration is allowed for this subtask."""
@@ -100,6 +126,104 @@ class IterationContext:
             subtask_count < self.max_iterations
             and self.total_iterations < self.max_total_iterations
         )
+
+    # ── RD-10c sticky decision cache ─────────────────────────────────────
+    def subtask_signature(
+        self,
+        task: dict[str, Any] | None,
+        subtask: dict[str, Any] | None,
+        candidate: str | None,
+    ) -> str:
+        """Stable signature over the *sanitized* task shape + candidate shape.
+
+        RD-10c keys the sticky cache on a hash of ``(task, subtask, candidate)``
+        with volatile detail sanitized out: the objective/action are whitespace-
+        normalized and truncated, and the candidate is reduced to a coarse
+        *shape* fingerprint (digit-count length bucket + normalized head/tail)
+        rather than its exact bytes — so an approved *pattern* can skip re-review
+        for structurally-equivalent candidates within the same run/wave.
+        """
+        obj = " ".join(str((task or {}).get("objective", "")).lower().split())[:200]
+        action = " ".join(str((subtask or {}).get("action", "")).lower().split())[:200]
+        cand = str(candidate or "")
+        n = len(cand)
+        len_bucket = 0 if n == 0 else len(str(n))  # order-of-magnitude bucket
+        head = " ".join(cand[:80].lower().split())
+        tail = " ".join(cand[-80:].lower().split())
+        payload = json.dumps(
+            {
+                "objective": obj,
+                "action": action,
+                "shape": {"len_bucket": len_bucket, "head": head, "tail": tail},
+            },
+            sort_keys=True,
+            ensure_ascii=False,
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    def cached_decision(self, signature: str) -> "ReviewDecision | None":
+        """Return a sticky APPROVE for this signature, or None. Off by default."""
+        if not self.decision_cache_enabled:
+            return None
+        value = self.decision_cache.get(signature)
+        if value is None:
+            return None
+        try:
+            return ReviewDecision(value)
+        except ValueError:
+            return None
+
+    def remember_decision(self, signature: str, decision: "ReviewDecision") -> None:
+        """Cache an APPROVE pattern. REJECT/REJECT_TO_EMPTY are NEVER sticky."""
+        if not self.decision_cache_enabled:
+            return
+        if decision == ReviewDecision.APPROVE:
+            self.decision_cache[signature] = decision.value
+
+    # ── RD-11 / LB-5 shadow budget-check seam ────────────────────────────
+    def check_token_budget(
+        self,
+        decision_type: str,
+        *,
+        tokens_used: int | None = None,
+        token_budget: int | None = None,
+        latency_ms: float | None = None,
+        latency_budget_ms: float | None = None,
+        actor: str = "",
+    ) -> dict[str, Any] | None:
+        """Record a per-decision token/latency budget breach — NEVER blocks.
+
+        The LB-2 budgets (plan-review ≤350 tok, candidate-review ≤300,
+        rubric-authoring ≤800 amortized, rubric-grading ≤180, plus their latency
+        ceilings) are *observation-grade / proposed*. This hook is the enforcement
+        seam: in the shadow era it appends a VIOLATION record and logs it, but it
+        never raises and never alters control flow. Returns the record on breach,
+        else None.
+        """
+        breaches: dict[str, Any] = {}
+        if (
+            token_budget is not None
+            and tokens_used is not None
+            and tokens_used > token_budget
+        ):
+            breaches["tokens"] = {"used": tokens_used, "budget": token_budget}
+        if (
+            latency_budget_ms is not None
+            and latency_ms is not None
+            and latency_ms > latency_budget_ms
+        ):
+            breaches["latency_ms"] = {"used": latency_ms, "budget": latency_budget_ms}
+        if not breaches:
+            return None
+        record = {
+            "decision_type": decision_type,
+            "actor": actor,
+            "breaches": breaches,
+            "timestamp": datetime.now().isoformat(),
+        }
+        self.budget_violations.append(record)
+        logger.info("review budget VIOLATION (shadow, non-blocking): %s", record)
+        return record
 
     def record_iteration(
         self,
@@ -134,7 +258,23 @@ class IterationContext:
 
 @dataclass
 class ArchitectReview:
-    """Result of architect reviewing specialist output."""
+    """Result of a reviewer adjudicating specialist output.
+
+    RA-6 extends this with the evidence-linked control-plane fields while keeping
+    every legacy field/default so existing consumers (review_service.py,
+    delegator.py, parallel_step_executor.py, chat_review.py) are unaffected.
+
+    Score vs confidence semantics (score-vs-confidence is an open operator
+    decision, documented here for now):
+      * ``score``      — advisory quality of the candidate in [0, 1]
+                         (how good is the output). Legacy field, kept for compat.
+      * ``confidence`` — the reviewer's calibrated confidence in its own VERDICT
+                         in [0, 1] (how sure am I this decision is correct). Feeds
+                         the FA/FR calibration ledger, not the quality signal.
+
+    ``tripwire`` is the hard-stop channel (orthogonal to ``score``): a violated
+    invariant blocks regardless of advisory score (safety_gate.py semantics).
+    """
 
     subtask_id: str
     decision: ReviewDecision
@@ -142,9 +282,18 @@ class ArchitectReview:
     score: float = 0.0
     suggested_changes: list[str] = field(default_factory=list)
     approved_output: str | None = None
+    # RA-6 evidence-linked control-plane fields (all optional / defaulted):
+    confidence: float = 0.0
+    tripwire: bool = False
+    evidence: list[dict[str, Any]] = field(default_factory=list)
+    verifier_requests: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for JSON serialization."""
+        """Convert to dictionary for JSON serialization.
+
+        Legacy keys are preserved verbatim; the new keys are additive so existing
+        readers of the dict are unaffected.
+        """
         return {
             "subtask_id": self.subtask_id,
             "decision": self.decision.value,
@@ -152,6 +301,10 @@ class ArchitectReview:
             "score": self.score,
             "suggested_changes": self.suggested_changes,
             "approved_output": self.approved_output,
+            "confidence": self.confidence,
+            "tripwire": self.tripwire,
+            "evidence": self.evidence,
+            "verifier_requests": self.verifier_requests,
         }
 
 

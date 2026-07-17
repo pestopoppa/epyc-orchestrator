@@ -16,6 +16,7 @@ from __future__ import annotations
 import csv
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
@@ -49,6 +50,42 @@ def _normalize_ts(raw: str | None) -> str:
         return dt.astimezone(timezone.utc).isoformat()
     except ValueError:
         return raw
+
+
+def shard_paths(main_path: Path | str) -> list[Path]:
+    """Return the primary journal file plus its rotated shards, in read order.
+
+    The autopilot journal rotates by appending ``_<n>`` before the suffix,
+    e.g. ``autopilot_journal.jsonl`` rotates to ``autopilot_journal_1.jsonl``,
+    ``autopilot_journal_2.jsonl``, ... (memory: journal rotates to ``_<n>``).
+    We must ingest EVERY shard, not just the live file, or historical trials
+    silently disappear from the store.
+
+    Ordering: primary first, then shards by ascending ``<n>``. Dedup in the
+    store is keyed by ``(source_path, source_line)`` and each shard has a
+    distinct path, so ordering only affects presentation, never correctness.
+
+    ``.bak-*`` / ``.run3-poisoned`` backups are deliberately excluded: they do
+    not end in the bare suffix and never match the strict ``_<n><suffix>`` regex.
+    """
+    main_path = Path(main_path)
+    parent = main_path.parent
+    stem = main_path.stem  # e.g. "autopilot_journal"
+    suffix = main_path.suffix  # e.g. ".jsonl"
+
+    paths: list[Path] = []
+    if main_path.exists():
+        paths.append(main_path)
+
+    shard_re = re.compile(rf"^{re.escape(stem)}_(\d+){re.escape(suffix)}$")
+    numbered: list[tuple[int, Path]] = []
+    if parent.exists():
+        for candidate in parent.glob(f"{stem}_*{suffix}"):
+            m = shard_re.match(candidate.name)
+            if m:
+                numbered.append((int(m.group(1)), candidate))
+    paths.extend(p for _, p in sorted(numbered))
+    return paths
 
 
 def _emit_unavailable(path: Path, kind: str) -> Event:
@@ -156,15 +193,8 @@ def parse_all(
     `source_unavailable` events for any absent file.
     """
     events: list[Event] = []
-    for path, parser, kind in (
-        (Path(tsv_path), _parse_tsv, EventSource.AUTOPILOT_JOURNAL),
-        (Path(jsonl_path), _parse_jsonl, EventSource.AUTOPILOT_JOURNAL),
-        (Path(state_path), _parse_state, EventSource.AUTOPILOT_STATE),
-    ):
-        if not path.exists():
-            logger.info("autopilot source not found at %s — emitting source_unavailable", path)
-            events.append(_emit_unavailable(path, kind))
-            continue
+
+    def _run_parser(path: Path, parser, kind: str) -> None:
         try:
             events.extend(parser(path))
         except Exception as e:  # noqa: BLE001 — defensive, log and continue per source
@@ -181,4 +211,29 @@ def parse_all(
                     detail_json=detail_to_json({"path": str(path), "error": str(e)}),
                 )
             )
+
+    # TSV + JSONL journals rotate into ``_<n>`` shards — ingest every shard.
+    for primary, parser in (
+        (Path(tsv_path), _parse_tsv),
+        (Path(jsonl_path), _parse_jsonl),
+    ):
+        shards = shard_paths(primary)
+        if not shards:
+            logger.info(
+                "autopilot journal not found at %s (no shards) — emitting source_unavailable",
+                primary,
+            )
+            events.append(_emit_unavailable(primary, EventSource.AUTOPILOT_JOURNAL))
+            continue
+        for shard in shards:
+            _run_parser(shard, parser, EventSource.AUTOPILOT_JOURNAL)
+
+    # Controller state snapshot is a single file (not rotated).
+    state = Path(state_path)
+    if not state.exists():
+        logger.info("autopilot state not found at %s — emitting source_unavailable", state)
+        events.append(_emit_unavailable(state, EventSource.AUTOPILOT_STATE))
+    else:
+        _run_parser(state, _parse_state, EventSource.AUTOPILOT_STATE)
+
     return events

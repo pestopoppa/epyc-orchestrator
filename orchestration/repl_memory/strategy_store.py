@@ -789,20 +789,7 @@ class StrategyStore:
         self,
         rows: list[sqlite3.Row],
     ) -> dict[str, int]:
-        if getattr(self, "_fts_enabled", False):
-            self._conn.execute("DELETE FROM strategies_fts")
-            for row in rows:
-                self._conn.execute(
-                    "INSERT INTO strategies_fts(id, description, insight, species) "
-                    "VALUES (?, ?, ?, ?)",
-                    (row["id"], row["description"], row["insight"], row["species"]),
-                )
-
-        self._faiss.index = self._faiss._faiss.IndexFlatIP(self.embedding_dim)
-        self._faiss.id_map = []
-        self._faiss.id_to_idx = {}
-        if hasattr(self._faiss, "_dirty"):
-            self._faiss._dirty = True
+        prepared_rows: list[tuple[sqlite3.Row, np.ndarray]] = []
         for row in rows:
             try:
                 metadata = json.loads(row["metadata_json"] or "{}")
@@ -817,9 +804,42 @@ class StrategyStore:
                 format_meta = {}
             title = _compact_text(format_meta.get("title")) or _derive_title(row["description"])
             embed_text = f"{title} {row['description']} {row['insight']}"
-            self._faiss.add(row["id"], self._embed(embed_text))
-        self._faiss.save()
-        self._conn.commit()
+            prepared_rows.append((row, self._embed(embed_text)))
+
+        old_index = self._faiss.index
+        old_id_map = list(self._faiss.id_map)
+        old_id_to_idx = dict(self._faiss.id_to_idx)
+        old_dirty = getattr(self._faiss, "_dirty", False)
+        old_disk_signature = getattr(self._faiss, "_disk_signature", None)
+        if getattr(self, "_fts_enabled", False):
+            self._conn.execute("DELETE FROM strategies_fts")
+            for row in rows:
+                self._conn.execute(
+                    "INSERT INTO strategies_fts(id, description, insight, species) "
+                    "VALUES (?, ?, ?, ?)",
+                    (row["id"], row["description"], row["insight"], row["species"]),
+                )
+
+        self._faiss.index = self._faiss._faiss.IndexFlatIP(self.embedding_dim)
+        self._faiss.id_map = []
+        self._faiss.id_to_idx = {}
+        if hasattr(self._faiss, "_dirty"):
+            self._faiss._dirty = True
+        try:
+            for row, embedding in prepared_rows:
+                self._faiss.add(row["id"], embedding)
+            self._faiss.save()
+            self._conn.commit()
+        except BaseException:
+            self._conn.rollback()
+            self._faiss.index = old_index
+            self._faiss.id_map = old_id_map
+            self._faiss.id_to_idx = old_id_to_idx
+            if hasattr(self._faiss, "_dirty"):
+                self._faiss._dirty = old_dirty
+            if old_disk_signature is not None:
+                self._faiss._disk_signature = old_disk_signature
+            raise
         return {
             "sqlite_count": len(rows),
             "fts_count": (

@@ -103,14 +103,19 @@ class MathAdapter(BaseAdapter):
         return {
             "id": f"gsm8k_{idx:05d}",
             "suite": "math",
-            "prompt": question + "\n\nSolve step by step. Put your final numeric answer inside <answer></answer> tags.",
+            # EV-11 (2026-07-17): scored by math_verify. The prompt asks for a
+            # \boxed{} answer because debug_scorer._score_math_verify extracts the
+            # candidate from \boxed{} (it does NOT read the old <answer></answer>
+            # tags or scoring_config.extract_pattern). This prompt change makes the
+            # math_verify flip actually score GSM8K and requires a fresh baseline.
+            "prompt": question + "\n\nSolve step by step. Put your final answer in \\boxed{}.",
             "context": "",
             "expected": expected,
             "scoring": [],
             "image_path": "",
             "tier": 1,  # GSM8K is grade-school level
-            "scoring_method": "exact_match",
-            "scoring_config": {"extract_pattern": r"<answer>(.*?)</answer>"},
+            "scoring_method": "math_verify",
+            "scoring_config": {"extraction_mode": "expr"},
         }
 
     def _math500_prompt(self, idx: int, row: dict) -> dict:
@@ -131,8 +136,11 @@ class MathAdapter(BaseAdapter):
             "scoring": [],
             "image_path": "",
             "tier": tier,
-            "scoring_method": "substring",
-            "scoring_config": {"case_sensitive": False},
+            # EV-11 (2026-07-17): substring scoring silently mis-scored symbolic /
+            # LaTeX answers (e.g. \frac{mg}{2} vs mg/2). math_verify does symbolic
+            # equivalence and extracts the candidate from the \boxed{} above.
+            "scoring_method": "math_verify",
+            "scoring_config": {"extraction_mode": "latex"},
         }
 
 

@@ -523,14 +523,27 @@ class TestApplyPlanReview:
         review.patches = [{"op": "reroute", "step": "S2", "v": _RETIRED_ARCHITECT_ROLE}]
         result = _apply_plan_review(["coder", "worker"], review)
         assert result[0] == "coder"
-        assert result[1] == _RETIRED_ARCHITECT_ROLE
+        assert result[1] == "architect_general"
 
-    def test_invalid_step_id_defaults_to_first(self):
-        """Invalid step_id defaults to first position."""
+    def test_invalid_step_id_defaults_to_first_for_valid_role(self):
+        """Invalid step_id defaults to first position for a valid role."""
         review = MagicMock()
-        review.patches = [{"op": "reroute", "step": "invalid", "v": "new_role"}]
+        review.patches = [{"op": "reroute", "step": "invalid", "v": "architect_general"}]
         result = _apply_plan_review(["original"], review)
-        assert result[0] == "new_role"
+        assert result[0] == "architect_general"
+
+    def test_invalid_reroute_role_is_ignored(self):
+        """Reroute values must be backend roles, not free-form instructions."""
+        review = MagicMock()
+        review.patches = [
+            {
+                "op": "reroute",
+                "step": "S1",
+                "v": "Implement frequency counter and add test assertion",
+            }
+        ]
+        result = _apply_plan_review(["coder_escalation"], review)
+        assert result == ["coder_escalation"]
 
     def test_empty_routing_with_patch(self):
         """Empty routing with reroute patch."""
@@ -549,7 +562,7 @@ class TestApplyPlanReview:
     def test_out_of_bounds_step_id(self):
         """Out of bounds step_id handled gracefully."""
         review = MagicMock()
-        review.patches = [{"op": "reroute", "step": "S99", "v": "new_role"}]
+        review.patches = [{"op": "reroute", "step": "S99", "v": "architect_general"}]
         result = _apply_plan_review(["coder"], review)
         assert result == ["coder"]  # Unchanged
 

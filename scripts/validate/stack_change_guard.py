@@ -7,7 +7,6 @@ import argparse
 import fnmatch
 import hashlib
 import json
-import os
 import re
 import sys
 from collections import Counter
@@ -820,9 +819,9 @@ def _launch_manifest_targets(
     except Exception:
         return {}
 
-    numa_mode = os.environ.get("ORCHESTRATOR_STACK_NUMA_MODE", "full").strip().lower()
-    if numa_mode not in {"full", "quarter", "both"}:
-        numa_mode = "full"
+    from scripts.server.stack_numa_mode import env_stack_numa_mode
+
+    numa_mode = env_stack_numa_mode()
     registry = _load_yaml_mapping(registry_path)
     registry_roles = registry.get("roles") if isinstance(registry.get("roles"), dict) else {}
     server_mode = (

@@ -299,6 +299,160 @@ def _economics_section(now: datetime, repo_root: Path | None = None) -> list[str
     ]
 
 
+def _refresh_review_ledger_subprocess(events_db: Path, ledger_path: Path) -> bool:
+    """Fallback for :func:`_refresh_review_ledger` when the materializer is not
+    importable: shell out to the CLI. Best-effort; never raises."""
+    try:
+        import subprocess
+        import sys
+
+        script = (
+            Path(__file__).resolve().parents[2]
+            / "scripts" / "analysis" / "reviewer_events_to_ledger.py"
+        )
+        if not script.exists():
+            return False
+        subprocess.run(
+            [
+                sys.executable, str(script),
+                "--events", str(events_db),
+                "--output", str(ledger_path.parent),
+                "--emit", "ledger-sqlite",
+            ],
+            capture_output=True, timeout=120, check=False,
+        )
+        return True
+    except Exception:  # noqa: BLE001 — best-effort; digest must never break
+        return False
+
+
+def _refresh_review_ledger(
+    events_db: Path | str | None = None,
+    ledger_path: Path | str | None = None,
+    *,
+    materializer: Any | None = None,
+) -> bool:
+    """Best-effort pre-digest refresh: materialize REVIEW_DECISION trace events into
+    the review ledger right before the calibration section reads it (B2).
+
+    Chains the offline, NON-INFERENCE events→ledger materializer
+    (``scripts/analysis/reviewer_events_to_ledger``): read events → map to ledger
+    rows → write ``<ledger dir>/review_ledger.sqlite`` (the file
+    ``review_ledger.calibration_summary`` then reads). Defaults:
+    ``src.trace.store.DEFAULT_DB_PATH`` → ``review_ledger.DEFAULT_REVIEW_LEDGER_PATH``.
+
+    NEVER raises — every failure (missing events DB, unimportable materializer,
+    0 events, write error) is swallowed so the digest always completes. A clean
+    no-op when the trace store has zero REVIEW_DECISION events (the materializer
+    yields nothing on empty). ``materializer`` is injectable for tests. Returns
+    ``True`` iff rows were materialized.
+    """
+    try:
+        from src.trace.review_ledger import DEFAULT_REVIEW_LEDGER_PATH
+        from src.trace.store import DEFAULT_DB_PATH
+
+        events_db = Path(events_db) if events_db else DEFAULT_DB_PATH
+        ledger_path = Path(ledger_path) if ledger_path else DEFAULT_REVIEW_LEDGER_PATH
+        if not events_db.exists():
+            return False
+        if materializer is None:
+            try:
+                from scripts.analysis import reviewer_events_to_ledger as materializer
+            except Exception:  # noqa: BLE001 — namespace import unavailable
+                return _refresh_review_ledger_subprocess(events_db, ledger_path)
+        events = materializer.read_review_events(events_db)
+        if not events:
+            return False
+        rows = materializer.materialize_rows(events)
+        if not rows:
+            return False
+        materializer.write_ledger_sqlite(rows, ledger_path.parent)
+        return True
+    except Exception:  # noqa: BLE001 — best-effort; digest must never break
+        log.debug("review-ledger pre-digest refresh skipped", exc_info=True)
+        return False
+
+
+def _reviewer_calibration_section(
+    now: datetime,
+    *,
+    ledger_module: Any | None = None,
+    emission_stats: Any | None = None,
+) -> list[str]:
+    """Reviewer-calibration trends (H8 AP-8, observe-only).
+
+    Reads the review ledger via ``src.trace.review_ledger`` when present — a
+    parallel agent (H4) is building it, so the import is guarded and a missing or
+    empty ledger renders a graceful "no data yet" line. Also surfaces the codex
+    dogfooding emission counters (AP-6) as a proxy signal when the ledger is not
+    yet wired. Pure/observe-only: no planner, gate, or archive authority.
+    """
+    lines = ["### Reviewer calibration (H8 AP-8, observe-only)"]
+    rendered_any = False
+
+    ledger = ledger_module
+    if ledger is None:
+        try:
+            from src.trace import review_ledger as ledger  # type: ignore
+        except Exception:  # noqa: BLE001 — parallel agent may not have landed it
+            ledger = None
+
+    if ledger is not None:
+        summary: Any = None
+        for attr in ("calibration_summary", "summarize", "summary", "recent_summary"):
+            fn = getattr(ledger, attr, None)
+            if callable(fn):
+                try:
+                    summary = fn()
+                    break
+                except Exception:  # noqa: BLE001
+                    continue
+        if isinstance(summary, dict) and summary:
+            preferred = (
+                "n_decisions",
+                "reviewer_fa_rate",
+                "reviewer_fr_rate",
+                "reviewer_fa_fr_ratio",
+                "review_decision_latency_ms",
+            )
+            shown: set[str] = set()
+            for key in preferred:
+                if key in summary:
+                    lines.append(f"- {key.replace('_', ' ')}: **{_fmt_num(summary[key])}**")
+                    shown.add(key)
+                    rendered_any = True
+            for key, val in summary.items():
+                if key in shown or isinstance(val, (dict, list)):
+                    continue
+                lines.append(f"- {key.replace('_', ' ')}: {_fmt_num(val)}")
+                rendered_any = True
+
+    stats = emission_stats
+    if stats is None:
+        try:
+            from planner_providers import CODEX_REVIEW_DECISION_STATS as stats  # type: ignore
+        except Exception:  # noqa: BLE001
+            try:
+                from scripts.autopilot.planner_providers import (  # type: ignore
+                    CODEX_REVIEW_DECISION_STATS as stats,
+                )
+            except Exception:  # noqa: BLE001
+                stats = None
+    if stats is not None:
+        data = stats.to_dict() if hasattr(stats, "to_dict") else stats
+        if isinstance(data, dict) and (data.get("emitted") or data.get("parse_failures")):
+            lines.append(
+                "- codex dogfood emission: "
+                f"emitted={data.get('emitted', 0)}, "
+                f"parse_failures={data.get('parse_failures', 0)}"
+            )
+            rendered_any = True
+
+    if not rendered_any:
+        lines.append("- no reviewer-calibration data yet (review_ledger absent or empty)")
+    return lines
+
+
 def render_digest(
     *,
     swarm: Any,
@@ -323,6 +477,15 @@ def render_digest(
     body.extend(_structural_lab_section(lab))
     body.append("")
     body.extend(_economics_section(now))
+    body.append("")
+    # B2: best-effort refresh of the review ledger from trace events BEFORE the
+    # calibration section reads it. Double-guarded (the hook itself never raises)
+    # so a materializer failure can never break digest generation.
+    try:
+        _refresh_review_ledger()
+    except Exception:  # noqa: BLE001 — belt-and-suspenders; digest must never break
+        log.debug("review-ledger refresh hook raised; ignored", exc_info=True)
+    body.extend(_reviewer_calibration_section(now))
     body.append("")
     body.append("### NumericSwarm surfaces")
     body.append("")

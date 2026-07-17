@@ -1,0 +1,252 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/pestopoppa/amd-epyc-inference/schemas/candidate_package.schema.json",
+  "title": "CandidatePackage",
+  "description": "The unit a Reviewer adjudicates: a task ref, the plan it was produced under, the produced outputs, declared acceptance checks, and provenance. Carries a SANITIZATION CONTRACT: the reviewer-visible projection (`sanitized_view`) MUST exclude author self-assessment prose, confidence assertions, and 'refined/final/expert' labels, because those framings shift verdicts ~18-29pp (intake-837/838). Sanitization is applied at package-assembly time, not at reviewer-prompt time. Immutable once assembled; only `status` mutates.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "package_id", "task_ref", "provenance", "sanitized_view"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+      "description": "Artifact schema version (semver)."
+    },
+    "package_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Unique identifier for this candidate package."
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["assembled", "in_review", "reviewed", "withdrawn"],
+      "description": "Mutable status field (immutable-structure/mutable-status, intake-846). All other fields are append/versioned."
+    },
+    "task_ref": {
+      "type": "string",
+      "minLength": 1,
+      "description": "task_id of the TaskIR this candidate answers."
+    },
+    "plan_ref": {
+      "type": "string",
+      "description": "Reference to the plan/ArchitectureIR the candidate was produced under (task_id or arch name@version)."
+    },
+    "objective": {
+      "type": "string",
+      "description": "Neutral restatement of the objective (safe for the reviewer view)."
+    },
+    "outputs": {
+      "type": "array",
+      "description": "The produced artifacts under review (domain-general: diffs, files, answers, summaries).",
+      "items": { "$ref": "#/$defs/output_ref" }
+    },
+    "acceptance_checks": {
+      "type": "array",
+      "description": "Declared, checkable acceptance criteria (mirror of TaskIR.definition_of_done).",
+      "items": { "$ref": "#/$defs/acceptance_check" }
+    },
+    "provenance": { "$ref": "#/$defs/provenance" },
+    "author_self_assessment": {
+      "type": "string",
+      "description": "OPTIONAL author-supplied self-assessment prose. MUST be stripped from sanitized_view — retained on the full package for audit only."
+    },
+    "author_confidence_assertion": {
+      "description": "OPTIONAL author-asserted confidence. MUST be stripped from sanitized_view (framing-neutrality, intake-837).",
+      "type": ["number", "string"]
+    },
+    "quality_labels": {
+      "type": "array",
+      "description": "OPTIONAL author labels (e.g. 'refined', 'final', 'expert'). MUST be stripped from sanitized_view.",
+      "items": { "type": "string" }
+    },
+    "subject": { "$ref": "#/$defs/subject" },
+    "untrusted_content_policy": { "$ref": "#/$defs/untrusted_content_policy" },
+    "context_refs": {
+      "type": "array",
+      "description": "v1.1 (spec §4.3/§6.1/§13.3). Content-addressed pointers to the ONLY context the reviewer is shown: relevant source spans, IRs, prior reports. Each ref is a `blob:sha256:...` hash (optionally with a span suffix) — full history is retrieved only via a typed evidence request, shrinking context cost + prompt-injection surface. Enables the §12.4 replay query to reconstruct the exact reviewed package from hashes.",
+      "items": { "$ref": "#/$defs/context_ref" }
+    },
+    "verification_report_refs": {
+      "type": "array",
+      "description": "v1.1 (spec §6.1). report_ids / content addresses of the VerificationReports attached to this package.",
+      "items": { "type": "string" }
+    },
+    "sanitized_view": { "$ref": "#/$defs/sanitized_view" }
+  },
+  "$defs": {
+    "output_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "ref"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["diff", "file", "text", "answer", "summary", "artifact"]
+        },
+        "ref": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Locator or inline content id for the output."
+        },
+        "content_type": { "type": "string" },
+        "label": { "type": "string" }
+      }
+    },
+    "acceptance_check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "statement"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "statement": { "type": "string", "minLength": 1 },
+        "verifier": {
+          "type": "string",
+          "description": "Objective verifier that can decide this check (gate/scorer/checker id), if any."
+        }
+      }
+    },
+    "subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "v1.1 (spec §6.1). Content-addressed identity of what is under review. These hashes are the material inputs the DecisionEnvelope binds to (§6.6 subject) and that automatic invalidation (§12.3) watches — a change to any of them invalidates a prior decision.",
+      "properties": {
+        "task_id": { "type": "string" },
+        "task_type": { "type": "string" },
+        "artifact_type": { "type": "string" },
+        "artifact_hash": {
+          "type": "string",
+          "description": "sha256 of the produced artifact under review (the integrated patch / answer / proof)."
+        },
+        "specification_hash": {
+          "type": "string",
+          "description": "sha256 of the task specification / acceptance criteria."
+        },
+        "plan_hash": {
+          "type": "string",
+          "description": "sha256 of the plan / ArchitectureIR the candidate was produced under."
+        }
+      }
+    },
+    "untrusted_content_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "v1.1 (spec §5-security / §6.1 / §13). The candidate artifact is attacker-controlled input from the reviewer's perspective, EVEN when produced by a trusted local model. This block declares the control/data separation contract the package builder enforces: candidate text is data, embedded instructions are ignored, and any authority claim ('tests passed', 'a human approved') has ZERO weight without a trusted ledger evidence id.",
+      "properties": {
+        "candidate_text_is_data": {
+          "type": "boolean",
+          "description": "Candidate content is placed in explicitly delimited data fields; it is never interpreted as reviewer instructions (§13.1 control/data separation)."
+        },
+        "candidate_instructions_ignored": {
+          "type": "boolean",
+          "description": "Any 'ignore the reviewer policy'-style instruction embedded in the candidate/retrieved text is inert (§13.1)."
+        },
+        "authority_claims_require_ledger_proof": {
+          "type": "boolean",
+          "description": "Textual claims of prior verification/approval resolve to authority ONLY through a hash-verified ledger evidence id (§13.1 evidence-must-resolve-through-the-ledger)."
+        }
+      }
+    },
+    "context_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "ref"],
+      "description": "v1.1 (spec §6.1). A single content-addressed context pointer.",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "source_span",
+            "architecture_ir",
+            "task_ir",
+            "trace_event",
+            "evidence_item",
+            "verification_report",
+            "retrieval_doc",
+            "diff"
+          ],
+          "description": "What the ref points at."
+        },
+        "ref": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Content address, e.g. 'blob:sha256:<hex>' or 'blob:sha256:<hex>#L20-L150'. Bound to a hash so the reviewer cannot be shown different bytes than were decided on (§13.3)."
+        },
+        "label": { "type": "string" }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model", "role"],
+      "description": "Reproducibility record for the AUTHOR of the candidate.",
+      "properties": {
+        "model": { "type": "string", "minLength": 1 },
+        "quant": {
+          "type": "string",
+          "description": "Quantization (e.g. Q4_K_M, UD-IQ2_M)."
+        },
+        "role": { "type": "string", "minLength": 1 },
+        "flag_state": {
+          "type": "object",
+          "description": "Relevant runtime-flag values at generation time.",
+          "additionalProperties": true
+        },
+        "instrument_era": {
+          "type": "string",
+          "description": "instrument_eras.yaml era label active at generation time."
+        },
+        "server": { "type": "string" },
+        "generated_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "sanitized_view": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "REVIEWER-VISIBLE PROJECTION. This is the ONLY view a Reviewer is shown. It MUST NOT contain author self-assessment prose, confidence assertions, or 'refined/final/expert' quality labels (the fields author_self_assessment / author_confidence_assertion / quality_labels are excluded by construction). Framing-neutral by contract.",
+      "required": ["task_ref", "outputs", "sanitization"],
+      "properties": {
+        "task_ref": { "type": "string", "minLength": 1 },
+        "objective": { "type": "string" },
+        "outputs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/output_ref" }
+        },
+        "acceptance_checks": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/acceptance_check" }
+        },
+        "subject": { "$ref": "#/$defs/subject" },
+        "context_refs": {
+          "type": "array",
+          "description": "v1.1. Content-addressed context the reviewer is shown (mirror of the top-level field — this is the reviewer-visible projection).",
+          "items": { "$ref": "#/$defs/context_ref" }
+        },
+        "untrusted_content_policy": { "$ref": "#/$defs/untrusted_content_policy" },
+        "sanitization": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["applied"],
+          "properties": {
+            "applied": {
+              "type": "boolean",
+              "description": "True once the sanitization projection has been applied at assembly time."
+            },
+            "removed_fields": {
+              "type": "array",
+              "description": "Field names stripped from the full package (audit trail).",
+              "items": { "type": "string" }
+            },
+            "policy_version": {
+              "type": "string",
+              "description": "Version of the sanitization policy applied."
+            }
+          }
+        }
+      }
+    }
+  }
+}

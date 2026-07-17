@@ -102,6 +102,10 @@ from seeding_types import (  # noqa: E402, F401
     state,
 )
 from seeding_types import (  # noqa: E402 (additional imports for 3-way routing)
+    ACTION_ARCHITECT,
+    ACTION_SELF_DIRECT,
+    ACTION_SELF_REPL,
+    ACTION_WORKER,
     THREE_WAY_ACTIONS,
 )
 from seeding_rewards import (  # noqa: E402, F401

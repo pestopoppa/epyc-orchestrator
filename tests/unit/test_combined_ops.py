@@ -4,11 +4,19 @@
 import json
 import os
 import tempfile
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
 from src.repl_environment import REPLEnvironment
+
+AP26_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "ap26"
+    / "metadata_first_workspace_trace.json"
+)
 
 
 @pytest.fixture(autouse=True)
@@ -553,6 +561,33 @@ class TestWorkspaceScanEnabled:
 
         # router.py should rank first due to query relevance despite fewer accesses
         assert parsed["files"][0]["path"] == "/src/router.py"
+
+    def test_workspace_scan_ap26_fixture_metadata_first_win_condition(self):
+        """AP-26 staging fixture: query scan beats high-frecency distractors."""
+        os.environ["REPL_COMBINED_OPS"] = "1"
+        repl = _make_repl(use_toon=False)
+
+        from src.repl_environment.file_recency import FrecencyStore
+
+        fixture = json.loads(AP26_FIXTURE.read_text(encoding="utf-8"))
+        store = FrecencyStore(db_path=":memory:")
+        for item in fixture["access_history"]:
+            for _ in range(item["access_count"]):
+                store.record_access(item["path"])
+        repl._frecency_store = store
+
+        result = repl._workspace_scan(
+            query=fixture["query"],
+            limit=fixture["win_condition"]["max_scan_files"],
+        )
+        parsed = json.loads(result)
+        paths = [entry["path"] for entry in parsed["files"]]
+
+        assert parsed["query"] == fixture["query"]
+        assert parsed["file_count"] == fixture["win_condition"]["max_scan_files"]
+        assert paths[0] == fixture["expected_first_path"]
+        assert all(path in paths for path in fixture["expected_required_paths"])
+        assert not any(path in paths for path in fixture["distractor_paths"])
 
     def test_workspace_scan_toon_encoding(self):
         """TOON encoding produces text format with scores."""

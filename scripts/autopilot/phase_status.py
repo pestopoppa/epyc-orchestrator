@@ -55,6 +55,13 @@ EVAL_PROGRESS_FIELDS = (
 AUTOPILOT_ENV_FLAGS = (
     "AUTOPILOT_PLANNER_HINTS",
     "AUTOPILOT_SEQ_VERDICT",
+    "AUTOPILOT_SEQ_P0_2_BRIDGE",
+    "AUTOPILOT_TOOL_SENTINELS",
+    "AUTOPILOT_STEPPING_STONES",
+    "AUTOPILOT_PLANNER_PRIMARY",
+    "AUTOPILOT_PLANNER_CRITIC",
+    "AUTOPILOT_PLANNER_CRITIC_FALLBACK",
+    "AUTOPILOT_PLANNER_SPEND_BREAKER",
     "AUTOPILOT_W6_AUDIT_BLOCK",
     "AUTOPILOT_W6_AUDIT_N",
     "AUTOPILOT_W6_AUDIT_EVERY_N_TRIALS",
@@ -79,6 +86,7 @@ AUTOPILOT_RUNTIME_SOURCE_PATHS = (
     ORCH_ROOT / "scripts" / "autopilot" / "species" / "evolution_manager.py",
     ORCH_ROOT / "scripts" / "autopilot" / "safety_gate.py",
     ORCH_ROOT / "scripts" / "autopilot" / "phase_status.py",
+    ORCH_ROOT / "src" / "autopilot_core" / "authority_consent.py",
     ORCH_ROOT / "src" / "autopilot_core" / "planner_evidence.py",
     RESEARCH_ROOT / "scripts" / "benchmark" / "debug_scorer.py",
 )
@@ -423,11 +431,40 @@ def _rate(count: int, total: int) -> float | None:
     return round(count / total, 3)
 
 
+def _per_100(count: int, total: int) -> float | None:
+    if total <= 0:
+        return None
+    return round((count / total) * 100.0, 3)
+
+
+def _is_active_trial_row(row: dict[str, Any]) -> bool:
+    """True for rows that represent live-loop trial work, not skip residue."""
+    if _row_trial_id(row) is None:
+        return False
+    bug = str(row.get("bug_corrupted_by") or "").strip()
+    if bug and bug != "mad_noise":
+        return False
+    outcome_status = str(row.get("outcome_status") or "ok").strip().lower()
+    if outcome_status in {"invalid", "skipped"}:
+        return False
+    action_type = str(row.get("action_type") or "").strip()
+    return action_type not in {"distill_knowledge", "reset_memories"}
+
+
+def _row_has_regression_signal(row: dict[str, Any]) -> bool:
+    category = str(row.get("deficiency_category") or "").strip().lower()
+    if category in {"regression", "per_suite_regression"}:
+        return True
+    failure_analysis = str(row.get("failure_analysis") or "").lower()
+    return "regression" in failure_analysis
+
+
 def _outcome_rates(
     rows: list[dict[str, Any]],
     *,
     latest_trial_id: int | None,
     recent_window_trials: int,
+    promotion_trial_ids: Iterable[int] = (),
 ) -> dict[str, Any]:
     recent_floor = None
     if latest_trial_id is not None and recent_window_trials > 0:
@@ -436,12 +473,19 @@ def _outcome_rates(
     keepable_count = 0
     wasted_eval_count = 0
     learning_excluded_count = 0
+    active_trial_count = 0
+    regression_count = 0
     for row in rows:
         trial_id = _row_trial_id(row)
         if recent_floor is not None and trial_id is not None and trial_id <= recent_floor:
             continue
         bug = str(row.get("bug_corrupted_by") or "").strip()
-        if bug and bug != "mad_noise":
+        outcome_rate_eligible = not bug or bug == "mad_noise"
+        if _is_active_trial_row(row):
+            active_trial_count += 1
+            if _row_has_regression_signal(row):
+                regression_count += 1
+        if not outcome_rate_eligible:
             continue
         decision = str(row.get("keep_revert_decision") or "").strip()
         eval_details = row.get("eval_details")
@@ -459,6 +503,11 @@ def _outcome_rates(
                 wasted_eval_count += 1
         if is_learning_excluded:
             learning_excluded_count += 1
+    recent_promotion_count = sum(
+        1
+        for trial_id in promotion_trial_ids
+        if recent_floor is None or int(trial_id) > recent_floor
+    )
     return {
         "recent_window_trials": recent_window_trials,
         "keepable_rate": {
@@ -475,6 +524,17 @@ def _outcome_rates(
             "count": learning_excluded_count,
             "total": keep_revert_total,
             "rate": _rate(learning_excluded_count, keep_revert_total),
+        },
+        "active_trial_count": active_trial_count,
+        "regression_per_active_trial": {
+            "count": regression_count,
+            "total": active_trial_count,
+            "rate": _rate(regression_count, active_trial_count),
+        },
+        "promotions_per_100_active_trials": {
+            "count": recent_promotion_count,
+            "total": active_trial_count,
+            "per_100": _per_100(recent_promotion_count, active_trial_count),
         },
     }
 
@@ -571,6 +631,7 @@ def _build_outcome_progress_report(
             trials,
             latest_trial_id=latest_trial_id,
             recent_window_trials=recent_window_trials,
+            promotion_trial_ids=promotion_ids,
         ),
         "blockers": blockers,
     }
@@ -693,6 +754,23 @@ def build_phase_health_report(
         "seq_verdict_enabled": _env_enabled(
             None if env_flags is None else env_flags.get("AUTOPILOT_SEQ_VERDICT")
         ),
+        "seq_p0_2_bridge_env_enabled": _env_enabled(
+            None if env_flags is None else env_flags.get("AUTOPILOT_SEQ_P0_2_BRIDGE")
+        ),
+        "tool_sentinels_enabled": _env_enabled(
+            None if env_flags is None else env_flags.get("AUTOPILOT_TOOL_SENTINELS")
+        ),
+        "stepping_stones_enabled": _env_enabled(
+            None if env_flags is None else env_flags.get("AUTOPILOT_STEPPING_STONES")
+        ),
+        "planner_primary": None if env_flags is None else env_flags.get("AUTOPILOT_PLANNER_PRIMARY"),
+        "planner_critic": None if env_flags is None else env_flags.get("AUTOPILOT_PLANNER_CRITIC"),
+        "planner_critic_fallback": (
+            None if env_flags is None else env_flags.get("AUTOPILOT_PLANNER_CRITIC_FALLBACK")
+        ),
+        "planner_spend_breaker_enabled": _env_enabled(
+            None if env_flags is None else env_flags.get("AUTOPILOT_PLANNER_SPEND_BREAKER")
+        ),
         "w6_audit_accrual_enabled": _env_enabled(
             None if env_flags is None else env_flags.get("AUTOPILOT_W6_AUDIT_BLOCK")
         ),
@@ -762,6 +840,16 @@ def format_phase_health_report(report: dict[str, Any]) -> list[str]:
         f"- Outcome progress status: {(report.get('outcome_progress') or {}).get('status')}",
         f"- Planner hints env: {report.get('planner_hints_enabled')}",
         f"- Seq verdict env: {report.get('seq_verdict_enabled')}",
+        f"- Seq P0.2 bridge env: {report.get('seq_p0_2_bridge_env_enabled')}",
+        f"- Tool sentinels env: {report.get('tool_sentinels_enabled')}",
+        f"- Stepping stones env: {report.get('stepping_stones_enabled')}",
+        (
+            "- Planner providers: "
+            f"primary={report.get('planner_primary')}, "
+            f"critic={report.get('planner_critic')}, "
+            f"fallback={report.get('planner_critic_fallback')}"
+        ),
+        f"- Planner spend breaker env: {report.get('planner_spend_breaker_enabled')}",
         (
             "- W6 audit env: "
             f"{report.get('w6_audit_accrual_enabled')} "
@@ -800,10 +888,16 @@ def format_phase_health_report(report: dict[str, Any]) -> list[str]:
             keepable = (rates.get("keepable_rate") or {}).get("rate")
             wasted = (rates.get("wasted_eval_rate") or {}).get("rate")
             excluded = (rates.get("learning_excluded_rate") or {}).get("rate")
+            regression = (rates.get("regression_per_active_trial") or {}).get("rate")
+            promotions = (rates.get("promotions_per_100_active_trials") or {}).get(
+                "per_100"
+            )
             lines.append(
                 "- Recent rates: "
                 f"keepable={keepable}, wasted_eval={wasted}, "
-                f"learning_excluded={excluded}"
+                f"learning_excluded={excluded}, "
+                f"regression_per_active_trial={regression}, "
+                f"promotions_per_100_active_trials={promotions}"
             )
         if outcome_progress.get("blockers"):
             lines.extend(["", "## Outcome Progress Signals", ""])

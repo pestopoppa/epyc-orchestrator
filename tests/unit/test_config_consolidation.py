@@ -396,6 +396,27 @@ class TestChatPipelineDefaults:
         cfg = ChatPipelineConfig()
         assert cfg.try_cheap_first_role == "worker_general"
 
+    def test_try_cheap_first_q_threshold_default(self):
+        cfg = ChatPipelineConfig()
+        assert cfg.try_cheap_first_q_threshold == 0.65
+
+    def test_get_config_reads_try_cheap_first_q_threshold(self, monkeypatch):
+        monkeypatch.setenv("ORCHESTRATOR_CHAT_TRY_CHEAP_FIRST_Q_THRESHOLD", "0.78")
+        reset_config()
+
+        cfg = get_config()
+
+        assert cfg.chat.try_cheap_first_q_threshold == 0.78
+
+    def test_get_config_reads_legacy_quality_threshold_alias_for_q_threshold(self, monkeypatch):
+        monkeypatch.delenv("ORCHESTRATOR_CHAT_TRY_CHEAP_FIRST_Q_THRESHOLD", raising=False)
+        monkeypatch.setenv("ORCHESTRATOR_CHAT_TRY_CHEAP_FIRST_QUALITY_THRESHOLD", "0.74")
+        reset_config()
+
+        cfg = get_config()
+
+        assert cfg.chat.try_cheap_first_q_threshold == 0.74
+
 
 # ── VisionConfig defaults match src/vision/config.py ─────────────────────
 
@@ -677,6 +698,37 @@ roles:
             reset_config()
             cfg = get_config()
             assert cfg.chat.long_context_max_turns == 16
+
+    def test_chat_threshold_overrides(self):
+        with patch.dict(
+            os.environ,
+            {
+                "ORCHESTRATOR_CHAT_LONG_CONTEXT_THRESHOLD_CHARS": "64000",
+                "ORCHESTRATOR_CHAT_SUMMARIZATION_THRESHOLD_TOKENS": "24000",
+                "ORCHESTRATOR_CHAT_REVIEW_LOW_Q_THRESHOLD": "0.55",
+                "ORCHESTRATOR_CHAT_REVIEW_SKIP_Q_THRESHOLD": "0.72",
+            },
+        ):
+            reset_config()
+            cfg = get_config()
+            assert cfg.chat.long_context_threshold_chars == 64000
+            assert cfg.chat.summarization_threshold_tokens == 24000
+            assert cfg.chat.review_low_q_threshold == 0.55
+            assert cfg.chat.review_skip_q_threshold == 0.72
+
+    def test_manual_env_loader_reads_review_thresholds(self):
+        from src.config import _load_from_env
+
+        with patch.dict(
+            os.environ,
+            {
+                "ORCHESTRATOR_CHAT_REVIEW_LOW_Q_THRESHOLD": "0.52",
+                "ORCHESTRATOR_CHAT_REVIEW_SKIP_Q_THRESHOLD": "0.76",
+            },
+        ):
+            cfg = _load_from_env()
+            assert cfg.chat.review_low_q_threshold == 0.52
+            assert cfg.chat.review_skip_q_threshold == 0.76
 
     def test_escalation_max_retries_override(self):
         with patch.dict(os.environ, {"ORCHESTRATOR_ESCALATION_MAX_RETRIES": "5"}):

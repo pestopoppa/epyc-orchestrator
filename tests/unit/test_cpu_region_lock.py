@@ -49,11 +49,13 @@ from src.runtime.cpu_region_lock import (  # noqa: E402
     CpuRegionLockTimeout,
     cpu_region_lock,
     cpu_region_lock_for_instance,
+    read_region_lock_payload,
     region_lock_path,
 )
 
 
 # ───────────────────────────── topology tests ─────────────────────────────
+
 
 class TestTopology:
     def test_atomic_regions_partition(self):
@@ -132,11 +134,11 @@ class TestTopology:
         cfg = {
             "frontdoor": {
                 "instances": [
-                    ("0-47,96-143", 8070, 96),   # full
-                    ("0-23,96-119", 8080, 48),   # q0
-                    ("24-47,120-143", 8180, 48), # q1
-                    ("48-71,144-167", 8280, 48), # q2
-                    ("72-95,168-191", 8380, 48), # q3
+                    ("0-47,96-143", 8070, 96),  # full
+                    ("0-23,96-119", 8080, 48),  # q0
+                    ("24-47,120-143", 8180, 48),  # q1
+                    ("48-71,144-167", 8280, 48),  # q2
+                    ("72-95,168-191", 8380, 48),  # q3
                 ],
             },
         }
@@ -163,6 +165,7 @@ class TestTopology:
 
 # ─────────────────────────── lock primitive tests ──────────────────────────
 
+
 class TestCpuRegionLockBasic:
     def test_region_lock_path_uses_tmp_dir(self, tmp_path):
         p = region_lock_path("frontdoor", "q0")
@@ -180,6 +183,26 @@ class TestCpuRegionLockBasic:
     def test_acquire_multiple_regions(self):
         with cpu_region_lock("frontdoor", {"q0", "q1"}) as paths:
             assert set(paths.keys()) == {"q0", "q1"}
+
+    def test_lock_payload_written_while_held_and_cleared_on_release(self):
+        with cpu_region_lock(
+            "frontdoor",
+            {"q1", "q0"},
+            instance_idx=0,
+            request_tag="unit-request",
+        ) as paths:
+            payload = read_region_lock_payload(paths["q0"])
+            assert payload is not None
+            assert payload["schema_version"] == 1
+            assert payload["pid"] == os.getpid()
+            assert payload["role"] == "frontdoor"
+            assert payload["region"] == "q0"
+            assert payload["regions"] == ["q0", "q1"]
+            assert payload["instance_idx"] == 0
+            assert payload["request_tag"] == "unit-request"
+            assert isinstance(payload["started_at"], float)
+
+        assert read_region_lock_payload(paths["q0"]) is None
 
     def test_empty_region_set_is_noop(self):
         with cpu_region_lock("frontdoor", set()) as paths:
@@ -296,6 +319,7 @@ class TestCpuRegionLockSafety:
                     cancelled[0] = True
                     return True
                 return False
+
             return check
 
         # Hold q0 in a thread
@@ -314,7 +338,8 @@ class TestCpuRegionLockSafety:
             deadline = time.perf_counter() + 0.3
             with pytest.raises(CpuRegionLockTimeout, match="cancelled"):
                 with cpu_region_lock(
-                    "frontdoor", {"q0"},
+                    "frontdoor",
+                    {"q0"},
                     timeout_s=10,
                     cancel_check=cancel_after(deadline),
                 ):
@@ -340,8 +365,9 @@ class TestCpuRegionLockSafety:
                 acquired.append("B")
                 time.sleep(0.05)
 
-        threads = [threading.Thread(target=thread_a) for _ in range(3)] + \
-                  [threading.Thread(target=thread_b) for _ in range(3)]
+        threads = [threading.Thread(target=thread_a) for _ in range(3)] + [
+            threading.Thread(target=thread_b) for _ in range(3)
+        ]
         for t in threads:
             t.start()
         for t in threads:
@@ -360,6 +386,7 @@ class TestCpuRegionLockCrossProcess:
         # Re-import to pick up env override
         import importlib
         import src.runtime.cpu_region_lock as crl
+
         importlib.reload(crl)
         with crl.cpu_region_lock(role, set(regions), timeout_s=10):
             Path(ready_path).touch()
@@ -408,6 +435,7 @@ class TestForInstanceConvenience:
         """cpu_region_lock_for_instance reads regions from the topology
         table and acquires them. Patch the lookup to return a known set."""
         from src.runtime import instance_topology
+
         monkeypatch.setattr(
             instance_topology,
             "_INSTANCE_REGIONS_CACHE",
@@ -418,8 +446,11 @@ class TestForInstanceConvenience:
 
     def test_unknown_instance_is_noop(self, monkeypatch):
         from src.runtime import instance_topology
+
         monkeypatch.setattr(
-            instance_topology, "_INSTANCE_REGIONS_CACHE", {},
+            instance_topology,
+            "_INSTANCE_REGIONS_CACHE",
+            {},
         )
         with cpu_region_lock_for_instance("unknown_role", 999) as paths:
             assert paths == {}

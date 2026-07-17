@@ -30,6 +30,9 @@ htmlcov/
 data/trace/
 data/kb_rag/
 
+# Reviewer rubric cache (rebuildable — re-authoring re-populates; RD-2)
+data/review/
+
 # Logs and runtime data
 logs/
 *.log

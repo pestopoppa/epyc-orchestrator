@@ -254,8 +254,9 @@ def _is_alias_role(role: RoleConfig) -> bool:
 
 
 def _active_numa_mode() -> str:
-    mode = os.environ.get("ORCHESTRATOR_STACK_NUMA_MODE", "full").strip().lower()
-    return mode if mode in {"full", "quarter", "both"} else "full"
+    from scripts.server.stack_numa_mode import env_stack_numa_mode
+
+    return env_stack_numa_mode()
 
 
 def _role_instance_ports(role: RoleConfig, numa_mode: str | None = None) -> list[int]:
@@ -281,6 +282,14 @@ def _stack_prior_record_ports(record: dict[str, Any]) -> list[int]:
         return ports
     primary_port = stack_prior_primary_port(serving)
     return [primary_port] if primary_port is not None else []
+
+
+def _matching_numa_mode_for_ports(role: RoleConfig, ports: list[int]) -> str | None:
+    expected = sorted(ports)
+    for mode in ("full", "quarter", "both"):
+        if sorted(_role_instance_ports(role, numa_mode=mode)) == expected:
+            return mode
+    return None
 
 
 def _requires_stack_prior_parity(template: StackTemplate) -> bool:
@@ -313,11 +322,17 @@ def _validate_stack_prior_parity(
         )
         return errors, warnings
 
-    numa_mode = _active_numa_mode()
-    template_ports = {
-        role_name: _role_instance_ports(role, numa_mode=numa_mode)
-        for role_name, role in template.roles.items()
-    }
+    active_numa_mode = _active_numa_mode()
+    template_ports: dict[str, list[int]] = {}
+    for role_name, role in template.roles.items():
+        mode = active_numa_mode
+        record = live_records.get(role_name)
+        if isinstance(record, dict) and not _is_alias_role(role) and role.mode != "embedding":
+            prior_ports = _stack_prior_record_ports(record)
+            matching_mode = _matching_numa_mode_for_ports(role, prior_ports)
+            if matching_mode is not None:
+                mode = matching_mode
+        template_ports[role_name] = _role_instance_ports(role, numa_mode=mode)
 
     for role_name, role in template.roles.items():
         if _is_alias_role(role) or role.mode == "embedding":

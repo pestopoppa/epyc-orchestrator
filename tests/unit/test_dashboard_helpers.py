@@ -59,6 +59,7 @@ def test_active_stack_numa_mode_defaults_to_both(monkeypatch) -> None:
     # instance (full + 4 quarters per multi-instance role), so the dashboard
     # defaults to "both" to reflect the running instances rather than hiding them.
     monkeypatch.delenv("ORCHESTRATOR_STACK_NUMA_MODE", raising=False)
+    monkeypatch.setattr(dashboard_topology, "read_runtime_stack_numa_mode", lambda: None)
     assert dashboard_topology.active_stack_numa_mode() == "both"
 
     monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "quarter")
@@ -67,6 +68,24 @@ def test_active_stack_numa_mode_defaults_to_both(monkeypatch) -> None:
     # Unknown values fall back to the "both" default.
     monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "stale-quarter")
     assert dashboard_topology.active_stack_numa_mode() == "both"
+
+
+def test_active_stack_numa_mode_uses_runtime_facts_manifest(monkeypatch) -> None:
+    monkeypatch.delenv("ORCHESTRATOR_STACK_NUMA_MODE", raising=False)
+    monkeypatch.setattr(dashboard_topology, "read_runtime_stack_numa_mode", lambda: "quarter")
+
+    assert dashboard_topology.active_stack_numa_mode() == "quarter"
+
+
+def test_active_stack_numa_mode_env_override_skips_runtime_facts_manifest(monkeypatch) -> None:
+    monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "full")
+
+    def fail_reader():
+        raise AssertionError("env override should use explicit NUMA mode")
+
+    monkeypatch.setattr(dashboard_topology, "read_runtime_stack_numa_mode", fail_reader)
+
+    assert dashboard_topology.active_stack_numa_mode() == "full"
 
 
 def test_expected_stack_services_are_numa_mode_filtered(monkeypatch) -> None:
@@ -84,16 +103,80 @@ def test_expected_stack_services_are_numa_mode_filtered(monkeypatch) -> None:
     assert by_port[8182]["role"] == "worker_general.q1"
 
 
-def test_port_hint_uses_active_manifest_mode_for_quarters(monkeypatch) -> None:
+def test_expected_stack_services_uses_runtime_facts_manifest(monkeypatch) -> None:
+    monkeypatch.delenv("ORCHESTRATOR_STACK_NUMA_MODE", raising=False)
+    monkeypatch.setattr(
+        dashboard_topology,
+        "read_runtime_stack_selected_servers",
+        lambda: [{
+            "port": 18070,
+            "roles": ["eval_batch_frontdoor"],
+            "embedding": False,
+            "vision": False,
+            "worker_pool": False,
+            "numa_instance": 0,
+        }],
+    )
+
+    services = dashboard_topology.expected_stack_services()
+
+    assert services == [{
+        "name": "eval_batch_frontdoor",
+        "role": "eval_batch_frontdoor",
+        "port": 18070,
+        "roles": ["eval_batch_frontdoor"],
+        "embedding": False,
+        "vision": False,
+        "worker_pool": False,
+        "numa_instance": 0,
+    }]
+
+
+def test_expected_stack_services_env_override_skips_runtime_facts_manifest(monkeypatch) -> None:
     monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "full")
-    assert dashboard_topology._port_hint(8080) == "port_8080"
+
+    def fail_reader():
+        raise AssertionError("env override should use static manifest")
+
+    monkeypatch.setattr(
+        dashboard_topology,
+        "read_runtime_stack_selected_servers",
+        fail_reader,
+    )
+
+    ports = {service["port"] for service in dashboard_topology.expected_stack_services()}
+
+    assert 8070 in ports
+    assert 8080 not in ports
+
+
+def test_port_hint_labels_known_numa_ports_independent_of_expected_mode(monkeypatch) -> None:
+    monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "full")
+    assert dashboard_topology._port_hint(8080) == "frontdoor.q0"
 
     monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "quarter")
     assert dashboard_topology._port_hint(8080) == "frontdoor.q0"
     assert dashboard_topology._port_hint(8182) == "worker_general.q1"
 
 
-def test_expected_stack_services_include_embedder_fleet() -> None:
+def test_port_hint_uses_runtime_selected_servers_when_env_unset(monkeypatch) -> None:
+    monkeypatch.delenv("ORCHESTRATOR_STACK_NUMA_MODE", raising=False)
+    monkeypatch.setattr(
+        dashboard_topology,
+        "read_runtime_stack_selected_servers",
+        lambda: [{
+            "port": 18070,
+            "roles": ["eval_batch_frontdoor"],
+            "numa_instance": 0,
+        }],
+    )
+
+    assert dashboard_topology._port_hint(18070) == "eval_batch_frontdoor"
+    assert dashboard_topology._port_hint(8080) == "frontdoor.q0"
+
+
+def test_expected_stack_services_include_embedder_fleet(monkeypatch) -> None:
+    monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "both")
     services = dashboard_topology.expected_stack_services()
     embedders = [s for s in services if s.get("embedding")]
 
@@ -127,6 +210,82 @@ def test_topology_emits_expected_unloaded_stack_servers(monkeypatch) -> None:
     assert embedder["kind"] == "expected-stack-server"
     assert embedder["expected"] is True
     assert embedder["running"] is False
+
+
+def test_topology_parity_smoke_for_expected_listener_ports(monkeypatch) -> None:
+    from scripts.server import stack_commands
+
+    mode = "both"
+    expected_services = dashboard_topology.expected_stack_services(mode)
+    expected_by_port = {
+        int(s["port"]): s
+        for s in expected_services
+        if isinstance(s.get("port"), int)
+    }
+    assert expected_by_port
+
+    def port_for_base_role(base: str) -> int:
+        for port, service in sorted(expected_by_port.items()):
+            if dashboard_topology.base_role(str(service.get("role") or "")) == base:
+                return port
+        raise AssertionError(f"expected stack service missing for base role {base}")
+
+    listener_ports = {
+        port_for_base_role("frontdoor"),
+        port_for_base_role("worker_general"),
+        port_for_base_role("embedder"),
+    }
+    scan_inputs: list[list[int]] = []
+
+    def fake_scan_known_ports(ports):
+        scanned = sorted(int(port) for port in ports)
+        scan_inputs.append(scanned)
+        return {
+            port: [100_000 + port]
+            for port in sorted(listener_ports)
+            if port in scanned
+        }
+
+    monkeypatch.setattr(
+        stack_commands._stack_processes,
+        "scan_known_ports",
+        fake_scan_known_ports,
+    )
+    discovered_listeners = stack_commands._scan_known_ports()
+
+    assert scan_inputs
+    assert set(expected_by_port).issubset(set(scan_inputs[0]))
+    assert set(discovered_listeners) == listener_ports
+
+    monkeypatch.setattr(
+        dashboard,
+        "_discover_llama_ports",
+        lambda: {
+            port: str(expected_by_port[port]["role"])
+            for port in sorted(discovered_listeners)
+        },
+    )
+    monkeypatch.setattr(dashboard, "_discover_llama_models", lambda: {})
+    monkeypatch.setattr(dashboard, "_load_state_services", lambda: [])
+
+    topology_by_port = {
+        node["port"]: node
+        for node in dashboard._build_topology_nodes(mode)
+        if isinstance(node.get("port"), int)
+    }
+
+    assert set(expected_by_port).issubset(set(topology_by_port))
+    for port, service in expected_by_port.items():
+        node = topology_by_port[port]
+        assert node["expected"] is True
+        assert node["role"] == service["role"]
+        assert node["manifest_roles"] == service["roles"]
+        if port in listener_ports:
+            assert node["running"] is True
+            assert node["kind"] == "llama-server"
+        else:
+            assert node["running"] is False
+            assert node["kind"] == "expected-stack-server"
 
 
 def test_topology_activity_initializes_expected_embedder_bucket(monkeypatch, tmp_path) -> None:
@@ -286,6 +445,24 @@ def test_discover_llama_ports_parses_ps_output(monkeypatch) -> None:
     # MI210 HIP builds are the GPU testbed (operator-decided first-class role).
     assert ports[8802] == "mi210_gpu"
     assert 1234 not in ports  # filtered out (no llama-server in cmd)
+
+
+def test_discover_llama_ports_labels_live_quarters_as_configured_instances(monkeypatch) -> None:
+    fake_ps = (
+        "1234 /opt/llama-server --port 8080 -m /m/frontdoor-quarter.gguf\n"
+        "5678 /opt/llama-server --port 8182 -m /m/worker-quarter.gguf\n"
+    )
+    monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "full")
+    monkeypatch.setattr(
+        dashboard_topology.subprocess, "run",
+        lambda *a, **kw: SimpleNamespace(stdout=fake_ps),
+    )
+
+    ports = dashboard_topology._discover_llama_ports()
+
+    assert ports[8080] == "frontdoor.q0"
+    assert ports[8182] == "worker_general.q1"
+    assert all(not role.startswith("extern_") for role in ports.values())
 
 
 # ----- dashboard_tap -----
@@ -1890,6 +2067,8 @@ def test_autopilot_progress_surfaces_eval_label_from_log_tail(
     ]) + "\n")
     monkeypatch.setattr(dashboard, "_AUTOPILOT_STATE_PATH", state_path)
     monkeypatch.setattr(dashboard, "_AUTOPILOT_LOG_DIR", log_dir)
+    monkeypatch.setattr(dashboard, "_AUTOPILOT_TMP_LOG_DIR", tmp_path / "tmp")
+    monkeypatch.setattr(dashboard, "AUTOPILOT_LOG", tmp_path / "missing.log")
     monkeypatch.setattr(dashboard, "_AUTOPILOT_JOURNAL_PATH", tmp_path / "missing.jsonl")
 
     response = asyncio.run(dashboard.autopilot_progress())
@@ -1988,6 +2167,8 @@ def test_autopilot_progress_surfaces_outcome_kpis_and_current_code_health(
             "timestamp": "2026-07-05T00:01:00+00:00",
             "action_type": "seed_batch",
             "keep_revert_decision": "revert",
+            "deficiency_category": "regression",
+            "failure_analysis": "VIOLATIONS: regression vs baseline",
         },
         {
             "trial_id": 3,
@@ -2045,6 +2226,17 @@ def test_autopilot_progress_surfaces_outcome_kpis_and_current_code_health(
         "count": 1,
         "total": 3,
         "rate": 0.333,
+    }
+    assert payload["outcome_kpis"]["active_trial_count"] == 4
+    assert payload["outcome_kpis"]["regression_per_active_trial"] == {
+        "count": 1,
+        "total": 4,
+        "rate": 0.25,
+    }
+    assert payload["outcome_kpis"]["promotions_per_100_active_trials"] == {
+        "count": 1,
+        "total": 4,
+        "per_100": 25.0,
     }
     assert payload["current_code_health"] == {
         "ok": True,
@@ -2159,6 +2351,17 @@ def test_autopilot_progress_leaves_outcome_kpis_unknown_without_source_data(
         "total": 0,
         "rate": None,
     }
+    assert payload["outcome_kpis"]["active_trial_count"] == 3
+    assert payload["outcome_kpis"]["regression_per_active_trial"] == {
+        "count": 0,
+        "total": 3,
+        "rate": 0.0,
+    }
+    assert payload["outcome_kpis"]["promotions_per_100_active_trials"] == {
+        "count": 0,
+        "total": 3,
+        "per_100": 0.0,
+    }
     assert payload["current_code_health"] is None
 
 
@@ -2191,6 +2394,7 @@ def test_autopilot_progress_prefers_active_autopilot_log_over_stale_restart_log(
     os.utime(active_log, (now, now))
     monkeypatch.setattr(dashboard, "_AUTOPILOT_STATE_PATH", state_path)
     monkeypatch.setattr(dashboard, "_AUTOPILOT_LOG_DIR", log_dir)
+    monkeypatch.setattr(dashboard, "_AUTOPILOT_TMP_LOG_DIR", tmp_path / "tmp")
     monkeypatch.setattr(dashboard, "AUTOPILOT_LOG", active_log)
     monkeypatch.setattr(dashboard, "_AUTOPILOT_JOURNAL_PATH", tmp_path / "missing.jsonl")
 
@@ -2704,6 +2908,7 @@ def test_snapshot_uses_fresh_region_lock_scan(monkeypatch) -> None:
     monkeypatch.setattr(dashboard, "_structured_tap_requests_for_dashboard", lambda **_k: [])
     monkeypatch.setattr(dashboard, "_topology_activity_payload", lambda **_k: activity)
     monkeypatch.setattr(dashboard, "_topology_nodes_cached", lambda _numa_mode=None: [])
+    monkeypatch.setattr(dashboard_topology, "read_runtime_stack_numa_mode", lambda: None)
 
     response = asyncio.run(dashboard._snapshot_impl())
     payload = json.loads(response.body)

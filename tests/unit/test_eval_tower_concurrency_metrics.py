@@ -6,6 +6,7 @@ import hashlib
 import math
 import sys
 import time
+from dataclasses import fields
 from pathlib import Path
 
 import pytest
@@ -263,6 +264,120 @@ def test_aggregate_uses_batch_throughput_for_concurrent_objective() -> None:
     assert out.details["tokens_per_solved_task"] == 140.0
 
 
+def test_question_result_has_host_covariates_default_factory() -> None:
+    host_covariates_field = next(
+        field for field in fields(QuestionResult) if field.name == "host_covariates"
+    )
+
+    assert host_covariates_field.default_factory is dict
+
+
+def test_compact_question_result_includes_bounded_host_covariates() -> None:
+    result = QuestionResult(
+        question_id="q1",
+        suite="math",
+        prompt="a",
+        expected="a",
+        tokens_generated=42,
+        elapsed_s=1.0,
+        host_covariates={
+            "min_core_mhz": 2600.0,
+            "host_inflight": 3,
+            "numa_balancing": 0,
+            "cache_warm_state": "warm",
+            "page_cache_mb": 4096.0,
+            "mem_available_mb": 8192.0,
+            "timestamp": 123.456,
+            "loadavg_1min": 7.25,
+            "extra_noise": "ignore-me",
+        },
+    )
+
+    compact = eval_tower._compact_question_result(result)
+
+    assert compact["tokens_generated"] == 42
+    assert compact["host_covariates"] == {
+        "min_core_mhz": 2600.0,
+        "host_inflight": 3,
+        "numa_balancing": 0,
+        "cache_warm_state": "warm",
+        "page_cache_mb": 4096.0,
+        "mem_available_mb": 8192.0,
+    }
+    assert "timestamp" not in compact["host_covariates"]
+    assert "loadavg_1min" not in compact["host_covariates"]
+    assert "extra_noise" not in compact["host_covariates"]
+
+
+def test_aggregate_emits_speed_analytics_and_host_covariate_summary() -> None:
+    tower = EvalTower()
+    results = [
+        QuestionResult(
+            question_id="q1",
+            suite="math",
+            prompt="a",
+            expected="a",
+            tokens_generated=64,
+            elapsed_s=1.0,
+            eval_concurrency=1,
+            eval_wall_s=4.0,
+            host_covariates={"min_core_mhz": 2500.0, "host_inflight": 1},
+        ),
+        QuestionResult(
+            question_id="q2",
+            suite="math",
+            prompt="b",
+            expected="b",
+            tokens_generated=128,
+            elapsed_s=2.0,
+            eval_concurrency=1,
+            eval_wall_s=4.0,
+            host_covariates={
+                "min_core_mhz": 2600.0,
+                "host_inflight": 2,
+                "numa_balancing": 0,
+                "cache_warm_state": "warm",
+                "page_cache_mb": 4096.0,
+                "mem_available_mb": 8192.0,
+            },
+        ),
+        QuestionResult(
+            question_id="q3",
+            suite="math",
+            prompt="c",
+            expected="c",
+            tokens_generated=256,
+            elapsed_s=4.0,
+            eval_concurrency=1,
+            eval_wall_s=4.0,
+            host_covariates={
+                "min_core_mhz": 2700.0,
+                "host_inflight": 3,
+                "numa_balancing": 1,
+                "cache_warm_state": "cold",
+                "page_cache_mb": 8192.0,
+                "mem_available_mb": 16384.0,
+            },
+        ),
+    ]
+
+    out = tower._aggregate(results, tier=1)
+
+    assert out.details["speed_analytics_min_tokens"] == 128
+    assert out.details["speed_analytics_n_ge_128"] == 2
+    assert out.details["speed_analytics_median_request_tps_ge_128"] == 64.0
+    assert "host_timing_covariates" in out.details
+    assert isinstance(out.details["host_timing_covariates"], dict)
+    assert {
+        "min_core_mhz",
+        "host_inflight",
+        "numa_balancing",
+        "cache_warm_state",
+        "page_cache_mb",
+        "mem_available_mb",
+    }.issubset(out.details["host_timing_covariates"])
+
+
 def test_aggregate_emits_compact_stable_question_results() -> None:
     tower = EvalTower()
     out = tower._aggregate(
@@ -290,7 +405,9 @@ def test_aggregate_emits_compact_stable_question_results() -> None:
             "partition": "core",
             "correct": True,
             "latency_ms": 1234,
+            "tokens_generated": 5,
             "tools_used": 2,
+            "answer_hash": eval_tower.normalized_answer_hash("4"),
         }
     ]
     assert "prompt" not in out.question_results[0]
@@ -333,6 +450,7 @@ def test_aggregate_emits_truthy_question_provenance_flags() -> None:
             "partition": "audit",
             "correct": False,
             "latency_ms": 2000,
+            "tokens_generated": 0,
             "tools_used": 1,
             "scoring_method": "programmatic",
             "route": "frontdoor->worker_general",
@@ -348,6 +466,7 @@ def test_aggregate_emits_truthy_question_provenance_flags() -> None:
     ]
     assert "prompt" not in out.question_results[0]
     assert "answer" not in out.question_results[0]
+    assert "answer_hash" not in out.question_results[0]
 
 
 def test_eval_result_grep_lines_include_concurrency_metrics() -> None:

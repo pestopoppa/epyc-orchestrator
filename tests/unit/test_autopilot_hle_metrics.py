@@ -10,7 +10,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "autopilot"))
 
-from hle_metrics import compute_hle_observe_payload, infer_oracle_adequacy  # noqa: E402
+from hle_metrics import (  # noqa: E402
+    compute_hle_observe_payload,
+    infer_control_attestation,
+    infer_oracle_adequacy,
+)
 from safety_gate import EvalResult  # noqa: E402
 
 
@@ -78,3 +82,72 @@ def test_oracle_adequacy_registers_profiles_for_observed_suites() -> None:
     assert oracle["suites"]["hotpotqa"]["shortcut_risk"] == "high"
     assert oracle["suites"]["humaneval"]["oracle_type"] == "unit_test"
     assert oracle["suites"]["humaneval"]["deterministic"] is True
+    assert oracle["control_attestation"]["status"] == "disabled"
+
+
+def test_control_attestation_default_off(monkeypatch) -> None:
+    monkeypatch.delenv("AUTOPILOT_ORACLE_CONTROL_ATTESTATION", raising=False)
+
+    attestation = infer_control_attestation(
+        _result(
+            details={
+                "oracle_control_pairs": {
+                    "known_good": [{"suite": "humaneval", "passed": True}],
+                    "known_bad": [{"suite": "humaneval", "passed": False}],
+                }
+            }
+        )
+    )
+
+    assert attestation["status"] == "disabled"
+    assert attestation["observe_only"] is True
+    assert attestation["eligible_for_evidence"] is False
+
+
+def test_control_attestation_reports_passed_pair_when_enabled(monkeypatch) -> None:
+    monkeypatch.setenv("AUTOPILOT_ORACLE_CONTROL_ATTESTATION", "1")
+
+    attestation = infer_control_attestation(
+        _result(
+            details={
+                "oracle_control_pairs": {
+                    "known_good": [{"suite": "humaneval", "passed": True}],
+                    "known_bad": [{"suite": "humaneval", "passed": False}],
+                }
+            }
+        )
+    )
+
+    assert attestation["status"] == "passed"
+    assert attestation["controls_seen"] == {"known_good": 1, "known_bad": 1}
+    assert attestation["suites"] == ["humaneval"]
+    assert attestation["failures"] == []
+
+
+def test_control_attestation_reports_failed_or_incomplete_controls(monkeypatch) -> None:
+    monkeypatch.setenv("AUTOPILOT_ORACLE_CONTROL_ATTESTATION", "1")
+
+    failed = infer_control_attestation(
+        _result(
+            details={
+                "oracle_control_pairs": [
+                    {"kind": "known_good", "suite": "qa", "passed": True},
+                    {"kind": "known_bad", "suite": "qa", "passed": True},
+                ]
+            }
+        )
+    )
+    incomplete = infer_control_attestation(
+        _result(
+            details={
+                "oracle_control_pairs": {
+                    "known_good": [{"suite": "qa", "passed": True}],
+                }
+            }
+        )
+    )
+
+    assert failed["status"] == "failed"
+    assert failed["failures"][0]["expected_accept"] is False
+    assert failed["failures"][0]["observed_accept"] is True
+    assert incomplete["status"] == "incomplete"

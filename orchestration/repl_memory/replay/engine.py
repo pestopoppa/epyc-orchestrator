@@ -19,6 +19,8 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
+from src.llm_primitives.stat_tests import expected_calibration_error as _stat_ece
+
 from ..episodic_store import EpisodicStore
 from ..progress_logger import EventType
 from ..q_scorer import QScorer, ScoringConfig
@@ -487,21 +489,19 @@ def _expected_calibration_error(
     pairs: List[tuple[float, float]],
     bins: int = 10,
 ) -> float:
-    """Compute expected calibration error over (confidence, success) pairs."""
+    """Compute expected calibration error over (confidence, success) pairs.
+
+    Consolidated onto the clean-room stdlib
+    ``src.llm_primitives.stat_tests.expected_calibration_error``. The binning is
+    identical (equal-width; the final bin is closed on the right so a confidence
+    of exactly 1.0 lands in it); empty input returns 0.0 as before.
+    """
     if not pairs:
         return 0.0
-    ece = 0.0
-    n = len(pairs)
-    for i in range(bins):
-        lo = i / bins
-        hi = (i + 1) / bins
-        bucket = [(c, y) for (c, y) in pairs if (lo <= c < hi) or (i == bins - 1 and c == 1.0)]
-        if not bucket:
-            continue
-        avg_conf = sum(c for c, _ in bucket) / len(bucket)
-        avg_acc = sum(y for _, y in bucket) / len(bucket)
-        ece += (len(bucket) / n) * abs(avg_conf - avg_acc)
-    return float(ece)
+    probs = [c for c, _ in pairs]
+    labels = [y for _, y in pairs]
+    ece = _stat_ece(probs, labels, n_bins=bins)
+    return 0.0 if ece is None else float(ece)
 
 
 def _brier_score(pairs: List[tuple[float, float]]) -> float:

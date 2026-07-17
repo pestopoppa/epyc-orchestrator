@@ -19,6 +19,7 @@ import asyncio
 import logging
 import time
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
@@ -235,6 +236,11 @@ class StepExecutor:
     max_burst_concurrent: int = 2
     burst_worker_roles: frozenset[str] = field(default_factory=_live_burst_worker_roles)
     step_outputs: dict[str, str] = field(default_factory=dict)
+    # RD-10b/RD-10c: optional per-step review gate + skip counter. Default None →
+    # review every step (behavior preserved). ``reviews_skipped`` lets the
+    # delegator decide whether a final-aggregate review is warranted.
+    should_review: Callable[[dict[str, Any]], bool] | None = None
+    reviews_skipped: int = 0
 
     async def execute_plan(
         self,
@@ -413,8 +419,25 @@ class StepExecutor:
 
         elapsed = time.monotonic() - start
 
-        # Optional architect review (single pass, no iteration loop)
-        if self.review_service is not None:
+        # Optional architect review (single pass, no iteration loop). RD-10b/RD-10c:
+        # honor the complexity gate + sticky decision cache. Defaults
+        # (should_review=None, cache disabled) review every step → behavior preserved.
+        review_allowed = self.should_review(step) if self.should_review is not None else True
+        if self.review_service is not None and not review_allowed:
+            self.reviews_skipped += 1
+        if self.review_service is not None and review_allowed:
+            ctx = self.iteration_context
+            signature = None
+            if ctx is not None and getattr(ctx, "decision_cache_enabled", False):
+                signature = ctx.subtask_signature(task_ir, step, output)
+                if ctx.cached_decision(signature) == ReviewDecision.APPROVE:
+                    return SubtaskResult(
+                        subtask_id=step_id,
+                        role=role,
+                        output=output,
+                        success=True,
+                        elapsed_seconds=elapsed,
+                    )
             try:
                 review = self.review_service.review(
                     spec=task_ir,
@@ -423,6 +446,8 @@ class StepExecutor:
                 )
                 if review.decision == ReviewDecision.APPROVE:
                     output = review.approved_output or output
+                    if signature is not None and ctx is not None:
+                        ctx.remember_decision(signature, review.decision)
                 elif review.decision == ReviewDecision.REJECT:
                     return SubtaskResult(
                         subtask_id=step_id,

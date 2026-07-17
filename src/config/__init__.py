@@ -269,6 +269,19 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         session_compaction_recompaction_interval: int = 0
         session_compaction_min_turns: int = 5
         session_compaction_trigger_ratio: float = 0.75
+        try_cheap_first_enabled: bool = True
+        try_cheap_first_phase: str = "A"
+        try_cheap_first_role: str = "worker_general"
+        try_cheap_first_max_tokens: int = 1024
+        try_cheap_first_quality_threshold: float = 0.6
+        try_cheap_first_q_threshold: float = PydanticField(
+            default_factory=lambda: float(
+                os.environ.get(
+                    "ORCHESTRATOR_CHAT_TRY_CHEAP_FIRST_Q_THRESHOLD",
+                    os.environ.get("ORCHESTRATOR_CHAT_TRY_CHEAP_FIRST_QUALITY_THRESHOLD", "0.65"),
+                )
+            )
+        )
 
         model_config = SettingsConfigDict(
             env_prefix="ORCHESTRATOR_CHAT_",
@@ -566,6 +579,8 @@ def _load_from_env() -> OrchestratorConfigData:
             long_context_enabled=_env_bool(f"{P}CHAT_LONG_CONTEXT_ENABLED", True),
             long_context_threshold_chars=_env_int(f"{P}CHAT_LONG_CONTEXT_THRESHOLD_CHARS", 20000),
             long_context_max_turns=_env_int(f"{P}CHAT_LONG_CONTEXT_MAX_TURNS", 8),
+            review_low_q_threshold=_env_float(f"{P}CHAT_REVIEW_LOW_Q_THRESHOLD", 0.6),
+            review_skip_q_threshold=_env_float(f"{P}CHAT_REVIEW_SKIP_Q_THRESHOLD", 0.6),
             session_compaction_keep_recent_ratio=_env_float(
                 f"{P}CHAT_SESSION_COMPACTION_KEEP_RECENT_RATIO", 0.20
             ),
@@ -577,6 +592,17 @@ def _load_from_env() -> OrchestratorConfigData:
             ),
             session_compaction_trigger_ratio=_env_float(
                 f"{P}CHAT_SESSION_COMPACTION_TRIGGER_RATIO", 0.75
+            ),
+            try_cheap_first_enabled=_env_bool(f"{P}CHAT_TRY_CHEAP_FIRST_ENABLED", True),
+            try_cheap_first_phase=_env_str(f"{P}CHAT_TRY_CHEAP_FIRST_PHASE", "A"),
+            try_cheap_first_role=_env_str(f"{P}CHAT_TRY_CHEAP_FIRST_ROLE", "worker_general"),
+            try_cheap_first_max_tokens=_env_int(f"{P}CHAT_TRY_CHEAP_FIRST_MAX_TOKENS", 1024),
+            try_cheap_first_quality_threshold=_env_float(
+                f"{P}CHAT_TRY_CHEAP_FIRST_QUALITY_THRESHOLD", 0.6
+            ),
+            try_cheap_first_q_threshold=_env_float(
+                f"{P}CHAT_TRY_CHEAP_FIRST_Q_THRESHOLD",
+                _env_float(f"{P}CHAT_TRY_CHEAP_FIRST_QUALITY_THRESHOLD", 0.65),
             ),
         ),
         memrl_retrieval=MemRLRetrievalConfigData(
@@ -809,6 +835,12 @@ def get_config() -> OrchestratorConfigData:
                 session_compaction_recompaction_interval=settings.chat.session_compaction_recompaction_interval,
                 session_compaction_min_turns=settings.chat.session_compaction_min_turns,
                 session_compaction_trigger_ratio=settings.chat.session_compaction_trigger_ratio,
+                try_cheap_first_enabled=settings.chat.try_cheap_first_enabled,
+                try_cheap_first_phase=settings.chat.try_cheap_first_phase,
+                try_cheap_first_role=settings.chat.try_cheap_first_role,
+                try_cheap_first_max_tokens=settings.chat.try_cheap_first_max_tokens,
+                try_cheap_first_quality_threshold=settings.chat.try_cheap_first_quality_threshold,
+                try_cheap_first_q_threshold=settings.chat.try_cheap_first_q_threshold,
             ),
             memrl_retrieval=MemRLRetrievalConfigData(
                 semantic_k=settings.memrl_retrieval.semantic_k,

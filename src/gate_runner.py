@@ -119,6 +119,14 @@ class GateRunner:
 
     Loads gate configuration from a YAML file and executes gates
     in order, collecting structured results.
+
+    Config source (RD-4): ``config/gates.yaml`` now exists and codifies the
+    exact gate set below. When present it is loaded; when absent
+    ``_get_default_gates()`` is the fallback. The two are kept byte-for-behaviour
+    equal (same names/commands/timeouts/flags) — introducing the file changed no
+    default behaviour; ``tests/test_verifier_adapter.py::TestGatesYamlParity``
+    guards that parity. Consumed by ``src/proactive_delegation/verifier_adapter.py``,
+    which maps ``verifier_requests[]`` onto named gates.
     """
 
     DEFAULT_CONFIG_PATH = Path("config/gates.yaml")

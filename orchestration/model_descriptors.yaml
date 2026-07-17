@@ -1,16 +1,16 @@
 descriptor_version: 3
-compiled_at: '2026-07-06T21:22:59Z'
+compiled_at: '2026-07-17T14:31:36Z'
 status: compiled
 coverage_scope: active_roles_from_stack_manifest
 source_registries:
   lean:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
-    repo_commit: d184e665
-    sha256: d37ae875864dc027f0ddc28c0fb09f0effc93fc9dd8c84c76123581e8f434370
+    repo_commit: d9f0d148
+    sha256: 1b15929a011285a469f23046dfb8a1d87e802d3bd4fce101a0acdfb280b69e6c
   research:
     path: /mnt/raid0/llm/epyc-inference-research/orchestration/model_registry.yaml
-    repo_commit: 05c1867
-    sha256: 82c1eb93ed13fd512f38f730e76802944c7182394b04cb25b9fdbca6f12153ef
+    repo_commit: f56096c
+    sha256: 28399f902009327abedfa234d60a744b71270daf4ce763aa683deb023ad8e75c
 model_id_policy:
   canonical_shape: family-params-active-quant
   invariant: model records are keyed by physical model identity, never by role name
@@ -58,36 +58,36 @@ models:
     - date: null
       protocol: registry performance block
       value:
-        baseline_tps: 44.7
-        optimized_tps: 60.7
+        baseline_tps: 38.46
+        optimized_tps: 38.46
         quality_pct: 90
         tool_compliance_pct: 96
     - date: null
       protocol: registry performance block
       value:
-        baseline_tps: 44.7
-        optimized_tps: 60.7
+        baseline_tps: 38.46
+        optimized_tps: 38.46
         quality_pct: 90
         tool_compliance_pct: 96
     - date: null
       protocol: registry performance block
       value:
-        baseline_tps: 44.7
-        optimized_tps: 60.7
+        baseline_tps: 38.46
+        optimized_tps: 38.46
         quality_pct: 90
         tool_compliance_pct: 96
   speed:
-    solo_96t_tps: 44.7
-    quarter_48t_tps: 60.7
+    solo_96t_tps: 38.46
+    quarter_48t_tps: 38.46
     prefill_tps: null
-    optimized_tps: 60.7
+    optimized_tps: 38.46
     source: orchestration/model_registry.yaml
     measured:
     - date: null
       protocol: server_mode throughput
-      value_tps: 60.7
+      value_tps: 38.46
   acceleration:
-    spec_type: draft-mtp
+    spec_type: ngram-mod,draft-mtp
     draft_compat:
     - draft_gemma4_26b_a4b_assistant_q8
     enable_thinking: false
@@ -129,6 +129,7 @@ models:
   - vision
   role_bindings:
     roles:
+    - vision_escalation
     - worker_vision
     server_roles: []
     runtime_aliases: []
@@ -140,6 +141,17 @@ models:
     source: orchestration/model_registry.yaml
     eval_protocol: MEASUREMENT.md#canonical-quality
     measured:
+    - date: '2026-07-17'
+      protocol: registry performance block
+      value:
+        baseline_tps: 16.91
+        optimized_tps: 21.32
+        speedup: 1.0x
+        vl_score:
+          pct: 100.0
+          raw: 4/4 K35 fixed fixtures
+        benchmark_date: '2026-07-17'
+        evidence: /mnt/raid0/llm/tmp/k35-vision-matrix-20260717T1500Z/summary.json
     - date: '2026-03-04'
       protocol: registry performance block
       value:
@@ -152,13 +164,13 @@ models:
     solo_96t_tps: null
     quarter_48t_tps: null
     prefill_tps: null
-    optimized_tps: 20.0
+    optimized_tps: 21.32
     source: orchestration/model_registry.yaml
     measured:
-    - date: '2026-03-04'
+    - date: '2026-07-17'
       protocol: registry performance block
-      baseline_tps: 15.28
-      optimized_tps: 20.0
+      baseline_tps: 16.91
+      optimized_tps: 21.32
   acceleration:
     spec_type: baseline
     draft_compat: []
@@ -178,6 +190,7 @@ models:
     mlock: false
     ports:
     - 8086
+    - 8087
     server_role: null
     requirements:
       mmproj_path: lmstudio-community/Qwen2.5-VL-7B-Instruct-GGUF/mmproj-model-f16.gguf
@@ -215,14 +228,14 @@ models:
     solo_96t_tps: 14.4
     quarter_48t_tps: null
     prefill_tps: null
-    optimized_tps: 6.29
+    optimized_tps: 10.12
     source: orchestration/model_registry.yaml
     measured:
     - date: null
       protocol: server_mode throughput
       value_tps: 14.4
   acceleration:
-    spec_type: moe_expert_reduction
+    spec_type: none
     draft_compat: []
     enable_thinking: null
     thinking_control:
@@ -246,75 +259,6 @@ models:
   architecture:
     attention_layers: 32
     source: registry.model
-- model_id: qwen3-vl-30b-a3b-q4_k_m
-  display_name: Qwen3-VL-30B-A3B-Instruct
-  family: qwen3-vl
-  arch: qwen3vlmoe
-  params_b: 30.0
-  active_b: 3.0
-  quant: Q4_K_M
-  mem_gb: 18.0
-  ctx_max: 262144
-  modalities:
-  - text
-  - vision
-  role_bindings:
-    roles:
-    - vision_escalation
-    server_roles: []
-    runtime_aliases: []
-    shared_mmap: false
-  quality:
-    suite_vector:
-      vision_language: 0.92
-      overall: 0.92
-    source: orchestration/model_registry.yaml
-    eval_protocol: MEASUREMENT.md#canonical-quality
-    measured:
-    - date: '2026-03-04'
-      protocol: registry performance block
-      value:
-        baseline_tps: 19.0
-        optimized_tps: 27.6
-        speedup: 1.45x
-        vl_score:
-          pct: 92.0
-          raw: 11/12
-        benchmark_date: '2026-03-04'
-  speed:
-    solo_96t_tps: null
-    quarter_48t_tps: null
-    prefill_tps: null
-    optimized_tps: 27.6
-    source: orchestration/model_registry.yaml
-    measured:
-    - date: '2026-03-04'
-      protocol: registry performance block
-      baseline_tps: 19.0
-      optimized_tps: 27.6
-  acceleration:
-    spec_type: moe_expert_reduction
-    draft_compat: []
-    enable_thinking: null
-    thinking_control:
-      mode: native_no_thinking_toggle
-      effective_mode: native_no_think_tags
-      evidence_strength: model_variant_inferred
-      evidence: Qwen3-VL-30B-A3B-Instruct is the non-thinking VL variant; multimodal role follows native VL chat behavior rather than a text-model enable_thinking toggle.
-    kv:
-      k: null
-      v: null
-  serving:
-    binary: llama.cpp
-    binary_dir: null
-    numa_policy: role_endpoint_binding
-    mlock: false
-    ports:
-    - 8087
-    server_role: null
-    requirements:
-      mmproj_path: lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/mmproj-Qwen3-VL-30B-A3B-Instruct-F16.gguf
-  known_gaps: []
 - model_id: qwen3.5-122b-a10b-q4_k_m
   display_name: Qwen3.5-122B-A10B
   family: qwen3.5

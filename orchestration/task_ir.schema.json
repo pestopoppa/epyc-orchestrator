@@ -193,7 +193,33 @@
               "depends_on": {
                 "type": "array",
                 "items": { "type": "string", "pattern": "^S[0-9]+$" },
-                "description": "Step IDs that must complete before this one"
+                "description": "Step IDs that must complete before this one (untyped ordering dependency)"
+              },
+              "call_edges": {
+                "type": "array",
+                "description": "RA-11 (intake-839): typed call-flow / data-dependency edges, superseding prose in depends_on for new artifacts. Each edge names the prerequisite step and the edge type so the plan graph carries typed structure, not prose.",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["to", "type"],
+                  "properties": {
+                    "to": {
+                      "type": "string",
+                      "pattern": "^S[0-9]+$",
+                      "description": "Prerequisite step id this edge depends on"
+                    },
+                    "type": {
+                      "type": "string",
+                      "enum": ["data", "control", "ordering", "resource"],
+                      "description": "Edge kind: data=consumes an output, control=branch/gate dependency, ordering=must-run-after, resource=shared resource contention"
+                    },
+                    "artifact": {
+                      "type": "string",
+                      "description": "For data edges: the produced/consumed artifact name"
+                    },
+                    "description": { "type": "string" }
+                  }
+                }
               },
               "timeout_seconds": {
                 "type": "integer",

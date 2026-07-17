@@ -1,0 +1,243 @@
+version: 1
+description: >
+  Guarded numeric-surface manifest for the reviewer control plane (H8 tuning-
+  surface CLASS 1 — control-plane governance). Declares the RD-11 / LB-5 tuning
+  knobs the autopilot (AP-1) consumes. This file exists because the LIVE numeric-
+  surface manifest is CODE-OWNED by scripts/autopilot (SURFACES in
+  scripts/autopilot/species/numeric_swarm.py + ENV_PARAMS/HOT_SWAP_FEATURES in
+  scripts/autopilot/config_applicator.py), which the H3 delegator agent does not
+  edit. Field conventions mirror ParamSpec (name/low/high/param_type) plus the
+  extra governance fields required by RD-11 (default, proposed, dtype,
+  restart_cost, provenance, enforcement_seam, application).
+
+  ALL declared defaults preserve current behavior byte-for-byte. `proposed`
+  values are the LB-2 targets and are PROPOSED / observation-grade — none may
+  gate an enforce-mode flip on its own (blocked on H-LB LB-6 budget gate).
+
+# ── Merge point for the autopilot agent (AP-1) ──────────────────────────────
+# The delegator reads these knobs via ReviewPlaneKnobs.from_config()
+# (src/proactive_delegation/delegator.py): it looks for each field on
+# get_config().delegation (or a nested `review_plane` section) and otherwise
+# uses the behavior-preserving default. To wire this manifest into the live,
+# hot-swappable surface the autopilot should:
+#   1. Add the sweepable int/float knobs below to numeric_swarm.SURFACES as a new
+#      surface "review_plane" (ParamSpec(name, low, high, param_type)); names use
+#      the dotted "review_plane.<knob>" form.
+#   2. Route them in config_applicator: runtime (restart_cost: none) knobs go to a
+#      hot-swap path (POST /config → runtime flags), NOT ENV_PARAMS (those force an
+#      API restart). Boolean knobs route like HOT_SWAP_FEATURES.
+#   3. Surface each on get_config().delegation.review_plane so from_config() picks
+#      it up with no delegator change. Until then, defaults apply (behavior
+#      unchanged).
+#   4. Seed initial values via the strategy store (flag-gate + SQLite write),
+#      per seeding discipline.
+merge_point:
+  consumer: scripts/autopilot/config_applicator.py::apply_params
+  delegator_reader: src/proactive_delegation/delegator.py::ReviewPlaneKnobs.from_config
+  live_surface_to_extend: scripts/autopilot/species/numeric_swarm.py::SURFACES
+  config_attr: get_config().delegation.review_plane
+
+tuning_surface_class: 1  # control-plane governance (H8 AP-1)
+
+knobs:
+  # ── RD-10b — complexity-gated per-subtask review placement ──────────────
+  - name: review_plane.review_trigger_complexity_threshold
+    dtype: int
+    param_type: int
+    low: 0
+    high: 3
+    default: 0        # 0=TRIVIAL → review every subtask (current behavior)
+    proposed: 3       # COMPLEX-only per-subtask review (LB-3 "review only COMPLEX")
+    restart_cost: none
+    application: runtime
+    enforcement_seam: ProactiveDelegator._should_review_subtask
+    semantics: >
+      TaskComplexity rank (TRIVIAL=0..COMPLEX=3). Per-subtask review runs only
+      when the subtask rank >= threshold; below-threshold subtasks route to the
+      single final-aggregate review in delegate().
+    provenance: RD-10b / intake-849 P4; LB-3 sampling policy (proposed)
+
+  - name: review_plane.per_subtask_review_enabled
+    dtype: bool
+    param_type: bool
+    default: true     # review every subtask (current behavior)
+    proposed: false   # single final-aggregate review only (stop reviewing each subtask)
+    restart_cost: none
+    application: runtime  # boolean → hot-swap flag path (like HOT_SWAP_FEATURES)
+    enforcement_seam: ProactiveDelegator._should_review_subtask
+    provenance: RD-10 / intake-849 P4 (proposed)
+
+  # ── Per-session review caps (reuse IterationContext ledger) ─────────────
+  - name: review_plane.max_review_iterations
+    dtype: int
+    param_type: int
+    low: 1
+    high: 5
+    default: 3        # live IterationContext.max_iterations default
+    proposed: 2       # LB-2 per-task review-turn ceiling
+    restart_cost: none
+    application: runtime
+    enforcement_seam: IterationContext.max_iterations (via IterationContext.can_iterate)
+    semantics: >
+      Reuses IterationContext.max_iterations — review turns count on the SAME
+      per-task iteration ledger so a runaway Architect<->Reviewer handshake trips
+      the existing cap, not a new one.
+    provenance: LB-2 per-session caps (proposed)
+
+  - name: review_plane.max_total_review_iterations
+    dtype: int
+    param_type: int
+    low: 1
+    high: 20
+    default: 10       # live IterationContext.max_total_iterations default
+    proposed: scale_with_session_task_count  # LB-2: cap the review-token share (see multiplier)
+    restart_cost: none
+    application: runtime
+    enforcement_seam: IterationContext.max_total_iterations (via IterationContext.can_iterate)
+    semantics: Reuses IterationContext.max_total_iterations — per-session ceiling across all tasks.
+    provenance: LB-2 per-session caps (proposed)
+
+  # ── RD-9 — plan-reminder cadence (preferred over re-review) ─────────────
+  - name: review_plane.reminder_cadence
+    dtype: int
+    param_type: int
+    low: 0
+    high: 50
+    default: 0        # disabled → no plan-reminder re-injection (current behavior)
+    proposed: 5       # ~every 5 steps (RD-9 / intake-835)
+    restart_cost: none
+    application: runtime
+    enforcement_seam: ProactiveDelegator._maybe_plan_reminder
+    semantics: >
+      Steps between plan-reminder re-injections. 0 disables. Calls the
+      review_service.build_plan_reminder helper via getattr (absence-tolerant).
+    provenance: RD-9 / intake-835 (2509.03581) (proposed)
+
+  # ── RD-2 — near-band majority-of-k grading ──────────────────────────────
+  - name: review_plane.review_majority_k
+    dtype: int
+    param_type: int
+    low: 1
+    high: 5
+    default: 1        # single grading pass (current behavior)
+    proposed: 3       # majority-of-3 near decision-band edges
+    restart_cost: none
+    application: runtime
+    enforcement_seam: review_service (declared here; enforced in the grading turn)
+    provenance: RD-2 / intake-834 (judge flakiness 2-9%) (proposed)
+
+  # ── RA-6 — request_evidence follow-up rounds ────────────────────────────
+  - name: review_plane.request_evidence_round_budget
+    dtype: int
+    param_type: int
+    low: 0
+    high: 3
+    default: 0        # no evidence-request rounds (current behavior)
+    proposed: 1       # one verifier-request round before a verdict is forced
+    restart_cost: none
+    application: runtime
+    enforcement_seam: review_service / gate_runner adapter (declared here)
+    provenance: RA-6 / RD-4 / intake-842,843 (proposed)
+
+  # ── LB-2 — governed token multiplier (the single knob H8 tunes) ─────────
+  - name: review_plane.review_token_multiplier
+    dtype: float
+    param_type: float
+    low: 1.0
+    high: 2.0
+    default: 2.0      # hard ceiling → never throttles (behavior-preserving)
+    proposed: 1.5     # target ≤1.5x; stretch 1.3x; hard ceiling 2.0x
+    restart_cost: none
+    application: runtime
+    enforcement_seam: review_service fan-out throttle (declared here; composed with LB-6 gate)
+    semantics: >
+      total tokens with the plane ÷ single-augmented-LLM baseline tokens on the
+      same tasks. Above the ceiling the plane auto-throttles review fan-out
+      (LB-3 sampling) rather than spend.
+    provenance: LB-2 token-multiplier / intake-839 (~2-3x cost) / intake-846 (~15x tokens) (proposed)
+
+  # ── RD-10a — HANDOFF input_filter window ────────────────────────────────
+  - name: review_plane.input_filter_window
+    dtype: int
+    param_type: int
+    low: 0
+    high: 10
+    default: 3        # reproduces feedback_history[-3:] exactly
+    proposed: 3
+    restart_cost: none
+    application: runtime
+    enforcement_seam: ProactiveDelegator._execute_with_review (feedback slice)
+    semantics: >
+      Size of the feedback-history slice carried forward on ESCALATE (HANDOFF /
+      ownership transfer). 0 carries nothing.
+    provenance: RD-10a / intake-849 P5,P7
+
+  # ── RD-10c — sticky decision cache ──────────────────────────────────────
+  - name: review_plane.decision_cache_enabled
+    dtype: bool
+    param_type: bool
+    default: false    # sticky cache OFF (current behavior)
+    proposed: true    # approved patterns skip re-review within a run/wave
+    restart_cost: none
+    application: runtime
+    enforcement_seam: IterationContext.decision_cache (subtask_signature/cached_decision/remember_decision)
+    semantics: >
+      Per-run cache keyed by sanitized (task+candidate shape) signature. APPROVE
+      patterns skip re-review; REJECT/REJECT_TO_EMPTY are NEVER sticky.
+    provenance: RD-10c / intake-849 P7 (proposed)
+
+  # ── LB-5 — shadow budget-violation logging ──────────────────────────────
+  - name: review_plane.budget_shadow_logging_enabled
+    dtype: bool
+    param_type: bool
+    default: false    # shadow budget hook never invoked from default path
+    proposed: true    # log per-decision budget VIOLATIONS in the shadow era (never blocks)
+    restart_cost: none
+    application: runtime
+    enforcement_seam: IterationContext.check_token_budget
+    provenance: LB-5 / H3 shadow-only posture (proposed)
+
+# ── LB-2 per-decision token + latency budgets (ceilings) ────────────────────
+# Consumed by the shadow budget hook (IterationContext.check_token_budget) when
+# budget_shadow_logging_enabled flips on. All PROPOSED / observation-grade
+# (derived as tokens ÷ t/s on the deciding arm, rounded up); confirm under
+# P-AB-1 + P-SPEED-OBJ (LB-4) before any enforce-mode flip. restart_cost: none.
+per_decision_budgets:
+  plan_review:
+    actor: architect        # ~18-21 t/s CPU
+    token_budget: 350
+    latency_budget_ms: 22000
+    knob_names:
+      - review_plane.plan_review_token_budget
+      - review_plane.plan_review_latency_budget_ms
+    note: one pass per plan; reminders-over-re-review preferred (intake-835)
+    provenance: LB-2 table (proposed / observation-grade)
+  candidate_review:
+    actor: reviewer         # CPU GLM low t/s OR GPU-resident
+    token_budget: 300
+    latency_budget_ms: 18000        # CPU
+    latency_budget_ms_gpu_resident: 6000
+    knob_names:
+      - review_plane.candidate_review_token_budget
+      - review_plane.candidate_review_latency_budget_ms
+    note: GBNF-constrained verdict; SUM-not-MAX if run parallel to production
+    provenance: LB-2 table (proposed / observation-grade)
+  rubric_authoring:
+    actor: strong_model     # architect-tier
+    token_budget: 800
+    latency_budget_ms: 45000
+    amortized: true         # authored once per task-type, sticky-cached (H3)
+    knob_names:
+      - review_plane.rubric_authoring_token_budget
+      - review_plane.rubric_authoring_latency_budget_ms
+    note: cost divided over all items it grades
+    provenance: LB-2 table (proposed / observation-grade)
+  rubric_grading:
+    actor: cheap_grader     # worker ~44.7 t/s
+    token_budget: 180
+    latency_budget_ms: 5000
+    knob_names:
+      - review_plane.rubric_grading_token_budget
+      - review_plane.rubric_grading_latency_budget_ms
+    note: high-frequency per-item path; grading-model insensitivity 2.4pp (intake-834)
+    provenance: LB-2 table (proposed / observation-grade)

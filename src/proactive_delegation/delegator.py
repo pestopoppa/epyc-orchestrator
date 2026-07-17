@@ -1,10 +1,41 @@
-"""ProactiveDelegator — orchestrates proactive delegation workflow."""
+"""ProactiveDelegator — orchestrates proactive delegation workflow.
+
+Delegation modes (RD-10a)
+-------------------------
+Two delegation shapes are named explicitly (``DelegationMode``):
+
+* **AS-TOOL** — a specialist *subtask*. The manager (this delegator) KEEPS
+  control: the specialist's raw output flows through the ``output_extractor``
+  seam and the delegator retains ownership of the iteration loop.
+* **HANDOFF** — an ESCALATE decision. OWNERSHIP TRANSFERS to a higher-tier role,
+  which receives an *input-filtered* slice of the feedback history (the
+  ``input_filter``; its window is ``ReviewPlaneKnobs.input_filter_window``,
+  formerly the hard-coded ``feedback_history[-3:]``).
+
+Plan-reminder wire-point contract (RD-9)
+----------------------------------------
+The delegator exposes a call-site for a plan-reminder helper that the
+``review_service`` agent owns. Contract:
+
+* ``review_service`` MAY expose
+  ``build_plan_reminder(objective: str, plan_steps: list, step_index: int) -> str | None``.
+* The delegator calls it from the ``delegate()`` step loop every
+  ``ReviewPlaneKnobs.reminder_cadence`` steps (default ``0`` → disabled). The
+  returned reminder is prepended to subsequent specialist prompts — PREFERRED
+  over re-review (intake-835).
+* The call is resolved via ``getattr`` and wrapped so the helper's ABSENCE (the
+  other agent has not landed it yet) or any error is a no-op. Neither agent
+  blocks the other. Shadow-only; never blocks request completion.
+"""
 
 from __future__ import annotations
 
 import logging
 import time
 import uuid
+from collections.abc import Callable
+from dataclasses import dataclass, fields
+from enum import Enum
 from typing import Any, TYPE_CHECKING
 
 from src.roles import Role, chain_name_to_role
@@ -34,6 +65,119 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_MISSING = object()
+
+# Ordinal rank for the complexity-gated review threshold (RD-10b). Reuses the
+# existing TaskComplexity enum — a subtask is reviewed per-subtask only when its
+# rank is >= review_trigger_complexity_threshold.
+_COMPLEXITY_RANK: dict[TaskComplexity, int] = {
+    TaskComplexity.TRIVIAL: 0,
+    TaskComplexity.SIMPLE: 1,
+    TaskComplexity.MODERATE: 2,
+    TaskComplexity.COMPLEX: 3,
+}
+
+
+class DelegationMode(Enum):
+    """The two delegation modes, named explicitly (RD-10a).
+
+    See the module docstring for the full contract. ``AS_TOOL`` keeps control in
+    the manager; ``HANDOFF`` transfers ownership on ESCALATE.
+    """
+
+    AS_TOOL = "as_tool"
+    HANDOFF = "handoff"
+
+
+def _identity_output_extractor(raw: str) -> str:
+    """Default AS-TOOL output extractor: passthrough (behavior-preserving).
+
+    RD-10a formalizes the specialist(as-tool)-output → manager boundary as a
+    seam. The default is the identity function so the manager keeps exactly the
+    bytes it does today; a caller may inject truncation/parse/normalization here.
+    """
+    return raw
+
+
+@dataclass
+class ReviewPlaneKnobs:
+    """Control-plane tuning knobs (RD-11 / LB-5) consumed by the delegator loop.
+
+    EVERY default preserves current behavior byte-for-byte:
+
+    * ``per_subtask_review_enabled=True`` + ``review_trigger_complexity_threshold=0``
+      → every subtask is reviewed (current behavior); the single final-aggregate
+      review path in ``delegate()`` stays dormant.
+    * ``input_filter_window=3`` → the HANDOFF input_filter reproduces
+      ``feedback_history[-3:]`` exactly.
+    * ``decision_cache_enabled=False`` → RD-10c sticky cache is off.
+    * ``reminder_cadence=0`` → the RD-9 plan-reminder call-site never fires.
+    * ``budget_shadow_logging_enabled=False`` → the LB-5 shadow budget hook is
+      never invoked from the default path.
+
+    The per-decision token/latency budgets are the LB-2 targets (PROPOSED /
+    observation-grade). The authoritative declaration — bounds, dtype,
+    restart_cost, provenance — lives in the guarded numeric-surface manifest at
+    ``orchestration/review_plane_knobs.yaml`` (what the autopilot AP-1 consumes).
+    """
+
+    # RD-10b — complexity-gated per-subtask review placement
+    per_subtask_review_enabled: bool = True
+    review_trigger_complexity_threshold: int = 0  # 0=TRIVIAL → review all (inert)
+    # RD-10a — HANDOFF input_filter window (was hard-coded [-3:])
+    input_filter_window: int = 3
+    # RD-10c — sticky decision cache
+    decision_cache_enabled: bool = False
+    # RD-9 — plan-reminder cadence (steps); 0 = disabled
+    reminder_cadence: int = 0
+    # RD-2 — near-band majority-of-k grading (declared; enforced in review_service)
+    review_majority_k: int = 1
+    # RA-6 — request_evidence follow-up rounds; 0 = disabled
+    request_evidence_round_budget: int = 0
+    # LB-2 — governed token multiplier vs single-model baseline (hard ceiling 2.0)
+    review_token_multiplier: float = 2.0
+    # LB-5 — shadow budget-violation logging (never blocks)
+    budget_shadow_logging_enabled: bool = False
+    # LB-2 per-decision budgets (ceilings; used only by the shadow budget hook)
+    plan_review_token_budget: int = 350
+    plan_review_latency_budget_ms: int = 22000
+    candidate_review_token_budget: int = 300
+    candidate_review_latency_budget_ms: int = 18000
+    rubric_authoring_token_budget: int = 800
+    rubric_authoring_latency_budget_ms: int = 45000
+    rubric_grading_token_budget: int = 180
+    rubric_grading_latency_budget_ms: int = 5000
+
+    @classmethod
+    def from_config(cls) -> "ReviewPlaneKnobs":
+        """Merge point for the autopilot (AP-1).
+
+        Reads per-field overrides from ``get_config().delegation`` when present.
+        Until the autopilot lands those fields on the delegation config (or a
+        dedicated ``review_plane`` section), every field is absent → the
+        behavior-preserving defaults above apply. Any failure falls back to
+        defaults so delegator construction never breaks.
+        """
+        knobs = cls()
+        try:
+            from src.config import get_config
+
+            cfg = getattr(get_config(), "delegation", None)
+        except Exception:  # pragma: no cover - defensive
+            cfg = None
+        if cfg is None:
+            return knobs
+        review_plane = getattr(cfg, "review_plane", None)
+        for spec in fields(cls):
+            value = _MISSING
+            if review_plane is not None:
+                value = getattr(review_plane, spec.name, _MISSING)
+            if value is _MISSING:
+                value = getattr(cfg, spec.name, _MISSING)
+            if value is not _MISSING:
+                setattr(knobs, spec.name, value)
+        return knobs
+
 
 class ProactiveDelegator:
     """Orchestrates proactive delegation workflow.
@@ -56,6 +200,8 @@ class ProactiveDelegator:
         max_iterations: int = 3,
         max_total_iterations: int = 10,
         skip_complexity_check: bool = False,
+        review_knobs: "ReviewPlaneKnobs | None" = None,
+        output_extractor: "Callable[[str], str] | None" = None,
     ):
         """Initialize the delegator."""
         self.registry = registry
@@ -68,6 +214,15 @@ class ProactiveDelegator:
         self.iteration_context = IterationContext(
             max_iterations=max_iterations,
             max_total_iterations=max_total_iterations,
+        )
+        # RD-10/RD-11 control-plane knobs. Default knobs preserve current behavior
+        # (see ReviewPlaneKnobs); from_config() is the autopilot (AP-1) merge point.
+        self._review_knobs = review_knobs or ReviewPlaneKnobs.from_config()
+        # RD-10a AS-TOOL output-extraction seam (default = identity passthrough).
+        self._output_extractor = output_extractor or _identity_output_extractor
+        # RD-10c: honor the sticky-cache flag on the shared iteration context.
+        self.iteration_context.decision_cache_enabled = (
+            self._review_knobs.decision_cache_enabled
         )
 
     def _registry_has_role(self, role_name: str) -> bool:
@@ -199,6 +354,10 @@ class ProactiveDelegator:
 
         plan_start = time.monotonic()
         used_parallel = False
+        # RD-10b: set when any subtask was routed AROUND per-subtask review by the
+        # complexity gate; if so, a single final-aggregate review runs below.
+        # Default knobs never gate anything → stays False → no aggregate pass.
+        skipped_any = False
 
         if _get_features().parallel_execution and len(steps) > 1:
             from src.parallel_step_executor import compute_waves, StepExecutor
@@ -215,19 +374,36 @@ class ProactiveDelegator:
                 iteration_context=self.iteration_context,
                 hybrid_router=self.hybrid_router,
                 max_burst_concurrent=max_concurrent,
+                # RD-10b/RD-10c: parallel waves honor the same review gate + sticky
+                # cache (default predicate reviews every step → behavior preserved).
+                should_review=self._should_review_subtask,
             )
             subtask_results = await executor.execute_plan(
                 task_ir,
                 waves,
                 ROLE_MAPPING,
             )
+            if getattr(executor, "reviews_skipped", 0):
+                skipped_any = True
             for sr in subtask_results:
                 result.subtask_results.append(sr)
                 if sr.role not in result.roles_used:
                     result.roles_used.append(sr.role)
         else:
-            for step in steps:
-                subtask_result = await self._execute_with_review(task_ir, step)
+            reminder = ""
+            for step_index, step in enumerate(steps):
+                # RD-9 plan-reminder call-site (default cadence 0 → no-op).
+                reminder = self._maybe_plan_reminder(task_ir, steps, step_index, reminder)
+                # RD-10b complexity-gated per-subtask review placement.
+                review_enabled = self._should_review_subtask(step)
+                if not review_enabled:
+                    skipped_any = True
+                subtask_result = await self._execute_with_review(
+                    task_ir,
+                    step,
+                    review_enabled=review_enabled,
+                    reminder=reminder,
+                )
                 result.subtask_results.append(subtask_result)
                 if subtask_result.role not in result.roles_used:
                     result.roles_used.append(subtask_result.role)
@@ -275,7 +451,34 @@ class ProactiveDelegator:
             result.subtask_results,
             strategy="concatenate",
         )
-        result.all_approved = all(r.success or getattr(r, 'partial', False) for r in result.subtask_results)
+
+        # RD-10b: single final-aggregate review when the complexity gate routed
+        # one or more subtasks around per-subtask review. Dormant by default
+        # (skipped_any stays False under default knobs → this block never runs).
+        aggregate_rejected = False
+        if skipped_any and self.review_service is not None:
+            try:
+                aggregate_review = self.review_service.review(
+                    spec=task_ir,
+                    subtask={"id": "__final_aggregate__", "action": "final aggregate review"},
+                    output=result.aggregated_output,
+                )
+                self.iteration_context.record_iteration(
+                    subtask_id="__final_aggregate__",
+                    decision=aggregate_review.decision,
+                    feedback=aggregate_review.feedback,
+                )
+                aggregate_rejected = aggregate_review.decision in (
+                    ReviewDecision.REJECT,
+                    ReviewDecision.REJECT_TO_EMPTY,
+                )
+            except Exception as e:
+                logger.warning("Final-aggregate review failed: %s", e)
+
+        result.all_approved = (
+            all(r.success or getattr(r, 'partial', False) for r in result.subtask_results)
+            and not aggregate_rejected
+        )
         result.total_iterations = self.iteration_context.total_iterations
 
         # Log completion
@@ -293,8 +496,19 @@ class ProactiveDelegator:
         self,
         task_ir: dict[str, Any],
         step: dict[str, Any],
+        *,
+        review_enabled: bool = True,
+        reminder: str = "",
     ) -> SubtaskResult:
-        """Execute a subtask with architect review loop."""
+        """Execute a subtask in AS-TOOL mode (manager keeps control).
+
+        ``review_enabled=False`` (RD-10b complexity gate) runs the specialist
+        once and accepts the output without per-subtask review — the single
+        final-aggregate review in ``delegate()`` covers it. ``reminder`` (RD-9)
+        is prepended to the prompt when non-empty. The defaults
+        (``review_enabled=True``, ``reminder=""``) reproduce the original
+        review loop byte-for-byte.
+        """
         subtask_id = step.get("id", f"S{uuid.uuid4().hex[:4]}")
         actor = step.get("actor", "worker")
         step.get("action", "")
@@ -316,31 +530,61 @@ class ProactiveDelegator:
                 ROLE_MAPPING.get(actor, Role.WORKER_GENERAL.value),
             )
 
-        # Build prompt for specialist
+        # Build prompt for specialist (RD-9 reminder prepended when present).
         prompt = self._build_specialist_prompt(task_ir, step)
+        if reminder:
+            prompt = f"{reminder}\n\n{prompt}"
+
+        # RD-10b: gated out of per-subtask review → single AS-TOOL call, accepted.
+        if not review_enabled:
+            try:
+                raw = self.primitives.llm_call(prompt, role=role, n_tokens=1024)
+            except Exception as e:
+                exc = StepExecutionError(subtask_id, role, cause=e)
+                logger.warning("%s", exc, exc_info=True)
+                return SubtaskResult(
+                    subtask_id=subtask_id,
+                    role=role,
+                    output="",
+                    success=False,
+                    error=str(exc),
+                )
+            return SubtaskResult(
+                subtask_id=subtask_id,
+                role=role,
+                output=self._output_extractor(raw),
+                success=True,
+            )
 
         # Iteration loop
         current_output = ""
         feedback_history: list[str] = []
+        # RD-10a HANDOFF input_filter: the feedback-history slice carried forward
+        # (was hard-coded ``[-3:]``; window <= 0 → carry nothing).
+        window = self._review_knobs.input_filter_window
+        ctx = self.iteration_context
 
-        while self.iteration_context.can_iterate(subtask_id):
+        while ctx.can_iterate(subtask_id):
             # Include feedback from previous iterations
             if feedback_history:
+                sliced = feedback_history[-window:] if window > 0 else []
                 prompt_with_feedback = (
                     prompt
                     + "\n\n## Previous Feedback\n"
-                    + "\n".join(f"- {fb}" for fb in feedback_history[-3:])
+                    + "\n".join(f"- {fb}" for fb in sliced)
                     + "\n\nAddress the feedback above."
                 )
             else:
                 prompt_with_feedback = prompt
 
-            # Call specialist
+            # Call specialist (AS-TOOL: raw output flows through the extractor seam)
             try:
-                current_output = self.primitives.llm_call(
-                    prompt_with_feedback,
-                    role=role,
-                    n_tokens=1024,
+                current_output = self._output_extractor(
+                    self.primitives.llm_call(
+                        prompt_with_feedback,
+                        role=role,
+                        n_tokens=1024,
+                    )
                 )
             except Exception as e:
                 exc = StepExecutionError(subtask_id, role, cause=e)
@@ -352,6 +596,18 @@ class ProactiveDelegator:
                     success=False,
                     error=str(exc),
                 )
+
+            # RD-10c sticky decision cache: a cached APPROVE pattern skips re-review.
+            signature = None
+            if ctx.decision_cache_enabled:
+                signature = ctx.subtask_signature(task_ir, step, current_output)
+                if ctx.cached_decision(signature) == ReviewDecision.APPROVE:
+                    return SubtaskResult(
+                        subtask_id=subtask_id,
+                        role=role,
+                        output=current_output,
+                        success=True,
+                    )
 
             # Architect review
             review = self.review_service.review(
@@ -378,6 +634,9 @@ class ProactiveDelegator:
 
             # Check decision
             if review.decision == ReviewDecision.APPROVE:
+                # RD-10c: remember APPROVE so an equivalent pattern skips re-review.
+                if signature is not None:
+                    ctx.remember_decision(signature, review.decision)
                 return SubtaskResult(
                     subtask_id=subtask_id,
                     role=role,
@@ -466,3 +725,53 @@ class ProactiveDelegator:
             "architect_general": "architect_general",
         }
         return escalation_map.get(current_role, "architect_general")
+
+    def _should_review_subtask(self, step: dict[str, Any]) -> bool:
+        """Complexity-gated per-subtask review placement (RD-10b).
+
+        Default knobs (``per_subtask_review_enabled=True``,
+        ``review_trigger_complexity_threshold=0``) → always True → review every
+        subtask (current behavior; the threshold short-circuits *before* any
+        complexity classification, so the default path is unchanged). Raising the
+        threshold reviews only subtasks whose complexity rank meets it; the rest
+        are routed to the single final-aggregate review in ``delegate()``.
+        """
+        knobs = self._review_knobs
+        if not knobs.per_subtask_review_enabled:
+            return False
+        if knobs.review_trigger_complexity_threshold <= 0:
+            return True
+        complexity, _signals = classify_task_complexity(step.get("action", ""))
+        return _COMPLEXITY_RANK.get(complexity, 0) >= knobs.review_trigger_complexity_threshold
+
+    def _maybe_plan_reminder(
+        self,
+        task_ir: dict[str, Any],
+        steps: list[dict[str, Any]],
+        step_index: int,
+        current_reminder: str,
+    ) -> str:
+        """Plan-reminder call-site (RD-9). See the module docstring for the contract.
+
+        Fires only when ``reminder_cadence > 0`` and the step boundary is hit.
+        Resolves ``review_service.build_plan_reminder`` via ``getattr`` and tolerates
+        its absence / any error (the review_service agent owns the helper) so neither
+        agent blocks the other. Default cadence 0 → returns ``current_reminder``
+        unchanged (no-op).
+        """
+        cadence = self._review_knobs.reminder_cadence
+        if cadence <= 0 or step_index == 0 or step_index % cadence != 0:
+            return current_reminder
+        helper = getattr(self.review_service, "build_plan_reminder", None)
+        if helper is None:
+            return current_reminder
+        try:
+            reminder = helper(
+                objective=task_ir.get("objective", ""),
+                plan_steps=steps,
+                step_index=step_index,
+            )
+        except Exception as e:  # pragma: no cover - defensive; never blocks
+            logger.debug("plan-reminder helper failed: %s", e)
+            return current_reminder
+        return reminder or current_reminder

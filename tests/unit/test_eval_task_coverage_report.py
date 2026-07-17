@@ -140,3 +140,82 @@ def test_markdown_renders_lane_split_guidance(tmp_path: Path) -> None:
     assert "Least-Covered Non-Sentinel Suites" in markdown
     assert "authority_core" in markdown
     assert "exploration_coverage" in markdown
+
+
+def test_report_summarizes_surrogate_verifier_feedback(tmp_path: Path) -> None:
+    pool = tmp_path / "question_pool.jsonl"
+    prompt = "2+2?"
+    qid = coverage_report._stable_question_qid("math", prompt)
+    _write_jsonl(
+        pool,
+        [
+            {"__pool_metadata__": True, "total_questions": 1},
+            {"id": "m1", "suite": "math", "tier": 1, "prompt": prompt},
+        ],
+    )
+    journal = tmp_path / "autopilot_journal.jsonl"
+    question_results = [{"suite": "math", "qid": qid, "correct": True}]
+    _write_jsonl(
+        journal,
+        [
+            {
+                "trial_id": 10,
+                "eval_details": {
+                    "question_results": question_results,
+                    "details": {
+                        "surrogate_feedback": {
+                            "proxy_reward": 0.5,
+                            "dense_feedback": True,
+                            "opaque_only": False,
+                            "accepted": False,
+                        }
+                    },
+                },
+            },
+            {
+                "trial_id": 11,
+                "eval_details": {
+                    "question_results": question_results,
+                    "details": {
+                        "surrogate_feedback": {
+                            "proxy_reward": 1.0,
+                            "dense_feedback": False,
+                            "opaque_only": False,
+                            "accepted": True,
+                        }
+                    },
+                },
+            },
+            {
+                "trial_id": 12,
+                "eval_details": {
+                    "question_results": question_results,
+                    "surrogate_feedback": {
+                        "proxy_reward": 1.0,
+                        "dense_feedback": False,
+                        "opaque_only": True,
+                        "accepted": False,
+                    },
+                },
+            },
+        ],
+    )
+
+    report = coverage_report.build_report(
+        journal_paths=[journal], pool_path=pool, fold_supersessions=False
+    )
+    surrogate = report["surrogate_verifier"]
+
+    assert surrogate["rows"] == 3
+    assert surrogate["accepted"] == 1
+    assert surrogate["dense_feedback"] == 1
+    assert surrogate["opaque_only"] == 1
+    assert surrogate["proxy_reward_rows"] == 3
+    assert surrogate["avg_proxy_reward"] == 0.8333
+    assert surrogate["trial_id_min"] == 10
+    assert surrogate["trial_id_max"] == 12
+    assert surrogate["status"] == "oracle_conflict"
+
+    markdown = coverage_report.render_markdown(report)
+    assert "Surrogate Verifier Feedback" in markdown
+    assert "Opaque-only oracle conflicts: `1`" in markdown

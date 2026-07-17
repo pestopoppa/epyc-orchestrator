@@ -222,6 +222,7 @@ def test_local_planner_contract_wraps_draft_and_critique(monkeypatch) -> None:
     ]
 
     assert draft_content.startswith("CRITICAL OUTPUT CONTRACT")
+    assert "must be one JSON object, not a list or array" in draft_content
     assert "\nplanner prompt\n" in draft_content
     assert critique_content.startswith("CRITICAL OUTPUT CONTRACT FOR THIS LOCAL AUTOPILOT CRITIQUE")
     assert "\nplanner prompt\n" in critique_content
@@ -299,6 +300,7 @@ def test_local_briefed_provider_briefs_then_drafts(monkeypatch, tmp_path) -> Non
     assert "FULL CONTROLLER PROMPT" in brief_provider.calls[0]["prompt"]
     assert draft_provider.calls[0]["role"] == "draft"
     assert "Controller Prompt Brief" in draft_provider.calls[0]["prompt"]
+    assert "must be one JSON\nobject, not a list or array" in draft_provider.calls[0]["prompt"]
     assert "FULL CONTROLLER PROMPT" not in draft_provider.calls[0]["prompt"]
     assert "Original controller prompt length: 22 chars" in draft_provider.calls[0]["prompt"]
     assert records[-1]["provider"] == "local_brief_frontdoor"

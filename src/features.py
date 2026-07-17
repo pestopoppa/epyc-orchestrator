@@ -205,6 +205,14 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     FeatureSpec("swarm_fanout", False, False, "SWARM_FANOUT", "DAR-6.1: fan high-injection-risk prompts to N>=2 concurrent serves + BT-aggregate (J14). Scaffolding only — default-off until the DAR-6.5 injection-suite A/B clears (handoffs/active/decision-aware-routing.md § DAR-6.5)."),
     # P21.A test-time compute: DeepConf offline confidence-filtered self-consistency (intake-603)
     FeatureSpec("deepconf", False, False, "DEEPCONF", "DeepConf offline confidence-filtered self-consistency"),
+    # RD-5 Reviewer decision plane (shadow/enforce split; intake-849 P2). Both default-off
+    # in BOTH test and prod. review_decision_shadow has NO dependencies on purpose — it is
+    # the DECOUPLED shadow-emission path: plan_review requires memrl (see validate()), but
+    # the decision-plane shadow machinery must be able to flow WITHOUT flipping plan_review
+    # (and therefore without requiring memrl). Always-on trace emission (TM-3) is independent
+    # of both flags; these gate only the extra shadow processing / (blocked) enforcement.
+    FeatureSpec("review_decision_shadow", False, False, "REVIEW_DECISION_SHADOW", "RD-5: emit + trace review-plane decisions (verifier precedence, reject-admissibility, warn-only downgrade) WITHOUT acting. Decoupled from plan_review→memrl (no dependencies)."),
+    FeatureSpec("review_decision_enforce", False, False, "REVIEW_DECISION_ENFORCE", "RD-5: ACT on review-plane decisions. Default OFF and BLOCKED on the H-LB LB-6 latency/sampling budget gate — do not enable until that gate passes."),
     # Debug/Development
     FeatureSpec("mock_mode", True, False, "MOCK_MODE", "Mock mode for safety"),
 )
@@ -547,6 +555,16 @@ class Features:
     # build + scoring logic in src/test_time/deepconf.py. Wiring onto N parallel llama-server
     # completions (payload n_probs=K) is P21.A3, gated on the A2 live-server sanity check.
     deepconf: bool = False
+
+    # RD-5 Reviewer decision plane (shadow/enforce split).
+    # review_decision_shadow: emit + trace review decisions (verifier precedence,
+    #   reject-admissibility, warn-only downgrade) but NEVER act. Deliberately has
+    #   NO memrl dependency — this is the decoupled shadow-emission path so shadow
+    #   data flows without flipping plan_review (which requires memrl).
+    # review_decision_enforce: act on review decisions. Default OFF and BLOCKED on
+    #   the H-LB LB-6 latency/sampling budget gate — do not enable until it passes.
+    review_decision_shadow: bool = False
+    review_decision_enforce: bool = False
 
     # Debug/Development
     mock_mode: bool = True  # Default to mock mode for safety

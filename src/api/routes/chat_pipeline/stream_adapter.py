@@ -54,6 +54,8 @@ from src.api.routes.chat_pipeline.telemetry import llm_completion_meta
 from src.api.routes.chat_review import (
     _architect_verdict,
     _fast_revise,
+    _plan_review_abort_message,
+    _plan_review_should_abort,
     _should_review,
 )
 from src.api.routes.chat_utils import _resolve_answer
@@ -479,7 +481,31 @@ async def generate_stream(
         return
 
     # Stage 5: Plan review gate (shared with _handle_chat)
-    _plan_review_gate(request, routing, primitives, state)
+    plan_review_result = _plan_review_gate(request, routing, primitives, state)
+    if _plan_review_should_abort(plan_review_result):
+        assert plan_review_result is not None
+        answer = _plan_review_abort_message(plan_review_result)
+        if state.progress_logger:
+            state.progress_logger.log_task_completed(
+                routing.task_id,
+                success=False,
+                details=answer,
+                completion_meta={
+                    "producer_role": "architect_general",
+                    "delegation_lineage": ["architect_general"],
+                    "final_answer_role": "architect_general",
+                },
+            )
+            score_completed_task(
+                state,
+                routing.task_id,
+                force_role=request.force_role,
+                real_mode=request.real_mode,
+            )
+        yield error_event(answer)
+        yield final_event(answer)
+        yield done_event()
+        return
 
     # Real-mode REPL streaming
     async for event in _stream_repl(request, routing, primitives, state, start_time):

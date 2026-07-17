@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 
 from src.config import get_config as _get_config
 from src.constants import TASK_IR_OBJECTIVE_LEN
-from src.roles import Role
+from src.roles import Role, chain_name_to_role
 from src.task_ir import canonicalize_task_ir
 from src.prompt_builders import (
     build_review_verdict_prompt,
@@ -275,11 +275,20 @@ def _architect_plan_review(
     if not plan_steps:
         return None
 
+    # RD-1/RD-5/TM-3: the reviewer role is resolved via the config-level binding
+    # inside the service (default → architect_general, so no behavior change).
+    # review_plan() emits an always-on shadow trace event regardless of whether the
+    # plan_review feature acts — this is the DECOUPLED shadow-emission path: the
+    # trace flows even though the plan_review flag itself requires memrl (features.py
+    # validate()), because emission lives on the review_service seam, not the flag.
+    # We anchor emitted rows to this task via session_id so decision_chain replay
+    # (src/trace/query.py) can reconstruct task → plan → review → gate → outcome.
     review_service = ArchitectReviewService(primitives)
     result = review_service.review_plan(
         objective=objective,
         task_type=task_type,
         plan_steps=plan_steps,
+        session_id=task_id,
     )
 
     if result:
@@ -316,7 +325,7 @@ def _apply_plan_review(
     for patch in review.patches:
         op = patch.get("op", "")
         if op == "reroute":
-            new_role = patch.get("v", "")
+            new_role = _normalize_plan_review_reroute_role(patch.get("v", ""))
             step_id = patch.get("step", "")
             if new_role:
                 # Map step index to routing decision index
@@ -333,6 +342,37 @@ def _apply_plan_review(
                         updated[0] = new_role
 
     return updated
+
+
+def _normalize_plan_review_reroute_role(value: object) -> str:
+    """Return a canonical role for a plan-review reroute target, or "".
+
+    Architect patches are model output, so the ``v`` field can contain free-form
+    task guidance instead of a backend role. Letting that text overwrite
+    ``routing_decision`` later turns it into ``force_role`` and fails at
+    inference time with "No backend configured for role ...".
+    """
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    role = Role.from_string(raw) or chain_name_to_role(raw)
+    if role is None:
+        log.warning("Ignoring invalid plan-review reroute target: %r", raw[:120])
+        return ""
+    return str(role)
+
+
+def _plan_review_should_abort(review: "PlanReviewResult | None") -> bool:
+    """Return True when architect review explicitly rejects execution."""
+    return bool(review and str(review.decision).strip().lower() == "drop")
+
+
+def _plan_review_abort_message(review: "PlanReviewResult") -> str:
+    """Human-readable message for a terminal plan-review rejection."""
+    feedback = str(review.feedback or "").strip()
+    if feedback:
+        return f"Plan rejected by architect review: {feedback}"
+    return "Plan rejected by architect review."
 
 
 def _store_plan_review_episode(

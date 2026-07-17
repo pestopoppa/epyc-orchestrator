@@ -3,6 +3,7 @@
 Pure: no autopilot loop, no inference. Verifies the coarse trial-level signature, the partial-
 confidence policy, and the diff severities the observe-only run would journal.
 """
+
 from __future__ import annotations
 
 import sys
@@ -17,14 +18,20 @@ from bsv_observe import (  # noqa: E402
     build_conflict_report,
     build_mutation_dependency_entry,
     compute_bsv_observe_payload,
+    _question_answer_hashes,
     _question_outcomes,
     _suite_outcomes,
 )
 
 
 def _er(**kw) -> SimpleNamespace:
-    base = dict(routing_distribution={}, per_suite_quality={}, oracle_adequacy={},
-                avg_prompt_tokens=0.0, metric_schema_version=1)
+    base = dict(
+        routing_distribution={},
+        per_suite_quality={},
+        oracle_adequacy={},
+        avg_prompt_tokens=0.0,
+        metric_schema_version=1,
+    )
     base.update(kw)
     return SimpleNamespace(**base)
 
@@ -36,20 +43,38 @@ def test_suite_outcomes_proxy_uses_bsv_vocab():
 
 
 def test_question_outcomes_use_bsv_vocab_and_skip_malformed_rows():
-    out = _question_outcomes([
-        {"qid": "q1", "correct": True},
-        {"question_id": "q2", "correct": False},
-        {"qid": " ", "correct": True},
-        {"qid": "q3"},
-        "not-a-row",
-    ])
+    out = _question_outcomes(
+        [
+            {"qid": "q1", "correct": True},
+            {"question_id": "q2", "correct": False},
+            {"qid": " ", "correct": True},
+            {"qid": "q3"},
+            "not-a-row",
+        ]
+    )
     assert out == {"q1": "pass", "q2": "fail", "q3": "fail"}
     assert _question_outcomes(None) == {}
 
 
+def test_question_answer_hashes_skip_raw_answer_and_malformed_rows():
+    out = _question_answer_hashes(
+        [
+            {"qid": "q1", "answer_hash": "abc123", "answer": "private"},
+            {"question_id": "q2", "normalized_answer_hash": "def456"},
+            {"qid": "q3", "answer": "private only"},
+            "not-a-row",
+        ]
+    )
+
+    assert out == {"q1": "abc123", "q2": "def456"}
+    assert _question_answer_hashes(None) == {}
+
+
 def test_no_incumbent_has_no_severity():
     p = compute_bsv_observe_payload(
-        _er(routing_distribution={"frontdoor": 1.0}), species_name="seeder", trial_id=1,
+        _er(routing_distribution={"frontdoor": 1.0}),
+        species_name="seeder",
+        trial_id=1,
         incumbent_signature=None,
     )
     assert p["severity"] is None
@@ -83,6 +108,25 @@ def test_question_results_are_preferred_over_suite_proxy():
     assert p["sentinel_outcome_count"] == 2
 
 
+def test_question_result_answer_hashes_are_included_without_raw_answers():
+    p = compute_bsv_observe_payload(
+        _er(
+            question_results=[
+                {"qid": "suite_a/q1", "correct": True, "answer_hash": "a1"},
+                {"qid": "suite_a/q2", "correct": False, "answer_hash": "a2"},
+            ],
+        ),
+        species_name="seeder",
+        trial_id=1,
+        incumbent_signature=None,
+    )
+
+    assert p["signature"]["answer_hash"]
+    assert p["answer_hash_source"] == "question_results.answer_hash"
+    assert p["answer_hash_count"] == 2
+    assert "answer" not in p["signature"]
+
+
 def test_suite_proxy_remains_fallback_when_question_results_absent():
     p = compute_bsv_observe_payload(
         _er(per_suite_quality={"qa": 2.6, "coding": 1.0}),
@@ -114,7 +158,9 @@ def test_archive_member_identity_overrides_species_name():
 def test_identical_partial_signature_is_watch_not_benign():
     # Two identical trials: nothing changed, but partial-confidence cannot certify BENIGN.
     er = _er(routing_distribution={"frontdoor": 1.0}, per_suite_quality={"qa": 2.6})
-    inc = compute_bsv_observe_payload(er, species_name="s", trial_id=1, incumbent_signature=None)["signature"]
+    inc = compute_bsv_observe_payload(er, species_name="s", trial_id=1, incumbent_signature=None)[
+        "signature"
+    ]
     p = compute_bsv_observe_payload(er, species_name="s", trial_id=2, incumbent_signature=inc)
     assert p["severity"] == "watch"
     assert any("partial" in r for r in p["reasons"])
@@ -122,10 +168,16 @@ def test_identical_partial_signature_is_watch_not_benign():
 
 def test_suite_regression_is_blocking():
     inc = compute_bsv_observe_payload(
-        _er(per_suite_quality={"coding": 2.6}), species_name="s", trial_id=1, incumbent_signature=None,
+        _er(per_suite_quality={"coding": 2.6}),
+        species_name="s",
+        trial_id=1,
+        incumbent_signature=None,
     )["signature"]
     p = compute_bsv_observe_payload(
-        _er(per_suite_quality={"coding": 1.0}), species_name="s", trial_id=2, incumbent_signature=inc,
+        _er(per_suite_quality={"coding": 1.0}),
+        species_name="s",
+        trial_id=2,
+        incumbent_signature=inc,
     )
     assert p["severity"] == "blocking"
     assert any("coding" in r for r in p["reasons"])
@@ -134,11 +186,15 @@ def test_suite_regression_is_blocking():
 def test_routing_change_flags_at_least_watch():
     inc = compute_bsv_observe_payload(
         _er(routing_distribution={"frontdoor": 1.0}, per_suite_quality={"qa": 2.6}),
-        species_name="s", trial_id=1, incumbent_signature=None,
+        species_name="s",
+        trial_id=1,
+        incumbent_signature=None,
     )["signature"]
     p = compute_bsv_observe_payload(
         _er(routing_distribution={"worker_coder": 1.0}, per_suite_quality={"qa": 2.6}),
-        species_name="s", trial_id=2, incumbent_signature=inc,
+        species_name="s",
+        trial_id=2,
+        incumbent_signature=inc,
     )
     assert p["severity"] in ("watch", "blocking")
     assert any("route_path_hash" in r for r in p["reasons"])
@@ -230,7 +286,9 @@ def test_legacy_tool_name_counts_are_signed_when_question_rows_absent():
 
 def test_graceful_on_empty_eval_result():
     # Missing fields must not raise — observe-only must never disrupt the trial loop.
-    p = compute_bsv_observe_payload(SimpleNamespace(), species_name="", trial_id=0, incumbent_signature=None)
+    p = compute_bsv_observe_payload(
+        SimpleNamespace(), species_name="", trial_id=0, incumbent_signature=None
+    )
     assert p["severity"] is None
     assert "signature" in p and p["signature_confidence"] == "partial"
 
@@ -239,25 +297,46 @@ def test_routing_weight_drift_flags_change():
     # finding #3: SAME roles, but a major weight shift must change route_path_hash (it would not
     # under name-only hashing). frontdoor 0.9->0.1 (q4->q1), worker_coder 0.1->0.9 (q1->q4).
     inc = compute_bsv_observe_payload(
-        _er(routing_distribution={"frontdoor": 0.9, "worker_coder": 0.1}, per_suite_quality={"qa": 2.6}),
-        species_name="s", trial_id=1, incumbent_signature=None,
+        _er(
+            routing_distribution={"frontdoor": 0.9, "worker_coder": 0.1},
+            per_suite_quality={"qa": 2.6},
+        ),
+        species_name="s",
+        trial_id=1,
+        incumbent_signature=None,
     )["signature"]
     p = compute_bsv_observe_payload(
-        _er(routing_distribution={"frontdoor": 0.1, "worker_coder": 0.9}, per_suite_quality={"qa": 2.6}),
-        species_name="s", trial_id=2, incumbent_signature=inc,
+        _er(
+            routing_distribution={"frontdoor": 0.1, "worker_coder": 0.9},
+            per_suite_quality={"qa": 2.6},
+        ),
+        species_name="s",
+        trial_id=2,
+        incumbent_signature=inc,
     )
     assert p["severity"] in ("watch", "blocking")
     assert any("route_path_hash" in r for r in p["reasons"])
 
 
 def test_diagnostics_are_named_not_fake_signature_ids():
-    # finding #2: schema/count live under explicit diagnostic keys, NOT as fake IDs in the signature.
+    # finding #2: schema/count live under explicit diagnostic keys, not fake IDs in the signature.
     p = compute_bsv_observe_payload(
-        _er(oracle_adequacy={"a": 1, "b": 2}, metric_schema_version=3),
-        species_name="s", trial_id=1, incumbent_signature=None,
+        _er(
+            oracle_adequacy={"a": 1, "b": 2},
+            metric_schema_version=3,
+            details={"trace_event_id": 42, "harness_metrics_id": 7},
+        ),
+        species_name="s",
+        trial_id=1,
+        incumbent_signature=None,
     )
     assert p["metric_schema_version"] == 3
     assert p["oracle_adequacy_count"] == 2
+    assert p["trace_event_id"] == 42
+    assert p["trace_event_id_source"] == "details.trace_event_id"
+    assert p["harness_metrics_id"] == 7
+    assert p["harness_metrics_id_source"] == "details.harness_metrics_id"
+    assert p["signature"]["event_id"] == 42
     assert "harness_metrics_id" not in p["signature"]  # signature is the diffable subset only
 
 
@@ -355,5 +434,37 @@ def test_conflict_report_ignores_disjoint_mutations():
         "behavior_signature_delta": {"severity": "watch"},
     }
     report = build_conflict_report(new, [prior])
+    assert report["severity"] == "none"
+    assert report["conflict_count"] == 0
+
+
+def test_conflict_report_skips_same_trial_archive_member_duplicate():
+    prior = {
+        "trial_id": 10,
+        "archive_member_id": "trial:10",
+        "action_type": "prompt_mutation",
+        "subsystem": "prompt",
+        "files_touched": ["prompts/frontdoor.md"],
+        "prompt_sections_touched": ["rubric"],
+        "feature_flags": {},
+        "behavior_signature_delta": {
+            "severity": "watch",
+            "changed_fields": ["route_path_hash"],
+            "improved_sentinels": ["q1"],
+            "regressed_sentinels": [],
+        },
+    }
+    new = {
+        **prior,
+        "behavior_signature_delta": {
+            "severity": "watch",
+            "changed_fields": ["token_bucket"],
+            "improved_sentinels": ["q2"],
+            "regressed_sentinels": [],
+        },
+    }
+
+    report = build_conflict_report(new, [prior])
+
     assert report["severity"] == "none"
     assert report["conflict_count"] == 0

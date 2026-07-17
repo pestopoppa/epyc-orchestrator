@@ -4,7 +4,7 @@ import os
 
 import pytest
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import AsyncMock, patch, MagicMock
 
 from src.services.pdf_router import (
     PDFRouter,
@@ -513,7 +513,7 @@ class TestPDFRouterIntegration:
 
     @pytest.mark.integration
     def test_extract_real_pdf(self):
-        """Test extraction with a real PDF file."""
+        """Test extraction with a real PDF file (pinned to the pdftotext path)."""
         pdf_path = Path("/mnt/raid0/llm/epyc-orchestrator/tmp/Twyne_V1_Whitepaper.pdf")
         if not pdf_path.exists():
             pytest.skip("Test PDF not available")
@@ -521,7 +521,10 @@ class TestPDFRouterIntegration:
             pytest.skip("Test PDF not readable")
 
         router = PDFRouter()
-        result = router.extract_sync(pdf_path)
+        # Default fast path is now OpenDataLoader; pin pdftotext to keep this
+        # test exercising the born-digital pdftotext path specifically.
+        with patch.dict(os.environ, {"PDF_EXTRACTOR": "pdftotext"}):
+            result = router.extract_sync(pdf_path)
 
         assert result.text
         assert len(result.text) > 10000
@@ -538,7 +541,8 @@ class TestPDFRouterIntegration:
             pytest.skip("Test PDF not available")
 
         router = PDFRouter()
-        result = router.extract_sync(pdf_path, extract_figures=True)
+        with patch.dict(os.environ, {"PDF_EXTRACTOR": "pdftotext"}):
+            result = router.extract_sync(pdf_path, extract_figures=True)
 
         assert len(result.figures) > 0
         for fig in result.figures:
@@ -559,3 +563,321 @@ class TestExtractPdfFunction:
 
         mock_extract.assert_called_once()
         assert result.text == "test"
+
+
+# ─── Phase-1 default flip: ODL fast path + pdftotext fallback ─────────────────
+
+
+class TestResolveExtractor:
+    """The fast-path extractor resolution honours the 2026-07 default flip."""
+
+    def test_default_is_opendataloader_when_runtime_available(self, monkeypatch):
+        monkeypatch.delenv("PDF_EXTRACTOR", raising=False)
+        router = PDFRouter()
+        with patch(
+            "src.services.pdf_router._opendataloader_runtime_available",
+            return_value=True,
+        ):
+            assert router._resolve_extractor() == "opendataloader"
+
+    def test_default_is_pdftotext_when_runtime_unavailable(self, monkeypatch):
+        """JVM-unavailable graceful degrade: default stays inert on pdftotext."""
+        monkeypatch.delenv("PDF_EXTRACTOR", raising=False)
+        router = PDFRouter()
+        with patch(
+            "src.services.pdf_router._opendataloader_runtime_available",
+            return_value=False,
+        ):
+            assert router._resolve_extractor() == "pdftotext"
+
+    def test_explicit_pdftotext_selects_pdftotext(self, monkeypatch):
+        monkeypatch.setenv("PDF_EXTRACTOR", "pdftotext")
+        router = PDFRouter()
+        # Explicit env wins even when the ODL runtime is available.
+        with patch(
+            "src.services.pdf_router._opendataloader_runtime_available",
+            return_value=True,
+        ):
+            assert router._resolve_extractor() == "pdftotext"
+
+    def test_explicit_opendataloader_honoured_even_if_runtime_probe_false(
+        self, monkeypatch
+    ):
+        """Explicit opt-in is honoured verbatim; per-doc empty->pdftotext handles
+        an actually-broken JVM (so mocked tests that patch the extractor work)."""
+        monkeypatch.setenv("PDF_EXTRACTOR", "opendataloader")
+        router = PDFRouter()
+        with patch(
+            "src.services.pdf_router._opendataloader_runtime_available",
+            return_value=False,
+        ):
+            assert router._resolve_extractor() == "opendataloader"
+
+
+class TestOpendataloaderRuntimeProbe:
+    """The cached runtime probe degrades gracefully with a logged reason."""
+
+    def test_probe_false_when_java_missing(self):
+        from src.services import pdf_router as pr
+
+        pr._opendataloader_runtime_available.cache_clear()
+        try:
+            with patch("src.services.pdf_router.shutil.which", return_value=None):
+                assert pr._opendataloader_runtime_available() is False
+        finally:
+            pr._opendataloader_runtime_available.cache_clear()
+
+    def test_probe_true_when_java_and_sdk_present(self):
+        from src.services import pdf_router as pr
+
+        pr._opendataloader_runtime_available.cache_clear()
+        try:
+            with patch(
+                "src.services.pdf_router.shutil.which", return_value="/usr/bin/java"
+            ):
+                assert pr._opendataloader_runtime_available() is True
+        finally:
+            pr._opendataloader_runtime_available.cache_clear()
+
+
+class TestFastPathDefaultFlip:
+    """extract() now defaults to ODL, with pdftotext as the safety fallback."""
+
+    @pytest.mark.asyncio
+    async def test_default_path_uses_opendataloader(self, tmp_path, monkeypatch):
+        pdf_path = tmp_path / "doc.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\n%EOF\n")
+        monkeypatch.delenv("PDF_EXTRACTOR", raising=False)
+
+        router = PDFRouter()
+        with patch(
+            "src.services.pdf_router._opendataloader_runtime_available",
+            return_value=True,
+        ):
+            with patch.object(
+                router,
+                "_extract_with_opendataloader",
+                return_value=("Clean extracted paragraph text.", 12.0),
+            ) as mock_odl:
+                with patch.object(router, "_extract_with_pdftotext") as mock_pt:
+                    with patch.object(
+                        router, "_assess_text_quality", return_value=(0.9, False)
+                    ):
+                        with patch.object(
+                            router, "_page_dimensions_pymupdf", return_value={}
+                        ):
+                            result = await router.extract(pdf_path, extract_figures=False)
+
+        mock_odl.assert_called_once_with(pdf_path)
+        mock_pt.assert_not_called()
+        assert result.method == "opendataloader"
+        assert result.ocr_required is False
+
+    @pytest.mark.asyncio
+    async def test_default_inert_pdftotext_when_runtime_unavailable(
+        self, tmp_path, monkeypatch
+    ):
+        pdf_path = tmp_path / "doc.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\n%EOF\n")
+        monkeypatch.delenv("PDF_EXTRACTOR", raising=False)
+
+        router = PDFRouter()
+        with patch(
+            "src.services.pdf_router._opendataloader_runtime_available",
+            return_value=False,
+        ):
+            with patch.object(
+                router,
+                "_extract_with_pdftotext",
+                return_value=("Clean pdftotext body content.", 5.0),
+            ) as mock_pt:
+                with patch.object(router, "_extract_with_opendataloader") as mock_odl:
+                    with patch.object(
+                        router, "_assess_text_quality", return_value=(0.9, False)
+                    ):
+                        with patch.object(
+                            router, "_page_dimensions_pymupdf", return_value={}
+                        ):
+                            result = await router.extract(pdf_path, extract_figures=False)
+
+        mock_odl.assert_not_called()
+        mock_pt.assert_called_once_with(pdf_path)
+        assert result.method == "pdftotext"
+
+    @pytest.mark.asyncio
+    async def test_odl_empty_falls_back_to_pdftotext(self, tmp_path, monkeypatch):
+        pdf_path = tmp_path / "doc.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\n%EOF\n")
+        monkeypatch.setenv("PDF_EXTRACTOR", "opendataloader")
+
+        clean = "Recovered clean pdftotext body text."
+        router = PDFRouter()
+        with patch.object(
+            router, "_extract_with_opendataloader", return_value=("", 8.0)
+        ) as mock_odl:
+            with patch.object(
+                router, "_extract_with_pdftotext", return_value=(clean, 4.0)
+            ) as mock_pt:
+                # Empty ODL text fails the quality check; clean pdftotext passes.
+                with patch.object(
+                    router,
+                    "_assess_text_quality",
+                    side_effect=lambda t: (0.9, False) if t else (0.0, True),
+                ):
+                    with patch.object(router, "_page_dimensions_pymupdf", return_value={}):
+                        result = await router.extract(pdf_path, extract_figures=False)
+
+        mock_odl.assert_called_once_with(pdf_path)
+        mock_pt.assert_called_once_with(pdf_path)
+        assert result.method == "pdftotext"
+        assert result.text == clean
+
+    @pytest.mark.asyncio
+    async def test_garbage_check_parity_odl_garbled_uses_pdftotext(
+        self, tmp_path, monkeypatch
+    ):
+        """ODL output that fails the quality check falls back to pdftotext (never
+        emits garbage), exactly as the checks would gate pdftotext."""
+        pdf_path = tmp_path / "doc.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\n%EOF\n")
+        monkeypatch.setenv("PDF_EXTRACTOR", "opendataloader")
+
+        garbled = "\x00\x01\x02 x x x x x x x x x x x x x x x x x x x x x"
+        clean = "A well-formed paragraph of readable English prose."
+        router = PDFRouter()
+        with patch.object(
+            router, "_extract_with_opendataloader", return_value=(garbled, 9.0)
+        ) as mock_odl:
+            with patch.object(
+                router, "_extract_with_pdftotext", return_value=(clean, 4.0)
+            ) as mock_pt:
+                with patch.object(
+                    router,
+                    "_assess_text_quality",
+                    side_effect=lambda t: (0.9, False) if t == clean else (0.1, True),
+                ):
+                    with patch.object(router, "_page_dimensions_pymupdf", return_value={}):
+                        result = await router.extract(pdf_path, extract_figures=False)
+
+        mock_odl.assert_called_once_with(pdf_path)
+        mock_pt.assert_called_once_with(pdf_path)
+        assert result.method == "pdftotext"
+        assert result.text == clean
+        assert result.ocr_required is False
+
+    @pytest.mark.asyncio
+    async def test_both_fast_paths_garbled_falls_through_to_ocr(
+        self, tmp_path, monkeypatch
+    ):
+        """If ODL and pdftotext both fail the garbage check, go to OCR."""
+        pdf_path = tmp_path / "doc.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\n%EOF\n")
+        monkeypatch.setenv("PDF_EXTRACTOR", "opendataloader")
+
+        garbled = "\x00\x01\x02 x x x x x x x x x x x x x x x x x x x x x"
+        router = PDFRouter()
+        with patch.object(
+            router, "_extract_with_opendataloader", return_value=(garbled, 9.0)
+        ):
+            with patch.object(
+                router, "_extract_with_pdftotext", return_value=(garbled, 4.0)
+            ):
+                with patch.object(
+                    router, "_assess_text_quality", return_value=(0.1, True)
+                ):
+                    with patch.object(router, "_page_dimensions_pymupdf", return_value={}):
+                        with patch.object(
+                            router,
+                            "_extract_with_lightonocr",
+                            new=AsyncMock(return_value=("OCR recovered text.", [], 50.0)),
+                        ) as mock_ocr:
+                            result = await router.extract(pdf_path, extract_figures=False)
+
+        mock_ocr.assert_awaited_once()
+        assert result.method == "lightonocr"
+        assert result.ocr_required is True
+
+    @pytest.mark.asyncio
+    async def test_structured_odl_empty_falls_back_and_clears_structured_data(
+        self, tmp_path, monkeypatch
+    ):
+        pdf_path = tmp_path / "doc.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\n%EOF\n")
+        monkeypatch.setenv("PDF_EXTRACTOR", "opendataloader")
+        monkeypatch.setenv("ORCHESTRATOR_ODL_STRUCTURED", "1")
+
+        clean = "Recovered clean body text from pdftotext."
+        router = PDFRouter()
+        with patch.object(
+            router,
+            "_extract_with_odl_table_backend",
+            return_value=("", None, 9.0, "local"),
+        ):
+            with patch.object(
+                router, "_extract_with_pdftotext", return_value=(clean, 4.0)
+            ) as mock_pt:
+                with patch.object(
+                    router,
+                    "_assess_text_quality",
+                    side_effect=lambda t: (0.9, False) if t else (0.0, True),
+                ):
+                    with patch.object(router, "_page_dimensions_pymupdf", return_value={}):
+                        result = await router.extract(pdf_path, extract_figures=False)
+
+        mock_pt.assert_called_once_with(pdf_path)
+        assert result.method == "pdftotext"
+        assert result.structured_data is None
+
+
+class TestExtractBatchOpendataloader:
+    """Batch warming: one JVM invocation amortized across many PDFs."""
+
+    def test_batch_single_convert_call(self, tmp_path):
+        pdfs = []
+        for i in range(3):
+            p = tmp_path / f"doc{i}.pdf"
+            p.write_bytes(b"%PDF-1.4\n%EOF\n")
+            pdfs.append(p)
+
+        router = PDFRouter()
+        with patch(
+            "src.services.pdf_router._opendataloader_runtime_available",
+            return_value=True,
+        ):
+            with patch.dict("sys.modules", {"opendataloader_pdf.wrapper": MagicMock()}):
+                from opendataloader_pdf.wrapper import convert as mock_convert
+
+                def write_all(paths, **kwargs):
+                    out = Path(kwargs["output_dir"])
+                    for pth in paths:
+                        (out / f"{Path(pth).stem}.md").write_text(
+                            f"Body of {Path(pth).stem}", encoding="utf-8"
+                        )
+                    return None
+
+                mock_convert.side_effect = write_all
+                results = router.extract_batch_opendataloader(pdfs)
+
+        # Exactly ONE convert() call for the whole batch (single JVM).
+        mock_convert.assert_called_once()
+        args, kwargs = mock_convert.call_args
+        assert len(args[0]) == 3
+        assert kwargs["format"] == "markdown"
+        for p in pdfs:
+            text, latency = results[str(p)]
+            assert text == f"Body of {p.stem}"
+            assert latency >= 0
+
+    def test_batch_runtime_unavailable_returns_empty(self, tmp_path):
+        p = tmp_path / "doc.pdf"
+        p.write_bytes(b"%PDF-1.4\n%EOF\n")
+        router = PDFRouter()
+        with patch(
+            "src.services.pdf_router._opendataloader_runtime_available",
+            return_value=False,
+        ):
+            results = router.extract_batch_opendataloader([p])
+        assert results[str(p)] == ("", 0.0)
+
+    def test_batch_empty_input(self):
+        assert PDFRouter().extract_batch_opendataloader([]) == {}

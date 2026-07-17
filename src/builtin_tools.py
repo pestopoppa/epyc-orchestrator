@@ -34,12 +34,18 @@ def register_builtin_tools(registry: ToolRegistry) -> None:
     _register_code_tools(registry)
     _register_data_tools(registry)
     _register_file_tools(registry)
+    _register_compatibility_tools(registry)
     # Eval-only opaque-secret tool — registered ONLY when the tool-use eval
     # contract is armed, so production stays minimal. See eval_secret.py.
     import os as _os
     if _os.environ.get("AUTOPILOT_TOOL_SENTINELS") == "1":
         _register_eval_tools(registry)
     logger.info(f"Registered {len(registry._tools)} built-in tools")
+
+
+def _tool_registered(registry: ToolRegistry, name: str) -> bool:
+    """Return whether a tool is already registered on this registry."""
+    return name in getattr(registry, "_tools", {})
 
 
 def _register_eval_tools(registry: ToolRegistry) -> None:
@@ -337,3 +343,203 @@ def _register_file_tools(registry: ToolRegistry) -> None:
             }
         except Exception as e:
             return {"error": str(e), "success": False}
+
+
+def _register_compatibility_tools(registry: ToolRegistry) -> None:
+    """Register prompt-advertised compatibility tools when no real tool exists.
+
+    These close the gap between historical/eval prompts and the runtime registry.
+    Stubs are intentionally descriptive and non-mutating; they convert framework
+    "Unknown tool" crashes into ordinary tool outputs the model can handle.
+    """
+
+    if not _tool_registered(registry, "search_files"):
+
+        @registry.register_handler(
+            name="search_files",
+            description="Search files under a directory for text content",
+            category=ToolCategory.FILE,
+            parameters={
+                "directory": {
+                    "type": "string",
+                    "description": "Directory to search",
+                    "required": True,
+                },
+                "content": {
+                    "type": "string",
+                    "description": "Text to search for",
+                    "required": True,
+                },
+                "recursive": {
+                    "type": "boolean",
+                    "description": "Search recursively",
+                    "required": False,
+                },
+                "pattern": {
+                    "type": "string",
+                    "description": "Glob pattern to filter files",
+                    "required": False,
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Maximum matching files to return",
+                    "required": False,
+                },
+            },
+            side_effects=["read_only"],
+        )
+        def search_files(
+            directory: str,
+            content: str,
+            recursive: bool = True,
+            pattern: str = "*",
+            max_results: int = 100,
+        ) -> dict[str, Any]:
+            """Search files for text content."""
+            root = Path(directory)
+            if not root.is_dir():
+                return {"success": False, "error": f"Not a directory: {directory}", "matches": []}
+
+            iterator = root.rglob(pattern) if recursive else root.glob(pattern)
+            matches: list[dict[str, Any]] = []
+            scanned = 0
+            for path in iterator:
+                if len(matches) >= max_results:
+                    break
+                if not path.is_file():
+                    continue
+                scanned += 1
+                try:
+                    text = path.read_text(errors="ignore")
+                except Exception:
+                    continue
+                if content not in text:
+                    continue
+                line_numbers = [
+                    idx
+                    for idx, line in enumerate(text.splitlines(), start=1)
+                    if content in line
+                ][:10]
+                matches.append({"path": str(path), "line_numbers": line_numbers})
+            return {
+                "success": True,
+                "matches": matches,
+                "count": len(matches),
+                "scanned": scanned,
+                "truncated": len(matches) >= max_results,
+            }
+
+    if not _tool_registered(registry, "get_time"):
+
+        @registry.register_handler(
+            name="get_time",
+            description="Get the current local time for an IANA timezone",
+            category=ToolCategory.DATA,
+            parameters={
+                "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone name, e.g. UTC or Asia/Tokyo",
+                    "required": False,
+                },
+            },
+            side_effects=["read_only"],
+        )
+        def get_time(timezone: str = "UTC") -> dict[str, Any]:
+            """Return current time for a timezone."""
+            from datetime import datetime
+            from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+            try:
+                tz = ZoneInfo(timezone)
+            except ZoneInfoNotFoundError:
+                return {"success": False, "error": f"Unknown timezone: {timezone}"}
+            now = datetime.now(tz)
+            return {
+                "success": True,
+                "timezone": timezone,
+                "datetime": now.isoformat(),
+                "date": now.date().isoformat(),
+                "time": now.strftime("%H:%M:%S"),
+            }
+
+    if not _tool_registered(registry, "fetch_stock_price"):
+
+        @registry.register_handler(
+            name="fetch_stock_price",
+            description="Compatibility stub for stock price lookup; no market data backend is configured",
+            category=ToolCategory.DATA,
+            parameters={
+                "ticker": {
+                    "type": "string",
+                    "description": "Stock ticker symbol",
+                    "required": True,
+                },
+            },
+            side_effects=["read_only"],
+        )
+        def fetch_stock_price(ticker: str) -> dict[str, Any]:
+            """Return an explicit unavailable response instead of raising Unknown tool."""
+            return {
+                "success": False,
+                "ticker": ticker,
+                "error": "fetch_stock_price is not configured in this environment",
+            }
+
+    if not _tool_registered(registry, "translate_text"):
+
+        @registry.register_handler(
+            name="translate_text",
+            description="Compatibility stub for translation; no translation backend is configured",
+            category=ToolCategory.DATA,
+            parameters={
+                "text": {"type": "string", "description": "Text to translate", "required": True},
+                "source_lang": {
+                    "type": "string",
+                    "description": "Source language",
+                    "required": False,
+                },
+                "target_lang": {
+                    "type": "string",
+                    "description": "Target language",
+                    "required": True,
+                },
+            },
+            side_effects=["read_only"],
+        )
+        def translate_text(
+            text: str,
+            target_lang: str,
+            source_lang: str = "auto",
+        ) -> dict[str, Any]:
+            """Return an explicit unavailable response instead of raising Unknown tool."""
+            return {
+                "success": False,
+                "text": text,
+                "source_lang": source_lang,
+                "target_lang": target_lang,
+                "error": "translate_text is not configured in this environment",
+            }
+
+    if not _tool_registered(registry, "start_service"):
+
+        @registry.register_handler(
+            name="start_service",
+            description="Dry-run compatibility stub; does not start system services",
+            category=ToolCategory.DATA,
+            parameters={
+                "name": {
+                    "type": "string",
+                    "description": "Service name requested by the prompt",
+                    "required": True,
+                },
+            },
+            side_effects=["read_only"],
+        )
+        def start_service(name: str) -> dict[str, Any]:
+            """Return a non-mutating dry-run response."""
+            return {
+                "success": False,
+                "dry_run": True,
+                "service": name,
+                "error": "start_service is disabled; no service was started",
+            }

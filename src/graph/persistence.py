@@ -1,5 +1,24 @@
 """Persistence adapter for orchestration graph checkpoints.
 
+.. deprecated:: TM-7 (durable resume, intake-847)
+    ``SQLiteStatePersistence`` is **WRITE-ONLY**: ``load_next()`` always returns
+    ``None``, so it never rehydrates and no run ever survives a process restart
+    through it. It is retained only for backward compatibility with existing
+    pydantic_graph callers.
+
+    New callers wanting durable, cross-restart resume MUST use the LangGraph
+    checkpointer instead — ``src.graph.langgraph.checkpointing`` (an
+    ``AsyncSqliteSaver`` on the dedicated ``data/graph_checkpoints.sqlite``
+    store), driven via ``src.graph.langgraph.graph.run_task_lg_durable`` /
+    ``resume_task_lg``. See :func:`durable_checkpointer` below for the routing
+    entry point.
+
+    **Idempotency hazard (applies to the replacement too):** on resume the
+    LangGraph checkpointer re-executes the *pending* super-step — the node that
+    was mid-flight when the process died. Node side effects (``_execute_turn``
+    model calls, REPL mutations, file writes) will run again unless idempotent.
+    This dovetails the ``side_effect_tracking`` dependency of ``approval_gates``.
+
 Wraps the existing SQLiteSessionStore to provide pydantic-graph's
 BaseStatePersistence interface. Enables ``graph.iter_from_persistence()``
 for conversation resume.
@@ -9,6 +28,7 @@ from __future__ import annotations
 
 import json
 import logging
+import warnings
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, TYPE_CHECKING
 
@@ -26,6 +46,13 @@ log = logging.getLogger(__name__)
 class SQLiteStatePersistence(BaseStatePersistence[TaskState, TaskResult]):
     """Adapter that stores graph snapshots in the existing checkpoints table.
 
+    .. deprecated:: TM-7
+        WRITE-ONLY — ``load_next()`` always returns ``None`` so this never
+        rehydrates state across a restart. Prefer the LangGraph checkpointer
+        (:func:`durable_checkpointer` / ``run_task_lg_durable`` /
+        ``resume_task_lg``). Retained for compatibility with existing
+        pydantic_graph callers only.
+
     Maps:
     - ``session_id`` ↔ graph run identifier
     - Each snapshot is a JSON blob with full ``TaskState`` + current node class name
@@ -33,6 +60,14 @@ class SQLiteStatePersistence(BaseStatePersistence[TaskState, TaskResult]):
 
     def __init__(self, session_store: Any, session_id: str):
         super().__init__()
+        warnings.warn(
+            "SQLiteStatePersistence is deprecated (TM-7): it is write-only and "
+            "never rehydrates state across a restart. Use the LangGraph "
+            "checkpointer via src.graph.persistence.durable_checkpointer() / "
+            "src.graph.langgraph.graph.run_task_lg_durable().",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self._store = session_store
         self._session_id = session_id
         self._snapshots: list[dict] = []
@@ -96,7 +131,9 @@ class SQLiteStatePersistence(BaseStatePersistence[TaskState, TaskResult]):
     async def load_next(self) -> "NodeSnapshot[TaskState, TaskResult] | None":
         """Load the next un-replayed snapshot.
 
-        Returns None if no more snapshots to replay.
+        Always returns ``None`` — this adapter never rehydrated (that is the
+        deprecation reason). For real cross-restart resume use the LangGraph
+        checkpointer (:func:`durable_checkpointer`).
         """
         return None
 
@@ -168,3 +205,26 @@ def _state_to_dict(state: TaskState) -> dict:
     if _get_features().state_history_snapshots:
         return _state_to_dict_full(state)
     return _state_to_dict_minimal(state)
+
+
+def durable_checkpointer(path: Any = None):
+    """Preferred replacement for :class:`SQLiteStatePersistence`.
+
+    Returns the async LangGraph checkpointer context manager
+    (``AsyncSqliteSaver`` on ``data/graph_checkpoints.sqlite`` by default).
+    Unlike ``SQLiteStatePersistence`` this actually rehydrates state across a
+    process restart. Routing entry point for new callers.
+
+    Usage::
+
+        from src.graph.persistence import durable_checkpointer
+        async with durable_checkpointer() as saver:
+            graph = build_orchestration_graph().compile(checkpointer=saver)
+            ...
+
+    Or, higher-level, use ``run_task_lg_durable`` / ``resume_task_lg`` in
+    ``src.graph.langgraph.graph`` which manage the saver lifecycle for you.
+    """
+    from src.graph.langgraph.checkpointing import open_async_checkpointer
+
+    return open_async_checkpointer(path)

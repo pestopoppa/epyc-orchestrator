@@ -190,17 +190,21 @@ class TestPanelShapesFromMatrix:
             verdict="allow",
             instance_pairs=(
                 InstancePair(a="full", b="q3"),
-                InstancePair(a="q0",   b="q2"),
+                InstancePair(a="q0", b="q2"),
                 InstancePair(a="full", b="q2"),
-                InstancePair(a="q0",   b="q1"),
-                InstancePair(a="q0",   b="q3"),
-                InstancePair(a="q1",   b="q2"),
-                InstancePair(a="q2",   b="q3"),
-                InstancePair(a="q1",   b="q3"),
+                InstancePair(a="q0", b="q1"),
+                InstancePair(a="q0", b="q3"),
+                InstancePair(a="q1", b="q2"),
+                InstancePair(a="q2", b="q3"),
+                InstancePair(a="q1", b="q3"),
             ),
         )
         assert _panel_shapes_from_matrix(sr, primary_shape="half0") == {
-            "half0", "q0", "q1", "q2", "q3",
+            "half0",
+            "q0",
+            "q1",
+            "q2",
+            "q3",
         }
 
     def test_worker_general_strict_no_full(self) -> None:
@@ -236,18 +240,22 @@ class TestPanelShapesFromMatrix:
             role="vision_escalation",
             verdict="borderline",
             instance_pairs=(
-                InstancePair(a="q0",   b="q3"),
-                InstancePair(a="q1",   b="q2"),
-                InstancePair(a="q0",   b="q2"),
-                InstancePair(a="q0",   b="q1"),
-                InstancePair(a="q2",   b="q3"),
-                InstancePair(a="q1",   b="q3"),
+                InstancePair(a="q0", b="q3"),
+                InstancePair(a="q1", b="q2"),
+                InstancePair(a="q0", b="q2"),
+                InstancePair(a="q0", b="q1"),
+                InstancePair(a="q2", b="q3"),
+                InstancePair(a="q1", b="q3"),
                 InstancePair(a="full", b="q0"),
                 InstancePair(a="full", b="q1"),
             ),
         )
         assert _panel_shapes_from_matrix(sr, primary_shape="half1") == {
-            "half1", "q0", "q1", "q2", "q3",
+            "half1",
+            "q0",
+            "q1",
+            "q2",
+            "q3",
         }
 
     def test_full_alias_translates_per_role(self) -> None:
@@ -292,13 +300,17 @@ class TestRegionLocksSnapshot:
         }
 
     @pytest.mark.asyncio
-    async def test_region_lock_grid_shapes_follow_full_mode(self, tmp_path, monkeypatch) -> None:
+    async def test_region_lock_grid_keeps_configured_quarters_visible_in_full_mode(
+        self, tmp_path, monkeypatch
+    ) -> None:
         monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "full")
         for region in ("q0", "q1", "q2", "q3"):
             (tmp_path / f"cpu_region.worker_general.{region}.lock").write_text("")
 
         monkeypatch.setattr("src.runtime.cpu_region_lock._tmp_dir", lambda: tmp_path)
-        monkeypatch.setattr("src.runtime.cpu_region_lock._current_lock_owner_pids", lambda _path: ["wg-full"])
+        monkeypatch.setattr(
+            "src.runtime.cpu_region_lock._current_lock_owner_pids", lambda _path: ["wg-full"]
+        )
         monkeypatch.setattr(
             "src.runtime.instance_topology.get_instance_regions",
             lambda: {
@@ -311,26 +323,105 @@ class TestRegionLocksSnapshot:
         )
         monkeypatch.setattr(
             "src.scheduling.contention.load_contention_matrix",
-            lambda: type("Matrix", (), {
-                "same_role": {
-                    "worker_general": SameRole(role="worker_general", verdict="allow"),
+            lambda: type(
+                "Matrix",
+                (),
+                {
+                    "same_role": {
+                        "worker_general": SameRole(role="worker_general", verdict="allow"),
+                    },
                 },
-            })(),
+            )(),
         )
 
         payload = json.loads((await region_locks_snapshot()).body)
 
         worker = payload["by_role"]["worker_general"]
         assert payload["stack_numa_mode"] == "full"
-        assert [inst["shape"] for inst in worker["instances"]] == ["full"]
+        assert [inst["shape"] for inst in worker["instances"]] == [
+            "full",
+            "q0",
+            "q1",
+            "q2",
+            "q3",
+        ]
+        assert [inst["launch_selected"] for inst in worker["instances"]] == [
+            True,
+            False,
+            False,
+            False,
+            False,
+        ]
         assert worker["active_instance_idxs"] == [0]
         assert payload["display_matrix"]["active_holder_count"] == 1
+        assert payload["display_matrix"]["topology_mode"] == "all_configured"
+        assert payload["display_matrix"]["launch_mode"] == "full"
+        assert payload["display_matrix"]["row_kind"] == "role"
+        assert payload["display_matrix"]["role_count"] == 1
         worker_display = next(
-            row for row in payload["display_matrix"]["rows"]
-            if row["role"] == "worker_general"
+            row for row in payload["display_matrix"]["rows"] if row["role"] == "worker_general"
         )
-        assert worker_display["cells"][0]["state"] == "active"
-        assert worker_display["cells"][0]["label"] == "⚡"
+        states = [cell["state"] for cell in worker_display["cells"]]
+        labels = [cell["label"] for cell in worker_display["cells"]]
+        assert states == ["active", "na", "na", "blocked", "blocked", "blocked", "blocked"]
+        assert labels == ["⚡", "—", "—", "×", "×", "×", "×"]
+
+    @pytest.mark.asyncio
+    async def test_region_lock_grid_renders_unselected_free_quarters_as_ready(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "full")
+
+        monkeypatch.setattr("src.runtime.cpu_region_lock._tmp_dir", lambda: tmp_path)
+        monkeypatch.setattr(
+            "src.runtime.cpu_region_lock._current_lock_owner_pids", lambda _path: []
+        )
+        monkeypatch.setattr(
+            "src.runtime.instance_topology.get_instance_regions",
+            lambda: {
+                ("worker_general", 0): frozenset({"q0", "q1", "q2", "q3"}),
+                ("worker_general", 1): frozenset({"q0"}),
+                ("worker_general", 2): frozenset({"q1"}),
+                ("worker_general", 3): frozenset({"q2"}),
+                ("worker_general", 4): frozenset({"q3"}),
+            },
+        )
+        monkeypatch.setattr(
+            "src.scheduling.contention.load_contention_matrix",
+            lambda: type(
+                "Matrix",
+                (),
+                {
+                    "same_role": {
+                        "worker_general": SameRole(role="worker_general", verdict="allow"),
+                    },
+                },
+            )(),
+        )
+
+        payload = json.loads((await region_locks_snapshot()).body)
+
+        worker_display = next(
+            row for row in payload["display_matrix"]["rows"] if row["role"] == "worker_general"
+        )
+        assert [cell["state"] for cell in worker_display["cells"]] == [
+            "ready",
+            "na",
+            "na",
+            "ready",
+            "ready",
+            "ready",
+            "ready",
+        ]
+        assert [cell["label"] for cell in worker_display["cells"]] == [
+            "✅",
+            "—",
+            "—",
+            "✅",
+            "✅",
+            "✅",
+            "✅",
+        ]
 
     @pytest.mark.asyncio
     async def test_region_lock_grid_shapes_follow_quarter_mode(self, tmp_path, monkeypatch) -> None:
@@ -338,7 +429,9 @@ class TestRegionLocksSnapshot:
         (tmp_path / "cpu_region.worker_general.q0.lock").write_text("")
 
         monkeypatch.setattr("src.runtime.cpu_region_lock._tmp_dir", lambda: tmp_path)
-        monkeypatch.setattr("src.runtime.cpu_region_lock._current_lock_owner_pids", lambda _path: ["wg-q0"])
+        monkeypatch.setattr(
+            "src.runtime.cpu_region_lock._current_lock_owner_pids", lambda _path: ["wg-q0"]
+        )
         monkeypatch.setattr(
             "src.runtime.instance_topology.get_instance_regions",
             lambda: {
@@ -351,15 +444,19 @@ class TestRegionLocksSnapshot:
         )
         monkeypatch.setattr(
             "src.scheduling.contention.load_contention_matrix",
-            lambda: type("Matrix", (), {
-                "same_role": {
-                    "worker_general": SameRole(
-                        role="worker_general",
-                        verdict="allow",
-                        instance_pairs=(InstancePair(a="q0", b="q1"),),
-                    ),
+            lambda: type(
+                "Matrix",
+                (),
+                {
+                    "same_role": {
+                        "worker_general": SameRole(
+                            role="worker_general",
+                            verdict="allow",
+                            instance_pairs=(InstancePair(a="q0", b="q1"),),
+                        ),
+                    },
                 },
-            })(),
+            )(),
         )
 
         payload = json.loads((await region_locks_snapshot()).body)
@@ -367,9 +464,22 @@ class TestRegionLocksSnapshot:
         worker = payload["by_role"]["worker_general"]
         assert payload["stack_numa_mode"] == "quarter"
         # Visible shapes follow the role's CONFIGURED quarter instances (all four),
-        # not the matrix's co-placement pairs — every quarter server is a real
-        # dispatch target. active_instance_idxs still reflects the single held lock.
-        assert [inst["shape"] for inst in worker["instances"]] == ["q0", "q1", "q2", "q3"]
+        # plus the inactive full instance. The matrix's co-placement pairs are
+        # not a visibility filter — every configured server is shown.
+        assert [inst["shape"] for inst in worker["instances"]] == [
+            "full",
+            "q0",
+            "q1",
+            "q2",
+            "q3",
+        ]
+        assert [inst["launch_selected"] for inst in worker["instances"]] == [
+            False,
+            True,
+            True,
+            True,
+            True,
+        ]
         assert worker["active_instance_idxs"] == [1]
 
     @pytest.mark.asyncio
@@ -386,7 +496,9 @@ class TestRegionLocksSnapshot:
         (tmp_path / "cpu_region.embedder.q0.lock").write_text("")
 
         monkeypatch.setattr("src.runtime.cpu_region_lock._tmp_dir", lambda: tmp_path)
-        monkeypatch.setattr("src.runtime.cpu_region_lock._current_lock_owner_pids", lambda _path: ["embed-pid"])
+        monkeypatch.setattr(
+            "src.runtime.cpu_region_lock._current_lock_owner_pids", lambda _path: ["embed-pid"]
+        )
         monkeypatch.setattr(
             "src.runtime.instance_topology.get_instance_regions",
             lambda: {
@@ -397,12 +509,16 @@ class TestRegionLocksSnapshot:
         )
         monkeypatch.setattr(
             "src.scheduling.contention.load_contention_matrix",
-            lambda: type("Matrix", (), {
-                "same_role": {
-                    "embedder": SameRole(role="embedder", verdict="n/a"),
-                    "frontdoor": SameRole(role="frontdoor", verdict="allow"),
+            lambda: type(
+                "Matrix",
+                (),
+                {
+                    "same_role": {
+                        "embedder": SameRole(role="embedder", verdict="n/a"),
+                        "frontdoor": SameRole(role="frontdoor", verdict="allow"),
+                    },
                 },
-            })(),
+            )(),
         )
 
         response = await region_locks_snapshot()
@@ -413,14 +529,18 @@ class TestRegionLocksSnapshot:
         assert "frontdoor" in payload["by_role"]
 
     @pytest.mark.asyncio
-    async def test_runtime_holder_outside_matrix_visible_shapes_resolves(self, tmp_path, monkeypatch) -> None:
+    async def test_runtime_holder_outside_matrix_visible_shapes_resolves(
+        self, tmp_path, monkeypatch
+    ) -> None:
         """Runtime locks resolve against full topology, not just panel-visible shapes."""
         monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "both")
         lock = tmp_path / "cpu_region.ingest_long_context.q2.lock"
         lock.write_text("")
 
         monkeypatch.setattr("src.runtime.cpu_region_lock._tmp_dir", lambda: tmp_path)
-        monkeypatch.setattr("src.runtime.cpu_region_lock._current_lock_owner_pids", lambda _path: ["2928025"])
+        monkeypatch.setattr(
+            "src.runtime.cpu_region_lock._current_lock_owner_pids", lambda _path: ["2928025"]
+        )
         monkeypatch.setattr(
             "src.runtime.instance_topology.get_instance_regions",
             lambda: {
@@ -430,14 +550,18 @@ class TestRegionLocksSnapshot:
         )
         monkeypatch.setattr(
             "src.scheduling.contention.load_contention_matrix",
-            lambda: type("Matrix", (), {
-                "same_role": {
-                    "ingest_long_context": SameRole(
-                        role="ingest_long_context",
-                        verdict="allow",
-                    ),
+            lambda: type(
+                "Matrix",
+                (),
+                {
+                    "same_role": {
+                        "ingest_long_context": SameRole(
+                            role="ingest_long_context",
+                            verdict="allow",
+                        ),
+                    },
                 },
-            })(),
+            )(),
         )
 
         response = await region_locks_snapshot()
@@ -448,26 +572,103 @@ class TestRegionLocksSnapshot:
         # The held q2 quarter resolves to idx 3 and appears as a first-class
         # configured instance now that visible shapes follow the role's configured
         # instances (it is no longer an "outside-matrix" runtime_only-only holder).
-        assert any(
-            inst["idx"] == 3 and inst["shape"] == "q2"
-            for inst in ingest["instances"]
-        )
+        assert any(inst["idx"] == 3 and inst["shape"] == "q2" for inst in ingest["instances"])
         held = [r for r in ingest["regions"] if r["held"]]
-        assert held == [{
-            "region": "q2",
-            "held": True,
-            "holder_pids": ["2928025"],
-            "holder_instance_idxs": [3],
-        }]
+        assert held == [
+            {
+                "region": "q2",
+                "held": True,
+                "holder_pids": ["2928025"],
+                "holder_instance_idxs": [3],
+            }
+        ]
 
     @pytest.mark.asyncio
-    async def test_blocked_by_roles_uses_contention_matrix_not_raw_overlap(self, tmp_path, monkeypatch) -> None:
+    async def test_lock_payload_instance_idx_wins_over_region_set_fallback(
+        self,
+        tmp_path,
+        monkeypatch,
+    ) -> None:
+        """JSON payload under the flock is the direct instance attribution path."""
+        monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "both")
+        lock = tmp_path / "cpu_region.frontdoor.q0.lock"
+        lock.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "pid": 12345,
+                    "role": "frontdoor",
+                    "region": "q0",
+                    "regions": ["q0", "q1"],
+                    "instance_idx": 0,
+                    "request_tag": "chat-unit",
+                    "started_at": 1000.0,
+                }
+            )
+        )
+
+        monkeypatch.setattr("src.runtime.cpu_region_lock._tmp_dir", lambda: tmp_path)
+        monkeypatch.setattr(
+            "src.runtime.cpu_region_lock._current_lock_owner_pids",
+            lambda _path: ["12345"],
+        )
+        monkeypatch.setattr(
+            "src.runtime.instance_topology.get_instance_regions",
+            lambda: {
+                ("frontdoor", 0): {"q0", "q1"},
+                ("frontdoor", 1): {"q0"},
+                ("frontdoor", 2): {"q1"},
+            },
+        )
+        monkeypatch.setattr(
+            "src.scheduling.contention.load_contention_matrix",
+            lambda: type(
+                "Matrix",
+                (),
+                {
+                    "same_role": {
+                        "frontdoor": SameRole(role="frontdoor", verdict="allow"),
+                    },
+                },
+            )(),
+        )
+
+        payload = json.loads((await region_locks_snapshot()).body)
+
+        frontdoor = payload["by_role"]["frontdoor"]
+        assert frontdoor["active_instance_idxs"] == [0]
+        held = [r for r in frontdoor["regions"] if r["held"]]
+        assert held == [
+            {
+                "region": "q0",
+                "held": True,
+                "holder_pids": ["12345"],
+                "holder_instance_idxs": [0],
+                "lock_payload": {
+                    "schema_version": 1,
+                    "pid": 12345,
+                    "role": "frontdoor",
+                    "region": "q0",
+                    "regions": ["q0", "q1"],
+                    "instance_idx": 0,
+                    "request_tag": "chat-unit",
+                    "started_at": 1000.0,
+                },
+            }
+        ]
+
+    @pytest.mark.asyncio
+    async def test_blocked_by_roles_uses_contention_matrix_not_raw_overlap(
+        self, tmp_path, monkeypatch
+    ) -> None:
         """Cross-role occupied quarters should only render as waits when the matrix queues."""
         for region in ("q0", "q1", "q2", "q3"):
             (tmp_path / f"cpu_region.worker_general.{region}.lock").write_text("")
 
         monkeypatch.setattr("src.runtime.cpu_region_lock._tmp_dir", lambda: tmp_path)
-        monkeypatch.setattr("src.runtime.cpu_region_lock._current_lock_owner_pids", lambda _path: ["wg-pid"])
+        monkeypatch.setattr(
+            "src.runtime.cpu_region_lock._current_lock_owner_pids", lambda _path: ["wg-pid"]
+        )
         monkeypatch.setattr(
             "src.runtime.instance_topology.get_instance_regions",
             lambda: {

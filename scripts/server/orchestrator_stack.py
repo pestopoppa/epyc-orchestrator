@@ -128,6 +128,29 @@ _WORKER_GENERAL_DEGRADED_FALLBACK = {
     "context_tokens": 16384,
 }
 
+_CPU_ONLY_DEVICE_FLAGS = ("--device", "-dev")
+_CPU_ONLY_DRAFT_DEVICE_FLAGS = ("--device-draft", "-devd")
+
+
+def _has_any_flag(cmd: list[str], flags: tuple[str, ...]) -> bool:
+    return any(flag in cmd for flag in flags)
+
+
+def _append_cpu_only_device_args(cmd: list[str]) -> None:
+    """Pin stack-launched llama-server roles to CPU devices.
+
+    The production stack's text roles are CPU roles. A HIP-capable v7 binary will
+    otherwise auto-select ROCm0 for host op offload / draft sampling and regress
+    worker_general ngram+MTP throughput on CPU-only launches.
+    """
+    if not _has_any_flag(cmd, _CPU_ONLY_DEVICE_FLAGS):
+        cmd.extend(["--device", "none"])
+    if (
+        ("--spec-type" in cmd or "-md" in cmd)
+        and not _has_any_flag(cmd, _CPU_ONLY_DRAFT_DEVICE_FLAGS)
+    ):
+        cmd.extend(["--device-draft", "none"])
+
 
 def _repo_short_sha(path: Path | None = None) -> str | None:
     repo = path or _PATHS["project_root"]
@@ -428,19 +451,17 @@ def wait_for_health(
 
 
 def _build_vision_command(port: int, vision_type: str | None, numa_instance: int = 0) -> list[str]:
-    """VL launch: Qwen3-VL-30B MoE (escalation) or Qwen2.5-VL-7B (worker).
+    """VL launch: production worker or escalation multimodal server.
 
     Thread count comes from NUMA_CONFIG per (role, numa_instance) — added
     2026-05-24 along with the per-instance fix for `_build_role_command`, so
     that the newly-quartered vision roles get the correct -t per instance.
-    Pre-fix: vision_escalation = hardcoded 96, worker_vision = hardcoded 24.
     """
     if vision_type == "escalation":
         role_name = "vision_escalation"
         requirements, runtime = _stack_prior_launch(role_name)
         cache = _runtime_cache(runtime)
         flags = _runtime_flags(runtime)
-        # Qwen3-VL-30B MoE - larger model, expert reduction
         thread_count = _resolve_thread_count(role_name, numa_instance)
         cmd = [
             _runtime_string(runtime, "binary_path", str(LLAMA_SERVER)),
@@ -449,7 +470,7 @@ def _build_vision_command(port: int, vision_type: str | None, numa_instance: int
             "--mmproj",
             _runtime_string(requirements, "mmproj_path", VISION_ESCALATION_MMPROJ),
         ]
-        for override in flags.get("override_kv") or ["qwen3vlmoe.expert_used_count=int:4"]:
+        for override in flags.get("override_kv") or []:
             if isinstance(override, str) and override:
                 cmd.extend(["--override-kv", override])
         cmd.extend(
@@ -1032,21 +1053,25 @@ def build_server_command(
     care about quarters (vision, embedding, dev, worker_pool) are unaffected.
     """
     if vision_mode:
-        return _build_vision_command(port, vision_type, numa_instance)
-    if embedding_mode:
-        return _build_embedding_command(port)
-    if eval_batch_frontdoor_mode:
-        return _build_eval_batch_frontdoor_command(port, numa_instance)
-    if worker_pool_mode and worker_type:
+        cmd = _build_vision_command(port, vision_type, numa_instance)
+    elif embedding_mode:
+        cmd = _build_embedding_command(port)
+    elif eval_batch_frontdoor_mode:
+        cmd = _build_eval_batch_frontdoor_command(port, numa_instance)
+    elif worker_pool_mode and worker_type:
         model_path = WORKER_POOL_MODELS.get(worker_type)
         if not model_path:
             raise ValueError(f"Unknown worker type: {worker_type}")
         if worker_type == "fast":
-            return _build_worker_fast_command(port, model_path)
-        return _build_worker_general_command(port, model_path, binary_override, numa_instance)
-    if dev_mode:
-        return _build_dev_command(port)
-    return _build_role_command(role_config, port, numa_instance)
+            cmd = _build_worker_fast_command(port, model_path)
+        else:
+            cmd = _build_worker_general_command(port, model_path, binary_override, numa_instance)
+    elif dev_mode:
+        cmd = _build_dev_command(port)
+    else:
+        cmd = _build_role_command(role_config, port, numa_instance)
+    _append_cpu_only_device_args(cmd)
+    return cmd
 
 
 def start_server(
@@ -1133,7 +1158,7 @@ def start_server(
 
         if vision_type == "escalation":
             model_path = VISION_ESCALATION_MODEL
-            model_name = "Qwen3-VL-30B-A3B (vision escalation)"
+            model_name = "Qwen2.5-VL-7B (vision escalation temporary alias)"
         else:
             model_path = VISION_WORKER_MODEL
             model_name = "Qwen2.5-VL-7B (vision worker)"
@@ -1921,12 +1946,40 @@ def start_handoff_dashboard() -> ProcessInfo | None:
 # `from scripts.server import orchestrator_stack as stack`).
 # =============================================================================
 
+_STACK_MANIFEST_EXPORTS = {
+    "PORT_MAP",
+    "ROLE_LAUNCH_META",
+    "HOT_ROLES",
+    "NUMA_REPLICA_PORTS",
+    "HOT_SERVERS",
+    "WARM_SERVERS",
+    "DOCKER_SERVICES",
+    "validate_model_paths",
+    "validate_against_registry",
+    "_build_servers_from_classification",
+    "_validate_role_classification",
+    "_filter_by_numa_mode",
+}
+
+_STACK_PATH_EXPORTS = {
+    "_get_paths",
+    "LLAMA_MATH_TOOLS",
+}
+
 
 def __getattr__(name: str):
     if name in ("cmd_start", "cmd_stop", "cmd_reload", "cmd_status"):
         from scripts.server import stack_commands
 
         return getattr(stack_commands, name)
+    if name in _STACK_MANIFEST_EXPORTS:
+        from scripts.server import stack_manifest
+
+        return getattr(stack_manifest, name)
+    if name in _STACK_PATH_EXPORTS:
+        from scripts.server import stack_paths
+
+        return getattr(stack_paths, name)
     raise AttributeError(f"module 'scripts.server.orchestrator_stack' has no attribute {name!r}")
 
 

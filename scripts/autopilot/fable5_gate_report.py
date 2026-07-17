@@ -718,6 +718,166 @@ def eval_task_coverage_section(
     )
 
 
+def _as_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _as_int(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _latest_control_attestation(
+    journal_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    for row in reversed(journal_rows):
+        if not isinstance(row, dict):
+            continue
+        oracle = row.get("oracle_adequacy")
+        if not isinstance(oracle, dict):
+            eval_details = row.get("eval_details")
+            if isinstance(eval_details, dict):
+                oracle = eval_details.get("oracle_adequacy")
+        if not isinstance(oracle, dict):
+            continue
+        attestation = oracle.get("control_attestation")
+        if not isinstance(attestation, dict):
+            continue
+        return {"trial_id": row.get("trial_id"), **attestation}
+    return {"status": "missing", "reason": "no journaled control attestation found"}
+
+
+def _tier_coverage_item(
+    tier_coverage: Any,
+    tier: int,
+) -> dict[str, Any]:
+    if not isinstance(tier_coverage, dict):
+        return {}
+    for key in (tier, str(tier)):
+        item = tier_coverage.get(key)
+        if isinstance(item, dict):
+            return item
+    return {}
+
+
+def p0_2_amendment_bundle_section(
+    *,
+    restart: GateSection,
+    ds_e1: GateSection,
+    journal_rows: list[dict[str, Any]],
+    eval_coverage: GateSection | None,
+) -> GateSection:
+    """Hoist existing P0.2 evidence inputs without signing or gating anything."""
+    gaps: list[str] = []
+
+    latest_combined_e = _as_float(restart.details.get("w8_latest_combined_E"))
+    required_e = _as_float(restart.details.get("w8_latest_required_E"))
+    seq_state = restart.details.get("w8_latest_seq_state")
+    fresh_eval = restart.details.get("w8_latest_fresh_eval")
+    if latest_combined_e is None or required_e is None:
+        rate_axis_status = "missing"
+        gaps.append("rate_axis_evidence_missing")
+    elif latest_combined_e < required_e:
+        rate_axis_status = "below_required"
+        gaps.append("rate_axis_below_required")
+    elif seq_state not in (None, "confirmed"):
+        rate_axis_status = "not_confirmed"
+        gaps.append("rate_axis_seq_not_confirmed")
+    elif fresh_eval is False:
+        rate_axis_status = "fresh_eval_missing"
+        gaps.append("rate_axis_fresh_eval_missing")
+    else:
+        rate_axis_status = "ready"
+
+    control_attestation = _latest_control_attestation(journal_rows)
+    control_status = str(control_attestation.get("status") or "missing")
+    if control_status != "passed":
+        gaps.append(f"control_attestation_{control_status}")
+
+    eval_details = eval_coverage.details if eval_coverage is not None else {}
+    coverage_status = str(eval_details.get("coverage_status") or "missing")
+    if coverage_status != "ok":
+        gaps.append(f"eval_discriminability_{coverage_status}")
+    tier_coverage = eval_details.get("tier_coverage")
+    t3_coverage = _tier_coverage_item(tier_coverage, 3)
+    t3_trials = _as_int(t3_coverage.get("eval_bearing_trials"))
+    t3_distinct_qids = _as_int(t3_coverage.get("distinct_journal_question_keys"))
+    t3_hard_lane_status = (
+        "visible" if t3_trials > 0 and t3_distinct_qids > 0 else "missing"
+    )
+    if t3_hard_lane_status != "visible":
+        gaps.append("t3_hard_lane_coverage_missing")
+
+    ds_statuses = ds_e1.details.get("section_statuses")
+    if not isinstance(ds_statuses, dict):
+        ds_statuses = {}
+    ri10_status = str(ds_statuses.get("ri10_canary") or "missing")
+    if ri10_status != "ready":
+        gaps.append(f"ri10_canary_{ri10_status}")
+
+    status = "ready" if not gaps else "attention"
+    return GateSection(
+        key="p0_2_amendment_bundle_inputs",
+        status=status,
+        summary=(
+            "P0.2 amendment-bundle evidence inputs "
+            f"are {status}: rate_axis={rate_axis_status}, "
+            f"control_attestation={control_status}, "
+            f"eval_discriminability={coverage_status}, "
+            f"t3_hard_lane={t3_hard_lane_status}, ri10_canary={ri10_status}. "
+            "Operator signing remains outside this report."
+        ),
+        blockers=[],
+        details={
+            "observe_only": True,
+            "operator_signing_required": True,
+            "rate_axis_status": rate_axis_status,
+            "rate_axis_latest_combined_E": restart.details.get("w8_latest_combined_E"),
+            "rate_axis_required_E": restart.details.get("w8_latest_required_E"),
+            "rate_axis_seq_state": seq_state,
+            "rate_axis_fresh_eval": fresh_eval,
+            "w8_promotion_status": restart.details.get("w8_promotion_status"),
+            "control_attestation_status": control_status,
+            "control_attestation_trial_id": control_attestation.get("trial_id"),
+            "control_attestation_enabled": control_attestation.get("enabled"),
+            "control_attestation_eligible_for_evidence": control_attestation.get(
+                "eligible_for_evidence"
+            ),
+            "control_attestation_controls_seen": control_attestation.get(
+                "controls_seen"
+            ),
+            "control_attestation_suites": control_attestation.get("suites"),
+            "control_attestation_reason": control_attestation.get("reason"),
+            "eval_discriminability_status": coverage_status,
+            "eval_task_coverage_pct": eval_details.get(
+                "distinct_vs_pool_stable_upper_bound_pct"
+            ),
+            "eval_task_repeat_factor": eval_details.get("repeat_factor"),
+            "t3_hard_lane_status": t3_hard_lane_status,
+            "t3_eval_bearing_trials": t3_coverage.get("eval_bearing_trials"),
+            "t3_question_result_rows": t3_coverage.get("question_result_rows"),
+            "t3_distinct_journal_question_keys": t3_coverage.get(
+                "distinct_journal_question_keys"
+            ),
+            "t3_pool_question_keys": t3_coverage.get("pool_question_keys"),
+            "t3_distinct_vs_pool_pct": t3_coverage.get("distinct_vs_pool_pct"),
+            "ri10_canary_status": ri10_status,
+            "ri10_telemetry_collection_blocker": ds_e1.details.get(
+                "ri10_telemetry_collection_blocker"
+            ),
+            "ri10_telemetry_collection_reason": ds_e1.details.get(
+                "ri10_telemetry_collection_reason"
+            ),
+            "evidence_gaps": gaps,
+        },
+    )
+
+
 def _w8_candidate_generation_required(
     *,
     status_counts: dict[str, Any],
@@ -1439,21 +1599,31 @@ def build_fable5_gate_report(
     ),
     include_tool_use_activation: bool = True,
     include_eval_task_coverage: bool = True,
+    include_p0_2_amendment_bundle: bool = True,
     eval_task_coverage_report: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    phase_gate = phase_section(phase_report)
+    restart_gate = restart_section(
+        build_restart_readiness_report(
+            state,
+            journal_rows,
+            require_seq_cutover=True,
+            require_w6_audit=True,
+            require_current_code=bool(phase_report.get("require_current_code")),
+        )
+    )
+    w8_gate = w8_trajectory_section(build_w8_trajectory_report(journal_rows))
+    ds_e1_gate = ds_e1_section(ds_e1_packet)
+    eval_coverage_gate = (
+        eval_task_coverage_section(eval_task_coverage_report)
+        if include_eval_task_coverage
+        else None
+    )
     sections = [
-        phase_section(phase_report),
-        restart_section(
-            build_restart_readiness_report(
-                state,
-                journal_rows,
-                require_seq_cutover=True,
-                require_w6_audit=True,
-                require_current_code=bool(phase_report.get("require_current_code")),
-            )
-        ),
-        w8_trajectory_section(build_w8_trajectory_report(journal_rows)),
-        ds_e1_section(ds_e1_packet),
+        phase_gate,
+        restart_gate,
+        w8_gate,
+        ds_e1_gate,
         a9_collection_section(
             a9_collection_manifest,
             audit_target_ranker_summary_path=a9_audit_target_ranker_summary_path,
@@ -1465,8 +1635,17 @@ def build_fable5_gate_report(
             ab_root=xmas_ab_root,
         ),
     ]
-    if include_eval_task_coverage:
-        sections.append(eval_task_coverage_section(eval_task_coverage_report))
+    if eval_coverage_gate is not None:
+        sections.append(eval_coverage_gate)
+    if include_p0_2_amendment_bundle:
+        sections.append(
+            p0_2_amendment_bundle_section(
+                restart=restart_gate,
+                ds_e1=ds_e1_gate,
+                journal_rows=journal_rows,
+                eval_coverage=eval_coverage_gate,
+            )
+        )
     if include_tool_use_activation:
         sections.append(
             tool_use_activation_section(
@@ -1504,6 +1683,7 @@ def build_report_summary(
     phase = by_key.get("phase_health")
     tool_use = by_key.get("tool_use_activation")
     eval_coverage = by_key.get("eval_task_coverage")
+    p0_2 = by_key.get("p0_2_amendment_bundle_inputs")
     return {
         "ready": not blockers,
         "blocker_count": len(blockers),
@@ -1652,6 +1832,30 @@ def build_report_summary(
             if eval_coverage is not None
             else None
         ),
+        "p0_2_amendment_bundle_status": (p0_2.status if p0_2 is not None else None),
+        "p0_2_rate_axis_status": (
+            p0_2.details.get("rate_axis_status") if p0_2 is not None else None
+        ),
+        "p0_2_control_attestation_status": (
+            p0_2.details.get("control_attestation_status") if p0_2 is not None else None
+        ),
+        "p0_2_eval_discriminability_status": (
+            p0_2.details.get("eval_discriminability_status")
+            if p0_2 is not None
+            else None
+        ),
+        "p0_2_t3_hard_lane_status": (
+            p0_2.details.get("t3_hard_lane_status") if p0_2 is not None else None
+        ),
+        "p0_2_ri10_canary_status": (
+            p0_2.details.get("ri10_canary_status") if p0_2 is not None else None
+        ),
+        "p0_2_operator_signing_required": (
+            p0_2.details.get("operator_signing_required") if p0_2 is not None else None
+        ),
+        "p0_2_evidence_gaps": (
+            p0_2.details.get("evidence_gaps") if p0_2 is not None else None
+        ),
     }
 
 
@@ -1669,7 +1873,12 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
                 "status": "blocked",
                 "reason": "AutoPilot phase health is not ready; do not trust evidence accrual until recovered.",
                 "blocked_by": phase.blockers,
-                "command": "uv run python scripts/autopilot/phase_health_report.py --json",
+                "command": "uv run python scripts/autopilot/start_fable_authority_daemon.py --preflight",
+                "follow_up": (
+                    "Use the preflight/advisor output as the recovery authority; "
+                    "if it reports wait_for_boundary, do not restart until the "
+                    "active trial reaches a safe boundary."
+                ),
             }
         )
         return actions

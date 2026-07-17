@@ -1,0 +1,21 @@
+{
+  "aggregate_tps": 34.75560694205509,
+  "artifact": "/mnt/raid0/llm/epyc-orchestrator/orchestration/reports/frontier_replay_996_20260716T001046Z.json",
+  "caveat": "exact historical Optuna params include token_budget_min > token_budget_max",
+  "core_id": "legacy_pool_seed_42_n50",
+  "error": null,
+  "errors": 7,
+  "eval_concurrency": 3,
+  "eval_wall_s": 593.4006571769714,
+  "label": "trial-996-think_harder-legacy-t1n50",
+  "median_request_tps": 8.529936291255073,
+  "n_questions": 50,
+  "protocol": "legacy_t1_n50_seed42_w6_off_tool_sentinels_off",
+  "quality": 1.7399999999999998,
+  "reliability": 0.86,
+  "restore_status": "ok",
+  "speed": 34.75560694205509,
+  "speed_metric_mode": "aggregate_batch_tps",
+  "tokens_generated": 20624,
+  "trial": 996
+}

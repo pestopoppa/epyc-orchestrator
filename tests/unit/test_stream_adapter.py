@@ -4,12 +4,14 @@ Covers: generate_stream, _stream_mock, _stream_repl.
 """
 
 import asyncio
+import json
 from unittest.mock import MagicMock, patch
 
 from src.api.routes.chat_pipeline.stream_adapter import (
     _stream_mock,
     generate_stream,
 )
+from src.proactive_delegation.types import PlanReviewResult
 
 
 # ── helpers ────────────────────────────────────────────────────────────
@@ -163,6 +165,37 @@ class TestGenerateStream:
         types = [e.get("event") for e in events]
         assert "error" in types
         assert "done" in types
+
+    @patch("src.api.routes.chat_pipeline.stream_adapter._stream_repl")
+    @patch("src.api.routes.chat_pipeline.stream_adapter._plan_review_gate")
+    @patch("src.api.routes.chat_pipeline.stream_adapter._init_primitives")
+    @patch("src.api.routes.chat_pipeline.stream_adapter._preprocess")
+    @patch("src.api.routes.chat_pipeline.stream_adapter._route_request")
+    def test_plan_review_drop_stops_before_repl(
+        self, mock_route, mock_preprocess, mock_init, mock_plan, mock_repl
+    ):
+        routing = _mock_routing(use_mock=False)
+        mock_route.return_value = routing
+        mock_init.return_value = MagicMock()
+        mock_plan.return_value = PlanReviewResult(
+            decision="drop",
+            score=0.9,
+            feedback="Plan incomplete; missing problem logic.",
+            patches=[],
+        )
+
+        request = _mock_request(mock_mode=False, real_mode=True)
+        logger = MagicMock()
+        state = MagicMock(progress_logger=logger)
+
+        events = _collect(generate_stream(request, state))
+
+        assert [e.get("event") for e in events] == ["error", "final", "done"]
+        assert "Plan incomplete" in json.loads(events[0]["data"])["message"]
+        assert "Plan incomplete" in json.loads(events[1]["data"])["answer"]
+        mock_repl.assert_not_called()
+        logger.log_task_completed.assert_called_once()
+        assert logger.log_task_completed.call_args.kwargs["success"] is False
 
     @patch("src.api.routes.chat_pipeline.stream_adapter._plan_review_gate")
     @patch("src.api.routes.chat_pipeline.stream_adapter._init_primitives")

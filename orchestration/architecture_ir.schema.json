@@ -202,6 +202,96 @@
         }
       }
     },
+    "interfaces": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "RA-11 (intake-839): explicit interface-definition + data-structure section. REQUIRED for new ArchitectureIR artifacts (recommended, and enforced at the author role boundary); OPTIONAL here so existing records stay valid. Prose interface descriptions in `modules[].responsibilities` do NOT satisfy this — interfaces and shared data structures must be typed here.",
+      "properties": {
+        "data_structures": {
+          "type": "array",
+          "description": "Shared data structures / types crossing module boundaries.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "fields"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "kind": {
+                "type": "string",
+                "enum": ["struct", "dataclass", "enum", "union", "typed_dict", "message", "table"]
+              },
+              "description": { "type": "string" },
+              "fields": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["name", "type"],
+                  "properties": {
+                    "name": { "type": "string", "minLength": 1 },
+                    "type": { "type": "string", "minLength": 1 },
+                    "required": { "type": "boolean", "default": true },
+                    "description": { "type": "string" }
+                  }
+                }
+              },
+              "owner_module": {
+                "type": "string",
+                "description": "Module id that owns this structure."
+              }
+            }
+          }
+        },
+        "interface_definitions": {
+          "type": "array",
+          "description": "Typed interfaces/protocols each module exposes or consumes.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "name", "operations"],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z0-9_-]+$",
+                "description": "Interface identifier."
+              },
+              "name": { "type": "string", "minLength": 1 },
+              "provider_module": {
+                "type": "string",
+                "description": "Module id that implements this interface."
+              },
+              "consumer_modules": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "operations": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["name", "signature"],
+                  "properties": {
+                    "name": { "type": "string", "minLength": 1 },
+                    "signature": { "type": "string", "minLength": 1 },
+                    "description": { "type": "string" },
+                    "preconditions": {
+                      "type": "array",
+                      "items": { "type": "string" }
+                    },
+                    "postconditions": {
+                      "type": "array",
+                      "items": { "type": "string" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "contracts": {
       "type": "array",
       "description": "API contracts and schemas",

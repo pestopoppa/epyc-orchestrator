@@ -28,6 +28,7 @@ from planner_providers import (
     PlannerProviderResult,
     get_planner_provider,
 )
+from src.autopilot_core.action_identity import action_signature
 
 log = logging.getLogger("autopilot")
 
@@ -59,6 +60,8 @@ MEDIUM_RISK_ACTIONS = {
 }
 HIGH_RISK_ACTIONS = KNOWN_ACTION_TYPES - LOW_RISK_ACTIONS - MEDIUM_RISK_ACTIONS
 SAFE_FALLBACK_NUMERIC_SURFACE = "memrl_retrieval"
+SAFE_FALLBACK_NUMERIC_PARAMS = {"memrl_retrieval.semantic_k": 15}
+DETERMINISTIC_GUARD_PREFIX = "planner deterministic guard:"
 
 # Actions safe to DISPATCH WITHOUT a critic verdict (degraded/uncritiqued mode).
 # Intentionally EMPTY: when the binding critic is unavailable we PAUSE by default
@@ -146,6 +149,7 @@ class PlannerDecision:
     # Ordered provider attempt telemetry for planner_archive.jsonl. This is
     # observability only; dispatch semantics stay derived from action/critique.
     provider_trace: list[dict[str, Any]] = field(default_factory=list)
+    deterministic_block_reason: str = ""
 
 
 ProviderFactory = Callable[[str], PlannerProvider]
@@ -169,7 +173,7 @@ def _apply_planner_spend_breaker(
     settings: PlannerSettings,
     planner_state: dict[str, Any],
 ) -> tuple[PlannerSettings, bool]:
-    if not _env_bool("AUTOPILOT_PLANNER_SPEND_BREAKER", True):
+    if not _env_bool("AUTOPILOT_PLANNER_SPEND_BREAKER", False):
         planner_state.pop("_spend_breaker", None)
         return settings, False
 
@@ -253,10 +257,7 @@ def _write_trial_planning_banner(trial_id: int | None) -> None:
         return
     label = f"TRIAL {trial_id}"
     ts = datetime.now().isoformat(timespec="seconds")
-    banner = (
-        f"\n{'>' * 24} {label} {'<' * 24}\n"
-        f"[{ts}] planning cycle start\n"
-    )
+    banner = f"\n{'>' * 24} {label} {'<' * 24}\n[{ts}] planning cycle start\n"
     tap = _open_planner_tap()
     if tap is None:
         return
@@ -281,6 +282,7 @@ def plan_with_providers(
     settings: PlannerSettings | None = None,
     provider_factory: ProviderFactory = get_planner_provider,
     allowed_action_types: Iterable[str] | None = None,
+    action_feedback_state: dict[str, Any] | None = None,
     trial_id: int | None = None,
 ) -> PlannerDecision:
     """Draft a canonical planner action with optional secondary critique."""
@@ -289,6 +291,7 @@ def plan_with_providers(
     _write_trial_planning_banner(trial_id)
     settings = settings or load_planner_settings_from_env()
     planner_state = planner_state if planner_state is not None else {}
+    action_feedback_state = action_feedback_state if action_feedback_state is not None else {}
     settings, spend_breaker_active = _apply_planner_spend_breaker(settings, planner_state)
     session_update = None
     allowed_actions = (
@@ -337,11 +340,15 @@ def plan_with_providers(
     provider_trace: list[dict[str, Any]] = []
 
     action = extract_action(draft.text)
+    deterministic_block_reason = ""
     draft_unusable = _draft_unusable_reason(
         draft,
         action,
         allowed_action_types=allowed_actions,
+        action_feedback_state=action_feedback_state,
     )
+    if _is_deterministic_action_block_reason(draft_unusable):
+        deterministic_block_reason = draft_unusable
     provider_trace.append(
         _draft_provider_event(
             stage="draft_primary",
@@ -374,7 +381,10 @@ def plan_with_providers(
                 fallback,
                 fallback_action,
                 allowed_action_types=allowed_actions,
+                action_feedback_state=action_feedback_state,
             )
+            if _is_deterministic_action_block_reason(fallback_unusable):
+                deterministic_block_reason = fallback_unusable
             provider_trace.append(
                 _draft_provider_event(
                     stage="draft_fallback",
@@ -391,6 +401,7 @@ def plan_with_providers(
                 _mark_success(planner_state, fallback.provider)
                 draft = fallback
                 action = fallback_action
+                deterministic_block_reason = ""
             else:
                 _mark_failure(planner_state, fallback.provider, settings)
         else:
@@ -432,6 +443,7 @@ def plan_with_providers(
             predicted_objectives=peaf.extract_predicted_objectives(draft.text),
             providers_unavailable=providers_unavailable,
             provider_trace=provider_trace,
+            deterministic_block_reason=deterministic_block_reason,
         )
         _archive_decision(decision, planner_state)
         return decision
@@ -548,6 +560,7 @@ def plan_with_providers(
                                 active=active_critique,
                                 allowed_action_types=allowed_actions,
                                 planner_prompt=prompt,
+                                action_feedback_state=action_feedback_state,
                             )
                         else:
                             degraded = True
@@ -566,6 +579,7 @@ def plan_with_providers(
                             active=active_critique,
                             allowed_action_types=allowed_actions,
                             planner_prompt=prompt,
+                            action_feedback_state=action_feedback_state,
                         )
                 else:
                     # The critic invoke FAILED outright (timeout / empty / nonzero rc).
@@ -603,6 +617,7 @@ def plan_with_providers(
                             active=active_critique,
                             allowed_action_types=allowed_actions,
                             planner_prompt=prompt,
+                            action_feedback_state=action_feedback_state,
                         )
                     else:
                         degraded = True
@@ -632,6 +647,24 @@ def plan_with_providers(
         draft_action=draft_action,
         provider_trace=provider_trace,
     )
+    block_reason = _final_action_block_reason(
+        decision.action,
+        draft_action=decision.draft_action,
+        critique=decision.critique,
+        binding=decision.mode.strip().lower() == "draft_critique",
+        allowed_action_types=allowed_actions,
+        action_feedback_state=action_feedback_state,
+    )
+    if block_reason:
+        decision.action = None
+        decision.degraded = True
+        decision.deterministic_block_reason = block_reason
+        guard_reason = f"{DETERMINISTIC_GUARD_PREFIX} {block_reason}"
+        decision.fallback_reason = (
+            guard_reason
+            if not decision.fallback_reason
+            else f"{decision.fallback_reason}; {guard_reason}"
+        )
     _archive_decision(decision, planner_state)
     return decision
 
@@ -757,12 +790,10 @@ of the following — the relevant evidence is in the selected context below:
   - matches a "Blacklisted Configurations" entry.
   - cites below-MDE or single-trial evidence as decisive without a reproduction
     plan; use the "Evidence Power" section to reject unmeasurable proposals.
-Do NOT reject a `numeric_trial` solely because `"params": {{}}`. In the action
-schema, empty params means "ask NumericSwarm/Optuna for concrete values"; the
-dispatcher writes the applied params into the trial action and eval details
-before W8 replay/promotion accounting. Historical logged rows that stayed empty
-are not replayable, but a new empty-params numeric request is a valid way to
-produce a replayable candidate if the selected surface is otherwise allowed.
+Reject or revise a `numeric_trial` with missing or empty `"params"`. Planner
+output must carry exactly one explicit parameter for the selected surface; the
+Optuna empty-param sampler path is reserved for internal deterministic fallbacks,
+not model-authored planner actions.
 Do NOT manufacture host-noise / contention narratives when System Health is
 nominal, and do NOT propose operator-domain actions (widening safety-gate
 thresholds, baseline refresh) — those are outside the autopilot action space.
@@ -935,13 +966,17 @@ def _extract_markdown_section(text: str, heading: str) -> str:
 
 def extract_critique(text: str) -> PlannerCritique:
     raw = text or ""
+    if "```json:autopilot_critique" not in raw:
+        return PlannerCritique(raw_text=raw, parse_error="autopilot_critique fence missing")
     data, error = _extract_json_payload(raw, "```json:autopilot_critique")
     if data is None:
         return PlannerCritique(raw_text=raw, parse_error=error or "no critique JSON")
 
-    decision = str(data.get("decision", "approve")).strip().lower()
+    if "decision" not in data:
+        return PlannerCritique(raw_text=raw, parse_error="critique decision missing")
+    decision = str(data.get("decision", "")).strip().lower()
     if decision not in {"approve", "revise", "reject"}:
-        decision = "approve"
+        return PlannerCritique(raw_text=raw, parse_error=f"invalid critique decision: {decision}")
 
     try:
         confidence = float(data.get("confidence", 0.0))
@@ -1025,6 +1060,7 @@ def _reconcile(
     active: bool,
     allowed_action_types: Iterable[str] | None = None,
     planner_prompt: str = "",
+    action_feedback_state: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], str]:
     if not active or critique.decision == "approve":
         return action, rationale, draft_text
@@ -1036,18 +1072,15 @@ def _reconcile(
             revised,
             allowed_action_types=allowed_action_types,
             planner_prompt=planner_prompt,
+            action_feedback_state=action_feedback_state,
         )
         is None
     ):
         new_rationale = critique.revised_rationale or rationale
         return revised, new_rationale, _canonical_text_from_parts(revised, new_rationale)
 
-    if critique.decision == "reject":
-        safe_action = {
-            "type": "numeric_trial",
-            "surface": SAFE_FALLBACK_NUMERIC_SURFACE,
-            "params": {},
-        }
+    if critique.decision in {"reject", "revise"}:
+        safe_action = _safe_numeric_fallback_action()
         safe_rationale = {
             "falsifier": "critic reject numeric fallback fails to produce replayable evidence",
             "rubric_scores": {},
@@ -1072,6 +1105,7 @@ def _revision_validation_error(
     *,
     allowed_action_types: Iterable[str] | None = None,
     planner_prompt: str = "",
+    action_feedback_state: dict[str, Any] | None = None,
 ) -> str | None:
     schema_error = _action_validation_error(
         action,
@@ -1079,6 +1113,12 @@ def _revision_validation_error(
     )
     if schema_error:
         return schema_error
+    hard_block = _planner_action_hard_block_reason(
+        action,
+        action_feedback_state=action_feedback_state,
+    )
+    if hard_block:
+        return hard_block
     return _structural_noop_revision_error(action, planner_prompt)
 
 
@@ -1098,7 +1138,9 @@ def _structural_noop_revision_error(
     if live_state is None:
         return None
     if live_state is value:
-        return f"structural_experiment would not change live flag state: {flag}={str(value).lower()}"
+        return (
+            f"structural_experiment would not change live flag state: {flag}={str(value).lower()}"
+        )
     return None
 
 
@@ -1147,6 +1189,7 @@ def _draft_unusable_reason(
     action: dict[str, Any] | None,
     *,
     allowed_action_types: Iterable[str] | None = None,
+    action_feedback_state: dict[str, Any] | None = None,
 ) -> str:
     """Why a draft is unusable ("" if usable). Surfaces the EXACT schema-validation
     error (e.g. an out-of-range min_memories) rather than an opaque 'invalid action'
@@ -1157,10 +1200,19 @@ def _draft_unusable_reason(
         return result.error or "provider error / empty response"
     if action is None:
         return "no parseable json:autopilot_actions block"
-    return _action_validation_error(
+    schema_error = _action_validation_error(
         action,
         allowed_action_types=allowed_action_types,
-    ) or ""
+    )
+    if schema_error:
+        return schema_error
+    return (
+        _planner_action_hard_block_reason(
+            action,
+            action_feedback_state=action_feedback_state,
+        )
+        or ""
+    )
 
 
 def _action_validation_error(
@@ -1178,6 +1230,218 @@ def _action_validation_error(
         if action_type not in allowed:
             return f"action type currently unavailable: {action_type}"
     return validate_single_variable(action)
+
+
+def _safe_numeric_fallback_action() -> dict[str, Any]:
+    return {
+        "type": "numeric_trial",
+        "surface": SAFE_FALLBACK_NUMERIC_SURFACE,
+        "params": dict(SAFE_FALLBACK_NUMERIC_PARAMS),
+    }
+
+
+def _numeric_surface_specs() -> dict[str, list[Any]]:
+    try:
+        from species.numeric_swarm import SURFACES
+    except Exception:
+        return {}
+    if not isinstance(SURFACES, dict):
+        return {}
+    return {
+        str(surface): list(specs)
+        for surface, specs in SURFACES.items()
+        if isinstance(surface, str) and isinstance(specs, list)
+    }
+
+
+def _numeric_param_label(spec: Any) -> str:
+    name = str(getattr(spec, "name", "") or "")
+    ptype = str(getattr(spec, "param_type", "float") or "float")
+    low = getattr(spec, "low", "?")
+    high = getattr(spec, "high", "?")
+    return f"{name} ({ptype}, {low}-{high})"
+
+
+def _numeric_param_validation_error(action: dict[str, Any]) -> str | None:
+    if action.get("type") != "numeric_trial":
+        return None
+    params = action.get("params")
+    if not isinstance(params, dict) or not params:
+        return None
+    if len(params) != 1:
+        return None
+    surface = str(action.get("surface") or "")
+    specs_by_surface = _numeric_surface_specs()
+    specs = specs_by_surface.get(surface)
+    if not specs:
+        return None
+
+    key, value = next(iter(params.items()))
+    key_s = str(key)
+    full_names = {str(getattr(spec, "name", "") or ""): spec for spec in specs}
+    short_names: dict[str, Any] = {}
+    ambiguous: set[str] = set()
+    for spec in specs:
+        name = str(getattr(spec, "name", "") or "")
+        if "." not in name:
+            continue
+        short = name.split(".", 1)[1]
+        if short in short_names:
+            ambiguous.add(short)
+            short_names.pop(short, None)
+        elif short not in ambiguous:
+            short_names[short] = spec
+
+    spec = full_names.get(key_s) or short_names.get(key_s)
+    if spec is None:
+        valid = ", ".join(_numeric_param_label(item) for item in specs)
+        return (
+            f"numeric_trial param {key_s!r} is not valid for surface {surface!r}; "
+            f"valid params: {valid}. There is no numeric_trial "
+            "tool_activation_threshold knob; tool-required routing is controlled "
+            "by chat_routing.detect_tool_requirement(), not NumericSwarm."
+        )
+
+    ptype = str(getattr(spec, "param_type", "float") or "float")
+    low = getattr(spec, "low", None)
+    high = getattr(spec, "high", None)
+    if ptype == "int":
+        if not isinstance(value, int) or isinstance(value, bool):
+            return f"numeric_trial param {key_s!r} must be int; got {value!r}"
+    elif not isinstance(value, (int, float)) or isinstance(value, bool):
+        return f"numeric_trial param {key_s!r} must be numeric; got {value!r}"
+
+    if low is not None and value < low:
+        return f"numeric_trial param {key_s!r} must be >= {low}; got {value!r}"
+    if high is not None and value > high:
+        return f"numeric_trial param {key_s!r} must be <= {high}; got {value!r}"
+    review_order_error = _chat_review_threshold_order_error({key_s: value})
+    if review_order_error:
+        return review_order_error
+    return None
+
+
+def _current_chat_review_thresholds() -> tuple[float, float]:
+    try:
+        from src.config import get_config
+
+        cfg = get_config().chat
+        return float(cfg.review_low_q_threshold), float(cfg.review_skip_q_threshold)
+    except Exception:
+        return 0.6, 0.6
+
+
+def _chat_review_threshold_order_error(params: dict[str, Any]) -> str | None:
+    low_key = "chat.review_low_q_threshold"
+    skip_key = "chat.review_skip_q_threshold"
+    if low_key not in params and skip_key not in params:
+        return None
+    try:
+        low, skip = _current_chat_review_thresholds()
+        if low_key in params:
+            low = float(params[low_key])
+        if skip_key in params:
+            skip = float(params[skip_key])
+    except (TypeError, ValueError) as exc:
+        return f"chat review thresholds must be numeric: {exc}"
+    if low > skip:
+        return (
+            "chat review thresholds require "
+            "chat.review_low_q_threshold <= chat.review_skip_q_threshold; "
+            f"got {low:.6g} > {skip:.6g}"
+        )
+    return None
+
+
+def _planner_action_hard_block_reason(
+    action: dict[str, Any],
+    *,
+    action_feedback_state: dict[str, Any] | None = None,
+) -> str | None:
+    if not isinstance(action, dict):
+        return "missing action"
+    if action.get("type") == "numeric_trial":
+        params = action.get("params")
+        if not isinstance(params, dict) or not params:
+            return (
+                "numeric_trial planner output must include exactly one explicit "
+                "params entry; empty params are reserved for internal sampler fallbacks"
+            )
+        param_error = _numeric_param_validation_error(action)
+        if param_error:
+            return param_error
+
+    state = action_feedback_state if isinstance(action_feedback_state, dict) else {}
+    signature = action_signature(action)
+    rejected = state.get("critic_rejected_signatures")
+    if isinstance(rejected, dict):
+        record = rejected.get(signature)
+        if isinstance(record, dict):
+            trial = record.get("trial_id", "?")
+            reason = str(record.get("reason") or "critic rejected this exact action")
+            return (
+                "exact action signature was previously critic-rejected at "
+                f"trial {trial}: {reason[:220]}"
+            )
+    invalid_counts = state.get("invalid_signature_counts")
+    if isinstance(invalid_counts, dict) and signature in invalid_counts:
+        return (
+            "exact action signature was previously invalid "
+            f"({int(invalid_counts.get(signature) or 0)} recorded hit(s))"
+        )
+    return None
+
+
+def _is_deterministic_action_block_reason(reason: str) -> bool:
+    normalized = str(reason or "").strip().lower()
+    return normalized.startswith(
+        (
+            "numeric_trial planner output must include",
+            "exact action signature was previously",
+            "action type currently unavailable:",
+            "unknown action type:",
+            "numeric_trial params must be an object",
+            "numeric_trial sets ",
+            "numeric_trial surface must be one of",
+        )
+    )
+
+
+def _final_action_block_reason(
+    action: dict[str, Any] | None,
+    *,
+    draft_action: dict[str, Any] | None,
+    critique: PlannerCritique | None,
+    binding: bool = False,
+    allowed_action_types: Iterable[str] | None = None,
+    action_feedback_state: dict[str, Any] | None = None,
+) -> str | None:
+    if not isinstance(action, dict):
+        return None
+    schema_error = _action_validation_error(
+        action,
+        allowed_action_types=allowed_action_types,
+    )
+    if schema_error:
+        return schema_error
+    hard_block = _planner_action_hard_block_reason(
+        action,
+        action_feedback_state=action_feedback_state,
+    )
+    if hard_block:
+        return hard_block
+    if (
+        binding
+        and critique is not None
+        and critique.decision in {"revise", "reject"}
+        and isinstance(draft_action, dict)
+        and action == draft_action
+    ):
+        return (
+            f"critique decision {critique.decision!r} left final action unchanged; "
+            "revise/reject must produce a materially different dispatch action"
+        )
+    return None
 
 
 def _extract_json_payload(
@@ -1258,6 +1522,7 @@ def _archive_decision(
             "critique_issues": critique.issues if critique else [],
             "draft_action": decision.draft_action,
             "final_action": decision.action,
+            "deterministic_block_reason": decision.deterministic_block_reason,
             "provider_trace": decision.provider_trace,
             "planner_state": planner_state,
         }

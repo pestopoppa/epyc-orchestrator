@@ -189,6 +189,80 @@ def _hypothesis_text(row: Mapping[str, Any]) -> str | None:
     return None
 
 
+def _surrogate_feedback(row: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Return EV-10b surrogate-verifier feedback when a journal row carries it."""
+    details = _eval_details(row)
+    nested = _nested_details(row)
+    for source in (nested, details):
+        raw = source.get("surrogate_feedback")
+        if isinstance(raw, Mapping):
+            return raw
+    return {}
+
+
+def _float_or_none(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _surrogate_feedback_summary(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+    proxy_rewards: list[float] = []
+    rows_with_feedback = 0
+    accepted = 0
+    dense_feedback = 0
+    opaque_only = 0
+    trial_ids: list[int] = []
+
+    for row in rows:
+        feedback = _surrogate_feedback(row)
+        if not feedback:
+            continue
+        rows_with_feedback += 1
+        trial_id = _trial_id(row)
+        if trial_id is not None:
+            trial_ids.append(trial_id)
+        reward = _float_or_none(feedback.get("proxy_reward"))
+        if reward is not None:
+            proxy_rewards.append(reward)
+        if feedback.get("accepted") is True:
+            accepted += 1
+        if feedback.get("dense_feedback") is True:
+            dense_feedback += 1
+        if feedback.get("opaque_only") is True:
+            opaque_only += 1
+
+    if rows_with_feedback == 0:
+        status = "not_present"
+    elif opaque_only:
+        status = "oracle_conflict"
+    elif dense_feedback:
+        status = "dense_feedback"
+    elif accepted == rows_with_feedback:
+        status = "accepted_only"
+    else:
+        status = "present"
+
+    return {
+        "rows": rows_with_feedback,
+        "accepted": accepted,
+        "dense_feedback": dense_feedback,
+        "opaque_only": opaque_only,
+        "proxy_reward_rows": len(proxy_rewards),
+        "avg_proxy_reward": round(sum(proxy_rewards) / len(proxy_rewards), 4)
+        if proxy_rewards
+        else None,
+        "trial_id_min": min(trial_ids) if trial_ids else None,
+        "trial_id_max": max(trial_ids) if trial_ids else None,
+        "status": status,
+        "interpretation": (
+            "EV-10b surrogate-verifier feedback is read-only here; ground-truth "
+            "oracles remain authoritative when present."
+        ),
+    }
+
+
 def _question_key(item: Mapping[str, Any]) -> tuple[str, str] | None:
     qid = str(item.get("qid") or item.get("question_id") or item.get("id") or "").strip()
     if not qid:
@@ -263,9 +337,13 @@ def build_report(
     fold_supersessions: bool = True,
 ) -> dict[str, Any]:
     raw_rows, load_meta = load_jsonl(journal_paths)
-    rows, fold_meta = fold_rows(raw_rows) if fold_supersessions else (
-        raw_rows,
-        {"folded": False, "reason": "disabled"},
+    rows, fold_meta = (
+        fold_rows(raw_rows)
+        if fold_supersessions
+        else (
+            raw_rows,
+            {"folded": False, "reason": "disabled"},
+        )
     )
     pool = load_pool(pool_path)
 
@@ -324,12 +402,8 @@ def build_report(
         {"suite": suite, "qid": qid, "attempts": attempts}
         for (suite, qid), attempts in question_counts.most_common(20)
     ]
-    suite_distinct_counts = {
-        suite: len(qids) for suite, qids in sorted(suite_distinct.items())
-    }
-    tier_distinct_counts = {
-        tier: len(keys) for tier, keys in sorted(tier_distinct.items())
-    }
+    suite_distinct_counts = {suite: len(qids) for suite, qids in sorted(suite_distinct.items())}
+    tier_distinct_counts = {tier: len(keys) for tier, keys in sorted(tier_distinct.items())}
     pool_tier_counts = pool["tier_counts"]
     tier_coverage = {}
     for tier, distinct_count in tier_distinct_counts.items():
@@ -367,7 +441,9 @@ def build_report(
         "repeat_factor": round(question_rows / distinct_journal_count, 4)
         if distinct_journal_count
         else 0.0,
-        "status": "low_coverage" if _safe_pct(distinct_journal_count, pool_stable_count) < 10 else "ok",
+        "status": "low_coverage"
+        if _safe_pct(distinct_journal_count, pool_stable_count) < 10
+        else "ok",
         "interpretation": (
             "Fixed authority-core repetition is acceptable for paired safety evidence; "
             "planner-learning coverage is narrow if this is the dominant optimization signal."
@@ -405,6 +481,7 @@ def build_report(
             "unique_config_fingerprints": len(config_fingerprints),
             "unique_hypotheses": len(hypotheses),
         },
+        "surrogate_verifier": _surrogate_feedback_summary(rows),
         "pool": {
             "path": pool["pool_path"],
             "rows": pool["pool_rows"],
@@ -435,6 +512,7 @@ def render_markdown(report: Mapping[str, Any]) -> str:
     planner = report["planner_diversity"]
     questions = report["questions"]
     pool = report["pool"]
+    surrogate = report["surrogate_verifier"]
     lines = [
         "# AutoPilot Eval Task Coverage",
         "",
@@ -463,6 +541,17 @@ def render_markdown(report: Mapping[str, Any]) -> str:
         f"- Unique action types: `{planner['unique_action_types']}`",
         f"- Unique config fingerprints: `{planner['unique_config_fingerprints']}`",
         f"- Unique hypotheses: `{planner['unique_hypotheses']}`",
+        "",
+        "## Surrogate Verifier Feedback",
+        "",
+        f"- Rows: `{surrogate['rows']}`",
+        f"- Accepted: `{surrogate['accepted']}`",
+        f"- Dense feedback: `{surrogate['dense_feedback']}`",
+        f"- Opaque-only oracle conflicts: `{surrogate['opaque_only']}`",
+        f"- Average proxy reward: `{surrogate['avg_proxy_reward']}`",
+        f"- Status: `{surrogate['status']}`",
+        "",
+        surrogate["interpretation"],
         "",
         "## Tier Coverage",
         "",

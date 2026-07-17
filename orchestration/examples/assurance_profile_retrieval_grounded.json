@@ -1,0 +1,37 @@
+{
+  "schema_version": "1.0.0",
+  "profile_id": "retrieval_grounded:v1",
+  "domain": "retrieval_grounded",
+  "risk_class": "medium",
+  "criteria": {
+    "citation_entailment": { "severity": "critical", "mandatory": true },
+    "source_coverage": { "severity": "high", "mandatory": true },
+    "temporal_freshness": { "severity": "medium", "mandatory": false },
+    "contradiction_freedom": { "severity": "high", "mandatory": true }
+  },
+  "verifier_registry": {
+    "citation_entailment": ["source_span_resolver", "nli_entailment_check"],
+    "source_coverage": ["coverage_checker"],
+    "temporal_freshness": ["date_version_checker"],
+    "contradiction_freedom": ["nli_contradiction_check"]
+  },
+  "policy": {
+    "reviewer_required_at": ["release_candidate", "random_audit"],
+    "unknown_on_critical": "escalate",
+    "reviewer_timeout": "abstain",
+    "schema_error": "abstain",
+    "no_reviewer_available": "defer",
+    "conflict": "escalate",
+    "evidence_budget_exhausted": "defer",
+    "max_review_rounds": 1,
+    "max_evidence_rounds": 2,
+    "max_reviewer_risk": 0.1
+  },
+  "calibration_cohort": {
+    "architect_family": "qwen",
+    "reviewer_family": "glm",
+    "domain": "retrieval_grounded",
+    "context_band": "32k-128k",
+    "quantization": "iq2"
+  }
+}

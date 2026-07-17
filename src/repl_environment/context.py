@@ -12,6 +12,9 @@ from typing import Any
 from src.repl_environment.types import FinalSignal
 
 
+_MISSING = object()
+
+
 class _ContextMixin:
     """Mixin providing context management and tool dispatch.
 
@@ -166,16 +169,30 @@ class _ContextMixin:
     # Completion signals
     # ------------------------------------------------------------------
 
-    def _final(self, answer: str) -> None:
+    def _final(self, answer: Any = _MISSING, **kwargs: Any) -> None:
         """Signal completion with final answer.
 
         Args:
-            answer: The final answer to return.
+            answer: The final answer to return. Keyword aliases accepted for
+                model compatibility: answer, result, secret, value, response.
 
         Raises:
             FinalSignal: Raised to terminate execution (after validation).
             ValueError: If exploration requirement not met.
         """
+        if answer is _MISSING:
+            for key in ("answer", "result", "secret", "value", "response"):
+                if key in kwargs:
+                    answer = kwargs.pop(key)
+                    break
+        if answer is _MISSING:
+            raise ValueError(
+                "FINAL() requires an answer. Use FINAL(answer) or FINAL(result=answer)."
+            )
+        if kwargs:
+            keys = ", ".join(sorted(kwargs))
+            raise ValueError(f"FINAL() got unsupported keyword argument(s): {keys}")
+
         # Check forced exploration validation
         if self.config.require_exploration_before_final:
             if self._exploration_calls < self.config.min_exploration_calls:

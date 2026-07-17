@@ -30,6 +30,31 @@ logger = logging.getLogger(__name__)
 # Feature flag: use SearXNG as default search backend (SX-6)
 _SEARXNG_DEFAULT = os.environ.get("ORCHESTRATOR_SEARXNG_DEFAULT", "1") == "1"
 _SEARXNG_URL = os.environ.get("SEARXNG_URL", "http://localhost:8888")
+_QUERY_STOPWORDS = {
+    "about",
+    "after",
+    "and",
+    "are",
+    "current",
+    "for",
+    "from",
+    "how",
+    "latest",
+    "new",
+    "news",
+    "notes",
+    "now",
+    "of",
+    "on",
+    "or",
+    "release",
+    "the",
+    "to",
+    "what",
+    "when",
+    "where",
+    "with",
+}
 
 # Rate limiter: minimum seconds between DDG requests to avoid bot detection
 _DDG_MIN_INTERVAL = 2.0
@@ -207,6 +232,42 @@ def _search_searxng(
     return results
 
 
+def _query_terms(query: str) -> set[str]:
+    """Return non-trivial query terms for coarse search-result sanity checks."""
+    terms: set[str] = set()
+    for token in re.findall(r"[a-z0-9]+", query.lower()):
+        if len(token) < 3 or token in _QUERY_STOPWORDS:
+            continue
+        terms.add(token)
+    return terms
+
+
+def _result_relevance_score(query_terms: set[str], result: dict[str, Any]) -> int:
+    haystack = " ".join(
+        str(result.get(key, "")).lower()
+        for key in ("title", "url", "snippet")
+    )
+    return sum(1 for term in query_terms if term in haystack)
+
+
+def _results_pass_relevance_guard(query: str, results: list[dict[str, Any]]) -> bool:
+    """Reject obviously off-topic search result sets so fallback can run.
+
+    SearXNG can return HTTP-200 JSON backed by a degraded single engine while the
+    results are unrelated to the query. This guard is intentionally coarse: it
+    catches zero/near-zero lexical overlap, then lets downstream fetch/synthesis
+    handle normal quality ranking.
+    """
+    terms = _query_terms(query)
+    if not terms:
+        return True
+
+    scores = [_result_relevance_score(terms, result) for result in results]
+    if len(terms) <= 2:
+        return max(scores, default=0) >= 1
+    return max(scores, default=0) >= 2 or sum(score >= 1 for score in scores) >= 2
+
+
 def web_search(
     query: str,
     max_results: int = 5,
@@ -236,16 +297,23 @@ def web_search(
             timeout_seconds=15,
         )
         if result.success:
-            return {
-                "success": True,
-                "results": result.data,
-                "query": query,
-                "result_count": len(result.data),
-                "elapsed_ms": result.elapsed_ms,
-                "backend": "searxng",
-            }
-        # SearXNG failed — fall through to DDG as fallback
-        logger.warning("SearXNG failed (%s), falling back to DDG", result.error)
+            searx_results = result.data or []
+            if not searx_results:
+                logger.warning("SearXNG returned no results, falling back to DDG")
+            elif not _results_pass_relevance_guard(search_query, searx_results):
+                logger.warning("SearXNG low-relevance result set, falling back to DDG")
+            else:
+                return {
+                    "success": True,
+                    "results": searx_results,
+                    "query": query,
+                    "result_count": len(searx_results),
+                    "elapsed_ms": result.elapsed_ms,
+                    "backend": "searxng",
+                }
+        else:
+            logger.warning("SearXNG failed (%s), falling back to DDG", result.error)
+        # SearXNG failed or was low-quality - fall through to DDG as fallback
 
     result = safe_execute(
         _search_duckduckgo,
@@ -261,11 +329,22 @@ def web_search(
             "query": query,
         }
 
+    fallback_results = result.data or []
+    if not fallback_results or not _results_pass_relevance_guard(search_query, fallback_results):
+        return {
+            "success": False,
+            "error": "No relevant search results from configured search backends",
+            "query": query,
+            "result_count": 0,
+            "backend": "duckduckgo",
+            "elapsed_ms": result.elapsed_ms,
+        }
+
     return {
         "success": True,
-        "results": result.data,
+        "results": fallback_results,
         "query": query,
-        "result_count": len(result.data),
+        "result_count": len(fallback_results),
         "elapsed_ms": result.elapsed_ms,
         "backend": "duckduckgo",
     }

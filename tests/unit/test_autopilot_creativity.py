@@ -393,6 +393,10 @@ def test_action_availability_surfaces_w8_candidate_generation_priority(
 
     rendered = autopilot._format_available_action_schemas(selectable)
     assert '- Numeric: {"type": "numeric_trial"' in rendered
+    assert "Valid params by surface:" in rendered
+    assert "memrl_retrieval.semantic_k" in rendered
+    assert "repl.turn_token_cap" in rendered
+    assert "tool_activation_threshold" in rendered
     assert '- Structural: {"type": "structural_experiment"' in rendered
     assert "- Seed:" not in rendered
     assert "- Deep eval:" not in rendered
@@ -407,6 +411,48 @@ def test_controller_prompt_binds_availability_before_global_action_schema() -> N
     schema_idx = template.index("{available_action_schemas}")
 
     assert binding_idx < filtered_idx < schema_idx
+
+
+def test_action_schema_surfaces_new_file_memory_schema_root() -> None:
+    rendered = autopilot._format_available_action_schemas(["code_mutation"])
+
+    assert '"mutation": "targeted_fix"' in rendered
+    assert 'use mutation "new_file" only under' in rendered
+    assert "orchestration/repl_memory/schema_evolution" in rendered
+    assert "memory schema-evolution files must be default-inert" in rendered
+
+
+def test_bsv3_conflict_policy_default_off_allows_state_promotion(monkeypatch) -> None:
+    monkeypatch.delenv("AUTOPILOT_BSV3_CONFLICT_POLICY", raising=False)
+
+    decision = autopilot._bsv3_conflict_policy_decision(
+        {"severity": "blocking", "conflict_count": 2}
+    )
+
+    assert decision["enabled"] is False
+    assert decision["policy"] == "off"
+    assert decision["ledger_update_allowed"] is True
+    assert decision["scope"] == "bsv_ledger_incumbent_state_only"
+
+
+def test_bsv3_conflict_policy_blocks_only_configured_severities() -> None:
+    block_watch = autopilot._bsv3_conflict_policy_decision(
+        {"severity": "watch", "conflict_count": 1},
+        policy="block",
+    )
+    block_blocking = autopilot._bsv3_conflict_policy_decision(
+        {"severity": "blocking", "conflict_count": 1},
+        policy="block",
+    )
+    review_watch = autopilot._bsv3_conflict_policy_decision(
+        {"severity": "watch", "conflict_count": 1},
+        policy="review",
+    )
+
+    assert block_watch["ledger_update_allowed"] is True
+    assert block_blocking["ledger_update_allowed"] is False
+    assert block_blocking["incumbent_update_allowed"] is False
+    assert review_watch["ledger_update_allowed"] is False
 
 
 def test_w8_candidate_generation_pressure_ignores_replayable_candidates() -> None:
@@ -450,6 +496,65 @@ def test_action_availability_blocks_deferrals_during_w8_replay_pressure(
     assert "deep_eval" not in selectable
     assert "seed_batch" not in selectable
     assert "structural_prune" not in selectable
+
+
+def test_dispatch_allowlist_applies_only_to_planner_selected_actions() -> None:
+    assert autopilot._dispatch_allowed_action_types(
+        ["seed_batch", "numeric_trial"],
+        seq_due_bypassed_planner=False,
+        seq_fresh_eval_context=None,
+        seq_baseline_draw_reference=None,
+        seq_candidate_replay_context=None,
+    ) == ["seed_batch", "numeric_trial"]
+
+    assert (
+        autopilot._dispatch_allowed_action_types(
+            ["numeric_trial"],
+            seq_due_bypassed_planner=False,
+            seq_fresh_eval_context=None,
+            seq_baseline_draw_reference=None,
+            seq_candidate_replay_context=None,
+            seq_gate_preflight={
+                "status": "deferred",
+                "replacement_action": {"type": "seed_batch", "n_questions": 50},
+            },
+        )
+        is None
+    )
+
+    assert autopilot._dispatch_allowed_action_types(
+        ["numeric_trial"],
+        seq_due_bypassed_planner=False,
+        seq_fresh_eval_context=None,
+        seq_baseline_draw_reference=None,
+        seq_candidate_replay_context=None,
+        seq_gate_preflight={
+            "status": "blocked_no_fallback",
+            "replacement_action": None,
+        },
+    ) == ["numeric_trial"]
+
+    assert (
+        autopilot._dispatch_allowed_action_types(
+            ["seed_batch", "numeric_trial"],
+            seq_due_bypassed_planner=True,
+            seq_fresh_eval_context=None,
+            seq_baseline_draw_reference=None,
+            seq_candidate_replay_context=None,
+        )
+        is None
+    )
+
+    assert (
+        autopilot._dispatch_allowed_action_types(
+            ["seed_batch", "numeric_trial"],
+            seq_due_bypassed_planner=False,
+            seq_fresh_eval_context={"candidate": "candidate-a"},
+            seq_baseline_draw_reference=None,
+            seq_candidate_replay_context=None,
+        )
+        is None
+    )
 
 
 def test_w8_candidate_generation_replaces_deferral_with_numeric(monkeypatch) -> None:
@@ -1218,6 +1323,12 @@ def test_outcome_progress_pressure_reports_stall_and_rates(monkeypatch) -> None:
                 "keepable_rate": {"count": 1, "total": 20, "rate": 0.05},
                 "wasted_eval_rate": {"count": 15, "total": 20, "rate": 0.75},
                 "learning_excluded_rate": {"count": 4, "total": 20, "rate": 0.2},
+                "regression_per_active_trial": {"count": 3, "total": 20, "rate": 0.15},
+                "promotions_per_100_active_trials": {
+                    "count": 1,
+                    "total": 20,
+                    "per_100": 5.0,
+                },
             },
             "blockers": ["frontier admission stale"],
         }
@@ -1236,6 +1347,8 @@ def test_outcome_progress_pressure_reports_stall_and_rates(monkeypatch) -> None:
 
     assert "status=attention" in text
     assert "trials_since_frontier=175/5" in text
+    assert "regression_per_active_trial=3/20 (15.0%)" in text
+    assert "promotions_per_100_active_trials=1/20 (5.0/100)" in text
     assert "trials_since_promotion=211/10" in text
     assert "keepable=1/20 (5.0%)" in text
     assert "wasted_eval=15/20 (75.0%)" in text

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,6 +15,18 @@ sys.path.insert(0, str(REPO_ROOT / "scripts" / "autopilot"))
 
 import autopilot  # type: ignore[import-not-found]  # noqa: E402
 from experiment_journal import ExperimentJournal, JournalEntry  # noqa: E402
+from src.autopilot_core.authority_consent import (  # noqa: E402
+    SEQ_P0_2_BRIDGE_CONSENT,
+    SEQ_P0_2_BRIDGE_ENV,
+    SEQ_P0_2_BRIDGE_MODE,
+)
+
+
+def _enable_seq_p0_2_bridge(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    grant = tmp_path / "authority_consent.json"
+    grant.write_text(json.dumps({SEQ_P0_2_BRIDGE_CONSENT: "allow"}), encoding="utf-8")
+    monkeypatch.setenv("AUTOPILOT_AUTHORITY_CONSENT_PATH", str(grant))
+    monkeypatch.setenv(SEQ_P0_2_BRIDGE_ENV, "1")
 
 
 def test_eval_progress_callback_refreshes_dispatch_heartbeat() -> None:
@@ -138,6 +151,63 @@ def _entry(
     )
 
 
+def test_update_contrastive_trace_state_labels_frontier_success() -> None:
+    state: dict[str, Any] = {}
+
+    class FakeTower:
+        update_contrastive_trace_bank = staticmethod(
+            autopilot.EvalTower.update_contrastive_trace_bank
+        )
+
+        def capture_contrastive_traces(self, **kwargs):
+            return autopilot.EvalTower().capture_contrastive_traces(**kwargs)
+
+        build_critic_trace_ir = staticmethod(autopilot.EvalTower.build_critic_trace_ir)
+        format_critic_trace_ir = staticmethod(autopilot.EvalTower.format_critic_trace_ir)
+
+    autopilot._update_contrastive_trace_state(
+        state,
+        FakeTower(),
+        trace_text="ROLE=worker_general\nRESPONSE:\nok",
+        trial_id=21,
+        species="prompt_forge",
+        action_type="prompt_mutation",
+        pareto_status="frontier",
+        verdict=SimpleNamespace(passed=True),
+        eval_result=SimpleNamespace(tier=1, quality=2.2, speed=33.0),
+    )
+
+    assert state["contrastive_trace_bank"][0]["outcome"] == "success"
+    assert state["contrastive_trace_bank"][0]["trial_id"] == 21
+    assert "## Contrastive Execution Traces" in state["contrastive_traces"]
+    assert state["critic_trace_ir"]["schema_version"] == "harness_trace_ir.v1"
+    assert state["critic_trace_ir"]["trace_examples"][0]["outcome"] == "success"
+    assert "## Harness Trace IR (MH-11 observe-only)" in state["critic_trace_ir_prompt"]
+
+
+def test_update_contrastive_trace_state_skips_bug_corrupted_rows() -> None:
+    state: dict[str, Any] = {}
+
+    class FakeTower:
+        def update_contrastive_trace_bank(self, *args, **kwargs):  # pragma: no cover
+            raise AssertionError("bug-corrupted trace should not be stored")
+
+    autopilot._update_contrastive_trace_state(
+        state,
+        FakeTower(),
+        trace_text="ROLE=worker_general\nRESPONSE:\npartial",
+        trial_id=22,
+        species="prompt_forge",
+        action_type="prompt_mutation",
+        pareto_status="dominated",
+        verdict=SimpleNamespace(passed=False),
+        bug_corrupted_by="resource_contention",
+        failure_analysis="Excluded reload",
+    )
+
+    assert "contrastive_trace_bank" not in state
+
+
 def test_seq_inputs_use_trusted_same_tier_prior_rows(tmp_path: Path) -> None:
     action = {"type": "seed_batch", "n_questions": 10}
     candidate = autopilot._config_fingerprint(action)
@@ -249,6 +319,300 @@ def test_seq_paired_baseline_diagnostics_reports_missing_reference(
         "candidate_vector_qids": 1,
         "used_for_gating": False,
     }
+
+
+def test_seq_gate_preflight_blocks_rate_axis_unreachable_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(autopilot, "SEQ_GATE_PREFLIGHT_MIN_SEQ_ROWS", 2)
+    monkeypatch.setattr(autopilot, "SEQ_GATE_PREFLIGHT_RECENT_WINDOW", 2)
+    monkeypatch.setattr(autopilot, "SEQ_GATE_PREFLIGHT_MAX_RATE_E", 2.0)
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    base_action = {"type": "numeric_trial", "surface": "memrl_retrieval", "params": {"x": 1}}
+    for trial_id, wall_s in enumerate([60.0, 60.0, 1800.0, 1800.0], start=1):
+        journal.record(
+            _entry(
+                trial_id,
+                {**base_action, "params": {"x": trial_id}},
+                eval_details_extra={"eval_wall_s": wall_s},
+                seq={
+                    "candidate": f"candidate-{trial_id}",
+                    "core_id": "core_v1",
+                    "z": 0.1,
+                    "z_rate": -0.9,
+                    "E_quality": 2.0,
+                    "E_rate_noninf": 1.05,
+                    "state": "accumulating",
+                    "policy_version": "seq-v1",
+                },
+            )
+        )
+
+    proposed = {"type": "numeric_trial", "surface": "new_surface", "params": {"x": 99}}
+    action, rationale, payload = autopilot._maybe_defer_seq_unreachable_candidate_action(
+        proposed,
+        state={},
+        journal=journal,
+        blacklist=[],
+        rationale={},
+        trial_counter=10,
+        tier=1,
+        enabled=True,
+    )
+
+    assert payload is not None
+    assert payload["status"] == "blocked_unreachable"
+    assert payload["reason"] == "rate_axis_unreachable"
+    assert payload["replacement_action"] is None
+    assert action == proposed
+    assert rationale == {}
+
+
+def test_seq_gate_preflight_bridge_allows_rate_axis_advisory_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _enable_seq_p0_2_bridge(monkeypatch, tmp_path)
+    monkeypatch.setattr(autopilot, "SEQ_GATE_PREFLIGHT_MIN_SEQ_ROWS", 2)
+    monkeypatch.setattr(autopilot, "SEQ_GATE_PREFLIGHT_RECENT_WINDOW", 2)
+    monkeypatch.setattr(autopilot, "SEQ_GATE_PREFLIGHT_MAX_RATE_E", 2.0)
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    base_action = {"type": "numeric_trial", "surface": "memrl_retrieval", "params": {"x": 1}}
+    for trial_id, wall_s in enumerate([60.0, 60.0, 1800.0, 1800.0], start=1):
+        journal.record(
+            _entry(
+                trial_id,
+                {**base_action, "params": {"x": trial_id}},
+                eval_details_extra={"eval_wall_s": wall_s},
+                seq={
+                    "candidate": f"candidate-{trial_id}",
+                    "core_id": "core_v1",
+                    "z": 0.1,
+                    "z_rate": -0.9,
+                    "E_quality": 2.0,
+                    "E_rate_noninf": 1.05,
+                    "state": "accumulating",
+                    "policy_version": "seq-v1",
+                },
+            )
+        )
+    state: dict[str, Any] = {}
+    proposed = {"type": "numeric_trial", "surface": "new_surface", "params": {"x": 99}}
+
+    action, rationale, payload = autopilot._maybe_defer_seq_unreachable_candidate_action(
+        proposed,
+        state=state,
+        journal=journal,
+        blacklist=[],
+        rationale={},
+        trial_counter=10,
+        tier=1,
+        enabled=True,
+    )
+
+    assert payload is None
+    assert action == proposed
+    assert rationale == {}
+    preflight = state["seq_gate_reachability_preflight"]
+    assert preflight["status"] == "passed"
+    assert preflight["reachability"]["status"] == "rate_axis_advisory_bridge"
+    assert preflight["reachability"]["rate_axis_mode"] == SEQ_P0_2_BRIDGE_MODE
+    assert preflight["reachability"]["rate_axis_binding"] is False
+
+
+def test_seq_gate_preflight_does_not_use_retryable_seed_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(autopilot, "SEQ_GATE_PREFLIGHT_MIN_SEQ_ROWS", 2)
+    monkeypatch.setattr(autopilot, "SEQ_GATE_PREFLIGHT_RECENT_WINDOW", 2)
+    monkeypatch.setattr(autopilot, "SEQ_GATE_PREFLIGHT_MAX_RATE_E", 2.0)
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    base_action = {"type": "numeric_trial", "surface": "memrl_retrieval", "params": {"x": 1}}
+    for trial_id, wall_s in enumerate([60.0, 60.0, 1800.0, 1800.0], start=1):
+        journal.record(
+            _entry(
+                trial_id,
+                {**base_action, "params": {"x": trial_id}},
+                eval_details_extra={"eval_wall_s": wall_s},
+                seq={
+                    "candidate": f"candidate-{trial_id}",
+                    "core_id": "core_v1",
+                    "z": 0.1,
+                    "z_rate": -0.9,
+                    "E_quality": 2.0,
+                    "E_rate_noninf": 1.05,
+                    "state": "accumulating",
+                    "policy_version": "seq-v1",
+                },
+            )
+        )
+    blacklist = [
+        {
+            "pattern": {"type": "seed_batch", "n_questions": n_questions},
+            "reason": f"blocked {n_questions}",
+        }
+        for n_questions in (14, 16, 18, 20, 24, 30, 40)
+    ]
+    blacklist.append(
+        {
+            "pattern": {"type": "seed_batch", "n_questions": 50},
+            "reason": "Auto-blacklisted: 3 consecutive failures ending at trial 1317",
+            "source_trial": 1317,
+        }
+    )
+
+    proposed = {"type": "numeric_trial", "surface": "new_surface", "params": {"x": 99}}
+    action, rationale, payload = autopilot._maybe_defer_seq_unreachable_candidate_action(
+        proposed,
+        state={},
+        journal=journal,
+        blacklist=blacklist,
+        rationale={},
+        trial_counter=10,
+        tier=1,
+        enabled=True,
+    )
+
+    assert payload is not None
+    assert payload["status"] == "blocked_unreachable"
+    assert payload["reason"] == "rate_axis_unreachable"
+    assert payload["replacement_action"] is None
+    assert payload["retryable_blacklist_target"] is None
+    assert action == proposed
+    assert rationale == {}
+
+
+def test_seq_gate_preflight_blocks_alpha_exhausted_new_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(autopilot, "SEQ_GATE_PREFLIGHT_MIN_SEQ_ROWS", 1000)
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    for trial_id in range(1, 23):
+        journal.record(
+            _entry(
+                trial_id,
+                {"type": "numeric_trial", "surface": "memrl_retrieval", "params": {"x": trial_id}},
+                seq={
+                    "candidate": f"candidate-{trial_id}",
+                    "core_id": "core_v1",
+                    "z": 0.1,
+                    "z_rate": 0.1,
+                    "E_quality": 1.2,
+                    "E_rate_noninf": 1.2,
+                    "state": "accumulating",
+                    "policy_version": "seq-v1",
+                },
+            )
+        )
+
+    proposed = {"type": "prompt_mutation", "file": "frontdoor.md", "mutation": "new"}
+    action, rationale, payload = autopilot._maybe_defer_seq_unreachable_candidate_action(
+        proposed,
+        state={},
+        journal=journal,
+        blacklist=[],
+        rationale={},
+        trial_counter=30,
+        tier=1,
+        enabled=True,
+    )
+
+    assert payload is not None
+    assert payload["status"] == "blocked_unreachable"
+    assert payload["reason"] == "alpha_wealth_exhausted"
+    assert payload["alpha_wealth"]["new_fingerprint_confirmations_allowed"] is False
+    assert payload["replacement_action"] is None
+    assert action == proposed
+    assert rationale == {}
+
+
+def test_seq_gate_preflight_bridge_reprices_alpha_at_confirmation_stage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _enable_seq_p0_2_bridge(monkeypatch, tmp_path)
+    monkeypatch.setattr(autopilot, "SEQ_GATE_PREFLIGHT_MIN_SEQ_ROWS", 1000)
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    for trial_id in range(1, 23):
+        journal.record(
+            _entry(
+                trial_id,
+                {"type": "numeric_trial", "surface": "memrl_retrieval", "params": {"x": trial_id}},
+                seq={
+                    "candidate": f"candidate-{trial_id}",
+                    "core_id": "core_v1",
+                    "z": 0.1,
+                    "z_rate": 0.1,
+                    "E_quality": 1.2,
+                    "E_rate_noninf": 1.2,
+                    "state": "accumulating",
+                    "confirmed": False,
+                    "policy_version": "seq-v1",
+                },
+            )
+        )
+
+    proposed = {"type": "prompt_mutation", "file": "frontdoor.md", "mutation": "new"}
+    action, rationale, payload = autopilot._maybe_defer_seq_unreachable_candidate_action(
+        proposed,
+        state={},
+        journal=journal,
+        blacklist=[],
+        rationale={},
+        trial_counter=30,
+        tier=1,
+        enabled=True,
+    )
+
+    assert payload is None
+    assert action == proposed
+    assert rationale == {}
+    alpha = autopilot._seq_inputs_for_trial(journal=journal, action=proposed, tier=1)[
+        "alpha_wealth"
+    ]
+    assert alpha["alpha_wealth_mode"] == "confirmed_fresh_eval_stage"
+    assert alpha["fingerprints_tested"] == 22
+    assert alpha["fingerprints_charged"] == 0
+    assert alpha["legacy_tested_fingerprint_alpha_spent"] > alpha["budget"]
+    assert alpha["new_fingerprint_dispatch_allowed"] is True
+    assert alpha["new_fingerprint_confirmations_allowed"] is True
+
+
+def test_seq_alpha_bridge_still_blocks_when_confirmed_stage_budget_exhausted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _enable_seq_p0_2_bridge(monkeypatch, tmp_path)
+
+    alpha = autopilot._seq_alpha_wealth_state(
+        {f"candidate-{idx}" for idx in range(25)},
+        candidate="candidate-new",
+        confirmed_candidates={f"candidate-{idx}" for idx in range(20)},
+    )
+
+    assert alpha["alpha_wealth_mode"] == "confirmed_fresh_eval_stage"
+    assert alpha["fingerprints_charged"] == 20
+    assert alpha["budget_exhausted"] is True
+    assert alpha["new_fingerprint_confirmations_allowed"] is False
+    assert alpha["new_fingerprint_dispatch_allowed"] is False
+
+
+def test_seq_gate_preflight_dispatch_block_reason() -> None:
+    assert (
+        autopilot._seq_gate_preflight_dispatch_block_reason(
+            {"status": "blocked_unreachable", "reason": "alpha_wealth_exhausted"}
+        )
+        == "seq_gate_preflight_alpha_wealth_exhausted"
+    )
+    assert (
+        autopilot._seq_gate_preflight_dispatch_block_reason(
+            {"status": "deferred", "reason": "rate_axis_unreachable"}
+        )
+        == ""
+    )
 
 
 def test_seq_baseline_reference_state_tracks_cadence_and_staleness(
@@ -884,9 +1248,7 @@ def test_maybe_force_seq_baseline_draw_uses_alternate_when_default_blacklisted(
         state=state,
         journal=journal,
         tier=1,
-        blacklist=[
-            {"pattern": {"type": "seed_batch", "n_questions": 14}, "reason": "test"}
-        ],
+        blacklist=[{"pattern": {"type": "seed_batch", "n_questions": 14}, "reason": "test"}],
         rationale=None,
         trial_counter=9,
         enabled=True,
@@ -898,6 +1260,51 @@ def test_maybe_force_seq_baseline_draw_uses_alternate_when_default_blacklisted(
         "seq_baseline_reference_reason": "no marked seq baseline-reference draw",
     }
     assert reference is not None
+    assert state["seq_baseline_draw_forced"]["action"] == forced
+
+
+def test_maybe_force_seq_baseline_draw_uses_retryable_infra_seed(
+    tmp_path: Path,
+) -> None:
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    action = {"type": "noop"}
+    state: dict = {}
+    blacklist = [
+        {
+            "pattern": {"type": "seed_batch", "n_questions": n_questions},
+            "reason": f"blocked {n_questions}",
+        }
+        for n_questions in (14, 16, 18, 20, 24, 30, 40)
+    ]
+    blacklist.append(
+        {
+            "pattern": {"type": "seed_batch", "n_questions": 50},
+            "reason": "Auto-blacklisted: 3 consecutive failures ending at trial 1317",
+            "source_trial": 1317,
+        }
+    )
+
+    forced, rationale, reference = autopilot._maybe_force_seq_baseline_draw(
+        action,
+        state=state,
+        journal=journal,
+        tier=1,
+        blacklist=blacklist,
+        rationale=None,
+        trial_counter=9,
+        enabled=True,
+    )
+
+    assert forced == {"type": "seed_batch", "n_questions": 50}
+    assert reference is not None
+    assert rationale is not None
+    assert rationale["seq_baseline_reference_draw"] is True
+    assert rationale["seq_baseline_reference_retryable_blacklist"] is True
+    assert (
+        rationale["p0_3_blacklist_reexploration_target"]
+        == "seed_batch_n50_t1317_no_progress_infra"
+    )
+    assert state["seq_baseline_draw_blocked"] is None
     assert state["seq_baseline_draw_forced"]["action"] == forced
 
 
@@ -923,9 +1330,7 @@ def test_maybe_force_seq_baseline_draw_suppresses_recent_blocked_latch(
         state=state,
         journal=journal,
         tier=1,
-        blacklist=[
-            {"pattern": forced_default, "reason": "default still blocked"}
-        ],
+        blacklist=[{"pattern": forced_default, "reason": "default still blocked"}],
         rationale={"planner": "kept"},
         trial_counter=12,
         enabled=True,
@@ -959,9 +1364,7 @@ def test_maybe_force_seq_baseline_draw_retries_old_blocked_latch(
         state=state,
         journal=journal,
         tier=1,
-        blacklist=[
-            {"pattern": forced_default, "reason": "default still blocked"}
-        ],
+        blacklist=[{"pattern": forced_default, "reason": "default still blocked"}],
         rationale=None,
         trial_counter=14,
         enabled=True,
@@ -1087,6 +1490,37 @@ def test_seq_promotion_finalization_requires_fresh_eval_fresh_reference_and_e() 
         )
         is False
     )
+
+
+def test_seq_promotion_finalization_uses_quality_when_rate_axis_advisory() -> None:
+    seq = {
+        "confirmed": True,
+        "E_quality": 120.0,
+        "E_rate_noninf": 1.05,
+        "rate_axis_mode": SEQ_P0_2_BRIDGE_MODE,
+        "rate_axis_binding": False,
+        "z": 0.2,
+        "r_eff": 200,
+    }
+    reference = {
+        "tier": 2,
+        "latest_reference_trial_id": 4,
+        "latest_reference_age_s": 120.0,
+        "trials_since_reference": 1,
+        "stale_reference": False,
+    }
+
+    finalized = autopilot._annotate_seq_promotion_finalization(
+        seq,
+        baseline_reference=reference,
+        is_fresh_eval=True,
+    )
+
+    assert finalized is True
+    assert seq["baseline_promotion_finalized"] is True
+    assert seq["baseline_promotion_combined_E"] == pytest.approx(120.0)
+    assert seq["baseline_promotion_rate_axis_mode"] == SEQ_P0_2_BRIDGE_MODE
+    assert seq["baseline_promotion_combined_E_mode"] == "quality_only_rate_advisory"
 
 
 def test_seq_promotion_finalization_requires_delta_ci_excluding_regression() -> None:
@@ -1432,9 +1866,12 @@ def _run_loop_inner_seq_harness(
     state: dict[str, Any],
     verdict_seq: dict[str, Any],
     force_fresh_eval_context: dict[str, Any] | None = None,
+    seq_gate_preflight_payload: dict[str, Any] | None = None,
     learning_exclusion: tuple[str | None, str, Any] = (None, "", None),
     use_controller: bool = False,
     planner_should_not_run: bool = False,
+    journal_entries_out: list[JournalEntry] | None = None,
+    dispatch_actions_out: list[dict[str, Any]] | None = None,
 ) -> tuple[dict[str, Any], list[tuple[bool, int]]]:
     baseline_update_calls: list[tuple[bool, int]] = []
 
@@ -1445,6 +1882,8 @@ def _run_loop_inner_seq_harness(
 
         def record(self, entry: JournalEntry) -> None:
             self._entries.append(entry)
+            if journal_entries_out is not None:
+                journal_entries_out.append(entry)
 
         def all_entries(self) -> list[JournalEntry]:
             return list(self._entries)
@@ -1549,6 +1988,15 @@ def _run_loop_inner_seq_harness(
 
         def rebalance(self, *args: Any, **kwargs: Any) -> None:
             return None
+
+        def restore_diversity_state(self, _raw: dict[str, Any] | None) -> None:
+            return None
+
+        def observe_diversity(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+            return {"status": "signal_missing"}
+
+        def export_diversity_state(self) -> dict[str, Any]:
+            return {"schema_version": "ap37_diversity_stall.v1"}
 
     class FakeSeeder:
         def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -1657,9 +2105,7 @@ def _run_loop_inner_seq_harness(
 
     fake_journal = FakeJournal()
 
-    def fake_check_blacklist(
-        action: dict[str, Any], _blacklist: list[dict[str, Any]]
-    ) -> None:
+    def fake_check_blacklist(action: dict[str, Any], _blacklist: list[dict[str, Any]]) -> None:
         return None
 
     def fake_replace_blacklisted_seed_fallback(
@@ -1722,6 +2168,8 @@ def _run_loop_inner_seq_harness(
         return action, rationale, None
 
     def fake_dispatch_action(*args: Any, **kwargs: Any) -> tuple[Any, str]:
+        if dispatch_actions_out is not None and args:
+            dispatch_actions_out.append(dict(args[0]))
         return (
             autopilot.EvalResult(
                 tier=2,
@@ -1785,19 +2233,46 @@ def _run_loop_inner_seq_harness(
         "_maybe_force_seq_baseline_draw",
         fake_maybe_force_seq_baseline_draw,
     )
+    if seq_gate_preflight_payload is not None:
+
+        def fake_maybe_defer_seq_unreachable_candidate_action(
+            action: dict[str, Any],
+            *,
+            state: dict[str, Any],
+            journal: Any,  # noqa: ARG001
+            blacklist: list[dict[str, Any]],  # noqa: ARG001
+            rationale: dict[str, Any] | None,
+            trial_counter: int,  # noqa: ARG001
+            tier: int,  # noqa: ARG001
+            enabled: bool,  # noqa: ARG001
+        ) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any] | None]:
+            payload = dict(seq_gate_preflight_payload)
+            payload.setdefault("original_action", dict(action))
+            state["seq_gate_reachability_preflight"] = payload
+            return action, rationale, payload
+
+        monkeypatch.setattr(
+            autopilot,
+            "_maybe_defer_seq_unreachable_candidate_action",
+            fake_maybe_defer_seq_unreachable_candidate_action,
+        )
     monkeypatch.setattr(autopilot, "dispatch_action", fake_dispatch_action)
     monkeypatch.setattr(
         autopilot,
         "_journal_archive_payload_for_authority",
         lambda *args, **kwargs: None,
     )
-    monkeypatch.setattr(autopilot, "_sync_startup_archive_from_journal_authority", lambda *args, **kwargs: False)
+    monkeypatch.setattr(
+        autopilot, "_sync_startup_archive_from_journal_authority", lambda *args, **kwargs: False
+    )
     monkeypatch.setattr(
         autopilot,
         "_recover_from_in_flight_trial",
         lambda _state, _journal, _archive, trial_counter: trial_counter,
     )
-    monkeypatch.setattr(autopilot, "_save_state_with_journal_archive_authority", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        autopilot, "_save_state_with_journal_archive_authority", lambda *args, **kwargs: None
+    )
     monkeypatch.setattr(autopilot, "_append_baseline_promotion_event", lambda *args, **kwargs: None)
     monkeypatch.setattr(autopilot, "health_check", lambda *args, **kwargs: object())
     monkeypatch.setattr(autopilot, "should_generate_today", lambda _state: False)
@@ -1831,6 +2306,84 @@ def _run_loop_inner_seq_harness(
     )
 
     return state, baseline_update_calls
+
+
+def test_run_loop_inner_journals_report_only_rlvr_reward(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state: dict[str, Any] = {
+        "trial_counter": 0,
+        "paused": False,
+        "td_errors": [],
+        "seeder_state": {},
+        "consecutive_failures": 0,
+        "quality_history": [],
+        "quality_history_by_tier": {},
+        "baseline_state": {},
+    }
+    journal_entries: list[JournalEntry] = []
+
+    _run_loop_inner_seq_harness(
+        monkeypatch,
+        state=state,
+        verdict_seq={
+            "candidate": "candidate-a",
+            "confirmed": False,
+            "state": "accumulating",
+        },
+        journal_entries_out=journal_entries,
+    )
+
+    assert len(journal_entries) == 1
+    rlvr = journal_entries[0].eval_details["rlvr_reward"]
+    assert rlvr["policy"] == "ap27_rlvr_tier_reward_v1"
+    assert rlvr["reward_signal"] == "process_attributed"
+    assert rlvr["ready_for_training"] is False
+    assert "auroc_missing_or_degenerate" in rlvr["blockers"]
+    assert "question_results_missing" in rlvr["blockers"]
+
+
+def test_run_loop_inner_halts_on_blocked_seq_gate_preflight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state: dict[str, Any] = {
+        "trial_counter": 0,
+        "paused": False,
+        "td_errors": [],
+        "seeder_state": {},
+        "consecutive_failures": 0,
+        "quality_history": [],
+        "quality_history_by_tier": {},
+        "baseline_state": {},
+    }
+    journal_entries: list[JournalEntry] = []
+    dispatched: list[dict[str, Any]] = []
+
+    returned_state, _ = _run_loop_inner_seq_harness(
+        monkeypatch,
+        state=state,
+        verdict_seq={
+            "candidate": "candidate-a",
+            "confirmed": False,
+            "state": "accumulating",
+        },
+        seq_gate_preflight_payload={
+            "status": "blocked_unreachable",
+            "reason": "alpha_wealth_exhausted",
+            "original_action": {"type": "numeric_trial", "surface": "think_harder"},
+            "replacement_action": None,
+        },
+        journal_entries_out=journal_entries,
+        dispatch_actions_out=dispatched,
+    )
+
+    assert returned_state["paused"] is True
+    assert returned_state["_dispatch_deficiency"] == "seq_gate_preflight_blocked"
+    assert returned_state["last_invalid_reason"] == "seq_gate_preflight_alpha_wealth_exhausted"
+    assert returned_state["last_invalid_status"] == "seq_gate_preflight_blocked"
+    assert "in_flight_trial" not in returned_state
+    assert journal_entries == []
+    assert dispatched == []
 
 
 def test_run_loop_inner_forwards_finalized_seq_to_gate_and_clears_pending(
@@ -1918,9 +2471,7 @@ def test_run_loop_inner_forced_seq_fresh_eval_bypasses_controller_planner(
     )
 
     assert baseline_update_calls == [(True, 0)]
-    assert returned_state["seq_last_promotion_finalized"]["candidate"] == (
-        "candidate-controller"
-    )
+    assert returned_state["seq_last_promotion_finalized"]["candidate"] == ("candidate-controller")
     assert "session_id" not in returned_state
 
 
@@ -1960,9 +2511,7 @@ def test_run_loop_inner_forced_frontier_rerun_bypasses_controller_planner(
         planner_should_not_run=True,
     )
 
-    assert returned_state["frontier_rerun_forced"]["forced_action"]["type"] == (
-        "numeric_trial"
-    )
+    assert returned_state["frontier_rerun_forced"]["forced_action"]["type"] == ("numeric_trial")
 
 
 def test_run_loop_inner_nonfinalized_seq_does_not_promote_and_leaves_pending(

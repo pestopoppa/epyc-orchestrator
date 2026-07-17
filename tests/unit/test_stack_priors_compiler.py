@@ -617,6 +617,47 @@ def test_launch_runtime_record_canonicalizes_worker_explore_kv_types() -> None:
     assert runtime["cache"]["slots"] == 1
 
 
+def test_launch_runtime_record_does_not_inject_vision_escalation_override() -> None:
+    launch_cfg = {
+        "launch": {
+            "primary_roles": ["vision_escalation"],
+            "modes": ["vision"],
+            "entries": [{"vision_type": "escalation"}],
+            "requirements": {
+                "model_path": "/models/qwen2.5-vl.gguf",
+                "mmproj_path": "/models/qwen2.5-vl-mmproj.gguf",
+            },
+            "runtime": {},
+        }
+    }
+
+    runtime = _launch_runtime_record(
+        role="vision_escalation",
+        descriptor={},
+        server_cfg=None,
+        role_cfg={"acceleration": {"type": "baseline"}},
+        launch_cfg=launch_cfg,
+    )
+
+    assert runtime["flags"]["override_kv"] == []
+
+    runtime = _launch_runtime_record(
+        role="vision_escalation",
+        descriptor={},
+        server_cfg=None,
+        role_cfg={
+            "acceleration": {
+                "type": "moe_expert_reduction",
+                "override_key": "qwen3vlmoe.expert_used_count",
+                "experts": 4,
+            }
+        },
+        launch_cfg=launch_cfg,
+    )
+
+    assert runtime["flags"]["override_kv"] == ["qwen3vlmoe.expert_used_count=int:4"]
+
+
 def test_server_mode_requirement_overrides_keep_shared_alias_on_served_model() -> None:
     requirements = _server_mode_launch_requirement_overrides(
         "worker_math",

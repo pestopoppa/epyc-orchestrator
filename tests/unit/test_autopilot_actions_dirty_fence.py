@@ -26,6 +26,7 @@ actions = importlib.import_module("actions")
 
 # ── helper: _mutation_dirty_target_reason scoping ────────────────────────────
 
+
 def _patch_pathspec(monkeypatch: pytest.MonkeyPatch, dirty: bool):
     """Make _pathspec_pending_change_report return `dirty` and record the
     pathspec it was asked about."""
@@ -57,6 +58,39 @@ def test_code_mutation_clean_target_passes(monkeypatch: pytest.MonkeyPatch) -> N
         {"type": "code_mutation", "file": "src/api/routes/chat.py"}
     )
     assert reason is None
+
+
+def test_new_file_code_mutation_checks_parent_directory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen = _patch_pathspec(monkeypatch, dirty=False)
+    reason = actions._mutation_dirty_target_reason(
+        {
+            "type": "code_mutation",
+            "file": "src/generated/new_module.py",
+            "mutation": "new_file",
+        }
+    )
+    assert reason is None
+    assert len(seen) == 1
+    assert seen[0] == (actions._REPO_ROOT / "src/generated").resolve()
+
+
+def test_new_file_code_mutation_dirty_parent_is_skipped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen = _patch_pathspec(monkeypatch, dirty=True)
+    reason = actions._mutation_dirty_target_reason(
+        {
+            "type": "code_mutation",
+            "file": "src/generated/new_module.py",
+            "mutation": "new_file",
+        }
+    )
+    assert reason is not None
+    assert "new_module.py" in reason
+    assert len(seen) == 1
+    assert seen[0] == (actions._REPO_ROOT / "src/generated").resolve()
 
 
 def test_code_mutation_missing_file_defers_to_scope_validator(
@@ -184,15 +218,14 @@ def test_pathspec_report_includes_status_sample(
         stderr = ""
 
     monkeypatch.setattr(actions.subprocess, "run", lambda *a, **k: _R())
-    dirty, evidence = actions._pathspec_pending_change_report(
-        Path("orchestration/prompts")
-    )
+    dirty, evidence = actions._pathspec_pending_change_report(Path("orchestration/prompts"))
     assert dirty is True
     assert "M orchestration/prompts/frontdoor.md" in evidence
     assert "?? orchestration/prompts/tmp.md" in evidence
 
 
 # ── dispatch_action routing: fence -> skipped trial, handler not reached ──────
+
 
 def test_dispatch_action_routes_dirty_mutation_to_skip(
     monkeypatch: pytest.MonkeyPatch,
@@ -207,14 +240,19 @@ def test_dispatch_action_routes_dirty_mutation_to_skip(
         return ("RESULT", "prompt_forge")
 
     monkeypatch.setitem(actions._ACTION_HANDLERS, "code_mutation", fake_handler)
-    monkeypatch.setattr(
-        actions, "_mutation_dirty_target_reason", lambda _a: "dirty target"
-    )
+    monkeypatch.setattr(actions, "_mutation_dirty_target_reason", lambda _a: "dirty target")
 
     result, species = actions.dispatch_action(
         {"type": "code_mutation", "file": "src/api/routes/chat.py"},
-        seeder=None, swarm=None, forge=None, lab=None, tower=None,
-        gate=None, archive=None, journal=None, state={},
+        seeder=None,
+        swarm=None,
+        forge=None,
+        lab=None,
+        tower=None,
+        gate=None,
+        archive=None,
+        journal=None,
+        state={},
     )
     assert isinstance(result, actions.SkipOutcome)
     assert result.status == "skipped"
@@ -238,8 +276,15 @@ def test_dispatch_action_allows_clean_mutation_through(
 
     result, species = actions.dispatch_action(
         {"type": "code_mutation", "file": "src/api/routes/chat.py"},
-        seeder=None, swarm=None, forge=None, lab=None, tower=None,
-        gate=None, archive=None, journal=None, state={},
+        seeder=None,
+        swarm=None,
+        forge=None,
+        lab=None,
+        tower=None,
+        gate=None,
+        archive=None,
+        journal=None,
+        state={},
     )
     assert called["handler"] is True
     assert result == "RESULT"

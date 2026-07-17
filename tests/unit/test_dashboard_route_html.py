@@ -8,9 +8,6 @@ loader path breaking after future refactors.
 from __future__ import annotations
 
 import asyncio
-import json
-import subprocess
-import textwrap
 from pathlib import Path
 
 import pytest
@@ -20,6 +17,7 @@ import pytest
 def dashboard_route():
     """Import dashboard.py + return the route handler function for /dashboard."""
     from src.api.routes import dashboard
+
     # Find the GET /dashboard route in the router and return its endpoint
     for route in dashboard.router.routes:
         if getattr(route, "path", None) == "/dashboard":
@@ -32,7 +30,9 @@ def test_dashboard_route_returns_extracted_html(dashboard_route) -> None:
     response = asyncio.run(dashboard_route())
     # FastAPI HTMLResponse has .body as bytes
     body = response.body.decode("utf-8") if isinstance(response.body, bytes) else response.body
-    expected = (Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html").read_text()
+    expected = (
+        Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    ).read_text()
     assert body == expected
 
 
@@ -50,7 +50,9 @@ def test_dashboard_html_response_ends_with_closing_tags(dashboard_route) -> None
 
 def test_dashboard_html_file_exists_at_expected_path() -> None:
     """The extracted dashboard.html file must live alongside dashboard.py."""
-    html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    html_path = (
+        Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    )
     assert html_path.exists()
     assert html_path.stat().st_size > 40_000  # ~43KB after extraction
 
@@ -58,23 +60,23 @@ def test_dashboard_html_file_exists_at_expected_path() -> None:
 def test_dashboard_html_loaded_at_module_import() -> None:
     """_DASHBOARD_HTML constant in dashboard.py should be populated."""
     from src.api.routes import dashboard
+
     assert len(dashboard._DASHBOARD_HTML) > 40_000
 
 
 def test_dashboard_html_distinguishes_waiting_tap_from_active_locks() -> None:
     """The live tap can show CPU-lock wait states without counting them as holders."""
-    html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    html_path = (
+        Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    )
     body = html_path.read_text()
 
     assert "waiting_cpu_lock" in body
-    assert "tap-inferred request(s)" in body
-    assert "TAP ACTIVE" in body
     assert "structuredTapPrimaryRole" in body
     assert "function inferStructuredTapLockIdentity(req, byRole = null)" in body
     assert "const topoNode = (topology && Number.isFinite(port))" in body
     assert "const roleCandidates = [" in body
     assert "roleCandidates.find(r => byRole[r])" in body
-    assert "const identity = inferStructuredTapLockIdentity(req" in body
     assert "status === 'quiet'" in body
     assert "blocked_by_roles" in body
     assert "lockOnlyStructuredTapHolders" in body
@@ -83,11 +85,56 @@ def test_dashboard_html_distinguishes_waiting_tap_from_active_locks() -> None:
     assert "live tap request(s)" in body
     assert "prefill/decode pending" in body
     assert "tapLiveRequestCount" in body
+    assert "buildTapInferredRegionLocks" not in body
+    assert "TAP ACTIVE" not in body
+
+
+def test_dashboard_html_live_tap_ignores_stale_region_lock_frames() -> None:
+    """Aborted lock refreshes must not leave stale blockers on newer tap rows."""
+    html_path = (
+        Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    )
+    body = html_path.read_text()
+
+    assert "let _latestRegionLockFrame = { valid: false" in body
+    assert "const _REGION_LOCK_TAP_FRESH_S = 20;" in body
+    assert "function latestRegionLockFrameUsableForTap(req = null)" in body
+    assert "_REGION_LOCK_TAP_REQ_SKEW_S" not in body
+    assert "structuredTapRequestStartEpoch" not in body
+    assert "if (!req || !_latestRegionLocksByRole || !latestRegionLockFrameUsableForTap(req)) return false;" in body
+    assert "if (!req || !_latestRegionLocksByRole || !latestRegionLockFrameUsableForTap(req)) return [];" in body
+    assert "if (!latestRegionLockFrameUsableForTap()) return [];" in body
+    assert body.index("if (!hasOutput && lockActive)") < body.index(
+        "if (quietS >= _STRUCTURED_TAP_STALLED_S)"
+    )
+    assert "long prompt prefill may produce no tap chunks until the first token" in body
+    assert "generatedAt: regionLockPayloadFrameEpoch(d)" in body
+    assert "source: regionLocks ? 'snapshot' : 'direct'" in body
+    assert "_latestRegionLockFrame = { valid: false, generatedAt: 0, appliedAtMs: Date.now(), source: 'error' };" in body
+
+
+def test_dashboard_html_copy_snapshot_stays_on_the_click_activation_path() -> None:
+    """Copy should build synchronously and fall back to execCommand when needed."""
+    html_path = (
+        Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    )
+    body = html_path.read_text()
+    start = body.index("function copySnapshotFallback(text) {")
+    end = body.index("async function downloadSnapshot() {")
+    copy_body = body[start:end]
+
+    assert "const text = buildTextSnapshot();" in copy_body
+    assert "await navigator.clipboard.writeText(text);" in copy_body
+    assert "document.execCommand('copy')" in copy_body
+    assert "fetch(`/dashboard/api/task/" not in copy_body
+    assert "clipboard write failed:" in copy_body
 
 
 def test_dashboard_html_separates_proc_holders_from_live_tap_requests() -> None:
     """The lock panel should distinguish real /proc holders from tap inference."""
-    html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    html_path = (
+        Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    )
     body = html_path.read_text()
 
     assert "procHolderCount" in body
@@ -97,335 +144,88 @@ def test_dashboard_html_separates_proc_holders_from_live_tap_requests() -> None:
     assert "live tap request(s)" in body
     assert "/proc holder instance(s)" in body
     assert "structuredTapLockCandidates" in body
-    assert "tap-inferred request(s)" in body
+    assert "CPU-region lock state is sourced only from the lock payload/proc" in body
+    assert "tap rows into synthetic lock holders" in body
+    assert "tap-inferred request(s)" not in body
 
 
-def test_dashboard_html_infers_quiet_tap_requests_into_region_lock_candidates() -> None:
-    """Quiet open tap requests can still hold locks, so the lock overlay must paint them."""
-    html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
-    body = html_path.read_text()
-    start = body.index("function currentAutopilotActionSource()")
-    end = body.index("function refreshLiveDotsFromStructuredTap()")
-    snippet = body[start:end]
-
-    script = textwrap.dedent(
-        f"""
-        const vm = require('vm');
-        const ctx = {{
-          _latestProcessStatus: {{}},
-          _latestRegionLocksByRole: {{}},
-          _latestTapInferredRegionLocksByRole: {{}},
-          _lastRegionLocksPayload: {{
-            by_role: {{
-              worker_general: {{
-                instances: [
-                  {{ idx: 0, shape: 'full', regions: ['q0', 'q1', 'q2', 'q3'] }},
-                  {{ idx: 3, shape: 'q2', regions: ['q2'] }},
-                ],
-              }},
-            }},
-          }},
-          _structuredTapRequests: [
-            {{
-              request_id: 'streaming',
-              role: 'frontdoor',
-              lock_role: 'worker_general',
-              instance_idx: 0,
-              instance_shape: 'full',
-              instance_regions: ['q0', 'q1', 'q2', 'q3'],
-              status: 'running',
-              chunk_count: 2,
-              response_len: 64,
-              quiet_s: 0,
-            }},
-            {{
-              request_id: 'quiet',
-              role: 'architect',
-              lock_role: 'worker_general',
-              instance_idx: 3,
-              instance_shape: 'q2',
-              instance_regions: ['q2'],
-              status: 'quiet',
-              chunk_count: 2,
-              response_len: 64,
-              quiet_s: 0,
-            }},
-            {{
-              request_id: 'waiting',
-              role: 'ingest',
-              lock_role: 'worker_general',
-              instance_idx: 3,
-              instance_shape: 'q2',
-              instance_regions: ['q2'],
-              status: 'running',
-              chunk_count: 0,
-              response_len: 0,
-              quiet_s: 0,
-            }},
-          ],
-          _STRUCTURED_TAP_STALLED_S: 999999,
-          escapeHTML: (s) => String(s),
-          clientBaseRole: (s) => String(s || ''),
-          roleColor: () => 'x',
-          inferStructuredTapLockIdentity: (req) => ({{
-            role: req.lock_role || req.topology_role || req.role || '',
-            idx: Number(req.instance_idx),
-            regions: Array.isArray(req.instance_regions) ? req.instance_regions : [],
-            shape: req.instance_shape || '',
-          }}),
-          structuredTapHasActiveCpuLock: (req) => req.request_id !== 'waiting',
-          structuredTapCpuBlockers: (req) => req.request_id === 'waiting' ? ['worker_general'] : [],
-          structuredTapCpuBlockerSummary: (blockers) => blockers.join(','),
-          topology: {{ nodes: [] }},
-        }};
-        vm.createContext(ctx);
-        vm.runInContext({json.dumps(snippet)}, ctx);
-        const candidateIds = vm.runInContext(
-          'structuredTapLockCandidates().map((req) => req.request_id).sort().join(\",\")',
-          ctx,
-        );
-        const inferred = vm.runInContext(`
-          const out = buildTapInferredRegionLocks();
-          JSON.stringify(Object.fromEntries(Object.entries(out).map(([role, bucket]) => [role, {{
-            instanceIdxs: [...bucket.instanceIdxs].map(Number).sort((a, b) => a - b),
-            requestIds: bucket.sources.map((req) => req.request_id).sort(),
-          }}])));
-        `, ctx);
-        vm.runInContext('_latestTapInferredRegionLocksByRole = buildTapInferredRegionLocks();', ctx);
-        const summary = vm.runInContext('formatRegionLockHolderSummary()', ctx);
-        if (candidateIds !== 'quiet,streaming') {{
-          throw new Error(`unexpected candidate ids: ${{candidateIds}}`);
-        }}
-        const parsed = JSON.parse(inferred);
-        if (!parsed.worker_general) {{
-          throw new Error('missing worker_general bucket');
-        }}
-        if (parsed.worker_general.instanceIdxs.join(',') !== '0,3') {{
-          throw new Error(`unexpected instanceIdxs: ${{parsed.worker_general.instanceIdxs.join(',')}}`);
-        }}
-        if (parsed.worker_general.requestIds.join(',') !== 'quiet,streaming') {{
-          throw new Error(`unexpected requestIds: ${{parsed.worker_general.requestIds.join(',')}}`);
-        }}
-        if (!summary.includes('tap-inferred quiet/held')) {{
-          throw new Error(`summary did not include quiet holder: ${{summary}}`);
-        }}
-        if (!summary.includes('tap-inferred streaming')) {{
-          throw new Error(`summary did not include streaming holder: ${{summary}}`);
-        }}
-        if (!summary.includes('frontdoor') || !summary.includes('architect')) {{
-          throw new Error(`summary did not include logical aliases: ${{summary}}`);
-        }}
-        """
+def test_dashboard_html_keeps_tap_rows_out_of_lock_ownership() -> None:
+    """Live tap rows can describe work, but lock ownership comes from proc/payload."""
+    html_path = (
+        Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
     )
-
-    result = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=False)
-    assert result.returncode == 0, result.stderr or result.stdout
-
-
-def test_dashboard_html_preserves_tap_inferred_holders_even_when_proc_label_matches() -> None:
-    """A tapped holder should still appear when an older /proc label matches it."""
-    html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
     body = html_path.read_text()
-    start = body.index("function currentAutopilotActionSource()")
-    end = body.index("function refreshLiveDotsFromStructuredTap()")
-    snippet = body[start:end]
 
-    script = textwrap.dedent(
-        f"""
-        const vm = require('vm');
-        const ctx = {{
-          _latestProcessStatus: {{}},
-          _latestRegionLocksByRole: {{
-            worker_general: {{
-              instanceIdxs: new Set([0]),
-              procInstanceIdxs: [0],
-              regions: new Set(['q0', 'q1', 'q2', 'q3']),
-              holderPids: new Set(['111']),
-              pidsByInstanceIdx: new Map([[0, new Set(['111'])]]),
-              instances: [{{ idx: 0, shape: 'full', regions: ['q0', 'q1', 'q2', 'q3'] }}],
-            }},
-          }},
-          _latestTapInferredRegionLocksByRole: {{
-            worker_general: {{
-              instanceIdxs: new Set([0]),
-              regions: new Set(['q0', 'q1', 'q2', 'q3']),
-              holderPids: new Set(['222']),
-              pidsByInstanceIdx: new Map([[0, new Set(['222'])]]),
-              sources: [{{
-                request_id: 'streaming',
-                role: 'frontdoor',
-                lock_role: 'worker_general',
-                instance_idx: 0,
-                instance_shape: 'full',
-                instance_regions: ['q0', 'q1', 'q2', 'q3'],
-                status: 'running',
-                chunk_count: 2,
-                response_len: 64,
-                quiet_s: 0,
-              }}],
-            }},
-          }},
-          _lastRegionLocksPayload: {{
-            by_role: {{
-              worker_general: {{
-                instances: [{{ idx: 0, shape: 'full', regions: ['q0', 'q1', 'q2', 'q3'] }}],
-              }},
-            }},
-          }},
-          _STRUCTURED_TAP_STALLED_S: 999999,
-          _structuredTapRequests: [{{
-            request_id: 'streaming',
-            role: 'frontdoor',
-            lock_role: 'worker_general',
-            instance_idx: 0,
-            instance_shape: 'full',
-            instance_regions: ['q0', 'q1', 'q2', 'q3'],
-            status: 'running',
-            chunk_count: 2,
-            response_len: 64,
-            quiet_s: 0,
-          }}],
-          escapeHTML: (s) => String(s),
-          clientBaseRole: (s) => String(s || ''),
-          roleColor: () => 'x',
-          inferStructuredTapLockIdentity: () => null,
-          structuredTapHasActiveCpuLock: () => true,
-          structuredTapCpuBlockers: () => [],
-          structuredTapCpuBlockerSummary: (blockers) => blockers.join(','),
-          topology: {{ nodes: [] }},
-        }};
-        vm.createContext(ctx);
-        vm.runInContext({json.dumps(snippet)}, ctx);
-        const summary = vm.runInContext('formatRegionLockHolderSummary()', ctx);
-        const occurrences = (summary.match(/worker_general\\.full/g) || []).length;
-        if (occurrences < 2) {{
-          throw new Error(`expected both proc and tap-inferred entries, got: ${{summary}}`);
-        }}
-        if (!summary.includes('tap-inferred streaming')) {{
-          throw new Error(`expected tap-inferred holder in summary, got: ${{summary}}`);
-        }}
-        """
+    assert "function structuredTapLockCandidates()" in body
+    assert "CPU-region lock state is sourced only from the lock payload/proc" in body
+    assert "work, but it must not synthesize lock ownership in the lock grid" in body
+    assert "function buildTapInferredRegionLocks" not in body
+    assert "tap-inferred" not in body
+
+
+def test_dashboard_html_proc_summary_has_no_tap_merge_state() -> None:
+    """The proc holder summary should not read a synthetic tap-inferred map."""
+    html_path = (
+        Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
     )
+    body = html_path.read_text()
+    summary_start = body.index("function formatRegionLockHolderSummary()")
+    summary_end = body.index("function refreshLiveDotsFromStructuredTap()")
+    summary_body = body[summary_start:summary_end]
 
-    result = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=False)
-    assert result.returncode == 0, result.stderr or result.stdout
+    assert "procRegionLockHolders().map" in summary_body
+    assert "openStructuredTapRequests().some" in summary_body
+    assert (
+        "formatPhysicalRoleWithLogicalAliases(holder.role, holder.shape, holder.idx)"
+        in summary_body
+    )
+    assert "Inferred" not in summary_body
 
 
-def test_dashboard_html_merges_unique_tap_inferred_holders_into_region_lock_summary() -> None:
-    """The Regions Lock header should list tap-inferred holders alongside real /proc holders."""
-    html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+def test_dashboard_html_region_lock_summary_is_proc_payload_only() -> None:
+    """The Regions Lock header should not synthesize holders from tap rows."""
+    html_path = (
+        Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    )
     body = html_path.read_text()
 
     assert "function formatRegionLockHolderSummary()" in body
     assert "const displayHeldBySummary = formatRegionLockHolderSummary();" in body
-    assert "function tapInferredHolderLabel(role, shape, idx, sources)" in body
-    assert "tap-inferred active/pending" in body
-    assert "tap-inferred streaming" in body
-    assert "tap-inferred quiet/held" in body
-    assert "let tapInferredRequestCount = 0" in body
-    assert "tapInferredRequestCount += tapInferredSourceCount(inferred)" in body
-    assert "const tapInferredCountSuffix = tapInferredRequestCount" in body
-    assert "const countSuffix = holderSources.length > 1 ? ` ×${holderSources.length}` : ''" in body
-    assert "/proc holder instance(s)${tapInferredCountSuffix}: ${displayHeldBySummary" in body
-    assert "~${formatPhysicalRoleWithLogicalAliases(role, shape, idx)}${countSuffix} (${inferredState})" in body
+    summary_start = body.index("function formatRegionLockHolderSummary()")
+    summary_end = body.index("function refreshLiveDotsFromStructuredTap()")
+    summary_body = body[summary_start:summary_end]
+    assert "procRegionLockHolders().map" in summary_body
+    assert "_latestTapInferredRegionLocksByRole" not in summary_body
+    assert "tapInferredHolderLabel" not in body
+    assert "buildTapInferredRegionLocks" not in body
 
 
-def test_dashboard_html_counts_multiple_tap_requests_on_one_physical_holder() -> None:
-    """Eval batches can stream multiple requests through one lock; do not hide that behind one cell."""
-    html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
-    body = html_path.read_text()
-    start = body.index("function currentAutopilotActionSource()")
-    end = body.index("function refreshLiveDotsFromStructuredTap()")
-    snippet = body[start:end]
-
-    script = textwrap.dedent(
-        f"""
-        const vm = require('vm');
-        const ctx = {{
-          _latestProcessStatus: {{}},
-          _latestRegionLocksByRole: {{
-            worker_general: {{
-              instanceIdxs: new Set([0]),
-              procInstanceIdxs: new Set([0]),
-              regions: new Set(['q0', 'q1', 'q2', 'q3']),
-              holderPids: new Set(['111']),
-              pidsByInstanceIdx: new Map([[0, new Set(['111'])]]),
-              instances: [{{ idx: 0, shape: 'full', regions: ['q0', 'q1', 'q2', 'q3'] }}],
-            }},
-          }},
-          _latestTapInferredRegionLocksByRole: {{}},
-          _lastRegionLocksPayload: {{
-            by_role: {{
-              worker_general: {{
-                instances: [{{ idx: 0, shape: 'full', regions: ['q0', 'q1', 'q2', 'q3'] }}],
-              }},
-            }},
-          }},
-          _structuredTapRequests: [
-            {{
-              request_id: 'a',
-              role: 'worker_general',
-              lock_role: 'worker_general',
-              instance_idx: 0,
-              instance_shape: 'full',
-              instance_regions: ['q0', 'q1', 'q2', 'q3'],
-              status: 'running',
-              chunk_count: 2,
-              response_len: 64,
-              quiet_s: 0,
-            }},
-            {{
-              request_id: 'b',
-              role: 'worker_general',
-              lock_role: 'worker_general',
-              instance_idx: 0,
-              instance_shape: 'full',
-              instance_regions: ['q0', 'q1', 'q2', 'q3'],
-              status: 'running',
-              chunk_count: 2,
-              response_len: 64,
-              quiet_s: 0,
-            }},
-          ],
-          _STRUCTURED_TAP_STALLED_S: 999999,
-          escapeHTML: (s) => String(s),
-          clientBaseRole: (s) => String(s || ''),
-          roleColor: () => 'x',
-          inferStructuredTapLockIdentity: (req) => ({{
-            role: req.lock_role || req.topology_role || req.role || '',
-            idx: Number(req.instance_idx),
-            regions: Array.isArray(req.instance_regions) ? req.instance_regions : [],
-            shape: req.instance_shape || '',
-          }}),
-          structuredTapHasActiveCpuLock: () => true,
-          structuredTapCpuBlockers: () => [],
-          structuredTapCpuBlockerSummary: (blockers) => blockers.join(','),
-          topology: {{ nodes: [] }},
-        }};
-        vm.createContext(ctx);
-        vm.runInContext({json.dumps(snippet)}, ctx);
-        vm.runInContext('_latestTapInferredRegionLocksByRole = buildTapInferredRegionLocks();', ctx);
-        const inferredCount = vm.runInContext(
-          'tapInferredSourceCount(_latestTapInferredRegionLocksByRole.worker_general)',
-          ctx,
-        );
-        const summary = vm.runInContext('formatRegionLockHolderSummary()', ctx);
-        if (inferredCount !== 2) {{
-          throw new Error(`expected two tap-inferred requests, got ${{inferredCount}}`);
-        }}
-        if (!summary.includes('worker_general.full ×2')) {{
-          throw new Error(`expected source count in summary, got: ${{summary}}`);
-        }}
-        """
+def test_dashboard_html_region_lock_grid_uses_backend_display_matrix() -> None:
+    """The normal lock-grid renderer should consume the backend display_matrix."""
+    html_path = (
+        Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
     )
+    body = html_path.read_text()
 
-    result = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=False)
-    assert result.returncode == 0, result.stderr or result.stdout
+    assert "function renderRegionLocksDisplayMatrix(grid, d)" in body
+    assert "const matrix = d && d.display_matrix ? d.display_matrix : null;" in body
+    assert "row.label || row.role" in body
+    assert "configured and free" in body
+    assert "configured but not selected by this launch mode" not in body
+    assert "if (!renderRegionLocksDisplayMatrix(grid, d))" in body
+    assert "backend display_matrix unavailable; lock-grid rendering is intentionally disabled" in body
+    assert "using by_role fallback" not in body
+    assert "display_matrix render failed" in body
+    assert "renderRegionLocksBasicGrid(grid," not in body
+    assert "pickInstForCol" not in body
+    assert "SLOT ACTIVE" not in body
 
 
 def test_dashboard_run_state_active_inference_overrides_quiet_log() -> None:
     """Active tap/lock work should not render the top run-state as quiet."""
-    html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    html_path = (
+        Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    )
     body = html_path.read_text()
 
     assert "activeInferenceCount > 0 || activeLockCount > 0" in body
@@ -434,7 +234,9 @@ def test_dashboard_run_state_active_inference_overrides_quiet_log() -> None:
 
 
 def test_dashboard_autopilot_log_render_dedupes_adjacent_lines() -> None:
-    html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    html_path = (
+        Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    )
     body = html_path.read_text()
 
     assert "function _dedupeAdjacentAutopilotLines(lines)" in body
@@ -442,7 +244,9 @@ def test_dashboard_autopilot_log_render_dedupes_adjacent_lines() -> None:
 
 
 def test_dashboard_planner_status_distinguishes_history_from_active_stream() -> None:
-    html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    html_path = (
+        Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    )
     body = html_path.read_text()
 
     assert "function _plannerTapStatusText(lines)" in body
@@ -453,7 +257,9 @@ def test_dashboard_planner_status_distinguishes_history_from_active_stream() -> 
 
 def test_dashboard_topology_activity_stats_refresh_with_live_age_tick() -> None:
     """Topology activity text should not lag behind lock/tap freshness signals."""
-    html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    html_path = (
+        Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    )
     body = html_path.read_text()
 
     assert "TOPOLOGY_ACTIVITY_WINDOW_S = 60" in body
@@ -461,31 +267,47 @@ def test_dashboard_topology_activity_stats_refresh_with_live_age_tick() -> None:
     assert "topologyActivityAgeS" in body
     assert "renderTopologyActivity" in body
     assert "requestCoherentDashboardSnapshot('topology_activity_refresh')" in body
-    assert "fetchJSON(`/dashboard/api/topology_activity?window_s=${TOPOLOGY_ACTIVITY_WINDOW_S}`)" not in body
+    assert (
+        "fetchJSON(`/dashboard/api/topology_activity?window_s=${TOPOLOGY_ACTIVITY_WINDOW_S}`)"
+        not in body
+    )
     assert "scheduleRegionLocksRefresh(true)" in body
     assert "snap.region_locks" in body
     assert "const snapshotSeq = ++_latestSnapshotSeq;" in body
-    assert "return updateRegionLocks(refreshSeq, snap.region_locks, snapshotSeq, snap.in_flight_tasks || [])" in body
+    assert (
+        "return updateRegionLocks(refreshSeq, snap.region_locks, snapshotSeq, snap.in_flight_tasks || [])"
+        in body
+    )
     assert "const refreshSeq = ++_regionLocksRefreshSeq;" in body
     assert "updatePanelSafely('contention', () => updateContentionGate(refreshSeq));" in body
     assert "function updateTopology(activity, inflight, snapshotSeq = null)" in body
-    assert "updateTopology(snap.display_activity || snap.activity || {}, snap.in_flight_tasks || [], snapshotSeq)" in body
+    assert (
+        "updateTopology(snap.display_activity || snap.activity || {}, snap.in_flight_tasks || [], snapshotSeq)"
+        in body
+    )
     assert "let _latestStructuredTapFrameTs = 0;" in body
     assert "function applyStructuredTapFrame(data, {" in body
     assert "if (Array.isArray(snap.structured_requests))" in body
     assert "applyStructuredTapFrame(snap, {" in body
     assert "requestSnapshot: false" in body
     assert "acceptCoherentSnapshot: true" in body
-    assert "if (!acceptCoherentSnapshot && frameTs + 0.001 < _latestStructuredTapFrameTs) return false;" in body
-    assert "tap-inferred CPU holders and the lock grid reflect the same instant" in body
+    assert (
+        "if (!acceptCoherentSnapshot && frameTs + 0.001 < _latestStructuredTapFrameTs) return false;"
+        in body
+    )
+    assert "tap activity and proc/payload lock state share one frame" in body
     assert "let _topologyActivityRefreshSeq = 0;" in body
-    assert "async function updateTopologyActivity(refreshSeq = ++_topologyActivityRefreshSeq)" in body
-    assert "if (snap.topology_activity) applyTopologyActivityPayload(snap.topology_activity);" in body
+    assert (
+        "async function updateTopologyActivity(refreshSeq = ++_topologyActivityRefreshSeq)" in body
+    )
+    assert (
+        "if (snap.topology_activity) applyTopologyActivityPayload(snap.topology_activity);" in body
+    )
     assert "idle, not an active-holder signal" in body
-    assert "last <span class=\"stat-stale\">${formatTopologyActivityAge(age)}</span>" in body
+    assert 'last <span class="stat-stale">${formatTopologyActivityAge(age)}</span>' in body
     assert "not an active-holder signal" in body
     assert "historical avg ${stats.avg_tps_recent.toFixed(2)} t/s" in body
-    assert "history <span class=\"stat-stale\">${nCompleted}</span> done" in body
+    assert 'history <span class="stat-stale">${nCompleted}</span> done' in body
     assert "t/s hist" in body
     assert "servers up${suffix}" in body
     assert "setInterval(() => scheduleRegionLocksRefresh(true), 1500)" in body
@@ -504,26 +326,46 @@ def test_dashboard_topology_activity_stats_refresh_with_live_age_tick() -> None:
     assert "loading CPU region-lock matrix" in body
     assert "function startPanelSafely(name, fn)" in body
     assert "startPanelSafely('region-locks-primer', ensureRegionLocksPanelPainted);" in body
-    assert "startPanelSafely('region-locks-refresh', () => scheduleRegionLocksRefresh(true));" in body
+    assert (
+        "startPanelSafely('region-locks-refresh', () => scheduleRegionLocksRefresh(true));" in body
+    )
     assert "startPanelSafely('topology', loadTopology);" in body
     assert "startPanelSafely('snapshot-poll', updateSnapshotPoll);" in body
     assert "setTimeout(ensureRegionLocksPanelPainted, 750)" in body
     assert "_latestSnapshot = snap || {};" in body
-    assert "_latestSlotInferredRegionLocksByRole = {};" in body
-    assert "never promote raw llama /slots" in body
+    assert "it must not synthesize lock ownership in the lock grid" in body
+    assert "tap rows into synthetic lock holders" in body
     assert "Tap PIDs identify backend llama-server processes" in body
     assert "active.instanceIdxs && active.instanceIdxs.has(Number(idx))" in body
     assert "function requestCoherentDashboardSnapshot(reason = '')" in body
     assert "requestCoherentDashboardSnapshot('structured_tap')" in body
     assert "function structuredTapLogicalAliasesForIdentity(role, idx)" in body
     assert "formatPhysicalRoleWithLogicalAliases(holder.role, holder.shape, holder.idx)" in body
-    assert "logical route(s): ${aliases.join(', ')}" in body
     assert "logical ${escapeHTML(req.role)}" in body
+
+
+def test_dashboard_topology_active_badge_does_not_create_fake_counts() -> None:
+    """Grouped rows must not render as `x50` or append active text to aliases."""
+    html_path = (
+        Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    )
+    body = html_path.read_text()
+
+    assert ".topology-row .active-badge.zero {\n    display: none;" in body
+    assert (
+        '<span class="active-badge zero" id="active_badge_${g.base}" '
+        'title="${g.base}: priority chat-XXX tasks'
+        in body
+    )
+    assert ">0</span>${aliasChip}</div>`" in body
+    assert "${aliasChip}` +\n            `<span class=\"active-badge zero\"" not in body
 
 
 def test_dashboard_live_panel_refreshes_ignore_stale_responses_where_possible() -> None:
     """Live inference and CPU-lock refreshes should not repaint older responses."""
-    html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    html_path = (
+        Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    )
     body = html_path.read_text()
 
     assert "let _processStatusFetchSeq = 0;" in body
@@ -541,29 +383,40 @@ def test_dashboard_live_panel_refreshes_ignore_stale_responses_where_possible() 
     assert "updatePanelSafely('decisions', () => updateDecisions(snap));" in body
     assert "const result = fn();" in body
     assert "result.catch((err) =>" in body
-    assert "return updateRegionLocks(refreshSeq, snap.region_locks, snapshotSeq, snap.in_flight_tasks || [])" in body
+    assert (
+        "return updateRegionLocks(refreshSeq, snap.region_locks, snapshotSeq, snap.in_flight_tasks || [])"
+        in body
+    )
     assert "function requestCoherentDashboardSnapshot(reason = '')" in body
     assert "requestCoherentDashboardSnapshot('region_locks_refresh')" in body
     assert "function updateTopologyInflight(inflight, snapshotSeq = null)" in body
     assert "const safeInflight = snapshotSeq == null ? [] : (inflight || []);" in body
     assert "let _lastRegionLocksPayload = null;" in body
-    assert "rich overlay failed" in body
+    assert "display_matrix render failed" in body
     assert "fetchJSON('/dashboard/api/snapshot'" in body
     assert "timeoutMs: _SNAPSHOT_POLL_TIMEOUT_MS" in body
     assert "setInterval(updateSnapshotPoll, 2500)" in body
-    assert "fetchJSON(`/dashboard/api/topology_activity?window_s=${TOPOLOGY_ACTIVITY_WINDOW_S}`)" not in body
+    assert (
+        "fetchJSON(`/dashboard/api/topology_activity?window_s=${TOPOLOGY_ACTIVITY_WINDOW_S}`)"
+        not in body
+    )
     assert "fetchJSON('/dashboard/api/contention')" in body
     assert "if (refreshSeq !== _regionLocksRefreshSeq) return;" in body
 
 
 def test_dashboard_snapshot_to_region_lock_overlay_choreography() -> None:
     """Region-lock refreshes should only reuse in-flight tasks from the same snapshot frame."""
-    html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    html_path = (
+        Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    )
     body = html_path.read_text()
 
     assert "let _latestSnapshotSeq = 0;" in body
     assert "const snapshotSeq = ++_latestSnapshotSeq;" in body
-    assert "return updateRegionLocks(refreshSeq, snap.region_locks, snapshotSeq, snap.in_flight_tasks || []);" in body
+    assert (
+        "return updateRegionLocks(refreshSeq, snap.region_locks, snapshotSeq, snap.in_flight_tasks || []);"
+        in body
+    )
     assert "function updateTopology(activity, inflight, snapshotSeq = null)" in body
     assert "updateTopologyInflight(inflight, snapshotSeq)" in body
     assert "const safeInflight = snapshotSeq == null ? [] : (inflight || []);" in body
@@ -575,7 +428,9 @@ def test_dashboard_transport_self_heals_without_page_reload() -> None:
     """Wedge-killers + watchdog: a dead stream, hung fetch, or poisoned frame
     watermark must recover on its own — the trio of stream-fed panels
     (topology / region locks / live tap) froze permanently on these before."""
-    html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    html_path = (
+        Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    )
     body = html_path.read_text()
 
     # B1: timeout-bounded snapshot poll with a self-expiring in-flight guard.
@@ -589,7 +444,9 @@ def test_dashboard_transport_self_heals_without_page_reload() -> None:
     # but never advance it; watermark resets on every (re)connect.
     assert "if (!Number.isFinite(ts)) return null;" in body
     assert "Date.now() / 1000 + 120" in body
-    assert body.count("_latestSnapshotFrameTs = 0;") >= 3  # decl init + both stream starters + watchdog
+    assert (
+        body.count("_latestSnapshotFrameTs = 0;") >= 3
+    )  # decl init + both stream starters + watchdog
     assert "if (frameTs !== null) {" in body
 
     # B3: universal watchdog rebuilds the stream + fires a poll when snapshots
@@ -611,7 +468,9 @@ def test_dashboard_transport_self_heals_without_page_reload() -> None:
 
 def test_dashboard_pareto_plot_uses_journal_sources_and_nonnegative_axes() -> None:
     """Quality/speed axes should not render negative tick labels from padding."""
-    html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    html_path = (
+        Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    )
     body = html_path.read_text()
 
     assert "startsWith('journal_')" in body
@@ -633,7 +492,9 @@ def test_dashboard_pareto_plot_uses_journal_sources_and_nonnegative_axes() -> No
 
 
 def test_dashboard_gepa_and_pareto_surface_real_suite_metrics() -> None:
-    html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    html_path = (
+        Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    )
     body = html_path.read_text()
 
     assert "function realSuiteBadge(metric)" in body
@@ -647,13 +508,18 @@ def test_dashboard_gepa_and_pareto_surface_real_suite_metrics() -> None:
 
 
 def test_dashboard_autopilot_progress_includes_eval_label() -> None:
-    html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    html_path = (
+        Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    )
     body = html_path.read_text()
 
     assert "const evalLabel = prog.eval_label || phase.eval_label || '';" in body
     assert "evalLabel ? `trial #${d.trial_id} (${action}, ${evalLabel})`" in body
     assert "${evalLabel || 'T?'} tower ${lp.completed}/${lp.total}" in body
-    assert "${escapeHTML(String(evalLabel)) || 'T?'} tower ${prog.log_tail_progress.completed}/${prog.log_tail_progress.total}" in body
+    assert (
+        "${escapeHTML(String(evalLabel)) || 'T?'} tower ${prog.log_tail_progress.completed}/${prog.log_tail_progress.total}"
+        in body
+    )
     assert "const promotions = d.baseline_promotions || {};" in body
     assert "baseline promotions ${promotions.count}" in body
     assert "const outcome = d.outcome_kpis || {};" in body
@@ -671,7 +537,9 @@ def test_dashboard_autopilot_progress_includes_eval_label() -> None:
 
 def test_dashboard_repo_readiness_panel_is_advisory_only() -> None:
     """Repo-readiness queue can render in the dashboard without becoming a gate."""
-    html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    html_path = (
+        Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    )
     body = html_path.read_text()
 
     assert 'id="repo-readiness-panel"' in body
@@ -685,7 +553,9 @@ def test_dashboard_repo_readiness_panel_is_advisory_only() -> None:
 
 
 def test_dashboard_insight_graph_panel_is_wired_read_only() -> None:
-    html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    html_path = (
+        Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    )
     body = html_path.read_text()
 
     assert 'id="insight-graph-panel"' in body
@@ -701,7 +571,9 @@ def test_dashboard_insight_graph_panel_is_wired_read_only() -> None:
 
 def test_dashboard_operational_panels_stay_directly_under_topology() -> None:
     """Completed/routing must stay directly under topology in the right-column scan path."""
-    html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    html_path = (
+        Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    )
     body = html_path.read_text()
 
     topology_idx = body.index('id="topology-strip"')
@@ -736,14 +608,16 @@ def test_dashboard_folds_devices_into_regions_lock_and_tap_panels() -> None:
     """MI210/extern servers bypass the orchestrator pipeline; the Regions Lock
     grid and the live tap panel must still surface their occupancy instead of
     rendering an idle machine while a device is visibly working."""
-    html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    html_path = (
+        Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    )
     body = html_path.read_text()
 
     # Panel renamed + device fold (operator request 2026-07-05).
     assert "regions lock" in body
     assert "cpu region locks" not in body
     assert "function gpuDeviceRegionRows()" in body
-    assert body.count("rows.push(...gpuRows);") >= 2  # basic + rich renderers
+    assert body.count("rows.push(...gpuRows);") == 1  # display matrix only
     assert "device occupancy from /slots, not a CPU region lock" in body
 
     # Orphan (off-pipeline) inference cards in the live tap panel.

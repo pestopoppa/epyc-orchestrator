@@ -1,0 +1,19 @@
+{
+  "blocked": 249,
+  "blocker_counts": {
+    "auroc_missing_or_degenerate": 249,
+    "question_results_missing": 1
+  },
+  "ready_for_training": 102,
+  "reward_policy": "ap27_rlvr_tier_reward_v1",
+  "rows": 351,
+  "schema_version": "ap27_rlvr_environment_summary.v1",
+  "skipped_no_eval": 11,
+  "source_label": "autopilot_journal_1",
+  "tier_counts": {
+    "0": 102,
+    "1": 239,
+    "2": 6,
+    "3": 4
+  }
+}

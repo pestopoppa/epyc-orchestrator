@@ -1024,6 +1024,14 @@ def _web_research_impl(
             search_backend,
         )
 
+    all_irrelevant = total_synth > 0 and not relevant_pages
+    if all_irrelevant:
+        logger.warning(
+            "web_research quality gate: all synthesized pages irrelevant for query=%r backend=%s",
+            query,
+            search_backend,
+        )
+
     # Step 4: Build structured output
     sources = []
     for r in results:
@@ -1064,8 +1072,8 @@ def _web_research_impl(
     fetch_successes = sum(1 for p in fetched.values() if p.get("success"))
     synthesis_failures = sum(1 for s in synthesized if not s.get("success"))
 
-    return {
-        "success": True,
+    result = {
+        "success": not all_irrelevant,
         "query": query,
         "sources": sources,
         "search_result_count": len(results),
@@ -1083,6 +1091,13 @@ def _web_research_impl(
         "search_backend": search_backend,
         "reranked": reranked,
     }
+
+    if all_irrelevant:
+        result["degraded"] = True
+        result["error"] = "All synthesized pages were classified irrelevant."
+        result["no_results_reason"] = "all_synthesized_pages_irrelevant"
+
+    return result
 
 
 def web_research(

@@ -40,6 +40,11 @@ import numpy as np
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from src.llm_primitives.stat_tests import (  # noqa: E402
+    expected_calibration_error as _stat_ece,
+    roc_auc as _stat_roc_auc,
+)
+
 from orchestration.repl_memory.routing_classifier import RoutingClassifier
 from orchestration.repl_memory.verifier_head import VerifierHead
 
@@ -52,29 +57,19 @@ def _brier(probs: np.ndarray, labels: np.ndarray) -> float:
 
 
 def _roc_auc(scores: np.ndarray, labels: np.ndarray) -> float:
-    pos_n = int(labels.sum())
-    neg_n = len(labels) - pos_n
-    if pos_n == 0 or neg_n == 0:
-        return float("nan")
-    ranks = np.argsort(np.argsort(scores))
-    rank_pos = ranks[labels == 1].sum()
-    u = rank_pos - pos_n * (pos_n - 1) / 2
-    return float(u / (pos_n * neg_n))
+    """Rank-based ROC-AUC. Consolidated onto the clean-room stdlib
+    ``stat_tests.roc_auc`` (tie-averaged Mann-Whitney U, == sklearn); the
+    historical ``float('nan')`` on a single-class input is preserved here."""
+    auc = _stat_roc_auc(scores, labels)
+    return float("nan") if auc is None else float(auc)
 
 
 def _ece(probs: np.ndarray, labels: np.ndarray, n_bins: int = 10) -> float:
-    bins = np.linspace(0.0, 1.0, n_bins + 1)
-    ece = 0.0
-    N = len(probs)
-    for i in range(n_bins):
-        lo, hi = bins[i], bins[i + 1]
-        mask = (probs >= lo) & (probs < hi if i < n_bins - 1 else probs <= hi)
-        if not mask.any():
-            continue
-        bin_conf = probs[mask].mean()
-        bin_acc = labels[mask].mean()
-        ece += (mask.sum() / N) * abs(bin_conf - bin_acc)
-    return float(ece)
+    """Expected calibration error. Consolidated onto the clean-room stdlib
+    ``stat_tests.expected_calibration_error`` (identical equal-width binning);
+    the historical ``0.0`` on empty input is preserved here."""
+    ece = _stat_ece(probs, labels, n_bins=n_bins)
+    return 0.0 if ece is None else float(ece)
 
 
 def _metrics(probs: np.ndarray, labels: np.ndarray) -> dict[str, float]:

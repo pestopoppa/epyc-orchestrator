@@ -227,9 +227,109 @@ def test_phase_health_report_surfaces_outcome_stall_without_blocking_by_default(
         "total": 2,
         "rate": 0.5,
     }
+    assert report["outcome_progress"]["rates"]["regression_per_active_trial"] == {
+        "count": 0,
+        "total": 2,
+        "rate": 0.0,
+    }
+    assert report["outcome_progress"]["rates"]["promotions_per_100_active_trials"] == {
+        "count": 0,
+        "total": 2,
+        "per_100": 0.0,
+    }
     formatted = "\n".join(format_phase_health_report(report))
     assert "Outcome progress status: attention" in formatted
     assert "frontier admission stale" in formatted
+    assert "regression_per_active_trial=0.0" in formatted
+    assert "promotions_per_100_active_trials=0.0" in formatted
+
+
+def test_phase_health_outcome_rates_report_regressions_and_promotions_per_active_trial(
+    tmp_path,
+    monkeypatch,
+):
+    snapshot = tmp_path / "phase.json"
+    journal_dir = tmp_path / "journal"
+    journal_dir.mkdir()
+    (journal_dir / "autopilot_journal.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "trial_id": 10,
+                        "timestamp": "2026-07-05T00:10:00+00:00",
+                        "action_type": "numeric_trial",
+                        "pareto_status": "frontier",
+                        "keep_revert_decision": "keep",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "trial_id": 11,
+                        "timestamp": "2026-07-05T00:11:00+00:00",
+                        "action_type": "prompt_mutation",
+                        "pareto_status": "dominated",
+                        "keep_revert_decision": "revert",
+                        "deficiency_category": "regression",
+                        "failure_analysis": "VIOLATIONS: regression vs baseline",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "trial_id": 12,
+                        "timestamp": "2026-07-05T00:12:00+00:00",
+                        "action_type": "structural_experiment",
+                        "outcome_status": "invalid",
+                        "pareto_status": "dominated",
+                        "deficiency_category": "regression",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "baseline_promotion",
+                        "source_trial_id": 11,
+                        "timestamp": "2026-07-05T00:13:00+00:00",
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    snapshot.write_text(
+        json.dumps(
+            {
+                "phase": "dispatch_action",
+                "pid": 123,
+                "trial_id": 13,
+                "action_type": "numeric_trial",
+                "updated_at": 100.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("phase_status._process_exists", lambda pid: True)
+
+    report = build_phase_health_report(
+        path=snapshot,
+        journal_dir=journal_dir,
+        recent_window_trials=10,
+        now=120.0,
+        stale_after_s=60.0,
+    )
+
+    rates = report["outcome_progress"]["rates"]
+    assert rates["active_trial_count"] == 2
+    assert rates["regression_per_active_trial"] == {
+        "count": 1,
+        "total": 2,
+        "rate": 0.5,
+    }
+    assert rates["promotions_per_100_active_trials"] == {
+        "count": 1,
+        "total": 2,
+        "per_100": 50.0,
+    }
 
 
 def test_phase_health_report_can_block_on_outcome_stall(tmp_path, monkeypatch):
@@ -325,6 +425,13 @@ def test_phase_health_report_exposes_allowlisted_autopilot_env_flags(tmp_path, m
         lambda pid: {
             "AUTOPILOT_PLANNER_HINTS": "1",
             "AUTOPILOT_SEQ_VERDICT": "1",
+            "AUTOPILOT_SEQ_P0_2_BRIDGE": "1",
+            "AUTOPILOT_TOOL_SENTINELS": "1",
+            "AUTOPILOT_STEPPING_STONES": "1",
+            "AUTOPILOT_PLANNER_PRIMARY": "local_ingest",
+            "AUTOPILOT_PLANNER_CRITIC": "local_frontdoor",
+            "AUTOPILOT_PLANNER_CRITIC_FALLBACK": "claude",
+            "AUTOPILOT_PLANNER_SPEND_BREAKER": "0",
             "AUTOPILOT_W6_AUDIT_BLOCK": "1",
             "AUTOPILOT_W6_AUDIT_N": "10",
             "AUTOPILOT_W6_AUDIT_EVERY_N_TRIALS": "1",
@@ -338,6 +445,13 @@ def test_phase_health_report_exposes_allowlisted_autopilot_env_flags(tmp_path, m
     assert report["ok"] is True
     assert report["planner_hints_enabled"] is True
     assert report["seq_verdict_enabled"] is True
+    assert report["seq_p0_2_bridge_env_enabled"] is True
+    assert report["tool_sentinels_enabled"] is True
+    assert report["stepping_stones_enabled"] is True
+    assert report["planner_primary"] == "local_ingest"
+    assert report["planner_critic"] == "local_frontdoor"
+    assert report["planner_critic_fallback"] == "claude"
+    assert report["planner_spend_breaker_enabled"] is False
     assert report["w6_audit_accrual_enabled"] is True
     assert report["w6_audit_shadow_only"] is True
     assert report["w6_audit_n"] == "10"
@@ -346,6 +460,13 @@ def test_phase_health_report_exposes_allowlisted_autopilot_env_flags(tmp_path, m
     assert set(report["autopilot_env_flags"]) == {
         "AUTOPILOT_PLANNER_HINTS",
         "AUTOPILOT_SEQ_VERDICT",
+        "AUTOPILOT_SEQ_P0_2_BRIDGE",
+        "AUTOPILOT_TOOL_SENTINELS",
+        "AUTOPILOT_STEPPING_STONES",
+        "AUTOPILOT_PLANNER_PRIMARY",
+        "AUTOPILOT_PLANNER_CRITIC",
+        "AUTOPILOT_PLANNER_CRITIC_FALLBACK",
+        "AUTOPILOT_PLANNER_SPEND_BREAKER",
         "AUTOPILOT_W6_AUDIT_BLOCK",
         "AUTOPILOT_W6_AUDIT_N",
         "AUTOPILOT_W6_AUDIT_EVERY_N_TRIALS",
@@ -355,6 +476,11 @@ def test_phase_health_report_exposes_allowlisted_autopilot_env_flags(tmp_path, m
     formatted = "\n".join(format_phase_health_report(report))
     assert "Planner hints env: True" in formatted
     assert "Seq verdict env: True" in formatted
+    assert "Seq P0.2 bridge env: True" in formatted
+    assert "Tool sentinels env: True" in formatted
+    assert "Stepping stones env: True" in formatted
+    assert "Planner providers: primary=local_ingest, critic=local_frontdoor, fallback=claude" in formatted
+    assert "Planner spend breaker env: False" in formatted
     assert "W6 audit env: True (shadow_only=True, n=10, every_n=1)" in formatted
     assert "Planner timeout env: 600" in formatted
 

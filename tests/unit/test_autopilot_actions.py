@@ -23,8 +23,17 @@ autopilot = importlib.import_module("autopilot")
 def _ctx(**overrides):
     """Build a minimal _ActionContext with all the fields zeroed/None unless overridden."""
     defaults = dict(
-        seeder=None, swarm=None, forge=None, lab=None, tower=None,
-        gate=None, archive=None, journal=None, state={}, strategy_store=None, evo=None,
+        seeder=None,
+        swarm=None,
+        forge=None,
+        lab=None,
+        tower=None,
+        gate=None,
+        archive=None,
+        journal=None,
+        state={},
+        strategy_store=None,
+        evo=None,
     )
     defaults.update(overrides)
     return actions._ActionContext(**defaults)
@@ -39,8 +48,15 @@ def test_dispatcher_rejects_ap9_scope_violation(caplog) -> None:
     # journal/count/feed-back the reason.
     result, species = actions.dispatch_action(
         {"type": "numeric_trial", "params": {"a": 1, "b": 2}},
-        seeder=None, swarm=None, forge=None, lab=None, tower=None,
-        gate=None, archive=None, journal=None, state={},
+        seeder=None,
+        swarm=None,
+        forge=None,
+        lab=None,
+        tower=None,
+        gate=None,
+        archive=None,
+        journal=None,
+        state={},
     )
     assert isinstance(result, actions.SkipOutcome)
     assert result.status == "skipped"
@@ -139,8 +155,15 @@ def test_dispatcher_rejects_deep_eval_sampling_knobs(monkeypatch) -> None:
 
     result, species = actions.dispatch_action(
         {"type": "deep_eval", "tier": 2, "n_questions": 7, "seed": 999},
-        seeder=None, swarm=None, forge=None, lab=None, tower=None,
-        gate=None, archive=None, journal=None, state={},
+        seeder=None,
+        swarm=None,
+        forge=None,
+        lab=None,
+        tower=None,
+        gate=None,
+        archive=None,
+        journal=None,
+        state={},
     )
 
     assert isinstance(result, actions.SkipOutcome)
@@ -153,13 +176,47 @@ def test_dispatcher_rejects_deep_eval_sampling_knobs(monkeypatch) -> None:
 def test_dispatcher_unknown_action_type() -> None:
     result, species = actions.dispatch_action(
         {"type": "nonexistent_action"},
-        seeder=None, swarm=None, forge=None, lab=None, tower=None,
-        gate=None, archive=None, journal=None, state={},
+        seeder=None,
+        swarm=None,
+        forge=None,
+        lab=None,
+        tower=None,
+        gate=None,
+        archive=None,
+        journal=None,
+        state={},
     )
     assert isinstance(result, actions.SkipOutcome)
     assert result.status == "skipped"
     assert "unknown action type" in result.reason
     assert species == "unknown"
+
+
+def test_dispatcher_rejects_action_outside_live_allowlist(monkeypatch) -> None:
+    def fail_handler(action, ctx):  # noqa: ANN001, ARG001
+        raise AssertionError("unpromoted action handler should not run")
+
+    monkeypatch.setitem(actions._ACTION_HANDLERS, "code_mutation", fail_handler)
+
+    result, species = actions.dispatch_action(
+        {"type": "code_mutation", "target": "shadow"},
+        seeder=None,
+        swarm=None,
+        forge=None,
+        lab=None,
+        tower=None,
+        gate=None,
+        archive=None,
+        journal=None,
+        state={},
+        allowed_action_types=["seed_batch", "numeric_trial"],
+    )
+
+    assert isinstance(result, actions.SkipOutcome)
+    assert result.status == "skipped"
+    assert "active live-loop allowlist" in result.reason
+    assert "shadow lane" in result.reason
+    assert species == "code_mutation"
 
 
 def test_blacklisted_action_becomes_invalid_skip() -> None:
@@ -189,37 +246,128 @@ def test_slot_compact_handler_rejects_placeholder_port_zero() -> None:
 def test_blacklist_prompt_includes_older_enforced_patterns(monkeypatch) -> None:
     monkeypatch.setattr(autopilot, "BLACKLIST_RENDER_CAP", 2)
 
-    text = autopilot._format_blacklist_for_prompt([
-        {
-            "pattern": {
-                "type": "structural_experiment",
-                "flags": {"skillbank": True},
+    text = autopilot._format_blacklist_for_prompt(
+        [
+            {
+                "pattern": {
+                    "type": "structural_experiment",
+                    "flags": {"skillbank": True},
+                },
+                "reason": "old hidden reason",
+                "source_trial": 505,
             },
-            "reason": "old hidden reason",
-            "source_trial": 505,
-        },
-        {
-            "pattern": {"type": "numeric_trial", "surface": "monitor"},
-            "reason": "recent monitor reason",
-            "source_trial": 747,
-        },
-        {
-            "pattern": {"type": "train_routing_models"},
-            "reason": "recent routing reason",
-            "source_trial": 781,
-        },
-    ])
+            {
+                "pattern": {"type": "numeric_trial", "surface": "monitor"},
+                "reason": "recent monitor reason",
+                "source_trial": 747,
+            },
+            {
+                "pattern": {"type": "train_routing_models"},
+                "reason": "recent routing reason",
+                "source_trial": 781,
+            },
+        ]
+    )
 
     assert "recent monitor reason" in text
     assert "recent routing reason" in text
     assert "Older enforced patterns" in text
     assert '{"flags":{"skillbank":true},"type":"structural_experiment"}' in text
     assert "source_trial=505" in text
+    assert "no-expiry-metadata" in text
+
+
+def test_blacklist_prompt_separates_p0_3_retryable_entries(monkeypatch) -> None:
+    monkeypatch.setattr(autopilot, "BLACKLIST_RENDER_CAP", 4)
+
+    text = autopilot._format_blacklist_for_prompt(
+        [
+            {
+                "pattern": {
+                    "type": "structural_experiment",
+                    "flags": {"architect_delegation": True},
+                },
+                "reason": "Auto-blacklisted: 3 consecutive failures ending at trial 655",
+                "source_trial": 655,
+            },
+            {
+                "pattern": {"type": "prompt_mutation", "file": "frontdoor.md"},
+                "reason": "MANUAL FREEZE: remove after restart",
+                "source_trial": -1,
+            },
+        ]
+    )
+
+    assert "Retryable blacklist re-exploration entries" in text
+    assert "architect_delegation_t655_tool_use_axis_bug" in text
+    assert "target=architect_delegation_t655_tool_use_axis_bug; source_trial=655" in text
+    assert "Recent enforced entries" in text
+    assert "non-expiring" in text
+    assert "purge-scoped=frontdoor_prompt_mutation_restart_freeze" in text
+    assert "manual-purge-approval-required" in text
+    assert '{"file":"frontdoor.md","type":"prompt_mutation"}' in text
+
+
+def test_p0_3_retryable_blacklist_match_excludes_manual_freeze() -> None:
+    blacklist = [
+        {
+            "pattern": {
+                "type": "structural_experiment",
+                "flags": {"specialist_routing": True},
+            },
+            "reason": "Auto-blacklisted: 3 consecutive failures ending at trial 664",
+            "source_trial": 664,
+        },
+        {
+            "pattern": {"type": "gepa_optimize", "file": "frontdoor.md"},
+            "reason": "MANUAL FREEZE companion",
+            "source_trial": -1,
+        },
+    ]
+
+    retry = autopilot._p0_3_retryable_blacklist_match(
+        {"type": "structural_experiment", "flags": {"specialist_routing": True}},
+        blacklist,
+    )
+
+    assert retry is not None
+    assert retry["target_key"] == "specialist_routing_t664_tool_use_axis_bug"
+    assert (
+        autopilot._p0_3_retryable_blacklist_match(
+            {"type": "gepa_optimize", "file": "frontdoor.md", "max_evals": 50},
+            blacklist,
+        )
+        is None
+    )
+
+
+def test_retryable_infra_seed_blacklist_is_not_replaced() -> None:
+    requested = {"type": "seed_batch", "n_questions": 50}
+    action, rationale = autopilot._replace_blacklisted_seed_fallback(
+        requested,
+        [
+            {
+                "pattern": {"type": "seed_batch", "n_questions": 50},
+                "reason": "Auto-blacklisted: 3 consecutive failures ending at trial 1317",
+                "source_trial": 1317,
+            }
+        ],
+        {"falsifier": "original"},
+    )
+
+    assert action == requested
+    assert rationale["falsifier"] == "original"
+    assert rationale["p0_3_blacklist_reexploration"] is True
+    assert (
+        rationale["p0_3_blacklist_reexploration_scope"]
+        == "infra_contaminated_blacklist_recheck"
+    )
 
 
 def test_structural_experiment_invalid_flags_returns_skip_outcome() -> None:
     """Invalid flag dependency surfaces the validator reason as a SkipOutcome,
     not a bare None — this is the graph_router-deadlock fix."""
+
     class FakeLab:
         def propose_flag_experiment(self, flags):
             return {
@@ -277,6 +425,7 @@ def test_structural_experiment_error_status_is_skipped_not_invalid() -> None:
     """A transient validator 'error' (e.g. orchestrator unreachable) maps to a
     non-blacklisting 'skipped' SkipOutcome, never 'invalid' — so a blip cannot
     permanently blacklist a valid flag."""
+
     class FakeLab:
         def propose_flag_experiment(self, flags):
             return {"status": "error", "error": "live flag state unavailable"}
@@ -318,6 +467,169 @@ def test_structural_experiment_noop_skips_before_validation_or_eval() -> None:
     assert species == "structural_lab"
 
 
+def test_structural_experiment_failed_revert_marks_eval_corrupted() -> None:
+    class FakeLab:
+        def __init__(self):
+            self.applied = []
+
+        def current_flags(self):
+            return {"plan_review": False}
+
+        def propose_flag_experiment(self, flags):
+            return {"status": "valid", "flags": flags}
+
+        def apply_flag_experiment(self, flags):
+            self.applied.append(dict(flags))
+            if flags == {"plan_review": True}:
+                return {
+                    "status": "ok",
+                    "attestation": {"status": "ok", "expected": flags},
+                }
+            return {"status": "error", "error": "connection refused"}
+
+    class FakeTower:
+        def hybrid_eval(self):
+            return actions.EvalResult(
+                tier=1,
+                quality=0.5,
+                speed=10.0,
+                cost=0.5,
+                reliability=1.0,
+            )
+
+    class FakeGate:
+        use_sequential = False
+
+        def check(self, _eval_result):
+            return False
+
+    lab = FakeLab()
+    result, species = actions._action_structural_experiment(
+        {"type": "structural_experiment", "flags": {"plan_review": True}},
+        _ctx(lab=lab, tower=FakeTower(), gate=FakeGate()),
+    )
+
+    assert isinstance(result, actions.EvalResult)
+    assert species == "structural_lab"
+    assert lab.applied == [{"plan_review": True}, {"plan_review": False}]
+    assert result.details["flag_prior_values"] == {"plan_review": False}
+    assert result.details["flag_revert_failed"] is True
+    assert result.bug_corrupted_by == "structural_flag_revert_failure"
+    assert "connection refused" in result.bug_corrupted_reason
+
+
+def test_structural_experiment_requires_apply_attestation() -> None:
+    class FakeLab:
+        def __init__(self):
+            self.applied = []
+
+        def current_flags(self):
+            return {"plan_review": False}
+
+        def propose_flag_experiment(self, flags):
+            return {"status": "valid", "flags": flags}
+
+        def apply_flag_experiment(self, flags):
+            self.applied.append(dict(flags))
+            if flags == {"plan_review": True}:
+                return {"status": "ok"}
+            return {
+                "status": "ok",
+                "attestation": {"status": "ok", "expected": flags},
+            }
+
+    class FakeTower:
+        def hybrid_eval(self):  # pragma: no cover
+            raise AssertionError("must not eval without apply attestation")
+
+    lab = FakeLab()
+    result, species = actions._action_structural_experiment(
+        {"type": "structural_experiment", "flags": {"plan_review": True}},
+        _ctx(lab=lab, tower=FakeTower()),
+    )
+
+    assert isinstance(result, actions.SkipOutcome)
+    assert species == "structural_lab"
+    assert lab.applied == [{"plan_review": True}, {"plan_review": False}]
+    assert result.bug_corrupted_by == "structural_flag_apply_failure"
+    assert "attestation failed" in result.reason
+
+
+def test_structural_experiment_requires_revert_attestation() -> None:
+    class FakeLab:
+        def __init__(self):
+            self.applied = []
+
+        def current_flags(self):
+            return {"plan_review": False}
+
+        def propose_flag_experiment(self, flags):
+            return {"status": "valid", "flags": flags}
+
+        def apply_flag_experiment(self, flags):
+            self.applied.append(dict(flags))
+            if flags == {"plan_review": True}:
+                return {
+                    "status": "ok",
+                    "attestation": {"status": "ok", "expected": flags},
+                }
+            return {"status": "ok"}
+
+    class FakeTower:
+        def hybrid_eval(self):
+            return actions.EvalResult(
+                tier=1,
+                quality=0.5,
+                speed=10.0,
+                cost=0.5,
+                reliability=1.0,
+            )
+
+    class FakeGate:
+        use_sequential = False
+
+        def check(self, _eval_result):
+            return False
+
+    lab = FakeLab()
+    result, species = actions._action_structural_experiment(
+        {"type": "structural_experiment", "flags": {"plan_review": True}},
+        _ctx(lab=lab, tower=FakeTower(), gate=FakeGate()),
+    )
+
+    assert isinstance(result, actions.EvalResult)
+    assert species == "structural_lab"
+    assert lab.applied == [{"plan_review": True}, {"plan_review": False}]
+    assert result.details["flag_revert_failed"] is True
+    assert result.bug_corrupted_by == "structural_flag_revert_failure"
+
+
+def test_structural_experiment_refuses_eval_without_restore_snapshot() -> None:
+    class FakeLab:
+        def current_flags(self):
+            return {}
+
+        def propose_flag_experiment(self, flags):
+            return {"status": "valid", "flags": flags}
+
+        def apply_flag_experiment(self, _flags):  # pragma: no cover
+            raise AssertionError("must not apply without a restore snapshot")
+
+    class FakeTower:
+        def hybrid_eval(self):  # pragma: no cover
+            raise AssertionError("must not eval without a restore snapshot")
+
+    result, species = actions._action_structural_experiment(
+        {"type": "structural_experiment", "flags": {"plan_review": True}},
+        _ctx(lab=FakeLab(), tower=FakeTower()),
+    )
+
+    assert isinstance(result, actions.SkipOutcome)
+    assert result.status == "skipped"
+    assert "restore snapshot" in result.reason
+    assert species == "structural_lab"
+
+
 def test_planner_convention_bindings_are_default_off(monkeypatch) -> None:
     monkeypatch.setattr(actions, "_PLANNER_HINTS_ENABLED", False)
 
@@ -325,9 +637,12 @@ def test_planner_convention_bindings_are_default_off(monkeypatch) -> None:
         def retrieve_conventions(self, **_kwargs):
             raise AssertionError("default-off path must not read StrategyStore")
 
-    assert actions._planner_convention_bindings(
-        _ctx(strategy_store=FakeStore()), species="numeric_swarm"
-    ) == set()
+    assert (
+        actions._planner_convention_bindings(
+            _ctx(strategy_store=FakeStore()), species="numeric_swarm"
+        )
+        == set()
+    )
 
 
 def test_structural_experiment_convention_denylist_blocks_live_bound_flag(
@@ -604,8 +919,15 @@ def test_dispatcher_routes_to_correct_handler(monkeypatch) -> None:
 
     result, species = actions.dispatch_action(
         {"type": "seed_batch", "n_questions": 5},
-        seeder="seeder_obj", swarm="swarm_obj", forge=None, lab=None, tower=None,
-        gate=None, archive=None, journal=None, state={},
+        seeder="seeder_obj",
+        swarm="swarm_obj",
+        forge=None,
+        lab=None,
+        tower=None,
+        gate=None,
+        archive=None,
+        journal=None,
+        state={},
     )
     assert result == "EVAL_SENTINEL"
     assert species == "test_species"
@@ -628,8 +950,15 @@ def test_dispatcher_sets_tower_trial_context(monkeypatch) -> None:
 
     result, species = actions.dispatch_action(
         {"type": "seed_batch", "n_questions": 5},
-        seeder="seeder_obj", swarm="swarm_obj", forge=None, lab=None, tower=FakeTower(),
-        gate=None, archive=None, journal=None, state={"trial_counter": 817},
+        seeder="seeder_obj",
+        swarm="swarm_obj",
+        forge=None,
+        lab=None,
+        tower=FakeTower(),
+        gate=None,
+        archive=None,
+        journal=None,
+        state={"trial_counter": 817},
     )
 
     assert result == "EVAL_SENTINEL"
@@ -641,10 +970,24 @@ def test_dispatcher_sets_tower_trial_context(monkeypatch) -> None:
 def test_action_handlers_registered_for_all_known_types() -> None:
     """Sanity check: every documented action type has a handler."""
     expected = {
-        "seed_batch", "numeric_trial", "prompt_mutation", "gepa_optimize",
-        "code_mutation", "structural_experiment", "consult_gate_probe", "structural_prune",
-        "train_routing_models", "distill_skillbank", "reset_memories",
-        "deep_eval", "rollback", "distill_knowledge", "slot_compact",
+        "seed_batch",
+        "numeric_trial",
+        "prompt_mutation",
+        "gepa_optimize",
+        "code_mutation",
+        "structural_experiment",
+        "consult_gate_probe",
+        "structural_prune",
+        "train_routing_models",
+        "distill_skillbank",
+        "reset_memories",
+        "deep_eval",
+        "rollback",
+        "distill_knowledge",
+        "slot_compact",
+        # Reviewer control-plane actions (H8 AP-5) — plan-generation, inference-gated.
+        "review_policy_trial",
+        "screening_tier_driver",
     }
     assert expected == set(actions._ACTION_HANDLERS.keys())
 
@@ -797,13 +1140,11 @@ def test_deep_eval_replays_seq_promotion_numeric_candidate(monkeypatch) -> None:
                 "surface": "monitor",
                 "params": {"ORCHESTRATOR_MONITOR_THRESHOLD": 0.42},
             },
-        }
+        },
     }
     journal = SimpleNamespace(
         recent=lambda _limit: [
-            SimpleNamespace(
-                eval_details={"question_results": [{"qid": "recent-qid"}]}
-            )
+            SimpleNamespace(eval_details={"question_results": [{"qid": "recent-qid"}]})
         ]
     )
 
@@ -1049,6 +1390,98 @@ def test_prompt_mutation_skill_gate_default_off_single_eval(monkeypatch) -> None
     assert swarm.epochs == ["prompt_mutation:frontdoor.md/targeted_fix"]
 
 
+def test_prompt_mutation_records_diversity_coverage_detail_observe_only(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("AUTOPILOT_SKILL_EFFICACY_GATE", raising=False)
+    monkeypatch.delenv("AUTOPILOT_BSV2_ACCEPT_GATE", raising=False)
+
+    class FakeForge:
+        def __init__(self):
+            self.failure_context = ""
+            self.applied = 0
+            self.reverted = 0
+
+        def propose_mutation(self, **kwargs):
+            self.failure_context = kwargs["failure_context"]
+            return SimpleNamespace(
+                file=kwargs["target_file"],
+                mutation_type=kwargs["mutation_type"],
+                description="test",
+                original_content="old",
+                mutated_content="new",
+                safety_valid=True,
+            )
+
+        def apply_mutation(self, mutation):
+            self.applied += 1
+
+        def revert_mutation(self, mutation):
+            self.reverted += 1
+
+    class FakeStrategyStore:
+        def __init__(self):
+            self.calls = []
+
+        def retrieve_for_journal(self, query, *, journal, k, species=None):
+            self.calls.append((query, journal, k, species))
+            if k == 8:
+                return [
+                    SimpleNamespace(
+                        id="strategy-coverage-1",
+                        source_trial_id=77,
+                        species="prompt_forge",
+                        description="frontdoor retry loop fix",
+                        insight="prefer narrow retry-loop edits",
+                        similarity_score=0.5,
+                    )
+                ]
+            return []
+
+    journal = _FakeJournal()
+    store = FakeStrategyStore()
+    tower = _QueuedTower([_eval_result(per_suite_quality={"math": 1.1})])
+    forge = FakeForge()
+    swarm = _FakeSwarm()
+    result, species = actions._action_prompt_mutation(
+        {
+            "type": "prompt_mutation",
+            "file": "frontdoor.md",
+            "mutation": "targeted_fix",
+            "description": "retry loop",
+        },
+        _ctx(
+            forge=forge,
+            tower=tower,
+            gate=_AlwaysPassGate(),
+            swarm=swarm,
+            journal=journal,
+            strategy_store=store,
+            state={},
+        ),
+    )
+
+    assert species == "prompt_forge"
+    assert tower.calls == 1
+    assert forge.applied == 1
+    assert forge.reverted == 0
+    assert "Diversity Coverage Pressure (AP-35/AP-36 observe-only)" in forge.failure_context
+    assert store.calls == [
+        ("frontdoor.md targeted_fix retry loop", journal, 3, None),
+        ("frontdoor.md targeted_fix retry loop", journal, 8, "prompt_forge"),
+    ]
+    detail = result.details["mutation_diversity_coverage"]
+    assert detail["schema_version"] == "mutation_diversity_coverage.v1"
+    assert detail["artifact_kind"] == "prompt"
+    assert detail["target"] == "frontdoor.md"
+    assert detail["mutation_type"] == "targeted_fix"
+    assert detail["decision"] == "kept"
+    assert detail["acceptance_effect"] == "none_observe_only"
+    assert detail["density"] == pytest.approx(0.5)
+    assert detail["negative_log_density"] == pytest.approx(0.6931471805599453)
+    assert detail["top_matches"][0]["source_trial_id"] == 77
+
+
 def test_prompt_mutation_bsv2_gate_rejects_behavior_regression(monkeypatch) -> None:
     monkeypatch.delenv("AUTOPILOT_SKILL_EFFICACY_GATE", raising=False)
     monkeypatch.setenv("AUTOPILOT_BSV2_ACCEPT_GATE", "1")
@@ -1265,10 +1698,12 @@ def test_code_mutation_bsv2_gate_accepts_watch_behavior(monkeypatch) -> None:
         {"qid": "q1", "suite": "math", "correct": True},
         {"qid": "q2", "suite": "math", "correct": False},
     ]
-    tower = _QueuedTower([
-        _eval_result(question_results=shared_vector),
-        _eval_result(question_results=shared_vector),
-    ])
+    tower = _QueuedTower(
+        [
+            _eval_result(question_results=shared_vector),
+            _eval_result(question_results=shared_vector),
+        ]
+    )
     forge = FakeForge()
     swarm = _FakeSwarm()
 
@@ -1323,6 +1758,30 @@ def test_code_mutation_transfer_safety_skip_stops_before_apply_or_eval() -> None
     assert swarm.epochs == []
 
 
+def test_code_mutation_file_exists_block_does_not_raise() -> None:
+    class FakeForge:
+        def propose_code_mutation(self, **_kwargs):
+            raise FileExistsError("new file already exists")
+
+    result, species = actions._action_code_mutation(
+        {
+            "type": "code_mutation",
+            "file": "src/generated/new_module.py",
+            "mutation": "new_file",
+        },
+        _ctx(
+            forge=FakeForge(),
+            tower=_QueuedTower([]),
+            gate=_AlwaysPassGate(),
+            swarm=_FakeSwarm(),
+            journal=_FakeJournal(),
+        ),
+    )
+
+    assert result is None
+    assert species == "prompt_forge"
+
+
 def test_code_mutation_noop_skips_eval() -> None:
     class FakeForge:
         def __init__(self):
@@ -1362,7 +1821,8 @@ def test_code_mutation_noop_skips_eval() -> None:
 def test_distill_knowledge_returns_evolution_manager_species() -> None:
     """Without evo/strategy_store, distill_knowledge is a journalable invalid outcome."""
     result, species = actions._action_distill_knowledge(
-        {"type": "distill_knowledge"}, _ctx(evo=None, strategy_store=None),
+        {"type": "distill_knowledge"},
+        _ctx(evo=None, strategy_store=None),
     )
     assert isinstance(result, actions.SkipOutcome)
     assert result.status == "invalid"
@@ -1500,14 +1960,10 @@ def test_mutation_context_filters_strategy_trials_superseded_by_journal() -> Non
 
     class FakeStrategyStore:
         def __init__(self):
-            self.journal = None
-            self.query = ""
-            self.k = 0
+            self.calls = []
 
         def retrieve_for_journal(self, query, *, journal, k):
-            self.query = query
-            self.journal = journal
-            self.k = k
+            self.calls.append((query, journal, k))
             return []
 
     store = FakeStrategyStore()
@@ -1521,9 +1977,10 @@ def test_mutation_context_filters_strategy_trials_superseded_by_journal() -> Non
         _ctx(journal=FakeJournal(), strategy_store=store, state={}),
     )
 
-    assert store.journal is not None
-    assert store.k == 3
-    assert "src/example.py" in store.query
+    assert store.calls[0][1] is not None
+    assert store.calls[0][2] == 3
+    assert "src/example.py" in store.calls[0][0]
+    assert store.calls[1][2] == 8
 
 
 def test_mutation_context_promptforge_conventions_are_default_off(monkeypatch) -> None:
@@ -1586,9 +2043,7 @@ def test_mutation_context_injects_promptforge_conventions_when_enabled(monkeypat
                     title="Batch-1 decode exhausted",
                     description="batch=1 decode guardrail",
                     insight="Do not propose decode-kernel mutations for batch=1.",
-                    generalized_content=(
-                        "Do not propose decode-kernel mutations for batch=1."
-                    ),
+                    generalized_content=("Do not propose decode-kernel mutations for batch=1."),
                 )
             ]
 
@@ -1603,11 +2058,62 @@ def test_mutation_context_injects_promptforge_conventions_when_enabled(monkeypat
     )
 
     assert calls[0][0] == "retrieve_for_journal"
-    assert calls[1] == ("retrieve_conventions", "prompt_forge", journal, 8)
+    assert calls[1][0] == "retrieve_for_journal"
+    assert calls[2] == ("retrieve_conventions", "prompt_forge", journal, 8)
     assert "## PromptForge Convention Guardrails" in failure_context
     assert "Batch-1 decode exhausted" in failure_context
     assert "Do not propose decode-kernel mutations for batch=1." in failure_context
     assert "Past Strategy Insights" not in failure_context
+
+
+def test_mutation_context_injects_diversity_coverage_pressure() -> None:
+    class FakeJournal:
+        def recent_failures(self, species, n):
+            return []
+
+        def insights_text(self, n):
+            return "(no insights yet)"
+
+        def recent(self, n):
+            return []
+
+    class FakeStrategyStore:
+        def __init__(self):
+            self.calls = []
+
+        def retrieve_for_journal(self, query, *, journal, k, species=None):
+            self.calls.append((query, journal, k, species))
+            return [
+                SimpleNamespace(
+                    id="strategy-1",
+                    source_trial_id=88,
+                    species="prompt_forge",
+                    description="frontdoor retry loop fix",
+                    insight="Prefer a narrow retry-loop guard over global routing edits.",
+                    similarity_score=0.5,
+                )
+            ]
+
+    journal = FakeJournal()
+    store = FakeStrategyStore()
+    failure_context, _ = actions._build_mutation_context(
+        {
+            "file": "frontdoor.md",
+            "mutation": "targeted_fix",
+            "description": "retry loop",
+        },
+        _ctx(journal=journal, strategy_store=store, state={}),
+    )
+
+    assert store.calls == [
+        ("frontdoor.md targeted_fix retry loop", journal, 3, None),
+        ("frontdoor.md targeted_fix retry loop", journal, 8, "prompt_forge"),
+    ]
+    assert "Diversity Coverage Pressure (AP-35/AP-36 observe-only)" in failure_context
+    assert "strategy_density: 0.500000" in failure_context
+    assert "negative_log_density: 0.693" in failure_context
+    assert "not an acceptance score or quality gate" in failure_context
+    assert "Trial #88 (prompt_forge) score=0.500000" in failure_context
 
 
 def test_mutation_context_skips_legacy_strategy_store_without_journal_view(caplog) -> None:
@@ -1629,13 +2135,130 @@ def test_mutation_context_skips_legacy_strategy_store_without_journal_view(caplo
     assert "retrieve_for_journal" in caplog.text
 
 
+def test_mutation_context_prefers_contrastive_traces_from_tower() -> None:
+    class FakeTower:
+        def __init__(self):
+            self.calls = []
+
+        def capture_contrastive_traces(self, *, k_success, k_failure, trace_bank):
+            self.calls.append((k_success, k_failure, trace_bank))
+            return (
+                "## Contrastive Execution Traces\n"
+                "### Success Examples\n"
+                "[1] trial #7\nTrace:\nSUCCESS TRACE"
+            )
+
+    tower = FakeTower()
+    failure_context, _ = actions._build_mutation_context(
+        {
+            "file": "src/example.py",
+            "mutation": "targeted_fix",
+            "description": "example",
+        },
+        _ctx(
+            journal=_FakeJournal(),
+            tower=tower,
+            state={
+                "contrastive_trace_bank": [
+                    {"outcome": "success", "trial_id": 7, "trace": "SUCCESS TRACE"}
+                ],
+                "last_traces": "LEGACY TRACE",
+            },
+        ),
+    )
+
+    assert tower.calls == [
+        (
+            2,
+            2,
+            [{"outcome": "success", "trial_id": 7, "trace": "SUCCESS TRACE"}],
+        )
+    ]
+    assert "## Contrastive Execution Traces" in failure_context
+    assert "SUCCESS TRACE" in failure_context
+    assert "LEGACY TRACE" not in failure_context
+
+
+def test_mutation_context_prefers_critic_trace_ir_prompt() -> None:
+    class FakeTower:
+        def capture_contrastive_traces(self, *, k_success, k_failure, trace_bank):
+            raise AssertionError("legacy contrastive trace formatter should not run")
+
+    failure_context, _ = actions._build_mutation_context(
+        {
+            "file": "src/example.py",
+            "mutation": "targeted_fix",
+            "description": "example",
+        },
+        _ctx(
+            journal=_FakeJournal(),
+            tower=FakeTower(),
+            state={
+                "critic_trace_ir_prompt": (
+                    "## Harness Trace IR (MH-11 observe-only)\n"
+                    '{"schema_version":"harness_trace_ir.v1"}'
+                ),
+                "contrastive_traces": "## Contrastive Execution Traces\nLEGACY STRUCTURED",
+                "last_traces": "ROLE=frontdoor\nRESPONSE:\nlegacy",
+            },
+        ),
+    )
+
+    assert "## Harness Trace IR (MH-11 observe-only)" in failure_context
+    assert "harness_trace_ir.v1" in failure_context
+    assert "LEGACY STRUCTURED" not in failure_context
+    assert "ROLE=frontdoor" not in failure_context
+
+
+def test_mutation_context_formats_critic_trace_ir_from_state() -> None:
+    class FakeTower:
+        def format_critic_trace_ir(self, trace_ir):
+            assert trace_ir == {"trace_examples": [{"outcome": "success"}]}
+            return "## Harness Trace IR (MH-11 observe-only)\nFORMATTED"
+
+    failure_context, _ = actions._build_mutation_context(
+        {
+            "file": "src/example.py",
+            "mutation": "targeted_fix",
+            "description": "example",
+        },
+        _ctx(
+            journal=_FakeJournal(),
+            tower=FakeTower(),
+            state={"critic_trace_ir": {"trace_examples": [{"outcome": "success"}]}},
+        ),
+    )
+
+    assert "## Harness Trace IR (MH-11 observe-only)" in failure_context
+    assert "FORMATTED" in failure_context
+
+
+def test_mutation_context_falls_back_to_recent_traces() -> None:
+    failure_context, _ = actions._build_mutation_context(
+        {
+            "file": "src/example.py",
+            "mutation": "targeted_fix",
+            "description": "example",
+        },
+        _ctx(
+            journal=_FakeJournal(),
+            tower=None,
+            state={"last_traces": "ROLE=frontdoor\nRESPONSE:\nlegacy"},
+        ),
+    )
+
+    assert "## Recent Execution Traces" in failure_context
+    assert "ROLE=frontdoor" in failure_context
+
+
 def test_reset_memories_returns_none_eval() -> None:
     class FakeLab:
         def reset_and_reseed(self, **kw):
             return {"reset": True}
 
     result, species = actions._action_reset_memories(
-        {"type": "reset_memories"}, _ctx(lab=FakeLab(), state={"trial_counter": 5}),
+        {"type": "reset_memories"},
+        _ctx(lab=FakeLab(), state={"trial_counter": 5}),
     )
     assert result is None
     assert species == "structural_lab"
@@ -1761,6 +2384,41 @@ def test_w8_blacklisted_candidate_replacement_is_pressure_gated() -> None:
 
     assert action == requested
     assert rationale == {"falsifier": "original"}
+
+
+def test_w8_preserves_p0_3_retryable_structural_candidate() -> None:
+    requested = {
+        "type": "structural_experiment",
+        "flags": {"architect_delegation": True},
+    }
+
+    action, rationale = autopilot._replace_blacklisted_w8_candidate_action(
+        requested,
+        [
+            {
+                "pattern": {
+                    "type": "structural_experiment",
+                    "flags": {"architect_delegation": True},
+                },
+                "reason": "Auto-blacklisted: 3 consecutive failures ending at trial 655",
+                "source_trial": 655,
+            }
+        ],
+        {"falsifier": "original"},
+        trial_counter=0,
+        w8_replay_pressure_text=(
+            "W8 replay pressure: 0/1 accumulating candidate(s) are replayable "
+            "(blocked=unreplayable_action=seed_batch:1)."
+        ),
+    )
+
+    assert action == requested
+    assert rationale["falsifier"] == "original"
+    assert rationale["p0_3_blacklist_reexploration"] is True
+    assert (
+        rationale["p0_3_blacklist_reexploration_target"]
+        == "architect_delegation_t655_tool_use_axis_bug"
+    )
 
 
 def test_autonomous_blacklisted_action_reselects_seed_fallback() -> None:
@@ -1914,8 +2572,9 @@ def test_exhausted_critic_seed_fallback_uses_numeric_trial(monkeypatch) -> None:
     assert rationale is not None
     assert rationale["falsifier"] == "fallback remains metric-bearing"
     assert rationale["critic_seed_fallback_replaced"] is True
-    assert "critic fallback seed_batch unavailable" in (
-        rationale["critic_seed_fallback_unavailable_reason"]
+    assert (
+        "critic fallback seed_batch unavailable"
+        in (rationale["critic_seed_fallback_unavailable_reason"])
     )
 
 
@@ -1934,15 +2593,17 @@ def test_exhausted_critic_seed_fallback_pauses_when_numeric_exhausted(
         }
         for n_questions in autopilot.FALLBACK_SEED_CANDIDATES
     ]
-    blacklist.append({
-        "pattern": {
-            "type": "numeric_trial",
-            "surface": "memrl_retrieval",
-            "params": {},
-        },
-        "reason": "numeric blocked",
-        "scope": "surface",
-    })
+    blacklist.append(
+        {
+            "pattern": {
+                "type": "numeric_trial",
+                "surface": "memrl_retrieval",
+                "params": {},
+            },
+            "reason": "numeric blocked",
+            "scope": "surface",
+        }
+    )
 
     action, rationale, skip = autopilot._replace_exhausted_critic_seed_fallback(
         {"type": "seed_batch", "n_questions": autopilot.SAFE_FALLBACK_SEED_N},
@@ -1976,14 +2637,16 @@ def test_exhausted_critic_seed_fallback_uses_numeric_when_surface_ban_is_legacy(
         }
         for n_questions in autopilot.FALLBACK_SEED_CANDIDATES
     ]
-    blacklist.append({
-        "pattern": {
-            "type": "numeric_trial",
-            "surface": "memrl_retrieval",
-            "params": {},
-        },
-        "reason": "legacy numeric blocked",
-    })
+    blacklist.append(
+        {
+            "pattern": {
+                "type": "numeric_trial",
+                "surface": "memrl_retrieval",
+                "params": {},
+            },
+            "reason": "legacy numeric blocked",
+        }
+    )
 
     action, rationale, skip = autopilot._replace_exhausted_critic_seed_fallback(
         {"type": "seed_batch", "n_questions": autopilot.SAFE_FALLBACK_SEED_N},
@@ -2058,8 +2721,11 @@ def test_first_meta_action_is_allowed() -> None:
 def test_quota_passes_passive_below_memory_threshold() -> None:
     state = {"consecutive_passive_actions": 99}
     action, _ = autopilot._enforce_experiment_quota(
-        {"type": "seed_batch", "n_questions": 10}, state,
-        memory_count=10, rationale=None, trial_counter=1,
+        {"type": "seed_batch", "n_questions": 10},
+        state,
+        memory_count=10,
+        rationale=None,
+        trial_counter=1,
     )
     # Below threshold seeding is legitimate — never overridden.
     assert action["type"] == "seed_batch"
@@ -2069,9 +2735,11 @@ def test_quota_passes_passive_below_memory_threshold() -> None:
 def test_quota_forces_experiment_after_consecutive_passive_when_memory_large() -> None:
     state = {"consecutive_passive_actions": autopilot.MAX_CONSECUTIVE_PASSIVE}
     action, rationale = autopilot._enforce_experiment_quota(
-        {"type": "seed_batch", "n_questions": 10}, state,
+        {"type": "seed_batch", "n_questions": 10},
+        state,
         memory_count=autopilot.QUOTA_MEMORY_THRESHOLD + 1,
-        rationale={"falsifier": "x"}, trial_counter=0,
+        rationale={"falsifier": "x"},
+        trial_counter=0,
     )
     assert action["type"] == "numeric_trial"
     assert action["params"] == {}
@@ -2175,8 +2843,11 @@ def test_quota_records_block_when_all_numeric_surfaces_blacklisted() -> None:
 def test_quota_resets_counter_on_nonpassive_action() -> None:
     state = {"consecutive_passive_actions": 5}
     action, _ = autopilot._enforce_experiment_quota(
-        {"type": "prompt_mutation", "file": "frontdoor.md"}, state,
-        memory_count=99999, rationale=None, trial_counter=0,
+        {"type": "prompt_mutation", "file": "frontdoor.md"},
+        state,
+        memory_count=99999,
+        rationale=None,
+        trial_counter=0,
     )
     assert action["type"] == "prompt_mutation"
     assert state["consecutive_passive_actions"] == 0
@@ -2214,9 +2885,7 @@ def test_higher_tier_probe_selects_staler_t3_after_t2_has_rows() -> None:
             for _ in range(3)
         ]
     )
-    archive = SimpleNamespace(
-        summary=lambda tier: {"frontier_size": 1 if tier == 2 else 0}
-    )
+    archive = SimpleNamespace(summary=lambda tier: {"frontier_size": 1 if tier == 2 else 0})
 
     action, rationale = autopilot._maybe_force_higher_tier_probe(
         {"type": "structural_experiment", "flags": {"tool_use": True}},
@@ -2265,8 +2934,7 @@ def test_higher_tier_probe_skips_when_w8_candidate_generation_is_strict() -> Non
         rationale={},
         trial_counter=100,
         w8_replay_pressure_text=(
-            "W8 replay pressure: no accumulating candidate exists; "
-            "0/3 are replayable"
+            "W8 replay pressure: no accumulating candidate exists; 0/3 are replayable"
         ),
     )
 
@@ -2689,9 +3357,7 @@ def test_frontier_rerun_summary_reports_live_progress() -> None:
 def test_frontier_rerun_summary_reports_inactive_marker() -> None:
     journal = SimpleNamespace(entries_with_supersessions=lambda: [])
 
-    assert autopilot._frontier_rerun_summary_lines({}, journal) == [
-        "Frontier rerun: not required"
-    ]
+    assert autopilot._frontier_rerun_summary_lines({}, journal) == ["Frontier rerun: not required"]
 
 
 def test_numeric_swarm_epoch_label_prefers_autopilot_speed_era() -> None:
@@ -2707,9 +3373,12 @@ def test_numeric_swarm_epoch_label_prefers_autopilot_speed_era() -> None:
 
 def test_numeric_swarm_epoch_label_absent_without_speed_era() -> None:
     assert autopilot._numeric_swarm_epoch_label_from_state({}) is None
-    assert autopilot._numeric_swarm_epoch_label_from_state(
-        {"active_instrument_eras": {"cpu_bench": "E5-cpu-kernel"}}
-    ) is None
+    assert (
+        autopilot._numeric_swarm_epoch_label_from_state(
+            {"active_instrument_eras": {"cpu_bench": "E5-cpu-kernel"}}
+        )
+        is None
+    )
 
 
 def test_numeric_swarm_epoch_label_required_for_active_frontier_rerun() -> None:
@@ -3022,8 +3691,11 @@ def test_record_rejected_draft_counts_and_sets_feedback() -> None:
 
 def test_record_rejected_draft_blacklists_on_repeat(monkeypatch) -> None:
     calls = []
-    monkeypatch.setattr(autopilot, "append_blacklist",
-                        lambda action, tid, reason, **_: calls.append((action, reason)))
+    monkeypatch.setattr(
+        autopilot,
+        "append_blacklist",
+        lambda action, tid, reason, **_: calls.append((action, reason)),
+    )
     state = {}
     draft = {"type": "structural_experiment", "flags": {"graph_router": True}}
     autopilot._record_rejected_draft(state, draft, _FakeCritique(), trial_id=1)
@@ -3050,14 +3722,15 @@ def test_record_rejected_draft_keeps_observational_deep_eval_advisory() -> None:
     )
 
     assert blacklisted is False
-    assert state["invalid_signature_counts"] == {
-        autopilot._action_signature(draft): 7
-    }
+    assert state["invalid_signature_counts"] == {autopilot._action_signature(draft): 7}
     assert "critic_rejected_signatures" not in state
     assert state["consecutive_rejected_drafts"] == 1
-    assert state["critic_rejected_observational_signatures"][
-        autopilot._action_signature(draft)
-    ]["trial_id"] == 1208
+    assert (
+        state["critic_rejected_observational_signatures"][autopilot._action_signature(draft)][
+            "trial_id"
+        ]
+        == 1208
+    )
 
 
 def test_operator_domain_critique_detection() -> None:
@@ -3210,8 +3883,15 @@ def test_critic_rejected_signature_skip_allows_material_change() -> None:
 
 def test_action_context_is_dataclass() -> None:
     ctx = actions._ActionContext(
-        seeder="s", swarm="sw", forge="f", lab="l", tower="t",
-        gate="g", archive="a", journal="j", state={},
+        seeder="s",
+        swarm="sw",
+        forge="f",
+        lab="l",
+        tower="t",
+        gate="g",
+        archive="a",
+        journal="j",
+        state={},
     )
     assert ctx.seeder == "s"
     assert ctx.strategy_store is None

@@ -5,6 +5,7 @@ AP-22 memory?" decision so the run_loop wiring is testable without driving
 the whole loop. Two exclusion paths today: exogenous_operator_reload and
 mad_noise. Exogenous takes priority on the rare both-set path.
 """
+
 from __future__ import annotations
 
 import sys
@@ -31,13 +32,16 @@ def test_mad_noise_is_benign_so_not_journaled_as_bug_corrupted():
     assert "mad_noise" in BENIGN_LEARNING_EXCLUSIONS
     assert "reproduction_confirmed" in BENIGN_LEARNING_EXCLUSIONS
     assert "exogenous_operator_reload" not in BENIGN_LEARNING_EXCLUSIONS
-    by, _, _ = classify_learning_exclusion(_FakeVerdict(categories=["mad_noise"]), _FakeEvalResult())
+    by, _, _ = classify_learning_exclusion(
+        _FakeVerdict(categories=["mad_noise"]), _FakeEvalResult()
+    )
     assert by == "mad_noise", "still flagged for AP-22 suppression"
 
 
 @dataclass
 class _FakeVerdict:
     """Minimal SafetyVerdict stand-in — only `.categories` is read."""
+
     categories: list[str] = field(default_factory=list)
     passed: bool = True
 
@@ -45,13 +49,52 @@ class _FakeVerdict:
 @dataclass
 class _FakeEvalResult:
     """Minimal EvalResult stand-in for the fields classify_learning_exclusion reads."""
+
     n_exogenous_unrecovered: int = 0
     exogenous_question_ids: list[str] = field(default_factory=list)
     n_questions: int = 0
+    oracle_adequacy: dict = field(default_factory=dict)
+    bug_corrupted_by: str = ""
+    bug_corrupted_reason: str = ""
 
 
 def test_no_signals_returns_empty():
     by, reason, def_cat = classify_learning_exclusion(_FakeVerdict(), _FakeEvalResult())
+    assert by == ""
+    assert reason == ""
+    assert def_cat == ""
+
+
+def test_eval_result_bug_corruption_takes_priority():
+    result = _FakeEvalResult(
+        bug_corrupted_by="structural_flag_revert_failure",
+        bug_corrupted_reason="connection refused while restoring plan_review=false",
+        n_exogenous_unrecovered=2,
+        n_questions=10,
+    )
+
+    by, reason, def_cat = classify_learning_exclusion(
+        _FakeVerdict(categories=["mad_noise"]),
+        result,
+    )
+
+    assert by == "structural_flag_revert_failure"
+    assert "connection refused" in reason
+    assert def_cat == "structural_flag_revert_failure"
+
+
+def test_report_only_control_attestation_does_not_exclude_learning():
+    result = _FakeEvalResult(
+        oracle_adequacy={
+            "control_attestation": {
+                "status": "failed",
+                "observe_only": True,
+            }
+        }
+    )
+
+    by, reason, def_cat = classify_learning_exclusion(_FakeVerdict(), result)
+
     assert by == ""
     assert reason == ""
     assert def_cat == ""
@@ -152,6 +195,8 @@ def test_recovered_only_exo_is_not_excluded():
 def test_missing_attributes_safe():
     """Helper must not crash if the verdict / eval_result are missing fields
     (e.g. lightweight mocks in other tests). Treat as no exclusion."""
+
     class _Empty: ...
+
     by, reason, def_cat = classify_learning_exclusion(_Empty(), _Empty())
     assert by == "" and reason == "" and def_cat == ""

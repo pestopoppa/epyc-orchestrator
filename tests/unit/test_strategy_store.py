@@ -1456,6 +1456,55 @@ class TestAP28HybridRetrieval:
         assert report["faiss_count"] == 2
         assert store.search_index_health()["healthy"]
 
+    def test_rebuild_search_indexes_abort_does_not_publish_partial_faiss(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        from orchestration.repl_memory.strategy_store import StrategyStore
+
+        strategy_path = tmp_path / "strategies"
+        live_store = StrategyStore(
+            path=strategy_path,
+            embedding_dim=1024,
+            embedder=MockEmbedder(),
+        )
+        try:
+            live_store.store("first", "first insight", source_trial_id=1, species="alpha")
+            live_store.store("second", "second insight", source_trial_id=2, species="alpha")
+            assert live_store.search_index_health()["healthy"]
+            original_embed = live_store._embed
+            calls = 0
+
+            def fail_second_embed(text):
+                nonlocal calls
+                calls += 1
+                if calls == 2:
+                    raise RuntimeError("simulated embed failure")
+                return original_embed(text)
+
+            monkeypatch.setattr(live_store, "_embed", fail_second_embed)
+
+            with pytest.raises(RuntimeError, match="simulated embed failure"):
+                live_store.rebuild_search_indexes()
+        finally:
+            live_store.close()
+
+        reopened = StrategyStore(
+            path=strategy_path,
+            embedding_dim=1024,
+            embedder=MockEmbedder(),
+        )
+        try:
+            health = reopened.search_index_health()
+
+            assert health["healthy"]
+            assert health["sqlite_count"] == 2
+            assert health["faiss_count"] == 2
+            assert health["missing_faiss_count"] == 0
+        finally:
+            reopened.close()
+
     def test_retrieve_falls_back_to_fts_when_faiss_mirror_is_empty(self, store):
         if not getattr(store, "_fts_enabled", False):
             pytest.skip("FTS5 unavailable")

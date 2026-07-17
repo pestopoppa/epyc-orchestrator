@@ -1,0 +1,240 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/pestopoppa/amd-epyc-inference/schemas/review_decision.schema.json",
+  "title": "ReviewDecision",
+  "description": "Evidence-linked, bounded-authority review verdict emitted by a Reviewer (judicial gate, non-mutating). Domain-general: applies to code, answers, plans, summaries, math. The hard-stop channel (`blocking.tripwire` + `blocking.blocking_issues`) is STRUCTURALLY SEPARATE from the advisory channel (`advisory.score` / `non_blocking_issues` / `feedback`) so a consumer computing 'must this hard-stop?' reads ONLY `blocking` and never lets an advisory score bleed into a blocking verdict (safety_gate.py / Agents-SDK guardrail semantics). Immutable once emitted; version/append rather than mutate.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["decision", "confidence", "blocking"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+      "description": "Artifact schema version (semver). Optional on emission — the trace-store emission layer (RA-10) stamps it; reviewers need not produce it."
+    },
+    "decision_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Unique identifier for this decision (UUID recommended)."
+    },
+    "candidate_ref": {
+      "type": "string",
+      "description": "Reference (package_id) of the CandidatePackage under review."
+    },
+    "rubric_ref": {
+      "type": "string",
+      "description": "Reference (rubric_id@version) of the ReviewRubric applied, if any."
+    },
+    "subtask_id": {
+      "type": "string",
+      "description": "Subtask/step this verdict covers (compat with ArchitectReview.subtask_id)."
+    },
+    "reviewed_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp when the verdict was produced."
+    },
+    "decision": {
+      "type": "string",
+      "enum": [
+        "approve",
+        "reject",
+        "reject_to_empty",
+        "request_changes",
+        "request_evidence",
+        "abstain",
+        "escalate"
+      ],
+      "description": "Bounded-authority verdict. reject_to_empty = a bad plan/output is worse than none, discard rather than iterate. request_evidence = verdict withheld pending verifier_requests. abstain (v1.1, spec §9.2) = the package is insufficient AND no permitted evidence request can resolve it — the reviewer declines to decide (distinct from escalate). escalate = defer to a higher tier / human for a policy-defined case."
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Reviewer's calibrated confidence in the VERDICT itself (how sure am I this decision is correct), distinct from advisory.score (how good the candidate is). Used by the FA/FR calibration ledger."
+    },
+    "human_review_required": {
+      "type": "boolean",
+      "default": false,
+      "description": "Reviewer requests human adjudication before the decision is enforced."
+    },
+    "blocking": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tripwire"],
+      "description": "Hard-stop channel. Orthogonal to the advisory channel; only these fields may gate a bounce-to-author / reject.",
+      "properties": {
+        "tripwire": {
+          "type": "boolean",
+          "description": "True = a hard invariant was violated; the candidate MUST NOT pass regardless of advisory score."
+        },
+        "blocking_issues": {
+          "type": "array",
+          "description": "Issues that individually justify a hard stop.",
+          "items": { "$ref": "#/$defs/issue" }
+        }
+      }
+    },
+    "advisory": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Advisory channel. Informational only — MUST NOT be used to compute a hard-stop.",
+      "properties": {
+        "score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Advisory quality score of the candidate in [0,1]."
+        },
+        "non_blocking_issues": {
+          "type": "array",
+          "description": "Issues worth surfacing that do not by themselves block.",
+          "items": { "$ref": "#/$defs/issue" }
+        },
+        "feedback": {
+          "type": "string",
+          "description": "Free-form advisory feedback routed to the author on request_changes."
+        }
+      }
+    },
+    "telemetry": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "v1.1 (spec §5.4 raw-confidence invariant / §6.4 / §11.1). TELEMETRY ONLY. Nothing in this block may independently trigger approval, blocking, or escalation — enforcement authority derives from empirically calibrated cohort risk (see DecisionEnvelope.calibration + AssuranceProfile), never from what the model says about itself. Recorded for calibration/monitoring; the deterministic policy reducer MUST ignore it as an enforcement signal.",
+      "properties": {
+        "raw_model_confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "The reviewer model's self-reported (verbalized) confidence. TELEMETRY-ONLY — distinct from the top-level `confidence` (verdict-calibration input) and from calibrated cohort risk. Models are systematically overconfident (R8/R9); this number never gates."
+        },
+        "tokens_in": { "type": "integer", "minimum": 0 },
+        "tokens_out": { "type": "integer", "minimum": 0 },
+        "wall_ms": { "type": "number", "minimum": 0 }
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "description": "Links grounding the verdict. Domain-general evidence kinds (answer spans and scorer/retrieval results, not only file_span/test_result).",
+      "items": { "$ref": "#/$defs/evidence_item" }
+    },
+    "verifier_requests": {
+      "type": "array",
+      "description": "Objective checks the reviewer wants run (the request_evidence payload). Consumed by the verifier-request adapter; results return as a VerificationReport.",
+      "items": { "$ref": "#/$defs/verifier_request" }
+    },
+    "provenance": {
+      "type": "object",
+      "description": "Who/what produced this verdict (reviewer model, quant, flag state).",
+      "additionalProperties": true,
+      "properties": {
+        "model": { "type": "string" },
+        "quant": { "type": "string" },
+        "role": { "type": "string" },
+        "flag_state": { "type": "object" },
+        "instrument_era": { "type": "string" }
+      }
+    }
+  },
+  "$defs": {
+    "issue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["summary"],
+      "properties": {
+        "summary": { "type": "string", "minLength": 1 },
+        "severity": {
+          "type": "string",
+          "enum": ["critical", "high", "medium", "low"]
+        },
+        "location": {
+          "type": "string",
+          "description": "Domain-general locator: 'path:line', answer char span, retrieval doc id, etc."
+        },
+        "evidence_ref": {
+          "type": "string",
+          "description": "Points into evidence[] (by index or ref) grounding this issue."
+        },
+        "criterion_id": {
+          "type": "string",
+          "description": "v1.1 (spec §5.2/§6.4/§9.2). Criterion this finding is scoped to (keys into the AssuranceProfile.criteria / verifier_registry). A blocking finding SHOULD map to exactly one criterion; the reducer's `has_grounded_blocking_finding()` reads this + `evidence_ref`/`unsupported`."
+        },
+        "remediation_target": {
+          "type": "string",
+          "description": "v1.1 (spec §6.4). Who owns the repair: 'architect' | 'worker' | 'author' | role id. The reviewer never mutates the authoritative artifact (§5.1); repair routes here.",
+          "enum": ["architect", "worker", "author", "integrator", "reviewer", "human"]
+        },
+        "unsupported": {
+          "type": "boolean",
+          "description": "v1.1 (spec §9.2). True = this finding carries NO evidence reference (the reviewer is asserting it without grounding). An unsupported blocking finding cannot ground a calibrated rejection in the reducer (§8 step 5)."
+        }
+      }
+    },
+    "evidence_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "file_span",
+            "test_result",
+            "gate_result",
+            "scorer_result",
+            "answer_span",
+            "retrieval_provenance",
+            "trace_event",
+            "protocol_claim"
+          ]
+        },
+        "ref": {
+          "type": "string",
+          "description": "Pointer/URI/id to the evidence source (path, test id, gate id, trace event id, protocol-id)."
+        },
+        "summary": { "type": "string" },
+        "locator": {
+          "type": "object",
+          "description": "Kind-specific location (e.g. file_span: {path,start_line,end_line}; answer_span: {char_start,char_end}; retrieval_provenance: {doc_id,chunk_id}).",
+          "additionalProperties": true
+        },
+        "weight": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Relative importance of this evidence to the verdict."
+        }
+      }
+    },
+    "verifier_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verifier", "kind"],
+      "properties": {
+        "verifier": {
+          "type": "string",
+          "description": "Verifier identifier (gate name, scorer id, checker name)."
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "gate",
+            "test",
+            "lint",
+            "typecheck",
+            "format",
+            "scorer",
+            "retrieval_check",
+            "math_check",
+            "constraint_check"
+          ]
+        },
+        "target": {
+          "type": "string",
+          "description": "Artifact/output ref the verifier should run against."
+        },
+        "rationale": { "type": "string" }
+      }
+    }
+  }
+}

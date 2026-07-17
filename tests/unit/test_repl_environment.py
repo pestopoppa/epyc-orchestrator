@@ -179,6 +179,31 @@ class TestFinalFunction:
         assert result.is_final
         assert result.final_answer == "4"
 
+    def test_final_accepts_result_keyword(self):
+        """FINAL(result=...) should normalize to the final answer."""
+        repl = REPLEnvironment(context="test")
+        result = repl.execute('FINAL(result="computed answer")')
+
+        assert result.is_final
+        assert result.final_answer == "computed answer"
+
+    def test_final_accepts_secret_keyword(self):
+        """FINAL(secret=...) should normalize to the final answer."""
+        repl = REPLEnvironment(context="test")
+        result = repl.execute('FINAL(secret="opaque-secret")')
+
+        assert result.is_final
+        assert result.final_answer == "opaque-secret"
+
+    def test_final_rejects_unknown_keywords(self):
+        """Unknown FINAL keyword arguments should produce a clear REPL error."""
+        repl = REPLEnvironment(context="test")
+        result = repl.execute('FINAL(result="ok", extra="bad")')
+
+        assert not result.is_final
+        assert result.error is not None
+        assert "unsupported keyword" in result.error
+
     def test_final_var_returns_artifact(self):
         """Test that FINAL_VAR returns artifact content."""
         repl = REPLEnvironment(context="test")

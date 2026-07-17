@@ -20,6 +20,7 @@ from .general import (
     GPQAAdapter,
     HotpotQAAdapter,
     MMLUAdapter,
+    MMLUProAdapter,
     SimpleQAAdapter,
 )
 from .math_adapter import MathAdapter
@@ -32,7 +33,7 @@ ADAPTER_SUITES = {
     "general", "math", "coder", "thinking", "instruction_precision", "vl",
     "gaia", "cruxeval", "bigcodebench",
     # Phase 1 hard benchmarks (mode-advantage signal)
-    "gpqa", "simpleqa", "hotpotqa", "livecodebench",
+    "gpqa", "mmlu_pro", "simpleqa", "hotpotqa", "livecodebench",
     # Phase 2 hard benchmarks
     "debugbench", "usaco",
     # Phase 3: physics reasoning (mapped to adapters in get_adapter if available)
@@ -58,6 +59,7 @@ ADAPTER_CLASSES: dict[str, type[BaseAdapter]] = {
     "bigcodebench": BigCodeBenchAdapter,
     # Phase 1 hard benchmarks
     "gpqa": GPQAAdapter,
+    "mmlu_pro": MMLUProAdapter,
     "simpleqa": SimpleQAAdapter,
     "hotpotqa": HotpotQAAdapter,
     "livecodebench": LiveCodeBenchAdapter,

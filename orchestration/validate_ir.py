@@ -1,10 +1,22 @@
 #!/usr/bin/env python3
-"""Validate TaskIR / ArchitectureIR / FormalizationIR JSON files against local JSON Schemas.
+"""Validate IR JSON files against local JSON Schemas.
+
+Covers the planning IRs (task / arch / formal) and the reviewer control-plane
+artifacts (review decision / candidate package / verification report / rubric).
+Schema validation gates every role boundary: a validation failure is a routable
+bounce-to-author event (non-zero exit), never a silent fallback.
 
 Usage:
   python orchestration/validate_ir.py task path/to/task_ir.json
   python orchestration/validate_ir.py arch path/to/architecture_ir.json
   python orchestration/validate_ir.py formal path/to/formalization_ir.json
+  python orchestration/validate_ir.py review path/to/review_decision.json
+  python orchestration/validate_ir.py candidate path/to/candidate_package.json
+  python orchestration/validate_ir.py verification path/to/verification_report.json
+  python orchestration/validate_ir.py rubric path/to/review_rubric.json
+  python orchestration/validate_ir.py evidence path/to/evidence_item.json
+  python orchestration/validate_ir.py envelope path/to/decision_envelope.json
+  python orchestration/validate_ir.py profile path/to/assurance_profile.json
   echo '{"task_id": ...}' | python orchestration/validate_ir.py task -
 
 Exit codes:
@@ -35,6 +47,28 @@ ROOT = Path(__file__).resolve().parent
 SCHEMA_TASK = ROOT / "task_ir.schema.json"
 SCHEMA_ARCH = ROOT / "architecture_ir.schema.json"
 SCHEMA_FORMAL = ROOT / "formalization_ir.schema.json"
+SCHEMA_REVIEW = ROOT / "review_decision.schema.json"
+SCHEMA_CANDIDATE = ROOT / "candidate_package.schema.json"
+SCHEMA_VERIFICATION = ROOT / "verification_report.schema.json"
+SCHEMA_RUBRIC = ROOT / "review_rubric.schema.json"
+# CP2 semantics-layer additions (spec §6.2/§6.5/§6.6).
+SCHEMA_EVIDENCE = ROOT / "evidence_item.schema.json"
+SCHEMA_ENVELOPE = ROOT / "decision_envelope.schema.json"
+SCHEMA_PROFILE = ROOT / "assurance_profile.schema.json"
+
+# Ordered map of validator kind -> schema path (single source of truth).
+SCHEMA_MAP = {
+    "task": SCHEMA_TASK,
+    "arch": SCHEMA_ARCH,
+    "formal": SCHEMA_FORMAL,
+    "review": SCHEMA_REVIEW,
+    "candidate": SCHEMA_CANDIDATE,
+    "verification": SCHEMA_VERIFICATION,
+    "rubric": SCHEMA_RUBRIC,
+    "evidence": SCHEMA_EVIDENCE,
+    "envelope": SCHEMA_ENVELOPE,
+    "profile": SCHEMA_PROFILE,
+}
 
 
 def load_json(path: Path | None, from_stdin: bool = False) -> dict[str, Any]:
@@ -99,26 +133,22 @@ def validate(instance: dict[str, Any], schema_path: Path, source_name: str) -> i
 
 def main(argv: list[str]) -> int:
     """Main entry point."""
+    kinds = "|".join(SCHEMA_MAP)
     if len(argv) < 3:
-        print("Usage: validate_ir.py (task|arch|formal) <path.json | ->")
+        print(f"Usage: validate_ir.py ({kinds}) <path.json | ->")
         print("  Use '-' to read from stdin")
         return 1
 
     kind = argv[1]
-    if kind not in {"task", "arch", "formal"}:
-        print(f"ERROR: unknown kind '{kind}', expected 'task', 'arch', or 'formal'")
+    if kind not in SCHEMA_MAP:
+        print(f"ERROR: unknown kind '{kind}', expected one of: {kinds}")
         return 1
 
     input_arg = argv[2]
     from_stdin = input_arg == "-"
 
     # Select schema
-    schema_map = {
-        "task": SCHEMA_TASK,
-        "arch": SCHEMA_ARCH,
-        "formal": SCHEMA_FORMAL,
-    }
-    schema_path = schema_map[kind]
+    schema_path = SCHEMA_MAP[kind]
     source_name = "stdin" if from_stdin else input_arg
 
     # Load instance

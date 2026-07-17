@@ -33,6 +33,11 @@ import numpy as np
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from src.llm_primitives.stat_tests import (  # noqa: E402
+    expected_calibration_error as _stat_ece,
+    roc_auc as _stat_roc_auc,
+)
+
 from orchestration.repl_memory.routing_classifier import RoutingClassifier
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -54,32 +59,25 @@ def _brier(probs: np.ndarray, labels: np.ndarray) -> float:
 
 
 def _roc_auc(scores: np.ndarray, labels: np.ndarray) -> float:
-    """ROC-AUC via Mann–Whitney U (rank-based, no sklearn dep)."""
-    pos = scores[labels == 1]
-    neg = scores[labels == 0]
-    if len(pos) == 0 or len(neg) == 0:
-        return float("nan")
-    ranks = np.argsort(np.argsort(scores))
-    rank_pos = ranks[labels == 1].sum()
-    n_pos, n_neg = len(pos), len(neg)
-    u = rank_pos - n_pos * (n_pos - 1) / 2
-    return float(u / (n_pos * n_neg))
+    """ROC-AUC via Mann–Whitney U (rank-based, no sklearn dep).
+
+    Consolidated onto the clean-room stdlib ``stat_tests.roc_auc`` (tie-averaged,
+    == sklearn); the historical ``float('nan')`` on a single-class input is
+    preserved here.
+    """
+    auc = _stat_roc_auc(scores, labels)
+    return float("nan") if auc is None else float(auc)
 
 
 def _ece(probs: np.ndarray, labels: np.ndarray, n_bins: int = 10) -> float:
-    """Expected calibration error (10-bin equal-width)."""
-    bins = np.linspace(0.0, 1.0, n_bins + 1)
-    ece = 0.0
-    N = len(probs)
-    for i in range(n_bins):
-        lo, hi = bins[i], bins[i + 1]
-        mask = (probs >= lo) & (probs < hi if i < n_bins - 1 else probs <= hi)
-        if not mask.any():
-            continue
-        bin_conf = probs[mask].mean()
-        bin_acc = labels[mask].mean()
-        ece += (mask.sum() / N) * abs(bin_conf - bin_acc)
-    return float(ece)
+    """Expected calibration error (10-bin equal-width).
+
+    Consolidated onto the clean-room stdlib
+    ``stat_tests.expected_calibration_error`` (identical binning); the historical
+    ``0.0`` on empty input is preserved here.
+    """
+    ece = _stat_ece(probs, labels, n_bins=n_bins)
+    return 0.0 if ece is None else float(ece)
 
 
 def _entropy(p: np.ndarray, axis: int = -1) -> np.ndarray:

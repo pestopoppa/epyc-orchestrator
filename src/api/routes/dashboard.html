@@ -305,6 +305,7 @@ h2 .live-dot.down    { background: var(--bad);  box-shadow: 0 0 4px rgba(248, 11
     vertical-align: middle;
 }
 .topology-row .active-badge.zero {
+    display: none;
     background: rgba(148,163,184,0.08); color: var(--dim);
     border-color: var(--border);
 }
@@ -950,6 +951,7 @@ body.insight-fullscreen-open { overflow: hidden; }
         .rl-inferred { outline: 1px dashed rgba(251,191,36,0.75); outline-offset: -2px; }
         .rl-blocked { background: rgba(248,113,113,0.30); color: #f87171; }
         .rl-ready   { background: rgba(52,211,153,0.18); color: var(--good, #34d399); }
+        .rl-inactive { background: rgba(148,163,184,0.12); color: var(--muted, #94a3b8); }
         .rl-na      { background: rgba(100,100,100,0.10); color: var(--dim, #6b7280); font-style: italic; }
         /* Uniform per-panel freshness badge (dashboard_freshness contract). */
         .freshness-badge { display:inline-block; margin-left:8px; padding:1px 6px; border-radius:8px;
@@ -1082,7 +1084,7 @@ body.insight-fullscreen-open { overflow: hidden; }
         Each role row's ▸ expands to show its live activity. Three signals in priority order:
         <ol style="margin:4px 0;padding-left:18px">
           <li>Orchestrator-tracked chat-XXX tasks → <span class="tag" style="background:rgba(56,189,248,0.15);color:var(--accent);border:1px solid rgba(56,189,248,0.3)">N active</span> (cyan). Click-through opens the full event stream.</li>
-          <li>CPU region-lock holders (incl. tap-inferred when <code>/proc/locks</code> polling lags) → <span class="tag" style="background:rgba(168,85,247,0.15);color:#c084fc;border:1px solid rgba(168,85,247,0.3)">N active</span> (violet). Sourced from the same cache the CPU region-locks grid renders from, so the row and grid stay consistent.</li>
+          <li>CPU region-lock holders from the proc/payload lock cache → <span class="tag" style="background:rgba(168,85,247,0.15);color:#c084fc;border:1px solid rgba(168,85,247,0.3)">N active</span> (violet). Sourced from the same cache the regions lock grid renders from, so the row and grid stay consistent.</li>
           <li>Tap-only fallback (events without <code>instance_idx</code> binding) → <span class="tag" style="background:rgba(168,85,247,0.15);color:#c084fc;border:1px solid rgba(168,85,247,0.3)">N tap</span>. Click-through opens the captured prompt+response from <code>inference_tap.log</code>.</li>
         </ol>
       </div>
@@ -1305,8 +1307,8 @@ function renderTopologyStrip() {
             ? `<div class="role-model" title="${escapeHTML(modelName)}">${escapeHTML(modelName)}</div>`
             : '';
         label.innerHTML =
-            `<div class="role-line"><span class="role-expand-chev">▸</span>${labelText}${aliasChip}` +
-            `<span class="active-badge zero" id="active_badge_${g.base}" title="${g.base}: priority chat-XXX tasks (cyan) > CPU region-lock holders incl. tap-inferred (violet 'N active') > tap-only fallback (violet 'N tap')">0</span></div>` +
+            `<div class="role-line"><span class="role-expand-chev">▸</span>${labelText} ` +
+            `<span class="active-badge zero" id="active_badge_${g.base}" title="${g.base}: priority chat-XXX tasks (cyan) > proc/payload CPU region-lock holders (violet 'N active') > tap-only fallback (violet 'N tap')">0</span>${aliasChip}</div>` +
             modelLine;
 
         const port = document.createElement('div');
@@ -1487,11 +1489,9 @@ function updateTopologyInflight(inflight, snapshotSeq = null) {
         const tasks = byRole[base] || [];
         const tapEntries = tapByBase[base] || [];
         // Per-instance active count from the region-locks cache. The cache (built in
-        // updateRegionLocks → _latestRegionLocksByRole) already merges /proc/locks
-        // holders with the tap-inferred fallback used when polling lags — same source
-        // the CPU region-locks grid consumes. Without this, the badge undercounts
-        // whenever an instance is held without emitting a tap event (e.g. internal
-        // seeding probes) and the topology row disagrees with the locks panel.
+        // updateRegionLocks → _latestRegionLocksByRole) is proc/payload-derived,
+        // matching the regions lock grid without synthesizing lock holders from tap
+        // rows.
         const lockInfo = (typeof _latestRegionLocksByRole === 'object' && _latestRegionLocksByRole)
             ? _latestRegionLocksByRole[base] : null;
         const activeInstanceCount = (lockInfo && lockInfo.instanceIdxs) ? lockInfo.instanceIdxs.size : 0;
@@ -1523,9 +1523,9 @@ function updateTopologyInflight(inflight, snapshotSeq = null) {
             }
         } else if (activeInstanceCount > 0) {
             // No chat-XXX in-flight, but the region-locks cache reports per-instance
-            // holders for this role (seeding / eval / internal probes — possibly
-            // tap-inferred if polling lags). Match the locks panel by reporting the
-            // per-instance active count instead of just the tap-event count.
+            // holders for this role (seeding / eval / internal probes). Match the
+            // locks panel by reporting the per-instance active count instead of just
+            // the tap-event count.
             badge.textContent = `${activeInstanceCount} active`;
             badge.classList.remove('zero');
             badge.style.background = 'rgba(168,85,247,0.15)';
@@ -1549,12 +1549,9 @@ function updateTopologyInflight(inflight, snapshotSeq = null) {
         } else {
             // Tap + lock both contribute when present. Tap cards carry rich detail
             // (prompt/response, chunks) for in-flight inference; the lock summary
-            // lists every instance the region-locks cache reports as holding —
-            // including ones with no captured tap event AND ones a tap event covers
-            // (no dedup; the lock list is what the badge's "N active" counts so the
-            // expanded row sums to the same N). Fixes the case where the badge said
-            // "N active" from lock count but the expansion only showed a single tap
-            // card and hid the other holders.
+            // lists every instance the region-locks cache reports as holding. The
+            // lock list is proc/payload-derived, so it may show off-tap holders
+            // without promoting tap rows into lock ownership.
             const parts = [];
             if (tapEntries.length > 0) {
                 const sorted = [...tapEntries].sort((a, b) => {
@@ -1576,7 +1573,7 @@ function updateTopologyInflight(inflight, snapshotSeq = null) {
                 }).join('');
                 parts.push(
                     `<div style="padding:6px 8px;font-size:11px;background:rgba(168,85,247,0.08);border-left:2px solid rgba(168,85,247,0.5);border-radius:3px">`
-                    + `<div style="margin-bottom:4px"><strong>${activeInstanceCount} CPU region holder(s)</strong> <span style="color:var(--dim)">— lock cache, incl. tap-inferred when /proc/locks polling lags</span></div>`
+                    + `<div style="margin-bottom:4px"><strong>${activeInstanceCount} CPU region holder(s)</strong> <span style="color:var(--dim)">— proc/payload lock cache</span></div>`
                     + `<ul style="margin:0;padding-left:18px">${items}</ul>`
                     + `</div>`
                 );
@@ -1747,15 +1744,8 @@ let _latestAutopilotProgress = null;
 let _latestRegionLockSummary = { activeLockCount: 0, heldRegions: 0, enabled: null };
 let _latestRegionLockActivitySignature = null;
 let _lastRegionLocksPayload = null;
-const REGION_LOCK_COLS = [
-    { key: 'full',  label: 'Full'  },
-    { key: 'half0', label: 'Half₀' },  // q0+q1
-    { key: 'half1', label: 'Half₁' },  // q2+q3
-    { key: 'q0',    label: 'q0'    },
-    { key: 'q1',    label: 'q1'    },
-    { key: 'q2',    label: 'q2'    },
-    { key: 'q3',    label: 'q3'    },
-];
+let _latestRegionLockFrame = { valid: false, generatedAt: 0, appliedAtMs: 0, source: '' };
+const _REGION_LOCK_TAP_FRESH_S = 20;
 
 function formatShortDuration(s) {
     if (s == null || Number.isNaN(Number(s))) return '?';
@@ -1763,6 +1753,25 @@ function formatShortDuration(s) {
     if (n < 60) return `${Math.round(n)}s`;
     if (n < 3600) return `${(n / 60).toFixed(n < 600 ? 1 : 0)}m`;
     return `${(n / 3600).toFixed(n < 10 * 3600 ? 1 : 0)}h`;
+}
+
+function regionLockPayloadFrameEpoch(d) {
+    if (!d) return Date.now() / 1000;
+    if (d.now != null && Number.isFinite(Number(d.now))) return Number(d.now);
+    if (d.generated_at != null && Number.isFinite(Number(d.generated_at))) return Number(d.generated_at);
+    const fresh = d._freshness || {};
+    if (fresh.generated_at != null && Number.isFinite(Number(fresh.generated_at))) {
+        return Number(fresh.generated_at);
+    }
+    return Date.now() / 1000;
+}
+
+function latestRegionLockFrameUsableForTap(req = null) {
+    const frame = _latestRegionLockFrame || {};
+    if (!frame.valid || !frame.generatedAt) return false;
+    const nowS = Date.now() / 1000;
+    if (nowS - Number(frame.generatedAt) > _REGION_LOCK_TAP_FRESH_S) return false;
+    return true;
 }
 
 function topStripCard(label, value, sub, valueClass = '') {
@@ -1889,13 +1898,21 @@ function renderAutopilotRunStrip() {
         const keepable = outcome.keepable_rate || {};
         const wasted = outcome.wasted_eval_rate || {};
         const excluded = outcome.learning_excluded_rate || {};
+        const regressions = outcome.regression_per_active_trial || {};
+        const promotionsPer100 = outcome.promotions_per_100_active_trials || {};
         const fmtRate = (metric) => {
             if (!metric || metric.total == null || metric.total <= 0 || metric.rate == null) return 'unknown';
             return `${Math.round(metric.rate * 100)}% (${metric.count}/${metric.total})`;
         };
+        const fmtPer100 = (metric) => {
+            if (!metric || metric.total == null || metric.total <= 0 || metric.per_100 == null) return 'unknown';
+            return `${Number(metric.per_100).toFixed(1)}/100 (${metric.count}/${metric.total})`;
+        };
         if (outcome.keepable_rate) bits.push(`keepable ${fmtRate(keepable)}`);
         if (outcome.wasted_eval_rate) bits.push(`wasted-eval ${fmtRate(wasted)}`);
         if (outcome.learning_excluded_rate) bits.push(`learning-excluded ${fmtRate(excluded)}`);
+        if (outcome.regression_per_active_trial) bits.push(`regression/active ${fmtRate(regressions)}`);
+        if (outcome.promotions_per_100_active_trials) bits.push(`promotions/100 active ${fmtPer100(promotionsPer100)}`);
         trialSub = bits.join(' · ');
     } else if (phase.trial_id != null) {
         trialValue = `#${escapeHTML(String(phase.trial_id))}`;
@@ -2024,8 +2041,6 @@ let _structuredTapStream = null;
 let _rawTapBuffer = "";
 let _structuredTapRequests = [];
 let _latestRegionLocksByRole = {};
-let _latestTapInferredRegionLocksByRole = {};
-let _latestSlotInferredRegionLocksByRole = {};
 let _lastRegionLockPollStarted = 0;
 let _structuredTapOpenRequestIds = new Set();
 let _rawRenderedTapOpenKeys = new Set();
@@ -2189,7 +2204,7 @@ let _lastLockOnlyTapHolders = [];
 let _openStructuredTapRequestId = null;
 
 function structuredTapHasActiveCpuLock(req) {
-    if (!req || !_latestRegionLocksByRole) return false;
+    if (!req || !_latestRegionLocksByRole || !latestRegionLockFrameUsableForTap(req)) return false;
     const roleKeys = [
         req.lock_role,
         req.topology_role,
@@ -2224,6 +2239,7 @@ function structuredTapHasActiveCpuLock(req) {
 function structuredTapRequestedRegions(req) {
     const explicit = (req && req.instance_regions || []).map(String).filter(Boolean);
     if (explicit.length) return explicit;
+    if (!latestRegionLockFrameUsableForTap(req)) return [];
     const roleKeys = [
         req && req.lock_role,
         req && req.topology_role,
@@ -2246,7 +2262,7 @@ function structuredTapRequestedRegions(req) {
 }
 
 function structuredTapCpuBlockers(req) {
-    if (!req || !_latestRegionLocksByRole) return [];
+    if (!req || !_latestRegionLocksByRole || !latestRegionLockFrameUsableForTap(req)) return [];
     const needed = new Set(structuredTapRequestedRegions(req));
     if (!needed.size) return [];
     const ownPid = req.pid != null ? String(req.pid) : '';
@@ -2372,70 +2388,6 @@ function currentOffTapTrafficLabel() {
     return action ? `internal/${action}` : 'internal/off-tap';
 }
 
-function buildTapInferredRegionLocks() {
-    const inferred = {};
-    const requests = typeof structuredTapLockCandidates === 'function'
-        ? structuredTapLockCandidates()
-        : (typeof liveStructuredTapRequests === 'function' ? liveStructuredTapRequests() : []);
-    for (const req of requests) {
-        const identity = inferStructuredTapLockIdentity(req, _lastRegionLocksPayload && _lastRegionLocksPayload.by_role ? _lastRegionLocksPayload.by_role : null);
-        if (!identity) continue;
-        const role = identity.role;
-        const idx = identity.idx;
-        const regions = identity.regions;
-        const bucket = inferred[role] || {
-            instanceIdxs: new Set(),
-            regions: new Set(),
-            holderPids: new Set(),
-            pidsByInstanceIdx: new Map(),
-            sources: [],
-        };
-        bucket.instanceIdxs.add(idx);
-        for (const region of regions) bucket.regions.add(String(region));
-        const pid = req.pid != null ? String(req.pid) : '';
-        if (pid) {
-            bucket.holderPids.add(pid);
-            const pidsForIdx = bucket.pidsByInstanceIdx.get(idx) || new Set();
-            pidsForIdx.add(pid);
-            bucket.pidsByInstanceIdx.set(idx, pidsForIdx);
-        }
-        bucket.sources.push(req);
-        inferred[role] = bucket;
-    }
-    return inferred;
-}
-
-function buildSlotInferredRegionLocks(byRole) {
-    const inferred = {};
-    const snap = _latestSnapshot || {};
-    const activity = snap.activity || {};
-    if (!topology || !activity) return inferred;
-    for (const n of topology.nodes || []) {
-        if (!n || n.kind !== 'llama-server' || !n.port) continue;
-        const slotActivity = activity[n.port] || {};
-        if (!slotActivity.n_active) continue;
-        const { base, shape } = topologyRoleShapeFromLabel(n.label || n.role || '');
-        const roleInfo = byRole && byRole[base];
-        if (!roleInfo || !Array.isArray(roleInfo.instances) || !roleInfo.instances.length) continue;
-        const inst = shape
-            ? roleInfo.instances.find(i => String(i.shape) === shape)
-            : roleInfo.instances[0];
-        if (!inst || inst.idx == null) continue;
-        const idx = Number(inst.idx);
-        if (!Number.isFinite(idx)) continue;
-        const bucket = inferred[base] || {
-            instanceIdxs: new Set(),
-            regions: new Set(),
-            sources: [],
-        };
-        bucket.instanceIdxs.add(idx);
-        for (const region of (inst.regions || [])) bucket.regions.add(String(region));
-        bucket.sources.push({ port: n.port, label: n.label || base, n_active: slotActivity.n_active || 0, instance_idx: idx });
-        inferred[base] = bucket;
-    }
-    return inferred;
-}
-
 function structuredTapActivity(req) {
     if (!req) {
         return { state: 'unknown', label: 'unknown', color: 'var(--muted)', live: false, show: false, reason: '' };
@@ -2472,6 +2424,16 @@ function structuredTapActivity(req) {
             reason: `required CPU regions occupied by ${structuredTapCpuBlockerSummary(cpuBlockers)}`,
         };
     }
+    if (!hasOutput && lockActive) {
+        return {
+            state: 'prefill_decode_pending',
+            label: 'prefill/decode pending',
+            color: 'var(--good,#34d399)',
+            live: true,
+            show: true,
+            reason: 'CPU lock is held for this request; long prompt prefill may produce no tap chunks until the first token',
+        };
+    }
     if (quietS >= _STRUCTURED_TAP_STALLED_S) {
         return {
             state: 'stalled',
@@ -2495,16 +2457,6 @@ function structuredTapActivity(req) {
         };
     }
     if (!hasOutput) {
-        if (lockActive) {
-            return {
-                state: 'prefill_decode_pending',
-                label: 'prefill/decode pending',
-                color: 'var(--good,#34d399)',
-                live: true,
-                show: true,
-                reason: 'CPU lock is held for this request; model may be evaluating prompt or decoding before first token',
-            };
-        }
         return {
             state: 'queued',
             label: 'queued',
@@ -2568,6 +2520,7 @@ function structuredTapMatchesLockHolder(req, holder) {
 }
 
 function procRegionLockHolders() {
+    if (!latestRegionLockFrameUsableForTap()) return [];
     const holders = [];
     for (const [role, active] of Object.entries(_latestRegionLocksByRole || {})) {
         if (!active) continue;
@@ -2631,47 +2584,6 @@ function formatPhysicalRoleWithLogicalAliases(role, shape, idx = null) {
     return aliases.length ? `${base} (${aliases.join(', ')})` : base;
 }
 
-function tapInferredSourcesForInstance(inferred, idx) {
-    const sources = Array.isArray(inferred && inferred.sources) ? inferred.sources : [];
-    const nIdx = Number(idx);
-    if (!Number.isFinite(nIdx)) return sources;
-    return sources.filter(r => Number(r.instance_idx) === nIdx);
-}
-
-function tapInferredSourceCount(inferred) {
-    return (Array.isArray(inferred && inferred.sources) ? inferred.sources : []).length;
-}
-
-function tapInferredHolderLabel(role, shape, idx, sources) {
-    const sourceList = Array.isArray(sources) ? sources : [];
-    const matchingSources = sourceList.filter(r => Number(r.instance_idx) === Number(idx));
-    const holderSources = matchingSources.length ? matchingSources : sourceList;
-    const activityOrder = [
-        'prefill_decode_pending',
-        'streaming',
-        'quiet',
-        'stalled',
-    ];
-    const source = activityOrder
-        .map(state => holderSources.find(r => structuredTapActivity(r).state === state))
-        .find(Boolean) || holderSources[0] || null;
-    const activity = source ? structuredTapActivity(source) : null;
-    let inferredState = 'tap-inferred holder';
-    if (activity) {
-        if (activity.state === 'prefill_decode_pending') {
-            inferredState = 'tap-inferred active/pending';
-        } else if (activity.state === 'streaming') {
-            inferredState = 'tap-inferred streaming';
-        } else if (activity.state === 'quiet') {
-            inferredState = 'tap-inferred quiet/held';
-        } else if (activity.state === 'stalled') {
-            inferredState = 'tap-inferred stalled/held';
-        }
-    }
-    const countSuffix = holderSources.length > 1 ? ` ×${holderSources.length}` : '';
-    return `~${formatPhysicalRoleWithLogicalAliases(role, shape, idx)}${countSuffix} (${inferredState})`;
-}
-
 function lockHolderConcurrentSummary(holder) {
     const others = procRegionLockHolders()
         .filter(h => !(h.role === holder.role && Number(h.idx) === Number(holder.idx)))
@@ -2697,19 +2609,6 @@ function formatRegionLockHolderSummary() {
         const source = (!tapped && actionSource) ? ` (${actionSource})` : '';
         return `${formatPhysicalRoleWithLogicalAliases(holder.role, holder.shape, holder.idx)}${source}`;
     });
-    for (const [role, inferred] of Object.entries(_latestTapInferredRegionLocksByRole || {})) {
-        const base = (_latestRegionLocksByRole && _latestRegionLocksByRole[role]) || {};
-        const instMap = new Map((base.instances || []).map(i => [Number(i.idx), i]));
-        const sources = Array.isArray(inferred.sources) ? inferred.sources : [];
-        for (const rawIdx of (inferred.instanceIdxs || [])) {
-            const idx = Number(rawIdx);
-            if (!Number.isFinite(idx)) continue;
-            const inst = instMap.get(idx);
-            const shape = (inst && inst.shape) || `idx${idx}`;
-            const label = tapInferredHolderLabel(role, shape, idx, sources);
-            parts.push(label);
-        }
-    }
     return parts.join(', ');
 }
 
@@ -2770,61 +2669,21 @@ function gpuDeviceRegionRows() {
     return rows;
 }
 
-function renderRegionLocksBasicGrid(grid, d, note = '') {
-    if (!grid) return;
-    grid.dataset.regionLocksPainted = '1';
-    const byRole = d && d.by_role ? d.by_role : {};
-    const roleEntries = Object.entries(byRole).sort((a, b) => {
-        const wa = a[1].wired ? 0 : 1, wb = b[1].wired ? 0 : 1;
-        if (wa !== wb) return wa - wb;
-        return a[0].localeCompare(b[0]);
-    });
-    const rows = [];
-    rows.push(`<div style="color:var(--muted);font-size:10px">role / instance shape</div>`);
-    for (const c of REGION_LOCK_COLS) {
-        rows.push(`<div style="color:var(--muted);font-size:10px;text-align:center;font-weight:600">${c.label}</div>`);
-    }
-    for (const [role, info] of roleEntries) {
-        const insts = Array.isArray(info.instances) ? info.instances : [];
-        const activeSet = new Set((info.active_instance_idxs || []).map(Number));
-        rows.push(`<div style="overflow:hidden;color:var(--fg);font-size:11px;line-height:1.3">${escapeHTML(role)}</div>`);
-        for (const col of REGION_LOCK_COLS) {
-            const inst = insts.find(i => i.shape === col.key);
-            if (!inst) {
-                rows.push(`<div class="rl-cell rl-na" title="${escapeHTML(role)} has no ${col.label} shape">—</div>`);
-            } else if (activeSet.has(Number(inst.idx))) {
-                rows.push(`<div class="rl-cell rl-active" title="${escapeHTML(role)}.${col.label} ACTIVE — instance idx=${Number(inst.idx)}">⚡</div>`);
-            } else {
-                const regions = Array.isArray(inst.regions) ? inst.regions.join(',') : '';
-                rows.push(`<div class="rl-cell rl-ready" title="${escapeHTML(role)}.${col.label} READY — regions {${escapeHTML(regions)}}">✅</div>`);
-            }
-        }
-    }
-    const gpuRows = gpuDeviceRegionRows();
-    rows.push(...gpuRows);
-    if (!roleEntries.length && !gpuRows.length) {
-        rows.push(`<div style="grid-column:1/-1;color:var(--muted);font-size:11px">no CPU-region roles in region-lock payload</div>`);
-    }
-    const suffix = note
-        ? `<div style="grid-column:1/-1;color:var(--warn,#fbbf24);font-size:10px;font-family:var(--font-ui);margin-top:6px">${escapeHTML(note)}</div>`
-        : '';
-    grid.innerHTML = rows.join('') + suffix;
-}
-
 function renderRegionLocksDisplayMatrix(grid, d) {
     const matrix = d && d.display_matrix ? d.display_matrix : null;
     const columns = matrix && Array.isArray(matrix.columns) ? matrix.columns : [];
     const rowsIn = matrix && Array.isArray(matrix.rows) ? matrix.rows : [];
     if (!grid || !columns.length || !rowsIn.length) return false;
     grid.dataset.regionLocksPainted = '1';
+    grid.style.gridTemplateColumns = `160px repeat(${columns.length},1fr)`;
     const rows = [];
     rows.push(`<div style="color:var(--muted);font-size:10px">role / instance shape</div>`);
     for (const col of columns) {
         rows.push(`<div style="color:var(--muted);font-size:10px;text-align:center;font-weight:600">${escapeHTML(col.label || col.key || '')}</div>`);
     }
-    const stateClass = { active: 'rl-active', blocked: 'rl-blocked', ready: 'rl-ready', na: 'rl-na' };
+    const stateClass = { active: 'rl-active', blocked: 'rl-blocked', ready: 'rl-ready', inactive: 'rl-inactive', na: 'rl-na' };
     for (const row of rowsIn) {
-        rows.push(`<div style="overflow:hidden;color:var(--fg);font-size:11px;line-height:1.3">${escapeHTML(row.role || '')}</div>`);
+        rows.push(`<div style="overflow:hidden;text-overflow:ellipsis;color:var(--fg);font-size:11px;line-height:1.3" title="${escapeHTML(row.label || row.role || '')}">${escapeHTML(row.label || row.role || '')}</div>`);
         for (const cell of (row.cells || [])) {
             const state = String(cell.state || 'na');
             const cls = stateClass[state] || 'rl-na';
@@ -2836,7 +2695,10 @@ function renderRegionLocksDisplayMatrix(grid, d) {
     grid.innerHTML = rows.join('');
     const footer = document.createElement('div');
     footer.style.cssText = 'grid-column:1/-1;color:var(--dim);font-size:10px;font-family:var(--font-ui);margin-top:6px;line-height:1.5';
-    footer.innerHTML = `${rowsIn.length} role(s) from backend display matrix · Legend: <span style="color:#fbbf24">⚡ active holder</span> · <span style="color:#f87171">× waiting on occupied CPU regions</span> · <span style="color:var(--good,#34d399)">✅ ready to dispatch</span> · <span style="color:var(--dim)">— shape not in this role's same_role matrix</span>.`;
+    const launchMode = matrix && matrix.launch_mode ? ` · launch ${escapeHTML(matrix.launch_mode)}` : '';
+    const rowKind = matrix && matrix.row_kind === 'instance' ? 'instance' : 'role';
+    const roleCount = rowKind === 'instance' && matrix && Number.isFinite(Number(matrix.role_count)) ? ` across ${Number(matrix.role_count)} role(s)` : '';
+    footer.innerHTML = `${rowsIn.length} ${rowKind}(s) from backend display matrix${roleCount}${launchMode} · Legend: <span style="color:#fbbf24">⚡ active holder</span> · <span style="color:#f87171">× waiting on occupied CPU regions</span> · <span style="color:var(--good,#34d399)">✅ configured and free</span> · <span style="color:var(--dim)">— shape not configured for this role</span>.`;
     grid.appendChild(footer);
     return true;
 }
@@ -5176,27 +5038,47 @@ function buildTextSnapshot() {
     return lines.join('\n');
 }
 
-async function copySnapshotToClipboard() {
-    // Prefer the server-side filtered .txt endpoint (it strips stack_state
-    // and other noisy keys). Fall back to the local builder if the fetch fails.
-    let text;
+function copySnapshotFallback(text) {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.setAttribute('readonly', '');
+    textarea.style.position = 'fixed';
+    textarea.style.top = '-9999px';
+    textarea.style.left = '-9999px';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    let copied = false;
     try {
-        const r = await fetch(`/dashboard/api/task/${encodeURIComponent(_currentTaskRawText.taskId)}.txt`);
-        if (r.ok) {
-            text = await r.text();
-        } else {
-            text = buildTextSnapshot();
-        }
-    } catch {
-        text = buildTextSnapshot();
+        copied = document.execCommand('copy');
+    } catch (e) {
+        copied = false;
+    } finally {
+        textarea.remove();
     }
+    return copied;
+}
+
+async function copySnapshotToClipboard() {
+    const text = buildTextSnapshot();
+    const fb = document.getElementById('copy-feedback');
     try {
-        await navigator.clipboard.writeText(text);
-        const fb = document.getElementById('copy-feedback');
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(text);
+        } else if (!copySnapshotFallback(text)) {
+            throw new Error('clipboard API unavailable');
+        }
         fb.textContent = `copied ${text.length}c`;
         fb.classList.add('shown');
         setTimeout(() => fb.classList.remove('shown'), 1500);
     } catch (e) {
+        if (copySnapshotFallback(text)) {
+            fb.textContent = `copied ${text.length}c`;
+            fb.classList.add('shown');
+            setTimeout(() => fb.classList.remove('shown'), 1500);
+            return;
+        }
         alert('clipboard write failed: ' + e.message);
     }
 }
@@ -5446,9 +5328,10 @@ function applyDashboardSnapshot(snap, source) {
     _lastSnapshotAppliedAt = Date.now();
     _latestSnapshot = snap || {};
     const refreshSeq = ++_regionLocksRefreshSeq;
-    // Coherent snapshots now include the structured tap rows used by the live
+    // Coherent snapshots include the structured tap rows used by the live
     // inference pane. Apply that frame before painting region locks/topology so
-    // tap-inferred CPU holders and the lock grid reflect the same instant.
+    // tap activity and proc/payload lock state share one frame without turning
+    // tap rows into synthetic lock holders.
     if (Array.isArray(snap.structured_requests)) {
         applyStructuredTapFrame(snap, {
             updateFreshness: false,
@@ -5747,6 +5630,14 @@ function _autopilotOutcomeProgressLabel(progress) {
     if (rates.keepable_rate) bits.push(`keepable ${fmtRate(rates.keepable_rate)}`);
     if (rates.wasted_eval_rate) bits.push(`wasted-eval ${fmtRate(rates.wasted_eval_rate)}`);
     if (rates.learning_excluded_rate) bits.push(`learning-excluded ${fmtRate(rates.learning_excluded_rate)}`);
+    if (rates.regression_per_active_trial) bits.push(`regression/active ${fmtRate(rates.regression_per_active_trial)}`);
+    if (rates.promotions_per_100_active_trials) {
+        const metric = rates.promotions_per_100_active_trials;
+        const text = (!metric || metric.total == null || metric.total <= 0 || metric.per_100 == null)
+            ? 'unknown'
+            : `${Number(metric.per_100).toFixed(1)}/100 (${metric.count}/${metric.total})`;
+        bits.push(`promotions/100 active ${text}`);
+    }
     if (Array.isArray(progress.blockers) && progress.blockers.length) {
         bits.push(...progress.blockers.slice(0, 3));
     }
@@ -6382,11 +6273,19 @@ function startDashboard() {
             const keepable = outcome.keepable_rate || {};
             const wasted = outcome.wasted_eval_rate || {};
             const excluded = outcome.learning_excluded_rate || {};
+            const regressions = outcome.regression_per_active_trial || {};
+            const promotionsPer100 = outcome.promotions_per_100_active_trials || {};
             const fmtRate = (metric) => {
                 if (!metric || metric.total == null || metric.total <= 0 || metric.rate == null) {
                     return 'unknown';
                 }
                 return `${Math.round(metric.rate * 100)}% (${metric.count}/${metric.total})`;
+            };
+            const fmtPer100 = (metric) => {
+                if (!metric || metric.total == null || metric.total <= 0 || metric.per_100 == null) {
+                    return 'unknown';
+                }
+                return `${Number(metric.per_100).toFixed(1)}/100 (${metric.count}/${metric.total})`;
             };
             if (promotions.count != null) {
                 metaBits.push(`baseline promotions ${promotions.count}`);
@@ -6398,6 +6297,8 @@ function startDashboard() {
             if (outcome.keepable_rate) metaBits.push(`keepable ${fmtRate(keepable)}`);
             if (outcome.wasted_eval_rate) metaBits.push(`wasted-eval ${fmtRate(wasted)}`);
             if (outcome.learning_excluded_rate) metaBits.push(`learning-excluded ${fmtRate(excluded)}`);
+            if (outcome.regression_per_active_trial) metaBits.push(`regression/active ${fmtRate(regressions)}`);
+            if (outcome.promotions_per_100_active_trials) metaBits.push(`promotions/100 active ${fmtPer100(promotionsPer100)}`);
             if (!d.autopilot_alive) metaBits.push('⚠ autopilot process not running');
             meta.textContent = metaBits.join(' · ');
         } catch (e) {
@@ -6503,13 +6404,18 @@ async function updateRegionLocks(
             if (!grid) return;
             const enabled = d.per_region_locks_enabled;
             _lastRegionLocksPayload = d;
+            _latestRegionLockFrame = {
+                valid: true,
+                generatedAt: regionLockPayloadFrameEpoch(d),
+                appliedAtMs: Date.now(),
+                source: regionLocks ? 'snapshot' : 'direct',
+            };
             if (status) {
                 status.textContent = enabled
                     ? '— per-region cross-process locks ENABLED'
                     : '— DISABLED (legacy global lock; set ORCHESTRATOR_PER_REGION_LOCKS=1)';
                 status.style.color = enabled ? 'var(--muted)' : 'var(--warn, #fbbf24)';
             }
-            const backendMatrix = d.display_matrix || null;
             // by_role from the server is { role: { wired, regions, instances[], active_instance_idxs[] } }.
             const byRole = d.by_role || {};
             const roleEntries = Object.entries(byRole).sort((a, b) => {
@@ -6517,13 +6423,6 @@ async function updateRegionLocks(
                 if (wa !== wb) return wa - wb;
                 return a[0].localeCompare(b[0]);
             });
-            // Column schema: each column corresponds to one canonical instance
-            // SHAPE in NUMA_CONFIG. The backend tags each instance with a
-            // `shape` field that exactly matches one of REGION_LOCK_COLS.
-            const pickInstForCol = (insts, key) => insts.find(i => i.shape === key) || null;
-            const rows = [];
-            rows.push(`<div style="color:var(--muted);font-size:10px">role / instance shape</div>`);
-            for (const c of REGION_LOCK_COLS) rows.push(`<div style="color:var(--muted);font-size:10px;text-align:center;font-weight:600">${c.label}</div>`);
             _latestRegionLocksByRole = {};
             for (const [role, info] of roleEntries) {
                 const holderPids = new Set();
@@ -6549,12 +6448,9 @@ async function updateRegionLocks(
                     instances: info.instances || [],
                 };
             }
-            _latestTapInferredRegionLocksByRole = buildTapInferredRegionLocks();
-            // CPU region locks must be authoritative: use /proc holders plus
-            // structured tap metadata, but never promote raw llama /slots
-            // occupancy into a CPU-lock holder. /slots remains visible in the
-            // topology dots via snap.display_activity and in GPU/direct rows.
-            _latestSlotInferredRegionLocksByRole = {};
+            // CPU-region lock state is sourced only from the lock payload/proc
+            // scan. Tap data stays in the live-tap panel and may explain visible
+            // work, but it must not synthesize lock ownership in the lock grid.
             const tapLiveRequests = typeof liveStructuredTapRequests === 'function' ? liveStructuredTapRequests() : [];
             const tapLiveRequestCount = tapLiveRequests.length;
             const tapLiveStateCounts = {};
@@ -6566,54 +6462,6 @@ async function updateRegionLocks(
             if (tapLiveStateCounts.streaming) tapLiveStateBits.push(`${tapLiveStateCounts.streaming} streaming`);
             if (tapLiveStateCounts.prefill_decode_pending) {
                 tapLiveStateBits.push(`${tapLiveStateCounts.prefill_decode_pending} prefill/decode pending`);
-            }
-            for (const [role, inferred] of Object.entries(_latestTapInferredRegionLocksByRole || {})) {
-                const base = _latestRegionLocksByRole[role] || {
-                    instanceIdxs: new Set(),
-                    procInstanceIdxs: new Set(),
-                    regions: new Set(),
-                    holderPids: new Set(),
-                    pidsByInstanceIdx: new Map(),
-                    instances: (byRole[role] && byRole[role].instances) || [],
-                };
-                base.tapInferredInstanceIdxs = new Set([
-                    ...((base.tapInferredInstanceIdxs && [...base.tapInferredInstanceIdxs]) || []),
-                    ...((inferred.instanceIdxs && [...inferred.instanceIdxs]) || []),
-                ]);
-                base.tapInferredRegions = new Set([
-                    ...((base.tapInferredRegions && [...base.tapInferredRegions]) || []),
-                    ...((inferred.regions && [...inferred.regions]) || []),
-                ]);
-                for (const idx of (inferred.instanceIdxs || [])) base.instanceIdxs.add(Number(idx));
-                for (const region of (inferred.regions || [])) base.regions.add(String(region));
-                for (const pid of (inferred.holderPids || [])) base.holderPids.add(String(pid));
-                for (const [idx, pids] of (inferred.pidsByInstanceIdx || new Map()).entries()) {
-                    const bucket = base.pidsByInstanceIdx.get(Number(idx)) || new Set();
-                    for (const pid of pids) bucket.add(String(pid));
-                    base.pidsByInstanceIdx.set(Number(idx), bucket);
-                }
-                _latestRegionLocksByRole[role] = base;
-            }
-            for (const [role, inferred] of Object.entries(_latestSlotInferredRegionLocksByRole || {})) {
-                const base = _latestRegionLocksByRole[role] || {
-                    instanceIdxs: new Set(),
-                    procInstanceIdxs: new Set(),
-                    regions: new Set(),
-                    holderPids: new Set(),
-                    pidsByInstanceIdx: new Map(),
-                    instances: (byRole[role] && byRole[role].instances) || [],
-                };
-                base.slotInferredInstanceIdxs = new Set([
-                    ...((base.slotInferredInstanceIdxs && [...base.slotInferredInstanceIdxs]) || []),
-                    ...((inferred.instanceIdxs && [...inferred.instanceIdxs]) || []),
-                ]);
-                base.slotInferredRegions = new Set([
-                    ...((base.slotInferredRegions && [...base.slotInferredRegions]) || []),
-                    ...((inferred.regions && [...inferred.regions]) || []),
-                ]);
-                for (const idx of (inferred.instanceIdxs || [])) base.instanceIdxs.add(Number(idx));
-                for (const region of (inferred.regions || [])) base.regions.add(String(region));
-                _latestRegionLocksByRole[role] = base;
             }
             if (_rawTapRenderMode === 'structured') {
                 paintRawTap();
@@ -6650,57 +6498,16 @@ async function updateRegionLocks(
                 }
             }
             const displayHeldBySummary = formatRegionLockHolderSummary();
-            const tapInferredMissing = [];
-            let tapInferredRequestCount = 0;
-            let tapInferredMissingRequestCount = 0;
-            const slotInferredMissing = [];
-            for (const [role, inferred] of Object.entries(_latestTapInferredRegionLocksByRole || {})) {
-                const actualActive = new Set(((byRole[role] || {}).active_instance_idxs || []).map(Number));
-                const instByIdx = new Map((((byRole[role] || {}).instances) || []).map(i => [Number(i.idx), i]));
-                tapInferredRequestCount += tapInferredSourceCount(inferred);
-                for (const idx of (inferred.instanceIdxs || [])) {
-                    const nIdx = Number(idx);
-                    const sourceCount = tapInferredSourcesForInstance(inferred, nIdx).length || 1;
-                    if (actualActive.has(nIdx)) continue;
-                    const req = (inferred.sources || []).find(r => Number(r.instance_idx) === nIdx) || {};
-                    const inst = instByIdx.get(nIdx);
-                    const regions = ((req.instance_regions || (inst && inst.regions) || [])).map(String);
-                    if (!regions.length) continue;
-                    const shape = req.instance_shape || (inst && inst.shape) || `idx${nIdx}`;
-                    tapInferredMissing.push(formatPhysicalRoleWithLogicalAliases(role, shape, nIdx));
-                    tapInferredMissingRequestCount += sourceCount;
-                    for (const region of regions) {
-                        (globalHeldBy[region] ||= []).push({ role, shape, inferred: true });
-                    }
-                }
-            }
-            for (const [role, inferred] of Object.entries(_latestSlotInferredRegionLocksByRole || {})) {
-                const actualActive = new Set(((byRole[role] || {}).active_instance_idxs || []).map(Number));
-                const tapActive = new Set(((_latestTapInferredRegionLocksByRole[role] || {}).instanceIdxs || []));
-                const instByIdx = new Map((((byRole[role] || {}).instances) || []).map(i => [Number(i.idx), i]));
-                for (const idx of (inferred.instanceIdxs || [])) {
-                    const nIdx = Number(idx);
-                    if (actualActive.has(nIdx) || tapActive.has(nIdx)) continue;
-                    const inst = instByIdx.get(nIdx);
-                    const regions = ((inst && inst.regions) || []).map(String);
-                    if (!regions.length) continue;
-                    const shape = (inst && inst.shape) || `idx${nIdx}`;
-                    slotInferredMissing.push(`${role}.${shape}`);
-                    for (const region of regions) {
-                        (globalHeldBy[region] ||= []).push({ role, shape, inferred: true, slotInferred: true });
-                    }
-                }
-            }
             const globalHeldRegions = new Set(Object.keys(globalHeldBy));
             const actualActiveLockCount = Object.values(byRole).reduce(
                 (acc, info) => acc + ((info.active_instance_idxs || []).length),
                 0
             );
-            const activeLockCount = actualActiveLockCount + tapInferredMissing.length;
+            const activeLockCount = actualActiveLockCount;
             const heldBySummary = [...new Set(
                 Object.values(globalHeldBy)
                     .flat()
-                    .map(b => `${b.inferred ? (b.slotInferred ? '≈' : '~') : ''}${b.role}.${b.shape}`)
+                    .map(b => `${b.role}.${b.shape}`)
             )].join(', ');
             _latestRegionLockSummary = {
                 activeLockCount,
@@ -6708,10 +6515,10 @@ async function updateRegionLocks(
                 enabled,
                 procHolderCount: actualActiveLockCount,
                 tapLiveRequestCount,
-                tapInferredCount: tapInferredRequestCount,
-                tapInferredPhysicalCount: tapInferredMissing.length,
-                tapInferredMissingRequestCount,
-                slotInferredCount: slotInferredMissing.length,
+                tapInferredCount: 0,
+                tapInferredPhysicalCount: 0,
+                tapInferredMissingRequestCount: 0,
+                slotInferredCount: 0,
             };
             renderAutopilotRunStrip();
             const regionDot = document.getElementById('region-locks-dot');
@@ -6721,15 +6528,6 @@ async function updateRegionLocks(
                 const titleBits = [`${actualActiveLockCount} /proc holder instance(s)`];
                 if (tapLiveRequestCount) {
                     titleBits.push(`${tapLiveRequestCount} live tap request(s)${tapLiveStateBits.length ? ` (${tapLiveStateBits.join(' · ')})` : ''}`);
-                }
-                if (tapInferredRequestCount) {
-                    titleBits.push(`${tapInferredRequestCount} tap-inferred request(s)`);
-                }
-                if (tapInferredMissing.length) {
-                    titleBits.push(`${tapInferredMissingRequestCount || tapInferredMissing.length} tap-inferred request(s) without /proc match`);
-                }
-                if (slotInferredMissing.length) {
-                    titleBits.push(`${slotInferredMissing.length} slot-inferred active instance(s)`);
                 }
                 _setDotState(
                     regionDot,
@@ -6743,136 +6541,50 @@ async function updateRegionLocks(
                     `${tapLiveRequestCount} live tap request(s), but no CPU lock holder correlated in this frame`
                 );
             } else {
-                _setDotState(regionDot, 'idle', 'no CPU region locks currently held; grid shows dispatch readiness');
+                _setDotState(regionDot, 'idle', 'no CPU region locks currently held; grid shows configured free CPU shapes');
             }
             if (status && enabled) {
                 const liveTapSuffix = tapLiveRequestCount
                     ? `; +${tapLiveRequestCount} live tap request(s)${tapLiveStateBits.length ? ` (${tapLiveStateBits.join(' · ')})` : ''}`
                     : '';
-                const tapInferredCountSuffix = tapInferredRequestCount
-                    ? ` + ${tapInferredRequestCount} tap-inferred request(s)`
-                    : '';
-                const tapInferredUnmatchedSuffix = tapInferredMissing.length
-                    ? `; ${tapInferredMissingRequestCount || tapInferredMissing.length} request(s) have no /proc match`
-                    : '';
-                const slotInferredSuffix = slotInferredMissing.length
-                    ? `; +${slotInferredMissing.length} slot-inferred active instance(s): ${slotInferredMissing.join(', ')}`
-                    : '';
                 if (activeLockCount > 0) {
-                    status.textContent = `— ${actualActiveLockCount} /proc holder instance(s)${tapInferredCountSuffix}: ${displayHeldBySummary || 'none'}${liveTapSuffix}${tapInferredUnmatchedSuffix}${slotInferredSuffix}; × cells are same-role or matrix-blocked waits; per-region locks ENABLED`;
+                    status.textContent = `— ${actualActiveLockCount} /proc holder instance(s): ${displayHeldBySummary || 'none'}${liveTapSuffix}; × cells are same-role or matrix-blocked waits; per-region locks ENABLED`;
                     status.style.color = '#fbbf24';
                 } else if (tapLiveRequestCount > 0) {
                     status.textContent = `— no /proc holder correlated; ${tapLiveRequestCount} live tap request(s) visible${tapLiveStateBits.length ? ` (${tapLiveStateBits.join(' · ')})` : ''}; waiting for coherent lock metadata; per-region locks ENABLED`;
                     status.style.color = 'var(--warn,#fbbf24)';
                 } else {
-                    status.textContent = '— no locks held; per-region locks ENABLED';
+                    status.textContent = '— no locks held; grid shows configured free CPU shapes; per-region locks ENABLED';
                     status.style.color = 'var(--muted)';
                 }
             }
 
-            if (backendMatrix && renderRegionLocksDisplayMatrix(grid, d)) {
-                if (typeof updateTopologyInflight === 'function') {
-                    const overlayInflight = snapshotSeq != null
-                        ? ((Array.isArray(snapshotInflightTasks) ? snapshotInflightTasks : ((_latestSnapshot && _latestSnapshot.in_flight_tasks) || [])))
-                        : [];
-                    updateTopologyInflight(overlayInflight, snapshotSeq);
-                }
-                return;
+            if (!renderRegionLocksDisplayMatrix(grid, d)) {
+                grid.dataset.regionLocksPainted = '1';
+                grid.style.gridTemplateColumns = '1fr';
+                grid.innerHTML = `<div style="grid-column:1/-1;color:var(--warn,#fbbf24);font-size:11px;line-height:1.4">backend display_matrix unavailable; lock-grid rendering is intentionally disabled to avoid legacy by_role reconstruction drift</div>`;
             }
-
-            let nRoles = 0;
-            for (const [role, info] of roleEntries) {
-                nRoles++;
-                const insts = info.instances || [];
-                const activeSet = new Set(info.active_instance_idxs || []);
-                const inferredActiveSet = (_latestTapInferredRegionLocksByRole[role] && _latestTapInferredRegionLocksByRole[role].instanceIdxs) || new Set();
-                const slotInferredActiveSet = (_latestSlotInferredRegionLocksByRole[role] && _latestSlotInferredRegionLocksByRole[role].instanceIdxs) || new Set();
-                rows.push(`<div style="overflow:hidden;color:var(--fg);font-size:11px;line-height:1.3">${role}</div>`);
-                for (const col of REGION_LOCK_COLS) {
-                    const inst = pickInstForCol(insts, col.key);
-                    if (!inst) {
-                        rows.push(`<div class="rl-cell rl-na" title="${role} has no ${col.label} shape per contention_matrix.yaml">—</div>`);
-                        continue;
-                    }
-                    if (activeSet.has(inst.idx)) {
-                        const aliases = structuredTapLogicalAliasesForIdentity(role, inst.idx);
-                        const logical = aliases.length ? `; logical route(s): ${aliases.join(', ')}` : '';
-                        const inferred = (_latestTapInferredRegionLocksByRole[role] || null);
-                        const sourceCount = tapInferredSourcesForInstance(inferred, inst.idx).length;
-                        const tapNote = sourceCount ? `; ${sourceCount} structured tap request(s) map here` : '';
-                        const t = `${role}.${col.label} ACTIVE — instance idx=${inst.idx} holding {${(inst.regions || []).join(',')}}${logical}${tapNote}`;
-                        rows.push(`<div class="rl-cell rl-active" title="${t}">⚡</div>`);
-                        continue;
-                    }
-                    if (inferredActiveSet.has(Number(inst.idx))) {
-                        const aliases = structuredTapLogicalAliasesForIdentity(role, inst.idx);
-                        const logical = aliases.length ? `; logical route(s): ${aliases.join(', ')}` : '';
-                        const inferred = (_latestTapInferredRegionLocksByRole[role] || null);
-                        const sourceCount = tapInferredSourcesForInstance(inferred, inst.idx).length || 1;
-                        const t = `${role}.${col.label} TAP ACTIVE — ${sourceCount} structured tap request(s) map to idx=${inst.idx}${logical}; /proc lock poll has not observed the holder in this frame`;
-                        rows.push(`<div class="rl-cell rl-active rl-inferred" title="${t}">⚡</div>`);
-                        continue;
-                    }
-                    if (slotInferredActiveSet.has(Number(inst.idx))) {
-                        const t = `${role}.${col.label} SLOT ACTIVE — llama /slots reports active decode on idx=${inst.idx}; /proc lock and structured tap metadata did not identify the holder in this frame`;
-                        rows.push(`<div class="rl-cell rl-active rl-inferred" title="${t}">⚡</div>`);
-                        continue;
-                    }
-                    const needed = inst.regions || [];
-                    const blockedByRoles = new Set((info.blocked_by_roles || []).map(String));
-                    const isBlockingHolder = (b) => b.role === role || blockedByRoles.has(String(b.role));
-                    const blockingQuarters = needed.filter(q => (globalHeldBy[q] || []).some(isBlockingHolder));
-                    if (blockingQuarters.length) {
-                        const blockers = blockingQuarters
-                            .map(q => `${q}←${(globalHeldBy[q] || []).filter(isBlockingHolder).map(b => `${b.role}.${b.shape}`).join(',')}`)
-                            .join(' · ');
-                        rows.push(`<div class="rl-cell rl-blocked" title="${role}.${col.label} WAITING — physical cores ${blockingQuarters.join(',')} occupied by ${blockers}; not the active holder">×</div>`);
-                    } else {
-                        rows.push(`<div class="rl-cell rl-ready" title="${role}.${col.label} READY — regions {${needed.join(',')}} are free or occupied only by matrix-allowed concurrent roles">✅</div>`);
-                    }
-                }
-            }
-            const gpuRows = gpuDeviceRegionRows();
-            rows.push(...gpuRows);
-            if (!roleEntries.length && !gpuRows.length) {
-                const reason = d.matrix_loaded === false
-                    ? 'orchestration/contention_matrix.yaml not loadable — check that it exists and is valid YAML'
-                    : 'no roles in same_role section of contention_matrix.yaml';
-                grid.innerHTML = `<div style="grid-column:1/-1;color:var(--muted);font-size:11px">${reason}</div>`;
-            } else {
-                grid.innerHTML = rows.join('');
-                const footer = document.createElement('div');
-                footer.style.cssText = 'grid-column:1/-1;color:var(--dim);font-size:10px;font-family:var(--font-ui);margin-top:6px;line-height:1.5';
-                let footMsg = `${nRoles} role(s) from <code style="font-size:10px;color:var(--muted)">contention_matrix.yaml</code> · `;
-                footMsg += `Legend: <span style="color:#fbbf24">⚡ active holder</span> · <span style="color:#f87171">× waiting on occupied CPU regions</span> · <span style="color:var(--good,#34d399)">✅ ready to dispatch</span> · <span style="color:var(--dim)">— shape not in this role's same_role matrix</span>.`;
-                footer.innerHTML = footMsg;
-                grid.appendChild(footer);
-            }
-            // Keep the topology active badges in the same visual frame as the
-            // CPU-region grid. Structured tap SSE updates can arrive between
-            // main snapshot frames; repainting here makes the live inference,
-            // topology, and region-lock panels consume the same lock cache.
             if (typeof updateTopologyInflight === 'function') {
                 const overlayInflight = snapshotSeq != null
                     ? ((Array.isArray(snapshotInflightTasks) ? snapshotInflightTasks : ((_latestSnapshot && _latestSnapshot.in_flight_tasks) || [])))
                     : [];
                 updateTopologyInflight(overlayInflight, snapshotSeq);
             }
+            return;
+
         } catch (err) {
+            _latestRegionLockFrame = { valid: false, generatedAt: 0, appliedAtMs: Date.now(), source: 'error' };
             const status = document.getElementById('region-locks-status');
             const grid = document.getElementById('region-locks-grid');
             const msg = err && err.message ? err.message : String(err);
             if (status) {
-                status.textContent = `— region lock overlay error: ${msg}`;
+                status.textContent = `— region lock display-matrix error: ${msg}`;
                 status.style.color = 'var(--warn,#fbbf24)';
             }
             if (grid) {
-                const lastRegionLocks = _lastRegionLocksPayload || (_latestSnapshot && _latestSnapshot.region_locks ? _latestSnapshot.region_locks : null);
-                if (lastRegionLocks) {
-                    renderRegionLocksBasicGrid(grid, lastRegionLocks, `rich overlay failed: ${msg}`);
-                } else {
-                    grid.innerHTML = `<div style="grid-column:1/-1;color:var(--bad,#f87171);font-size:11px">region lock render failed before a payload was available: ${escapeHTML(msg)}</div>`;
-                }
+                grid.dataset.regionLocksPainted = '1';
+                grid.style.gridTemplateColumns = '1fr';
+                grid.innerHTML = `<div style="grid-column:1/-1;color:var(--bad,#f87171);font-size:11px">region lock display_matrix render failed: ${escapeHTML(msg)}</div>`;
             }
         }
     }

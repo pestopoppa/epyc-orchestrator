@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 
 import ast
 import importlib
+import math
 
 ORCH_ROOT = Path(__file__).resolve().parents[3]
 PROMPTS_DIR = ORCH_ROOT / "orchestration" / "prompts"
@@ -29,12 +30,21 @@ PROJECT_ROOT = Path("/mnt/raid0/llm/epyc-orchestrator")
 # Meta-Harness Tier 2: Python files that code mutations may touch.
 # This is the eval trust boundary — files NOT on this list are immutable.
 CODE_MUTATION_ALLOWLIST = [
-    "src/prompt_builders/resolver.py",      # Prompt resolution logic
-    "src/escalation.py",                     # Escalation policy & retry logic
-    "src/graph/escalation_helpers.py",       # Role cycle detection
-    "src/tool_policy.py",                    # Tool access control rules
-    "src/api/routes/chat.py",               # Chat pipeline (cheap-first, routing, response)
+    "src/prompt_builders/resolver.py",  # Prompt resolution logic
+    "src/escalation.py",  # Escalation policy & retry logic
+    "src/graph/escalation_helpers.py",  # Role cycle detection
+    "src/tool_policy.py",  # Tool access control rules
+    "src/api/routes/chat.py",  # Chat pipeline (cheap-first, routing, response)
 ]
+
+# New-file code mutations are more permissive than the existing-file allowlist,
+# but they stay directory-scoped. ``src/`` is for ordinary code scaffolds;
+# ``schema_evolution/`` is the AutoMem/MH-9 lane for default-inert memory
+# schema/scaffold proposals.
+NEW_FILE_MUTATION_ROOT = PROJECT_ROOT / "src"
+MEMORY_SCHEMA_MUTATION_ROOT = (
+    PROJECT_ROOT / "orchestration" / "repl_memory" / "schema_evolution"
+)
 
 MUTATION_TYPES = [
     "targeted_fix",  # Fix specific failure patterns
@@ -61,9 +71,7 @@ _SUITE_ALIASES: dict[str, tuple[str, ...]] = {
     "usaco": ("usaco",),
 }
 _SUITE_TERM_TO_CANONICAL = {
-    term: canonical
-    for canonical, aliases in _SUITE_ALIASES.items()
-    for term in aliases
+    term: canonical for canonical, aliases in _SUITE_ALIASES.items() for term in aliases
 }
 _SUITE_TERM_RE = re.compile(
     r"(?<![\w-])("
@@ -88,6 +96,155 @@ _FRONTDOOR_CORRUPTION_MARKERS = (
     "i should **not** edit the file directly",
     "one note worth flagging",
 )
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return default
+    if math.isnan(result) or math.isinf(result):
+        return default
+    return result
+
+
+def _coverage_retrieve(
+    strategy_store: Any,
+    query_text: str,
+    *,
+    journal: Any | None,
+    k: int,
+    species: str | None,
+) -> list[Any]:
+    if journal is not None and hasattr(strategy_store, "retrieve_for_journal"):
+        try:
+            return list(
+                strategy_store.retrieve_for_journal(
+                    query_text,
+                    journal=journal,
+                    k=k,
+                    species=species,
+                )
+            )
+        except TypeError:
+            return list(
+                strategy_store.retrieve_for_journal(
+                    query_text,
+                    journal=journal,
+                    k=k,
+                )
+            )
+
+    if hasattr(strategy_store, "retrieve"):
+        try:
+            return list(strategy_store.retrieve(query_text, k=k, species=species))
+        except TypeError:
+            return list(strategy_store.retrieve(query_text, k=k))
+
+    raise AttributeError("strategy_store has neither retrieve_for_journal() nor retrieve()")
+
+
+def diversity_coverage_penalty(
+    query_text: str,
+    strategy_store: Any | None,
+    *,
+    journal: Any | None = None,
+    k: int = 8,
+    species: str | None = "prompt_forge",
+    min_density: float = 1e-6,
+) -> dict[str, Any]:
+    """Estimate mutation-neighborhood density from StrategyStore retrieval.
+
+    AP-35 uses the existing strategy-memory index as an observe-only density
+    proxy. ``negative_log_density`` is high in sparse neighborhoods and low
+    near already-covered strategy clusters; callers decide how to present it.
+    """
+    query = str(query_text or "").strip()
+    if strategy_store is None:
+        return {
+            "status": "unavailable",
+            "reason": "missing_strategy_store",
+            "query_text": query,
+            "density": 0.0,
+            "negative_log_density": 0.0,
+            "penalty": 0.0,
+            "similar_count": 0,
+            "top_matches": [],
+        }
+    if not query:
+        return {
+            "status": "unavailable",
+            "reason": "empty_query",
+            "query_text": query,
+            "density": 0.0,
+            "negative_log_density": 0.0,
+            "penalty": 0.0,
+            "similar_count": 0,
+            "top_matches": [],
+        }
+
+    k = max(1, int(k))
+    floor = max(_safe_float(min_density, 1e-6), 1e-12)
+    try:
+        entries = _coverage_retrieve(
+            strategy_store,
+            query,
+            journal=journal,
+            k=k,
+            species=species,
+        )
+    except Exception as exc:  # noqa: BLE001 - density hints must not block mutation dispatch
+        return {
+            "status": "error",
+            "reason": f"{type(exc).__name__}: {exc}",
+            "query_text": query,
+            "density": 0.0,
+            "negative_log_density": 0.0,
+            "penalty": 0.0,
+            "similar_count": 0,
+            "top_matches": [],
+        }
+
+    top_matches: list[dict[str, Any]] = []
+    scores: list[float] = []
+    for entry in entries:
+        score = max(0.0, _safe_float(getattr(entry, "similarity_score", 0.0)))
+        scores.append(score)
+        top_matches.append(
+            {
+                "id": str(getattr(entry, "id", "") or ""),
+                "source_trial_id": getattr(entry, "source_trial_id", None),
+                "species": str(getattr(entry, "species", "") or ""),
+                "description": str(getattr(entry, "description", "") or ""),
+                "insight": str(
+                    getattr(entry, "generalized_content", "") or getattr(entry, "insight", "") or ""
+                ),
+                "similarity_score": score,
+            }
+        )
+
+    if scores:
+        density = sum(scores) / len(scores)
+        status = "ok"
+    else:
+        density = 0.0
+        status = "sparse"
+
+    negative_log_density = -math.log(max(density, floor))
+    return {
+        "status": status,
+        "reason": "ok" if scores else "no_nearby_strategy_entries",
+        "query_text": query,
+        "density": density,
+        "negative_log_density": negative_log_density,
+        "penalty": negative_log_density,
+        "similar_count": len(scores),
+        "top_matches": top_matches[:k],
+        "interpretation": (
+            "Higher negative_log_density means the mutation target is less covered "
+            "by strategy memory; use as exploration pressure, not as an acceptance gate."
+        ),
+    }
 
 
 @dataclass(frozen=True)
@@ -127,6 +284,41 @@ class CodeMutation:
     safety_valid: bool = True
     safety_reason: str = "ok"
     safety_warnings: list[str] = field(default_factory=list)
+
+
+def _resolve_code_mutation_target(target_file: str) -> Path:
+    """Resolve a code-mutation target while rejecting traversal and escapes."""
+    requested = Path(target_file)
+    if requested.is_absolute() or ".." in requested.parts:
+        raise FileNotFoundError(f"Target file not found: {PROJECT_ROOT / target_file}")
+    resolved = (PROJECT_ROOT / requested).resolve(strict=False)
+    if not resolved.is_relative_to(PROJECT_ROOT):
+        raise FileNotFoundError(f"Target file not found: {PROJECT_ROOT / target_file}")
+    return resolved
+
+
+def new_file_mutation_roots() -> tuple[Path, ...]:
+    """Directory roots where MH-9 may create brand-new Python modules."""
+    return (NEW_FILE_MUTATION_ROOT, MEMORY_SCHEMA_MUTATION_ROOT)
+
+
+def new_file_mutation_root_labels() -> tuple[str, ...]:
+    """Planner-facing labels for sanctioned new-file mutation roots."""
+    labels: list[str] = []
+    for root in new_file_mutation_roots():
+        try:
+            labels.append(str(root.relative_to(PROJECT_ROOT)))
+        except ValueError:
+            labels.append(str(root))
+    return tuple(labels)
+
+
+def _is_under_any(path: Path, roots: tuple[Path, ...]) -> bool:
+    return any(path.is_relative_to(root) for root in roots)
+
+
+def _is_memory_schema_evolution_target(path: Path) -> bool:
+    return path.is_relative_to(MEMORY_SCHEMA_MUTATION_ROOT)
 
 
 def _suite_mentions(text: str) -> set[str]:
@@ -374,8 +566,7 @@ class PromptForge:
 
         if self.auto_commit and mutation.git_diff:
             self._git_commit(
-                f"autopilot: {mutation.mutation_type} on {mutation.file}\n\n"
-                f"{mutation.description}"
+                f"autopilot: {mutation.mutation_type} on {mutation.file}\n\n{mutation.description}"
             )
 
         return {
@@ -406,9 +597,13 @@ class PromptForge:
     def _invoke_claude(self, prompt: str) -> str:
         """Invoke Claude CLI following the claude_debugger pattern."""
         cmd = [
-            "claude", "-p", prompt,
-            "--output-format", "json",
-            "--allowedTools", "Read,Grep,Glob",
+            "claude",
+            "-p",
+            prompt,
+            "--output-format",
+            "json",
+            "--allowedTools",
+            "Read,Grep,Glob",
         ]
         if self._session_id:
             cmd.extend(["--resume", self._session_id])
@@ -520,7 +715,7 @@ class PromptForge:
             "Return the complete mutated prompt inside a ```markdown fenced block. "
             "Also include a brief explanation of your changes in a "
             "```json:autopilot_actions block:\n"
-            '```json:autopilot_actions\n'
+            "```json:autopilot_actions\n"
             '{"changes": ["change1", "change2"], "rationale": "..."}\n'
             "```"
         )
@@ -571,20 +766,22 @@ class PromptForge:
         try:
             result = subprocess.run(
                 ["git", "diff", "--stat", str(self.prompts_dir)],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True,
+                text=True,
+                timeout=10,
                 cwd=str(PROJECT_ROOT),
             )
             return {"diff_stat": result.stdout}
         except Exception:
             return {}
 
-    def _diff_states(
-        self, before: dict[str, str], after: dict[str, str]
-    ) -> str:
+    def _diff_states(self, before: dict[str, str], after: dict[str, str]) -> str:
         try:
             result = subprocess.run(
                 ["git", "diff", str(self.prompts_dir)],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True,
+                text=True,
+                timeout=10,
                 cwd=str(PROJECT_ROOT),
             )
             return result.stdout
@@ -595,12 +792,14 @@ class PromptForge:
         try:
             subprocess.run(
                 ["git", "add", str(self.prompts_dir)],
-                timeout=10, check=True,
+                timeout=10,
+                check=True,
                 cwd=str(PROJECT_ROOT),
             )
             subprocess.run(
                 ["git", "commit", "-m", message],
-                timeout=10, check=True,
+                timeout=10,
+                check=True,
                 cwd=str(PROJECT_ROOT),
             )
             log.info("Committed prompt mutation")
@@ -632,6 +831,7 @@ class PromptForge:
                     ctx.reject()
         """
         from scripts.autopilot.worktree_manager import WorktreeManager
+
         wt = WorktreeManager(PROJECT_ROOT)
         return wt.experiment(trial_name)
 
@@ -701,17 +901,31 @@ class PromptForge:
 
         Only files in CODE_MUTATION_ALLOWLIST may be mutated.
         """
-        if target_file not in CODE_MUTATION_ALLOWLIST:
-            raise ValueError(
-                f"Code mutation blocked: {target_file} not in allowlist. "
-                f"Allowed: {CODE_MUTATION_ALLOWLIST}"
-            )
+        if mutation_type not in {"targeted_fix", "compress", "new_file"}:
+            raise ValueError(f"Unknown code mutation type: {mutation_type}")
 
-        abs_path = PROJECT_ROOT / target_file
-        if not abs_path.exists():
-            raise FileNotFoundError(f"Target file not found: {abs_path}")
-
-        original = abs_path.read_text()
+        abs_path = _resolve_code_mutation_target(target_file)
+        if mutation_type == "new_file":
+            roots = new_file_mutation_roots()
+            if not _is_under_any(abs_path.parent, roots):
+                raise ValueError(
+                    f"New-file mutation blocked: {target_file} must stay under "
+                    f"one of {', '.join(new_file_mutation_root_labels())}"
+                )
+            if not abs_path.parent.exists():
+                raise FileNotFoundError(f"New-file parent directory not found: {abs_path.parent}")
+            if abs_path.exists():
+                raise FileExistsError(f"New-file mutation blocked: {abs_path} already exists")
+            original = ""
+        else:
+            if target_file not in CODE_MUTATION_ALLOWLIST:
+                raise ValueError(
+                    f"Code mutation blocked: {target_file} not in allowlist. "
+                    f"Allowed: {CODE_MUTATION_ALLOWLIST}"
+                )
+            if not abs_path.exists():
+                raise FileNotFoundError(f"Target file not found: {abs_path}")
+            original = abs_path.read_text()
 
         prompt = self._build_code_mutation_prompt(
             target_file=target_file,
@@ -741,7 +955,12 @@ class PromptForge:
         )
 
         # Deep validation: syntax + shrinkage + public names + import test
-        valid, reason = self._validate_code_mutation(original, mutated_content, target_file)
+        valid, reason = self._validate_code_mutation(
+            original,
+            mutated_content,
+            target_file,
+            is_new_file=(mutation_type == "new_file"),
+        )
         mutation.syntax_valid = valid
         if not valid:
             log.warning("Code mutation rejected (%s): %s", target_file, reason)
@@ -767,12 +986,18 @@ class PromptForge:
         try:
             subprocess.run(
                 ["git", "add", str(abs_path)],
-                timeout=10, cwd=str(PROJECT_ROOT),
+                timeout=10,
+                cwd=str(PROJECT_ROOT),
             )
             subprocess.run(
-                ["git", "commit", "-m",
-                 f"autopilot: pre-code-mutation checkpoint ({mutation.file})"],
-                timeout=10, cwd=str(PROJECT_ROOT),
+                [
+                    "git",
+                    "commit",
+                    "-m",
+                    f"autopilot: pre-code-mutation checkpoint ({mutation.file})",
+                ],
+                timeout=10,
+                cwd=str(PROJECT_ROOT),
                 capture_output=True,
             )
         except Exception:
@@ -784,11 +1009,22 @@ class PromptForge:
 
         # Capture diff
         try:
-            result = subprocess.run(
-                ["git", "diff", str(abs_path)],
-                capture_output=True, text=True, timeout=10,
-                cwd=str(PROJECT_ROOT),
-            )
+            if mutation.mutation_type == "new_file" and not mutation.original_content:
+                result = subprocess.run(
+                    ["git", "diff", "--no-index", "--", "/dev/null", str(abs_path)],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    cwd=str(PROJECT_ROOT),
+                )
+            else:
+                result = subprocess.run(
+                    ["git", "diff", str(abs_path)],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    cwd=str(PROJECT_ROOT),
+                )
             mutation.git_diff = result.stdout
         except Exception:
             mutation.git_diff = ""
@@ -810,15 +1046,41 @@ class PromptForge:
     def revert_code_mutation(self, mutation: CodeMutation) -> None:
         """Revert a code mutation to original content and commit the revert."""
         abs_path = PROJECT_ROOT / mutation.file
-        abs_path.write_text(mutation.original_content)
+        if mutation.mutation_type == "new_file" and not mutation.original_content:
+            abs_path.unlink(missing_ok=True)
+        else:
+            abs_path.write_text(mutation.original_content)
         mutation.accepted = False
         # Commit the revert so corrupted state is never the HEAD
         if self.auto_commit:
-            self._git_commit_file(
-                abs_path,
-                f"autopilot: revert code mutation on {mutation.file}\n\n"
-                f"Reverted: {mutation.description}",
-            )
+            if mutation.mutation_type == "new_file" and not mutation.original_content:
+                try:
+                    subprocess.run(
+                        ["git", "add", "-A", str(abs_path)],
+                        timeout=10,
+                        check=True,
+                        cwd=str(PROJECT_ROOT),
+                    )
+                    subprocess.run(
+                        [
+                            "git",
+                            "commit",
+                            "-m",
+                            f"autopilot: revert code mutation on {mutation.file}\n\n"
+                            f"Reverted: {mutation.description}",
+                        ],
+                        timeout=10,
+                        check=True,
+                        cwd=str(PROJECT_ROOT),
+                    )
+                except Exception as e:
+                    log.warning("Git commit failed: %s", e)
+            else:
+                self._git_commit_file(
+                    abs_path,
+                    f"autopilot: revert code mutation on {mutation.file}\n\n"
+                    f"Reverted: {mutation.description}",
+                )
         log.info("Reverted code mutation on %s (committed)", mutation.file)
 
     def _validate_syntax(self, code: str) -> bool:
@@ -831,7 +1093,12 @@ class PromptForge:
             return False
 
     def _validate_code_mutation(
-        self, original: str, mutated: str, target_file: str
+        self,
+        original: str,
+        mutated: str,
+        target_file: str,
+        *,
+        is_new_file: bool = False,
     ) -> tuple[bool, str]:
         """Deep validation of a code mutation beyond syntax.
 
@@ -850,7 +1117,7 @@ class PromptForge:
         # 2. Catastrophic shrinkage — reject if >60% of lines removed
         orig_lines = len(original.splitlines())
         new_lines = len(mutated.splitlines())
-        if orig_lines > 10 and new_lines < orig_lines * 0.4:
+        if not is_new_file and orig_lines > 10 and new_lines < orig_lines * 0.4:
             return False, (
                 f"catastrophic shrinkage: {orig_lines}→{new_lines} lines "
                 f"({100 * (1 - new_lines / orig_lines):.0f}% removed)"
@@ -865,32 +1132,41 @@ class PromptForge:
                     names.add(node.name)
             return names
 
-        orig_tree = ast.parse(original)
-        orig_names = _top_level_names(orig_tree)
-        new_names = _top_level_names(mutated_tree)
-        missing = orig_names - new_names
-        if missing:
-            return False, f"missing public names: {missing}"
+        if not is_new_file:
+            orig_tree = ast.parse(original)
+            orig_names = _top_level_names(orig_tree)
+            new_names = _top_level_names(mutated_tree)
+            missing = orig_names - new_names
+            if missing:
+                return False, f"missing public names: {missing}"
 
         # 4. Import test — write to temp, try importing
         abs_path = PROJECT_ROOT / target_file
         try:
             # Temporarily write mutated code
-            backup = abs_path.read_text()
+            backup_exists = abs_path.exists()
+            backup = abs_path.read_text() if backup_exists else ""
             abs_path.write_text(mutated)
             try:
                 module_name = target_file.replace("/", ".").removesuffix(".py")
                 # Clear any cached version
                 import sys
+
                 if module_name in sys.modules:
                     del sys.modules[module_name]
                 importlib.import_module(module_name)
             except Exception as e:
-                abs_path.write_text(backup)
+                if backup_exists:
+                    abs_path.write_text(backup)
+                else:
+                    abs_path.unlink(missing_ok=True)
                 return False, f"import failed: {e}"
             finally:
                 # Always restore original before returning
-                abs_path.write_text(backup)
+                if backup_exists:
+                    abs_path.write_text(backup)
+                else:
+                    abs_path.unlink(missing_ok=True)
         except Exception as e:
             return False, f"validation IO error: {e}"
 
@@ -926,11 +1202,25 @@ class PromptForge:
                 "Reduce complexity while preserving behavior. Remove dead code, "
                 "simplify conditionals, merge redundant branches."
             ),
+            "new_file": (
+                "Create a new Python module at the requested path. Keep it "
+                "directory-scoped, minimal, and self-contained. Do not alter "
+                "existing files. Allowed roots: "
+                f"{', '.join(new_file_mutation_root_labels())}."
+            ),
         }
-        lines.append(type_instructions.get(mutation_type, "Improve this code with minimal changes."))
+        lines.append(
+            type_instructions.get(mutation_type, "Improve this code with minimal changes.")
+        )
         lines.append("")
 
-        lines.append(f"## Current code (`{target_file}`):\n```python")
+        if mutation_type == "new_file" and not original_content.strip():
+            lines.append(
+                f"## Current code (`{target_file}`):\n"
+                "(This file does not exist yet. Create it from scratch.)\n```python"
+            )
+        else:
+            lines.append(f"## Current code (`{target_file}`):\n```python")
         lines.append(original_content)
         lines.append("```\n")
 
@@ -963,6 +1253,29 @@ class PromptForge:
             "observable failure mechanisms."
         )
         lines.append("")
+
+        try:
+            target_abs = _resolve_code_mutation_target(target_file)
+        except FileNotFoundError:
+            target_abs = PROJECT_ROOT / target_file
+        if mutation_type == "new_file" and _is_memory_schema_evolution_target(target_abs):
+            lines.append(
+                "## AutoMem memory schema-evolution contract (MH-9/P2):\n"
+                "- Create a default-inert schema/scaffold module for "
+                "`MemoryAction` / `MemoryActionStore`; importing it must not "
+                "write files, start subprocesses, call inference, or touch the "
+                "trace store.\n"
+                "- Express schema-evolution moves as prompt-free helpers, "
+                "contracts, constants, or pure validators over "
+                "APPEND/CREATE/UPSERT and the status/inventory/strategy/plan/log "
+                "channels.\n"
+                "- Do not change SafetyGate, Pareto admission, eval scoring, "
+                "blacklists, thresholds, planner spend-breaker flags, or live "
+                "runtime behavior.\n"
+                "- Keep exports narrow and include explicit blockers when "
+                "calibration, process, or validation evidence is missing."
+            )
+            lines.append("")
 
         lines.append(self._negative_transfer_safety_block())
         lines.append("")
@@ -1058,10 +1371,7 @@ class PromptForge:
         if introduced_suites and _UNIVERSAL_TRANSFER_RE.search(introduced_text):
             return TransferSafetyVerdict(
                 valid=False,
-                reason=(
-                    "misapplied_best_practice:"
-                    f" introduced_suites={sorted(introduced_suites)}"
-                ),
+                reason=(f"misapplied_best_practice: introduced_suites={sorted(introduced_suites)}"),
                 warnings=tuple(warnings),
                 source_suites=tuple(sorted(source_suites)),
                 introduced_suites=tuple(sorted(introduced_suites)),
@@ -1103,12 +1413,14 @@ class PromptForge:
         try:
             subprocess.run(
                 ["git", "add", str(path)],
-                timeout=10, check=True,
+                timeout=10,
+                check=True,
                 cwd=str(PROJECT_ROOT),
             )
             subprocess.run(
                 ["git", "commit", "-m", message],
-                timeout=10, check=True,
+                timeout=10,
+                check=True,
                 cwd=str(PROJECT_ROOT),
             )
             log.info("Committed code mutation: %s", path.name)

@@ -18,6 +18,64 @@ from scripts.autopilot import config_applicator as applicator
 from scripts.autopilot import kv_compress
 
 
+def test_try_cheap_first_q_threshold_maps_to_live_env_alias() -> None:
+    env_changes = applicator.EnvRestartApplicator(restart=False).env_changes_for(
+        {"chat.try_cheap_first_q_threshold": 0.78}
+    )
+
+    assert env_changes == {"ORCHESTRATOR_CHAT_TRY_CHEAP_FIRST_Q_THRESHOLD": "0.78"}
+
+
+def test_legacy_try_cheap_first_quality_threshold_maps_to_live_env_alias() -> None:
+    env_changes = applicator.EnvRestartApplicator(restart=False).env_changes_for(
+        {"chat.try_cheap_first_quality_threshold": 0.78}
+    )
+
+    assert env_changes == {"ORCHESTRATOR_CHAT_TRY_CHEAP_FIRST_Q_THRESHOLD": "0.78"}
+
+
+def test_approved_chat_threshold_params_map_to_env() -> None:
+    env_changes = applicator.EnvRestartApplicator(restart=False).env_changes_for(
+        {
+            "chat.long_context_threshold_chars": 64000,
+            "chat.summarization_threshold_tokens": 24000,
+            "chat.review_low_q_threshold": 0.55,
+            "chat.review_skip_q_threshold": 0.72,
+        }
+    )
+
+    assert env_changes == {
+        "ORCHESTRATOR_CHAT_LONG_CONTEXT_THRESHOLD_CHARS": "64000",
+        "ORCHESTRATOR_CHAT_SUMMARIZATION_THRESHOLD_TOKENS": "24000",
+        "ORCHESTRATOR_CHAT_REVIEW_LOW_Q_THRESHOLD": "0.55",
+        "ORCHESTRATOR_CHAT_REVIEW_SKIP_Q_THRESHOLD": "0.72",
+    }
+
+
+def test_review_threshold_order_rejects_incoherent_low(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(applicator, "_current_chat_review_thresholds", lambda: (0.6, 0.6))
+
+    result = applicator.EnvRestartApplicator(restart=False).apply(
+        {"chat.review_low_q_threshold": 0.7}
+    )
+
+    assert result.status == "error"
+    assert "review_low_q_threshold <= chat.review_skip_q_threshold" in result.errors[0]
+
+
+def test_review_threshold_order_accepts_coherent_skip(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(applicator, "_current_chat_review_thresholds", lambda: (0.6, 0.6))
+
+    result = applicator.EnvRestartApplicator(restart=False).apply(
+        {"chat.review_skip_q_threshold": 0.72}
+    )
+
+    assert result.status == "staged"
+    assert result.payload["env_changes"] == {
+        "ORCHESTRATOR_CHAT_REVIEW_SKIP_Q_THRESHOLD": "0.72"
+    }
+
+
 def test_restart_api_with_env_uses_stack_reload(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[dict[str, object]] = []
 

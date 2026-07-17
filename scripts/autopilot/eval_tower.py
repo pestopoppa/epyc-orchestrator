@@ -12,6 +12,7 @@ import math
 import os
 import random
 import time
+from collections.abc import Sequence
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 import hashlib
@@ -41,6 +42,29 @@ PROMOTION_EVAL_DEFAULT_N = 500
 PROMOTION_EVAL_SUITE_HEALTH_GLOB = "item_analytics*.json"
 _EXPECTED_FREE_SCORERS = {"programmatic"}
 _CORE_METADATA_KEY = "__core_metadata__"
+_SPEED_ANALYTICS_MIN_TOKENS = 128
+_HOST_COVARIATE_COMPACT_KEYS = (
+    "min_core_mhz",
+    "mean_cur_mhz",
+    "base_mhz",
+    "host_inflight",
+    "numa_balancing",
+    "cache_warm_state",
+    "page_cache_mb",
+    "mem_available_mb",
+)
+_HOST_COVARIATE_NUMERIC_KEYS = (
+    "min_core_mhz",
+    "mean_cur_mhz",
+    "base_mhz",
+    "host_inflight",
+    "numa_balancing",
+    "page_cache_mb",
+    "mem_available_mb",
+    "loadavg_1min",
+    "loadavg_per_core",
+)
+_HOST_COVARIATE_CATEGORICAL_KEYS = ("cache_warm_state",)
 
 
 def _eval_no_progress_timeout_s(request_timeout_s: int) -> float:
@@ -85,6 +109,27 @@ def _has_code_execution_oracle(q: dict) -> bool:
     expected = q.get("expected", "")
     has_expected = expected is not None and str(expected) != ""
     return bool(config.get("entry_point") and has_expected)
+
+
+def _require_math_verify() -> None:
+    """EV-11 hard-fail: math_verify scoring must NEVER silently degrade.
+
+    ``debug_scorer._score_math_verify`` swallows ``ImportError`` and returns an
+    ``exact_match`` result when the ``math-verify`` package is absent. On the math
+    suites (whose answers are boxed/LaTeX expressions) exact_match scores almost
+    everything wrong, so a missing install silently no-ops the entire suite — the
+    0/1,819-question EV-11 bug. We refuse to run a ``math_verify``-scored question
+    when the library cannot be imported: fail loud, never fall back.
+    """
+    try:
+        import math_verify  # noqa: F401
+    except ImportError as exc:  # pragma: no cover - exercised via monkeypatch in tests
+        raise RuntimeError(
+            "EV-11: scoring_method='math_verify' requires the 'math-verify' package, "
+            "which is not importable in this interpreter. Refusing to silently fall "
+            "back to exact_match (that fallback no-ops the whole math suite). Install "
+            "it into the eval venv with `pip install math-verify`."
+        ) from exc
 
 
 def _is_rubric_scored_question(q: dict) -> bool:
@@ -151,9 +196,7 @@ def _sample_scoreable_eval_questions(
     excluded_suites = exclude_suites or set()
     filtered_pool = {
         suite: [
-            q
-            for q in suite_qs
-            if _question_qid(q) not in excluded and _is_scoreable_question(q)
+            q for q in suite_qs if _question_qid(q) not in excluded and _is_scoreable_question(q)
         ]
         for suite, suite_qs in pool.items()
         if suite not in excluded_suites
@@ -224,11 +267,7 @@ def _sample_scoreable_eval_questions_for_pool_tier(
     if not pool or n <= 0:
         return []
     filtered_pool = {
-        suite: [
-            q
-            for q in suite_qs
-            if _question_pool_tier(q) == int(pool_tier)
-        ]
+        suite: [q for q in suite_qs if _question_pool_tier(q) == int(pool_tier)]
         for suite, suite_qs in pool.items()
     }
     return _sample_scoreable_eval_questions(
@@ -259,6 +298,126 @@ def _question_qid(q: dict[str, Any]) -> str:
     return _stable_question_qid(str(q.get("suite", "unknown")), str(q.get("prompt", "")))
 
 
+def _nonnegative_int(value: Any, default: int = 0) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _finite_float(value: Any) -> float | None:
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    return out if math.isfinite(out) else None
+
+
+def _upper_median(values: list[float]) -> float:
+    return sorted(values)[len(values) // 2] if values else 0.0
+
+
+def _compact_host_covariates(covariates: dict[str, Any]) -> dict[str, Any]:
+    compact: dict[str, Any] = {}
+    for key in _HOST_COVARIATE_COMPACT_KEYS:
+        value = covariates.get(key)
+        if value is None:
+            continue
+        if isinstance(value, bool):
+            compact[key] = value
+        elif isinstance(value, int):
+            compact[key] = value
+        elif isinstance(value, float):
+            if math.isfinite(value):
+                compact[key] = round(value, 4)
+        elif isinstance(value, str):
+            compact[key] = value[:80]
+    return compact
+
+
+def _capture_host_timing_covariates(
+    *,
+    tokens_generated: int,
+    elapsed_s: float,
+) -> dict[str, Any]:
+    try:
+        from host_health import host_timing_covariates  # type: ignore
+
+        covariates = host_timing_covariates(
+            event="question_complete",
+            tokens_generated=tokens_generated,
+            elapsed_s=elapsed_s,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.debug("host timing covariates unavailable: %s", exc)
+        return {}
+    return _compact_host_covariates(covariates)
+
+
+def _speed_analytics_ge_128(
+    results: list["QuestionResult"],
+    *,
+    eval_wall_s: float,
+) -> dict[str, Any]:
+    eligible = [
+        r
+        for r in results
+        if not r.error and r.tokens_generated >= _SPEED_ANALYTICS_MIN_TOKENS and r.elapsed_s > 0
+    ]
+    short_timing_samples = sum(
+        1 for r in results if not r.error and 0 < r.tokens_generated < _SPEED_ANALYTICS_MIN_TOKENS
+    )
+    request_speeds = [r.tokens_generated / r.elapsed_s for r in eligible]
+    eligible_tokens = sum(r.tokens_generated for r in eligible)
+    aggregate_tps = (
+        eligible_tokens / eval_wall_s if eligible_tokens > 0 and eval_wall_s > 0 else 0.0
+    )
+    return {
+        "speed_analytics_min_tokens": _SPEED_ANALYTICS_MIN_TOKENS,
+        "speed_analytics_filter": f"tokens_generated>={_SPEED_ANALYTICS_MIN_TOKENS}",
+        "speed_analytics_n_ge_128": len(eligible),
+        "speed_analytics_n_lt_128": short_timing_samples,
+        "speed_analytics_tokens_ge_128": eligible_tokens,
+        "speed_analytics_median_request_tps_ge_128": _upper_median(request_speeds),
+        "speed_analytics_aggregate_tps_ge_128": aggregate_tps,
+    }
+
+
+def _summarize_host_timing_covariates(
+    results: list["QuestionResult"],
+) -> dict[str, Any]:
+    samples = [r.host_covariates for r in results if r.host_covariates]
+    summary: dict[str, Any] = {"samples": len(samples)}
+    if not samples:
+        return summary
+
+    for key in _HOST_COVARIATE_NUMERIC_KEYS:
+        values = [
+            value
+            for value in (_finite_float(sample.get(key)) for sample in samples)
+            if value is not None
+        ]
+        if values:
+            summary[key] = {
+                "min": min(values),
+                "median": _upper_median(values),
+                "max": max(values),
+            }
+
+    for key in _HOST_COVARIATE_CATEGORICAL_KEYS:
+        counts: dict[str, int] = {}
+        for sample in samples:
+            raw = sample.get(key)
+            if raw is None:
+                continue
+            value = str(raw)
+            counts[value] = counts.get(value, 0) + 1
+        if counts:
+            summary[key] = max(counts.items(), key=lambda item: (item[1], item[0]))[0]
+            summary[f"{key}_counts"] = dict(sorted(counts.items()))
+    return summary
+
+
 def _compact_question_result(r: "QuestionResult") -> dict[str, Any]:
     item: dict[str, Any] = {
         "qid": r.qid or _stable_question_qid(str(r.suite), str(r.prompt)),
@@ -266,8 +425,16 @@ def _compact_question_result(r: "QuestionResult") -> dict[str, Any]:
         "partition": r.eval_partition or "core",
         "correct": bool(r.correct),
         "latency_ms": int(round(max(0.0, r.elapsed_s) * 1000)),
+        "tokens_generated": int(r.tokens_generated or 0),
         "tools_used": int(r.tools_used or 0),
     }
+    if r.host_covariates:
+        compact_covariates = _compact_host_covariates(r.host_covariates)
+        if compact_covariates:
+            item["host_covariates"] = compact_covariates
+    answer_hash = normalized_answer_hash(r.answer)
+    if answer_hash and not r.error:
+        item["answer_hash"] = answer_hash
     if r.scoring_method and r.scoring_method != "exact_match":
         item["scoring_method"] = r.scoring_method
     if r.route_used:
@@ -378,9 +545,7 @@ def _promotion_excluded_suites_from_health() -> tuple[set[str], dict[str, Any]]:
 
 
 def _read_registry_timeout(category: str, key: str, fallback: int) -> int:
-    registry_path = (
-        Path(__file__).resolve().parents[2] / "orchestration" / "model_registry.yaml"
-    )
+    registry_path = Path(__file__).resolve().parents[2] / "orchestration" / "model_registry.yaml"
     try:
         data = yaml.safe_load(registry_path.read_text()) or {}
         timeouts = data.get("runtime_defaults", {}).get("timeouts", {})
@@ -397,6 +562,7 @@ def _default_eval_timeout() -> int:
 
 
 DEFAULT_TIMEOUT = _default_eval_timeout()
+
 
 # Concurrent fan-out for sentinel/pool evaluations.
 #
@@ -429,10 +595,7 @@ def _same_role_matrix_allows_eval_fanout(role: str) -> bool:
         current_hash = topology_fingerprint_for_matrix(NUMA_CONFIG, matrix)
         if matrix_status(current_topology_hash=current_hash) != MatrixStatus.OK:
             return False
-        return (
-            pair_policy(role, role, TrafficClass.BACKGROUND, matrix=matrix)
-            == PairDecision.ALLOW
-        )
+        return pair_policy(role, role, TrafficClass.BACKGROUND, matrix=matrix) == PairDecision.ALLOW
     except Exception:
         return False
 
@@ -502,6 +665,7 @@ def _eval_concurrency() -> int:
     bottleneck = os.environ.get("AUTOPILOT_EVAL_BOTTLENECK_ROLE", "frontdoor")
     try:
         from src.runtime.instance_topology import max_safe_concurrency
+
         topology_cap = max(1, max_safe_concurrency(bottleneck))
         if topology_cap <= 1:
             return 1
@@ -514,8 +678,7 @@ def _eval_concurrency() -> int:
 
 def _eval_batch_id(*, label: str, n_questions: int, started_at_s: float) -> str:
     safe_label = "".join(
-        ch if ch.isalnum() or ch in {"-", "_"} else "-"
-        for ch in str(label or "eval").strip()
+        ch if ch.isalnum() or ch in {"-", "_"} else "-" for ch in str(label or "eval").strip()
     ).strip("-_")
     if not safe_label:
         safe_label = "eval"
@@ -541,6 +704,11 @@ from rubric_scoring import (  # noqa: E402
 )
 from src.autopilot_core.instrument_era_guard import (  # noqa: E402
     designed_core_activation_guard,
+)
+from src.behavior_signature import normalized_answer_hash  # noqa: E402
+from src.llm_primitives.stat_tests import (  # noqa: E402
+    expected_calibration_error,
+    roc_auc,
 )
 
 DEFAULT_CORE_DIR = _orch_root / "benchmarks" / "prompts"
@@ -625,6 +793,7 @@ class QuestionResult:
     retry_count: int = 0
     eval_partition: str = "core"
     rubric_scores: dict[str, float] = field(default_factory=dict)
+    host_covariates: dict[str, Any] = field(default_factory=dict)
 
 
 # EV-6: Cross-family verification constraint.
@@ -646,6 +815,7 @@ def check_cross_family(generator_model: str, verifier_model: str) -> bool:
     Returns True if cross-family constraint is satisfied (safe to proceed).
     Returns True if either model family is unknown (permissive default).
     """
+
     def _get_family(model_name: str) -> str:
         for family, patterns in VERIFICATION_FAMILIES.items():
             if any(p.lower() in model_name.lower() for p in patterns):
@@ -655,6 +825,188 @@ def check_cross_family(generator_model: str, verifier_model: str) -> bool:
     gen_family = _get_family(generator_model)
     ver_family = _get_family(verifier_model)
     return gen_family != ver_family or gen_family == "unknown"
+
+
+# ── EV-4 / EV-11 verifier-mode metric primitives (additive, 2026-07-17) ──────
+# BUILD-evalbatch-verifier-mode. These are PURE, inference-free helpers.
+# EvalTower.eval_calibration (EV-4) and EvalTower.eval_math_rebaseline (EV-11)
+# below reuse the existing _eval_batch dispatch/scoring for GENERATION, then feed
+# the resulting (confidence, correctness) vectors through these functions. They
+# are unit-tested on synthetic vectors WITHOUT any inference. ECE + AUROC delegate
+# to the clean-room src/llm_primitives/stat_tests implementations (already the
+# consolidated impls the tower uses); the remaining four calibration metrics are
+# computed here because stat_tests does not carry them.
+
+# The six per-role EV-4 calibration metrics, in report order.
+CALIBRATION_METRIC_KEYS = (
+    "ece",
+    "auroc",
+    "top1_accuracy",
+    "bottom1_accuracy",
+    "spearman_rho",
+    "mae",
+)
+
+
+def _average_ranks(values: Sequence[float]) -> list[float]:
+    """1-based tie-averaged ranks (same convention as stat_tests.roc_auc)."""
+    order = sorted(range(len(values)), key=lambda i: values[i])
+    ranks = [0.0] * len(values)
+    i = 0
+    while i < len(order):
+        j = i
+        while j + 1 < len(order) and values[order[j + 1]] == values[order[i]]:
+            j += 1
+        avg = (i + j) / 2.0 + 1.0
+        for k in range(i, j + 1):
+            ranks[order[k]] = avg
+        i = j + 1
+    return ranks
+
+
+def _pearson(xs: Sequence[float], ys: Sequence[float]) -> float | None:
+    n = len(xs)
+    if n < 2 or n != len(ys):
+        return None
+    mean_x = sum(xs) / n
+    mean_y = sum(ys) / n
+    cov = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys))
+    var_x = sum((x - mean_x) ** 2 for x in xs)
+    var_y = sum((y - mean_y) ** 2 for y in ys)
+    if var_x <= 0.0 or var_y <= 0.0:
+        return None
+    return cov / math.sqrt(var_x * var_y)
+
+
+def _spearman_rho(xs: Sequence[float], ys: Sequence[float]) -> float | None:
+    """Spearman rank correlation (tie-averaged).
+
+    None when undefined: fewer than 2 paired points, a length mismatch, or a
+    constant vector on either axis (rank variance is 0).
+    """
+    if len(xs) < 2 or len(xs) != len(ys):
+        return None
+    return _pearson(_average_ranks(xs), _average_ranks(ys))
+
+
+def _cohort_accuracy(
+    confidences: Sequence[float],
+    labels: Sequence[float],
+    *,
+    pick_max: bool,
+) -> float | None:
+    """Accuracy of the max- (or min-) confidence cohort.
+
+    Ties are averaged: when several items share the extreme confidence the metric
+    is the mean label over that whole cohort, so with distinct confidences this
+    reduces to exactly the single top-1 / bottom-1 item. A discriminative
+    confidence signal shows top1_accuracy high and bottom1_accuracy low.
+    """
+    if not confidences:
+        return None
+    target = max(confidences) if pick_max else min(confidences)
+    cohort = [lab for conf, lab in zip(confidences, labels) if conf == target]
+    if not cohort:
+        return None
+    return sum(cohort) / len(cohort)
+
+
+def compute_calibration_metrics(
+    confidences: Sequence[float],
+    labels: Sequence[float],
+) -> dict[str, float | None]:
+    """EV-4 calibration metrics from paired (confidence, correctness) vectors.
+
+    ``confidences`` — model confidence proxy in [0, 1]
+    (EvalTower ``QuestionResult.confidence``).
+    ``labels`` — ground-truth correctness (0/1 or float in [0, 1]).
+
+    Returns a dict carrying every key in ``CALIBRATION_METRIC_KEYS`` plus ``n``.
+    Every metric is None-safe (returns None where undefined — empty input, a
+    single class / <3 distinct confidences for AUROC, a constant vector for
+    Spearman). No inference is performed.
+
+    Definitions:
+      * ece             — Expected Calibration Error (10-bin) via stat_tests.
+      * auroc           — ROC-AUC (tie-averaged Mann-Whitney U) via stat_tests.
+      * top1_accuracy   — accuracy of the most-confident cohort (see
+                          ``_cohort_accuracy``).
+      * bottom1_accuracy— accuracy of the least-confident cohort.
+      * spearman_rho    — rank correlation of confidence vs correctness.
+      * mae             — mean |confidence - label| (sample-level calibration error).
+    """
+    conf = [float(c) for c in confidences]
+    lab = [float(y) for y in labels]
+    if len(conf) != len(lab):
+        raise ValueError(
+            f"confidences/labels length mismatch: {len(conf)} != {len(lab)}"
+        )
+    n = len(conf)
+    ece = expected_calibration_error(conf, lab, n_bins=10) if n else None
+    # AUROC is only meaningful with both classes present AND >2 distinct
+    # confidences — the same guard EvalTower._aggregate applies. roc_auc() itself
+    # already returns None when a single class is present.
+    auroc: float | None = None
+    if n and len({round(c, 6) for c in conf}) > 2 and len({round(y) for y in lab}) > 1:
+        auroc = roc_auc(conf, lab)
+    mae = (sum(abs(c - y) for c, y in zip(conf, lab)) / n) if n else None
+    return {
+        "n": n,
+        "ece": ece,
+        "auroc": auroc,
+        "top1_accuracy": _cohort_accuracy(conf, lab, pick_max=True),
+        "bottom1_accuracy": _cohort_accuracy(conf, lab, pick_max=False),
+        "spearman_rho": _spearman_rho(conf, lab),
+        "mae": mae,
+    }
+
+
+def dataset_content_sha256(questions: Sequence[dict[str, Any]]) -> str:
+    """Stable SHA-256 over an ordered question set (EV-11 reproducibility stamp).
+
+    Hashes ``(id, prompt, expected, scoring_method)`` per question, in order, with
+    field and record separators. Order-sensitive by design: the drawn arm's exact
+    question sequence is part of its identity, so two arms that sampled different
+    orderings get different digests.
+    """
+    h = hashlib.sha256()
+    for q in questions:
+        for field_name in ("id", "prompt", "expected", "scoring_method"):
+            h.update(str(q.get(field_name, "")).encode("utf-8", "replace"))
+            h.update(b"\x00")
+        h.update(b"\x1e")
+    return h.hexdigest()
+
+
+def score_math_rebaseline_answers(
+    questions: Sequence[dict[str, Any]],
+    answers: Sequence[str],
+) -> list[bool]:
+    """Pure math_verify scoring of (question, model_answer) pairs — no inference.
+
+    EV-11: hard-fails via ``_require_math_verify`` when math-verify is not
+    importable rather than silently degrading to exact_match (the 0/1,819-question
+    no-op). Reuses ``score_answer_deterministic`` — the exact scoring path
+    ``_eval_question`` takes — so a fixture test exercises the real scorer.
+    """
+    if len(questions) != len(answers):
+        raise ValueError(
+            f"questions/answers length mismatch: {len(questions)} != {len(answers)}"
+        )
+    _require_math_verify()
+    out: list[bool] = []
+    for q, answer in zip(questions, answers):
+        out.append(
+            bool(
+                score_answer_deterministic(
+                    answer=answer,
+                    expected=str(q.get("expected", "")),
+                    scoring_method=str(q.get("scoring_method", "math_verify")),
+                    scoring_config=q.get("scoring_config") or {},
+                )
+            )
+        )
+    return out
 
 
 def _configured_rubric_judge_roles() -> list[str]:
@@ -783,6 +1135,7 @@ class EvalTower:
         loaded = yaml.safe_load(TOOL_SENTINEL_PATH.read_text()) or []
         try:
             from src.tools.eval_secret import load_persisted_secrets
+
             secrets = load_persisted_secrets()
         except Exception as e:  # noqa: BLE001
             log.warning("tool_sentinels: could not load runtime secrets: %s", e)
@@ -810,6 +1163,7 @@ class EvalTower:
             _research_root = Path("/mnt/raid0/llm/epyc-inference-research")
             sys.path.insert(0, str(_research_root / "scripts" / "benchmark"))
             from question_pool import load_pool
+
             self._pool = load_pool()
         except Exception as e:
             log.warning("Could not load question pool: %s", e)
@@ -1011,9 +1365,7 @@ class EvalTower:
                 combined[dim] = sum(values) / len(values)
         return combined
 
-    def _eval_question(
-        self, q: dict, client: httpx.Client
-    ) -> QuestionResult:
+    def _eval_question(self, q: dict, client: httpx.Client) -> QuestionResult:
         """Evaluate a single question through the orchestrator."""
         prompt = q.get("prompt", "")
         expected = q.get("expected", "")
@@ -1063,7 +1415,11 @@ class EvalTower:
             elapsed = time.time() - start
             answer = resp.get("answer", "")
             error = resp.get("error")
-            tokens = resp.get("tokens_generated", 0)
+            tokens = _nonnegative_int(resp.get("tokens_generated", 0))
+            host_covariates = _capture_host_timing_covariates(
+                tokens_generated=tokens,
+                elapsed_s=elapsed,
+            )
 
             correct = False
             rubric_scores: dict[str, float] = {}
@@ -1076,12 +1432,14 @@ class EvalTower:
                         tool_events=list(resp.get("tools_called") or []),
                         client=client,
                     )
-                    threshold = float(
-                        (scoring_config or {}).get("rubric_pass_threshold", 0.60)
-                    )
+                    threshold = float((scoring_config or {}).get("rubric_pass_threshold", 0.60))
                     correct = aggregate_rubric_score(rubric_scores).score >= threshold
                     scoring_method = "rubric"
                 else:
+                    if scoring_method == "math_verify":
+                        # EV-11: guarantee math_verify actually runs; never let a
+                        # missing library silently degrade to exact_match.
+                        _require_math_verify()
                     correct = score_answer_deterministic(
                         answer=answer,
                         expected=expected,
@@ -1130,9 +1488,14 @@ class EvalTower:
                 retry_count=int(meta.get("retry_count", 0)),
                 eval_partition=eval_partition,
                 rubric_scores=rubric_scores,
+                host_covariates=host_covariates,
             )
         except Exception as e:
             elapsed = time.time() - start
+            host_covariates = _capture_host_timing_covariates(
+                tokens_generated=0,
+                elapsed_s=elapsed,
+            )
             return QuestionResult(
                 question_id=qid,
                 suite=suite,
@@ -1142,6 +1505,7 @@ class EvalTower:
                 error=str(e),
                 elapsed_s=elapsed,
                 eval_partition=eval_partition,
+                host_covariates=host_covariates,
             )
 
     def _failed_question_result(
@@ -1156,6 +1520,10 @@ class EvalTower:
         stable_qid = str(q.get("qid") or q.get("stable_qid") or "").strip()
         if not stable_qid:
             stable_qid = _stable_question_qid(str(suite), str(prompt))
+        host_covariates = _capture_host_timing_covariates(
+            tokens_generated=0,
+            elapsed_s=elapsed_s,
+        )
         return QuestionResult(
             question_id=q.get("id", q.get("question_id", "unknown")),
             suite=suite,
@@ -1165,6 +1533,7 @@ class EvalTower:
             error=error,
             elapsed_s=elapsed_s,
             eval_partition=str(q.get("eval_partition") or "core"),
+            host_covariates=host_covariates,
         )
 
     def _eval_batch(
@@ -1205,7 +1574,10 @@ class EvalTower:
                     correct_so_far = sum(1 for r in results if r and r.correct)
                     log.info(
                         "%s progress: %d/%d (%.0f%% correct)",
-                        label, i + 1, n, 100 * correct_so_far / (i + 1),
+                        label,
+                        i + 1,
+                        n,
+                        100 * correct_so_far / (i + 1),
                     )
                     self._emit_progress(
                         label=label,
@@ -1273,7 +1645,11 @@ class EvalTower:
                         correct_so_far = sum(1 for r in results if r and r.correct)
                         log.info(
                             "%s progress: %d/%d (%.0f%% correct, concurrency=%d)",
-                            label, done, n, 100 * correct_so_far / done, workers,
+                            label,
+                            done,
+                            n,
+                            100 * correct_so_far / done,
+                            workers,
                         )
                         self._emit_progress(
                             label=label,
@@ -1368,6 +1744,8 @@ class EvalTower:
             if total_tokens_generated > 0 and eval_wall_s > 0
             else 0.0
         )
+        speed_analytics = _speed_analytics_ge_128(results, eval_wall_s=eval_wall_s)
+        host_timing_covariates = _summarize_host_timing_covariates(results)
         task_rate_qph = (len(results) / (eval_wall_s / 3600.0)) if eval_wall_s > 0 else 0.0
         goodput_qph = (quality / 3.0) * task_rate_qph
         tokens_per_solved_task = (
@@ -1375,9 +1753,7 @@ class EvalTower:
         )
         eval_concurrency = max((r.eval_concurrency for r in results), default=1)
         concurrent_eval = eval_concurrency > 1 and aggregate_speed > 0
-        speed_metric_mode = (
-            "aggregate_batch_tps" if concurrent_eval else "median_request_tps"
-        )
+        speed_metric_mode = "aggregate_batch_tps" if concurrent_eval else "median_request_tps"
         speed = aggregate_speed if concurrent_eval else median_request_speed
 
         # Cost: average cost tier normalized to 0-1 (tier 4 = 1.0)
@@ -1392,10 +1768,7 @@ class EvalTower:
         suite_correct: dict[str, list[bool]] = {}
         for r in results:
             suite_correct.setdefault(r.suite, []).append(r.correct)
-        per_suite = {
-            suite: (sum(vals) / len(vals)) * 3.0
-            for suite, vals in suite_correct.items()
-        }
+        per_suite = {suite: (sum(vals) / len(vals)) * 3.0 for suite, vals in suite_correct.items()}
         # Per-suite question counts (2026-06-06). The per-suite regression gate is
         # otherwise blind to sample size: on a hybrid eval each suite draws only
         # ~2 questions, so the score is quantized to {0.0, 1.5, 3.0} and a single
@@ -1410,21 +1783,16 @@ class EvalTower:
         for r in results:
             partition = r.eval_partition or "core"
             partition_correct.setdefault(partition, []).append(r.correct)
-            partition_suite_correct.setdefault(partition, {}).setdefault(
-                r.suite, []
-            ).append(r.correct)
+            partition_suite_correct.setdefault(partition, {}).setdefault(r.suite, []).append(
+                r.correct
+            )
         partition_quality = {
             partition: (sum(vals) / len(vals)) * 3.0
             for partition, vals in partition_correct.items()
         }
-        partition_counts = {
-            partition: len(vals) for partition, vals in partition_correct.items()
-        }
+        partition_counts = {partition: len(vals) for partition, vals in partition_correct.items()}
         partition_suite_quality = {
-            partition: {
-                suite: (sum(vals) / len(vals)) * 3.0
-                for suite, vals in suites.items()
-            }
+            partition: {suite: (sum(vals) / len(vals)) * 3.0 for suite, vals in suites.items()}
             for partition, suites in partition_suite_correct.items()
         }
 
@@ -1450,6 +1818,19 @@ class EvalTower:
         auroc = 0.0
         cal_violations = 0
         if confidences:
+            # NOTE (B1/EV-consolidation 2026-07-17): the ECE below is deliberately
+            # NOT swapped to src/llm_primitives/stat_tests.expected_calibration_error.
+            # This inline loop makes EVERY bin half-open [lo, hi) — including the top
+            # bin — so a confidence of exactly 1.0 falls in NO bin (dropped from the
+            # numerator, kept in the denominator). stat_tests closes the top bin
+            # (<= hi) and counts c==1.0. Because the default confidence here is
+            # float(correct) in {0.0, 1.0}, that edge is the COMMON case on the math
+            # suites, and the two differ by 0.15-0.40 absolute (measured). The
+            # canonical stat_tests binning is the correct one, but adopting it shifts
+            # a serialized metric consumed by safety_gate/journal/RLVR export on a
+            # CRITICAL-blast-radius path, so it is a behavior CHANGE, not a
+            # behavior-preserving consolidation — deferred to an operator-gated fix
+            # bundled with the EV-11 math re-baseline. Do NOT "helpfully" swap it.
             n_bins = 10
             for i in range(n_bins):
                 lo = i / n_bins
@@ -1460,14 +1841,19 @@ class EvalTower:
                     bin_acc = sum(cr for cr, m in zip(correctness_vals, mask) if m) / bin_count
                     bin_conf = sum(c for c, m in zip(confidences, mask) if m) / bin_count
                     ece += (bin_count / len(confidences)) * abs(bin_acc - bin_conf)
-            # AUC: only meaningful with non-degenerate confidence (>2 distinct values)
+            # AUC: only meaningful with non-degenerate confidence (>2 distinct values).
+            # B1/EV-consolidation (2026-07-17): compute ROC-AUC via the stdlib
+            # clean-room roc_auc() in src/llm_primitives/stat_tests.py instead of
+            # sklearn. stat_tests.roc_auc is the tie-averaged Mann-Whitney U
+            # estimator and is numerically identical to sklearn.metrics
+            # .roc_auc_score (verified to 6 d.p. on this path), so this swap is
+            # behavior-preserving and removes the sklearn dependency for the
+            # calibration metric. roc_auc() returns None only when a class is
+            # absent — already excluded by the guard below — and `or 0.0`
+            # preserves the prior ImportError/ValueError -> 0.0 convention.
             distinct_conf = len(set(round(c, 6) for c in confidences))
             if distinct_conf > 2 and len(set(correctness_vals)) > 1:
-                try:
-                    from sklearn.metrics import roc_auc_score
-                    auroc = roc_auc_score(correctness_vals, confidences)
-                except (ImportError, ValueError):
-                    auroc = 0.0
+                auroc = roc_auc(confidences, correctness_vals) or 0.0
             cal_violations = sum(
                 1 for c, cr in zip(confidences, correctness_vals) if abs(c - cr) > 0.5
             )
@@ -1477,9 +1863,7 @@ class EvalTower:
         instruction_tokens = self._count_instruction_tokens(results)
         avg_prompt_tokens = sum(len(r.prompt) // 4 for r in results) / len(results)
         total_per_request = instruction_tokens + avg_prompt_tokens
-        instruction_ratio = (
-            instruction_tokens / total_per_request if total_per_request > 0 else 0.0
-        )
+        instruction_ratio = instruction_tokens / total_per_request if total_per_request > 0 else 0.0
         if instruction_ratio > 0.20:
             log.warning(
                 "AP-16: Instruction token ratio %.1f%% exceeds 20%% threshold "
@@ -1505,7 +1889,7 @@ class EvalTower:
         )
         tool_name_counts: dict[str, int] = {}
         for r in results:
-            for name in (r.tools_called or []):
+            for name in r.tools_called or []:
                 tool_name_counts[name] = tool_name_counts.get(name, 0) + 1
         # Conditional credit — MARGINAL usefulness of tools, computed PER SUITE then
         # averaged, so a trivially-correct no-tool suite cannot anchor the baseline
@@ -1532,8 +1916,8 @@ class EvalTower:
                 _p_wo = sum(1 for r in _wo if r.correct) / len(_wo)
                 per_suite_tool_helpfulness[_suite] = _p_w - _p_wo
         if per_suite_tool_helpfulness:
-            tool_helpfulness = (
-                sum(per_suite_tool_helpfulness.values()) / len(per_suite_tool_helpfulness)
+            tool_helpfulness = sum(per_suite_tool_helpfulness.values()) / len(
+                per_suite_tool_helpfulness
             )
         else:
             tool_helpfulness = float("nan")
@@ -1553,8 +1937,7 @@ class EvalTower:
             if values
         }
         rubric_process_means = {
-            dim: rubric_dimension_means.get(dim, float("nan"))
-            for dim in MINDDR_PROCESS_DIMENSIONS
+            dim: rubric_dimension_means.get(dim, float("nan")) for dim in MINDDR_PROCESS_DIMENSIONS
         }
 
         return EvalResult(
@@ -1581,10 +1964,12 @@ class EvalTower:
                 "objective_speed_tps": speed,
                 "median_request_tps": median_request_speed,
                 "aggregate_tps": aggregate_speed,
+                **speed_analytics,
                 "eval_concurrency": eval_concurrency,
                 "eval_wall_s": eval_wall_s,
                 "sum_request_elapsed_s": sum_request_elapsed_s,
                 "tokens_generated": total_tokens_generated,
+                "host_timing_covariates": host_timing_covariates,
                 "task_rate_qph": task_rate_qph,
                 "goodput_qph": goodput_qph,
                 "tokens_per_solved_task": tokens_per_solved_task,
@@ -1620,9 +2005,7 @@ class EvalTower:
             auroc=auroc,
             calibration_violations=cal_violations,
             branching_density=avg_branching,
-            rubric_reasoning_trajectory=rubric_process_means[
-                "reasoning_trajectory"
-            ],
+            rubric_reasoning_trajectory=rubric_process_means["reasoning_trajectory"],
             rubric_tool_calls=rubric_process_means["tool_calls"],
             rubric_outline=rubric_process_means["outline"],
             rubric_content_stage=rubric_process_means["content_stage"],
@@ -1631,8 +2014,7 @@ class EvalTower:
             n_exogenous_unrecovered=sum(1 for r in results if r.exogenous_unrecovered),
             n_external_restart=sum(1 for r in results if r.external_restart),
             exogenous_question_ids=[
-                r.question_id for r in results
-                if (r.exogenous_recovered or r.exogenous_unrecovered)
+                r.question_id for r in results if (r.exogenous_recovered or r.exogenous_unrecovered)
             ],
         )
 
@@ -1726,7 +2108,8 @@ class EvalTower:
         for r in results:
             log.info(
                 "T0 [%s/%s] %s → %s",
-                r.suite, r.question_id,
+                r.suite,
+                r.question_id,
                 "PASS" if r.correct else "FAIL",
                 r.error or "",
             )
@@ -1750,11 +2133,8 @@ class EvalTower:
         audit_policy: dict[str, Any] = {
             "enabled": os.environ.get("AUTOPILOT_W6_AUDIT_BLOCK") == "1",
             "requested_n": max(0, _env_int("AUTOPILOT_W6_AUDIT_N", 10)),
-            "every_n_trials": max(
-                1, _env_int("AUTOPILOT_W6_AUDIT_EVERY_N_TRIALS", 1)
-            ),
-            "shadow_only": os.environ.get("AUTOPILOT_W6_AUDIT_SHADOW_ONLY", "1")
-            != "0",
+            "every_n_trials": max(1, _env_int("AUTOPILOT_W6_AUDIT_EVERY_N_TRIALS", 1)),
+            "shadow_only": os.environ.get("AUTOPILOT_W6_AUDIT_SHADOW_ONLY", "1") != "0",
         }
 
         if configured_core_path and not configured_core_id:
@@ -1903,9 +2283,7 @@ class EvalTower:
         # W6 audit rows are an overfit/generalization signal. Keep them in the
         # per-question ledger, but keep decision metrics paired-core-only by default.
         if audit_policy["active"] and audit_policy["shadow_only"]:
-            decision_results = [
-                r for r in results if (r.eval_partition or "core") != "audit"
-            ]
+            decision_results = [r for r in results if (r.eval_partition or "core") != "audit"]
             result = self._aggregate(decision_results, tier=1)
             result.question_results = full_result.question_results
             for key in (
@@ -2029,9 +2407,8 @@ class EvalTower:
             )
         # Tool-use sentinels also join T2 (the journaled deep eval) for the same
         # reason as T1. Inert ([]) unless AUTOPILOT_TOOL_SENTINELS=1.
-        questions = (
-            _annotate_partition(questions, "core")
-            + _annotate_partition(self._load_tool_sentinels(), "tool_sentinel")
+        questions = _annotate_partition(questions, "core") + _annotate_partition(
+            self._load_tool_sentinels(), "tool_sentinel"
         )
 
         with httpx.Client(timeout=self.timeout) as client:
@@ -2043,9 +2420,7 @@ class EvalTower:
                 [q for q in questions if q.get("eval_partition") == "core"]
             )
             result.details["promotion_eval_policy"] = promotion_policy
-            result.core_id = (
-                f"w8_promotion_eval_v1_trial_{resolved_trial_id}_n{requested_n}"
-            )
+            result.core_id = f"w8_promotion_eval_v1_trial_{resolved_trial_id}_n{requested_n}"
         return result
 
     def eval_t3(
@@ -2108,6 +2483,254 @@ class EvalTower:
         # label changed from "hard-only" to "expert/hard workflow".
         result.core_id = f"t3_hard_only_v1_seed_{draw_seed}_n{requested_n}"
         return result
+
+    # ── verifier-mode entrypoints (EV-4 / EV-11, additive 2026-07-17) ────────
+    # BUILD-evalbatch-verifier-mode. These are new ENTRYPOINTS, not new
+    # generation engines: they draw a suite, then reuse the existing _eval_batch
+    # dispatch + _eval_question scoring per role, and roll the per-question
+    # (confidence, correctness) vectors into the pure metric helpers above.
+    # Surfaced on eval_batch_serving_evaltower_window.py under the same
+    # --confirm-clean-window execution gate as the tier path.
+
+    @staticmethod
+    def _normalize_roles(roles: "list[str] | str | None") -> list[str]:
+        """Coerce a roles selector into a deduped ordered list; warn on unknowns.
+
+        Defaults to the live production worker when unset. Unknown role strings
+        are kept (the orchestrator is the authority on force_role) but logged.
+        """
+        if isinstance(roles, str):
+            roles = [part.strip() for part in roles.split(",")]
+        items = [str(r).strip() for r in (roles or []) if str(r).strip()]
+        deduped: list[str] = []
+        for role in items:
+            if role not in deduped:
+                deduped.append(role)
+        if not deduped:
+            deduped = ["worker_general"]
+        try:
+            from src.roles import Role
+
+            for role in deduped:
+                if Role.from_string(role) is None:
+                    log.warning("verifier-mode: role %r is not a known Role", role)
+        except Exception as exc:  # noqa: BLE001
+            log.debug("verifier-mode role validation unavailable: %s", exc)
+        return deduped
+
+    @staticmethod
+    def _with_forced_role(q: dict[str, Any], role: str) -> dict[str, Any]:
+        forced = dict(q)
+        forced["force_role"] = str(role)
+        return forced
+
+    def _load_dataset_adapter(self, suite: str):
+        """Return a research-repo dataset adapter INSTANCE for a named suite.
+
+        Reuses the same research ``scripts/benchmark`` sys.path insertion as
+        ``_load_pool`` so the canonical suite→adapter registry (``get_adapter``)
+        is the single source of truth for what each suite contains.
+        """
+        research_bench = str(
+            Path("/mnt/raid0/llm/epyc-inference-research") / "scripts" / "benchmark"
+        )
+        if research_bench not in sys.path:
+            sys.path.insert(0, research_bench)
+        from dataset_adapters import get_adapter  # research suite registry
+
+        adapter = get_adapter(suite)
+        if adapter is None:
+            raise ValueError(f"no dataset adapter registered for suite {suite!r}")
+        return adapter
+
+    @staticmethod
+    def _filter_questions_by_split(
+        questions: list[dict[str, Any]],
+        split: str | None,
+    ) -> list[dict[str, Any]]:
+        """Filter adapter questions to a named split/subset.
+
+        For scoring_verifiers the subset is carried in ``metadata.subset`` and the
+        id prefix (``sv_<subset>_...``); for math it is the id prefix
+        (``gsm8k_...`` / ``math500_...``). ``None`` / ``all`` / ``*`` keep everything.
+        """
+        split_l = str(split or "").strip().lower()
+        if not split_l or split_l in ("all", "*"):
+            return list(questions)
+        needle = split_l.replace("-", "_")
+
+        def _matches(q: dict[str, Any]) -> bool:
+            meta = q.get("metadata") or {}
+            subset = str(meta.get("subset", "")).strip().lower()
+            qid = str(q.get("id", "")).strip().lower()
+            return split_l == subset or split_l in qid or needle in qid
+
+        return [q for q in questions if _matches(q)]
+
+    def _load_verifier_suite_questions(
+        self,
+        suite: str,
+        split: str | None,
+        *,
+        n: int | None,
+        seed: int,
+        full: bool,
+    ) -> list[dict[str, Any]]:
+        adapter = self._load_dataset_adapter(suite)
+        questions = adapter.extract_all()
+        questions = self._filter_questions_by_split(questions, split)
+        if not full and n is not None and len(questions) > int(n):
+            rng = random.Random(int(seed))
+            questions = rng.sample(questions, int(n))
+        for q in questions:
+            q.setdefault("suite", suite)
+        return questions
+
+    def eval_calibration(
+        self,
+        suite: str,
+        split: str | None = None,
+        roles: "list[str] | str | None" = None,
+        seed: int = EVAL_SPEC_SEED,
+        *,
+        n: int | None = None,
+        full: bool = False,
+    ) -> dict[str, Any]:
+        """EV-4 calibration baseline: per-role calibration metrics over a suite/split.
+
+        Runs the suite over the split for each role (reusing ``_eval_batch``), then
+        computes the six per-role calibration metrics (ECE, AUROC, Top-1, Bottom-1,
+        Spearman rho, MAE) via ``compute_calibration_metrics``. Returns a plain,
+        JSON-serializable dict — the window runner embeds it in its report.
+
+        Execution here calls the orchestrator (generation); the caller (window
+        runner) gates that behind ``--confirm-clean-window``.
+        """
+        roles = self._normalize_roles(roles)
+        questions = self._load_verifier_suite_questions(
+            suite, split, n=n, seed=int(seed), full=full
+        )
+        if not questions:
+            raise ValueError(
+                f"calibration suite {suite!r} split {split!r} yielded 0 questions"
+            )
+        dataset_sha256 = dataset_content_sha256(questions)
+        per_role: dict[str, Any] = {}
+        with httpx.Client(timeout=self.timeout) as client:
+            for role in roles:
+                role_qs = [self._with_forced_role(q, role) for q in questions]
+                results = self._eval_batch(role_qs, client, log_every=25, label=f"cal-{role}")
+                scored = [r for r in results if not r.error]
+                confidences = [r.confidence for r in scored]
+                labels = [float(r.correct) for r in scored]
+                metrics = compute_calibration_metrics(confidences, labels)
+                correct = sum(1 for r in scored if r.correct)
+                per_role[role] = {
+                    "role": role,
+                    "n_questions": len(results),
+                    "n_scored": len(scored),
+                    "accuracy": (correct / len(scored)) if scored else None,
+                    **{key: metrics.get(key) for key in CALIBRATION_METRIC_KEYS},
+                }
+        return {
+            "mode": "calibration",
+            "suite": suite,
+            "split": split,
+            "seed": int(seed),
+            "roles": roles,
+            "n_questions": len(questions),
+            "dataset_sha256": dataset_sha256,
+            "metric_keys": list(CALIBRATION_METRIC_KEYS),
+            "per_role": per_role,
+        }
+
+    def eval_math_rebaseline(
+        self,
+        full: bool = True,
+        scoring: str = "math_verify",
+        roles: "list[str] | str | None" = None,
+        seed: int = EVAL_SPEC_SEED,
+        production_sampling: bool = True,
+        *,
+        n: int | None = None,
+    ) -> dict[str, Any]:
+        """EV-11 math re-baseline: GSM8K(1,319)+MATH-500(500)=1,819/arm under math_verify.
+
+        Per role, runs the math suite (full=1,819 or a subsample of ``n``) through
+        the existing dispatch/scoring with ``scoring_method`` forced to ``scoring``,
+        recording ``dataset_sha256`` and a ``test_profile``/arm stamp per role.
+        Hard-fails up front when ``scoring == "math_verify"`` and math-verify is not
+        importable (reuses the landed ``_require_math_verify`` guard). Returns a
+        plain JSON-serializable dict.
+        """
+        if str(scoring) == "math_verify":
+            _require_math_verify()
+        roles = self._normalize_roles(roles)
+        adapter = self._load_dataset_adapter("math")
+        if full or n is None:
+            questions = adapter.extract_all()
+        else:
+            questions = adapter.sample(n=int(n), seed=int(seed))
+        for q in questions:
+            q.setdefault("suite", "math")
+            if scoring:
+                q["scoring_method"] = str(scoring)
+        if not questions:
+            raise ValueError(
+                "math re-baseline drew 0 questions — GSM8K/MATH-500 datasets "
+                "unavailable (MODEL-DOWNLOAD/data required)"
+            )
+        dataset_sha256 = dataset_content_sha256(questions)
+        n_gsm8k = sum(1 for q in questions if str(q.get("id", "")).startswith("gsm8k"))
+        n_math500 = sum(1 for q in questions if str(q.get("id", "")).startswith("math500"))
+        test_profile = {
+            "version": "ev11-math-rebaseline-v1",
+            "scoring": str(scoring),
+            "seed": int(seed),
+            "production_sampling": bool(production_sampling),
+            # Per feedback_production_sampling_seed_not_temp0: sampling-sensitive
+            # (math_verify/spec-dec) arms record production temp + seed42 intent.
+            "sampling_profile": "production_temp_seed42"
+            if production_sampling
+            else "greedy_temp0",
+            "n_questions": len(questions),
+            "n_gsm8k": n_gsm8k,
+            "n_math500": n_math500,
+            "dataset_sha256": dataset_sha256,
+        }
+        per_role: dict[str, Any] = {}
+        with httpx.Client(timeout=self.timeout) as client:
+            for role in roles:
+                role_qs = [self._with_forced_role(q, role) for q in questions]
+                results = self._eval_batch(role_qs, client, log_every=100, label=f"ev11-{role}")
+                agg = self._aggregate(results, tier=2)
+                scored = [r for r in results if not r.error]
+                correct = sum(1 for r in scored if r.correct)
+                per_role[role] = {
+                    "role": role,
+                    "arm": f"ev11-math-rebaseline::{role}::seed{int(seed)}::{dataset_sha256[:12]}",
+                    "n_questions": len(results),
+                    "n_scored": len(scored),
+                    "correct": correct,
+                    "accuracy": (correct / len(scored)) if scored else None,
+                    "quality": agg.quality,
+                    "reliability": agg.reliability,
+                    "ece": agg.ece,
+                    "auroc": agg.auroc,
+                    "test_profile": test_profile,
+                }
+        return {
+            "mode": "math_rebaseline",
+            "suite": "math",
+            "scoring": str(scoring),
+            "full": bool(full),
+            "seed": int(seed),
+            "roles": roles,
+            "production_sampling": bool(production_sampling),
+            "dataset_sha256": dataset_sha256,
+            "test_profile": test_profile,
+            "per_role": per_role,
+        }
 
     def evaluate(
         self,
@@ -2182,6 +2805,306 @@ class EvalTower:
             log.warning("Could not capture traces: %s", e)
             return ""
 
+    @staticmethod
+    def _trim_trace_text(trace_text: Any, max_chars: int) -> str:
+        text = str(trace_text or "").strip()
+        if not text or max_chars <= 0:
+            return ""
+        if len(text) <= max_chars:
+            return text
+        return "[trace truncated]\n" + text[-max_chars:]
+
+    @staticmethod
+    def _trace_ir_steps(
+        trace_text: str, *, max_steps: int = 12, preview_chars: int = 240
+    ) -> list[dict[str, Any]]:
+        """Convert a tap tail into compact ROLE/PROMPT/RESPONSE steps."""
+        text = str(trace_text or "").strip()
+        if not text:
+            return []
+
+        sections: list[tuple[str, str]] = []
+        current_kind = "trace"
+        current_lines: list[str] = []
+        for raw_line in text.splitlines():
+            line = raw_line.rstrip()
+            upper = line.upper()
+            if upper.startswith("ROLE"):
+                if current_lines:
+                    sections.append((current_kind, "\n".join(current_lines).strip()))
+                sections.append(("role", line.strip()))
+                current_kind = "trace"
+                current_lines = []
+            elif upper in {"PROMPT:", "PROMPT"}:
+                if current_lines:
+                    sections.append((current_kind, "\n".join(current_lines).strip()))
+                current_kind = "prompt"
+                current_lines = []
+            elif upper in {"RESPONSE:", "RESPONSE"}:
+                if current_lines:
+                    sections.append((current_kind, "\n".join(current_lines).strip()))
+                current_kind = "response"
+                current_lines = []
+            else:
+                current_lines.append(line)
+        if current_lines:
+            sections.append((current_kind, "\n".join(current_lines).strip()))
+
+        steps: list[dict[str, Any]] = []
+        for kind, content in sections:
+            cleaned = content.strip()
+            if not cleaned:
+                continue
+            steps.append(
+                {
+                    "step_id": f"s{len(steps) + 1}",
+                    "kind": kind,
+                    "line_count": len(cleaned.splitlines()),
+                    "content_hash": hashlib.sha256(cleaned.encode("utf-8")).hexdigest()[:12],
+                    "content_preview": cleaned[:preview_chars],
+                }
+            )
+            if len(steps) >= max_steps:
+                break
+        return steps
+
+    @classmethod
+    def build_critic_trace_ir(
+        cls,
+        *,
+        trace_bank: list[dict[str, Any]] | None = None,
+        raw_trace_text: str = "",
+        trial_id: int | None = None,
+        failure_summary: str = "",
+        k_success: int = 2,
+        k_failure: int = 2,
+        max_trace_chars: int = 1600,
+    ) -> dict[str, Any]:
+        """Build a deterministic, observe-only trace IR for critic/prompt context.
+
+        This is a structured companion to the legacy formatted trace text. It is
+        intentionally not consumed by any score, safety, or acceptance gate.
+        """
+
+        def selected(outcome: str, limit: int) -> list[dict[str, Any]]:
+            if limit <= 0:
+                return []
+            matches = [
+                item
+                for item in trace_bank or []
+                if isinstance(item, dict)
+                and str(item.get("outcome") or "").lower() == outcome
+                and str(item.get("trace") or "").strip()
+            ]
+            return matches[-limit:]
+
+        examples: list[dict[str, Any]] = []
+        for outcome, limit in (("success", int(k_success)), ("failure", int(k_failure))):
+            for raw in selected(outcome, limit):
+                trace = cls._trim_trace_text(raw.get("trace", ""), max_trace_chars)
+                if not trace:
+                    continue
+                examples.append(
+                    {
+                        "outcome": outcome,
+                        "trial_id": raw.get("trial_id"),
+                        "species": str(raw.get("species") or ""),
+                        "action_type": str(raw.get("action_type") or ""),
+                        "reason": str(raw.get("reason") or "")[:500],
+                        "trace_hash": str(
+                            raw.get("trace_hash")
+                            or hashlib.sha256(trace.encode("utf-8")).hexdigest()[:12]
+                        ),
+                        "steps": cls._trace_ir_steps(trace),
+                    }
+                )
+
+        raw_tail = ""
+        if not examples:
+            raw_tail = cls._trim_trace_text(raw_trace_text, max_trace_chars)
+            if raw_tail:
+                examples.append(
+                    {
+                        "outcome": "unlabeled",
+                        "trial_id": trial_id,
+                        "species": "",
+                        "action_type": "",
+                        "reason": "raw_recent_trace_fallback",
+                        "trace_hash": hashlib.sha256(raw_tail.encode("utf-8")).hexdigest()[:12],
+                        "steps": cls._trace_ir_steps(raw_tail),
+                    }
+                )
+
+        return {
+            "schema_version": "harness_trace_ir.v1",
+            "observe_only": True,
+            "acceptance_effect": "none_observe_only",
+            "trial_id": trial_id,
+            "failure_summary": str(failure_summary or "")[:500],
+            "source": "contrastive_trace_bank"
+            if trace_bank and examples and not raw_tail
+            else "raw_recent_traces",
+            "trace_examples": examples,
+        }
+
+    @staticmethod
+    def format_critic_trace_ir(trace_ir: dict[str, Any] | None) -> str:
+        """Render critic trace IR as a prompt-safe JSON block."""
+        if not isinstance(trace_ir, dict) or not trace_ir.get("trace_examples"):
+            return ""
+        return (
+            "## Harness Trace IR (MH-11 observe-only)\n"
+            "This structured trace evidence is diagnostic context only; it is not "
+            "an acceptance score or quality gate.\n"
+            "```json\n"
+            f"{json.dumps(trace_ir, sort_keys=True, indent=2)}\n"
+            "```"
+        )
+
+    @classmethod
+    def update_contrastive_trace_bank(
+        cls,
+        trace_bank: list[dict[str, Any]] | None,
+        *,
+        trace_text: str,
+        outcome: str,
+        trial_id: int | None = None,
+        species: str = "",
+        action_type: str = "",
+        reason: str = "",
+        max_examples_per_outcome: int = 8,
+        max_trace_chars: int = 1600,
+    ) -> list[dict[str, Any]]:
+        """Append one labeled trace example and cap the in-state contrastive bank.
+
+        The raw tap file has no success/failure label, so callers add labels only
+        after the trial verdict is known. The returned bank is JSON-serializable
+        for autopilot_state.json.
+        """
+        normalized_outcome = str(outcome or "").strip().lower()
+        if normalized_outcome not in {"success", "failure"}:
+            return list(trace_bank or [])
+        trace = cls._trim_trace_text(trace_text, max_trace_chars)
+        if not trace:
+            return list(trace_bank or [])
+
+        normalized: list[dict[str, Any]] = []
+        for raw in trace_bank or []:
+            if not isinstance(raw, dict):
+                continue
+            raw_outcome = str(raw.get("outcome") or "").strip().lower()
+            if raw_outcome not in {"success", "failure"}:
+                continue
+            raw_trace = cls._trim_trace_text(raw.get("trace", ""), max_trace_chars)
+            if not raw_trace:
+                continue
+            normalized.append(
+                {
+                    "outcome": raw_outcome,
+                    "trial_id": raw.get("trial_id"),
+                    "species": str(raw.get("species") or ""),
+                    "action_type": str(raw.get("action_type") or ""),
+                    "reason": str(raw.get("reason") or ""),
+                    "trace": raw_trace,
+                    "trace_hash": str(
+                        raw.get("trace_hash")
+                        or hashlib.sha256(raw_trace.encode("utf-8")).hexdigest()[:12]
+                    ),
+                }
+            )
+
+        trace_hash = hashlib.sha256(trace.encode("utf-8")).hexdigest()[:12]
+        normalized = [
+            item
+            for item in normalized
+            if not (
+                item.get("outcome") == normalized_outcome
+                and item.get("trial_id") == trial_id
+                and item.get("trace_hash") == trace_hash
+            )
+        ]
+        normalized.append(
+            {
+                "outcome": normalized_outcome,
+                "trial_id": trial_id,
+                "species": str(species or ""),
+                "action_type": str(action_type or ""),
+                "reason": str(reason or ""),
+                "trace": trace,
+                "trace_hash": trace_hash,
+            }
+        )
+
+        capped: list[dict[str, Any]] = []
+        for bucket in ("success", "failure"):
+            capped.extend(
+                [item for item in normalized if item.get("outcome") == bucket][
+                    -max_examples_per_outcome:
+                ]
+            )
+        return capped
+
+    def capture_contrastive_traces(
+        self,
+        *,
+        k_success: int = 2,
+        k_failure: int = 2,
+        trace_bank: list[dict[str, Any]] | None = None,
+    ) -> str:
+        """Format labeled success/failure trace examples for PromptForge.
+
+        This intentionally reads only a caller-maintained trace bank. Raw tap
+        tails are still available through capture_recent_traces() as the fallback
+        when labeled examples are not available yet.
+        """
+        if not trace_bank:
+            return ""
+
+        def selected(outcome: str, limit: int) -> list[dict[str, Any]]:
+            if limit <= 0:
+                return []
+            matches = [
+                item
+                for item in trace_bank
+                if isinstance(item, dict)
+                and str(item.get("outcome") or "").lower() == outcome
+                and str(item.get("trace") or "").strip()
+            ]
+            return matches[-limit:]
+
+        success_examples = selected("success", int(k_success))
+        failure_examples = selected("failure", int(k_failure))
+        if not success_examples and not failure_examples:
+            return ""
+
+        def append_entry(lines: list[str], idx: int, entry: dict[str, Any]) -> None:
+            trial = entry.get("trial_id")
+            label_parts = []
+            if trial is not None:
+                label_parts.append(f"trial #{trial}")
+            species = str(entry.get("species") or "").strip()
+            action_type = str(entry.get("action_type") or "").strip()
+            if species or action_type:
+                label_parts.append("/".join(part for part in (species, action_type) if part))
+            label = ", ".join(label_parts) or "unlabeled trial"
+            lines.append(f"[{idx}] {label}")
+            reason = str(entry.get("reason") or "").strip()
+            if reason:
+                lines.append(f"Reason: {reason}")
+            lines.append("Trace:")
+            lines.append(str(entry.get("trace") or "").strip())
+
+        lines: list[str] = ["## Contrastive Execution Traces"]
+        if success_examples:
+            lines.append("### Success Examples")
+            for idx, entry in enumerate(success_examples, start=1):
+                append_entry(lines, idx, entry)
+        if failure_examples:
+            lines.append("### Failure Examples")
+            for idx, entry in enumerate(failure_examples, start=1):
+                append_entry(lines, idx, entry)
+        return "\n".join(lines)
+
     def hybrid_eval(
         self,
         seed: int = 42,
@@ -2209,8 +3132,7 @@ class EvalTower:
             log.info("Hybrid eval: T0 failed (q=%.3f), fast-reject", t0.quality)
             return t0
 
-        log.info("Hybrid eval: T0 passed (q=%.3f), running T1 (%d questions)...",
-                 t0.quality, t1_n)
+        log.info("Hybrid eval: T0 passed (q=%.3f), running T1 (%d questions)...", t0.quality, t1_n)
         if trial_id is None:
             t1 = self.eval_t1(n=t1_n, seed=seed)
         else:

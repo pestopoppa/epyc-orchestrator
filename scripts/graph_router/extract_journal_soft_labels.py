@@ -32,6 +32,8 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from src.llm_primitives.stat_tests import wilson_interval  # noqa: E402
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -65,25 +67,23 @@ def _softmax(values: list[float], tau: float = 2.0) -> list[float]:
 
 
 def _wilson_lower(correct: int, total: int, z: float = 1.96) -> float:
-    """Wilson score interval lower bound for a binomial proportion."""
-    if total == 0:
-        return 0.0
-    p = correct / total
-    denom = 1 + z * z / total
-    centre = p + z * z / (2 * total)
-    margin = z * math.sqrt((p * (1 - p) + z * z / (4 * total)) / total)
-    return max(0.0, (centre - margin) / denom)
+    """Wilson score interval lower bound for a binomial proportion.
+
+    Consolidated: delegates to the clean-room
+    ``src.llm_primitives.stat_tests.wilson_interval`` (``z=1.96`` passed through
+    to preserve the historical constant). ``total == 0`` yields 0.0 as before.
+    """
+    return wilson_interval(correct, total, z)[0]
 
 
 def _wilson_upper(correct: int, total: int, z: float = 1.96) -> float:
-    """Wilson score interval upper bound for a binomial proportion."""
-    if total == 0:
-        return 1.0
-    p = correct / total
-    denom = 1 + z * z / total
-    centre = p + z * z / (2 * total)
-    margin = z * math.sqrt((p * (1 - p) + z * z / (4 * total)) / total)
-    return min(1.0, (centre + margin) / denom)
+    """Wilson score interval upper bound for a binomial proportion.
+
+    Consolidated: delegates to the clean-room
+    ``src.llm_primitives.stat_tests.wilson_interval`` (``z=1.96`` passed through
+    to preserve the historical constant). ``total == 0`` yields 1.0 as before.
+    """
+    return wilson_interval(correct, total, z)[1]
 
 
 def extract(

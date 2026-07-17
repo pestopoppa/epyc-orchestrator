@@ -310,10 +310,16 @@ def test_reload_embedders_uses_listener_pid_helper(monkeypatch) -> None:
     killed: list[int] = []
     pid_helper_calls: list[int] = []
     saved: list[dict[str, stack.ProcessInfo]] = []
+    refreshed: list[tuple[str, dict[str, stack.ProcessInfo]]] = []
 
     monkeypatch.setattr(stack, "EMBEDDER_PORTS", [8090])
     monkeypatch.setattr(stack, "load_state", lambda: state)
     monkeypatch.setattr(stack, "save_state", lambda value: saved.append(dict(value)))
+    monkeypatch.setattr(
+        stack_commands,
+        "_refresh_runtime_facts_manifest",
+        lambda source, state, **_kw: refreshed.append((source, dict(state))),
+    )
     monkeypatch.setattr(stack, "RegistryLoader", lambda: object())
     monkeypatch.setattr(stack, "kill_process", lambda pid: killed.append(pid))
     monkeypatch.setattr(stack, "is_port_in_use", lambda port: port == 8090)
@@ -337,6 +343,7 @@ def test_reload_embedders_uses_listener_pid_helper(monkeypatch) -> None:
     assert pid_helper_calls == [8090]
     assert saved[-1]["server_8090"] == replacement_info
     assert saved[-1]["embedder"] == replacement_info
+    assert refreshed == [("stack_reload", saved[-1])]
 
 
 def test_reload_document_formalizer_uses_auxiliary_starter(monkeypatch) -> None:
@@ -360,9 +367,15 @@ def test_reload_document_formalizer_uses_auxiliary_starter(monkeypatch) -> None:
     killed: list[int] = []
     pid_helper_calls: list[int] = []
     saved: list[dict[str, stack.ProcessInfo]] = []
+    refreshed: list[tuple[str, dict[str, stack.ProcessInfo]]] = []
 
     monkeypatch.setattr(stack, "load_state", lambda: state)
     monkeypatch.setattr(stack, "save_state", lambda value: saved.append(dict(value)))
+    monkeypatch.setattr(
+        stack_commands,
+        "_refresh_runtime_facts_manifest",
+        lambda source, state, **_kw: refreshed.append((source, dict(state))),
+    )
     monkeypatch.setattr(
         stack,
         "RegistryLoader",
@@ -384,6 +397,44 @@ def test_reload_document_formalizer_uses_auxiliary_starter(monkeypatch) -> None:
     assert killed == [333]
     assert pid_helper_calls == [9001]
     assert saved[-1] == {"document_formalizer": new_info}
+    assert refreshed == [("stack_reload", {"document_formalizer": new_info})]
+
+
+def test_reload_refreshes_runtime_facts_manifest_after_successful_state_save(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    new_info = stack.ProcessInfo(
+        role="orchestrator",
+        pid=222,
+        port=8000,
+        started_at="after",
+        model_path="uvicorn",
+        log_file="orchestrator.log",
+    )
+    killed: list[int] = []
+    saved: list[dict[str, stack.ProcessInfo]] = []
+    refreshed: list[tuple[str, dict[str, stack.ProcessInfo]]] = []
+
+    monkeypatch.setattr(stack, "load_state", lambda: {})
+    monkeypatch.setattr(stack, "save_state", lambda value: saved.append(dict(value)))
+    monkeypatch.setattr(stack, "kill_process", lambda pid: killed.append(pid))
+    monkeypatch.setattr(stack.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(stack, "_pids_on_port", lambda port: [111] if port == 8000 else [])
+    monkeypatch.setattr(stack, "start_orchestrator", lambda _profile=None: new_info)
+    monkeypatch.setattr(
+        stack_commands,
+        "_refresh_runtime_facts_manifest",
+        lambda source, state, **_kw: refreshed.append((source, dict(state)))
+        or tmp_path / "facts.json",
+    )
+
+    rc = stack.cmd_reload(Namespace(components=["orchestrator"], profile="production"))
+
+    assert rc == 0
+    assert killed == [111]
+    assert saved[-1] == {"orchestrator": new_info}
+    assert refreshed == [("stack_reload", {"orchestrator": new_info})]
 
 
 def test_preserved_process_info_records_listener_pid(monkeypatch) -> None:
@@ -768,6 +819,71 @@ def test_worker_general_builder_keeps_separate_draft_model(monkeypatch) -> None:
 
     assert cmd[cmd.index("-md") + 1] == "/models/gemma-assistant.gguf"
     assert cmd[cmd.index("--spec-type") + 1] == "draft-mtp"
+
+
+def test_worker_general_launch_pins_target_and_draft_devices_to_cpu(monkeypatch) -> None:
+    monkeypatch.setattr(
+        stack,
+        "_stack_prior_launch",
+        lambda _role: _worker_general_launch_contract(
+            "/models/gemma-target.gguf",
+            "/models/gemma-assistant.gguf",
+        ),
+    )
+    monkeypatch.setattr(stack, "_resolve_thread_count", lambda _role, _idx: "96")
+
+    cmd = stack.build_server_command(
+        None,
+        8072,
+        worker_pool_mode=True,
+        worker_type="explore",
+    )
+
+    assert cmd[cmd.index("--device") + 1] == "none"
+    assert cmd[cmd.index("--device-draft") + 1] == "none"
+
+
+def test_generic_spec_launch_pins_target_and_draft_devices_to_cpu(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(stack, "SLOT_SAVE_DIR", tmp_path)
+    monkeypatch.setattr(stack, "_resolve_thread_count", lambda _role, _idx: "96")
+    monkeypatch.setattr(
+        stack,
+        "_stack_prior_launch",
+        lambda _role: (
+            {"model_path": "/models/frontdoor.gguf"},
+            {
+                "binary_path": "/opt/llama/bin/llama-server",
+                "cache": {
+                    "context_tokens": 32768,
+                    "slots": 1,
+                    "ubatch": 8192,
+                    "kv_type_k": "q8_0",
+                    "kv_type_v": "q8_0",
+                    "slot_save_path": str(tmp_path / "frontdoor"),
+                },
+                "flags": {
+                    "flash_attn": False,
+                    "jinja": False,
+                    "spec": {
+                        "enabled": True,
+                        "type": "draft-mtp",
+                        "draft_model_path": "/models/frontdoor.gguf",
+                        "draft_max": 4,
+                    },
+                },
+            },
+        ),
+    )
+    role_config = Namespace(
+        name="frontdoor",
+        model=Namespace(full_path="/models/frontdoor.gguf"),
+        acceleration=Namespace(type="none"),
+    )
+
+    cmd = stack.build_server_command(role_config, 8070)
+
+    assert cmd[cmd.index("--device") + 1] == "none"
+    assert cmd[cmd.index("--device-draft") + 1] == "none"
 
 
 def test_runtime_attestation_accepts_embedded_nextn_without_md() -> None:

@@ -27,12 +27,15 @@ def test_authority_env_forces_required_flags() -> None:
     assert env["AUTOPILOT_TOOL_SENTINELS"] == "1"
     assert env["AUTOPILOT_PLANNER_HINTS"] == "1"
     assert env["AUTOPILOT_SEQ_VERDICT"] == "1"
+    assert env["AUTOPILOT_SEQ_P0_2_BRIDGE"] == "1"
     assert env["AUTOPILOT_W6_AUDIT_BLOCK"] == "1"
     assert env["AUTOPILOT_PLANNER_TIMEOUT"] == "600"
-    assert env["AUTOPILOT_PLANNER_SPEND_BREAKER"] == "1"
+    # The planner runs on local models by default; forcing the spend breaker on
+    # has historically stopped AutoPilot even when no cloud spend was at risk.
+    assert env["AUTOPILOT_PLANNER_SPEND_BREAKER"] == "0"
 
 
-def test_authority_env_defaults_to_long_context_local_planner_without_overriding() -> None:
+def test_authority_env_defaults_to_claude_codex_planner_without_overriding() -> None:
     env = launcher.authority_env(
         {
             "AUTOPILOT_PLANNER_PRIMARY": "claude",
@@ -41,18 +44,18 @@ def test_authority_env_defaults_to_long_context_local_planner_without_overriding
     )
 
     assert env["AUTOPILOT_PLANNER_PRIMARY"] == "claude"
-    assert env["AUTOPILOT_PLANNER_CRITIC"] == "local_frontdoor"
+    assert env["AUTOPILOT_PLANNER_CRITIC"] == "codex_critic"
     assert env["AUTOPILOT_PLANNER_CRITIC_FALLBACK"] == "claude"
-    assert env["AUTOPILOT_PLANNER_SPEND_BREAKER_PRIMARY"] == "local_ingest"
-    assert env["AUTOPILOT_PLANNER_SPEND_BREAKER_CRITIC"] == "local_frontdoor"
+    assert env["AUTOPILOT_PLANNER_SPEND_BREAKER_PRIMARY"] == "local_frontdoor"
+    assert env["AUTOPILOT_PLANNER_SPEND_BREAKER_CRITIC"] == "local_ingest"
     assert env["AUTOPILOT_LOCAL_PLANNER_ROLE"] == "ingest_long_context"
     assert env["AUTOPILOT_LOCAL_PLANNER_MODEL"] == "ingest_long_context"
     assert env["AUTOPILOT_LOCAL_PLANNER_TEMPERATURE"] == "0"
     assert env["AUTOPILOT_LOCAL_PLANNER_MAX_TOKENS"] == "4096"
 
     default_env = launcher.authority_env({})
-    assert default_env["AUTOPILOT_PLANNER_PRIMARY"] == "local_ingest"
-    assert default_env["AUTOPILOT_PLANNER_CRITIC"] == "local_frontdoor"
+    assert default_env["AUTOPILOT_PLANNER_PRIMARY"] == "claude"
+    assert default_env["AUTOPILOT_PLANNER_CRITIC"] == "codex_critic"
 
 
 def test_authority_env_sets_latest_repo_readiness_pickup(
@@ -97,6 +100,28 @@ def test_build_command_uses_autopilot_start_and_default_trials(monkeypatch) -> N
     ]
 
 
+def test_build_supervisor_command_wraps_autopilot_child(monkeypatch) -> None:
+    monkeypatch.setattr(launcher, "python_executable", lambda: "/venv/bin/python3")
+    child = launcher.build_command(3000)
+
+    command = launcher.build_supervisor_command(
+        child,
+        max_restarts=2,
+        restart_delay_s=5.0,
+    )
+
+    assert command == [
+        "/venv/bin/python3",
+        "scripts/autopilot/autopilot_supervisor.py",
+        "--max-restarts",
+        "2",
+        "--restart-delay-s",
+        "5.0",
+        "--",
+        *child,
+    ]
+
+
 def test_dry_run_prints_authority_payload(monkeypatch, tmp_path, capsys) -> None:
     monkeypatch.setattr(launcher, "python_executable", lambda: "/venv/bin/python3")
     monkeypatch.setattr(launcher, "live_autopilot_processes", lambda: ["123 live"])
@@ -105,15 +130,27 @@ def test_dry_run_prints_authority_payload(monkeypatch, tmp_path, capsys) -> None
 
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
-    assert payload["command"] == [
+    assert payload["child_command"] == [
         "/venv/bin/python3",
         "scripts/autopilot/autopilot.py",
         "start",
         "--max-trials",
         "1234",
     ]
+    assert payload["command"] == [
+        "/venv/bin/python3",
+        "scripts/autopilot/autopilot_supervisor.py",
+        "--max-restarts",
+        "3",
+        "--restart-delay-s",
+        "30.0",
+        "--",
+        *payload["child_command"],
+    ]
+    assert payload["supervised"] is True
     assert payload["env"]["AUTOPILOT_TOOL_SENTINELS"] == "1"
     assert payload["env"]["AUTOPILOT_SEQ_VERDICT"] == "1"
+    assert payload["env"]["AUTOPILOT_SEQ_P0_2_BRIDGE"] == "1"
     assert payload["pid"] is None
 
 
@@ -137,6 +174,7 @@ def test_preflight_prints_restart_advice_without_starting(monkeypatch, tmp_path,
                 "blockers": [],
                 "phase": report["phase"],
                 "max_trials": max_trials,
+                "pid_age_verified_landed": False,
             }
 
     class FakePhase:
@@ -149,8 +187,48 @@ def test_preflight_prints_restart_advice_without_starting(monkeypatch, tmp_path,
 
     rc = launcher.main(["--preflight", "--log-dir", str(tmp_path), "--max-trials", "1234"])
 
-    assert rc == 0
+    assert rc == 1
     payload = json.loads(capsys.readouterr().out)
     assert payload["status"] == "restart_recommended"
     assert payload["phase"] == "loop_start"
     assert payload["max_trials"] == 1234
+
+
+def test_preflight_exits_zero_only_for_pid_age_verified_landed(
+    monkeypatch,
+    tmp_path,
+    capsys,
+) -> None:
+    class FakeAdvisor:
+        @staticmethod
+        def build_restart_advice(report, *, max_trials):
+            return {
+                "advisor_version": "autopilot_restart_advisor.v1",
+                "ok": True,
+                "status": "no_action",
+                "restart_needed": False,
+                "safe_to_restart_now": False,
+                "reason": "current",
+                "blockers": [],
+                "phase": report["phase"],
+                "max_trials": max_trials,
+                "pid_age_verified_landed": True,
+            }
+
+    class FakePhase:
+        @staticmethod
+        def build_phase_health_report(**kwargs):
+            return {
+                "phase": "planner_prompt_build",
+                "require_current_code": kwargs["require_current_code"],
+            }
+
+    monkeypatch.setitem(sys.modules, "autopilot_restart_advisor", FakeAdvisor)
+    monkeypatch.setitem(sys.modules, "phase_status", FakePhase)
+
+    rc = launcher.main(["--preflight", "--log-dir", str(tmp_path), "--max-trials", "1234"])
+
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "no_action"
+    assert payload["pid_age_verified_landed"] is True

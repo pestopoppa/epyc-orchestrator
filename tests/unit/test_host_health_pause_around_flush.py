@@ -93,25 +93,25 @@ def _stack_prior_record(role: str, model_path: str) -> dict:
 def test_exogenous_cache_flush_category_exists() -> None:
     """DeficiencyCategory.EXOGENOUS_CACHE_FLUSH must be defined for journal tagging."""
     assert hasattr(experiment_journal.DeficiencyCategory, "EXOGENOUS_CACHE_FLUSH")
-    assert experiment_journal.DeficiencyCategory.EXOGENOUS_CACHE_FLUSH.value == "exogenous_cache_flush"
+    assert (
+        experiment_journal.DeficiencyCategory.EXOGENOUS_CACHE_FLUSH.value == "exogenous_cache_flush"
+    )
 
 
 def test_llama_server_memory_reader_aggregates_rollup(tmp_path: Path) -> None:
     proc = tmp_path / "123"
     proc.mkdir()
-    (proc / "cmdline").write_bytes(b"/mnt/raid0/llm/llama.cpp/build/bin/llama-server\x00--port\x008070")
+    (proc / "cmdline").write_bytes(
+        b"/mnt/raid0/llm/llama.cpp/build/bin/llama-server\x00--port\x008070"
+    )
     (proc / "smaps_rollup").write_text(
-        "Pss:                2048 kB\n"
-        "Private_Dirty:      1024 kB\n"
-        "Locked:              512 kB\n"
+        "Pss:                2048 kB\nPrivate_Dirty:      1024 kB\nLocked:              512 kB\n"
     )
     other = tmp_path / "456"
     other.mkdir()
     (other / "cmdline").write_bytes(b"python\x00worker.py")
     (other / "smaps_rollup").write_text(
-        "Pss:                9999 kB\n"
-        "Private_Dirty:      9999 kB\n"
-        "Locked:             9999 kB\n"
+        "Pss:                9999 kB\nPrivate_Dirty:      9999 kB\nLocked:             9999 kB\n"
     )
 
     assert host_health._read_llama_server_memory_mb(tmp_path) == (1, 2.0, 1.0, 0.5)
@@ -170,11 +170,14 @@ def test_default_rewarm_paths_fall_back_to_stack_priors_when_launcher_targets_fa
         "/models/worker.gguf",
     )
 
+
 def test_default_rewarm_paths_fall_back_to_empty_tuple_when_no_stack_priors_exist(
     monkeypatch, tmp_path: Path
 ) -> None:
     monkeypatch.setattr(host_health, "_stack_rewarm_ggufs", lambda: ())
-    monkeypatch.setattr(host_health, "_fallback_rewarm_ggufs_from_stack_priors", lambda *args, **kwargs: ())
+    monkeypatch.setattr(
+        host_health, "_fallback_rewarm_ggufs_from_stack_priors", lambda *args, **kwargs: ()
+    )
 
     assert host_health._default_rewarm_ggufs(stack_priors_path=tmp_path / "missing.yaml") == ()
 
@@ -198,9 +201,11 @@ def test_flush_sets_paused_true_then_restores(tmp_path: Path) -> None:
             captured_states.append(json.load(f).get("paused", False))
         return True
 
-    with mock.patch.object(host_health, "remediate", side_effect=_fake_remediate), \
-         mock.patch.object(host_health, "_numa_interleave_rewarm", return_value={}), \
-         mock.patch("time.sleep"):
+    with (
+        mock.patch.object(host_health, "remediate", side_effect=_fake_remediate),
+        mock.patch.object(host_health, "_numa_interleave_rewarm", return_value={}),
+        mock.patch("time.sleep"),
+    ):
         result = host_health.flush_cache_with_pause(state_path=state_path, rewarm=False)
 
     assert result["flush_ok"] is True
@@ -217,9 +222,11 @@ def test_flush_preserves_user_set_pause(tmp_path: Path) -> None:
     state_path = tmp_path / "state.json"
     _write_state(state_path, paused=True)
 
-    with mock.patch.object(host_health, "remediate", return_value=True), \
-         mock.patch.object(host_health, "_numa_interleave_rewarm", return_value={}), \
-         mock.patch("time.sleep"):
+    with (
+        mock.patch.object(host_health, "remediate", return_value=True),
+        mock.patch.object(host_health, "_numa_interleave_rewarm", return_value={}),
+        mock.patch("time.sleep"),
+    ):
         result = host_health.flush_cache_with_pause(state_path=state_path, rewarm=False)
 
     assert result["paused_pre"] is True
@@ -233,10 +240,13 @@ def test_flush_runs_rewarm_when_enabled(tmp_path: Path) -> None:
     _write_state(state_path, paused=False)
 
     fake_rewarm_results = {"/tmp/fake1.gguf": True, "/tmp/fake2.gguf": True}
-    with mock.patch.object(host_health, "remediate", return_value=True), \
-         mock.patch.object(host_health, "_numa_interleave_rewarm",
-                           return_value=fake_rewarm_results) as mock_warm, \
-         mock.patch("time.sleep"):
+    with (
+        mock.patch.object(host_health, "remediate", return_value=True),
+        mock.patch.object(
+            host_health, "_numa_interleave_rewarm", return_value=fake_rewarm_results
+        ) as mock_warm,
+        mock.patch("time.sleep"),
+    ):
         result = host_health.flush_cache_with_pause(state_path=state_path, rewarm=True)
 
     assert mock_warm.called
@@ -247,10 +257,13 @@ def test_flush_skips_rewarm_when_disabled(tmp_path: Path) -> None:
     state_path = tmp_path / "state.json"
     _write_state(state_path, paused=False)
 
-    with mock.patch.object(host_health, "remediate", return_value=True), \
-         mock.patch.object(host_health, "_numa_interleave_rewarm",
-                           return_value={"x": True}) as mock_warm, \
-         mock.patch("time.sleep"):
+    with (
+        mock.patch.object(host_health, "remediate", return_value=True),
+        mock.patch.object(
+            host_health, "_numa_interleave_rewarm", return_value={"x": True}
+        ) as mock_warm,
+        mock.patch("time.sleep"),
+    ):
         result = host_health.flush_cache_with_pause(state_path=state_path, rewarm=False)
 
     assert not mock_warm.called
@@ -262,10 +275,13 @@ def test_flush_skips_rewarm_on_flush_failure(tmp_path: Path) -> None:
     state_path = tmp_path / "state.json"
     _write_state(state_path, paused=False)
 
-    with mock.patch.object(host_health, "remediate", return_value=False), \
-         mock.patch.object(host_health, "_numa_interleave_rewarm",
-                           return_value={"x": True}) as mock_warm, \
-         mock.patch("time.sleep"):
+    with (
+        mock.patch.object(host_health, "remediate", return_value=False),
+        mock.patch.object(
+            host_health, "_numa_interleave_rewarm", return_value={"x": True}
+        ) as mock_warm,
+        mock.patch("time.sleep"),
+    ):
         result = host_health.flush_cache_with_pause(state_path=state_path, rewarm=True)
 
     assert result["flush_ok"] is False
@@ -275,9 +291,51 @@ def test_flush_skips_rewarm_on_flush_failure(tmp_path: Path) -> None:
 def test_flush_handles_missing_state_file(tmp_path: Path) -> None:
     """If state.json doesn't exist, log a warning but still proceed with flush."""
     state_path = tmp_path / "nonexistent.json"
-    with mock.patch.object(host_health, "remediate", return_value=True), \
-         mock.patch.object(host_health, "_numa_interleave_rewarm", return_value={}), \
-         mock.patch("time.sleep"):
+    with (
+        mock.patch.object(host_health, "remediate", return_value=True),
+        mock.patch.object(host_health, "_numa_interleave_rewarm", return_value={}),
+        mock.patch("time.sleep"),
+    ):
         result = host_health.flush_cache_with_pause(state_path=state_path, rewarm=False)
     assert result["flush_ok"] is True
     assert result["paused_pre"] is None
+
+
+def test_host_timing_covariates_best_effort_handles_reader_failure(monkeypatch) -> None:
+    monkeypatch.setattr(host_health, "_read_loadavg_1min", lambda: 7.25)
+    monkeypatch.setattr(host_health, "_read_online_cores", lambda: 64)
+    monkeypatch.setattr(
+        host_health,
+        "_read_mean_cur_mhz",
+        lambda: (_ for _ in ()).throw(RuntimeError("freq")),
+    )
+    monkeypatch.setattr(host_health, "_read_base_mhz", lambda: 3200.0)
+    monkeypatch.setattr(
+        host_health,
+        "_read_meminfo_mb",
+        lambda field: {"Cached": 2048.0, "MemAvailable": 8192.0}.get(field, 0.0),
+    )
+    monkeypatch.setattr(
+        host_health,
+        "_read_llama_server_memory_mb",
+        lambda proc_root=None: (2, 128.0, 64.0, 16.0),
+    )
+    monkeypatch.setattr(host_health.time, "time", lambda: 123.456)
+
+    covariates = host_health.host_timing_covariates()
+
+    assert isinstance(covariates, dict)
+    assert {
+        "min_core_mhz",
+        "host_inflight",
+        "numa_balancing",
+        "cache_warm_state",
+        "page_cache_mb",
+        "mem_available_mb",
+        "timestamp",
+        "loadavg_1min",
+    }.issubset(covariates)
+    assert covariates["timestamp"] == 123.456
+    assert covariates["loadavg_1min"] == 7.25
+    assert covariates["page_cache_mb"] == 2048.0
+    assert covariates["mem_available_mb"] == 8192.0

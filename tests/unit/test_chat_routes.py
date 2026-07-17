@@ -26,6 +26,7 @@ from src.api.routes.chat import _handle_chat, _try_cheap_first, chat, chat_strea
 from src.api.routes.chat_utils import RoutingResult
 from src.api.state import AppState
 from src.prompt_builders.resolver import current_prompt_dir, resolve_prompt
+from src.proactive_delegation.types import PlanReviewResult
 
 
 # ── Fixtures ────────────────────────────────────────────────────────────────
@@ -764,6 +765,53 @@ class TestChatStreamEndpoint:
                     chunks.append(str(chunk))
             body = "".join(chunks)
             assert "[DONE]" in body
+
+
+class TestPlanReviewDrop:
+    """Plan-review drop verdicts must stop execution before worker dispatch."""
+
+    @pytest.mark.asyncio
+    async def test_drop_returns_structured_response_before_execution(
+        self, mock_state, mock_primitives, base_routing
+    ):
+        from contextlib import nullcontext
+        from unittest.mock import AsyncMock
+
+        mock_primitives.request_context = MagicMock(return_value=nullcontext())
+        mock_primitives.total_tokens_generated = 49
+        mock_primitives.total_generation_ms = 4005.0
+
+        review = PlanReviewResult(
+            decision="drop",
+            score=0.9,
+            feedback="Plan incomplete; missing problem logic and solution steps.",
+            patches=[],
+        )
+        req = ChatRequest(
+            prompt="Implement Aho-Corasick.",
+            mock_mode=False,
+            real_mode=True,
+        )
+
+        with patch("src.api.routes.chat._route_request", return_value=base_routing), \
+             patch("src.api.routes.chat._preprocess", return_value=None), \
+             patch("src.api.routes.chat._init_primitives", return_value=mock_primitives), \
+             patch("src.api.routes.chat._plan_review_gate", return_value=review), \
+             patch("src.api.routes.chat._execute_vision", new=AsyncMock(return_value=None)) as mock_vision, \
+             patch("src.api.routes.chat._execute_vision_multimodal", new=AsyncMock(return_value=None)) as mock_vision_mm, \
+             patch("src.api.routes.chat._execute_proactive", new=AsyncMock(return_value=None)) as mock_proactive, \
+             patch("src.api.routes.chat._try_cheap_first", new=AsyncMock(return_value=None)) as mock_cheap:
+            result = await _handle_chat(req, mock_state)
+
+        assert result.mode == "plan_review_drop"
+        assert result.error_code == 422
+        assert "Plan incomplete" in result.answer
+        assert result.routed_to == "architect_general"
+        assert result.tokens_used == 49
+        mock_vision.assert_not_called()
+        mock_vision_mm.assert_not_called()
+        mock_proactive.assert_not_called()
+        mock_cheap.assert_not_called()
 
 
 class TestEditModeFailClosed:

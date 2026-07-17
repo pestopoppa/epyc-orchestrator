@@ -9,11 +9,16 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import subprocess
 from pathlib import Path
 from typing import Any
 
+from scripts.server.runtime_facts_manifest import (
+    read_runtime_stack_numa_mode,
+    read_runtime_stack_selected_servers,
+)
 from src.roles import Role
 from src.registry.stack_priors import (
     live_stack_role_records,
@@ -116,26 +121,29 @@ _PORT_HINTS: dict[int, str] = _build_port_hints()
 def active_stack_numa_mode() -> str:
     """Return the stack NUMA mode the dashboard surfaces should render.
 
-    Honors an explicit ORCHESTRATOR_STACK_NUMA_MODE override (full/quarter/both).
-    Nothing in the codebase actually exports that env var, so when it is unset we
-    default to ``both``: the production stack launches EVERY configured instance —
-    each role's full/primary server PLUS its 4 NUMA-quarter servers (verified live:
-    all quarter ports up and healthy) — so ``both`` reflects reality. The prior
-    ``full`` default made the region-locks grid, topology strip, and
-    ``expected_stack_services`` health checks believe the stack was full-only,
-    hiding the running quarter instances and under-checking them. Set the env
-    explicitly to render a genuinely full-only or quarter-only stack.
+    Honors an explicit ORCHESTRATOR_STACK_NUMA_MODE override (full/quarter/both),
+    then uses the launcher-regenerated runtime facts manifest when it is present
+    and non-stale. Without either, keep the dashboard's historical ``both``
+    fallback: production commonly launches each role's full/primary server plus
+    its NUMA-quarter servers, and the older ``full`` default hid running quarter
+    instances from health and topology surfaces.
 
-    NOTE: this drives only the dashboard/health family. The config compiler's
-    template↔prior parity is a SEPARATE mode system — ``stack_templates`` reads
-    the env directly (its own ``full`` default) and ``live_stack_role_records``
-    reads the generated ``stack_priors.yaml`` file — so this default does not
-    touch that path.
+    NOTE: this drives only the dashboard/health family. The config compiler and
+    launcher still use the shared ``full`` fallback for spawn-time planning.
     """
-    import os
+    from scripts.server.stack_numa_mode import (
+        DASHBOARD_RUNTIME_FALLBACK_NUMA_MODE,
+        env_stack_numa_mode,
+    )
 
-    mode = os.environ.get("ORCHESTRATOR_STACK_NUMA_MODE", "both").strip().lower()
-    return mode if mode in {"full", "quarter", "both"} else "both"
+    if os.environ.get("ORCHESTRATOR_STACK_NUMA_MODE") is not None:
+        return env_stack_numa_mode(default=DASHBOARD_RUNTIME_FALLBACK_NUMA_MODE)
+
+    runtime_mode = read_runtime_stack_numa_mode()
+    if runtime_mode is not None:
+        return runtime_mode
+
+    return env_stack_numa_mode(default=DASHBOARD_RUNTIME_FALLBACK_NUMA_MODE)
 
 
 def _manifest_server_label(server: dict[str, Any]) -> str:
@@ -150,6 +158,17 @@ def _manifest_server_label(server: dict[str, Any]) -> str:
 
 
 def _manifest_port_hints(numa_mode: str | None = None) -> dict[int, str]:
+    if numa_mode is None and os.environ.get("ORCHESTRATOR_STACK_NUMA_MODE") is None:
+        runtime_servers = read_runtime_stack_selected_servers()
+        if runtime_servers is not None:
+            hints: dict[int, str] = {}
+            for server in runtime_servers:
+                port = server.get("port")
+                label = _manifest_server_label(server)
+                if isinstance(port, int) and label:
+                    hints[port] = label
+            return hints
+
     try:
         from scripts.server.stack_manifest import HOT_SERVERS, WARM_SERVERS, _filter_by_numa_mode
     except Exception:
@@ -170,8 +189,47 @@ def _manifest_port_hints(numa_mode: str | None = None) -> dict[int, str]:
     return hints
 
 
+def _configured_numa_port_hints() -> dict[int, str]:
+    """Labels for every statically configured NUMA llama-server port.
+
+    This is deliberately independent of the active launch mode. A quarter
+    listener that is already running must be labeled as `role.qN` in topology
+    and lock surfaces even if the current manifest mode says that quarter was
+    not expected for this run.
+    """
+    try:
+        from scripts.server.stack_numa import NUMA_CONFIG
+    except Exception:
+        return {}
+
+    hints: dict[int, str] = {}
+    for role, cfg in (NUMA_CONFIG or {}).items():
+        if not isinstance(cfg, dict):
+            continue
+        instances = cfg.get("instances")
+        if not isinstance(instances, list):
+            continue
+        full_idx = cfg.get("full_instance_idx")
+        for idx, entry in enumerate(instances):
+            if not isinstance(entry, (tuple, list)) or len(entry) < 2:
+                continue
+            port = entry[1]
+            if not isinstance(port, int):
+                continue
+            label = role
+            if isinstance(full_idx, int) and idx != full_idx:
+                label = f"{role}.q{idx - 1 if idx > full_idx else idx}"
+            hints[port] = label
+    return hints
+
+
 def _port_hint(port: int) -> str:
-    return _PORT_HINTS.get(port) or _manifest_port_hints().get(port, f"port_{port}")
+    return (
+        _PORT_HINTS.get(port)
+        or _manifest_port_hints().get(port)
+        or _configured_numa_port_hints().get(port)
+        or f"port_{port}"
+    )
 
 # Per-role display colors (CSS hex).
 _ROLE_COLORS: dict[str, str] = {
@@ -367,6 +425,11 @@ def _load_state_services(state_path: Path) -> list[dict[str, Any]]:
 
 def expected_stack_services(numa_mode: str | None = None) -> list[dict[str, Any]]:
     """Expected stack servers from the launch manifest, including unloaded ports."""
+    if numa_mode is None and "ORCHESTRATOR_STACK_NUMA_MODE" not in os.environ:
+        runtime_servers = read_runtime_stack_selected_servers()
+        if runtime_servers is not None:
+            return _expected_services_from_manifest_servers(runtime_servers)
+
     try:
         from scripts.server.stack_manifest import HOT_SERVERS, WARM_SERVERS, _filter_by_numa_mode
     except Exception as exc:
@@ -374,13 +437,16 @@ def expected_stack_services(numa_mode: str | None = None) -> list[dict[str, Any]
         return []
 
     mode = numa_mode or active_stack_numa_mode()
-    services: list[dict[str, Any]] = []
     try:
         servers = _filter_by_numa_mode(HOT_SERVERS + WARM_SERVERS, mode)
     except Exception as exc:
         logger.debug("Failed to filter stack manifest services by NUMA mode %s: %s", mode, exc)
         servers = HOT_SERVERS + WARM_SERVERS
+    return _expected_services_from_manifest_servers(servers)
 
+
+def _expected_services_from_manifest_servers(servers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    services: list[dict[str, Any]] = []
     for server in servers:
         if not isinstance(server, dict):
             continue

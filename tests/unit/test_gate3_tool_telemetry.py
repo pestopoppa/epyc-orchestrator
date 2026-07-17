@@ -63,14 +63,14 @@ def test_web_research_pass():
     assert status == "PASS"
 
 
-def test_web_research_success_with_response_error_still_passes_soft_telemetry():
+def test_web_research_success_with_response_error_is_infra_not_pass():
     status, lines = classify_web_research({
         "error_code": 500,
         "tools_called": ["web_research"],
         "tool_timings": [{"tool_name": "web_research", "success": True}],
         "web_research_results": [{"query": "q", "pages_fetched": 1}],
     })
-    assert status == "PASS"
+    assert status == "INFRA_FAIL"
     assert "post-tool error" in " ".join(lines)
 
 
@@ -83,6 +83,97 @@ def test_web_research_success_but_empty_results_is_infra_not_pass():
     })
     assert status == "INFRA_FAIL"
     assert "EMPTY" in " ".join(lines)
+
+
+def test_web_research_all_marked_irrelevant_is_infra_not_pass():
+    status, lines = classify_web_research({
+        "tools_called": ["web_research"],
+        "tool_timings": [{"tool_name": "web_research", "success": True}],
+        "web_research_results": [
+            {
+                "query": "q",
+                "pages_fetched": 2,
+                "pages_synthesized": 1,
+                "pages_irrelevant": 0,
+                "sources": [{"url": "https://example.test/a", "relevant": False}],
+            }
+        ],
+    })
+    assert status == "INFRA_FAIL"
+    assert "relevant=False" in " ".join(lines)
+
+
+def test_web_research_result_success_false_is_infra_not_pass():
+    status, lines = classify_web_research({
+        "tools_called": ["web_research"],
+        "tool_timings": [{"tool_name": "web_research", "success": True}],
+        "web_research_results": [
+            {
+                "success": False,
+                "query": "q",
+                "error": "Search failed",
+                "no_results_reason": "search_failed",
+                "sources": [],
+            }
+        ],
+    })
+    assert status == "INFRA_FAIL"
+    assert "search_failed" in " ".join(lines)
+
+
+def test_web_research_all_irrelevant_pages_is_infra_not_pass():
+    status, lines = classify_web_research({
+        "tools_called": ["web_research"],
+        "tool_timings": [{"tool_name": "web_research", "success": True}],
+        "web_research_results": [
+            {
+                "query": "q",
+                "pages_fetched": 4,
+                "pages_synthesized": 2,
+                "pages_irrelevant": 2,
+                "sources": [{"url": "https://example.test/a", "relevant": True}],
+            }
+        ],
+    })
+    assert status == "INFRA_FAIL"
+    assert "pages_irrelevant == pages_synthesized" in " ".join(lines)
+
+
+def test_web_research_high_irrelevant_rate_is_infra_not_pass():
+    status, lines = classify_web_research({
+        "tools_called": ["web_research"],
+        "tool_timings": [{"tool_name": "web_research", "success": True}],
+        "web_research_results": [
+            {
+                "query": "q",
+                "pages_fetched": 10,
+                "pages_synthesized": 10,
+                "pages_irrelevant": 3,
+                "sources": [{"url": "https://example.test/a", "relevant": True}],
+            }
+        ],
+    })
+    assert status == "INFRA_FAIL"
+    assert "irrelevant_rate too high" in " ".join(lines)
+
+
+def test_web_research_post_tool_error_is_infra_not_pass():
+    status, lines = classify_web_research({
+        "tools_called": ["web_research"],
+        "tool_timings": [{"tool_name": "web_research", "success": True}],
+        "web_research_results": [
+            {
+                "query": "q",
+                "pages_fetched": 1,
+                "pages_synthesized": 1,
+                "pages_irrelevant": 0,
+                "sources": [{"url": "https://example.test/a", "relevant": True}],
+            }
+        ],
+        "error": "[FAILED: terminal post-tool failure]",
+    })
+    assert status == "INFRA_FAIL"
+    assert "post-tool error" in " ".join(lines)
 
 
 def test_web_research_tool_failure_is_infra():

@@ -1517,7 +1517,7 @@ def test_simulated_context_kv_and_acceleration_drift_are_rejected(
     ] = "/tmp/stale-mmproj.gguf"
     payload["roles"]["vision_escalation"]["serving"]["launch"]["runtime"]["flags"][
         "override_kv"
-    ] = []
+    ] = ["stale.vision_override=int:1"]
     _write_yaml(config.stack_priors, payload)
 
     check_config = StackChangePipelineConfig(**{**config.__dict__, "mode": "check"})
@@ -1529,5 +1529,5 @@ def test_simulated_context_kv_and_acceleration_drift_are_rejected(
     assert any('"kv_type_k": "f16"' in error for error in report.errors)
     assert any('"enabled": false' in error for error in report.errors)
     assert any("qwen35moe.expert_used_count=int:8" in error for error in report.errors)
-    assert any("qwen3vlmoe.expert_used_count=int:4" in error for error in report.errors)
+    assert any("stale.vision_override=int:1" in error for error in report.errors)
     assert any("mmproj_path" in error and "stale-mmproj" in error for error in report.errors)

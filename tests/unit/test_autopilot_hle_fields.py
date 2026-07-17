@@ -58,6 +58,26 @@ def test_eval_result_grep_lines_emit_core_id() -> None:
     assert "METRIC core_id: core_v2" in result.to_grep_lines()
 
 
+def test_eval_result_grep_lines_emit_report_only_rlvr_reward() -> None:
+    result = EvalResult(
+        tier=1,
+        quality=2.4,
+        speed=20.0,
+        cost=0.2,
+        reliability=0.9,
+        ece=0.05,
+        auroc=0.85,
+    )
+
+    lines = result.to_grep_lines()
+
+    assert "METRIC rlvr_policy: ap27_rlvr_tier_reward_v1" in lines
+    assert "METRIC rlvr_signal: calibrated_continuous" in lines
+    assert "METRIC rlvr_reward: 0.837500" in lines
+    assert "METRIC rlvr_ready: 1" in lines
+    assert "METRIC rlvr_blockers:" not in lines
+
+
 def test_journal_round_trips_hle_fields_in_jsonl(tmp_path: Path) -> None:
     journal = ExperimentJournal(journal_dir=tmp_path)
     entry = JournalEntry(
@@ -84,7 +104,14 @@ def test_journal_round_trips_hle_fields_in_jsonl(tmp_path: Path) -> None:
         },
         metric_schema_version=1,
         harness_metrics={"planning_stability": {"score": 0.6, "evidence_event_ids": [42]}},
-        oracle_adequacy={"coding_sentinel": {"oracle_type": "pytest", "deterministic": True}},
+        oracle_adequacy={
+            "coding_sentinel": {"oracle_type": "pytest", "deterministic": True},
+            "control_attestation": {
+                "metric_version": "w5-control-pair-report-v1",
+                "observe_only": True,
+                "status": "passed",
+            },
+        },
         seq={
             "candidate": "fp-a",
             "core_id": "core_v1",
@@ -102,6 +129,7 @@ def test_journal_round_trips_hle_fields_in_jsonl(tmp_path: Path) -> None:
     assert raw["eval_details"]["question_results"][0]["qid"] == "q-stable"
     assert raw["harness_metrics"]["planning_stability"]["score"] == 0.6
     assert raw["oracle_adequacy"]["coding_sentinel"]["oracle_type"] == "pytest"
+    assert raw["oracle_adequacy"]["control_attestation"]["status"] == "passed"
     assert raw["seq"]["candidate"] == "fp-a"
     assert raw["seq"]["z_rate"] == 0.1
 
@@ -116,23 +144,25 @@ def test_journal_round_trips_hle_fields_in_jsonl(tmp_path: Path) -> None:
 
 def test_journal_loads_hle_fields_from_legacy_eval_details(tmp_path: Path) -> None:
     (tmp_path / "autopilot_journal.jsonl").write_text(
-        json.dumps({
-            "trial_id": 3,
-            "timestamp": "2026-05-27T00:00:00Z",
-            "species": "legacy",
-            "action_type": "observe_only",
-            "tier": 1,
-            "quality": 0.5,
-            "speed": 10.0,
-            "cost": 0.4,
-            "reliability": 0.9,
-            "pareto_status": "dominated",
-            "eval_details": {
-                "metric_schema_version": 1,
-                "harness_metrics": {"memory_coherence": {"score": 0.9}},
-                "oracle_adequacy": {"qa": {"oracle_type": "exact_match"}},
-            },
-        })
+        json.dumps(
+            {
+                "trial_id": 3,
+                "timestamp": "2026-05-27T00:00:00Z",
+                "species": "legacy",
+                "action_type": "observe_only",
+                "tier": 1,
+                "quality": 0.5,
+                "speed": 10.0,
+                "cost": 0.4,
+                "reliability": 0.9,
+                "pareto_status": "dominated",
+                "eval_details": {
+                    "metric_schema_version": 1,
+                    "harness_metrics": {"memory_coherence": {"score": 0.9}},
+                    "oracle_adequacy": {"qa": {"oracle_type": "exact_match"}},
+                },
+            }
+        )
         + "\n"
     )
 

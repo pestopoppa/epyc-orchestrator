@@ -40,6 +40,7 @@ _LOCAL_TRANSIENT_HTTP_ERRORS = (
 _LOCAL_ACTION_OUTPUT_CONTRACT = """\
 CRITICAL OUTPUT CONTRACT FOR THIS LOCAL AUTOPILOT DRAFT:
 - Return exactly one fenced ```json:autopilot_actions block followed by one fenced ```json:autopilot_rationale block.
+- The ```json:autopilot_actions payload must be one JSON object, not a list or array.
 - Do not write analysis, caveats, summaries, or prose before the first fence.
 - Use only action types and fields explicitly allowed in the prompt.
 - Do not invent flags, surfaces, suites, dependencies, or evidence.
@@ -76,6 +77,97 @@ class PlannerProviderResult:
     error: str = ""
     duration_s: float = 0.0
     raw_events: list[str] = field(default_factory=list)
+    # AP-6 dogfooding: schema-valid ReviewDecision derived from a codex critique
+    # (role="critique"). Additive + passive — None unless the codex-critic path
+    # emitted one; never consulted by the coordinator's control flow (the native
+    # PlannerCritique parse still drives dispatch). See _emit_codex_review_decision.
+    review_decision: dict[str, Any] | None = None
+
+
+# AP-6: default-on-safe emission flag. Emission is passive (attaches an artifact +
+# counts); set AUTOPILOT_CODEX_REVIEW_DECISION_EMIT to a false-y value to disable.
+_CODEX_REVIEW_DECISION_EMIT_ENV = "AUTOPILOT_CODEX_REVIEW_DECISION_EMIT"
+
+
+def _codex_review_decision_emit_enabled() -> bool:
+    return os.environ.get(_CODEX_REVIEW_DECISION_EMIT_ENV, "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
+def _new_critique_emission_stats():
+    """Module-level dogfooding counters (parse-failure accounting, AP-6/RA-9)."""
+    try:
+        from review_policy_trials import CritiqueEmissionStats
+    except Exception:  # noqa: BLE001
+        from scripts.autopilot.review_policy_trials import CritiqueEmissionStats
+    return CritiqueEmissionStats()
+
+
+CODEX_REVIEW_DECISION_STATS = _new_critique_emission_stats()
+
+
+def _emit_codex_review_decision(result: "PlannerProviderResult") -> None:
+    """Passively derive + attach a ReviewDecision artifact from a critique (AP-6).
+
+    Behavior-preserving: only attaches ``result.review_decision`` and updates the
+    module-level counters. Parse failures are counted (never a silent fallback)
+    and the result is left untouched so the caller keeps current behavior. Never
+    raises — dogfooding must not perturb the planner path.
+    """
+    if not _codex_review_decision_emit_enabled():
+        return
+    try:
+        from review_policy_trials import derive_review_decision_from_critique
+    except Exception:  # noqa: BLE001
+        try:
+            from scripts.autopilot.review_policy_trials import (
+                derive_review_decision_from_critique,
+            )
+        except Exception:  # noqa: BLE001
+            return
+    try:
+        obj, failure = derive_review_decision_from_critique(result.text or "")
+    except Exception:  # noqa: BLE001
+        CODEX_REVIEW_DECISION_STATS.record_failure("exception")
+        return
+    if obj is not None:
+        result.review_decision = obj
+        CODEX_REVIEW_DECISION_STATS.record_success()
+        _route_review_decision_to_ledger(obj, result)
+        return
+    reason = "unknown"
+    if failure is not None:
+        reason = getattr(getattr(failure, "reason", None), "value", None) or str(
+            getattr(failure, "reason", "unknown")
+        )
+    CODEX_REVIEW_DECISION_STATS.record_failure(reason)
+
+
+def _route_review_decision_to_ledger(
+    obj: dict[str, Any], result: "PlannerProviderResult"
+) -> None:
+    """Best-effort seam to a passive review-ledger sink (AP-6).
+
+    Import-guarded: the review ledger (src/trace/review_ledger.py, H4) exposes a
+    connection-based API (insert_review_ledger_row(conn, ...)), NOT a fire-and-
+    forget emitter. Opening/writing a live ledger DB from this passive planner
+    path would be a persistent side effect, which the zero-live-write constraint
+    forbids — so this seam intentionally stays a no-op until a safe convenience
+    sink (record_review_decision) is provided. The typed decision is still
+    attached to result.review_decision + counted, so no signal is lost.
+    """
+    try:
+        from src.trace.review_ledger import record_review_decision  # type: ignore
+    except Exception:  # noqa: BLE001
+        return
+    try:
+        record_review_decision(obj, source=result.provider, role=result.role)
+    except Exception:  # noqa: BLE001
+        return
 
 
 class PlannerProvider(Protocol):
@@ -274,6 +366,11 @@ class CodexPlannerProvider:
                 duration_s=time.time() - start,
                 raw_events=raw_events,
             )
+            # AP-6 dogfooding: the codex critic is the first live control-plane
+            # tenant. Passively emit a typed ReviewDecision from a successful
+            # critique; parse failures are counted, not fatal.
+            if ok and role == "critique":
+                _emit_codex_review_decision(result)
             _archive_codex_call(prompt, result, raw_events)
             return result
         except FileNotFoundError:
@@ -893,10 +990,11 @@ You are the AutoPilot meta-reasoning controller. A long-context local role has
 compressed the live controller prompt into the brief below.
 
 Return exactly one fenced ```json:autopilot_actions block followed by one fenced
-```json:autopilot_rationale block. Use only action types, fields, surfaces,
-flags, suites, and evidence explicitly present in the brief. If the brief is
-missing information needed for a higher-risk action, emit the safest valid
-fallback action named in the brief.
+```json:autopilot_rationale block. The action block payload must be one JSON
+object, not a list or array. Use only action types, fields, surfaces, flags,
+suites, and evidence explicitly present in the brief. If the brief is missing
+information needed for a higher-risk action, emit the safest valid fallback
+action named in the brief.
 
 Original controller prompt length: {original_prompt_chars} chars.
 

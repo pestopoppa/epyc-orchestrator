@@ -1,0 +1,20 @@
+{
+  "blocked": 773,
+  "blocker_counts": {
+    "auroc_missing_or_degenerate": 773,
+    "ece_missing": 1,
+    "question_results_missing": 5
+  },
+  "ready_for_training": 423,
+  "reward_policy": "ap27_rlvr_tier_reward_v1",
+  "rows": 1196,
+  "schema_version": "ap27_rlvr_environment_summary.v1",
+  "skipped_no_eval": 15,
+  "source_label": "operator_gate_packet_20260711",
+  "tier_counts": {
+    "0": 423,
+    "1": 746,
+    "2": 23,
+    "3": 4
+  }
+}
