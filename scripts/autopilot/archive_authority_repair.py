@@ -24,6 +24,8 @@ from src.autopilot_core.journal_reconstruction import (  # noqa: E402
     reconstruct_archive_from_journal_rows,
 )
 from state_store import save_state  # noqa: E402
+from state_lock import state_write_lock  # noqa: E402
+from contextlib import nullcontext  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -105,41 +107,50 @@ def repair_state_file(
     expect_trial_counter: int | None = None,
     max_examples: int = 20,
 ) -> ArchiveRepairResult:
-    """Build and optionally write a journal-authoritative state-cache removal."""
-    state = _load_state(state_path)
-    actual_counter = state.get("trial_counter")
-    if expect_trial_counter is not None and actual_counter != expect_trial_counter:
-        before = build_archive_authority_report(
+    """Build and optionally write a journal-authoritative state-cache removal.
+
+    H4: when actually writing, hold the cross-process ``state_write_lock`` across
+    the WHOLE read (``_load_state``) -> build -> write so the repair's read and
+    its whole-file overwrite are one atomic critical section that cannot lose a
+    concurrent daemon/dashboard update. Read-only (``write=False``) inspection
+    takes no lock.
+    """
+    lock_cm = state_write_lock(state_path) if write else nullcontext()
+    with lock_cm:
+        state = _load_state(state_path)
+        actual_counter = state.get("trial_counter")
+        if expect_trial_counter is not None and actual_counter != expect_trial_counter:
+            before = build_archive_authority_report(
+                state,
+                _load_jsonl(journal_path),
+                max_examples=max_examples,
+            )
+            return ArchiveRepairResult(
+                status="trial_counter_mismatch",
+                before=before,
+                warning=(
+                    f"expected trial_counter {expect_trial_counter}, "
+                    f"found {actual_counter}"
+                ),
+            )
+
+        journal_rows = _load_jsonl(journal_path)
+        repaired, result = build_repaired_state(
             state,
-            _load_jsonl(journal_path),
+            journal_rows,
             max_examples=max_examples,
         )
+        if not write or result.status != "ready":
+            return result
+
+        backup = _backup_state(state_path)
+        save_state(state_path, repaired)
         return ArchiveRepairResult(
-            status="trial_counter_mismatch",
-            before=before,
-            warning=(
-                f"expected trial_counter {expect_trial_counter}, "
-                f"found {actual_counter}"
-            ),
+            status="written",
+            before=result.before,
+            after=result.after,
+            backup_path=str(backup),
         )
-
-    journal_rows = _load_jsonl(journal_path)
-    repaired, result = build_repaired_state(
-        state,
-        journal_rows,
-        max_examples=max_examples,
-    )
-    if not write or result.status != "ready":
-        return result
-
-    backup = _backup_state(state_path)
-    save_state(state_path, repaired)
-    return ArchiveRepairResult(
-        status="written",
-        before=result.before,
-        after=result.after,
-        backup_path=str(backup),
-    )
 
 
 def _summary_lines(result: ArchiveRepairResult) -> list[str]:

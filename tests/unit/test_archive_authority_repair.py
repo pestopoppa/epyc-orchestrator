@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 from pathlib import Path
 import sys
 from typing import Any
@@ -11,6 +13,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "autopilot"))
 
+import archive_authority_repair  # noqa: E402
 from archive_authority_repair import (  # noqa: E402
     build_repaired_state,
     main,
@@ -161,6 +164,36 @@ def test_repair_state_file_refuses_trial_counter_mismatch(tmp_path: Path) -> Non
     assert result.status == "trial_counter_mismatch"
     assert "expected trial_counter 99" in result.warning
     assert list(tmp_path.glob("*.bak-archive-repair-*")) == []
+
+
+def test_repair_state_file_write_takes_state_lock(tmp_path: Path, monkeypatch) -> None:
+    """H4: the archiver holds the cross-process write lock across its whole
+    read->build->write when actually writing; dry-run inspection takes no lock."""
+    state_path, journal_path = _write_state_and_journal(
+        tmp_path,
+        state_rows=[_row(1)],
+        journal_rows=[_row(1), _row(2)],
+    )
+
+    acquisitions: list[Path] = []
+    real = archive_authority_repair.state_write_lock
+
+    @contextlib.contextmanager
+    def spy(path, *args, **kwargs):
+        acquisitions.append(Path(os.fspath(path)))
+        with real(path, *args, **kwargs) as held:
+            yield held
+
+    monkeypatch.setattr(archive_authority_repair, "state_write_lock", spy)
+
+    # Dry-run: no lock.
+    repair_state_file(state_path, journal_path)
+    assert acquisitions == []
+
+    # Write: the read-modify-write is bracketed by exactly one lock acquisition.
+    result = repair_state_file(state_path, journal_path, write=True, expect_trial_counter=3)
+    assert result.status == "written"
+    assert acquisitions == [state_path]
 
 
 def test_cli_write_returns_zero_on_repair(tmp_path: Path) -> None:

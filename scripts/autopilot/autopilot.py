@@ -109,6 +109,7 @@ from state_store import (
     save_state as _save_state_impl,
 )
 from blacklist_purge_plan import purge_scoped_target, retryable_reexploration_target
+from state_lock import state_write_lock
 from actions import dispatch_action, SkipOutcome, _structural_noop_reason
 from paired_stats import QuestionOutcome, mcnemar_from_vectors
 from src.autopilot_core.action_identity import (
@@ -5575,9 +5576,60 @@ def _update_contrastive_trace_state(
         log.debug("Contrastive trace update skipped for trial %d: %s", trial_id, exc)
 
 
-def save_state(state: dict[str, Any]) -> None:
-    _normalize_state_before_save(state)
-    _save_state_impl(STATE_PATH, state)
+def save_state(
+    state: dict[str, Any],
+    *,
+    merge_control: bool = False,
+    _lock: bool = True,
+) -> None:
+    """Persist autopilot state under the cross-process H4 write lock.
+
+    Single-writer discipline: ``autopilot_state.json`` is a whole-file JSON
+    rewritten by 5+ processes; atomic ``os.replace`` stops torn reads but NOT
+    lost updates. Every write therefore serializes on ``state_write_lock``.
+
+    ``merge_control=True`` (daemon periodic / trial-end / lifecycle save): while
+    holding the lock, RE-READ the on-disk out-of-band CONTROL fields (paused /
+    pause_reason / _in_cache_flush) and merge them into ``state`` BEFORE writing,
+    so a dashboard, host_health, config_applicator, or operator pause set
+    out-of-band while a trial was in flight survives the daemon's whole-file
+    save. The daemon keeps ownership of trial/frontier/pareto fields — only the
+    clearly out-of-band control flags in ``_EXTERNAL_CONTROL_FIELDS`` merge.
+
+    ``_lock=False``: the caller already holds ``state_write_lock(STATE_PATH)``
+    (e.g. ``cmd_pause``, which wraps its own load->modify->save so the whole
+    read-modify-write is atomic). flock is NOT reentrant across two fds in one
+    process, so nested acquisition would fail open after the timeout — pass
+    False to skip re-acquiring the lock the caller already holds.
+    """
+
+    def _write() -> None:
+        if merge_control:
+            merged = _merge_external_control_fields(state)
+            if merged:
+                log.info(
+                    "Merged out-of-band control fields under lock before save: %s",
+                    ", ".join(merged),
+                )
+        _normalize_state_before_save(state)
+        _save_state_impl(STATE_PATH, state)
+
+    if _lock:
+        with state_write_lock(STATE_PATH):
+            _write()
+    else:
+        _write()
+
+
+# Control-plane fields owned OUT-OF-BAND of the autopilot daemon: a dashboard
+# pause click, the host_health / config_applicator cache-flush pause, and the
+# operator `autopilot.py pause` all write these directly to disk while the
+# daemon holds a long-lived in-memory state dict across a whole trial. When the
+# daemon re-reads under the write lock before a save it merges ONLY these — never
+# counters / frontier / in-flight metadata (those stay daemon-owned). Note:
+# ``pause_reason`` is written solely by the dashboard (never by the daemon,
+# which only pops it), so it is safe to treat as out-of-band-owned.
+_EXTERNAL_CONTROL_FIELDS: tuple[str, ...] = ("paused", "pause_reason", "_in_cache_flush")
 
 
 def _merge_external_control_fields(
@@ -5590,6 +5642,10 @@ def _merge_external_control_fields(
     external ``autopilot.py pause`` writes ``paused=True`` to disk, but the
     trial-end save path can otherwise overwrite it with stale ``paused=False``.
     Merge only control-plane fields, never counters or in-flight metadata.
+
+    Callers that persist afterward must do so under ``state_write_lock`` (the
+    daemon reaches this via ``save_state(..., merge_control=True)``) so the
+    re-read and the write are one atomic critical section.
     """
     if disk_state is None:
         try:
@@ -5599,7 +5655,7 @@ def _merge_external_control_fields(
             return []
 
     changed: list[str] = []
-    for key in ("paused", "_in_cache_flush"):
+    for key in _EXTERNAL_CONTROL_FIELDS:
         if key in disk_state and disk_state.get(key) != state.get(key):
             state[key] = disk_state[key]
             changed.append(key)
@@ -5773,8 +5829,16 @@ def _save_state_with_journal_archive_authority(
     archive: ParetoArchive,
     *,
     context: str,
+    merge_control: bool = False,
 ) -> bool:
-    """Persist state with append-only journal folds as cache authority."""
+    """Persist state with append-only journal folds as cache authority.
+
+    ``merge_control`` is forwarded to ``save_state`` so the daemon's trial-end /
+    lifecycle saves re-read and merge out-of-band control fields (paused /
+    pause_reason / _in_cache_flush) under the write lock before writing (H4). The
+    forward is done via an explicit branch so the default (non-merging) path still
+    calls ``save_state(state)`` with a single positional arg, matching test doubles.
+    """
     archive_changed = _apply_journal_archive_authority(state, journal, archive)
     baseline_changed = apply_baseline_ledger_authority(
         state,
@@ -5786,10 +5850,11 @@ def _save_state_with_journal_archive_authority(
             "state without a legacy archive cache",
             context,
         )
-        save_state(state)
+    elif archive_changed:
+        log.info("State archive cache removed during %s", context)
+    if merge_control:
+        save_state(state, merge_control=True)
     else:
-        if archive_changed:
-            log.info("State archive cache removed during %s", context)
         save_state(state)
     if baseline_changed:
         log.info("State baseline cache removed during %s", context)
@@ -6319,7 +6384,7 @@ def _run_loop_inner(
         was_paused = bool(state.get("paused"))
         try:
             disk_state = load_state()
-            for key in ("paused", "_in_cache_flush"):
+            for key in _EXTERNAL_CONTROL_FIELDS:
                 if key in disk_state:
                     state[key] = disk_state[key]
         except Exception as _exc:
@@ -8250,12 +8315,6 @@ def _run_loop_inner(
         state["quality_history_by_tier"] = gate.quality_history_by_tier
         baseline_state = gate.baseline.to_state_dict()
         state["baseline_state"] = baseline_state
-        merged_control = _merge_external_control_fields(state)
-        if merged_control:
-            log.info(
-                "Preserved external control state before trial-end save: %s",
-                ", ".join(merged_control),
-            )
         try:
             _append_baseline_promotion_event(
                 journal=journal,
@@ -8271,11 +8330,15 @@ def _run_loop_inner(
                 trial_counter - 1,
                 exc,
             )
+        # H4: the out-of-band control merge now happens UNDER the write lock
+        # inside save_state (merge_control=True), so an operator/dashboard/
+        # host_health pause set while this trial ran survives this whole-file save.
         _save_state_with_journal_archive_authority(
             state,
             journal,
             archive,
             context=f"trial {trial_counter} final save",
+            merge_control=True,
         )
 
         # Phase 6b — clear in_flight_trial marker AFTER final save_state.
@@ -8285,17 +8348,12 @@ def _run_loop_inner(
         # startup. By the time we reach here both the journal and the
         # Pareto archive are durable on disk, so it is safe to clear.
         state["in_flight_trial"] = None
-        merged_control = _merge_external_control_fields(state)
-        if merged_control:
-            log.info(
-                "Preserved external control state before in-flight clear: %s",
-                ", ".join(merged_control),
-            )
         _save_state_with_journal_archive_authority(
             state,
             journal,
             archive,
             context=f"trial {trial_counter} in-flight clear",
+            merge_control=True,
         )
 
         log.info(
@@ -8344,6 +8402,7 @@ def _run_loop_inner(
         journal,
         archive,
         context="shutdown",
+        merge_control=True,
     )
     # Final synchronous plot render so the operator's last view reflects the
     # final completed trial. Covers SIGTERM/SIGINT and the max-trials break (both
@@ -8602,24 +8661,32 @@ def cmd_status(args: argparse.Namespace) -> None:
 
 
 def cmd_pause(args: argparse.Namespace) -> None:
-    state = load_state()
-    state["paused"] = True
-    save_state(state)
+    # Operator control write: hold the H4 write lock across the WHOLE
+    # load->modify->save so a concurrent daemon save can neither lose this pause
+    # nor have its counters clobbered by our stale whole-file write. We OWN
+    # `paused` here (this IS the out-of-band writer) — do NOT merge_control.
+    with state_write_lock(STATE_PATH):
+        state = load_state()
+        state["paused"] = True
+        save_state(state, _lock=False)
     print("AutoPilot paused")
 
 
 def cmd_resume(args: argparse.Namespace) -> None:
-    state = load_state()
-    state["paused"] = False
-    state.pop("pause_reason", None)
-    if state.get("_dispatch_deficiency") == "skip_action_loop":
-        state["consecutive_skip_actions"] = 0
-        state["last_invalid_action"] = None
-        state["last_invalid_reason"] = None
-        state["last_invalid_status"] = None
-    state.pop("_dispatch_deficiency", None)
-    state.pop("_meta_halt_reason", None)
-    save_state(state)
+    # Operator control write — same single-writer discipline as cmd_pause: the
+    # read-modify-write is one locked critical section; we own the control fields.
+    with state_write_lock(STATE_PATH):
+        state = load_state()
+        state["paused"] = False
+        state.pop("pause_reason", None)
+        if state.get("_dispatch_deficiency") == "skip_action_loop":
+            state["consecutive_skip_actions"] = 0
+            state["last_invalid_action"] = None
+            state["last_invalid_reason"] = None
+            state["last_invalid_status"] = None
+        state.pop("_dispatch_deficiency", None)
+        state.pop("_meta_halt_reason", None)
+        save_state(state, _lock=False)
     print("AutoPilot resumed")
 
 
