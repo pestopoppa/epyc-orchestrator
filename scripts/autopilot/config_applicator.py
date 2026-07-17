@@ -18,6 +18,11 @@ from typing import Any
 
 import httpx
 
+try:  # H4: cross-process single-writer lock on autopilot_state.json
+    from scripts.autopilot.state_lock import state_write_lock
+except ImportError:  # pragma: no cover - path-dependent import
+    from state_lock import state_write_lock
+
 log = logging.getLogger("autopilot.config")
 
 ORCHESTRATOR_URL = "http://localhost:8000"
@@ -796,15 +801,18 @@ def _pause_autopilot_dispatch(
         "grace_s": grace_s,
     }
     try:
-        with open(resolved, encoding="utf-8") as handle:
-            state = json.load(handle)
-        paused_pre = bool(state.get("paused", False))
-        state["paused"] = True
-        tmp = resolved.with_suffix(resolved.suffix + ".tmp")
-        with open(tmp, "w", encoding="utf-8") as handle:
-            json.dump(state, handle, indent=2)
-            handle.write("\n")
-        os.replace(tmp, resolved)
+        # H4: set paused=True under a BRIEF locked read-modify-write, then RELEASE
+        # the lock BEFORE the grace sleep — never hold the state lock across a sleep.
+        with state_write_lock(resolved):
+            with open(resolved, encoding="utf-8") as handle:
+                state = json.load(handle)
+            paused_pre = bool(state.get("paused", False))
+            state["paused"] = True
+            tmp = resolved.with_suffix(resolved.suffix + ".tmp")
+            with open(tmp, "w", encoding="utf-8") as handle:
+                json.dump(state, handle, indent=2)
+                handle.write("\n")
+            os.replace(tmp, resolved)
         result["paused_pre"] = paused_pre
         result["paused_set"] = True
         if grace_s > 0:
@@ -832,18 +840,20 @@ def _restore_autopilot_dispatch_pause(pause_result: dict[str, Any]) -> dict[str,
         result["reason"] = "already_paused"
         return result
     try:
-        with open(state_path, encoding="utf-8") as handle:
-            state = json.load(handle)
-        if state.get("paused") is True:
-            state["paused"] = False
-            tmp = state_path.with_suffix(state_path.suffix + ".tmp")
-            with open(tmp, "w", encoding="utf-8") as handle:
-                json.dump(state, handle, indent=2)
-                handle.write("\n")
-            os.replace(tmp, state_path)
-            result.update({"status": "ok", "restored": True})
-        else:
-            result.update({"status": "skipped", "reason": "pause_already_cleared"})
+        # H4: restore paused=False under a BRIEF locked read-modify-write.
+        with state_write_lock(state_path):
+            with open(state_path, encoding="utf-8") as handle:
+                state = json.load(handle)
+            if state.get("paused") is True:
+                state["paused"] = False
+                tmp = state_path.with_suffix(state_path.suffix + ".tmp")
+                with open(tmp, "w", encoding="utf-8") as handle:
+                    json.dump(state, handle, indent=2)
+                    handle.write("\n")
+                os.replace(tmp, state_path)
+                result.update({"status": "ok", "restored": True})
+            else:
+                result.update({"status": "skipped", "reason": "pause_already_cleared"})
     except Exception as exc:
         result.update({"status": "error", "error": str(exc)})
     return result

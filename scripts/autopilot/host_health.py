@@ -40,6 +40,11 @@ from src.registry.stack_priors import (
     stack_prior_serving,
 )
 
+try:  # H4: cross-process single-writer lock on autopilot_state.json
+    from scripts.autopilot.state_lock import state_write_lock
+except ImportError:  # pragma: no cover - path-dependent import
+    from state_lock import state_write_lock
+
 log = logging.getLogger("autopilot.host_health")
 
 # Canonical drop_caches path — root-owned wrapper installed via the sudoers
@@ -638,18 +643,22 @@ def flush_cache_with_pause(
         "elapsed_s": 0.0,
     }
 
-    # Step 1: set paused=True via atomic write (mirror AP-39 atomic state pattern).
+    # Step 1: set paused=True via a BRIEF locked read-modify-write. H4 single-
+    # writer discipline: hold the cross-process state_write_lock ONLY for this rmw
+    # and RELEASE it before the sleep below — never hold the lock across the sleep /
+    # drop_caches / rewarm, which would stall the autopilot daemon's per-trial save.
     paused_pre = None
     try:
         if state_path.exists():
-            with open(state_path) as f:
-                state = json.load(f)
-            paused_pre = state.get("paused", False)
-            state["paused"] = True
-            tmp = state_path.with_suffix(state_path.suffix + ".tmp")
-            with open(tmp, "w") as f:
-                json.dump(state, f, indent=2)
-            os.replace(tmp, state_path)
+            with state_write_lock(state_path):
+                with open(state_path) as f:
+                    state = json.load(f)
+                paused_pre = state.get("paused", False)
+                state["paused"] = True
+                tmp = state_path.with_suffix(state_path.suffix + ".tmp")
+                with open(tmp, "w") as f:
+                    json.dump(state, f, indent=2)
+                os.replace(tmp, state_path)
             log.info("autopilot paused via state.json (pre=%s)", paused_pre)
         else:
             log.warning(
@@ -661,7 +670,7 @@ def flush_cache_with_pause(
 
     # Step 2: brief grace window for the trial loop to notice the new paused state
     # (loop reloads at top of every iteration, so 11s covers the 10s sleep inside
-    # the paused branch plus jitter).
+    # the paused branch plus jitter). The state lock is NOT held across this sleep.
     time.sleep(11)
 
     # Step 3: run the canonical flush.
@@ -672,19 +681,21 @@ def flush_cache_with_pause(
     if rewarm and flush_ok:
         result["rewarm"] = _numa_interleave_rewarm(rewarm_paths)
 
-    # Step 5: restore previous paused state (if there was one).
+    # Step 5: restore previous paused state (if there was one) under a second
+    # BRIEF locked read-modify-write — bracketing the UNLOCKED sleep/flush/rewarm.
     try:
-        with open(state_path) as f:
-            state = json.load(f)
-        # Only restore if we set it ourselves AND nothing else changed it
-        # to a stricter value (operator may have run `autopilot.py pause` mid-flush).
-        if state.get("paused") is True and paused_pre is False:
-            state["paused"] = False
-            tmp = state_path.with_suffix(state_path.suffix + ".tmp")
-            with open(tmp, "w") as f:
-                json.dump(state, f, indent=2)
-            os.replace(tmp, state_path)
-            log.info("autopilot resume (paused=False)")
+        with state_write_lock(state_path):
+            with open(state_path) as f:
+                state = json.load(f)
+            # Only restore if we set it ourselves AND nothing else changed it
+            # to a stricter value (operator may have run `autopilot.py pause` mid-flush).
+            if state.get("paused") is True and paused_pre is False:
+                state["paused"] = False
+                tmp = state_path.with_suffix(state_path.suffix + ".tmp")
+                with open(tmp, "w") as f:
+                    json.dump(state, f, indent=2)
+                os.replace(tmp, state_path)
+                log.info("autopilot resume (paused=False)")
     except Exception as exc:
         log.error("could not restore paused state: %s", exc)
 
