@@ -147,6 +147,20 @@ def test_score_rubric_authoring_concrete_axes():
     assert r["composite"] == pytest.approx((0.75 + 0.5 + 2 / 3) / 3)
 
 
+def test_score_rubric_authoring_counts_axis_synonyms():
+    authored = {
+        "items": [
+            {"id": "R1", "text": "Does the response answer the prompt?", "axis": "relevance", "weight": 3},
+            {"id": "R2", "text": "Are claims factually correct?", "axis": "accuracy", "weight": 3},
+            {"id": "R3", "text": "Is it faithful to the source?", "axis": "faithfulness", "weight": 2},
+            {"id": "R4", "text": "Does it cover the whole task?", "axis": "coverage", "weight": 1},
+        ]
+    }
+    r = probe.score_rubric_authoring(authored, _REFERENCE_RUBRIC)
+    assert r["axis_coverage"] == pytest.approx(1.0)
+    assert r["axes_covered"] == ["completeness", "grounding", "integrity", "question-alignment"]
+
+
 def test_score_rubric_authoring_empty_authored_is_zero():
     r = probe.score_rubric_authoring({"items": []}, _REFERENCE_RUBRIC)
     assert r["count_ratio"] == 0.0
@@ -195,6 +209,21 @@ def test_score_why_diagnosis_that_vs_why_gap():
     assert agg["that_minus_why_gap"] == pytest.approx(0.25)
 
 
+def test_builtin_why_aliases_match_glm_repair_phrases():
+    task_set = probe._builtin_task_set("why_diagnosis", m=3)
+    tasks, errs = probe.parse_task_set(task_set, probe="why_diagnosis")
+    assert errs == []
+    outputs = [
+        "The root failure cause is an incorrect midpoint update that assigns left = mid instead of left = mid + 1.",
+        "The root failure cause is missing None-guard before attribute access on an unvalidated user parameter.",
+        "The root failure cause is using the wrong arithmetic operation inside the square root.",
+    ]
+    summary = probe.score_probe("why_diagnosis", tasks, outputs)
+    assert summary["n_that_detected"] == 3
+    assert summary["n_why_matched"] == 3
+    assert summary["why_match_rate"] == pytest.approx(1.0)
+
+
 # --------------------------------------------------------------------------- #
 # Task-set parsing / validation (pure)
 # --------------------------------------------------------------------------- #
@@ -214,6 +243,16 @@ def test_parse_task_set_rejects_bad_tasks_per_probe():
         {"tasks": [{"task_id": "a", "prompt": "x"}]}, probe="why_diagnosis"
     )
     assert tasks == [] and any("gold_cause_aliases" in e for e in errs)
+
+
+def test_builtin_why_diagnosis_tasks_include_observable_causes():
+    task_set = probe._builtin_task_set("why_diagnosis", m=3)
+    tasks, errs = probe.parse_task_set(task_set, probe="why_diagnosis")
+    assert errs == []
+    assert [task["task_id"] for task in tasks] == ["wd-00", "wd-01", "wd-02"]
+    assert "left = mid" in tasks[0]["prompt"]
+    assert "user=None" in tasks[1]["prompt"]
+    assert "sqrt(dx * dx - dy * dy)" in tasks[2]["prompt"]
 
 
 def test_parse_task_set_dedups_task_ids():
