@@ -873,10 +873,15 @@ def _first_launch_entry_value(launch: dict[str, Any], field: str) -> str | None:
     return None
 
 
-def _runtime_requirements(server_cfg: dict[str, Any] | None) -> tuple[str | None, list[str]]:
-    if not isinstance(server_cfg, dict):
-        return None, []
-    runtime = server_cfg.get("runtime_requirements")
+def _runtime_requirements(
+    server_cfg: dict[str, Any] | None,
+    role_cfg: dict[str, Any] | None,
+) -> tuple[str | None, list[str]]:
+    runtime = server_cfg.get("runtime_requirements") if isinstance(server_cfg, dict) else None
+    if not isinstance(runtime, dict) and isinstance(role_cfg, dict):
+        role_server = role_cfg.get("server")
+        if isinstance(role_server, dict):
+            runtime = role_server.get("runtime_requirements")
     if not isinstance(runtime, dict):
         return None, []
     binary_dir = runtime.get("binary_dir") if isinstance(runtime.get("binary_dir"), str) else None
@@ -1123,7 +1128,7 @@ def _launch_runtime_record(
     vision_type = _first_launch_entry_value(launch, "vision_type")
     requirements = launch.get("requirements") if isinstance(launch.get("requirements"), dict) else {}
     acceleration = _effective_acceleration(role_cfg, server_cfg)
-    binary_dir, ld_paths = _runtime_requirements(server_cfg)
+    binary_dir, ld_paths = _runtime_requirements(server_cfg, role_cfg)
 
     binary_path = str(Path(binary_dir) / "llama-server") if binary_dir else str(LLAMA_SERVER)
     binary_family = (

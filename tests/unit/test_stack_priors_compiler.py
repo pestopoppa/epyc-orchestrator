@@ -663,6 +663,42 @@ def test_launch_runtime_record_does_not_inject_vision_escalation_override() -> N
     assert runtime["flags"]["override_kv"] == ["qwen3vlmoe.expert_used_count=int:4"]
 
 
+def test_launch_runtime_record_accepts_role_level_runtime_requirements() -> None:
+    runtime = _launch_runtime_record(
+        role="vision_escalation",
+        descriptor={},
+        server_cfg=None,
+        role_cfg={
+            "server": {
+                "device": "ROCm0",
+                "reasoning": "off",
+                "runtime_requirements": {
+                    "binary_dir": "/tmp/v7-hip/bin",
+                    "ld_library_path": ["/tmp/v7-hip/bin"],
+                },
+            },
+            "acceleration": {"type": "baseline"},
+        },
+        launch_cfg={
+            "launch": {
+                "primary_roles": ["vision_escalation"],
+                "modes": ["vision"],
+                "entries": [{"vision_type": "escalation"}],
+                "requirements": {
+                    "model_path": "/models/minicpm.gguf",
+                    "mmproj_path": "/models/minicpm-mmproj.gguf",
+                },
+                "runtime": {},
+            }
+        },
+    )
+
+    assert runtime["binary_dir"] == "/tmp/v7-hip/bin"
+    assert runtime["binary_path"] == "/tmp/v7-hip/bin/llama-server"
+    assert runtime["ld_library_path"] == ["/tmp/v7-hip/bin"]
+    assert runtime["env_policy"] == "binary_override_strip_ggml"
+
+
 def test_server_mode_requirement_overrides_keep_shared_alias_on_served_model() -> None:
     requirements = _server_mode_launch_requirement_overrides(
         "worker_math",

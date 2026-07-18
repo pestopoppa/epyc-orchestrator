@@ -1806,6 +1806,10 @@ roles:
       api_format: openai_multimodal
       device: ROCm0
       reasoning: 'off'
+      runtime_requirements:
+        binary_dir: /mnt/raid0/llm/llama.cpp-experimental/build-hip/bin
+        ld_library_path:
+        - /mnt/raid0/llm/llama.cpp-experimental/build-hip/bin
     escalation:
       from: worker_vision
       auto_wired: false

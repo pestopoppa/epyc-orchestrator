@@ -947,6 +947,43 @@ def test_start_server_vision_forwards_numa_instance_to_prefix(tmp_path, monkeypa
     _assert_detached_popen(popen)
 
 
+def test_start_server_vision_applies_stack_prior_runtime_ld_path(tmp_path, monkeypatch) -> None:
+    fake_proc = SimpleNamespace(pid=4243)
+    monkeypatch.setattr(oss, "LOG_DIR", tmp_path)
+    monkeypatch.setattr(oss, "_write_llama_marker", lambda *a, **kw: None)
+    monkeypatch.setattr(oss, "wait_for_health", lambda *a, **kw: True)
+    monkeypatch.setattr(
+        oss,
+        "build_launch_env",
+        lambda *a, **kw: {"GGML_IQK": "1", "GGML_TEST_FLAG": "remove"},
+    )
+    monkeypatch.setattr(
+        oss,
+        "_stack_prior_runtime_overrides",
+        lambda role: ("/tmp/v7-hip/bin/llama-server", ["/tmp/v7-hip/bin"]),
+    )
+    with (
+        patch.object(oss, "_numa_prefix", return_value=[]),
+        patch.object(oss, "build_server_command", return_value=["/tmp/v7-hip/bin/llama-server"]),
+        patch.object(oss.subprocess, "Popen", return_value=fake_proc) as popen,
+    ):
+        info = oss.start_server(
+            port=8087,
+            roles=["vision_escalation"],
+            registry=SimpleNamespace(),
+            vision_mode=True,
+            vision_type="escalation",
+        )
+
+    assert info is not None
+    env = popen.call_args.kwargs["env"]
+    assert env["GGML_IQK"] == "1"
+    assert "GGML_TEST_FLAG" not in env
+    assert env["LD_LIBRARY_PATH"].startswith("/tmp/v7-hip/bin")
+    assert env["KMP_BLOCKTIME"] == "10"
+    _assert_detached_popen(popen)
+
+
 def test_start_server_worker_pool_forwards_numa_instance_to_prefix(tmp_path, monkeypatch) -> None:
     """Worker quarter launches must use the quarter CPU mask as well as -t 48."""
     calls: list[tuple[str, int]] = []

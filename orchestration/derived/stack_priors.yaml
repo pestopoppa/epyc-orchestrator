@@ -48,39 +48,39 @@ contract:
   - quality_overall
   - memory_cost
   fallback_policy: Consumers may use local fallback values only as explicit degraded mode when this generated contract is missing or invalid.
-compiled_at: '2026-07-18T11:53:38Z'
+compiled_at: '2026-07-18T12:21:03Z'
 status: compiled
 coverage_scope: descriptor_role_bindings
 precedence_spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
 source_artifacts:
   registry:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
-    sha256: 42627e52df9df55e9928d84f49d00ac07f00f38b4f1cd2ab442fe1f35dfe6bc7
-    repo_commit: 8ce579ab
+    sha256: 6aa2c90de12575203d6b689215a2b625d624b11606ee0250b2a38e343dfb0c6e
+    repo_commit: 4ab4e0ee
   descriptors:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_descriptors.yaml
-    sha256: 91257ece686e99f9cbc8644c155068f079ff7525feecc3651697ec1cc6ba04af
-    repo_commit: 8ce579ab
+    sha256: 6c362e3c05176fd14550fcd6ba6f492d316971091cd51afe9a1d8e0ebbc94a88
+    repo_commit: 4ab4e0ee
   stack_manifest:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_manifest.py
     sha256: 7461985303ee95a22a018414bcec32128f1399061395b63f3fc594d076a27a00
-    repo_commit: 8ce579ab
+    repo_commit: 4ab4e0ee
   stack_numa:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_numa.py
     sha256: 001897f21e9a10943c6f6b5714e10877d3a5f3f3c485b9380d456b4821373794
-    repo_commit: 8ce579ab
+    repo_commit: 4ab4e0ee
   orchestrator_stack:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/orchestrator_stack.py
-    sha256: 0cf496b3f451746e489ae6885cd5243ee09e67213e8896496d04f4265ed4e19f
-    repo_commit: 8ce579ab
+    sha256: 5a5428dc1bb82c084043d29834fd208597631f7bc0b1225728907110edac56e9
+    repo_commit: 4ab4e0ee
   stack_paths:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_paths.py
     sha256: 7eee8576101dbb827ec8e94a228beedb401d7cad80841e1a18aab9c03db4206b
-    repo_commit: 8ce579ab
+    repo_commit: 4ab4e0ee
   stack_runtime:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_runtime.py
-    sha256: f749047dde702b21759f67dcc81bf6cd64f1157e8a1fdf250b317301c1b6d32c
-    repo_commit: 8ce579ab
+    sha256: 984d27262e1f1d5a5332d0b4a3e6fb96fb8095fc890ddaa93da07bff52eb1c99
+    repo_commit: 4ab4e0ee
 roles:
   architect_general:
     role: architect_general
@@ -894,11 +894,12 @@ roles:
           model_path: /mnt/raid0/llm/models/MiniCPM-o-4_5-gguf/MiniCPM-o-4_5-Q4_K_M.gguf
         runtime:
           binary_family: llama.cpp
-          binary_path: /mnt/raid0/llm/llama.cpp/build/bin/llama-server
-          binary_dir: null
-          ld_library_path: []
-          env_policy: canonical
-          kmp_blocktime: null
+          binary_path: /mnt/raid0/llm/llama.cpp-experimental/build-hip/bin/llama-server
+          binary_dir: /mnt/raid0/llm/llama.cpp-experimental/build-hip/bin
+          ld_library_path:
+          - /mnt/raid0/llm/llama.cpp-experimental/build-hip/bin
+          env_policy: binary_override_strip_ggml
+          kmp_blocktime: 10
           cache:
             context_tokens: 8192
             slots: 1
