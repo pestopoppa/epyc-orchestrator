@@ -635,10 +635,15 @@ def test_launch_runtime_record_does_not_inject_vision_escalation_override() -> N
         role="vision_escalation",
         descriptor={},
         server_cfg=None,
-        role_cfg={"acceleration": {"type": "baseline"}},
+        role_cfg={
+            "server": {"device": "ROCm0", "reasoning": "off"},
+            "acceleration": {"type": "baseline"},
+        },
         launch_cfg=launch_cfg,
     )
 
+    assert runtime["flags"]["device"] == "ROCm0"
+    assert runtime["flags"]["reasoning"] == "off"
     assert runtime["flags"]["override_kv"] == []
 
     runtime = _launch_runtime_record(
@@ -778,6 +783,7 @@ def test_compile_uses_stack_manifest_when_server_mode_is_absent(tmp_path: Path) 
     assert runtime["cache"]["ubatch"] is None
     assert runtime["cache"]["mlock"] is False
     assert runtime["flags"]["flash_attn"] is True
+    assert runtime["flags"]["device"] is None
     assert runtime["flags"]["jinja"] is False
     assert runtime["flags"]["spec"]["enabled"] is False
     assert role["priors"]["memory_cost"] == 1.0

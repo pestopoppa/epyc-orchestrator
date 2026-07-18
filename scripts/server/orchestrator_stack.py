@@ -85,6 +85,8 @@ from scripts.server.stack_manifest import (
     SERIAL_ROLES,
     VISION_ESCALATION_MMPROJ,
     VISION_ESCALATION_MODEL,
+    VISION_ESCALATION_DEVICE,
+    VISION_ESCALATION_REASONING,
     VISION_WORKER_MMPROJ,
     VISION_WORKER_MODEL,
     WORKER_POOL_MODELS,
@@ -489,6 +491,12 @@ def _build_vision_command(port: int, vision_type: str | None, numa_instance: int
         )
         if flags.get("flash_attn", True) is True:
             cmd.extend(["--flash-attn", "on"])
+        reasoning = flags.get("reasoning") or VISION_ESCALATION_REASONING
+        if isinstance(reasoning, str) and reasoning:
+            cmd.extend(["--reasoning", reasoning])
+        device = flags.get("device") or VISION_ESCALATION_DEVICE
+        if isinstance(device, str) and device:
+            cmd.extend(["--device", device])
         if cache.get("no_mmap", False) is True:
             cmd.append("--no-mmap")
         return cmd
@@ -517,6 +525,12 @@ def _build_vision_command(port: int, vision_type: str | None, numa_instance: int
     ]
     if flags.get("flash_attn", True) is True:
         cmd.extend(["--flash-attn", "on"])
+    reasoning = flags.get("reasoning")
+    if isinstance(reasoning, str) and reasoning:
+        cmd.extend(["--reasoning", reasoning])
+    device = flags.get("device")
+    if isinstance(device, str) and device:
+        cmd.extend(["--device", device])
     if cache.get("no_mmap", False) is True:
         cmd.append("--no-mmap")
     return cmd
@@ -1158,7 +1172,7 @@ def start_server(
 
         if vision_type == "escalation":
             model_path = VISION_ESCALATION_MODEL
-            model_name = "Qwen2.5-VL-7B (vision escalation temporary alias)"
+            model_name = "MiniCPM-o-4.5 Q4_K_M (vision escalation on MI210)"
         else:
             model_path = VISION_WORKER_MODEL
             model_name = "Qwen2.5-VL-7B (vision worker)"

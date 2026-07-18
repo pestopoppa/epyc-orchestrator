@@ -1,16 +1,16 @@
 descriptor_version: 3
-compiled_at: '2026-07-17T14:31:36Z'
+compiled_at: '2026-07-18T11:53:38Z'
 status: compiled
 coverage_scope: active_roles_from_stack_manifest
 source_registries:
   lean:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
-    repo_commit: d9f0d148
-    sha256: 1b15929a011285a469f23046dfb8a1d87e802d3bd4fce101a0acdfb280b69e6c
+    repo_commit: 8ce579ab
+    sha256: 42627e52df9df55e9928d84f49d00ac07f00f38b4f1cd2ab442fe1f35dfe6bc7
   research:
     path: /mnt/raid0/llm/epyc-inference-research/orchestration/model_registry.yaml
-    repo_commit: f56096c
-    sha256: 28399f902009327abedfa234d60a744b71270daf4ce763aa683deb023ad8e75c
+    repo_commit: 760b2c9
+    sha256: ded705e1a3e6d3e4d0da9d43cf10220ffcb9fc06edd40cf0e686088d6e440a22
 model_id_policy:
   canonical_shape: family-params-active-quant
   invariant: model records are keyed by physical model identity, never by role name
@@ -115,6 +115,76 @@ models:
     server_role: worker
     requirements: {}
   known_gaps: []
+- model_id: minicpm-o-4_5-q4_k_m
+  display_name: MiniCPM-o-4_5
+  family: minicpm-o-4_5-q4_k_m
+  arch: dense
+  params_b: null
+  active_b: null
+  quant: Q4_K_M
+  mem_gb: 6.2
+  ctx_max: 8192
+  modalities:
+  - text
+  - vision
+  role_bindings:
+    roles:
+    - vision_escalation
+    server_roles: []
+    runtime_aliases: []
+    shared_mmap: false
+  quality:
+    suite_vector:
+      vision_language: 1.0
+      overall: 1.0
+    source: orchestration/model_registry.yaml
+    eval_protocol: MEASUREMENT.md#canonical-quality
+    measured:
+    - date: '2026-07-17'
+      protocol: registry performance block
+      value:
+        baseline_tps: 110.81
+        optimized_tps: 110.81
+        speedup: 1.0x
+        vl_score:
+          pct: 100.0
+          raw: 4/4 K35 fixed fixtures
+        benchmark_date: '2026-07-17'
+        evidence: /mnt/raid0/llm/tmp/k35-vision-matrix-20260717T1500Z/summary.json; K35.13c mixed-service matrix passed 8/8 context/fixture pairs with frontdoor overlap.
+  speed:
+    solo_96t_tps: null
+    quarter_48t_tps: null
+    prefill_tps: null
+    optimized_tps: 110.81
+    source: orchestration/model_registry.yaml
+    measured:
+    - date: '2026-07-17'
+      protocol: registry performance block
+      baseline_tps: 110.81
+      optimized_tps: 110.81
+  acceleration:
+    spec_type: baseline
+    draft_compat: []
+    enable_thinking: null
+    thinking_control:
+      mode: llama_server_reasoning_off
+      effective_mode: no_reasoning_trace
+      evidence_strength: K35 fixed-fixture MI210 evidence
+      evidence: K35.11/K35.13c passed fixed OCR/chart fixtures and mixed-service checks with --reasoning off.
+    kv:
+      k: null
+      v: null
+  serving:
+    binary: llama.cpp
+    binary_dir: null
+    numa_policy: role_endpoint_binding
+    mlock: false
+    ports:
+    - 8087
+    server_role: null
+    requirements:
+      mmproj_path: /mnt/raid0/llm/models/MiniCPM-o-4_5-gguf/vision/MiniCPM-o-4_5-vision-F16.gguf
+  known_gaps: []
 - model_id: qwen2.5-vl-7b-q4_k_m
   display_name: Qwen2.5-VL-7B-Instruct
   family: qwen2.5-vl
@@ -129,7 +199,6 @@ models:
   - vision
   role_bindings:
     roles:
-    - vision_escalation
     - worker_vision
     server_roles: []
     runtime_aliases: []
@@ -141,17 +210,6 @@ models:
     source: orchestration/model_registry.yaml
     eval_protocol: MEASUREMENT.md#canonical-quality
     measured:
-    - date: '2026-07-17'
-      protocol: registry performance block
-      value:
-        baseline_tps: 16.91
-        optimized_tps: 21.32
-        speedup: 1.0x
-        vl_score:
-          pct: 100.0
-          raw: 4/4 K35 fixed fixtures
-        benchmark_date: '2026-07-17'
-        evidence: /mnt/raid0/llm/tmp/k35-vision-matrix-20260717T1500Z/summary.json
     - date: '2026-03-04'
       protocol: registry performance block
       value:
@@ -164,13 +222,13 @@ models:
     solo_96t_tps: null
     quarter_48t_tps: null
     prefill_tps: null
-    optimized_tps: 21.32
+    optimized_tps: 20.0
     source: orchestration/model_registry.yaml
     measured:
-    - date: '2026-07-17'
+    - date: '2026-03-04'
       protocol: registry performance block
-      baseline_tps: 16.91
-      optimized_tps: 21.32
+      baseline_tps: 15.28
+      optimized_tps: 20.0
   acceleration:
     spec_type: baseline
     draft_compat: []
@@ -190,7 +248,6 @@ models:
     mlock: false
     ports:
     - 8086
-    - 8087
     server_role: null
     requirements:
       mmproj_path: lmstudio-community/Qwen2.5-VL-7B-Instruct-GGUF/mmproj-model-f16.gguf

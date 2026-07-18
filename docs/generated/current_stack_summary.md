@@ -9,9 +9,9 @@ uv run python scripts/registry/stack_change_pipeline.py update
 Source: `orchestration/derived/stack_priors.yaml`
 
 Source fingerprints:
-- orchestration/derived/stack_priors.yaml: `64429bb0b0e171b3268b973f56728079a75e56354bf8d3b158c125781bd88957`
-- orchestration/model_registry.yaml: `1b15929a011285a469f23046dfb8a1d87e802d3bd4fce101a0acdfb280b69e6c`
-- orchestration/model_descriptors.yaml: `dce099c51b086e5a7aa546cd11ab95ab725a8e0dc33be0dd6b971a4b2b441203`
+- orchestration/derived/stack_priors.yaml: `c9b6e7eda4f0fe9cd2c95aad877ffbb10e27a471dfb60fbffe4c93f94bbc53fb`
+- orchestration/model_registry.yaml: `42627e52df9df55e9928d84f49d00ac07f00f38b4f1cd2ab442fe1f35dfe6bc7`
+- orchestration/model_descriptors.yaml: `91257ece686e99f9cbc8644c155068f079ff7525feecc3651697ec1cc6ba04af`
 
 | Role | Port | Model | Tier | Acceleration | Requirements | Throughput | Description |
 |---|---:|---|---|---|---|---:|---|
@@ -20,8 +20,8 @@ Source fingerprints:
 | frontdoor | 8070 | Qwen3.6-35B-A3B-MTP-Q8_0 | hot | none (lookup=false) | embedded_nextn=Qwen3.6-35B-A3B-MTP-Q8_0.gguf | 24.3 | live_stack; binding=server_mode.direct; status=compiled |
 | ingest_long_context | 8085 | Qwen3-Next-80B-A3B-Instruct | hot | none | none | 20.8 | live_stack; binding=server_mode.direct; status=compiled |
 | toolrunner | 8072 | gemma-4-26B-A4B-it-ORIG-Q4_K_M | hot | ngram-mod,draft-mtp (lookup=false, draft_max=2) | draft=gemma-4-26B-A4B-it-assistant-v6-Q8_0.gguf | 38.46 | live_stack; binding=server_mode.shared_with; status=compiled |
-| vision_escalation | 8087 | Qwen2.5-VL-7B-Instruct | hot | baseline | mmproj=mmproj-model-f16.gguf | 21.32 | live_stack; binding=stack_manifest.role; status=compiled |
+| vision_escalation | 8087 | MiniCPM-o-4_5 | hot | baseline | mmproj=MiniCPM-o-4_5-vision-F16.gguf | 110.81 | live_stack; binding=stack_manifest.role; status=compiled |
 | worker_general | 8072 | gemma-4-26B-A4B-it-ORIG-Q4_K_M | hot | ngram-mod,draft-mtp (lookup=false, draft_max=2) | draft=gemma-4-26B-A4B-it-assistant-v6-Q8_0.gguf | 38.46 | live_stack; binding=server_mode.model_role; status=compiled |
 | worker_math | 8072 | gemma-4-26B-A4B-it-ORIG-Q4_K_M | hot | ngram-mod,draft-mtp (lookup=false, draft_max=2) | draft=gemma-4-26B-A4B-it-assistant-v6-Q8_0.gguf | 38.46 | live_stack; binding=server_mode.shared_with; status=compiled |
 | worker_summarize | 8070 | Qwen3.6-35B-A3B-MTP-Q8_0 | hot | none (lookup=false) | embedded_nextn=Qwen3.6-35B-A3B-MTP-Q8_0.gguf | 24.3 | live_stack; binding=stack_manifest.alias->server_mode.direct; status=compiled |
-| worker_vision | 8086 | Qwen2.5-VL-7B-Instruct | hot | baseline | mmproj=mmproj-model-f16.gguf | 21.32 | live_stack; binding=stack_manifest.role; status=compiled |
+| worker_vision | 8086 | Qwen2.5-VL-7B-Instruct | hot | baseline | mmproj=mmproj-model-f16.gguf | 20 | live_stack; binding=stack_manifest.role; status=compiled |
