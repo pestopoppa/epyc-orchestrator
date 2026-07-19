@@ -47,6 +47,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -70,6 +71,22 @@ HEALTH_CHECK_SCRIPT = ORCH / "scripts" / "session" / "health_check.sh"
 ATTEST_DIR = Path(
     "/mnt/raid0/llm/epyc-root/coordination/inference-batch/attestations"
 )
+PROJECT_VENV_PY = ORCH / ".venv/bin/python"
+
+
+def _reexec_under_project_venv() -> None:
+    """Run CLI invocations under the project venv so probe imports are stable."""
+
+    if (
+        PROJECT_VENV_PY.exists()
+        and Path(sys.executable).resolve() != PROJECT_VENV_PY.resolve()
+        and os.environ.get("ORCHESTRATOR_PREFLIGHT_REEXEC") != "1"
+    ):
+        os.environ["ORCHESTRATOR_PREFLIGHT_REEXEC"] = "1"
+        os.execv(
+            str(PROJECT_VENV_PY),
+            [str(PROJECT_VENV_PY), __file__, *sys.argv[1:]],
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -108,7 +125,8 @@ def _tail(text: str | None, n: int = 2) -> list[str]:
 # --------------------------------------------------------------------------- #
 def check_live_affinity(roles: list[str] | None = None,
                         timeout: float = 180.0,
-                        script: Path = AFFINITY_SCRIPT) -> dict:
+                        script: Path = AFFINITY_SCRIPT,
+                        live_only: bool = False) -> dict:
     """Subprocess affinity_preflight.py; read live_affinity_verified from its artifact.
 
     Conservative: any failure to run or parse ⇒ verified False ⇒ check FAIL. A
@@ -143,14 +161,29 @@ def check_live_affinity(roles: list[str] | None = None,
     summary = None
     if isinstance(artifact, dict):
         instances = artifact.get("instances", [])
+        live_instances = [
+            e for e in instances if isinstance(e, dict) and e.get("pid")
+        ]
+        live_verified = bool(live_instances) and all(
+            bool(e.get("match")) for e in live_instances
+        )
+        memory_verified = bool(artifact.get("live_memory_placement_verified", True))
+        if live_only:
+            verified = live_verified and memory_verified
         summary = {
             "instances": len(instances),
             "matched": sum(1 for e in instances if e.get("match")),
+            "live_instances": len(live_instances),
+            "live_matched": sum(1 for e in live_instances if e.get("match")),
             "live_memory_placement_verified": artifact.get("live_memory_placement_verified"),
         }
     return {
         "ok": verified,
         "live_affinity_verified": verified,
+        "configured_affinity_verified": bool(
+            artifact.get("live_affinity_verified")
+        ) if isinstance(artifact, dict) else False,
+        "live_only": live_only,
         "returncode": (res.returncode if res else None),
         "artifact_summary": summary,
         "error": None if res else "affinity_preflight subprocess failed to run",
@@ -183,10 +216,28 @@ def _probe_ports(ports: list[int] | None, timeout: float) -> dict:
     return {"ports": per_port, "error": None}
 
 
+def ports_for_roles(roles: list[str] | None) -> list[int] | None:
+    """Return primary health ports for a role-scoped server gate."""
+
+    if not roles:
+        return None
+    try:
+        from scripts.server.stack_manifest import PORT_MAP
+    except Exception:  # noqa: BLE001
+        return None
+    ports: list[int] = []
+    for role in roles:
+        port = PORT_MAP.get(role)
+        if port is not None and port not in ports:
+            ports.append(port)
+    return ports
+
+
 def check_health(require_servers: bool = False,
                  ports: list[int] | None = None,
                  port_timeout: float = 3.0,
-                 script: Path = HEALTH_CHECK_SCRIPT) -> dict:
+                 script: Path = HEALTH_CHECK_SCRIPT,
+                 server_health_only: bool = False) -> dict:
     """Structural stack health (health_check.sh) + optional live server-port probe.
 
     health_ok = structural_ok, unless --require-servers is set, in which case all
@@ -195,7 +246,9 @@ def check_health(require_servers: bool = False,
     detail: dict = {"probe": "health_check.sh (+ stack_health.wait_for_health)"}
     structural_ok = None
     rc = None
-    if Path(script).exists():
+    if server_health_only:
+        detail["structural_skipped"] = True
+    elif Path(script).exists():
         res = _run(["bash", str(script)], cwd=ORCH, timeout=180.0)
         if res is not None:
             rc = res.returncode
@@ -210,7 +263,8 @@ def check_health(require_servers: bool = False,
         probed = port_detail.get("ports", {})
         ports_ok = bool(probed) and all(probed.values())
 
-    ok = bool(structural_ok) and (ports_ok if require_servers else True)
+    structural_pass = True if server_health_only else bool(structural_ok)
+    ok = structural_pass and (ports_ok if require_servers else True)
     return {
         "ok": ok,
         "health_ok": ok,
@@ -257,7 +311,8 @@ def check_topology_hashes(expected_topology_hash: str | None = None,
 
 
 def check_contention_matrix_fresh(max_age_days: int = 30,
-                                  script: Path = CONTENTION_FRESH_SCRIPT) -> dict:
+                                  script: Path = CONTENTION_FRESH_SCRIPT,
+                                  observation_only: bool = False) -> dict:
     """Subprocess the freshness validator: exit 0 fresh / 2 stale|missing / 3 invalid."""
     detail: dict = {"probe": "check_contention_matrix_fresh.py", "method": "subprocess"}
     if not Path(script).exists():
@@ -271,12 +326,15 @@ def check_contention_matrix_fresh(max_age_days: int = 30,
         return {"ok": False, "contention_matrix_fresh": False,
                 "error": "freshness checker subprocess failed to run", **detail}
     fresh = res.returncode == 0
+    warning = None if fresh else f"contention matrix not fresh (rc={res.returncode})"
     return {
-        "ok": fresh,
+        "ok": fresh or observation_only,
         "contention_matrix_fresh": fresh,
         "returncode": res.returncode,
         "message_tail": _tail(res.stdout) + _tail(res.stderr),
-        "error": None if fresh else f"contention matrix not fresh (rc={res.returncode})",
+        "error": None if fresh or observation_only else warning,
+        "warning": warning,
+        "observation_only": observation_only,
         **detail,
     }
 
@@ -297,6 +355,9 @@ def attest(*, expected_topology_hash: str | None = None,
            require_servers: bool = False,
            max_age_days: int = 30,
            ports: list[int] | None = None,
+           affinity_live_only: bool = False,
+           server_health_only: bool = False,
+           contention_observation_only: bool = False,
            checks: dict | None = None) -> dict:
     """Compose the four probes into a single attestation dict (no file write).
 
@@ -304,12 +365,24 @@ def attest(*, expected_topology_hash: str | None = None,
     read-only probes run. overall is PASS iff every check's "ok" is truthy.
     """
     ts = time.strftime("%Y-%m-%dT%H:%M:%S")
+    if require_servers and ports is None:
+        ports = ports_for_roles(roles)
     if checks is None:
         checks = {
-            "live_affinity": check_live_affinity(roles=roles),
-            "health": check_health(require_servers=require_servers, ports=ports),
+            "live_affinity": check_live_affinity(
+                roles=roles,
+                live_only=affinity_live_only,
+            ),
+            "health": check_health(
+                require_servers=require_servers,
+                ports=ports,
+                server_health_only=server_health_only,
+            ),
             "topology": check_topology_hashes(expected_topology_hash=expected_topology_hash),
-            "contention_matrix": check_contention_matrix_fresh(max_age_days=max_age_days),
+            "contention_matrix": check_contention_matrix_fresh(
+                max_age_days=max_age_days,
+                observation_only=contention_observation_only,
+            ),
         }
 
     fail_reasons: list[str] = []
@@ -349,12 +422,20 @@ def write_attestation(att: dict, output_dir: Path = ATTEST_DIR) -> Path:
 # CLI
 # --------------------------------------------------------------------------- #
 def main(argv: list[str] | None = None) -> int:
+    if argv is None:
+        _reexec_under_project_venv()
     ap = argparse.ArgumentParser(description="B4 inference-batch preflight gate (read-only).")
     ap.add_argument("--expected-topology-hash", default=None,
                     help="fail if the live topology hash does not match this value")
     ap.add_argument("--roles", nargs="*", default=None, help="affinity roles subset")
     ap.add_argument("--require-servers", action="store_true",
                     help="also require all configured server ports to answer /health")
+    ap.add_argument("--affinity-live-only", action="store_true",
+                    help="pass affinity if every live scoped instance matches, while recording dropped configured replicas")
+    ap.add_argument("--server-health-only", action="store_true",
+                    help="skip structural health_check.sh and require only scoped live server ports")
+    ap.add_argument("--contention-observation-only", action="store_true",
+                    help="record stale/missing contention matrix status without failing the preflight")
     ap.add_argument("--max-age-days", type=int, default=30,
                     help="contention-matrix staleness window (default 30)")
     ap.add_argument("--output-dir", default=str(ATTEST_DIR))
@@ -367,6 +448,9 @@ def main(argv: list[str] | None = None) -> int:
         roles=args.roles,
         require_servers=args.require_servers,
         max_age_days=args.max_age_days,
+        affinity_live_only=args.affinity_live_only,
+        server_health_only=args.server_health_only,
+        contention_observation_only=args.contention_observation_only,
     )
 
     path = None

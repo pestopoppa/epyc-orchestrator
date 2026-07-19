@@ -23,7 +23,7 @@ class FakeRunner:
         elif argv[:2] == ["ps", "-eo"]:
             stdout = "123 bash bash\n"
         elif argv[:1] == ["rocm-smi"]:
-            stdout = "No KFD PIDs\n"
+            stdout = "No KFD PIDs currently running\n"
         return subprocess.CompletedProcess(argv, 0, stdout, "")
 
 
@@ -55,6 +55,8 @@ def test_dry_bundle_writes_no_inference_operator_script(tmp_path: Path, monkeypa
     assert "--execute" in operator
     assert "--policy-enabled" in operator
     assert 'CPU_URL="${CPU_URL:?set CPU_URL to the CPU llama-server base URL}"' in operator
+    assert 'GPU_SERVER_PID="${GPU_SERVER_PID:?set GPU_SERVER_PID to the intended GPU llama-server PID}"' in operator
+    assert '--gpu-server-pid "$GPU_SERVER_PID"' in operator
     assert '--cpu-url "$CPU_URL"' in operator
     assert "--cpu-url '${CPU_URL" not in operator
     assert "--quant-change-role-allowlist --cpu-quant" not in operator
@@ -63,6 +65,26 @@ def test_dry_bundle_writes_no_inference_operator_script(tmp_path: Path, monkeypa
 
     loaded = json.loads((out / "summary.json").read_text())
     assert loaded["schema"] == bundle.SCHEMA
+
+
+def test_gpu_occupancy_requires_declared_allowed_pid() -> None:
+    snapshot = {"rocm_smi_showpids": {"ok": True, "stdout": "KFD process 12345 llama-server\n", "stderr": ""}}
+
+    occupied = bundle.gpu_occupancy(snapshot, allowed_pids={12345})
+
+    assert occupied["occupied"] is True
+    assert occupied["exclusive_to_allowed"] is True
+    assert occupied["pids"] == [12345]
+
+
+def test_gpu_occupancy_flags_unexpected_pid() -> None:
+    snapshot = {"rocm_smi_showpids": {"ok": True, "stdout": "KFD process 12345 llama-server\n", "stderr": ""}}
+
+    occupied = bundle.gpu_occupancy(snapshot, allowed_pids={22222})
+
+    assert occupied["occupied"] is True
+    assert occupied["exclusive_to_allowed"] is False
+    assert occupied["unexpected_pids"] == [12345]
 
 
 def test_first_char_divergence_handles_equal_prefixes() -> None:
@@ -106,6 +128,43 @@ def test_execute_bundle_policy_declined_still_records_continuity(tmp_path: Path,
     assert not (out / "responses" / "cpu_prefix.response.json").exists()
     events = [json.loads(line)["event"] for line in (out / "events.jsonl").read_text().splitlines()]
     assert events == ["teleport_candidate", "fallback"]
+
+
+def test_execute_bundle_policy_cutover_refuses_unknown_global_gpu_owner(tmp_path: Path, monkeypatch) -> None:
+    calls: list[str] = []
+
+    def fake_post(base_url, payload, *, timeout_s):  # noqa: ANN001
+        calls.append(base_url)
+        return {
+            "ok": True,
+            "status": 200,
+            "elapsed_s": 0.01,
+            "json": {"content": f"{base_url}:{payload['n_predict']}"},
+        }
+
+    fake = FakeRunner()
+    monkeypatch.setattr(bundle.subprocess, "run", fake)
+    monkeypatch.setattr(bundle, "post_completion", fake_post)
+    out = tmp_path / "run"
+    args = bundle.parse_args(
+        [
+            "--execute",
+            "--policy-enabled",
+            "--output",
+            str(out),
+            "--cpu-url",
+            "http://127.0.0.1:19001",
+            "--gpu-url",
+            "http://127.0.0.1:19002",
+        ]
+    )
+
+    summary = bundle.execute_bundle(args)
+
+    assert summary["status"] == "global_gpu_owner_unverified"
+    assert summary["global_gpu_preflight"]["exclusive_to_allowed"] is False
+    assert not (out / "responses" / "cpu_prefix.response.json").exists()
+    assert calls == ["http://127.0.0.1:19001", "http://127.0.0.1:19002"]
 
 
 def test_operator_script_defaults_to_dynamic_execution_output(tmp_path: Path, monkeypatch) -> None:

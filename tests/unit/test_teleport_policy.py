@@ -41,6 +41,37 @@ def test_teleport_policy_accepts_resident_break_even():
     assert decision.estimated_speedup == 2.2
 
 
+def test_teleport_policy_rejects_unknown_mode():
+    policy = TeleportPolicy(enabled=True, mode="spec_catch_up")
+
+    decision = decide_teleport(policy, _inputs())
+
+    assert decision.should_cutover is False
+    assert decision.reason == "invalid_teleport_mode"
+    assert decision.mode == "spec_catch_up"
+
+
+def test_teleport_policy_rejects_catch_up_claim_in_v1():
+    policy = TeleportPolicy(enabled=True)
+
+    decision = decide_teleport(policy, _inputs(catch_up_supported=True))
+
+    assert decision.should_cutover is False
+    assert decision.reason == "catch_up_not_supported_in_v1"
+    assert decision.catch_up_supported is False
+
+
+def test_teleport_policy_requires_rate_window_observation():
+    policy = TeleportPolicy(enabled=True, rate_window_tokens=64)
+
+    decision = decide_teleport(policy, _inputs(rate_window_observed_tokens=32))
+
+    assert decision.should_cutover is False
+    assert decision.reason == "insufficient_rate_window"
+    assert decision.rate_window_tokens == 64
+    assert decision.rate_window_observed_tokens == 32
+
+
 def test_teleport_policy_uses_cold_break_even():
     policy = TeleportPolicy(enabled=True)
 

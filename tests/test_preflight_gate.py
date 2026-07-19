@@ -92,6 +92,91 @@ def test_attest_default_path_with_monkeypatched_probes(monkeypatch):
     assert any("contention_matrix" in r and "STALE" in r for r in att["fail_reasons"])
 
 
+def test_role_scoped_require_servers_uses_primary_role_ports(monkeypatch):
+    seen = {}
+
+    monkeypatch.setattr(pg, "check_live_affinity",
+                        lambda **k: {"ok": True, "live_affinity_verified": True})
+    monkeypatch.setattr(pg, "check_topology_hashes",
+                        lambda **k: {"ok": True, "topology_hash": "h", "registry_hash": "r"})
+    monkeypatch.setattr(pg, "check_contention_matrix_fresh",
+                        lambda **k: {"ok": True, "contention_matrix_fresh": True})
+
+    def fake_health(**kwargs):
+        seen.update(kwargs)
+        return {"ok": True, "health_ok": True}
+
+    monkeypatch.setattr(pg, "check_health", fake_health)
+
+    att = pg.attest(roles=["frontdoor", "worker_general"], require_servers=True)
+
+    assert att["overall"] == "PASS"
+    assert seen["require_servers"] is True
+    assert seen["ports"] == [8070, 8072]
+
+
+def test_server_health_only_skips_structural_health(monkeypatch):
+    monkeypatch.setattr(pg, "_probe_ports", lambda ports, timeout: {
+        "ports": {"8070": True},
+        "error": None,
+    })
+
+    res = pg.check_health(
+        require_servers=True,
+        ports=[8070],
+        script=pg.ORCH / "does-not-exist.sh",
+        server_health_only=True,
+    )
+
+    assert res["ok"] is True
+    assert res["health_ok"] is True
+    assert res["structural_ok"] is None
+    assert res["structural_skipped"] is True
+
+
+def test_contention_observation_only_records_stale_without_failing(tmp_path):
+    stale_script = tmp_path / "stale.py"
+    stale_script.write_text("import sys; print('stale'); sys.exit(2)\n")
+
+    res = pg.check_contention_matrix_fresh(
+        script=stale_script,
+        observation_only=True,
+    )
+
+    assert res["ok"] is True
+    assert res["contention_matrix_fresh"] is False
+    assert res["warning"] == "contention matrix not fresh (rc=2)"
+    assert res["error"] is None
+
+
+def test_live_affinity_live_only_passes_when_live_instances_match(tmp_path):
+    script = tmp_path / "aff_live_only.py"
+    script.write_text(
+        "import argparse, json, sys\n"
+        "ap = argparse.ArgumentParser()\n"
+        "ap.add_argument('--output')\n"
+        "ap.add_argument('--roles', nargs='*')\n"
+        "args = ap.parse_args()\n"
+        "json.dump({\n"
+        "  'live_affinity_verified': False,\n"
+        "  'live_memory_placement_verified': True,\n"
+        "  'instances': [\n"
+        "    {'port': 8070, 'pid': '123', 'match': True},\n"
+        "    {'port': 8080, 'pid': None, 'match': False},\n"
+        "  ],\n"
+        "}, open(args.output, 'w'))\n"
+        "sys.exit(1)\n"
+    )
+
+    res = pg.check_live_affinity(script=script, live_only=True)
+
+    assert res["ok"] is True
+    assert res["live_affinity_verified"] is True
+    assert res["configured_affinity_verified"] is False
+    assert res["artifact_summary"]["live_instances"] == 1
+    assert res["artifact_summary"]["live_matched"] == 1
+
+
 # --------------------------------------------------------------------------- #
 # Topology-hash gate
 # --------------------------------------------------------------------------- #

@@ -75,6 +75,8 @@ def mine() -> list[dict]:
     preprocess = _load_jsonl(common.CCRAB_PREPROCESS)
     stage3 = _stage_comment_keys(common.CCRAB_FUNNEL / "stage3_testgen_verified.jsonl")
     stage4 = _stage_comment_keys(common.CCRAB_FUNNEL / "stage4_agent_resolved.jsonl")
+    stage3_instances = {key[0] for key in stage3}
+    stage4_instances = {key[0] for key in stage4}
 
     rows: list[dict] = []
     for inst in preprocess:
@@ -170,6 +172,22 @@ def mine() -> list[dict]:
         # One accept-control per instance: the merged/accepted revision.
         merged = common.truncate(inst.get("merged_patch") or "", 20000)
         if merged:
+            accept_in_s4 = instance_id in stage4_instances
+            accept_in_s3 = instance_id in stage3_instances
+            accept_oracle = None
+            accept_confidence = "observation"
+            if accept_in_s4 or accept_in_s3:
+                accept_oracle = {
+                    "oracle_type": "testgen_fail_then_pass",
+                    "verdict": "pass",
+                    "source": "c-crab/stage4_agent_resolved"
+                    if accept_in_s4
+                    else "c-crab/stage3_testgen_verified",
+                    "resolution": "agent_resolved"
+                    if accept_in_s4
+                    else "testgen_verified",
+                }
+                accept_confidence = "multi_oracle"
             rows.append(
                 common.make_row(
                     source_benchmark="c-crab",
@@ -179,10 +197,10 @@ def mine() -> list[dict]:
                     candidate=merged,
                     gold_label="accept",
                     gold_source="merged_pr_accepted",
-                    gold_confidence="observation",  # merge status is not a hard oracle
+                    gold_confidence=accept_confidence,
                     defect_origin="natural",
                     row_key=f"ccrab-accept|{instance_id}",
-                    executable_oracle=None,
+                    executable_oracle=accept_oracle,
                     reasoning_module_labels={
                         "source": "merged_pr",
                         "note": "final merged/accepted revision (clean control)",

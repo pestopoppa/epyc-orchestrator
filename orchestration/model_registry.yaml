@@ -10,8 +10,8 @@
 # temporarily skip the compile (e.g. during a master schema change), set
 # ORCHESTRATOR_REGISTRY_NO_COMPILE=1.
 #
-# Compiled at: 2026-07-17T14:24:40+00:00
-# Cache key:   cb94cc912fe4da34...
+# Compiled at: 2026-07-19T12:34:21+00:00
+# Cache key:   d274531a1df74b4f...
 # Active roles: architect_general, coder_escalation, embedder, embedder_1, embedder_2, embedder_3, embedder_4, embedder_5, embedder_bge_m3, embedder_granite_97m_r2, embedder_multilingual_e5_base, frontdoor, ingest_long_context, toolrunner, vision_escalation, worker_explore, worker_fast, worker_general, worker_math, worker_summarize, worker_vision
 # =============================================================================
 
@@ -1672,7 +1672,13 @@ roles:
       optimized_tps: 38.46
       quality_pct: 90
       tool_compliance_pct: 96
-      mi210_ngram_mtp_prompt_diverse_observation: "2026-07-19 current-v7 MI210 evidence keeps ngram-mod,draft-mtp as a task-specific repetitive/token-reuse lane, not the broad worker default: repetitive JSON speed was strong, but prompt-diverse follow-up did not improve non-repetitive worker quality/speed. Future controlled launches should default worker_general to draft-mtp unless routing selects a measured token-reuse task lane."
+      draft_depth_sweep_observation: '2026-07-17 T5 production-shaped CPU worker sweep at /mnt/raid0/llm/tmp/t5-gemma-worker-draft-depth-20260717T213641Z/summary.json confirms draft_max=2: depth2 87.76
+        t/s with 492/666 accepted; depth3 76.38 t/s with 492/812 accepted; depth4 84.40 t/s with 494/734 accepted.'
+      mi210_ngram_mtp_repetition_observation: '2026-07-19 current-v7 MI210 strict repetitive JSON/tool-shaped fixture: no-spec passed at 74.15 t/s, draft-mtp passed at 113.45 t/s with 465/474 drafts accepted,
+        and ngram-mod,draft-mtp passed at 183.50 t/s with 625/1454 accepted. Artifact: /mnt/raid0/llm/epyc-inference-research/data/k11_gemma4_determinism/k11_gemma4_mi210_modes_20260719T004400Z/summary.json.'
+      mi210_ngram_mtp_prompt_diverse_observation: '2026-07-19 prompt-diverse MI210 follow-up: ngram-mod,draft-mtp reproduced the large repetitive-output speedup (330.57 t/s vs draft-mtp 143.58 and no-spec
+        85.77) but did not improve non-repetitive coding explanation speed and failed the required-heading contract under the 640-token cap; short edit was only marginally faster than draft-mtp and all
+        modes failed the exact patch contract. Treat ngram-mod,draft-mtp as a task-specific token-reuse lane, not the broad worker default. Artifact: /mnt/raid0/llm/epyc-inference-research/data/k11_gemma4_determinism/k11_gemma4_mi210_prompt_diverse_20260719T004626Z/compact_summary.json.'
     memory:
       residency: hot
       pinned: true
@@ -1750,6 +1756,10 @@ roles:
       speedup: 1.3x
       vl_score: 11/12 (92%)
       benchmark_date: 2026-03-04
+      k35_longdecode_observation: '2026-07-19 current experimental-v7 `ed4091266` MI210 worker-vs-escalation comparison kept Qwen2.5-VL as the faster safe lane: fixed fixtures passed `4/4`, quality decode
+        averaged `133.29 t/s`, and the chart long-decode sample generated `437` completion tokens at `118.50 t/s` with max `11%` VRAM. Artifact: `/mnt/raid0/llm/epyc-inference-research/data/k35_vision_matrix/k35_worker_vs_escalation_mi210_longdecode_20260719T004016Z/summary.json`.
+
+        '
     memory:
       residency: hot
       pinned: false
@@ -1768,22 +1778,20 @@ roles:
   vision_escalation:
     tier: C
     port: 8087
-    description: Vision escalation - MiniCPM-o 4.5 Q4 on MI210 with reasoning disabled
+    description: Temporary safe vision escalation alias - Qwen2.5-VL server with mmproj
     model:
-      name: MiniCPM-o-4_5
-      path: /mnt/raid0/llm/models/MiniCPM-o-4_5-gguf/MiniCPM-o-4_5-Q4_K_M.gguf
-      mmproj_path: /mnt/raid0/llm/models/MiniCPM-o-4_5-gguf/vision/MiniCPM-o-4_5-vision-F16.gguf
+      name: Qwen2.5-VL-7B-Instruct
+      path: lmstudio-community/Qwen2.5-VL-7B-Instruct-GGUF/Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf
+      mmproj_path: lmstudio-community/Qwen2.5-VL-7B-Instruct-GGUF/mmproj-model-f16.gguf
       quant: Q4_K_M
-      size_gb: 6.2
+      size_gb: 4.4
       architecture: dense
-      ctx_max: 8192
-      sha256: 1237a97ee081b8abebc47aa7dad565701e8f5f904cdc92f6723ac4281bbc0932
-      mmproj_sha256: 1453678cc4e4fe18de241952962e234f265cb8dda780773526103ab8ba82f421
+      ctx_max: 128000
     thinking_control:
-      mode: llama_server_reasoning_off
-      effective_mode: no_reasoning_trace
-      evidence_strength: K35 fixed-fixture MI210 evidence
-      evidence: K35.11/K35.13c passed fixed OCR/chart fixtures and mixed-service checks with --reasoning off.
+      mode: native_no_thinking_toggle
+      effective_mode: native_no_think_tags
+      evidence_strength: model_family_inferred
+      evidence: Qwen2.5-VL Instruct predates Qwen3 thinking controls; multimodal role has no chat-template thinking toggle.
     candidate_roles:
     - vision
     acceleration:
@@ -1791,28 +1799,28 @@ roles:
       disallowed:
       - speculative_decoding
       - prompt_lookup
-      reason: MiniCPM-o vision lane is served as baseline multimodal llama-server on MI210; no spec-dec evidence.
+      reason: VL models with mmproj not supported by llama-speculative binary
     performance:
-      baseline_tps: 110.81
-      optimized_tps: 110.81
+      baseline_tps: 16.91
+      optimized_tps: 21.32
       speedup: 1.0x
       vl_score:
         pct: 100.0
         raw: 4/4 K35 fixed fixtures
       benchmark_date: 2026-07-17
-      evidence: /mnt/raid0/llm/tmp/k35-vision-matrix-20260717T1500Z/summary.json; K35.13c mixed-service matrix passed 8/8 context/fixture pairs with frontdoor overlap.
+      evidence: /mnt/raid0/llm/tmp/k35-vision-matrix-20260717T1500Z/summary.json
+      k35_longdecode_observation: '2026-07-19 current experimental-v7 `ed4091266` comparison against the MiniCPM-o candidate found the temporary Qwen2.5-VL alias still faster on MI210 (`4/4`, quality decode
+        mean `133.29 t/s`, long decode `118.50 t/s`). MiniCPM-o also passed the same four fixtures but decoded the long sample at `109.18 t/s`. The controlled MiniCPM-o live launch/smoke and Qwen2.5-VL
+        rollback check were executed after the candidate gate, but persistent API/AutoPilot traffic was not restarted or observed; keep this Qwen2.5-VL alias as the safety lane until that persistent-live
+        cutover is explicitly performed.
+
+        '
     memory:
       residency: hot
       pinned: false
     server:
       endpoint: http://localhost:8087
       api_format: openai_multimodal
-      device: ROCm0
-      reasoning: 'off'
-      runtime_requirements:
-        binary_dir: /mnt/raid0/llm/llama.cpp-experimental/build-hip/bin
-        ld_library_path:
-        - /mnt/raid0/llm/llama.cpp-experimental/build-hip/bin
     escalation:
       from: worker_vision
       auto_wired: false
@@ -1824,22 +1832,18 @@ roles:
       - cross-reference multiple image regions
     paged_attention:
       recommended: false
-      reason: no K35 evidence that paged attention helps MiniCPM-o VL fixtures.
-    notes: 'K35.13d controlled live-stack flip target. K35.11 fixed OCR/chart
+      reason: temporary alias uses Qwen2.5-VL dense worker model
+    notes: 'Temporary 2026-07-17 safety alias to worker_vision. K35 fixed-fixture
 
-      candidate gate passed CPU 4/4 and MI210 4/4 with --reasoning off; MI210
+      matrix showed worker_vision passed 4/4 while the former Qwen3-VL-30B MoE4
 
-      decode observed 110.81-122.18 t/s. K35.12 co-residency smoke passed with
+      escalation lane passed only 3/4 and missed the chart fixture. Diagnostic
 
-      frontdoor on MI210. K35.13c operational fixture service matrix passed 8/8
+      probes with --image-min/max-tokens 1024 and default experts also failed.
 
-      active fixture/context pairs; active overlap averaged 94.77 t/s frontdoor
+      Keep port 8087 for call-site stability, but do not treat this as a true
 
-      plus 85.22 t/s MiniCPM-o. Keep port 8087 for call-site stability and cap
-
-      serving at one active slot. Rollback is Qwen2.5-VL worker alias on the same
-
-      port if the live smoke fails.
+      higher-quality escalation model until a replacement A/B wins.
 
       '
   worker_summarize:

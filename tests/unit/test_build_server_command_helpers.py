@@ -181,16 +181,16 @@ def test_descriptor_active_roles_are_canonical_launch_roles() -> None:
 # -----------------------------------------------------------------------------
 
 
-def test_build_vision_command_escalation_uses_minicpm_o_mi210_lane() -> None:
+def test_build_vision_command_escalation_uses_worker_vision_safety_alias() -> None:
     cmd = oss._build_vision_command(port=8087, vision_type="escalation")
-    assert oss.VISION_ESCALATION_MODEL != oss.VISION_WORKER_MODEL
-    assert oss.VISION_ESCALATION_MMPROJ != oss.VISION_WORKER_MMPROJ
-    assert "MiniCPM-o-4_5-Q4_K_M.gguf" in oss.VISION_ESCALATION_MODEL
-    assert "MiniCPM-o-4_5-vision-F16.gguf" in oss.VISION_ESCALATION_MMPROJ
+    assert oss.VISION_ESCALATION_MODEL == oss.VISION_WORKER_MODEL
+    assert oss.VISION_ESCALATION_MMPROJ == oss.VISION_WORKER_MMPROJ
+    assert "Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf" in oss.VISION_ESCALATION_MODEL
+    assert "mmproj-model-f16.gguf" in oss.VISION_ESCALATION_MMPROJ
     assert oss.VISION_ESCALATION_MODEL in cmd
     assert oss.VISION_ESCALATION_MMPROJ in cmd
     assert "--mmproj" in cmd
-    assert _flag_value(cmd, "--device") == "ROCm0"
+    assert _flag_value(cmd, "--device") == "none"
     assert _flag_value(cmd, "--reasoning") == "off"
     assert "--override-kv" not in cmd
     assert cmd[cmd.index("-c") + 1] == "8192"
@@ -270,11 +270,11 @@ def test_build_vision_command_prefers_stack_prior_requirements(
     assert "--flash-attn" not in cmd
 
 
-def test_dispatcher_preserves_explicit_vision_device() -> None:
+def test_dispatcher_uses_cpu_device_for_temporary_vision_escalation_alias() -> None:
     cmd = oss.build_server_command(None, 8087, vision_mode=True, vision_type="escalation")
 
-    assert _flag_value(cmd, "--device") == "ROCm0"
-    assert "none" not in _all_flag_values(cmd, "--device")
+    assert _flag_value(cmd, "--device") == "none"
+    assert "ROCm0" not in _all_flag_values(cmd, "--device")
 
 
 def test_build_embedding_command_enables_embeddings_and_cls_pool() -> None:
@@ -324,9 +324,9 @@ def test_build_worker_general_command_engages_mtp_path() -> None:
     cmd = oss._build_worker_general_command(
         port=8072, model_path="/m/gemma4.gguf", binary_override=None,
     )
-    # MTP-specific flags must all be present. The worker launch now uses one
-    # combined v7 speculative stack: ngram-mod first, draft-mtp fallback.
-    assert cmd[cmd.index("--spec-type") + 1] == "ngram-mod,draft-mtp"
+    # MTP-specific flags must all be present. The broad worker default remains
+    # native MTP; ngram-mod,draft-mtp is a task-specific candidate lane.
+    assert cmd[cmd.index("--spec-type") + 1] == "draft-mtp"
     assert cmd[cmd.index("--spec-draft-n-max") + 1] == "2"
     assert cmd[cmd.index("--draft-p-min") + 1] == "0.0"
     assert cmd[cmd.index("--threads-draft") + 1] == "16"
@@ -551,7 +551,7 @@ def test_build_worker_explore_command_keeps_compatibility_wrapper() -> None:
     cmd = oss._build_worker_explore_command(
         port=8072, model_path="/m/gemma4.gguf", binary_override=None,
     )
-    assert cmd[cmd.index("--spec-type") + 1] == "ngram-mod,draft-mtp"
+    assert cmd[cmd.index("--spec-type") + 1] == "draft-mtp"
 
 
 # -----------------------------------------------------------------------------

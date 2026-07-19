@@ -16,6 +16,8 @@ TELEPORT_EVENTS = (
     "lease_released",
 )
 
+SUPPORTED_TELEPORT_MODE = "v1_reprefill_cutover_only"
+
 
 @dataclass(frozen=True)
 class TeleportPolicy:
@@ -46,6 +48,7 @@ class TeleportInputs:
     cpu_quant: str | None = None
     gpu_quant: str | None = None
     catch_up_supported: bool = False
+    rate_window_observed_tokens: int | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -59,6 +62,8 @@ class TeleportDecision:
     estimated_speedup: float | None = None
     long_running_trigger_tokens: int | None = None
     rate_window_tokens: int | None = None
+    rate_window_observed_tokens: int | None = None
+    mode: str | None = None
     quant_policy: str | None = None
     quant_transition: str | None = None
 
@@ -114,23 +119,30 @@ def decide_teleport(policy: TeleportPolicy, inputs: TeleportInputs) -> TeleportD
         if inputs.cpu_tps > 0 and inputs.gpu_tps > 0
         else None
     )
+    observed_rate_window = (
+        inputs.rate_window_observed_tokens
+        if inputs.rate_window_observed_tokens is not None
+        else inputs.generated_tokens
+    )
     common = {
-        "catch_up_supported": inputs.catch_up_supported,
-        "catch_up_reason": (
-            ""
-            if inputs.catch_up_supported
-            else "llama_server_verify_api_unavailable"
-        ),
+        "catch_up_supported": False,
+        "catch_up_reason": "llama_server_verify_api_unavailable",
         "threshold_tokens": threshold,
         "estimated_speedup": speedup,
         "long_running_trigger_tokens": policy.long_running_trigger_tokens,
         "rate_window_tokens": policy.rate_window_tokens,
+        "rate_window_observed_tokens": observed_rate_window,
+        "mode": policy.mode,
         "quant_policy": policy.quant_policy,
         "quant_transition": _quant_transition(inputs),
     }
 
     if not policy.enabled:
         return TeleportDecision(False, "disabled", **common)
+    if policy.mode != SUPPORTED_TELEPORT_MODE:
+        return TeleportDecision(False, "invalid_teleport_mode", **common)
+    if inputs.catch_up_supported:
+        return TeleportDecision(False, "catch_up_not_supported_in_v1", **common)
     if policy.allowed_roles and inputs.role not in policy.allowed_roles:
         return TeleportDecision(False, "role_not_allowed", **common)
     quant_rejection = _quant_policy_rejection(policy, inputs)
@@ -140,6 +152,8 @@ def decide_teleport(policy: TeleportPolicy, inputs: TeleportInputs) -> TeleportD
         return TeleportDecision(False, "gpu_unavailable", **common)
     if inputs.generated_tokens < policy.long_running_trigger_tokens:
         return TeleportDecision(False, "below_long_running_trigger", **common)
+    if observed_rate_window < policy.rate_window_tokens:
+        return TeleportDecision(False, "insufficient_rate_window", **common)
     if inputs.estimated_remaining_tokens < threshold:
         return TeleportDecision(False, "below_break_even_tokens", **common)
     if speedup is None:

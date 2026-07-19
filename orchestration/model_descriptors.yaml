@@ -1,16 +1,16 @@
 descriptor_version: 3
-compiled_at: '2026-07-18T12:21:02Z'
+compiled_at: '2026-07-19T12:47:57Z'
 status: compiled
 coverage_scope: active_roles_from_stack_manifest
 source_registries:
   lean:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
-    repo_commit: 4ab4e0ee
-    sha256: 6aa2c90de12575203d6b689215a2b625d624b11606ee0250b2a38e343dfb0c6e
+    repo_commit: 91cf4033
+    sha256: a185591d35134009ebab23706b28140d322ccb2d84478b2dec3909bcd8f9ee4c
   research:
     path: /mnt/raid0/llm/epyc-inference-research/orchestration/model_registry.yaml
-    repo_commit: 54a3e51
-    sha256: ded705e1a3e6d3e4d0da9d43cf10220ffcb9fc06edd40cf0e686088d6e440a22
+    repo_commit: 6abb269
+    sha256: acf01b15781654d5904e8d4c0aa4aec3987d2def4b7a9546eeb2df8ee095774c
 model_id_policy:
   canonical_shape: family-params-active-quant
   invariant: model records are keyed by physical model identity, never by role name
@@ -62,6 +62,13 @@ models:
         optimized_tps: 38.46
         quality_pct: 90
         tool_compliance_pct: 96
+        draft_depth_sweep_observation: '2026-07-17 T5 production-shaped CPU worker sweep at /mnt/raid0/llm/tmp/t5-gemma-worker-draft-depth-20260717T213641Z/summary.json confirms draft_max=2: depth2 87.76
+          t/s with 492/666 accepted; depth3 76.38 t/s with 492/812 accepted; depth4 84.40 t/s with 494/734 accepted.'
+        mi210_ngram_mtp_repetition_observation: '2026-07-19 current-v7 MI210 strict repetitive JSON/tool-shaped fixture: no-spec passed at 74.15 t/s, draft-mtp passed at 113.45 t/s with 465/474 drafts accepted,
+          and ngram-mod,draft-mtp passed at 183.50 t/s with 625/1454 accepted. Artifact: /mnt/raid0/llm/epyc-inference-research/data/k11_gemma4_determinism/k11_gemma4_mi210_modes_20260719T004400Z/summary.json.'
+        mi210_ngram_mtp_prompt_diverse_observation: '2026-07-19 prompt-diverse MI210 follow-up: ngram-mod,draft-mtp reproduced the large repetitive-output speedup (330.57 t/s vs draft-mtp 143.58 and no-spec
+          85.77) but did not improve non-repetitive coding explanation speed and failed the required-heading contract under the 640-token cap; short edit was only marginally faster than draft-mtp and all
+          modes failed the exact patch contract. Treat ngram-mod,draft-mtp as a task-specific token-reuse lane, not the broad worker default. Artifact: /mnt/raid0/llm/epyc-inference-research/data/k11_gemma4_determinism/k11_gemma4_mi210_prompt_diverse_20260719T004626Z/compact_summary.json.'
     - date: null
       protocol: registry performance block
       value:
@@ -69,6 +76,13 @@ models:
         optimized_tps: 38.46
         quality_pct: 90
         tool_compliance_pct: 96
+        draft_depth_sweep_observation: '2026-07-17 T5 production-shaped CPU worker sweep at /mnt/raid0/llm/tmp/t5-gemma-worker-draft-depth-20260717T213641Z/summary.json confirms draft_max=2: depth2 87.76
+          t/s with 492/666 accepted; depth3 76.38 t/s with 492/812 accepted; depth4 84.40 t/s with 494/734 accepted.'
+        mi210_ngram_mtp_repetition_observation: '2026-07-19 current-v7 MI210 strict repetitive JSON/tool-shaped fixture: no-spec passed at 74.15 t/s, draft-mtp passed at 113.45 t/s with 465/474 drafts accepted,
+          and ngram-mod,draft-mtp passed at 183.50 t/s with 625/1454 accepted. Artifact: /mnt/raid0/llm/epyc-inference-research/data/k11_gemma4_determinism/k11_gemma4_mi210_modes_20260719T004400Z/summary.json.'
+        mi210_ngram_mtp_prompt_diverse_observation: '2026-07-19 prompt-diverse MI210 follow-up: ngram-mod,draft-mtp reproduced the large repetitive-output speedup (330.57 t/s vs draft-mtp 143.58 and no-spec
+          85.77) but did not improve non-repetitive coding explanation speed and failed the required-heading contract under the 640-token cap; short edit was only marginally faster than draft-mtp and all
+          modes failed the exact patch contract. Treat ngram-mod,draft-mtp as a task-specific token-reuse lane, not the broad worker default. Artifact: /mnt/raid0/llm/epyc-inference-research/data/k11_gemma4_determinism/k11_gemma4_mi210_prompt_diverse_20260719T004626Z/compact_summary.json.'
     - date: null
       protocol: registry performance block
       value:
@@ -76,6 +90,13 @@ models:
         optimized_tps: 38.46
         quality_pct: 90
         tool_compliance_pct: 96
+        draft_depth_sweep_observation: '2026-07-17 T5 production-shaped CPU worker sweep at /mnt/raid0/llm/tmp/t5-gemma-worker-draft-depth-20260717T213641Z/summary.json confirms draft_max=2: depth2 87.76
+          t/s with 492/666 accepted; depth3 76.38 t/s with 492/812 accepted; depth4 84.40 t/s with 494/734 accepted.'
+        mi210_ngram_mtp_repetition_observation: '2026-07-19 current-v7 MI210 strict repetitive JSON/tool-shaped fixture: no-spec passed at 74.15 t/s, draft-mtp passed at 113.45 t/s with 465/474 drafts accepted,
+          and ngram-mod,draft-mtp passed at 183.50 t/s with 625/1454 accepted. Artifact: /mnt/raid0/llm/epyc-inference-research/data/k11_gemma4_determinism/k11_gemma4_mi210_modes_20260719T004400Z/summary.json.'
+        mi210_ngram_mtp_prompt_diverse_observation: '2026-07-19 prompt-diverse MI210 follow-up: ngram-mod,draft-mtp reproduced the large repetitive-output speedup (330.57 t/s vs draft-mtp 143.58 and no-spec
+          85.77) but did not improve non-repetitive coding explanation speed and failed the required-heading contract under the 640-token cap; short edit was only marginally faster than draft-mtp and all
+          modes failed the exact patch contract. Treat ngram-mod,draft-mtp as a task-specific token-reuse lane, not the broad worker default. Artifact: /mnt/raid0/llm/epyc-inference-research/data/k11_gemma4_determinism/k11_gemma4_mi210_prompt_diverse_20260719T004626Z/compact_summary.json.'
   speed:
     solo_96t_tps: 38.46
     quarter_48t_tps: 38.46
@@ -87,7 +108,7 @@ models:
       protocol: server_mode throughput
       value_tps: 38.46
   acceleration:
-    spec_type: ngram-mod,draft-mtp
+    spec_type: draft-mtp
     draft_compat:
     - draft_gemma4_26b_a4b_assistant_q8
     enable_thinking: false
@@ -115,76 +136,6 @@ models:
     server_role: worker
     requirements: {}
   known_gaps: []
-- model_id: minicpm-o-4_5-q4_k_m
-  display_name: MiniCPM-o-4_5
-  family: minicpm-o-4_5-q4_k_m
-  arch: dense
-  params_b: null
-  active_b: null
-  quant: Q4_K_M
-  mem_gb: 6.2
-  ctx_max: 8192
-  modalities:
-  - text
-  - vision
-  role_bindings:
-    roles:
-    - vision_escalation
-    server_roles: []
-    runtime_aliases: []
-    shared_mmap: false
-  quality:
-    suite_vector:
-      vision_language: 1.0
-      overall: 1.0
-    source: orchestration/model_registry.yaml
-    eval_protocol: MEASUREMENT.md#canonical-quality
-    measured:
-    - date: '2026-07-17'
-      protocol: registry performance block
-      value:
-        baseline_tps: 110.81
-        optimized_tps: 110.81
-        speedup: 1.0x
-        vl_score:
-          pct: 100.0
-          raw: 4/4 K35 fixed fixtures
-        benchmark_date: '2026-07-17'
-        evidence: /mnt/raid0/llm/tmp/k35-vision-matrix-20260717T1500Z/summary.json; K35.13c mixed-service matrix passed 8/8 context/fixture pairs with frontdoor overlap.
-  speed:
-    solo_96t_tps: null
-    quarter_48t_tps: null
-    prefill_tps: null
-    optimized_tps: 110.81
-    source: orchestration/model_registry.yaml
-    measured:
-    - date: '2026-07-17'
-      protocol: registry performance block
-      baseline_tps: 110.81
-      optimized_tps: 110.81
-  acceleration:
-    spec_type: baseline
-    draft_compat: []
-    enable_thinking: null
-    thinking_control:
-      mode: llama_server_reasoning_off
-      effective_mode: no_reasoning_trace
-      evidence_strength: K35 fixed-fixture MI210 evidence
-      evidence: K35.11/K35.13c passed fixed OCR/chart fixtures and mixed-service checks with --reasoning off.
-    kv:
-      k: null
-      v: null
-  serving:
-    binary: llama.cpp
-    binary_dir: null
-    numa_policy: role_endpoint_binding
-    mlock: false
-    ports:
-    - 8087
-    server_role: null
-    requirements:
-      mmproj_path: /mnt/raid0/llm/models/MiniCPM-o-4_5-gguf/vision/MiniCPM-o-4_5-vision-F16.gguf
-  known_gaps: []
 - model_id: qwen2.5-vl-7b-q4_k_m
   display_name: Qwen2.5-VL-7B-Instruct
   family: qwen2.5-vl
@@ -199,6 +150,7 @@ models:
   - vision
   role_bindings:
     roles:
+    - vision_escalation
     - worker_vision
     server_roles: []
     runtime_aliases: []
@@ -210,6 +162,23 @@ models:
     source: orchestration/model_registry.yaml
     eval_protocol: MEASUREMENT.md#canonical-quality
     measured:
+    - date: '2026-07-17'
+      protocol: registry performance block
+      value:
+        baseline_tps: 16.91
+        optimized_tps: 21.32
+        speedup: 1.0x
+        vl_score:
+          pct: 100.0
+          raw: 4/4 K35 fixed fixtures
+        benchmark_date: '2026-07-17'
+        evidence: /mnt/raid0/llm/tmp/k35-vision-matrix-20260717T1500Z/summary.json
+        k35_longdecode_observation: '2026-07-19 current experimental-v7 `ed4091266` comparison against the MiniCPM-o candidate found the temporary Qwen2.5-VL alias still faster on MI210 (`4/4`, quality
+          decode mean `133.29 t/s`, long decode `118.50 t/s`). MiniCPM-o also passed the same four fixtures but decoded the long sample at `109.18 t/s`. The controlled MiniCPM-o live launch/smoke and Qwen2.5-VL
+          rollback check were executed after the candidate gate, but persistent API/AutoPilot traffic was not restarted or observed; keep this Qwen2.5-VL alias as the safety lane until that persistent-live
+          cutover is explicitly performed.
+
+          '
     - date: '2026-03-04'
       protocol: registry performance block
       value:
@@ -218,17 +187,21 @@ models:
         speedup: 1.3x
         vl_score: 11/12 (92%)
         benchmark_date: '2026-03-04'
+        k35_longdecode_observation: '2026-07-19 current experimental-v7 `ed4091266` MI210 worker-vs-escalation comparison kept Qwen2.5-VL as the faster safe lane: fixed fixtures passed `4/4`, quality decode
+          averaged `133.29 t/s`, and the chart long-decode sample generated `437` completion tokens at `118.50 t/s` with max `11%` VRAM. Artifact: `/mnt/raid0/llm/epyc-inference-research/data/k35_vision_matrix/k35_worker_vs_escalation_mi210_longdecode_20260719T004016Z/summary.json`.
+
+          '
   speed:
     solo_96t_tps: null
     quarter_48t_tps: null
     prefill_tps: null
-    optimized_tps: 20.0
+    optimized_tps: 21.32
     source: orchestration/model_registry.yaml
     measured:
-    - date: '2026-03-04'
+    - date: '2026-07-17'
       protocol: registry performance block
-      baseline_tps: 15.28
-      optimized_tps: 20.0
+      baseline_tps: 16.91
+      optimized_tps: 21.32
   acceleration:
     spec_type: baseline
     draft_compat: []
@@ -248,6 +221,7 @@ models:
     mlock: false
     ports:
     - 8086
+    - 8087
     server_role: null
     requirements:
       mmproj_path: lmstudio-community/Qwen2.5-VL-7B-Instruct-GGUF/mmproj-model-f16.gguf

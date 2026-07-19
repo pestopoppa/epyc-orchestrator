@@ -163,6 +163,48 @@ def test_cli_smoke_writes_json_and_md(tmp_path):
     assert "FA/FR" in md
 
 
+def test_cli_run_manifest_can_stamp_p_rev1_decision_grade(tmp_path):
+    decisions = tmp_path / "decisions.jsonl"
+    with open(decisions, "w") as fh:
+        for row in _fa_fr_fixture():
+            fh.write(json.dumps(row) + "\n")
+    manifest = tmp_path / "run_manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema": "glm52_reviewer_corpus_direct_run_manifest.v1",
+                "measurement_protocol": "p_rev1",
+                "observation_only": False,
+                "protocol_attestation": "attest-test",
+            }
+        )
+    )
+    out_json = tmp_path / "report.json"
+    out_md = tmp_path / "report.md"
+
+    rc = rcr.main(
+        [
+            "--decisions",
+            str(decisions),
+            "--run-manifest",
+            str(manifest),
+            "--out-json",
+            str(out_json),
+            "--out-md",
+            str(out_md),
+        ]
+    )
+
+    assert rc == 0
+    report = json.loads(out_json.read_text())
+    assert report["measurement"]["grade"] == "decision"
+    assert report["measurement"]["protocol"] == "P-REV-1"
+    assert report["measurement"]["run_manifest"]["protocol_attestation"] == "attest-test"
+    md = out_md.read_text()
+    assert "decision-grade" in md
+    assert "attest-test" in md
+
+
 def test_cli_corpus_join(tmp_path):
     # decisions carry only candidate_id + decision; gold comes from corpus join.
     decisions = tmp_path / "d.jsonl"
