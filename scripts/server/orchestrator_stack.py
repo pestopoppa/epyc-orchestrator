@@ -1274,7 +1274,7 @@ def start_server(
 
         if vision_type == "escalation":
             model_path = VISION_ESCALATION_MODEL
-            model_name = "MiniCPM-o-4.5 Q4_K_M (vision escalation on MI210)"
+            model_name = "Qwen2.5-VL-7B Q4_K_M (temporary vision escalation alias)"
         else:
             model_path = VISION_WORKER_MODEL
             model_name = "Qwen2.5-VL-7B (vision worker)"

@@ -190,7 +190,7 @@ def test_build_vision_command_escalation_uses_worker_vision_safety_alias() -> No
     assert oss.VISION_ESCALATION_MODEL in cmd
     assert oss.VISION_ESCALATION_MMPROJ in cmd
     assert "--mmproj" in cmd
-    assert _flag_value(cmd, "--device") == "ROCm0"
+    assert _flag_value(cmd, "--device") == "none"
     assert _flag_value(cmd, "--reasoning") == "off"
     assert "--override-kv" not in cmd
     assert cmd[cmd.index("-c") + 1] == "8192"
@@ -270,11 +270,11 @@ def test_build_vision_command_prefers_stack_prior_requirements(
     assert "--flash-attn" not in cmd
 
 
-def test_dispatcher_preserves_explicit_vision_device() -> None:
+def test_dispatcher_uses_cpu_device_for_temporary_vision_escalation_alias() -> None:
     cmd = oss.build_server_command(None, 8087, vision_mode=True, vision_type="escalation")
 
-    assert _flag_value(cmd, "--device") == "ROCm0"
-    assert "none" not in _all_flag_values(cmd, "--device")
+    assert _flag_value(cmd, "--device") == "none"
+    assert "ROCm0" not in _all_flag_values(cmd, "--device")
 
 
 def test_build_embedding_command_enables_embeddings_and_cls_pool() -> None:
