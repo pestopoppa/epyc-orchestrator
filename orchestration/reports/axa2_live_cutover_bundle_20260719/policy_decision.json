@@ -1,0 +1,12 @@
+{
+  "catch_up_reason": "llama_server_verify_api_unavailable",
+  "catch_up_supported": false,
+  "estimated_speedup": 2.2,
+  "long_running_trigger_tokens": 128,
+  "quant_policy": "same_quant_only",
+  "quant_transition": "q4_k_m->q4_k_m",
+  "rate_window_tokens": 64,
+  "reason": "cutover",
+  "should_cutover": true,
+  "threshold_tokens": 150
+}
