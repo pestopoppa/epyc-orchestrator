@@ -14,6 +14,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -437,6 +438,64 @@ def test_execute_screening_queue_filters_to_row_ids(tmp_path):
     assert results[0]["n_scored"] == 2
     assert results[0]["reviewer_fa_rate"] == pytest.approx(0.0)
     assert results[0]["reviewer_fr_rate"] == pytest.approx(0.0)
+
+
+def test_default_reviewer_probe_uses_p_rev_schema_and_forced_direct(monkeypatch):
+    """The live default probe must stay P-REV-shaped, not one-token free-form."""
+    captured: dict = {}
+    schema = {"type": "object", "required": ["decision"]}
+
+    def _fake_call_orchestrator_forced(**kwargs):
+        captured.update(kwargs)
+        return {
+            "answer": json.dumps(
+                {
+                    "decision": "approve",
+                    "confidence": 0.73,
+                    "blocking": {"tripwire": False},
+                    "evidence": {"basis": "diff fixes behavior", "risk": "no blocker found"},
+                }
+            )
+        }
+
+    fake_seeding = types.SimpleNamespace(
+        call_orchestrator_forced=_fake_call_orchestrator_forced
+    )
+    fake_p_rev = types.SimpleNamespace(
+        DEFAULT_MAX_FIELD_CHARS=24000,
+        build_review_prompt=lambda row, *, max_field_chars: (
+            f"P-REV PROMPT {row['row_id']} {max_field_chars}",
+            {"review_mode": "patch_diff_strict", "prompt_chars": 123},
+        ),
+        binary_review_decision_response_schema=lambda: schema,
+        parse_review_decision_text=lambda text: (json.loads(text), None),
+    )
+    monkeypatch.setitem(sys.modules, "seeding_orchestrator", fake_seeding)
+    monkeypatch.setitem(sys.modules, "glm52_reviewer_corpus_direct_runner", fake_p_rev)
+
+    job = runner.TrialJobSpec(
+        pairing_id="archA__revB__grd", architect="archA", reviewer="revB",
+        grader="grd", anchor_arm=None, self_review=False, cross_family=True,
+        staged_involved=True, n=1, eval_tier="T0", corpus_id="nearmiss-v1",
+        domain="code", corpus_content_sha256="abc", corpus_n_rows=10,
+        coresidency_fits=True, priority_rank=0,
+    )
+    row = {"row_id": "ccrab-1", "task": "Fix bug", "candidate": "diff", "gold_label": "accept"}
+    tower = types.SimpleNamespace(url="http://orch", timeout=123)
+
+    out = runner._default_reviewer_probe(job, row, tower)
+
+    assert captured["prompt"] == "P-REV PROMPT ccrab-1 24000"
+    assert captured["force_role"] == "revB"
+    assert captured["force_mode"] == "direct"
+    assert captured["request_priority"] == "background"
+    assert captured["workload_class"] == "eval_batch"
+    assert captured["max_tokens"] == 256
+    assert captured["output_schema"] is schema
+    assert out["decision"] == "approve"
+    assert out["confidence"] == pytest.approx(0.73)
+    assert out["gate"] == "pass"
+    assert out["review_mode"] == "patch_diff_strict"
 
 
 # --------------------------------------------------------------------------- #

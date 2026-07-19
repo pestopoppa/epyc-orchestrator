@@ -633,6 +633,7 @@ def call_orchestrator_forced(
     tools: list[dict[str, Any]] | None = None,
     tool_choice: str | dict[str, Any] | None = None,
     max_tokens: int | None = None,
+    output_schema: dict[str, Any] | None = None,
     prompt_root: str | None = None,
     watcher: Any | None = None,
     llama_port: int | None = None,
@@ -660,6 +661,9 @@ def call_orchestrator_forced(
         tool_choice: Optional OpenAI-compatible tool choice policy for tools.
         max_tokens: Optional response-token cap forwarded to `/chat`. Omitted
             by default to preserve legacy payload shape.
+        output_schema: Optional JSON schema forwarded to `/chat` for direct
+            backend-constrained output. Omitted by default to preserve legacy
+            payload shape.
         prompt_root: Optional scratch prompt root forwarded to `/chat` for
             AutoPilot prompt-isolation evals. Omitted by default to preserve
             legacy payload shape.
@@ -726,6 +730,8 @@ def call_orchestrator_forced(
         payload["tool_choice"] = tool_choice
     if max_tokens is not None:
         payload["max_tokens"] = max(1, int(max_tokens))
+    if output_schema is not None:
+        payload["output_schema"] = output_schema
     if prompt_root:
         payload["x_orchestrator_prompt_root"] = str(prompt_root)
 

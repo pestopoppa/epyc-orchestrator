@@ -2146,13 +2146,12 @@ def _action_slot_compact(action: dict[str, Any], ctx: _ActionContext):
 
 
 # -----------------------------------------------------------------------------
-# Reviewer control-plane actions (H8 AP-5). Plan-generation now; execution is
-# inference-gated. The default (and un-flagged) path enumerates the trial plan
-# WITHOUT calling any backend and returns a SkipOutcome carrying the summary; the
-# full plan dict is stashed on ctx.state for inspection/tests. A live run only
-# attempts inference when the operator explicitly sets the documented env flag,
-# and even then raises NotImplementedError (the eval-tower execution is not
-# wired — zero-inference by construction).
+# Reviewer control-plane actions (H8 AP-5). Plan-generation is default;
+# execution is inference-gated. The default (and un-flagged) path enumerates the
+# trial plan WITHOUT calling any backend and returns a SkipOutcome carrying the
+# summary; the full plan dict is stashed on ctx.state for inspection/tests.
+# Screening-tier live execution is wired through screening_tier_runner and still
+# requires the documented env flag plus action dry_run=false.
 # -----------------------------------------------------------------------------
 
 _REVIEW_POLICY_TRIAL_INFERENCE_ENV = "AUTOPILOT_REVIEW_POLICY_TRIAL_INFERENCE"
@@ -2237,7 +2236,7 @@ def _action_screening_tier_driver(action: dict[str, Any], ctx: _ActionContext):
         corpus_manifest=manifest,
         per_pairing_n=int(action.get("per_pairing_n", 12)),
         eval_tier=str(action.get("tier", "T0")),
-        max_pairings=int(action.get("max_pairings", 0)),
+        max_pairings=0,
         domain=action.get("domain"),
     )
     if error is not None or plan is None:
@@ -2264,18 +2263,40 @@ def _action_screening_tier_driver(action: dict[str, Any], ctx: _ActionContext):
             SkipOutcome(
                 "skipped",
                 "screening_tier_driver live execution is inference-gated; set "
-                f"{_SCREENING_TIER_INFERENCE_ENV}=1 to attempt (still unimplemented). "
+                f"{_SCREENING_TIER_INFERENCE_ENV}=1 to attempt. "
                 f"Plan enumerated: {summary}",
                 "screening_tier_driver",
             ),
             "review_plane",
         )
 
-    raise NotImplementedError(
-        "screening_tier_driver live eval-tower execution is not wired (H8 AP-5 / "
-        f"RM-3 is plan-generation only). {_SCREENING_TIER_INFERENCE_ENV} was set but the "
-        "inference path is intentionally unimplemented under the zero-inference "
-        "constraint; the queue is on ctx.state['_screening_tier_plan']."
+    from screening_tier_runner import run_screening_tier
+
+    output_path_raw = action.get("results_path") or action.get("output_path")
+    row_ids_path_raw = action.get("row_ids_path") or action.get("row_ids_file")
+    result = run_screening_tier(
+        plan.to_dict(),
+        pool_gen_output,
+        corpus_manifest=manifest,
+        output_path=Path(str(output_path_raw)) if output_path_raw else None,
+        row_ids_path=Path(str(row_ids_path_raw)) if row_ids_path_raw else None,
+        cap_per_pairing=int(action.get("cap_per_pairing", 0)),
+        max_pairings=int(action.get("max_pairings", 0)),
+        prune_unfit=not bool(action.get("no_prune", False)),
+        priority=not bool(action.get("no_priority", False)),
+        seed=int(action.get("seed", 42)),
+    )
+    ctx.state["_screening_tier_result"] = result
+    mode = str(result.get("mode") or "unknown")
+    ran = bool(result.get("inference_ran"))
+    n_jobs = int(result.get("n_jobs", 0) or 0)
+    return (
+        SkipOutcome(
+            "skipped",
+            f"screening_tier_driver {mode} complete: inference_ran={ran}, n_jobs={n_jobs}",
+            "screening_tier_driver",
+        ),
+        "review_plane",
     )
 
 

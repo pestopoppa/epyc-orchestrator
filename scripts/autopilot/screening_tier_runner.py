@@ -674,58 +674,62 @@ def _default_reviewer_probe(
     row: dict[str, Any],
     tower: Any,
 ) -> dict[str, Any]:  # pragma: no cover - inference path
-    """Send ONE (task, candidate) reviewer judgement over the placement queue.
+    """Send ONE P-REV-shaped reviewer judgement over the placement queue.
 
     This is the real inference seam. It reuses the SAME transport eval_tower uses
     internally — ``call_orchestrator_forced`` with ``request_priority=background``
     and ``workload_class=eval_batch`` (the placement-queue path), pinning
-    ``force_role`` to the reviewer under test — so a screening judgement is never a
-    foreground ``/chat`` request. Returns a decision row shaped for
-    ``review_policy_trials.reviewer_calibration_from_decisions`` +
-    ``consistency_rate``: ``{"decision","gate","latency_ms"}``.
+    ``force_role`` to the reviewer under test — so a screening judgement is never
+    foreground/interactive traffic. The prompt/schema/parser are reused from the
+    P-REV-1 direct corpus runner so RM-3 live screening does not silently fall
+    back to the old one-token APPROVE/REJECT probe.
 
     Never exercised by the unit tests (the whole execution bridge is env-gated and
     unreached under the zero-inference constraint).
     """
     import time as _time
 
-    # Deferred import of the orchestrator client (same source eval_tower uses).
+    # Deferred imports: no live-run dependencies are imported in dry-run/tests.
+    _orch_bench = str(ORCH_ROOT / "scripts" / "benchmark")
     _research = Path("/mnt/raid0/llm/epyc-inference-research")
     _bench = str(_research / "scripts" / "benchmark")
-    if _bench not in sys.path:
-        sys.path.insert(0, _bench)
+    for _path in (_orch_bench, _bench):
+        if _path not in sys.path:
+            sys.path.insert(0, _path)
     from seeding_orchestrator import call_orchestrator_forced  # type: ignore
+    import glm52_reviewer_corpus_direct_runner as p_rev  # type: ignore
 
-    task = str(row.get("task") or "")
-    candidate = str(row.get("candidate") or "")
-    prompt = (
-        "You are a strict reviewer. Decide whether the CANDIDATE answer to the "
-        "TASK is acceptable. Reply with a single token: APPROVE or REJECT.\n\n"
-        f"TASK:\n{task}\n\nCANDIDATE:\n{candidate}\n\nDECISION:"
+    prompt, prompt_meta = p_rev.build_review_prompt(
+        row,
+        max_field_chars=p_rev.DEFAULT_MAX_FIELD_CHARS,
     )
+    schema = p_rev.binary_review_decision_response_schema()
     start = _time.time()
     resp = call_orchestrator_forced(
         prompt=prompt,
         force_role=job.reviewer or "",
-        force_mode="",
+        force_mode="direct",
         url=getattr(tower, "url", "http://localhost:8000"),
         timeout=getattr(tower, "timeout", 300),
         request_priority=PLACEMENT_REQUEST_PRIORITY,   # placement queue, not /chat
         workload_class=PLACEMENT_WORKLOAD_CLASS,
+        max_tokens=256,
+        output_schema=schema,
     )
     latency_ms = (_time.time() - start) * 1000.0
-    answer = str(resp.get("answer") or "").strip().lower()
-    if "approve" in answer or "accept" in answer:
-        decision = "approve"
-    elif "reject" in answer:
-        decision = "reject"
-    else:
-        decision = "abstain"  # unparseable -> excluded from FA/FR by the calibrator
+    answer = str(resp.get("answer") or "").strip()
+    parsed, parse_failure = p_rev.parse_review_decision_text(answer)
+    decision = str(parsed.get("decision")) if parsed else "parse_error"
     return {
         "decision": decision,
         "gate": gate_from_gold_label(row.get("gold_label")),
         "latency_ms": latency_ms,
         "row_id": row.get("row_id"),
+        "confidence": parsed.get("confidence") if parsed else None,
+        "parse_failure": parse_failure,
+        "prompt_meta": prompt_meta,
+        "output_schema": "binary_review_decision_response_schema",
+        "review_mode": prompt_meta.get("review_mode"),
     }
 
 

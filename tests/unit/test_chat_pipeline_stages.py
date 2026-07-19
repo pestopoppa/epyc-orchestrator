@@ -1399,6 +1399,48 @@ class TestExecuteDirect:
         assert result.answer == "Direct answer"
         assert mock_primitives.llm_call.call_args.kwargs["n_tokens"] == 1024
 
+    def test_direct_call_forwards_output_schema_as_json_schema(self, mock_primitives, mock_state):
+        """Forced direct probes can use backend JSON-schema constrained output."""
+        schema = {"type": "object", "required": ["decision"]}
+        request = ChatRequest(
+            prompt="Review this patch.",
+            real_mode=True,
+            force_role="frontdoor",
+            force_mode="direct",
+            max_tokens=256,
+            output_schema=schema,
+        )
+        routing = RoutingResult(
+            task_id="direct-json-schema",
+            task_ir={},
+            use_mock=False,
+            routing_decision=["frontdoor"],
+            routing_strategy="forced",
+        )
+        start_time = time.perf_counter()
+
+        mock_primitives.llm_call.return_value = '{"decision":"approve"}'
+
+        with patch("src.api.routes.chat_pipeline.direct_stage._truncate_looped_answer") as mock_trunc:
+            mock_trunc.return_value = '{"decision":"approve"}'
+            with patch("src.api.routes.chat_pipeline.direct_stage._quality_escalate") as mock_quality:
+                mock_quality.side_effect = lambda answer, _prompt, _prims, role, **_kw: (answer, role)
+                with patch("src.api.routes.chat_pipeline.direct_stage._should_review") as mock_review:
+                    mock_review.return_value = False
+                    with patch("src.api.routes.chat_pipeline.direct_stage.score_completed_task"):
+                        result = _execute_direct(
+                            request,
+                            routing,
+                            mock_primitives,
+                            mock_state,
+                            start_time,
+                            initial_role="frontdoor",
+                        )
+
+        assert result.answer == '{"decision":"approve"}'
+        assert mock_primitives.llm_call.call_args.kwargs["json_schema"] == schema
+        assert mock_primitives.llm_call.call_args.kwargs["n_tokens"] == 256
+
     def test_forced_direct_call_skips_output_formalizer(self, mock_primitives, mock_state):
         """Forced eval traffic measures the selected role, not a worker rewrite."""
         request = ChatRequest(

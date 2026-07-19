@@ -629,6 +629,62 @@ def test_ap5_screening_handler_requires_pool_path() -> None:
     assert res.status == "invalid" and "pool_gen_path" in res.reason
 
 
+def test_ap5_screening_handler_live_with_flag_calls_runner(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AUTOPILOT_SCREENING_TIER_INFERENCE", "1")
+    pool = {
+        "pairings": [
+            {"pairing_id": "a__b__c", "architect": "a", "reviewer": "b", "grader": "c"}
+        ],
+        "provenance": {"schema_version": "1"},
+    }
+    pool_file = tmp_path / "pool.json"
+    pool_file.write_text(json.dumps(pool), encoding="utf-8")
+    corpus = tmp_path / "manifest.json"
+    corpus.write_text(json.dumps({"corpus_id": "c1", "total_rows": 50, "counts": {}}), encoding="utf-8")
+    row_ids = tmp_path / "rows.txt"
+    row_ids.write_text("row-a\nrow-b\n", encoding="utf-8")
+    output = tmp_path / "results.jsonl"
+
+    captured: dict = {}
+
+    def _fake_run_screening_tier(plan, pool_gen_output, **kwargs):
+        captured["plan"] = plan
+        captured["pool_gen_output"] = pool_gen_output
+        captured["kwargs"] = kwargs
+        return {"mode": "execute", "inference_ran": True, "n_jobs": 1, "results": []}
+
+    monkeypatch.setitem(
+        sys.modules,
+        "screening_tier_runner",
+        type("FakeScreeningTierRunner", (), {"run_screening_tier": staticmethod(_fake_run_screening_tier)}),
+    )
+
+    ctx = _ctx()
+    res, species = actions._action_screening_tier_driver(
+        {
+            "pool_gen_path": str(pool_file),
+            "corpus_manifest_path": str(corpus),
+            "row_ids_path": str(row_ids),
+            "results_path": str(output),
+            "max_pairings": 7,
+            "cap_per_pairing": 3,
+            "seed": 99,
+            "dry_run": False,
+        },
+        ctx,
+    )
+
+    assert species == "review_plane"
+    assert res.status == "skipped"
+    assert "execute complete" in res.reason
+    assert ctx.state["_screening_tier_result"]["inference_ran"] is True
+    assert captured["kwargs"]["output_path"] == output
+    assert captured["kwargs"]["row_ids_path"] == row_ids
+    assert captured["kwargs"]["max_pairings"] == 7
+    assert captured["kwargs"]["cap_per_pairing"] == 3
+    assert captured["kwargs"]["seed"] == 99
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # AP-6 — codex-critic dogfooding
 # ══════════════════════════════════════════════════════════════════════════════

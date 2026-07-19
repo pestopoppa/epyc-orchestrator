@@ -126,6 +126,7 @@ def _execute_direct(
             n_tokens=default_tokens,
             skip_suffix=True,
             stop_sequences=stop_seqs,
+            json_schema=request.output_schema,
         )
         answer = answer.strip()
     except Exception as e:
@@ -177,6 +178,7 @@ def _execute_direct(
                 n_tokens=retry_tokens,
                 skip_suffix=True,
                 stop_sequences=stop_seqs,
+                json_schema=request.output_schema,
             )
             answer = answer.strip()
         except Exception as e2:
