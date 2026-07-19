@@ -1214,7 +1214,8 @@ server_mode:
     previous_model: Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf
     acceleration:
       type: speculative_decoding
-      spec_type: ngram-mod,draft-mtp
+      spec_type: draft-mtp
+      ngram_candidate_spec_type: ngram-mod,draft-mtp
       draft_max: 2
       draft_p_min: 0.0
       threads_draft: 16
@@ -1655,7 +1656,8 @@ roles:
     - coder
     acceleration:
       type: speculative_decoding
-      spec_type: ngram-mod,draft-mtp
+      spec_type: draft-mtp
+      ngram_candidate_spec_type: ngram-mod,draft-mtp
       draft_role: draft_gemma4_26b_a4b_assistant_q8
       draft_max: 2
       draft_p_min: 0.0
@@ -1670,6 +1672,7 @@ roles:
       optimized_tps: 38.46
       quality_pct: 90
       tool_compliance_pct: 96
+      mi210_ngram_mtp_prompt_diverse_observation: "2026-07-19 current-v7 MI210 evidence keeps ngram-mod,draft-mtp as a task-specific repetitive/token-reuse lane, not the broad worker default: repetitive JSON speed was strong, but prompt-diverse follow-up did not improve non-repetitive worker quality/speed. Future controlled launches should default worker_general to draft-mtp unless routing selects a measured token-reuse task lane."
     memory:
       residency: hot
       pinned: true
