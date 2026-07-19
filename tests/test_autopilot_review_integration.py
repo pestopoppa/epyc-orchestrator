@@ -62,6 +62,20 @@ _EXPECTED_AXA3_KNOBS = {
     "lease_eval_weight",
 }
 
+_EXPECTED_AP3_ROLE_RESTART_KNOBS = {
+    "frontdoor_spec_type",
+    "frontdoor_draft_max",
+    "frontdoor_kv_profile",
+    "worker_spec_type",
+    "worker_draft_max",
+    "worker_draft_p_min",
+    "worker_threads_draft",
+    "worker_kv_profile",
+    "architect_spec_type",
+    "architect_draft_max",
+    "architect_kv_profile",
+}
+
 
 def test_ap1_all_class1_knobs_registered_with_bounds_and_restart_cost() -> None:
     assert set(ca.REVIEW_PLANE_KNOB_SPECS) == _EXPECTED_KNOBS
@@ -273,6 +287,117 @@ def test_ap2_manifest_loader_reads_placement_policy_block(tmp_path: Path) -> Non
     assert merged["min_resident_remaining_tokens"]["lo"] == 80
     assert merged["min_resident_remaining_tokens"]["hi"] == 900
     assert merged["min_resident_remaining_tokens"]["default"] == 200
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# AP-3 — spec-dec / KV launch role-restart registration
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def test_ap3_all_role_restart_knobs_registered() -> None:
+    assert set(ca.AP3_ROLE_RESTART_KNOB_SPECS) == _EXPECTED_AP3_ROLE_RESTART_KNOBS
+    for name, spec in ca.AP3_ROLE_RESTART_KNOB_SPECS.items():
+        assert spec.section == "role_restart"
+        assert spec.restart_cost == "role_restart"
+        assert spec.apply_key == f"role_restart.{name}"
+        assert spec.role in {"frontdoor", "worker_general", "architect_general"}
+        if spec.kind == "enum":
+            assert spec.allowed_values
+        else:
+            assert spec.lo is not None and spec.hi is not None
+
+
+def test_ap3_apply_params_dry_run_classifies_role_restart() -> None:
+    res = ca.apply_params(
+        {
+            "worker_draft_max": 4,
+            "worker_draft_p_min": 0.1,
+            "worker_threads_draft": 24,
+            "worker_spec_type": "ngram-mod,draft-mtp",
+            "worker_kv_profile": "f16_f16",
+        },
+        dry_run=True,
+    )
+
+    assert res["status"] == "ok"
+    assert res["classified"]["role_restart"] == {
+        "role_restart.worker_draft_max": 4,
+        "role_restart.worker_draft_p_min": 0.1,
+        "role_restart.worker_threads_draft": 24,
+        "role_restart.worker_spec_type": "ngram-mod,draft-mtp",
+        "role_restart.worker_kv_profile": "f16_f16",
+    }
+
+
+def test_ap3_invalid_spec_type_rejected_before_classification_apply() -> None:
+    res = ca.apply_params({"worker_spec_type": "mtp"}, dry_run=True)
+
+    assert res["status"] == "error"
+    assert "role_restart" in res["errors"][0]
+    assert "draft-mtp" in res["errors"][0]
+
+
+def test_ap3_live_role_restart_requires_operator_env(monkeypatch) -> None:
+    monkeypatch.delenv("AUTOPILOT_AP3_ROLE_RESTART_ENABLE", raising=False)
+
+    res = ca.apply_role_restart_params({"role_restart.worker_draft_max": 4})
+
+    assert res["status"] == "error"
+    assert "AUTOPILOT_AP3_ROLE_RESTART_ENABLE" in res["errors"][0]
+    assert res["per_role"] == {}
+
+
+def test_ap3_role_restart_builds_registry_overrides_and_groups_by_role(monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+    monkeypatch.setenv("AUTOPILOT_AP3_ROLE_RESTART_ENABLE", "1")
+
+    def fake_restart_role(**kwargs):
+        calls.append(kwargs)
+        return {"status": "ok", "role": kwargs["role"], "registry_overrides": kwargs["registry_overrides"]}
+
+    monkeypatch.setattr(ca, "restart_role", fake_restart_role)
+
+    res = ca.apply_role_restart_params(
+        {
+            "worker_draft_max": 4,
+            "worker_spec_type": "ngram-mod,draft-mtp",
+            "worker_kv_profile": "f16_f16",
+        },
+        smoke_check=lambda _role, _affected_roles: {"status": "ok"},
+    )
+
+    assert res["status"] == "ok"
+    assert len(calls) == 1
+    assert calls[0]["role"] == "worker_general"
+    assert calls[0]["pause_dispatch"] is True
+    assert calls[0]["require_smoke_check"] is True
+    assert calls[0]["registry_overrides"] == {
+        "server_mode.worker.acceleration.draft_max": 4,
+        "server_mode.worker.acceleration.spec_type": "ngram-mod,draft-mtp",
+        "server_mode.worker.kv_quant": {"k": "f16", "v": "f16"},
+    }
+
+
+def test_ap3_manifest_loader_reads_role_restart_block(tmp_path: Path) -> None:
+    manifest = tmp_path / "review_plane_knobs.yaml"
+    manifest.write_text(
+        "role_restart_knobs:\n"
+        "  - name: role_restart.worker_draft_max\n"
+        "    param_type: int\n"
+        "    low: 1\n"
+        "    high: 12\n"
+        "    default: 3\n"
+        "    role: worker_general\n"
+        "    registry_path: server_mode.worker.acceleration.draft_max\n",
+        encoding="utf-8",
+    )
+
+    merged = ca.load_ap3_role_restart_knob_manifest(manifest)
+
+    assert set(_EXPECTED_AP3_ROLE_RESTART_KNOBS).issubset(merged)
+    assert merged["worker_draft_max"]["hi"] == 12
+    assert merged["worker_draft_max"]["default"] == 3
+    assert merged["worker_draft_max"]["role"] == "worker_general"
 
 
 # ══════════════════════════════════════════════════════════════════════════════

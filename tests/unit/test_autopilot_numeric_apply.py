@@ -82,6 +82,19 @@ def test_gpu_placement_policy_surface_exposes_thresholds_not_enable_flag() -> No
     assert by_name["placement_policy.lease_eval_weight"].param_type == "float"
 
 
+def test_spec_decode_role_restart_surface_exposes_numeric_only() -> None:
+    specs = numeric_swarm.SURFACES["spec_decode_role_restart"]
+    by_name = {spec.name: spec for spec in specs}
+
+    assert by_name["role_restart.frontdoor_draft_max"].param_type == "int"
+    assert by_name["role_restart.worker_draft_max"].param_type == "int"
+    assert by_name["role_restart.worker_draft_p_min"].param_type == "float"
+    assert by_name["role_restart.worker_threads_draft"].param_type == "int"
+    assert by_name["role_restart.architect_draft_max"].param_type == "int"
+    assert "role_restart.worker_spec_type" not in by_name
+    assert "role_restart.worker_kv_profile" not in by_name
+
+
 def test_suggested_numeric_trial_env_restart_skips_without_marking_failed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -319,6 +319,171 @@ placement_policy_knobs:
     semantics: MI210 lease priority weight for eval/benchmark workload mix.
     provenance: AXA-3 lease policy
 
+# ── AP-3 — spec-dec / KV launch role-restart knobs (classes 2/4) ─────────────
+# These knobs mutate registry launch params and require model-server role reloads.
+# NumericSwarm may tune only the numeric subset; categorical spec-type/KV choices
+# require explicit quality-gated actions. Live apply is gated by
+# AUTOPILOT_AP3_ROLE_RESTART_ENABLE and restart smoke checks.
+role_restart_knobs:
+  - name: role_restart.frontdoor_spec_type
+    dtype: enum
+    param_type: enum
+    allowed_values: ["draft-mtp", "ngram-mod,draft-mtp"]
+    default: draft-mtp
+    restart_cost: role_restart
+    application: registry_launch
+    tuning_surface_class: 2
+    role: frontdoor
+    registry_path: server_mode.frontdoor.acceleration.spec_type
+    enforcement_seam: config_applicator.apply_role_restart_params
+    semantics: Frontdoor composed-spec launch type; ngram composition stays task-quality gated.
+    provenance: AP-3 / common_speculative ngram->MTP fallback
+
+  - name: role_restart.frontdoor_draft_max
+    dtype: int
+    param_type: int
+    low: 1
+    high: 8
+    default: 4
+    restart_cost: role_restart
+    application: registry_launch
+    tuning_surface_class: 2
+    role: frontdoor
+    registry_path: server_mode.frontdoor.acceleration.draft_max
+    enforcement_seam: --spec-draft-n-max
+    semantics: Frontdoor NEXTN/draft-mtp max drafted tokens per verification step.
+    provenance: AP-3 spec-dec launch tuning
+
+  - name: role_restart.frontdoor_kv_profile
+    dtype: enum
+    param_type: enum
+    allowed_values: [q8_0_q8_0, f16_f16]
+    default: q8_0_q8_0
+    restart_cost: role_restart
+    application: registry_launch
+    tuning_surface_class: 4
+    role: frontdoor
+    registry_path: server_mode.frontdoor.kv_quant
+    enforcement_seam: -ctk/-ctv launch args
+    semantics: Frontdoor homogeneous KV profile; mixed K/V remains lane-gated.
+    provenance: AP-3 per-role KV config
+
+  - name: role_restart.worker_spec_type
+    dtype: enum
+    param_type: enum
+    allowed_values: ["draft-mtp", "ngram-mod,draft-mtp"]
+    default: draft-mtp
+    restart_cost: role_restart
+    application: registry_launch
+    tuning_surface_class: 2
+    role: worker_general
+    registry_path: server_mode.worker.acceleration.spec_type
+    enforcement_seam: config_applicator.apply_role_restart_params
+    semantics: Worker composed-spec launch type; broad default remains draft-mtp until ngram quality clears.
+    provenance: AP-3 / K14 ngram retest
+
+  - name: role_restart.worker_draft_max
+    dtype: int
+    param_type: int
+    low: 1
+    high: 8
+    default: 2
+    restart_cost: role_restart
+    application: registry_launch
+    tuning_surface_class: 2
+    role: worker_general
+    registry_path: server_mode.worker.acceleration.draft_max
+    enforcement_seam: --spec-draft-n-max
+    semantics: Worker MTP/composed-spec max drafted tokens per verification step.
+    provenance: AP-3 spec-dec launch tuning
+
+  - name: role_restart.worker_draft_p_min
+    dtype: float
+    param_type: float
+    low: 0.0
+    high: 0.5
+    default: 0.0
+    restart_cost: role_restart
+    application: registry_launch
+    tuning_surface_class: 2
+    role: worker_general
+    registry_path: server_mode.worker.acceleration.draft_p_min
+    enforcement_seam: --draft-p-min
+    semantics: Worker draft probability floor for launch-time spec decode.
+    provenance: AP-3 spec-dec launch tuning
+
+  - name: role_restart.worker_threads_draft
+    dtype: int
+    param_type: int
+    low: 1
+    high: 96
+    default: 16
+    restart_cost: role_restart
+    application: registry_launch
+    tuning_surface_class: 2
+    role: worker_general
+    registry_path: server_mode.worker.acceleration.threads_draft
+    enforcement_seam: --threads-draft
+    semantics: Worker draft thread count for launch-time spec decode.
+    provenance: AP-3 spec-dec launch tuning
+
+  - name: role_restart.worker_kv_profile
+    dtype: enum
+    param_type: enum
+    allowed_values: [q8_0_q8_0, f16_f16]
+    default: q8_0_q8_0
+    restart_cost: role_restart
+    application: registry_launch
+    tuning_surface_class: 4
+    role: worker_general
+    registry_path: server_mode.worker.kv_quant
+    enforcement_seam: -ctk/-ctv launch args
+    semantics: Worker homogeneous KV profile; mixed K/V remains lane-gated.
+    provenance: AP-3 per-role KV config
+
+  - name: role_restart.architect_spec_type
+    dtype: enum
+    param_type: enum
+    allowed_values: ["draft-mtp", "ngram-mod,draft-mtp"]
+    default: draft-mtp
+    restart_cost: role_restart
+    application: registry_launch
+    tuning_surface_class: 2
+    role: architect_general
+    registry_path: server_mode.architect_general.acceleration.spec_type
+    enforcement_seam: config_applicator.apply_role_restart_params
+    semantics: Architect composed-spec launch type; quality-gated before live use.
+    provenance: AP-3 spec-dec launch tuning
+
+  - name: role_restart.architect_draft_max
+    dtype: int
+    param_type: int
+    low: 1
+    high: 8
+    default: 4
+    restart_cost: role_restart
+    application: registry_launch
+    tuning_surface_class: 2
+    role: architect_general
+    registry_path: server_mode.architect_general.acceleration.draft_max
+    enforcement_seam: --spec-draft-n-max
+    semantics: Architect NEXTN/draft-mtp max drafted tokens per verification step.
+    provenance: AP-3 spec-dec launch tuning
+
+  - name: role_restart.architect_kv_profile
+    dtype: enum
+    param_type: enum
+    allowed_values: [q8_0_q8_0, f16_f16]
+    default: q8_0_q8_0
+    restart_cost: role_restart
+    application: registry_launch
+    tuning_surface_class: 4
+    role: architect_general
+    registry_path: server_mode.architect_general.kv_quant
+    enforcement_seam: -ctk/-ctv launch args
+    semantics: Architect homogeneous KV profile; mixed K/V remains lane-gated.
+    provenance: AP-3 per-role KV config
+
 # ── LB-2 per-decision token + latency budgets (ceilings) ────────────────────
 # Consumed by the shadow budget hook (IterationContext.check_token_budget) when
 # budget_shadow_logging_enabled flips on. All PROPOSED / observation-grade

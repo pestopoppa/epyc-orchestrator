@@ -116,6 +116,17 @@ SURFACES: dict[str, list[ParamSpec]] = {
         ParamSpec("placement_policy.lease_batch_weight", 0.0, 4.0, "float"),
         ParamSpec("placement_policy.lease_eval_weight", 0.0, 4.0, "float"),
     ],
+    "spec_decode_role_restart": [
+        # AP-3 class-2 launch knobs. These are expensive role-restart params:
+        # apply_params classifies them as role_restart and live application is
+        # gated separately. Categorical spec-type and KV-profile choices are not
+        # NumericSwarm floats; they stay explicit quality-gated action params.
+        ParamSpec("role_restart.frontdoor_draft_max", 1, 8, "int"),
+        ParamSpec("role_restart.worker_draft_max", 1, 8, "int"),
+        ParamSpec("role_restart.worker_draft_p_min", 0.0, 0.5, "float"),
+        ParamSpec("role_restart.worker_threads_draft", 1, 96, "int"),
+        ParamSpec("role_restart.architect_draft_max", 1, 8, "int"),
+    ],
 }
 
 
