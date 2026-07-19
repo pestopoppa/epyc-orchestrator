@@ -1,0 +1,118 @@
+{
+  "costs": {
+    "cpu_tps": 20.0,
+    "estimated_saved_seconds_before_load": 4.909090909090909,
+    "gpu_tps": 44.0,
+    "load_seconds": 7.0,
+    "positive_after_load_only": false
+  },
+  "decision": {
+    "catch_up_reason": "llama_server_verify_api_unavailable",
+    "catch_up_supported": false,
+    "estimated_speedup": 2.2,
+    "long_running_trigger_tokens": 128,
+    "quant_policy": "same_quant_only",
+    "quant_transition": "q4_k_m->q4_k_m",
+    "rate_window_tokens": 64,
+    "reason": "cutover",
+    "should_cutover": true,
+    "threshold_tokens": 150
+  },
+  "idx": 0,
+  "inputs": {
+    "catch_up_supported": false,
+    "cpu_quant": "q4_k_m",
+    "cpu_tps": 20.0,
+    "estimated_remaining_tokens": 180,
+    "generated_tokens": 200,
+    "gpu_available": true,
+    "gpu_quant": "q4_k_m",
+    "gpu_resident": true,
+    "gpu_tps": 44.0,
+    "metadata": {
+      "prompt_tokens": 8192,
+      "trace_id": "resident_same_quant_tail",
+      "trace_line_no": 1,
+      "workload_class": null
+    },
+    "role": "architect_general"
+  },
+  "policy": {
+    "allowed_quant_change_roles": [],
+    "allowed_roles": [
+      "architect_general"
+    ],
+    "enabled": true,
+    "lease_batch_weight": 0.25,
+    "lease_eval_weight": 0.1,
+    "lease_interactive_weight": 1.0,
+    "long_running_trigger_tokens": 128,
+    "min_cold_remaining_tokens": 350,
+    "min_resident_remaining_tokens": 150,
+    "min_speedup": 1.05,
+    "mode": "v1_reprefill_cutover_only",
+    "quant_policy": "same_quant_only",
+    "rate_window_tokens": 64
+  },
+  "trace_id": "resident_same_quant_tail",
+  "trace_line_no": 1
+}
+{
+  "costs": {
+    "cpu_tps": 20.0,
+    "estimated_saved_seconds_before_load": 13.636363636363637,
+    "gpu_tps": 44.0,
+    "load_seconds": 7.0,
+    "positive_after_load_only": true
+  },
+  "decision": {
+    "catch_up_reason": "llama_server_verify_api_unavailable",
+    "catch_up_supported": false,
+    "estimated_speedup": 2.2,
+    "long_running_trigger_tokens": 128,
+    "quant_policy": "same_quant_only",
+    "quant_transition": "q4_k_m->iq2_m",
+    "rate_window_tokens": 64,
+    "reason": "quant_change_not_allowed",
+    "should_cutover": false,
+    "threshold_tokens": 150
+  },
+  "idx": 1,
+  "inputs": {
+    "catch_up_supported": false,
+    "cpu_quant": "q4_k_m",
+    "cpu_tps": 20.0,
+    "estimated_remaining_tokens": 500,
+    "generated_tokens": 200,
+    "gpu_available": true,
+    "gpu_quant": "iq2_m",
+    "gpu_resident": true,
+    "gpu_tps": 44.0,
+    "metadata": {
+      "prompt_tokens": 16384,
+      "trace_id": "cross_quant_default_reject",
+      "trace_line_no": 2,
+      "workload_class": null
+    },
+    "role": "architect_general"
+  },
+  "policy": {
+    "allowed_quant_change_roles": [],
+    "allowed_roles": [
+      "architect_general"
+    ],
+    "enabled": true,
+    "lease_batch_weight": 0.25,
+    "lease_eval_weight": 0.1,
+    "lease_interactive_weight": 1.0,
+    "long_running_trigger_tokens": 128,
+    "min_cold_remaining_tokens": 350,
+    "min_resident_remaining_tokens": 150,
+    "min_speedup": 1.05,
+    "mode": "v1_reprefill_cutover_only",
+    "quant_policy": "same_quant_only",
+    "rate_window_tokens": 64
+  },
+  "trace_id": "cross_quant_default_reject",
+  "trace_line_no": 2
+}
