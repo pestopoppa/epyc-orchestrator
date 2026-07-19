@@ -9,6 +9,7 @@ import json
 import os
 import threading
 import time
+from dataclasses import replace
 from typing import Any
 
 from .backend import BackendMixin
@@ -19,6 +20,7 @@ from .mock import MockMixin
 from .persona import PersonaMixin
 from .stats import StatsMixin
 from .tokens import TokensMixin
+from .teleport import TeleportDecision, TeleportInputs, TeleportPolicy, decide_teleport
 from .types import CallLogEntry, LLMResult
 from src.roles import Role
 from src.workload_model import infer_workload_class
@@ -72,6 +74,8 @@ class LLMPrimitives(
         use_worker_pool: bool = False,
         health_tracker: Any | None = None,
         admission_controller: Any | None = None,
+        gpu_lease_manager: Any | None = None,
+        teleport_policy: TeleportPolicy | None = None,
     ):
         """Initialize LLM primitives.
 
@@ -88,11 +92,15 @@ class LLMPrimitives(
             use_worker_pool: If True and worker_pool provided, route worker calls through pool.
             health_tracker: Optional BackendHealthTracker for circuit breaker integration.
             admission_controller: Optional AdmissionController for per-backend queue limiting.
+            gpu_lease_manager: Optional process-local lease manager for AXA-2 decisions.
+            teleport_policy: Optional default-off AXA-2 teleport policy.
         """
         self.model_server = model_server
         self.mock_mode = mock_mode
         self.health_tracker = health_tracker
         self.admission_controller = admission_controller
+        self.gpu_lease_manager = gpu_lease_manager
+        self.teleport_policy = teleport_policy if teleport_policy is not None else TeleportPolicy()
         self.config = config if config is not None else LLMPrimitivesConfig()
         self.mock_responses = mock_responses if mock_responses is not None else {}
         self.server_urls = server_urls
@@ -223,6 +231,35 @@ class LLMPrimitives(
             role: get_role_max_concurrency(role) for role in (server_urls or {}).keys()
         }
         self._role_semaphores: dict[str, threading.Semaphore] = {}
+
+    def evaluate_teleport_decision(
+        self,
+        inputs: TeleportInputs,
+        *,
+        lease_owner: str | None = None,
+    ) -> TeleportDecision:
+        """Evaluate AXA-2 teleport eligibility without performing cutover.
+
+        The disabled default returns before consulting the optional lease
+        manager. An enabled policy treats a lease held by another owner as an
+        unavailable GPU, but this helper never acquires or releases a lease.
+        """
+        if not self.teleport_policy.enabled:
+            return decide_teleport(self.teleport_policy, inputs)
+
+        effective_inputs = inputs
+        if self.gpu_lease_manager is not None:
+            lease_status = self.gpu_lease_manager.status()
+            if lease_status.acquired and lease_status.owner != lease_owner:
+                effective_inputs = replace(
+                    inputs,
+                    gpu_available=False,
+                    metadata={
+                        **inputs.metadata,
+                        "gpu_lease_owner": lease_status.owner,
+                    },
+                )
+        return decide_teleport(self.teleport_policy, effective_inputs)
 
     def _get_role_limit(self, role: str) -> int:
         """Return per-role concurrency limit (defaults to 1)."""
