@@ -65,14 +65,31 @@ _EXPECTED_AXA3_KNOBS = {
 _EXPECTED_AP3_ROLE_RESTART_KNOBS = {
     "frontdoor_spec_type",
     "frontdoor_draft_max",
+    "frontdoor_draft_min",
+    "frontdoor_draft_p_min",
+    "frontdoor_draft_p_split",
+    "frontdoor_ngram_mod_n_min",
+    "frontdoor_ngram_mod_n_max",
+    "frontdoor_ngram_mod_n_match",
     "frontdoor_kv_profile",
     "worker_spec_type",
     "worker_draft_max",
+    "worker_draft_min",
     "worker_draft_p_min",
+    "worker_draft_p_split",
     "worker_threads_draft",
+    "worker_ngram_mod_n_min",
+    "worker_ngram_mod_n_max",
+    "worker_ngram_mod_n_match",
     "worker_kv_profile",
     "architect_spec_type",
     "architect_draft_max",
+    "architect_draft_min",
+    "architect_draft_p_min",
+    "architect_draft_p_split",
+    "architect_ngram_mod_n_min",
+    "architect_ngram_mod_n_max",
+    "architect_ngram_mod_n_match",
     "architect_kv_profile",
 }
 
@@ -311,8 +328,13 @@ def test_ap3_apply_params_dry_run_classifies_role_restart() -> None:
     res = ca.apply_params(
         {
             "worker_draft_max": 4,
+            "worker_draft_min": 1,
             "worker_draft_p_min": 0.1,
+            "worker_draft_p_split": 0.2,
             "worker_threads_draft": 24,
+            "worker_ngram_mod_n_min": 16,
+            "worker_ngram_mod_n_max": 32,
+            "worker_ngram_mod_n_match": 8,
             "worker_spec_type": "ngram-mod,draft-mtp",
             "worker_kv_profile": "f16_f16",
         },
@@ -322,8 +344,13 @@ def test_ap3_apply_params_dry_run_classifies_role_restart() -> None:
     assert res["status"] == "ok"
     assert res["classified"]["role_restart"] == {
         "role_restart.worker_draft_max": 4,
+        "role_restart.worker_draft_min": 1,
         "role_restart.worker_draft_p_min": 0.1,
+        "role_restart.worker_draft_p_split": 0.2,
         "role_restart.worker_threads_draft": 24,
+        "role_restart.worker_ngram_mod_n_min": 16,
+        "role_restart.worker_ngram_mod_n_max": 32,
+        "role_restart.worker_ngram_mod_n_match": 8,
         "role_restart.worker_spec_type": "ngram-mod,draft-mtp",
         "role_restart.worker_kv_profile": "f16_f16",
     }
@@ -360,7 +387,10 @@ def test_ap3_role_restart_builds_registry_overrides_and_groups_by_role(monkeypat
     res = ca.apply_role_restart_params(
         {
             "worker_draft_max": 4,
+            "worker_draft_min": 1,
             "worker_spec_type": "ngram-mod,draft-mtp",
+            "worker_draft_p_split": 0.25,
+            "worker_ngram_mod_n_match": 16,
             "worker_kv_profile": "f16_f16",
         },
         smoke_check=lambda _role, _affected_roles: {"status": "ok"},
@@ -373,7 +403,10 @@ def test_ap3_role_restart_builds_registry_overrides_and_groups_by_role(monkeypat
     assert calls[0]["require_smoke_check"] is True
     assert calls[0]["registry_overrides"] == {
         "server_mode.worker.acceleration.draft_max": 4,
+        "server_mode.worker.acceleration.draft_min": 1,
         "server_mode.worker.acceleration.spec_type": "ngram-mod,draft-mtp",
+        "server_mode.worker.acceleration.draft_p_split": 0.25,
+        "server_mode.worker.acceleration.ngram_mod_n_match": 16,
         "server_mode.worker.kv_quant": {"k": "f16", "v": "f16"},
     }
 

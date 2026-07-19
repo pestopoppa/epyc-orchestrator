@@ -388,8 +388,13 @@ def test_build_worker_general_command_prefers_stack_prior_runtime(
                     "type": "draft-mtp",
                     "draft_model_path": "/prior/draft.gguf",
                     "draft_max": 4,
+                    "draft_min": 1,
                     "draft_p_min": 0.25,
+                    "draft_p_split": 0.75,
                     "threads_draft": 8,
+                    "ngram_mod_n_min": 0,
+                    "ngram_mod_n_max": 96,
+                    "ngram_mod_n_match": 12,
                 },
             },
         },
@@ -407,8 +412,13 @@ def test_build_worker_general_command_prefers_stack_prior_runtime(
     assert _flag_value(cmd, "-md") == "/prior/draft.gguf"
     # 2026-06-26 v6 cutover: n-max emitted via --spec-draft-n-max (was --draft-max).
     assert _flag_value(cmd, "--spec-draft-n-max") == "4"
+    assert _flag_value(cmd, "--spec-draft-n-min") == "1"
     assert _flag_value(cmd, "--draft-p-min") == "0.25"
+    assert _flag_value(cmd, "--draft-p-split") == "0.75"
     assert _flag_value(cmd, "--threads-draft") == "8"
+    assert _flag_value(cmd, "--spec-ngram-mod-n-min") == "0"
+    assert _flag_value(cmd, "--spec-ngram-mod-n-max") == "96"
+    assert _flag_value(cmd, "--spec-ngram-mod-n-match") == "12"
     assert _flag_value(cmd, "-ub") == "256"
     assert _flag_value(cmd, "-c") == "12288"
     assert _flag_value(cmd, "-ctk") == "q5_0"

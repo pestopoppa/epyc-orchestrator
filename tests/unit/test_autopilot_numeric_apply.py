@@ -87,10 +87,27 @@ def test_spec_decode_role_restart_surface_exposes_numeric_only() -> None:
     by_name = {spec.name: spec for spec in specs}
 
     assert by_name["role_restart.frontdoor_draft_max"].param_type == "int"
+    assert by_name["role_restart.frontdoor_draft_min"].param_type == "int"
+    assert by_name["role_restart.frontdoor_draft_p_min"].param_type == "float"
+    assert by_name["role_restart.frontdoor_draft_p_split"].param_type == "float"
+    assert by_name["role_restart.frontdoor_ngram_mod_n_min"].param_type == "int"
+    assert by_name["role_restart.frontdoor_ngram_mod_n_max"].param_type == "int"
+    assert by_name["role_restart.frontdoor_ngram_mod_n_match"].param_type == "int"
     assert by_name["role_restart.worker_draft_max"].param_type == "int"
+    assert by_name["role_restart.worker_draft_min"].param_type == "int"
     assert by_name["role_restart.worker_draft_p_min"].param_type == "float"
+    assert by_name["role_restart.worker_draft_p_split"].param_type == "float"
     assert by_name["role_restart.worker_threads_draft"].param_type == "int"
+    assert by_name["role_restart.worker_ngram_mod_n_min"].param_type == "int"
+    assert by_name["role_restart.worker_ngram_mod_n_max"].param_type == "int"
+    assert by_name["role_restart.worker_ngram_mod_n_match"].param_type == "int"
     assert by_name["role_restart.architect_draft_max"].param_type == "int"
+    assert by_name["role_restart.architect_draft_min"].param_type == "int"
+    assert by_name["role_restart.architect_draft_p_min"].param_type == "float"
+    assert by_name["role_restart.architect_draft_p_split"].param_type == "float"
+    assert by_name["role_restart.architect_ngram_mod_n_min"].param_type == "int"
+    assert by_name["role_restart.architect_ngram_mod_n_max"].param_type == "int"
+    assert by_name["role_restart.architect_ngram_mod_n_match"].param_type == "int"
     assert "role_restart.worker_spec_type" not in by_name
     assert "role_restart.worker_kv_profile" not in by_name
 

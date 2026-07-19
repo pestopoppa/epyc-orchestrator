@@ -214,6 +214,19 @@ def _runtime_positive_int(
     return str(fallback)
 
 
+def _runtime_nonnegative_int(
+    container: dict[str, Any],
+    key: str,
+    fallback: int | str,
+) -> str:
+    value = container.get(key)
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return str(value)
+    if isinstance(value, str) and value.isdigit() and int(value) >= 0:
+        return value
+    return str(fallback)
+
+
 def _runtime_number_string(
     container: dict[str, Any],
     key: str,
@@ -247,8 +260,13 @@ def _append_spec_decode_args(
     draft_model_path: str | None,
     spec_type: str | None,
     draft_max: str | None,
+    draft_min: str | None = None,
     draft_p_min: str | None = None,
+    draft_p_split: str | None = None,
     threads_draft: str | None = None,
+    ngram_mod_n_min: str | None = None,
+    ngram_mod_n_max: str | None = None,
+    ngram_mod_n_match: str | None = None,
 ) -> None:
     if draft_model_path and not _same_real_model_path(model_path, draft_model_path):
         cmd.extend(["-md", draft_model_path])
@@ -256,10 +274,20 @@ def _append_spec_decode_args(
         cmd.extend(["--spec-type", spec_type])
     if draft_max:
         cmd.extend(["--spec-draft-n-max", draft_max])
-    if draft_p_min is not None:
+    if draft_min:
+        cmd.extend(["--spec-draft-n-min", draft_min])
+    if draft_p_min not in (None, ""):
         cmd.extend(["--draft-p-min", draft_p_min])
+    if draft_p_split not in (None, ""):
+        cmd.extend(["--draft-p-split", draft_p_split])
     if threads_draft:
         cmd.extend(["--threads-draft", threads_draft])
+    if ngram_mod_n_min:
+        cmd.extend(["--spec-ngram-mod-n-min", ngram_mod_n_min])
+    if ngram_mod_n_max:
+        cmd.extend(["--spec-ngram-mod-n-max", ngram_mod_n_max])
+    if ngram_mod_n_match:
+        cmd.extend(["--spec-ngram-mod-n-match", ngram_mod_n_match])
 
 
 def _append_runtime_kv_args(cmd: list[str], cache: dict[str, Any]) -> None:
@@ -282,7 +310,9 @@ def _append_runtime_spec_args(cmd: list[str], runtime: dict[str, Any], model_pat
         return
     spec_type = spec.get("type")
     draft_max = spec.get("draft_max")
+    draft_min = spec.get("draft_min")
     draft_p_min = spec.get("draft_p_min")
+    draft_p_split = spec.get("draft_p_split")
     threads_draft = spec.get("threads_draft")
     _append_spec_decode_args(
         cmd,
@@ -295,9 +325,19 @@ def _append_runtime_spec_args(cmd: list[str], runtime: dict[str, Any], model_pat
             if isinstance(draft_max, int) and not isinstance(draft_max, bool) and draft_max > 0
             else None
         ),
+        draft_min=(
+            str(draft_min)
+            if isinstance(draft_min, int) and not isinstance(draft_min, bool) and draft_min >= 0
+            else None
+        ),
         draft_p_min=(
             str(float(draft_p_min))
             if isinstance(draft_p_min, (int, float)) and not isinstance(draft_p_min, bool)
+            else None
+        ),
+        draft_p_split=(
+            str(float(draft_p_split))
+            if isinstance(draft_p_split, (int, float)) and not isinstance(draft_p_split, bool)
             else None
         ),
         threads_draft=(
@@ -307,6 +347,15 @@ def _append_runtime_spec_args(cmd: list[str], runtime: dict[str, Any], model_pat
             and threads_draft > 0
             else None
         ),
+        ngram_mod_n_min=_runtime_positive_int(spec, "ngram_mod_n_min", "")
+        if "ngram_mod_n_min" in spec
+        else None,
+        ngram_mod_n_max=_runtime_positive_int(spec, "ngram_mod_n_max", "")
+        if "ngram_mod_n_max" in spec
+        else None,
+        ngram_mod_n_match=_runtime_positive_int(spec, "ngram_mod_n_match", "")
+        if "ngram_mod_n_match" in spec
+        else None,
     )
 
 
@@ -677,16 +726,31 @@ def _build_worker_general_command(
             "draft_max",
             _WORKER_GENERAL_DEGRADED_FALLBACK["draft_max"],
         ),
+        draft_min=_runtime_nonnegative_int(spec, "draft_min", "")
+        if "draft_min" in spec
+        else None,
         draft_p_min=_runtime_number_string(
             spec,
             "draft_p_min",
             _WORKER_GENERAL_DEGRADED_FALLBACK["draft_p_min"],
         ),
+        draft_p_split=_runtime_number_string(spec, "draft_p_split", "")
+        if "draft_p_split" in spec
+        else None,
         threads_draft=_runtime_positive_int(
             spec,
             "threads_draft",
             _WORKER_GENERAL_DEGRADED_FALLBACK["threads_draft"],
         ),
+        ngram_mod_n_min=_runtime_nonnegative_int(spec, "ngram_mod_n_min", "")
+        if "ngram_mod_n_min" in spec
+        else None,
+        ngram_mod_n_max=_runtime_nonnegative_int(spec, "ngram_mod_n_max", "")
+        if "ngram_mod_n_max" in spec
+        else None,
+        ngram_mod_n_match=_runtime_positive_int(spec, "ngram_mod_n_match", "")
+        if "ngram_mod_n_match" in spec
+        else None,
     )
     cmd.extend(
         [

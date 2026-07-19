@@ -950,6 +950,19 @@ def _positive_int_prior(
     return fallback
 
 
+def _nonnegative_int_prior(
+    *containers: dict[str, Any] | None,
+    key: str,
+) -> int | None:
+    for container in containers:
+        if not isinstance(container, dict):
+            continue
+        value = container.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            return value
+    return None
+
+
 def _runtime_flag_string_prior(
     server_cfg: dict[str, Any] | None,
     role_cfg: dict[str, Any] | None,
@@ -1165,8 +1178,13 @@ def _launch_runtime_record(
         "disabled_by": None,
         "draft_model_path": None,
         "draft_max": None,
+        "draft_min": None,
         "draft_p_min": None,
+        "draft_p_split": None,
         "threads_draft": None,
+        "ngram_mod_n_min": None,
+        "ngram_mod_n_max": None,
+        "ngram_mod_n_match": None,
     }
     # 2026-06-26 v6 cutover: spec_type carries the v6 MTP token 'draft-mtp' (bare
     # 'mtp' is invalid in v6). It is preserved verbatim from the registry
@@ -1187,10 +1205,19 @@ def _launch_runtime_record(
             key="threads_draft",
             fallback=16,
         )
+        worker_draft_min = _nonnegative_int_prior(
+            acceleration,
+            key="draft_min",
+        )
         worker_draft_p_min = _number_prior(
             acceleration,
             key="draft_p_min",
             fallback=0.0,
+        )
+        worker_draft_p_split = (
+            _number_prior(acceleration, key="draft_p_split", fallback=0.0)
+            if "draft_p_split" in acceleration
+            else None
         )
         spec.update(
             {
@@ -1202,8 +1229,25 @@ def _launch_runtime_record(
                 if requirements.get("draft_model_path")
                 else None,
                 "draft_max": worker_draft_max,
+                "draft_min": worker_draft_min,
                 "draft_p_min": worker_draft_p_min,
+                "draft_p_split": worker_draft_p_split,
                 "threads_draft": worker_threads_draft,
+                "ngram_mod_n_min": _nonnegative_int_prior(
+                    acceleration,
+                    key="ngram_mod_n_min",
+                ),
+                "ngram_mod_n_max": _nonnegative_int_prior(
+                    acceleration,
+                    key="ngram_mod_n_max",
+                ),
+                "ngram_mod_n_match": _positive_int_prior(
+                    acceleration,
+                    key="ngram_mod_n_match",
+                    fallback=0,
+                )
+                if "ngram_mod_n_match" in acceleration
+                else None,
             }
         )
     elif spec_type_prior == "draft-mtp" and role == primary_role:
@@ -1235,6 +1279,35 @@ def _launch_runtime_record(
                 "draft_model_path": str(nextn_draft_path) if nextn_draft_path else None,
                 "draft_max": draft_max_prior
                 if isinstance(draft_max_prior, int) and not isinstance(draft_max_prior, bool)
+                else None,
+                "draft_min": _nonnegative_int_prior(
+                    acceleration,
+                    key="draft_min",
+                ),
+                "draft_p_min": (
+                    _number_prior(acceleration, key="draft_p_min", fallback=0.0)
+                    if "draft_p_min" in acceleration
+                    else None
+                ),
+                "draft_p_split": (
+                    _number_prior(acceleration, key="draft_p_split", fallback=0.0)
+                    if "draft_p_split" in acceleration
+                    else None
+                ),
+                "ngram_mod_n_min": _nonnegative_int_prior(
+                    acceleration,
+                    key="ngram_mod_n_min",
+                ),
+                "ngram_mod_n_max": _nonnegative_int_prior(
+                    acceleration,
+                    key="ngram_mod_n_max",
+                ),
+                "ngram_mod_n_match": _positive_int_prior(
+                    acceleration,
+                    key="ngram_mod_n_match",
+                    fallback=0,
+                )
+                if "ngram_mod_n_match" in acceleration
                 else None,
             }
         )

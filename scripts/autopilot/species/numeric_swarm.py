@@ -122,10 +122,27 @@ SURFACES: dict[str, list[ParamSpec]] = {
         # gated separately. Categorical spec-type and KV-profile choices are not
         # NumericSwarm floats; they stay explicit quality-gated action params.
         ParamSpec("role_restart.frontdoor_draft_max", 1, 8, "int"),
+        ParamSpec("role_restart.frontdoor_draft_min", 0, 8, "int"),
+        ParamSpec("role_restart.frontdoor_draft_p_min", 0.0, 0.5, "float"),
+        ParamSpec("role_restart.frontdoor_draft_p_split", 0.0, 1.0, "float"),
+        ParamSpec("role_restart.frontdoor_ngram_mod_n_min", 0, 1024, "int"),
+        ParamSpec("role_restart.frontdoor_ngram_mod_n_max", 0, 1024, "int"),
+        ParamSpec("role_restart.frontdoor_ngram_mod_n_match", 1, 1024, "int"),
         ParamSpec("role_restart.worker_draft_max", 1, 8, "int"),
+        ParamSpec("role_restart.worker_draft_min", 0, 8, "int"),
         ParamSpec("role_restart.worker_draft_p_min", 0.0, 0.5, "float"),
+        ParamSpec("role_restart.worker_draft_p_split", 0.0, 1.0, "float"),
         ParamSpec("role_restart.worker_threads_draft", 1, 96, "int"),
+        ParamSpec("role_restart.worker_ngram_mod_n_min", 0, 1024, "int"),
+        ParamSpec("role_restart.worker_ngram_mod_n_max", 0, 1024, "int"),
+        ParamSpec("role_restart.worker_ngram_mod_n_match", 1, 1024, "int"),
         ParamSpec("role_restart.architect_draft_max", 1, 8, "int"),
+        ParamSpec("role_restart.architect_draft_min", 0, 8, "int"),
+        ParamSpec("role_restart.architect_draft_p_min", 0.0, 0.5, "float"),
+        ParamSpec("role_restart.architect_draft_p_split", 0.0, 1.0, "float"),
+        ParamSpec("role_restart.architect_ngram_mod_n_min", 0, 1024, "int"),
+        ParamSpec("role_restart.architect_ngram_mod_n_max", 0, 1024, "int"),
+        ParamSpec("role_restart.architect_ngram_mod_n_match", 1, 1024, "int"),
     ],
 }
 
