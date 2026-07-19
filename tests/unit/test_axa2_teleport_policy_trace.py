@@ -115,3 +115,6 @@ def test_main_writes_dry_policy_artifacts(tmp_path: Path):
     assert summary["cutover_reasons"] == ["cutover"]
     assert summary["no_inference"] is True
     assert (out / "policy_decisions.jsonl").exists()
+    decision_lines = (out / "policy_decisions.jsonl").read_text().splitlines()
+    assert len(decision_lines) == 1
+    assert json.loads(decision_lines[0])["decision"]["should_cutover"] is True

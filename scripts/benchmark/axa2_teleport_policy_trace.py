@@ -49,6 +49,10 @@ def canonical_json(value: Any) -> str:
     return json.dumps(value, indent=2, sort_keys=True) + "\n"
 
 
+def jsonl_line(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"
+
+
 def jsonable(value: Any) -> Any:
     if isinstance(value, (frozenset, set)):
         return sorted(value)
@@ -229,7 +233,7 @@ def write_artifacts(rows: list[dict[str, Any]], args: argparse.Namespace) -> dic
         "environment": collect_environment(),
     }
     (output_dir / "policy_decisions.jsonl").write_text(
-        "".join(canonical_json(item) for item in decisions),
+        "".join(jsonl_line(item) for item in decisions),
         encoding="utf-8",
     )
     (output_dir / "summary.json").write_text(canonical_json(summary), encoding="utf-8")
