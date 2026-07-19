@@ -125,9 +125,26 @@ ENV_PARAMS["delegation"] = {
 }
 
 _REVIEW_PLANE_SECTION = "delegation"
+_AXA3_POLICY_SECTION = "placement_policy"
 DEFAULT_REVIEW_PLANE_KNOB_MANIFEST = (
     ORCH_ROOT / "orchestration" / "review_plane_knobs.yaml"
 )
+DEFAULT_AXA3_POLICY_KNOB_MANIFEST = DEFAULT_REVIEW_PLANE_KNOB_MANIFEST
+
+ENV_PARAMS[_AXA3_POLICY_SECTION] = {
+    "teleport_enabled": "ORCHESTRATOR_PLACEMENT_POLICY_TELEPORT_ENABLED",
+    "long_running_trigger_tokens": (
+        "ORCHESTRATOR_PLACEMENT_POLICY_LONG_RUNNING_TRIGGER_TOKENS"
+    ),
+    "rate_window_tokens": "ORCHESTRATOR_PLACEMENT_POLICY_RATE_WINDOW_TOKENS",
+    "min_resident_remaining_tokens": (
+        "ORCHESTRATOR_PLACEMENT_POLICY_MIN_RESIDENT_REMAINING_TOKENS"
+    ),
+    "min_speedup": "ORCHESTRATOR_PLACEMENT_POLICY_MIN_SPEEDUP",
+    "lease_interactive_weight": "ORCHESTRATOR_PLACEMENT_POLICY_LEASE_INTERACTIVE_WEIGHT",
+    "lease_batch_weight": "ORCHESTRATOR_PLACEMENT_POLICY_LEASE_BATCH_WEIGHT",
+    "lease_eval_weight": "ORCHESTRATOR_PLACEMENT_POLICY_LEASE_EVAL_WEIGHT",
+}
 
 
 @dataclass(frozen=True)
@@ -147,10 +164,11 @@ class ReviewPlaneKnob:
     restart_cost: str = "api_restart"  # "none" | "api_restart" | "role_restart"
     apply_surface: str = "env_restart"  # classify_params bucket the value lands in
     doc: str = ""
+    section: str = _REVIEW_PLANE_SECTION
 
     @property
     def apply_key(self) -> str:
-        return f"{_REVIEW_PLANE_SECTION}.{self.name}"
+        return f"{self.section}.{self.name}"
 
     def coerce(self, value: Any) -> Any:
         if self.kind == "bool":
@@ -186,6 +204,7 @@ class ReviewPlaneKnob:
             "restart_cost": self.restart_cost,
             "apply_surface": self.apply_surface,
             "apply_key": self.apply_key,
+            "section": self.section,
             "doc": self.doc,
         }
 
@@ -242,6 +261,61 @@ _REVIEW_PLANE_BY_APPLY_KEY: dict[str, ReviewPlaneKnob] = {
 }
 
 
+AXA3_POLICY_KNOB_SPECS: dict[str, ReviewPlaneKnob] = {
+    knob.name: knob
+    for knob in (
+        ReviewPlaneKnob(
+            "teleport_enabled", "bool", False,
+            doc="Default-off AXA-3 operator gate. Registered for explicit staging "
+            "only; NumericSwarm does not sweep this enable flag.",
+            section=_AXA3_POLICY_SECTION,
+        ),
+        ReviewPlaneKnob(
+            "long_running_trigger_tokens", "int", 128, 0, 4096,
+            doc="Generated-token count before a stream can be considered long-running "
+            "enough for v1 re-prefill cutover.",
+            section=_AXA3_POLICY_SECTION,
+        ),
+        ReviewPlaneKnob(
+            "rate_window_tokens", "int", 64, 16, 1024,
+            doc="Decode-rate observation window, in generated tokens, used by the "
+            "future long-running stream detector.",
+            section=_AXA3_POLICY_SECTION,
+        ),
+        ReviewPlaneKnob(
+            "min_resident_remaining_tokens", "int", 150, 64, 1024,
+            doc="Resident-lane positive-savings break-even threshold for estimated "
+            "remaining tokens. Cold-load break-even stays operator-gated.",
+            section=_AXA3_POLICY_SECTION,
+        ),
+        ReviewPlaneKnob(
+            "min_speedup", "float", 1.05, 1.0, 4.0,
+            doc="Minimum GPU/CPU decode-rate ratio before teleport can be considered.",
+            section=_AXA3_POLICY_SECTION,
+        ),
+        ReviewPlaneKnob(
+            "lease_interactive_weight", "float", 1.0, 0.0, 4.0,
+            doc="MI210 lease priority weight for interactive workload mix.",
+            section=_AXA3_POLICY_SECTION,
+        ),
+        ReviewPlaneKnob(
+            "lease_batch_weight", "float", 0.25, 0.0, 4.0,
+            doc="MI210 lease priority weight for batch/offline workload mix.",
+            section=_AXA3_POLICY_SECTION,
+        ),
+        ReviewPlaneKnob(
+            "lease_eval_weight", "float", 0.1, 0.0, 4.0,
+            doc="MI210 lease priority weight for eval/benchmark workload mix.",
+            section=_AXA3_POLICY_SECTION,
+        ),
+    )
+}
+
+_AXA3_POLICY_BY_APPLY_KEY: dict[str, ReviewPlaneKnob] = {
+    knob.apply_key: knob for knob in AXA3_POLICY_KNOB_SPECS.values()
+}
+
+
 def load_review_plane_knob_manifest(
     path: Path | None = None,
 ) -> dict[str, dict[str, Any]]:
@@ -284,6 +358,57 @@ def load_review_plane_knob_manifest(
         name = raw_name.split(".", 1)[1] if raw_name.startswith("review_plane.") else raw_name
         base = merged.get(name, {"name": name, "manifest_only": True})
         for spec_field, value in _normalize_manifest_knob_fields(override).items():
+            base[spec_field] = value
+        merged[name] = base
+    return merged
+
+
+def load_axa3_policy_knob_manifest(
+    path: Path | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Load AXA-3 class-3 GPU placement/teleport policy knob declarations.
+
+    The manifest lives beside the AP-1 review-plane manifest because both are
+    guarded control-plane numeric surfaces. This loader reads the dedicated
+    ``placement_policy_knobs`` list first, and also tolerates entries under the
+    historical ``knobs`` list when their name starts with ``placement_policy.``.
+    """
+    resolved = path or DEFAULT_AXA3_POLICY_KNOB_MANIFEST
+    merged: dict[str, dict[str, Any]] = {
+        name: knob.to_dict() for name, knob in AXA3_POLICY_KNOB_SPECS.items()
+    }
+    try:
+        if not resolved.exists():
+            return merged
+        raw = _load_yaml_mapping(resolved)
+    except Exception as exc:  # noqa: BLE001 — never let a bad manifest break apply
+        log.warning("AXA-3 policy knob manifest unreadable (%s); using built-ins", exc)
+        return merged
+
+    entries: list[Any] = []
+    explicit = raw.get("placement_policy_knobs") if isinstance(raw, dict) else None
+    if isinstance(explicit, list):
+        entries.extend(explicit)
+    legacy = raw.get("knobs") if isinstance(raw, dict) else None
+    if isinstance(legacy, list):
+        entries.extend(
+            item
+            for item in legacy
+            if isinstance(item, dict)
+            and str(item.get("name", "")).startswith("placement_policy.")
+        )
+
+    for entry in entries:
+        if not isinstance(entry, dict) or not entry.get("name"):
+            continue
+        raw_name = str(entry["name"])
+        name = (
+            raw_name.split(".", 1)[1]
+            if raw_name.startswith("placement_policy.")
+            else raw_name
+        )
+        base = merged.get(name, {"name": name, "manifest_only": True})
+        for spec_field, value in _normalize_manifest_knob_fields(entry).items():
             base[spec_field] = value
         merged[name] = base
     return merged
@@ -333,6 +458,17 @@ def normalize_review_plane_params(params: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def normalize_axa3_policy_params(params: dict[str, Any]) -> dict[str, Any]:
+    """Translate bare AXA-3 policy knob names to dotted apply keys."""
+    if not any(key in AXA3_POLICY_KNOB_SPECS for key in params):
+        return params
+    out: dict[str, Any] = {}
+    for key, value in params.items():
+        spec = AXA3_POLICY_KNOB_SPECS.get(key)
+        out[spec.apply_key if spec is not None else key] = value
+    return out
+
+
 def validate_review_plane_params(params: dict[str, Any]) -> str | None:
     """Bounds-check any review-plane knobs in ``params`` (bare or dotted).
 
@@ -348,6 +484,30 @@ def validate_review_plane_params(params: dict[str, Any]) -> str | None:
         err = spec.validate(value)
         if err:
             errors.append(err)
+    return "; ".join(errors) if errors else None
+
+
+def validate_axa3_policy_params(params: dict[str, Any]) -> str | None:
+    """Bounds-check AXA-3 GPU placement/teleport policy knobs."""
+    errors: list[str] = []
+    for key, value in params.items():
+        spec = AXA3_POLICY_KNOB_SPECS.get(key) or _AXA3_POLICY_BY_APPLY_KEY.get(key)
+        if spec is None:
+            continue
+        err = spec.validate(value)
+        if err:
+            errors.append(err)
+            continue
+        if spec.name == "teleport_enabled" and spec.coerce(value) is True:
+            # Keep the registered gate default-off. NumericSwarm never sweeps this
+            # bool, and explicit true requires a separate operator/debug env.
+            import os
+
+            gate = os.environ.get("AUTOPILOT_AXA3_TELEPORT_ENABLE", "").strip().lower()
+            if gate not in {"1", "true", "yes", "on"}:
+                errors.append(
+                    "teleport_enabled: true requires AUTOPILOT_AXA3_TELEPORT_ENABLE=1"
+                )
     return "; ".join(errors) if errors else None
 
 
@@ -1474,21 +1634,28 @@ def apply_params(
 
     Returns summary of what was applied.
     """
-    # AP-1: translate bare review-plane knob names to their dotted apply keys and
-    # bounds-check them. Both are no-ops (identical behavior) when no review-plane
-    # knob is present, so every legacy caller is unaffected.
+    # AP-1/AP-2: translate bare control-plane knob names to their dotted apply
+    # keys and bounds-check them. Both are no-ops (identical behavior) when no
+    # matching knob is present, so every legacy caller is unaffected.
     params = normalize_review_plane_params(params)
+    params = normalize_axa3_policy_params(params)
     review_plane_error = validate_review_plane_params(params)
+    axa3_policy_error = validate_axa3_policy_params(params)
 
     classified = classify_params(params)
     results: dict[str, Any] = {"classified": classified, "status": "ok"}
     errors: list[str] = []
 
-    if review_plane_error:
+    if review_plane_error or axa3_policy_error:
         # Reject out-of-bounds knobs before touching the live surface: an invalid
-        # review-plane value must never trigger an API reload.
+        # control-plane value must never trigger an API reload.
+        error_payload = []
+        if review_plane_error:
+            error_payload.append(f"review_plane: {review_plane_error}")
+        if axa3_policy_error:
+            error_payload.append(f"placement_policy: {axa3_policy_error}")
         results["status"] = "error"
-        results["errors"] = [f"review_plane: {review_plane_error}"]
+        results["errors"] = error_payload
         return results
 
     if dry_run:

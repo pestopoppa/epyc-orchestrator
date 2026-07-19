@@ -51,6 +51,17 @@ _EXPECTED_KNOBS = {
     "review_token_multiplier",
 }
 
+_EXPECTED_AXA3_KNOBS = {
+    "teleport_enabled",
+    "long_running_trigger_tokens",
+    "rate_window_tokens",
+    "min_resident_remaining_tokens",
+    "min_speedup",
+    "lease_interactive_weight",
+    "lease_batch_weight",
+    "lease_eval_weight",
+}
+
 
 def test_ap1_all_class1_knobs_registered_with_bounds_and_restart_cost() -> None:
     assert set(ca.REVIEW_PLANE_KNOB_SPECS) == _EXPECTED_KNOBS
@@ -172,6 +183,96 @@ def test_ap1_seed_fixture_shape_not_written_to_store() -> None:
         assert entry["species"] == "numeric_swarm"
         assert entry["slug"].startswith("review-plane-")
         assert entry["bind_identifiers"][0].startswith("delegation.")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# AP-2 — AXA-3 GPU placement / teleport policy registration
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def test_ap2_all_class3_knobs_registered_default_off() -> None:
+    assert set(ca.AXA3_POLICY_KNOB_SPECS) == _EXPECTED_AXA3_KNOBS
+    enabled = ca.AXA3_POLICY_KNOB_SPECS["teleport_enabled"]
+    assert enabled.default is False
+    assert enabled.apply_key == "placement_policy.teleport_enabled"
+    for name, spec in ca.AXA3_POLICY_KNOB_SPECS.items():
+        assert spec.section == "placement_policy"
+        assert spec.restart_cost in {"none", "api_restart", "role_restart"}
+        if spec.kind != "bool":
+            assert spec.lo is not None and spec.hi is not None
+            assert spec.lo <= spec.hi
+
+
+def test_ap2_apply_params_dry_run_classifies_token_rate_break_even_and_weights() -> None:
+    res = ca.apply_params(
+        {
+            "long_running_trigger_tokens": 256,
+            "rate_window_tokens": 128,
+            "min_resident_remaining_tokens": 250,
+            "min_speedup": 1.25,
+            "lease_interactive_weight": 1.5,
+            "lease_batch_weight": 0.5,
+            "lease_eval_weight": 0.2,
+        },
+        dry_run=True,
+    )
+
+    assert res["status"] == "ok"
+    assert res["classified"]["env_restart"] == {
+        "placement_policy.long_running_trigger_tokens": 256,
+        "placement_policy.rate_window_tokens": 128,
+        "placement_policy.min_resident_remaining_tokens": 250,
+        "placement_policy.min_speedup": 1.25,
+        "placement_policy.lease_interactive_weight": 1.5,
+        "placement_policy.lease_batch_weight": 0.5,
+        "placement_policy.lease_eval_weight": 0.2,
+    }
+
+
+def test_ap2_env_changes_map_to_placement_policy_env_vars() -> None:
+    dotted = ca.normalize_axa3_policy_params(
+        {
+            "long_running_trigger_tokens": 192,
+            "min_resident_remaining_tokens": 300,
+            "lease_eval_weight": 0.4,
+        }
+    )
+    env = ca.EnvRestartApplicator(restart=False).env_changes_for(dotted)
+
+    assert env == {
+        "ORCHESTRATOR_PLACEMENT_POLICY_LONG_RUNNING_TRIGGER_TOKENS": "192",
+        "ORCHESTRATOR_PLACEMENT_POLICY_MIN_RESIDENT_REMAINING_TOKENS": "300",
+        "ORCHESTRATOR_PLACEMENT_POLICY_LEASE_EVAL_WEIGHT": "0.4",
+    }
+
+
+def test_ap2_teleport_enable_true_requires_operator_env(monkeypatch) -> None:
+    monkeypatch.delenv("AUTOPILOT_AXA3_TELEPORT_ENABLE", raising=False)
+
+    res = ca.apply_params({"teleport_enabled": True}, dry_run=True)
+
+    assert res["status"] == "error"
+    assert "AUTOPILOT_AXA3_TELEPORT_ENABLE" in res["errors"][0]
+
+
+def test_ap2_manifest_loader_reads_placement_policy_block(tmp_path: Path) -> None:
+    manifest = tmp_path / "review_plane_knobs.yaml"
+    manifest.write_text(
+        "placement_policy_knobs:\n"
+        "  - name: placement_policy.min_resident_remaining_tokens\n"
+        "    param_type: int\n"
+        "    low: 80\n"
+        "    high: 900\n"
+        "    default: 200\n",
+        encoding="utf-8",
+    )
+
+    merged = ca.load_axa3_policy_knob_manifest(manifest)
+
+    assert set(_EXPECTED_AXA3_KNOBS).issubset(merged)
+    assert merged["min_resident_remaining_tokens"]["lo"] == 80
+    assert merged["min_resident_remaining_tokens"]["hi"] == 900
+    assert merged["min_resident_remaining_tokens"]["default"] == 200
 
 
 # ══════════════════════════════════════════════════════════════════════════════

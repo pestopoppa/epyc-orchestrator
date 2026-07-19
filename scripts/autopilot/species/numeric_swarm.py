@@ -104,6 +104,18 @@ SURFACES: dict[str, list[ParamSpec]] = {
         # Higher = more stable scores, slower.
         ParamSpec("kv.n_future", 64, 1024, "int"),
     ],
+    "gpu_placement_policy": [
+        # AXA-3 class-3 GPU placement/teleport policy knobs. These remain
+        # default-off policy parameters: NumericSwarm can tune the thresholds and
+        # lease weights, but it cannot flip placement_policy.teleport_enabled.
+        ParamSpec("placement_policy.long_running_trigger_tokens", 0, 4096, "int"),
+        ParamSpec("placement_policy.rate_window_tokens", 16, 1024, "int"),
+        ParamSpec("placement_policy.min_resident_remaining_tokens", 64, 1024, "int"),
+        ParamSpec("placement_policy.min_speedup", 1.0, 4.0, "float"),
+        ParamSpec("placement_policy.lease_interactive_weight", 0.0, 4.0, "float"),
+        ParamSpec("placement_policy.lease_batch_weight", 0.0, 4.0, "float"),
+        ParamSpec("placement_policy.lease_eval_weight", 0.0, 4.0, "float"),
+    ],
 }
 
 

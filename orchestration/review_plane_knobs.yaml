@@ -197,6 +197,128 @@ knobs:
     enforcement_seam: IterationContext.check_token_budget
     provenance: LB-5 / H3 shadow-only posture (proposed)
 
+# ── AXA-3 — GPU placement / teleport policy (class 3) ───────────────────────
+# These knobs are declaration/application plumbing only. They do NOT enable
+# teleport or alter serving by default. v1 policy remains re-prefill cutover only;
+# spec-dec catch-up, mixed-KV 32K on the default HIP build, cold-load break-even,
+# and mid-stream quant-change policy remain separately gated in the MI210 roadmap.
+placement_policy_knobs:
+  - name: placement_policy.teleport_enabled
+    dtype: bool
+    param_type: bool
+    default: false
+    proposed: false
+    restart_cost: none
+    application: runtime
+    tuning_surface_class: 3
+    enforcement_seam: LLMPrimitives.evaluate_teleport_decision
+    semantics: >
+      Operator gate for AXA-3. Must stay false until AXA-2 cutover smoke,
+      release-proof telemetry, P-GPU-1 ratification, and teleport quant-policy
+      decisions are closed. NumericSwarm must not sweep this enable flag.
+    provenance: AXA-3 / mi210-big-model-and-acceleration-roadmap
+
+  - name: placement_policy.long_running_trigger_tokens
+    dtype: int
+    param_type: int
+    low: 0
+    high: 4096
+    default: 128
+    proposed: 256
+    restart_cost: none
+    application: runtime
+    tuning_surface_class: 3
+    enforcement_seam: TeleportPolicy.long_running_trigger_tokens
+    semantics: Minimum generated tokens before a stream can be considered for re-prefill teleport.
+    provenance: AXA-2/AXA-3 long-running signal
+
+  - name: placement_policy.rate_window_tokens
+    dtype: int
+    param_type: int
+    low: 16
+    high: 1024
+    default: 64
+    proposed: 128
+    restart_cost: none
+    application: runtime
+    tuning_surface_class: 3
+    enforcement_seam: future stream-rate detector
+    semantics: Decode-rate observation window for the long-running stream trigger.
+    provenance: AXA-2/AXA-3 rate-window signal
+
+  - name: placement_policy.min_resident_remaining_tokens
+    dtype: int
+    param_type: int
+    low: 64
+    high: 1024
+    default: 150
+    proposed: 250
+    restart_cost: none
+    application: runtime
+    tuning_surface_class: 3
+    enforcement_seam: TeleportPolicy.min_resident_remaining_tokens
+    semantics: >
+      Resident-lane positive-savings break-even threshold. Cold-load break-even
+      remains unfilled until an operator-approved cold-cache/post-reboot protocol
+      exists.
+    provenance: AXA-2 prefill/load observations; observation-grade until P-GPU-1
+
+  - name: placement_policy.min_speedup
+    dtype: float
+    param_type: float
+    low: 1.0
+    high: 4.0
+    default: 1.05
+    proposed: 1.10
+    restart_cost: none
+    application: runtime
+    tuning_surface_class: 3
+    enforcement_seam: TeleportPolicy.min_speedup
+    semantics: Minimum GPU/CPU decode-rate ratio before teleport can be considered.
+    provenance: AXA-2 positive-savings guard
+
+  - name: placement_policy.lease_interactive_weight
+    dtype: float
+    param_type: float
+    low: 0.0
+    high: 4.0
+    default: 1.0
+    proposed: 1.0
+    restart_cost: none
+    application: runtime
+    tuning_surface_class: 3
+    enforcement_seam: GPU lease selector
+    semantics: MI210 lease priority weight for interactive workload mix.
+    provenance: AXA-3 lease policy
+
+  - name: placement_policy.lease_batch_weight
+    dtype: float
+    param_type: float
+    low: 0.0
+    high: 4.0
+    default: 0.25
+    proposed: 0.25
+    restart_cost: none
+    application: runtime
+    tuning_surface_class: 3
+    enforcement_seam: GPU lease selector
+    semantics: MI210 lease priority weight for batch/offline workload mix.
+    provenance: AXA-3 lease policy
+
+  - name: placement_policy.lease_eval_weight
+    dtype: float
+    param_type: float
+    low: 0.0
+    high: 4.0
+    default: 0.1
+    proposed: 0.1
+    restart_cost: none
+    application: runtime
+    tuning_surface_class: 3
+    enforcement_seam: GPU lease selector
+    semantics: MI210 lease priority weight for eval/benchmark workload mix.
+    provenance: AXA-3 lease policy
+
 # ── LB-2 per-decision token + latency budgets (ceilings) ────────────────────
 # Consumed by the shadow budget hook (IterationContext.check_token_budget) when
 # budget_shadow_logging_enabled flips on. All PROPOSED / observation-grade
