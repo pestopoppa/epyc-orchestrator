@@ -39,7 +39,7 @@
           "ok": true,
           "returncode": 0,
           "stderr": "",
-          "stdout": "a784eb489683014863ebb27cb2b34d3ee53ebc59\n"
+          "stdout": "ea3f9d4cbc5498361b2d526cdca7958ded2bb0d0\n"
         },
         "status": {
           "argv": [
@@ -52,16 +52,16 @@
           "ok": true,
           "returncode": 0,
           "stderr": "",
-          "stdout": " M orchestration/autopilot_baseline.yaml\n M orchestration/autopilot_journal_1.jsonl\n M orchestration/classifier_config.yaml\n M orchestration/repl_memory/q_scorer.py\n M scripts/autopilot/failure_blacklist.yaml\n M scripts/benchmark/mtp_acceptance_report.py\n M scripts/benchmark/seeding_rewards.py\n M tests/unit/test_mtp_acceptance_report.py\n M tests/unit/test_q_scorer.py\n M tests/unit/test_seeding_rewards.py\n"
+          "stdout": " M orchestration/autopilot_baseline.yaml\n M orchestration/autopilot_journal_1.jsonl\n M orchestration/classifier_config.yaml\n M orchestration/repl_memory/q_scorer.py\n M scripts/autopilot/failure_blacklist.yaml\n M scripts/benchmark/axa2_live_cutover_bundle.py\n M scripts/benchmark/mtp_acceptance_report.py\n M scripts/benchmark/seeding_rewards.py\n M tests/unit/test_axa2_live_cutover_bundle.py\n M tests/unit/test_mtp_acceptance_report.py\n M tests/unit/test_q_scorer.py\n M tests/unit/test_seeding_rewards.py\n"
         }
       },
-      "head": "a784eb489683014863ebb27cb2b34d3ee53ebc59",
+      "head": "ea3f9d4cbc5498361b2d526cdca7958ded2bb0d0",
       "path": "/mnt/raid0/llm/epyc-orchestrator",
-      "tracked_dirty_lines": 10
+      "tracked_dirty_lines": 12
     }
   },
   "execute": false,
-  "generated_at": "2026-07-19T10:50:44.872302+00:00",
+  "generated_at": "2026-07-19T11:23:53.193025+00:00",
   "inputs": {
     "catch_up_supported": false,
     "cpu_quant": "q4_k_m",
@@ -74,12 +74,17 @@
     "gpu_tps": 44.0,
     "metadata": {
       "protocol_note": "v1 re-prefill cutover only; no spec-dec catch-up",
-      "trace_id": "axa2-live-20260719T105044Z"
+      "trace_id": "axa2-live-20260719T112353Z"
     },
     "role": "architect_general"
   },
   "no_inference": true,
   "no_server_start": true,
+  "operator_execution": {
+    "default_output": "${AXA2_EXECUTION_BASE}/${AXA2_RUN_ID}",
+    "mode": "dynamic_timestamped",
+    "output_base": "/mnt/raid0/llm/epyc-orchestrator/orchestration/reports/axa2_live_cutover_runs"
+  },
   "output_dir": "/mnt/raid0/llm/epyc-orchestrator/orchestration/reports/axa2_live_cutover_bundle_20260719",
   "policy": {
     "allowed_quant_change_roles": [],
@@ -114,5 +119,5 @@
   ],
   "schema": "epyc.axa2_live_cutover_bundle.v1",
   "status": "prepared_no_inference",
-  "trace_id": "axa2-live-20260719T105044Z"
+  "trace_id": "axa2-live-20260719T112353Z"
 }

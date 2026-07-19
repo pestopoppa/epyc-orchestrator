@@ -47,6 +47,7 @@ decide_teleport = _TELEPORT_MODULE.decide_teleport
 
 SCHEMA = "epyc.axa2_live_cutover_bundle.v1"
 DEFAULT_OUTPUT_BASE = REPO_ROOT / "orchestration" / "reports"
+DEFAULT_EXECUTION_OUTPUT_BASE = DEFAULT_OUTPUT_BASE / "axa2_live_cutover_runs"
 DEFAULT_PROMPT = (
     "Write a deterministic two sentence validation note. "
     "Mention AXA-2 once and end with the word done."
@@ -267,6 +268,19 @@ def first_char_divergence(left: str, right: str) -> int | None:
     return min(len(left), len(right))
 
 
+def operator_output_preamble(args: argparse.Namespace) -> str:
+    if args.execution_output:
+        execution_dir = Path(args.execution_output).expanduser().resolve()
+        return f'export AXA2_EXEC_OUTPUT="${{AXA2_EXEC_OUTPUT:-{execution_dir}}}"'
+    return "\n".join(
+        [
+            ': "${AXA2_RUN_ID:=axa2-live-cutover-$(date -u +%Y%m%dT%H%M%SZ)}"',
+            f'export AXA2_EXECUTION_BASE="${{AXA2_EXECUTION_BASE:-{DEFAULT_EXECUTION_OUTPUT_BASE}}}"',
+            'export AXA2_EXEC_OUTPUT="${AXA2_EXEC_OUTPUT:-${AXA2_EXECUTION_BASE}/${AXA2_RUN_ID}}"',
+        ]
+    )
+
+
 def write_operator_script(output_dir: Path, args: argparse.Namespace) -> None:
     script_path = output_dir / "operator_run.sh"
     argv = [
@@ -274,7 +288,7 @@ def write_operator_script(output_dir: Path, args: argparse.Namespace) -> None:
         str(Path(__file__).resolve()),
         "--execute",
         "--output",
-        str(output_dir),
+        "__AXA2_EXEC_OUTPUT__",
         "--policy-enabled" if args.policy_enabled else "",
         "--role",
         args.role,
@@ -306,6 +320,7 @@ def write_operator_script(output_dir: Path, args: argparse.Namespace) -> None:
     if args.quant_change_role_allowlist:
         argv.extend(["--quant-change-role-allowlist", args.quant_change_role_allowlist])
     argv = [item for item in argv if item]
+    invocation = shlex.join(argv).replace("__AXA2_EXEC_OUTPUT__", '"$AXA2_EXEC_OUTPUT"')
     script = "\n".join(
         [
             "#!/usr/bin/env bash",
@@ -313,9 +328,10 @@ def write_operator_script(output_dir: Path, args: argparse.Namespace) -> None:
             "",
             "# AXA-2 operator gate: this talks to already-running servers only.",
             "# It does not start servers, build kernels, restart AutoPilot, or touch production v6.",
+            operator_output_preamble(args),
             'CPU_URL="${CPU_URL:?set CPU_URL to the CPU llama-server base URL}"',
             'GPU_URL="${GPU_URL:?set GPU_URL to the GPU llama-server base URL}"',
-            shlex.join(argv) + ' --cpu-url "$CPU_URL" --gpu-url "$GPU_URL"',
+            invocation + ' --cpu-url "$CPU_URL" --gpu-url "$GPU_URL"',
             "",
         ]
     )
@@ -333,6 +349,13 @@ def dry_summary(args: argparse.Namespace, output_dir: Path, prompt: str) -> dict
         "status": "prepared_no_inference",
         "execute": False,
         "output_dir": str(output_dir),
+        "operator_execution": {
+            "mode": "static" if args.execution_output else "dynamic_timestamped",
+            "default_output": str(Path(args.execution_output).expanduser().resolve())
+            if args.execution_output
+            else "${AXA2_EXECUTION_BASE}/${AXA2_RUN_ID}",
+            "output_base": None if args.execution_output else str(DEFAULT_EXECUTION_OUTPUT_BASE),
+        },
         "no_inference": True,
         "no_server_start": True,
         "production_v6_touch_authorized": False,
@@ -517,6 +540,15 @@ def execute_bundle(args: argparse.Namespace) -> dict[str, Any]:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", default=str(DEFAULT_OUTPUT_BASE / f"axa2_live_cutover_bundle_{utc_stamp()}"))
+    parser.add_argument(
+        "--execution-output",
+        default="",
+        help=(
+            "Optional static artifact directory used by generated operator_run.sh. "
+            "If omitted, operator_run.sh creates a fresh timestamped directory under "
+            f"{DEFAULT_EXECUTION_OUTPUT_BASE}."
+        ),
+    )
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--trace-id", default=f"axa2-live-{utc_stamp()}")
     parser.add_argument("--prompt")

@@ -106,3 +106,42 @@ def test_execute_bundle_policy_declined_still_records_continuity(tmp_path: Path,
     assert not (out / "responses" / "cpu_prefix.response.json").exists()
     events = [json.loads(line)["event"] for line in (out / "events.jsonl").read_text().splitlines()]
     assert events == ["teleport_candidate", "fallback"]
+
+
+def test_operator_script_defaults_to_dynamic_execution_output(tmp_path: Path, monkeypatch) -> None:
+    fake = FakeRunner()
+    monkeypatch.setattr(bundle.subprocess, "run", fake)
+    out = tmp_path / "prep"
+    args = bundle.parse_args(["--output", str(out), "--policy-enabled"])
+
+    summary = bundle.write_dry_bundle(args)
+
+    operator = (out / "operator_run.sh").read_text()
+    assert "AXA2_RUN_ID:=axa2-live-cutover-$(date -u +%Y%m%dT%H%M%SZ)" in operator
+    assert "/mnt/raid0/llm/epyc-orchestrator/orchestration/reports/axa2_live_cutover_runs" in operator
+    assert '--output "$AXA2_EXEC_OUTPUT"' in operator
+    assert f"--output {out}" not in operator
+    assert summary["operator_execution"]["mode"] == "dynamic_timestamped"
+
+
+def test_operator_script_static_execution_output_is_explicit(tmp_path: Path, monkeypatch) -> None:
+    fake = FakeRunner()
+    monkeypatch.setattr(bundle.subprocess, "run", fake)
+    out = tmp_path / "prep"
+    execution = tmp_path / "execute"
+    args = bundle.parse_args(
+        [
+            "--output",
+            str(out),
+            "--execution-output",
+            str(execution),
+            "--policy-enabled",
+        ]
+    )
+
+    summary = bundle.write_dry_bundle(args)
+
+    operator = (out / "operator_run.sh").read_text()
+    assert f"AXA2_EXEC_OUTPUT:-{execution.resolve()}" in operator
+    assert '--output "$AXA2_EXEC_OUTPUT"' in operator
+    assert summary["operator_execution"]["mode"] == "static"
