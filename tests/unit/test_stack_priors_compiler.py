@@ -57,6 +57,13 @@ def test_stack_manifest_info_defaults_to_launcher_full_mode(monkeypatch: pytest.
     assert roles["worker_general"]["ports"] == [8072]
     assert roles["ingest_long_context"]["url"] == "http://localhost:8085"
     assert roles["vision_escalation"]["url"] == "http://localhost:8087"
+    assert (
+        roles["vision_escalation"]["launch"]["requirements"]
+        == roles["worker_vision"]["launch"]["requirements"]
+    )
+    assert "Qwen2.5-VL-7B-Instruct" in roles["vision_escalation"]["launch"][
+        "requirements"
+    ]["model_path"]
 
 
 def test_stack_manifest_info_can_compile_explicit_both_mode(

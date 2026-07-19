@@ -294,12 +294,10 @@ VISION_WORKER_MODEL = str(
 VISION_WORKER_MMPROJ = str(
     _PATHS["model_base"] / "lmstudio-community/Qwen2.5-VL-7B-Instruct-GGUF/mmproj-model-f16.gguf"
 )
-VISION_ESCALATION_MODEL = str(
-    _PATHS["models_dir"] / "MiniCPM-o-4_5-gguf/MiniCPM-o-4_5-Q4_K_M.gguf"
-)
-VISION_ESCALATION_MMPROJ = str(
-    _PATHS["models_dir"] / "MiniCPM-o-4_5-gguf/vision/MiniCPM-o-4_5-vision-F16.gguf"
-)
+# Temporary 2026-07-19 safety alias: use the same validated Qwen2.5-VL lane
+# for escalation until a higher-quality replacement wins the vision gate.
+VISION_ESCALATION_MODEL = VISION_WORKER_MODEL
+VISION_ESCALATION_MMPROJ = VISION_WORKER_MMPROJ
 VISION_ESCALATION_DEVICE = "ROCm0"
 VISION_ESCALATION_REASONING = "off"
 
