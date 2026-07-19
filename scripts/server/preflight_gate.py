@@ -183,6 +183,23 @@ def _probe_ports(ports: list[int] | None, timeout: float) -> dict:
     return {"ports": per_port, "error": None}
 
 
+def ports_for_roles(roles: list[str] | None) -> list[int] | None:
+    """Return primary health ports for a role-scoped server gate."""
+
+    if not roles:
+        return None
+    try:
+        from scripts.server.stack_manifest import PORT_MAP
+    except Exception:  # noqa: BLE001
+        return None
+    ports: list[int] = []
+    for role in roles:
+        port = PORT_MAP.get(role)
+        if port is not None and port not in ports:
+            ports.append(port)
+    return ports
+
+
 def check_health(require_servers: bool = False,
                  ports: list[int] | None = None,
                  port_timeout: float = 3.0,
@@ -304,6 +321,8 @@ def attest(*, expected_topology_hash: str | None = None,
     read-only probes run. overall is PASS iff every check's "ok" is truthy.
     """
     ts = time.strftime("%Y-%m-%dT%H:%M:%S")
+    if require_servers and ports is None:
+        ports = ports_for_roles(roles)
     if checks is None:
         checks = {
             "live_affinity": check_live_affinity(roles=roles),

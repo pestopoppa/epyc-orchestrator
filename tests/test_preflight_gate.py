@@ -92,6 +92,29 @@ def test_attest_default_path_with_monkeypatched_probes(monkeypatch):
     assert any("contention_matrix" in r and "STALE" in r for r in att["fail_reasons"])
 
 
+def test_role_scoped_require_servers_uses_primary_role_ports(monkeypatch):
+    seen = {}
+
+    monkeypatch.setattr(pg, "check_live_affinity",
+                        lambda **k: {"ok": True, "live_affinity_verified": True})
+    monkeypatch.setattr(pg, "check_topology_hashes",
+                        lambda **k: {"ok": True, "topology_hash": "h", "registry_hash": "r"})
+    monkeypatch.setattr(pg, "check_contention_matrix_fresh",
+                        lambda **k: {"ok": True, "contention_matrix_fresh": True})
+
+    def fake_health(**kwargs):
+        seen.update(kwargs)
+        return {"ok": True, "health_ok": True}
+
+    monkeypatch.setattr(pg, "check_health", fake_health)
+
+    att = pg.attest(roles=["frontdoor", "worker_general"], require_servers=True)
+
+    assert att["overall"] == "PASS"
+    assert seen["require_servers"] is True
+    assert seen["ports"] == [8070, 8072]
+
+
 # --------------------------------------------------------------------------- #
 # Topology-hash gate
 # --------------------------------------------------------------------------- #
