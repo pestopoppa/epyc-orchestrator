@@ -197,6 +197,550 @@ knobs:
     enforcement_seam: IterationContext.check_token_budget
     provenance: LB-5 / H3 shadow-only posture (proposed)
 
+# ── AXA-3 — GPU placement / teleport policy (class 3) ───────────────────────
+# These knobs are declaration/application plumbing only. They do NOT enable
+# teleport or alter serving by default. v1 policy remains re-prefill cutover only;
+# spec-dec catch-up, mixed-KV 32K on the default HIP build, and cold-load
+# break-even remain separately gated in the MI210 roadmap. Mid-stream quant
+# changes fail closed in TeleportPolicy: same-quant-only is the default, and
+# role-scoped cross-quant tails require an explicit operator policy.
+placement_policy_knobs:
+  - name: placement_policy.teleport_enabled
+    dtype: bool
+    param_type: bool
+    default: false
+    proposed: false
+    restart_cost: none
+    application: runtime
+    tuning_surface_class: 3
+    enforcement_seam: LLMPrimitives.evaluate_teleport_decision
+    semantics: >
+      Operator gate for AXA-3. Must stay false until AXA-2 cutover smoke,
+      release-proof telemetry, P-GPU-1 ratification, and teleport quant-policy
+      decisions are closed. NumericSwarm must not sweep this enable flag.
+    provenance: AXA-3 / mi210-big-model-and-acceleration-roadmap
+
+  - name: placement_policy.long_running_trigger_tokens
+    dtype: int
+    param_type: int
+    low: 0
+    high: 4096
+    default: 128
+    proposed: 256
+    restart_cost: none
+    application: runtime
+    tuning_surface_class: 3
+    enforcement_seam: TeleportPolicy.long_running_trigger_tokens
+    semantics: Minimum generated tokens before a stream can be considered for re-prefill teleport.
+    provenance: AXA-2/AXA-3 long-running signal
+
+  - name: placement_policy.rate_window_tokens
+    dtype: int
+    param_type: int
+    low: 16
+    high: 1024
+    default: 64
+    proposed: 128
+    restart_cost: none
+    application: runtime
+    tuning_surface_class: 3
+    enforcement_seam: future stream-rate detector
+    semantics: Decode-rate observation window for the long-running stream trigger.
+    provenance: AXA-2/AXA-3 rate-window signal
+
+  - name: placement_policy.min_resident_remaining_tokens
+    dtype: int
+    param_type: int
+    low: 64
+    high: 1024
+    default: 150
+    proposed: 250
+    restart_cost: none
+    application: runtime
+    tuning_surface_class: 3
+    enforcement_seam: TeleportPolicy.min_resident_remaining_tokens
+    semantics: >
+      Resident-lane positive-savings break-even threshold. Cold-load break-even
+      remains unfilled until an operator-approved cold-cache/post-reboot protocol
+      exists.
+    provenance: AXA-2 prefill/load observations; observation-grade until P-GPU-1
+
+  - name: placement_policy.min_speedup
+    dtype: float
+    param_type: float
+    low: 1.0
+    high: 4.0
+    default: 1.05
+    proposed: 1.10
+    restart_cost: none
+    application: runtime
+    tuning_surface_class: 3
+    enforcement_seam: TeleportPolicy.min_speedup
+    semantics: Minimum GPU/CPU decode-rate ratio before teleport can be considered.
+    provenance: AXA-2 positive-savings guard
+
+  - name: placement_policy.lease_interactive_weight
+    dtype: float
+    param_type: float
+    low: 0.0
+    high: 4.0
+    default: 1.0
+    proposed: 1.0
+    restart_cost: none
+    application: runtime
+    tuning_surface_class: 3
+    enforcement_seam: GPU lease selector
+    semantics: MI210 lease priority weight for interactive workload mix.
+    provenance: AXA-3 lease policy
+
+  - name: placement_policy.lease_batch_weight
+    dtype: float
+    param_type: float
+    low: 0.0
+    high: 4.0
+    default: 0.25
+    proposed: 0.25
+    restart_cost: none
+    application: runtime
+    tuning_surface_class: 3
+    enforcement_seam: GPU lease selector
+    semantics: MI210 lease priority weight for batch/offline workload mix.
+    provenance: AXA-3 lease policy
+
+  - name: placement_policy.lease_eval_weight
+    dtype: float
+    param_type: float
+    low: 0.0
+    high: 4.0
+    default: 0.1
+    proposed: 0.1
+    restart_cost: none
+    application: runtime
+    tuning_surface_class: 3
+    enforcement_seam: GPU lease selector
+    semantics: MI210 lease priority weight for eval/benchmark workload mix.
+    provenance: AXA-3 lease policy
+
+# ── AP-3 — spec-dec / KV launch role-restart knobs (classes 2/4) ─────────────
+# These knobs mutate registry launch params and require model-server role reloads.
+# NumericSwarm may tune only the numeric subset; categorical spec-type/KV choices
+# require explicit quality-gated actions. Live apply is gated by
+# AUTOPILOT_AP3_ROLE_RESTART_ENABLE and restart smoke checks.
+role_restart_knobs:
+  - name: role_restart.frontdoor_spec_type
+    dtype: enum
+    param_type: enum
+    allowed_values: ["draft-mtp", "ngram-mod,draft-mtp"]
+    default: draft-mtp
+    restart_cost: role_restart
+    application: registry_launch
+    tuning_surface_class: 2
+    role: frontdoor
+    registry_path: server_mode.frontdoor.acceleration.spec_type
+    enforcement_seam: config_applicator.apply_role_restart_params
+    semantics: Frontdoor composed-spec launch type; ngram composition stays task-quality gated.
+    provenance: AP-3 / common_speculative ngram->MTP fallback
+
+  - name: role_restart.frontdoor_draft_max
+    dtype: int
+    param_type: int
+    low: 1
+    high: 8
+    default: 4
+    restart_cost: role_restart
+    application: registry_launch
+    tuning_surface_class: 2
+    role: frontdoor
+    registry_path: server_mode.frontdoor.acceleration.draft_max
+    enforcement_seam: --spec-draft-n-max
+    semantics: Frontdoor NEXTN/draft-mtp max drafted tokens per verification step.
+    provenance: AP-3 spec-dec launch tuning
+
+  - name: role_restart.frontdoor_draft_min
+    dtype: int
+    param_type: int
+    low: 0
+    high: 8
+    default: 0
+    restart_cost: role_restart
+    application: registry_launch
+    tuning_surface_class: 2
+    role: frontdoor
+    registry_path: server_mode.frontdoor.acceleration.draft_min
+    enforcement_seam: --spec-draft-n-min
+    semantics: Frontdoor minimum drafted tokens requested from the spec decoder.
+    provenance: AP-3b source-proven llama.cpp flag audit
+
+  - name: role_restart.frontdoor_draft_p_min
+    dtype: float
+    param_type: float
+    low: 0.0
+    high: 0.5
+    default: 0.0
+    restart_cost: role_restart
+    application: registry_launch
+    tuning_surface_class: 2
+    role: frontdoor
+    registry_path: server_mode.frontdoor.acceleration.draft_p_min
+    enforcement_seam: --draft-p-min
+    semantics: Frontdoor draft probability floor for launch-time spec decode.
+    provenance: AP-3b source-proven llama.cpp flag audit
+
+  - name: role_restart.frontdoor_draft_p_split
+    dtype: float
+    param_type: float
+    low: 0.0
+    high: 1.0
+    default: 0.0
+    restart_cost: role_restart
+    application: registry_launch
+    tuning_surface_class: 2
+    role: frontdoor
+    registry_path: server_mode.frontdoor.acceleration.draft_p_split
+    enforcement_seam: --draft-p-split
+    semantics: Frontdoor draft split probability threshold for launch-time spec decode.
+    provenance: AP-3b source-proven llama.cpp flag audit
+
+  - name: role_restart.frontdoor_ngram_mod_n_min
+    dtype: int
+    param_type: int
+    low: 0
+    high: 1024
+    default: 48
+    restart_cost: role_restart
+    application: registry_launch
+    tuning_surface_class: 2
+    role: frontdoor
+    registry_path: server_mode.frontdoor.acceleration.ngram_mod_n_min
+    enforcement_seam: --spec-ngram-mod-n-min
+    semantics: Frontdoor ngram-mod minimum drafted n-gram length.
+    provenance: AP-3b source-proven llama.cpp flag audit
+
+  - name: role_restart.frontdoor_ngram_mod_n_max
+    dtype: int
+    param_type: int
+    low: 0
+    high: 1024
+    default: 64
+    restart_cost: role_restart
+    application: registry_launch
+    tuning_surface_class: 2
+    role: frontdoor
+    registry_path: server_mode.frontdoor.acceleration.ngram_mod_n_max
+    enforcement_seam: --spec-ngram-mod-n-max
+    semantics: Frontdoor ngram-mod maximum drafted n-gram length.
+    provenance: AP-3b source-proven llama.cpp flag audit
+
+  - name: role_restart.frontdoor_ngram_mod_n_match
+    dtype: int
+    param_type: int
+    low: 1
+    high: 1024
+    default: 24
+    restart_cost: role_restart
+    application: registry_launch
+    tuning_surface_class: 2
+    role: frontdoor
+    registry_path: server_mode.frontdoor.acceleration.ngram_mod_n_match
+    enforcement_seam: --spec-ngram-mod-n-match
+    semantics: Frontdoor ngram-mod required match length before drafting.
+    provenance: AP-3b source-proven llama.cpp flag audit
+
+  - name: role_restart.frontdoor_kv_profile
+    dtype: enum
+    param_type: enum
+    allowed_values: [q8_0_q8_0, f16_f16]
+    default: q8_0_q8_0
+    restart_cost: role_restart
+    application: registry_launch
+    tuning_surface_class: 4
+    role: frontdoor
+    registry_path: server_mode.frontdoor.kv_quant
+    enforcement_seam: -ctk/-ctv launch args
+    semantics: Frontdoor homogeneous KV profile; mixed K/V remains lane-gated.
+    provenance: AP-3 per-role KV config
+
+  - name: role_restart.worker_spec_type
+    dtype: enum
+    param_type: enum
+    allowed_values: ["draft-mtp", "ngram-mod,draft-mtp"]
+    default: draft-mtp
+    restart_cost: role_restart
+    application: registry_launch
+    tuning_surface_class: 2
+    role: worker_general
+    registry_path: server_mode.worker.acceleration.spec_type
+    enforcement_seam: config_applicator.apply_role_restart_params
+    semantics: Worker composed-spec launch type; broad default remains draft-mtp until ngram quality clears.
+    provenance: AP-3 / K14 ngram retest
+
+  - name: role_restart.worker_draft_max
+    dtype: int
+    param_type: int
+    low: 1
+    high: 8
+    default: 2
+    restart_cost: role_restart
+    application: registry_launch
+    tuning_surface_class: 2
+    role: worker_general
+    registry_path: server_mode.worker.acceleration.draft_max
+    enforcement_seam: --spec-draft-n-max
+    semantics: Worker MTP/composed-spec max drafted tokens per verification step.
+    provenance: AP-3 spec-dec launch tuning
+
+  - name: role_restart.worker_draft_min
+    dtype: int
+    param_type: int
+    low: 0
+    high: 8
+    default: 0
+    restart_cost: role_restart
+    application: registry_launch
+    tuning_surface_class: 2
+    role: worker_general
+    registry_path: server_mode.worker.acceleration.draft_min
+    enforcement_seam: --spec-draft-n-min
+    semantics: Worker minimum drafted tokens requested from the spec decoder.
+    provenance: AP-3b source-proven llama.cpp flag audit
+
+  - name: role_restart.worker_draft_p_min
+    dtype: float
+    param_type: float
+    low: 0.0
+    high: 0.5
+    default: 0.0
+    restart_cost: role_restart
+    application: registry_launch
+    tuning_surface_class: 2
+    role: worker_general
+    registry_path: server_mode.worker.acceleration.draft_p_min
+    enforcement_seam: --draft-p-min
+    semantics: Worker draft probability floor for launch-time spec decode.
+    provenance: AP-3 spec-dec launch tuning
+
+  - name: role_restart.worker_draft_p_split
+    dtype: float
+    param_type: float
+    low: 0.0
+    high: 1.0
+    default: 0.0
+    restart_cost: role_restart
+    application: registry_launch
+    tuning_surface_class: 2
+    role: worker_general
+    registry_path: server_mode.worker.acceleration.draft_p_split
+    enforcement_seam: --draft-p-split
+    semantics: Worker draft split probability threshold for launch-time spec decode.
+    provenance: AP-3b source-proven llama.cpp flag audit
+
+  - name: role_restart.worker_threads_draft
+    dtype: int
+    param_type: int
+    low: 1
+    high: 96
+    default: 16
+    restart_cost: role_restart
+    application: registry_launch
+    tuning_surface_class: 2
+    role: worker_general
+    registry_path: server_mode.worker.acceleration.threads_draft
+    enforcement_seam: --threads-draft
+    semantics: Worker draft thread count for launch-time spec decode.
+    provenance: AP-3 spec-dec launch tuning
+
+  - name: role_restart.worker_ngram_mod_n_min
+    dtype: int
+    param_type: int
+    low: 0
+    high: 1024
+    default: 48
+    restart_cost: role_restart
+    application: registry_launch
+    tuning_surface_class: 2
+    role: worker_general
+    registry_path: server_mode.worker.acceleration.ngram_mod_n_min
+    enforcement_seam: --spec-ngram-mod-n-min
+    semantics: Worker ngram-mod minimum drafted n-gram length.
+    provenance: AP-3b source-proven llama.cpp flag audit
+
+  - name: role_restart.worker_ngram_mod_n_max
+    dtype: int
+    param_type: int
+    low: 0
+    high: 1024
+    default: 64
+    restart_cost: role_restart
+    application: registry_launch
+    tuning_surface_class: 2
+    role: worker_general
+    registry_path: server_mode.worker.acceleration.ngram_mod_n_max
+    enforcement_seam: --spec-ngram-mod-n-max
+    semantics: Worker ngram-mod maximum drafted n-gram length.
+    provenance: AP-3b source-proven llama.cpp flag audit
+
+  - name: role_restart.worker_ngram_mod_n_match
+    dtype: int
+    param_type: int
+    low: 1
+    high: 1024
+    default: 24
+    restart_cost: role_restart
+    application: registry_launch
+    tuning_surface_class: 2
+    role: worker_general
+    registry_path: server_mode.worker.acceleration.ngram_mod_n_match
+    enforcement_seam: --spec-ngram-mod-n-match
+    semantics: Worker ngram-mod required match length before drafting.
+    provenance: AP-3b source-proven llama.cpp flag audit
+
+  - name: role_restart.worker_kv_profile
+    dtype: enum
+    param_type: enum
+    allowed_values: [q8_0_q8_0, f16_f16]
+    default: q8_0_q8_0
+    restart_cost: role_restart
+    application: registry_launch
+    tuning_surface_class: 4
+    role: worker_general
+    registry_path: server_mode.worker.kv_quant
+    enforcement_seam: -ctk/-ctv launch args
+    semantics: Worker homogeneous KV profile; mixed K/V remains lane-gated.
+    provenance: AP-3 per-role KV config
+
+  - name: role_restart.architect_spec_type
+    dtype: enum
+    param_type: enum
+    allowed_values: ["draft-mtp", "ngram-mod,draft-mtp"]
+    default: draft-mtp
+    restart_cost: role_restart
+    application: registry_launch
+    tuning_surface_class: 2
+    role: architect_general
+    registry_path: server_mode.architect_general.acceleration.spec_type
+    enforcement_seam: config_applicator.apply_role_restart_params
+    semantics: Architect composed-spec launch type; quality-gated before live use.
+    provenance: AP-3 spec-dec launch tuning
+
+  - name: role_restart.architect_draft_max
+    dtype: int
+    param_type: int
+    low: 1
+    high: 8
+    default: 4
+    restart_cost: role_restart
+    application: registry_launch
+    tuning_surface_class: 2
+    role: architect_general
+    registry_path: server_mode.architect_general.acceleration.draft_max
+    enforcement_seam: --spec-draft-n-max
+    semantics: Architect NEXTN/draft-mtp max drafted tokens per verification step.
+    provenance: AP-3 spec-dec launch tuning
+
+  - name: role_restart.architect_draft_min
+    dtype: int
+    param_type: int
+    low: 0
+    high: 8
+    default: 0
+    restart_cost: role_restart
+    application: registry_launch
+    tuning_surface_class: 2
+    role: architect_general
+    registry_path: server_mode.architect_general.acceleration.draft_min
+    enforcement_seam: --spec-draft-n-min
+    semantics: Architect minimum drafted tokens requested from the spec decoder.
+    provenance: AP-3b source-proven llama.cpp flag audit
+
+  - name: role_restart.architect_draft_p_min
+    dtype: float
+    param_type: float
+    low: 0.0
+    high: 0.5
+    default: 0.0
+    restart_cost: role_restart
+    application: registry_launch
+    tuning_surface_class: 2
+    role: architect_general
+    registry_path: server_mode.architect_general.acceleration.draft_p_min
+    enforcement_seam: --draft-p-min
+    semantics: Architect draft probability floor for launch-time spec decode.
+    provenance: AP-3b source-proven llama.cpp flag audit
+
+  - name: role_restart.architect_draft_p_split
+    dtype: float
+    param_type: float
+    low: 0.0
+    high: 1.0
+    default: 0.0
+    restart_cost: role_restart
+    application: registry_launch
+    tuning_surface_class: 2
+    role: architect_general
+    registry_path: server_mode.architect_general.acceleration.draft_p_split
+    enforcement_seam: --draft-p-split
+    semantics: Architect draft split probability threshold for launch-time spec decode.
+    provenance: AP-3b source-proven llama.cpp flag audit
+
+  - name: role_restart.architect_ngram_mod_n_min
+    dtype: int
+    param_type: int
+    low: 0
+    high: 1024
+    default: 48
+    restart_cost: role_restart
+    application: registry_launch
+    tuning_surface_class: 2
+    role: architect_general
+    registry_path: server_mode.architect_general.acceleration.ngram_mod_n_min
+    enforcement_seam: --spec-ngram-mod-n-min
+    semantics: Architect ngram-mod minimum drafted n-gram length.
+    provenance: AP-3b source-proven llama.cpp flag audit
+
+  - name: role_restart.architect_ngram_mod_n_max
+    dtype: int
+    param_type: int
+    low: 0
+    high: 1024
+    default: 64
+    restart_cost: role_restart
+    application: registry_launch
+    tuning_surface_class: 2
+    role: architect_general
+    registry_path: server_mode.architect_general.acceleration.ngram_mod_n_max
+    enforcement_seam: --spec-ngram-mod-n-max
+    semantics: Architect ngram-mod maximum drafted n-gram length.
+    provenance: AP-3b source-proven llama.cpp flag audit
+
+  - name: role_restart.architect_ngram_mod_n_match
+    dtype: int
+    param_type: int
+    low: 1
+    high: 1024
+    default: 24
+    restart_cost: role_restart
+    application: registry_launch
+    tuning_surface_class: 2
+    role: architect_general
+    registry_path: server_mode.architect_general.acceleration.ngram_mod_n_match
+    enforcement_seam: --spec-ngram-mod-n-match
+    semantics: Architect ngram-mod required match length before drafting.
+    provenance: AP-3b source-proven llama.cpp flag audit
+
+  - name: role_restart.architect_kv_profile
+    dtype: enum
+    param_type: enum
+    allowed_values: [q8_0_q8_0, f16_f16]
+    default: q8_0_q8_0
+    restart_cost: role_restart
+    application: registry_launch
+    tuning_surface_class: 4
+    role: architect_general
+    registry_path: server_mode.architect_general.kv_quant
+    enforcement_seam: -ctk/-ctv launch args
+    semantics: Architect homogeneous KV profile; mixed K/V remains lane-gated.
+    provenance: AP-3 per-role KV config
+
 # ── LB-2 per-decision token + latency budgets (ceilings) ────────────────────
 # Consumed by the shadow budget hook (IterationContext.check_token_budget) when
 # budget_shadow_logging_enabled flips on. All PROPOSED / observation-grade

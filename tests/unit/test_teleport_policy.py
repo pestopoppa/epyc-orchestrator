@@ -14,6 +14,8 @@ def _inputs(**overrides):
         "gpu_tps": 44.0,
         "gpu_available": True,
         "gpu_resident": True,
+        "cpu_quant": "q4_k_m",
+        "gpu_quant": "q4_k_m",
     }
     base.update(overrides)
     return TeleportInputs(**base)
@@ -59,6 +61,56 @@ def test_teleport_policy_rejects_unavailable_gpu():
 
     assert decision.should_cutover is False
     assert decision.reason == "gpu_unavailable"
+
+
+def test_teleport_policy_rejects_missing_quant_context_when_enabled():
+    policy = TeleportPolicy(enabled=True)
+
+    decision = decide_teleport(
+        policy,
+        _inputs(cpu_quant=None, gpu_quant=None),
+    )
+
+    assert decision.should_cutover is False
+    assert decision.reason == "missing_quant_context"
+    assert decision.quant_policy == "same_quant_only"
+    assert decision.quant_transition == "unknown->unknown"
+
+
+def test_teleport_policy_rejects_midstream_quant_change_by_default():
+    policy = TeleportPolicy(enabled=True)
+
+    decision = decide_teleport(policy, _inputs(cpu_quant="q4_k_m", gpu_quant="iq2_m"))
+
+    assert decision.should_cutover is False
+    assert decision.reason == "quant_change_not_allowed"
+    assert decision.quant_transition == "q4_k_m->iq2_m"
+
+
+def test_teleport_policy_allows_operator_approved_role_quant_change():
+    policy = TeleportPolicy(
+        enabled=True,
+        quant_policy="operator_approved_tail_roles",
+        allowed_quant_change_roles=frozenset({"architect_general"}),
+    )
+
+    decision = decide_teleport(policy, _inputs(cpu_quant="q4_k_m", gpu_quant="iq2_m"))
+
+    assert decision.should_cutover is True
+    assert decision.reason == "cutover"
+
+
+def test_teleport_policy_rejects_operator_policy_for_unlisted_role():
+    policy = TeleportPolicy(
+        enabled=True,
+        quant_policy="operator_approved_tail_roles",
+        allowed_quant_change_roles=frozenset({"frontdoor"}),
+    )
+
+    decision = decide_teleport(policy, _inputs(cpu_quant="q4_k_m", gpu_quant="iq2_m"))
+
+    assert decision.should_cutover is False
+    assert decision.reason == "quant_change_role_not_allowed"
 
 
 def test_teleport_policy_rejects_role_not_allowed():

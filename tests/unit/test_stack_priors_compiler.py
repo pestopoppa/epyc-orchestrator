@@ -617,6 +617,53 @@ def test_launch_runtime_record_canonicalizes_worker_explore_kv_types() -> None:
     assert runtime["cache"]["slots"] == 1
 
 
+def test_launch_runtime_record_projects_ap3b_spec_numeric_controls() -> None:
+    runtime = _launch_runtime_record(
+        role="worker_general",
+        descriptor={},
+        server_cfg={
+            "acceleration": {
+                "type": "speculative_decoding",
+                "spec_type": "ngram-mod,draft-mtp",
+                "draft_max": 5,
+                "draft_min": 0,
+                "draft_p_min": 0.125,
+                "draft_p_split": 0.5,
+                "threads_draft": 12,
+                "ngram_mod_n_min": 0,
+                "ngram_mod_n_max": 96,
+                "ngram_mod_n_match": 16,
+            }
+        },
+        role_cfg=None,
+        launch_cfg={
+            "launch": {
+                "primary_roles": ["worker_general"],
+                "modes": ["worker_pool"],
+                "entries": [{"worker_type": "explore"}],
+                "requirements": {
+                    "model_path": "/models/gemma.gguf",
+                    "draft_model_path": "/models/draft.gguf",
+                },
+                "runtime": {},
+            }
+        },
+    )
+
+    spec = runtime["flags"]["spec"]
+    assert spec["enabled"] is True
+    assert spec["type"] == "ngram-mod,draft-mtp"
+    assert spec["draft_model_path"] == "/models/draft.gguf"
+    assert spec["draft_max"] == 5
+    assert spec["draft_min"] == 0
+    assert spec["draft_p_min"] == 0.125
+    assert spec["draft_p_split"] == 0.5
+    assert spec["threads_draft"] == 12
+    assert spec["ngram_mod_n_min"] == 0
+    assert spec["ngram_mod_n_max"] == 96
+    assert spec["ngram_mod_n_match"] == 16
+
+
 def test_launch_runtime_record_does_not_inject_vision_escalation_override() -> None:
     launch_cfg = {
         "launch": {

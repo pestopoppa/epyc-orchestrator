@@ -125,9 +125,29 @@ ENV_PARAMS["delegation"] = {
 }
 
 _REVIEW_PLANE_SECTION = "delegation"
+_AXA3_POLICY_SECTION = "placement_policy"
+_AP3_ROLE_RESTART_SECTION = "role_restart"
+_AP3_ROLE_RESTART_ENABLE_ENV = "AUTOPILOT_AP3_ROLE_RESTART_ENABLE"
 DEFAULT_REVIEW_PLANE_KNOB_MANIFEST = (
     ORCH_ROOT / "orchestration" / "review_plane_knobs.yaml"
 )
+DEFAULT_AXA3_POLICY_KNOB_MANIFEST = DEFAULT_REVIEW_PLANE_KNOB_MANIFEST
+DEFAULT_AP3_ROLE_RESTART_KNOB_MANIFEST = DEFAULT_REVIEW_PLANE_KNOB_MANIFEST
+
+ENV_PARAMS[_AXA3_POLICY_SECTION] = {
+    "teleport_enabled": "ORCHESTRATOR_PLACEMENT_POLICY_TELEPORT_ENABLED",
+    "long_running_trigger_tokens": (
+        "ORCHESTRATOR_PLACEMENT_POLICY_LONG_RUNNING_TRIGGER_TOKENS"
+    ),
+    "rate_window_tokens": "ORCHESTRATOR_PLACEMENT_POLICY_RATE_WINDOW_TOKENS",
+    "min_resident_remaining_tokens": (
+        "ORCHESTRATOR_PLACEMENT_POLICY_MIN_RESIDENT_REMAINING_TOKENS"
+    ),
+    "min_speedup": "ORCHESTRATOR_PLACEMENT_POLICY_MIN_SPEEDUP",
+    "lease_interactive_weight": "ORCHESTRATOR_PLACEMENT_POLICY_LEASE_INTERACTIVE_WEIGHT",
+    "lease_batch_weight": "ORCHESTRATOR_PLACEMENT_POLICY_LEASE_BATCH_WEIGHT",
+    "lease_eval_weight": "ORCHESTRATOR_PLACEMENT_POLICY_LEASE_EVAL_WEIGHT",
+}
 
 
 @dataclass(frozen=True)
@@ -147,10 +167,11 @@ class ReviewPlaneKnob:
     restart_cost: str = "api_restart"  # "none" | "api_restart" | "role_restart"
     apply_surface: str = "env_restart"  # classify_params bucket the value lands in
     doc: str = ""
+    section: str = _REVIEW_PLANE_SECTION
 
     @property
     def apply_key(self) -> str:
-        return f"{_REVIEW_PLANE_SECTION}.{self.name}"
+        return f"{self.section}.{self.name}"
 
     def coerce(self, value: Any) -> Any:
         if self.kind == "bool":
@@ -186,6 +207,88 @@ class ReviewPlaneKnob:
             "restart_cost": self.restart_cost,
             "apply_surface": self.apply_surface,
             "apply_key": self.apply_key,
+            "section": self.section,
+            "doc": self.doc,
+        }
+
+
+_KV_PROFILE_VALUES: dict[str, dict[str, str]] = {
+    "q8_0_q8_0": {"k": "q8_0", "v": "q8_0"},
+    "f16_f16": {"k": "f16", "v": "f16"},
+}
+
+
+@dataclass(frozen=True)
+class RoleRestartKnob:
+    """One AP-3 role-restart launch knob with registry-override mapping."""
+
+    name: str
+    kind: str  # "float" | "int" | "enum"
+    default: Any
+    role: str
+    registry_path: str | None = None
+    lo: float | None = None
+    hi: float | None = None
+    allowed_values: tuple[str, ...] = ()
+    restart_cost: str = "role_restart"
+    doc: str = ""
+    section: str = _AP3_ROLE_RESTART_SECTION
+
+    @property
+    def apply_key(self) -> str:
+        return f"{self.section}.{self.name}"
+
+    def coerce(self, value: Any) -> Any:
+        if self.kind == "int":
+            return int(value)
+        if self.kind == "float":
+            return float(value)
+        if self.kind == "enum":
+            return str(value).strip()
+        raise ValueError(f"unknown knob kind {self.kind!r}")
+
+    def validate(self, value: Any) -> str | None:
+        try:
+            coerced = self.coerce(value)
+        except (TypeError, ValueError):
+            return f"{self.name}: value {value!r} is not a valid {self.kind}"
+        if self.kind == "enum":
+            if coerced not in self.allowed_values:
+                allowed = ", ".join(self.allowed_values)
+                return f"{self.name}: {coerced!r} not in allowed values [{allowed}]"
+            return None
+        if self.lo is not None and coerced < self.lo:
+            return f"{self.name}: {coerced} < min {self.lo}"
+        if self.hi is not None and coerced > self.hi:
+            return f"{self.name}: {coerced} > max {self.hi}"
+        return None
+
+    def registry_overrides(self, value: Any) -> dict[str, Any]:
+        coerced = self.coerce(value)
+        if self.name.endswith("_kv_profile"):
+            profile = _KV_PROFILE_VALUES.get(str(coerced))
+            if profile is None:
+                raise ValueError(f"{self.name}: unknown KV profile {coerced!r}")
+            if not self.registry_path:
+                raise ValueError(f"{self.name}: registry_path is required")
+            return {self.registry_path: dict(profile)}
+        if not self.registry_path:
+            raise ValueError(f"{self.name}: registry_path is required")
+        return {self.registry_path: coerced}
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "kind": self.kind,
+            "default": self.default,
+            "lo": self.lo,
+            "hi": self.hi,
+            "role": self.role,
+            "registry_path": self.registry_path,
+            "allowed_values": list(self.allowed_values),
+            "restart_cost": self.restart_cost,
+            "apply_key": self.apply_key,
+            "section": self.section,
             "doc": self.doc,
         }
 
@@ -242,6 +345,290 @@ _REVIEW_PLANE_BY_APPLY_KEY: dict[str, ReviewPlaneKnob] = {
 }
 
 
+AXA3_POLICY_KNOB_SPECS: dict[str, ReviewPlaneKnob] = {
+    knob.name: knob
+    for knob in (
+        ReviewPlaneKnob(
+            "teleport_enabled", "bool", False,
+            doc="Default-off AXA-3 operator gate. Registered for explicit staging "
+            "only; NumericSwarm does not sweep this enable flag.",
+            section=_AXA3_POLICY_SECTION,
+        ),
+        ReviewPlaneKnob(
+            "long_running_trigger_tokens", "int", 128, 0, 4096,
+            doc="Generated-token count before a stream can be considered long-running "
+            "enough for v1 re-prefill cutover.",
+            section=_AXA3_POLICY_SECTION,
+        ),
+        ReviewPlaneKnob(
+            "rate_window_tokens", "int", 64, 16, 1024,
+            doc="Decode-rate observation window, in generated tokens, used by the "
+            "future long-running stream detector.",
+            section=_AXA3_POLICY_SECTION,
+        ),
+        ReviewPlaneKnob(
+            "min_resident_remaining_tokens", "int", 150, 64, 1024,
+            doc="Resident-lane positive-savings break-even threshold for estimated "
+            "remaining tokens. Cold-load break-even stays operator-gated.",
+            section=_AXA3_POLICY_SECTION,
+        ),
+        ReviewPlaneKnob(
+            "min_speedup", "float", 1.05, 1.0, 4.0,
+            doc="Minimum GPU/CPU decode-rate ratio before teleport can be considered.",
+            section=_AXA3_POLICY_SECTION,
+        ),
+        ReviewPlaneKnob(
+            "lease_interactive_weight", "float", 1.0, 0.0, 4.0,
+            doc="MI210 lease priority weight for interactive workload mix.",
+            section=_AXA3_POLICY_SECTION,
+        ),
+        ReviewPlaneKnob(
+            "lease_batch_weight", "float", 0.25, 0.0, 4.0,
+            doc="MI210 lease priority weight for batch/offline workload mix.",
+            section=_AXA3_POLICY_SECTION,
+        ),
+        ReviewPlaneKnob(
+            "lease_eval_weight", "float", 0.1, 0.0, 4.0,
+            doc="MI210 lease priority weight for eval/benchmark workload mix.",
+            section=_AXA3_POLICY_SECTION,
+        ),
+    )
+}
+
+_AXA3_POLICY_BY_APPLY_KEY: dict[str, ReviewPlaneKnob] = {
+    knob.apply_key: knob for knob in AXA3_POLICY_KNOB_SPECS.values()
+}
+
+
+AP3_ROLE_RESTART_KNOB_SPECS: dict[str, RoleRestartKnob] = {
+    knob.name: knob
+    for knob in (
+        RoleRestartKnob(
+            "frontdoor_spec_type", "enum", "draft-mtp",
+            role="frontdoor",
+            registry_path="server_mode.frontdoor.acceleration.spec_type",
+            allowed_values=("draft-mtp", "ngram-mod,draft-mtp"),
+            doc="Frontdoor composed-spec launch type. ngram composition is gated by task-level quality evidence.",
+        ),
+        RoleRestartKnob(
+            "frontdoor_draft_max", "int", 4,
+            role="frontdoor",
+            registry_path="server_mode.frontdoor.acceleration.draft_max",
+            lo=1,
+            hi=8,
+            doc="Frontdoor --spec-draft-n-max for NEXTN/draft-mtp launches.",
+        ),
+        RoleRestartKnob(
+            "frontdoor_draft_min", "int", 0,
+            role="frontdoor",
+            registry_path="server_mode.frontdoor.acceleration.draft_min",
+            lo=0,
+            hi=8,
+            doc="Frontdoor --spec-draft-n-min for NEXTN/draft-mtp launches.",
+        ),
+        RoleRestartKnob(
+            "frontdoor_draft_p_min", "float", 0.0,
+            role="frontdoor",
+            registry_path="server_mode.frontdoor.acceleration.draft_p_min",
+            lo=0.0,
+            hi=0.5,
+            doc="Frontdoor --draft-p-min for MTP/composed-spec launches.",
+        ),
+        RoleRestartKnob(
+            "frontdoor_draft_p_split", "float", 0.0,
+            role="frontdoor",
+            registry_path="server_mode.frontdoor.acceleration.draft_p_split",
+            lo=0.0,
+            hi=1.0,
+            doc="Frontdoor --draft-p-split for MTP/composed-spec launches.",
+        ),
+        RoleRestartKnob(
+            "frontdoor_ngram_mod_n_min", "int", 48,
+            role="frontdoor",
+            registry_path="server_mode.frontdoor.acceleration.ngram_mod_n_min",
+            lo=0,
+            hi=1024,
+            doc="Frontdoor --spec-ngram-mod-n-min for ngram-mod composed speculation.",
+        ),
+        RoleRestartKnob(
+            "frontdoor_ngram_mod_n_max", "int", 64,
+            role="frontdoor",
+            registry_path="server_mode.frontdoor.acceleration.ngram_mod_n_max",
+            lo=0,
+            hi=1024,
+            doc="Frontdoor --spec-ngram-mod-n-max for ngram-mod composed speculation.",
+        ),
+        RoleRestartKnob(
+            "frontdoor_ngram_mod_n_match", "int", 24,
+            role="frontdoor",
+            registry_path="server_mode.frontdoor.acceleration.ngram_mod_n_match",
+            lo=1,
+            hi=1024,
+            doc="Frontdoor --spec-ngram-mod-n-match for ngram-mod composed speculation.",
+        ),
+        RoleRestartKnob(
+            "frontdoor_kv_profile", "enum", "q8_0_q8_0",
+            role="frontdoor",
+            registry_path="server_mode.frontdoor.kv_quant",
+            allowed_values=tuple(_KV_PROFILE_VALUES),
+            doc="Frontdoor launch KV profile. Mixed K/V profiles stay out of AP-3 until lane-specific evidence clears.",
+        ),
+        RoleRestartKnob(
+            "worker_spec_type", "enum", "draft-mtp",
+            role="worker_general",
+            registry_path="server_mode.worker.acceleration.spec_type",
+            allowed_values=("draft-mtp", "ngram-mod,draft-mtp"),
+            doc="Worker composed-spec launch type; broad worker default remains draft-mtp until ngram quality clears.",
+        ),
+        RoleRestartKnob(
+            "worker_draft_max", "int", 2,
+            role="worker_general",
+            registry_path="server_mode.worker.acceleration.draft_max",
+            lo=1,
+            hi=8,
+            doc="Worker --spec-draft-n-max for MTP/composed-spec launches.",
+        ),
+        RoleRestartKnob(
+            "worker_draft_min", "int", 0,
+            role="worker_general",
+            registry_path="server_mode.worker.acceleration.draft_min",
+            lo=0,
+            hi=8,
+            doc="Worker --spec-draft-n-min for MTP/composed-spec launches.",
+        ),
+        RoleRestartKnob(
+            "worker_draft_p_min", "float", 0.0,
+            role="worker_general",
+            registry_path="server_mode.worker.acceleration.draft_p_min",
+            lo=0.0,
+            hi=0.5,
+            doc="Worker --draft-p-min for MTP/composed-spec launches.",
+        ),
+        RoleRestartKnob(
+            "worker_draft_p_split", "float", 0.0,
+            role="worker_general",
+            registry_path="server_mode.worker.acceleration.draft_p_split",
+            lo=0.0,
+            hi=1.0,
+            doc="Worker --draft-p-split for MTP/composed-spec launches.",
+        ),
+        RoleRestartKnob(
+            "worker_threads_draft", "int", 16,
+            role="worker_general",
+            registry_path="server_mode.worker.acceleration.threads_draft",
+            lo=1,
+            hi=96,
+            doc="Worker --threads-draft for launch-time spec decode.",
+        ),
+        RoleRestartKnob(
+            "worker_ngram_mod_n_min", "int", 48,
+            role="worker_general",
+            registry_path="server_mode.worker.acceleration.ngram_mod_n_min",
+            lo=0,
+            hi=1024,
+            doc="Worker --spec-ngram-mod-n-min for ngram-mod composed speculation.",
+        ),
+        RoleRestartKnob(
+            "worker_ngram_mod_n_max", "int", 64,
+            role="worker_general",
+            registry_path="server_mode.worker.acceleration.ngram_mod_n_max",
+            lo=0,
+            hi=1024,
+            doc="Worker --spec-ngram-mod-n-max for ngram-mod composed speculation.",
+        ),
+        RoleRestartKnob(
+            "worker_ngram_mod_n_match", "int", 24,
+            role="worker_general",
+            registry_path="server_mode.worker.acceleration.ngram_mod_n_match",
+            lo=1,
+            hi=1024,
+            doc="Worker --spec-ngram-mod-n-match for ngram-mod composed speculation.",
+        ),
+        RoleRestartKnob(
+            "worker_kv_profile", "enum", "q8_0_q8_0",
+            role="worker_general",
+            registry_path="server_mode.worker.kv_quant",
+            allowed_values=tuple(_KV_PROFILE_VALUES),
+            doc="Worker launch KV profile. Mixed K/V profiles stay gated outside AP-3.",
+        ),
+        RoleRestartKnob(
+            "architect_spec_type", "enum", "draft-mtp",
+            role="architect_general",
+            registry_path="server_mode.architect_general.acceleration.spec_type",
+            allowed_values=("draft-mtp", "ngram-mod,draft-mtp"),
+            doc="Architect composed-spec launch type, quality-gated before live use.",
+        ),
+        RoleRestartKnob(
+            "architect_draft_max", "int", 4,
+            role="architect_general",
+            registry_path="server_mode.architect_general.acceleration.draft_max",
+            lo=1,
+            hi=8,
+            doc="Architect --spec-draft-n-max for NEXTN/draft-mtp launches.",
+        ),
+        RoleRestartKnob(
+            "architect_draft_min", "int", 0,
+            role="architect_general",
+            registry_path="server_mode.architect_general.acceleration.draft_min",
+            lo=0,
+            hi=8,
+            doc="Architect --spec-draft-n-min for NEXTN/draft-mtp launches.",
+        ),
+        RoleRestartKnob(
+            "architect_draft_p_min", "float", 0.0,
+            role="architect_general",
+            registry_path="server_mode.architect_general.acceleration.draft_p_min",
+            lo=0.0,
+            hi=0.5,
+            doc="Architect --draft-p-min for MTP/composed-spec launches.",
+        ),
+        RoleRestartKnob(
+            "architect_draft_p_split", "float", 0.0,
+            role="architect_general",
+            registry_path="server_mode.architect_general.acceleration.draft_p_split",
+            lo=0.0,
+            hi=1.0,
+            doc="Architect --draft-p-split for MTP/composed-spec launches.",
+        ),
+        RoleRestartKnob(
+            "architect_ngram_mod_n_min", "int", 48,
+            role="architect_general",
+            registry_path="server_mode.architect_general.acceleration.ngram_mod_n_min",
+            lo=0,
+            hi=1024,
+            doc="Architect --spec-ngram-mod-n-min for ngram-mod composed speculation.",
+        ),
+        RoleRestartKnob(
+            "architect_ngram_mod_n_max", "int", 64,
+            role="architect_general",
+            registry_path="server_mode.architect_general.acceleration.ngram_mod_n_max",
+            lo=0,
+            hi=1024,
+            doc="Architect --spec-ngram-mod-n-max for ngram-mod composed speculation.",
+        ),
+        RoleRestartKnob(
+            "architect_ngram_mod_n_match", "int", 24,
+            role="architect_general",
+            registry_path="server_mode.architect_general.acceleration.ngram_mod_n_match",
+            lo=1,
+            hi=1024,
+            doc="Architect --spec-ngram-mod-n-match for ngram-mod composed speculation.",
+        ),
+        RoleRestartKnob(
+            "architect_kv_profile", "enum", "q8_0_q8_0",
+            role="architect_general",
+            registry_path="server_mode.architect_general.kv_quant",
+            allowed_values=tuple(_KV_PROFILE_VALUES),
+            doc="Architect launch KV profile; mixed K/V profiles remain lane-gated.",
+        ),
+    )
+}
+
+_AP3_ROLE_RESTART_BY_APPLY_KEY: dict[str, RoleRestartKnob] = {
+    knob.apply_key: knob for knob in AP3_ROLE_RESTART_KNOB_SPECS.values()
+}
+
+
 def load_review_plane_knob_manifest(
     path: Path | None = None,
 ) -> dict[str, dict[str, Any]]:
@@ -289,6 +676,108 @@ def load_review_plane_knob_manifest(
     return merged
 
 
+def load_axa3_policy_knob_manifest(
+    path: Path | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Load AXA-3 class-3 GPU placement/teleport policy knob declarations.
+
+    The manifest lives beside the AP-1 review-plane manifest because both are
+    guarded control-plane numeric surfaces. This loader reads the dedicated
+    ``placement_policy_knobs`` list first, and also tolerates entries under the
+    historical ``knobs`` list when their name starts with ``placement_policy.``.
+    """
+    resolved = path or DEFAULT_AXA3_POLICY_KNOB_MANIFEST
+    merged: dict[str, dict[str, Any]] = {
+        name: knob.to_dict() for name, knob in AXA3_POLICY_KNOB_SPECS.items()
+    }
+    try:
+        if not resolved.exists():
+            return merged
+        raw = _load_yaml_mapping(resolved)
+    except Exception as exc:  # noqa: BLE001 — never let a bad manifest break apply
+        log.warning("AXA-3 policy knob manifest unreadable (%s); using built-ins", exc)
+        return merged
+
+    entries: list[Any] = []
+    explicit = raw.get("placement_policy_knobs") if isinstance(raw, dict) else None
+    if isinstance(explicit, list):
+        entries.extend(explicit)
+    legacy = raw.get("knobs") if isinstance(raw, dict) else None
+    if isinstance(legacy, list):
+        entries.extend(
+            item
+            for item in legacy
+            if isinstance(item, dict)
+            and str(item.get("name", "")).startswith("placement_policy.")
+        )
+
+    for entry in entries:
+        if not isinstance(entry, dict) or not entry.get("name"):
+            continue
+        raw_name = str(entry["name"])
+        name = (
+            raw_name.split(".", 1)[1]
+            if raw_name.startswith("placement_policy.")
+            else raw_name
+        )
+        base = merged.get(name, {"name": name, "manifest_only": True})
+        for spec_field, value in _normalize_manifest_knob_fields(entry).items():
+            base[spec_field] = value
+        merged[name] = base
+    return merged
+
+
+def load_ap3_role_restart_knob_manifest(
+    path: Path | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Load AP-3 role-restart launch knob declarations."""
+    resolved = path or DEFAULT_AP3_ROLE_RESTART_KNOB_MANIFEST
+    merged: dict[str, dict[str, Any]] = {
+        name: knob.to_dict() for name, knob in AP3_ROLE_RESTART_KNOB_SPECS.items()
+    }
+    try:
+        if not resolved.exists():
+            return merged
+        raw = _load_yaml_mapping(resolved)
+    except Exception as exc:  # noqa: BLE001 — never let a bad manifest break apply
+        log.warning("AP-3 role-restart knob manifest unreadable (%s); using built-ins", exc)
+        return merged
+
+    entries: list[Any] = []
+    explicit = raw.get("role_restart_knobs") if isinstance(raw, dict) else None
+    if isinstance(explicit, list):
+        entries.extend(explicit)
+    legacy = raw.get("knobs") if isinstance(raw, dict) else None
+    if isinstance(legacy, list):
+        entries.extend(
+            item
+            for item in legacy
+            if isinstance(item, dict)
+            and str(item.get("name", "")).startswith("role_restart.")
+        )
+
+    for entry in entries:
+        if not isinstance(entry, dict) or not entry.get("name"):
+            continue
+        raw_name = str(entry["name"])
+        name = (
+            raw_name.split(".", 1)[1]
+            if raw_name.startswith("role_restart.")
+            else raw_name
+        )
+        base = merged.get(name, {"name": name, "manifest_only": True})
+        for spec_field, value in _normalize_manifest_knob_fields(entry).items():
+            base[spec_field] = value
+        if "allowed_values" in entry and isinstance(entry["allowed_values"], list):
+            base["allowed_values"] = [str(value) for value in entry["allowed_values"]]
+        if "role" in entry:
+            base["role"] = str(entry["role"])
+        if "registry_path" in entry:
+            base["registry_path"] = str(entry["registry_path"])
+        merged[name] = base
+    return merged
+
+
 # W2c ParamSpec field aliases -> ReviewPlaneKnob field names.
 _MANIFEST_FIELD_ALIASES: dict[str, str] = {
     "low": "lo",
@@ -300,6 +789,8 @@ _MANIFEST_FIELD_ALIASES: dict[str, str] = {
     "kind": "kind",
     "default": "default",
     "restart_cost": "restart_cost",
+    "registry_path": "registry_path",
+    "role": "role",
     "doc": "doc",
     "semantics": "doc",
 }
@@ -333,6 +824,28 @@ def normalize_review_plane_params(params: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def normalize_axa3_policy_params(params: dict[str, Any]) -> dict[str, Any]:
+    """Translate bare AXA-3 policy knob names to dotted apply keys."""
+    if not any(key in AXA3_POLICY_KNOB_SPECS for key in params):
+        return params
+    out: dict[str, Any] = {}
+    for key, value in params.items():
+        spec = AXA3_POLICY_KNOB_SPECS.get(key)
+        out[spec.apply_key if spec is not None else key] = value
+    return out
+
+
+def normalize_ap3_role_restart_params(params: dict[str, Any]) -> dict[str, Any]:
+    """Translate bare AP-3 role-restart knob names to dotted apply keys."""
+    if not any(key in AP3_ROLE_RESTART_KNOB_SPECS for key in params):
+        return params
+    out: dict[str, Any] = {}
+    for key, value in params.items():
+        spec = AP3_ROLE_RESTART_KNOB_SPECS.get(key)
+        out[spec.apply_key if spec is not None else key] = value
+    return out
+
+
 def validate_review_plane_params(params: dict[str, Any]) -> str | None:
     """Bounds-check any review-plane knobs in ``params`` (bare or dotted).
 
@@ -343,6 +856,43 @@ def validate_review_plane_params(params: dict[str, Any]) -> str | None:
     errors: list[str] = []
     for key, value in params.items():
         spec = REVIEW_PLANE_KNOB_SPECS.get(key) or _REVIEW_PLANE_BY_APPLY_KEY.get(key)
+        if spec is None:
+            continue
+        err = spec.validate(value)
+        if err:
+            errors.append(err)
+    return "; ".join(errors) if errors else None
+
+
+def validate_axa3_policy_params(params: dict[str, Any]) -> str | None:
+    """Bounds-check AXA-3 GPU placement/teleport policy knobs."""
+    errors: list[str] = []
+    for key, value in params.items():
+        spec = AXA3_POLICY_KNOB_SPECS.get(key) or _AXA3_POLICY_BY_APPLY_KEY.get(key)
+        if spec is None:
+            continue
+        err = spec.validate(value)
+        if err:
+            errors.append(err)
+            continue
+        if spec.name == "teleport_enabled" and spec.coerce(value) is True:
+            # Keep the registered gate default-off. NumericSwarm never sweeps this
+            # bool, and explicit true requires a separate operator/debug env.
+            import os
+
+            gate = os.environ.get("AUTOPILOT_AXA3_TELEPORT_ENABLE", "").strip().lower()
+            if gate not in {"1", "true", "yes", "on"}:
+                errors.append(
+                    "teleport_enabled: true requires AUTOPILOT_AXA3_TELEPORT_ENABLE=1"
+                )
+    return "; ".join(errors) if errors else None
+
+
+def validate_ap3_role_restart_params(params: dict[str, Any]) -> str | None:
+    """Bounds-check AP-3 role-restart launch knobs."""
+    errors: list[str] = []
+    for key, value in params.items():
+        spec = AP3_ROLE_RESTART_KNOB_SPECS.get(key) or _AP3_ROLE_RESTART_BY_APPLY_KEY.get(key)
         if spec is None:
             continue
         err = spec.validate(value)
@@ -613,11 +1163,18 @@ class KvCompactionApplicator:
 def classify_params(params: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """Classify parameters by application method.
 
-    Returns {"hot_swap": {...}, "env_restart": {...}, "kv_compact": {...}, "unknown": {...}}.
+    Returns {
+        "hot_swap": {...},
+        "env_restart": {...},
+        "role_restart": {...},
+        "kv_compact": {...},
+        "unknown": {...},
+    }.
     """
     result: dict[str, dict[str, Any]] = {
         "hot_swap": {},
         "env_restart": {},
+        "role_restart": {},
         "kv_compact": {},
         "unknown": {},
     }
@@ -629,6 +1186,8 @@ def classify_params(params: dict[str, Any]) -> dict[str, dict[str, Any]]:
             section, param = key.split(".", 1)
             if section == "kv" and param in KV_COMPACT_PARAMS:
                 result["kv_compact"][key] = value
+            elif key in _AP3_ROLE_RESTART_BY_APPLY_KEY:
+                result["role_restart"][key] = value
             elif section in ENV_PARAMS and param in ENV_PARAMS[section]:
                 result["env_restart"][key] = value
             else:
@@ -656,6 +1215,105 @@ def apply_env_params(
     params: dict like {"memrl_retrieval.q_weight": 0.75}
     """
     return EnvRestartApplicator(url=url, restart=restart).apply(params).to_dict()
+
+
+def _ap3_role_restart_gate_enabled() -> bool:
+    import os
+
+    return os.environ.get(_AP3_ROLE_RESTART_ENABLE_ENV, "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _ap3_role_restart_groups(params: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], list[str]]:
+    groups: dict[str, dict[str, Any]] = {}
+    errors: list[str] = []
+    for key, value in params.items():
+        spec = AP3_ROLE_RESTART_KNOB_SPECS.get(key) or _AP3_ROLE_RESTART_BY_APPLY_KEY.get(key)
+        if spec is None:
+            errors.append(f"{key}: unknown AP-3 role-restart knob")
+            continue
+        err = spec.validate(value)
+        if err:
+            errors.append(err)
+            continue
+        try:
+            overrides = spec.registry_overrides(value)
+        except ValueError as exc:
+            errors.append(str(exc))
+            continue
+        role_group = groups.setdefault(spec.role, {})
+        role_group.update(overrides)
+    return groups, errors
+
+
+def apply_role_restart_params(
+    params: dict[str, Any],
+    *,
+    registry_path: Path = DEFAULT_MODEL_REGISTRY_PATH,
+    journal: Any | None = None,
+    smoke_check: RoleSmokeCheck | None = None,
+    require_smoke_check: bool = True,
+    pause_dispatch: bool = True,
+    trial_id: int | None = None,
+    actor: str = "config_applicator.apply_role_restart_params",
+) -> dict[str, Any]:
+    """Apply AP-3 launch-param changes via guarded sequential role reloads."""
+    if not params:
+        return {"status": "no_changes", "per_role": {}}
+
+    params = normalize_ap3_role_restart_params(params)
+    groups, errors = _ap3_role_restart_groups(params)
+    if errors:
+        return {"status": "error", "errors": errors, "per_role": {}}
+    if not groups:
+        return {"status": "no_changes", "per_role": {}}
+    if not _ap3_role_restart_gate_enabled():
+        return {
+            "status": "error",
+            "errors": [
+                f"AP-3 role restart requires {_AP3_ROLE_RESTART_ENABLE_ENV}=1"
+            ],
+            "per_role": {},
+            "registry_override_keys": sorted(
+                key for overrides in groups.values() for key in overrides
+            ),
+        }
+
+    per_role: dict[str, Any] = {}
+    result_errors: list[str] = []
+    for role in sorted(groups):
+        overrides = groups[role]
+        role_result = restart_role(
+            role=role,
+            registry_overrides=overrides,
+            registry_path=registry_path,
+            journal=journal,
+            smoke_check=smoke_check,
+            require_smoke_check=require_smoke_check,
+            pause_dispatch=pause_dispatch,
+            trial_id=trial_id,
+            boundary_reason="AP-3 launch role-restart trial",
+            actor=actor,
+        )
+        per_role[role] = role_result
+        if role_result.get("status") == "error" or role_result.get("error"):
+            result_errors.append(f"{role}: {role_result.get('error') or 'role restart failed'}")
+            break
+
+    result: dict[str, Any] = {
+        "status": "error" if result_errors else "ok",
+        "per_role": per_role,
+        "registry_override_keys": sorted(
+            key for overrides in groups.values() for key in overrides
+        ),
+    }
+    if result_errors:
+        result["errors"] = result_errors
+    return result
 
 
 def resolve_restart_affected_roles(
@@ -1474,21 +2132,32 @@ def apply_params(
 
     Returns summary of what was applied.
     """
-    # AP-1: translate bare review-plane knob names to their dotted apply keys and
-    # bounds-check them. Both are no-ops (identical behavior) when no review-plane
-    # knob is present, so every legacy caller is unaffected.
+    # AP-1/AP-2/AP-3: translate bare control-plane knob names to their dotted apply
+    # keys and bounds-check them. Both are no-ops (identical behavior) when no
+    # matching knob is present, so every legacy caller is unaffected.
     params = normalize_review_plane_params(params)
+    params = normalize_axa3_policy_params(params)
+    params = normalize_ap3_role_restart_params(params)
     review_plane_error = validate_review_plane_params(params)
+    axa3_policy_error = validate_axa3_policy_params(params)
+    ap3_role_restart_error = validate_ap3_role_restart_params(params)
 
     classified = classify_params(params)
     results: dict[str, Any] = {"classified": classified, "status": "ok"}
     errors: list[str] = []
 
-    if review_plane_error:
+    if review_plane_error or axa3_policy_error or ap3_role_restart_error:
         # Reject out-of-bounds knobs before touching the live surface: an invalid
-        # review-plane value must never trigger an API reload.
+        # control-plane value must never trigger an API reload.
+        error_payload = []
+        if review_plane_error:
+            error_payload.append(f"review_plane: {review_plane_error}")
+        if axa3_policy_error:
+            error_payload.append(f"placement_policy: {axa3_policy_error}")
+        if ap3_role_restart_error:
+            error_payload.append(f"role_restart: {ap3_role_restart_error}")
         results["status"] = "error"
-        results["errors"] = [f"review_plane: {review_plane_error}"]
+        results["errors"] = error_payload
         return results
 
     if dry_run:
@@ -1510,6 +2179,16 @@ def apply_params(
         )
         results["env_result"] = env_result.to_dict()
         errors.extend(f"env_restart: {error}" for error in env_result.errors)
+
+    # AP-3 role restart (expensive): registry overrides + sequential stack reloads.
+    if classified["role_restart"]:
+        role_restart_result = ApplyResult.from_payload(
+            apply_role_restart_params(classified["role_restart"])
+        )
+        results["role_restart_result"] = role_restart_result.to_dict()
+        errors.extend(
+            f"role_restart: {error}" for error in role_restart_result.errors
+        )
 
     # KV compaction (runtime POST to llama-server /slots/{id}?action=compact)
     if classified["kv_compact"]:

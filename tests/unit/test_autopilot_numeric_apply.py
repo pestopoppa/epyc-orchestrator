@@ -68,6 +68,50 @@ def test_approved_chat_threshold_surfaces_have_operator_ranges() -> None:
     assert (review_skip.low, review_skip.high) == (0.45, 0.80)
 
 
+def test_gpu_placement_policy_surface_exposes_thresholds_not_enable_flag() -> None:
+    specs = numeric_swarm.SURFACES["gpu_placement_policy"]
+    by_name = {spec.name: spec for spec in specs}
+
+    assert "placement_policy.teleport_enabled" not in by_name
+    assert by_name["placement_policy.long_running_trigger_tokens"].param_type == "int"
+    assert by_name["placement_policy.rate_window_tokens"].param_type == "int"
+    assert by_name["placement_policy.min_resident_remaining_tokens"].param_type == "int"
+    assert by_name["placement_policy.min_speedup"].param_type == "float"
+    assert by_name["placement_policy.lease_interactive_weight"].param_type == "float"
+    assert by_name["placement_policy.lease_batch_weight"].param_type == "float"
+    assert by_name["placement_policy.lease_eval_weight"].param_type == "float"
+
+
+def test_spec_decode_role_restart_surface_exposes_numeric_only() -> None:
+    specs = numeric_swarm.SURFACES["spec_decode_role_restart"]
+    by_name = {spec.name: spec for spec in specs}
+
+    assert by_name["role_restart.frontdoor_draft_max"].param_type == "int"
+    assert by_name["role_restart.frontdoor_draft_min"].param_type == "int"
+    assert by_name["role_restart.frontdoor_draft_p_min"].param_type == "float"
+    assert by_name["role_restart.frontdoor_draft_p_split"].param_type == "float"
+    assert by_name["role_restart.frontdoor_ngram_mod_n_min"].param_type == "int"
+    assert by_name["role_restart.frontdoor_ngram_mod_n_max"].param_type == "int"
+    assert by_name["role_restart.frontdoor_ngram_mod_n_match"].param_type == "int"
+    assert by_name["role_restart.worker_draft_max"].param_type == "int"
+    assert by_name["role_restart.worker_draft_min"].param_type == "int"
+    assert by_name["role_restart.worker_draft_p_min"].param_type == "float"
+    assert by_name["role_restart.worker_draft_p_split"].param_type == "float"
+    assert by_name["role_restart.worker_threads_draft"].param_type == "int"
+    assert by_name["role_restart.worker_ngram_mod_n_min"].param_type == "int"
+    assert by_name["role_restart.worker_ngram_mod_n_max"].param_type == "int"
+    assert by_name["role_restart.worker_ngram_mod_n_match"].param_type == "int"
+    assert by_name["role_restart.architect_draft_max"].param_type == "int"
+    assert by_name["role_restart.architect_draft_min"].param_type == "int"
+    assert by_name["role_restart.architect_draft_p_min"].param_type == "float"
+    assert by_name["role_restart.architect_draft_p_split"].param_type == "float"
+    assert by_name["role_restart.architect_ngram_mod_n_min"].param_type == "int"
+    assert by_name["role_restart.architect_ngram_mod_n_max"].param_type == "int"
+    assert by_name["role_restart.architect_ngram_mod_n_match"].param_type == "int"
+    assert "role_restart.worker_spec_type" not in by_name
+    assert "role_restart.worker_kv_profile" not in by_name
+
+
 def test_suggested_numeric_trial_env_restart_skips_without_marking_failed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -51,6 +51,48 @@ _EXPECTED_KNOBS = {
     "review_token_multiplier",
 }
 
+_EXPECTED_AXA3_KNOBS = {
+    "teleport_enabled",
+    "long_running_trigger_tokens",
+    "rate_window_tokens",
+    "min_resident_remaining_tokens",
+    "min_speedup",
+    "lease_interactive_weight",
+    "lease_batch_weight",
+    "lease_eval_weight",
+}
+
+_EXPECTED_AP3_ROLE_RESTART_KNOBS = {
+    "frontdoor_spec_type",
+    "frontdoor_draft_max",
+    "frontdoor_draft_min",
+    "frontdoor_draft_p_min",
+    "frontdoor_draft_p_split",
+    "frontdoor_ngram_mod_n_min",
+    "frontdoor_ngram_mod_n_max",
+    "frontdoor_ngram_mod_n_match",
+    "frontdoor_kv_profile",
+    "worker_spec_type",
+    "worker_draft_max",
+    "worker_draft_min",
+    "worker_draft_p_min",
+    "worker_draft_p_split",
+    "worker_threads_draft",
+    "worker_ngram_mod_n_min",
+    "worker_ngram_mod_n_max",
+    "worker_ngram_mod_n_match",
+    "worker_kv_profile",
+    "architect_spec_type",
+    "architect_draft_max",
+    "architect_draft_min",
+    "architect_draft_p_min",
+    "architect_draft_p_split",
+    "architect_ngram_mod_n_min",
+    "architect_ngram_mod_n_max",
+    "architect_ngram_mod_n_match",
+    "architect_kv_profile",
+}
+
 
 def test_ap1_all_class1_knobs_registered_with_bounds_and_restart_cost() -> None:
     assert set(ca.REVIEW_PLANE_KNOB_SPECS) == _EXPECTED_KNOBS
@@ -172,6 +214,223 @@ def test_ap1_seed_fixture_shape_not_written_to_store() -> None:
         assert entry["species"] == "numeric_swarm"
         assert entry["slug"].startswith("review-plane-")
         assert entry["bind_identifiers"][0].startswith("delegation.")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# AP-2 — AXA-3 GPU placement / teleport policy registration
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def test_ap2_all_class3_knobs_registered_default_off() -> None:
+    assert set(ca.AXA3_POLICY_KNOB_SPECS) == _EXPECTED_AXA3_KNOBS
+    enabled = ca.AXA3_POLICY_KNOB_SPECS["teleport_enabled"]
+    assert enabled.default is False
+    assert enabled.apply_key == "placement_policy.teleport_enabled"
+    for name, spec in ca.AXA3_POLICY_KNOB_SPECS.items():
+        assert spec.section == "placement_policy"
+        assert spec.restart_cost in {"none", "api_restart", "role_restart"}
+        if spec.kind != "bool":
+            assert spec.lo is not None and spec.hi is not None
+            assert spec.lo <= spec.hi
+
+
+def test_ap2_apply_params_dry_run_classifies_token_rate_break_even_and_weights() -> None:
+    res = ca.apply_params(
+        {
+            "long_running_trigger_tokens": 256,
+            "rate_window_tokens": 128,
+            "min_resident_remaining_tokens": 250,
+            "min_speedup": 1.25,
+            "lease_interactive_weight": 1.5,
+            "lease_batch_weight": 0.5,
+            "lease_eval_weight": 0.2,
+        },
+        dry_run=True,
+    )
+
+    assert res["status"] == "ok"
+    assert res["classified"]["env_restart"] == {
+        "placement_policy.long_running_trigger_tokens": 256,
+        "placement_policy.rate_window_tokens": 128,
+        "placement_policy.min_resident_remaining_tokens": 250,
+        "placement_policy.min_speedup": 1.25,
+        "placement_policy.lease_interactive_weight": 1.5,
+        "placement_policy.lease_batch_weight": 0.5,
+        "placement_policy.lease_eval_weight": 0.2,
+    }
+
+
+def test_ap2_env_changes_map_to_placement_policy_env_vars() -> None:
+    dotted = ca.normalize_axa3_policy_params(
+        {
+            "long_running_trigger_tokens": 192,
+            "min_resident_remaining_tokens": 300,
+            "lease_eval_weight": 0.4,
+        }
+    )
+    env = ca.EnvRestartApplicator(restart=False).env_changes_for(dotted)
+
+    assert env == {
+        "ORCHESTRATOR_PLACEMENT_POLICY_LONG_RUNNING_TRIGGER_TOKENS": "192",
+        "ORCHESTRATOR_PLACEMENT_POLICY_MIN_RESIDENT_REMAINING_TOKENS": "300",
+        "ORCHESTRATOR_PLACEMENT_POLICY_LEASE_EVAL_WEIGHT": "0.4",
+    }
+
+
+def test_ap2_teleport_enable_true_requires_operator_env(monkeypatch) -> None:
+    monkeypatch.delenv("AUTOPILOT_AXA3_TELEPORT_ENABLE", raising=False)
+
+    res = ca.apply_params({"teleport_enabled": True}, dry_run=True)
+
+    assert res["status"] == "error"
+    assert "AUTOPILOT_AXA3_TELEPORT_ENABLE" in res["errors"][0]
+
+
+def test_ap2_manifest_loader_reads_placement_policy_block(tmp_path: Path) -> None:
+    manifest = tmp_path / "review_plane_knobs.yaml"
+    manifest.write_text(
+        "placement_policy_knobs:\n"
+        "  - name: placement_policy.min_resident_remaining_tokens\n"
+        "    param_type: int\n"
+        "    low: 80\n"
+        "    high: 900\n"
+        "    default: 200\n",
+        encoding="utf-8",
+    )
+
+    merged = ca.load_axa3_policy_knob_manifest(manifest)
+
+    assert set(_EXPECTED_AXA3_KNOBS).issubset(merged)
+    assert merged["min_resident_remaining_tokens"]["lo"] == 80
+    assert merged["min_resident_remaining_tokens"]["hi"] == 900
+    assert merged["min_resident_remaining_tokens"]["default"] == 200
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# AP-3 — spec-dec / KV launch role-restart registration
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def test_ap3_all_role_restart_knobs_registered() -> None:
+    assert set(ca.AP3_ROLE_RESTART_KNOB_SPECS) == _EXPECTED_AP3_ROLE_RESTART_KNOBS
+    for name, spec in ca.AP3_ROLE_RESTART_KNOB_SPECS.items():
+        assert spec.section == "role_restart"
+        assert spec.restart_cost == "role_restart"
+        assert spec.apply_key == f"role_restart.{name}"
+        assert spec.role in {"frontdoor", "worker_general", "architect_general"}
+        if spec.kind == "enum":
+            assert spec.allowed_values
+        else:
+            assert spec.lo is not None and spec.hi is not None
+
+
+def test_ap3_apply_params_dry_run_classifies_role_restart() -> None:
+    res = ca.apply_params(
+        {
+            "worker_draft_max": 4,
+            "worker_draft_min": 1,
+            "worker_draft_p_min": 0.1,
+            "worker_draft_p_split": 0.2,
+            "worker_threads_draft": 24,
+            "worker_ngram_mod_n_min": 16,
+            "worker_ngram_mod_n_max": 32,
+            "worker_ngram_mod_n_match": 8,
+            "worker_spec_type": "ngram-mod,draft-mtp",
+            "worker_kv_profile": "f16_f16",
+        },
+        dry_run=True,
+    )
+
+    assert res["status"] == "ok"
+    assert res["classified"]["role_restart"] == {
+        "role_restart.worker_draft_max": 4,
+        "role_restart.worker_draft_min": 1,
+        "role_restart.worker_draft_p_min": 0.1,
+        "role_restart.worker_draft_p_split": 0.2,
+        "role_restart.worker_threads_draft": 24,
+        "role_restart.worker_ngram_mod_n_min": 16,
+        "role_restart.worker_ngram_mod_n_max": 32,
+        "role_restart.worker_ngram_mod_n_match": 8,
+        "role_restart.worker_spec_type": "ngram-mod,draft-mtp",
+        "role_restart.worker_kv_profile": "f16_f16",
+    }
+
+
+def test_ap3_invalid_spec_type_rejected_before_classification_apply() -> None:
+    res = ca.apply_params({"worker_spec_type": "mtp"}, dry_run=True)
+
+    assert res["status"] == "error"
+    assert "role_restart" in res["errors"][0]
+    assert "draft-mtp" in res["errors"][0]
+
+
+def test_ap3_live_role_restart_requires_operator_env(monkeypatch) -> None:
+    monkeypatch.delenv("AUTOPILOT_AP3_ROLE_RESTART_ENABLE", raising=False)
+
+    res = ca.apply_role_restart_params({"role_restart.worker_draft_max": 4})
+
+    assert res["status"] == "error"
+    assert "AUTOPILOT_AP3_ROLE_RESTART_ENABLE" in res["errors"][0]
+    assert res["per_role"] == {}
+
+
+def test_ap3_role_restart_builds_registry_overrides_and_groups_by_role(monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+    monkeypatch.setenv("AUTOPILOT_AP3_ROLE_RESTART_ENABLE", "1")
+
+    def fake_restart_role(**kwargs):
+        calls.append(kwargs)
+        return {"status": "ok", "role": kwargs["role"], "registry_overrides": kwargs["registry_overrides"]}
+
+    monkeypatch.setattr(ca, "restart_role", fake_restart_role)
+
+    res = ca.apply_role_restart_params(
+        {
+            "worker_draft_max": 4,
+            "worker_draft_min": 1,
+            "worker_spec_type": "ngram-mod,draft-mtp",
+            "worker_draft_p_split": 0.25,
+            "worker_ngram_mod_n_match": 16,
+            "worker_kv_profile": "f16_f16",
+        },
+        smoke_check=lambda _role, _affected_roles: {"status": "ok"},
+    )
+
+    assert res["status"] == "ok"
+    assert len(calls) == 1
+    assert calls[0]["role"] == "worker_general"
+    assert calls[0]["pause_dispatch"] is True
+    assert calls[0]["require_smoke_check"] is True
+    assert calls[0]["registry_overrides"] == {
+        "server_mode.worker.acceleration.draft_max": 4,
+        "server_mode.worker.acceleration.draft_min": 1,
+        "server_mode.worker.acceleration.spec_type": "ngram-mod,draft-mtp",
+        "server_mode.worker.acceleration.draft_p_split": 0.25,
+        "server_mode.worker.acceleration.ngram_mod_n_match": 16,
+        "server_mode.worker.kv_quant": {"k": "f16", "v": "f16"},
+    }
+
+
+def test_ap3_manifest_loader_reads_role_restart_block(tmp_path: Path) -> None:
+    manifest = tmp_path / "review_plane_knobs.yaml"
+    manifest.write_text(
+        "role_restart_knobs:\n"
+        "  - name: role_restart.worker_draft_max\n"
+        "    param_type: int\n"
+        "    low: 1\n"
+        "    high: 12\n"
+        "    default: 3\n"
+        "    role: worker_general\n"
+        "    registry_path: server_mode.worker.acceleration.draft_max\n",
+        encoding="utf-8",
+    )
+
+    merged = ca.load_ap3_role_restart_knob_manifest(manifest)
+
+    assert set(_EXPECTED_AP3_ROLE_RESTART_KNOBS).issubset(merged)
+    assert merged["worker_draft_max"]["hi"] == 12
+    assert merged["worker_draft_max"]["default"] == 3
+    assert merged["worker_draft_max"]["role"] == "worker_general"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
