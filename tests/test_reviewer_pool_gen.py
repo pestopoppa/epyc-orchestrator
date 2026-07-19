@@ -151,6 +151,11 @@ def cfg():
     )
 
 
+def test_default_staged_keys_exclude_bonsai_q1_0():
+    assert "bonsai_27b_q1_0" not in rpg.DEFAULT_STAGED_KEYS
+    assert "bonsai_27b_q1_0" not in rpg.PruneConfig().staged_keys
+
+
 def _build(registry_path, cfg, **kw):
     data, sha = rpg.load_registry(str(registry_path))
     return rpg.build_output(data, cfg, str(registry_path), sha, **kw), sha

@@ -66,7 +66,6 @@ DEFAULT_STAGED_KEYS = [
     "ingest_long_context",               # Qwen3-Next-80B-A3B-Instruct
     "gemma4_31b_q4km_mtp",               # gemma-4-31B-it
     "qwen36_27b_q8",                     # Qwen3.6-27B
-    "bonsai_27b_q1_0",                   # Bonsai-27B
 ]
 DEFAULT_PRODUCTION_TRIO = ["frontdoor", "worker_general", "toolrunner"]
 
