@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reviewer decision calibration report (H4 RC-4) — observation-grade.
+"""Reviewer decision calibration report (H4 RC-4).
 
 Given review-ledger rows (a ``review_ledger`` SQLite table and/or a decisions
 JSONL, optionally joined to a near-miss corpus for gold labels), compute — per
@@ -13,10 +13,11 @@ the reviewer calibration panel:
   * parse-failure rate
   * Wilson score intervals on every rate
 
-Emits a report JSON + a markdown table. **All outputs are observation-grade**:
-MEASUREMENT protocol P-REV-1 is still a draft (RC-6a), so nothing here may gate a
-keep/revert/deploy/promote decision. Directions are stamped in the output
-(FA/FR/parse lower-better; acceptance/yield/CR higher-better).
+Emits a report JSON + a markdown table. Default outputs are observation-grade.
+A caller may provide a run manifest whose measurement protocol is P-REV-1 and
+``observation_only`` is false; in that case the report stamps the metrics as
+decision-grade for that specific attested run. Directions are stamped in the
+output (FA/FR/parse lower-better; acceptance/yield/CR higher-better).
 
 Metric provenance (EV-tier reuse — RC-4 "reuse ... do not duplicate"):
   * ECE / ROC-AUC / Wilson interval are CONSOLIDATED into the single clean-room
@@ -87,6 +88,16 @@ OBSERVATION_STAMP = {
         "brier": "lower-better",
         "auc": "higher-better",
     },
+}
+
+P_REV1_DECISION_STAMP = {
+    "grade": "decision",
+    "protocol": "P-REV-1",
+    "note": (
+        "P-REV-1: metrics are decision-grade for the material inputs and "
+        "attestation recorded in the supplied run manifest."
+    ),
+    "directions": OBSERVATION_STAMP["directions"],
 }
 
 # Grouping key: (reviewer config x grading model x rubric version x corpus version x domain).
@@ -200,6 +211,25 @@ def join_corpus_gold(
         if not row.get("corpus_id"):
             row["corpus_id"] = cr.get("corpus_id")
     return rows
+
+
+def measurement_stamp_from_run_manifest(path: str | Path | None) -> dict[str, Any]:
+    if path is None:
+        return dict(OBSERVATION_STAMP)
+    manifest_path = Path(path)
+    data = json.loads(manifest_path.read_text())
+    if not isinstance(data, dict):
+        raise ValueError(f"run manifest must be a JSON object: {manifest_path}")
+    stamp = dict(P_REV1_DECISION_STAMP if data.get("measurement_protocol") == "p_rev1" and data.get("observation_only") is False else OBSERVATION_STAMP)
+    stamp["run_manifest"] = {
+        "path": str(manifest_path),
+        "measurement_protocol": data.get("measurement_protocol"),
+        "observation_only": data.get("observation_only"),
+        "protocol_attestation": data.get("protocol_attestation"),
+    }
+    if stamp["grade"] == "decision" and data.get("protocol_attestation"):
+        stamp["note"] = f"{stamp['note']} Attestation: {data['protocol_attestation']}."
+    return stamp
 
 
 # --------------------------------------------------------------------------- #
@@ -352,7 +382,11 @@ def _consistency_and_passk(
 
 
 def build_report(
-    rows: list[dict[str, Any]], *, k: int = 2, instrument: dict[str, Any] | None = None
+    rows: list[dict[str, Any]],
+    *,
+    k: int = 2,
+    instrument: dict[str, Any] | None = None,
+    measurement: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Group rows and compute per-group + overall metrics."""
     groups: dict[tuple, list[dict[str, Any]]] = defaultdict(list)
@@ -369,7 +403,7 @@ def build_report(
         )
 
     return {
-        "measurement": OBSERVATION_STAMP,
+        "measurement": measurement or dict(OBSERVATION_STAMP),
         "instrument": instrument or {},
         "group_fields": list(GROUP_FIELDS),
         "n_rows": len(rows),
@@ -396,7 +430,9 @@ def _fmt(v: Any, pct: bool = False) -> str:
 
 def render_markdown(report: dict[str, Any], *, k: int = 2) -> str:
     lines: list[str] = []
-    lines.append("# Reviewer calibration report (observation-grade)")
+    grade = str(report.get("measurement", {}).get("grade") or "observation")
+    grade_label = "decision-grade" if grade == "decision" else "observation-grade"
+    lines.append(f"# Reviewer calibration report ({grade_label})")
     lines.append("")
     lines.append(f"> {report['measurement']['note']}")
     lines.append("")
@@ -463,6 +499,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--k", type=int, default=2, help="k for pass^k (default 2).")
     ap.add_argument("--out-json", help="Write report JSON here.")
     ap.add_argument("--out-md", help="Write markdown table here.")
+    ap.add_argument(
+        "--run-manifest",
+        help=(
+            "Optional runner manifest. If it records measurement_protocol=p_rev1 "
+            "and observation_only=false, stamp this report decision-grade."
+        ),
+    )
     ap.add_argument("--print", dest="do_print", action="store_true", help="Print markdown to stdout.")
     args = ap.parse_args(argv)
 
@@ -475,8 +518,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.corpus:
         rows = join_corpus_gold(rows, args.corpus)
         source_desc["corpus"] = str(args.corpus)
+    if args.run_manifest:
+        source_desc["run_manifest"] = str(args.run_manifest)
 
-    report = build_report(rows, k=args.k, instrument={"source": source_desc})
+    report = build_report(
+        rows,
+        k=args.k,
+        instrument={"source": source_desc},
+        measurement=measurement_stamp_from_run_manifest(args.run_manifest),
+    )
     md = render_markdown(report, k=args.k)
 
     if args.out_json:
