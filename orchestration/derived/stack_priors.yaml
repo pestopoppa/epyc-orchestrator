@@ -48,39 +48,39 @@ contract:
   - quality_overall
   - memory_cost
   fallback_policy: Consumers may use local fallback values only as explicit degraded mode when this generated contract is missing or invalid.
-compiled_at: '2026-07-17T14:31:37Z'
+compiled_at: '2026-07-18T12:21:03Z'
 status: compiled
 coverage_scope: descriptor_role_bindings
 precedence_spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
 source_artifacts:
   registry:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
-    sha256: 1b15929a011285a469f23046dfb8a1d87e802d3bd4fce101a0acdfb280b69e6c
-    repo_commit: d9f0d148
+    sha256: 6aa2c90de12575203d6b689215a2b625d624b11606ee0250b2a38e343dfb0c6e
+    repo_commit: 4ab4e0ee
   descriptors:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_descriptors.yaml
-    sha256: dce099c51b086e5a7aa546cd11ab95ab725a8e0dc33be0dd6b971a4b2b441203
-    repo_commit: d9f0d148
+    sha256: 6c362e3c05176fd14550fcd6ba6f492d316971091cd51afe9a1d8e0ebbc94a88
+    repo_commit: 4ab4e0ee
   stack_manifest:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_manifest.py
-    sha256: 0ff2cc3c1a0370ee59cee401d60ec483b5bede4cc7a8287074f16a58e52560c1
-    repo_commit: d9f0d148
+    sha256: 7461985303ee95a22a018414bcec32128f1399061395b63f3fc594d076a27a00
+    repo_commit: 4ab4e0ee
   stack_numa:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_numa.py
-    sha256: 3b8b0a304fed4f4351bd336b089b9ff628e398ce7862fb6589d8795632da6930
-    repo_commit: d9f0d148
+    sha256: 001897f21e9a10943c6f6b5714e10877d3a5f3f3c485b9380d456b4821373794
+    repo_commit: 4ab4e0ee
   orchestrator_stack:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/orchestrator_stack.py
-    sha256: 3463a165d8781edc204e976ede6526acdafcc7c0d47f8d7d036303b171a40c94
-    repo_commit: d9f0d148
+    sha256: 5a5428dc1bb82c084043d29834fd208597631f7bc0b1225728907110edac56e9
+    repo_commit: 4ab4e0ee
   stack_paths:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_paths.py
     sha256: 7eee8576101dbb827ec8e94a228beedb401d7cad80841e1a18aab9c03db4206b
-    repo_commit: d9f0d148
+    repo_commit: 4ab4e0ee
   stack_runtime:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_runtime.py
-    sha256: f749047dde702b21759f67dcc81bf6cd64f1157e8a1fdf250b317301c1b6d32c
-    repo_commit: d9f0d148
+    sha256: 984d27262e1f1d5a5332d0b4a3e6fb96fb8095fc890ddaa93da07bff52eb1c99
+    repo_commit: 4ab4e0ee
 roles:
   architect_general:
     role: architect_general
@@ -134,6 +134,7 @@ roles:
           flags:
             flash_attn: true
             jinja: true
+            device: null
             reasoning: null
             override_kv: []
             spec:
@@ -259,6 +260,7 @@ roles:
           flags:
             flash_attn: true
             jinja: true
+            device: null
             reasoning: null
             override_kv: []
             spec:
@@ -381,6 +383,7 @@ roles:
           flags:
             flash_attn: true
             jinja: true
+            device: null
             reasoning: null
             override_kv: []
             spec:
@@ -502,6 +505,7 @@ roles:
           flags:
             flash_attn: true
             jinja: true
+            device: null
             reasoning: null
             override_kv: []
             spec:
@@ -772,6 +776,7 @@ roles:
           flags:
             flash_attn: true
             jinja: true
+            device: null
             reasoning: 'off'
             override_kv: []
             spec:
@@ -858,8 +863,8 @@ roles:
     role: vision_escalation
     deployment_status: live_stack
     status: compiled
-    model_id: qwen2.5-vl-7b-q4_k_m
-    display_name: Qwen2.5-VL-7B-Instruct
+    model_id: minicpm-o-4_5-q4_k_m
+    display_name: MiniCPM-o-4_5
     serving:
       endpoint: http://localhost:8087
       server_role: vision_escalation
@@ -885,15 +890,16 @@ roles:
         modes:
         - vision
         requirements:
-          mmproj_path: /mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen2.5-VL-7B-Instruct-GGUF/mmproj-model-f16.gguf
-          model_path: /mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen2.5-VL-7B-Instruct-GGUF/Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf
+          mmproj_path: /mnt/raid0/llm/models/MiniCPM-o-4_5-gguf/vision/MiniCPM-o-4_5-vision-F16.gguf
+          model_path: /mnt/raid0/llm/models/MiniCPM-o-4_5-gguf/MiniCPM-o-4_5-Q4_K_M.gguf
         runtime:
           binary_family: llama.cpp
-          binary_path: /mnt/raid0/llm/llama.cpp/build/bin/llama-server
-          binary_dir: null
-          ld_library_path: []
-          env_policy: canonical
-          kmp_blocktime: null
+          binary_path: /mnt/raid0/llm/llama.cpp-experimental/build-hip/bin/llama-server
+          binary_dir: /mnt/raid0/llm/llama.cpp-experimental/build-hip/bin
+          ld_library_path:
+          - /mnt/raid0/llm/llama.cpp-experimental/build-hip/bin
+          env_policy: binary_override_strip_ggml
+          kmp_blocktime: 10
           cache:
             context_tokens: 8192
             slots: 1
@@ -907,7 +913,8 @@ roles:
           flags:
             flash_attn: true
             jinja: false
-            reasoning: null
+            device: ROCm0
+            reasoning: 'off'
             override_kv: []
             spec:
               enabled: false
@@ -918,29 +925,29 @@ roles:
               draft_p_min: null
               threads_draft: null
     priors:
-      throughput_tps: 21.32
-      quality_overall: 0.9167
+      throughput_tps: 110.81
+      quality_overall: 1.0
       memory_cost: 1.0
     acceleration:
       spec_type: baseline
       draft_compat: []
       enable_thinking: null
       thinking_control:
-        mode: native_no_thinking_toggle
-        effective_mode: native_no_think_tags
-        evidence_strength: model_family_inferred
-        evidence: Qwen2.5-VL Instruct predates Qwen3 thinking controls; multimodal role has no chat-template thinking toggle.
+        mode: llama_server_reasoning_off
+        effective_mode: no_reasoning_trace
+        evidence_strength: K35 fixed-fixture MI210 evidence
+        evidence: K35.11/K35.13c passed fixed OCR/chart fixtures and mixed-service checks with --reasoning off.
       kv:
         k: null
         v: null
     model:
-      family: qwen2.5-vl
+      family: minicpm-o-4_5-q4_k_m
       arch: dense
-      params_b: 7.0
-      active_b: 7.0
+      params_b: null
+      active_b: null
       quant: Q4_K_M
-      mem_gb: 4.4
-      ctx_max: 128000
+      mem_gb: 6.2
+      ctx_max: 8192
       modalities:
       - text
       - vision
@@ -955,27 +962,19 @@ roles:
       - date: '2026-07-17'
         protocol: registry performance block
         value:
-          baseline_tps: 16.91
-          optimized_tps: 21.32
+          baseline_tps: 110.81
+          optimized_tps: 110.81
           speedup: 1.0x
           vl_score:
             pct: 100.0
             raw: 4/4 K35 fixed fixtures
           benchmark_date: '2026-07-17'
-          evidence: /mnt/raid0/llm/tmp/k35-vision-matrix-20260717T1500Z/summary.json
-      - date: '2026-03-04'
-        protocol: registry performance block
-        value:
-          baseline_tps: 15.28
-          optimized_tps: 20.0
-          speedup: 1.3x
-          vl_score: 11/12 (92%)
-          benchmark_date: '2026-03-04'
+          evidence: /mnt/raid0/llm/tmp/k35-vision-matrix-20260717T1500Z/summary.json; K35.13c mixed-service matrix passed 8/8 context/fixture pairs with frontdoor overlap.
       speed:
       - date: '2026-07-17'
         protocol: registry performance block
-        baseline_tps: 16.91
-        optimized_tps: 21.32
+        baseline_tps: 110.81
+        optimized_tps: 110.81
     known_gaps: []
   worker_general:
     role: worker_general
@@ -1031,6 +1030,7 @@ roles:
           flags:
             flash_attn: true
             jinja: true
+            device: null
             reasoning: 'off'
             override_kv: []
             spec:
@@ -1167,6 +1167,7 @@ roles:
           flags:
             flash_attn: true
             jinja: true
+            device: null
             reasoning: 'off'
             override_kv: []
             spec:
@@ -1302,6 +1303,7 @@ roles:
           flags:
             flash_attn: true
             jinja: true
+            device: null
             reasoning: null
             override_kv: []
             spec:
@@ -1424,6 +1426,7 @@ roles:
           flags:
             flash_attn: true
             jinja: false
+            device: null
             reasoning: null
             override_kv: []
             spec:
@@ -1435,7 +1438,7 @@ roles:
               draft_p_min: null
               threads_draft: null
     priors:
-      throughput_tps: 21.32
+      throughput_tps: 20.0
       quality_overall: 0.9167
       memory_cost: 1.0
     acceleration:
@@ -1469,17 +1472,6 @@ roles:
       descriptor_server_roles: []
       alias_overrides: []
       quality:
-      - date: '2026-07-17'
-        protocol: registry performance block
-        value:
-          baseline_tps: 16.91
-          optimized_tps: 21.32
-          speedup: 1.0x
-          vl_score:
-            pct: 100.0
-            raw: 4/4 K35 fixed fixtures
-          benchmark_date: '2026-07-17'
-          evidence: /mnt/raid0/llm/tmp/k35-vision-matrix-20260717T1500Z/summary.json
       - date: '2026-03-04'
         protocol: registry performance block
         value:
@@ -1489,9 +1481,9 @@ roles:
           vl_score: 11/12 (92%)
           benchmark_date: '2026-03-04'
       speed:
-      - date: '2026-07-17'
+      - date: '2026-03-04'
         protocol: registry performance block
-        baseline_tps: 16.91
-        optimized_tps: 21.32
+        baseline_tps: 15.28
+        optimized_tps: 20.0
     known_gaps: []
 known_global_gaps: {}

@@ -873,10 +873,15 @@ def _first_launch_entry_value(launch: dict[str, Any], field: str) -> str | None:
     return None
 
 
-def _runtime_requirements(server_cfg: dict[str, Any] | None) -> tuple[str | None, list[str]]:
-    if not isinstance(server_cfg, dict):
-        return None, []
-    runtime = server_cfg.get("runtime_requirements")
+def _runtime_requirements(
+    server_cfg: dict[str, Any] | None,
+    role_cfg: dict[str, Any] | None,
+) -> tuple[str | None, list[str]]:
+    runtime = server_cfg.get("runtime_requirements") if isinstance(server_cfg, dict) else None
+    if not isinstance(runtime, dict) and isinstance(role_cfg, dict):
+        role_server = role_cfg.get("server")
+        if isinstance(role_server, dict):
+            runtime = role_server.get("runtime_requirements")
     if not isinstance(runtime, dict):
         return None, []
     binary_dir = runtime.get("binary_dir") if isinstance(runtime.get("binary_dir"), str) else None
@@ -942,6 +947,30 @@ def _positive_int_prior(
         value = container.get(key)
         if isinstance(value, int) and not isinstance(value, bool) and value > 0:
             return value
+    return fallback
+
+
+def _runtime_flag_string_prior(
+    server_cfg: dict[str, Any] | None,
+    role_cfg: dict[str, Any] | None,
+    *,
+    key: str,
+    fallback: str | None = None,
+) -> str | None:
+    """Resolve an optional launcher flag from registry serving metadata.
+
+    Dedicated stack-manifest roles such as vision_escalation do not have a
+    server_mode row, so role-local ``server``/``serving`` metadata must be able
+    to carry runtime flags into the generated stack priors.
+    """
+    for cfg in (server_cfg, role_cfg):
+        if not isinstance(cfg, dict):
+            continue
+        for source in (cfg, cfg.get("server"), cfg.get("serving"), cfg.get("launch")):
+            if isinstance(source, dict):
+                value = source.get(key)
+                if isinstance(value, str) and value:
+                    return value
     return fallback
 
 
@@ -1077,6 +1106,8 @@ def _launch_runtime_record(
             LAUNCH_KV_QUANT_CONFIGS,
             NO_SPEC_DECODE_ROLES,
             SERIAL_ROLES,
+            VISION_ESCALATION_DEVICE,
+            VISION_ESCALATION_REASONING,
         )
         from scripts.server.stack_numa import MLOCK_ROLES
         from scripts.server.stack_paths import (
@@ -1097,7 +1128,7 @@ def _launch_runtime_record(
     vision_type = _first_launch_entry_value(launch, "vision_type")
     requirements = launch.get("requirements") if isinstance(launch.get("requirements"), dict) else {}
     acceleration = _effective_acceleration(role_cfg, server_cfg)
-    binary_dir, ld_paths = _runtime_requirements(server_cfg)
+    binary_dir, ld_paths = _runtime_requirements(server_cfg, role_cfg)
 
     binary_path = str(Path(binary_dir) / "llama-server") if binary_dir else str(LLAMA_SERVER)
     binary_family = (
@@ -1270,7 +1301,24 @@ def _launch_runtime_record(
                 (mode == "default")
                 or (mode == "worker_pool" and worker_type == "explore")
             ),
-            "reasoning": "off" if mode == "worker_pool" and worker_type == "explore" else None,
+            "device": _runtime_flag_string_prior(
+                server_cfg,
+                role_cfg,
+                key="device",
+                fallback=VISION_ESCALATION_DEVICE
+                if mode == "vision" and vision_type == "escalation"
+                else None,
+            ),
+            "reasoning": _runtime_flag_string_prior(
+                server_cfg,
+                role_cfg,
+                key="reasoning",
+                fallback=VISION_ESCALATION_REASONING
+                if mode == "vision" and vision_type == "escalation"
+                else "off"
+                if mode == "worker_pool" and worker_type == "explore"
+                else None,
+            ),
             "override_kv": override_kv,
             "spec": spec,
         },

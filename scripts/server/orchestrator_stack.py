@@ -85,6 +85,8 @@ from scripts.server.stack_manifest import (
     SERIAL_ROLES,
     VISION_ESCALATION_MMPROJ,
     VISION_ESCALATION_MODEL,
+    VISION_ESCALATION_DEVICE,
+    VISION_ESCALATION_REASONING,
     VISION_WORKER_MMPROJ,
     VISION_WORKER_MODEL,
     WORKER_POOL_MODELS,
@@ -365,6 +367,43 @@ def _runtime_requirements_for_role(
     return _runtime_requirements_for_role_impl(registry, role_name)
 
 
+def _stack_prior_runtime_overrides(role_name: str) -> tuple[str | None, list[str] | None]:
+    """Return runtime binary override + LD paths from the compiled stack prior."""
+    _requirements, runtime = _stack_prior_launch(role_name)
+    binary_dir = runtime.get("binary_dir") if isinstance(runtime.get("binary_dir"), str) else None
+    raw_ld_paths = runtime.get("ld_library_path")
+    ld_paths = (
+        [str(path) for path in raw_ld_paths if isinstance(path, str)]
+        if isinstance(raw_ld_paths, list)
+        else None
+    )
+    binary_override = str(Path(binary_dir) / "llama-server") if binary_dir else None
+    return binary_override, ld_paths
+
+
+def _apply_runtime_requirements_env(
+    env: MutableMapping[str, str],
+    *,
+    binary_override: str | None,
+    ld_paths: list[str] | None,
+) -> None:
+    """Apply role runtime overrides to a llama-server launch environment."""
+    if binary_override:
+        stripped = [
+            key for key in list(env.keys()) if key.startswith("GGML_") and key != "GGML_IQK"
+        ]
+        for key in stripped:
+            del env[key]
+        if stripped:
+            print(f"    [binary_override] stripped GGML_* env: {stripped}")
+        env["KMP_BLOCKTIME"] = "10"
+    if ld_paths:
+        existing = env.get("LD_LIBRARY_PATH", "")
+        merged = ":".join(ld_paths) + (f":{existing}" if existing else "")
+        env["LD_LIBRARY_PATH"] = merged
+        print(f"    LD_LIBRARY_PATH += {ld_paths}")
+
+
 def is_port_in_use(port: int) -> bool:
     """Check if a port is in use."""
     return _stack_processes.is_port_in_use(port)
@@ -489,6 +528,12 @@ def _build_vision_command(port: int, vision_type: str | None, numa_instance: int
         )
         if flags.get("flash_attn", True) is True:
             cmd.extend(["--flash-attn", "on"])
+        reasoning = flags.get("reasoning") or VISION_ESCALATION_REASONING
+        if isinstance(reasoning, str) and reasoning:
+            cmd.extend(["--reasoning", reasoning])
+        device = flags.get("device") or VISION_ESCALATION_DEVICE
+        if isinstance(device, str) and device:
+            cmd.extend(["--device", device])
         if cache.get("no_mmap", False) is True:
             cmd.append("--no-mmap")
         return cmd
@@ -517,6 +562,12 @@ def _build_vision_command(port: int, vision_type: str | None, numa_instance: int
     ]
     if flags.get("flash_attn", True) is True:
         cmd.extend(["--flash-attn", "on"])
+    reasoning = flags.get("reasoning")
+    if isinstance(reasoning, str) and reasoning:
+        cmd.extend(["--reasoning", reasoning])
+    device = flags.get("device")
+    if isinstance(device, str) and device:
+        cmd.extend(["--device", device])
     if cache.get("no_mmap", False) is True:
         cmd.append("--no-mmap")
     return cmd
@@ -1155,10 +1206,11 @@ def start_server(
     if vision_mode:
         log_file = LOG_DIR / f"vision-{vision_type or 'worker'}-{port}.log"
         LOG_DIR.mkdir(parents=True, exist_ok=True)
+        binary_override, ld_paths = _stack_prior_runtime_overrides(roles[0])
 
         if vision_type == "escalation":
             model_path = VISION_ESCALATION_MODEL
-            model_name = "Qwen2.5-VL-7B (vision escalation temporary alias)"
+            model_name = "MiniCPM-o-4.5 Q4_K_M (vision escalation on MI210)"
         else:
             model_path = VISION_WORKER_MODEL
             model_name = "Qwen2.5-VL-7B (vision worker)"
@@ -1173,6 +1225,8 @@ def start_server(
 
         print(f"  Starting vision server [{vision_type or 'worker'}] on port {port}: {model_name}")
         print(f"    Roles: {', '.join(roles)}")
+        if binary_override:
+            print(f"    Binary override: {binary_override}")
         print(f"    Command: {' '.join(cmd[:6])}...")
 
         # Fleet marker: written BEFORE Popen so subsequent watcher polls
@@ -1184,6 +1238,11 @@ def start_server(
 
         with open(log_file, "w") as log:
             env = build_launch_env(roles[0], os.environ.copy())
+            _apply_runtime_requirements_env(
+                env,
+                binary_override=binary_override,
+                ld_paths=ld_paths,
+            )
             proc = subprocess.Popen(
                 _numa_prefix(roles[0], numa_instance) + cmd,
                 stdout=log,
@@ -1274,9 +1333,8 @@ def start_server(
             print(f"  [!] Unknown worker type: {worker_type}")
             return None
 
-        # Per-role binary + LD_LIBRARY_PATH override (Phase 2). worker_general (gemma4
-        # MTP) needs ik_llama.cpp PR #1744 binary; other workers fall back to default.
-        # Lookup keyed on the primary role (e.g. "worker_general"), not worker_type.
+        # Per-role binary + LD_LIBRARY_PATH override. Lookup is keyed on the
+        # primary role (e.g. "worker_general"), not worker_type.
         binary_dir, ld_paths = _runtime_requirements_for_role(registry, roles[0])
         binary_override = str(Path(binary_dir) / "llama-server") if binary_dir else None
 
@@ -1299,57 +1357,11 @@ def start_server(
         with open(log_file, "w") as log:
             # Worker pool roles map their worker_type to the canonical "worker" role for env.
             env = build_launch_env("worker", os.environ.copy())
-            # When a per-role binary override is in effect (gemma4 MTP via ik_llama.cpp
-            # PR #1744), strip the production-llama.cpp-tuned GGML_* env block. Those
-            # flags (GGML_CCD_POOLS / GGML_CCD_WORK_DIST / GGML_BARRIER_LOCAL_BETWEEN_OPS)
-            # were validated for Qwen3-Coder-30B on the production ggml fork; the
-            # ik_llama.cpp gemma-mtp branch is forked at a different ggml commit and
-            # leaves MTP draft tensors with no buffer assignment when these flags are
-            # set, triggering "tensor buffer not set" assertion at ggml-backend.cpp:236.
-            # Bench launches confirm: gemma4 MTP works with bare OMP env, no GGML_*.
-            if binary_override:
-                # 2026-06-26 v6 cutover: never strip GGML_IQK (gates iqk kernels)
-                stripped = [
-                    k for k in list(env.keys()) if k.startswith("GGML_") and k != "GGML_IQK"
-                ]
-                for k in stripped:
-                    del env[k]
-                if stripped:
-                    print(f"    [binary_override] stripped GGML_* env: {stripped}")
-                # 2026-05-09: KMP_BLOCKTIME=10 ms — fixes the libomp idle busy-spin.
-                #
-                # Background: PR #1744 uses bare `#pragma omp parallel` per
-                # ggml_graph_compute() call (ggml/src/ggml.c:26739), no persistent
-                # threadpool. Between dispatches, AOCC libomp's worker team stays
-                # alive in a busy-wait state under OMP_WAIT_POLICY=active (95+ cores
-                # spinning idle, polluting L3 / DRAM bandwidth shared with the other
-                # roles — measured -40 to -69% throughput hit on frontdoor / coder /
-                # ingest while gemma4 was idle).
-                #
-                # Tried in source: omp_pause_resource(soft) + omp_pause_resource_all(hard)
-                # — verified BOTH ignored by AOCC 5.0.0 libomp (threads stayed in R
-                # state, wchan=0). The OMP runtime's idle behavior isn't controllable
-                # via the standard pause API on this libomp build.
-                #
-                # KMP_BLOCKTIME is the LLVM libomp tunable (AOCC's libomp is LLVM-
-                # based). Workers busy-wait this many ms before transitioning to a
-                # futex sleep. 10 ms = fast enough that MTP request dispatch finds
-                # workers warm (no perceptible first-token-latency regression), short
-                # enough that the multi-second gaps between requests don't waste
-                # cycles. OMP_WAIT_POLICY=active stays — it controls the steady-state
-                # behavior; KMP_BLOCKTIME tunes the idle transition. Full passive
-                # (= KMP_BLOCKTIME=0) breaks MTP wakeup; active alone busy-spins
-                # forever; active + KMP_BLOCKTIME=10 is the sweet spot.
-                env["KMP_BLOCKTIME"] = "10"
-            # Prepend role-specific LD_LIBRARY_PATH entries (Phase 2): ik_llama.cpp
-            # PR #1744 build needs its own libllama.so / libggml.so on the resolver
-            # path. Prepend so the override beats system libs without touching the
-            # canonical-recipe LLVM-20 libomp path that already lives in env.
-            if ld_paths:
-                existing = env.get("LD_LIBRARY_PATH", "")
-                merged = ":".join(ld_paths) + (f":{existing}" if existing else "")
-                env["LD_LIBRARY_PATH"] = merged
-                print(f"    LD_LIBRARY_PATH += {ld_paths}")
+            _apply_runtime_requirements_env(
+                env,
+                binary_override=binary_override,
+                ld_paths=ld_paths,
+            )
             # NOTE: Do NOT set OMP_NUM_THREADS=1 - it disables parallel tensor repack (2.2x slower loading)
             # Fleet marker: written BEFORE Popen so the watcher can resolve
             # role→port and detect operator-initiated reloads.
@@ -1431,6 +1443,12 @@ def start_server(
     # Start process — taskset CPU-pinned per NUMA config + canonical OMP env + per-role GGML
     with open(log_file, "w") as log:
         env = build_launch_env(primary_role, os.environ.copy())
+        binary_override, ld_paths = _stack_prior_runtime_overrides(primary_role)
+        _apply_runtime_requirements_env(
+            env,
+            binary_override=binary_override,
+            ld_paths=ld_paths,
+        )
         # NOTE: Do NOT set OMP_NUM_THREADS=1 - it disables parallel tensor repack (2.2x slower loading)
         # Fleet marker: written BEFORE Popen so the watcher can resolve
         # role→port and detect operator-initiated reloads.

@@ -635,10 +635,15 @@ def test_launch_runtime_record_does_not_inject_vision_escalation_override() -> N
         role="vision_escalation",
         descriptor={},
         server_cfg=None,
-        role_cfg={"acceleration": {"type": "baseline"}},
+        role_cfg={
+            "server": {"device": "ROCm0", "reasoning": "off"},
+            "acceleration": {"type": "baseline"},
+        },
         launch_cfg=launch_cfg,
     )
 
+    assert runtime["flags"]["device"] == "ROCm0"
+    assert runtime["flags"]["reasoning"] == "off"
     assert runtime["flags"]["override_kv"] == []
 
     runtime = _launch_runtime_record(
@@ -656,6 +661,42 @@ def test_launch_runtime_record_does_not_inject_vision_escalation_override() -> N
     )
 
     assert runtime["flags"]["override_kv"] == ["qwen3vlmoe.expert_used_count=int:4"]
+
+
+def test_launch_runtime_record_accepts_role_level_runtime_requirements() -> None:
+    runtime = _launch_runtime_record(
+        role="vision_escalation",
+        descriptor={},
+        server_cfg=None,
+        role_cfg={
+            "server": {
+                "device": "ROCm0",
+                "reasoning": "off",
+                "runtime_requirements": {
+                    "binary_dir": "/tmp/v7-hip/bin",
+                    "ld_library_path": ["/tmp/v7-hip/bin"],
+                },
+            },
+            "acceleration": {"type": "baseline"},
+        },
+        launch_cfg={
+            "launch": {
+                "primary_roles": ["vision_escalation"],
+                "modes": ["vision"],
+                "entries": [{"vision_type": "escalation"}],
+                "requirements": {
+                    "model_path": "/models/minicpm.gguf",
+                    "mmproj_path": "/models/minicpm-mmproj.gguf",
+                },
+                "runtime": {},
+            }
+        },
+    )
+
+    assert runtime["binary_dir"] == "/tmp/v7-hip/bin"
+    assert runtime["binary_path"] == "/tmp/v7-hip/bin/llama-server"
+    assert runtime["ld_library_path"] == ["/tmp/v7-hip/bin"]
+    assert runtime["env_policy"] == "binary_override_strip_ggml"
 
 
 def test_server_mode_requirement_overrides_keep_shared_alias_on_served_model() -> None:
@@ -778,6 +819,7 @@ def test_compile_uses_stack_manifest_when_server_mode_is_absent(tmp_path: Path) 
     assert runtime["cache"]["ubatch"] is None
     assert runtime["cache"]["mlock"] is False
     assert runtime["flags"]["flash_attn"] is True
+    assert runtime["flags"]["device"] is None
     assert runtime["flags"]["jinja"] is False
     assert runtime["flags"]["spec"]["enabled"] is False
     assert role["priors"]["memory_cost"] == 1.0

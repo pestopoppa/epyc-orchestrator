@@ -1765,20 +1765,22 @@ roles:
   vision_escalation:
     tier: C
     port: 8087
-    description: Temporary safe vision escalation alias - Qwen2.5-VL server with mmproj
+    description: Vision escalation - MiniCPM-o 4.5 Q4 on MI210 with reasoning disabled
     model:
-      name: Qwen2.5-VL-7B-Instruct
-      path: lmstudio-community/Qwen2.5-VL-7B-Instruct-GGUF/Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf
-      mmproj_path: lmstudio-community/Qwen2.5-VL-7B-Instruct-GGUF/mmproj-model-f16.gguf
+      name: MiniCPM-o-4_5
+      path: /mnt/raid0/llm/models/MiniCPM-o-4_5-gguf/MiniCPM-o-4_5-Q4_K_M.gguf
+      mmproj_path: /mnt/raid0/llm/models/MiniCPM-o-4_5-gguf/vision/MiniCPM-o-4_5-vision-F16.gguf
       quant: Q4_K_M
-      size_gb: 4.4
+      size_gb: 6.2
       architecture: dense
-      ctx_max: 128000
+      ctx_max: 8192
+      sha256: 1237a97ee081b8abebc47aa7dad565701e8f5f904cdc92f6723ac4281bbc0932
+      mmproj_sha256: 1453678cc4e4fe18de241952962e234f265cb8dda780773526103ab8ba82f421
     thinking_control:
-      mode: native_no_thinking_toggle
-      effective_mode: native_no_think_tags
-      evidence_strength: model_family_inferred
-      evidence: Qwen2.5-VL Instruct predates Qwen3 thinking controls; multimodal role has no chat-template thinking toggle.
+      mode: llama_server_reasoning_off
+      effective_mode: no_reasoning_trace
+      evidence_strength: K35 fixed-fixture MI210 evidence
+      evidence: K35.11/K35.13c passed fixed OCR/chart fixtures and mixed-service checks with --reasoning off.
     candidate_roles:
     - vision
     acceleration:
@@ -1786,22 +1788,28 @@ roles:
       disallowed:
       - speculative_decoding
       - prompt_lookup
-      reason: VL models with mmproj not supported by llama-speculative binary
+      reason: MiniCPM-o vision lane is served as baseline multimodal llama-server on MI210; no spec-dec evidence.
     performance:
-      baseline_tps: 16.91
-      optimized_tps: 21.32
+      baseline_tps: 110.81
+      optimized_tps: 110.81
       speedup: 1.0x
       vl_score:
         pct: 100.0
         raw: 4/4 K35 fixed fixtures
       benchmark_date: 2026-07-17
-      evidence: /mnt/raid0/llm/tmp/k35-vision-matrix-20260717T1500Z/summary.json
+      evidence: /mnt/raid0/llm/tmp/k35-vision-matrix-20260717T1500Z/summary.json; K35.13c mixed-service matrix passed 8/8 context/fixture pairs with frontdoor overlap.
     memory:
       residency: hot
       pinned: false
     server:
       endpoint: http://localhost:8087
       api_format: openai_multimodal
+      device: ROCm0
+      reasoning: 'off'
+      runtime_requirements:
+        binary_dir: /mnt/raid0/llm/llama.cpp-experimental/build-hip/bin
+        ld_library_path:
+        - /mnt/raid0/llm/llama.cpp-experimental/build-hip/bin
     escalation:
       from: worker_vision
       auto_wired: false
@@ -1813,18 +1821,22 @@ roles:
       - cross-reference multiple image regions
     paged_attention:
       recommended: false
-      reason: temporary alias uses Qwen2.5-VL dense worker model
-    notes: 'Temporary 2026-07-17 safety alias to worker_vision. K35 fixed-fixture
+      reason: no K35 evidence that paged attention helps MiniCPM-o VL fixtures.
+    notes: 'K35.13d controlled live-stack flip target. K35.11 fixed OCR/chart
 
-      matrix showed worker_vision passed 4/4 while the former Qwen3-VL-30B MoE4
+      candidate gate passed CPU 4/4 and MI210 4/4 with --reasoning off; MI210
 
-      escalation lane passed only 3/4 and missed the chart fixture. Diagnostic
+      decode observed 110.81-122.18 t/s. K35.12 co-residency smoke passed with
 
-      probes with --image-min/max-tokens 1024 and default experts also failed.
+      frontdoor on MI210. K35.13c operational fixture service matrix passed 8/8
 
-      Keep port 8087 for call-site stability, but do not treat this as a true
+      active fixture/context pairs; active overlap averaged 94.77 t/s frontdoor
 
-      higher-quality escalation model until a replacement A/B wins.
+      plus 85.22 t/s MiniCPM-o. Keep port 8087 for call-site stability and cap
+
+      serving at one active slot. Rollback is Qwen2.5-VL worker alias on the same
+
+      port if the live smoke fails.
 
       '
   worker_summarize:

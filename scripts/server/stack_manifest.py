@@ -295,12 +295,13 @@ VISION_WORKER_MMPROJ = str(
     _PATHS["model_base"] / "lmstudio-community/Qwen2.5-VL-7B-Instruct-GGUF/mmproj-model-f16.gguf"
 )
 VISION_ESCALATION_MODEL = str(
-    _PATHS["model_base"]
-    / "lmstudio-community/Qwen2.5-VL-7B-Instruct-GGUF/Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf"
+    _PATHS["models_dir"] / "MiniCPM-o-4_5-gguf/MiniCPM-o-4_5-Q4_K_M.gguf"
 )
 VISION_ESCALATION_MMPROJ = str(
-    _PATHS["model_base"] / "lmstudio-community/Qwen2.5-VL-7B-Instruct-GGUF/mmproj-model-f16.gguf"
+    _PATHS["models_dir"] / "MiniCPM-o-4_5-gguf/vision/MiniCPM-o-4_5-vision-F16.gguf"
 )
+VISION_ESCALATION_DEVICE = "ROCm0"
+VISION_ESCALATION_REASONING = "off"
 
 DEFAULT_EFFECTIVE_CONTEXT_TOKENS = 32768
 LAUNCH_CONTEXT_TOKENS = {

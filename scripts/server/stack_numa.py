@@ -190,13 +190,12 @@ NUMA_CONFIG: dict[str, dict] = {
         "instances": [(NUMA_Q0B[0], 8086, 24)],
         "mlock": True,    # ~4 GB — minimal footprint
     },
-    # Temporary 2026-07-17 safety alias: vision_escalation serves the same
-    # Qwen2.5-VL model as worker_vision until a replacement VL escalation A/B
-    # beats it. Keep a distinct 24t quarter so ports 8086 and 8087 can coexist
-    # without overlapping CPU masks.
+    # MiniCPM-o vision escalation runs on MI210 with a small 24t host quarter
+    # for request/image preprocessing. Keep it distinct from worker_vision so
+    # ports 8086 and 8087 can coexist without overlapping CPU masks.
     "vision_escalation": {
         "instances": [(NUMA_Q1B[0], 8087, 24)],
-        "mlock": True,    # ~4 GB — temporary Qwen2.5-VL alias
+        "mlock": True,    # ~6 GB host-visible + MI210 resident VL lane
     },
 }
 

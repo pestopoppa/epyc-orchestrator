@@ -1,8 +1,7 @@
 """Per-role runtime-requirements lookup from the model registry.
 
 Reads `server_mode.<entry>.runtime_requirements` to discover whether a role
-needs a non-default binary directory (e.g. ik_llama.cpp PR #1744 fork for
-gemma4 MTP via worker_general) and/or extra LD_LIBRARY_PATH entries. Returns
+needs a non-default binary directory and/or extra LD_LIBRARY_PATH entries. Returns
 (None, None) when no entry has runtime_requirements or the role is absent —
 the launcher falls back to the default LLAMA_SERVER + canonical env stack
 in that case.
@@ -22,9 +21,8 @@ def runtime_requirements_for_role(
     """Return (binary_dir, ld_library_paths) for `role_name` from server_mode entries.
 
     Walks `registry._raw["server_mode"]` for the entry whose `model_role`
-    matches `role_name`. Used by the worker_pool launch branch (currently
-    worker_general / gemma4 MTP via ik_llama.cpp PR #1744). Other workers
-    stay on the default binary.
+    matches `role_name`. Launch branches use this for role-specific binary
+    and dynamic-library overrides while defaulting to the canonical binary.
     """
     if not registry or not hasattr(registry, "_raw"):
         return None, None

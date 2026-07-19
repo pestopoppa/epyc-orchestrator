@@ -115,6 +115,43 @@ _DECISION_ENUM = {
 }
 _RUBRIC_WEIGHTS = {1, 2, 3}
 _RUBRIC_ID_RE = re.compile(r"^R[0-9]+$")
+_RUBRIC_AXIS_ALIASES = {
+    "question-alignment": {
+        "alignment",
+        "answer relevance",
+        "prompt alignment",
+        "question alignment",
+        "relevance",
+        "task alignment",
+    },
+    "grounding": {
+        "accuracy",
+        "correctness",
+        "evidence",
+        "evidence grounding",
+        "factuality",
+        "source grounding",
+    },
+    "integrity": {
+        "faithfulness",
+        "hallucination control",
+        "honesty",
+        "integrity",
+        "non hallucination",
+        "truthfulness",
+    },
+    "completeness": {
+        "coverage",
+        "completeness",
+        "completeness coverage",
+        "sufficiency",
+    },
+}
+_RUBRIC_AXIS_CANONICAL = {
+    re.sub(r"[^a-z0-9]+", " ", alias.lower()).strip(): canonical
+    for canonical, aliases in _RUBRIC_AXIS_ALIASES.items()
+    for alias in (aliases | {canonical})
+}
 # defect-detection keywords for the why-diagnosis "detect-THAT" signal.
 _DEFECT_KEYWORDS = (
     "reject",
@@ -287,6 +324,17 @@ def _valid_rubric_items(rubric: Any) -> list[dict[str, Any]]:
     return out
 
 
+def _canonical_rubric_axis(axis: Any) -> str:
+    """Normalize equivalent rubric-axis labels for deterministic scoring.
+
+    GLM repair smokes showed that schema-valid rubrics often use conventional
+    review-axis synonyms (for example ``accuracy`` for ``grounding``). The scorer
+    should measure semantic axis coverage, not exact wording drift.
+    """
+    norm = _normalize(str(axis))
+    return _RUBRIC_AXIS_CANONICAL.get(norm, norm.replace(" ", "-"))
+
+
 def score_rubric_authoring(
     authored: dict[str, Any], reference: dict[str, Any]
 ) -> dict[str, Any]:
@@ -302,8 +350,8 @@ def score_rubric_authoring(
     """
     a_items = _valid_rubric_items(authored)
     r_items = _valid_rubric_items(reference)
-    a_axes = {str(it["axis"]).strip().lower() for it in a_items}
-    r_axes = {str(it["axis"]).strip().lower() for it in r_items}
+    a_axes = {_canonical_rubric_axis(it["axis"]) for it in a_items}
+    r_axes = {_canonical_rubric_axis(it["axis"]) for it in r_items}
 
     ref_count = len(r_items)
     count_ratio = min(1.0, len(a_items) / ref_count) if ref_count else 0.0
@@ -480,11 +528,50 @@ def _builtin_task_set(probe: str, *, m: int) -> dict[str, Any]:
         "probe": "why_diagnosis",
         "tasks": [
             {
-                "task_id": f"wd-{i:02d}",
-                "prompt": "Diagnose the failure CAUSE of the CANDIDATE, not just whether it fails.",
-                "gold_cause_aliases": ["off-by-one", "boundary error"],
+                "task_id": "wd-00",
+                "prompt": (
+                    "CANDIDATE: In binary_search, the branch for arr[mid] < target "
+                    "sets left = mid. Symptom: with adjacent bounds, mid repeats and "
+                    "the loop never advances when the target is larger than arr[mid]."
+                ),
+                "gold_cause_aliases": [
+                    "off-by-one",
+                    "missing mid plus one",
+                    "left equals mid",
+                    "left mid",
+                    "incorrect midpoint update",
+                ],
+            },
+            {
+                "task_id": "wd-01",
+                "prompt": (
+                    "CANDIDATE: render_user(user) returns user.name.upper() without "
+                    "checking user. Symptom: AttributeError/NoneType crash when the "
+                    "caller passes user=None."
+                ),
+                "gold_cause_aliases": [
+                    "null dereference",
+                    "none dereference",
+                    "missing null check",
+                    "missing none guard",
+                    "attribute access on unvalidated user",
+                ],
+            },
+            {
+                "task_id": "wd-02",
+                "prompt": (
+                    "CANDIDATE: distance(dx, dy) computes sqrt(dx * dx - dy * dy). "
+                    "Symptom: valid inputs can produce a negative value under sqrt "
+                    "and the distance is mathematically wrong."
+                ),
+                "gold_cause_aliases": [
+                    "wrong formula",
+                    "subtraction instead of addition",
+                    "sign error",
+                    "wrong arithmetic operation",
+                    "subtracting dy dy",
+                ],
             }
-            for i in range(3)
         ],
     }
 

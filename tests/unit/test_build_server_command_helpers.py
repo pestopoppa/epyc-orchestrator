@@ -95,6 +95,7 @@ def _command_runtime_signature(cmd: list[str]) -> dict[str, Any]:
             "slot_save_path": _flag_value(cmd, "--slot-save-path"),
         },
         "flags": {
+            "device": _flag_value(cmd, "--device"),
             "flash_attn": _flag_value(cmd, "--flash-attn") == "on",
             "jinja": "--jinja" in cmd,
             "reasoning": _flag_value(cmd, "--reasoning"),
@@ -142,6 +143,7 @@ def _stack_prior_runtime_signature(runtime: dict[str, Any]) -> dict[str, Any]:
             "slot_save_path": cache["slot_save_path"],
         },
         "flags": {
+            "device": flags.get("device"),
             "flash_attn": flags["flash_attn"],
             "jinja": flags["jinja"],
             "reasoning": flags["reasoning"],
@@ -179,11 +181,17 @@ def test_descriptor_active_roles_are_canonical_launch_roles() -> None:
 # -----------------------------------------------------------------------------
 
 
-def test_build_vision_command_escalation_uses_temporary_safe_alias() -> None:
+def test_build_vision_command_escalation_uses_minicpm_o_mi210_lane() -> None:
     cmd = oss._build_vision_command(port=8087, vision_type="escalation")
-    assert oss.VISION_ESCALATION_MODEL == oss.VISION_WORKER_MODEL
-    assert oss.VISION_ESCALATION_MMPROJ == oss.VISION_WORKER_MMPROJ
+    assert oss.VISION_ESCALATION_MODEL != oss.VISION_WORKER_MODEL
+    assert oss.VISION_ESCALATION_MMPROJ != oss.VISION_WORKER_MMPROJ
+    assert "MiniCPM-o-4_5-Q4_K_M.gguf" in oss.VISION_ESCALATION_MODEL
+    assert "MiniCPM-o-4_5-vision-F16.gguf" in oss.VISION_ESCALATION_MMPROJ
+    assert oss.VISION_ESCALATION_MODEL in cmd
+    assert oss.VISION_ESCALATION_MMPROJ in cmd
     assert "--mmproj" in cmd
+    assert _flag_value(cmd, "--device") == "ROCm0"
+    assert _flag_value(cmd, "--reasoning") == "off"
     assert "--override-kv" not in cmd
     assert cmd[cmd.index("-c") + 1] == "8192"
     assert cmd[cmd.index("-t") + 1] == "24"
@@ -237,6 +245,8 @@ def test_build_vision_command_prefers_stack_prior_requirements(
             "cache": {"context_tokens": 12000, "slots": 1, "no_mmap": True},
             "flags": {
                 "flash_attn": False,
+                "device": "ROCm0",
+                "reasoning": "off",
                 "override_kv": ["qwen3vlmoe.expert_used_count=int:2"],
                 "spec": {"enabled": False},
             },
@@ -254,8 +264,17 @@ def test_build_vision_command_prefers_stack_prior_requirements(
     ]
     assert _flag_value(cmd, "-np") == "1"
     assert _flag_value(cmd, "-c") == "12000"
+    assert _flag_value(cmd, "--device") == "ROCm0"
+    assert _flag_value(cmd, "--reasoning") == "off"
     assert "--no-mmap" in cmd
     assert "--flash-attn" not in cmd
+
+
+def test_dispatcher_preserves_explicit_vision_device() -> None:
+    cmd = oss.build_server_command(None, 8087, vision_mode=True, vision_type="escalation")
+
+    assert _flag_value(cmd, "--device") == "ROCm0"
+    assert "none" not in _all_flag_values(cmd, "--device")
 
 
 def test_build_embedding_command_enables_embeddings_and_cls_pool() -> None:
@@ -925,6 +944,43 @@ def test_start_server_vision_forwards_numa_instance_to_prefix(tmp_path, monkeypa
     assert info is not None
     assert calls == [("vision_escalation", 1)]
     assert popen.call_args.args[0][:3] == ["taskset", "-c", "vision_escalation:1"]
+    _assert_detached_popen(popen)
+
+
+def test_start_server_vision_applies_stack_prior_runtime_ld_path(tmp_path, monkeypatch) -> None:
+    fake_proc = SimpleNamespace(pid=4243)
+    monkeypatch.setattr(oss, "LOG_DIR", tmp_path)
+    monkeypatch.setattr(oss, "_write_llama_marker", lambda *a, **kw: None)
+    monkeypatch.setattr(oss, "wait_for_health", lambda *a, **kw: True)
+    monkeypatch.setattr(
+        oss,
+        "build_launch_env",
+        lambda *a, **kw: {"GGML_IQK": "1", "GGML_TEST_FLAG": "remove"},
+    )
+    monkeypatch.setattr(
+        oss,
+        "_stack_prior_runtime_overrides",
+        lambda role: ("/tmp/v7-hip/bin/llama-server", ["/tmp/v7-hip/bin"]),
+    )
+    with (
+        patch.object(oss, "_numa_prefix", return_value=[]),
+        patch.object(oss, "build_server_command", return_value=["/tmp/v7-hip/bin/llama-server"]),
+        patch.object(oss.subprocess, "Popen", return_value=fake_proc) as popen,
+    ):
+        info = oss.start_server(
+            port=8087,
+            roles=["vision_escalation"],
+            registry=SimpleNamespace(),
+            vision_mode=True,
+            vision_type="escalation",
+        )
+
+    assert info is not None
+    env = popen.call_args.kwargs["env"]
+    assert env["GGML_IQK"] == "1"
+    assert "GGML_TEST_FLAG" not in env
+    assert env["LD_LIBRARY_PATH"].startswith("/tmp/v7-hip/bin")
+    assert env["KMP_BLOCKTIME"] == "10"
     _assert_detached_popen(popen)
 
 
