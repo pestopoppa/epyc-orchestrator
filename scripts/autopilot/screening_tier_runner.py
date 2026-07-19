@@ -121,6 +121,61 @@ def _env_flag_enabled(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def load_row_ids(path: Path) -> list[str]:
+    """Load a newline-delimited row-id allowlist.
+
+    Blank lines and ``#`` comments are ignored. Duplicates are removed while
+    preserving first-seen order so a row-id file can be used both as a filter and
+    as a stable provenance object.
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    with path.open("r", encoding="utf-8") as fh:
+        for raw in fh:
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            # Allow trailing comments in hand-written run sheets.
+            row_id = line.split("#", 1)[0].strip()
+            if not row_id or row_id in seen:
+                continue
+            seen.add(row_id)
+            out.append(row_id)
+    return out
+
+
+def row_id_filter_summary(path: Path) -> dict[str, Any]:
+    row_ids = load_row_ids(path)
+    digest = hashlib.sha256(
+        ("\n".join(row_ids) + ("\n" if row_ids else "")).encode("utf-8")
+    ).hexdigest()
+    return {
+        "row_id_filter_path": str(path),
+        "row_id_filter_n": len(row_ids),
+        "row_id_filter_sha256": digest,
+    }
+
+
+def attach_row_id_filter(plan: dict[str, Any], row_ids_path: Path | None) -> dict[str, Any]:
+    """Return ``plan`` with row-id filter provenance attached to the corpus slice."""
+    if row_ids_path is None:
+        return plan
+    summary = row_id_filter_summary(row_ids_path)
+    out = dict(plan)
+    corpus_slice = dict(out.get("corpus_slice") or {})
+    corpus_slice.update(summary)
+    out["corpus_slice"] = corpus_slice
+    provenance = dict(out.get("provenance") or {})
+    provenance.update(summary)
+    out["provenance"] = provenance
+    note = "row-id allowlist attached; live execution must filter to this slice."
+    notes = list(out.get("notes") or [])
+    if note not in notes:
+        notes.append(note)
+    out["notes"] = notes
+    return out
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Job spec + resolved queue dataclasses
 # ══════════════════════════════════════════════════════════════════════════════
@@ -440,7 +495,7 @@ def build_and_resolve(
         corpus_manifest=corpus_manifest,
         per_pairing_n=per_pairing_n,
         eval_tier=eval_tier,
-        max_pairings=max_pairings,
+        max_pairings=0,
         domain=domain,
     )
     if error is not None or plan is None:
@@ -449,7 +504,7 @@ def build_and_resolve(
         plan.to_dict(),
         pool_gen_output,
         cap_per_pairing=cap_per_pairing,
-        max_pairings=0,  # plan already applied max_pairings; don't double-truncate
+        max_pairings=max_pairings,
         prune_unfit=prune_unfit,
         priority=priority,
     )
@@ -556,6 +611,7 @@ def iter_judgeable_rows(
     rows_path: Path,
     *,
     domain: str | None = None,
+    row_ids: set[str] | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Lazily yield judgeable corpus rows (optionally filtered to one domain)."""
     with rows_path.open("r", encoding="utf-8") as fh:
@@ -567,6 +623,10 @@ def iter_judgeable_rows(
                 row = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            if row_ids is not None:
+                rid = str(row.get("row_id") or row.get("candidate_id") or "")
+                if rid not in row_ids:
+                    continue
             if domain and domain != "all" and str(row.get("domain")) != domain:
                 continue
             if is_judgeable_row(row):
@@ -674,6 +734,7 @@ def execute_screening_queue(
     *,
     output_path: Path | None = None,
     corpus_rows_path: Path | None = None,
+    row_ids_path: Path | None = None,
     tower: Any | None = None,
     tower_factory: Callable[[], Any] | None = None,
     reviewer_probe: Callable[[TrialJobSpec, dict[str, Any], Any], dict[str, Any]] | None = None,
@@ -703,7 +764,8 @@ def execute_screening_queue(
         rows_path = default_rows
 
     domain = str(resolved.corpus_slice.get("domain", "all"))
-    pool = list(iter_judgeable_rows(Path(rows_path), domain=domain))
+    row_ids = set(load_row_ids(row_ids_path)) if row_ids_path is not None else None
+    pool = list(iter_judgeable_rows(Path(rows_path), domain=domain, row_ids=row_ids))
 
     results: list[dict[str, Any]] = []
     for job in resolved.jobs:
@@ -734,6 +796,7 @@ def run_screening_tier(
     corpus_manifest: dict[str, Any] | None = None,
     output_path: Path | None = None,
     corpus_rows_path: Path | None = None,
+    row_ids_path: Path | None = None,
     cap_per_pairing: int = 0,
     max_pairings: int = 0,
     prune_unfit: bool = True,
@@ -754,6 +817,7 @@ def run_screening_tier(
     ``actions.py`` / ``plan_screening_tier``); the resolver joins it to
     ``pool_gen_output``. (Building a plan from scratch is :func:`build_and_resolve`.)
     """
+    plan = attach_row_id_filter(plan, row_ids_path)
     resolved = resolve_screening_queue(
         plan,
         pool_gen_output,
@@ -780,6 +844,7 @@ def run_screening_tier(
         resolved,
         output_path=output_path,
         corpus_rows_path=corpus_rows_path,
+        row_ids_path=row_ids_path,
         tower=tower,
         tower_factory=tower_factory,
         reviewer_probe=reviewer_probe,
@@ -843,6 +908,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="JSONL path for per-pairing FA/FR/CR results (execute path only)",
     )
     p.add_argument(
+        "--row-ids",
+        default=None,
+        help=(
+            "newline-delimited corpus row-id allowlist; attaches provenance in "
+            "dry-run and filters live execution to that exact slice"
+        ),
+    )
+    p.add_argument(
         "--run",
         action="store_true",
         help="attempt execution (STILL env-gated by "
@@ -875,13 +948,19 @@ def main(argv: list[str] | None = None) -> int:
             corpus_manifest=manifest,
             per_pairing_n=args.per_pairing_n,
             eval_tier=args.tier,
-            max_pairings=args.max_pairings,
+            max_pairings=0,
             domain=args.domain,
         )
         if error is not None or plan_obj is None:
             print(json.dumps({"error": error or "no plan"}, indent=2))
             return 2
         plan = plan_obj.to_dict()
+    row_ids_path = Path(args.row_ids) if args.row_ids else None
+    if row_ids_path is not None:
+        if not row_ids_path.exists():
+            print(json.dumps({"error": f"row-id file not found: {row_ids_path}"}, indent=2))
+            return 2
+        plan = attach_row_id_filter(plan, row_ids_path)
 
     if not args.run:
         # Pure resolution — no inference, whatever the env flag says.
@@ -889,9 +968,7 @@ def main(argv: list[str] | None = None) -> int:
             plan,
             pool_gen_output,
             cap_per_pairing=args.cap_per_pairing,
-            # plan already applied max_pairings when built here; still honor an
-            # explicit CLI cap when a prebuilt plan was passed in.
-            max_pairings=args.max_pairings if args.plan else 0,
+            max_pairings=args.max_pairings,
             prune_unfit=not args.no_prune,
             priority=not args.no_priority,
         )
@@ -903,8 +980,9 @@ def main(argv: list[str] | None = None) -> int:
         pool_gen_output,
         corpus_manifest=manifest,
         output_path=Path(args.output) if args.output else None,
+        row_ids_path=row_ids_path,
         cap_per_pairing=args.cap_per_pairing,
-        max_pairings=args.max_pairings if args.plan else 0,
+        max_pairings=args.max_pairings,
         prune_unfit=not args.no_prune,
         priority=not args.no_priority,
         seed=args.seed,
