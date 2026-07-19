@@ -200,8 +200,10 @@ knobs:
 # ── AXA-3 — GPU placement / teleport policy (class 3) ───────────────────────
 # These knobs are declaration/application plumbing only. They do NOT enable
 # teleport or alter serving by default. v1 policy remains re-prefill cutover only;
-# spec-dec catch-up, mixed-KV 32K on the default HIP build, cold-load break-even,
-# and mid-stream quant-change policy remain separately gated in the MI210 roadmap.
+# spec-dec catch-up, mixed-KV 32K on the default HIP build, and cold-load
+# break-even remain separately gated in the MI210 roadmap. Mid-stream quant
+# changes fail closed in TeleportPolicy: same-quant-only is the default, and
+# role-scoped cross-quant tails require an explicit operator policy.
 placement_policy_knobs:
   - name: placement_policy.teleport_enabled
     dtype: bool

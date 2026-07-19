@@ -19,6 +19,8 @@ def _inputs(**overrides):
         "gpu_tps": 44.0,
         "gpu_available": True,
         "gpu_resident": True,
+        "cpu_quant": "q4_k_m",
+        "gpu_quant": "q4_k_m",
     }
     values.update(overrides)
     return TeleportInputs(**values)
