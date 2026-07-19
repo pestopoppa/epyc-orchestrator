@@ -368,6 +368,7 @@ def test_summarize_pairing_computes_fa_fr_cr():
     assert result["n_scored"] == 4
     assert result["n_conclusive"] == 4
     assert result["transport"] == "placement_queue"
+    assert "execution_transport" not in result
     assert result["observation_only"] is True
 
 
@@ -438,6 +439,10 @@ def test_execute_screening_queue_filters_to_row_ids(tmp_path):
     assert results[0]["n_scored"] == 2
     assert results[0]["reviewer_fa_rate"] == pytest.approx(0.0)
     assert results[0]["reviewer_fr_rate"] == pytest.approx(0.0)
+    assert results[0]["planned_transport"] == "placement_queue"
+    assert results[0]["transport"] == "forced_direct_chat"
+    assert results[0]["execution_transport"]["uses_chat_endpoint"] is True
+    assert results[0]["execution_transport"]["force_mode"] == "direct"
 
 
 def test_default_reviewer_probe_uses_p_rev_schema_and_forced_direct(monkeypatch):
@@ -496,6 +501,9 @@ def test_default_reviewer_probe_uses_p_rev_schema_and_forced_direct(monkeypatch)
     assert out["confidence"] == pytest.approx(0.73)
     assert out["gate"] == "pass"
     assert out["review_mode"] == "patch_diff_strict"
+    assert out["execution_transport"]["transport"] == "forced_direct_chat"
+    assert out["execution_transport"]["planned_transport"] == "placement_queue"
+    assert out["execution_transport"]["uses_chat_endpoint"] is True
 
 
 # --------------------------------------------------------------------------- #
@@ -534,6 +542,9 @@ def test_env_flag_on_routes_to_execute_bridge(monkeypatch):
     assert out["mode"] == "execute"
     assert out["inference_ran"] is True
     assert out["results"] == [{"pairing_id": "archA__revB__grd", "reviewer_fa_rate": 0.0}]
+    assert out["execution_transport"]["transport"] == "forced_direct_chat"
+    assert out["execution_transport"]["planned_transport"] == "placement_queue"
+    assert out["execution_transport"]["uses_chat_endpoint"] is True
     assert isinstance(captured["resolved"], runner.ResolvedScreeningQueue)
 
 

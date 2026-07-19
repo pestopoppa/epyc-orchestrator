@@ -22,9 +22,10 @@ Two responsibilities, cleanly split:
 
   2. **Execution bridge** (env-flag-gated ``AUTOPILOT_SCREENING_TIER_INFERENCE=1``,
      DEFAULT OFF): with the flag OFF the resolved queue is returned as a dry-run
-     plan and NO inference happens. With the flag ON, drive the eval-tower over the
-     queue via the placement queue, collect per-pairing FA/FR/CR estimates, and
-     emit them as JSONL. The execution path is modeled on
+     plan and NO inference happens. With the flag ON, drive the eval over the
+     current forced-direct review bridge, explicitly recording that live transport
+     separately from the planned placement queue, collect per-pairing FA/FR/CR
+     estimates, and emit them as JSONL. The execution path is modeled on
      ``bsv_paired_runner.py`` (deferred ``EvalTower`` import, autopilot-stopped
      assumption) and is intentionally NEVER reached by the tests.
 
@@ -78,13 +79,18 @@ SCREENING_TIER_INFERENCE_ENV = "AUTOPILOT_SCREENING_TIER_INFERENCE"
 
 RUNNER_VERSION = "screening-tier-runner-v1"
 
-# Placement-queue transport constants (RM-3 discipline). These mirror the kwargs
-# eval_tower._eval_question already sets on its orchestrator calls, so a screening
-# trial rides the SAME background/eval_batch placement path a normal autopilot eval
-# fan-out uses — it is never a foreground /chat request.
+# Placement-queue transport constants (RM-3 plan discipline). Dry-run queue specs
+# stay pinned to placement_queue so future wiring can be checked without running
+# inference.
 PLACEMENT_QUEUE_TRANSPORT = "placement_queue"
 PLACEMENT_REQUEST_PRIORITY = "background"
 PLACEMENT_WORKLOAD_CLASS = "eval_batch"
+
+# Current live execution bridge. The probe still uses call_orchestrator_forced
+# with force_mode=direct, so result metadata must not claim actual placement-queue
+# execution even though the resolved plan is placement-queue-shaped.
+FORCED_DIRECT_CHAT_TRANSPORT = "forced_direct_chat"
+FORCED_DIRECT_FORCE_MODE = "direct"
 
 DEFAULT_CORPUS_MANIFEST = Path(
     "/mnt/raid0/llm/datasets/nearmiss-corpus-v1/manifest.json"
@@ -273,6 +279,18 @@ class ResolvedScreeningQueue:
             "notes": list(self.notes),
             "inference_required": self.inference_required,
         }
+
+
+def live_execution_transport_summary() -> dict[str, Any]:
+    """Actual transport used by the env-gated live bridge today."""
+    return {
+        "transport": FORCED_DIRECT_CHAT_TRANSPORT,
+        "planned_transport": PLACEMENT_QUEUE_TRANSPORT,
+        "force_mode": FORCED_DIRECT_FORCE_MODE,
+        "request_priority": PLACEMENT_REQUEST_PRIORITY,
+        "workload_class": PLACEMENT_WORKLOAD_CLASS,
+        "uses_chat_endpoint": True,
+    }
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -674,15 +692,14 @@ def _default_reviewer_probe(
     row: dict[str, Any],
     tower: Any,
 ) -> dict[str, Any]:  # pragma: no cover - inference path
-    """Send ONE P-REV-shaped reviewer judgement over the placement queue.
+    """Send ONE P-REV-shaped reviewer judgement over the current live bridge.
 
-    This is the real inference seam. It reuses the SAME transport eval_tower uses
-    internally — ``call_orchestrator_forced`` with ``request_priority=background``
-    and ``workload_class=eval_batch`` (the placement-queue path), pinning
-    ``force_role`` to the reviewer under test — so a screening judgement is never
-    foreground/interactive traffic. The prompt/schema/parser are reused from the
-    P-REV-1 direct corpus runner so RM-3 live screening does not silently fall
-    back to the old one-token APPROVE/REJECT probe.
+    This is the real inference seam. It currently uses
+    ``call_orchestrator_forced`` with ``force_mode=direct`` plus
+    ``request_priority=background`` and ``workload_class=eval_batch``, pinning
+    ``force_role`` to the reviewer under test. The prompt/schema/parser are
+    reused from the P-REV-1 direct corpus runner so RM-3 live screening does not
+    silently fall back to the old one-token APPROVE/REJECT probe.
 
     Never exercised by the unit tests (the whole execution bridge is env-gated and
     unreached under the zero-inference constraint).
@@ -708,10 +725,10 @@ def _default_reviewer_probe(
     resp = call_orchestrator_forced(
         prompt=prompt,
         force_role=job.reviewer or "",
-        force_mode="direct",
+        force_mode=FORCED_DIRECT_FORCE_MODE,
         url=getattr(tower, "url", "http://localhost:8000"),
         timeout=getattr(tower, "timeout", 300),
-        request_priority=PLACEMENT_REQUEST_PRIORITY,   # placement queue, not /chat
+        request_priority=PLACEMENT_REQUEST_PRIORITY,
         workload_class=PLACEMENT_WORKLOAD_CLASS,
         max_tokens=256,
         output_schema=schema,
@@ -730,6 +747,7 @@ def _default_reviewer_probe(
         "prompt_meta": prompt_meta,
         "output_schema": "binary_review_decision_response_schema",
         "review_mode": prompt_meta.get("review_mode"),
+        "execution_transport": live_execution_transport_summary(),
     }
 
 
@@ -744,14 +762,17 @@ def execute_screening_queue(
     reviewer_probe: Callable[[TrialJobSpec, dict[str, Any], Any], dict[str, Any]] | None = None,
     seed: int = 42,
 ) -> list[dict[str, Any]]:  # pragma: no cover - inference path
-    """Drive the resolved queue over the placement queue and collect FA/FR/CR.
+    """Drive the resolved queue over the live review bridge and collect FA/FR/CR.
 
     Reached ONLY when ``AUTOPILOT_SCREENING_TIER_INFERENCE=1`` (via
     ``run_screening_tier``) or called directly by a future caller that owns the
     inference decision. Autopilot-stopped assumption (bsv pattern): the caller is
     responsible for the no-concurrent-inference window; this function never touches
     autopilot lifecycle/state. Emits one JSONL row per pairing to ``output_path``
-    (append) and returns the same rows. Does NOT write the batch ledger.
+    (append) and returns the same rows. Does NOT write the batch ledger. Result
+    metadata records both the planned placement-queue transport and the actual
+    forced-direct live bridge so observation rows cannot masquerade as
+    placement-queue execution evidence.
     """
     tower = tower or (tower_factory or _default_tower)()
     probe = reviewer_probe or _default_reviewer_probe
@@ -776,6 +797,9 @@ def execute_screening_queue(
         sample = select_rows_for_job(pool, n=job.n, seed_key=f"{seed}:{job.pairing_id}")
         decisions = [probe(job, row, tower) for row in sample]
         result = summarize_pairing(job, decisions)
+        result["planned_transport"] = result["transport"]
+        result["transport"] = FORCED_DIRECT_CHAT_TRANSPORT
+        result["execution_transport"] = live_execution_transport_summary()
         results.append(result)
         if output_path is not None:
             _append_jsonl(Path(output_path), result)
@@ -815,7 +839,7 @@ def run_screening_tier(
     DEFAULT (``AUTOPILOT_SCREENING_TIER_INFERENCE`` unset/false): returns the
     resolved queue as a dry-run plan and runs NO inference — this is the entire
     surface the unit tests exercise. When the flag is set the resolved queue is
-    driven over the placement queue via :func:`execute_screening_queue`.
+    driven over the live execution bridge via :func:`execute_screening_queue`.
 
     ``plan`` may be a ``_screening_tier_plan`` dict (already generated by
     ``actions.py`` / ``plan_screening_tier``); the resolver joins it to
@@ -860,6 +884,7 @@ def run_screening_tier(
         "inference_ran": True,
         "n_jobs": len(resolved.jobs),
         "output_path": str(output_path) if output_path else None,
+        "execution_transport": live_execution_transport_summary(),
         "resolved_queue": resolved.to_dict(),
         "results": results,
     }
