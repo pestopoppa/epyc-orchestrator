@@ -52,6 +52,7 @@ DEFAULT_PROMPT = (
     "Write a deterministic two sentence validation note. "
     "Mention AXA-2 once and end with the word done."
 )
+ROCM_NO_KFD_PIDS_MARKERS = ("No KFD PIDs currently running", "No KFD PIDs")
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 
@@ -134,6 +135,52 @@ def process_snapshot(*, runner: Runner = subprocess.run) -> dict[str, Any]:
     }
 
 
+def parse_kfd_pids(stdout: str) -> list[int]:
+    pids: set[int] = set()
+    for line in stdout.splitlines():
+        if "PID" in line or "====" in line or "End of ROCm" in line:
+            continue
+        for token in line.replace("|", " ").split():
+            if token.isdigit():
+                value = int(token)
+                if value > 100:
+                    pids.add(value)
+    return sorted(pids)
+
+
+def gpu_occupancy(snapshot: dict[str, Any], *, allowed_pids: set[int] | None = None) -> dict[str, Any]:
+    allowed_pids = allowed_pids or set()
+    rocm = snapshot.get("rocm_smi_showpids")
+    if not isinstance(rocm, dict) or not rocm.get("ok"):
+        return {
+            "ok": False,
+            "occupied": None,
+            "exclusive_to_allowed": False,
+            "pids": [],
+            "unexpected_pids": [],
+            "reason": "rocm_smi_showpids_unavailable",
+            "stdout": rocm.get("stdout", "") if isinstance(rocm, dict) else "",
+            "stderr": rocm.get("stderr", "") if isinstance(rocm, dict) else "",
+        }
+    stdout = str(rocm.get("stdout") or "")
+    stderr = str(rocm.get("stderr") or "")
+    pids = parse_kfd_pids(stdout)
+    occupied = not any(marker in stdout for marker in ROCM_NO_KFD_PIDS_MARKERS)
+    unexpected_pids = sorted(set(pids) - allowed_pids)
+    exclusive_to_allowed = bool(allowed_pids) and occupied and not unexpected_pids
+    return {
+        "ok": True,
+        "occupied": occupied,
+        "exclusive_to_allowed": exclusive_to_allowed,
+        "pids": pids,
+        "unexpected_pids": unexpected_pids,
+        "allowed_pids": sorted(allowed_pids),
+        "reason": "exclusive_to_allowed" if exclusive_to_allowed else ("kfd_pids_present" if occupied else "no_kfd_pids"),
+        "stdout": stdout,
+        "stderr": stderr,
+    }
+
+
 def read_prompt(args: argparse.Namespace) -> str:
     if args.prompt_file:
         return Path(args.prompt_file).expanduser().read_text(encoding="utf-8")
@@ -149,8 +196,10 @@ def parse_csv_set(value: str | None) -> frozenset[str]:
 def build_policy(args: argparse.Namespace) -> TeleportPolicy:
     return TeleportPolicy(
         enabled=args.policy_enabled,
+        mode=args.mode,
         quant_policy=args.quant_policy,
         long_running_trigger_tokens=args.long_running_trigger_tokens,
+        rate_window_tokens=args.rate_window_tokens,
         min_resident_remaining_tokens=args.min_resident_remaining_tokens,
         min_cold_remaining_tokens=args.min_cold_remaining_tokens,
         min_speedup=args.min_speedup,
@@ -171,6 +220,7 @@ def build_inputs(args: argparse.Namespace) -> TeleportInputs:
         cpu_quant=args.cpu_quant,
         gpu_quant=args.gpu_quant,
         catch_up_supported=False,
+        rate_window_observed_tokens=args.rate_window_observed_tokens,
         metadata={
             "trace_id": args.trace_id,
             "protocol_note": "v1 re-prefill cutover only; no spec-dec catch-up",
@@ -292,6 +342,8 @@ def write_operator_script(output_dir: Path, args: argparse.Namespace) -> None:
         "--policy-enabled" if args.policy_enabled else "",
         "--role",
         args.role,
+        "--mode",
+        args.mode,
         "--quant-policy",
         args.quant_policy,
         "--cpu-quant",
@@ -300,6 +352,10 @@ def write_operator_script(output_dir: Path, args: argparse.Namespace) -> None:
         args.gpu_quant,
         "--generated-tokens",
         str(args.generated_tokens),
+        "--rate-window-tokens",
+        str(args.rate_window_tokens),
+        "--rate-window-observed-tokens",
+        str(args.rate_window_observed_tokens),
         "--estimated-remaining-tokens",
         str(args.estimated_remaining_tokens),
         "--cpu-tps",
@@ -314,13 +370,19 @@ def write_operator_script(output_dir: Path, args: argparse.Namespace) -> None:
         str(args.continuity_tokens),
         "--seed",
         str(args.seed),
+        "--gpu-server-pid",
+        "__GPU_SERVER_PID__",
     ]
     if args.role_allowlist:
         argv.extend(["--role-allowlist", args.role_allowlist])
     if args.quant_change_role_allowlist:
         argv.extend(["--quant-change-role-allowlist", args.quant_change_role_allowlist])
     argv = [item for item in argv if item]
-    invocation = shlex.join(argv).replace("__AXA2_EXEC_OUTPUT__", '"$AXA2_EXEC_OUTPUT"')
+    invocation = (
+        shlex.join(argv)
+        .replace("__AXA2_EXEC_OUTPUT__", '"$AXA2_EXEC_OUTPUT"')
+        .replace("__GPU_SERVER_PID__", '"$GPU_SERVER_PID"')
+    )
     script = "\n".join(
         [
             "#!/usr/bin/env bash",
@@ -331,6 +393,7 @@ def write_operator_script(output_dir: Path, args: argparse.Namespace) -> None:
             operator_output_preamble(args),
             'CPU_URL="${CPU_URL:?set CPU_URL to the CPU llama-server base URL}"',
             'GPU_URL="${GPU_URL:?set GPU_URL to the GPU llama-server base URL}"',
+            'GPU_SERVER_PID="${GPU_SERVER_PID:?set GPU_SERVER_PID to the intended GPU llama-server PID}"',
             invocation + ' --cpu-url "$CPU_URL" --gpu-url "$GPU_URL"',
             "",
         ]
@@ -374,6 +437,7 @@ def dry_summary(args: argparse.Namespace, output_dir: Path, prompt: str) -> dict
             "responses/gpu_suffix.response.json",
             "responses/continuity_cpu.response.json",
             "responses/continuity_gpu.response.json",
+            "preflight/gpu_occupancy.json",
             "postflight/process_snapshot.json",
         ],
         "environment": {
@@ -424,7 +488,11 @@ def execute_bundle(args: argparse.Namespace) -> dict[str, Any]:
     if events_path.exists():
         events_path.unlink()
 
-    write_json(output_dir / "preflight" / "process_snapshot.json", process_snapshot())
+    preflight_snapshot = process_snapshot()
+    allowed_gpu_pids = {args.gpu_server_pid} if args.gpu_server_pid else set()
+    preflight_occupancy = gpu_occupancy(preflight_snapshot, allowed_pids=allowed_gpu_pids)
+    write_json(output_dir / "preflight" / "process_snapshot.json", preflight_snapshot)
+    write_json(output_dir / "preflight" / "gpu_occupancy.json", preflight_occupancy)
     write_json(output_dir / "policy_decision.json", jsonable(asdict(decision)))
     append_event(events_path, "teleport_candidate", {"decision": jsonable(asdict(decision))})
 
@@ -436,52 +504,56 @@ def execute_bundle(args: argparse.Namespace) -> dict[str, Any]:
     lease_released = None
 
     if decision.should_cutover:
-        lease = GpuLeaseManager()
-        acquire = lease.acquire(args.trace_id, reason="axa2_live_cutover_smoke", wait=False)
-        append_event(events_path, "gpu_lease_acquired", {"acquired": acquire.acquired, "reason": acquire.reason})
-        if not acquire.acquired or acquire.handle is None:
-            status = "lease_unavailable"
-            append_event(events_path, "fallback", {"reason": status})
+        if preflight_occupancy.get("exclusive_to_allowed") is not True:
+            status = "global_gpu_owner_unverified"
+            append_event(events_path, "fallback", {"reason": status, "gpu_occupancy": preflight_occupancy})
         else:
-            try:
-                cpu_prefix_payload = request_payload(prompt, n_predict=args.cpu_prefix_tokens, seed=args.seed)
-                write_json(output_dir / "requests" / "cpu_prefix.request.json", cpu_prefix_payload)
-                cpu_prefix = post_completion(args.cpu_url, cpu_prefix_payload, timeout_s=args.timeout_s)
-                write_json(output_dir / "responses" / "cpu_prefix.response.json", cpu_prefix)
-                cpu_prefix_text = extract_text(cpu_prefix)
+            lease = GpuLeaseManager()
+            acquire = lease.acquire(args.trace_id, reason="axa2_live_cutover_smoke", wait=False)
+            append_event(events_path, "gpu_lease_acquired", {"acquired": acquire.acquired, "reason": acquire.reason})
+            if not acquire.acquired or acquire.handle is None:
+                status = "lease_unavailable"
+                append_event(events_path, "fallback", {"reason": status})
+            else:
+                try:
+                    cpu_prefix_payload = request_payload(prompt, n_predict=args.cpu_prefix_tokens, seed=args.seed)
+                    write_json(output_dir / "requests" / "cpu_prefix.request.json", cpu_prefix_payload)
+                    cpu_prefix = post_completion(args.cpu_url, cpu_prefix_payload, timeout_s=args.timeout_s)
+                    write_json(output_dir / "responses" / "cpu_prefix.response.json", cpu_prefix)
+                    cpu_prefix_text = extract_text(cpu_prefix)
 
-                if not cpu_prefix.get("ok"):
-                    status = "cpu_prefix_failed"
-                    append_event(events_path, "fallback", {"reason": status})
-                else:
-                    gpu_prompt = prompt + cpu_prefix_text
-                    append_event(events_path, "gpu_prefill_start", {"prefix_chars": len(gpu_prompt)})
-                    gpu_suffix_payload = request_payload(gpu_prompt, n_predict=args.gpu_suffix_tokens, seed=args.seed)
-                    write_json(output_dir / "requests" / "gpu_suffix.request.json", gpu_suffix_payload)
-                    gpu_suffix = post_completion(args.gpu_url, gpu_suffix_payload, timeout_s=args.timeout_s)
-                    write_json(output_dir / "responses" / "gpu_suffix.response.json", gpu_suffix)
-                    append_event(
-                        events_path,
-                        "gpu_prefill_end",
-                        {"ok": gpu_suffix.get("ok"), "elapsed_s": gpu_suffix.get("elapsed_s")},
-                    )
-                    gpu_suffix_text = extract_text(gpu_suffix)
-                    if not gpu_suffix.get("ok"):
-                        status = "gpu_suffix_failed"
+                    if not cpu_prefix.get("ok"):
+                        status = "cpu_prefix_failed"
                         append_event(events_path, "fallback", {"reason": status})
                     else:
+                        gpu_prompt = prompt + cpu_prefix_text
+                        append_event(events_path, "gpu_prefill_start", {"prefix_chars": len(gpu_prompt)})
+                        gpu_suffix_payload = request_payload(gpu_prompt, n_predict=args.gpu_suffix_tokens, seed=args.seed)
+                        write_json(output_dir / "requests" / "gpu_suffix.request.json", gpu_suffix_payload)
+                        gpu_suffix = post_completion(args.gpu_url, gpu_suffix_payload, timeout_s=args.timeout_s)
+                        write_json(output_dir / "responses" / "gpu_suffix.response.json", gpu_suffix)
                         append_event(
                             events_path,
-                            "cutover",
-                            {
-                                "cpu_prefix_sha256": sha256_text(cpu_prefix_text),
-                                "gpu_suffix_sha256": sha256_text(gpu_suffix_text),
-                            },
+                            "gpu_prefill_end",
+                            {"ok": gpu_suffix.get("ok"), "elapsed_s": gpu_suffix.get("elapsed_s")},
                         )
-                        status = "executed"
-            finally:
-                lease_released = acquire.handle.release()
-                append_event(events_path, "lease_released", {"released": lease_released})
+                        gpu_suffix_text = extract_text(gpu_suffix)
+                        if not gpu_suffix.get("ok"):
+                            status = "gpu_suffix_failed"
+                            append_event(events_path, "fallback", {"reason": status})
+                        else:
+                            append_event(
+                                events_path,
+                                "cutover",
+                                {
+                                    "cpu_prefix_sha256": sha256_text(cpu_prefix_text),
+                                    "gpu_suffix_sha256": sha256_text(gpu_suffix_text),
+                                },
+                            )
+                            status = "executed"
+                finally:
+                    lease_released = acquire.handle.release()
+                    append_event(events_path, "lease_released", {"released": lease_released})
     else:
         append_event(events_path, "fallback", {"reason": decision.reason})
 
@@ -517,6 +589,7 @@ def execute_bundle(args: argparse.Namespace) -> dict[str, Any]:
         "policy": jsonable(asdict(policy)),
         "inputs": jsonable(asdict(inputs)),
         "decision": jsonable(asdict(decision)),
+        "global_gpu_preflight": preflight_occupancy,
         "lease_released": lease_released,
         "cutover": {
             "cpu_prefix_sha256": sha256_text(cpu_prefix_text),
@@ -526,7 +599,7 @@ def execute_bundle(args: argparse.Namespace) -> dict[str, Any]:
             "gpu_suffix_chars": len(gpu_suffix_text),
         },
         "continuity": continuity,
-        "artifact_grade": "observation_until_p_gpu_1_ratified",
+        "artifact_grade": "p_gpu_1_eligible_only_for_production_named_kernel_runs",
         "environment": {
             "platform": platform.platform(),
             "cpu_count": os.cpu_count(),
@@ -555,13 +628,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--prompt-file")
     parser.add_argument("--cpu-url", default="")
     parser.add_argument("--gpu-url", default="")
+    parser.add_argument(
+        "--gpu-server-pid",
+        type=int,
+        default=0,
+        help="PID of the intended already-running GPU llama-server; cutover refuses other/unknown KFD ownership.",
+    )
     parser.add_argument("--timeout-s", type=float, default=240.0)
     parser.add_argument("--policy-enabled", action="store_true")
     parser.add_argument("--role", default="architect_general")
+    parser.add_argument("--mode", default="v1_reprefill_cutover_only")
     parser.add_argument("--role-allowlist", default="architect_general")
     parser.add_argument("--quant-policy", default="same_quant_only")
     parser.add_argument("--quant-change-role-allowlist", default="")
     parser.add_argument("--long-running-trigger-tokens", type=int, default=128)
+    parser.add_argument("--rate-window-tokens", type=int, default=64)
+    parser.add_argument("--rate-window-observed-tokens", type=int, default=200)
     parser.add_argument("--min-resident-remaining-tokens", type=int, default=150)
     parser.add_argument("--min-cold-remaining-tokens", type=int, default=350)
     parser.add_argument("--min-speedup", type=float, default=1.05)
