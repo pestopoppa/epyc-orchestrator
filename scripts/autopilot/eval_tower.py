@@ -46,6 +46,7 @@ PROMOTION_EVAL_SUITE_HEALTH_GLOB = "item_analytics*.json"
 _EXPECTED_FREE_SCORERS = {"programmatic"}
 _CORE_METADATA_KEY = "__core_metadata__"
 _SPEED_ANALYTICS_MIN_TOKENS = 128
+_REQUIRED_EVAL_QUESTION_FIELDS = ("prompt", "expected", "suite")
 _HOST_COVARIATE_COMPACT_KEYS = (
     "min_core_mhz",
     "mean_cur_mhz",
@@ -113,6 +114,123 @@ def _eval_batch_wall_budget_s(
     per_wave = float(request_timeout_s) + 30.0
     waves = math.ceil(max(1, int(n_questions)) / max(1, int(workers)))
     return max(_eval_no_progress_timeout_s(request_timeout_s), min(4 * 3600.0, waves * per_wave))
+
+
+def _file_mtime_ns(path: Path) -> int | None:
+    try:
+        return path.stat().st_mtime_ns
+    except FileNotFoundError:
+        return None
+
+
+def _question_validation_errors(q: Any) -> list[str]:
+    if not isinstance(q, Mapping):
+        return ["row_not_object"]
+
+    errors: list[str] = []
+    prompt = q.get("prompt")
+    suite = q.get("suite")
+    if prompt is None or str(prompt).strip() == "":
+        errors.append("missing_prompt")
+    if "expected" not in q:
+        errors.append("missing_expected")
+    elif q.get("expected") is None:
+        errors.append("null_expected")
+    if suite is None or str(suite).strip() == "":
+        errors.append("missing_suite")
+    if not errors and not _is_scoreable_question(dict(q)):
+        errors.append("unscoreable")
+    return errors
+
+
+def _validate_eval_question_rows(
+    rows: Sequence[Any],
+    *,
+    source: str,
+) -> tuple[list[dict], dict[str, Any]]:
+    valid: list[dict] = []
+    drop_reasons: dict[str, int] = {}
+    examples: list[dict[str, Any]] = []
+    for idx, row in enumerate(rows):
+        errors = _question_validation_errors(row)
+        if errors:
+            for error in errors:
+                drop_reasons[error] = drop_reasons.get(error, 0) + 1
+            if len(examples) < 5:
+                examples.append(
+                    {
+                        "index": idx,
+                        "id": row.get("id") if isinstance(row, Mapping) else None,
+                        "errors": errors,
+                    }
+                )
+            continue
+        valid.append(dict(row))
+
+    details = {
+        "source": source,
+        "loaded_rows": len(rows),
+        "valid_rows": len(valid),
+        "dropped_rows": len(rows) - len(valid),
+        "drop_reasons": drop_reasons,
+        "drop_examples": examples,
+        "required_fields": list(_REQUIRED_EVAL_QUESTION_FIELDS),
+    }
+    if drop_reasons:
+        log.warning(
+            "Dropped %d invalid eval question row(s) from %s: %s",
+            details["dropped_rows"],
+            source,
+            drop_reasons,
+        )
+    return valid, details
+
+
+def _validate_question_pool(
+    raw_pool: Any,
+    *,
+    source: str,
+) -> tuple[dict[str, list[dict]], dict[str, Any]]:
+    if not isinstance(raw_pool, Mapping):
+        return {}, {
+            "source": source,
+            "loaded_rows": 0,
+            "valid_rows": 0,
+            "dropped_rows": 0,
+            "drop_reasons": {"pool_not_mapping": 1},
+            "invalid_suites": [],
+            "required_fields": list(_REQUIRED_EVAL_QUESTION_FIELDS),
+        }
+
+    pool: dict[str, list[dict]] = {}
+    details: dict[str, Any] = {
+        "source": source,
+        "loaded_rows": 0,
+        "valid_rows": 0,
+        "dropped_rows": 0,
+        "drop_reasons": {},
+        "invalid_suites": [],
+        "required_fields": list(_REQUIRED_EVAL_QUESTION_FIELDS),
+    }
+    for suite, rows in raw_pool.items():
+        if isinstance(rows, (str, bytes)) or not isinstance(rows, Sequence):
+            details["invalid_suites"].append(str(suite))
+            details["drop_reasons"]["suite_not_sequence"] = (
+                details["drop_reasons"].get("suite_not_sequence", 0) + 1
+            )
+            continue
+        suite_valid, suite_details = _validate_eval_question_rows(
+            list(rows),
+            source=f"{source}:{suite}",
+        )
+        details["loaded_rows"] += suite_details["loaded_rows"]
+        details["valid_rows"] += suite_details["valid_rows"]
+        details["dropped_rows"] += suite_details["dropped_rows"]
+        for reason, count in suite_details["drop_reasons"].items():
+            details["drop_reasons"][reason] = details["drop_reasons"].get(reason, 0) + count
+        if suite_valid:
+            pool[str(suite)] = suite_valid
+    return pool, details
 
 
 def _has_executable_assertion(test_code: str) -> bool:
@@ -1330,6 +1448,44 @@ def _stamp_eval_instrument(
     return result
 
 
+def _loader_error_eval_result(
+    *,
+    tier: int,
+    source: str,
+    error: str,
+    core_id: str,
+    test_profile: dict[str, Any],
+    loader_details: dict[str, Any] | None = None,
+    extra_details: dict[str, Any] | None = None,
+) -> EvalResult:
+    result = EvalResult(
+        tier=tier,
+        quality=0,
+        speed=0,
+        cost=0,
+        reliability=0,
+        details={
+            "loader_error": {
+                "source": source,
+                "error": error,
+                "retryable_without_restart": True,
+                "details": loader_details or {},
+            },
+            "decision_grade": False,
+            **(extra_details or {}),
+        },
+    )
+    return _stamp_eval_instrument(
+        result,
+        questions=[],
+        core_id=core_id,
+        test_profile={
+            **test_profile,
+            "loader_error": error,
+        },
+    )
+
+
 # ── paired-significance screening (config/quant A/B) ─────────────────────────
 #
 # When eval_tower scores two (or more) arms of a config/quant A/B on the SAME
@@ -1582,7 +1738,11 @@ class EvalTower:
         self.timeout = timeout
         self._sentinel_path = sentinel_path or SENTINEL_PATH
         self._sentinels: list[dict] | None = None
+        self._sentinels_mtime_ns: int | None = None
+        self._sentinel_load_details: dict[str, Any] = {}
         self._pool = None
+        self._pool_mtime_ns: int | None = None
+        self._pool_load_details: dict[str, Any] = {}
         self._core_cache: dict[str, tuple[list[dict], dict[str, Any], Path]] = {}
         self._trial_id_context: int | None = None
         self._trial_path_context: Path | None = None
@@ -1607,13 +1767,53 @@ class EvalTower:
     # ── sentinel questions (T0) ──────────────────────────────────
 
     def _load_sentinels(self) -> list[dict]:
-        if self._sentinels is not None:
+        mtime_ns = _file_mtime_ns(self._sentinel_path)
+        if self._sentinels is not None and (
+            self._sentinels_mtime_ns is None or self._sentinels_mtime_ns == mtime_ns
+        ):
             return self._sentinels
-        if not self._sentinel_path.exists():
+
+        self._sentinels = None
+        self._sentinels_mtime_ns = None
+        if mtime_ns is None:
             log.warning("No sentinel file at %s", self._sentinel_path)
-            self._sentinels = []
-            return self._sentinels
-        self._sentinels = yaml.safe_load(self._sentinel_path.read_text()) or []
+            self._sentinel_load_details = {
+                "source": str(self._sentinel_path),
+                "error": "missing_sentinel_file",
+            }
+            return []
+
+        try:
+            loaded = yaml.safe_load(self._sentinel_path.read_text(encoding="utf-8"))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Could not load sentinel file %s: %s", self._sentinel_path, exc)
+            self._sentinel_load_details = {
+                "source": str(self._sentinel_path),
+                "error": "sentinel_load_failed",
+                "exception": str(exc),
+            }
+            return []
+        if loaded is None:
+            loaded = []
+        if not isinstance(loaded, list):
+            log.warning("Sentinel file %s must contain a YAML list", self._sentinel_path)
+            self._sentinel_load_details = {
+                "source": str(self._sentinel_path),
+                "error": "sentinel_yaml_not_list",
+                "loaded_type": type(loaded).__name__,
+            }
+            return []
+
+        sentinels, details = _validate_eval_question_rows(
+            loaded,
+            source=str(self._sentinel_path),
+        )
+        self._sentinel_load_details = details
+        if not sentinels:
+            log.warning("Sentinel file %s contains no valid eval questions", self._sentinel_path)
+            return []
+        self._sentinels = sentinels
+        self._sentinels_mtime_ns = mtime_ns
         return self._sentinels
 
     def _load_tool_sentinels(self) -> list[dict]:
@@ -1636,7 +1836,17 @@ class EvalTower:
         if not TOOL_SENTINEL_PATH.exists():
             log.warning("AUTOPILOT_TOOL_SENTINELS=1 but no file at %s", TOOL_SENTINEL_PATH)
             return []
-        loaded = yaml.safe_load(TOOL_SENTINEL_PATH.read_text()) or []
+        loaded = yaml.safe_load(TOOL_SENTINEL_PATH.read_text(encoding="utf-8")) or []
+        if not isinstance(loaded, list):
+            log.warning("tool_sentinels: %s must contain a YAML list", TOOL_SENTINEL_PATH)
+            return []
+        loaded, details = _validate_eval_question_rows(
+            loaded,
+            source=str(TOOL_SENTINEL_PATH),
+        )
+        if not loaded:
+            log.warning("tool_sentinels: no valid rows after schema validation: %s", details)
+            return []
         try:
             from src.tools.eval_secret import load_persisted_secrets
 
@@ -1661,18 +1871,60 @@ class EvalTower:
 
     def _load_pool(self):
         """Load question pool for T1/T2 validation questions."""
-        if self._pool is not None:
+        if self._pool is not None and self._pool_mtime_ns is None:
             return self._pool
         try:
-            _research_root = Path("/mnt/raid0/llm/epyc-inference-research")
-            sys.path.insert(0, str(_research_root / "scripts" / "benchmark"))
-            from question_pool import load_pool
+            _research_root = Path(
+                os.environ.get("EPYC_RESEARCH_ROOT", "/mnt/raid0/llm/epyc-inference-research")
+            )
+            research_benchmark_dir = str(_research_root / "scripts" / "benchmark")
+            if research_benchmark_dir not in sys.path:
+                sys.path.insert(0, research_benchmark_dir)
+            import question_pool  # type: ignore
 
-            self._pool = load_pool()
-        except Exception as e:
+            default_pool_path = _research_root / "benchmarks" / "prompts" / "question_pool.jsonl"
+            pool_path = Path(getattr(question_pool, "POOL_FILE", default_pool_path))
+            mtime_ns = _file_mtime_ns(pool_path)
+            if self._pool is not None and self._pool_mtime_ns == mtime_ns:
+                return self._pool
+
+            self._pool = None
+            self._pool_mtime_ns = None
+            if mtime_ns is None:
+                self._pool_load_details = {
+                    "source": str(pool_path),
+                    "error": "missing_question_pool",
+                }
+                log.warning("Question pool file missing: %s", pool_path)
+                return {}
+
+            raw_pool = question_pool.load_pool()
+            if not raw_pool:
+                self._pool_load_details = {
+                    "source": str(pool_path),
+                    "error": "empty_question_pool",
+                }
+                log.warning("Question pool is empty: %s", pool_path)
+                return {}
+
+            pool, details = _validate_question_pool(raw_pool, source=str(pool_path))
+            self._pool_load_details = details
+            if not pool:
+                log.warning("Question pool has no valid eval questions after validation")
+                return {}
+
+            self._pool = pool
+            self._pool_mtime_ns = mtime_ns
+            return self._pool
+        except Exception as e:  # noqa: BLE001
             log.warning("Could not load question pool: %s", e)
-            self._pool = {}
-        return self._pool
+            self._pool = None
+            self._pool_mtime_ns = None
+            self._pool_load_details = {
+                "error": "question_pool_load_failed",
+                "exception": str(e),
+            }
+            return {}
 
     def _core_path(self, core_id: str) -> Path:
         override = os.environ.get("AUTOPILOT_T1_CORE_PATH", "").strip()
@@ -2687,8 +2939,21 @@ class EvalTower:
         """Tier 0: 10 sentinel questions, binary pass/fail, ~30s."""
         sentinels = self._load_sentinels()
         if not sentinels:
+            error = "no_valid_sentinel_questions"
             log.error("No sentinel questions available for T0")
-            return EvalResult(tier=0, quality=0, speed=0, cost=0, reliability=0)
+            return _loader_error_eval_result(
+                tier=0,
+                source="sentinel_questions",
+                error=error,
+                core_id="t0_sentinels_v1_n0",
+                loader_details=self._sentinel_load_details,
+                test_profile={
+                    "version": "eval-tower-tier-profile-v1",
+                    "tier": 0,
+                    "source": "sentinel_questions",
+                    "n_questions": 0,
+                },
+            )
 
         # T0 is a fast pass/fail GATE only — its telemetry is NOT journaled into
         # the trial record (hybrid/progressive eval journals T1/T2). Tool-use
@@ -2810,8 +3075,28 @@ class EvalTower:
         else:
             pool = self._load_pool()
             if not pool:
+                error = "no_valid_question_pool"
                 log.error("No question pool available for T1")
-                return EvalResult(tier=1, quality=0, speed=0, cost=0, reliability=0)
+                return _loader_error_eval_result(
+                    tier=1,
+                    source="question_pool",
+                    error=error,
+                    core_id=f"legacy_pool_seed_{seed}_n{n}",
+                    loader_details=self._pool_load_details,
+                    extra_details={
+                        "core_selection": core_selection,
+                        "requested_n": n,
+                    },
+                    test_profile={
+                        "version": "eval-tower-tier-profile-v1",
+                        "tier": 1,
+                        "core_id": f"legacy_pool_seed_{seed}_n{n}",
+                        "core_selection": core_selection,
+                        "seed": int(seed),
+                        "requested_n": int(n),
+                        "n_questions": 0,
+                    },
+                )
             rng = random.Random(seed)
             questions = _sample_scoreable_eval_questions(pool, n, rng)
             core_id = f"legacy_pool_seed_{seed}_n{n}"
@@ -2955,8 +3240,29 @@ class EvalTower:
         """Tier 2: 500+ full benchmark, ~30min."""
         pool = self._load_pool()
         if not pool:
+            error = "no_valid_question_pool"
             log.error("No question pool available for T2")
-            return EvalResult(tier=2, quality=0, speed=0, cost=0, reliability=0)
+            requested_n = int(n)
+            return _loader_error_eval_result(
+                tier=2,
+                source="question_pool",
+                error=error,
+                core_id=f"legacy_pool_t2_seed_{seed}_n{requested_n}",
+                loader_details=self._pool_load_details,
+                extra_details={
+                    "requested_n": requested_n,
+                    "promotion_eval": bool(promotion_eval),
+                },
+                test_profile={
+                    "version": "eval-tower-tier-profile-v1",
+                    "tier": 2,
+                    "core_id": f"legacy_pool_t2_seed_{seed}_n{requested_n}",
+                    "seed": int(seed),
+                    "requested_n": requested_n,
+                    "n_questions": 0,
+                    "promotion_eval": bool(promotion_eval),
+                },
+            )
 
         resolved_trial_id = self._resolve_trial_id(trial_id)
         requested_n = int(n)
