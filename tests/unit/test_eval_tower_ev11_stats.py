@@ -66,8 +66,8 @@ def test_math_adapter_flips_both_suites_to_math_verify() -> None:
 
     assert gsm["scoring_method"] == "math_verify"
     assert m500["scoring_method"] == "math_verify"
-    # GSM8K must request a \boxed{} answer so _score_math_verify can extract it
-    # (it does not read the old <answer></answer> tags).
+    # GSM8K must request a \boxed{} answer so math_verify can parse it natively
+    # (the EV-11 path does not read the old <answer></answer> tags).
     assert "\\boxed{}" in gsm["prompt"]
     assert "<answer>" not in gsm["prompt"]
 

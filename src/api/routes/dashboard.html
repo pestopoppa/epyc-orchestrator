@@ -4165,10 +4165,24 @@ async function updatePareto() {
         const d = await fetchJSON(url);
         const noteEl = document.getElementById('pareto-era-note');
         if (noteEl) {
+            const activeEras = d.active_instrument_eras || {};
+            const activeSpeedEra = activeEras.autopilot_speed || '';
+            const activeCpuEra = activeEras.cpu_bench || '';
+            const eraParts = [];
+            if (activeSpeedEra) eraParts.push(`current speed era ${activeSpeedEra}`);
+            if (activeCpuEra) eraParts.push(`cpu ${activeCpuEra}`);
+            if (d.frontier_rerun_required && d.frontier_rerun_required.required) {
+                eraParts.push('frontier rerun required');
+            }
             if (d.available && Array.isArray(d.eras) && d.eras.length) {
-                noteEl.textContent = 'era clouds from instrument_eras.yaml · pre-E2 speeds ×0.5 (double-count fix) · cross-era view is comparative, not decision-grade';
+                eraParts.push('era clouds from instrument_eras.yaml');
+                eraParts.push('pre-E2 speeds ×0.5 (double-count fix)');
+                eraParts.push('cross-era view is comparative, not decision-grade');
+                noteEl.textContent = eraParts.join(' · ');
             } else if (d.available && d.era_registry_error) {
                 noteEl.textContent = '⚠ era registry: ' + d.era_registry_error;
+            } else if (eraParts.length) {
+                noteEl.textContent = eraParts.join(' · ');
             } else {
                 noteEl.textContent = '';
             }

@@ -1,0 +1,32 @@
+{
+  "allow_autopilot_active": false,
+  "api_url": "http://localhost:8000",
+  "applied": false,
+  "blockers": [],
+  "confirm_clean_window": true,
+  "decision_grade": false,
+  "decision_grade_notes": [
+    "requires --apply --confirm-clean-window",
+    "requires AutoPilot inactive unless --allow-autopilot-active",
+    "verifier-model pass (EV-5/7/8) is MODEL-DOWNLOAD gated"
+  ],
+  "full": false,
+  "generated_at": "2026-07-20T03:37:30+00:00",
+  "mode": "math_rebaseline",
+  "n": 50,
+  "pin_command": ".venv/bin/python scripts/benchmark/eval_batch_serving_evaltower_window.py --mode math_rebaseline --roles worker_general --scoring math_verify --n 50 --seed 42 --api-url http://localhost:8000 --apply --confirm-clean-window",
+  "preflight": {
+    "autopilot_active": false
+  },
+  "result": null,
+  "roles": [
+    "worker_general"
+  ],
+  "scoring": "math_verify",
+  "seed": 42,
+  "split": null,
+  "status": "plan_only",
+  "suite": null,
+  "verifier": null,
+  "verifier_gate": null
+}

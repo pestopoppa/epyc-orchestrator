@@ -22,9 +22,10 @@ Two responsibilities, cleanly split:
 
   2. **Execution bridge** (env-flag-gated ``AUTOPILOT_SCREENING_TIER_INFERENCE=1``,
      DEFAULT OFF): with the flag OFF the resolved queue is returned as a dry-run
-     plan and NO inference happens. With the flag ON, drive the eval-tower over the
-     queue via the placement queue, collect per-pairing FA/FR/CR estimates, and
-     emit them as JSONL. The execution path is modeled on
+     plan and NO inference happens. With the flag ON, drive the eval over the
+     current forced-direct review bridge, explicitly recording that live transport
+     separately from the planned placement queue, collect per-pairing FA/FR/CR
+     estimates, and emit them as JSONL. The execution path is modeled on
      ``bsv_paired_runner.py`` (deferred ``EvalTower`` import, autopilot-stopped
      assumption) and is intentionally NEVER reached by the tests.
 
@@ -78,13 +79,18 @@ SCREENING_TIER_INFERENCE_ENV = "AUTOPILOT_SCREENING_TIER_INFERENCE"
 
 RUNNER_VERSION = "screening-tier-runner-v1"
 
-# Placement-queue transport constants (RM-3 discipline). These mirror the kwargs
-# eval_tower._eval_question already sets on its orchestrator calls, so a screening
-# trial rides the SAME background/eval_batch placement path a normal autopilot eval
-# fan-out uses — it is never a foreground /chat request.
+# Placement-queue transport constants (RM-3 plan discipline). Dry-run queue specs
+# stay pinned to placement_queue so future wiring can be checked without running
+# inference.
 PLACEMENT_QUEUE_TRANSPORT = "placement_queue"
 PLACEMENT_REQUEST_PRIORITY = "background"
 PLACEMENT_WORKLOAD_CLASS = "eval_batch"
+
+# Current live execution bridge. The probe still uses call_orchestrator_forced
+# with force_mode=direct, so result metadata must not claim actual placement-queue
+# execution even though the resolved plan is placement-queue-shaped.
+FORCED_DIRECT_CHAT_TRANSPORT = "forced_direct_chat"
+FORCED_DIRECT_FORCE_MODE = "direct"
 
 DEFAULT_CORPUS_MANIFEST = Path(
     "/mnt/raid0/llm/datasets/nearmiss-corpus-v1/manifest.json"
@@ -119,6 +125,61 @@ def _load_review_policy_trials():
 def _env_flag_enabled(name: str) -> bool:
     """True iff env var ``name`` is a truthy flag (matches actions._env_flag_enabled)."""
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def load_row_ids(path: Path) -> list[str]:
+    """Load a newline-delimited row-id allowlist.
+
+    Blank lines and ``#`` comments are ignored. Duplicates are removed while
+    preserving first-seen order so a row-id file can be used both as a filter and
+    as a stable provenance object.
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    with path.open("r", encoding="utf-8") as fh:
+        for raw in fh:
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            # Allow trailing comments in hand-written run sheets.
+            row_id = line.split("#", 1)[0].strip()
+            if not row_id or row_id in seen:
+                continue
+            seen.add(row_id)
+            out.append(row_id)
+    return out
+
+
+def row_id_filter_summary(path: Path) -> dict[str, Any]:
+    row_ids = load_row_ids(path)
+    digest = hashlib.sha256(
+        ("\n".join(row_ids) + ("\n" if row_ids else "")).encode("utf-8")
+    ).hexdigest()
+    return {
+        "row_id_filter_path": str(path),
+        "row_id_filter_n": len(row_ids),
+        "row_id_filter_sha256": digest,
+    }
+
+
+def attach_row_id_filter(plan: dict[str, Any], row_ids_path: Path | None) -> dict[str, Any]:
+    """Return ``plan`` with row-id filter provenance attached to the corpus slice."""
+    if row_ids_path is None:
+        return plan
+    summary = row_id_filter_summary(row_ids_path)
+    out = dict(plan)
+    corpus_slice = dict(out.get("corpus_slice") or {})
+    corpus_slice.update(summary)
+    out["corpus_slice"] = corpus_slice
+    provenance = dict(out.get("provenance") or {})
+    provenance.update(summary)
+    out["provenance"] = provenance
+    note = "row-id allowlist attached; live execution must filter to this slice."
+    notes = list(out.get("notes") or [])
+    if note not in notes:
+        notes.append(note)
+    out["notes"] = notes
+    return out
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -218,6 +279,18 @@ class ResolvedScreeningQueue:
             "notes": list(self.notes),
             "inference_required": self.inference_required,
         }
+
+
+def live_execution_transport_summary() -> dict[str, Any]:
+    """Actual transport used by the env-gated live bridge today."""
+    return {
+        "transport": FORCED_DIRECT_CHAT_TRANSPORT,
+        "planned_transport": PLACEMENT_QUEUE_TRANSPORT,
+        "force_mode": FORCED_DIRECT_FORCE_MODE,
+        "request_priority": PLACEMENT_REQUEST_PRIORITY,
+        "workload_class": PLACEMENT_WORKLOAD_CLASS,
+        "uses_chat_endpoint": True,
+    }
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -440,7 +513,7 @@ def build_and_resolve(
         corpus_manifest=corpus_manifest,
         per_pairing_n=per_pairing_n,
         eval_tier=eval_tier,
-        max_pairings=max_pairings,
+        max_pairings=0,
         domain=domain,
     )
     if error is not None or plan is None:
@@ -449,7 +522,7 @@ def build_and_resolve(
         plan.to_dict(),
         pool_gen_output,
         cap_per_pairing=cap_per_pairing,
-        max_pairings=0,  # plan already applied max_pairings; don't double-truncate
+        max_pairings=max_pairings,
         prune_unfit=prune_unfit,
         priority=priority,
     )
@@ -556,6 +629,7 @@ def iter_judgeable_rows(
     rows_path: Path,
     *,
     domain: str | None = None,
+    row_ids: set[str] | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Lazily yield judgeable corpus rows (optionally filtered to one domain)."""
     with rows_path.open("r", encoding="utf-8") as fh:
@@ -567,6 +641,10 @@ def iter_judgeable_rows(
                 row = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            if row_ids is not None:
+                rid = str(row.get("row_id") or row.get("candidate_id") or "")
+                if rid not in row_ids:
+                    continue
             if domain and domain != "all" and str(row.get("domain")) != domain:
                 continue
             if is_judgeable_row(row):
@@ -614,58 +692,62 @@ def _default_reviewer_probe(
     row: dict[str, Any],
     tower: Any,
 ) -> dict[str, Any]:  # pragma: no cover - inference path
-    """Send ONE (task, candidate) reviewer judgement over the placement queue.
+    """Send ONE P-REV-shaped reviewer judgement over the current live bridge.
 
-    This is the real inference seam. It reuses the SAME transport eval_tower uses
-    internally — ``call_orchestrator_forced`` with ``request_priority=background``
-    and ``workload_class=eval_batch`` (the placement-queue path), pinning
-    ``force_role`` to the reviewer under test — so a screening judgement is never a
-    foreground ``/chat`` request. Returns a decision row shaped for
-    ``review_policy_trials.reviewer_calibration_from_decisions`` +
-    ``consistency_rate``: ``{"decision","gate","latency_ms"}``.
+    This is the real inference seam. It currently uses
+    ``call_orchestrator_forced`` with ``force_mode=direct`` plus
+    ``request_priority=background`` and ``workload_class=eval_batch``, pinning
+    ``force_role`` to the reviewer under test. The prompt/schema/parser are
+    reused from the P-REV-1 direct corpus runner so RM-3 live screening does not
+    silently fall back to the old one-token APPROVE/REJECT probe.
 
     Never exercised by the unit tests (the whole execution bridge is env-gated and
     unreached under the zero-inference constraint).
     """
     import time as _time
 
-    # Deferred import of the orchestrator client (same source eval_tower uses).
+    # Deferred imports: no live-run dependencies are imported in dry-run/tests.
+    _orch_bench = str(ORCH_ROOT / "scripts" / "benchmark")
     _research = Path("/mnt/raid0/llm/epyc-inference-research")
     _bench = str(_research / "scripts" / "benchmark")
-    if _bench not in sys.path:
-        sys.path.insert(0, _bench)
+    for _path in (_orch_bench, _bench):
+        if _path not in sys.path:
+            sys.path.insert(0, _path)
     from seeding_orchestrator import call_orchestrator_forced  # type: ignore
+    import glm52_reviewer_corpus_direct_runner as p_rev  # type: ignore
 
-    task = str(row.get("task") or "")
-    candidate = str(row.get("candidate") or "")
-    prompt = (
-        "You are a strict reviewer. Decide whether the CANDIDATE answer to the "
-        "TASK is acceptable. Reply with a single token: APPROVE or REJECT.\n\n"
-        f"TASK:\n{task}\n\nCANDIDATE:\n{candidate}\n\nDECISION:"
+    prompt, prompt_meta = p_rev.build_review_prompt(
+        row,
+        max_field_chars=p_rev.DEFAULT_MAX_FIELD_CHARS,
     )
+    schema = p_rev.binary_review_decision_response_schema()
     start = _time.time()
     resp = call_orchestrator_forced(
         prompt=prompt,
         force_role=job.reviewer or "",
-        force_mode="",
+        force_mode=FORCED_DIRECT_FORCE_MODE,
         url=getattr(tower, "url", "http://localhost:8000"),
         timeout=getattr(tower, "timeout", 300),
-        request_priority=PLACEMENT_REQUEST_PRIORITY,   # placement queue, not /chat
+        request_priority=PLACEMENT_REQUEST_PRIORITY,
         workload_class=PLACEMENT_WORKLOAD_CLASS,
+        max_tokens=256,
+        output_schema=schema,
     )
     latency_ms = (_time.time() - start) * 1000.0
-    answer = str(resp.get("answer") or "").strip().lower()
-    if "approve" in answer or "accept" in answer:
-        decision = "approve"
-    elif "reject" in answer:
-        decision = "reject"
-    else:
-        decision = "abstain"  # unparseable -> excluded from FA/FR by the calibrator
+    answer = str(resp.get("answer") or "").strip()
+    parsed, parse_failure = p_rev.parse_review_decision_text(answer)
+    decision = str(parsed.get("decision")) if parsed else "parse_error"
     return {
         "decision": decision,
         "gate": gate_from_gold_label(row.get("gold_label")),
         "latency_ms": latency_ms,
         "row_id": row.get("row_id"),
+        "confidence": parsed.get("confidence") if parsed else None,
+        "parse_failure": parse_failure,
+        "prompt_meta": prompt_meta,
+        "output_schema": "binary_review_decision_response_schema",
+        "review_mode": prompt_meta.get("review_mode"),
+        "execution_transport": live_execution_transport_summary(),
     }
 
 
@@ -674,19 +756,23 @@ def execute_screening_queue(
     *,
     output_path: Path | None = None,
     corpus_rows_path: Path | None = None,
+    row_ids_path: Path | None = None,
     tower: Any | None = None,
     tower_factory: Callable[[], Any] | None = None,
     reviewer_probe: Callable[[TrialJobSpec, dict[str, Any], Any], dict[str, Any]] | None = None,
     seed: int = 42,
 ) -> list[dict[str, Any]]:  # pragma: no cover - inference path
-    """Drive the resolved queue over the placement queue and collect FA/FR/CR.
+    """Drive the resolved queue over the live review bridge and collect FA/FR/CR.
 
     Reached ONLY when ``AUTOPILOT_SCREENING_TIER_INFERENCE=1`` (via
     ``run_screening_tier``) or called directly by a future caller that owns the
     inference decision. Autopilot-stopped assumption (bsv pattern): the caller is
     responsible for the no-concurrent-inference window; this function never touches
     autopilot lifecycle/state. Emits one JSONL row per pairing to ``output_path``
-    (append) and returns the same rows. Does NOT write the batch ledger.
+    (append) and returns the same rows. Does NOT write the batch ledger. Result
+    metadata records both the planned placement-queue transport and the actual
+    forced-direct live bridge so observation rows cannot masquerade as
+    placement-queue execution evidence.
     """
     tower = tower or (tower_factory or _default_tower)()
     probe = reviewer_probe or _default_reviewer_probe
@@ -703,13 +789,17 @@ def execute_screening_queue(
         rows_path = default_rows
 
     domain = str(resolved.corpus_slice.get("domain", "all"))
-    pool = list(iter_judgeable_rows(Path(rows_path), domain=domain))
+    row_ids = set(load_row_ids(row_ids_path)) if row_ids_path is not None else None
+    pool = list(iter_judgeable_rows(Path(rows_path), domain=domain, row_ids=row_ids))
 
     results: list[dict[str, Any]] = []
     for job in resolved.jobs:
         sample = select_rows_for_job(pool, n=job.n, seed_key=f"{seed}:{job.pairing_id}")
         decisions = [probe(job, row, tower) for row in sample]
         result = summarize_pairing(job, decisions)
+        result["planned_transport"] = result["transport"]
+        result["transport"] = FORCED_DIRECT_CHAT_TRANSPORT
+        result["execution_transport"] = live_execution_transport_summary()
         results.append(result)
         if output_path is not None:
             _append_jsonl(Path(output_path), result)
@@ -734,6 +824,7 @@ def run_screening_tier(
     corpus_manifest: dict[str, Any] | None = None,
     output_path: Path | None = None,
     corpus_rows_path: Path | None = None,
+    row_ids_path: Path | None = None,
     cap_per_pairing: int = 0,
     max_pairings: int = 0,
     prune_unfit: bool = True,
@@ -748,12 +839,13 @@ def run_screening_tier(
     DEFAULT (``AUTOPILOT_SCREENING_TIER_INFERENCE`` unset/false): returns the
     resolved queue as a dry-run plan and runs NO inference — this is the entire
     surface the unit tests exercise. When the flag is set the resolved queue is
-    driven over the placement queue via :func:`execute_screening_queue`.
+    driven over the live execution bridge via :func:`execute_screening_queue`.
 
     ``plan`` may be a ``_screening_tier_plan`` dict (already generated by
     ``actions.py`` / ``plan_screening_tier``); the resolver joins it to
     ``pool_gen_output``. (Building a plan from scratch is :func:`build_and_resolve`.)
     """
+    plan = attach_row_id_filter(plan, row_ids_path)
     resolved = resolve_screening_queue(
         plan,
         pool_gen_output,
@@ -780,6 +872,7 @@ def run_screening_tier(
         resolved,
         output_path=output_path,
         corpus_rows_path=corpus_rows_path,
+        row_ids_path=row_ids_path,
         tower=tower,
         tower_factory=tower_factory,
         reviewer_probe=reviewer_probe,
@@ -791,6 +884,7 @@ def run_screening_tier(
         "inference_ran": True,
         "n_jobs": len(resolved.jobs),
         "output_path": str(output_path) if output_path else None,
+        "execution_transport": live_execution_transport_summary(),
         "resolved_queue": resolved.to_dict(),
         "results": results,
     }
@@ -843,6 +937,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="JSONL path for per-pairing FA/FR/CR results (execute path only)",
     )
     p.add_argument(
+        "--row-ids",
+        default=None,
+        help=(
+            "newline-delimited corpus row-id allowlist; attaches provenance in "
+            "dry-run and filters live execution to that exact slice"
+        ),
+    )
+    p.add_argument(
         "--run",
         action="store_true",
         help="attempt execution (STILL env-gated by "
@@ -875,13 +977,19 @@ def main(argv: list[str] | None = None) -> int:
             corpus_manifest=manifest,
             per_pairing_n=args.per_pairing_n,
             eval_tier=args.tier,
-            max_pairings=args.max_pairings,
+            max_pairings=0,
             domain=args.domain,
         )
         if error is not None or plan_obj is None:
             print(json.dumps({"error": error or "no plan"}, indent=2))
             return 2
         plan = plan_obj.to_dict()
+    row_ids_path = Path(args.row_ids) if args.row_ids else None
+    if row_ids_path is not None:
+        if not row_ids_path.exists():
+            print(json.dumps({"error": f"row-id file not found: {row_ids_path}"}, indent=2))
+            return 2
+        plan = attach_row_id_filter(plan, row_ids_path)
 
     if not args.run:
         # Pure resolution — no inference, whatever the env flag says.
@@ -889,9 +997,7 @@ def main(argv: list[str] | None = None) -> int:
             plan,
             pool_gen_output,
             cap_per_pairing=args.cap_per_pairing,
-            # plan already applied max_pairings when built here; still honor an
-            # explicit CLI cap when a prebuilt plan was passed in.
-            max_pairings=args.max_pairings if args.plan else 0,
+            max_pairings=args.max_pairings,
             prune_unfit=not args.no_prune,
             priority=not args.no_priority,
         )
@@ -903,8 +1009,9 @@ def main(argv: list[str] | None = None) -> int:
         pool_gen_output,
         corpus_manifest=manifest,
         output_path=Path(args.output) if args.output else None,
+        row_ids_path=row_ids_path,
         cap_per_pairing=args.cap_per_pairing,
-        max_pairings=args.max_pairings if args.plan else 0,
+        max_pairings=args.max_pairings,
         prune_unfit=not args.no_prune,
         priority=not args.no_priority,
         seed=args.seed,

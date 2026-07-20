@@ -14,6 +14,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -287,6 +288,35 @@ def test_max_pairings_truncates_after_priority():
 # --------------------------------------------------------------------------- #
 # Pure scoring helpers (no inference)
 # --------------------------------------------------------------------------- #
+def test_load_row_ids_dedupes_and_ignores_comments(tmp_path):
+    path = tmp_path / "row_ids.txt"
+    path.write_text(
+        "\n"
+        "# comment\n"
+        "r1\n"
+        "r2  # trailing comment\n"
+        "r1\n"
+        "\n"
+        "r3\n"
+    )
+    assert runner.load_row_ids(path) == ["r1", "r2", "r3"]
+    summary = runner.row_id_filter_summary(path)
+    assert summary["row_id_filter_n"] == 3
+    assert summary["row_id_filter_sha256"]
+
+
+def test_attach_row_id_filter_is_idempotent(tmp_path):
+    path = tmp_path / "row_ids.txt"
+    path.write_text("r1\nr2\n")
+    plan = _plan()
+    once = runner.attach_row_id_filter(plan, path)
+    twice = runner.attach_row_id_filter(once, path)
+    assert twice["corpus_slice"]["row_id_filter_n"] == 2
+    assert twice["provenance"]["row_id_filter_n"] == 2
+    note = "row-id allowlist attached; live execution must filter to this slice."
+    assert twice["notes"].count(note) == 1
+
+
 def test_is_judgeable_row():
     good = {"candidate": "42", "gold_label": "accept", "gold_confidence": "multi_oracle"}
     assert runner.is_judgeable_row(good)
@@ -338,6 +368,7 @@ def test_summarize_pairing_computes_fa_fr_cr():
     assert result["n_scored"] == 4
     assert result["n_conclusive"] == 4
     assert result["transport"] == "placement_queue"
+    assert "execution_transport" not in result
     assert result["observation_only"] is True
 
 
@@ -352,6 +383,127 @@ def test_select_rows_for_job_deterministic():
     assert a != c
     assert runner.select_rows_for_job(rows, n=0, seed_key="x") == []
     assert runner.select_rows_for_job([], n=5, seed_key="x") == []
+
+
+def test_execute_screening_queue_filters_to_row_ids(tmp_path):
+    rows_path = tmp_path / "rows.jsonl"
+    rows = [
+        {
+            "row_id": "keep_accept",
+            "candidate": "ok",
+            "gold_label": "accept",
+            "gold_confidence": "multi_oracle",
+            "task": "t1",
+        },
+        {
+            "row_id": "drop_reject",
+            "candidate": "bad",
+            "gold_label": "reject",
+            "gold_confidence": "multi_oracle",
+            "task": "t2",
+        },
+        {
+            "row_id": "keep_reject",
+            "candidate": "bad",
+            "gold_label": "reject",
+            "gold_confidence": "multi_oracle",
+            "task": "t3",
+        },
+    ]
+    rows_path.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    row_ids_path = tmp_path / "row_ids.txt"
+    row_ids_path.write_text("keep_accept\nkeep_reject\n")
+    resolved = runner.resolve_screening_queue(
+        _plan(per_pairing_n=10),
+        _pool_gen_output(),
+    )
+    seen = []
+
+    def _probe(job, row, tower):
+        seen.append(row["row_id"])
+        return {
+            "decision": "approve" if row["gold_label"] == "accept" else "reject",
+            "gate": runner.gate_from_gold_label(row["gold_label"]),
+            "latency_ms": 1.0,
+            "row_id": row["row_id"],
+        }
+
+    results = runner.execute_screening_queue(
+        resolved,
+        corpus_rows_path=rows_path,
+        row_ids_path=row_ids_path,
+        tower=object(),
+        reviewer_probe=_probe,
+    )
+    assert sorted(seen) == ["keep_accept", "keep_reject"]
+    assert results[0]["n_scored"] == 2
+    assert results[0]["reviewer_fa_rate"] == pytest.approx(0.0)
+    assert results[0]["reviewer_fr_rate"] == pytest.approx(0.0)
+    assert results[0]["planned_transport"] == "placement_queue"
+    assert results[0]["transport"] == "forced_direct_chat"
+    assert results[0]["execution_transport"]["uses_chat_endpoint"] is True
+    assert results[0]["execution_transport"]["force_mode"] == "direct"
+
+
+def test_default_reviewer_probe_uses_p_rev_schema_and_forced_direct(monkeypatch):
+    """The live default probe must stay P-REV-shaped, not one-token free-form."""
+    captured: dict = {}
+    schema = {"type": "object", "required": ["decision"]}
+
+    def _fake_call_orchestrator_forced(**kwargs):
+        captured.update(kwargs)
+        return {
+            "answer": json.dumps(
+                {
+                    "decision": "approve",
+                    "confidence": 0.73,
+                    "blocking": {"tripwire": False},
+                    "evidence": {"basis": "diff fixes behavior", "risk": "no blocker found"},
+                }
+            )
+        }
+
+    fake_seeding = types.SimpleNamespace(
+        call_orchestrator_forced=_fake_call_orchestrator_forced
+    )
+    fake_p_rev = types.SimpleNamespace(
+        DEFAULT_MAX_FIELD_CHARS=24000,
+        build_review_prompt=lambda row, *, max_field_chars: (
+            f"P-REV PROMPT {row['row_id']} {max_field_chars}",
+            {"review_mode": "patch_diff_strict", "prompt_chars": 123},
+        ),
+        binary_review_decision_response_schema=lambda: schema,
+        parse_review_decision_text=lambda text: (json.loads(text), None),
+    )
+    monkeypatch.setitem(sys.modules, "seeding_orchestrator", fake_seeding)
+    monkeypatch.setitem(sys.modules, "glm52_reviewer_corpus_direct_runner", fake_p_rev)
+
+    job = runner.TrialJobSpec(
+        pairing_id="archA__revB__grd", architect="archA", reviewer="revB",
+        grader="grd", anchor_arm=None, self_review=False, cross_family=True,
+        staged_involved=True, n=1, eval_tier="T0", corpus_id="nearmiss-v1",
+        domain="code", corpus_content_sha256="abc", corpus_n_rows=10,
+        coresidency_fits=True, priority_rank=0,
+    )
+    row = {"row_id": "ccrab-1", "task": "Fix bug", "candidate": "diff", "gold_label": "accept"}
+    tower = types.SimpleNamespace(url="http://orch", timeout=123)
+
+    out = runner._default_reviewer_probe(job, row, tower)
+
+    assert captured["prompt"] == "P-REV PROMPT ccrab-1 24000"
+    assert captured["force_role"] == "revB"
+    assert captured["force_mode"] == "direct"
+    assert captured["request_priority"] == "background"
+    assert captured["workload_class"] == "eval_batch"
+    assert captured["max_tokens"] == 256
+    assert captured["output_schema"] is schema
+    assert out["decision"] == "approve"
+    assert out["confidence"] == pytest.approx(0.73)
+    assert out["gate"] == "pass"
+    assert out["review_mode"] == "patch_diff_strict"
+    assert out["execution_transport"]["transport"] == "forced_direct_chat"
+    assert out["execution_transport"]["planned_transport"] == "placement_queue"
+    assert out["execution_transport"]["uses_chat_endpoint"] is True
 
 
 # --------------------------------------------------------------------------- #
@@ -390,6 +542,9 @@ def test_env_flag_on_routes_to_execute_bridge(monkeypatch):
     assert out["mode"] == "execute"
     assert out["inference_ran"] is True
     assert out["results"] == [{"pairing_id": "archA__revB__grd", "reviewer_fa_rate": 0.0}]
+    assert out["execution_transport"]["transport"] == "forced_direct_chat"
+    assert out["execution_transport"]["planned_transport"] == "placement_queue"
+    assert out["execution_transport"]["uses_chat_endpoint"] is True
     assert isinstance(captured["resolved"], runner.ResolvedScreeningQueue)
 
 
@@ -433,6 +588,83 @@ def test_main_dry_run_prints_resolved_queue(tmp_path, capsys, monkeypatch):
     assert all(j["n"] == 6 for j in payload["jobs"])
     # dry-run writes no results file.
     assert not (tmp_path / "results.jsonl").exists()
+
+
+def test_main_dry_run_accepts_row_id_filter(tmp_path, capsys, monkeypatch):
+    monkeypatch.delenv(runner.SCREENING_TIER_INFERENCE_ENV, raising=False)
+    pool_path = tmp_path / "pool.json"
+    pool_path.write_text(json.dumps(_pool_gen_output()))
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps({
+        "corpus_id": "nearmiss-v1",
+        "total_rows": 500,
+        "content_sha256": "cafe",
+        "schema_version": "nearmiss_corpus_row.v1",
+        "counts": {"per_domain": {"code": 200}},
+        "gate_worthy_multi_oracle": 300,
+    }))
+    row_ids_path = tmp_path / "row_ids.txt"
+    row_ids_path.write_text("r1\nr2\n")
+
+    code = runner.main([
+        "--pool-gen", str(pool_path),
+        "--corpus-manifest", str(manifest_path),
+        "--row-ids", str(row_ids_path),
+    ])
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    corpus_slice = payload["corpus_slice"]
+    assert corpus_slice["row_id_filter_n"] == 2
+    assert corpus_slice["row_id_filter_path"] == str(row_ids_path)
+    assert payload["provenance"]["row_id_filter_sha256"]
+
+
+def test_main_max_pairings_caps_after_priority(tmp_path, capsys, monkeypatch):
+    monkeypatch.delenv(runner.SCREENING_TIER_INFERENCE_ENV, raising=False)
+    pool = _pool_gen_output()
+    for p in pool["pairings"]:
+        p["coresidency"] = {"fits": True}
+    # Put a lower-priority plain pairing first; CLI must still keep anchor+staged.
+    pool["pairings"] = [
+        pool["pairings"][2],  # plain cross-family
+        pool["pairings"][1],  # anchor A1
+        pool["pairings"][0],  # staged
+    ]
+    pool_path = tmp_path / "pool.json"
+    pool_path.write_text(json.dumps(pool))
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps({
+        "corpus_id": "nearmiss-v1",
+        "total_rows": 500,
+        "content_sha256": "cafe",
+        "schema_version": "nearmiss_corpus_row.v1",
+        "counts": {"per_domain": {"code": 200}},
+        "gate_worthy_multi_oracle": 300,
+    }))
+
+    code = runner.main([
+        "--pool-gen", str(pool_path),
+        "--corpus-manifest", str(manifest_path),
+        "--max-pairings", "2",
+    ])
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["n_jobs"] == 2
+    assert [j["pairing_id"] for j in payload["jobs"]] == [
+        "archA__archA__grd",
+        "archA__revB__grd",
+    ]
+
+
+def test_main_errors_on_missing_row_id_filter(tmp_path, capsys):
+    pool_path = tmp_path / "pool.json"
+    pool_path.write_text(json.dumps(_pool_gen_output()))
+    code = runner.main([
+        "--pool-gen", str(pool_path),
+        "--row-ids", str(tmp_path / "missing.txt"),
+    ])
+    assert code == 2
+    assert "row-id file not found" in capsys.readouterr().out
 
 
 def test_main_errors_on_empty_pool(tmp_path, capsys):

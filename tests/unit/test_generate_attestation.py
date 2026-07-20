@@ -114,6 +114,36 @@ server_mode:
     ]
 
 
+def test_manifest_port_map_can_satisfy_live_port_attestation() -> None:
+    registry_ports: dict[int, list[dict[str, object]]] = {}
+    manifest_ports = {
+        8185: [
+            {
+                "role": "ingest_long_context",
+                "model_name": None,
+                "model_path": None,
+                "registry_section": "stack_manifest.ingest_long_context",
+                "port_kind": "stack_manifest_hot",
+            }
+        ]
+    }
+
+    ports = attest.merge_port_maps(registry_ports, manifest_ports)
+    summary = attest.summarize(
+        [
+            {
+                "pid": 123,
+                "kind": "llama_server",
+                "port": 8185,
+                "registry_matches": ports[8185],
+                "dynamic_linking": {"issues": []},
+            }
+        ]
+    )
+
+    assert summary["issue_count"] == 0
+
+
 def test_llama_resolution_detects_cross_tree_mismatch() -> None:
     status = attest.llama_resolution_status(
         "/mnt/raid0/llm/ik_llama.cpp/build/bin/llama-server",
@@ -183,6 +213,62 @@ def test_collect_feature_flags_detects_worker_drift(monkeypatch, tmp_path: Path)
             "actual": "0",
         }
     ]
+
+
+def test_collect_feature_flags_uses_runtime_file_for_worker_intent(
+    monkeypatch, tmp_path: Path
+) -> None:
+    runtime_flags = tmp_path / "runtime_flags.json"
+    runtime_flags.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "flags": {
+                    "react_mode": {
+                        "value": False,
+                        "set_by": "unit",
+                        "ts": "2026-07-20T00:00:00+00:00",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    proc_root = tmp_path / "proc"
+    pid_dir = proc_root / "101"
+    pid_dir.mkdir(parents=True)
+    pid_dir.joinpath("environ").write_bytes(
+        (
+            "ORCHESTRATOR_REACT_MODE=1\0"
+            "ORCHESTRATOR_FEATURE_REACT_MODE=1\0"
+            f"ORCHESTRATOR_RUNTIME_FLAGS_PATH={runtime_flags}\0"
+        ).encode()
+    )
+    responses = [
+        {
+            "pid": 101,
+            "flags": {"react_mode": False},
+            "sources": {"react_mode": f"runtime_file:{runtime_flags}"},
+        }
+    ]
+
+    monkeypatch.setattr(attest, "_fetch_json", lambda _url: responses.pop(0))
+    monkeypatch.setattr(
+        attest,
+        "load_declared_feature_env",
+        lambda: {
+            "status": "ok",
+            "env": {"ORCHESTRATOR_FEATURE_REACT_MODE": "1"},
+            "flag_env_names": {"react_mode": "ORCHESTRATOR_FEATURE_REACT_MODE"},
+            "flags": {"react_mode": True},
+        },
+    )
+
+    report = attest.collect_feature_flags(polls=1, delay_s=0, proc_root=proc_root)
+
+    assert report["status"] == "ok"
+    assert report["intent_diffs"] == []
+    assert report["env_diffs"] == []
 
 
 def test_build_serving_config_reports_numa_match() -> None:

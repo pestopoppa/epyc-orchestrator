@@ -161,6 +161,23 @@ def test_score_math_rebaseline_answers_uses_real_math_verify() -> None:
     assert scored2 == [True, True]
 
 
+def test_score_math_rebaseline_handles_nested_boxed_latex() -> None:
+    questions = [
+        {
+            "id": "math500_frac_00001",
+            "prompt": "Return the value. Put your final answer in \\boxed{}.",
+            "expected": "\\frac{1}{2}",
+            "scoring_method": "math_verify",
+            "scoring_config": {"extraction_mode": "expr"},
+        }
+    ]
+
+    assert score_math_rebaseline_answers(
+        questions,
+        ["Work omitted. Therefore the answer is \\boxed{\\frac{1}{2}}."],
+    ) == [True]
+
+
 def test_score_math_rebaseline_hard_fails_without_math_verify(monkeypatch) -> None:
     # EV-11: a missing math-verify must RAISE, never silently fall back.
     monkeypatch.setitem(sys.modules, "math_verify", None)

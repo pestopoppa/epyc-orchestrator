@@ -28,6 +28,7 @@ from src.config import (
     get_config,
     reset_config,
 )
+from src.config.models import reset_stack_prior_server_url_cache
 
 _RETIRED_ARCHITECT_ROLE = "architect_" "coding"
 
@@ -251,6 +252,13 @@ class TestPathsConfig:
 class TestServerURLsConfig:
     """Tests for ServerURLsConfig and as_dict()."""
 
+    @pytest.fixture(autouse=True)
+    def _ignore_live_runtime_facts(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("ORCHESTRATOR_IGNORE_RUNTIME_STACK_FACTS", "1")
+        reset_stack_prior_server_url_cache()
+        yield
+        reset_stack_prior_server_url_cache()
+
     def test_as_dict_excludes_service_urls(self) -> None:
         cfg = ServerURLsConfig()
         d = cfg.as_dict()
@@ -267,6 +275,7 @@ class TestServerURLsConfig:
             "coder_escalation",
             "worker",
             "worker_general",
+            "toolrunner",
             "worker_explore",
             "worker_math",
             "worker_vision",
@@ -287,9 +296,10 @@ class TestServerURLsConfig:
 
     def test_default_frontdoor_url(self) -> None:
         cfg = ServerURLsConfig()
-        # Multi-instance "full:" prefix for ConcurrencyAwareBackend
-        assert cfg.frontdoor.startswith("full:")
-        assert "http://localhost:8080" in cfg.frontdoor
+        assert cfg.frontdoor.startswith("full:http://localhost:8080")
+        assert "http://localhost:8180" in cfg.frontdoor
+        assert "http://localhost:8280" in cfg.frontdoor
+        assert "http://localhost:8380" in cfg.frontdoor
 
     def test_default_architect_urls(self) -> None:
         cfg = ServerURLsConfig()
@@ -354,6 +364,52 @@ roles:
             assert cfg.worker_fast == "http://localhost:8102"
 
         reset_config()
+
+    def test_quarter_numa_mode_urls_skip_dead_full_ports(self, tmp_path: Path) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "ORCHESTRATOR_PATHS_STACK_PRIORS_PATH": str(tmp_path / "missing.yaml"),
+                "ORCHESTRATOR_STACK_NUMA_MODE": "quarter",
+            },
+        ):
+            reset_stack_prior_server_url_cache()
+            cfg = ServerURLsConfig()
+            assert cfg.frontdoor == (
+                "http://localhost:8080,http://localhost:8180,"
+                "http://localhost:8280,http://localhost:8380"
+            )
+            assert cfg.worker_general == (
+                "http://localhost:8082,http://localhost:8182,"
+                "http://localhost:8282,http://localhost:8382"
+            )
+            assert cfg.ingest_long_context == (
+                "http://localhost:8185,http://localhost:8285,"
+                "http://localhost:8385,http://localhost:8485"
+            )
+            assert "8070" not in cfg.frontdoor
+            assert "8072" not in cfg.worker_general
+            assert "8085" not in cfg.ingest_long_context
+            assert not cfg.frontdoor.startswith("full:")
+
+        reset_stack_prior_server_url_cache()
+
+    def test_both_numa_mode_urls_keep_full_prefix(self, tmp_path: Path) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "ORCHESTRATOR_PATHS_STACK_PRIORS_PATH": str(tmp_path / "missing.yaml"),
+                "ORCHESTRATOR_STACK_NUMA_MODE": "both",
+            },
+        ):
+            reset_stack_prior_server_url_cache()
+            cfg = ServerURLsConfig()
+            assert cfg.frontdoor.startswith("full:http://localhost:8070")
+            assert "http://localhost:8080" in cfg.frontdoor
+            assert cfg.worker_general.startswith("full:http://localhost:8072")
+            assert "http://localhost:8082" in cfg.worker_general
+
+        reset_stack_prior_server_url_cache()
 
 
 # ============================================================================

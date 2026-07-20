@@ -331,6 +331,45 @@ def load_registry_ports(path: Path) -> dict[int, list[dict[str, Any]]]:
     return ports
 
 
+def load_declared_stack_ports() -> dict[int, list[dict[str, Any]]]:
+    """Return launcher-declared ports that may not live in the lean registry."""
+    try:
+        from scripts.server.stack_manifest import HOT_SERVERS, WARM_SERVERS
+    except Exception:
+        return {}
+
+    ports: dict[int, list[dict[str, Any]]] = {}
+    for tier, servers in (("hot", HOT_SERVERS), ("warm", WARM_SERVERS)):
+        for server in servers:
+            port = server.get("port")
+            if not isinstance(port, int):
+                continue
+            for role in server.get("roles") or []:
+                _append_registry_port(
+                    ports,
+                    port,
+                    {
+                        "role": str(role),
+                        "model_name": None,
+                        "model_path": None,
+                        "registry_section": f"stack_manifest.{role}",
+                        "port_kind": f"stack_manifest_{tier}",
+                    },
+                )
+    return ports
+
+
+def merge_port_maps(
+    *maps: dict[int, list[dict[str, Any]]],
+) -> dict[int, list[dict[str, Any]]]:
+    ports: dict[int, list[dict[str, Any]]] = {}
+    for port_map in maps:
+        for port, entries in port_map.items():
+            for entry in entries:
+                _append_registry_port(ports, port, entry)
+    return ports
+
+
 def load_numa_ports() -> dict[int, dict[str, Any]]:
     try:
         from scripts.server.stack_numa import NUMA_CONFIG  # type: ignore[import-not-found]
@@ -359,7 +398,7 @@ def load_numa_ports() -> dict[int, dict[str, Any]]:
 def load_declared_feature_env() -> dict[str, Any]:
     try:
         from scripts.server.orchestrator_stack import _production_feature_env
-        from src.features import _FEATURE_REGISTRY
+        from src.features import _FEATURE_REGISTRY, runtime_flag_overrides, runtime_flags_path
     except Exception as exc:
         return {
             "status": "unavailable",
@@ -378,12 +417,57 @@ def load_declared_feature_env() -> dict[str, Any]:
         for name, env_name in flag_env_names.items()
         if env_name in env
     }
+    runtime_path = runtime_flags_path()
+    runtime_overrides = runtime_flag_overrides(runtime_path)
+    flags.update(runtime_overrides)
     return {
         "status": "ok",
         "env": env,
         "flag_env_names": flag_env_names,
         "flags": flags,
+        "runtime_flags_path": str(runtime_path),
+        "runtime_overrides": runtime_overrides,
     }
+
+
+def _feature_flags_from_env(env: dict[str, str]) -> tuple[dict[str, bool], dict[str, str]]:
+    try:
+        from src.features import (
+            ENV_PREFIX,
+            FEATURE_ENV_PREFIX,
+            RUNTIME_FLAGS_ENV,
+            _FEATURE_REGISTRY,
+            runtime_flag_overrides,
+            runtime_flags_path,
+        )
+    except Exception:
+        return {}, {}
+
+    flags: dict[str, bool] = {}
+    sources: dict[str, str] = {}
+    defaults = {spec.name: spec.default_test for spec in _FEATURE_REGISTRY}
+    for spec in _FEATURE_REGISTRY:
+        env_key = f"{ENV_PREFIX}{spec.env_var}"
+        feature_env_key = f"{FEATURE_ENV_PREFIX}{spec.env_var}"
+        if env_key in env:
+            parsed = _env_bool(env.get(env_key))
+            flags[spec.name] = defaults[spec.name] if parsed is None else parsed
+            sources[spec.name] = env_key
+        elif feature_env_key in env:
+            parsed = _env_bool(env.get(feature_env_key))
+            flags[spec.name] = defaults[spec.name] if parsed is None else parsed
+            sources[spec.name] = feature_env_key
+        else:
+            flags[spec.name] = defaults[spec.name]
+            sources[spec.name] = "default_test"
+
+    runtime_path = Path(env[RUNTIME_FLAGS_ENV]) if env.get(RUNTIME_FLAGS_ENV) else runtime_flags_path()
+    for name, value in runtime_flag_overrides(runtime_path).items():
+        if name not in flags:
+            continue
+        flags[name] = bool(value)
+        sources[name] = f"runtime_file:{runtime_path}"
+    return flags, sources
 
 
 def _fetch_json(url: str, timeout_s: float = 2.0) -> dict[str, Any]:
@@ -412,14 +496,18 @@ def _flag_heterogeneity(workers: dict[str, dict[str, Any]]) -> dict[str, dict[st
 def _expected_flag_diffs(
     workers: dict[str, dict[str, Any]],
     expected: dict[str, bool | None],
+    expected_by_worker: dict[str, dict[str, bool]] | None = None,
 ) -> list[dict[str, Any]]:
     diffs: list[dict[str, Any]] = []
+    expected_by_worker = expected_by_worker or {}
     for pid, data in workers.items():
         if data.get("error"):
             continue
         flags = data.get("flags", {}) or {}
         sources = data.get("sources", {}) or {}
+        worker_expected = expected_by_worker.get(pid) or expected
         for name, expected_value in expected.items():
+            expected_value = worker_expected.get(name, expected_value)
             if expected_value is None:
                 continue
             actual = flags.get(name)
@@ -495,6 +583,8 @@ def collect_feature_flags(
             time.sleep(delay_s)
 
     worker_env: dict[str, dict[str, str]] = {}
+    worker_expected_flags: dict[str, dict[str, bool]] = {}
+    worker_expected_sources: dict[str, dict[str, str]] = {}
     expected_env = declared.get("env", {}) or {}
     selected_env_names = set(expected_env)
     selected_env_names.add("ORCHESTRATOR_RUNTIME_FLAGS_PATH")
@@ -502,6 +592,10 @@ def collect_feature_flags(
         if not pid.isdigit():
             continue
         env = read_environ(int(pid), proc_root)
+        flags, sources = _feature_flags_from_env(env)
+        if flags:
+            worker_expected_flags[pid] = flags
+            worker_expected_sources[pid] = sources
         worker_env[pid] = {
             key: value
             for key, value in sorted(env.items())
@@ -511,7 +605,11 @@ def collect_feature_flags(
     errors = {pid: data.get("error") for pid, data in workers.items() if data.get("error")}
     hetero = _flag_heterogeneity(workers)
     expected_flags = declared.get("flags", {}) or {}
-    intent_diffs = _expected_flag_diffs(workers, expected_flags)
+    intent_diffs = _expected_flag_diffs(
+        workers,
+        expected_flags,
+        expected_by_worker=worker_expected_flags,
+    )
     env_diffs = _worker_env_diffs(worker_env, expected_env)
     too_few_workers = len([pid for pid in workers if pid.isdigit()]) < min_workers
     status = "ok"
@@ -526,6 +624,7 @@ def collect_feature_flags(
         "workers_seen": len(workers),
         "workers": workers,
         "worker_env": worker_env,
+        "worker_expected_sources": worker_expected_sources,
         "heterogeneous": hetero,
         "intent_diffs": intent_diffs,
         "env_diffs": env_diffs,
@@ -1067,7 +1166,9 @@ def build_report(
     generated_at: str | None = None,
 ) -> dict[str, Any]:
     registry_ports = load_registry_ports(registry)
-    processes = collect_processes(proc_root=proc_root, registry_ports=registry_ports)
+    declared_stack_ports = load_declared_stack_ports()
+    process_ports = merge_port_maps(registry_ports, declared_stack_ports)
+    processes = collect_processes(proc_root=proc_root, registry_ports=process_ports)
     numa_ports = load_numa_ports()
     serving_config = build_serving_config(processes, numa_ports=numa_ports)
     feature_flags = collect_feature_flags(
@@ -1092,6 +1193,9 @@ def build_report(
             "dcp_j7_results_root": str(dcp_j7_results_root),
         },
         "registry_ports": {str(port): entries for port, entries in sorted(registry_ports.items())},
+        "declared_stack_ports": {
+            str(port): entries for port, entries in sorted(declared_stack_ports.items())
+        },
         "numa_ports": {str(port): entry for port, entry in sorted(numa_ports.items())},
         "sections": {
             "processes": processes,

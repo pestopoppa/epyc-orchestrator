@@ -1,0 +1,161 @@
+{
+  "artifact_grade": "p_gpu_1_eligible_only_for_production_named_kernel_runs",
+  "continuity": {
+    "cpu_chars": 528,
+    "cpu_output_sha256": "d61597bf1fbc79b52e92f7920dd9a7092cbcc7114ee3bd355f1e920a4c591d96",
+    "first_char_divergence": null,
+    "gpu_chars": 528,
+    "gpu_output_sha256": "d61597bf1fbc79b52e92f7920dd9a7092cbcc7114ee3bd355f1e920a4c591d96",
+    "n_predict": 128,
+    "seed": 42
+  },
+  "cutover": {
+    "combined_output_sha256": "4681240cae78610feeeeaace4d4f8c1bb5ed8e2d99875cd45a24e32afacdf2ff",
+    "cpu_prefix_chars": 284,
+    "cpu_prefix_sha256": "18221e20c7d67903218a7ef934091592929c48876259da02579b711fea6ca08e",
+    "gpu_suffix_chars": 430,
+    "gpu_suffix_sha256": "b8430f5f6c633fd0ca4506319c2946789581715a7fe962b99cec5512b374e5e7"
+  },
+  "decision": {
+    "catch_up_reason": "llama_server_verify_api_unavailable",
+    "catch_up_supported": false,
+    "estimated_speedup": 7.051282051282051,
+    "long_running_trigger_tokens": 128,
+    "mode": "v1_reprefill_cutover_only",
+    "quant_policy": "same_quant_only",
+    "quant_transition": "iq2_m->iq2_m",
+    "rate_window_observed_tokens": 200,
+    "rate_window_tokens": 64,
+    "reason": "cutover",
+    "should_cutover": true,
+    "threshold_tokens": 150
+  },
+  "environment": {
+    "cpu_count": 192,
+    "platform": "Linux-6.14.0-37-generic-x86_64-with-glibc2.42",
+    "repo": {
+      "branch": "spec-dec-mtp-refresh-2026-06-22",
+      "commands": {
+        "branch": {
+          "argv": [
+            "git",
+            "branch",
+            "--show-current"
+          ],
+          "cwd": "/mnt/raid0/llm/epyc-orchestrator",
+          "ok": true,
+          "returncode": 0,
+          "stderr": "",
+          "stdout": "spec-dec-mtp-refresh-2026-06-22\n"
+        },
+        "head": {
+          "argv": [
+            "git",
+            "rev-parse",
+            "HEAD"
+          ],
+          "cwd": "/mnt/raid0/llm/epyc-orchestrator",
+          "ok": true,
+          "returncode": 0,
+          "stderr": "",
+          "stdout": "49743dfb3f0f815a3aa35d78c9bc06462d7d4ebd\n"
+        },
+        "status": {
+          "argv": [
+            "git",
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=no"
+          ],
+          "cwd": "/mnt/raid0/llm/epyc-orchestrator",
+          "ok": true,
+          "returncode": 0,
+          "stderr": "",
+          "stdout": " M orchestration/autopilot_baseline.yaml\n M orchestration/autopilot_journal_1.jsonl\n M orchestration/classifier_config.yaml\n M orchestration/repl_memory/q_scorer.py\n M scripts/autopilot/failure_blacklist.yaml\n M scripts/benchmark/axa2_live_cutover_bundle.py\n M scripts/benchmark/mtp_acceptance_report.py\n M scripts/benchmark/seeding_rewards.py\n M tests/unit/test_axa2_live_cutover_bundle.py\n M tests/unit/test_mtp_acceptance_report.py\n M tests/unit/test_q_scorer.py\n M tests/unit/test_seeding_rewards.py\n"
+        }
+      },
+      "head": "49743dfb3f0f815a3aa35d78c9bc06462d7d4ebd",
+      "path": "/mnt/raid0/llm/epyc-orchestrator",
+      "tracked_dirty_lines": 12
+    }
+  },
+  "execute": true,
+  "generated_at": "2026-07-20T05:29:17.350851+00:00",
+  "global_gpu_preflight": {
+    "allowed_pids": [
+      574608
+    ],
+    "exclusive_to_allowed": true,
+    "gpu_owner_pids": [
+      574608
+    ],
+    "ignored_zero_vram_pids": [
+      574294
+    ],
+    "occupied": true,
+    "ok": true,
+    "pids": [
+      574294,
+      574608
+    ],
+    "process_rows": [
+      {
+        "gpus": "1",
+        "pid": 574608,
+        "process_name": "llama-server",
+        "vram_used": 41206038528
+      },
+      {
+        "gpus": "0",
+        "pid": 574294,
+        "process_name": "llama-server",
+        "vram_used": 0
+      }
+    ],
+    "reason": "exclusive_to_allowed",
+    "stderr": "",
+    "stdout": "\n\n============================ ROCm System Management Interface ============================\n===================================== KFD Processes ======================================\nKFD process information:\nPID   \tPROCESS NAME\tGPU(s)\tVRAM USED  \tSDMA USED\tCU OCCUPANCY\t\n574608\tllama-server\t1     \t41206038528\t0        \t0           \t\n574294\tllama-server\t0     \t0          \t0        \t0           \t\n==========================================================================================\n================================== End of ROCm SMI Log ===================================\n",
+    "unexpected_pids": []
+  },
+  "inputs": {
+    "catch_up_supported": false,
+    "cpu_quant": "iq2_m",
+    "cpu_tps": 6.24,
+    "estimated_remaining_tokens": 500,
+    "generated_tokens": 200,
+    "gpu_available": true,
+    "gpu_quant": "iq2_m",
+    "gpu_resident": true,
+    "gpu_tps": 44.0,
+    "metadata": {
+      "protocol_note": "v1 re-prefill cutover only; no spec-dec catch-up",
+      "trace_id": "axa2-live-20260720T052836Z"
+    },
+    "rate_window_observed_tokens": 200,
+    "role": "architect_general"
+  },
+  "lease_released": true,
+  "no_server_start": true,
+  "output_dir": "/mnt/raid0/llm/epyc-orchestrator/orchestration/reports/axa2_live_cutover_runs/axa2-live-samequant-iq2-20260720T052826Z",
+  "policy": {
+    "allowed_quant_change_roles": [],
+    "allowed_roles": [
+      "architect_general"
+    ],
+    "enabled": true,
+    "lease_batch_weight": 0.25,
+    "lease_eval_weight": 0.1,
+    "lease_interactive_weight": 1.0,
+    "long_running_trigger_tokens": 128,
+    "min_cold_remaining_tokens": 350,
+    "min_resident_remaining_tokens": 150,
+    "min_speedup": 1.05,
+    "mode": "v1_reprefill_cutover_only",
+    "quant_policy": "same_quant_only",
+    "rate_window_tokens": 64
+  },
+  "production_v6_touch_authorized": false,
+  "schema": "epyc.axa2_live_cutover_bundle.v1",
+  "status": "executed",
+  "trace_id": "axa2-live-20260720T052836Z"
+}

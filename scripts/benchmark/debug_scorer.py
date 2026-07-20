@@ -710,25 +710,9 @@ def _score_math_verify(
         # Fallback to exact_match if math-verify not installed
         return _score_exact_match(answer, expected, config)
 
-    # Extract answer from \boxed{} if present
-    boxed = re.search(r'\\boxed\{(.+?)\}', answer, re.DOTALL)
-    candidate = boxed.group(1).strip() if boxed else answer.strip()
-
-    # Also try extracting from common answer patterns
-    if not boxed:
-        for pattern in [
-            r'(?:answer|result)\s*(?:is|=)\s*[:\s]*(.+?)(?:\.|$)',
-            r'####\s*(.+?)$',
-            r'=\s*(.+?)$',
-        ]:
-            m = re.search(pattern, answer, re.IGNORECASE | re.MULTILINE)
-            if m:
-                candidate = m.group(1).strip()
-                break
-
     try:
         gold = parse(expected)
-        pred = parse(candidate)
+        pred = parse(answer.strip())
         return verify(gold, pred)
     except Exception:
         # If parsing fails, fall back to exact_match

@@ -332,7 +332,7 @@ def test_compute_comparative_rewards_canonicalizes_worker_explore_degraded_fallb
         },
     )
 
-    assert 0.4 < rewards["worker_explore:direct"] < 0.5
+    assert rewards["worker_explore:direct"] == 0.5
 
 
 def test_compute_comparative_rewards_without_baseline_defaults_to_binary_success():

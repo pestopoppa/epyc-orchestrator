@@ -135,17 +135,29 @@ def process_snapshot(*, runner: Runner = subprocess.run) -> dict[str, Any]:
     }
 
 
-def parse_kfd_pids(stdout: str) -> list[int]:
-    pids: set[int] = set()
+def parse_kfd_process_rows(stdout: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
     for line in stdout.splitlines():
-        if "PID" in line or "====" in line or "End of ROCm" in line:
+        stripped = line.strip()
+        if not stripped or "PID" in stripped or "====" in stripped or "End of ROCm" in stripped:
             continue
-        for token in line.replace("|", " ").split():
-            if token.isdigit():
-                value = int(token)
-                if value > 100:
-                    pids.add(value)
-    return sorted(pids)
+        parts = stripped.replace("|", " ").split()
+        if not parts or not parts[0].isdigit():
+            continue
+        row: dict[str, Any] = {
+            "pid": int(parts[0]),
+            "process_name": parts[1] if len(parts) > 1 else "",
+            "gpus": parts[2] if len(parts) > 2 else "",
+            "vram_used": None,
+        }
+        if len(parts) > 3 and parts[3].isdigit():
+            row["vram_used"] = int(parts[3])
+        rows.append(row)
+    return rows
+
+
+def parse_kfd_pids(stdout: str) -> list[int]:
+    return sorted({int(row["pid"]) for row in parse_kfd_process_rows(stdout)})
 
 
 def gpu_occupancy(snapshot: dict[str, Any], *, allowed_pids: set[int] | None = None) -> dict[str, Any]:
@@ -164,15 +176,27 @@ def gpu_occupancy(snapshot: dict[str, Any], *, allowed_pids: set[int] | None = N
         }
     stdout = str(rocm.get("stdout") or "")
     stderr = str(rocm.get("stderr") or "")
-    pids = parse_kfd_pids(stdout)
-    occupied = not any(marker in stdout for marker in ROCM_NO_KFD_PIDS_MARKERS)
-    unexpected_pids = sorted(set(pids) - allowed_pids)
+    process_rows = parse_kfd_process_rows(stdout)
+    pids = sorted({int(row["pid"]) for row in process_rows})
+    gpu_owner_pids = sorted(
+        {
+            int(row["pid"])
+            for row in process_rows
+            if isinstance(row.get("vram_used"), int) and row["vram_used"] > 0
+        }
+    )
+    ignored_zero_vram_pids = sorted(set(pids) - set(gpu_owner_pids))
+    occupied = bool(gpu_owner_pids) and not any(marker in stdout for marker in ROCM_NO_KFD_PIDS_MARKERS)
+    unexpected_pids = sorted(set(gpu_owner_pids) - allowed_pids)
     exclusive_to_allowed = bool(allowed_pids) and occupied and not unexpected_pids
     return {
         "ok": True,
         "occupied": occupied,
         "exclusive_to_allowed": exclusive_to_allowed,
         "pids": pids,
+        "process_rows": process_rows,
+        "gpu_owner_pids": gpu_owner_pids,
+        "ignored_zero_vram_pids": ignored_zero_vram_pids,
         "unexpected_pids": unexpected_pids,
         "allowed_pids": sorted(allowed_pids),
         "reason": "exclusive_to_allowed" if exclusive_to_allowed else ("kfd_pids_present" if occupied else "no_kfd_pids"),

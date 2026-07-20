@@ -621,6 +621,62 @@ def test_launch_runtime_record_canonicalizes_worker_explore_kv_types() -> None:
 
     assert runtime["cache"]["kv_type_k"] == "q8_0"
     assert runtime["cache"]["kv_type_v"] == "q8_0"
+
+
+def test_launch_runtime_record_derives_reasoning_off_from_thinking_prior() -> None:
+    runtime = _launch_runtime_record(
+        role="frontdoor",
+        descriptor={
+            "acceleration": {
+                "enable_thinking": False,
+                "thinking_control": {
+                    "mode": "toggle_off",
+                    "source": "model.disable_thinking",
+                },
+            },
+        },
+        server_cfg={},
+        role_cfg={},
+        launch_cfg={
+            "effective_context_tokens": 8192,
+            "launch": {
+                "primary_roles": ["frontdoor"],
+                "modes": ["default"],
+                "requirements": {},
+                "runtime": {},
+            },
+        },
+    )
+
+    assert runtime["flags"]["reasoning"] == "off"
+
+
+def test_launch_runtime_record_does_not_force_reasoning_when_template_ignores_toggle() -> None:
+    runtime = _launch_runtime_record(
+        role="ingest_long_context",
+        descriptor={
+            "acceleration": {
+                "enable_thinking": None,
+                "thinking_control": {
+                    "mode": "template_ignores_enable_thinking",
+                    "source": "registry note",
+                },
+            },
+        },
+        server_cfg={},
+        role_cfg={},
+        launch_cfg={
+            "effective_context_tokens": 131072,
+            "launch": {
+                "primary_roles": ["ingest_long_context"],
+                "modes": ["default"],
+                "requirements": {},
+                "runtime": {},
+            },
+        },
+    )
+
+    assert runtime["flags"]["reasoning"] is None
     assert runtime["cache"]["slots"] == 1
 
 

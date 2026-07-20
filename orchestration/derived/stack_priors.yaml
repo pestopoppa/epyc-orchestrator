@@ -48,39 +48,39 @@ contract:
   - quality_overall
   - memory_cost
   fallback_policy: Consumers may use local fallback values only as explicit degraded mode when this generated contract is missing or invalid.
-compiled_at: '2026-07-19T12:47:57Z'
+compiled_at: '2026-07-20T13:51:11Z'
 status: compiled
 coverage_scope: descriptor_role_bindings
 precedence_spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
 source_artifacts:
   registry:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
-    sha256: a185591d35134009ebab23706b28140d322ccb2d84478b2dec3909bcd8f9ee4c
-    repo_commit: 91cf4033
+    sha256: 4020793ca9b485017e562003fdea2ecf8a424793ceef7c148796f584a00e91d0
+    repo_commit: 987762a1
   descriptors:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_descriptors.yaml
-    sha256: b662ada782e0c8de5038710acb678ba6c4ab2adf77c6e1845b1c1fe0d5fa2619
-    repo_commit: 91cf4033
+    sha256: 967b689bb5dba0478e748c0ee85ddb8b7ffb6afaba6b78ecc37c030d8f4b80ec
+    repo_commit: 987762a1
   stack_manifest:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_manifest.py
     sha256: 29fde0c2b3161d5b56fe8cb6fd2fe4ebd0bfbdd609fe239b6e0045f6c70b744b
-    repo_commit: 91cf4033
+    repo_commit: 987762a1
   stack_numa:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_numa.py
     sha256: 001897f21e9a10943c6f6b5714e10877d3a5f3f3c485b9380d456b4821373794
-    repo_commit: 91cf4033
+    repo_commit: 987762a1
   orchestrator_stack:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/orchestrator_stack.py
-    sha256: b3329449007a67fd00564922e89481315cf6172e7509eaecab268b3d7b1afbf1
-    repo_commit: 91cf4033
+    sha256: cf15cd0597ae82303ec5257e3ca4667402800965cda9c5edee2e8a886f15bb85
+    repo_commit: 987762a1
   stack_paths:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_paths.py
     sha256: 7eee8576101dbb827ec8e94a228beedb401d7cad80841e1a18aab9c03db4206b
-    repo_commit: 91cf4033
+    repo_commit: 987762a1
   stack_runtime:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_runtime.py
     sha256: 984d27262e1f1d5a5332d0b4a3e6fb96fb8095fc890ddaa93da07bff52eb1c99
-    repo_commit: 91cf4033
+    repo_commit: 987762a1
 roles:
   architect_general:
     role: architect_general
@@ -135,7 +135,7 @@ roles:
             flash_attn: true
             jinja: true
             device: null
-            reasoning: null
+            reasoning: 'off'
             override_kv: []
             spec:
               enabled: true
@@ -208,6 +208,29 @@ roles:
           baseline_tps: null
           optimized_tps: null
           speedup: null
+          measured:
+          - protocol: p_rev1
+            instrument_era: p_rev1_attested
+            attestation: MEASUREMENT-P-REV1-OPERATOR-APPROVED-20260719
+            date: 2026-07-19
+            role: patch_reviewer
+            corpus: c-crab
+            slice: GC-shadow-repair4b.2c
+            n: 48
+            accept_controls: 24
+            hard_negatives: 24
+            reviewer_arm: architect_general_self_review_status_quo
+            false_accept_rate: 0.458
+            false_reject_rate: 0.417
+            auc: 0.463
+            ece: 0.385
+            brier: 0.397
+            parse_failure_rate: 0.0
+            median_latency_seconds: 41.4
+            total_wall_seconds: 2164.234
+            role_ready: false
+            verdict: status_quo_self_review_failed_patch_reviewer
+            evidence: /mnt/raid0/llm/epyc-inference-research/data/reviewer_model_ablations/rm2-next-a1-architect-statusquo-ccrab-p-rev1-20260719T210513Z
       speed:
       - date: null
         protocol: server_mode throughput
@@ -220,11 +243,11 @@ roles:
     model_id: qwen3.6-35b-a3b-mtp-q8_0
     display_name: Qwen3.6-35B-A3B-MTP-Q8_0
     serving:
-      endpoint: http://localhost:8070
+      endpoint: http://localhost:8080
       server_role: coder_escalation
       binding: server_mode.direct
       ports:
-      - 8070
+      - 8080
       slots: 1
       tier: hot
       effective_context_tokens: 32768
@@ -234,11 +257,11 @@ roles:
       shared_mmap: true
       launch:
         entries:
-        - port: 8070
+        - port: 8080
           primary_role: frontdoor
           mode: default
           alias: true
-          numa_instance: 0
+          numa_instance: 1
         primary_roles:
         - frontdoor
         modes:
@@ -266,7 +289,7 @@ roles:
             flash_attn: true
             jinja: true
             device: null
-            reasoning: null
+            reasoning: 'off'
             override_kv: []
             spec:
               enabled: false
@@ -347,11 +370,14 @@ roles:
     model_id: qwen3.6-35b-a3b-mtp-q8_0
     display_name: Qwen3.6-35B-A3B-MTP-Q8_0
     serving:
-      endpoint: http://localhost:8070
+      endpoint: http://localhost:8080
       server_role: frontdoor
       binding: server_mode.direct
       ports:
-      - 8070
+      - 8080
+      - 8180
+      - 8280
+      - 8380
       slots: 2
       tier: hot
       effective_context_tokens: 32768
@@ -361,11 +387,26 @@ roles:
       shared_mmap: true
       launch:
         entries:
-        - port: 8070
+        - port: 8080
           primary_role: frontdoor
           mode: default
           alias: false
-          numa_instance: 0
+          numa_instance: 1
+        - port: 8180
+          primary_role: frontdoor
+          mode: default
+          alias: false
+          numa_instance: 2
+        - port: 8280
+          primary_role: frontdoor
+          mode: default
+          alias: false
+          numa_instance: 3
+        - port: 8380
+          primary_role: frontdoor
+          mode: default
+          alias: false
+          numa_instance: 4
         primary_roles:
         - frontdoor
         modes:
@@ -394,7 +435,7 @@ roles:
             flash_attn: true
             jinja: true
             device: null
-            reasoning: null
+            reasoning: 'off'
             override_kv: []
             spec:
               enabled: true
@@ -475,11 +516,14 @@ roles:
     model_id: qwen3-next-80b-a3b-q4_k_m
     display_name: Qwen3-Next-80B-A3B-Instruct
     serving:
-      endpoint: http://localhost:8085
+      endpoint: http://localhost:8185
       server_role: ingest_long_context
       binding: server_mode.direct
       ports:
-      - 8085
+      - 8185
+      - 8285
+      - 8385
+      - 8485
       slots: 1
       tier: hot
       effective_context_tokens: 32768
@@ -489,11 +533,26 @@ roles:
       shared_mmap: true
       launch:
         entries:
-        - port: 8085
+        - port: 8185
           primary_role: ingest_long_context
           mode: default
           alias: false
-          numa_instance: 0
+          numa_instance: 1
+        - port: 8285
+          primary_role: ingest_long_context
+          mode: default
+          alias: false
+          numa_instance: 2
+        - port: 8385
+          primary_role: ingest_long_context
+          mode: default
+          alias: false
+          numa_instance: 3
+        - port: 8485
+          primary_role: ingest_long_context
+          mode: default
+          alias: false
+          numa_instance: 4
         primary_roles:
         - ingest_long_context
         modes:
@@ -664,6 +723,29 @@ roles:
           baseline_tps: null
           optimized_tps: null
           speedup: null
+          measured:
+          - protocol: p_rev1
+            instrument_era: p_rev1_attested
+            attestation: MEASUREMENT-P-REV1-OPERATOR-APPROVED-20260719
+            date: 2026-07-19
+            role: patch_reviewer
+            corpus: c-crab
+            slice: GC-shadow-repair4b.2c
+            n: 48
+            accept_controls: 24
+            hard_negatives: 24
+            reviewer_arm: architect_general_self_review_status_quo
+            false_accept_rate: 0.458
+            false_reject_rate: 0.417
+            auc: 0.463
+            ece: 0.385
+            brier: 0.397
+            parse_failure_rate: 0.0
+            median_latency_seconds: 41.4
+            total_wall_seconds: 2164.234
+            role_ready: false
+            verdict: status_quo_self_review_failed_patch_reviewer
+            evidence: /mnt/raid0/llm/epyc-inference-research/data/reviewer_model_ablations/rm2-next-a1-architect-statusquo-ccrab-p-rev1-20260719T210513Z
       speed:
       - date: null
         protocol: server_mode throughput
@@ -749,11 +831,11 @@ roles:
     model_id: gemma4-26b-a4b-it-orig-q4_k_m
     display_name: gemma-4-26B-A4B-it-ORIG-Q4_K_M
     serving:
-      endpoint: http://localhost:8072
+      endpoint: http://localhost:8082
       server_role: worker
       binding: server_mode.shared_with
       ports:
-      - 8072
+      - 8082
       slots: 1
       tier: hot
       effective_context_tokens: 16384
@@ -763,11 +845,11 @@ roles:
       shared_mmap: true
       launch:
         entries:
-        - port: 8072
+        - port: 8082
           primary_role: worker_general
           mode: worker_pool
           alias: true
-          numa_instance: 0
+          numa_instance: 1
           worker_type: explore
         primary_roles:
         - worker_general
@@ -1051,11 +1133,14 @@ roles:
     model_id: gemma4-26b-a4b-it-orig-q4_k_m
     display_name: gemma-4-26B-A4B-it-ORIG-Q4_K_M
     serving:
-      endpoint: http://localhost:8072
+      endpoint: http://localhost:8082
       server_role: worker
       binding: server_mode.model_role
       ports:
-      - 8072
+      - 8082
+      - 8182
+      - 8282
+      - 8382
       slots: 1
       tier: hot
       effective_context_tokens: 16384
@@ -1065,11 +1150,29 @@ roles:
       shared_mmap: true
       launch:
         entries:
-        - port: 8072
+        - port: 8082
           primary_role: worker_general
           mode: worker_pool
           alias: false
-          numa_instance: 0
+          numa_instance: 1
+          worker_type: explore
+        - port: 8182
+          primary_role: worker_general
+          mode: worker_pool
+          alias: false
+          numa_instance: 2
+          worker_type: explore
+        - port: 8282
+          primary_role: worker_general
+          mode: worker_pool
+          alias: false
+          numa_instance: 3
+          worker_type: explore
+        - port: 8382
+          primary_role: worker_general
+          mode: worker_pool
+          alias: false
+          numa_instance: 4
           worker_type: explore
         primary_roles:
         - worker_general
@@ -1214,11 +1317,11 @@ roles:
     model_id: gemma4-26b-a4b-it-orig-q4_k_m
     display_name: gemma-4-26B-A4B-it-ORIG-Q4_K_M
     serving:
-      endpoint: http://localhost:8072
+      endpoint: http://localhost:8082
       server_role: worker
       binding: server_mode.shared_with
       ports:
-      - 8072
+      - 8082
       slots: 1
       tier: hot
       effective_context_tokens: 16384
@@ -1228,11 +1331,11 @@ roles:
       shared_mmap: true
       launch:
         entries:
-        - port: 8072
+        - port: 8082
           primary_role: worker_general
           mode: worker_pool
           alias: true
-          numa_instance: 0
+          numa_instance: 1
           worker_type: explore
         primary_roles:
         - worker_general
@@ -1377,11 +1480,11 @@ roles:
     model_id: qwen3.6-35b-a3b-mtp-q8_0
     display_name: Qwen3.6-35B-A3B-MTP-Q8_0
     serving:
-      endpoint: http://localhost:8070
+      endpoint: http://localhost:8080
       server_role: frontdoor
       binding: stack_manifest.alias->server_mode.direct
       ports:
-      - 8070
+      - 8080
       slots: 2
       tier: hot
       effective_context_tokens: 32768
@@ -1391,11 +1494,11 @@ roles:
       shared_mmap: true
       launch:
         entries:
-        - port: 8070
+        - port: 8080
           primary_role: frontdoor
           mode: default
           alias: true
-          numa_instance: 0
+          numa_instance: 1
         primary_roles:
         - frontdoor
         modes:
@@ -1424,7 +1527,7 @@ roles:
             flash_attn: true
             jinja: true
             device: null
-            reasoning: null
+            reasoning: 'off'
             override_kv: []
             spec:
               enabled: false

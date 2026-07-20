@@ -229,11 +229,11 @@ def test_system_card_compiles_fallback_rows_when_stack_priors_missing(tmp_path: 
         "orchestration/model_descriptors.yaml (compiled fallback)"
     ) in card
     assert (
-        "| frontdoor | 8070, 8080, 8180, 8280, 8380 | "
+        "| frontdoor | 8070 | "
         "frontdoor-compiled.gguf |"
     ) in card
     assert (
-        "| worker_general | 8072, 8082, 8182, 8282, 8382 | "
+        "| worker_general | 8072 | "
         "worker-compiled.gguf |"
     ) in card
     assert "worker.gguf" not in card
@@ -257,11 +257,11 @@ def test_renderer_compiles_fallback_rows_when_stack_priors_missing(tmp_path: Pat
         "orchestration/model_descriptors.yaml (compiled fallback)`"
     ) in summary
     assert (
-        "| frontdoor | 8070, 8080, 8180, 8280, 8380 | "
+        "| frontdoor | 8070 | "
         "frontdoor-compiled.gguf |"
     ) in summary
     assert (
-        "| worker_general | 8072, 8082, 8182, 8282, 8382 | "
+        "| worker_general | 8072 | "
         "worker-compiled.gguf |"
     ) in summary
     assert "worker.gguf" not in summary
