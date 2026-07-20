@@ -181,7 +181,13 @@ def test_seeding_scoring_binds_orchestrator_copy() -> None:
         bound = sys.modules["epyc_orch_debug_scorer"]
         assert bound.__file__ is not None
         assert bound.__file__.startswith(orch_bench)
-        assert "epyc-orchestrator" in bound.__file__
+        # The pin's contract is same-directory, not a repo-name substring
+        # (which breaks in worktree checkouts): the bound scorer must be the
+        # sibling debug_scorer.py of the seeding_scoring module that ran.
+        assert (
+            Path(bound.__file__).resolve().parent
+            == Path(seeding_scoring.__file__).resolve().parent
+        )
     finally:
         sys.path[:] = saved_path
         for key, val in saved_modules.items():
