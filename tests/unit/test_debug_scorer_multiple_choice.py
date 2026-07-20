@@ -61,6 +61,23 @@ def test_multiple_choice_prefers_longer_overlapping_text_choice() -> None:
     )
 
 
+def test_multiple_choice_prefers_containing_choice_with_same_end() -> None:
+    choices = ["None", "None of the above"]
+
+    assert score_answer(
+        answer="None of the above",
+        expected="None of the above",
+        scoring_method="multiple_choice",
+        scoring_config={"choices": choices},
+    )
+    assert not score_answer(
+        answer="None of the above",
+        expected="None",
+        scoring_method="multiple_choice",
+        scoring_config={"choices": choices},
+    )
+
+
 def test_multiple_choice_requires_choices_for_textual_expected() -> None:
     assert not score_answer(
         answer="**incorrect**",
