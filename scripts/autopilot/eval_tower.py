@@ -1605,6 +1605,15 @@ def screen_paired_arms(
             arm_a = prepared[i]
             arm_b = prepared[j]
             # Provenance gate — only pair arms scored on the same dataset+profile.
+            if (arm_a["profile"] is None) != (arm_b["profile"] is None):
+                mismatched.append(
+                    {
+                        "arm_a": arm_a["label"],
+                        "arm_b": arm_b["label"],
+                        "reason": "refusing to compare one-sided paired-arm provenance",
+                    }
+                )
+                continue
             if arm_a["profile"] is not None and arm_b["profile"] is not None:
                 try:
                     require_matched_comparison(arm_a["profile"], arm_b["profile"])

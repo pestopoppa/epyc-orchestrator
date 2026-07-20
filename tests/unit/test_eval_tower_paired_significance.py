@@ -125,6 +125,16 @@ def test_screen_gates_on_matched_dataset_and_profile() -> None:
     assert "dataset_sha256" in mism["reason"]
 
 
+def test_screen_refuses_one_sided_provenance() -> None:
+    out = screen_paired_arms([_arm("A", ARM_A), _arm("B", ARM_B, profile=None)])
+
+    assert out["pairs"] == []
+    assert len(out["mismatched_pairs"]) == 1
+    mism = out["mismatched_pairs"][0]
+    assert {mism["arm_a"], mism["arm_b"]} == {"A", "B"}
+    assert "one-sided" in mism["reason"]
+
+
 def test_screen_single_arm_has_wilson_but_no_pairs() -> None:
     out = screen_paired_arms([_arm("A", ARM_A)])
     assert out["pairs"] == []
