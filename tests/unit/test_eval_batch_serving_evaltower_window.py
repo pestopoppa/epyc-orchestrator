@@ -661,3 +661,14 @@ def test_write_verifier_report_versions_summary_and_uses_atomic_writers(
     assert report["schema_version"] == window.VERIFIER_REPORT_SCHEMA_VERSION
     assert ("json", "summary.json", window.VERIFIER_REPORT_SCHEMA_VERSION) in calls
     assert ("text", "summary.md", "") in calls
+
+
+def test_atomic_write_json_replaces_tmp_and_preserves_schema(tmp_path: Path) -> None:
+    path = tmp_path / "summary.json"
+    window._atomic_write_json(path, {"schema_version": "unit.v1", "value": 1})
+
+    assert json.loads(path.read_text(encoding="utf-8")) == {
+        "schema_version": "unit.v1",
+        "value": 1,
+    }
+    assert not path.with_suffix(path.suffix + ".tmp").exists()
