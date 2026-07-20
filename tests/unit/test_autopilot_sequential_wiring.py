@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,6 +16,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts" / "autopilot"))
 
 import autopilot  # type: ignore[import-not-found]  # noqa: E402
 from experiment_journal import ExperimentJournal, JournalEntry  # noqa: E402
+from safety_gate import EvalResult, SafetyGate  # type: ignore[import-not-found]  # noqa: E402
 from src.autopilot_core.authority_consent import (  # noqa: E402
     SEQ_P0_2_BRIDGE_CONSENT,
     SEQ_P0_2_BRIDGE_ENV,
@@ -123,6 +125,7 @@ def _entry(
     eval_details_extra: dict | None = None,
     keep_revert_decision: str = "",
     failure_analysis: str = "",
+    pareto_status: str = "candidate",
 ) -> JournalEntry:
     eval_details = {
         "eval_wall_s": 1800.0,
@@ -140,7 +143,7 @@ def _entry(
         speed=10.0,
         cost=0.2,
         reliability=1.0,
-        pareto_status="candidate",
+        pareto_status=pareto_status,
         config_snapshot=dict(action),
         failure_analysis=failure_analysis,
         eval_details=eval_details,
@@ -209,15 +212,20 @@ def test_update_contrastive_trace_state_skips_bug_corrupted_rows() -> None:
 
 
 def test_seq_inputs_use_trusted_same_tier_prior_rows(tmp_path: Path) -> None:
+    # B4 / SEQ-1: the null profile is built ONLY from incumbent-representative trials
+    # (pareto_status == "frontier" or keep_revert_decision == "keep"), and it needs at
+    # least SEQ_BASELINE_PROFILE_MIN_TRIALS of them. Three frontier rows qualify; the
+    # corrupt / skipped / wrong-tier rows are still excluded by the pre-existing filters.
     action = {"type": "seed_batch", "n_questions": 10}
     candidate = autopilot._config_fingerprint(action)
     journal = ExperimentJournal(journal_dir=tmp_path)
-    journal.record(_entry(1, action, correct=True))
+    journal.record(_entry(1, action, correct=True, pareto_status="frontier"))
     journal.record(
         _entry(
             2,
             action,
             correct=False,
+            pareto_status="frontier",
             seq={
                 "candidate": candidate,
                 "core_id": "core_v1",
@@ -228,6 +236,7 @@ def test_seq_inputs_use_trusted_same_tier_prior_rows(tmp_path: Path) -> None:
             },
         )
     )
+    journal.record(_entry(6, action, correct=True, keep_revert_decision="keep"))
     journal.record(_entry(3, action, correct=True, corrupt="resource_contention"))
     journal.record(_entry(4, action, correct=True, outcome_status="skipped"))
     journal.record(_entry(5, action, tier=2, correct=True))
@@ -236,11 +245,135 @@ def test_seq_inputs_use_trusted_same_tier_prior_rows(tmp_path: Path) -> None:
 
     assert inputs["candidate"] == candidate
     assert inputs["core_id"] == "core_v1"
-    assert inputs["baseline_profile"] == {"q1": 0.5}
+    # q1 correctness across the 3 qualifying rows: [True, False, True] -> mean 2/3.
+    assert inputs["baseline_profile"] == {"q1": pytest.approx(2 / 3)}
     assert inputs["baseline_task_rate"] == pytest.approx(2.0)
     assert inputs["prior_quality_obs"] == [(2, 0.25)]
     assert inputs["prior_rate_obs"] == [(2, 0.1)]
     assert inputs["baseline_reference"]["due"] is True
+
+
+def test_seq_null_profile_excludes_non_incumbent_config_changes(tmp_path: Path) -> None:
+    # B4 / SEQ-1: a dominated/unpromoted experiment (pareto_status != frontier and NOT
+    # kept) must be dropped from the null profile even though it is a trusted (non-corrupt,
+    # non-skipped, same-tier) same-tier row — otherwise its depressed outcomes contaminate
+    # the mixture and accrue e-process wealth anti-conservatively. Here only the 3 frontier
+    # rows (all correct) survive, so the profile is a clean {"q1": 1.0}, NOT pulled down by
+    # the three dominated wrong rows.
+    action = {"type": "prompt_mutation", "file": "x"}
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    for tid in (1, 2, 3):
+        journal.record(_entry(tid, action, correct=True, pareto_status="frontier"))
+    for tid in (4, 5, 6):
+        journal.record(_entry(tid, action, correct=False, pareto_status="dominated"))
+
+    inputs = autopilot._seq_inputs_for_trial(journal=journal, action=action, tier=1)
+
+    assert inputs["baseline_profile"] == {"q1": pytest.approx(1.0)}
+
+
+def test_seq_inputs_unavailable_when_too_few_incumbent_trials(tmp_path: Path) -> None:
+    # B4 / SEQ-1: below SEQ_BASELINE_PROFILE_MIN_TRIALS incumbent-representative trials
+    # the null profile is treated as UNAVAILABLE (empty) so gate.check() skips the
+    # sequential path and seq_confirmed resolves to None downstream — never a thin mixture.
+    action = {"type": "prompt_mutation", "file": "y"}
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    # Two frontier rows (qualify) + several dominated rows (excluded) => only 2 < min 3.
+    journal.record(_entry(1, action, correct=True, pareto_status="frontier"))
+    journal.record(_entry(2, action, correct=True, pareto_status="frontier"))
+    for tid in (3, 4, 5):
+        journal.record(_entry(tid, action, correct=True, pareto_status="dominated"))
+
+    inputs = autopilot._seq_inputs_for_trial(journal=journal, action=action, tier=1)
+
+    assert inputs["baseline_profile"] == {}
+    assert inputs["baseline_task_rate"] is None
+
+
+def test_seq_inputs_unavailable_on_fresh_journal(tmp_path: Path) -> None:
+    # B4 / SEQ-1 + SEQ-2 precondition: a fresh (empty) journal yields no incumbent
+    # profile => seq inputs unavailable. This is the state that drives seq_confirmed=None
+    # and the gate's seq_inputs_unavailable promotion refusal.
+    action = {"type": "seed_batch"}
+    journal = ExperimentJournal(journal_dir=tmp_path)
+
+    inputs = autopilot._seq_inputs_for_trial(journal=journal, action=action, tier=1)
+
+    assert inputs["baseline_profile"] == {}
+    assert inputs["baseline_task_rate"] is None
+
+
+def test_log_baseline_update_result_surfaces_seq_inputs_unavailable(caplog) -> None:
+    # B4 / SEQ-2: a promotion refused because the sequential inputs were unavailable
+    # (seq_confirmed=None -> BaselineUpdateResult.seq_refused_reason ==
+    # 'seq_inputs_unavailable') is surfaced DISTINCTLY, not as a generic 'baseline
+    # update skipped' line. Mirrors the real gate object: the machine token rides on
+    # seq_refused_reason while `reason` is the long human sentence.
+    refusal = SimpleNamespace(
+        updated=False,
+        reason="sequential verdict UNAVAILABLE (no per-question evidence); REFUSED",
+        seq_refused_reason="seq_inputs_unavailable",
+        tier=2,
+        previous_quality=2.0,
+        new_quality=2.5,
+    )
+    with caplog.at_level(logging.INFO, logger="autopilot"):
+        autopilot._log_baseline_update_result(41, refusal)
+
+    assert "seq_inputs_unavailable" in caplog.text
+    assert "SEQ-2" in caplog.text
+    assert "baseline update skipped" not in caplog.text
+
+
+def test_log_baseline_update_result_logs_promotion_and_generic_skip(caplog) -> None:
+    # B4 / SEQ-2: the pre-existing 'auto-raised' and generic 'skipped' lines are preserved.
+    with caplog.at_level(logging.INFO, logger="autopilot"):
+        autopilot._log_baseline_update_result(
+            7,
+            SimpleNamespace(
+                updated=True, reason="", tier=2, previous_quality=2.0, new_quality=2.5
+            ),
+        )
+    assert "baseline auto-raised" in caplog.text
+
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="autopilot"):
+        autopilot._log_baseline_update_result(
+            8,
+            SimpleNamespace(
+                updated=False,
+                reason="not a monotonic same-tier improvement",
+                tier=2,
+                previous_quality=2.0,
+                new_quality=1.9,
+            ),
+        )
+    assert "baseline update skipped (not a monotonic same-tier improvement)" in caplog.text
+    assert "SEQ-2" not in caplog.text
+
+
+def test_seq_flag_on_fresh_journal_refuses_promotion_with_reason(tmp_path, monkeypatch) -> None:
+    # B4 / SEQ-2 end-to-end contract: with the sequential flag ON and no confirmed/refuted
+    # verdict (seq_confirmed=None, the state a fresh journal produces), update_baseline must
+    # REFUSE the write and surface the seq_inputs_unavailable machine token — the anti-ratchet
+    # the autopilot call site relies on. (Eligibility is stubbed so the seq gate is reached.)
+    gate = SafetyGate(baseline_path=tmp_path / "absent.yaml", use_sequential=True)
+    monkeypatch.setattr(gate, "_baseline_eligible", lambda result: (True, "test-eligible", {}))
+    result = EvalResult(
+        tier=2,
+        quality=2.9,
+        speed=99.0,
+        cost=0.1,
+        reliability=0.99,
+        per_suite_quality={"coder": 2.9},
+        n_questions=50,
+        speed_metric_mode="aggregate_batch_tps",
+    )
+
+    res = gate.update_baseline(result, seq_confirmed=None)
+
+    assert res.updated is False
+    assert res.seq_refused_reason == "seq_inputs_unavailable"
 
 
 def test_seq_paired_baseline_diagnostics_compares_latest_reference(
@@ -1872,6 +2005,7 @@ def _run_loop_inner_seq_harness(
     planner_should_not_run: bool = False,
     journal_entries_out: list[JournalEntry] | None = None,
     dispatch_actions_out: list[dict[str, Any]] | None = None,
+    gate_check_raises_on_seq: bool = False,
 ) -> tuple[dict[str, Any], list[tuple[bool, int]]]:
     baseline_update_calls: list[tuple[bool, int]] = []
 
@@ -1948,6 +2082,12 @@ def _run_loop_inner_seq_harness(
             self.use_sequential = True
 
         def check(self, *args: Any, **kwargs: Any) -> FakeVerdict:
+            # SEQ-3b: when opted in, raise on the SEQUENTIAL check (the call that
+            # threads baseline_profile) but succeed on the bare legacy fallback call
+            # (`gate.check(eval_result)`, no kwargs) so the main loop must catch and
+            # fall back instead of crashing.
+            if gate_check_raises_on_seq and "baseline_profile" in kwargs:
+                raise RuntimeError("corrupt sequential inputs (SEQ-3b test)")
             return FakeVerdict(verdict_seq)
 
         def analyze_failure(self, *args: Any, **kwargs: Any) -> str:
@@ -2341,6 +2481,44 @@ def test_run_loop_inner_journals_report_only_rlvr_reward(
     assert rlvr["ready_for_training"] is False
     assert "auroc_missing_or_degenerate" in rlvr["blockers"]
     assert "question_results_missing" in rlvr["blockers"]
+
+
+def test_run_loop_inner_gate_check_falls_back_when_seq_inputs_raise(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog,
+) -> None:
+    # SEQ-3b: if the main-loop sequential gate.check(...) raises (e.g. corrupt
+    # journal-derived seq inputs), the loop must catch it, log a fallback warning, and
+    # complete via the legacy gate.check(eval_result) — NOT crash. Mirrors the
+    # actions.py _action_gate_check fallback semantics.
+    state: dict[str, Any] = {
+        "trial_counter": 0,
+        "paused": False,
+        "td_errors": [],
+        "seeder_state": {},
+        "consecutive_failures": 0,
+        "quality_history": [],
+        "quality_history_by_tier": {},
+        "baseline_state": {},
+    }
+    journal_entries: list[JournalEntry] = []
+
+    with caplog.at_level(logging.WARNING, logger="autopilot"):
+        _run_loop_inner_seq_harness(
+            monkeypatch,
+            state=state,
+            verdict_seq={
+                "candidate": "candidate-a",
+                "confirmed": False,
+                "state": "accumulating",
+            },
+            journal_entries_out=journal_entries,
+            gate_check_raises_on_seq=True,
+        )
+
+    # The loop survived the raise and still journaled the trial.
+    assert len(journal_entries) == 1
+    assert "fell back to legacy check" in caplog.text
 
 
 def test_run_loop_inner_halts_on_blocked_seq_gate_preflight(

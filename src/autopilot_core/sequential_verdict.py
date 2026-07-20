@@ -7,6 +7,8 @@ math.
 
 from __future__ import annotations
 
+import logging
+import math
 import random
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
@@ -14,9 +16,29 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 
+log = logging.getLogger(__name__)
+
 STATE_ACCUMULATING = "accumulating"
 STATE_CONFIRMED = "confirmed"
 STATE_REFUTED = "refuted"
+
+# SEQ-3a: validity floor for a per-trial e-process statistic ``z``.
+#
+# The wealth process is a nonnegative supermartingale (the property Ville's
+# inequality — hence the anytime-valid type-I guarantee — rests on) only while every
+# applied factor ``1 + lambda_t * z`` stays >= 0. With ``lambda_t`` capped at
+# ``policy.lambda_cap``, that is threatened ONLY on the negative side: it requires
+# ``z >= -1/lambda_cap``. This is EXACTLY the condition under which
+# ``EProcessState.update`` raises ValueError. A journal-derived z below that floor
+# (an old-schema / mis-scaled / corrupt value) would crash the rebuild.
+#
+# We deliberately impose NO upper bound: a large-positive z keeps the factor >= 0 and
+# is legitimate strong evidence — it does not threaten the nonnegative-supermartingale
+# validity guarantee, and the statistics that produce z are already bounded by
+# construction (quality in [-1, 1]; rate in ~[-0.9, 1.1]). Rejecting large-positive
+# values would instead break legitimate accumulation. The public candidate-view rebuild
+# entry point SKIPS (not clamps) non-finite / below-floor values and counts them.
+_SEQ_Z_RANGE_EPS = 1e-9
 
 
 @dataclass(frozen=True)
@@ -71,6 +93,9 @@ class CandidateSequentialView:
     state: str
     policy_version: str
     expected_axis: str = "quality"
+    # SEQ-3a: count of journal-derived z observations rejected as non-finite /
+    # out-of-domain during this rebuild (0 for clean evidence).
+    out_of_range_skipped: int = 0
 
 
 @dataclass(frozen=True)
@@ -228,6 +253,13 @@ def journal_seq_block(
     return block
 
 
+def _z_lower_bound(policy: SequentialPolicy) -> float:
+    """SEQ-3a factor-nonnegativity floor for ``z``: ``-1/lambda_cap`` (or -inf if uncapped)."""
+    if policy.lambda_cap <= 0.0:
+        return float("-inf")
+    return -1.0 / policy.lambda_cap
+
+
 def rebuild_candidate_view(
     *,
     candidate: str,
@@ -236,19 +268,47 @@ def rebuild_candidate_view(
     policy: SequentialPolicy = DEFAULT_POLICY,
     expected_axis: str = "quality",
 ) -> CandidateSequentialView:
-    """Fold journal rows or ``(trial_id, z)`` pairs into a candidate view."""
+    """Fold journal rows or ``(trial_id, z)`` pairs into a candidate view.
+
+    SEQ-3a: this is the PUBLIC entry point that accepts journal-derived z sequences.
+    Each observed z is validated against the factor-nonnegativity floor
+    (``_z_lower_bound`` = ``-1/lambda_cap``) BEFORE it reaches
+    ``EProcessState.update`` — a non-finite or below-floor value (corrupt / mis-scaled
+    journal evidence that would drive ``1 + lambda*z`` negative and raise) is SKIPPED
+    and counted, never fed to the wealth update. Skipping (rather than clamping) is
+    what preserves the anytime-valid guarantee: a skipped observation multiplies wealth
+    by exactly 1.0, which cannot inflate the Ville false-confirm bound, whereas clamping
+    would fabricate an observation that was never actually measured. No upper bound is
+    imposed — a large-positive z keeps the factor nonnegative and is legitimate evidence.
+    """
     state = EProcessState()
     updates: list[EProcessUpdate] = []
     trials: list[int] = []
+    z_floor = _z_lower_bound(policy)
+    skipped_out_of_range = 0
     for observation in observations:
         parsed = _coerce_seq_observation(observation, candidate=candidate, core_id=core_id)
         if parsed is None:
             continue
         trial_id, z = parsed
+        if not math.isfinite(z) or z < z_floor - _SEQ_Z_RANGE_EPS:
+            skipped_out_of_range += 1
+            continue
         state, update = state.update(z, policy=policy, trial_id=trial_id)
         updates.append(update)
         if trial_id is not None:
             trials.append(trial_id)
+    if skipped_out_of_range:
+        log.warning(
+            "rebuild_candidate_view skipped %d non-finite / below-floor z value(s) for "
+            "candidate=%s core_id=%s axis=%s (z floor=%.4f = -1/lambda_cap); corrupt "
+            "journal evidence excluded to preserve e-process validity (SEQ-3a)",
+            skipped_out_of_range,
+            candidate,
+            core_id,
+            expected_axis,
+            z_floor,
+        )
     return CandidateSequentialView(
         fingerprint=candidate,
         core_id=core_id,
@@ -258,6 +318,7 @@ def rebuild_candidate_view(
         state=state.state_name(policy),
         policy_version=policy.version,
         expected_axis=expected_axis,
+        out_of_range_skipped=skipped_out_of_range,
     )
 
 

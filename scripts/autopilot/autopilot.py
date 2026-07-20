@@ -211,6 +211,15 @@ PLANNER_STRUCTURED_INSIGHTS_LIMIT = int(
 BSV3_CONFLICT_POLICY_ENV = "AUTOPILOT_BSV3_CONFLICT_POLICY"
 ORCHESTRATOR_URL = "http://localhost:8000"
 SEQ_BASELINE_PROFILE_LIMIT = int(os.environ.get("AUTOPILOT_SEQ_BASELINE_PROFILE_LIMIT", "120"))
+# B4 / SEQ-1: minimum number of incumbent-representative trials the sequential null
+# profile must be built from. Below this the profile is treated as UNAVAILABLE
+# (empty baseline_profile) rather than run against a contaminated/thin mixture,
+# which anti-conservatively depresses the null and accrues wealth too easily. 3
+# mirrors the other reproduction/probe minimums (BASELINE_PROMOTION_REPRO_MIN,
+# HIGHER_TIER_PROBE_MIN_TRIALS_PER_TIER, MAD_MIN_SAMPLES).
+SEQ_BASELINE_PROFILE_MIN_TRIALS = int(
+    os.environ.get("AUTOPILOT_SEQ_BASELINE_PROFILE_MIN_TRIALS", "3")
+)
 SEQ_PRIOR_OBS_LIMIT = int(os.environ.get("AUTOPILOT_SEQ_PRIOR_OBS_LIMIT", "120"))
 SEQ_BASELINE_REFRESH_CADENCE = int(os.environ.get("AUTOPILOT_SEQ_BASELINE_REFRESH_CADENCE", "10"))
 SEQ_BASELINE_BLOCK_RETRY_CADENCE = int(
@@ -1202,6 +1211,123 @@ def _question_outcome_map(question_results: Any) -> dict[str, bool]:
             continue
         outcomes[qid] = bool(item.get("correct"))
     return outcomes
+
+
+# D6 / FIELD-1: the documented EvalResult metric families that feed the journal's
+# eval_details payload. Each name below is a field on safety_gate.EvalResult whose
+# value was previously DROPPED from the journal (only the METRIC grep-lines and,
+# for a few, JournalEntry top-level columns carried them). The AP-4 axes comment on
+# EvalResult says these persist for H-LB; they must actually land in eval_details.
+#
+# The list is explicit (not reflected from the dataclass) BY DESIGN: a NEW
+# diversity_/rubric_/reviewer_ field added to EvalResult must be wired here too, and
+# the completeness guard in tests/unit/test_eval_details_field_parity.py fails until
+# it is — so the journal schema can never silently drop a freshly-added family axis.
+_EVAL_DETAILS_FLOAT_FIELDS: tuple[str, ...] = (
+    # EV-8 diversity (5) — NaN means "unavailable this trial".
+    "diversity_entropy",
+    "diversity_distinct2",
+    "diversity_self_bleu",
+    "diversity_ttr",
+    "diversity_semantic_embedding_agreement",
+    # EV-9 / MindDR rubric (4).
+    "rubric_reasoning_trajectory",
+    "rubric_tool_calls",
+    "rubric_outline",
+    "rubric_content_stage",
+    # AP-4 reviewer-calibration axes (4; review_decision_latency_ms is grouped here
+    # even though it lacks the reviewer_ prefix — it is the 4th AP-4 axis).
+    "reviewer_fa_rate",
+    "reviewer_fr_rate",
+    "reviewer_fa_fr_ratio",
+    "review_decision_latency_ms",
+    # intake-378 branching density + AP-16 instruction-token budget + AM compaction.
+    "branching_density",
+    "instruction_token_ratio",
+    "avg_prompt_tokens",
+)
+_EVAL_DETAILS_INT_FIELDS: tuple[str, ...] = (
+    "instruction_token_count",
+    "compaction_events",
+)
+
+
+def _finite_or_none(value: Any) -> float | None:
+    """Coerce to float, mapping non-finite / NaN / unparseable to None (null-gated)."""
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
+
+
+def _eval_details_from_result(result: Any) -> dict[str, Any]:
+    """D6 / FIELD-1 journal leg: map the documented EvalResult metric families into the
+    eval_details payload, null-gated.
+
+    Null-gating rule (documented once): a float family value that is NaN / non-finite
+    (the dataclass default for "unavailable this trial") becomes ``None``; an int family
+    value is emitted as an int (0 default is a real value, not "unavailable"). Every
+    family key is ALWAYS present in the returned dict (present-with-None rather than
+    omitted) so downstream consumers and the parity guard can rely on a stable schema.
+    The journal serializer additionally runs strict-JSON ``json_sanitize`` (NaN -> null),
+    so None here is belt-and-suspenders + explicit intent.
+    """
+    payload: dict[str, Any] = {}
+    for name in _EVAL_DETAILS_FLOAT_FIELDS:
+        payload[name] = _finite_or_none(getattr(result, name, None))
+    for name in _EVAL_DETAILS_INT_FIELDS:
+        raw = getattr(result, name, None)
+        try:
+            payload[name] = int(raw)
+        except (TypeError, ValueError):
+            payload[name] = None
+    return payload
+
+
+# B4 / SEQ-2: the refusal reason the gate returns when a promotion is blocked because
+# the sequential null profile / verdict was unavailable (seq_confirmed=None). Kept as a
+# named constant so the autopilot-side surfacing is not a bare string literal.
+SEQ_INPUTS_UNAVAILABLE_REASON = "seq_inputs_unavailable"
+
+
+def _log_baseline_update_result(trial_counter: int, baseline_update: Any) -> None:
+    """Surface a baseline update / refusal outcome cleanly (B4 / SEQ-2).
+
+    Preserves the existing 'auto-raised' and generic 'skipped' log lines, and adds a
+    DISTINCT line when the gate refuses because the sequential inputs were unavailable
+    (seq_confirmed=None -> reason ``seq_inputs_unavailable``). That refusal is expected
+    (no trustworthy null this trial => no ratchet), so it must be visible and not lost
+    among unrelated 'baseline update skipped' reasons.
+    """
+    if baseline_update.updated:
+        log.info(
+            "Trial %d: T%d baseline auto-raised %.3f → %.3f",
+            trial_counter,
+            baseline_update.tier,
+            baseline_update.previous_quality or 0.0,
+            baseline_update.new_quality,
+        )
+        return
+    reason = getattr(baseline_update, "reason", "") or ""
+    # The gate carries the machine token on BaselineUpdateResult.seq_refused_reason
+    # (the human `reason` is a longer sentence); check the token first, then fall back
+    # to a substring match in case a path stashes it in `reason`.
+    seq_refused = getattr(baseline_update, "seq_refused_reason", "") or ""
+    if seq_refused == SEQ_INPUTS_UNAVAILABLE_REASON or SEQ_INPUTS_UNAVAILABLE_REASON in reason:
+        log.info(
+            "Trial %d: baseline promotion REFUSED — sequential inputs unavailable "
+            "(%s); seq_confirmed=None so no baseline ratchet this trial (B4/SEQ-2): %s",
+            trial_counter,
+            SEQ_INPUTS_UNAVAILABLE_REASON,
+            reason,
+        )
+        return
+    log.info(
+        "Trial %d: baseline update skipped (%s)",
+        trial_counter,
+        reason,
+    )
 
 
 def _question_outcome_vector(
@@ -2677,6 +2803,30 @@ def _seq_alpha_wealth_state(
     }
 
 
+def _seq_trial_is_incumbent_representative(entry: Any) -> bool:
+    """B4 / SEQ-1 provenance gate for the sequential null (incumbent) profile.
+
+    Keep a same-tier trial's per-question outcomes in the null profile ONLY when the
+    trial is plausibly incumbent-representative, using the strongest provenance signal
+    the journal rows actually carry:
+      * ``pareto_status == "frontier"`` — the trial sat on the live Pareto frontier
+        (the best-known / incumbent set) when recorded; OR
+      * ``keep_revert_decision == "keep"`` — the trial's config was accepted (kept),
+        i.e. promoted-like.
+
+    ``config_diff`` is deliberately NOT used as a signal: it is computed relative to
+    the immediate same-species PARENT, not the incumbent baseline, so a chain of
+    unpromoted experiments can each show an empty diff yet none represent the
+    incumbent — exactly the depressed off-incumbent rows the audit (SEQ-1) flags as
+    the source of anti-conservative wealth accrual from a mixed profile.
+    """
+    if str(getattr(entry, "pareto_status", "") or "") == "frontier":
+        return True
+    if str(getattr(entry, "keep_revert_decision", "") or "") == "keep":
+        return True
+    return False
+
+
 def _seq_inputs_for_trial(
     *,
     journal: ExperimentJournal,
@@ -2707,10 +2857,20 @@ def _seq_inputs_for_trial(
         if not isinstance(eval_details, dict):
             continue
 
+        # B4 / SEQ-1: only incumbent-representative trials feed the null profile +
+        # its rate baseline. A dominated/unpromoted experiment (a config change that
+        # was NOT kept and is not on the frontier) that scored poorly would depress
+        # the mixture and accrue e-process wealth anti-conservatively. The candidate's
+        # OWN prior obs (below) are NOT gated — those rebuild the candidate's evidence.
+        incumbent_representative = _seq_trial_is_incumbent_representative(entry)
         outcome_map = _question_outcome_map(eval_details.get("question_results"))
-        if outcome_map and len(baseline_trials) < SEQ_BASELINE_PROFILE_LIMIT:
+        if (
+            incumbent_representative
+            and outcome_map
+            and len(baseline_trials) < SEQ_BASELINE_PROFILE_LIMIT
+        ):
             baseline_trials.append(outcome_map)
-        if len(baseline_task_rates) < SEQ_BASELINE_PROFILE_LIMIT:
+        if incumbent_representative and len(baseline_task_rates) < SEQ_BASELINE_PROFILE_LIMIT:
             row = {
                 "quality": getattr(entry, "quality", 0.0),
                 "n_questions": len(outcome_map),
@@ -2743,10 +2903,19 @@ def _seq_inputs_for_trial(
             except (TypeError, ValueError):
                 pass
 
-    baseline_profile = baseline_profile_from_trials(reversed(baseline_trials))
-    baseline_task_rate = (
-        sum(baseline_task_rates) / len(baseline_task_rates) if baseline_task_rates else None
-    )
+    # B4 / SEQ-1: if too few incumbent-representative trials survived the provenance
+    # filter, the null profile would be thin/contaminated. Treat the sequential inputs
+    # as UNAVAILABLE (empty profile) so gate.check() skips the sequential path
+    # (it requires `bool(baseline_profile)`), leaving verdict.seq is None and
+    # seq_confirmed=None downstream — the conservative outcome, not a silent mixture.
+    if len(baseline_trials) < SEQ_BASELINE_PROFILE_MIN_TRIALS:
+        baseline_profile: dict[str, float] = {}
+        baseline_task_rate: float | None = None
+    else:
+        baseline_profile = baseline_profile_from_trials(reversed(baseline_trials))
+        baseline_task_rate = (
+            sum(baseline_task_rates) / len(baseline_task_rates) if baseline_task_rates else None
+        )
     return {
         "candidate": candidate,
         "core_id": DEFAULT_EVIDENCE_CORE_ID,
@@ -7635,17 +7804,33 @@ def _run_loop_inner(
                     str(seq_fresh_eval_context.get("candidate")) if seq_fresh_eval_context else None
                 ),
             )
-            verdict = gate.check(
-                eval_result,
-                question_results=list(getattr(eval_result, "question_results", []) or []),
-                task_rate=task_rate_qph_from(eval_result),
-                baseline_profile=seq_inputs["baseline_profile"],
-                baseline_task_rate=seq_inputs["baseline_task_rate"],
-                prior_quality_obs=seq_inputs["prior_quality_obs"],
-                prior_rate_obs=seq_inputs["prior_rate_obs"],
-                candidate=seq_inputs["candidate"],
-                core_id=seq_inputs["core_id"],
-            )
+            try:
+                verdict = gate.check(
+                    eval_result,
+                    question_results=list(getattr(eval_result, "question_results", []) or []),
+                    task_rate=task_rate_qph_from(eval_result),
+                    baseline_profile=seq_inputs["baseline_profile"],
+                    baseline_task_rate=seq_inputs["baseline_task_rate"],
+                    prior_quality_obs=seq_inputs["prior_quality_obs"],
+                    prior_rate_obs=seq_inputs["prior_rate_obs"],
+                    candidate=seq_inputs["candidate"],
+                    core_id=seq_inputs["core_id"],
+                )
+            except Exception as exc:  # noqa: BLE001 - SEQ-3b: seq inputs must never crash the loop
+                # SEQ-3b: mirror the actions.py action-gate fallback
+                # (_action_gate_check). A corrupt journal-derived seq input (e.g. an
+                # out-of-range z that slipped past the rebuild guard) must fail THIS
+                # trial safely, not tear down the whole optimization loop. Fall back to
+                # the legacy (non-sequential) gate check: baseline_profile omitted =>
+                # the e-process path is not taken => verdict.seq is None =>
+                # seq_confirmed=None downstream (conservative: no baseline ratchet).
+                log.warning(
+                    "Main-loop safety gate fell back to legacy check "
+                    "(sequential inputs raised %s: %s)",
+                    type(exc).__name__,
+                    exc,
+                )
+                verdict = gate.check(eval_result)
             if isinstance(getattr(verdict, "seq", None), dict):
                 verdict.seq["alpha_wealth"] = seq_inputs.get("alpha_wealth")
             seq_finalized = _annotate_seq_promotion_finalization(
@@ -7819,20 +8004,9 @@ def _run_loop_inner(
                 source_trial_id=trial_counter,
                 seq_confirmed=seq_confirmed,
             )
-            if baseline_update.updated:
-                log.info(
-                    "Trial %d: T%d baseline auto-raised %.3f → %.3f",
-                    trial_counter,
-                    baseline_update.tier,
-                    baseline_update.previous_quality or 0.0,
-                    baseline_update.new_quality,
-                )
-            else:
-                log.info(
-                    "Trial %d: baseline update skipped (%s)",
-                    trial_counter,
-                    baseline_update.reason,
-                )
+            # B4 / SEQ-2: surface the update/refusal outcome — including a distinct
+            # line for the gate's seq_inputs_unavailable refusal (seq_confirmed=None).
+            _log_baseline_update_result(trial_counter, baseline_update)
 
         _update_seq_promotion_fresh_eval_state(
             state,
@@ -8146,6 +8320,12 @@ def _run_loop_inner(
             "tool_helpfulness": getattr(eval_result, "tool_helpfulness", float("nan")),
             "per_suite_tool_helpfulness": getattr(eval_result, "per_suite_tool_helpfulness", {}),
         }
+        # D6 / FIELD-1 journal leg: persist the documented diversity_* / rubric_* /
+        # reviewer_* / branching_density / instruction_token_* / avg_prompt_tokens /
+        # compaction_events families that were previously dropped from the journal
+        # payload (they only reached the METRIC grep-lines). Null-gated; see
+        # _eval_details_from_result. These feed H-LB (AP-4 axes comment on EvalResult).
+        eval_details_dict.update(_eval_details_from_result(eval_result))
         if seq_paired_baseline_payload:
             eval_details_dict["seq_paired_baseline"] = seq_paired_baseline_payload
         if learning_excluded_by:
