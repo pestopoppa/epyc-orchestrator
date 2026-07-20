@@ -2870,6 +2870,81 @@ class EvalTower:
             ],
         )
 
+    def _aggregate_decision_partitions(
+        self,
+        results: list[QuestionResult],
+        *,
+        tier: int,
+        excluded_partitions: set[str],
+        exclusion_reasons: Mapping[str, str] | None = None,
+    ) -> EvalResult:
+        if not excluded_partitions:
+            return self._aggregate(results, tier=tier)
+
+        full_result = self._aggregate(results, tier=tier)
+        decision_results = [
+            r
+            for r in results
+            if (r.eval_partition or "core") not in excluded_partitions
+        ]
+        if len(decision_results) == len(results):
+            return full_result
+        if decision_results:
+            result = self._aggregate(decision_results, tier=tier)
+        else:
+            result = EvalResult(tier=tier, quality=0, speed=0, cost=0, reliability=0)
+
+        result.question_results = full_result.question_results
+        for key in (
+            "partition_quality",
+            "partition_counts",
+            "partition_total_counts",
+            "partition_suite_quality",
+        ):
+            result.details[key] = full_result.details.get(key, {})
+
+        excluded_counts: dict[str, int] = {}
+        for r in results:
+            partition = r.eval_partition or "core"
+            if partition in excluded_partitions:
+                excluded_counts[partition] = excluded_counts.get(partition, 0) + 1
+
+        pre_filter_speed = result.speed
+        pre_filter_speed_mode = result.speed_metric_mode
+        if excluded_counts:
+            # A filtered subset has no independent batch wall clock. Keep the
+            # mixed-batch aggregate TPS as telemetry and use comparable per-request
+            # median TPS for the decision objective.
+            result.speed = result.median_request_speed
+            result.speed_metric_mode = "median_request_tps_partition_filtered"
+            result.details["speed_metric_mode"] = result.speed_metric_mode
+            result.details["objective_speed_tps"] = result.speed
+
+        result.details.update(
+            {
+                "decision_partition_filter": {
+                    "excluded_partitions": sorted(excluded_counts),
+                    "excluded_counts": excluded_counts,
+                    "exclusion_reasons": dict(exclusion_reasons or {}),
+                    "full_n_questions": full_result.n_questions,
+                    "decision_n_questions": result.n_questions,
+                    "full_batch_objective_speed_tps": full_result.speed,
+                    "pre_filter_objective_speed_tps": pre_filter_speed,
+                    "pre_filter_speed_metric_mode": pre_filter_speed_mode,
+                    "decision_speed_metric_mode": result.speed_metric_mode,
+                    "decision_subset_speed_comparable": True,
+                    "decision_subset_speed_semantics": (
+                        "partition-filtered decision speed uses median request TPS; "
+                        "aggregate TPS over the mixed batch wall clock is retained "
+                        "only as full-batch telemetry"
+                    ),
+                },
+                "decision_excluded_partitions": sorted(excluded_counts),
+                "decision_subset_speed_comparable": True,
+            }
+        )
+        return result
+
     def _count_instruction_tokens(
         self,
         results: list[QuestionResult] | None = None,
@@ -3166,38 +3241,56 @@ class EvalTower:
         # ([]) unless AUTOPILOT_TOOL_SENTINELS=1.
         base_core_questions = len(questions)
         base_audit_questions = len(audit_questions)
+        tool_sentinel_questions = self._load_tool_sentinels()
         questions = (
             _annotate_partition(questions, "core")
             + _annotate_partition(audit_questions, "audit")
-            + _annotate_partition(self._load_tool_sentinels(), "tool_sentinel")
+            + _annotate_partition(tool_sentinel_questions, "tool_sentinel")
         )
 
         with httpx.Client(timeout=self.timeout) as client:
             results = self._eval_batch(questions, client, log_every=10, label="T1")
 
-        full_result = self._aggregate(results, tier=1)
-        # W6 audit rows are an overfit/generalization signal. Keep them in the
-        # per-question ledger, but keep decision metrics paired-core-only by default.
+        excluded_partitions: set[str] = set()
+        exclusion_reasons: dict[str, str] = {}
         if audit_policy["active"] and audit_policy["shadow_only"]:
-            decision_results = [r for r in results if (r.eval_partition or "core") != "audit"]
-            result = self._aggregate(decision_results, tier=1)
-            result.question_results = full_result.question_results
-            for key in (
-                "partition_quality",
-                "partition_counts",
-                "partition_suite_quality",
-            ):
-                result.details[key] = full_result.details.get(key, {})
+            excluded_partitions.add("audit")
+            exclusion_reasons["audit"] = "w6_audit_shadow_only"
+        if tool_sentinel_questions:
+            excluded_partitions.add("tool_sentinel")
+            exclusion_reasons["tool_sentinel"] = "tool_secret_minting_not_decision_grade"
+        result = self._aggregate_decision_partitions(
+            results,
+            tier=1,
+            excluded_partitions=excluded_partitions,
+            exclusion_reasons=exclusion_reasons,
+        )
+        if audit_policy["active"] and audit_policy["shadow_only"]:
             result.details.update(
                 {
                     "audit_shadow_only": True,
-                    "audit_shadow_total_n_questions": full_result.n_questions,
+                    "audit_shadow_total_n_questions": len(results),
                     "audit_shadow_decision_n_questions": result.n_questions,
                     "audit_shadow_excluded_partitions": ["audit"],
                 }
             )
-        else:
-            result = full_result
+        if tool_sentinel_questions:
+            result.details.update(
+                {
+                    "tool_sentinel_decision_excluded": True,
+                    "tool_sentinel_questions": len(tool_sentinel_questions),
+                }
+            )
+        instrument_questions = [
+            q
+            for q in questions
+            if q.get("eval_partition", "core") not in excluded_partitions
+        ]
+        if excluded_partitions:
+            result.details["full_batch_dataset_content_sha256"] = dataset_content_sha256(
+                questions
+            )
+            result.details["full_batch_n_questions"] = len(questions)
         result.details.update(
             {
                 "core_selection": core_selection,
@@ -3212,7 +3305,7 @@ class EvalTower:
         )
         return _stamp_eval_instrument(
             result,
-            questions=questions,
+            questions=instrument_questions,
             core_id=core_id,
             test_profile={
                 "version": "eval-tower-tier-profile-v1",
@@ -3221,7 +3314,9 @@ class EvalTower:
                 "core_selection": core_selection,
                 "seed": int(seed),
                 "requested_n": int(n),
-                "n_questions": len(questions),
+                "n_questions": len(instrument_questions),
+                "full_batch_n_questions": len(questions),
+                "decision_excluded_partitions": sorted(excluded_partitions),
                 "base_core_questions": base_core_questions,
                 "base_audit_questions": base_audit_questions,
                 "audit_policy": audit_policy,
@@ -3338,14 +3433,42 @@ class EvalTower:
             )
         # Tool-use sentinels also join T2 (the journaled deep eval) for the same
         # reason as T1. Inert ([]) unless AUTOPILOT_TOOL_SENTINELS=1.
+        tool_sentinel_questions = self._load_tool_sentinels()
         questions = _annotate_partition(questions, "core") + _annotate_partition(
-            self._load_tool_sentinels(), "tool_sentinel"
+            tool_sentinel_questions, "tool_sentinel"
         )
 
         with httpx.Client(timeout=self.timeout) as client:
             results = self._eval_batch(questions, client, log_every=50, label="T2")
 
-        result = self._aggregate(results, tier=2)
+        excluded_partitions: set[str] = set()
+        exclusion_reasons: dict[str, str] = {}
+        if tool_sentinel_questions:
+            excluded_partitions.add("tool_sentinel")
+            exclusion_reasons["tool_sentinel"] = "tool_secret_minting_not_decision_grade"
+        result = self._aggregate_decision_partitions(
+            results,
+            tier=2,
+            excluded_partitions=excluded_partitions,
+            exclusion_reasons=exclusion_reasons,
+        )
+        if tool_sentinel_questions:
+            result.details.update(
+                {
+                    "tool_sentinel_decision_excluded": True,
+                    "tool_sentinel_questions": len(tool_sentinel_questions),
+                }
+            )
+        instrument_questions = [
+            q
+            for q in questions
+            if q.get("eval_partition", "core") not in excluded_partitions
+        ]
+        if excluded_partitions:
+            result.details["full_batch_dataset_content_sha256"] = dataset_content_sha256(
+                questions
+            )
+            result.details["full_batch_n_questions"] = len(questions)
         core_id = f"legacy_pool_t2_seed_{draw_seed}_n{requested_n}"
         if promotion_eval:
             promotion_policy["actual_n"] = len(
@@ -3355,7 +3478,7 @@ class EvalTower:
             core_id = f"w8_promotion_eval_v1_trial_{resolved_trial_id}_n{requested_n}"
         return _stamp_eval_instrument(
             result,
-            questions=questions,
+            questions=instrument_questions,
             core_id=core_id,
             test_profile={
                 "version": "eval-tower-tier-profile-v1",
@@ -3363,7 +3486,9 @@ class EvalTower:
                 "core_id": core_id,
                 "seed": int(draw_seed),
                 "requested_n": int(requested_n),
-                "n_questions": len(questions),
+                "n_questions": len(instrument_questions),
+                "full_batch_n_questions": len(questions),
+                "decision_excluded_partitions": sorted(excluded_partitions),
                 "promotion_eval": bool(promotion_eval),
                 "promotion_policy": promotion_policy if promotion_eval else None,
             },
