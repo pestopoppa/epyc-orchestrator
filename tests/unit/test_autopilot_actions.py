@@ -1216,7 +1216,15 @@ def test_recent_eval_qids_excludes_only_rows_inside_recency_window(monkeypatch) 
             ),
             SimpleNamespace(
                 timestamp="2026-07-01T00:00:00Z",
-                eval_details={"question_results": [{"qid": "fresh-q", "question_id": "fresh-pool-id"}]},
+                eval_details={
+                    "question_results": [
+                        {
+                            "qid": "fresh-q",
+                            "question_id": "fresh-pool-id",
+                            "id": "fresh-legacy-id",
+                        }
+                    ]
+                },
             ),
             SimpleNamespace(
                 timestamp="not-a-date",
@@ -1228,6 +1236,7 @@ def test_recent_eval_qids_excludes_only_rows_inside_recency_window(monkeypatch) 
     assert actions._recent_eval_qids(journal, days=60) == {
         "fresh-q",
         "fresh-pool-id",
+        "fresh-legacy-id",
         "malformed-time-q",
     }
 

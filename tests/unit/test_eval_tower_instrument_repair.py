@@ -924,10 +924,12 @@ def test_eval_t2_promotion_eval_uses_trial_seed_and_excludes_recent_qids(
 
     monkeypatch.setattr(EvalTower, "_eval_batch", _fake_eval_batch)
 
+    recent_stable_qid = eval_tower._stable_question_qid("math", "old")
+
     result = tower.eval_t2(
         promotion_eval=True,
         trial_id=42,
-        exclude_qids={"recent-math"},
+        exclude_qids={recent_stable_qid},
     )
 
     assert "recent-math" not in captured

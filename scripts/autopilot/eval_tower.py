@@ -223,7 +223,9 @@ def _sample_scoreable_eval_questions(
     excluded_suites = exclude_suites or set()
     filtered_pool = {
         suite: [
-            q for q in suite_qs if _question_qid(q) not in excluded and _is_scoreable_question(q)
+            q
+            for q in suite_qs
+            if not (_question_identity_set(q) & excluded) and _is_scoreable_question(q)
         ]
         for suite, suite_qs in pool.items()
         if suite not in excluded_suites
@@ -323,6 +325,24 @@ def _question_qid(q: dict[str, Any]) -> str:
     if explicit:
         return explicit
     return _stable_question_qid(str(q.get("suite", "unknown")), str(q.get("prompt", "")))
+
+
+def _question_identity_set(q: dict[str, Any]) -> set[str]:
+    """All comparable identities for one pool question.
+
+    Historical journals may carry only the stable prompt hash (`qid`), while
+    pool rows commonly carry only their source `id`. Promotion fresh-draw
+    exclusion must compare against both namespaces.
+    """
+    identities: set[str] = set()
+    for key in ("qid", "stable_qid", "id", "question_id"):
+        value = str(q.get(key) or "").strip()
+        if value:
+            identities.add(value)
+    prompt = str(q.get("prompt") or "")
+    if prompt:
+        identities.add(_stable_question_qid(str(q.get("suite", "unknown")), prompt))
+    return identities
 
 
 def _nonnegative_int(value: Any, default: int = 0) -> int:
