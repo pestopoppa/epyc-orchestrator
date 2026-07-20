@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import sys
 import threading
@@ -11,6 +12,7 @@ from datetime import UTC, datetime
 from dataclasses import fields
 from pathlib import Path
 
+import httpx
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -115,6 +117,133 @@ def test_eval_batch_stamps_shared_eval_batch_id(monkeypatch) -> None:
     assert len(set(seen_batch_ids)) == 1
     assert seen_batch_ids[0].startswith("evaltower-T1-")
     assert seen_batch_ids[0].endswith("-3q")
+
+
+@pytest.mark.parametrize(
+    ("response_kind", "expected_error"),
+    [
+        ("timeout", "timed out"),
+        ("http_503", "backend down"),
+        ("payload_error", "backend busy"),
+    ],
+)
+def test_eval_question_fake_transport_error_paths(
+    response_kind: str,
+    expected_error: str,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if response_kind == "timeout":
+            raise httpx.ReadTimeout("timed out", request=request)
+        if response_kind == "http_503":
+            return httpx.Response(
+                503,
+                json={"error_code": 503, "error_detail": "backend down"},
+                request=request,
+            )
+        return httpx.Response(200, json={"error": "backend busy"}, request=request)
+
+    tower = EvalTower(timeout=1)
+    with httpx.Client(transport=httpx.MockTransport(handler), timeout=1) as client:
+        result = tower._eval_question(
+            {
+                "id": response_kind,
+                "suite": "unit",
+                "prompt": "Say ok.",
+                "expected": "ok",
+                "scoring_method": "exact_match",
+            },
+            client,
+        )
+
+    assert result.question_id == response_kind
+    assert result.correct is False
+    assert result.error
+    assert expected_error in result.error
+    assert result.tokens_generated == 0
+
+
+def test_eval_batch_fake_transport_errors_use_non_error_quality_denominator(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AUTOPILOT_EVAL_CONCURRENCY", "1")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content.decode("utf-8"))
+        prompt = str(payload.get("prompt") or "")
+        if "payload error" in prompt:
+            return httpx.Response(200, json={"error": "backend busy"}, request=request)
+        if "http error" in prompt:
+            return httpx.Response(
+                503,
+                json={"error_code": 503, "error_detail": "backend down"},
+                request=request,
+            )
+        return httpx.Response(
+            200,
+            json={"answer": "ok", "tokens_generated": 4, "model": "mock-frontdoor"},
+            request=request,
+        )
+
+    tower = EvalTower(timeout=1)
+    questions = [
+        {"id": "ok", "suite": "unit", "prompt": "Say ok.", "expected": "ok"},
+        {
+            "id": "payload-error",
+            "suite": "unit",
+            "prompt": "Return payload error.",
+            "expected": "ok",
+        },
+        {
+            "id": "http-error",
+            "suite": "unit",
+            "prompt": "Return http error.",
+            "expected": "ok",
+        },
+    ]
+    with httpx.Client(transport=httpx.MockTransport(handler), timeout=1) as client:
+        results = tower._eval_batch(questions, client=client, label="fake-transport")
+
+    assert [r.question_id for r in results] == ["ok", "payload-error", "http-error"]
+    assert results[0].correct is True
+    assert results[0].error is None
+    assert "backend busy" in str(results[1].error)
+    assert "backend down" in str(results[2].error)
+
+    agg = tower._aggregate(results, tier=1)
+    assert agg.details["n_scored"] == 1
+    assert agg.details["quality_denominator"] == 1
+    assert agg.details["scoring_errors"] == 2
+    assert agg.quality == 3.0
+    assert agg.reliability == pytest.approx(1 / 3)
+
+
+def test_eval_batch_worker_exception_becomes_error_result(monkeypatch) -> None:
+    monkeypatch.setenv("AUTOPILOT_EVAL_CONCURRENCY", "1")
+    tower = EvalTower(timeout=1)
+
+    def fake_eval_question(q: dict, client: object) -> QuestionResult:
+        if q["id"] == "boom":
+            raise RuntimeError("worker exploded")
+        return QuestionResult(
+            question_id=str(q["id"]),
+            suite="unit",
+            prompt=str(q["id"]),
+            expected="ok",
+            correct=True,
+        )
+
+    monkeypatch.setattr(tower, "_eval_question", fake_eval_question)
+
+    results = tower._eval_batch(
+        [{"id": "ok"}, {"id": "boom"}, {"id": "after"}],
+        client=object(),  # type: ignore[arg-type]
+        label="worker-exception",
+    )
+
+    assert [r.question_id for r in results] == ["ok", "boom", "after"]
+    assert results[0].error is None
+    assert results[1].error == "worker exploded"
+    assert results[2].error is None
 
 
 def test_eval_batch_fails_remaining_questions_after_no_progress_timeout(monkeypatch) -> None:
