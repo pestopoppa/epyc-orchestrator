@@ -4154,22 +4154,11 @@ class EvalTower:
         how the orchestrator actually handled recent requests.  Empty string
         if the tap file doesn't exist or is unreadable.
         """
-        try:
-            if not self.TAP_PATH.exists():
-                return ""
-            with open(self.TAP_PATH, "rb") as f:
-                # Seek to approximate tail position
-                f.seek(0, 2)  # EOF
-                size = f.tell()
-                # Read last ~8KB (generous for n_lines)
-                read_bytes = min(size, n_lines * 160)
-                f.seek(max(0, size - read_bytes))
-                tail = f.read().decode("utf-8", errors="replace")
-            lines = tail.splitlines()
-            return "\n".join(lines[-n_lines:])
-        except Exception as e:
-            log.warning("Could not capture traces: %s", e)
-            return ""
+        return eval_tower_trace_feedback.capture_recent_traces(
+            self.TAP_PATH,
+            n_lines,
+            logger=log,
+        )
 
     @staticmethod
     def _trim_trace_text(trace_text: Any, max_chars: int) -> str:

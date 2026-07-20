@@ -234,3 +234,16 @@ def test_trace_feedback_module_matches_eval_tower_wrappers() -> None:
     assert FakeTower().capture_contrastive_traces(trace_bank=tower_bank) == (
         eval_tower_trace_feedback.format_contrastive_traces(trace_bank=module_bank)
     )
+
+
+def test_trace_feedback_capture_recent_traces_tails_file(tmp_path) -> None:
+    tap_path = tmp_path / "inference_tap.log"
+    tap_path.write_text("\n".join(f"line {i}" for i in range(6)))
+
+    assert eval_tower_trace_feedback.capture_recent_traces(tap_path, n_lines=3) == (
+        "line 3\nline 4\nline 5"
+    )
+    assert eval_tower_trace_feedback.capture_recent_traces(
+        tmp_path / "missing.log",
+        n_lines=3,
+    ) == ""

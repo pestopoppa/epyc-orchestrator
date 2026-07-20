@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+from pathlib import Path
 from typing import Any
 
 
@@ -18,6 +20,30 @@ def trim_trace_text(trace_text: Any, max_chars: int) -> str:
     if len(text) <= max_chars:
         return text
     return "[trace truncated]\n" + text[-max_chars:]
+
+
+def capture_recent_traces(
+    tap_path: Path,
+    n_lines: int = 50,
+    *,
+    logger: logging.Logger | None = None,
+) -> str:
+    """Read the last n_lines from an inference tap log."""
+    try:
+        if not tap_path.exists():
+            return ""
+        with open(tap_path, "rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            read_bytes = min(size, n_lines * 160)
+            f.seek(max(0, size - read_bytes))
+            tail = f.read().decode("utf-8", errors="replace")
+        lines = tail.splitlines()
+        return "\n".join(lines[-n_lines:])
+    except Exception as exc:  # noqa: BLE001 - trace feedback must not affect eval
+        if logger is not None:
+            logger.warning("Could not capture traces: %s", exc)
+        return ""
 
 
 def trace_ir_steps(
