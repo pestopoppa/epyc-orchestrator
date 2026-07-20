@@ -1,0 +1,10 @@
+{
+  "cache_prompt": false,
+  "n_predict": 128,
+  "prompt": "Write a deterministic two sentence validation note. Mention AXA-2 once and end with the word done.\n\n<think>\nThinking Process:\n\n1.  **Analyze the Request:**\n    *   Task: Write a validation note.\n    *   Constraints:\n        *   Deterministic (implies consistency, no randomness, though in text generation this usually means following instructions precisely).\n        *   Exactly two",
+  "seed": 42,
+  "stream": false,
+  "temperature": 0.0,
+  "top_k": 1,
+  "top_p": 1.0
+}

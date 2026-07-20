@@ -68,7 +68,13 @@ def test_dry_bundle_writes_no_inference_operator_script(tmp_path: Path, monkeypa
 
 
 def test_gpu_occupancy_requires_declared_allowed_pid() -> None:
-    snapshot = {"rocm_smi_showpids": {"ok": True, "stdout": "KFD process 12345 llama-server\n", "stderr": ""}}
+    snapshot = {
+        "rocm_smi_showpids": {
+            "ok": True,
+            "stdout": "12345 llama-server 0 1024 0 0\n",
+            "stderr": "",
+        }
+    }
 
     occupied = bundle.gpu_occupancy(snapshot, allowed_pids={12345})
 
@@ -78,13 +84,43 @@ def test_gpu_occupancy_requires_declared_allowed_pid() -> None:
 
 
 def test_gpu_occupancy_flags_unexpected_pid() -> None:
-    snapshot = {"rocm_smi_showpids": {"ok": True, "stdout": "KFD process 12345 llama-server\n", "stderr": ""}}
+    snapshot = {
+        "rocm_smi_showpids": {
+            "ok": True,
+            "stdout": "12345 llama-server 0 1024 0 0\n",
+            "stderr": "",
+        }
+    }
 
     occupied = bundle.gpu_occupancy(snapshot, allowed_pids={22222})
 
     assert occupied["occupied"] is True
     assert occupied["exclusive_to_allowed"] is False
     assert occupied["unexpected_pids"] == [12345]
+
+
+def test_gpu_occupancy_ignores_zero_vram_kfd_and_vram_numeric_column() -> None:
+    rocm_showpids = """
+
+============================ ROCm System Management Interface ============================
+===================================== KFD Processes ======================================
+KFD process information:
+PID   \tPROCESS NAME\tGPU(s)\tVRAM USED  \tSDMA USED\tCU OCCUPANCY\t
+571438\tllama-server\t1     \t40847425536\t0        \t0           \t
+571437\tllama-server\t0     \t0          \t0        \t0           \t
+==========================================================================================
+================================== End of ROCm SMI Log ===================================
+"""
+    snapshot = {"rocm_smi_showpids": {"ok": True, "stdout": rocm_showpids, "stderr": ""}}
+
+    occupied = bundle.gpu_occupancy(snapshot, allowed_pids={571438})
+
+    assert occupied["occupied"] is True
+    assert occupied["exclusive_to_allowed"] is True
+    assert occupied["pids"] == [571437, 571438]
+    assert occupied["gpu_owner_pids"] == [571438]
+    assert occupied["ignored_zero_vram_pids"] == [571437]
+    assert occupied["unexpected_pids"] == []
 
 
 def test_first_char_divergence_handles_equal_prefixes() -> None:

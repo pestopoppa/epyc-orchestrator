@@ -1,0 +1,10 @@
+{
+  "cache_prompt": false,
+  "n_predict": 64,
+  "prompt": "Write a deterministic two sentence validation note. Mention AXA-2 once and end with the word done.",
+  "seed": 42,
+  "stream": false,
+  "temperature": 0.0,
+  "top_k": 1,
+  "top_p": 1.0
+}

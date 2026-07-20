@@ -1,0 +1,36 @@
+{
+  "allowed_pids": [
+    574608
+  ],
+  "exclusive_to_allowed": true,
+  "gpu_owner_pids": [
+    574608
+  ],
+  "ignored_zero_vram_pids": [
+    574294
+  ],
+  "occupied": true,
+  "ok": true,
+  "pids": [
+    574294,
+    574608
+  ],
+  "process_rows": [
+    {
+      "gpus": "1",
+      "pid": 574608,
+      "process_name": "llama-server",
+      "vram_used": 41206038528
+    },
+    {
+      "gpus": "0",
+      "pid": 574294,
+      "process_name": "llama-server",
+      "vram_used": 0
+    }
+  ],
+  "reason": "exclusive_to_allowed",
+  "stderr": "",
+  "stdout": "\n\n============================ ROCm System Management Interface ============================\n===================================== KFD Processes ======================================\nKFD process information:\nPID   \tPROCESS NAME\tGPU(s)\tVRAM USED  \tSDMA USED\tCU OCCUPANCY\t\n574608\tllama-server\t1     \t41206038528\t0        \t0           \t\n574294\tllama-server\t0     \t0          \t0        \t0           \t\n==========================================================================================\n================================== End of ROCm SMI Log ===================================\n",
+  "unexpected_pids": []
+}
