@@ -21,7 +21,9 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from src.llm_primitives.stat_tests import (  # noqa: E402
+    CALIBRATION_METRIC_KEYS,
     DEFAULT_WILSON_Z,
+    compute_calibration_metrics,
     expected_calibration_error,
     roc_auc,
     wilson_interval,
@@ -165,6 +167,57 @@ def test_roc_auc_matches_sklearn():
     scores = [0.5, 0.5, 0.5, 0.9, 0.1, 0.5]
     labels = [0, 1, 0, 1, 0, 1]
     assert math.isclose(roc_auc(scores, labels), _sk_auc(labels, scores), rel_tol=1e-9)
+
+
+# --------------------------------------------------------------------------- #
+# Eval calibration metric bundle
+# --------------------------------------------------------------------------- #
+def test_calibration_metric_bundle_keys_are_stable():
+    assert CALIBRATION_METRIC_KEYS == (
+        "ece",
+        "auroc",
+        "top1_accuracy",
+        "bottom1_accuracy",
+        "spearman_rho",
+        "mae",
+    )
+
+
+def test_calibration_metric_bundle_concrete_values():
+    metrics = compute_calibration_metrics([0.2, 0.4, 0.6, 0.8], [0, 0, 1, 1])
+    assert metrics["n"] == 4
+    assert metrics["ece"] == pytest.approx(0.3, abs=1e-12)
+    assert metrics["auroc"] == pytest.approx(1.0, abs=1e-12)
+    assert metrics["top1_accuracy"] == pytest.approx(1.0, abs=1e-12)
+    assert metrics["bottom1_accuracy"] == pytest.approx(0.0, abs=1e-12)
+    assert metrics["spearman_rho"] == pytest.approx(0.8944271909999159, abs=1e-9)
+    assert metrics["mae"] == pytest.approx(0.3, abs=1e-12)
+
+
+def test_calibration_metric_bundle_averages_extreme_ties():
+    metrics = compute_calibration_metrics([0.9, 0.9, 0.1, 0.1], [1, 0, 0, 1])
+    assert metrics["top1_accuracy"] == pytest.approx(0.5, abs=1e-12)
+    assert metrics["bottom1_accuracy"] == pytest.approx(0.5, abs=1e-12)
+
+
+def test_calibration_metric_bundle_handles_degenerate_inputs():
+    empty = compute_calibration_metrics([], [])
+    assert empty["n"] == 0
+    for key in CALIBRATION_METRIC_KEYS:
+        assert empty[key] is None
+
+    constant_conf = compute_calibration_metrics([0.5, 0.5, 0.5, 0.5], [1, 0, 1, 0])
+    assert constant_conf["auroc"] is None
+    assert constant_conf["spearman_rho"] is None
+    assert constant_conf["top1_accuracy"] == pytest.approx(0.5, abs=1e-12)
+
+    single_class = compute_calibration_metrics([0.1, 0.4, 0.9], [1, 1, 1])
+    assert single_class["auroc"] is None
+
+
+def test_calibration_metric_bundle_length_mismatch_raises():
+    with pytest.raises(ValueError):
+        compute_calibration_metrics([0.1, 0.2], [1])
 
 
 # --------------------------------------------------------------------------- #
