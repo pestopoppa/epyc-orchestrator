@@ -987,6 +987,39 @@ def _runtime_flag_string_prior(
     return fallback
 
 
+def _descriptor_reasoning_flag_prior(descriptor: dict[str, Any]) -> str | None:
+    acceleration = descriptor.get("acceleration")
+    if not isinstance(acceleration, dict):
+        return None
+    if acceleration.get("enable_thinking") is not False:
+        return None
+    thinking_control = acceleration.get("thinking_control")
+    mode = thinking_control.get("mode") if isinstance(thinking_control, dict) else None
+    if mode in {"reasoning_off", "toggle_off"}:
+        return "off"
+    return None
+
+
+def _runtime_reasoning_prior(
+    server_cfg: dict[str, Any] | None,
+    role_cfg: dict[str, Any] | None,
+    descriptor: dict[str, Any],
+    *,
+    mode: str,
+    worker_type: str | None,
+    vision_type: str | None,
+    vision_escalation_reasoning: str,
+) -> str | None:
+    explicit = _runtime_flag_string_prior(server_cfg, role_cfg, key="reasoning")
+    if explicit:
+        return explicit
+    if mode == "vision" and vision_type == "escalation":
+        return vision_escalation_reasoning
+    if mode == "worker_pool" and worker_type == "explore":
+        return "off"
+    return _descriptor_reasoning_flag_prior(descriptor)
+
+
 def _number_prior(
     *containers: dict[str, Any] | None,
     key: str,
@@ -1382,15 +1415,14 @@ def _launch_runtime_record(
                 if mode == "vision" and vision_type == "escalation"
                 else None,
             ),
-            "reasoning": _runtime_flag_string_prior(
+            "reasoning": _runtime_reasoning_prior(
                 server_cfg,
                 role_cfg,
-                key="reasoning",
-                fallback=VISION_ESCALATION_REASONING
-                if mode == "vision" and vision_type == "escalation"
-                else "off"
-                if mode == "worker_pool" and worker_type == "explore"
-                else None,
+                descriptor,
+                mode=mode,
+                worker_type=worker_type,
+                vision_type=vision_type,
+                vision_escalation_reasoning=VISION_ESCALATION_REASONING,
             ),
             "override_kv": override_kv,
             "spec": spec,

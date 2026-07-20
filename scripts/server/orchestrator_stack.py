@@ -108,6 +108,8 @@ from scripts.server.stack_numa import (
     NUMA_CONFIG,
     _numa_prefix,
 )
+from scripts.server.runtime_facts_manifest import read_runtime_stack_numa_mode
+from scripts.server.stack_numa_mode import normalize_stack_numa_mode
 from scripts.server.stack_state import (
     ProcessInfo,
     load_state_file as _load_state_file,
@@ -1606,7 +1608,10 @@ def _apply_production_feature_env(env: MutableMapping[str, str]) -> None:
         env.setdefault(key, value)
 
 
-def start_orchestrator(profile: str | None = None) -> ProcessInfo | None:
+def start_orchestrator(
+    profile: str | None = None,
+    stack_numa_mode: str | None = None,
+) -> ProcessInfo | None:
     """Start the orchestrator API."""
     log_file = LOG_DIR / "orchestrator.log"
 
@@ -1622,6 +1627,13 @@ def start_orchestrator(profile: str | None = None) -> ProcessInfo | None:
     env = os.environ.copy()
     env["HF_HOME"] = str(_PATHS["cache_dir"] / "huggingface")
     env["TMPDIR"] = str(_PATHS["tmp_dir"])
+    runtime_numa_mode = (
+        stack_numa_mode
+        or read_runtime_stack_numa_mode()
+        or env.get("ORCHESTRATOR_STACK_NUMA_MODE")
+    )
+    if runtime_numa_mode:
+        env["ORCHESTRATOR_STACK_NUMA_MODE"] = normalize_stack_numa_mode(runtime_numa_mode)
     # Feature flags: make every registry flag explicit in /proc/<pid>/environ.
     # Explicit launch-time env values are activation intent and must survive.
     _apply_production_feature_env(env)

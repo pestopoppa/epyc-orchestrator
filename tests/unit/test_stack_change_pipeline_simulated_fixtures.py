@@ -664,6 +664,17 @@ def _assert_text_stack_primary_port_consumers(
     )
 
 
+def _primary_port_for_roles(priors: dict[str, Any], roles: set[str]) -> int:
+    ports = {
+        port
+        for role in roles
+        for port in ((priors["roles"][role].get("serving") or {}).get("ports") or [])
+        if isinstance(port, int)
+    }
+    assert ports
+    return min(ports)
+
+
 def _assert_worker_pool_stack_prior_consumer(
     records: dict[str, dict[str, Any]],
     *,
@@ -907,11 +918,12 @@ def test_simulated_frontdoor_swap_updates_generated_consumers_with_approval(
     from src.api.routes.dashboard_topology import _stack_prior_port_hints
     from src.api.routes.health import _stack_prior_backend_urls
 
+    expected_port = _primary_port_for_roles(priors, roles)
     assert _stack_prior_backend_urls(config.stack_priors) == {
-        "coder_escalation/frontdoor": "http://localhost:8070"
+        "coder_escalation/frontdoor": f"http://localhost:{expected_port}"
     }
     port_hints = _stack_prior_port_hints(config.stack_priors)
-    assert port_hints[8070] in roles
+    assert port_hints[expected_port].split(".", 1)[0] in roles
 
     from src.api.routes import chat_routing, openai_compat
 
@@ -1030,14 +1042,15 @@ def test_simulated_worker_swap_updates_generated_consumers_with_approval(
         expected_roles=roles,
         expected_tps=66.2,
     )
+    expected_port = _primary_port_for_roles(priors, roles)
     _assert_text_stack_primary_port_consumers(
         config.stack_priors,
         expected_roles=roles,
-        expected_port=8072,
+        expected_port=expected_port,
     )
     _assert_worker_pool_stack_prior_consumer(
         priors["roles"],
-        expected_port=8072,
+        expected_port=expected_port,
         expected_model_path_fragment="gemma-4-26B-A4B-it-Q8_0.gguf",
         monkeypatch=monkeypatch,
     )
@@ -1260,12 +1273,14 @@ def test_simulated_ingest_swap_updates_generated_consumers_with_approval(
     from src.api.routes.dashboard_topology import _stack_prior_port_hints
     from src.api.routes.health import _stack_prior_backend_urls
 
+    expected_port = _primary_port_for_roles(priors, roles)
     assert _stack_prior_backend_urls(config.stack_priors) == {
-        "ingest_long_context": "http://localhost:8085"
+        "ingest_long_context": f"http://localhost:{expected_port}"
     }
     port_hints = _stack_prior_port_hints(config.stack_priors)
-    assert port_hints[8085] == "ingest_long_context"
-    assert not ({8185, 8285, 8385, 8485} & set(port_hints))
+    assert port_hints[expected_port].split(".", 1)[0] == "ingest_long_context"
+    if expected_port == 8085:
+        assert not ({8185, 8285, 8385, 8485} & set(port_hints))
 
     q_priors = stack_prior_q_scorer_priors_by_role(config.stack_priors)
     assert q_priors.baseline_tps_by_role["ingest_long_context"] == 14.2

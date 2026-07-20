@@ -60,9 +60,9 @@ FALLBACK_BASELINE_TPS_BY_ROLE: Dict[str, float] = {
     "coder_escalation": 10.8,
     "architect_general": 4.3,
     "ingest_long_context": 12.0,
-    "worker_general": 50.0,
-    "worker_math": 50.0,
-    "toolrunner": 50.0,
+    "worker_general": 38.46,
+    "worker_math": 38.46,
+    "toolrunner": 38.46,
     "worker_vision": 15.28,
     "vision_escalation": 27.6,
 }

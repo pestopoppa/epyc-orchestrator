@@ -52,7 +52,10 @@ from scripts.server.stack_paths import (
     STATE_FILE,
 )
 from scripts.server.stack_prewarm import prewarm_all as _prewarm_all
-from scripts.server.runtime_facts_manifest import write_runtime_facts_manifest
+from scripts.server.runtime_facts_manifest import (
+    read_runtime_stack_numa_mode,
+    write_runtime_facts_manifest,
+)
 from scripts.server.stack_state import ProcessInfo
 from src.roles import Role
 from src.registry.stack_priors import (
@@ -1203,7 +1206,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         if preserved:
             state["orchestrator"] = preserved
     else:
-        info = start_orchestrator(getattr(args, "profile", None))
+        info = start_orchestrator(getattr(args, "profile", None), stack_numa_mode=numa_mode)
         if info:
             state["orchestrator"] = info
         else:
@@ -1497,7 +1500,10 @@ def cmd_reload(args: argparse.Namespace) -> int:
             time.sleep(1)
 
             # Start new
-            info = start_orchestrator(getattr(args, "profile", None))
+            info = start_orchestrator(
+                getattr(args, "profile", None),
+                stack_numa_mode=read_runtime_stack_numa_mode(),
+            )
             if info:
                 state["orchestrator"] = info
             else:

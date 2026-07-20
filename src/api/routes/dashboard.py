@@ -4092,6 +4092,16 @@ async def pareto(max_dominated: int = 600, scope: str = "current") -> JSONRespon
         }
 
     canonical_tier = int(archive.get("canonical_tier", DEFAULT_FRONTIER_TIER))
+    active_instrument_eras = (
+        data.get("active_instrument_eras")
+        if isinstance(data.get("active_instrument_eras"), dict)
+        else {}
+    )
+    frontier_rerun_required = (
+        data.get("frontier_rerun_required")
+        if isinstance(data.get("frontier_rerun_required"), dict)
+        else None
+    )
     frontiers_by_tier_raw = archive.get("frontiers_by_tier", {}) or {}
     hv_history_by_tier_raw = archive.get("hv_history_by_tier", {}) or {}
     frontier_raw = (
@@ -4180,6 +4190,10 @@ async def pareto(max_dominated: int = 600, scope: str = "current") -> JSONRespon
                 "source": source,
                 "source_reason": source_reason,
                 "scope": "all_eras" if all_eras else "current",
+                "active_instrument_eras": active_instrument_eras,
+                "pareto_epoch_ts": pareto_epoch_ts,
+                "pareto_exclude_before_ts": pareto_exclude_before_ts,
+                "frontier_rerun_required": frontier_rerun_required,
                 "eras": eras_payload,
                 "era_registry_error": era_registry_error if all_eras else None,
                 # Visibility into why trials may be missing from the frontier, so the

@@ -37,6 +37,12 @@ CUMULATIVE_STATS_RE = re.compile(
 NO_SPEC_IMPL_RE = re.compile(r"no implementations specified for speculative decoding", re.IGNORECASE)
 
 
+def _spec_type_contains(spec_type: str | None, token: str) -> bool:
+    if not spec_type:
+        return False
+    return token in {part.strip() for part in spec_type.split(",") if part.strip()}
+
+
 @dataclass(frozen=True)
 class PortInventory:
     """Current serving inventory for one port."""
@@ -52,7 +58,7 @@ class PortInventory:
 
     @property
     def mtp_configured(self) -> bool:
-        return self.spec_type == "draft-mtp" or bool(self.draft_model_path)
+        return _spec_type_contains(self.spec_type, "draft-mtp") or bool(self.draft_model_path)
 
 
 @dataclass

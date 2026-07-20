@@ -200,13 +200,13 @@ class TestScoringConfigDefaults:
         assert cfg.baseline_tps_by_role["coder_escalation"] == pytest.approx(24.3)
         assert cfg.baseline_tps_by_role["architect_general"] == pytest.approx(12.19)
         assert cfg.baseline_tps_by_role["ingest_long_context"] == pytest.approx(20.8)
-        assert cfg.baseline_tps_by_role["worker_explore"] == pytest.approx(60.7)
-        assert cfg.baseline_tps_by_role["worker_general"] == pytest.approx(60.7)
-        assert cfg.baseline_tps_by_role["worker_math"] == pytest.approx(60.7)
+        assert cfg.baseline_tps_by_role["worker_explore"] == pytest.approx(38.46)
+        assert cfg.baseline_tps_by_role["worker_general"] == pytest.approx(38.46)
+        assert cfg.baseline_tps_by_role["worker_math"] == pytest.approx(38.46)
         assert cfg.baseline_tps_by_role["worker_summarize"] == pytest.approx(24.3)
-        assert cfg.baseline_tps_by_role["toolrunner"] == pytest.approx(60.7)
-        assert cfg.baseline_tps_by_role["worker_vision"] == pytest.approx(20.0)
-        assert cfg.baseline_tps_by_role["vision_escalation"] == pytest.approx(27.6)
+        assert cfg.baseline_tps_by_role["toolrunner"] == pytest.approx(38.46)
+        assert cfg.baseline_tps_by_role["worker_vision"] == pytest.approx(21.32)
+        assert cfg.baseline_tps_by_role["vision_escalation"] == pytest.approx(21.32)
         assert _RETIRED_ARCHITECT_ROLE not in cfg.baseline_tps_by_role
 
     def test_default_config_exposes_stack_prior_sources(self):

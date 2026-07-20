@@ -310,6 +310,92 @@ def _localhost_url_from_port(port: Any) -> str | None:
     return f"http://localhost:{port}" if isinstance(port, int) and port > 0 else None
 
 
+def _runtime_or_env_selected_servers() -> list[dict[str, Any]] | None:
+    """Return launcher-selected servers for the active NUMA mode.
+
+    The generated stack-priors file is static and can describe the full-mode
+    primary ports even when the live launcher selected quarter mode. Runtime
+    facts are authoritative after stack startup; during API startup, before that
+    manifest is refreshed, fall back to ORCHESTRATOR_STACK_NUMA_MODE plus the
+    stack manifest filter.
+    """
+    mode = os.environ.get("ORCHESTRATOR_STACK_NUMA_MODE")
+    if mode:
+        try:
+            from scripts.server.stack_manifest import (
+                HOT_SERVERS,
+                WARM_SERVERS,
+                _filter_by_numa_mode,
+            )
+            from scripts.server.stack_numa_mode import normalize_stack_numa_mode
+
+            return _filter_by_numa_mode(
+                HOT_SERVERS + WARM_SERVERS,
+                normalize_stack_numa_mode(mode),
+            )
+        except Exception:
+            return None
+
+    if os.environ.get("ORCHESTRATOR_IGNORE_RUNTIME_STACK_FACTS") == "1":
+        return None
+    try:
+        from scripts.server.runtime_facts_manifest import read_runtime_stack_selected_servers
+
+        return read_runtime_stack_selected_servers()
+    except Exception:
+        return None
+
+
+def _selected_server_url_values(selected_servers: list[dict[str, Any]] | None) -> dict[str, str]:
+    """Build config-compatible role URLs from selected launcher servers."""
+    if not selected_servers:
+        return {}
+    try:
+        from scripts.server.stack_numa import NUMA_CONFIG
+    except Exception:
+        NUMA_CONFIG = {}
+
+    ports_by_role: dict[str, list[tuple[int, bool]]] = {}
+    seen_by_role: dict[str, set[int]] = {}
+    for server in selected_servers:
+        if not isinstance(server, dict):
+            continue
+        port = server.get("port")
+        roles = server.get("roles")
+        if isinstance(port, bool) or not isinstance(port, int) or port <= 0:
+            continue
+        if not isinstance(roles, list):
+            continue
+        for role in roles:
+            if not isinstance(role, str) or not role:
+                continue
+            seen = seen_by_role.setdefault(role, set())
+            if port in seen:
+                continue
+            seen.add(port)
+            cfg = NUMA_CONFIG.get(role) if isinstance(NUMA_CONFIG, dict) else None
+            full_idx = cfg.get("full_instance_idx") if isinstance(cfg, dict) else None
+            is_full = (
+                isinstance(full_idx, int)
+                and isinstance(server.get("numa_instance"), int)
+                and server.get("numa_instance") == full_idx
+            )
+            ports_by_role.setdefault(role, []).append((port, is_full))
+
+    urls: dict[str, str] = {}
+    for role, entries in ports_by_role.items():
+        full_ports = [port for port, is_full in entries if is_full]
+        other_ports = [port for port, is_full in entries if not is_full]
+        ordered = full_ports[:1] + other_ports + full_ports[1:]
+        if not ordered:
+            continue
+        role_urls = [f"http://localhost:{port}" for port in ordered]
+        if full_ports and len(role_urls) > 1:
+            role_urls[0] = f"full:{role_urls[0]}"
+        urls[role] = ",".join(role_urls)
+    return urls
+
+
 def _stack_manifest_server_urls() -> dict[str, str]:
     """Return compatibility/service URLs derived from stack manifest ports."""
     try:
@@ -344,9 +430,11 @@ def _stack_prior_server_urls() -> dict[str, str]:
         return _STACK_PRIOR_SERVER_URLS_CACHE
 
     urls: dict[str, str] = {}
+    urls.update(_selected_server_url_values(_runtime_or_env_selected_servers()))
     try:
         priors_path = Path(_get_default_stack_priors_path())
-        urls.update(live_stack_serving_url_values(priors_path))
+        for role, url in live_stack_serving_url_values(priors_path).items():
+            urls.setdefault(role, url)
 
         for alias, target in _STACK_PRIOR_SERVER_URL_ALIASES.items():
             if target in urls:

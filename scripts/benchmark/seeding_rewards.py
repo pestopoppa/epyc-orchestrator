@@ -61,9 +61,9 @@ FALLBACK_THROUGHPUT_BY_ROLE: dict[str, float] = {
     "worker_summarize": 24.3,
     "architect_general": 12.19,
     "ingest_long_context": 20.8,
-    "toolrunner": 60.7,
-    "worker_general": 60.7,
-    "worker_math": 60.7,
+    "toolrunner": 38.46,
+    "worker_general": 38.46,
+    "worker_math": 38.46,
     "worker_vision": 20.0,
     "vision_escalation": 27.6,
 }

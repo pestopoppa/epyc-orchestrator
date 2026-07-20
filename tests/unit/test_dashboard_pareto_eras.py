@@ -149,6 +149,35 @@ def test_current_scope_unchanged_and_excludes_pre_epoch(tmp_path, monkeypatch):
     assert d["exclusions"]["before_ts"]["count"] == 3
 
 
+def test_pareto_payload_surfaces_active_testing_era(tmp_path, monkeypatch):
+    _eras_file(tmp_path, monkeypatch)
+    _journal(tmp_path, monkeypatch, ROWS)
+    _state(
+        tmp_path,
+        monkeypatch,
+        active_instrument_eras={
+            "autopilot_speed": "E6-autopilot-speed",
+            "cpu_bench": "E6-cpu-kernel",
+        },
+        frontier_rerun_required={
+            "required": True,
+            "reason": "E6-autopilot-speed production-consolidated-v7 era opened",
+        },
+        pareto_epoch_ts=1784554213.0,
+        pareto_exclude_before_ts=1784554213.0,
+    )
+    d = _call("current")
+
+    assert d["active_instrument_eras"] == {
+        "autopilot_speed": "E6-autopilot-speed",
+        "cpu_bench": "E6-cpu-kernel",
+    }
+    assert d["pareto_epoch_ts"] == 1784554213.0
+    assert d["pareto_exclude_before_ts"] == 1784554213.0
+    assert d["frontier_rerun_required"]["required"] is True
+    assert "production-consolidated-v7" in d["frontier_rerun_required"]["reason"]
+
+
 def test_all_eras_without_registry_shows_unscaled_with_warning(tmp_path, monkeypatch):
     """Registry unreadable → fail open WITHOUT deinflation (the state's
     pareto_epoch_ts is a rebase marker, not the E2 boundary) + surfaced error."""

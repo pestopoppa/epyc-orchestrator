@@ -29,7 +29,7 @@ def _write_attestation(path: Path) -> None:
                 {
                     "port": 8072,
                     "pid": 1234,
-                    "spec_type": "draft-mtp",
+                    "spec_type": "ngram-mod,draft-mtp",
                     "draft_model_path": "/models/draft.gguf",
                     "model_path": "/models/worker.gguf",
                     "numa_intent": {"role": "worker_general", "cpu_list": "0-95"},
@@ -70,6 +70,21 @@ def test_parse_acceptance_lines() -> None:
     assert cumulative.accepted_tokens == 37046
     assert cumulative.token_acceptance_rate == 37046 / 44781
     assert cumulative.draft_acceptance_rate == 19662 / 22393
+
+
+def test_port_inventory_detects_mtp_inside_combined_spec_type() -> None:
+    inventory = report.PortInventory(
+        port=8072,
+        primary_role="worker_general",
+        registry_roles=["worker_general"],
+        pid=1234,
+        spec_type="ngram-mod,draft-mtp",
+        draft_model_path=None,
+        model_path="/models/worker.gguf",
+        cpu_intent=None,
+    )
+
+    assert inventory.mtp_configured is True
 
 
 def test_build_report_uses_latest_cumulative_stats(tmp_path: Path) -> None:
