@@ -66,6 +66,7 @@ _HOST_COVARIATE_NUMERIC_KEYS = (
     "loadavg_per_core",
 )
 _HOST_COVARIATE_CATEGORICAL_KEYS = ("cache_warm_state",)
+_DATASET_SHA_BY_CORE_ID: dict[str, str] = {}
 
 
 def _eval_no_progress_timeout_s(request_timeout_s: int) -> float:
@@ -1158,6 +1159,45 @@ def dataset_content_sha256(questions: Sequence[dict[str, Any]]) -> str:
             h.update(b"\x00")
         h.update(b"\x1e")
     return h.hexdigest()
+
+
+def _stamp_eval_instrument(
+    result: EvalResult,
+    *,
+    questions: Sequence[dict[str, Any]],
+    core_id: str,
+    test_profile: dict[str, Any],
+) -> EvalResult:
+    """Attach machine-checkable dataset/profile identity to a tier result."""
+    dataset_sha = dataset_content_sha256(questions)
+    profile_json = json.dumps(test_profile, sort_keys=True, separators=(",", ":"), default=str)
+    result.core_id = core_id
+    result.details.update(
+        {
+            "core_id": core_id,
+            "dataset_content_sha256": dataset_sha,
+            "dataset_sha256": dataset_sha,
+            "test_profile": test_profile,
+            "test_profile_json": profile_json,
+        }
+    )
+    if core_id:
+        previous = _DATASET_SHA_BY_CORE_ID.get(core_id)
+        if previous and previous != dataset_sha:
+            warning = {
+                "core_id": core_id,
+                "previous_dataset_content_sha256": previous,
+                "current_dataset_content_sha256": dataset_sha,
+            }
+            result.details["instrument_drift_warning"] = warning
+            log.warning(
+                "Eval instrument drift under core_id=%s: %s -> %s",
+                core_id,
+                previous,
+                dataset_sha,
+            )
+        _DATASET_SHA_BY_CORE_ID[core_id] = dataset_sha
+    return result
 
 
 # ── paired-significance screening (config/quant A/B) ─────────────────────────
@@ -2484,7 +2524,18 @@ class EvalTower:
                 r.error or "",
             )
 
-        return self._aggregate(results, tier=0)
+        result = self._aggregate(results, tier=0)
+        return _stamp_eval_instrument(
+            result,
+            questions=batch,
+            core_id=f"t0_sentinels_v1_n{len(batch)}",
+            test_profile={
+                "version": "eval-tower-tier-profile-v1",
+                "tier": 0,
+                "source": "sentinel_questions",
+                "n_questions": len(batch),
+            },
+        )
 
     def eval_t1(
         self,
@@ -2672,10 +2723,8 @@ class EvalTower:
             )
         else:
             result = full_result
-        result.core_id = core_id
         result.details.update(
             {
-                "core_id": core_id,
                 "core_selection": core_selection,
                 "core_path": core_path,
                 "core_metadata": core_metadata,
@@ -2686,7 +2735,23 @@ class EvalTower:
                 "audit_policy": audit_policy,
             }
         )
-        return result
+        return _stamp_eval_instrument(
+            result,
+            questions=questions,
+            core_id=core_id,
+            test_profile={
+                "version": "eval-tower-tier-profile-v1",
+                "tier": 1,
+                "core_id": core_id,
+                "core_selection": core_selection,
+                "seed": int(seed),
+                "requested_n": int(n),
+                "n_questions": len(questions),
+                "base_core_questions": base_core_questions,
+                "base_audit_questions": base_audit_questions,
+                "audit_policy": audit_policy,
+            },
+        )
 
     def eval_t2(
         self,
@@ -2785,13 +2850,28 @@ class EvalTower:
             results = self._eval_batch(questions, client, log_every=50, label="T2")
 
         result = self._aggregate(results, tier=2)
+        core_id = f"legacy_pool_t2_seed_{draw_seed}_n{requested_n}"
         if promotion_eval:
             promotion_policy["actual_n"] = len(
                 [q for q in questions if q.get("eval_partition") == "core"]
             )
             result.details["promotion_eval_policy"] = promotion_policy
-            result.core_id = f"w8_promotion_eval_v1_trial_{resolved_trial_id}_n{requested_n}"
-        return result
+            core_id = f"w8_promotion_eval_v1_trial_{resolved_trial_id}_n{requested_n}"
+        return _stamp_eval_instrument(
+            result,
+            questions=questions,
+            core_id=core_id,
+            test_profile={
+                "version": "eval-tower-tier-profile-v1",
+                "tier": 2,
+                "core_id": core_id,
+                "seed": int(draw_seed),
+                "requested_n": int(requested_n),
+                "n_questions": len(questions),
+                "promotion_eval": bool(promotion_eval),
+                "promotion_policy": promotion_policy if promotion_eval else None,
+            },
+        )
 
     def eval_t3(
         self,
@@ -2851,8 +2931,21 @@ class EvalTower:
         }
         # Keep the original core_id for evidence continuity; only the human-facing
         # label changed from "hard-only" to "expert/hard workflow".
-        result.core_id = f"t3_hard_only_v1_seed_{draw_seed}_n{requested_n}"
-        return result
+        core_id = f"t3_hard_only_v1_seed_{draw_seed}_n{requested_n}"
+        return _stamp_eval_instrument(
+            result,
+            questions=questions,
+            core_id=core_id,
+            test_profile={
+                "version": "eval-tower-tier-profile-v1",
+                "tier": 3,
+                "core_id": core_id,
+                "seed": int(draw_seed),
+                "requested_n": int(requested_n),
+                "n_questions": len(questions),
+                "pool_tier": 3,
+            },
+        )
 
     # ── verifier-mode entrypoints (EV-4 / EV-11, additive 2026-07-17) ────────
     # BUILD-evalbatch-verifier-mode. These are new ENTRYPOINTS, not new

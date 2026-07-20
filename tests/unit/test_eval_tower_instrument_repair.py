@@ -599,6 +599,59 @@ def test_eval_t1_legacy_sampling_records_core_id(monkeypatch) -> None:
     assert result.core_id == "legacy_pool_seed_42_n2"
     assert result.details["core_selection"] == "legacy_pool_seed"
     assert result.details["base_core_questions"] == 2
+    assert len(result.details["dataset_content_sha256"]) == 64
+    assert result.details["dataset_sha256"] == result.details["dataset_content_sha256"]
+    assert result.details["test_profile"]["tier"] == 1
+    assert result.details["test_profile"]["core_id"] == "legacy_pool_seed_42_n2"
+    assert result.details["test_profile"]["n_questions"] == 2
+    assert "test_profile_json" in result.details
+
+
+def test_dataset_content_sha256_includes_suite_and_scoring_oracle() -> None:
+    base = [
+        {
+            "id": "q1",
+            "suite": "math",
+            "prompt": "2+2?",
+            "expected": "4",
+            "scoring_method": "exact_match",
+            "scoring_config": {"extract_pattern": r"ANSWER:\s*(\d+)"},
+        }
+    ]
+    changed_oracle = [dict(base[0], scoring_config={"extract_pattern": r"####\s*(\d+)"})]
+    changed_suite = [dict(base[0], suite="coder")]
+
+    assert eval_tower.dataset_content_sha256(base) != eval_tower.dataset_content_sha256(
+        changed_oracle
+    )
+    assert eval_tower.dataset_content_sha256(base) != eval_tower.dataset_content_sha256(
+        changed_suite
+    )
+
+
+def test_eval_instrument_stamp_warns_on_core_id_drift() -> None:
+    eval_tower._DATASET_SHA_BY_CORE_ID.clear()
+    q1 = [{"id": "q1", "suite": "math", "prompt": "2+2?", "expected": "4"}]
+    q2 = [{"id": "q2", "suite": "math", "prompt": "3+3?", "expected": "6"}]
+
+    first = eval_tower._stamp_eval_instrument(
+        eval_tower.EvalResult(tier=1, quality=3.0, speed=1.0, cost=0.0, reliability=1.0),
+        questions=q1,
+        core_id="core-v",
+        test_profile={"tier": 1},
+    )
+    second = eval_tower._stamp_eval_instrument(
+        eval_tower.EvalResult(tier=1, quality=3.0, speed=1.0, cost=0.0, reliability=1.0),
+        questions=q2,
+        core_id="core-v",
+        test_profile={"tier": 1},
+    )
+
+    assert "instrument_drift_warning" not in first.details
+    warning = second.details["instrument_drift_warning"]
+    assert warning["core_id"] == "core-v"
+    assert warning["previous_dataset_content_sha256"] == first.details["dataset_content_sha256"]
+    assert warning["current_dataset_content_sha256"] == second.details["dataset_content_sha256"]
 
 
 def test_eval_t1_w6_audit_block_appends_trial_seeded_questions(
