@@ -4017,6 +4017,12 @@ class EvalTower:
         dataset_sha256 = dataset_content_sha256(questions)
         n_gsm8k = sum(1 for q in questions if str(q.get("id", "")).startswith("gsm8k"))
         n_math500 = sum(1 for q in questions if str(q.get("id", "")).startswith("math500"))
+        if n_math500 <= 0:
+            raise ValueError(
+                "math re-baseline has n_math500=0; MATH-500 coverage is required "
+                "before EV-11 can be decision-grade; repair adapter/pool source "
+                "accounting and rebuild under the operator era label"
+            )
         test_profile = {
             "version": "ev11-math-rebaseline-v1",
             "scoring": str(scoring),

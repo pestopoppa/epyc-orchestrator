@@ -193,6 +193,35 @@ def test_score_math_rebaseline_length_mismatch_raises() -> None:
         score_math_rebaseline_answers(_tiny_math_set(), ["only-one-answer"])
 
 
+def test_eval_math_rebaseline_refuses_without_math500(monkeypatch) -> None:
+    class GsmOnlyAdapter:
+        def extract_all(self) -> list[dict]:
+            return [
+                {
+                    "id": "gsm8k_00001",
+                    "suite": "math",
+                    "prompt": "1+1?",
+                    "expected": "2",
+                    "scoring_method": "exact_match",
+                }
+            ]
+
+    tower = EvalTower(url="http://127.0.0.1:1", timeout=1)
+    monkeypatch.setattr(tower, "_load_dataset_adapter", lambda _suite: GsmOnlyAdapter())
+
+    def fail_eval_batch(*_args, **_kwargs):  # noqa: ANN001
+        raise AssertionError("eval_math_rebaseline must fail before inference")
+
+    monkeypatch.setattr(tower, "_eval_batch", fail_eval_batch)
+
+    with pytest.raises(ValueError) as exc:
+        tower.eval_math_rebaseline(full=True, scoring="exact_match", roles=["worker_general"])
+
+    msg = str(exc.value)
+    assert "n_math500=0" in msg
+    assert "decision-grade" in msg
+
+
 def test_dataset_content_sha256_is_deterministic_and_order_sensitive() -> None:
     questions = _tiny_math_set()
     digest = dataset_content_sha256(questions)
