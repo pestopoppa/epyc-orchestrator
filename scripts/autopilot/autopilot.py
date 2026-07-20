@@ -69,7 +69,7 @@ from pareto_archive import (
     ParetoEntry,
     pareto_archive_from_journal_rows,
 )
-from safety_gate import Baseline, DEFAULT_BASELINE_PATH, EvalResult, SafetyGate
+from safety_gate import Baseline, DEFAULT_BASELINE_PATH, EvalResult, SafetyGate, _atomic_write_text
 from eval_tower import EvalTower
 from config_applicator import apply_params  # noqa: F401 - re-export for actions.py tests
 from config_applicator import health_check
@@ -8871,7 +8871,7 @@ def _write_baseline_yaml_tiers(path: Path, baseline: Baseline) -> None:
         text = _drop_top_level_yaml_block(text, "baselines_by_tier")
         text = _drop_top_level_yaml_block(text, "per_suite_quality_by_tier")
         text = _drop_top_level_yaml_block(text, "per_suite_counts_by_tier")
-        path.write_text(text.rstrip() + "\n\n" + _format_baseline_tier_yaml(baseline) + "\n")
+        _atomic_write_text(path, text.rstrip() + "\n\n" + _format_baseline_tier_yaml(baseline) + "\n")
         return
 
     data = {
@@ -8885,7 +8885,7 @@ def _write_baseline_yaml_tiers(path: Path, baseline: Baseline) -> None:
         "per_suite_quality_by_tier": baseline.per_suite_quality_by_tier,
         "per_suite_counts_by_tier": baseline.per_suite_counts_by_tier,
     }
-    path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
+    _atomic_write_text(path, yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
 
 
 def _migrate_flat_baseline_to_tier(

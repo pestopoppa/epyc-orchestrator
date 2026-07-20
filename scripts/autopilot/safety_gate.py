@@ -38,6 +38,40 @@ DEFAULT_BASELINE_PATH = (
     Path(__file__).resolve().parents[2] / "orchestration" / "autopilot_baseline.yaml"
 )
 
+# Remediation shown whenever the baseline file is unreadable/unparseable. Kept as a
+# single constant so the raised message and the docs stay in lockstep.
+_BASELINE_REMEDIATION = (
+    "Restore the file from git or recompute via "
+    "`autopilot.py checkpoint --production-best`."
+)
+
+
+class BaselineCorruptError(RuntimeError):
+    """Raised when the baseline YAML is unreadable/unparseable.
+
+    The gate deliberately refuses to start on a silent default: a missing or
+    zeroed baseline passes every trial, so falling back quietly would weaken
+    regression gating exactly when the operator most needs it enforced.
+    Remediation: restore the file from git or recompute via
+    ``autopilot.py checkpoint --production-best``.
+    """
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Atomically write ``text`` to ``path`` (mirrors state_store.save_state).
+
+    Write to a per-pid temp file, flush + fsync, then os.replace onto the target
+    so a SIGKILL or process crash mid-write can never leave a truncated baseline
+    YAML on disk (the old truncate-in-place write_text could).
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
+    with open(tmp, "w") as fh:
+        fh.write(text)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, path)
+
 # Hard-coded safety thresholds
 # Quality is scored on a 0-3 scale (eval_tower: fraction_correct * 3.0); reliability
 # is a 0-1 fraction. QUALITY_MAX guards the baseline loader: a persisted baseline.quality
@@ -484,7 +518,18 @@ class Baseline:
             if state:
                 baseline.apply_state(state, path)
             return baseline
-        data = yaml.safe_load(path.read_text())
+        try:
+            data = yaml.safe_load(path.read_text())
+        except (yaml.YAMLError, OSError, UnicodeDecodeError) as exc:
+            raise BaselineCorruptError(
+                f"Baseline file {path} is unreadable/unparseable ({exc}). "
+                f"{_BASELINE_REMEDIATION}"
+            ) from exc
+        if data is None or not isinstance(data, dict):
+            raise BaselineCorruptError(
+                f"Baseline file {path} is an empty or non-mapping baseline file. "
+                f"{_BASELINE_REMEDIATION}"
+            )
         defaults = cls()
         quality = cls._validate_quality(
             data.get("quality", defaults.quality), defaults.quality, "quality", path
@@ -539,25 +584,48 @@ class Baseline:
             data.get("per_suite_counts_by_tier", {}), path
         )
         reliability = data.get("reliability", defaults.reliability)
-        if reliability is not None and not 0.0 <= reliability <= RELIABILITY_MAX:
+        if reliability is not None and (
+            isinstance(reliability, bool)
+            or not isinstance(reliability, (int, float))
+            or not 0.0 <= reliability <= RELIABILITY_MAX
+        ):
             log.error(
-                "Corrupt baseline reliability %.3f in %s (valid 0..%.1f); using default %.3f",
+                "Corrupt baseline reliability %r in %s (valid 0..%.1f); using default %.3f",
                 reliability,
                 path,
                 RELIABILITY_MAX,
                 defaults.reliability,
             )
             reliability = defaults.reliability
+        # speed/frontdoor_speed must be finite and > 0: a null/negative frontdoor_speed
+        # either raises a TypeError inside check() (None * 0.8) or silently disarms the
+        # throughput floor (result.speed < negative is never true). cost may be 0.
+        speed = cls._validate_positive_float(
+            data.get("speed", defaults.speed), defaults.speed, "speed", path
+        )
+        frontdoor_speed = cls._validate_positive_float(
+            data.get("frontdoor_speed", defaults.frontdoor_speed),
+            defaults.frontdoor_speed,
+            "frontdoor_speed",
+            path,
+        )
+        cost = cls._validate_positive_float(
+            data.get("cost", defaults.cost),
+            defaults.cost,
+            "cost",
+            path,
+            allow_zero=True,
+        )
         baseline = cls(
             quality=quality,
-            speed=data.get("speed", 10.0),
-            cost=data.get("cost", 0.5),
+            speed=speed,
+            cost=cost,
             reliability=reliability,
             per_suite_quality=per_suite,
             baselines_by_tier=baselines_by_tier,
             per_suite_quality_by_tier=per_suite_by_tier,
             per_suite_counts_by_tier=per_suite_counts_by_tier,
-            frontdoor_speed=data.get("frontdoor_speed", 10.0),
+            frontdoor_speed=frontdoor_speed,
             source_path=path,
         )
         if state:
@@ -576,6 +644,16 @@ class Baseline:
         """
         if value is None:
             return None
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            log.error(
+                "Corrupt baseline %s=%r in %s is not a number — the regression gate "
+                "cannot compare it; falling back to %s. Recompute from a real 0-3 eval.",
+                label,
+                value,
+                path,
+                fallback,
+            )
+            return fallback
         if not 0.0 <= value <= QUALITY_MAX:
             log.error(
                 "Corrupt baseline %s=%.3f in %s exceeds valid quality scale [0, %.1f] — "
@@ -590,10 +668,59 @@ class Baseline:
             return fallback
         return value
 
+    @staticmethod
+    def _validate_positive_float(
+        value: Any,
+        fallback: float,
+        label: str,
+        path: Path,
+        *,
+        allow_zero: bool = False,
+    ) -> float:
+        """Reject a non-numeric / non-finite / non-positive baseline scalar.
+
+        A null/None, bool, non-numeric string, NaN/inf, or <= 0 value (< 0 when
+        ``allow_zero``) would later raise a TypeError inside check() or silently
+        disarm a floor (e.g. a negative ``frontdoor_speed``). Log loudly and fall
+        back to the safe default; mirrors the ``_validate_quality`` log style.
+        """
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            log.error(
+                "Corrupt baseline %s=%r in %s is not a number; using default %s.",
+                label,
+                value,
+                path,
+                fallback,
+            )
+            return fallback
+        fval = float(value)
+        if not math.isfinite(fval):
+            log.error(
+                "Corrupt baseline %s=%r in %s is non-finite; using default %s.",
+                label,
+                value,
+                path,
+                fallback,
+            )
+            return fallback
+        below = fval < 0.0 if allow_zero else fval <= 0.0
+        if below:
+            log.error(
+                "Corrupt baseline %s=%.3f in %s must be %s; using default %s.",
+                label,
+                fval,
+                path,
+                ">= 0" if allow_zero else "> 0",
+                fallback,
+            )
+            return fallback
+        return fval
+
     def save(self, path: Path | None = None) -> None:
         path = path or self.source_path or DEFAULT_BASELINE_PATH
         path.parent.mkdir(parents=True, exist_ok=True)
         data = {
+            "schema_version": 1,
             "quality": self.quality,
             "speed": self.speed,
             "cost": self.cost,
@@ -604,7 +731,9 @@ class Baseline:
             "per_suite_counts_by_tier": self.per_suite_counts_by_tier,
             "frontdoor_speed": self.frontdoor_speed,
         }
-        path.write_text(yaml.dump(data, default_flow_style=False, allow_unicode=True))
+        _atomic_write_text(
+            path, yaml.dump(data, default_flow_style=False, allow_unicode=True)
+        )
 
     def apply_state(self, state: dict[str, Any], path: Path | None = None) -> None:
         state_path = path or self.source_path or DEFAULT_BASELINE_PATH
