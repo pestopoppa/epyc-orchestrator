@@ -19,7 +19,7 @@ import pytest
 
 sys.path.insert(0, "/mnt/raid0/llm/epyc-orchestrator")
 
-from src.safety_gate import EvalResult, SafetyGate, Verdict
+from src.diversity_gate import EvalResult, SafetyGate, Verdict
 from src.tools.diversity import metrics, verbalized_sampling
 
 

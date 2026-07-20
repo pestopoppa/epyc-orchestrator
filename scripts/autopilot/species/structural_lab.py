@@ -394,10 +394,16 @@ class StructuralLab:
                     unavailable so the merge is untrustworthy). NOT blacklistable.
         """
         import sys
-        sys.path.insert(0, str(ORCH_ROOT / "src"))
+        # DRIFT-1: insert the repo ROOT (not <root>/src) so src/ is never ahead of
+        # scripts/autopilot on sys.path. Inserting <root>/src at position 0 let a
+        # bare `import safety_gate` (used throughout the autopilot) bind src/*.py
+        # instead of scripts/autopilot/safety_gate.py. Import src modules via the
+        # `src.` package prefix from the repo root instead.
+        if str(ORCH_ROOT) not in sys.path:
+            sys.path.insert(0, str(ORCH_ROOT))
 
         try:
-            from features import Features, _REGISTRY_BY_NAME
+            from src.features import Features, _REGISTRY_BY_NAME
 
             # Validate all flags exist in the declarative registry (always
             # trustworthy — registry-based, independent of live state).
@@ -557,9 +563,12 @@ class StructuralLab:
         propose_flag_experiment() enforces — e.g. graph_router -> specialist_routing.
         """
         import sys
-        sys.path.insert(0, str(ORCH_ROOT / "src"))
+        # DRIFT-1: insert repo ROOT and import via the `src.` package prefix so
+        # src/ never shadows scripts/autopilot on sys.path (see propose_flag_experiment).
+        if str(ORCH_ROOT) not in sys.path:
+            sys.path.insert(0, str(ORCH_ROOT))
         try:
-            from features import _FEATURE_REGISTRY  # type: ignore
+            from src.features import _FEATURE_REGISTRY  # type: ignore
         except Exception:
             return []
         return [

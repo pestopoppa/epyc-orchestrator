@@ -6,6 +6,8 @@ from types import SimpleNamespace
 
 from src.autopilot_core.rlvr_tiers import (
     RLVR_REWARD_POLICY,
+    T0_SUCCESS_ACCURACY,
+    T0_SUCCESS_RELIABILITY,
     rlvr_reward_from_result,
     spec_for_rlvr_tier,
 )
@@ -25,14 +27,70 @@ def _result(**kw) -> SimpleNamespace:
 
 
 def test_t0_reward_is_binary_state_match() -> None:
-    passed = rlvr_reward_from_result(_result(tier=0, quality=3.0, reliability=1.0))
-    failed = rlvr_reward_from_result(_result(tier=0, quality=2.7, reliability=1.0))
+    # RLVR-2: T0 saturates ~2.4/3.0, so success now keys off T0_SUCCESS_ACCURACY
+    # (0.8), not exact 1.0 — otherwise the binary reward is constant-0 / gradient-free.
+    assert T0_SUCCESS_ACCURACY == 0.8
+    assert T0_SUCCESS_RELIABILITY == 0.9
+
+    passed = rlvr_reward_from_result(_result(tier=0, quality=2.7, reliability=1.0))  # acc 0.9
+    saturated = rlvr_reward_from_result(_result(tier=0, quality=2.5, reliability=0.9))  # acc 0.833
+    failed = rlvr_reward_from_result(_result(tier=0, quality=2.1, reliability=1.0))  # acc 0.7
 
     assert passed.policy == RLVR_REWARD_POLICY
     assert passed.reward_signal == "binary_outcome"
     assert passed.reward == 1.0
     assert passed.ready_for_training
-    assert failed.reward == 0.0
+    # A saturated-good run (~2.5/3.0) now earns reward 1.0 instead of the old 0.
+    assert saturated.reward == 1.0
+    assert failed.reward == 0.0  # below the relaxed accuracy floor
+    # Boundary note: quality exactly 2.4 → 2.4/3.0 == 0.7999999999999999 (FP just
+    # below 0.8), so the exact saturation point sits a hair under the floor.
+    assert rlvr_reward_from_result(_result(tier=0, quality=2.4, reliability=0.9)).reward == 0.0
+
+
+def test_t0_reliability_floor_still_gates_success() -> None:
+    # RLVR-2: accuracy alone is not enough; reliability must clear T0_SUCCESS_RELIABILITY.
+    high_acc_low_rel = rlvr_reward_from_result(_result(tier=0, quality=3.0, reliability=0.85))
+    assert high_acc_low_rel.reward == 0.0
+
+
+def test_t0_missing_required_metrics_block_training() -> None:
+    # RLVR-1: T0 required_metrics = (quality, reliability); a missing/non-finite
+    # required metric must surface as a blocker instead of coercing silently to 0.0.
+    missing_reliability = rlvr_reward_from_result(_result(tier=0, quality=3.0, reliability=None))
+    assert "reliability_missing_or_nonfinite" in missing_reliability.blockers
+    assert not missing_reliability.ready_for_training
+
+    missing_quality = rlvr_reward_from_result(_result(tier=0, quality=None, reliability=1.0))
+    assert "quality_missing_or_nonfinite" in missing_quality.blockers
+    assert not missing_quality.ready_for_training
+
+
+def test_t1_missing_quality_blocks_training() -> None:
+    # RLVR-1: quality is a required metric for T1+ too.
+    reward = rlvr_reward_from_result(
+        _result(tier=1, quality=None, reliability=0.9, ece=0.1, auroc=0.8)
+    )
+    assert reward.blockers == ("quality_missing_or_nonfinite",)
+    assert not reward.ready_for_training
+
+
+def test_subchance_auroc_earns_no_discrimination_credit() -> None:
+    # RLVR-3: AUROC <= 0.5 is anti-discriminative; it must earn 0 discrimination
+    # credit rather than positive clamp01(auroc). Note auroc > 0 avoids the separate
+    # auroc_missing_or_degenerate blocker, isolating the discrimination change.
+    subchance = rlvr_reward_from_result(
+        _result(tier=1, quality=2.4, reliability=0.9, ece=0.05, auroc=0.40)
+    )
+    at_chance = rlvr_reward_from_result(
+        _result(tier=1, quality=2.4, reliability=0.9, ece=0.05, auroc=0.50)
+    )
+    above_chance = rlvr_reward_from_result(
+        _result(tier=1, quality=2.4, reliability=0.9, ece=0.05, auroc=0.65)
+    )
+    assert subchance.components["discrimination"] == 0.0
+    assert at_chance.components["discrimination"] == 0.0
+    assert above_chance.components["discrimination"] == 0.65
 
 
 def test_t1_reward_uses_calibration_and_discrimination() -> None:

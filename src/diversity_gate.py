@@ -1,4 +1,10 @@
-"""SafetyGate — eval-trust boundary for autopilot experiment acceptance.
+"""Diversity gate — EV-8 diversity WARN/REJECT policy for Pareto candidates.
+
+Renamed 2026-07-20 (audit B6 / DRIFT-1) from ``src/safety_gate.py`` to end the
+bare-name collision with ``scripts/autopilot/safety_gate.py`` (the module the
+autopilot actually imports as ``safety_gate``). This module holds the EV-8
+diversity gate (WARN/REJECT policy) and currently has zero production importers
+— it is a future wiring target, not yet on the live experiment-admission path.
 
 Implements EV-8's amended two-tier warn/reject policy (NIB2-42,
 handoffs/active/eval-tower-verification.md L201-226).
