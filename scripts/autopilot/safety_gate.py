@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import math
 import os
+import re
 import statistics
 from collections import deque
 from dataclasses import asdict, dataclass, field, replace
@@ -124,6 +125,18 @@ RELIABILITY_FLOOR = 0.8
 # MATRIX_STALENESS_DAYS wall (in src.scheduling.contention). Past the wall the matrix goes
 # STALE, _baseline_eligible fails-closed, and the baseline ratchet FREEZES.
 PRE_EXPIRY_WARN_DAYS = 7
+# D4 (audit MET-1): version of the ``METRIC <key>: <value>`` grep-line contract emitted by
+# EvalResult.to_grep_lines. v1 = implicit / pre-2026-07-20 (conditional emission; a NaN
+# printed the bare string ``nan``; NaN-gated keys were silently dropped). v2 = UNCONDITIONAL
+# emission with an explicit ``null`` absence sentinel + sanitized interpolated names. The one
+# blessed parser is scripts.autopilot.metric_lines.parse_metric_lines — NOT ad-hoc grep/awk.
+METRIC_LINE_SCHEMA_VERSION = 2
+# SG-7 (B9): minimum quality delta that counts as a REAL change against a degenerate /
+# saturated MAD window (MAD == 0, i.e. every recent same-tier sample is identical). The old
+# rule ("any nonzero delta is significant") let a single-question flip masquerade as a fresh
+# gain. ~2 single-flip quanta: 2 * (3/n) ≈ 0.2 at n ≈ 30. The result's per-suite counts / n
+# are NOT in scope inside _mad_significance, so this fixed floor stands in for 2*(3/n).
+MAD_ZERO_MIN_DELTA = 0.2
 
 
 def _reliability_floor() -> float:
@@ -362,6 +375,37 @@ def _normalize_counts_by_tier(raw: Any, path: Path) -> dict[int, dict[str, int]]
     return normalized
 
 
+def _fmt_metric(value: Any, spec: str) -> str:
+    """D4 / FIELD-1 (MET-1): format a numeric METRIC value for ``to_grep_lines``.
+
+    Emits the literal ``null`` for an UNAVAILABLE value — ``None`` or a non-finite
+    float (NaN / inf) — instead of the bare string ``nan`` (indistinguishable from a
+    real token, and coerced to 0 by awk). A real zero still formats normally
+    (``0``/``0.0000``). For any finite value the output is byte-identical to the
+    pre-v2 ``format(value, spec)``, so this only ever changes the absence sentinel.
+    """
+    if value is None:
+        return "null"
+    try:
+        fv = float(value)
+    except (TypeError, ValueError):
+        return "null"
+    if not math.isfinite(fv):
+        return "null"
+    return format(value, spec)
+
+
+def _san_metric_name(name: Any) -> str:
+    """MET-2: neutralize a value interpolated into a METRIC key/value.
+
+    Suite / species / role names are embedded directly in ``METRIC <key>: <value>``
+    lines. A stray ``:`` or whitespace in the name would break ``awk -F': '`` field
+    splitting (and the blessed metric_lines parser splits on the first ``': '``), so
+    collapse any run of ``:``/whitespace to a single ``_``. A clean name (the common
+    case, e.g. ``coder``) is returned unchanged."""
+    return re.sub(r"[:\s]+", "_", str(name))
+
+
 @dataclass
 class SafetyVerdict:
     passed: bool
@@ -487,9 +531,10 @@ class EvalResult:
     # AP-4: reviewer-calibration Pareto axes (reviewer-control-plane H8). Optional
     # quality axes carried alongside task quality/throughput. All default to NaN
     # ("unavailable this trial") so an EvalResult produced WITHOUT a reviewer in
-    # the loop is byte-for-byte behavior-identical: the objectives 4-tuple below
-    # is unchanged, SafetyGate/Pareto never see these, and to_grep_lines emits
-    # nothing for them. They become live axes only once a review_policy_trial or a
+    # the loop still leaves the objectives 4-tuple below unchanged and SafetyGate/
+    # Pareto never see these. (D4: to_grep_lines now emits them UNCONDITIONALLY as
+    # the literal ``null`` when NaN — the absence is explicit, not a dropped line.)
+    # They become live axes only once a review_policy_trial or a
     # shadow reviewer actually populates them. reviewer_fa_rate = P(reviewer
     # approved | gate FAIL) = false-accept; reviewer_fr_rate = P(reviewer rejected
     # | gate PASS) = false-reject; ratio + per-decision latency feed H-LB.
@@ -507,65 +552,94 @@ class EvalResult:
         return (self.quality, self.speed, -self.cost, self.reliability)
 
     def to_grep_lines(self, trial_id: int = 0, species: str = "") -> str:
-        """AP-13: Grep-parseable key: value output.
+        """AP-13 / D4 (audit MET-1, MET-2, FIELD-1): grep-parseable METRIC lines.
 
-        Designed for `grep 'METRIC' autopilot.log | awk -F': '` extraction.
+        CONTRACT v2 (2026-07-20): the first line is ``METRIC schema_version: 2``.
+        Every key below is emitted UNCONDITIONALLY — an unavailable / NaN value emits
+        the literal ``null`` (never the string ``nan``, never a silently dropped line);
+        a real zero emits ``0``/``0.0000``. This kills the old absence-vs-zero
+        ambiguity where a NaN-gated key was simply omitted, so a consumer could not
+        tell "not measured" from "measured zero". Interpolated names (species / suite /
+        role) are sanitized so a stray ``:``/whitespace cannot break ``awk -F': '``.
+
+        Consumers MUST parse with scripts.autopilot.metric_lines.parse_metric_lines —
+        NOT ad-hoc grep/awk (that is the whole point of the versioned contract).
         """
+        _fmt = _fmt_metric
         lines = [
+            # D4 (MET-1): explicit contract version; v1 was the implicit, pre-null format.
+            f"METRIC schema_version: {METRIC_LINE_SCHEMA_VERSION}",
             f"METRIC trial: {trial_id}",
-            f"METRIC species: {species}",
+            f"METRIC species: {_san_metric_name(species)}",
             f"METRIC tier: {self.tier}",
-            f"METRIC quality: {self.quality:.4f}",
-            f"METRIC speed: {self.speed:.2f}",
+            f"METRIC quality: {_fmt(self.quality, '.4f')}",
+            f"METRIC speed: {_fmt(self.speed, '.2f')}",
             f"METRIC speed_metric_mode: {self.speed_metric_mode}",
-            f"METRIC median_request_speed: {self.median_request_speed:.2f}",
-            f"METRIC aggregate_speed: {self.aggregate_speed:.2f}",
+            f"METRIC median_request_speed: {_fmt(self.median_request_speed, '.2f')}",
+            f"METRIC aggregate_speed: {_fmt(self.aggregate_speed, '.2f')}",
             f"METRIC eval_concurrency: {self.eval_concurrency}",
-            f"METRIC eval_wall_s: {self.eval_wall_s:.2f}",
-            f"METRIC cost: {self.cost:.4f}",
-            f"METRIC reliability: {self.reliability:.4f}",
+            f"METRIC eval_wall_s: {_fmt(self.eval_wall_s, '.2f')}",
+            f"METRIC cost: {_fmt(self.cost, '.4f')}",
+            f"METRIC reliability: {_fmt(self.reliability, '.4f')}",
             f"METRIC n_questions: {self.n_questions}",
         ]
         if self.core_id:
-            lines.append(f"METRIC core_id: {self.core_id}")
+            lines.append(f"METRIC core_id: {_san_metric_name(self.core_id)}")
         for suite, q in sorted(self.per_suite_quality.items()):
-            lines.append(f"METRIC suite_{suite}: {q:.4f}")
+            lines.append(f"METRIC suite_{_san_metric_name(suite)}: {_fmt(q, '.4f')}")
         for role, frac in sorted(self.routing_distribution.items()):
-            lines.append(f"METRIC route_{role}: {frac:.4f}")
+            lines.append(f"METRIC route_{_san_metric_name(role)}: {_fmt(frac, '.4f')}")
         # AP-16: Instruction token budget
         lines.append(f"METRIC instruction_tokens: {self.instruction_token_count}")
-        lines.append(f"METRIC instruction_ratio: {self.instruction_token_ratio:.4f}")
-        # Degradation metrics from refactored InferenceResult
-        if self.partial_count > 0:
-            lines.append(f"METRIC partial_count: {self.partial_count}")
-        if self.degraded_count > 0:
-            lines.append(f"METRIC degraded_count: {self.degraded_count}")
-        # EV-2: Calibration metrics
-        lines.append(f"METRIC ece: {self.ece:.4f}")
-        if self.auroc > 0:
-            lines.append(f"METRIC auroc: {self.auroc:.4f}")
-        if self.calibration_violations > 0:
-            lines.append(f"METRIC calibration_violations: {self.calibration_violations}")
+        lines.append(f"METRIC instruction_ratio: {_fmt(self.instruction_token_ratio, '.4f')}")
+        # D4 (FIELD-1): degradation counts now emit UNCONDITIONALLY. A real 0 ("clean,
+        # no partials") is distinct from an absent line ("never measured").
+        lines.append(f"METRIC partial_count: {self.partial_count}")
+        lines.append(f"METRIC degraded_count: {self.degraded_count}")
+        # EV-2: Calibration metrics. ece/auroc emit ``null`` when non-finite (were
+        # 'nan' / dropped); calibration_violations is an always-present count.
+        lines.append(f"METRIC ece: {_fmt(self.ece, '.4f')}")
+        lines.append(f"METRIC auroc: {_fmt(self.auroc, '.4f')}")
+        lines.append(f"METRIC calibration_violations: {self.calibration_violations}")
         # AP-27: report-only RLVR reward view. This is deliberately log-only;
         # EvalResult.objectives, SafetyGate verdicts, Pareto archive state, and
         # journal schema remain unchanged.
         rlvr = rlvr_reward_from_result(self)
         lines.append(f"METRIC rlvr_policy: {rlvr.policy}")
         lines.append(f"METRIC rlvr_signal: {rlvr.reward_signal}")
-        lines.append(f"METRIC rlvr_reward: {rlvr.reward:.6f}")
+        lines.append(f"METRIC rlvr_reward: {_fmt(rlvr.reward, '.6f')}")
         lines.append(f"METRIC rlvr_ready: {int(rlvr.ready_for_training)}")
         if rlvr.blockers:
+            # Bounded, variable-length list; only meaningful when non-empty (a
+            # comma-joined string value, not a numeric metric) — stays conditional.
             lines.append(f"METRIC rlvr_blockers: {','.join(rlvr.blockers)}")
-        # Branching density (intake-378)
-        if self.branching_density > 0:
-            lines.append(f"METRIC branching_density: {self.branching_density:.4f}")
-        # AM compaction telemetry
-        if self.avg_prompt_tokens > 0:
-            lines.append(f"METRIC avg_prompt_tokens: {self.avg_prompt_tokens:.0f}")
-        if self.compaction_events > 0:
-            lines.append(f"METRIC compaction_events: {self.compaction_events}")
-        # EV-8: Diversity metrics (NaN-gated — only emit when the signal was
-        # actually computed; NaN means "unavailable this trial").
+        # Branching density (intake-378) + AM compaction telemetry — unconditional now.
+        lines.append(f"METRIC branching_density: {_fmt(self.branching_density, '.4f')}")
+        lines.append(f"METRIC avg_prompt_tokens: {_fmt(self.avg_prompt_tokens, '.0f')}")
+        lines.append(f"METRIC compaction_events: {self.compaction_events}")
+        # D6 (FIELD-1 partial): tool-use telemetry block. The field comments have
+        # promised this since 2026-06-01 but it was never emitted; wire it in now,
+        # null-gated like the rest.
+        lines.append(f"METRIC mean_tools_used: {_fmt(self.mean_tools_used, '.4f')}")
+        lines.append(f"METRIC tool_use_rate: {_fmt(self.tool_use_rate, '.4f')}")
+        lines.append(f"METRIC total_tool_calls: {self.total_tool_calls}")
+        lines.append(f"METRIC tool_helpfulness: {_fmt(self.tool_helpfulness, '.4f')}")
+        # per_suite_tool_helpfulness is a dict, NOT a scalar: emit one bounded
+        # ``tool_helpfulness[<suite>]`` line per POPULATED (finite) suite, and skip
+        # the scalar form of the dict entirely (unavailable per-suite entries are
+        # simply absent from the map rather than emitted as null — bounded).
+        psth = self.per_suite_tool_helpfulness
+        if isinstance(psth, dict):
+            for _suite, _val in sorted(psth.items()):
+                try:
+                    _fv = float(_val)
+                except (TypeError, ValueError):
+                    continue
+                if math.isfinite(_fv):
+                    lines.append(
+                        f"METRIC tool_helpfulness[{_san_metric_name(_suite)}]: {_fv:.4f}"
+                    )
+        # EV-8: Diversity metrics — unconditional; NaN → ``null``.
         for _div_key, _div_val in (
             ("diversity_entropy", self.diversity_entropy),
             ("diversity_distinct2", self.diversity_distinct2),
@@ -573,26 +647,23 @@ class EvalResult:
             ("diversity_ttr", self.diversity_ttr),
             ("diversity_semantic_embedding_agreement", self.diversity_semantic_embedding_agreement),
         ):
-            if not math.isnan(_div_val):
-                lines.append(f"METRIC {_div_key}: {_div_val:.4f}")
+            lines.append(f"METRIC {_div_key}: {_fmt(_div_val, '.4f')}")
+        # EV-9 / MindDR rubric telemetry — unconditional; NaN → ``null``.
         for _rubric_key, _rubric_val in (
             ("rubric_reasoning_trajectory", self.rubric_reasoning_trajectory),
             ("rubric_tool_calls", self.rubric_tool_calls),
             ("rubric_outline", self.rubric_outline),
             ("rubric_content_stage", self.rubric_content_stage),
         ):
-            if not math.isnan(_rubric_val):
-                lines.append(f"METRIC {_rubric_key}: {_rubric_val:.4f}")
-        # AP-4: reviewer-calibration axes (NaN-gated — identical output when a
-        # trial had no reviewer in the loop).
+            lines.append(f"METRIC {_rubric_key}: {_fmt(_rubric_val, '.4f')}")
+        # AP-4: reviewer-calibration axes — unconditional; NaN → ``null`` (was dropped).
         for _rev_key, _rev_val in (
             ("reviewer_fa_rate", self.reviewer_fa_rate),
             ("reviewer_fr_rate", self.reviewer_fr_rate),
             ("reviewer_fa_fr_ratio", self.reviewer_fa_fr_ratio),
             ("review_decision_latency_ms", self.review_decision_latency_ms),
         ):
-            if not math.isnan(_rev_val):
-                lines.append(f"METRIC {_rev_key}: {_rev_val:.4f}")
+            lines.append(f"METRIC {_rev_key}: {_fmt(_rev_val, '.4f')}")
         return "\n".join(lines)
 
 
@@ -926,6 +997,14 @@ class BaselineUpdateResult:
     # Empty on every eligible path (including ordinary monotonic/seq skips), so a caller
     # can distinguish "ratchet frozen, go re-measure" from "candidate simply not better".
     ineligible_reason: str = ""
+    # B4 / SEQ-2: machine token naming WHY the sequential anti-ratchet refused a write.
+    # ``seq_inputs_unavailable`` = the sequential path is ON but no confirmed/refuted
+    # verdict could be rendered (fresh journal / missing question_results) → fail-closed.
+    # ``seq_not_confirmed`` = a verdict was rendered but did not clear confirm_e. Empty on
+    # every other path, so a caller can tell "accumulate journal evidence" from "candidate
+    # simply not confirmed yet" from an ordinary monotonic skip. Kept distinct from
+    # ineligible_reason (which is reserved for the SG-0 matrix-freeze case).
+    seq_refused_reason: str = ""
 
 
 class SafetyGate:
@@ -1002,7 +1081,13 @@ class SafetyGate:
         median_q = statistics.median(history)
         mad = statistics.median(abs(x - median_q) for x in history)
         if mad == 0:
-            return (new_quality != median_q), math.nan, median_q, 0.0
+            # SG-7 (B9): a saturated / degenerate window (every recent same-tier sample
+            # identical) has MAD == 0. The old rule "any nonzero delta is significant"
+            # promoted a single-question flip to a real gain. Require the delta to clear
+            # TWO single-flip quanta before calling it significant. z is undefined for a
+            # zero-MAD window → NaN; check() tags the resulting within-band case
+            # ``mad_zero_window`` so a NaN z can no longer dodge the noise classification.
+            return (abs(new_quality - median_q) > MAD_ZERO_MIN_DELTA), math.nan, median_q, 0.0
         z_mad = abs(new_quality - median_q) / (mad * MAD_CONSISTENCY)
         return z_mad > MAD_Z_THRESHOLD, z_mad, median_q, mad
 
@@ -1086,7 +1171,13 @@ class SafetyGate:
         bridge = seq_p0_2_bridge_status()
         rate_axis_advisory = bool(bridge["enabled"])
 
-        if q_name == STATE_REFUTED or (not rate_axis_advisory and rate_name == STATE_REFUTED):
+        # SEQ-3 (B9): a REFUTED rate axis blocks confirmation even under the advisory
+        # (P0.2 bridge) mode. Refutation is strictly STRONGER evidence than mere
+        # non-confirmation: the bridge relaxes the rate axis from *required-to-confirm*
+        # down to advisory (see the confirm branch below), but it must NOT let an
+        # actively-refuted rate axis ratchet the baseline. Previously advisory mode
+        # ignored rate refutation entirely (`not rate_axis_advisory and ...`).
+        if q_name == STATE_REFUTED or rate_name == STATE_REFUTED:
             state = "refuted"
         elif e_quality >= policy.confirm_e and (
             rate_axis_advisory or (e_rate is not None and e_rate >= policy.confirm_e)
@@ -1282,8 +1373,16 @@ class SafetyGate:
                     is_sig, z_mad, median_q, mad = self._mad_significance(
                         result.quality, result.tier
                     )
-                    if not is_sig and not math.isnan(z_mad):
+                    if not is_sig:
                         categories.append("mad_noise")
+                        # SG-7 (B9): a degenerate / saturated window yields a NaN z
+                        # (MAD == 0). The old guard `not math.isnan(z_mad)` let that NaN
+                        # z DODGE the mad_noise tag entirely, silently promoting a
+                        # within-tolerance change as a fresh gain. Tag it distinctly so
+                        # the planner still excludes it from archive/learning (it rides
+                        # the same `mad_noise` exclusion path) while staying auditable.
+                        if math.isnan(z_mad):
+                            categories.append("mad_zero_window")
                         # Convergence-vs-corruption disambiguation (2026-05-31).
                         # `mad_noise` is correct and unchanged: this is not a NEW
                         # statistically significant improvement, so it earns no
@@ -1391,63 +1490,54 @@ class SafetyGate:
 
         # 5. Throughput floor
         if result.speed < self.baseline.frontdoor_speed * 0.8:
-            # 2026-05-09: before attributing a throughput regression to the
-            # config-under-test, check whether the host is itself throttled
-            # (CPU freq dip / page-cache fragmentation per
-            # feedback_host_throttle_check.md). If yes, run drop_caches and
-            # tag the verdict for autopilot to retry the trial. This avoids
-            # contaminating the Pareto archive with false-negative entries
-            # caused by sustained mlocked load (the 2026-05-09 incident:
-            # frontdoor measured 7.48 t/s = 1/3 of expected after 9 hours).
+            # 2026-05-09 / SG-9 (B9): before attributing a throughput regression to
+            # the config-under-test, check whether the HOST is itself throttled (CPU
+            # freq dip / page-cache fragmentation per feedback_host_throttle_check.md).
+            # If so, DEMOTE the throughput violation to a warning so a transient host
+            # stall doesn't force-revert a good config (the 2026-05-09 incident:
+            # frontdoor measured 7.48 t/s = 1/3 of expected after 9 hours of mlocked
+            # load). The gate must NOT remediate here: a bare drop_caches from an
+            # arbitrary thread pins NUMA pages (feedback_drop_caches_numa_eviction.md),
+            # and check() must not mutate host state — remediation belongs to the
+            # host_health cadence, not this read-only gate. Detection is READ-ONLY.
             host_throttled = False
-            host_remediated = False
             host_triggers: list[str] = []
             try:
-                from scripts.autopilot.host_health import (
-                    HostHealthState,
-                    remediate as _hh_remediate,
-                    _numa_interleave_rewarm,
-                )
+                from scripts.autopilot.host_health import HostHealthState
 
                 _hh_state = HostHealthState.snapshot()
                 host_throttled, host_triggers = _hh_state.is_throttled()
-                if host_throttled:
-                    # In-process safety_gate path: trial already ran, so no need
-                    # to pause autopilot (we ARE autopilot). Flush + rewarm so
-                    # the NEXT trial starts with warm NUMA-interleaved cache;
-                    # mark THIS trial as exogenous_cache_flush so the planner
-                    # doesn't learn from data taken in the suspected cold-cache
-                    # window (see DeficiencyCategory.EXOGENOUS_CACHE_FLUSH).
-                    host_remediated = _hh_remediate()
-                    if host_remediated:
-                        _numa_interleave_rewarm()
-            except Exception:  # noqa: BLE001 — never let host check crash gate
-                pass
+            except Exception as exc:  # noqa: BLE001
+                # SG-9 (B9): detection must never crash the gate — but the old blanket
+                # `except Exception: pass` let a broken import silently disable throttle
+                # detection FOREVER, so every real host stall would have been charged to
+                # the config-under-test. Surface it: the throughput violation will NOT be
+                # throttle-demoted this trial, and the operator sees the breakage.
+                log.warning(
+                    "Host-throttle detection failed (%s); throughput violation will "
+                    "NOT be throttle-demoted this trial.",
+                    exc,
+                )
 
             base_msg = (
                 f"Throughput floor: {result.speed:.1f} t/s < "
                 f"{self.baseline.frontdoor_speed * 0.8:.1f} t/s "
                 f"(80% of baseline {self.baseline.frontdoor_speed:.1f})"
             )
-            if host_throttled and host_remediated:
-                # Soft-fail: throttle was the likely cause; retry next tick.
-                # 2026-05-24: tag the trial with EXOGENOUS_CACHE_FLUSH so the
-                # planner's trustworthiness gate excludes it from hypothesis
-                # chains (data was taken under suspect host state).
+            if host_throttled:
+                # SG-9 (B9): explicit violation→warning DEMOTION, recorded so the pass
+                # is auditable rather than an invisible skip. Tag exogenous_cache_flush
+                # so the planner's trustworthiness gate excludes data taken under the
+                # suspect host window (DeficiencyCategory.EXOGENOUS_CACHE_FLUSH); the
+                # actual drop_caches + NUMA-interleave rewarm is performed by the
+                # host_health cadence, not here.
                 warnings.append(
                     f"{base_msg}. Host throttle detected ({'; '.join(host_triggers)}); "
-                    f"drop_caches + NUMA-interleave rewarm issued — RECOMMEND retry."
+                    f"throughput violation DEMOTED to warning (reason=throttle_demoted). "
+                    f"Remediation deferred to the host_health cadence — RECOMMEND retry."
                 )
-                categories.append("throughput_host_throttle_retry")
+                categories.append("throughput_throttle_demoted")
                 categories.append("exogenous_cache_flush")
-            elif host_throttled:
-                # Throttled but couldn't remediate — still flag for retry, log the gap.
-                warnings.append(
-                    f"{base_msg}. Host throttle detected but remediation unavailable "
-                    f"({'; '.join(host_triggers)}); install per "
-                    f"scripts/autopilot/host_health_install.md."
-                )
-                categories.append("throughput_host_throttle_no_remediate")
             else:
                 violations.append(base_msg)
                 categories.append("throughput")
@@ -1680,8 +1770,29 @@ class SafetyGate:
         # a CONFIRMED joint e-process verdict (E_quality >= confirm_e AND
         # E_rate_noninf >= confirm_e). This is the anti-ratchet: a monotonic quality
         # uptick that has not cleared the anytime-valid thresholds is journaled but
-        # cannot move the baseline. Inert when the flag is off or when the caller does
-        # not pass seq_confirmed (the legacy promotion path is then unchanged).
+        # cannot move the baseline. Inert when the flag is off (the legacy promotion
+        # path is then unchanged).
+        #
+        # B4 / SEQ-2 (anti-ratchet, fail-closed; operator-decided 2026-07-20): when the
+        # sequential path is ON but seq_confirmed is None, the per-question inputs were
+        # UNAVAILABLE (fresh journal, missing question_results) — exactly the low-evidence
+        # regime the anti-ratchet exists for. The old code let None silently fall through
+        # to the legacy monotonic path, ratcheting the baseline on evidence it could not
+        # verify. REFUSE the write and surface seq_inputs_unavailable, restoring the
+        # docstring's stated intent (a candidate cannot ratchet on quality alone).
+        if self.use_sequential and seq_confirmed is None:
+            reason = (
+                "sequential verdict UNAVAILABLE (no per-question evidence: fresh journal "
+                "or missing question_results); baseline promotion REFUSED (B4/SEQ-2 "
+                "anti-ratchet, fail-closed). Remediation: accumulate paired-core journal "
+                "evidence so the anytime-valid e-process can render a confirmed/refuted "
+                "verdict before this candidate can ratchet the baseline."
+            )
+            log.warning("Baseline update REFUSED — %s", reason)
+            return BaselineUpdateResult(
+                False, reason, tier, previous_quality, result.quality, proof,
+                seq_refused_reason="seq_inputs_unavailable",
+            )
         if self.use_sequential and seq_confirmed is not None and not seq_confirmed:
             reason = (
                 "sequential verdict not confirmed (E_quality/E_rate_noninf below the "
@@ -1689,7 +1800,8 @@ class SafetyGate:
             )
             log.info("Baseline update skipped — %s", reason)
             return BaselineUpdateResult(
-                False, reason, tier, previous_quality, result.quality, proof
+                False, reason, tier, previous_quality, result.quality, proof,
+                seq_refused_reason="seq_not_confirmed",
             )
         if tier < MIN_FRONTIER_EVAL_TIER:
             reason = f"tier {tier} is audit-only and cannot update production baselines"

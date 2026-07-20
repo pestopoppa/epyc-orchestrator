@@ -212,11 +212,21 @@ class TestEvalResultDiversityFields:
         assert math.isnan(r.diversity_ttr)
         assert math.isnan(r.diversity_semantic_embedding_agreement)
 
-    def test_to_grep_lines_omits_nan_diversity(self):
+    def test_to_grep_lines_emits_null_for_nan_diversity(self):
+        # D4 (audit FIELD-1): NaN diversity fields now emit the literal `null`
+        # UNCONDITIONALLY (kills absence-vs-zero ambiguity) — never the string `nan`,
+        # never a silently dropped line.
         r = self._base()
         output = r.to_grep_lines(trial_id=99, species="test")
-        # NaN fields must be silently dropped — no 'nan' in output
-        assert "diversity" not in output
+        for key in (
+            "diversity_entropy",
+            "diversity_distinct2",
+            "diversity_self_bleu",
+            "diversity_ttr",
+            "diversity_semantic_embedding_agreement",
+        ):
+            assert f"METRIC {key}: null" in output
+        assert ": nan" not in output
 
     def test_to_grep_lines_emits_populated_diversity(self):
         r = self._base(
@@ -231,8 +241,8 @@ class TestEvalResultDiversityFields:
         assert "METRIC diversity_distinct2: 0.7200" in output
         assert "METRIC diversity_self_bleu: 0.2100" in output
         assert "METRIC diversity_ttr: 0.5500" in output
-        # Semantic still NaN → must not appear
-        assert "diversity_semantic_embedding_agreement" not in output
+        # Semantic still NaN → emitted as the explicit `null` sentinel (D4 always-emit).
+        assert "METRIC diversity_semantic_embedding_agreement: null" in output
 
     def test_to_grep_lines_emits_all_five_when_fully_populated(self):
         r = self._base(

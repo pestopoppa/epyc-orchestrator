@@ -141,13 +141,30 @@ def test_per_suite_regression_uses_same_tier_baseline(tmp_path):
     assert "per_suite_regression" in t1_verdict.categories
 
 
-def test_mad_zero_mad_flags_any_change_as_significant(tmp_path):
-    """Pathological zero-MAD case (history is constant) — any new value differs."""
+def test_mad_zero_window_small_change_is_noise_not_significant(tmp_path):
+    """SG-7 (audit B9): on a degenerate zero-MAD window (constant history) a change WITHIN
+    two single-flip quanta (< MAD_ZERO_MIN_DELTA ≈ 0.2) is NOISE, not a fresh gain.
+
+    Old semantics flagged ANY nonzero delta as significant (a NaN z then dodged the
+    mad_noise tag entirely). New semantics: the within-band change is tagged mad_noise
+    PLUS the distinct mad_zero_window so a saturated window can no longer launder a
+    within-tolerance change as a real improvement."""
     g = _gate(tmp_path, history=[2.0, 2.0, 2.0])
     g.baseline.baselines_by_tier = {2: 1.16}  # SG-3 (B3a): strict same-tier baseline needed
-    verdict = g.check(_result(2.0001))
-    # equal to median would be "not significant"; differing → significant → no warning
+    verdict = g.check(_result(2.0001))  # delta 0.0001 << 0.2
+    assert verdict.passed
+    assert "mad_noise" in verdict.categories
+    assert "mad_zero_window" in verdict.categories
+
+
+def test_mad_zero_window_large_change_is_significant(tmp_path):
+    """SG-7 (audit B9): a change CLEARING two single-flip quanta (> MAD_ZERO_MIN_DELTA) on
+    a zero-MAD window is a real change → no noise tag."""
+    g = _gate(tmp_path, history=[2.0, 2.0, 2.0])
+    g.baseline.baselines_by_tier = {2: 1.16}
+    verdict = g.check(_result(2.5))  # delta 0.5 > 0.2
     assert "mad_noise" not in verdict.categories
+    assert "mad_zero_window" not in verdict.categories
 
 
 def test_quality_history_persists_across_check_calls(tmp_path):
