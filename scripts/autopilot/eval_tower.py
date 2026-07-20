@@ -468,6 +468,13 @@ def _question_identity_set(q: dict[str, Any]) -> set[str]:
     return identities
 
 
+def _question_identity_union(questions: Sequence[dict[str, Any]]) -> set[str]:
+    identities: set[str] = set()
+    for question in questions:
+        identities.update(_question_identity_set(question))
+    return identities
+
+
 def _nonnegative_int(value: Any, default: int = 0) -> int:
     try:
         return max(0, int(value))
@@ -2059,6 +2066,52 @@ class EvalTower:
         )
         return questions, seed
 
+    def _t1_core_exclusion_qids(
+        self,
+        pool: dict[str, list[dict]],
+        *,
+        seed: int,
+    ) -> tuple[set[str], dict[str, Any]]:
+        configured_core_id = os.environ.get("AUTOPILOT_T1_CORE_ID", "").strip()
+        configured_core_path = os.environ.get("AUTOPILOT_T1_CORE_PATH", "").strip()
+        policy: dict[str, Any] = {
+            "enabled": True,
+            "version": "t2-nonpromotion-excludes-t1-core-v1",
+        }
+
+        if configured_core_path and not configured_core_id:
+            raise ValueError("AUTOPILOT_T1_CORE_PATH requires AUTOPILOT_T1_CORE_ID")
+
+        if configured_core_id:
+            questions, _metadata, core_file = self._load_designed_core(configured_core_id)
+            policy.update(
+                {
+                    "source": "designed_core",
+                    "core_id": configured_core_id,
+                    "core_path": str(core_file),
+                    "actual_n": len(questions),
+                }
+            )
+        else:
+            questions = _sample_scoreable_eval_questions(
+                pool,
+                EVAL_T1_SPEC_N,
+                random.Random(int(seed)),
+            )
+            policy.update(
+                {
+                    "source": "legacy_pool_seed",
+                    "core_id": f"legacy_pool_seed_{int(seed)}_n{EVAL_T1_SPEC_N}",
+                    "seed": int(seed),
+                    "requested_n": EVAL_T1_SPEC_N,
+                    "actual_n": len(questions),
+                }
+            )
+
+        identities = _question_identity_union(questions)
+        policy["excluded_t1_core_qids"] = len(identities)
+        return identities, policy
+
     # ── single question evaluation ───────────────────────────────
 
     def _rubric_scores_for_answer(
@@ -3365,7 +3418,13 @@ class EvalTower:
         promotion_policy: dict[str, Any] = {
             "enabled": bool(promotion_eval),
         }
+        t1_core_exclusion_policy: dict[str, Any] = {
+            "enabled": not bool(promotion_eval),
+        }
+        t1_core_exclude_qids: set[str] = set()
+        effective_exclude_qids: set[str] | None = set(exclude_qids or set())
         if promotion_eval:
+            effective_exclude_qids = exclude_qids
             requested_n = _promotion_eval_n()
             if resolved_trial_id is None:
                 error = "promotion eval requires a trial_id"
@@ -3400,6 +3459,30 @@ class EvalTower:
             )
         else:
             excluded_suites = set()
+            try:
+                t1_core_exclude_qids, t1_core_exclusion_policy = self._t1_core_exclusion_qids(
+                    pool,
+                    seed=draw_seed,
+                )
+                effective_exclude_qids = set(exclude_qids or set()) | t1_core_exclude_qids
+                t1_core_exclusion_policy["caller_excluded_qids"] = len(exclude_qids or set())
+                t1_core_exclusion_policy["total_exclude_qids"] = len(effective_exclude_qids)
+            except Exception as exc:  # noqa: BLE001
+                error = f"T2 T1-core exclusion unavailable: {exc}"
+                log.error(error)
+                return EvalResult(
+                    tier=2,
+                    quality=0,
+                    speed=0,
+                    cost=0,
+                    reliability=0,
+                    details={
+                        "t1_core_exclusion_policy": {
+                            **t1_core_exclusion_policy,
+                            "error": str(exc),
+                        },
+                    },
+                )
 
         rng = random.Random(seed)
         if promotion_eval:
@@ -3408,9 +3491,26 @@ class EvalTower:
             pool,
             requested_n,
             rng,
-            exclude_qids=exclude_qids if promotion_eval else None,
+            exclude_qids=effective_exclude_qids,
             exclude_suites=excluded_suites if promotion_eval else None,
         )
+        if not promotion_eval and not questions:
+            error = "T2 drew 0 scoreable non-T1-core question(s)"
+            log.error("T2 non-promotion eval failed closed: %s", error)
+            return EvalResult(
+                tier=2,
+                quality=0,
+                speed=0,
+                cost=0,
+                reliability=0,
+                details={
+                    "t1_core_exclusion_policy": {
+                        **t1_core_exclusion_policy,
+                        "actual_t2_core_n": 0,
+                        "error": error,
+                    },
+                },
+            )
         if promotion_eval and len(questions) < PROMOTION_EVAL_MIN_N:
             error = (
                 f"promotion eval drew {len(questions)} scoreable fresh question(s); "
@@ -3476,6 +3576,11 @@ class EvalTower:
             )
             result.details["promotion_eval_policy"] = promotion_policy
             core_id = f"w8_promotion_eval_v1_trial_{resolved_trial_id}_n{requested_n}"
+        else:
+            t1_core_exclusion_policy["actual_t2_core_n"] = len(
+                [q for q in questions if q.get("eval_partition") == "core"]
+            )
+            result.details["t1_core_exclusion_policy"] = t1_core_exclusion_policy
         return _stamp_eval_instrument(
             result,
             questions=instrument_questions,
@@ -3491,6 +3596,9 @@ class EvalTower:
                 "decision_excluded_partitions": sorted(excluded_partitions),
                 "promotion_eval": bool(promotion_eval),
                 "promotion_policy": promotion_policy if promotion_eval else None,
+                "t1_core_exclusion_policy": t1_core_exclusion_policy
+                if not promotion_eval
+                else None,
             },
         )
 
@@ -3649,15 +3757,16 @@ class EvalTower:
             qid = EvalTower._normalize_split_label(str(q.get("id", "")))
             if subset:
                 return needle == subset
+            qid_split = qid
             if qid.startswith("sv_"):
                 tail = qid[3:]
                 parts = tail.rsplit("_", 1)
-                qid_subset = parts[0] if len(parts) == 2 and parts[1].isdigit() else tail
-                return qid_subset == needle
-            return (
-                qid == needle
-                or qid.startswith(f"{needle}_")
-            )
+                qid_split = parts[0] if len(parts) == 2 and parts[1].isdigit() else tail
+            else:
+                parts = qid.rsplit("_", 1)
+                if len(parts) == 2 and parts[1].isdigit():
+                    qid_split = parts[0]
+            return qid_split == needle
 
         return [q for q in questions if _matches(q)]
 

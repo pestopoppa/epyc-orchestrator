@@ -228,19 +228,29 @@ def test_filter_questions_by_split_is_strict_after_normalization() -> None:
     questions = [
         {"id": "sv_he_r_plus_001", "metadata": {"subset": "HE-R+"}},
         {"id": "sv_he_r_002", "metadata": {"subset": "HE-R"}},
+        {"id": "he_r_plus_003"},
+        {"id": "he_r_004"},
         {"id": "gsm8k_00001", "metadata": {"subset": "gsm8k"}},
         {"id": "math500_00001", "metadata": {"subset": "math500"}},
+        {"id": "math500_00002"},
     ]
 
     assert [q["id"] for q in EvalTower._filter_questions_by_split(questions, "HE-R+")] == [
-        "sv_he_r_plus_001"
+        "sv_he_r_plus_001",
+        "he_r_plus_003",
     ]
     assert [q["id"] for q in EvalTower._filter_questions_by_split(questions, "HE-R")] == [
-        "sv_he_r_002"
+        "sv_he_r_002",
+        "he_r_004",
     ]
     assert [q["id"] for q in EvalTower._filter_questions_by_split(questions, "gsm8k")] == [
         "gsm8k_00001"
     ]
+    assert [q["id"] for q in EvalTower._filter_questions_by_split(questions, "math500")] == [
+        "math500_00001",
+        "math500_00002",
+    ]
+    assert EvalTower._filter_questions_by_split(questions, "math") == []
 
 
 # ── (3) window-runner verifier-mode surface ──────────────────────────────────
