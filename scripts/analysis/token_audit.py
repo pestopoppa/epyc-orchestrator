@@ -21,10 +21,16 @@ from typing import Any
 # ── Paths ────────────────────────────────────────────────────────────────────
 
 ORCHESTRATOR_ROOT = Path("/mnt/raid0/llm/epyc-orchestrator")
+if str(ORCHESTRATOR_ROOT) not in sys.path:
+    sys.path.insert(0, str(ORCHESTRATOR_ROOT))
+
+from scripts.autopilot.journal_shards import journal_shards  # noqa: E402
+
 CONSTANTS_PATH = ORCHESTRATOR_ROOT / "src" / "prompt_builders" / "constants.py"
 ROLES_DIR = ORCHESTRATOR_ROOT / "orchestration" / "prompts" / "roles"
 PROMPTS_DIR = ORCHESTRATOR_ROOT / "orchestration" / "prompts"
-JOURNAL_PATHS = sorted((ORCHESTRATOR_ROOT / "orchestration").glob("autopilot_journal*.jsonl"))
+# JRN-6/7: numeric, gap-tolerant shard order (was lexicographic glob).
+JOURNAL_PATHS = journal_shards(ORCHESTRATOR_ROOT / "orchestration")
 DIAGNOSTICS_PATHS = [
     ORCHESTRATOR_ROOT / "data" / "package_b" / "seeding_diagnostics.jsonl",
     ORCHESTRATOR_ROOT / "data" / "package_a" / "seeding_diagnostics.jsonl",

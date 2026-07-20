@@ -10,7 +10,12 @@ from scripts.autopilot.export_rlvr_environment import (
     SUMMARY_SCHEMA_VERSION,
     export_environment_rows,
     main,
+    write_jsonl,
 )
+
+
+def _fail_on_bare_constant(token: str):  # pragma: no cover - only hit on failure
+    raise AssertionError(f"bare non-finite JSON constant present: {token!r}")
 
 
 def test_export_environment_rows_strips_private_question_text() -> None:
@@ -118,6 +123,52 @@ def test_cli_writes_jsonl_and_summary(tmp_path: Path) -> None:
     assert exported[0]["source_label"] == "fixture"
     assert exported[0]["reward_signal"] == "binary_outcome"
     assert json.loads(summary.read_text(encoding="utf-8"))["tier_counts"] == {"0": 1}
+
+
+def test_nonfinite_metric_flagged_and_written_as_strict_json(tmp_path: Path) -> None:
+    # ece=None is coerced to NaN by rlvr_tiers; the exporter must record which
+    # metric was non-finite (D2) and still emit strict, jq-parseable JSON.
+    rows, summary = export_environment_rows(
+        [
+            {
+                "trial_id": 7,
+                "action_type": "deep_eval",
+                "tier": 2,
+                "quality": 2.4,
+                "reliability": 0.9,
+                "eval_details": {
+                    "ece": None,
+                    "auroc": 0.8,
+                    "question_results": [
+                        {
+                            "qid": "q1",
+                            "suite": "math",
+                            "correct": True,
+                            "answer_hash": "sha256:abc",
+                        }
+                    ],
+                },
+            }
+        ],
+        source_label="unit",
+    )
+
+    assert rows[0]["metrics_nonfinite"] == ["ece"]
+    assert summary["rows_with_nonfinite_metrics"] == 1
+
+    output = tmp_path / "rlvr.jsonl"
+    write_jsonl(output, rows)
+    raw = output.read_text(encoding="utf-8")
+    assert "NaN" not in raw
+    assert "Infinity" not in raw
+
+    parsed = [
+        json.loads(line, parse_constant=_fail_on_bare_constant)
+        for line in raw.splitlines()
+        if line.strip()
+    ]
+    assert parsed[0]["metrics"]["ece"] is None
+    assert parsed[0]["metrics_nonfinite"] == ["ece"]
 
 
 def test_cli_fail_on_blockers_returns_one_after_writing_outputs(tmp_path: Path) -> None:

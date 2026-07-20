@@ -11,6 +11,7 @@ import fcntl
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 from dataclasses import asdict, dataclass, field, replace
@@ -20,6 +21,15 @@ from pathlib import Path
 from typing import Any
 
 from src.autopilot_core.tier_specs import DEFAULT_FRONTIER_TIER
+
+# experiment_journal is imported both as the package path
+# ``scripts.autopilot.experiment_journal`` (tests, cross-module readers) and as a
+# bare ``experiment_journal`` module (autopilot.py inserts scripts/autopilot on
+# sys.path). Resolve the shard iterator under both contexts.
+try:
+    from scripts.autopilot.journal_shards import journal_shards, shard_batch_index
+except ModuleNotFoundError:  # pragma: no cover - bare-module import context
+    from journal_shards import journal_shards, shard_batch_index
 
 log = logging.getLogger(__name__)
 
@@ -116,6 +126,30 @@ SUPERSESSION_EVENT_TYPE = "supersession"
 BASELINE_PROMOTION_EVENT_TYPE = "baseline_promotion"
 JOURNAL_SNAPSHOT_EVENT_TYPE = "journal_snapshot"
 ROLE_RESTART_BOUNDARY_EVENT_TYPE = "role_restart_boundary"
+
+
+def json_sanitize(obj: Any) -> Any:
+    """Recursively replace non-finite floats (NaN / ±Inf) with None for strict JSON.
+
+    D2: ``json.dumps`` with the default ``allow_nan=True`` emits bare ``NaN`` /
+    ``Infinity`` tokens, which are invalid JSON — they break ``jq`` and every
+    strict parser that reads the journal, RLVR export, and autopilot state files.
+    Sanitizing at each serialization boundary lets those writers pass
+    ``allow_nan=False`` safely: the only reachable floats are finite, so encoding
+    never raises.
+
+    Containers are rebuilt (``dict`` values sanitized, ``list``/``tuple`` elements
+    sanitized with tuples collapsed to lists, matching JSON array semantics);
+    every other value (str, int, bool, None, and non-JSON objects handled by the
+    encoder's ``default=str``) is returned unchanged.
+    """
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if isinstance(obj, dict):
+        return {key: json_sanitize(value) for key, value in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [json_sanitize(value) for value in obj]
+    return obj
 
 
 def has_legacy_scale_failure_analysis(text: str) -> bool:
@@ -408,7 +442,14 @@ class ExperimentJournal:
         return self._entries[-1].trial_id // MAX_TRIALS_PER_FILE
 
     def _load_existing(self) -> None:
-        """Load entries from all existing JSONL files.
+        """Load entries from all existing JSONL shards.
+
+        Shard discovery uses the canonical ``journal_shards`` iterator (audit
+        JRN-5/6/7): every rotated shard is read in numeric batch order and a gap
+        (e.g. a missing ``_2``) no longer stops discovery at that index — the old
+        ``while path(batch).exists()`` loop silently dropped ``_3`` and every later
+        shard once a shard was absent. The per-shard batch index (used to key
+        ``_ledger_events_by_batch``) is derived from each shard's filename.
 
         Tolerant of a single torn *trailing* line (a partial final append left
         by a crash): it is logged and skipped here (``torn_lines_skipped`` is
@@ -417,11 +458,10 @@ class ExperimentJournal:
         after it — is NOT auto-recoverable and raises
         ``ExperimentJournalCorruptError``.
         """
-        batch = 0
-        while True:
-            jsonl = self._jsonl_path(batch)
-            if not jsonl.exists():
-                break
+        for jsonl in journal_shards(self.journal_dir):
+            batch = shard_batch_index(jsonl)
+            if batch is None:  # defensive: journal_shards only yields matching files
+                continue
             with open(jsonl) as f:
                 lines = f.readlines()
             for line_number, raw in enumerate(lines, start=1):
@@ -506,7 +546,6 @@ class ExperimentJournal:
                     outcome_status=data.get("outcome_status", "ok"),
                 )
                 self._entries.append(entry)
-            batch += 1
 
     # ── writing ──────────────────────────────────────────────────
 
@@ -529,7 +568,9 @@ class ExperimentJournal:
         # exclusive flock with fsync so a crash can only ever tear THIS trailing
         # line (never a mid-file record), and concurrent writers can't interleave.
         self._repair_torn_tail(jsonl)
-        line = json.dumps(asdict(entry), default=str) + "\n"
+        # D2: sanitize non-finite floats → null and forbid bare NaN/Infinity tokens
+        # so every written line is strict, jq-parseable JSON.
+        line = json.dumps(json_sanitize(asdict(entry)), default=str, allow_nan=False) + "\n"
         with open(jsonl, "a") as f:
             fcntl.flock(f.fileno(), fcntl.LOCK_EX)
             try:
@@ -554,7 +595,8 @@ class ExperimentJournal:
         # Durable append (A5): mirror record()'s repair → serialize → locked
         # fsync'd write so ledger events survive a crash the same way trials do.
         self._repair_torn_tail(jsonl)
-        line = json.dumps(event, default=str) + "\n"
+        # D2: strict JSON (non-finite floats → null, no bare NaN/Infinity tokens).
+        line = json.dumps(json_sanitize(event), default=str, allow_nan=False) + "\n"
         with open(jsonl, "a") as f:
             fcntl.flock(f.fileno(), fcntl.LOCK_EX)
             try:

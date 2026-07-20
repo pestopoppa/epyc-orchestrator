@@ -34,14 +34,14 @@ from pathlib import Path
 from typing import Any
 
 from scripts.autopilot.audit_block_report import build_report as _w6_build_report
+from scripts.autopilot.journal_shards import journal_shards
 from src.autopilot_core.baseline_ledger import baseline_ledger_authority_enabled
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_STATE_PATH = REPO_ROOT / "orchestration" / "autopilot_state.json"
-DEFAULT_JOURNAL_PATHS = [
-    REPO_ROOT / "orchestration" / "autopilot_journal.jsonl",
-    REPO_ROOT / "orchestration" / "autopilot_journal_1.jsonl",
-]
+# JRN-5/7: discover every rotated shard (was a hardcoded base + _1 pair that
+# silently ignored _2 and beyond once the journal rotated a second time).
+DEFAULT_JOURNAL_PATHS = journal_shards(REPO_ROOT / "orchestration")
 DEFAULT_STRATEGY_DB = (
     REPO_ROOT / "orchestration" / "repl_memory" / "strategies" / "strategies.db"
 )

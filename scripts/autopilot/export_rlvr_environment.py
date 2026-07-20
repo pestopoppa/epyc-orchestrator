@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from collections import Counter
 from pathlib import Path
@@ -21,6 +22,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.autopilot_core.rlvr_tiers import RLVR_REWARD_POLICY, rlvr_reward_from_result
+from scripts.autopilot.experiment_journal import json_sanitize
 
 
 ROW_SCHEMA_VERSION = "ap27_rlvr_environment_row.v1"
@@ -107,7 +109,42 @@ def write_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as handle:
         for row in rows:
-            handle.write(json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n")
+            # D2: strict, jq-parseable output — non-finite metric floats become
+            # null (their names are already recorded in `metrics_nonfinite`) and
+            # allow_nan=False forbids bare NaN/Infinity tokens.
+            handle.write(
+                json.dumps(
+                    json_sanitize(row),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                )
+                + "\n"
+            )
+
+
+def _has_nonfinite(value: Any) -> bool:
+    """True if `value` is (or nests) a non-finite float (NaN / ±Inf)."""
+    if isinstance(value, float):
+        return not math.isfinite(value)
+    if isinstance(value, dict):
+        return any(_has_nonfinite(item) for item in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_has_nonfinite(item) for item in value)
+    return False
+
+
+def _nonfinite_metric_names(metrics: Any) -> list[str]:
+    """Sorted metric names whose value carries a non-finite float, pre-sanitization.
+
+    D2: rlvr_tiers coerces a missing/None ece/auroc to ``math.nan`` (a row can be
+    ready_for_training while carrying NaN calibration). Sanitization turns those
+    into null, erasing which metric was affected — so we snapshot the offending
+    names here, before the write boundary drops the signal.
+    """
+    if not isinstance(metrics, dict):
+        return []
+    return sorted(name for name, value in metrics.items() if _has_nonfinite(value))
 
 
 def _load_json(path: Path) -> Any:
@@ -230,6 +267,10 @@ def _environment_row(
     )
     if fingerprint:
         row["config_fingerprint"] = fingerprint
+    # D2: record which metrics were non-finite before write_jsonl sanitizes them.
+    nonfinite_metrics = _nonfinite_metric_names(row["metrics"])
+    if nonfinite_metrics:
+        row["metrics_nonfinite"] = nonfinite_metrics
     _assert_prompt_free(row)
     return row
 
@@ -287,6 +328,7 @@ def _summary(
         "rows": len(rows),
         "ready_for_training": sum(1 for row in rows if row["ready_for_training"]),
         "blocked": sum(1 for row in rows if not row["ready_for_training"]),
+        "rows_with_nonfinite_metrics": sum(1 for row in rows if row.get("metrics_nonfinite")),
         "skipped_no_eval": skipped_no_eval,
         "reward_policy": RLVR_REWARD_POLICY,
         "tier_counts": dict(sorted(Counter(str(row["tier"]) for row in rows).items())),
@@ -340,7 +382,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.summary_json:
             args.summary_json.parent.mkdir(parents=True, exist_ok=True)
             args.summary_json.write_text(
-                json.dumps(summary, indent=2, sort_keys=True) + "\n",
+                json.dumps(json_sanitize(summary), indent=2, sort_keys=True, allow_nan=False)
+                + "\n",
                 encoding="utf-8",
             )
     except RLVREnvironmentExportError as exc:

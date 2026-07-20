@@ -29,6 +29,7 @@ from scripts.registry.render_stack_summary import (  # noqa: E402
     stack_prior_role_rows as _stack_prior_role_rows,
 )
 from src.autopilot_core.baseline_ledger import reconcile_baseline_ledger  # noqa: E402
+from scripts.autopilot.journal_shards import journal_shards  # noqa: E402
 
 TRUST_BOUNDARY_FILES = [
     "scripts/benchmark/seed_specialist_routing.py",
@@ -82,10 +83,11 @@ def _baseline_payload(
     state_baseline = state.get("baseline_state") if isinstance(state, dict) else None
     if isinstance(state_baseline, dict) and state_baseline:
         return state_baseline, "orchestration/autopilot_state.json:baseline_state"
-    reconciliation = reconcile_baseline_ledger(
-        _load_jsonl(root / "orchestration" / "autopilot_journal.jsonl"),
-        None,
-    )
+    # JRN-5: fold every rotated shard, not just the frozen base file.
+    journal_rows: list[dict[str, Any]] = []
+    for shard in journal_shards(root / "orchestration"):
+        journal_rows.extend(_load_jsonl(shard))
+    reconciliation = reconcile_baseline_ledger(journal_rows, None)
     if reconciliation.cutover_ready and isinstance(reconciliation.folded_state, dict):
         return (
             reconciliation.folded_state,

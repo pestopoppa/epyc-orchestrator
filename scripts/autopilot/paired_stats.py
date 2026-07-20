@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from src.autopilot_core.journal_reconstruction import fold_supersession_events
+from scripts.autopilot.journal_shards import journal_shards
 
 DEFAULT_JOURNAL_DIR = Path(__file__).resolve().parents[2] / "orchestration"
 
@@ -51,7 +52,8 @@ class McNemarResult:
 def iter_journal_rows(path: Path | str) -> Iterable[dict[str, Any]]:
     """Yield JSONL rows from one file or every autopilot_journal*.jsonl in a dir."""
     p = Path(path)
-    files = [p] if p.is_file() else sorted(p.glob("autopilot_journal*.jsonl"))
+    # JRN-6/7: numeric, gap-tolerant shard order (was lexicographic glob).
+    files = [p] if p.is_file() else journal_shards(p)
     rows: list[dict[str, Any]] = []
     for file_path in files:
         with file_path.open() as f:

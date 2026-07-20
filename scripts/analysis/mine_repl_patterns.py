@@ -33,9 +33,17 @@ import yaml
 # Paths
 # ---------------------------------------------------------------------------
 REPO = Path("/mnt/raid0/llm/epyc-orchestrator")
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
+
+from scripts.autopilot.journal_shards import journal_shards  # noqa: E402
+
 AUTOPILOT_LOG = REPO / "logs" / "autopilot.log"
 DIAGNOSTICS_JSONL = REPO / "logs" / "seeding_diagnostics.jsonl"
 JOURNAL_JSONL = REPO / "orchestration" / "autopilot_journal.jsonl"
+# JRN-5/7: every rotated shard, not just the frozen base file, for any journal
+# analysis that consumes these paths.
+JOURNAL_SHARDS = journal_shards(REPO / "orchestration")
 TOOL_REGISTRY_YAML = REPO / "orchestration" / "tool_registry.yaml"
 REPORT_OUT = REPO / "docs" / "repl_pattern_analysis.md"
 

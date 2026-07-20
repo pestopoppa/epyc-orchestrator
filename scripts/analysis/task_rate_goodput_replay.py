@@ -28,6 +28,7 @@ from src.autopilot_core.tier_specs import (  # noqa: E402
     task_rate_objectives_from_row,
     task_rate_qph_from_row,
 )
+from scripts.autopilot.journal_shards import resolve_journal_paths  # noqa: E402
 
 DEFAULT_JOURNAL = REPO / "orchestration" / "autopilot_journal.jsonl"
 DEFAULT_STATE = REPO / "orchestration" / "autopilot_state.json"
@@ -454,7 +455,14 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    rows, malformed = _read_jsonl(args.journal)
+    # JRN-5: default base path fans out to every rotated shard; an explicit
+    # non-base --journal path is read as given.
+    rows: list[dict[str, Any]] = []
+    malformed = 0
+    for shard in resolve_journal_paths(args.journal):
+        shard_rows, shard_malformed = _read_jsonl(shard)
+        rows.extend(shard_rows)
+        malformed += shard_malformed
     state = _read_state(args.state)
     legacy = _archive(
         rows,
