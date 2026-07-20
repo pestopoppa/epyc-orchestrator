@@ -5,6 +5,7 @@ Pure functions — no network I/O or mutable state.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from seeding_types import DEFAULT_TIMEOUT
@@ -22,6 +23,40 @@ __all__ = [
 # ── Scoring ──────────────────────────────────────────────────────────
 
 
+_ORCH_SCORER_KEY = "epyc_orch_debug_scorer"
+
+
+def _load_orchestrator_debug_scorer():
+    """Load THIS repo's ``debug_scorer.py`` by path, under a private key.
+
+    seeding_scoring lives beside the orchestrator copy of ``debug_scorer.py``,
+    but the research repo ships a diverged copy of the *same* filename. A bare
+    ``from debug_scorer import score_answer`` binds whichever copy won the
+    ``sys.path`` insertion race, so scorer identity became import-order
+    dependent (and could silently pick up the research copy's scoring rules).
+
+    Load the sibling file explicitly via ``importlib`` under a private
+    ``epyc_orch_debug_scorer`` ``sys.modules`` key so we always resolve the
+    orchestrator copy regardless of import history — and without mutating
+    ``sys.path`` or touching the research repo. Cached after first load.
+    """
+    import importlib.util
+    import sys
+
+    cached = sys.modules.get(_ORCH_SCORER_KEY)
+    if cached is not None:
+        return cached
+
+    scorer_path = Path(__file__).resolve().parent / "debug_scorer.py"
+    spec = importlib.util.spec_from_file_location(_ORCH_SCORER_KEY, scorer_path)
+    if spec is None or spec.loader is None:  # pragma: no cover - defensive
+        raise ImportError(f"cannot load debug_scorer from {scorer_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[_ORCH_SCORER_KEY] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def score_answer_deterministic(
     answer: str,
     expected: str,
@@ -29,7 +64,7 @@ def score_answer_deterministic(
     scoring_config: dict[str, Any] | None = None,
 ) -> bool:
     """Score an answer deterministically."""
-    from debug_scorer import score_answer
+    score_answer = _load_orchestrator_debug_scorer().score_answer
 
     return score_answer(answer, expected, scoring_method, scoring_config or {})
 

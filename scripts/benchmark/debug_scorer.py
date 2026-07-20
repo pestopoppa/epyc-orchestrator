@@ -23,8 +23,23 @@ import json
 import re
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any
+
+
+class ScoringUnavailableError(RuntimeError):
+    """Raised when a requested scorer cannot run.
+
+    Signals a scorer-infrastructure defect — a missing dependency, an
+    unreachable judge, or an unparseable GOLD/expected answer — as distinct
+    from the model merely producing a wrong answer. Callers MUST surface this
+    as an eval ERROR (an item that could not be scored) and NEVER fold it into
+    a ``False`` (wrong-answer) result. Silently swapping in a different scorer
+    (e.g. exact_match / substring) on such a failure is exactly how threaded
+    ``math_verify`` parses were mis-scored en masse; this exception makes the
+    failure loud instead of catastrophic-and-quiet.
+    """
 
 
 def score_answer(
@@ -496,8 +511,10 @@ def _score_programmatic(
 
     fn = verifiers.get(verifier)
     if fn is None:
-        # Unknown verifier — check if expected is a simple match
-        return expected.strip().lower() in answer_stripped.lower() if expected else False
+        # Mirror score_answer's "Unknown scoring method" convention: an
+        # unrecognized verifier is a config defect, not a silent substring
+        # match that would score arbitrary answers as correct.
+        raise ValueError(f"Unknown programmatic verifier: {verifier!r}")
 
     return fn()
 
@@ -671,8 +688,9 @@ def _score_llm_judge(
         "\"true\" or \"false\", nothing else."
     )
 
+    import httpx
+
     try:
-        import httpx
         resp = httpx.post(
             f"http://{host}:{port}/v1/chat/completions",
             json={
@@ -684,10 +702,19 @@ def _score_llm_judge(
         )
         resp.raise_for_status()
         verdict = resp.json()["choices"][0]["message"]["content"].strip().lower()
-        return verdict.startswith("true")
-    except Exception:
-        # If judge is unavailable, fall back to substring match
-        return expected.strip().lower() in candidate.lower()
+    except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as exc:
+        # HTTP/transport failure (httpx.*), non-2xx (HTTPStatusError from
+        # raise_for_status), bad JSON (json.JSONDecodeError <: ValueError), or
+        # an unexpected response shape (KeyError/IndexError/TypeError). A judge
+        # that is down or malformed is scorer-unavailability — surface it as an
+        # ERROR; do NOT silently fall back to substring (audit item B7 owns the
+        # substring fast-path extraction semantics).
+        raise ScoringUnavailableError(
+            f"llm_judge unreachable or returned a malformed response at "
+            f"{host}:{port}; refusing to silently fall back to substring"
+        ) from exc
+
+    return verdict.startswith("true")
 
 
 def _score_math_verify(
@@ -699,24 +726,74 @@ def _score_math_verify(
     (e.g. \\frac{mg}{2} ≡ mg/2, x^2+1 ≡ 1+x^2, {1,2,3} ≡ {3,1,2}).
 
     Requires: pip install math-verify (Apache-2.0, HuggingFace).
-    Falls back to exact_match if not installed.
+
+    Error semantics — NO silent scorer fallback:
+        - math-verify not installed → ScoringUnavailableError. We refuse to
+          quietly score math with exact_match; that silent swap is what
+          mis-scored every threaded math eval.
+        - The GOLD (``expected``) answer raising on parse, or parsing to an
+          empty extraction, is a dataset/gold defect → ScoringUnavailableError.
+        - The MODEL's answer failing to parse is a *task* failure → False.
+        - ``verify`` itself raising is a scorer defect → ScoringUnavailableError.
+
+    Thread safety:
+        math-verify guards BOTH ``parse`` and ``verify`` with ``signal.alarm``,
+        which raises ``ValueError("... signal only works in main thread ...")``
+        on any non-main thread. The library's documented remedy is to disable
+        those timeouts (``parse(..., parsing_timeout=None)`` and
+        ``verify(..., timeout_seconds=None)``); we pass both whenever we are
+        off the main thread — the eval-level watchdog still bounds pathological
+        wall time — so threaded scoring runs the real math_verify path instead
+        of silently degrading (or, if only parse were fixed, ERRORing on every
+        threaded verify() call).
 
     Config:
         extraction_mode: "latex" (default), "expr", or "string"
     """
     try:
         from math_verify import parse, verify
-    except ImportError:
-        # Fallback to exact_match if math-verify not installed
-        return _score_exact_match(answer, expected, config)
+    except ImportError as exc:
+        raise ScoringUnavailableError(
+            "math-verify not installed but scoring_method=math_verify "
+            "requested; refusing to silently fall back to exact_match"
+        ) from exc
+
+    parse_kwargs: dict[str, Any] = {}
+    verify_kwargs: dict[str, Any] = {}
+    if threading.current_thread() is not threading.main_thread():
+        # math-verify's own documented remedy for threaded use; the
+        # eval-level watchdog bounds pathological wall time.
+        parse_kwargs["parsing_timeout"] = None
+        verify_kwargs["timeout_seconds"] = None
 
     try:
-        gold = parse(expected)
-        pred = parse(answer.strip())
-        return verify(gold, pred)
+        gold = parse(expected, **parse_kwargs)
+    except Exception as exc:
+        raise ScoringUnavailableError(
+            "math_verify could not parse the GOLD/expected answer "
+            f"{expected!r} (dataset/gold defect)"
+        ) from exc
+    if not gold:
+        raise ScoringUnavailableError(
+            "math_verify extracted nothing from the GOLD/expected answer "
+            f"{expected!r} (dataset/gold defect)"
+        )
+
+    try:
+        pred = parse(answer.strip(), **parse_kwargs)
     except Exception:
-        # If parsing fails, fall back to exact_match
-        return _score_exact_match(answer, expected, config)
+        # The model's own answer failing to parse is a task failure, not a
+        # scorer-unavailability condition — score it wrong, don't raise.
+        return False
+
+    try:
+        # gold-first argument order — verify() is asymmetric.
+        return bool(verify(gold, pred, **verify_kwargs))
+    except Exception as exc:
+        raise ScoringUnavailableError(
+            "math_verify.verify() raised while comparing parsed answers "
+            "(scorer defect)"
+        ) from exc
 
 
 # ── Helpers ────────────────────────────────────────────────────────────

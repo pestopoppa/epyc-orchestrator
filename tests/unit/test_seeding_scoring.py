@@ -26,17 +26,20 @@ def test_score_answer_deterministic_delegates_to_debug_scorer():
         calls["config"] = config
         return True
 
-    stub = ModuleType("debug_scorer")
+    # score_answer_deterministic pins the orchestrator copy under a private
+    # sys.modules key (see seeding_scoring._load_orchestrator_debug_scorer),
+    # so stub that key rather than the bare "debug_scorer" name.
+    stub = ModuleType("epyc_orch_debug_scorer")
     stub.score_answer = _score
-    prev = sys.modules.get("debug_scorer")
-    sys.modules["debug_scorer"] = stub
+    prev = sys.modules.get("epyc_orch_debug_scorer")
+    sys.modules["epyc_orch_debug_scorer"] = stub
     try:
         assert _MOD.score_answer_deterministic("a", "b") is True
     finally:
         if prev is None:
-            sys.modules.pop("debug_scorer", None)
+            sys.modules.pop("epyc_orch_debug_scorer", None)
         else:
-            sys.modules["debug_scorer"] = prev
+            sys.modules["epyc_orch_debug_scorer"] = prev
 
     assert calls == {
         "answer": "a",
@@ -53,10 +56,10 @@ def test_score_answer_deterministic_passes_explicit_config():
         calls["config"] = config
         return False
 
-    stub = ModuleType("debug_scorer")
+    stub = ModuleType("epyc_orch_debug_scorer")
     stub.score_answer = _score
-    prev = sys.modules.get("debug_scorer")
-    sys.modules["debug_scorer"] = stub
+    prev = sys.modules.get("epyc_orch_debug_scorer")
+    sys.modules["epyc_orch_debug_scorer"] = stub
     try:
         assert (
             _MOD.score_answer_deterministic(
@@ -69,9 +72,9 @@ def test_score_answer_deterministic_passes_explicit_config():
         )
     finally:
         if prev is None:
-            sys.modules.pop("debug_scorer", None)
+            sys.modules.pop("epyc_orch_debug_scorer", None)
         else:
-            sys.modules["debug_scorer"] = prev
+            sys.modules["epyc_orch_debug_scorer"] = prev
 
     assert calls["config"] == {"extract_patterns": ["x"]}
 
