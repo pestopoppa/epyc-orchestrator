@@ -12,11 +12,13 @@ import math
 import os
 import random
 import time
+import uuid
 from collections.abc import Mapping, Sequence
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import hashlib
+import threading
 from pathlib import Path
 from typing import Any, Callable
 
@@ -67,6 +69,8 @@ _HOST_COVARIATE_NUMERIC_KEYS = (
 )
 _HOST_COVARIATE_CATEGORICAL_KEYS = ("cache_warm_state",)
 _DATASET_SHA_BY_CORE_ID: dict[str, str] = {}
+_EVAL_QUESTION_JSONL_SCHEMA_VERSION = 1
+_DEFAULT_EVAL_ARTIFACT_ROOT = Path("/mnt/raid0/llm/tmp/eval_tower_trials")
 
 
 def _eval_no_progress_timeout_s(request_timeout_s: int) -> float:
@@ -839,7 +843,133 @@ def _eval_batch_id(*, label: str, n_questions: int, started_at_s: float) -> str:
     ).strip("-_")
     if not safe_label:
         safe_label = "eval"
-    return f"evaltower-{safe_label}-{int(started_at_s * 1000)}-{max(0, n_questions)}q"
+    return f"evaltower-{safe_label}-{int(started_at_s * 1000)}-{uuid.uuid4().hex[:8]}-{max(0, n_questions)}q"
+
+
+def _safe_artifact_name(value: str, *, fallback: str = "eval") -> str:
+    safe = "".join(
+        ch if ch.isalnum() or ch in {"-", "_", "."} else "-" for ch in str(value or "").strip()
+    ).strip("-_.")
+    return safe or fallback
+
+
+def _eval_artifact_root_from_trial_path(trial_path: Path | None) -> Path | None:
+    if trial_path is None:
+        return None
+    path = Path(trial_path).expanduser()
+    if path.suffix:
+        path = path.parent
+    return path / "eval_tower"
+
+
+def _eval_artifact_root(trial_path: Path | None = None) -> tuple[Path, str]:
+    override = os.environ.get("AUTOPILOT_EVAL_ARTIFACT_ROOT", "").strip()
+    if override:
+        return Path(override).expanduser(), "env:AUTOPILOT_EVAL_ARTIFACT_ROOT"
+    trial_root = _eval_artifact_root_from_trial_path(trial_path)
+    if trial_root is not None:
+        return trial_root, "trial_path"
+    return _DEFAULT_EVAL_ARTIFACT_ROOT, "default"
+
+
+class _EvalQuestionJsonlWriter:
+    """Durable append-only per-trial QuestionResult sidecar."""
+
+    def __init__(
+        self,
+        *,
+        root: Path,
+        root_source: str,
+        eval_batch_id: str,
+        trial_id: int | None,
+        label: str,
+        requested_n: int,
+        concurrency: int,
+    ) -> None:
+        trial_name = f"trial_{trial_id}" if trial_id is not None else "trial_unknown"
+        self.path = root / _safe_artifact_name(trial_name, fallback="trial_unknown") / "question_results.jsonl"
+        self._eval_batch_id = eval_batch_id
+        self._trial_id = trial_id
+        self._label = str(label or "")
+        self._requested_n = int(requested_n)
+        self._concurrency = int(concurrency)
+        self._root_source = root_source
+        self._lock = threading.Lock()
+        self._fd: int | None = None
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._fd = os.open(self.path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o644)
+        self._fsync_parent_dir()
+
+    def _fsync_parent_dir(self) -> None:
+        try:
+            dir_fd = os.open(self.path.parent, os.O_RDONLY)
+        except OSError:
+            return
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+
+    def _base_row(self, row_type: str) -> dict[str, Any]:
+        row: dict[str, Any] = {
+            "schema_version": _EVAL_QUESTION_JSONL_SCHEMA_VERSION,
+            "row_type": row_type,
+            "eval_batch_id": self._eval_batch_id,
+            "label": self._label,
+            "requested_n": self._requested_n,
+            "artifact_root_source": self._root_source,
+            "recovery_contract": "complete_marker_required",
+        }
+        if self._trial_id is not None:
+            row["trial_id"] = self._trial_id
+        return row
+
+    def append_start(self) -> None:
+        row = self._base_row("batch_start")
+        row["concurrency"] = self._concurrency
+        row["complete"] = False
+        self.append_row(row)
+
+    def append_result(self, *, ordinal: int, result: "QuestionResult") -> None:
+        row = self._base_row("question_result")
+        row.update(
+            {
+                "ordinal": int(ordinal),
+                "result": _compact_question_result(result),
+                "complete": False,
+            }
+        )
+        self.append_row(row)
+
+    def append_complete(self, *, completed_n: int, elapsed_s: float) -> None:
+        row = self._base_row("batch_complete")
+        row.update(
+            {
+                "completed_n": int(completed_n),
+                "elapsed_s": round(max(0.0, float(elapsed_s)), 6),
+                "complete": True,
+            }
+        )
+        self.append_row(row)
+
+    def append_row(self, row: dict[str, Any]) -> None:
+        data = (json.dumps(row, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n").encode(
+            "utf-8"
+        )
+        with self._lock:
+            if self._fd is None:
+                raise OSError("eval question JSONL writer is closed")
+            written = 0
+            while written < len(data):
+                written += os.write(self._fd, data[written:])
+            os.fsync(self._fd)
+
+    def close(self) -> None:
+        with self._lock:
+            if self._fd is None:
+                return
+            os.close(self._fd)
+            self._fd = None
 
 
 # Import seeding infrastructure
@@ -1455,15 +1585,21 @@ class EvalTower:
         self._pool = None
         self._core_cache: dict[str, tuple[list[dict], dict[str, Any], Path]] = {}
         self._trial_id_context: int | None = None
+        self._trial_path_context: Path | None = None
         self.on_question = on_question
         self.on_progress = on_progress
 
-    def set_trial_context(self, trial_id: int | str | None) -> None:
+    def set_trial_context(
+        self,
+        trial_id: int | str | None,
+        trial_path: str | Path | None = None,
+    ) -> None:
         """Set the current AutoPilot trial id for deterministic audit sampling."""
         try:
             self._trial_id_context = int(trial_id) if trial_id is not None else None
         except (TypeError, ValueError):
             self._trial_id_context = None
+        self._trial_path_context = Path(trial_path) if trial_path is not None else None
 
     def _resolve_trial_id(self, trial_id: int | None = None) -> int | None:
         return trial_id if trial_id is not None else self._trial_id_context
@@ -1935,56 +2071,101 @@ class EvalTower:
         ]
         results: list[QuestionResult | None] = [None] * n
         batch_start = time.time()
-        if workers <= 1:
-            wall_budget_s = _eval_batch_wall_budget_s(
-                n_questions=n,
-                workers=workers,
-                request_timeout_s=self.timeout,
+        writer: _EvalQuestionJsonlWriter | None = None
+        artifact_root, artifact_root_source = _eval_artifact_root(self._trial_path_context)
+        try:
+            pending_writer = _EvalQuestionJsonlWriter(
+                root=artifact_root,
+                root_source=artifact_root_source,
+                eval_batch_id=eval_batch_id,
+                trial_id=self._resolve_trial_id(),
+                label=label,
+                requested_n=n,
+                concurrency=workers,
             )
-            for i, q in enumerate(dispatch_questions):
-                results[i] = self._eval_question(q, client)
-                elapsed = time.time() - batch_start
-                correct_so_far = sum(1 for r in results if r and r.correct)
-                self._emit_progress(
-                    label=label,
-                    completed_questions=i + 1,
-                    total_questions=n,
-                    correct_questions=correct_so_far,
-                    concurrency=workers,
+            pending_writer.append_start()
+            writer = pending_writer
+        except Exception as exc:  # noqa: BLE001
+            if "pending_writer" in locals():
+                pending_writer.close()
+            log.warning("EvalTower question-result sidecar disabled: %s", exc)
+            writer = None
+
+        def append_question_result(ordinal: int, result: QuestionResult) -> None:
+            if writer is None:
+                return
+            try:
+                writer.append_result(ordinal=ordinal, result=result)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("EvalTower question-result sidecar append failed: %s", exc)
+
+        def append_complete_marker(completed_n: int, elapsed_s: float) -> None:
+            if writer is None:
+                return
+            try:
+                writer.append_complete(completed_n=completed_n, elapsed_s=elapsed_s)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("EvalTower question-result sidecar complete marker failed: %s", exc)
+
+        if workers <= 1:
+            try:
+                wall_budget_s = _eval_batch_wall_budget_s(
+                    n_questions=n,
+                    workers=workers,
+                    request_timeout_s=self.timeout,
                 )
-                if log_every and (i + 1) % log_every == 0:
-                    log.info(
-                        "%s progress: %d/%d (%.0f%% correct)",
-                        label,
-                        i + 1,
-                        n,
-                        100 * correct_so_far / (i + 1),
+                for i, q in enumerate(dispatch_questions):
+                    results[i] = self._eval_question(q, client)
+                    results[i].eval_concurrency = workers
+                    append_question_result(i, results[i])
+                    elapsed = time.time() - batch_start
+                    correct_so_far = sum(1 for r in results if r and r.correct)
+                    self._emit_progress(
+                        label=label,
+                        completed_questions=i + 1,
+                        total_questions=n,
+                        correct_questions=correct_so_far,
+                        concurrency=workers,
                     )
-                if wall_budget_s > 0 and elapsed >= wall_budget_s and (i + 1) < n:
-                    log.error(
-                        "%s serial eval exceeded wall budget %.1fs after %d/%d "
-                        "question(s); failing remaining question(s) closed",
-                        label,
-                        wall_budget_s,
-                        i + 1,
-                        n,
-                    )
-                    for j in range(i + 1, n):
-                        results[j] = self._failed_question_result(
-                            questions[j],
-                            elapsed_s=time.time() - batch_start,
-                            error=(
-                                "eval_wall_budget_timeout: serial eval exceeded "
-                                f"{wall_budget_s:.1f}s"
-                            ),
+                    if log_every and (i + 1) % log_every == 0:
+                        log.info(
+                            "%s progress: %d/%d (%.0f%% correct)",
+                            label,
+                            i + 1,
+                            n,
+                            100 * correct_so_far / (i + 1),
                         )
-                    break
-            batch_wall_s = time.time() - batch_start
-            out = [r for r in results if r is not None]
-            for r in out:
-                r.eval_concurrency = workers
-                r.eval_wall_s = batch_wall_s
-            return out
+                    if wall_budget_s > 0 and elapsed >= wall_budget_s and (i + 1) < n:
+                        log.error(
+                            "%s serial eval exceeded wall budget %.1fs after %d/%d "
+                            "question(s); failing remaining question(s) closed",
+                            label,
+                            wall_budget_s,
+                            i + 1,
+                            n,
+                        )
+                        for j in range(i + 1, n):
+                            results[j] = self._failed_question_result(
+                                questions[j],
+                                elapsed_s=time.time() - batch_start,
+                                error=(
+                                    "eval_wall_budget_timeout: serial eval exceeded "
+                                    f"{wall_budget_s:.1f}s"
+                                ),
+                            )
+                            results[j].eval_concurrency = workers
+                            append_question_result(j, results[j])
+                        break
+                batch_wall_s = time.time() - batch_start
+                out = [r for r in results if r is not None]
+                for r in out:
+                    r.eval_concurrency = workers
+                    r.eval_wall_s = batch_wall_s
+                append_complete_marker(len(out), batch_wall_s)
+                return out
+            finally:
+                if writer is not None:
+                    writer.close()
 
         ex = ThreadPoolExecutor(max_workers=workers, thread_name_prefix=f"eval-{label}")
         done = 0
@@ -2021,6 +2202,8 @@ class EvalTower:
                                 f"for {no_progress_timeout_s:.1f}s"
                             ),
                         )
+                        results[idx].eval_concurrency = workers
+                        append_question_result(idx, results[idx])
                     break
 
                 for fut in completed:
@@ -2033,6 +2216,8 @@ class EvalTower:
                             elapsed_s=time.time() - batch_start,
                             error=str(exc),
                         )
+                    results[idx].eval_concurrency = workers
+                    append_question_result(idx, results[idx])
                     done += 1
                     correct_so_far = sum(1 for r in results if r and r.correct)
                     self._emit_progress(
@@ -2068,6 +2253,8 @@ class EvalTower:
                     elapsed_s=time.time() - batch_start,
                     error="eval_cancelled_after_no_progress_timeout",
                 )
+                results[i].eval_concurrency = workers
+                append_question_result(i, results[i])
         if log_every and done % log_every:
             correct_so_far = sum(1 for r in results if r and r.correct)
             log.info(
@@ -2090,6 +2277,9 @@ class EvalTower:
         for r in out:
             r.eval_concurrency = workers
             r.eval_wall_s = batch_wall_s
+        append_complete_marker(len(out), batch_wall_s)
+        if writer is not None:
+            writer.close()
         return out
 
     def _emit_progress(
