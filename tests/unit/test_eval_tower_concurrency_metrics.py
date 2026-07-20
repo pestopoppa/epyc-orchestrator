@@ -6,6 +6,7 @@ import hashlib
 import math
 import sys
 import time
+from datetime import UTC, datetime
 from dataclasses import fields
 from pathlib import Path
 
@@ -30,7 +31,7 @@ def test_eval_concurrency_env_override_still_wins(monkeypatch) -> None:
     assert eval_tower._eval_concurrency() == 5
 
 
-def test_eval_batch_progress_callback_reports_logged_milestones(monkeypatch) -> None:
+def test_eval_batch_progress_callback_reports_each_completed_question(monkeypatch) -> None:
     monkeypatch.setenv("AUTOPILOT_EVAL_CONCURRENCY", "1")
     tower = EvalTower()
     events: list[dict] = []
@@ -62,12 +63,28 @@ def test_eval_batch_progress_callback_reports_logged_milestones(monkeypatch) -> 
     assert events == [
         {
             "label": "T2",
+            "completed_questions": 1,
+            "total_questions": 3,
+            "correct_questions": 1,
+            "correct_pct": 100.0,
+            "concurrency": 1,
+        },
+        {
+            "label": "T2",
             "completed_questions": 2,
             "total_questions": 3,
             "correct_questions": 1,
             "correct_pct": 50.0,
             "concurrency": 1,
-        }
+        },
+        {
+            "label": "T2",
+            "completed_questions": 3,
+            "total_questions": 3,
+            "correct_questions": 2,
+            "correct_pct": pytest.approx(100 * 2 / 3),
+            "concurrency": 1,
+        },
     ]
 
 
@@ -171,6 +188,59 @@ def test_eval_concurrency_caps_to_live_fleet_when_static_topology_allows(monkeyp
     assert eval_tower._eval_concurrency() == 1
 
 
+def test_live_safe_concurrency_uses_quarter_mode_live_ports(monkeypatch) -> None:
+    from scripts.server import runtime_facts_manifest, stack_numa
+
+    cfg = {
+        "worker_general": {
+            "instances": [
+                ("0-95", 8072, 96),
+                ("0-23,96-119", 8082, 48),
+                ("24-47,120-143", 8182, 48),
+                ("48-71,144-167", 8282, 48),
+                ("72-95,168-191", 8382, 48),
+            ],
+        },
+    }
+    live_ports = {8082, 8182, 8282, 8382}
+
+    class _Response:
+        def __init__(self, status_code: int) -> None:
+            self.status_code = status_code
+
+    def fake_get(url: str, timeout: float) -> _Response:
+        del timeout
+        port = int(url.rsplit(":", 1)[1].split("/", 1)[0])
+        return _Response(200 if port in live_ports else 503)
+
+    monkeypatch.setenv("AUTOPILOT_EVAL_REQUIRE_LIVE_FLEET", "1")
+    monkeypatch.setattr(stack_numa, "NUMA_CONFIG", cfg)
+    monkeypatch.setattr(runtime_facts_manifest, "read_runtime_stack_numa_mode", lambda: "quarter")
+    monkeypatch.setattr(eval_tower.httpx, "get", fake_get)
+
+    assert eval_tower._live_safe_concurrency("worker_general", 1) == 4
+
+
+def test_eval_concurrency_can_exceed_full_first_cap_in_quarter_mode(monkeypatch) -> None:
+    from src.runtime import instance_topology
+
+    monkeypatch.delenv("AUTOPILOT_EVAL_CONCURRENCY", raising=False)
+    monkeypatch.setenv("AUTOPILOT_EVAL_BOTTLENECK_ROLE", "worker_general")
+    monkeypatch.setattr(instance_topology, "max_safe_concurrency", lambda _role: 1)
+    monkeypatch.setattr(
+        eval_tower,
+        "_same_role_matrix_allows_eval_fanout",
+        lambda _role: True,
+    )
+    monkeypatch.setattr(
+        eval_tower,
+        "_live_safe_concurrency",
+        lambda _role, _cap: 4,
+    )
+
+    assert eval_tower._eval_concurrency() == 4
+
+
 def test_live_safe_concurrency_can_be_disabled_for_diagnostics(monkeypatch) -> None:
     monkeypatch.setenv("AUTOPILOT_EVAL_REQUIRE_LIVE_FLEET", "0")
 
@@ -193,14 +263,130 @@ def test_eval_concurrency_falls_back_to_serial_when_matrix_blocks(monkeypatch) -
 
 
 def test_eval_concurrency_falls_back_to_serial_when_matrix_stale(monkeypatch) -> None:
+    from scripts.server import stack_numa
     from src.scheduling import contention
 
+    matrix = contention.ContentionMatrix(
+        version=1,
+        measured_at="",
+        host="test",
+        topology_hash="old",
+        default_floor=0.85,
+        same_role={
+            "frontdoor": contention.SameRole(role="frontdoor", verdict="allow"),
+        },
+    )
+    monkeypatch.setattr(stack_numa, "NUMA_CONFIG", {"frontdoor": {"instances": []}})
+    monkeypatch.setattr(contention, "load_contention_matrix", lambda: matrix)
+    monkeypatch.setattr(contention, "topology_fingerprint_for_matrix", lambda _cfg, _matrix: "new")
     monkeypatch.setattr(
         contention,
         "matrix_status",
         lambda current_topology_hash: contention.MatrixStatus.STALE,
     )
-    monkeypatch.setattr(contention, "topology_fingerprint", lambda _config: "hash")
+
+    assert not eval_tower._same_role_matrix_allows_eval_fanout("frontdoor")
+
+
+def test_eval_concurrency_allows_stale_global_matrix_with_fresh_role_cert(monkeypatch) -> None:
+    from scripts.server import stack_numa
+    from src.scheduling import contention
+
+    cfg = {
+        "frontdoor": {
+            "instances": [
+                ("0-47,96-143", 8070, 96),
+                ("0-23,96-119", 8080, 48),
+                ("24-47,120-143", 8180, 48),
+            ],
+        },
+    }
+    live_ports = {8080, 8180}
+    role_hash = contention.role_topology_fingerprint(
+        cfg,
+        "frontdoor",
+        live_ports=live_ports,
+    )
+    matrix = contention.ContentionMatrix(
+        version=1,
+        measured_at="",
+        host="test",
+        topology_hash="stale-whole",
+        default_floor=0.85,
+        same_role={
+            "frontdoor": contention.SameRole(role="frontdoor", verdict="allow"),
+        },
+        same_role_certifications={
+            "frontdoor": contention.SameRoleCertification(
+                role="frontdoor",
+                topology_hash=role_hash,
+                verdict="allow",
+                measured_at=datetime.now(UTC).isoformat(),
+                live_ports=tuple(sorted(live_ports)),
+            ),
+        },
+    )
+
+    monkeypatch.setattr(stack_numa, "NUMA_CONFIG", cfg)
+    monkeypatch.setattr(contention, "load_contention_matrix", lambda: matrix)
+    monkeypatch.setattr(contention, "topology_fingerprint_for_matrix", lambda _cfg, _matrix: "new-whole")
+    monkeypatch.setattr(
+        contention,
+        "matrix_status",
+        lambda current_topology_hash: contention.MatrixStatus.STALE,
+    )
+    monkeypatch.setattr(eval_tower, "_live_role_ports", lambda _cfg, _role: live_ports)
+
+    assert eval_tower._same_role_matrix_allows_eval_fanout("frontdoor")
+
+
+def test_eval_concurrency_rejects_role_cert_when_live_ports_drift(monkeypatch) -> None:
+    from scripts.server import stack_numa
+    from src.scheduling import contention
+
+    cfg = {
+        "frontdoor": {
+            "instances": [
+                ("0-23,96-119", 8080, 48),
+                ("24-47,120-143", 8180, 48),
+                ("48-71,144-167", 8280, 48),
+            ],
+        },
+    }
+    certified_ports = {8080, 8180}
+    matrix = contention.ContentionMatrix(
+        version=1,
+        measured_at="",
+        host="test",
+        topology_hash="stale-whole",
+        default_floor=0.85,
+        same_role={
+            "frontdoor": contention.SameRole(role="frontdoor", verdict="allow"),
+        },
+        same_role_certifications={
+            "frontdoor": contention.SameRoleCertification(
+                role="frontdoor",
+                topology_hash=contention.role_topology_fingerprint(
+                    cfg,
+                    "frontdoor",
+                    live_ports=certified_ports,
+                ),
+                verdict="allow",
+                measured_at=datetime.now(UTC).isoformat(),
+                live_ports=tuple(sorted(certified_ports)),
+            ),
+        },
+    )
+
+    monkeypatch.setattr(stack_numa, "NUMA_CONFIG", cfg)
+    monkeypatch.setattr(contention, "load_contention_matrix", lambda: matrix)
+    monkeypatch.setattr(contention, "topology_fingerprint_for_matrix", lambda _cfg, _matrix: "new-whole")
+    monkeypatch.setattr(
+        contention,
+        "matrix_status",
+        lambda current_topology_hash: contention.MatrixStatus.STALE,
+    )
+    monkeypatch.setattr(eval_tower, "_live_role_ports", lambda _cfg, _role: {8080, 8180, 8280})
 
     assert not eval_tower._same_role_matrix_allows_eval_fanout("frontdoor")
 

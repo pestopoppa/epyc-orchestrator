@@ -63,6 +63,18 @@ same_role:
   - role: "vision_escalation"
     verdict: "block"
     note: "4-quarter anomaly"
+same_role_certifications:
+  - role: "frontdoor"
+    mode: "live_only"
+    measured_at: "2026-07-20T00:00:00+00:00"
+    topology_hash: "ROLE_HASH"
+    live_ports: [8080, 8180]
+    verdict: "allow"
+    samples: 3
+    min_ratio: 1.2
+    max_cv: 0.04
+    artifact: "data/contention_matrix/test/j5_within_role_results.json"
+    affinity_artifact: "data/contention_matrix/test/affinity_preflight.json"
 unknown_pairs:
   - roles: ["ingest_long_context", "worker_vision"]
     reason: "not_measured"
@@ -141,6 +153,22 @@ def test_unknown_pair_detection(minimal_matrix_yaml: Path) -> None:
     assert m.is_unknown_pair("ingest_long_context", "worker_vision")
     assert m.is_unknown_pair("worker_vision", "ingest_long_context")  # order-agnostic
     assert not m.is_unknown_pair("frontdoor", "architect_general")  # known
+
+
+def test_same_role_certification_parses(minimal_matrix_yaml: Path) -> None:
+    m = contention.load_contention_matrix(minimal_matrix_yaml)
+
+    cert = m.get_same_role_certification("frontdoor")
+
+    assert cert is not None
+    assert cert.verdict == "allow"
+    assert cert.mode == "live_only"
+    assert cert.topology_hash == "ROLE_HASH"
+    assert cert.live_ports == (8080, 8180)
+    assert cert.samples == 3
+    assert cert.min_ratio == 1.2
+    assert cert.max_cv == 0.04
+    assert cert.artifact.endswith("j5_within_role_results.json")
 
 
 def test_missing_file_raises() -> None:
@@ -278,11 +306,9 @@ def test_policy_fail_open_on_missing_matrix(monkeypatch, tmp_path: Path) -> None
     ) == contention.PairDecision.QUEUE
 
 
-def test_traffic_class_string_coerces() -> None:
+def test_traffic_class_string_coerces(minimal_matrix_yaml: Path) -> None:
     """Passing a string for traffic_class should be coerced to TrafficClass."""
-    m = contention.load_contention_matrix(
-        Path(__file__).resolve().parents[2] / "orchestration" / "contention_matrix.yaml"
-    )
+    m = contention.load_contention_matrix(minimal_matrix_yaml)
     # "background" string should work
     decision = contention.pair_policy("frontdoor", "architect_general", "background", matrix=m)
     assert decision == contention.PairDecision.QUEUE
@@ -329,6 +355,34 @@ def test_topology_fingerprint_ignores_metadata() -> None:
     a = {"frontdoor": {"instances": [("0-47", 8070, 96)], "mlock": True}}
     b = {"frontdoor": {"instances": [("0-47", 8070, 96)], "mlock": False, "numactl_policy": "interleave=all"}}
     assert contention.topology_fingerprint(a) == contention.topology_fingerprint(b)
+
+
+def test_role_topology_fingerprint_filters_to_live_ports() -> None:
+    config = {
+        "frontdoor": {
+            "instances": [
+                ("0-47,96-143", 8070, 96),
+                ("0-23,96-119", 8080, 48),
+                ("24-47,120-143", 8180, 48),
+            ],
+        },
+        "worker_general": {"instances": [("0-95", 8072, 96)]},
+    }
+
+    live_hash = contention.role_topology_fingerprint(
+        config,
+        "frontdoor",
+        live_ports={8080, 8180},
+    )
+
+    assert len(live_hash) == 16
+    assert live_hash == contention.role_topology_fingerprint(
+        config,
+        "frontdoor",
+        live_ports={8180, 8080},
+    )
+    assert live_hash != contention.role_topology_fingerprint(config, "frontdoor")
+    assert live_hash != contention.role_topology_fingerprint(config, "worker_general")
 
 
 def test_topology_fingerprint_for_matrix_excludes_unmeasured_auxiliary_role() -> None:

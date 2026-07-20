@@ -117,13 +117,51 @@ def test_apply_refuses_active_autopilot_by_default(tmp_path: Path, monkeypatch) 
         lambda _args: _healthy_preflight(autopilot_active=True),
     )
 
-    args = window.parse_args(["--apply", "--confirm-clean-window", "--output-dir", str(tmp_path)])
+    monkeypatch.setattr(window, "_resolved_eval_concurrency", lambda: 3)
+
+    args = window.parse_args(
+        [
+            "--apply",
+            "--confirm-clean-window",
+            "--min-eval-concurrency",
+            "3",
+            "--output-dir",
+            str(tmp_path),
+        ]
+    )
     report, rc = window.build_report(args, output_dir=tmp_path)
 
     assert rc == 75
     assert report["status"] == "blocked"
     assert "AutoPilot appears active" in report["blockers"][0]
     assert report["decision_grade"] is False
+
+
+def test_apply_requires_explicit_min_concurrency_or_allow_serial(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        window.activation_window,
+        "build_preflight",
+        lambda _args: _healthy_preflight(),
+    )
+    monkeypatch.setattr(window, "_resolved_eval_concurrency", lambda: 1)
+    monkeypatch.setattr(
+        window,
+        "run_eval_arm",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("eval must not run before fanout guard")
+        ),
+    )
+
+    args = window.parse_args(["--apply", "--confirm-clean-window", "--output-dir", str(tmp_path)])
+    report, rc = window.build_report(args, output_dir=tmp_path)
+
+    assert rc != 0
+    assert report["status"] == "blocked"
+    assert report["decision_grade"] is False
+    assert any("requires explicit --min-eval-concurrency" in b for b in report["blockers"])
 
 
 def test_successful_apply_runs_both_arms_and_rolls_back(tmp_path: Path, monkeypatch) -> None:
@@ -147,6 +185,7 @@ def test_successful_apply_runs_both_arms_and_rolls_back(tmp_path: Path, monkeypa
         "execute_rollback",
         lambda _args: [_step("rollback_reload"), _step("rollback_stop")],
     )
+    monkeypatch.setattr(window, "_resolved_eval_concurrency", lambda: 4)
 
     calls: list[str] = []
 
@@ -157,18 +196,41 @@ def test_successful_apply_runs_both_arms_and_rolls_back(tmp_path: Path, monkeypa
                 "name": name,
                 "ok": True,
                 "error": None,
-                "metrics": {"quality": 2.0, "speed": 10.0, "reliability": 1.0, "wall_s": 100.0},
+                "metrics": {
+                    "quality": 2.0,
+                    "speed": 10.0,
+                    "reliability": 1.0,
+                    "wall_s": 100.0,
+                    "n_questions": 50,
+                    "n_scored": 50,
+                },
             }
         return {
             "name": name,
             "ok": True,
             "error": None,
-            "metrics": {"quality": 2.1, "speed": 12.0, "reliability": 1.0, "wall_s": 25.0},
+            "metrics": {
+                "quality": 2.1,
+                "speed": 12.0,
+                "reliability": 1.0,
+                "wall_s": 25.0,
+                "n_questions": 50,
+                "n_scored": 50,
+            },
         }
 
     monkeypatch.setattr(window, "run_eval_arm", fake_run_eval_arm)
 
-    args = window.parse_args(["--apply", "--confirm-clean-window", "--output-dir", str(tmp_path)])
+    args = window.parse_args(
+        [
+            "--apply",
+            "--confirm-clean-window",
+            "--min-eval-concurrency",
+            "3",
+            "--output-dir",
+            str(tmp_path),
+        ]
+    )
     report, rc = window.build_report(args, output_dir=tmp_path)
 
     assert rc == 0
@@ -176,6 +238,120 @@ def test_successful_apply_runs_both_arms_and_rolls_back(tmp_path: Path, monkeypa
     assert calls == ["current", "eval_batch"]
     assert report["decision_grade"] is True
     assert report["comparison"]["wall_speedup_current_over_eval_batch"] == 4.0
+    assert [step["name"] for step in report["rollback_steps"]] == [
+        "rollback_reload",
+        "rollback_stop",
+    ]
+
+
+def test_degenerate_empty_current_arm_blocks_decision_grade(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        window.activation_window,
+        "build_preflight",
+        lambda _args: _healthy_preflight(),
+    )
+    monkeypatch.setattr(window, "_resolved_eval_concurrency", lambda: 4)
+    activated = False
+
+    def fake_activate(_args, *, output_dir):  # noqa: ARG001
+        nonlocal activated
+        activated = True
+        return ([_step("start")], [])
+
+    monkeypatch.setattr(window.activation_window, "execute_activation", fake_activate)
+    monkeypatch.setattr(
+        window,
+        "run_eval_arm",
+        lambda _name, _args: {
+            "name": "current",
+            "ok": True,
+            "error": None,
+            "metrics": {"quality": 0.0, "speed": 0.0, "reliability": 0.0, "n_questions": 0},
+        },
+    )
+
+    args = window.parse_args(
+        [
+            "--apply",
+            "--confirm-clean-window",
+            "--min-eval-concurrency",
+            "3",
+            "--output-dir",
+            str(tmp_path),
+        ]
+    )
+    report, rc = window.build_report(args, output_dir=tmp_path)
+
+    assert rc == 75
+    assert report["status"] == "current_eval_degenerate"
+    assert report["decision_grade"] is False
+    assert activated is False
+    assert any("degenerate" in b for b in report["blockers"])
+
+
+def test_interrupt_after_activation_rolls_back_and_returns_report(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        window.activation_window,
+        "build_preflight",
+        lambda _args: _healthy_preflight(),
+    )
+    monkeypatch.setattr(window, "_resolved_eval_concurrency", lambda: 4)
+    monkeypatch.setattr(
+        window.activation_window,
+        "execute_activation",
+        lambda _args, *, output_dir: ([_step("start"), _step("reload")], []),
+    )
+    monkeypatch.setattr(
+        window.activation_window,
+        "_load_probe_summary",
+        lambda _output_dir: {"status": "smoke_passed", "decision_grade": True},
+    )
+    monkeypatch.setattr(
+        window.activation_window,
+        "execute_rollback",
+        lambda _args: [_step("rollback_reload"), _step("rollback_stop")],
+    )
+
+    def fake_run_eval_arm(name: str, _args):
+        if name == "current":
+            return {
+                "name": name,
+                "ok": True,
+                "error": None,
+                "metrics": {
+                    "quality": 2.0,
+                    "speed": 10.0,
+                    "reliability": 1.0,
+                    "wall_s": 100.0,
+                    "n_questions": 50,
+                    "n_scored": 50,
+                },
+            }
+        raise window._RunInterrupted("SIGINT")
+
+    monkeypatch.setattr(window, "run_eval_arm", fake_run_eval_arm)
+
+    args = window.parse_args(
+        [
+            "--apply",
+            "--confirm-clean-window",
+            "--min-eval-concurrency",
+            "3",
+            "--output-dir",
+            str(tmp_path),
+        ]
+    )
+    report, rc = window.build_report(args, output_dir=tmp_path)
+
+    assert rc == 130
+    assert report["status"] == "interrupted"
+    assert report["decision_grade"] is False
     assert [step["name"] for step in report["rollback_steps"]] == [
         "rollback_reload",
         "rollback_stop",
@@ -206,6 +382,7 @@ def test_skip_current_arm_runs_batch_only_and_is_not_decision_grade(
         "execute_rollback",
         lambda _args: [_step("rollback_reload"), _step("rollback_stop")],
     )
+    monkeypatch.setattr(window, "_resolved_eval_concurrency", lambda: 4)
 
     calls: list[str] = []
 
@@ -215,13 +392,28 @@ def test_skip_current_arm_runs_batch_only_and_is_not_decision_grade(
             "name": name,
             "ok": True,
             "error": None,
-            "metrics": {"quality": 2.1, "speed": 12.0, "reliability": 1.0, "wall_s": 25.0},
+            "metrics": {
+                "quality": 2.1,
+                "speed": 12.0,
+                "reliability": 1.0,
+                "wall_s": 25.0,
+                "n_questions": 50,
+                "n_scored": 50,
+            },
         }
 
     monkeypatch.setattr(window, "run_eval_arm", fake_run_eval_arm)
 
     args = window.parse_args(
-        ["--apply", "--confirm-clean-window", "--skip-current-arm", "--output-dir", str(tmp_path)]
+        [
+            "--apply",
+            "--confirm-clean-window",
+            "--skip-current-arm",
+            "--min-eval-concurrency",
+            "3",
+            "--output-dir",
+            str(tmp_path),
+        ]
     )
     report, rc = window.build_report(args, output_dir=tmp_path)
 
@@ -246,6 +438,7 @@ def test_current_arm_failure_blocks_activation(tmp_path: Path, monkeypatch) -> N
         return ([_step("start")], [])
 
     monkeypatch.setattr(window.activation_window, "execute_activation", fake_activate)
+    monkeypatch.setattr(window, "_resolved_eval_concurrency", lambda: 3)
     monkeypatch.setattr(
         window,
         "run_eval_arm",
@@ -257,7 +450,16 @@ def test_current_arm_failure_blocks_activation(tmp_path: Path, monkeypatch) -> N
         },
     )
 
-    args = window.parse_args(["--apply", "--confirm-clean-window", "--output-dir", str(tmp_path)])
+    args = window.parse_args(
+        [
+            "--apply",
+            "--confirm-clean-window",
+            "--min-eval-concurrency",
+            "3",
+            "--output-dir",
+            str(tmp_path),
+        ]
+    )
     report, rc = window.build_report(args, output_dir=tmp_path)
 
     assert rc == 75
@@ -286,4 +488,5 @@ def test_eval_result_metrics_includes_suite_and_batch_fields(monkeypatch) -> Non
     assert arm["metrics"]["quality"] == 2.2
     assert arm["metrics"]["aggregate_tps"] == 40.0
     assert arm["metrics"]["eval_wall_s"] == 7.0
+    assert arm["metrics"]["n_scored"] == 5
     assert arm["metrics"]["per_suite_counts"] == {"general": 5}

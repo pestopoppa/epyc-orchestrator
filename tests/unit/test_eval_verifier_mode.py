@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import json
 from pathlib import Path
 import sys
 
@@ -275,6 +276,8 @@ def test_ev4_calibration_plan_only_pin_and_no_inference(tmp_path, monkeypatch) -
             "--roles",
             "worker_general",
             "--full",
+            "--min-eval-concurrency",
+            "3",
             "--output-dir",
             str(tmp_path),
         ]
@@ -288,10 +291,79 @@ def test_ev4_calibration_plan_only_pin_and_no_inference(tmp_path, monkeypatch) -
     assert "--mode calibration" in pin
     assert "--suite scoring_verifiers" in pin
     assert "--split HE-R+" in pin
+    assert "--min-eval-concurrency 3" in pin
+
+
+def test_verifier_mode_apply_blocks_when_fanout_resolves_serial(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(window.activation_window, "build_preflight", lambda _a: _healthy_preflight())
+    monkeypatch.setattr(window, "_resolved_eval_concurrency", lambda: 1)
+    monkeypatch.setattr(window, "_optimized_live_stack_status", lambda: {"ok": True, "warnings": []})
+    monkeypatch.setattr(window, "EvalTower", _ExplodingTower)
+
+    args = window.parse_args(
+        [
+            "--mode",
+            "calibration",
+            "--suite",
+            "scoring_verifiers",
+            "--split",
+            "HE-R+",
+            "--roles",
+            "worker_general,frontdoor",
+            "--full",
+            "--min-eval-concurrency",
+            "3",
+            "--apply",
+            "--confirm-clean-window",
+            "--output-dir",
+            str(tmp_path),
+        ]
+    )
+    report, rc = window.build_verifier_report(args, output_dir=tmp_path)
+
+    assert report["status"] == "blocked"
+    assert rc != 0
+    assert report["result"] is None
+    assert report["resolved_eval_concurrency"] == 1
+    assert report["min_eval_concurrency"] == 3
+    assert any("resolved EvalTower concurrency 1" in b for b in report["blockers"])
+
+
+def test_verifier_mode_apply_requires_explicit_fanout_floor(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(window.activation_window, "build_preflight", lambda _a: _healthy_preflight())
+    monkeypatch.setattr(window, "_resolved_eval_concurrency", lambda: 1)
+    monkeypatch.setattr(window, "_optimized_live_stack_status", lambda: {"ok": True, "warnings": []})
+    monkeypatch.setattr(window, "EvalTower", _ExplodingTower)
+
+    args = window.parse_args(
+        [
+            "--mode",
+            "calibration",
+            "--suite",
+            "scoring_verifiers",
+            "--split",
+            "HE-R+",
+            "--roles",
+            "worker_general",
+            "--full",
+            "--apply",
+            "--confirm-clean-window",
+            "--output-dir",
+            str(tmp_path),
+        ]
+    )
+    report, rc = window.build_verifier_report(args, output_dir=tmp_path)
+
+    assert report["status"] == "blocked"
+    assert rc != 0
+    assert report["decision_grade"] is False
+    assert any("requires explicit --min-eval-concurrency" in b for b in report["blockers"])
 
 
 def test_verifier_model_pass_is_download_gated(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(window.activation_window, "build_preflight", lambda _a: _healthy_preflight())
+    monkeypatch.setattr(window, "_resolved_eval_concurrency", lambda: 3)
+    monkeypatch.setattr(window, "_optimized_live_stack_status", lambda: {"ok": True, "warnings": []})
     monkeypatch.setattr(window, "EvalTower", _ExplodingTower)
 
     args = window.parse_args(
@@ -301,6 +373,8 @@ def test_verifier_model_pass_is_download_gated(tmp_path, monkeypatch) -> None:
             "--full",
             "--verifier",
             "thinkprm",
+            "--min-eval-concurrency",
+            "3",
             "--apply",
             "--confirm-clean-window",
             "--output-dir",
@@ -327,10 +401,21 @@ def test_require_verifier_on_disk_raises_model_download() -> None:
 
 def test_apply_without_confirm_clean_window_is_blocked(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(window.activation_window, "build_preflight", lambda _a: _healthy_preflight())
+    monkeypatch.setattr(window, "_resolved_eval_concurrency", lambda: 3)
+    monkeypatch.setattr(window, "_optimized_live_stack_status", lambda: {"ok": True, "warnings": []})
     monkeypatch.setattr(window, "EvalTower", _ExplodingTower)
 
     args = window.parse_args(
-        ["--mode", "math_rebaseline", "--full", "--apply", "--output-dir", str(tmp_path)]
+        [
+            "--mode",
+            "math_rebaseline",
+            "--full",
+            "--min-eval-concurrency",
+            "3",
+            "--apply",
+            "--output-dir",
+            str(tmp_path),
+        ]
     )
     report, rc = window.build_verifier_report(args, output_dir=tmp_path)
 
@@ -338,3 +423,161 @@ def test_apply_without_confirm_clean_window_is_blocked(tmp_path, monkeypatch) ->
     assert rc != 0
     assert any("confirm-clean-window" in b for b in report["blockers"])
     assert report["result"] is None
+
+
+def test_verifier_mode_apply_writes_progress_files(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(window.activation_window, "build_preflight", lambda _a: _healthy_preflight())
+    monkeypatch.setattr(window, "_resolved_eval_concurrency", lambda: 4)
+    monkeypatch.setattr(window, "_optimized_live_stack_status", lambda: {"ok": True, "warnings": []})
+
+    class _ProgressTower:
+        def __init__(self, *_args, on_progress=None, **_kwargs) -> None:
+            self.on_progress = on_progress
+
+        def eval_calibration(self, *, suite, split, roles, seed, n, full):  # noqa: ARG002
+            assert self.on_progress is not None
+            self.on_progress(
+                {
+                    "label": "cal-worker_general",
+                    "completed_questions": 1,
+                    "total_questions": 2,
+                    "correct_questions": 1,
+                    "correct_pct": 100.0,
+                    "concurrency": 4,
+                }
+            )
+            self.on_progress(
+                {
+                    "label": "cal-worker_general",
+                    "completed_questions": 2,
+                    "total_questions": 2,
+                    "correct_questions": 1,
+                    "correct_pct": 50.0,
+                    "concurrency": 4,
+                }
+            )
+            return {
+                "dataset_sha256": "abc",
+                "n_questions": 2,
+                "roles": roles,
+                "per_role": {
+                    role: {"metrics": {"ece": 0.5}, "n": 2}
+                    for role in roles
+                },
+            }
+
+    monkeypatch.setattr(window, "EvalTower", _ProgressTower)
+    args = window.parse_args(
+        [
+            "--mode",
+            "calibration",
+            "--suite",
+            "scoring_verifiers",
+            "--split",
+            "HE-R+",
+            "--roles",
+            "worker_general",
+            "--n",
+            "2",
+            "--min-eval-concurrency",
+            "3",
+            "--apply",
+            "--confirm-clean-window",
+            "--output-dir",
+            str(tmp_path),
+        ]
+    )
+
+    report, rc = window.build_verifier_report(args, output_dir=tmp_path)
+
+    assert rc == 0
+    assert report["status"] == "complete"
+    assert report["decision_grade"] is True
+    assert report["live_stack_contract"] == {"ok": True, "warnings": []}
+    progress_lines = (tmp_path / "progress.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(progress_lines) == 2
+    current = json.loads((tmp_path / "progress.current.json").read_text(encoding="utf-8"))
+    assert current["seq"] == 2
+    assert current["context"]["resolved_eval_concurrency"] == 4
+    assert current["event"]["completed_questions"] == 2
+
+
+def test_verifier_mode_empty_result_is_not_decision_grade(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(window.activation_window, "build_preflight", lambda _a: _healthy_preflight())
+    monkeypatch.setattr(window, "_resolved_eval_concurrency", lambda: 4)
+    monkeypatch.setattr(window, "_optimized_live_stack_status", lambda: {"ok": True, "warnings": []})
+
+    class _EmptyTower:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def eval_calibration(self, *, suite, split, roles, seed, n, full):  # noqa: ARG002
+            return {"dataset_sha256": "abc", "n_questions": 0, "per_role": {}}
+
+    monkeypatch.setattr(window, "EvalTower", _EmptyTower)
+    args = window.parse_args(
+        [
+            "--mode",
+            "calibration",
+            "--suite",
+            "scoring_verifiers",
+            "--split",
+            "HE-R+",
+            "--roles",
+            "worker_general",
+            "--n",
+            "2",
+            "--min-eval-concurrency",
+            "3",
+            "--apply",
+            "--confirm-clean-window",
+            "--output-dir",
+            str(tmp_path),
+        ]
+    )
+
+    report, rc = window.build_verifier_report(args, output_dir=tmp_path)
+
+    assert rc == 75
+    assert report["status"] == "eval_degenerate"
+    assert report["decision_grade"] is False
+    assert report["verifier_counts"] == {"n_questions": 0, "n_scored": 0}
+    assert any("degenerate" in b or "scored 0/2" in b for b in report["blockers"])
+
+
+def test_verifier_mode_apply_blocks_on_live_stack_contract_drift(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(window.activation_window, "build_preflight", lambda _a: _healthy_preflight())
+    monkeypatch.setattr(window, "_resolved_eval_concurrency", lambda: 4)
+    monkeypatch.setattr(
+        window,
+        "_optimized_live_stack_status",
+        lambda: {"ok": False, "warnings": ["frontdoor missing --spec-type draft-mtp"]},
+    )
+    monkeypatch.setattr(window, "EvalTower", _ExplodingTower)
+
+    args = window.parse_args(
+        [
+            "--mode",
+            "calibration",
+            "--suite",
+            "scoring_verifiers",
+            "--split",
+            "HE-R+",
+            "--roles",
+            "worker_general,frontdoor",
+            "--full",
+            "--min-eval-concurrency",
+            "3",
+            "--apply",
+            "--confirm-clean-window",
+            "--output-dir",
+            str(tmp_path),
+        ]
+    )
+    report, rc = window.build_verifier_report(args, output_dir=tmp_path)
+
+    assert report["status"] == "blocked"
+    assert rc != 0
+    assert report["result"] is None
+    assert report["live_stack_contract"]["warnings"] == ["frontdoor missing --spec-type draft-mtp"]
+    assert any("live stack launch contract" in b for b in report["blockers"])

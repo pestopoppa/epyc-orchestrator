@@ -104,6 +104,30 @@ class SameRole:
 
 
 @dataclass(frozen=True)
+class SameRoleCertification:
+    """Freshness certificate for one same-role live-shape subset.
+
+    This is intentionally narrower than the matrix-level `topology_hash`.
+    A role-scoped certification can authorize a background EvalTower fan-out
+    on the exact live ports it measured while the older full cross-role matrix
+    remains stale/fail-closed for broader scheduling.
+    """
+
+    role: str
+    topology_hash: str
+    verdict: str
+    measured_at: str = ""
+    mode: str = ""
+    live_ports: tuple[int, ...] = ()
+    samples: int = 1
+    min_ratio: float = 0.0
+    max_cv: float = 0.0
+    artifact: str = ""
+    affinity_artifact: str = ""
+    note: str = ""
+
+
+@dataclass(frozen=True)
 class Nway:
     """A measured N-way (>=2 role) cross-role active set (quarter-level)."""
     roles: tuple[str, ...]  # sorted
@@ -125,6 +149,7 @@ class ContentionMatrix:
     default_floor: float
     pairs: dict[tuple[str, str], Pair] = field(default_factory=dict)  # sorted-tuple keys
     same_role: dict[str, SameRole] = field(default_factory=dict)
+    same_role_certifications: dict[str, SameRoleCertification] = field(default_factory=dict)
     unknown_pairs: list[tuple[str, str]] = field(default_factory=list)
     n_way: dict[tuple[str, ...], Nway] = field(default_factory=dict)  # sorted-role-tuple keys
     light_roles: frozenset[str] = field(default_factory=frozenset)
@@ -138,6 +163,9 @@ class ContentionMatrix:
 
     def get_same_role(self, role: str) -> SameRole | None:
         return self.same_role.get(role)
+
+    def get_same_role_certification(self, role: str) -> SameRoleCertification | None:
+        return self.same_role_certifications.get(role)
 
     def get_nway(self, roles) -> Nway | None:
         """Exact-match lookup for an N-way active set (order-independent)."""
@@ -209,6 +237,36 @@ def load_contention_matrix(path: Path | None = None) -> ContentionMatrix:
             instance_pairs=tuple(pairs_parsed),
         )
 
+    same_role_certifications: dict[str, SameRoleCertification] = {}
+    for entry in data.get("same_role_certifications", []) or []:
+        if not isinstance(entry, dict):
+            continue
+        role = entry.get("role")
+        if not role:
+            raise ValueError(f"same_role_certification entry missing role: {entry}")
+        live_ports_raw = entry.get("live_ports") or []
+        live_ports: list[int] = []
+        if isinstance(live_ports_raw, list):
+            for port in live_ports_raw:
+                try:
+                    live_ports.append(int(port))
+                except (TypeError, ValueError):
+                    continue
+        same_role_certifications[str(role)] = SameRoleCertification(
+            role=str(role),
+            topology_hash=str(entry.get("topology_hash", "")),
+            verdict=str(entry.get("verdict", "")),
+            measured_at=str(entry.get("measured_at", "")),
+            mode=str(entry.get("mode", "")),
+            live_ports=tuple(sorted(live_ports)),
+            samples=int(entry.get("samples", 1)),
+            min_ratio=float(entry.get("min_ratio", 0.0) or 0.0),
+            max_cv=float(entry.get("max_cv", 0.0) or 0.0),
+            artifact=str(entry.get("artifact", "")),
+            affinity_artifact=str(entry.get("affinity_artifact", "")),
+            note=str(entry.get("note", "")),
+        )
+
     unknown_pairs: list[tuple[str, str]] = []
     for entry in data.get("unknown_pairs", []) or []:
         roles = entry.get("roles")
@@ -238,6 +296,7 @@ def load_contention_matrix(path: Path | None = None) -> ContentionMatrix:
         default_floor=float(data.get("default_floor", CONTENTION_RATIO_FLOOR)),
         pairs=pairs,
         same_role=same_role,
+        same_role_certifications=same_role_certifications,
         unknown_pairs=unknown_pairs,
         n_way=n_way,
         light_roles=frozenset(data.get("nway_light_roles", []) or []),
@@ -764,6 +823,40 @@ def topology_fingerprint(numa_config: dict[str, Any]) -> str:
                 instance_tuples.append((cpu_list, port, threads))
         fingerprint_input.append((role, instance_tuples))
     canonical = json.dumps(fingerprint_input, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+
+def role_topology_fingerprint(
+    numa_config: dict[str, Any],
+    role: str,
+    *,
+    live_ports: set[int] | frozenset[int] | tuple[int, ...] | list[int] | None = None,
+) -> str:
+    """Deterministic hash for one role's certified live instance subset.
+
+    `topology_fingerprint()` answers "does the entire matrix still describe
+    this NUMA_CONFIG?". EvalTower same-role fan-out sometimes only needs a
+    narrower answer: "do these live ports for this role still match the
+    recertified live-shape measurement?". This helper hashes the role name and
+    filtered `(cpu_list, port, threads)` tuples using the same canonical rules.
+    """
+    cfg = (numa_config or {}).get(role) if numa_config else None
+    instances = cfg.get("instances", []) if isinstance(cfg, dict) else []
+    port_filter: set[int] | None = None
+    if live_ports is not None:
+        port_filter = {int(port) for port in live_ports}
+    instance_tuples: list[tuple[str, int, int]] = []
+    for inst in instances:
+        if isinstance(inst, (list, tuple)) and len(inst) >= 3:
+            try:
+                port = int(inst[1])
+                threads = int(inst[2])
+            except (TypeError, ValueError):
+                continue
+            if port_filter is not None and port not in port_filter:
+                continue
+            instance_tuples.append((str(inst[0]), port, threads))
+    canonical = json.dumps([(role, instance_tuples)], sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
 

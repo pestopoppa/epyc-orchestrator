@@ -15,6 +15,7 @@ import time
 from collections.abc import Mapping, Sequence
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 import hashlib
 from pathlib import Path
 from typing import Any, Callable
@@ -576,6 +577,69 @@ DEFAULT_TIMEOUT = _default_eval_timeout()
 # override always wins, even over the topology/matrix cap, because some
 # test/diag paths intentionally exceed it (e.g. WP-3 migration smoke tests).
 #
+def _live_role_ports(numa_config: dict, role: str) -> set[int]:
+    instances = ((numa_config or {}).get(role) or {}).get("instances") or []
+    live_ports: set[int] = set()
+    for entry in instances:
+        if not entry or len(entry) < 2:
+            continue
+        try:
+            port = int(entry[1])
+        except (TypeError, ValueError):
+            continue
+        try:
+            resp = httpx.get(f"http://localhost:{port}/health", timeout=0.5)
+            if resp.status_code == 200:
+                live_ports.add(port)
+        except Exception:
+            continue
+    return live_ports
+
+
+def _iso_within_days(value: str, days: int) -> bool:
+    if not value:
+        return False
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    age_s = (datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds()
+    return 0 <= age_s <= days * 86400
+
+
+def _same_role_certification_allows_eval_fanout(role: str, *, matrix: object, numa_config: dict) -> bool:
+    try:
+        from src.scheduling.contention import (
+            MATRIX_STALENESS_DAYS,
+            PairDecision,
+            TrafficClass,
+            pair_policy,
+            role_topology_fingerprint,
+        )
+    except Exception:
+        return False
+
+    get_cert = getattr(matrix, "get_same_role_certification", None)
+    cert = get_cert(role) if callable(get_cert) else None
+    if cert is None or getattr(cert, "verdict", "") != "allow":
+        return False
+    if pair_policy(role, role, TrafficClass.BACKGROUND, matrix=matrix) != PairDecision.ALLOW:
+        return False
+    if not _iso_within_days(str(getattr(cert, "measured_at", "")), MATRIX_STALENESS_DAYS):
+        return False
+
+    live_ports = _live_role_ports(numa_config, role)
+    if not live_ports:
+        return False
+    certified_ports = set(getattr(cert, "live_ports", ()) or ())
+    if certified_ports and certified_ports != live_ports:
+        return False
+    role_hash = role_topology_fingerprint(numa_config, role, live_ports=live_ports)
+    return role_hash == getattr(cert, "topology_hash", "")
+
+
 # Reference certified safe-N: frontdoor=3, ingest_long_context=3,
 # vision_escalation=3, worker_general=1, architect_general=1, worker_vision=1.
 def _same_role_matrix_allows_eval_fanout(role: str) -> bool:
@@ -593,9 +657,16 @@ def _same_role_matrix_allows_eval_fanout(role: str) -> bool:
 
         matrix = load_contention_matrix()
         current_hash = topology_fingerprint_for_matrix(NUMA_CONFIG, matrix)
-        if matrix_status(current_topology_hash=current_hash) != MatrixStatus.OK:
+        status = matrix_status(current_topology_hash=current_hash)
+        if status == MatrixStatus.OK:
+            return pair_policy(role, role, TrafficClass.BACKGROUND, matrix=matrix) == PairDecision.ALLOW
+        if status != MatrixStatus.STALE:
             return False
-        return pair_policy(role, role, TrafficClass.BACKGROUND, matrix=matrix) == PairDecision.ALLOW
+        return _same_role_certification_allows_eval_fanout(
+            role,
+            matrix=matrix,
+            numa_config=NUMA_CONFIG,
+        )
     except Exception:
         return False
 
@@ -607,13 +678,12 @@ def _live_safe_concurrency(role: str, topology_cap: int) -> int:
     intentionally launched in full-only mode. In that case, concurrent evals
     pile onto one llama-server and can corrupt evidence with 5xx/timeouts.
     """
-    if topology_cap <= 1:
-        return 1
     if os.environ.get("AUTOPILOT_EVAL_REQUIRE_LIVE_FLEET", "1") == "0":
         return topology_cap
     try:
         from scripts.server.stack_numa import NUMA_CONFIG  # type: ignore[import-not-found]
         from src.runtime.instance_topology import cpu_list_to_regions
+        from src.runtime.instance_topology import compute_max_disjoint_live_concurrency
     except Exception:
         return 1
 
@@ -622,6 +692,7 @@ def _live_safe_concurrency(role: str, topology_cap: int) -> int:
         return 1
 
     live_regions: list[frozenset[str]] = []
+    live_ports = _live_role_ports(NUMA_CONFIG, role)
     for entry in instances:
         if not entry or len(entry) < 2:
             continue
@@ -629,15 +700,33 @@ def _live_safe_concurrency(role: str, topology_cap: int) -> int:
             port = int(entry[1])
         except (TypeError, ValueError):
             continue
-        try:
-            resp = httpx.get(f"http://localhost:{port}/health", timeout=0.5)
-            if resp.status_code != 200:
-                continue
-        except Exception:
+        if port not in live_ports:
             continue
         live_regions.append(cpu_list_to_regions(str(entry[0])))
 
     if not live_regions:
+        return 1
+
+    try:
+        from scripts.server.runtime_facts_manifest import read_runtime_stack_numa_mode
+
+        stack_numa_mode = read_runtime_stack_numa_mode()
+        if not stack_numa_mode:
+            try:
+                stack_numa_mode = read_runtime_stack_numa_mode(state_file=None)
+            except TypeError:
+                pass
+    except Exception:
+        stack_numa_mode = os.environ.get("ORCHESTRATOR_STACK_NUMA_MODE")
+
+    if str(stack_numa_mode or "").strip().lower() == "quarter":
+        return compute_max_disjoint_live_concurrency(
+            NUMA_CONFIG,
+            role,
+            live_ports=live_ports,
+        )
+
+    if topology_cap <= 1:
         return 1
 
     accepted_union: set[str] = set(live_regions[0])
@@ -667,8 +756,6 @@ def _eval_concurrency() -> int:
         from src.runtime.instance_topology import max_safe_concurrency
 
         topology_cap = max(1, max_safe_concurrency(bottleneck))
-        if topology_cap <= 1:
-            return 1
         if not _same_role_matrix_allows_eval_fanout(bottleneck):
             return 1
         return _live_safe_concurrency(bottleneck, topology_cap)
@@ -1730,21 +1817,21 @@ class EvalTower:
         if workers <= 1:
             for i, q in enumerate(dispatch_questions):
                 results[i] = self._eval_question(q, client)
+                correct_so_far = sum(1 for r in results if r and r.correct)
+                self._emit_progress(
+                    label=label,
+                    completed_questions=i + 1,
+                    total_questions=n,
+                    correct_questions=correct_so_far,
+                    concurrency=workers,
+                )
                 if log_every and (i + 1) % log_every == 0:
-                    correct_so_far = sum(1 for r in results if r and r.correct)
                     log.info(
                         "%s progress: %d/%d (%.0f%% correct)",
                         label,
                         i + 1,
                         n,
                         100 * correct_so_far / (i + 1),
-                    )
-                    self._emit_progress(
-                        label=label,
-                        completed_questions=i + 1,
-                        total_questions=n,
-                        correct_questions=correct_so_far,
-                        concurrency=workers,
                     )
             batch_wall_s = time.time() - batch_start
             out = [r for r in results if r is not None]
@@ -1801,8 +1888,15 @@ class EvalTower:
                             error=str(exc),
                         )
                     done += 1
+                    correct_so_far = sum(1 for r in results if r and r.correct)
+                    self._emit_progress(
+                        label=label,
+                        completed_questions=done,
+                        total_questions=n,
+                        correct_questions=correct_so_far,
+                        concurrency=workers,
+                    )
                     if log_every and done % log_every == 0:
-                        correct_so_far = sum(1 for r in results if r and r.correct)
                         log.info(
                             "%s progress: %d/%d (%.0f%% correct, concurrency=%d)",
                             label,
