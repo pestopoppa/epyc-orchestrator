@@ -129,6 +129,20 @@ def test_llm_judge_unreachable_raises() -> None:
         )
 
 
+def test_llm_judge_fast_path_is_boundary_aware() -> None:
+    with pytest.raises(ScoringUnavailableError):
+        score_answer(
+            answer="the word concatenate appears here",
+            expected="cat",
+            scoring_method="llm_judge",
+            scoring_config={
+                "judge_port": 1,
+                "judge_host": "127.0.0.1",
+                "timeout": 2,
+            },
+        )
+
+
 # ── programmatic: unknown verifier is a config defect ────────────────────
 
 

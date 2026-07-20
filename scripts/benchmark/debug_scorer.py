@@ -44,7 +44,7 @@ class ScoringUnavailableError(RuntimeError):
 
 def score_answer(
     answer: str,
-    expected: str,
+    expected: Any,
     scoring_method: str,
     scoring_config: dict[str, Any] | None = None,
 ) -> bool:
@@ -68,6 +68,7 @@ def score_answer(
     if not answer:
         return False
 
+    expected = "" if expected is None else str(expected)
     config = scoring_config or {}
 
     scorers = {
@@ -110,6 +111,10 @@ def _score_exact_match(
         # Legacy fallback: try #### pattern for backward compatibility
         extracted = _extract_answer(answer, r"####[ \t]*\n?(\S+)")
     if extracted is None:
+        boxed = _extract_boxed_answer(answer)
+        if boxed is not None:
+            extracted = boxed
+    if extracted is None:
         # Last resort: try to find the expected value anywhere in the last line
         last_line = answer.strip().split("\n")[-1]
         extracted = last_line.strip()
@@ -146,7 +151,7 @@ def _score_exact_match(
     #   'The text in the image is "iRaeenlc".' or 'The image contains the text: iRaeenlc'
     # Try extracting quoted text or text after colon from the full answer.
     if normalize:
-        answer_lower = answer.strip().lower()
+        answer_lower = _final_answer_region(answer).lower()
         # Check quoted: "answer" or 'answer'
         for q in ('"', "'", "\u201c"):
             q_end = "\u201d" if q == "\u201c" else q
@@ -158,7 +163,7 @@ def _score_exact_match(
                     if candidate == expected_norm:
                         return True
         # Check after colon on last meaningful line
-        for line in reversed(answer.strip().split("\n")):
+        for line in reversed(_final_answer_region(answer).split("\n")):
             if ":" in line:
                 candidate = line.split(":", 1)[1].strip().lower().rstrip(".")
                 if candidate == expected_norm:
@@ -347,8 +352,10 @@ def _score_stdin_program(
 
         Path(sol_file.name).unlink(missing_ok=True)
         return True
-    except OSError:
-        return False
+    except OSError as exc:
+        raise ScoringUnavailableError(
+            "code_execution could not create or execute its temporary stdin harness"
+        ) from exc
 
 
 def _has_executable_assertion(test_code: str) -> bool:
@@ -357,6 +364,14 @@ def _has_executable_assertion(test_code: str) -> bool:
         if not stripped or stripped.startswith("#"):
             continue
         if stripped.startswith("assert ") or stripped.startswith("assert("):
+            expr = (
+                stripped[6:].strip()
+                if stripped.startswith("assert ")
+                else stripped[7:].strip()
+            )
+            expr = expr.split(",", 1)[0].strip().strip("()")
+            if expr == "True":
+                continue
             return True
     return False
 
@@ -382,6 +397,7 @@ def _score_code_execution(
     timeout = config.get("timeout", 10)
     test_code = config.get("test_code", "")
     entry_point = config.get("entry_point", "")
+    entry_point_cases = config.get("entry_point_cases")
 
     if language != "python":
         # Only Python execution supported currently
@@ -413,10 +429,18 @@ def _score_code_execution(
     has_test_oracle = (
         _has_executable_assertion(test_code) or _has_unittest_case(test_code)
     )
-    has_entrypoint_oracle = bool(entry_point and expected)
+    has_entrypoint_oracle = bool(
+        entry_point and isinstance(entry_point_cases, list) and entry_point_cases
+    )
     if test_code and not has_test_oracle:
         return False
     if not test_code and not has_entrypoint_oracle:
+        if entry_point and expected:
+            raise ScoringUnavailableError(
+                "code_execution entry_point oracle requires executable "
+                "entry_point_cases or test_code; refusing to synthesize a "
+                "zero-argument assertion from expected text"
+            )
         return False
 
     # Build full test script
@@ -425,9 +449,26 @@ def _score_code_execution(
         full_code += "\n\n" + test_code
         if _has_unittest_case(test_code) and "unittest.main" not in test_code:
             full_code += "\n\nif __name__ == '__main__':\n    unittest.main()\n"
-    elif entry_point and expected:
-        # Simple assertion test
-        full_code += f"\n\nassert {entry_point}() == {expected}"
+    elif entry_point:
+        if not _is_safe_entry_point(entry_point):
+            raise ScoringUnavailableError(
+                f"code_execution entry_point {entry_point!r} is not a safe "
+                "Python identifier path"
+            )
+        cases_literal = repr(entry_point_cases)
+        full_code += (
+            "\n\n"
+            f"_EPYC_ENTRY_POINT_CASES = {cases_literal}\n"
+            "for _case in _EPYC_ENTRY_POINT_CASES:\n"
+            "    if isinstance(_case, dict):\n"
+            "        _args = _case.get('args', [])\n"
+            "        _kwargs = _case.get('kwargs', {})\n"
+            "        _expected = _case.get('expected')\n"
+            "    else:\n"
+            "        _args, _expected = _case\n"
+            "        _kwargs = {}\n"
+            f"    assert {entry_point}(*_args, **_kwargs) == _expected\n"
+        )
 
     # Execute in sandboxed subprocess
     try:
@@ -446,8 +487,12 @@ def _score_code_execution(
             )
             Path(f.name).unlink(missing_ok=True)
             return result.returncode == 0
-    except (subprocess.TimeoutExpired, OSError):
+    except subprocess.TimeoutExpired:
         return False
+    except OSError as exc:
+        raise ScoringUnavailableError(
+            "code_execution could not create or execute its temporary harness"
+        ) from exc
 
 
 def _score_programmatic(
@@ -621,10 +666,10 @@ def _score_substring(
     answer = _strip_digit_separators(answer)
     expected = _strip_digit_separators(expected)
 
-    if case_sensitive:
-        return expected.strip() in answer
-    else:
-        return expected.strip().lower() in answer.lower()
+    needle = expected.strip()
+    if not needle:
+        return False
+    return _contains_text_unit(answer, needle, case_sensitive=case_sensitive)
 
 
 def _score_f1(
@@ -648,7 +693,8 @@ def _score_f1(
 
     # Extract answer: find the LAST occurrence — models may emit
     # the tag multiple times before settling on a final answer.
-    matches = re.findall(pattern, answer, re.IGNORECASE | re.DOTALL)
+    compiled_pattern = _compile_single_group_pattern(pattern)
+    matches = compiled_pattern.findall(answer)
     if matches:
         extracted = matches[-1].strip()
     else:
@@ -677,14 +723,18 @@ def _score_f1(
     if not pred_tokens:
         return False
 
-    # Compute token overlap
-    common = set(pred_tokens) & set(gold_tokens)
+    # Compute multiset token overlap so repeated entities are counted honestly.
+    from collections import Counter
+
+    pred_counts = Counter(pred_tokens)
+    gold_counts = Counter(gold_tokens)
+    common = sum((pred_counts & gold_counts).values())
 
     if not common:
         return False
 
-    precision = len(common) / len(pred_tokens)
-    recall = len(common) / len(gold_tokens)
+    precision = common / len(pred_tokens)
+    recall = common / len(gold_tokens)
 
     if precision + recall == 0:
         f1 = 0.0
@@ -741,8 +791,9 @@ def _score_llm_judge(
     host = config.get("judge_host", "localhost")
     timeout = config.get("timeout", 30)
 
-    # First try substring as a fast path — if the exact string matches, skip the LLM call
-    if expected.strip().lower() in answer.lower():
+    # First try a boundary-aware substring fast path; contained words such as
+    # "cat" in "concatenate" must still go to the judge.
+    if _contains_text_unit(answer, expected.strip()):
         return True
 
     # Extract answer from \boxed{} if present
@@ -876,10 +927,75 @@ def _score_math_verify(
 
 def _extract_answer(text: str, pattern: str) -> str | None:
     """Extract answer from text using regex pattern."""
-    match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
+    compiled = _compile_single_group_pattern(pattern)
+    match = compiled.search(text)
     if match and match.group(1):
         return match.group(1).strip()
     return None
+
+
+def _compile_single_group_pattern(pattern: str) -> re.Pattern[str]:
+    compiled = re.compile(pattern, re.IGNORECASE | re.DOTALL)
+    if compiled.groups != 1:
+        raise ValueError(
+            f"extract_pattern must contain exactly one capture group, got {compiled.groups}"
+        )
+    return compiled
+
+
+def _extract_boxed_answer(text: str) -> str | None:
+    """Extract the final LaTeX \\boxed{...} payload, including nested braces."""
+    last_start = text.rfind(r"\boxed{")
+    if last_start < 0:
+        return None
+    i = last_start + len(r"\boxed{")
+    depth = 1
+    out: list[str] = []
+    while i < len(text):
+        ch = text[i]
+        if ch == "{":
+            depth += 1
+            out.append(ch)
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return "".join(out).strip()
+            out.append(ch)
+        else:
+            out.append(ch)
+        i += 1
+    return None
+
+
+def _final_answer_region(text: str) -> str:
+    """Return the final answer-bearing line/region, not earlier explanation."""
+    lines = [ln.strip() for ln in text.strip().splitlines() if ln.strip()]
+    if not lines:
+        return ""
+    marker = re.compile(r"\b(final\s+answer|answer|result)\b", re.IGNORECASE)
+    for line in reversed(lines):
+        if marker.search(line):
+            return line
+    return lines[-1]
+
+
+def _contains_text_unit(
+    haystack: str,
+    needle: str,
+    *,
+    case_sensitive: bool = False,
+) -> bool:
+    flags = 0 if case_sensitive else re.IGNORECASE
+    needle = needle.strip()
+    if not needle:
+        return False
+    left = r"(?<!\w)" if needle[0].isalnum() else ""
+    right = r"(?!\w)" if needle[-1].isalnum() else ""
+    return re.search(f"{left}{re.escape(needle)}{right}", haystack, flags) is not None
+
+
+def _is_safe_entry_point(entry_point: str) -> bool:
+    return bool(re.fullmatch(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*", str(entry_point)))
 
 
 def _extract_code_block(text: str, language: str = "python") -> str | None:
