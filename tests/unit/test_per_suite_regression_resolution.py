@@ -230,17 +230,21 @@ def test_write_baseline_yaml_tiers_roundtrips_counts(tmp_path):
 # ── tool_use advisory regression gate ─────────────────────────────────────────
 
 
-def test_tool_use_moderate_regression_is_advisory(tmp_path):
-    """A -0.6 drop on tool_use (1 question missed of 5) is advisory, not terminal."""
+def test_tool_use_single_flip_is_at_resolution_noise(tmp_path):
+    """B2 / SG-1: a -0.6 drop on tool_use is EXACTLY one flip of 5 questions (3/5=0.6),
+    i.e. the single-flip quantum and the per-suite threshold itself. It is at-resolution
+    noise, not even advisory — the PER_SUITE_EPS boundary guard keeps float rounding from
+    crossing the bare `<`. (Before the fix, `2.4-3.0 = -0.6000000000000001` slipped just
+    past `threshold = -0.6`, spuriously tagging this single flip as an advisory regression —
+    one of the 185 (n,k) float-boundary artifacts.)"""
     g = _gate(tmp_path)
     g.baseline.per_suite_quality_by_tier = {1: {"tool_use": 3.0}}
     g.baseline.per_suite_counts_by_tier = {1: {"tool_use": 5}}
-    # 4/5 correct → 2.4, delta = -0.6 (typical single-question flakiness)
+    # 4/5 correct → 2.4, delta = -0.6 == one flip → below the crossing threshold.
     verdict = g.check(_trial({"tool_use": 2.4}, {"tool_use": 5}))
     assert verdict.passed
     assert "per_suite_regression" not in verdict.categories
-    assert "tool_use_regression_advisory" in verdict.categories
-    assert any("tool_use" in w for w in verdict.warnings)
+    assert "tool_use_regression_advisory" not in verdict.categories
 
 
 def test_tool_use_catastrophic_regression_still_blocks(tmp_path):
@@ -283,8 +287,11 @@ def test_tool_use_and_other_suite_regression_combined(tmp_path):
     g = _gate(tmp_path)
     g.baseline.per_suite_quality_by_tier = {1: {"tool_use": 3.0, "coder": 2.4}}
     g.baseline.per_suite_counts_by_tier = {1: {"tool_use": 5, "coder": 50}}
+    # tool_use 3.0 -> 1.8 is a TWO-flip drop (delta -1.2, past the -0.6 single-flip
+    # threshold) so it still crosses and is treated as advisory (non-catastrophic). A
+    # single flip would now be at-resolution noise post-B2 (see the single-flip test).
     verdict = g.check(
-        _trial({"tool_use": 2.4, "coder": 2.0}, {"tool_use": 5, "coder": 50})
+        _trial({"tool_use": 1.8, "coder": 2.0}, {"tool_use": 5, "coder": 50})
     )
     assert not verdict.passed  # coder regression is a hard violation
     assert "per_suite_regression" in verdict.categories  # from coder

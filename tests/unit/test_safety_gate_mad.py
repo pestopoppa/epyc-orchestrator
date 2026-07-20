@@ -47,6 +47,10 @@ def _gate(tmp_path, history: list[float] | None = None) -> SafetyGate:
 def test_mad_skipped_when_history_below_min(tmp_path):
     """With fewer than MAD_MIN_SAMPLES, the filter must NOT fire."""
     g = _gate(tmp_path, history=[2.0] * (MAD_MIN_SAMPLES - 1))
+    # SG-3 (audit B3a): the regression/MAD path now requires a STRICT same-tier baseline
+    # (quality_for_tier(tier, strict=True)) — the old lenient fallback to the top-level
+    # legacy quality is gone. Seed a same-tier baseline so the improvement branch runs.
+    g.baseline.baselines_by_tier = {2: 1.16}
     verdict = g.check(_result(2.01))
     assert "mad_noise" not in verdict.categories
 
@@ -55,6 +59,7 @@ def test_mad_fires_on_noise_level_improvement(tmp_path):
     """Improvement within ~1 MAD of history median → warning, no violation."""
     history = [2.00, 2.02, 1.98, 2.01, 1.99]
     g = _gate(tmp_path, history=history)
+    g.baseline.baselines_by_tier = {2: 1.16}  # SG-3 (B3a): strict same-tier baseline needed
     verdict = g.check(_result(2.01))  # well inside the noise band
     assert verdict.passed, "MAD filter must never block; it only warns"
     assert "mad_noise" in verdict.categories
@@ -75,6 +80,7 @@ def test_mad_passes_significant_improvement(tmp_path):
     """A real improvement (> Z_THRESHOLD MADs from median) must NOT warn."""
     history = [2.00, 2.02, 1.98, 2.01, 1.99]
     g = _gate(tmp_path, history=history)
+    g.baseline.baselines_by_tier = {2: 1.16}  # SG-3 (B3a): strict same-tier baseline needed
     verdict = g.check(_result(2.50))
     assert verdict.passed
     assert "mad_noise" not in verdict.categories
@@ -100,7 +106,10 @@ def test_mad_only_fires_on_improvement_branch(tmp_path):
     not the MAD branch."""
     history = [2.00, 2.02, 1.98, 2.01, 1.99]
     g = _gate(tmp_path, history=history)
-    g.baseline.quality = 3.0  # so result.quality < baseline → not the "improvement" branch
+    # SG-3 (B3a): set the STRICT same-tier baseline above the result so it takes the
+    # regression/slight-drop branch, not the MAD branch. (Was g.baseline.quality=3.0, which
+    # the strict regression gate no longer consults for a T2 result.)
+    g.baseline.baselines_by_tier = {2: 3.0}
     verdict = g.check(_result(2.01))
     assert "mad_noise" not in verdict.categories
 
@@ -135,6 +144,7 @@ def test_per_suite_regression_uses_same_tier_baseline(tmp_path):
 def test_mad_zero_mad_flags_any_change_as_significant(tmp_path):
     """Pathological zero-MAD case (history is constant) — any new value differs."""
     g = _gate(tmp_path, history=[2.0, 2.0, 2.0])
+    g.baseline.baselines_by_tier = {2: 1.16}  # SG-3 (B3a): strict same-tier baseline needed
     verdict = g.check(_result(2.0001))
     # equal to median would be "not significant"; differing → significant → no warning
     assert "mad_noise" not in verdict.categories
@@ -168,6 +178,7 @@ def test_reproduction_confirmed_on_above_baseline_level(tmp_path):
     # History clustered ~1.8, baseline 1.16 (default) → established gain.
     history = [1.74, 1.58, 1.66, 1.82, 1.80]
     g = _gate(tmp_path, history=history)
+    g.baseline.baselines_by_tier = {2: 1.16}  # SG-3 (B3a): strict same-tier baseline needed
     verdict = g.check(_result(1.816))  # reproduces the established level
     assert verdict.passed
     assert "mad_noise" in verdict.categories, "MAD invariant must be preserved"
@@ -181,6 +192,7 @@ def test_reproduction_not_confirmed_near_baseline(tmp_path):
     # Non-zero spread centered on baseline (avoid the zero-MAD edge case).
     g = _gate(tmp_path, history=[1.16, 1.20, 1.12, 1.18, 1.14])
     g.baseline.quality = 1.16
+    g.baseline.baselines_by_tier = {2: 1.16}  # SG-3 (B3a): strict same-tier baseline needed
     verdict = g.check(_result(1.17))  # within noise, but median ≈ baseline
     assert "mad_noise" in verdict.categories
     assert "reproduction_confirmed" not in verdict.categories
@@ -190,6 +202,7 @@ def test_reverted_trial_excluded_from_noise_window(tmp_path):
     """A gate-FAILING (reverted) trial must not shape the MAD noise band."""
     g = _gate(tmp_path, history=[1.8, 1.8, 1.8])
     g.baseline.quality = 1.16
+    g.baseline.baselines_by_tier = {2: 1.16}  # SG-3 (B3a): strict same-tier baseline needed
     verdict = g.check(_result(0.40))  # −66% vs baseline → regression violation
     assert not verdict.passed
     assert g.quality_history == [1.8, 1.8, 1.8], "reverted trial must not enter window"

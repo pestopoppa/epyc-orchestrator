@@ -134,9 +134,16 @@ def test_archive_guard_is_same_tier(tmp_path, monkeypatch):
 
 
 def test_baseline_state_round_trips_per_tier(tmp_path, monkeypatch):
+    import safety_gate as sg  # type: ignore[import-not-found]
+
     g = SafetyGate(baseline_path=tmp_path / "absent.yaml")
     monkeypatch.setattr(g, "_baseline_eligible", lambda result: (True, "test-eligible", {"x": 1}))
     monkeypatch.setattr(SafetyGate, "_archive_best_quality", staticmethod(lambda tier=None: 2.9))
+    # SG-4 (audit B3c): apply_state now applies load()'s above-archive-max guard to
+    # state-sourced tier baselines too, reading the module-level Pareto frontier. Pin it
+    # consistent with the archive max above so the round-tripped T2=2.9 baseline is NOT
+    # dropped as over-max during restore (the guard reads the LIVE archive otherwise).
+    monkeypatch.setattr(sg, "_pareto_frontier_best_quality", lambda tier=None: 2.9)
     monkeypatch.setattr(
         SafetyGate, "_archive_frontier_entry", staticmethod(lambda source_trial_id, tier=None: _repro_entry())
     )

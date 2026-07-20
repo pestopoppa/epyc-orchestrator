@@ -107,6 +107,110 @@ PER_SUITE_LOW_SUPPORT_CATASTROPHIC_DROP = 2.5
 # but only treat it as a hard violation when the regression is catastrophic (3+ questions
 # failed, delta <= -3.0 on the 0-3 scale).
 TOOL_USE_CATASTROPHIC_REGRESSION = 3.0  # magnitude; delta <= -this is hard-fail for tool_use
+# B2 / SG-1 float-representation guard. per_suite_regression_threshold() returns the
+# single-flip quantum (3/n) as the boundary, and its docstring states a delta must be
+# "MORE negative" than the threshold to count. But `fraction*3` and `-max(...,3/n)` are
+# computed separately, so a delta that is exactly one flip lands ~1e-16 to one side of the
+# threshold at random — 185 (n,k) pairs cross the bare `<` purely from float rounding
+# (see the artifact sweep). Comparing against `threshold - PER_SUITE_EPS` restores the
+# documented intent: a delta equal to one flip is at-resolution noise, not a violation.
+PER_SUITE_EPS = 1e-9
+# B1 / REL-1 reliability floor. Below this non-error fraction the eval's per-question
+# outcomes are untrustworthy (infra errors), so the quality-floor / regression / per-suite
+# checks are computed over garbage. Env-overridable via AUTOPILOT_RELIABILITY_FLOOR (see
+# _reliability_floor). A reliability-floor failure signals RETRY, not a revert.
+RELIABILITY_FLOOR = 0.8
+# B8 / SG-0: warn this many days before the contention matrix crosses the
+# MATRIX_STALENESS_DAYS wall (in src.scheduling.contention). Past the wall the matrix goes
+# STALE, _baseline_eligible fails-closed, and the baseline ratchet FREEZES.
+PRE_EXPIRY_WARN_DAYS = 7
+
+
+def _reliability_floor() -> float:
+    """Resolve the reliability floor (B1/REL-1), env-overridable via AUTOPILOT_RELIABILITY_FLOOR.
+
+    A missing/malformed/out-of-[0,1] override is ignored (falls back to RELIABILITY_FLOOR)
+    and logged, so a fat-fingered env var can never silently disarm the guard."""
+    raw = os.environ.get("AUTOPILOT_RELIABILITY_FLOOR", "").strip()
+    if not raw:
+        return RELIABILITY_FLOOR
+    try:
+        val = float(raw)
+    except ValueError:
+        log.warning(
+            "Ignoring non-numeric AUTOPILOT_RELIABILITY_FLOOR=%r; using %.2f",
+            raw,
+            RELIABILITY_FLOOR,
+        )
+        return RELIABILITY_FLOOR
+    if not 0.0 <= val <= 1.0:
+        log.warning(
+            "Ignoring out-of-range AUTOPILOT_RELIABILITY_FLOOR=%r (need 0..1); using %.2f",
+            raw,
+            RELIABILITY_FLOOR,
+        )
+        return RELIABILITY_FLOOR
+    return val
+
+
+def _warn_matrix_pre_expiry() -> None:
+    """Read-only heads-up (B8/SG-0): warn when the contention matrix is within
+    PRE_EXPIRY_WARN_DAYS of the MATRIX_STALENESS_DAYS wall, past which it goes STALE and
+    _baseline_eligible fails-closed — freezing the baseline ratchet.
+
+    Uses ONLY read-only reads of contention's exposed DEFAULT_MATRIX_PATH + staleness
+    constant; the file mtime is the exact signal matrix_status() ages against, so no
+    private state of src.scheduling.contention is touched or mutated. Fail-soft: any error
+    (module unimportable, path missing, stat error) is swallowed — this is an advisory
+    countdown and must never affect eligibility."""
+    try:
+        import time as _time
+
+        from src.scheduling.contention import (
+            DEFAULT_MATRIX_PATH,
+            MATRIX_STALENESS_DAYS,
+        )
+
+        path = DEFAULT_MATRIX_PATH
+        if not path.exists():
+            return
+        age_days = (_time.time() - path.stat().st_mtime) / 86400.0
+        remaining = MATRIX_STALENESS_DAYS - age_days
+        if 0.0 <= remaining <= PRE_EXPIRY_WARN_DAYS:
+            log.warning(
+                "baseline ratchet freezes in ~%d day(s) — schedule contention-matrix "
+                "re-measurement (matrix age %.1fd, staleness wall %dd).",
+                math.ceil(remaining),
+                age_days,
+                MATRIX_STALENESS_DAYS,
+            )
+    except Exception:  # noqa: BLE001 — advisory only; never affect eligibility
+        pass
+
+
+def _drop_over_archive_max_tiers(baselines_by_tier: dict[int, float], path: Path) -> None:
+    """B3 / SG-4: drop tier baselines whose quality exceeds the same-tier Pareto archive max.
+
+    A persisted/applied tier baseline strictly above the same-tier frontier max is
+    unachievable/corrupt — it force-reverts every honest trial and gate-locks the loop
+    (2026-05-31). Mutates ``baselines_by_tier`` IN PLACE, logging each drop at error level.
+    A tier whose archive is empty/unreadable (fresh bootstrap) is skipped so a legitimate
+    first write is never blocked. Factored out of Baseline.load() so apply_state() applies
+    the identical defense-in-depth guard to state-sourced tier baselines."""
+    for tier, tier_quality in list(baselines_by_tier.items()):
+        tier_archive_max = _pareto_frontier_best_quality(tier)
+        if tier_archive_max is None:
+            continue
+        if tier_quality > tier_archive_max + BASELINE_ARCHIVE_TOLERANCE:
+            log.error(
+                "Persisted/applied T%d baseline quality %.3f in %s exceeds same-tier Pareto "
+                "archive max %.3f — unachievable/corrupt; dropping tier baseline.",
+                tier,
+                tier_quality,
+                path,
+                tier_archive_max,
+            )
+            del baselines_by_tier[tier]
 
 
 def per_suite_regression_threshold(result_n: int | None, baseline_n: int | None) -> float:
@@ -269,6 +373,12 @@ class SafetyVerdict:
     # AUTOPILOT_SEQ_VERDICT path runs and the caller supplies per-question results.
     # None preserves the legacy verdict shape for every existing caller/fixture.
     seq: dict[str, Any] | None = None
+    # B1 / REL-1: True when reliability fell below the floor and the quality-floor /
+    # regression / per-suite checks were SUPPRESSED (evidence untrustworthy). The trial
+    # failed, but it signals RETRY, not a revert — callers use this to avoid treating an
+    # infra-error trial as a quality regression, and the gate skips the consecutive-failure
+    # increment for it. Defaults False so every existing verdict is behavior-identical.
+    reliability_blocked: bool = False
 
     def __bool__(self) -> bool:
         return self.passed
@@ -563,20 +673,7 @@ class Baseline:
             for suite, q in (data.get("per_suite_quality", {}) or {}).items()
         }
         baselines_by_tier = _normalize_float_by_tier(data.get("baselines_by_tier", {}), path)
-        for tier, tier_quality in list(baselines_by_tier.items()):
-            tier_archive_max = _pareto_frontier_best_quality(tier)
-            if tier_archive_max is None:
-                continue
-            if tier_quality > tier_archive_max + BASELINE_ARCHIVE_TOLERANCE:
-                log.error(
-                    "Persisted T%d baseline quality %.3f in %s exceeds same-tier Pareto "
-                    "archive max %.3f — unachievable/corrupt; dropping tier baseline.",
-                    tier,
-                    tier_quality,
-                    path,
-                    tier_archive_max,
-                )
-                del baselines_by_tier[tier]
+        _drop_over_archive_max_tiers(baselines_by_tier, path)
         per_suite_by_tier = _normalize_suite_by_tier(
             data.get("per_suite_quality_by_tier", {}), path
         )
@@ -740,6 +837,11 @@ class Baseline:
         self.baselines_by_tier.update(
             _normalize_float_by_tier(state.get("baselines_by_tier", {}), state_path)
         )
+        # B3 / SG-4: apply the same above-archive-max guard load() uses. A state dict
+        # (autopilot_state.json) can carry a corrupt/wrong-scale tier baseline just as a
+        # YAML file can; without this, an over-max value applied here would gate-lock the
+        # loop exactly as the 2026-05-31 file-side value did.
+        _drop_over_archive_max_tiers(self.baselines_by_tier, state_path)
         self.per_suite_quality_by_tier.update(
             _normalize_suite_by_tier(state.get("per_suite_quality_by_tier", {}), state_path)
         )
@@ -780,9 +882,14 @@ class Baseline:
             self.per_suite_quality.update(result.per_suite_quality)
             if result.speed > 0:
                 self.frontdoor_speed = result.speed
-        self.speed = result.speed
-        self.cost = result.cost
-        self.reliability = result.reliability
+            # B3 / MISC-1: the top-level speed/cost/reliability scalars describe the
+            # DEFAULT_FRONTIER_TIER production point and feed the throughput floor; gate
+            # them on the same tier check as quality/frontdoor_speed. Previously an
+            # audit-only / off-frontier tier (e.g. T2) promotion clobbered them with its
+            # own (differently-measured) numbers, corrupting the frontier baseline.
+            self.speed = result.speed
+            self.cost = result.cost
+            self.reliability = result.reliability
 
     def to_state_dict(self) -> dict[str, Any]:
         """State payload for in-memory baseline promotions; YAML remains the seed config."""
@@ -813,6 +920,12 @@ class BaselineUpdateResult:
     previous_quality: float | None
     new_quality: float
     proof: dict[str, Any] = field(default_factory=dict)
+    # B8 / SG-0: non-empty ONLY when _baseline_eligible refused the write (a stale or
+    # unverifiable contention matrix froze the baseline ratchet). Operator remediation is
+    # to re-measure/refresh the matrix so it is certified-fresh against the live topology.
+    # Empty on every eligible path (including ordinary monotonic/seq skips), so a caller
+    # can distinguish "ratchet frozen, go re-measure" from "candidate simply not better".
+    ineligible_reason: str = ""
 
 
 class SafetyGate:
@@ -1091,134 +1204,181 @@ class SafetyGate:
                 )
             )
 
-        # 1. Quality floor (tier-aware)
-        quality_floor = QUALITY_FLOOR_T0 if result.tier == 0 else QUALITY_FLOOR_T1
-        if result.quality < quality_floor:
+        # SG-5 (B3b): fail-closed on a non-finite quality BEFORE any comparison-based
+        # gate. NaN/inf silently passes every `<`/`>` check (all comparisons are False),
+        # so a degenerate eval would otherwise sail through the quality floor and the
+        # regression gate. This is INDEPENDENT of the reliability suppression below: a NaN
+        # quality with good reliability must still fail (a degenerate measurement is not an
+        # infra-error retry). Checked first so it is recorded regardless of the other legs.
+        if not math.isfinite(result.quality):
+            violations.append("quality is not finite — degenerate eval")
+            categories.append("quality_not_finite")
+
+        # REL-1 (B1): reliability conditioning. When the eval's non-error fraction is below
+        # the floor the per-question outcomes are untrustworthy (infra errors), so the
+        # quality-floor / regression / per-suite checks are computed over garbage — running
+        # them would convert an infrastructure failure into a spurious quality-regression
+        # REVERT. Record a violation, mark the verdict reliability_blocked, and SKIP those
+        # three legs; this trial signals RETRY, not revert (see the consecutive-failure
+        # guard below, which does not advance the auto-rollback counter for it). Routing /
+        # throughput legs still run — they don't depend on per-question correctness.
+        reliability_blocked = False
+        reliability_floor = _reliability_floor()
+        if math.isfinite(result.reliability) and result.reliability < reliability_floor:
             violations.append(
-                f"Quality floor violation: {result.quality:.3f} < {quality_floor} (tier {result.tier})"
+                f"Reliability {result.reliability:.2f} below floor {reliability_floor:.2f} — "
+                "eval evidence untrustworthy (infra errors), quality checks suppressed"
             )
-            categories.append("quality_floor")
+            categories.append("reliability_floor")
+            reliability_blocked = True
 
-        # 2. Regression vs baseline (relative: allow 5% drop from baseline)
-        baseline_q = self.baseline.quality_for_tier(result.tier)
-        if baseline_q is not None and baseline_q > 0:
-            relative_delta = (result.quality - baseline_q) / baseline_q
-            if relative_delta < REGRESSION_THRESHOLD:
+        if not reliability_blocked:
+            # 1. Quality floor (tier-aware)
+            quality_floor = QUALITY_FLOOR_T0 if result.tier == 0 else QUALITY_FLOOR_T1
+            if result.quality < quality_floor:
                 violations.append(
-                    f"Quality regression: {result.quality:.3f} vs baseline {baseline_q:.3f} "
-                    f"({relative_delta:+.1%}, threshold: {REGRESSION_THRESHOLD:+.0%})"
+                    f"Quality floor violation: {result.quality:.3f} < {quality_floor} (tier {result.tier})"
                 )
-                categories.append("regression")
-            elif relative_delta < 0:
-                warnings.append(
-                    f"Slight quality drop: {result.quality:.3f} vs baseline {baseline_q:.3f} "
-                    f"({relative_delta:+.1%})"
-                )
-            elif seq_inputs_ready:
-                record_seq_shadow()
-                # Seq evidence is already journaled above and replaces the MAD noise
-                # filter as the "is this a real improvement?" significance test.
-            else:
-                # Improvement or no change — apply MAD noise filter (intake-421).
-                # Robust against outliers; only fires once history has MAD_MIN_SAMPLES.
-                # Gate never blocks; the `mad_noise` category is consumed by
-                # autopilot's classify_learning_exclusion() helper, which
-                # journals the trial but skips archive.update + AP-22 short-term
-                # memory so noise-level improvements don't poison the Pareto
-                # frontier or strategy memory.
-                is_sig, z_mad, median_q, mad = self._mad_significance(result.quality, result.tier)
-                if not is_sig and not math.isnan(z_mad):
-                    categories.append("mad_noise")
-                    # Convergence-vs-corruption disambiguation (2026-05-31).
-                    # `mad_noise` is correct and unchanged: this is not a NEW
-                    # statistically significant improvement, so it earns no
-                    # Pareto point. But "within noise" conflates two very
-                    # different situations. If the established recent level
-                    # (history median) is ITSELF significantly above baseline,
-                    # then this result REPRODUCES an already-demonstrated
-                    # above-baseline gain — a convergence/confidence signal, not
-                    # corrupted or untrustworthy data. Tag it separately
-                    # (`reproduction_confirmed`) so the planner's
-                    # "noisy/untrustworthy instrument" summary never lumps
-                    # reproductions in with kills / exogenous reloads /
-                    # bug-corruptions. The MAD statistic is NOT re-anchored.
-                    base_q = self.baseline.quality_for_tier(result.tier)
-                    reproduction_confirmed = (
-                        base_q is not None
-                        and base_q > 0
-                        and not math.isnan(median_q)
-                        and mad > 0
-                        and (median_q - base_q) > MAD_Z_THRESHOLD * mad * MAD_CONSISTENCY
-                    )
-                    if reproduction_confirmed:
-                        categories.append("reproduction_confirmed")
-                    convergence_note = (
-                        " Reproduces an established above-baseline level "
-                        "(history median {:.3f} >> baseline {:.3f}): this is a "
-                        "convergence/confirmation of an existing gain, NOT "
-                        "instrument noise or a corrupted trial.".format(median_q, base_q)
-                        if reproduction_confirmed
-                        else ""
-                    )
-                    warnings.append(
-                        f"Improvement within noise (MAD filter): q={result.quality:.3f} "
-                        f"vs history median {median_q:.3f} (MAD={mad:.4f}, z={z_mad:.2f}, "
-                        f"threshold={MAD_Z_THRESHOLD}); still journaled, excluded "
-                        f"from archive/learning by autopilot." + convergence_note
-                    )
+                categories.append("quality_floor")
 
-        # 3. Per-suite regression (resolution-aware since 2026-06-06). A per-suite
-        # score is fraction_correct*3 over only the questions that suite drew; at
-        # ~2 q/suite a single flip is a 1.5 swing, so a fixed -0.1 floor flagged
-        # pure sampling noise as a regression on essentially every trial and
-        # deadlocked the planner. The threshold is widened to the coarser of the
-        # result's and baseline's single-flip quantum (3/n); counts default empty
-        # ⇒ fixed -0.1 floor (unchanged behavior for pre-2026-06-06 baselines).
-        # If either side has very low support, a threshold-crossing drop remains
-        # visible but advisory unless it is a catastrophic 0-3 scale collapse.
-        baseline_suites = self.baseline.per_suite_for_tier(result.tier)
-        baseline_counts = self.baseline.per_suite_counts_for_tier(result.tier)
-        result_counts = getattr(result, "per_suite_counts", None) or {}
-        for suite, quality in result.per_suite_quality.items():
-            baseline_q = baseline_suites.get(suite)
-            if baseline_q is not None:
-                suite_delta = quality - baseline_q
-                result_n = result_counts.get(suite)
-                baseline_n = baseline_counts.get(suite)
-                threshold = per_suite_regression_threshold(result_n, baseline_n)
-                if suite_delta < threshold:
-                    msg = (
-                        f"Suite '{suite}' regression: {suite_delta:+.3f} "
-                        f"(threshold: {threshold:+.3f}; "
-                        f"n_result={result_n}, n_baseline={baseline_n})"
+            # 2. Regression vs baseline (relative: allow 5% drop from baseline). SG-3 (B3a):
+            # use the STRICT same-tier baseline — NO cross-tier legacy fallback for gating.
+            # The lenient accessor would compare, e.g., a T2 result against the top-level
+            # (tier-1) legacy quality, force-reverting on a difficulty gap that is not a
+            # regression. When no same-tier baseline exists we SKIP the gate (log.info) and
+            # let update_baseline seed the tier baseline on the next eligible promotion.
+            baseline_q = self.baseline.quality_for_tier(result.tier, strict=True)
+            if baseline_q is None:
+                log.info(
+                    "No strict same-tier T%d quality baseline — skipping regression gate "
+                    "(baseline will seed on the next eligible promotion).",
+                    result.tier,
+                )
+            elif baseline_q > 0:
+                relative_delta = (result.quality - baseline_q) / baseline_q
+                if relative_delta < REGRESSION_THRESHOLD:
+                    violations.append(
+                        f"Quality regression: {result.quality:.3f} vs baseline {baseline_q:.3f} "
+                        f"({relative_delta:+.1%}, threshold: {REGRESSION_THRESHOLD:+.0%})"
                     )
-                    # tool_use sentinel suite is inherently flaky (substring scoring
-                    # of REPL output); only catastrophic regressions (3+ questions
-                    # failed, delta <= -3.0) are hard violations. Moderate drops are
-                    # advisory to prevent blocking quality-positive config changes.
-                    is_tool_use_advisory = (
-                        suite == "tool_use" and suite_delta > -TOOL_USE_CATASTROPHIC_REGRESSION
+                    categories.append("regression")
+                elif relative_delta < 0:
+                    warnings.append(
+                        f"Slight quality drop: {result.quality:.3f} vs baseline {baseline_q:.3f} "
+                        f"({relative_delta:+.1%})"
                     )
-                    if is_tool_use_advisory:
-                        warnings.append(
-                            f"{msg} tool_use regression treated as advisory — "
-                            f"only catastrophic drops (<= -{TOOL_USE_CATASTROPHIC_REGRESSION}) "
-                            "are hard violations for this suite."
+                elif seq_inputs_ready:
+                    record_seq_shadow()
+                    # Seq evidence is already journaled above and replaces the MAD noise
+                    # filter as the "is this a real improvement?" significance test.
+                else:
+                    # Improvement or no change — apply MAD noise filter (intake-421).
+                    # Robust against outliers; only fires once history has MAD_MIN_SAMPLES.
+                    # Gate never blocks; the `mad_noise` category is consumed by
+                    # autopilot's classify_learning_exclusion() helper, which
+                    # journals the trial but skips archive.update + AP-22 short-term
+                    # memory so noise-level improvements don't poison the Pareto
+                    # frontier or strategy memory.
+                    is_sig, z_mad, median_q, mad = self._mad_significance(
+                        result.quality, result.tier
+                    )
+                    if not is_sig and not math.isnan(z_mad):
+                        categories.append("mad_noise")
+                        # Convergence-vs-corruption disambiguation (2026-05-31).
+                        # `mad_noise` is correct and unchanged: this is not a NEW
+                        # statistically significant improvement, so it earns no
+                        # Pareto point. But "within noise" conflates two very
+                        # different situations. If the established recent level
+                        # (history median) is ITSELF significantly above baseline,
+                        # then this result REPRODUCES an already-demonstrated
+                        # above-baseline gain — a convergence/confidence signal, not
+                        # corrupted or untrustworthy data. Tag it separately
+                        # (`reproduction_confirmed`) so the planner's
+                        # "noisy/untrustworthy instrument" summary never lumps
+                        # reproductions in with kills / exogenous reloads /
+                        # bug-corruptions. The MAD statistic is NOT re-anchored.
+                        # SG-3: base_q is the strict same-tier baseline (== baseline_q here).
+                        base_q = baseline_q
+                        reproduction_confirmed = (
+                            base_q is not None
+                            and base_q > 0
+                            and not math.isnan(median_q)
+                            and mad > 0
+                            and (median_q - base_q) > MAD_Z_THRESHOLD * mad * MAD_CONSISTENCY
                         )
-                        if "tool_use_regression_advisory" not in categories:
-                            categories.append("tool_use_regression_advisory")
-                    elif _per_suite_regression_binding(suite_delta, result_n, baseline_n):
-                        violations.append(msg)
-                        if "per_suite_regression" not in categories:
-                            categories.append("per_suite_regression")
-                    else:
-                        warnings.append(
-                            f"{msg} treated as advisory because per-suite support "
-                            f"is below n={PER_SUITE_BINDING_MIN_COUNT} and the "
-                            "drop is not catastrophic."
+                        if reproduction_confirmed:
+                            categories.append("reproduction_confirmed")
+                        convergence_note = (
+                            " Reproduces an established above-baseline level "
+                            "(history median {:.3f} >> baseline {:.3f}): this is a "
+                            "convergence/confirmation of an existing gain, NOT "
+                            "instrument noise or a corrupted trial.".format(median_q, base_q)
+                            if reproduction_confirmed
+                            else ""
                         )
-                        if "per_suite_regression_advisory" not in categories:
-                            categories.append("per_suite_regression_advisory")
+                        warnings.append(
+                            f"Improvement within noise (MAD filter): q={result.quality:.3f} "
+                            f"vs history median {median_q:.3f} (MAD={mad:.4f}, z={z_mad:.2f}, "
+                            f"threshold={MAD_Z_THRESHOLD}); still journaled, excluded "
+                            f"from archive/learning by autopilot." + convergence_note
+                        )
+
+            # 3. Per-suite regression (resolution-aware since 2026-06-06). A per-suite
+            # score is fraction_correct*3 over only the questions that suite drew; at
+            # ~2 q/suite a single flip is a 1.5 swing, so a fixed -0.1 floor flagged
+            # pure sampling noise as a regression on essentially every trial and
+            # deadlocked the planner. The threshold is widened to the coarser of the
+            # result's and baseline's single-flip quantum (3/n); counts default empty
+            # ⇒ fixed -0.1 floor (unchanged behavior for pre-2026-06-06 baselines).
+            # If either side has very low support, a threshold-crossing drop remains
+            # visible but advisory unless it is a catastrophic 0-3 scale collapse.
+            baseline_suites = self.baseline.per_suite_for_tier(result.tier)
+            baseline_counts = self.baseline.per_suite_counts_for_tier(result.tier)
+            result_counts = getattr(result, "per_suite_counts", None) or {}
+            for suite, quality in result.per_suite_quality.items():
+                baseline_q = baseline_suites.get(suite)
+                if baseline_q is not None:
+                    suite_delta = quality - baseline_q
+                    result_n = result_counts.get(suite)
+                    baseline_n = baseline_counts.get(suite)
+                    threshold = per_suite_regression_threshold(result_n, baseline_n)
+                    # B2 / SG-1: fire only when the delta is strictly MORE negative than the
+                    # single-flip quantum. A delta exactly equal to one flip is at-resolution
+                    # noise; the PER_SUITE_EPS guard keeps float rounding from crossing the
+                    # bare `<` (the 185 (n,k) boundary artifacts). Restores documented intent.
+                    if suite_delta < threshold - PER_SUITE_EPS:
+                        msg = (
+                            f"Suite '{suite}' regression: {suite_delta:+.3f} "
+                            f"(threshold: {threshold:+.3f}; "
+                            f"n_result={result_n}, n_baseline={baseline_n})"
+                        )
+                        # tool_use sentinel suite is inherently flaky (substring scoring
+                        # of REPL output); only catastrophic regressions (3+ questions
+                        # failed, delta <= -3.0) are hard violations. Moderate drops are
+                        # advisory to prevent blocking quality-positive config changes.
+                        is_tool_use_advisory = (
+                            suite == "tool_use" and suite_delta > -TOOL_USE_CATASTROPHIC_REGRESSION
+                        )
+                        if is_tool_use_advisory:
+                            warnings.append(
+                                f"{msg} tool_use regression treated as advisory — "
+                                f"only catastrophic drops (<= -{TOOL_USE_CATASTROPHIC_REGRESSION}) "
+                                "are hard violations for this suite."
+                            )
+                            if "tool_use_regression_advisory" not in categories:
+                                categories.append("tool_use_regression_advisory")
+                        elif _per_suite_regression_binding(suite_delta, result_n, baseline_n):
+                            violations.append(msg)
+                            if "per_suite_regression" not in categories:
+                                categories.append("per_suite_regression")
+                        else:
+                            warnings.append(
+                                f"{msg} treated as advisory because per-suite support "
+                                f"is below n={PER_SUITE_BINDING_MIN_COUNT} and the "
+                                "drop is not catastrophic."
+                            )
+                            if "per_suite_regression_advisory" not in categories:
+                                categories.append("per_suite_regression_advisory")
 
         # 4. Routing diversity
         architect_frac = result.routing_distribution.get("architect", 0.0)
@@ -1309,6 +1469,7 @@ class SafetyGate:
             warnings=warnings,
             categories=categories,
             seq=seq_block,
+            reliability_blocked=reliability_blocked,
         )
 
         # Track consecutive failures only for the first gate pass over this
@@ -1316,7 +1477,13 @@ class SafetyGate:
         # per-question evidence after an action handler already cached a legacy
         # verdict; that seq-aware upgrade must not double-count failures.
         if record_side_effects:
-            if not passed:
+            if reliability_blocked:
+                # REL-1 (B1): an untrustworthy-evidence failure signals RETRY, not a
+                # revert — it must NOT advance the auto-rollback counter (nor reset it).
+                # Otherwise a run of infra-error trials would trip should_rollback() and
+                # revert a config that was never actually shown to regress.
+                pass
+            elif not passed:
                 self._consecutive_failures += 1
             else:
                 self._consecutive_failures = 0
@@ -1385,6 +1552,9 @@ class SafetyGate:
         topology (matrix_status==OK with the live hash). Fail-closed: if the live topology/matrix
         cannot be determined we are NOT eligible — a baseline must never be written on unknown
         state (operator audit #3, 2026-05-27). No env override by design (hard gate)."""
+        # B8 / SG-0: emit the pre-expiry countdown wherever matrix freshness is consulted so
+        # the operator hears about an impending ratchet freeze BEFORE the matrix goes STALE.
+        _warn_matrix_pre_expiry()
         proof: dict[str, Any] = {
             "speed_metric_mode": getattr(result, "speed_metric_mode", None),
             "eval_concurrency": getattr(result, "eval_concurrency", None),
@@ -1485,14 +1655,26 @@ class SafetyGate:
         autopilot_state.json via Baseline.to_state_dict().
         """
         tier = int(result.tier)
-        previous_quality = self.baseline.quality_for_tier(tier)
+        # SG-3 (B3a): the monotonic gate compares against the STRICT same-tier baseline —
+        # no cross-tier legacy fallback. When it is None (no prior same-tier baseline) the
+        # monotonic check below is skipped and update_tier SEEDS the tier baseline.
+        previous_quality = self.baseline.quality_for_tier(tier, strict=True)
         eligible, reason, proof = self._baseline_eligible(result)
         if not eligible:
-            log.warning(
-                "Baseline update REFUSED — baseline_eligible=false (%s) | proof=%s", reason, proof
+            # B8 / SG-0: a frozen baseline ratchet is a loud failure, not a quiet skip —
+            # nothing can promote until the operator refreshes the matrix, so log at ERROR
+            # with the remediation and surface the reason distinctly via ineligible_reason.
+            log.error(
+                "Baseline update REFUSED — baseline_eligible=false (%s) | proof=%s | "
+                "remediation: re-measure/refresh the contention matrix so it is "
+                "certified-fresh against the live topology; the baseline ratchet stays "
+                "FROZEN (no promotion possible) until then.",
+                reason,
+                proof,
             )
             return BaselineUpdateResult(
-                False, reason, tier, previous_quality, result.quality, proof
+                False, reason, tier, previous_quality, result.quality, proof,
+                ineligible_reason=reason,
             )
         # LEDGER-W4 (01c §3): when the sequential path is active, a promotion requires
         # a CONFIRMED joint e-process verdict (E_quality >= confirm_e AND
@@ -1618,6 +1800,14 @@ class SafetyGate:
                 speed=float(objectives[1]),
                 cost=-float(objectives[2]),
                 reliability=float(objectives[3]),
+            )
+        if previous_quality is None:
+            # SG-3 (B3a): explicit seed of a tier that had no strict same-tier baseline.
+            # No cross-tier legacy fallback was consulted to gate this write.
+            log.info(
+                "Seeding T%d baseline from q=%.3f (no prior strict same-tier baseline).",
+                tier,
+                promotion_result.quality,
             )
         self.baseline.update_tier(promotion_result)
         log.info(

@@ -257,6 +257,10 @@ def test_seq_shadow_journaled_for_failed_regression(tmp_path):
     """Failed trials still need seq shadow rows for W4 readiness denominators.
     The seq tag must remain advisory and must not launder the failed verdict."""
     g = SafetyGate(baseline_path=tmp_path / "absent.yaml", use_sequential=True)
+    # SG-3 (audit B3a): the regression gate now uses the STRICT same-tier baseline; seed a
+    # T2 baseline so the crater (q=0.2 vs 1.16) still trips the regression leg (the old
+    # lenient fallback to the top-level legacy quality is gone).
+    g.baseline.baselines_by_tier[2] = 1.16
     verdict = g.check(
         _improvement_result(quality=0.2),
         question_results={"q1": False},
