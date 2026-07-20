@@ -38,6 +38,19 @@ def classify_learning_exclusion(verdict: Any, eval_result: Any) -> tuple[str, st
         )
         return "exogenous_operator_reload", reason, "exogenous_reload"
 
+    details = getattr(eval_result, "details", {}) or {}
+    if isinstance(details, dict) and details.get("eval_contaminated_by_abandoned_requests"):
+        try:
+            orphan_count = int(details.get("eval_orphan_contamination_count") or 0)
+        except (TypeError, ValueError):
+            orphan_count = 0
+        n_q = getattr(eval_result, "n_questions", 0) or orphan_count
+        reason = (
+            f"{orphan_count}/{n_q} eval request(s) may still have been decoding "
+            "server-side after the eval-batch watchdog fired"
+        )
+        return "eval_abandoned_requests", reason, "eval_abandoned_requests"
+
     categories = getattr(verdict, "categories", None) or []
     # The MAD test is QUALITY-ONLY. A within-noise quality reading must not launder
     # a FAILED safety verdict (per-suite regression, quality floor, throughput, …)

@@ -90,6 +90,22 @@ def _eval_no_progress_timeout_s(request_timeout_s: int) -> float:
     return max(180.0, float(request_timeout_s) + 60.0)
 
 
+def _eval_orphan_drain_timeout_s(request_timeout_s: int) -> float:
+    """Bounded wait for in-flight eval workers before returning to caller."""
+    raw = os.environ.get("AUTOPILOT_EVAL_ORPHAN_DRAIN_TIMEOUT_S", "").strip()
+    if raw:
+        try:
+            value = float(raw)
+        except ValueError:
+            log.warning(
+                "Invalid AUTOPILOT_EVAL_ORPHAN_DRAIN_TIMEOUT_S=%r; using default",
+                raw,
+            )
+        else:
+            return max(0.0, value)
+    return min(30.0, max(1.0, float(request_timeout_s) / 2.0))
+
+
 def _eval_batch_wall_budget_s(
     *,
     n_questions: int,
@@ -2412,15 +2428,80 @@ class EvalTower:
             except Exception as exc:  # noqa: BLE001
                 log.warning("EvalTower question-result sidecar complete marker failed: %s", exc)
 
+        def mark_abandoned(idx: int, result: QuestionResult, *, drain_timeout_s: float) -> None:
+            result.degraded = True
+            suffix = (
+                "eval_orphan_contamination: request may still be decoding "
+                f"server-side after {drain_timeout_s:.1f}s drain"
+            )
+            result.error = f"{result.error}; {suffix}" if result.error else suffix
+            results[idx] = result
+
         if workers <= 1:
+            ex = ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"eval-{label}-serial")
             try:
                 wall_budget_s = _eval_batch_wall_budget_s(
                     n_questions=n,
                     workers=workers,
                     request_timeout_s=self.timeout,
                 )
+                no_progress_timeout_s = _eval_no_progress_timeout_s(self.timeout)
+                drain_timeout_s = _eval_orphan_drain_timeout_s(self.timeout)
                 for i, q in enumerate(dispatch_questions):
-                    results[i] = self._eval_question(q, client)
+                    fut = ex.submit(self._eval_question, q, client)
+                    completed, not_done = wait(
+                        {fut},
+                        timeout=no_progress_timeout_s or None,
+                        return_when=FIRST_COMPLETED,
+                    )
+                    if not completed:
+                        elapsed = time.time() - batch_start
+                        fut.cancel()
+                        log.error(
+                            "%s serial eval question %d/%d made no progress for %.1fs; "
+                            "failing current and remaining question(s) closed",
+                            label,
+                            i + 1,
+                            n,
+                            no_progress_timeout_s,
+                        )
+                        results[i] = self._failed_question_result(
+                            questions[i],
+                            elapsed_s=elapsed,
+                            error=(
+                                "eval_no_progress_timeout: serial eval question "
+                                f"made no progress for {no_progress_timeout_s:.1f}s"
+                            ),
+                        )
+                        if not_done:
+                            drained, still_running = wait(not_done, timeout=drain_timeout_s)
+                            if drained:
+                                log.info(
+                                    "%s serial eval worker drained after no-progress timeout",
+                                    label,
+                                )
+                            if still_running:
+                                mark_abandoned(i, results[i], drain_timeout_s=drain_timeout_s)
+                        results[i].eval_concurrency = workers
+                        append_question_result(i, results[i])
+                        for j in range(i + 1, n):
+                            results[j] = self._failed_question_result(
+                                questions[j],
+                                elapsed_s=time.time() - batch_start,
+                                error="eval_cancelled_after_no_progress_timeout",
+                            )
+                            results[j].eval_concurrency = workers
+                            append_question_result(j, results[j])
+                        break
+
+                    try:
+                        results[i] = fut.result()
+                    except Exception as exc:  # noqa: BLE001
+                        results[i] = self._failed_question_result(
+                            questions[i],
+                            elapsed_s=time.time() - batch_start,
+                            error=str(exc),
+                        )
                     results[i].eval_concurrency = workers
                     append_question_result(i, results[i])
                     elapsed = time.time() - batch_start
@@ -2469,6 +2550,7 @@ class EvalTower:
                 append_complete_marker(len(out), batch_wall_s)
                 return out
             finally:
+                ex.shutdown(wait=False, cancel_futures=True)
                 if writer is not None:
                     writer.close()
 
@@ -2481,6 +2563,7 @@ class EvalTower:
             }
             pending = set(future_to_idx)
             no_progress_timeout_s = _eval_no_progress_timeout_s(self.timeout)
+            drain_timeout_s = _eval_orphan_drain_timeout_s(self.timeout)
             while pending:
                 completed, pending = wait(
                     pending,
@@ -2496,7 +2579,8 @@ class EvalTower:
                         no_progress_timeout_s,
                         len(pending),
                     )
-                    for fut in pending:
+                    timed_out = set(pending)
+                    for fut in timed_out:
                         idx = future_to_idx[fut]
                         fut.cancel()
                         results[idx] = self._failed_question_result(
@@ -2508,6 +2592,33 @@ class EvalTower:
                             ),
                         )
                         results[idx].eval_concurrency = workers
+                    drained, still_running = wait(timed_out, timeout=drain_timeout_s)
+                    if drained:
+                        log.info(
+                            "%s drained %d eval worker(s) after no-progress timeout",
+                            label,
+                            len(drained),
+                        )
+                    if still_running:
+                        log.error(
+                            "%s %d eval worker(s) still running after %.1fs drain; "
+                            "marking batch contaminated by abandoned server-side request(s)",
+                            label,
+                            len(still_running),
+                            drain_timeout_s,
+                        )
+                        for fut in still_running:
+                            idx = future_to_idx[fut]
+                            if results[idx] is not None:
+                                mark_abandoned(
+                                    idx,
+                                    results[idx],
+                                    drain_timeout_s=drain_timeout_s,
+                                )
+                    for fut in timed_out:
+                        idx = future_to_idx[fut]
+                        if results[idx] is not None:
+                            results[idx].eval_concurrency = workers
                         append_question_result(idx, results[idx])
                     break
 
@@ -2834,6 +2945,9 @@ class EvalTower:
         rubric_process_means = {
             dim: rubric_dimension_means.get(dim, float("nan")) for dim in MINDDR_PROCESS_DIMENSIONS
         }
+        orphan_contamination_count = sum(
+            1 for r in results if r.error and "eval_orphan_contamination" in r.error
+        )
 
         return EvalResult(
             tier=tier,
@@ -2861,6 +2975,8 @@ class EvalTower:
                 "partition_total_counts": partition_total_counts,
                 "partition_suite_quality": partition_suite_quality,
                 "errors": sum(1 for r in results if r.error),
+                "eval_contaminated_by_abandoned_requests": orphan_contamination_count > 0,
+                "eval_orphan_contamination_count": orphan_contamination_count,
                 "speed_semantics": "speed is the objective speed used by safety/Pareto; median_request_tps and aggregate_tps retain raw throughput components",
                 "speed_metric_mode": speed_metric_mode,
                 "objective_speed_tps": speed,

@@ -7722,14 +7722,13 @@ def _run_loop_inner(
         # ── 5. Record ────────────────────────────────────────────
         phase.set("record_trial", trial_id=trial_counter, species=species_name)
         # Classify whether this trial should be excluded from learning
-        # surfaces (Pareto archive + AP-22 short-term memory). Two paths:
-        # exogenous reload (Phase 5, partially-missing data) and MAD-noise
-        # improvements (intake-421, noise inflates strategy memory). Both
-        # tag bug_corrupted_by so the planner's trustworthiness gate
-        # excludes the trial; both skip archive.update so the Pareto
-        # frontier isn't distorted; both still journal so the operator can
-        # audit. See classify_learning_exclusion() near the top of this
-        # module for the priority order + reason strings.
+        # surfaces (Pareto archive + AP-22 short-term memory). Non-benign
+        # measurement contamination (unrecovered reloads, abandoned eval
+        # requests) tags bug_corrupted_by so the planner's trustworthiness
+        # gate excludes the trial and the Pareto frontier is not distorted.
+        # Benign within-noise exclusions (mad_noise/reproduction/seq) suppress
+        # learning without marking data corruption. See
+        # classify_learning_exclusion() for priority order + reason strings.
         learning_excluded_by, learning_excluded_reason, exclusion_def_cat = (
             classify_learning_exclusion(verdict, eval_result)
         )

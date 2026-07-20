@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import math
 import sys
+import threading
 import time
 from datetime import UTC, datetime
 from dataclasses import fields
@@ -119,6 +120,7 @@ def test_eval_batch_stamps_shared_eval_batch_id(monkeypatch) -> None:
 def test_eval_batch_fails_remaining_questions_after_no_progress_timeout(monkeypatch) -> None:
     monkeypatch.setenv("AUTOPILOT_EVAL_CONCURRENCY", "2")
     monkeypatch.setenv("AUTOPILOT_EVAL_NO_PROGRESS_TIMEOUT_S", "0.05")
+    monkeypatch.setenv("AUTOPILOT_EVAL_ORPHAN_DRAIN_TIMEOUT_S", "0.01")
     tower = EvalTower(timeout=1)
 
     def fake_eval_question(q: dict, client: object) -> QuestionResult:
@@ -144,8 +146,80 @@ def test_eval_batch_fails_remaining_questions_after_no_progress_timeout(monkeypa
     assert results[0].error is None
     assert results[1].error
     assert results[1].error.startswith("eval_no_progress_timeout:")
+    assert "eval_orphan_contamination" in results[1].error
+    assert results[1].degraded is True
     assert results[2].error
     assert results[2].error.startswith("eval_no_progress_timeout:")
+    assert "eval_orphan_contamination" in results[2].error
+    assert results[2].degraded is True
+
+
+def test_serial_eval_batch_no_progress_marks_orphan_contamination(monkeypatch) -> None:
+    monkeypatch.setenv("AUTOPILOT_EVAL_CONCURRENCY", "1")
+    monkeypatch.setenv("AUTOPILOT_EVAL_NO_PROGRESS_TIMEOUT_S", "0.02")
+    monkeypatch.setenv("AUTOPILOT_EVAL_ORPHAN_DRAIN_TIMEOUT_S", "0.01")
+    release = threading.Event()
+    tower = EvalTower(timeout=1)
+
+    def fake_eval_question(q: dict, client: object) -> QuestionResult:
+        if q["id"] == "stuck":
+            release.wait(1.0)
+        return QuestionResult(
+            question_id=str(q["id"]),
+            suite="unit",
+            prompt=str(q["id"]),
+            expected="ok",
+            correct=True,
+        )
+
+    monkeypatch.setattr(tower, "_eval_question", fake_eval_question)
+
+    try:
+        results = tower._eval_batch(
+            [{"id": "stuck"}, {"id": "queued"}],
+            client=object(),  # type: ignore[arg-type]
+            label="serial-watchdog",
+        )
+    finally:
+        release.set()
+
+    assert [r.question_id for r in results] == ["stuck", "queued"]
+    assert results[0].error
+    assert results[0].error.startswith("eval_no_progress_timeout:")
+    assert "eval_orphan_contamination" in results[0].error
+    assert results[0].degraded is True
+    assert results[1].error == "eval_cancelled_after_no_progress_timeout"
+
+
+def test_aggregate_surfaces_abandoned_eval_request_contamination() -> None:
+    tower = EvalTower()
+    out = tower._aggregate(
+        [
+            QuestionResult(
+                question_id="q1",
+                suite="unit",
+                prompt="ok",
+                expected="ok",
+                correct=True,
+            ),
+            QuestionResult(
+                question_id="q2",
+                suite="unit",
+                prompt="stuck",
+                expected="ok",
+                error=(
+                    "eval_no_progress_timeout: no completed future for 0.1s; "
+                    "eval_orphan_contamination: request may still be decoding server-side"
+                ),
+                degraded=True,
+            ),
+        ],
+        tier=1,
+    )
+
+    assert out.degraded_count == 1
+    assert out.details["eval_contaminated_by_abandoned_requests"] is True
+    assert out.details["eval_orphan_contamination_count"] == 1
 
 
 def test_serial_eval_batch_fails_remaining_after_wall_budget(monkeypatch) -> None:
