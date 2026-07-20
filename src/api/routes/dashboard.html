@@ -4168,11 +4168,21 @@ async function updatePareto() {
             const activeEras = d.active_instrument_eras || {};
             const activeSpeedEra = activeEras.autopilot_speed || '';
             const activeCpuEra = activeEras.cpu_bench || '';
+            const rerunMarker = d.frontier_rerun_required || {};
             const eraParts = [];
             if (activeSpeedEra) eraParts.push(`current speed era ${activeSpeedEra}`);
             if (activeCpuEra) eraParts.push(`cpu ${activeCpuEra}`);
-            if (d.frontier_rerun_required && d.frontier_rerun_required.required) {
-                eraParts.push('frontier rerun required');
+            if (rerunMarker && rerunMarker.required) {
+                const completed = Number(rerunMarker.completed_numeric_trials);
+                const minTrials = Number(rerunMarker.min_numeric_trials);
+                const progress = Number.isFinite(completed) && Number.isFinite(minTrials)
+                    ? ` ${completed}/${minTrials}`
+                    : '';
+                const reason = String(rerunMarker.reason || '');
+                const eraLabel = activeSpeedEra.includes('E6') || reason.includes('production-consolidated-v7')
+                    ? 'v7 testing era'
+                    : 'testing era';
+                eraParts.push(`${eraLabel}: frontier rebuild${progress} required`);
             }
             if (d.available && Array.isArray(d.eras) && d.eras.length) {
                 eraParts.push('era clouds from instrument_eras.yaml');
@@ -4202,6 +4212,14 @@ async function updatePareto() {
                 // look silently complete (the recurring "frozen at ~700" confusion).
                 if (d.stale_state_warning) {
                     txt += ` · ⚠ state stale (counter ${d.stale_state_warning.state_trial_counter} < journal ${d.stale_state_warning.journal_max_trial_id})`;
+                }
+                if (d.frontier_rerun_required && d.frontier_rerun_required.required) {
+                    const completed = Number(d.frontier_rerun_required.completed_numeric_trials);
+                    const minTrials = Number(d.frontier_rerun_required.min_numeric_trials);
+                    const progress = Number.isFinite(completed) && Number.isFinite(minTrials)
+                        ? ` ${completed}/${minTrials}`
+                        : '';
+                    txt += ` · v7 testing era rebuild${progress}`;
                 }
                 const bugExcl = d.exclusions && d.exclusions.bug_corrupted;
                 if (bugExcl && bugExcl.count) {
