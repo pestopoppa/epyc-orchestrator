@@ -57,11 +57,18 @@ class RLVREnvironmentExportError(ValueError):
     """Raised when a candidate export cannot be rendered safely."""
 
 
-def load_records(paths: Iterable[Path]) -> list[dict[str, Any]]:
+def load_records(
+    paths: Iterable[Path],
+    *,
+    skip_bad_rows: bool = False,
+    bad_rows: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     for path in paths:
         if path.suffix == ".jsonl":
-            records.extend(_load_jsonl(path))
+            records.extend(
+                _load_jsonl(path, skip_bad_rows=skip_bad_rows, bad_rows=bad_rows)
+            )
         else:
             payload = _load_json(path)
             if isinstance(payload, list):
@@ -111,7 +118,12 @@ def _load_json(path: Path) -> Any:
         raise RLVREnvironmentExportError(f"{path}: invalid JSON: {exc}") from exc
 
 
-def _load_jsonl(path: Path) -> list[dict[str, Any]]:
+def _load_jsonl(
+    path: Path,
+    *,
+    skip_bad_rows: bool = False,
+    bad_rows: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     with path.open("r", encoding="utf-8") as handle:
         for line_number, line in enumerate(handle, start=1):
@@ -121,10 +133,32 @@ def _load_jsonl(path: Path) -> list[dict[str, Any]]:
             try:
                 value = json.loads(stripped)
             except json.JSONDecodeError as exc:
+                if skip_bad_rows:
+                    if bad_rows is not None:
+                        bad_rows.append(
+                            {
+                                "path": str(path),
+                                "line": line_number,
+                                "error": f"invalid JSON: {exc}",
+                            }
+                        )
+                    continue
                 raise RLVREnvironmentExportError(
                     f"{path}:{line_number}: invalid JSON: {exc}"
                 ) from exc
-            out.append(_checked_record(value, path=path, index=line_number))
+            if not isinstance(value, dict):
+                if skip_bad_rows:
+                    if bad_rows is not None:
+                        bad_rows.append(
+                            {
+                                "path": str(path),
+                                "line": line_number,
+                                "error": "expected object",
+                            }
+                        )
+                    continue
+                raise RLVREnvironmentExportError(f"{path}:{line_number}: expected object")
+            out.append(value)
     return out
 
 
@@ -282,11 +316,26 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Return nonzero if any exported row is not ready_for_training",
     )
+    parser.add_argument(
+        "--skip-bad-rows",
+        action="store_true",
+        help=(
+            "Tolerate malformed JSONL input rows (invalid JSON or non-object): "
+            "skip them, count them in the summary, and warn to stderr instead of "
+            "failing all-or-nothing. Default off keeps strict behavior."
+        ),
+    )
     args = parser.parse_args(argv)
 
+    bad_rows: list[dict[str, Any]] = []
     try:
-        records = load_records(args.inputs)
+        records = load_records(
+            args.inputs, skip_bad_rows=args.skip_bad_rows, bad_rows=bad_rows
+        )
         rows, summary = export_environment_rows(records, source_label=args.source_label)
+        if args.skip_bad_rows:
+            summary["skipped_bad_rows"] = len(bad_rows)
+            summary["skipped_bad_row_samples"] = bad_rows[:5]
         write_jsonl(args.output_jsonl, rows)
         if args.summary_json:
             args.summary_json.parent.mkdir(parents=True, exist_ok=True)
@@ -297,6 +346,12 @@ def main(argv: list[str] | None = None) -> int:
     except RLVREnvironmentExportError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+
+    if args.skip_bad_rows and bad_rows:
+        print(
+            f"warning: skipped {len(bad_rows)} malformed input row(s)",
+            file=sys.stderr,
+        )
 
     if args.fail_on_blockers and summary["blocked"]:
         return 1
