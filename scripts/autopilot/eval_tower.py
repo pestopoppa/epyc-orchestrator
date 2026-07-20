@@ -84,6 +84,32 @@ def _eval_no_progress_timeout_s(request_timeout_s: int) -> float:
     return max(180.0, float(request_timeout_s) + 60.0)
 
 
+def _eval_batch_wall_budget_s(
+    *,
+    n_questions: int,
+    workers: int,
+    request_timeout_s: int,
+) -> float:
+    """Max end-to-end wall time for a single EvalTower batch.
+
+    The explicit env override exists for tests and one-off operator windows.
+    The default is deliberately generous but finite so an accidental serial
+    fallback cannot run forever after the fanout guard has already degraded.
+    """
+    raw = os.environ.get("AUTOPILOT_EVAL_BATCH_WALL_BUDGET_S", "").strip()
+    if raw:
+        try:
+            return max(0.0, float(raw))
+        except ValueError:
+            log.warning(
+                "Invalid AUTOPILOT_EVAL_BATCH_WALL_BUDGET_S=%r; using default",
+                raw,
+            )
+    per_wave = float(request_timeout_s) + 30.0
+    waves = math.ceil(max(1, int(n_questions)) / max(1, int(workers)))
+    return max(_eval_no_progress_timeout_s(request_timeout_s), min(4 * 3600.0, waves * per_wave))
+
+
 def _has_executable_assertion(test_code: str) -> bool:
     for line in test_code.splitlines():
         stripped = line.strip()
@@ -420,6 +446,7 @@ def _summarize_host_timing_covariates(
 
 
 def _compact_question_result(r: "QuestionResult") -> dict[str, Any]:
+    question_id = str(r.question_id or "").strip()
     item: dict[str, Any] = {
         "qid": r.qid or _stable_question_qid(str(r.suite), str(r.prompt)),
         "suite": r.suite,
@@ -429,6 +456,8 @@ def _compact_question_result(r: "QuestionResult") -> dict[str, Any]:
         "tokens_generated": int(r.tokens_generated or 0),
         "tools_used": int(r.tools_used or 0),
     }
+    if question_id:
+        item["question_id"] = question_id
     if r.host_covariates:
         compact_covariates = _compact_host_covariates(r.host_covariates)
         if compact_covariates:
@@ -744,23 +773,43 @@ def _live_safe_concurrency(role: str, topology_cap: int) -> int:
     return max(1, min(topology_cap, live_cap))
 
 
-def _eval_concurrency() -> int:
+def _forced_roles_for_questions(questions: Sequence[Mapping[str, Any]]) -> list[str]:
+    roles: list[str] = []
+    for q in questions:
+        role = str(q.get("force_role") or "").strip()
+        if role and role not in roles:
+            roles.append(role)
+    return roles
+
+
+def _eval_concurrency(roles: Sequence[str] | None = None) -> int:
     raw = os.environ.get("AUTOPILOT_EVAL_CONCURRENCY")
     if raw is not None:
         try:
             return max(1, int(raw))
         except (TypeError, ValueError):
             pass  # fall through to topology default
-    bottleneck = os.environ.get("AUTOPILOT_EVAL_BOTTLENECK_ROLE", "frontdoor")
+
+    role_candidates = [str(r).strip() for r in (roles or []) if str(r).strip()]
+    if not role_candidates:
+        role_candidates = [os.environ.get("AUTOPILOT_EVAL_BOTTLENECK_ROLE", "frontdoor")]
+
     try:
         from src.runtime.instance_topology import max_safe_concurrency
-
-        topology_cap = max(1, max_safe_concurrency(bottleneck))
-        if not _same_role_matrix_allows_eval_fanout(bottleneck):
-            return 1
-        return _live_safe_concurrency(bottleneck, topology_cap)
     except Exception:
         return 1
+
+    caps: list[int] = []
+    for role in role_candidates:
+        try:
+            topology_cap = max(1, max_safe_concurrency(role))
+            if not _same_role_matrix_allows_eval_fanout(role):
+                caps.append(1)
+                continue
+            caps.append(_live_safe_concurrency(role, topology_cap))
+        except Exception:
+            caps.append(1)
+    return max(1, min(caps or [1]))
 
 
 def _eval_batch_id(*, label: str, n_questions: int, started_at_s: float) -> str:
@@ -1062,18 +1111,30 @@ def compute_calibration_metrics(
     }
 
 
+def _dataset_identity_value(value: Any) -> str:
+    if isinstance(value, (dict, list, tuple)):
+        return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+    return str(value)
+
+
 def dataset_content_sha256(questions: Sequence[dict[str, Any]]) -> str:
     """Stable SHA-256 over an ordered question set (EV-11 reproducibility stamp).
 
-    Hashes ``(id, prompt, expected, scoring_method)`` per question, in order, with
-    field and record separators. Order-sensitive by design: the drawn arm's exact
-    question sequence is part of its identity, so two arms that sampled different
-    orderings get different digests.
+    Hashes the ordered question identity plus the scoring oracle. Order-sensitive
+    by design: the drawn arm's exact question sequence is part of its identity,
+    so two arms that sampled different orderings get different digests.
     """
     h = hashlib.sha256()
     for q in questions:
-        for field_name in ("id", "prompt", "expected", "scoring_method"):
-            h.update(str(q.get(field_name, "")).encode("utf-8", "replace"))
+        for field_name in (
+            "suite",
+            "id",
+            "prompt",
+            "expected",
+            "scoring_method",
+            "scoring_config",
+        ):
+            h.update(_dataset_identity_value(q.get(field_name, "")).encode("utf-8", "replace"))
             h.update(b"\x00")
         h.update(b"\x1e")
     return h.hexdigest()
@@ -1802,7 +1863,7 @@ class EvalTower:
         n = len(questions)
         if n == 0:
             return []
-        workers = min(n, _eval_concurrency())
+        workers = min(n, _eval_concurrency(_forced_roles_for_questions(questions)))
         eval_batch_id = _eval_batch_id(
             label=label,
             n_questions=n,
@@ -1815,8 +1876,14 @@ class EvalTower:
         results: list[QuestionResult | None] = [None] * n
         batch_start = time.time()
         if workers <= 1:
+            wall_budget_s = _eval_batch_wall_budget_s(
+                n_questions=n,
+                workers=workers,
+                request_timeout_s=self.timeout,
+            )
             for i, q in enumerate(dispatch_questions):
                 results[i] = self._eval_question(q, client)
+                elapsed = time.time() - batch_start
                 correct_so_far = sum(1 for r in results if r and r.correct)
                 self._emit_progress(
                     label=label,
@@ -1833,6 +1900,25 @@ class EvalTower:
                         n,
                         100 * correct_so_far / (i + 1),
                     )
+                if wall_budget_s > 0 and elapsed >= wall_budget_s and (i + 1) < n:
+                    log.error(
+                        "%s serial eval exceeded wall budget %.1fs after %d/%d "
+                        "question(s); failing remaining question(s) closed",
+                        label,
+                        wall_budget_s,
+                        i + 1,
+                        n,
+                    )
+                    for j in range(i + 1, n):
+                        results[j] = self._failed_question_result(
+                            questions[j],
+                            elapsed_s=time.time() - batch_start,
+                            error=(
+                                "eval_wall_budget_timeout: serial eval exceeded "
+                                f"{wall_budget_s:.1f}s"
+                            ),
+                        )
+                    break
             batch_wall_s = time.time() - batch_start
             out = [r for r in results if r is not None]
             for r in out:
@@ -1978,9 +2064,16 @@ class EvalTower:
         if not results:
             return EvalResult(tier=tier, quality=0, speed=0, cost=0, reliability=0)
 
-        # Quality: fraction correct scaled to 0-3
-        correct_count = sum(1 for r in results if r.correct)
-        quality = (correct_count / len(results)) * 3.0
+        total_count = len(results)
+        scored_results = [r for r in results if not r.error]
+        n_scored = len(scored_results)
+
+        # Quality: fraction correct over scored (non-error) rows, scaled to 0-3.
+        # Infrastructure/scoring failures are reliability evidence, not wrong-answer
+        # evidence. This matches verifier/calibration paths and keeps the two
+        # denominators explicit in details.
+        correct_count = sum(1 for r in scored_results if r.correct)
+        quality = (correct_count / n_scored) * 3.0 if n_scored else 0.0
 
         # Speed: median per-request tokens/sec for non-error results. This is
         # intentionally kept stable for Pareto/backward compatibility. Concurrent
@@ -2000,8 +2093,13 @@ class EvalTower:
         )
         speed_analytics = _speed_analytics_ge_128(results, eval_wall_s=eval_wall_s)
         host_timing_covariates = _summarize_host_timing_covariates(results)
-        task_rate_qph = (len(results) / (eval_wall_s / 3600.0)) if eval_wall_s > 0 else 0.0
-        goodput_qph = (quality / 3.0) * task_rate_qph
+        task_rate_qph = (total_count / (eval_wall_s / 3600.0)) if eval_wall_s > 0 else 0.0
+        scored_task_rate_qph = (
+            n_scored / (eval_wall_s / 3600.0) if eval_wall_s > 0 else 0.0
+        )
+        goodput_qph = (
+            correct_count / (eval_wall_s / 3600.0) if eval_wall_s > 0 else 0.0
+        )
         tokens_per_solved_task = (
             total_tokens_generated / correct_count if correct_count > 0 else 0.0
         )
@@ -2015,12 +2113,15 @@ class EvalTower:
         cost = (sum(cost_tiers) / len(cost_tiers) / 4.0) if cost_tiers else 0.5
 
         # Reliability: fraction of non-error responses
-        non_error = sum(1 for r in results if not r.error)
-        reliability = non_error / len(results)
+        non_error = n_scored
+        reliability = non_error / total_count
 
         # Per-suite quality
         suite_correct: dict[str, list[bool]] = {}
+        suite_total_counts: dict[str, int] = {}
         for r in results:
+            suite_total_counts[r.suite] = suite_total_counts.get(r.suite, 0) + 1
+        for r in scored_results:
             suite_correct.setdefault(r.suite, []).append(r.correct)
         per_suite = {suite: (sum(vals) / len(vals)) * 3.0 for suite, vals in suite_correct.items()}
         # Per-suite question counts (2026-06-06). The per-suite regression gate is
@@ -2034,7 +2135,11 @@ class EvalTower:
         question_results = [_compact_question_result(r) for r in results]
         partition_correct: dict[str, list[bool]] = {}
         partition_suite_correct: dict[str, dict[str, list[bool]]] = {}
+        partition_total_counts: dict[str, int] = {}
         for r in results:
+            partition = r.eval_partition or "core"
+            partition_total_counts[partition] = partition_total_counts.get(partition, 0) + 1
+        for r in scored_results:
             partition = r.eval_partition or "core"
             partition_correct.setdefault(partition, []).append(r.correct)
             partition_suite_correct.setdefault(partition, {}).setdefault(r.suite, []).append(
@@ -2072,29 +2177,10 @@ class EvalTower:
         auroc = 0.0
         cal_violations = 0
         if confidences:
-            # NOTE (B1/EV-consolidation 2026-07-17): the ECE below is deliberately
-            # NOT swapped to src/llm_primitives/stat_tests.expected_calibration_error.
-            # This inline loop makes EVERY bin half-open [lo, hi) — including the top
-            # bin — so a confidence of exactly 1.0 falls in NO bin (dropped from the
-            # numerator, kept in the denominator). stat_tests closes the top bin
-            # (<= hi) and counts c==1.0. Because the default confidence here is
-            # float(correct) in {0.0, 1.0}, that edge is the COMMON case on the math
-            # suites, and the two differ by 0.15-0.40 absolute (measured). The
-            # canonical stat_tests binning is the correct one, but adopting it shifts
-            # a serialized metric consumed by safety_gate/journal/RLVR export on a
-            # CRITICAL-blast-radius path, so it is a behavior CHANGE, not a
-            # behavior-preserving consolidation — deferred to an operator-gated fix
-            # bundled with the EV-11 math re-baseline. Do NOT "helpfully" swap it.
-            n_bins = 10
-            for i in range(n_bins):
-                lo = i / n_bins
-                hi = (i + 1) / n_bins
-                mask = [lo <= c < hi for c in confidences]
-                bin_count = sum(mask)
-                if bin_count > 0:
-                    bin_acc = sum(cr for cr, m in zip(correctness_vals, mask) if m) / bin_count
-                    bin_conf = sum(c for c, m in zip(confidences, mask) if m) / bin_count
-                    ece += (bin_count / len(confidences)) * abs(bin_acc - bin_conf)
+            # EV-11b (operator-decided 2026-07-20): use the canonical closed-top-bin
+            # ECE from stat_tests. This is a scoring-semantics change and is
+            # era-labeled in details so pre/post EV-11b numbers are not mixed.
+            ece = expected_calibration_error(confidences, correctness_vals, n_bins=10) or 0.0
             # AUC: only meaningful with non-degenerate confidence (>2 distinct values).
             # B1/EV-consolidation (2026-07-17): compute ROC-AUC via the stdlib
             # clean-room roc_auc() in src/llm_primitives/stat_tests.py instead of
@@ -2203,14 +2289,21 @@ class EvalTower:
             per_suite_quality=per_suite,
             per_suite_counts=per_suite_counts,
             routing_distribution=routing_dist,
-            n_questions=len(results),
+            n_questions=total_count,
             question_results=question_results,
             details={
                 "correct": correct_count,
-                "total": len(results),
+                "total": total_count,
+                "n_questions": total_count,
+                "n_scored": n_scored,
+                "quality_denominator": n_scored,
+                "quality_denominator_semantics": "non_error_question_results",
+                "scoring_errors": total_count - n_scored,
                 "per_suite_counts": per_suite_counts,
+                "per_suite_total_counts": suite_total_counts,
                 "partition_quality": partition_quality,
                 "partition_counts": partition_counts,
+                "partition_total_counts": partition_total_counts,
                 "partition_suite_quality": partition_suite_quality,
                 "errors": sum(1 for r in results if r.error),
                 "speed_semantics": "speed is the objective speed used by safety/Pareto; median_request_tps and aggregate_tps retain raw throughput components",
@@ -2225,6 +2318,7 @@ class EvalTower:
                 "tokens_generated": total_tokens_generated,
                 "host_timing_covariates": host_timing_covariates,
                 "task_rate_qph": task_rate_qph,
+                "scored_task_rate_qph": scored_task_rate_qph,
                 "goodput_qph": goodput_qph,
                 "tokens_per_solved_task": tokens_per_solved_task,
                 "tokens_include_tool_turns": True,
@@ -2238,6 +2332,8 @@ class EvalTower:
                 "per_suite_tool_helpfulness": per_suite_tool_helpfulness,
                 "rubric_dimension_means": rubric_dimension_means,
                 "rubric_n_questions": sum(1 for r in results if r.rubric_scores),
+                "ece_binning": "closed_top_bin_stat_tests",
+                "ece_instrument_era": "ev11b_closed_bin_2026_07_20",
             },
             mean_tools_used=mean_tools_used,
             tool_use_rate=tool_use_rate,
@@ -2811,15 +2907,31 @@ class EvalTower:
         split_l = str(split or "").strip().lower()
         if not split_l or split_l in ("all", "*"):
             return list(questions)
-        needle = split_l.replace("-", "_")
+        needle = EvalTower._normalize_split_label(split_l)
 
         def _matches(q: dict[str, Any]) -> bool:
             meta = q.get("metadata") or {}
-            subset = str(meta.get("subset", "")).strip().lower()
-            qid = str(q.get("id", "")).strip().lower()
-            return split_l == subset or split_l in qid or needle in qid
+            subset = EvalTower._normalize_split_label(str(meta.get("subset", "")))
+            qid = EvalTower._normalize_split_label(str(q.get("id", "")))
+            if subset:
+                return needle == subset
+            if qid.startswith("sv_"):
+                tail = qid[3:]
+                parts = tail.rsplit("_", 1)
+                qid_subset = parts[0] if len(parts) == 2 and parts[1].isdigit() else tail
+                return qid_subset == needle
+            return (
+                qid == needle
+                or qid.startswith(f"{needle}_")
+            )
 
         return [q for q in questions if _matches(q)]
+
+    @staticmethod
+    def _normalize_split_label(value: str) -> str:
+        normalized = str(value or "").strip().lower().replace("+", "_plus")
+        normalized = _re.sub(r"[^a-z0-9]+", "_", normalized)
+        return _re.sub(r"_+", "_", normalized).strip("_")
 
     def _load_verifier_suite_questions(
         self,

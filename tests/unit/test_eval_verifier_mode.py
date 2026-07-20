@@ -33,6 +33,7 @@ for _p in (
 
 from eval_tower import (  # type: ignore[import-not-found]
     CALIBRATION_METRIC_KEYS,
+    EvalTower,
     compute_calibration_metrics,
     dataset_content_sha256,
     score_math_rebaseline_answers,
@@ -202,15 +203,44 @@ def test_dataset_content_sha256_is_deterministic_and_order_sensitive() -> None:
 
     # Order is part of identity: reversing changes the digest.
     assert dataset_content_sha256(list(reversed(questions))) != digest
+    # Suite and scoring config are part of instrument identity.
+    changed_suite = [dict(q) for q in questions]
+    changed_suite[0]["suite"] = "math_alt"
+    assert dataset_content_sha256(changed_suite) != digest
+    changed_config = [dict(q) for q in questions]
+    changed_config[0]["scoring_config"] = {"extraction_mode": "expr", "strict": False}
+    assert dataset_content_sha256(changed_config) != digest
 
     # Independently recompute the exact hashing scheme to pin the algorithm.
     h = hashlib.sha256()
     for q in questions:
-        for name in ("id", "prompt", "expected", "scoring_method"):
-            h.update(str(q.get(name, "")).encode("utf-8", "replace"))
+        for name in ("suite", "id", "prompt", "expected", "scoring_method", "scoring_config"):
+            value = q.get(name, "")
+            if isinstance(value, (dict, list, tuple)):
+                value = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+            h.update(str(value).encode("utf-8", "replace"))
             h.update(b"\x00")
         h.update(b"\x1e")
     assert digest == h.hexdigest()
+
+
+def test_filter_questions_by_split_is_strict_after_normalization() -> None:
+    questions = [
+        {"id": "sv_he_r_plus_001", "metadata": {"subset": "HE-R+"}},
+        {"id": "sv_he_r_002", "metadata": {"subset": "HE-R"}},
+        {"id": "gsm8k_00001", "metadata": {"subset": "gsm8k"}},
+        {"id": "math500_00001", "metadata": {"subset": "math500"}},
+    ]
+
+    assert [q["id"] for q in EvalTower._filter_questions_by_split(questions, "HE-R+")] == [
+        "sv_he_r_plus_001"
+    ]
+    assert [q["id"] for q in EvalTower._filter_questions_by_split(questions, "HE-R")] == [
+        "sv_he_r_002"
+    ]
+    assert [q["id"] for q in EvalTower._filter_questions_by_split(questions, "gsm8k")] == [
+        "gsm8k_00001"
+    ]
 
 
 # ── (3) window-runner verifier-mode surface ──────────────────────────────────
@@ -296,7 +326,13 @@ def test_ev4_calibration_plan_only_pin_and_no_inference(tmp_path, monkeypatch) -
 
 def test_verifier_mode_apply_blocks_when_fanout_resolves_serial(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(window.activation_window, "build_preflight", lambda _a: _healthy_preflight())
-    monkeypatch.setattr(window, "_resolved_eval_concurrency", lambda: 1)
+    observed_roles: list[tuple[str, ...]] = []
+
+    def fake_resolved_eval_concurrency(roles=None):
+        observed_roles.append(tuple(roles or ()))
+        return 1
+
+    monkeypatch.setattr(window, "_resolved_eval_concurrency", fake_resolved_eval_concurrency)
     monkeypatch.setattr(window, "_optimized_live_stack_status", lambda: {"ok": True, "warnings": []})
     monkeypatch.setattr(window, "EvalTower", _ExplodingTower)
 
@@ -326,12 +362,13 @@ def test_verifier_mode_apply_blocks_when_fanout_resolves_serial(tmp_path, monkey
     assert report["result"] is None
     assert report["resolved_eval_concurrency"] == 1
     assert report["min_eval_concurrency"] == 3
+    assert observed_roles == [("worker_general", "frontdoor")]
     assert any("resolved EvalTower concurrency 1" in b for b in report["blockers"])
 
 
 def test_verifier_mode_apply_requires_explicit_fanout_floor(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(window.activation_window, "build_preflight", lambda _a: _healthy_preflight())
-    monkeypatch.setattr(window, "_resolved_eval_concurrency", lambda: 1)
+    monkeypatch.setattr(window, "_resolved_eval_concurrency", lambda _roles=None: 1)
     monkeypatch.setattr(window, "_optimized_live_stack_status", lambda: {"ok": True, "warnings": []})
     monkeypatch.setattr(window, "EvalTower", _ExplodingTower)
 
@@ -362,7 +399,7 @@ def test_verifier_mode_apply_requires_explicit_fanout_floor(tmp_path, monkeypatc
 
 def test_verifier_model_pass_is_download_gated(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(window.activation_window, "build_preflight", lambda _a: _healthy_preflight())
-    monkeypatch.setattr(window, "_resolved_eval_concurrency", lambda: 3)
+    monkeypatch.setattr(window, "_resolved_eval_concurrency", lambda _roles=None: 3)
     monkeypatch.setattr(window, "_optimized_live_stack_status", lambda: {"ok": True, "warnings": []})
     monkeypatch.setattr(window, "EvalTower", _ExplodingTower)
 
@@ -401,7 +438,7 @@ def test_require_verifier_on_disk_raises_model_download() -> None:
 
 def test_apply_without_confirm_clean_window_is_blocked(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(window.activation_window, "build_preflight", lambda _a: _healthy_preflight())
-    monkeypatch.setattr(window, "_resolved_eval_concurrency", lambda: 3)
+    monkeypatch.setattr(window, "_resolved_eval_concurrency", lambda _roles=None: 3)
     monkeypatch.setattr(window, "_optimized_live_stack_status", lambda: {"ok": True, "warnings": []})
     monkeypatch.setattr(window, "EvalTower", _ExplodingTower)
 
@@ -427,7 +464,7 @@ def test_apply_without_confirm_clean_window_is_blocked(tmp_path, monkeypatch) ->
 
 def test_verifier_mode_apply_writes_progress_files(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(window.activation_window, "build_preflight", lambda _a: _healthy_preflight())
-    monkeypatch.setattr(window, "_resolved_eval_concurrency", lambda: 4)
+    monkeypatch.setattr(window, "_resolved_eval_concurrency", lambda _roles=None: 4)
     monkeypatch.setattr(window, "_optimized_live_stack_status", lambda: {"ok": True, "warnings": []})
 
     class _ProgressTower:
@@ -502,9 +539,65 @@ def test_verifier_mode_apply_writes_progress_files(tmp_path, monkeypatch) -> Non
     assert current["event"]["completed_questions"] == 2
 
 
+def test_verifier_mode_partial_scored_result_is_not_decision_grade(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(window.activation_window, "build_preflight", lambda _a: _healthy_preflight())
+    monkeypatch.setattr(window, "_resolved_eval_concurrency", lambda _roles=None: 4)
+    monkeypatch.setattr(window, "_optimized_live_stack_status", lambda: {"ok": True, "warnings": []})
+
+    class _PartialScoredTower:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def eval_calibration(self, *, suite, split, roles, seed, n, full):  # noqa: ARG002
+            return {
+                "dataset_sha256": "abc",
+                "n_questions": 2,
+                "roles": roles,
+                "per_role": {
+                    role: {
+                        "n_questions": 2,
+                        "n_scored": 1,
+                        "accuracy": 1.0,
+                        "ece": 0.0,
+                    }
+                    for role in roles
+                },
+            }
+
+    monkeypatch.setattr(window, "EvalTower", _PartialScoredTower)
+    args = window.parse_args(
+        [
+            "--mode",
+            "calibration",
+            "--suite",
+            "scoring_verifiers",
+            "--split",
+            "HE-R+",
+            "--roles",
+            "worker_general",
+            "--n",
+            "2",
+            "--min-eval-concurrency",
+            "3",
+            "--apply",
+            "--confirm-clean-window",
+            "--output-dir",
+            str(tmp_path),
+        ]
+    )
+
+    report, rc = window.build_verifier_report(args, output_dir=tmp_path)
+
+    assert rc == 75
+    assert report["status"] == "eval_degenerate"
+    assert report["decision_grade"] is False
+    assert report["verifier_counts"] == {"n_questions": 2, "n_scored": 1}
+    assert any("scored 1/2 non-error questions" in b for b in report["blockers"])
+
+
 def test_verifier_mode_empty_result_is_not_decision_grade(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(window.activation_window, "build_preflight", lambda _a: _healthy_preflight())
-    monkeypatch.setattr(window, "_resolved_eval_concurrency", lambda: 4)
+    monkeypatch.setattr(window, "_resolved_eval_concurrency", lambda _roles=None: 4)
     monkeypatch.setattr(window, "_optimized_live_stack_status", lambda: {"ok": True, "warnings": []})
 
     class _EmptyTower:
@@ -547,7 +640,7 @@ def test_verifier_mode_empty_result_is_not_decision_grade(tmp_path, monkeypatch)
 
 def test_verifier_mode_apply_blocks_on_live_stack_contract_drift(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(window.activation_window, "build_preflight", lambda _a: _healthy_preflight())
-    monkeypatch.setattr(window, "_resolved_eval_concurrency", lambda: 4)
+    monkeypatch.setattr(window, "_resolved_eval_concurrency", lambda _roles=None: 4)
     monkeypatch.setattr(
         window,
         "_optimized_live_stack_status",

@@ -170,46 +170,121 @@ def _score_exact_match(
 def _score_multiple_choice(
     answer: str, expected: str, config: dict[str, Any]
 ) -> bool:
-    """Parse A/B/C/D from output, compare to expected letter.
+    """Parse A/B/C/D or configured choice text from output.
 
     Used for: ARC-Challenge, MMLU, HellaSwag.
 
     Config:
-        choices: Optional list of choice texts (for fuzzy matching).
+        choices: Optional list of choice texts.
     """
-    expected_letter = expected.strip().upper()
-    if expected_letter not in "ABCDEFGH":
+    choices = config.get("choices")
+    if not isinstance(choices, list):
+        choices = []
+
+    expected_letter = _expected_choice_letter(expected, choices)
+    expected_index = _expected_choice_index(expected, choices)
+    if expected_letter is None and expected_index is None:
         return False
 
+    parsed_letter = _extract_multiple_choice_letter(answer)
+    if parsed_letter is not None and expected_letter is not None:
+        return parsed_letter == expected_letter
+
+    parsed_index = _extract_multiple_choice_text_index(answer, choices)
+    if parsed_index is not None and expected_index is not None:
+        return parsed_index == expected_index
+
+    return False
+
+
+def _expected_choice_letter(expected: str, choices: list[Any]) -> str | None:
+    expected_match = re.fullmatch(
+        r"\s*[\(\[\{]?\s*([A-H])\s*[\)\]\}]?\s*\.?\s*",
+        expected,
+        re.IGNORECASE,
+    )
+    if expected_match:
+        return expected_match.group(1).upper()
+
+    idx = _expected_choice_index(expected, choices)
+    if idx is not None and idx < 8:
+        return chr(ord("A") + idx)
+    return None
+
+
+def _expected_choice_index(expected: str, choices: list[Any]) -> int | None:
+    if not choices:
+        return None
+    expected_norm = _normalize_choice_text(expected)
+    for idx, choice in enumerate(choices):
+        if _normalize_choice_text(str(choice)) == expected_norm:
+            return idx
+    return None
+
+
+def _normalize_choice_text(text: str) -> str:
+    text = re.sub(r'<think>.*?</think>', '', str(text), flags=re.DOTALL)
+    text = re.sub(r"[*_`~]+", "", text)
+    text = text.strip().lower()
+    text = text.strip("\"'“”‘’()[]{}")
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _extract_multiple_choice_letter(answer: str) -> str | None:
     # Strategy 1: Explicit "Answer: X" — take LAST match (verbose models repeat)
     # Negative lookahead prevents "option is correct" matching as letter "C"
     explicit_pat = r"(?:answer|choice|option)\s*(?:is|:)\s*\(?([A-H])\)?(?![a-zA-Z])"
     explicit_matches = re.findall(explicit_pat, answer, re.IGNORECASE)
     if explicit_matches:
-        return explicit_matches[-1].upper() == expected_letter
+        return explicit_matches[-1].upper()
 
     # Strategy 2: Letter on its own line near the end of output
     last_line_pat = r"^\s*\(?([A-H])\)?\s*$"
     line_matches = re.findall(last_line_pat, answer, re.MULTILINE)
     if line_matches:
-        return line_matches[-1].upper() == expected_letter
+        return line_matches[-1].upper()
 
     # Strategy 3: Letter at very start of output (before any prose)
     match = re.match(r"\s*\(?([A-H])\)?\s*[.:\-\n]", answer)
     if match:
-        return match.group(1).upper() == expected_letter
+        return match.group(1).upper()
 
     # Strategy 4: Bold letter — take LAST match
     bold_matches = re.findall(r"\*\*([A-H])\*\*", answer)
     if bold_matches:
-        return bold_matches[-1].upper() == expected_letter
+        return bold_matches[-1].upper()
 
     # Strategy 5: Last standalone letter A-H in the text (not first!)
     standalone = re.findall(r"\b([A-H])\b", answer)
     if standalone:
-        return standalone[-1].upper() == expected_letter
+        return standalone[-1].upper()
 
-    return False
+    return None
+
+
+def _extract_multiple_choice_text_index(answer: str, choices: list[Any]) -> int | None:
+    if not choices:
+        return None
+
+    answer_norm = _normalize_choice_text(answer)
+    if not answer_norm:
+        return None
+
+    matches: list[tuple[int, int, int]] = []
+    for idx, choice in enumerate(choices):
+        choice_norm = _normalize_choice_text(str(choice))
+        if not choice_norm:
+            continue
+        pattern = rf"(?<!\w){re.escape(choice_norm)}(?!\w)"
+        found = list(re.finditer(pattern, answer_norm))
+        if found:
+            match = found[-1]
+            matches.append((match.end(), len(choice_norm), idx))
+
+    if not matches:
+        return None
+    return max(matches)[2]
 
 
 def _score_stdin_program(

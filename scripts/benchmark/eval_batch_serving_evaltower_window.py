@@ -22,7 +22,7 @@ import re
 import signal
 import sys
 import time
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -31,6 +31,8 @@ AUTOPILOT_DIR = PROJECT_ROOT / "scripts" / "autopilot"
 DEFAULT_API_URL = "http://localhost:8000"
 DEFAULT_EVAL_BATCH_URL = "http://localhost:18070"
 DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / "orchestration" / "reports"
+TIER_REPORT_SCHEMA_VERSION = "eval_batch_serving_evaltower.tier.v1"
+VERIFIER_REPORT_SCHEMA_VERSION = "eval_batch_serving_evaltower.verifier.v1"
 
 for path in (SCRIPT_DIR, AUTOPILOT_DIR):
     path_s = str(path)
@@ -84,9 +86,9 @@ def _planned_eval_arm(name: str, args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
-def _resolved_eval_concurrency() -> int:
+def _resolved_eval_concurrency(roles: Sequence[str] | None = None) -> int:
     try:
-        return max(1, int(_eval_concurrency()))
+        return max(1, int(_eval_concurrency(roles)))
     except Exception:
         return 1
 
@@ -138,6 +140,10 @@ def _int_metric(metrics: dict[str, Any], key: str) -> int:
         return 0
 
 
+def _has_metric(metrics: dict[str, Any], key: str) -> bool:
+    return key in metrics and metrics.get(key) is not None
+
+
 def _float_metric(metrics: dict[str, Any], key: str) -> float:
     try:
         return float(metrics.get(key, 0.0) or 0.0)
@@ -150,9 +156,18 @@ def _arm_decision_blocker(name: str, arm: dict[str, Any] | None, *, expected_n: 
         return None
     metrics = arm.get("metrics") or {}
     n_questions = _int_metric(metrics, "n_questions")
-    n_scored = _int_metric(metrics, "n_scored") or _int_metric(metrics, "question_results_count")
+    n_scored = _int_metric(metrics, "n_scored")
+    if not _has_metric(metrics, "n_scored"):
+        n_scored = _int_metric(metrics, "quality_denominator") or _int_metric(
+            metrics, "question_results_count"
+        )
     reliability = _float_metric(metrics, "reliability")
-    if n_scored <= 0 and n_questions > 0 and reliability > 0:
+    if (
+        n_scored <= 0
+        and n_questions > 0
+        and reliability >= 1.0
+        and _int_metric(metrics, "errors") <= 0
+    ):
         n_scored = n_questions
     if n_questions <= 0 or n_scored <= 0 or reliability <= 0:
         return (
@@ -161,6 +176,8 @@ def _arm_decision_blocker(name: str, arm: dict[str, Any] | None, *, expected_n: 
         )
     if expected_n > 0 and n_questions < expected_n:
         return f"{name} EvalTower arm scored {n_questions}/{expected_n} questions"
+    if expected_n > 0 and n_scored < expected_n:
+        return f"{name} EvalTower arm scored {n_scored}/{expected_n} non-error questions"
     return None
 
 
@@ -169,6 +186,7 @@ def _verifier_result_counts(result: dict[str, Any] | None) -> dict[str, int]:
         return {"n_questions": 0, "n_scored": 0}
     n_questions = _int_metric(result, "n_questions") or _int_metric(result, "n")
     n_scored = _int_metric(result, "n_scored")
+    has_top_level_n_scored = _has_metric(result, "n_scored")
     per_role = result.get("per_role") or {}
     if isinstance(per_role, dict):
         if n_questions <= 0:
@@ -177,9 +195,11 @@ def _verifier_result_counts(result: dict[str, Any] | None) -> dict[str, int]:
                 for payload in per_role.values()
                 if isinstance(payload, dict)
             )
-        if n_scored <= 0:
+        if n_scored <= 0 and not has_top_level_n_scored:
             n_scored = sum(
-                _int_metric(payload, "n_scored") or _int_metric(payload, "n")
+                _int_metric(payload, "n_scored")
+                if _has_metric(payload, "n_scored")
+                else _int_metric(payload, "n")
                 for payload in per_role.values()
                 if isinstance(payload, dict)
             )
@@ -197,12 +217,23 @@ def _verifier_result_blocker(result: dict[str, Any] | None, *, expected_n: int |
             "verifier-mode eval is degenerate "
             f"(n_questions={counts['n_questions']}, n_scored={counts['n_scored']})"
         )
+    if expected_n is not None and counts["n_scored"] < expected_n:
+        return (
+            f"verifier-mode eval scored {counts['n_scored']}/{expected_n} "
+            "non-error questions"
+        )
     return None
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    tmp.replace(path)
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
     tmp.replace(path)
 
 
@@ -264,13 +295,26 @@ def eval_result_metrics(result: Any, *, wall_s: float) -> dict[str, Any]:
     n_questions = int(getattr(result, "n_questions", 0) or 0)
     reliability = float(getattr(result, "reliability", 0.0) or 0.0)
     question_results = getattr(result, "question_results", []) or []
-    n_scored = len(question_results) or (n_questions if reliability > 0 else 0)
+    n_scored = _int_metric(details, "n_scored")
+    if not _has_metric(details, "n_scored"):
+        n_scored = _int_metric(details, "quality_denominator")
+    if n_scored <= 0 and not (
+        _has_metric(details, "n_scored") or _has_metric(details, "quality_denominator")
+    ):
+        n_scored = sum(
+            1
+            for row in question_results
+            if not (isinstance(row, dict) and row.get("error"))
+        )
+    if n_scored <= 0 and n_questions > 0 and reliability >= 1.0 and _int_metric(details, "errors") <= 0:
+        n_scored = n_questions
     return {
         "tier": int(getattr(result, "tier", 0) or 0),
         "quality": float(getattr(result, "quality", 0.0) or 0.0),
         "speed": float(getattr(result, "speed", 0.0) or 0.0),
         "cost": float(getattr(result, "cost", 0.0) or 0.0),
         "reliability": reliability,
+        "errors": _int_metric(details, "errors"),
         "n_questions": n_questions,
         "n_scored": n_scored,
         "core_id": str(getattr(result, "core_id", "") or ""),
@@ -409,7 +453,15 @@ def _write_markdown(path: Path, report: dict[str, Any]) -> None:
             if arm.get("error"):
                 lines.append(f"- error: `{arm['error']}`")
             metrics = arm.get("metrics") or {}
-            for metric in ("quality", "speed", "reliability", "wall_s", "n_questions"):
+            for metric in (
+                "quality",
+                "speed",
+                "reliability",
+                "wall_s",
+                "n_questions",
+                "n_scored",
+                "errors",
+            ):
                 if metric in metrics:
                     lines.append(f"- {metric}: `{metrics[metric]}`")
     if isinstance(report.get("comparison"), dict):
@@ -428,14 +480,15 @@ def _write_markdown(path: Path, report: dict[str, Any]) -> None:
             lines.append(
                 f"- `{step['name']}` rc=`{step['returncode']}` elapsed_s=`{step['elapsed_s']:.3f}`"
             )
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    _atomic_write_text(path, "\n".join(lines) + "\n")
 
 
 def write_report(report: dict[str, Any], output_dir: Path) -> tuple[Path, Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     json_path = output_dir / "summary.json"
     md_path = output_dir / "summary.md"
-    json_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    report.setdefault("schema_version", TIER_REPORT_SCHEMA_VERSION)
+    _atomic_write_json(json_path, report)
     _write_markdown(md_path, report)
     return json_path, md_path
 
@@ -559,6 +612,7 @@ def build_report(args: argparse.Namespace, *, output_dir: Path) -> tuple[dict[st
         and comparison
     )
     report = {
+        "schema_version": TIER_REPORT_SCHEMA_VERSION,
         "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "status": status,
         "decision_grade": decision_grade,
@@ -733,7 +787,7 @@ def build_verifier_report(
     if not args.apply:
         status = "plan_only"
     else:
-        resolved_eval_concurrency = _resolved_eval_concurrency()
+        resolved_eval_concurrency = _resolved_eval_concurrency(roles)
         live_stack_contract = _optimized_live_stack_status()
         if _missing_concurrency_guard(args):
             blockers.append(
@@ -840,6 +894,7 @@ def build_verifier_report(
         and result is not None
     )
     report = {
+        "schema_version": VERIFIER_REPORT_SCHEMA_VERSION,
         "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "mode": mode,
         "status": status,
@@ -906,14 +961,15 @@ def _write_verifier_markdown(path: Path, report: dict[str, Any]) -> None:
         )
         for role, payload in (result.get("per_role") or {}).items():
             lines.append(f"- `{role}`: `{json.dumps(payload, sort_keys=True)}`")
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    _atomic_write_text(path, "\n".join(lines) + "\n")
 
 
 def write_verifier_report(report: dict[str, Any], output_dir: Path) -> tuple[Path, Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     json_path = output_dir / "summary.json"
     md_path = output_dir / "summary.md"
-    json_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    report.setdefault("schema_version", VERIFIER_REPORT_SCHEMA_VERSION)
+    _atomic_write_json(json_path, report)
     _write_verifier_markdown(md_path, report)
     return json_path, md_path
 

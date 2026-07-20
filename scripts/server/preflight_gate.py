@@ -13,7 +13,8 @@ Composition (which existing probe is imported vs subprocessed, and why):
                                                    optional --require-servers health
                                                    probe knows what to poll.
     * scripts.server.stack_health.wait_for_health — per-port /health probe.
-    * hashlib over the registry YAMLs            — topology_hash / registry_hash.
+    * src.scheduling.contention topology hash    — topology_hash.
+    * hashlib over the live registry YAML        — registry_hash.
 
   SUBPROCESSED (standalone CLIs whose exit codes / artifacts ARE the contract;
   re-running them in-process would fight their argparse/sys.path and hide the
@@ -21,14 +22,14 @@ Composition (which existing probe is imported vs subprocessed, and why):
     * scripts/server/affinity_preflight.py       — writes the live-affinity
       artifact and returns live_affinity_verified.
     * scripts/validate/check_contention_matrix_fresh.py — exit 0 fresh / 2 stale
-      or missing / 3 invalid.
-    * scripts/session/health_check.sh            — structural stack health (exit 0).
+      or missing / 3 invalid. This is a hard preflight gate.
+    * epyc-root scripts/session/health_check.sh --profile batch — structural
+      batch health (exit 0).
 
-Hash mapping (matches epyc-inference-research clean_window_manifest.py so the
-attestation's topology_hash is directly comparable to a manifest entry's
-``required_topology_hash``):
-    topology_hash  = sha256(research/full model_registry.yaml)   [== required_topology_hash]
-    registry_hash  = sha256(live/lean orchestrator model_registry.yaml) [== live_registry_hash]
+Hash mapping:
+    topology_hash  = 16-char live NUMA/contention-matrix topology fingerprint
+                     [== inference-batch required_topology_hash]
+    registry_hash  = sha256(live/lean orchestrator model_registry.yaml)
 
 Attestation JSON shape (written to coordination/inference-batch/attestations/<ts>.json):
     {ts, topology_hash, registry_hash, expected_topology_hash,
@@ -56,16 +57,19 @@ from pathlib import Path
 
 ORCH = Path(__file__).resolve().parents[2]  # /mnt/raid0/llm/epyc-orchestrator
 
-# Registry files (hash sources).
+# Registry files (metadata hash sources).
 LIVE_REGISTRY = ORCH / "orchestration" / "model_registry.yaml"
-RESEARCH_REGISTRY = Path(
-    "/mnt/raid0/llm/epyc-inference-research/orchestration/model_registry.yaml"
-)
+CONTENTION_MATRIX = ORCH / "orchestration" / "contention_matrix.yaml"
 
 # Subprocessed probe scripts.
 AFFINITY_SCRIPT = ORCH / "scripts" / "server" / "affinity_preflight.py"
 CONTENTION_FRESH_SCRIPT = ORCH / "scripts" / "validate" / "check_contention_matrix_fresh.py"
-HEALTH_CHECK_SCRIPT = ORCH / "scripts" / "session" / "health_check.sh"
+ROOT_HEALTH_CHECK_SCRIPT = Path("/mnt/raid0/llm/epyc-root/scripts/session/health_check.sh")
+HEALTH_CHECK_SCRIPT = (
+    ROOT_HEALTH_CHECK_SCRIPT
+    if ROOT_HEALTH_CHECK_SCRIPT.exists()
+    else ORCH / "scripts" / "session" / "health_check.sh"
+)
 
 # Attestation output lives with the inference-batch coordination surface (epyc-root).
 ATTEST_DIR = Path(
@@ -114,10 +118,50 @@ def _sha256(path: Path) -> str | None:
     return digest.hexdigest()
 
 
+def _live_topology_hash(matrix_path: Path = CONTENTION_MATRIX) -> str | None:
+    """Return the same 16-char topology hash used by the contention matrix gate."""
+    try:
+        from scripts.server.stack_numa import NUMA_CONFIG
+        from src.scheduling.contention import (
+            load_contention_matrix,
+            topology_fingerprint,
+            topology_fingerprint_for_matrix,
+        )
+    except Exception:
+        return None
+    matrix = None
+    try:
+        matrix = load_contention_matrix(matrix_path)
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
+    return (
+        topology_fingerprint_for_matrix(NUMA_CONFIG, matrix)
+        if matrix is not None
+        else topology_fingerprint(NUMA_CONFIG)
+    )
+
+
 def _tail(text: str | None, n: int = 2) -> list[str]:
     if not text:
         return []
     return text.strip().splitlines()[-n:]
+
+
+def _pid_on_port(port: int) -> str | None:
+    res = _run(
+        [
+            "bash",
+            "-c",
+            f"ps -eo pid,args | grep -E 'llama-server|ik_llama' | "
+            f"grep -- '--port {port}' | grep -v grep | awk '{{print $1}}' | head -1",
+        ],
+        timeout=5.0,
+    )
+    if res is None or res.returncode not in (0, 1):
+        return None
+    return res.stdout.strip() or None
 
 
 # --------------------------------------------------------------------------- #
@@ -167,7 +211,11 @@ def check_live_affinity(roles: list[str] | None = None,
         live_verified = bool(live_instances) and all(
             bool(e.get("match")) for e in live_instances
         )
-        memory_verified = bool(artifact.get("live_memory_placement_verified", True))
+        memory_required = bool(artifact.get("memory_locality_required", False))
+        memory_verified = (
+            not memory_required
+            or bool(artifact.get("live_memory_placement_verified", True))
+        )
         if live_only:
             verified = live_verified and memory_verified
         summary = {
@@ -186,6 +234,9 @@ def check_live_affinity(roles: list[str] | None = None,
         "live_only": live_only,
         "returncode": (res.returncode if res else None),
         "artifact_summary": summary,
+        "memory_locality_required": bool(
+            artifact.get("memory_locality_required", False)
+        ) if isinstance(artifact, dict) else False,
         "error": None if res else "affinity_preflight subprocess failed to run",
         **detail,
     }
@@ -216,11 +267,30 @@ def _probe_ports(ports: list[int] | None, timeout: float) -> dict:
     return {"ports": per_port, "error": None}
 
 
-def ports_for_roles(roles: list[str] | None) -> list[int] | None:
-    """Return primary health ports for a role-scoped server gate."""
+def ports_for_roles(roles: list[str] | None, *, live_only: bool = False) -> list[int] | None:
+    """Return NUMA-configured health ports for a role-scoped server gate."""
 
     if not roles:
         return None
+    try:
+        from scripts.server.stack_numa import NUMA_CONFIG
+
+        ports: list[int] = []
+        for role in roles:
+            cfg = NUMA_CONFIG.get(role)
+            if not cfg:
+                continue
+            for inst in cfg.get("instances", []):
+                port = inst[1]
+                if live_only and not _pid_on_port(port):
+                    continue
+                if port not in ports:
+                    ports.append(port)
+        if ports:
+            return ports
+    except Exception:  # noqa: BLE001
+        pass
+
     try:
         from scripts.server.stack_manifest import PORT_MAP
     except Exception:  # noqa: BLE001
@@ -237,19 +307,26 @@ def check_health(require_servers: bool = False,
                  ports: list[int] | None = None,
                  port_timeout: float = 3.0,
                  script: Path = HEALTH_CHECK_SCRIPT,
-                 server_health_only: bool = False) -> dict:
+                 server_health_only: bool = False,
+                 health_profile: str | None = "batch") -> dict:
     """Structural stack health (health_check.sh) + optional live server-port probe.
 
     health_ok = structural_ok, unless --require-servers is set, in which case all
     configured server ports must also answer /health.
     """
-    detail: dict = {"probe": "health_check.sh (+ stack_health.wait_for_health)"}
+    detail: dict = {
+        "probe": "health_check.sh (+ stack_health.wait_for_health)",
+        "health_profile": health_profile,
+    }
     structural_ok = None
     rc = None
     if server_health_only:
         detail["structural_skipped"] = True
     elif Path(script).exists():
-        res = _run(["bash", str(script)], cwd=ORCH, timeout=180.0)
+        cmd = ["bash", str(script)]
+        if health_profile:
+            cmd += ["--profile", health_profile]
+        res = _run(cmd, cwd=ORCH, timeout=180.0)
         if res is not None:
             rc = res.returncode
             structural_ok = res.returncode == 0
@@ -277,27 +354,27 @@ def check_health(require_servers: bool = False,
 
 
 def check_topology_hashes(expected_topology_hash: str | None = None,
-                          research_registry: Path = RESEARCH_REGISTRY,
-                          live_registry: Path = LIVE_REGISTRY) -> dict:
-    """Compute topology_hash (research registry) + registry_hash (live registry).
+                          live_registry: Path = LIVE_REGISTRY,
+                          matrix_path: Path = CONTENTION_MATRIX) -> dict:
+    """Compute topology_hash (live NUMA topology) + registry_hash.
 
     Gate semantics: if expected_topology_hash is provided, ok requires an exact
-    match (drift ⇒ FAIL). If not provided, the hash is recorded as an observation
-    and ok is True as long as the topology registry is hashable.
+    match (drift ⇒ FAIL). If not provided, the topology hash is recorded as an
+    observation and ok is True as long as it is computable.
     """
-    topo = _sha256(Path(research_registry))
+    topo = _live_topology_hash(Path(matrix_path))
     reg = _sha256(Path(live_registry))
     result: dict = {
         "topology_hash": topo,
         "registry_hash": reg,
-        "topology_source": str(research_registry),
+        "topology_source": str(matrix_path),
         "registry_source": str(live_registry),
         "expected_topology_hash": expected_topology_hash,
     }
     if topo is None:
         result["ok"] = False
         result["topology_match"] = None
-        result["error"] = f"topology registry missing/unhashable: {research_registry}"
+        result["error"] = f"live topology hash unavailable for matrix: {matrix_path}"
     elif expected_topology_hash is not None:
         match = topo == expected_topology_hash
         result["ok"] = match
@@ -357,7 +434,7 @@ def attest(*, expected_topology_hash: str | None = None,
            ports: list[int] | None = None,
            affinity_live_only: bool = False,
            server_health_only: bool = False,
-           contention_observation_only: bool = False,
+           health_profile: str | None = "batch",
            checks: dict | None = None) -> dict:
     """Compose the four probes into a single attestation dict (no file write).
 
@@ -366,7 +443,7 @@ def attest(*, expected_topology_hash: str | None = None,
     """
     ts = time.strftime("%Y-%m-%dT%H:%M:%S")
     if require_servers and ports is None:
-        ports = ports_for_roles(roles)
+        ports = ports_for_roles(roles, live_only=affinity_live_only)
     if checks is None:
         checks = {
             "live_affinity": check_live_affinity(
@@ -377,11 +454,11 @@ def attest(*, expected_topology_hash: str | None = None,
                 require_servers=require_servers,
                 ports=ports,
                 server_health_only=server_health_only,
+                health_profile=health_profile,
             ),
             "topology": check_topology_hashes(expected_topology_hash=expected_topology_hash),
             "contention_matrix": check_contention_matrix_fresh(
                 max_age_days=max_age_days,
-                observation_only=contention_observation_only,
             ),
         }
 
@@ -434,8 +511,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="pass affinity if every live scoped instance matches, while recording dropped configured replicas")
     ap.add_argument("--server-health-only", action="store_true",
                     help="skip structural health_check.sh and require only scoped live server ports")
-    ap.add_argument("--contention-observation-only", action="store_true",
-                    help="record stale/missing contention matrix status without failing the preflight")
+    ap.add_argument("--health-profile", default="batch",
+                    help="health_check.sh profile to use for structural health (default: batch)")
     ap.add_argument("--max-age-days", type=int, default=30,
                     help="contention-matrix staleness window (default 30)")
     ap.add_argument("--output-dir", default=str(ATTEST_DIR))
@@ -450,7 +527,7 @@ def main(argv: list[str] | None = None) -> int:
         max_age_days=args.max_age_days,
         affinity_live_only=args.affinity_live_only,
         server_health_only=args.server_health_only,
-        contention_observation_only=args.contention_observation_only,
+        health_profile=args.health_profile,
     )
 
     path = None

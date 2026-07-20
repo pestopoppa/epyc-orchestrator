@@ -1144,7 +1144,13 @@ def test_deep_eval_replays_seq_promotion_numeric_candidate(monkeypatch) -> None:
     }
     journal = SimpleNamespace(
         recent=lambda _limit: [
-            SimpleNamespace(eval_details={"question_results": [{"qid": "recent-qid"}]})
+            SimpleNamespace(
+                eval_details={
+                    "question_results": [
+                        {"qid": "recent-qid", "question_id": "recent-pool-id"}
+                    ]
+                }
+            )
         ]
     )
 
@@ -1160,7 +1166,7 @@ def test_deep_eval_replays_seq_promotion_numeric_candidate(monkeypatch) -> None:
             "tier": 2,
             "promotion_eval": True,
             "trial_id": 21,
-            "exclude_qids": {"recent-qid"},
+            "exclude_qids": {"recent-qid", "recent-pool-id"},
         }
     ]
     assert "_seq_promotion_candidate_replay" not in state
@@ -1210,7 +1216,7 @@ def test_recent_eval_qids_excludes_only_rows_inside_recency_window(monkeypatch) 
             ),
             SimpleNamespace(
                 timestamp="2026-07-01T00:00:00Z",
-                eval_details={"question_results": [{"qid": "fresh-q"}]},
+                eval_details={"question_results": [{"qid": "fresh-q", "question_id": "fresh-pool-id"}]},
             ),
             SimpleNamespace(
                 timestamp="not-a-date",
@@ -1221,6 +1227,7 @@ def test_recent_eval_qids_excludes_only_rows_inside_recency_window(monkeypatch) 
 
     assert actions._recent_eval_qids(journal, days=60) == {
         "fresh-q",
+        "fresh-pool-id",
         "malformed-time-q",
     }
 

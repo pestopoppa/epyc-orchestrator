@@ -1932,9 +1932,10 @@ def _recent_eval_qids(
         for row in rows:
             if not isinstance(row, dict):
                 continue
-            qid = str(row.get("qid") or row.get("question_id") or "").strip()
-            if qid:
-                qids.add(qid)
+            for key in ("qid", "question_id"):
+                qid = str(row.get(key) or "").strip()
+                if qid:
+                    qids.add(qid)
     return qids
 
 

@@ -148,6 +148,37 @@ def test_eval_batch_fails_remaining_questions_after_no_progress_timeout(monkeypa
     assert results[2].error.startswith("eval_no_progress_timeout:")
 
 
+def test_serial_eval_batch_fails_remaining_after_wall_budget(monkeypatch) -> None:
+    monkeypatch.setenv("AUTOPILOT_EVAL_CONCURRENCY", "1")
+    monkeypatch.setenv("AUTOPILOT_EVAL_BATCH_WALL_BUDGET_S", "0.01")
+    tower = EvalTower(timeout=1)
+
+    def fake_eval_question(q: dict, client: object) -> QuestionResult:
+        time.sleep(0.02)
+        return QuestionResult(
+            question_id=str(q["id"]),
+            suite="unit",
+            prompt=str(q["id"]),
+            expected="ok",
+            correct=True,
+        )
+
+    monkeypatch.setattr(tower, "_eval_question", fake_eval_question)
+
+    results = tower._eval_batch(
+        [{"id": "first"}, {"id": "second"}, {"id": "third"}],
+        client=object(),  # type: ignore[arg-type]
+        label="serial-budget",
+    )
+
+    assert [r.question_id for r in results] == ["first", "second", "third"]
+    assert results[0].error is None
+    assert results[1].error
+    assert results[1].error.startswith("eval_wall_budget_timeout:")
+    assert results[2].error
+    assert results[2].error.startswith("eval_wall_budget_timeout:")
+
+
 def test_eval_concurrency_uses_topology_cap_when_matrix_allows(monkeypatch) -> None:
     from src.runtime import instance_topology
 
@@ -166,6 +197,64 @@ def test_eval_concurrency_uses_topology_cap_when_matrix_allows(monkeypatch) -> N
     )
 
     assert eval_tower._eval_concurrency() == 3
+
+
+def test_eval_concurrency_uses_min_cap_across_forced_roles(monkeypatch) -> None:
+    from src.runtime import instance_topology
+
+    monkeypatch.delenv("AUTOPILOT_EVAL_CONCURRENCY", raising=False)
+    monkeypatch.setenv("AUTOPILOT_EVAL_BOTTLENECK_ROLE", "frontdoor")
+    monkeypatch.setattr(
+        instance_topology,
+        "max_safe_concurrency",
+        lambda role: {"frontdoor": 4, "worker_general": 2}.get(role, 1),
+    )
+    monkeypatch.setattr(
+        eval_tower,
+        "_same_role_matrix_allows_eval_fanout",
+        lambda role: role in {"frontdoor", "worker_general"},
+    )
+    monkeypatch.setattr(
+        eval_tower,
+        "_live_safe_concurrency",
+        lambda role, cap: {"frontdoor": 4, "worker_general": 2}.get(role, cap),
+    )
+
+    assert eval_tower._eval_concurrency(["frontdoor", "worker_general"]) == 2
+
+
+def test_eval_batch_resolves_concurrency_from_actual_forced_roles(monkeypatch) -> None:
+    monkeypatch.delenv("AUTOPILOT_EVAL_CONCURRENCY", raising=False)
+    tower = EvalTower()
+    observed: list[tuple[str, ...]] = []
+
+    def fake_eval_concurrency(roles=None):
+        observed.append(tuple(roles or ()))
+        return 1
+
+    def fake_eval_question(q: dict, client: object) -> QuestionResult:
+        return QuestionResult(
+            question_id=str(q["id"]),
+            suite="unit",
+            prompt=str(q["id"]),
+            expected="ok",
+            correct=True,
+        )
+
+    monkeypatch.setattr(eval_tower, "_eval_concurrency", fake_eval_concurrency)
+    monkeypatch.setattr(tower, "_eval_question", fake_eval_question)
+
+    tower._eval_batch(
+        [
+            {"id": "q1", "force_role": "worker_general"},
+            {"id": "q2", "force_role": "frontdoor"},
+            {"id": "q3", "force_role": "worker_general"},
+        ],
+        client=object(),  # type: ignore[arg-type]
+        label="forced",
+    )
+
+    assert observed == [("worker_general", "frontdoor")]
 
 
 def test_eval_concurrency_caps_to_live_fleet_when_static_topology_allows(monkeypatch) -> None:
@@ -450,6 +539,63 @@ def test_aggregate_uses_batch_throughput_for_concurrent_objective() -> None:
     assert out.details["tokens_per_solved_task"] == 140.0
 
 
+def test_aggregate_quality_denominator_excludes_error_rows() -> None:
+    tower = EvalTower()
+    results = [
+        QuestionResult(
+            question_id="q1",
+            suite="math",
+            prompt="a",
+            expected="a",
+            answer="a",
+            correct=True,
+            tokens_generated=100,
+            elapsed_s=10.0,
+            eval_wall_s=12.0,
+        ),
+        QuestionResult(
+            question_id="q2",
+            suite="math",
+            prompt="b",
+            expected="b",
+            answer="wrong",
+            correct=False,
+            tokens_generated=50,
+            elapsed_s=5.0,
+            eval_wall_s=12.0,
+        ),
+        QuestionResult(
+            question_id="q3",
+            suite="math",
+            prompt="c",
+            expected="c",
+            answer="",
+            correct=False,
+            error="scorer_unavailable",
+            elapsed_s=1.0,
+            eval_wall_s=12.0,
+        ),
+    ]
+
+    out = tower._aggregate(results, tier=1)
+
+    assert out.n_questions == 3
+    assert out.quality == pytest.approx(1.5)
+    assert out.reliability == pytest.approx(2 / 3)
+    assert set(out.per_suite_quality) == {"math"}
+    assert out.per_suite_quality["math"] == pytest.approx(1.5)
+    assert out.per_suite_counts == {"math": 2}
+    assert out.details["n_questions"] == 3
+    assert out.details["n_scored"] == 2
+    assert out.details["quality_denominator"] == 2
+    assert out.details["quality_denominator_semantics"] == "non_error_question_results"
+    assert out.details["errors"] == 1
+    assert out.details["scoring_errors"] == 1
+    assert out.details["per_suite_total_counts"] == {"math": 3}
+    assert out.details["goodput_qph"] == pytest.approx(300.0)
+    assert out.details["scored_task_rate_qph"] == pytest.approx(600.0)
+
+
 def test_question_result_has_host_covariates_default_factory() -> None:
     host_covariates_field = next(
         field for field in fields(QuestionResult) if field.name == "host_covariates"
@@ -587,6 +733,7 @@ def test_aggregate_emits_compact_stable_question_results() -> None:
     assert out.question_results == [
         {
             "qid": expected_qid,
+            "question_id": "transient-source-id",
             "suite": "math",
             "partition": "core",
             "correct": True,
@@ -632,6 +779,7 @@ def test_aggregate_emits_truthy_question_provenance_flags() -> None:
     assert out.question_results == [
         {
             "qid": "stable-q1",
+            "question_id": "q1",
             "suite": "coder",
             "partition": "audit",
             "correct": False,
