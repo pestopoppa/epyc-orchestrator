@@ -103,10 +103,10 @@ class MathAdapter(BaseAdapter):
         return {
             "id": f"gsm8k_{idx:05d}",
             "suite": "math",
-            # EV-11 (2026-07-17): scored by math_verify. The prompt asks for a
-            # \boxed{} answer because debug_scorer._score_math_verify extracts the
-            # candidate from \boxed{} (it does NOT read the old <answer></answer>
-            # tags or scoring_config.extract_pattern). This prompt change makes the
+            # EV-11 (2026-07-20): scored by math_verify. The prompt asks for a
+            # \boxed{} answer because math_verify.parse handles boxed math natively
+            # and does not read the old <answer></answer> tags or
+            # scoring_config.extract_pattern. This prompt change makes the
             # math_verify flip actually score GSM8K and requires a fresh baseline.
             "prompt": question + "\n\nSolve step by step. Put your final answer in \\boxed{}.",
             "context": "",
@@ -136,13 +136,12 @@ class MathAdapter(BaseAdapter):
             "scoring": [],
             "image_path": "",
             "tier": tier,
-            # EV-11 (2026-07-17): substring scoring silently mis-scored symbolic /
+            # EV-11 (2026-07-20): substring scoring silently mis-scored symbolic /
             # LaTeX answers (e.g. \frac{mg}{2} vs mg/2). math_verify does symbolic
-            # equivalence and extracts the candidate from the \boxed{} above.
+            # equivalence and parses the boxed answer above.
             "scoring_method": "math_verify",
             "scoring_config": {"extraction_mode": "latex"},
         }
 
 
 # ── HumanEval + MBPP (Coder) ─────────────────────────────────────────────
-
