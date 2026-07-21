@@ -418,13 +418,14 @@ def test_topology_fingerprint_for_matrix_excludes_unmeasured_auxiliary_role() ->
 
 
 def test_real_matrix_against_live_numa_config() -> None:
-    """Smoke: the committed matrix should at least parse alongside the live NUMA_CONFIG.
-    Topology hashes don't have to match (matrix uses a placeholder), but
-    the topology_fingerprint of NUMA_CONFIG should be a sensible non-empty hash."""
+    """The committed matrix must be certified against the live measured topology."""
     sys.path.insert(0, str(ROOT / "scripts" / "server"))
     import stack_numa
-    h = contention.topology_fingerprint(stack_numa.NUMA_CONFIG)
-    assert isinstance(h, str) and len(h) == 16
+
+    matrix = contention.load_contention_matrix(ROOT / "orchestration" / "contention_matrix.yaml")
+    live_hash = contention.topology_fingerprint_for_matrix(stack_numa.NUMA_CONFIG, matrix)
+    assert isinstance(live_hash, str) and len(live_hash) == 16
+    assert matrix.topology_hash == live_hash
 
 
 # ── nway_policy (J4c — N-way active-set admission) ───────────────────
