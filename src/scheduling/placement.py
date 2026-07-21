@@ -119,6 +119,9 @@ def evaluate_placement(
     holder_idxs: Iterable[int],
     instance_regions: dict[tuple[str, int], frozenset[str]],
     cross_role_holders: dict[str, Iterable[int]] | None = None,
+    *,
+    holder_regions: frozenset[str] | None = None,
+    cross_role_regions: frozenset[str] | None = None,
 ) -> PlacementResult:
     """Filter dispatcher-priority `candidates` to those whose cpuset is
     disjoint from the union of regions held by current `holder_idxs`.
@@ -131,26 +134,49 @@ def evaluate_placement(
         existing `ConcurrencyAwareBackend._dispatch` candidate construction.
       holder_idxs: instance indices currently holding region locks for `role`,
         from `cpu_region_lock.active_region_holders()`. Use the topology_idx
-        convention (0 = full, 1..N = quarters).
+        convention (0 = full, 1..N = quarters). Consumed ONLY when
+        `holder_regions` is not supplied (legacy idx→region expansion) and for
+        the queue-detail message.
       instance_regions: full {(role, topology_idx): regions} mapping from
         `instance_topology.get_instance_regions()` or a test fixture.
+      holder_regions: EXACT set of physical regions currently held by `role`
+        (from `cpu_region_lock.held_regions_by_role()`). When supplied it is the
+        authoritative same-role occupancy and REPLACES the `holder_idxs`
+        expansion. This exists because `active_region_holders()` is an
+        ATTRIBUTION view: a single held quarter (e.g. q0) is reported as EVERY
+        instance whose region-set contains q0 — including the all-region `full`
+        (idx 0). Expanding those idxs inflated the union to the whole machine and
+        falsely QUEUED every physically-disjoint quarter, serializing concurrent
+        same-role traffic onto one quarter (the DISPATCH-A residual serializer).
+      cross_role_regions: EXACT set of physical regions held by OTHER roles
+        (same source, self-role excluded). When supplied it REPLACES the
+        `cross_role_holders` expansion for the identical reason.
 
     Returns:
       PlacementResult with `places=[…]` listing the safe candidates in
       priority order, OR `queue=Queue(...)` if every candidate overlaps
       an in-flight holder.
     """
-    holders_union = _holder_regions_union(role, holder_idxs, instance_regions)
+    # Same-role occupancy: prefer the EXACT held-region set (physical truth,
+    # matches the shape-aware seam) over the ATTRIBUTION idx expansion.
+    if holder_regions is not None:
+        holders_union = holder_regions
+    else:
+        holders_union = _holder_regions_union(role, holder_idxs, instance_regions)
     # Part A: also exclude regions held by OTHER roles, so a light role can
     # backfill the free quarters while a heavy role's node-half is in flight.
-    # cross_role_holders=None → empty union → legacy same-role-only behavior.
-    # NB: this union excludes the dispatching role's own entry, so a map that
-    # contains ONLY self-role holders yields an empty cross-role union (and must
-    # NOT trigger the size-reorder below — audit P1).
-    cross_role_union = _cross_role_regions_union(
-        role, cross_role_holders, instance_regions
-    )
-    holders_union |= cross_role_union
+    # cross_role_holders/cross_role_regions=None → empty union → legacy
+    # same-role-only behavior. NB: the exact cross-role view already excludes the
+    # dispatching role's own entry, so a snapshot containing ONLY self-role
+    # holders yields an empty cross-role union (and must NOT trigger the
+    # size-reorder below — audit P1).
+    if cross_role_regions is not None:
+        cross_role_union = cross_role_regions
+    else:
+        cross_role_union = _cross_role_regions_union(
+            role, cross_role_holders, instance_regions
+        )
+    holders_union = holders_union | cross_role_union
 
     safe: list[tuple[Place, int]] = []  # (place, region_count) for size-ordering
     blocking: list[int] = []

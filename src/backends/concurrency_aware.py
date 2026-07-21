@@ -1112,7 +1112,10 @@ class ConcurrencyAwareBackend:
             # the queue — the existing inference must complete and release
             # its lock, after which the WP-2 poll re-evaluates and succeeds.
             from src.scheduling.placement import evaluate_placement
-            from src.runtime.cpu_region_lock import active_region_holders
+            from src.runtime.cpu_region_lock import (
+                active_region_holders,
+                held_regions_by_role,
+            )
             from src.runtime.instance_topology import get_instance_regions
             from src.scheduling.contention_gate import ContentionDenied, get_gate
 
@@ -1147,12 +1150,36 @@ class ConcurrencyAwareBackend:
                     loop_candidates = [
                         c for c in candidates if c[0] != -1
                     ] + [full_candidate]
+                # DISPATCH-A residual fix: feed the placement filter the EXACT
+                # held-region sets, NOT the ATTRIBUTION idx view. `active_region_
+                # holders()` marks an instance active when ANY of its regions is
+                # held, so one held quarter (e.g. q0) is reported as every
+                # instance containing q0 — including the all-region `full`
+                # (idx 0). Expanding those idxs inflated the same-role holders_
+                # union to the whole machine and QUEUED every physically-disjoint
+                # quarter, serializing concurrent same-role traffic onto a single
+                # quarter. `held_regions_by_role()` is the exact physical truth
+                # (never over-reports the phantom full) and matches the
+                # shape-aware seam. Recomputed per poll so releases are observed.
+                held_by_role = held_regions_by_role(instance_regions)
+                same_role_regions = held_by_role.get(
+                    self._topology_role, frozenset()
+                )
+                cross_role_regions = None
+                if cross_role_enabled:
+                    _cross_acc: set[str] = set()
+                    for _hrole, _hregions in held_by_role.items():
+                        if _hrole != self._topology_role:
+                            _cross_acc |= _hregions
+                    cross_role_regions = frozenset(_cross_acc)
                 placement = evaluate_placement(
                     role=self._topology_role,
                     candidates=loop_candidates,
                     holder_idxs=holders_for_role,
                     instance_regions=instance_regions,
                     cross_role_holders=all_holders if cross_role_enabled else None,
+                    holder_regions=same_role_regions,
+                    cross_role_regions=cross_role_regions,
                 )
                 if not placement.is_queue:
                     # At least one safe candidate — try them in priority order.

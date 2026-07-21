@@ -99,6 +99,12 @@ def test_dispatcher_uses_topology_safe_candidate_when_full_held(
         "src.runtime.cpu_region_lock.active_region_holders",
         lambda: {"frontdoor": [0]},
     )
+    # The dispatcher's placement filter reads the EXACT held-region set. Full
+    # (idx 0) genuinely decoding == its regions {q0, q1} held.
+    monkeypatch.setattr(
+        "src.runtime.cpu_region_lock.held_regions_by_role",
+        lambda *a, **k: {"frontdoor": frozenset({"q0", "q1"})},
+    )
     monkeypatch.setattr(
         "src.runtime.instance_topology.get_instance_regions",
         lambda: _FRONTDOOR_REGIONS,
@@ -134,8 +140,18 @@ def test_dispatcher_queues_when_all_candidates_overlap_then_succeeds_after_relea
         # q3(4) becomes acquirable on second eval.
         return _FakeLockCtx(role, instance_idx, succeed=(instance_idx == 4))
 
+    def _held():
+        # EXACT held-region view derived from the same holder-idx state the
+        # dispatcher's placement filter now consumes.
+        idxs = holder_state["current"].get("frontdoor", [])
+        acc: set[str] = set()
+        for i in idxs:
+            acc |= _FRONTDOOR_REGIONS.get(("frontdoor", i), frozenset())
+        return {"frontdoor": frozenset(acc)} if acc else {}
+
     monkeypatch.setattr("src.runtime.cpu_region_lock.cpu_region_lock_for_instance", _mock_lock)
     monkeypatch.setattr("src.runtime.cpu_region_lock.active_region_holders", _holders)
+    monkeypatch.setattr("src.runtime.cpu_region_lock.held_regions_by_role", lambda *a, **k: _held())
     monkeypatch.setattr(
         "src.runtime.instance_topology.get_instance_regions",
         lambda: _FRONTDOOR_REGIONS,
@@ -161,6 +177,11 @@ def test_dispatcher_raises_contention_denied_on_poll_timeout(
     monkeypatch.setattr(
         "src.runtime.cpu_region_lock.active_region_holders",
         lambda: {"frontdoor": [0, 1, 2, 3, 4]},  # all instances "held"
+    )
+    # EXACT held-region view: every atomic region is occupied → no safe candidate.
+    monkeypatch.setattr(
+        "src.runtime.cpu_region_lock.held_regions_by_role",
+        lambda *a, **k: {"frontdoor": frozenset({"q0", "q1", "q2", "q3"})},
     )
     monkeypatch.setattr(
         "src.runtime.instance_topology.get_instance_regions",
@@ -380,3 +401,119 @@ def test_full_slot_port_mismatch_skips_full_candidate(
         assert is_full is False  # never the mislabeled full
         assert idx != -1
         assert 0 not in acquired  # all-region idx-0 lock never attempted
+
+
+# ── DISPATCH-A residual serializer regression (attribution over-report) ───────
+#
+# The DISPATCH-A tests above mock `active_region_holders` with CLEAN idx lists
+# and therefore never reproduce the production ATTRIBUTION view: when only
+# physical region q0 is held, `active_region_holders` reports EVERY instance
+# whose region-set contains q0 — including the all-region `full` (idx 0). The
+# placement filter used to expand those idxs to a region union, which a single
+# held quarter inflated to the WHOLE machine, so every disjoint quarter was
+# QUEUED and concurrent same-role traffic serialized onto ONE quarter. The fix
+# feeds the filter the EXACT held-region set (`held_regions_by_role`). This test
+# uses a FAITHFUL attribution model so it fails on the pre-fix code and pins the
+# spread.
+
+
+class _AttributionLockModel:
+    """Faithful worker_general lock layer: tracks held physical regions and
+    reproduces BOTH the attribution over-report (active_region_holders) and the
+    exact region view (held_regions_by_role)."""
+
+    def __init__(self, regions_map: dict):
+        self.regions_map = regions_map          # (role, topo_idx) -> frozenset(regions)
+        self.owner: dict[str, int] = {}          # region -> owning topo_idx
+
+    def active_region_holders(self, *a, **k) -> dict[str, list[int]]:
+        # ATTRIBUTION: an instance is "active" if ANY of its regions is held —
+        # so a single held q0 flags the all-region full (idx 0) too.
+        idxs = sorted(
+            idx
+            for (role, idx), regions in self.regions_map.items()
+            if role == "worker_general" and any(r in self.owner for r in regions)
+        )
+        return {"worker_general": idxs} if idxs else {}
+
+    def held_regions_by_role(self, *a, **k) -> dict[str, frozenset[str]]:
+        return {"worker_general": frozenset(self.owner)} if self.owner else {}
+
+    def lock(self, role, instance_idx, timeout_s=None, deadline_s=None):
+        regions = self.regions_map.get((role, instance_idx), frozenset())
+        model = self
+
+        class _Ctx:
+            def __enter__(self_ctx):
+                for rg in regions:
+                    if model.owner.get(rg, instance_idx) != instance_idx:
+                        from src.runtime.cpu_region_lock import CpuRegionLockTimeout
+
+                        raise CpuRegionLockTimeout(f"region {rg} held")
+                for rg in regions:
+                    model.owner[rg] = instance_idx
+                return [f"/tmp/cpu_region.mock.{role}.{instance_idx}.lock"]
+
+            def __exit__(self_ctx, *exc):
+                for rg in regions:
+                    if model.owner.get(rg) == instance_idx:
+                        del model.owner[rg]
+                return False
+
+        return _Ctx()
+
+
+def test_full_disabled_four_concurrent_spread_despite_attribution_over_report(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DISPATCH-A residual pin: 4 concurrent worker_general (FULL_DISABLED)
+    dispatches must occupy 4 DISTINCT quarters even though the attribution view
+    reports the phantom full (idx 0) as a holder the moment one quarter is held.
+    Pre-fix, the placement filter expanded [0, ...] to the whole-machine union
+    and QUEUED every disjoint quarter → serialization onto one quarter."""
+    from types import SimpleNamespace
+
+    monkeypatch.setenv("ORCHESTRATOR_PER_REGION_LOCKS", "1")
+    monkeypatch.setenv("ORCHESTRATOR_PLACEMENT_STATE_MACHINE", "1")
+    # Isolate the placement filter: cross-role + shape-aware seam OFF.
+    monkeypatch.delenv("ORCHESTRATOR_CROSS_ROLE_DISJOINT_PLACEMENT", raising=False)
+    monkeypatch.delenv("ORCHESTRATOR_SHAPE_AWARE_CONTENTION", raising=False)
+
+    full = _StubBackend("http://localhost:8072")
+    quarters = [_StubBackend(f"http://localhost:{p}") for p in (8082, 8182, 8282, 8382)]
+    backend = ca_mod.ConcurrencyAwareBackend(
+        full_backend=full, quarter_backends=quarters,
+        role="worker_general", full_port=8072,  # aligned; FULL_DISABLED drops full anyway
+    )
+
+    model = _AttributionLockModel(dict(_WORKER_GENERAL_REGIONS))
+    monkeypatch.setattr(
+        "src.runtime.instance_topology.get_instance_regions",
+        lambda: dict(_WORKER_GENERAL_REGIONS),
+    )
+    monkeypatch.setattr(
+        "src.runtime.cpu_region_lock.active_region_holders", model.active_region_holders
+    )
+    monkeypatch.setattr(
+        "src.runtime.cpu_region_lock.held_regions_by_role", model.held_regions_by_role
+    )
+    monkeypatch.setattr(
+        "src.runtime.cpu_region_lock.cpu_region_lock_for_instance", model.lock
+    )
+
+    # Bounded queue budget: a regression (attribution-driven QUEUE) times out
+    # fast into ContentionDenied instead of hanging the suite for 60s.
+    req = SimpleNamespace(request_priority="background", max_queue_wait_ms=600)
+
+    chosen_topos: list[int] = []
+    with contextlib.ExitStack() as stack:
+        for i in range(4):
+            _b, idx, is_full = stack.enter_context(
+                backend._dispatch(session_id=f"wg{i}", request=req)
+            )
+            assert is_full is False
+            chosen_topos.append(0 if idx == -1 else idx + 1)
+        # Assert WHILE all four contexts are still held (locks release on exit).
+        assert sorted(chosen_topos) == [1, 2, 3, 4]  # four DISTINCT quarters, not serialized
+        assert 0 not in model.owner.values()          # all-region full never acquired
+        assert len(model.owner) == 4                   # exactly the four disjoint regions held
