@@ -61,7 +61,11 @@ def test_loaders_and_sampling_paths_v2(tmp_path, monkeypatch):
     fake = ModuleType("dataset_adapters")
     fake.ADAPTER_SUITES = {"suite", "none"}
     fake.get_adapter = lambda name: _Adapter() if name == "suite" else None
-    monkeypatch.setitem(sys.modules, "dataset_adapters", fake)
+    monkeypatch.setattr(
+        mod._seeding_sampling,
+        "_load_research_benchmark_module",
+        Mock(return_value=fake),
+    )
     assert mod._load_from_dataset_adapter("suite", 1, 1) == [{"id": "q1", "suite": "s", "prompt": "p"}]
     assert mod._load_from_dataset_adapter("missing", 1, 1) == []
     assert mod._load_from_dataset_adapter("none", 1, 1) == []
@@ -88,7 +92,11 @@ def test_loaders_and_sampling_paths_v2(tmp_path, monkeypatch):
     pool_mod.build_pool = Mock()
     pool_mod.load_pool = lambda: {"pool": 1}
     pool_mod.sample_from_pool = lambda *a, **k: [{"id": "q_fast", "suite": "s"}]
-    monkeypatch.setitem(sys.modules, "question_pool", pool_mod)
+    monkeypatch.setattr(
+        mod._seeding_sampling,
+        "_load_research_benchmark_module",
+        Mock(return_value=pool_mod),
+    )
     sampled = mod.sample_unseen_questions(["suite"], 1, set(), seed=1, use_pool=True)
     assert sampled == [{"id": "q_fast", "suite": "s"}]
 
@@ -100,10 +108,15 @@ def test_loader_import_error_paths_v2(monkeypatch):
     orig_import = builtins.__import__
 
     def _fail_import(name, *args, **kwargs):
-        if name in {"dataset_adapters", "yaml"}:
+        if name == "yaml":
             raise ImportError("missing")
         return orig_import(name, *args, **kwargs)
 
+    monkeypatch.setattr(
+        mod._seeding_sampling,
+        "_load_research_benchmark_module",
+        Mock(side_effect=ImportError("missing")),
+    )
     monkeypatch.setattr(builtins, "__import__", _fail_import)
     assert mod._load_from_dataset_adapter("suite", 1, 1) == []
     assert mod._load_from_yaml("suite", 1, 1) == []
@@ -118,7 +131,11 @@ def test_sample_unseen_questions_fallback_interleave_and_filter_v2(monkeypatch):
     pool_mod.build_pool = Mock(side_effect=RuntimeError("no pool"))
     pool_mod.load_pool = Mock(side_effect=RuntimeError("no pool"))
     pool_mod.sample_from_pool = Mock(return_value=[])
-    monkeypatch.setitem(sys.modules, "question_pool", pool_mod)
+    monkeypatch.setattr(
+        mod._seeding_sampling,
+        "_load_research_benchmark_module",
+        Mock(return_value=pool_mod),
+    )
 
     def _from_adapter(suite, *_args, **_kwargs):
         if suite == "a":
@@ -140,7 +157,11 @@ def test_sample_unseen_questions_pool_empty_then_yaml_fallback_v2(tmp_path, monk
     pool_mod.build_pool = Mock()
     pool_mod.load_pool = lambda: {"pool": 1}
     pool_mod.sample_from_pool = lambda *a, **k: []
-    monkeypatch.setitem(sys.modules, "question_pool", pool_mod)
+    monkeypatch.setattr(
+        mod._seeding_sampling,
+        "_load_research_benchmark_module",
+        Mock(return_value=pool_mod),
+    )
 
     monkeypatch.setattr(mod, "_load_from_dataset_adapter", lambda *_a, **_k: [])
     monkeypatch.setattr(
