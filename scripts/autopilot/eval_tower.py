@@ -11,6 +11,7 @@ import logging
 import math
 import os
 import random
+import sys
 import time
 import uuid
 from collections.abc import Mapping, Sequence
@@ -18,6 +19,7 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import hashlib
+import importlib.util
 import threading
 from pathlib import Path
 from typing import Any, Callable
@@ -138,6 +140,46 @@ def _file_mtime_ns(path: Path) -> int | None:
         return path.stat().st_mtime_ns
     except FileNotFoundError:
         return None
+
+
+_RESEARCH_BENCHMARK_MODULE_CACHE: dict[tuple[str, str, int], Any] = {}
+
+
+def _research_root() -> Path:
+    return Path(os.environ.get("EPYC_RESEARCH_ROOT", "/mnt/raid0/llm/epyc-inference-research"))
+
+
+def _load_research_benchmark_module(module_name: str) -> Any:
+    """Load a research benchmark module by path, independent of bare import state."""
+    module_path = _research_root() / "scripts" / "benchmark" / f"{module_name}.py"
+    mtime_ns = _file_mtime_ns(module_path)
+    if mtime_ns is None:
+        raise FileNotFoundError(f"research benchmark module not found: {module_path}")
+
+    cache_key = (module_name, str(module_path), mtime_ns)
+    cached = _RESEARCH_BENCHMARK_MODULE_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    module_hash = hashlib.sha1(f"{module_path}:{mtime_ns}".encode("utf-8")).hexdigest()[:16]
+    private_name = f"_epyc_research_{module_name}_{module_hash}"
+    existing = sys.modules.get(private_name)
+    if existing is not None:
+        _RESEARCH_BENCHMARK_MODULE_CACHE[cache_key] = existing
+        return existing
+
+    spec = importlib.util.spec_from_file_location(private_name, module_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"could not load research benchmark module: {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[private_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        sys.modules.pop(private_name, None)
+        raise
+    _RESEARCH_BENCHMARK_MODULE_CACHE[cache_key] = module
+    return module
 
 
 def _question_validation_errors(q: Any) -> list[str]:
@@ -1115,8 +1157,6 @@ class _EvalQuestionJsonlWriter:
 
 
 # Import seeding infrastructure
-import sys
-
 _orch_root = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_orch_root / "scripts" / "benchmark"))
 # Repo root on path so `src.tools.eval_secret` (runtime tool-secret ground truth)
@@ -1783,15 +1823,10 @@ class EvalTower:
         if self._pool is not None and self._pool_mtime_ns is None:
             return self._pool
         try:
-            _research_root = Path(
-                os.environ.get("EPYC_RESEARCH_ROOT", "/mnt/raid0/llm/epyc-inference-research")
-            )
-            research_benchmark_dir = str(_research_root / "scripts" / "benchmark")
-            if research_benchmark_dir not in sys.path:
-                sys.path.insert(0, research_benchmark_dir)
-            import question_pool  # type: ignore
+            _research_root_path = _research_root()
+            question_pool = _load_research_benchmark_module("question_pool")
 
-            default_pool_path = _research_root / "benchmarks" / "prompts" / "question_pool.jsonl"
+            default_pool_path = _research_root_path / "benchmarks" / "prompts" / "question_pool.jsonl"
             pool_path = Path(getattr(question_pool, "POOL_FILE", default_pool_path))
             mtime_ns = _file_mtime_ns(pool_path)
             if self._pool is not None and self._pool_mtime_ns == mtime_ns:
@@ -3721,16 +3756,11 @@ class EvalTower:
     def _load_dataset_adapter(self, suite: str):
         """Return a research-repo dataset adapter INSTANCE for a named suite.
 
-        Reuses the same research ``scripts/benchmark`` sys.path insertion as
-        ``_load_pool`` so the canonical suite→adapter registry (``get_adapter``)
-        is the single source of truth for what each suite contains.
+        Loads the canonical research registry by file path so a stale bare
+        ``dataset_adapters`` module cannot win through ``sys.modules`` order.
         """
-        research_bench = str(
-            Path("/mnt/raid0/llm/epyc-inference-research") / "scripts" / "benchmark"
-        )
-        if research_bench not in sys.path:
-            sys.path.insert(0, research_bench)
-        from dataset_adapters import get_adapter  # research suite registry
+        dataset_adapters = _load_research_benchmark_module("dataset_adapters")
+        get_adapter = getattr(dataset_adapters, "get_adapter")
 
         adapter = get_adapter(suite)
         if adapter is None:
