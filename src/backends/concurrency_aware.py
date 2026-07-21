@@ -191,6 +191,7 @@ class ConcurrencyAwareBackend:
         role: str = "",
         full_port: int = 0,
         topology_role: str | None = None,
+        quarter_topology_idxs: list[int] | None = None,
     ):
         if not quarter_backends:
             raise ValueError("ConcurrencyAwareBackend requires at least one quarter backend")
@@ -200,6 +201,25 @@ class ConcurrencyAwareBackend:
         self._topology_role = topology_role or role
         self._full_port = full_port
         self._lock = threading.Lock()
+
+        # DISPATCH-A2: the TRUE NUMA_CONFIG topology index of each quarter
+        # backend, resolved by PORT at construction. The dispatcher keys region
+        # locks on topology index, so this MUST be the index whose cpuset matches
+        # the quarter server's physical cores — NOT the quarter's list position.
+        # They diverge whenever a misaligned `full:` endpoint is demoted into the
+        # quarters pool (the full-stripped list no longer starts at topology idx
+        # 1). Default (None) → legacy positional mapping (list idx i → topology
+        # idx i+1), preserving the aligned full+quarters layout exactly.
+        if quarter_topology_idxs is None:
+            self._quarter_topology_idx = [i + 1 for i in range(len(quarter_backends))]
+        else:
+            if len(quarter_topology_idxs) != len(quarter_backends):
+                raise ValueError(
+                    "quarter_topology_idxs length "
+                    f"({len(quarter_topology_idxs)}) != quarter_backends "
+                    f"({len(quarter_backends)})"
+                )
+            self._quarter_topology_idx = list(quarter_topology_idxs)
 
         # Extract base URLs for slot API calls
         self._full_url = _get_base_url(full_backend)
@@ -249,12 +269,21 @@ class ConcurrencyAwareBackend:
         # never emit the full candidate (quarters only). Unknown role/port →
         # aligned (preserve legacy behavior). Computed once; static per backend.
         self._full_slot_aligned: bool = self._compute_full_slot_alignment()
-        if not self._full_slot_aligned:
+        if self._full is not None and not self._full_slot_aligned:
+            # A full backend is present but its port is not the topology idx-0
+            # port (a quarter impersonating the full) AND it was not demoted
+            # upstream (`_init_caching_backends` demotes it into the quarters pool
+            # when the true index is resolvable; this branch remains as a safety
+            # net for direct construction or an unresolvable port). The full
+            # candidate is suppressed so the all-region lock is never grabbed;
+            # that endpoint's own quarter capacity is NOT reclaimed here — prefer
+            # demotion at the construction site to reclaim it.
             logger.warning(
                 "ConcurrencyAwareBackend[%s]: full slot MISALIGNED — port %s is "
                 "not the NUMA_CONFIG idx-0 port for topology role %s; the full "
                 "(all-region) candidate is disabled to avoid a whole-machine "
-                "lock grab. Requests route to quarters only.",
+                "lock grab (endpoint capacity is stranded — demote it at "
+                "construction to reclaim it). Requests route to quarters only.",
                 self._role or "unknown", self._full_port, self._topology_role,
             )
 
@@ -341,7 +370,7 @@ class ConcurrencyAwareBackend:
         disjoint: list[int] = []
         overlapping: list[int] = []
         for q_idx in range(len(self._quarters)):
-            topo_idx = q_idx + 1  # quarter index in NUMA_CONFIG.instances
+            topo_idx = self._quarter_topology_idx[q_idx]  # TRUE NUMA_CONFIG index (port-resolved)
             if topo_idx >= len(instances):
                 # More backends than topology entries — append at the end
                 overlapping.append(q_idx)
@@ -392,8 +421,10 @@ class ConcurrencyAwareBackend:
                         self._quarter_requests += 1
                         return self._quarters[q_idx], q_idx, False
 
-            # If full instance is idle, use it (best per-request speed)
-            if not self._full_active:
+            # If full instance is idle, use it (best per-request speed).
+            # Quarters-only backends (self._full is None, e.g. a demoted
+            # misaligned full) skip straight to quarter selection.
+            if self._full is not None and not self._full_active:
                 # If there was a previous session on full and we're a NEW session,
                 # we need to migrate the previous session's KV to a quarter first.
                 if (
@@ -916,7 +947,14 @@ class ConcurrencyAwareBackend:
     def _compute_full_slot_alignment(self) -> bool:
         """DISPATCH-A: True unless the endpoint wired as this backend's full
         instance is a mislabeled quarter (its port != the topology role's
-        NUMA_CONFIG idx-0 port). Unknown expected port → True (legacy)."""
+        NUMA_CONFIG idx-0 port). Unknown expected port → True (legacy).
+
+        No full backend (quarters-only, e.g. after a misaligned full is demoted
+        upstream) → True: there is no full slot to be misaligned. `emit_full`
+        independently requires `self._full is not None`, so this never emits a
+        phantom full."""
+        if self._full is None:
+            return True
         try:
             from src.runtime.instance_topology import full_instance_port
 
@@ -943,7 +981,7 @@ class ConcurrencyAwareBackend:
 
     def _tap_dispatch_metadata(self, idx: int, backend: Any) -> dict[str, Any]:
         """Return structured tap metadata for the selected runtime instance."""
-        topology_idx = 0 if idx == -1 else idx + 1
+        topology_idx = 0 if idx == -1 else self._quarter_topology_idx[idx]
         url = self._full_url if idx == -1 else (
             self._quarter_urls[idx] if 0 <= idx < len(self._quarter_urls) else None
         )
@@ -1069,7 +1107,8 @@ class ConcurrencyAwareBackend:
         )
         placement_policy = get_placement_policy(self._topology_role)
         emit_full = (
-            self._full_slot_aligned
+            self._full is not None
+            and self._full_slot_aligned
             and placement_policy is not RolePlacementPolicy.FULL_DISABLED
         )
         full_candidate = (-1, 0)
@@ -1082,13 +1121,14 @@ class ConcurrencyAwareBackend:
         # has an in-flight holder (single-request mode keeps full first).
         candidates: list[tuple[int, int]] = []
         if sticky_q_idx is not None and 0 <= sticky_q_idx < len(self._quarters):
-            candidates.append((sticky_q_idx, sticky_q_idx + 1))
+            candidates.append((sticky_q_idx, self._quarter_topology_idx[sticky_q_idx]))
         if emit_full:
             candidates.append(full_candidate)
         for q_idx in self._quarter_preference_order:
             if q_idx == sticky_q_idx:
                 continue  # already at the head
-            candidates.append((q_idx, q_idx + 1))  # quarter q_idx → topology idx q_idx+1
+            # internal quarter q_idx → its TRUE NUMA_CONFIG topology idx (port-resolved)
+            candidates.append((q_idx, self._quarter_topology_idx[q_idx]))
 
         chosen_ctx = None
         chosen_idx = -2
@@ -1112,7 +1152,10 @@ class ConcurrencyAwareBackend:
             # the queue — the existing inference must complete and release
             # its lock, after which the WP-2 poll re-evaluates and succeeds.
             from src.scheduling.placement import evaluate_placement
-            from src.runtime.cpu_region_lock import active_region_holders
+            from src.runtime.cpu_region_lock import (
+                active_region_holders,
+                held_regions_by_role,
+            )
             from src.runtime.instance_topology import get_instance_regions
             from src.scheduling.contention_gate import ContentionDenied, get_gate
 
@@ -1147,12 +1190,36 @@ class ConcurrencyAwareBackend:
                     loop_candidates = [
                         c for c in candidates if c[0] != -1
                     ] + [full_candidate]
+                # DISPATCH-A residual fix: feed the placement filter the EXACT
+                # held-region sets, NOT the ATTRIBUTION idx view. `active_region_
+                # holders()` marks an instance active when ANY of its regions is
+                # held, so one held quarter (e.g. q0) is reported as every
+                # instance containing q0 — including the all-region `full`
+                # (idx 0). Expanding those idxs inflated the same-role holders_
+                # union to the whole machine and QUEUED every physically-disjoint
+                # quarter, serializing concurrent same-role traffic onto a single
+                # quarter. `held_regions_by_role()` is the exact physical truth
+                # (never over-reports the phantom full) and matches the
+                # shape-aware seam. Recomputed per poll so releases are observed.
+                held_by_role = held_regions_by_role(instance_regions)
+                same_role_regions = held_by_role.get(
+                    self._topology_role, frozenset()
+                )
+                cross_role_regions = None
+                if cross_role_enabled:
+                    _cross_acc: set[str] = set()
+                    for _hrole, _hregions in held_by_role.items():
+                        if _hrole != self._topology_role:
+                            _cross_acc |= _hregions
+                    cross_role_regions = frozenset(_cross_acc)
                 placement = evaluate_placement(
                     role=self._topology_role,
                     candidates=loop_candidates,
                     holder_idxs=holders_for_role,
                     instance_regions=instance_regions,
                     cross_role_holders=all_holders if cross_role_enabled else None,
+                    holder_regions=same_role_regions,
+                    cross_role_regions=cross_role_regions,
                 )
                 if not placement.is_queue:
                     # At least one safe candidate — try them in priority order.
@@ -1210,17 +1277,35 @@ class ConcurrencyAwareBackend:
                     break
 
             if chosen_ctx is None:
-                # All non-blocking attempts failed → block on full's region
-                # locks. Lock layer's union-acquisition prevents overlap
-                # (full's lock takes all of full's regions), but this can
-                # wait on full even when a quarter would have been safe sooner.
-                blocking_ctx = cpu_region_lock_for_instance(
-                    self._topology_role, 0,
-                    timeout_s=60.0, deadline_s=deadline_s,
-                )
-                chosen_ctx = blocking_ctx
-                blocking_ctx.__enter__()
-                chosen_idx = -1
+                if self._full is not None:
+                    # All non-blocking attempts failed → block on full's region
+                    # locks. Lock layer's union-acquisition prevents overlap
+                    # (full's lock takes all of full's regions), but this can
+                    # wait on full even when a quarter would have been safe sooner.
+                    blocking_ctx = cpu_region_lock_for_instance(
+                        self._topology_role, 0,
+                        timeout_s=60.0, deadline_s=deadline_s,
+                    )
+                    chosen_ctx = blocking_ctx
+                    blocking_ctx.__enter__()
+                    chosen_idx = -1
+                else:
+                    # Quarters-only (no full slot, e.g. a demoted misaligned
+                    # full): there is no all-region idx-0 instance to block on.
+                    # Block on the first-preference quarter's TRUE region locks
+                    # instead — never grab the unserved all-region idx-0 lock.
+                    first_q = (
+                        self._quarter_preference_order[0]
+                        if self._quarter_preference_order
+                        else 0
+                    )
+                    blocking_ctx = cpu_region_lock_for_instance(
+                        self._topology_role, self._quarter_topology_idx[first_q],
+                        timeout_s=60.0, deadline_s=deadline_s,
+                    )
+                    chosen_ctx = blocking_ctx
+                    blocking_ctx.__enter__()
+                    chosen_idx = first_q
 
         # Update in-process telemetry (best-effort; not authoritative).
         # 2026-05-24 Phase E port: when full is acquired by a DIFFERENT session

@@ -118,33 +118,74 @@ class BackendMixin:
                     _log.info("role %s → /v1/chat/completions backend (server-side jinja)", role)
 
                 if has_full and quarter_urls:
-                    # Pre-warm role: full-speed + quarter instances
-                    full_config = ServerConfig(
-                        base_url=full_url, num_slots=num_slots,
-                        use_chat_completions=_use_cc,
+                    def _port_of(u: str) -> int:
+                        return int(u.rsplit(":", 1)[-1]) if ":" in u else 0
+
+                    def _mk_backend(u: str):
+                        return CachingBackend(
+                            LlamaServerBackend(ServerConfig(
+                                base_url=u, num_slots=num_slots,
+                                use_chat_completions=_use_cc,
+                            )),
+                            PrefixRouter(num_slots=num_slots),
+                        )
+
+                    full_port = _port_of(full_url)
+
+                    # DISPATCH-A2: resolve each endpoint's TRUE topology index by
+                    # PORT against NUMA_CONFIG. When the endpoint wired as `full:`
+                    # is NOT the topology idx-0 port (a quarter impersonating the
+                    # 96-core full — e.g. a quarters-only serving stack whose first
+                    # port got the `full:` marker), DEMOTE it into the quarters
+                    # pool at its true index rather than stranding it. This (a)
+                    # makes all live quarters dispatchable (restores the N-way
+                    # ceiling) and (b) makes every quarter's region lock match the
+                    # server's physical cores (kills the q0-lock-on-q1-cores
+                    # cross-role collision hazard). Only demote when the true index
+                    # is resolvable; otherwise keep today's behavior (the
+                    # ConcurrencyAwareBackend alignment guard suppresses the full).
+                    from src.runtime.instance_topology import (
+                        full_instance_port,
+                        topology_idx_for_port,
                     )
-                    full_backend = CachingBackend(
-                        LlamaServerBackend(full_config),
-                        PrefixRouter(num_slots=num_slots),
+                    idx0_port = full_instance_port(topology_role)
+                    demoted_idx = (
+                        topology_idx_for_port(topology_role, full_port)
+                        if (idx0_port is not None and full_port != idx0_port)
+                        else None
                     )
-                    full_port = int(full_url.rsplit(":", 1)[-1]) if ":" in full_url else 0
+
+                    if demoted_idx is not None:
+                        quarter_url_list = [full_url] + list(quarter_urls)
+                        full_backend = None
+                        ca_full_port = 0
+                        _log.warning(
+                            "role %s: endpoint %s wired as full: is NOT the "
+                            "NUMA_CONFIG idx-0 port (%s) for topology role %s — "
+                            "DEMOTED into the quarters pool at topology idx %d so "
+                            "all %d quarters are dispatchable and each region lock "
+                            "matches its physical cores. No full instance served.",
+                            role, full_url, idx0_port, topology_role,
+                            demoted_idx, len(quarter_url_list),
+                        )
+                    else:
+                        quarter_url_list = list(quarter_urls)
+                        full_backend = _mk_backend(full_url)
+                        ca_full_port = full_port
 
                     quarter_backends = []
-                    for url in quarter_urls:
-                        qcfg = ServerConfig(
-                            base_url=url, num_slots=num_slots,
-                            use_chat_completions=_use_cc,
-                        )
-                        quarter_backends.append(CachingBackend(
-                            LlamaServerBackend(qcfg),
-                            PrefixRouter(num_slots=num_slots),
-                        ))
+                    quarter_topology_idxs: list[int] = []
+                    for pos, url in enumerate(quarter_url_list):
+                        quarter_backends.append(_mk_backend(url))
+                        t_idx = topology_idx_for_port(topology_role, _port_of(url))
+                        quarter_topology_idxs.append(t_idx if t_idx is not None else pos + 1)
 
                     self._backends[role] = ConcurrencyAwareBackend(
                         full_backend, quarter_backends,
                         role=role,
-                        full_port=full_port,
+                        full_port=ca_full_port,
                         topology_role=topology_role,
+                        quarter_topology_idxs=quarter_topology_idxs,
                     )
                     if topology_role != role:
                         _log.info(
@@ -152,8 +193,9 @@ class BackendMixin:
                             role, topology_role,
                         )
                     _log.info(
-                        "Concurrency-aware backend for %s: 1 full + %d quarters",
-                        role, len(quarter_backends),
+                        "Concurrency-aware backend for %s: %d full + %d quarters (topo idxs %s)",
+                        role, 1 if full_backend is not None else 0,
+                        len(quarter_backends), quarter_topology_idxs,
                     )
                 elif len(quarter_urls) > 1:
                     # Multi-instance role without full: round-robin

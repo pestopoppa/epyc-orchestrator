@@ -305,6 +305,45 @@ def full_instance_port(role: str, numa_config: dict | None = None) -> int | None
         return None
 
 
+def topology_idx_for_port(
+    role: str, port: int, numa_config: dict | None = None
+) -> int | None:
+    """Return the NUMA_CONFIG instance index for (`role`, `port`), or None.
+
+    Resolves an endpoint's TRUE topology index (and therefore its atomic region
+    set) by PORT rather than by list position (DISPATCH-A2). The dispatcher's
+    per-quarter region locks are keyed by topology index; when a `full:`-labelled
+    endpoint that is actually a quarter is demoted into the quarters pool, its
+    lock MUST be the region matching its physical cores — which is the region of
+    the NUMA_CONFIG instance whose port equals the endpoint's port, not the
+    region implied by its position in the (full-stripped) quarter list.
+
+    Returns None when the role or port is unknown — the caller then preserves
+    legacy positional behavior rather than guessing a (wrong) region. Pure when
+    `numa_config` is supplied; otherwise reads the live NUMA_CONFIG.
+    """
+    if numa_config is not None:
+        cfg = numa_config.get(role) if numa_config else None
+    else:
+        try:
+            from scripts.server.stack_numa import NUMA_CONFIG  # type: ignore[import-not-found]
+            cfg = NUMA_CONFIG.get(role)
+        except Exception:
+            cfg = None
+    if not cfg:
+        return None
+    instances = cfg.get("instances") or []
+    for idx, entry in enumerate(instances):
+        if not entry or len(entry) < 2:
+            continue
+        try:
+            if int(entry[1]) == int(port):
+                return idx
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 _MAX_SAFE_CONCURRENCY_CACHE: dict[str, int] = {}
 
 

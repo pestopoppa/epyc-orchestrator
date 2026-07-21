@@ -90,6 +90,20 @@ def _wire(monkeypatch: pytest.MonkeyPatch, holders: dict, acquired: list[int]) -
         lambda *a, **k: dict(holders),
     )
 
+    def _held(*a, **k) -> dict[str, frozenset[str]]:
+        # EXACT held-region view derived from the same holder-idx map. The
+        # dispatcher's placement filter consumes this (not the attribution view).
+        out: dict[str, frozenset[str]] = {}
+        for role, idxs in holders.items():
+            acc: set[str] = set()
+            for i in idxs:
+                acc |= _REGIONS.get((role, i), frozenset())
+            if acc:
+                out[role] = frozenset(acc)
+        return out
+
+    monkeypatch.setattr("src.runtime.cpu_region_lock.held_regions_by_role", _held)
+
     def _mock_lock(role, instance_idx, timeout_s=None, deadline_s=None):
         # All disjoint candidates acquire cleanly; we record which topo_idx the
         # dispatcher actually attempted/acquired.
@@ -208,6 +222,15 @@ class _RegionMutexModel:
             out.setdefault(role, set()).add(topo)
         return {role: sorted(topos) for role, topos in out.items()}
 
+    def held_regions(self, *a, **k) -> dict[str, frozenset[str]]:
+        """EXACT held-region view (the `held_regions_by_role` counterpart): the
+        physical regions actually owned, grouped by role — never the phantom
+        full over-report."""
+        out: dict[str, set[str]] = {}
+        for rg, (role, _topo) in self.owner.items():
+            out.setdefault(role, set()).add(rg)
+        return {role: frozenset(rs) for role, rs in out.items()}
+
     def lock(self, role, instance_idx, timeout_s=None, deadline_s=None):
         regions = self.regions_map.get((role, instance_idx), frozenset())
         model = self
@@ -238,6 +261,7 @@ def _wire_model(monkeypatch: pytest.MonkeyPatch, model: _RegionMutexModel) -> No
         "src.runtime.instance_topology.get_instance_regions", lambda: dict(model.regions_map)
     )
     monkeypatch.setattr("src.runtime.cpu_region_lock.active_region_holders", model.holders)
+    monkeypatch.setattr("src.runtime.cpu_region_lock.held_regions_by_role", model.held_regions)
     monkeypatch.setattr(
         "src.runtime.cpu_region_lock.cpu_region_lock_for_instance", model.lock
     )
