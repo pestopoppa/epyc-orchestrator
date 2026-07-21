@@ -11,12 +11,39 @@ aren't pure config-only math.
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from .progress_logger import EventType, ProgressEntry
 
 if TYPE_CHECKING:
     from .q_scorer import ScoringConfig
+
+logger = logging.getLogger(__name__)
+
+# Roles that are legitimately absent from baseline_tps_by_role: decommissioned
+# roles that only appear in historical replay, and the test role. Warning on
+# these would be noise during any rescore of retained logs.
+_KNOWN_UNPRICED_ROLES = frozenset({"architect_coding", "mock", "plan_review"})
+_warned_unpriced_roles: set[str] = set()
+
+
+def _warn_unpriced_role(role: str) -> None:
+    """Warn once per distinct role that has no baseline_tps entry.
+
+    A role with no baseline skips every cost dimension and scores the full base
+    reward. That silent miss is what disabled the entire cost/speed half of this
+    function until 2026-07-21, so it is now surfaced rather than swallowed.
+    """
+    if role in _KNOWN_UNPRICED_ROLES or role in _warned_unpriced_roles:
+        return
+    _warned_unpriced_roles.add(role)
+    logger.warning(
+        "Reward cost penalty SKIPPED: role %r has no baseline_tps_by_role entry, "
+        "so this task scores the full base reward. Either register the role in the "
+        "q_scorer priors or fix the caller supplying it.",
+        role[:80],
+    )
 
 
 def compute_reward(
@@ -89,6 +116,16 @@ def compute_reward(
             or ""
         )
         baseline_tps = config.baseline_tps_by_role.get(role, 0)
+        if role and baseline_tps <= 0:
+            # An unresolvable role skips EVERY cost dimension below and hands the
+            # task the full base reward. That is exactly how this whole subsystem
+            # went dark, so it must never be silent again. Known-benign cases:
+            # decommissioned roles in historical replay (architect_coding, retired
+            # 2026-06) and the "mock" test role. Anything else means either a new
+            # role was added without a baseline_tps_by_role entry, or unvalidated
+            # input reached the telemetry (see _normalize_role_field in
+            # src/api/models/requests.py).
+            _warn_unpriced_role(role)
 
         # Prefer generation_ms (clean generation time excluding prompt eval)
         # over elapsed_seconds (polluted by prompt processing time)

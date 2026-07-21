@@ -2,9 +2,67 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+logger = logging.getLogger(__name__)
+
+# Role strings that legitimately appear on the wire but are pipeline-stage
+# markers rather than serving roles. They must not be rewritten to "" (that
+# would change routing), but they are also not expected to resolve to a Role.
+_NON_ROLE_SENTINELS = frozenset({"mock", "plan", "stream_init", "proactive_delegation"})
+
+
+def _normalize_role_field(value: str | None, field_name: str) -> str | None:
+    """Coerce a client-supplied role string to a canonical role name.
+
+    ``role`` and ``force_role`` were bare ``str`` fields with no validation, so
+    any client string flowed through the pipeline into the TASK_COMPLETED
+    telemetry as ``producer_role``. A rescore of 117,074 historical completions
+    (2026-07-21) found 157 rows with non-role values, including uppercase
+    variants from 3-way seeding (``SELF``, ``WORKER``) and one row whose role
+    field contained a prompt fragment ("Provide full Python snippet with
+    variable name.").
+
+    That is not cosmetic. ``compute_reward`` looks the role up in
+    ``baseline_tps_by_role``; an unresolvable role misses every cost dimension
+    and the task scores the full base reward. An unvalidated client string could
+    therefore suppress the entire cost/speed penalty — a latent reward-hacking
+    surface, and the same silent-miss shape as the ``role``/``producer_role``
+    bug it was found alongside.
+
+    Behaviour: resolve via ``Role.from_string`` (which already handles legacy
+    aliases), accept a case-insensitive match, pass known non-role sentinels
+    through untouched, and downgrade anything else to "" (auto-route) with a
+    warning rather than letting it reach telemetry.
+    """
+    if value is None or value == "":
+        return value
+
+    from src.roles import Role
+
+    if Role.from_string(value) is not None:
+        return value
+    if value in _NON_ROLE_SENTINELS:
+        return value
+
+    lowered = value.strip().lower()
+    if Role.from_string(lowered) is not None:
+        logger.warning(
+            "Normalized non-canonical %s=%r to %r", field_name, value, lowered
+        )
+        return lowered
+
+    logger.warning(
+        "Rejected unrecognized %s=%r (%d chars); falling back to auto-route. "
+        "Unresolvable roles silently disable the reward cost penalty.",
+        field_name,
+        value[:80],
+        len(value),
+    )
+    return ""
 
 
 class ChatRequest(BaseModel):
@@ -45,6 +103,12 @@ class ChatRequest(BaseModel):
         description="Force routing to a specific role, bypassing all routing logic. "
         "Used by comparative seeding to test specialist quality.",
     )
+
+    @field_validator("role", "force_role")
+    @classmethod
+    def _validate_role_fields(cls, value, info):
+        """Reject free text in role fields — see _normalize_role_field."""
+        return _normalize_role_field(value, info.field_name)
     force_mode: str | None = Field(
         default=None,
         description="Force execution mode ('direct', 'react', 'repl', 'delegated', or 'edit'), "
