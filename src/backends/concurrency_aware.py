@@ -239,6 +239,25 @@ class ConcurrencyAwareBackend:
         # full+own-quarter test. See `_compute_quarter_preference()`.
         self._quarter_preference_order: list[int] = self._compute_quarter_preference()
 
+        # DISPATCH-A alignment guard: confirm the endpoint wired into this
+        # backend's "full" slot really is the topology's idx-0 (all-region)
+        # instance. When the live wiring labels a quarter-sized endpoint as
+        # `full:` (a 24-core quarter impersonating the 96-core full), routing
+        # there would acquire idx-0's whole-machine region lock and serialize
+        # every role. If the port we hold as full does not match NUMA_CONFIG's
+        # idx-0 port for this role, we treat the full slot as misaligned and
+        # never emit the full candidate (quarters only). Unknown role/port →
+        # aligned (preserve legacy behavior). Computed once; static per backend.
+        self._full_slot_aligned: bool = self._compute_full_slot_alignment()
+        if not self._full_slot_aligned:
+            logger.warning(
+                "ConcurrencyAwareBackend[%s]: full slot MISALIGNED — port %s is "
+                "not the NUMA_CONFIG idx-0 port for topology role %s; the full "
+                "(all-region) candidate is disabled to avoid a whole-machine "
+                "lock grab. Requests route to quarters only.",
+                self._role or "unknown", self._full_port, self._topology_role,
+            )
+
         # Phase E (cross-role-bw-aware-routing): KV migration status.
         # 2026-05-24 update: migration is NOW also wired into the per-region-
         # locks `_dispatch` path (the "port" the handoff asked for). The flag
@@ -894,6 +913,20 @@ class ConcurrencyAwareBackend:
             return None
         return value if value >= 0 else None
 
+    def _compute_full_slot_alignment(self) -> bool:
+        """DISPATCH-A: True unless the endpoint wired as this backend's full
+        instance is a mislabeled quarter (its port != the topology role's
+        NUMA_CONFIG idx-0 port). Unknown expected port → True (legacy)."""
+        try:
+            from src.runtime.instance_topology import full_instance_port
+
+            expected = full_instance_port(self._topology_role)
+        except Exception:
+            return True
+        if expected is None:
+            return True
+        return self._full_port == expected
+
     def _extract_migration_budget_ms(self, request: Any) -> Optional[int]:
         """Best-effort read of ChatRequest.migration_budget_ms for the WP-3
         load-transition trigger. Returns None if not present."""
@@ -1017,10 +1050,41 @@ class ConcurrencyAwareBackend:
         if session_id:
             with self._lock:
                 sticky_q_idx = self._quarter_for_session_locked(session_id)
+        # DISPATCH-A: the placement policy governs whether/where the full
+        # (-1, 0) all-region candidate is emitted.
+        #   * FULL_DISABLED    — never emit full (quarters only).
+        #   * BURST_PREFER_QUARTERS — full FIRST only in single-request mode
+        #     (zero current holders for the role); once any holder is present,
+        #     quarters are preferred and the full trails. Because full="0-95"
+        #     overlaps every quarter, a trailing full never places while a
+        #     quarter holds a region — which is the mode-abandonment the design
+        #     contract requires (full/half is single-request-throughput only).
+        #   * SOLO_PREFER_FULL (default) / QUEUE_ONLY / unknown — legacy order
+        #     (full first, then quarters).
+        # The alignment guard (`_full_slot_aligned`) independently suppresses
+        # the full candidate when the full slot is a mislabeled quarter.
+        from src.scheduling.placement_policy import (
+            RolePlacementPolicy,
+            get_placement_policy,
+        )
+        placement_policy = get_placement_policy(self._topology_role)
+        emit_full = (
+            self._full_slot_aligned
+            and placement_policy is not RolePlacementPolicy.FULL_DISABLED
+        )
+        full_candidate = (-1, 0)
+
+        # Base (single-request / legacy) ordering: sticky quarter (if any),
+        # then full, then quarters in NUMA-disjoint preference order. `emit_full`
+        # drops the full candidate entirely for FULL_DISABLED roles and for a
+        # misaligned full slot. BURST_PREFER_QUARTERS re-orders this list to
+        # quarters-first inside the WP-2 poll loop below, but only once the role
+        # has an in-flight holder (single-request mode keeps full first).
         candidates: list[tuple[int, int]] = []
         if sticky_q_idx is not None and 0 <= sticky_q_idx < len(self._quarters):
             candidates.append((sticky_q_idx, sticky_q_idx + 1))
-        candidates.append((-1, 0))  # full
+        if emit_full:
+            candidates.append(full_candidate)
         for q_idx in self._quarter_preference_order:
             if q_idx == sticky_q_idx:
                 continue  # already at the head
@@ -1065,9 +1129,27 @@ class ConcurrencyAwareBackend:
             while True:
                 all_holders = active_region_holders()
                 holders_for_role = all_holders.get(self._topology_role, [])
+                # DISPATCH-A: BURST_PREFER_QUARTERS abandons the full/half for
+                # quarters the moment the role has an in-flight holder (design
+                # contract: full is single-request-throughput ONLY; under
+                # concurrent load the router prefers quarters and lets the full
+                # trail). Single-request (no self-role holder) keeps full first
+                # for peak latency. Re-evaluated every poll so a request that
+                # becomes concurrent mid-wait switches modes. Full="0-95"
+                # overlaps every quarter, so a trailing full is naturally vetoed
+                # while any quarter holds a region — no explicit eviction needed.
+                loop_candidates = candidates
+                if (
+                    placement_policy is RolePlacementPolicy.BURST_PREFER_QUARTERS
+                    and emit_full
+                    and holders_for_role
+                ):
+                    loop_candidates = [
+                        c for c in candidates if c[0] != -1
+                    ] + [full_candidate]
                 placement = evaluate_placement(
                     role=self._topology_role,
-                    candidates=candidates,
+                    candidates=loop_candidates,
                     holder_idxs=holders_for_role,
                     instance_regions=instance_regions,
                     cross_role_holders=all_holders if cross_role_enabled else None,
@@ -1152,12 +1234,8 @@ class ConcurrencyAwareBackend:
         # WP-3 policy gate: FULL_DISABLED + QUEUE_ONLY skip migration; the
         # other two policies (SOLO_PREFER_FULL = default, BURST_PREFER_QUARTERS)
         # leave the existing session-handover migration trigger active.
-        from src.scheduling.placement_policy import (
-            RolePlacementPolicy,
-            get_placement_policy,
-        )
-        _policy = get_placement_policy(self._topology_role)
-        _migration_allowed_by_policy = _policy in (
+        # Reuse the policy resolved during candidate construction (same scope).
+        _migration_allowed_by_policy = placement_policy in (
             RolePlacementPolicy.SOLO_PREFER_FULL,
             RolePlacementPolicy.BURST_PREFER_QUARTERS,
         )

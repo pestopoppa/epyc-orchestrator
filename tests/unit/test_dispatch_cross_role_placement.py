@@ -169,3 +169,175 @@ def test_shape_aware_gate_runs_per_real_candidate_and_skips_denied_idx(
         assert idx == 3  # internal idx for topology q3
         assert acquired[-1] == 4
         assert evaluated[:2] == [3, 4]
+
+
+# ── DISPATCH-A cross-role co-placement acceptance (operator 2026-07-21) ───────
+#
+# Unblocking quarters explicitly includes CROSS-ROLE mixing: different roles'
+# quarter instances co-place on DISJOINT regions, coordinated by the GLOBAL
+# per-region mutex (one holder per physical region, across roles) + cross-role
+# pair verdicts. Same-region cross-role stacking must still serialize.
+
+_ALL_REGIONS = frozenset({"q0", "q1", "q2", "q3"})
+
+# Cross-role topology: frontdoor (node0-half full + 4 quarters) alongside
+# worker_general (all-region full + 4 quarters). Quarter topo idx 1..4 = q0..q3.
+_XROLE_REGIONS = {
+    **_REGIONS,
+    ("worker_general", 0): _ALL_REGIONS,  # "0-95" full — the amplifier shape
+    ("worker_general", 1): frozenset({"q0"}),
+    ("worker_general", 2): frozenset({"q1"}),
+    ("worker_general", 3): frozenset({"q2"}),
+    ("worker_general", 4): frozenset({"q3"}),
+}
+
+
+class _RegionMutexModel:
+    """Faithful mock of the lock layer's exclusion: the GLOBAL per-region mutex
+    plus the per-role region lock together mean each physical region has at most
+    ONE holder (role, topo_idx) at a time — across roles. A non-blocking acquire
+    whose region set overlaps another holder raises CpuRegionLockTimeout."""
+
+    def __init__(self, regions_map: dict):
+        self.regions_map = regions_map
+        self.owner: dict[str, tuple[str, int]] = {}  # region -> (role, topo)
+
+    def holders(self, *a, **k) -> dict[str, list[int]]:
+        out: dict[str, set[int]] = {}
+        for (role, topo) in self.owner.values():
+            out.setdefault(role, set()).add(topo)
+        return {role: sorted(topos) for role, topos in out.items()}
+
+    def lock(self, role, instance_idx, timeout_s=None, deadline_s=None):
+        regions = self.regions_map.get((role, instance_idx), frozenset())
+        model = self
+
+        class _Ctx:
+            def __enter__(self_ctx):
+                for rg in regions:
+                    held_by = model.owner.get(rg)
+                    if held_by is not None and held_by != (role, instance_idx):
+                        from src.runtime.cpu_region_lock import CpuRegionLockTimeout
+
+                        raise CpuRegionLockTimeout(f"region {rg} held by {held_by}")
+                for rg in regions:
+                    model.owner[rg] = (role, instance_idx)
+                return [f"/tmp/cpu_region.mock.{role}.{instance_idx}.lock"]
+
+            def __exit__(self_ctx, *exc):
+                for rg in regions:
+                    if model.owner.get(rg) == (role, instance_idx):
+                        del model.owner[rg]
+                return False
+
+        return _Ctx()
+
+
+def _wire_model(monkeypatch: pytest.MonkeyPatch, model: _RegionMutexModel) -> None:
+    monkeypatch.setattr(
+        "src.runtime.instance_topology.get_instance_regions", lambda: dict(model.regions_map)
+    )
+    monkeypatch.setattr("src.runtime.cpu_region_lock.active_region_holders", model.holders)
+    monkeypatch.setattr(
+        "src.runtime.cpu_region_lock.cpu_region_lock_for_instance", model.lock
+    )
+
+
+def _make_role_backend(monkeypatch: pytest.MonkeyPatch, role: str, full_port: int):
+    monkeypatch.setenv("ORCHESTRATOR_PER_REGION_LOCKS", "1")
+    monkeypatch.setenv("ORCHESTRATOR_PLACEMENT_STATE_MACHINE", "1")
+    full = _StubBackend(f"http://localhost:{full_port}")
+    quarters = [_StubBackend(f"http://localhost:{full_port + 10 + i}") for i in range(4)]
+    return ca_mod.ConcurrencyAwareBackend(
+        full_backend=full, quarter_backends=quarters, role=role, full_port=full_port,
+    )
+
+
+def test_cross_role_disjoint_quarters_coplace_no_machine_wide_block(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DISPATCH-A (a): a worker_general quarter decode on q0 (holding ONLY its
+    per-role q0 + GLOBAL q0) co-places CONCURRENTLY with a frontdoor quarter on a
+    disjoint region — no machine-wide blocking. Neither role touches the
+    all-region set."""
+    monkeypatch.setenv("ORCHESTRATOR_CROSS_ROLE_DISJOINT_PLACEMENT", "1")
+    model = _RegionMutexModel(_XROLE_REGIONS)
+    _wire_model(monkeypatch, model)
+
+    wg = _make_role_backend(monkeypatch, "worker_general", 8072)  # FULL_DISABLED
+    fd = _make_role_backend(monkeypatch, "frontdoor", 8070)       # BURST_PREFER_QUARTERS
+
+    with wg._dispatch(session_id="wg") as (_b1, idx1, is_full1):
+        assert is_full1 is False
+        topo1 = 0 if idx1 == -1 else idx1 + 1
+        r1 = _XROLE_REGIONS[("worker_general", topo1)]
+        assert r1 == frozenset({"q0"})  # worker's first quarter is q0
+
+        # Second role dispatches WHILE worker holds q0 — must succeed on a
+        # disjoint region, not queue and not grab the all-region full.
+        with fd._dispatch(session_id="fd") as (_b2, idx2, is_full2):
+            assert is_full2 is False
+            topo2 = 0 if idx2 == -1 else idx2 + 1
+            r2 = _XROLE_REGIONS[("frontdoor", topo2)]
+            assert r1.isdisjoint(r2)          # co-placed on disjoint regions
+            assert r2 != _ALL_REGIONS          # frontdoor did not grab all-region
+            live = model.holders()
+            assert topo1 in live["worker_general"]  # both concurrently held
+            assert topo2 in live["frontdoor"]
+            # No region is double-booked across the two roles.
+            assert len(model.owner) == len(r1) + len(r2)
+
+
+def test_cross_role_same_region_stacking_queues(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DISPATCH-A (b): same-region cross-role stacking (worker q0 + frontdoor q0)
+    must NOT co-place — the GLOBAL q0 mutex serializes it. With worker's other
+    quarters occupied and frontdoor already holding q0, a worker dispatch whose
+    only remaining region is q0 queues (ContentionDenied), never double-booking
+    q0."""
+    monkeypatch.setenv("ORCHESTRATOR_CROSS_ROLE_DISJOINT_PLACEMENT", "1")
+    model = _RegionMutexModel(_XROLE_REGIONS)
+    # frontdoor holds q0 (its q0 quarter); worker_general holds q1/q2/q3.
+    model.owner["q0"] = ("frontdoor", 1)
+    model.owner["q1"] = ("worker_general", 2)
+    model.owner["q2"] = ("worker_general", 3)
+    model.owner["q3"] = ("worker_general", 4)
+    _wire_model(monkeypatch, model)
+
+    wg = _make_role_backend(monkeypatch, "worker_general", 8072)
+
+    # Bound the poll loop so the queue resolves to ContentionDenied fast.
+    times = iter([0.0, 0.0, 100.0])
+    monkeypatch.setattr("src.backends.concurrency_aware.time.perf_counter", lambda: next(times))
+    monkeypatch.setattr("src.backends.concurrency_aware.time.sleep", lambda _x: None)
+
+    from src.scheduling.contention_gate import ContentionDenied
+
+    with pytest.raises(ContentionDenied) as exc:
+        with wg._dispatch(session_id="wg-q0"):
+            pass
+    assert "worker_general" in str(exc.value)
+    # q0 was never double-booked — still owned by frontdoor.
+    assert model.owner["q0"] == ("frontdoor", 1)
+
+
+def test_worker_general_never_acquires_more_than_candidate_region_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DISPATCH-A (c) regression pin: a worker_general dispatch acquires ONLY its
+    chosen quarter's region set — NEVER the all-region idx-0 set (the amplifier
+    bug this fix kills). FULL_DISABLED makes the whole-machine grab structurally
+    impossible."""
+    model = _RegionMutexModel(_XROLE_REGIONS)
+    _wire_model(monkeypatch, model)
+    wg = _make_role_backend(monkeypatch, "worker_general", 8072)
+
+    with wg._dispatch(session_id="wg-solo") as (_b, idx, is_full):
+        assert is_full is False
+        topo = 0 if idx == -1 else idx + 1
+        assert topo != 0  # never the all-region full instance
+        held_regions = set(model.owner)          # regions this dispatch holds
+        assert held_regions == set(_XROLE_REGIONS[("worker_general", topo)])
+        assert held_regions != set(_ALL_REGIONS)  # NOT the whole machine
+        assert len(held_regions) == 1             # exactly its own quarter

@@ -266,6 +266,45 @@ def compute_max_disjoint_live_concurrency(
     return max(1, safe_n)
 
 
+def full_instance_port(role: str, numa_config: dict | None = None) -> int | None:
+    """Return the port declared for `role`'s full instance (NUMA_CONFIG idx 0).
+
+    Liveness/alignment helper (DISPATCH-A). The dispatcher labels one endpoint
+    per concurrency-aware role as the "full" (all-region) instance and, when it
+    routes there, acquires idx-0's *whole-machine* region lock. If the endpoint
+    wired into that slot is actually a quarter-sized server (a 24-core quarter
+    impersonating the 96-core full), routing to it grabs every region lock and
+    serializes the machine — the DISPATCH-A amplifier. This helper lets the
+    dispatcher confirm the port it holds as "full" really is the topology's
+    idx-0 port before it emits the full candidate.
+
+    Returns None when the role, its instance list, or the port is unknown — the
+    caller then preserves legacy behavior (no demotion) rather than guessing.
+    Pure when `numa_config` is supplied; otherwise reads the live NUMA_CONFIG.
+    """
+    cfg: dict | None
+    if numa_config is not None:
+        cfg = numa_config.get(role) if numa_config else None
+    else:
+        try:
+            from scripts.server.stack_numa import NUMA_CONFIG  # type: ignore[import-not-found]
+            cfg = NUMA_CONFIG.get(role)
+        except Exception:
+            cfg = None
+    if not cfg:
+        return None
+    instances = cfg.get("instances") or []
+    if not instances:
+        return None
+    entry = instances[0]
+    if not entry or len(entry) < 2:
+        return None
+    try:
+        return int(entry[1])
+    except (TypeError, ValueError):
+        return None
+
+
 _MAX_SAFE_CONCURRENCY_CACHE: dict[str, int] = {}
 
 

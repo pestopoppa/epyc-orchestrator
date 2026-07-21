@@ -169,12 +169,19 @@ NUMA_CONFIG: dict[str, dict] = {
         # WP-7/J6 (2026-05-26): J5 -t48 re-bench → same_role borderline (mean
         # 0.879, all 6 quarter pairs net-positive 1.54-1.89x aggregate; gate
         # block→borderline). NOTE full="0-95" OVERLAPS all quarters, so full+
-        # quarter never co-place (topology veto) — under burst the placement SM
-        # queues behind full until it frees, or use FULL_DISABLED to reclaim
-        # full's mlock and always quarter. Starting burst_prefer_quarters; the
-        # J6 observe will show whether full_disabled is the better worker_general
-        # policy (cross-node pairs q0+q2/q1+q3 are the weak ones).
-        "placement_policy": "burst_prefer_quarters",
+        # quarter never co-place (topology veto).
+        # DISPATCH-A (2026-07-21, operator-granted): FULL_DISABLED. The full
+        # (0-95) instance is NOT in the live serving stack (quarters-only; no
+        # 8072 — orchestration/derived/stack_priors.yaml). Emitting a full-first
+        # candidate made the burst placement SM acquire idx-0's ALL-region lock
+        # (all four per-role region locks + all four global cross-role mutexes),
+        # serializing the machine and starving concurrent same-role requests on
+        # a 150ms poll. full="0-95" overlaps every quarter, so full can never
+        # co-place with a quarter anyway: quarters-only is the correct static
+        # mode until an operator redeploys a real full instance. This reclaims
+        # the full's mlock and lets 4 same-role requests occupy 4 disjoint
+        # quarters (design contract: big instance idle under concurrent load).
+        "placement_policy": "full_disabled",
         "mlock": True,
         "spec_overrides": {"draft_max": 2, "p_split": 0},  # gemma4 MTP recipe (was dm=8 for Qwen3-Coder)
         "numactl_policy_instances": {0: "interleave=all"},  # required for gemma4 MTP idx0
