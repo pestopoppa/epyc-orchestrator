@@ -56,7 +56,7 @@ import statistics
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 ORCH_ROOT = SCRIPT_DIR.parents[1]
@@ -672,6 +672,241 @@ def load_instance_regions(
 # ══════════════════════════════════════════════════════════════════════════════
 # Execution bridge (--execute + env-gated; placement queue; NEVER run in tests)
 # ══════════════════════════════════════════════════════════════════════════════
+#
+# Admit-vs-queue detection — the SIGNAL that decides measurement validity
+# --------------------------------------------------------------------------
+# A Step-2 admit-overlap probe rides the SAME seam ``run_paired_ab`` uses:
+# ``seeding_orchestrator.call_orchestrator_forced`` with
+# ``request_priority=background`` + ``workload_class=eval_batch`` (POST /chat over
+# the placement queue, never a foreground /chat). The orchestrator does NOT return
+# an explicit "admitted vs queued" field, so the bridge INFERS the gate decision
+# from the response the placement path actually produces:
+#
+#   * ADMIT  — the request got a real ``answer`` (no error). When the shape-aware
+#     gate admits a candidate ``candidate_topology_idx`` (disjoint from the held
+#     anchor), the dispatch poll loop in
+#     ``src/backends/concurrency_aware.py::_dispatch`` (~L1078-1102) acquires it and
+#     inference proceeds → a normal ChatResponse.
+#   * QUEUE  — the shape-aware gate fails closed on an overlapping candidate; the
+#     dispatch poll loop exhausts ``max_queue_wait_ms`` and raises
+#     ``ContentionDenied`` ("placement timeout …", concurrency_aware.py:1115). The
+#     API's exception handler (``src/api/__init__.py`` ~L359-374) maps that to
+#     HTTP 503 ``{"error":"contention_denied", ...}``. Through
+#     ``call_orchestrator_forced`` that 503 surfaces as ``{"answer":"",
+#     "error":"…503…"}`` (its ``response.raise_for_status()`` branch,
+#     seeding_orchestrator.py:757-780).
+#
+# ``_classify_admit_queue`` encodes exactly that mapping and, crucially, returns
+# ``None`` (unscored) for any response that is NOT clean gate evidence — a
+# backend 500/502, a circuit-open 503 (which arrives as an ``[ERROR: … unavailable]``
+# answer + ``error_code=503``, distinct from the contention 503), or an empty
+# non-error body. See the two honest limitations documented on
+# ``_drive_admit_overlap_probes``.
+
+# Orchestrator API + probe knobs (execute path only; never used in tests/dry-run).
+DEFAULT_ORCH_URL = "http://localhost:8000"
+# Probe timeout drives call_orchestrator_forced's max_queue_wait_ms
+# (=min(timeout*1000, 90_000)); 120 s ⇒ the full 90 s background queue budget, so
+# an OVERLAPPING candidate genuinely times out (→ 503 → QUEUE) rather than
+# slow-admitting. The operator must hold the anchor for at least this long.
+PROBE_TIMEOUT_S = 120
+PROBE_MAX_TOKENS = 4  # a minimal generation — we score routing, not the answer
+
+# Response markers that unambiguously identify the contention gate's fail-closed
+# path (case-insensitive substring match over error/error_detail).
+_QUEUE_SIGNAL_MARKERS = (
+    "contention",          # 503 body {"error":"contention_denied", ...}
+    "contention_denied",
+    "placement timeout",   # ContentionDenied reason string from _dispatch
+    "retry_after",
+    "backpressure",
+    "queued",
+)
+_BACKEND_ERROR_PREFIXES = ("[error", "[failed")
+
+
+def _classify_admit_queue(outcome: Any) -> str | None:
+    """Map one probe outcome to ``"admit"`` / ``"queue"`` / ``None`` (unscored).
+
+    ``outcome`` is either a raw ``call_orchestrator_forced`` response dict OR a
+    pre-classified decision string (so an injected ``probe_fn`` may return either).
+    ``None`` means "not clean gate evidence" — the aggregator excludes it from the
+    pass/fail tally rather than counting a backend failure as a gate decision. Pure.
+    """
+    if isinstance(outcome, str):
+        v = outcome.strip().lower()
+        return v if v in (DECISION_ADMIT, DECISION_QUEUE) else None
+    if not isinstance(outcome, dict):
+        return None
+
+    answer = outcome.get("answer")
+    answer_s = answer.strip() if isinstance(answer, str) else ""
+    answer_is_backend_error = answer_s.lower().startswith(_BACKEND_ERROR_PREFIXES)
+    error = str(outcome.get("error") or "").strip()
+    error_detail = str(outcome.get("error_detail") or "").strip()
+    error_code = outcome.get("error_code")
+    blob = f"{error} {error_detail}".lower()
+
+    # (1) Explicit contention-gate fail-closed signal → QUEUE.
+    if any(m in blob for m in _QUEUE_SIGNAL_MARKERS):
+        return DECISION_QUEUE
+    # A bare HTTP-503 error with NO backend "[ERROR:/…]" answer is the contention
+    # handler's JSONResponse surfaced through raise_for_status (empty answer).
+    # A circuit-open 503 instead arrives as an "[ERROR: … unavailable]" answer +
+    # error_code and is NOT gate evidence (falls through to (2)).
+    if ("503" in blob or str(error_code) == "503") and not answer_is_backend_error:
+        if not answer_s:
+            return DECISION_QUEUE
+    # (2) Any OTHER error (backend 500/502, circuit-open, connection drop, an
+    #     "[ERROR:/…]" answer) is not a gate decision → leave the probe unscored.
+    if error or error_detail or error_code or answer_is_backend_error:
+        return None
+    # (3) A real answer with no error ⇒ the request admitted (immediately OR after
+    #     a bounded queue-wait the /chat body does not expose — see the limitation
+    #     note on the driver).
+    if answer_s:
+        return DECISION_ADMIT
+    # (4) Empty answer, no error: ambiguous → unscored.
+    return None
+
+
+def _load_call_orchestrator_forced() -> Callable[..., dict[str, Any]]:  # pragma: no cover - inference path
+    """Import ``call_orchestrator_forced`` (the SAME seam ``run_paired_ab`` uses).
+
+    Tries the research benchmark dir first (parity with
+    ``run_paired_ab._default_arm_probe``), then this repo's ``scripts/benchmark``.
+    """
+    _research_bench = "/mnt/raid0/llm/epyc-inference-research/scripts/benchmark"
+    _orch_bench = str(ORCH_ROOT / "scripts" / "benchmark")
+    for _p in (_research_bench, _orch_bench):
+        if _p not in sys.path:
+            sys.path.insert(0, _p)
+    try:
+        from scripts.benchmark.seeding_orchestrator import (  # type: ignore
+            call_orchestrator_forced,
+        )
+    except Exception:  # noqa: BLE001
+        from seeding_orchestrator import call_orchestrator_forced  # type: ignore
+    return call_orchestrator_forced
+
+
+def _default_admit_overlap_probe(
+    spec: AdmitOverlapProbeSpec, *, seed: int
+) -> dict[str, Any]:  # pragma: no cover - inference path
+    """Dispatch ONE small generation for this probe's candidate over the placement
+    queue and return the raw orchestrator response dict.
+
+    Mirrors ``run_paired_ab._default_arm_probe``: ``call_orchestrator_forced`` with
+    ``force_role`` pinned to the candidate placement's role, ``request_priority=
+    background`` + ``workload_class=eval_batch`` (placement queue — NEVER /chat).
+    The anchor must be held live for ~``PROBE_TIMEOUT_S`` (operator quiesce window)
+    so an overlapping candidate actually times out rather than slow-admitting.
+    """
+    call_orchestrator_forced = _load_call_orchestrator_forced()
+    prompt = f"Reply with OK. (shapekeyed step2 admit probe {spec.probe_id} seed={seed})"
+    return call_orchestrator_forced(
+        prompt=prompt,
+        force_role=spec.candidate.role,
+        force_mode="",
+        url=DEFAULT_ORCH_URL,
+        timeout=PROBE_TIMEOUT_S,
+        request_priority=spec.request_priority,   # background → placement queue
+        workload_class=spec.workload_class,        # eval_batch (not /chat)
+        max_tokens=PROBE_MAX_TOKENS,
+    )
+
+
+def _drive_admit_overlap_probes(
+    plan: Step2SmokePlan,
+    *,
+    seed: int,
+    probe_fn: Callable[..., Any] | None = None,
+) -> dict[str, str]:
+    """Drive every admit-overlap probe and collect its observed gate decision.
+
+    For each probe spec, ``probe_fn(spec, seed=seed)`` returns a
+    ``call_orchestrator_forced`` response dict (or a pre-classified decision
+    string); ``_classify_admit_queue`` maps it to ``"admit"``/``"queue"``. Probes
+    whose outcome is not clean gate evidence are OMITTED (the aggregator then scores
+    them ``pass=None`` and excludes them). Returns ``{probe_id: decision}`` in the
+    exact shape ``aggregate_admit_overlap`` consumes.
+
+    ``probe_fn`` is injected in tests (like ``run_paired_ab``'s ``arm_probe``); the
+    default hits the live placement queue and is never exercised under test.
+
+    Two measurement-validity limitations (flagged, not faked):
+
+      1. **Role- not instance-granular.** ``call_orchestrator_forced`` pins
+         ``force_role`` only (no ``candidate_topology_idx``), so a probe observes
+         "did the gate find ANY admissible placement for this role vs the held
+         anchor", not the specific ``spec.candidate.instance_idx``. Probes whose
+         role has no disjoint option (e.g. ``worker_general`` full vs a held
+         quarter) are the cleanest QUEUE evidence; a per-instance expectation can
+         disagree with the role-level observation when the role has a disjoint
+         alternative the dispatcher picks instead.
+      2. **Admit hides queue-then-admit.** The /chat body carries no ``waited_s``
+         (that lands only in ``ContentionGate._metrics``), so a candidate that
+         QUEUED then admitted within budget is indistinguishable from an immediate
+         admit. Only a fail-closed **timeout** (503) is observably a QUEUE.
+    """
+    probe = probe_fn or _default_admit_overlap_probe
+    observed: dict[str, str] = {}
+    for spec in plan.probes:
+        decision = _classify_admit_queue(probe(spec, seed=seed))
+        if decision is not None:
+            observed[spec.probe_id] = decision
+    return observed
+
+
+def _default_rebench_pair_samples(
+    pair: RebenchPairSpec, *, seed: int, target_samples: int
+) -> list[float]:  # pragma: no cover - inference path
+    """Real co-run re-bench seam for one within-role disjoint pair.
+
+    Unlike the admit-overlap probe (which is role-granular and works over the
+    ``force_role`` eval lane), a within-role co-run ratio requires the pair's TWO
+    same-role instances to be pinned to their specific CPU regions
+    (``region_a`` vs ``region_b``) and co-run — which ``call_orchestrator_forced``
+    (``force_role`` only) cannot express. The J5 priors were measured with the
+    codified ``bench_canonical`` recipe (``taskset``-pinned, solo + co-run), and a
+    ``ratio_delta_vs_prior`` is only valid if these samples use the SAME protocol.
+
+    So the module refuses to fabricate a ratio: the operator loop MUST pass a
+    ``sample_fn`` bound to the codified within-role co-run recipe (protocol parity
+    with J5) — see ``scripts/lib/canonical_recipe.py`` /
+    ``scripts/benchmark/bench_canonical.sh``. The driver loop, sample counting,
+    aggregation and artifact write are all implemented and injection-tested.
+    """
+    raise NotImplementedError(
+        "live vision within-role co-run re-bench needs a sample_fn bound to the "
+        "codified bench_canonical recipe (taskset-pinned solo+co-run, protocol "
+        "parity with the J5 priors so ratio_delta_vs_prior stays valid). "
+        "call_orchestrator_forced pins force_role only and cannot co-run two "
+        f"same-role instances on {list(pair.region_a)} vs {list(pair.region_b)}. "
+        "Pass sample_fn=<codified recipe sampler> to execute_step2_smoke."
+    )
+
+
+def _drive_rebench_pairs(
+    plan: Step2SmokePlan,
+    *,
+    seed: int,
+    sample_fn: Callable[..., Iterable[float]] | None = None,
+) -> dict[str, list[float]]:
+    """Collect co-run ratio samples for every re-bench pair.
+
+    For each pair, ``sample_fn(pair, seed=seed, target_samples=pair.target_samples)``
+    returns that pair's ratio samples; results are keyed by ``pair_id`` in the exact
+    shape ``aggregate_rebench`` consumes. ``sample_fn`` is injected in tests (same
+    pattern as the admit-overlap ``probe_fn``); the default is the codified-recipe
+    seam and is never exercised under test.
+    """
+    sampler = sample_fn or _default_rebench_pair_samples
+    samples_by_pair: dict[str, list[float]] = {}
+    for pair in plan.rebench_pairs:
+        raw = sampler(pair, seed=seed, target_samples=pair.target_samples)
+        samples_by_pair[pair.pair_id] = [float(s) for s in (raw or [])]
+    return samples_by_pair
 
 
 def execute_step2_smoke(
@@ -679,29 +914,25 @@ def execute_step2_smoke(
     *,
     output_path: Path | None = None,
     seed: int = 42,
-) -> dict[str, Any]:  # pragma: no cover - inference path
+    probe_fn: Callable[..., Any] | None = None,
+    sample_fn: Callable[..., Iterable[float]] | None = None,
+) -> dict[str, Any]:
     """Drive the plan over the PLACEMENT QUEUE, collect outcomes, aggregate.
 
-    Reached ONLY when both ``--execute`` and ``AUTOPILOT_SHAPEKEYED_STEP2_SMOKE=1``
-    are set. Autopilot-stopped assumption: the caller owns the
-    no-concurrent-inference window; this function never touches autopilot
-    lifecycle/state and never modifies the routing/serving path (the dispatcher and
-    gate are consulted through the normal eval_batch placement path only).
+    Reached (with ``probe_fn``/``sample_fn`` defaulted to the live seams) ONLY when
+    both ``--execute`` and ``AUTOPILOT_SHAPEKEYED_STEP2_SMOKE=1`` are set —
+    ``run_shapekeyed_step2_smoke`` enforces the double gate. Autopilot-stopped
+    assumption: the caller owns the no-concurrent-inference window; this function
+    never touches autopilot lifecycle/state and never modifies the routing/serving
+    path (the dispatcher + gate are consulted only through the normal eval_batch
+    placement lane).
 
-    Never exercised by the unit tests — the whole bridge is double-gated and unread
-    under the zero-inference constraint. The real seams:
-
-      * admit-overlap: submit each probe's candidate placement as an eval_batch
-        (background) placement request while the anchor is held, and record the
-        dispatcher's admit/queue outcome for that ``candidate_topology_idx``.
-      * re-bench: run each disjoint pair's co-run bench via the eval_batch lane
-        (``bench_canonical`` recipe), collecting ``target_samples`` ratios.
-
-    Both feed the pure aggregators; the batch ledger is written by the operator
-    loop, not here.
+    Tests exercise this function DIRECTLY with injected ``probe_fn``/``sample_fn``
+    (never the env gate, never a network) to cover aggregation + artifact write; the
+    live-seam defaults stay unread under test.
     """
-    observed_decisions = _drive_admit_overlap_probes(plan, seed=seed)
-    rebench_samples = _drive_rebench_pairs(plan, seed=seed)
+    observed_decisions = _drive_admit_overlap_probes(plan, seed=seed, probe_fn=probe_fn)
+    rebench_samples = _drive_rebench_pairs(plan, seed=seed, sample_fn=sample_fn)
     report = aggregate_smoke(
         plan,
         observed_decisions=observed_decisions,
@@ -712,26 +943,7 @@ def execute_step2_smoke(
     return report
 
 
-def _drive_admit_overlap_probes(
-    plan: Step2SmokePlan, *, seed: int
-) -> dict[str, str]:  # pragma: no cover - inference path
-    raise NotImplementedError(
-        "live admit-overlap probing needs a quiesce window + a single-worker API "
-        "(the multi-worker confound in the within-role handoff's J2/J3 finding). "
-        "Wire it to the eval_batch placement lane; do NOT touch the serving path."
-    )
-
-
-def _drive_rebench_pairs(
-    plan: Step2SmokePlan, *, seed: int
-) -> dict[str, list[float]]:  # pragma: no cover - inference path
-    raise NotImplementedError(
-        "live vision re-bench needs operator-approved inference via the codified "
-        "bench_canonical recipe over the eval_batch lane; not run here."
-    )
-
-
-def _write_report(path: Path, report: dict[str, Any]) -> None:  # pragma: no cover
+def _write_report(path: Path, report: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as fh:
         json.dump(report, fh, indent=2, sort_keys=True, default=str)
