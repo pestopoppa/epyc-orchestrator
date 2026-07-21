@@ -59,6 +59,33 @@ def test_eval_result_grep_lines_emit_core_id() -> None:
 
 
 def test_eval_result_grep_lines_emit_report_only_rlvr_reward() -> None:
+    # EV-CONF gate (audit, 2026-07-21): calibration+discrimination components
+    # require details['confidence_is_real']=True — with real provenance the
+    # full composition reproduces the original 0.8375 reward.
+    result = EvalResult(
+        tier=1,
+        quality=2.4,
+        speed=20.0,
+        cost=0.2,
+        reliability=0.9,
+        ece=0.05,
+        auroc=0.85,
+        details={"confidence_is_real": True},
+    )
+
+    lines = result.to_grep_lines()
+
+    assert "METRIC rlvr_policy: ap27_rlvr_tier_reward_v1" in lines
+    assert "METRIC rlvr_signal: calibrated_continuous" in lines
+    assert "METRIC rlvr_reward: 0.837500" in lines
+    assert "METRIC rlvr_ready: 1" in lines
+    assert "METRIC rlvr_blockers:" not in lines
+
+
+def test_eval_result_grep_lines_rlvr_fails_closed_without_confidence_provenance() -> None:
+    # Same fixture WITHOUT the provenance flag: calibration+discrimination are
+    # zeroed (0.65*acc + 0.20*rel only) and the confidence_not_real blocker
+    # emits — stub/legacy rows can never earn calibration credit (EV-CONF).
     result = EvalResult(
         tier=1,
         quality=2.4,
@@ -71,11 +98,9 @@ def test_eval_result_grep_lines_emit_report_only_rlvr_reward() -> None:
 
     lines = result.to_grep_lines()
 
-    assert "METRIC rlvr_policy: ap27_rlvr_tier_reward_v1" in lines
-    assert "METRIC rlvr_signal: calibrated_continuous" in lines
-    assert "METRIC rlvr_reward: 0.837500" in lines
-    assert "METRIC rlvr_ready: 1" in lines
-    assert "METRIC rlvr_blockers:" not in lines
+    assert "METRIC rlvr_reward: 0.700000" in lines
+    assert "METRIC rlvr_ready: 0" in lines
+    assert "METRIC rlvr_blockers: confidence_not_real" in lines
 
 
 def test_journal_round_trips_hle_fields_in_jsonl(tmp_path: Path) -> None:
