@@ -1321,7 +1321,7 @@ class TestExecuteDirect:
 
     def test_basic_direct_call(self, mock_primitives, mock_state):
         """Basic direct LLM call returns ChatResponse."""
-        request = ChatRequest(prompt="Direct question", real_mode=True)
+        request = ChatRequest(prompt="Direct question", real_mode=True, n_probs=7)
         routing = RoutingResult(
             task_id="direct-001",
             task_ir={},
@@ -1332,6 +1332,11 @@ class TestExecuteDirect:
         start_time = time.perf_counter()
 
         mock_primitives.llm_call.return_value = "Direct answer"
+        mock_primitives._last_inference_meta = {
+            "completion_probabilities": [
+                {"content": "D", "probs": [{"tok_str": "D", "prob": 0.8}]}
+            ]
+        }
 
         with patch("src.api.routes.chat_pipeline.direct_stage._truncate_looped_answer") as mock_trunc:
             mock_trunc.return_value = "Direct answer"
@@ -1354,6 +1359,9 @@ class TestExecuteDirect:
         assert result is not None
         assert result.answer == "Direct answer"
         assert result.mode == "direct"
+        assert result.completion_probabilities[0]["content"] == "D"
+        mock_primitives.llm_call.assert_called_once()
+        assert mock_primitives.llm_call.call_args.kwargs["n_probs"] == 7
         call = mock_state.progress_logger.log_task_completed.call_args
         assert call.kwargs["completion_meta"]["tokens_generated"] == 100
         assert call.kwargs["completion_meta"]["prompt_eval_ms"] == 50.0

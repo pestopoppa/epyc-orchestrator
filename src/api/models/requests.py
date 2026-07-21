@@ -28,6 +28,15 @@ class ChatRequest(BaseModel):
             "stage defaults such as MCQ/code budgets are clamped to this value."
         ),
     )
+    n_probs: int | None = Field(
+        default=None,
+        ge=0,
+        le=128,
+        description=(
+            "Optional llama.cpp top-k token probability capture for calibration "
+            "instrumentation. Omitted by normal chat traffic."
+        ),
+    )
     role: str = Field(
         default="", description="Initial role to use (empty = auto-route via _classify_and_route)"
     )

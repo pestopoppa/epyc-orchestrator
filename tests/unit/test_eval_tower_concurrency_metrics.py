@@ -1169,6 +1169,49 @@ def test_eval_question_populates_deterministic_rubric_scores(monkeypatch) -> Non
     assert result.rubric_scores["tool_calls"] > 0
 
 
+def test_eval_question_uses_completion_probabilities_for_confidence(monkeypatch) -> None:
+    tower = EvalTower()
+    seen: dict[str, object] = {}
+
+    def _fake_call(**kwargs):  # noqa: ANN001
+        seen.update(kwargs)
+        return {
+            "answer": "black cat",
+            "tokens_generated": 2,
+            "model": "fake",
+            "completion_probabilities": [
+                {"content": "black", "probs": [{"tok_str": "black", "prob": 0.81}]},
+                {"content": " cat", "probs": [{"tok_str": " cat", "prob": 0.64}]},
+            ],
+        }
+
+    monkeypatch.setattr(eval_tower, "call_orchestrator_forced", _fake_call)
+
+    with eval_tower.httpx.Client(timeout=1) as client:
+        result = tower._eval_question(
+            {
+                "id": "mc-1",
+                "suite": "unit",
+                "prompt": "Choose the phrase.",
+                "expected": "black cat",
+                "scoring_method": "multiple_choice",
+                "scoring_config": {"choices": ["cat", "black cat"]},
+            },
+            client,
+        )
+
+    assert seen["n_probs"] == 5
+    assert result.correct is True
+    assert result.confidence_source == "completion_probabilities_geomean"
+    assert result.confidence == pytest.approx(math.sqrt(0.81 * 0.64))
+
+    aggregate = tower._aggregate([result], tier=1)
+    assert aggregate.details["confidence_source_counts"] == {
+        "completion_probabilities_geomean": 1
+    }
+    assert aggregate.details["confidence_is_real"] is True
+
+
 def test_parse_rubric_judge_scores_accepts_fenced_json() -> None:
     parsed = eval_tower._parse_rubric_judge_scores(
         """```json

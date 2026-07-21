@@ -549,6 +549,34 @@ def _finite_float(value: Any) -> float | None:
     return out if math.isfinite(out) else None
 
 
+def _completion_probabilities_confidence(rows: Any) -> float | None:
+    """Convert llama.cpp completion probability rows into sequence confidence."""
+    if not isinstance(rows, list):
+        return None
+    logps: list[float] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        prob = _finite_float(row.get("probability", row.get("prob")))
+        logprob = _finite_float(row.get("logprob"))
+        if prob is None:
+            candidates = row.get("probs") or row.get("top_logprobs") or []
+            if isinstance(candidates, list) and candidates:
+                first = candidates[0]
+                if isinstance(first, dict):
+                    prob = _finite_float(first.get("probability", first.get("prob")))
+                    logprob = _finite_float(first.get("logprob"))
+        if prob is None and logprob is not None:
+            prob = math.exp(logprob)
+        if prob is None:
+            continue
+        prob = min(1.0, max(1e-12, float(prob)))
+        logps.append(math.log(prob))
+    if not logps:
+        return None
+    return min(1.0, max(0.0, math.exp(sum(logps) / len(logps))))
+
+
 def _upper_median(values: list[float]) -> float:
     return sorted(values)[len(values) // 2] if values else 0.0
 
@@ -680,6 +708,9 @@ def _compact_question_result(r: "QuestionResult") -> dict[str, Any]:
         item["route"] = r.route_used
     if r.tools_called:
         item["tools_called"] = list(r.tools_called[:5])
+    if r.confidence_source and r.confidence_source != "binary_correctness_proxy":
+        item["confidence"] = round(float(r.confidence), 6)
+        item["confidence_source"] = r.confidence_source
     if r.error:
         item["error"] = True
         item["error_detail"] = str(r.error).replace("\n", " ")[:200]
@@ -1247,6 +1278,7 @@ class QuestionResult:
     partial: bool = False  # Inference completed with partial output (read_timeout)
     degraded: bool = False  # Inference completed in degraded mode
     confidence: float = 0.0  # EV-1: Model confidence proxy (0-1). Initially float(correct); upgraded to logprobs when available.
+    confidence_source: str = "binary_correctness_proxy"
     branching_density: float = 0.0  # Fraction of <think> steps with branching keywords (intake-378)
     eval_concurrency: int = 1  # Worker fan-out used for this eval batch.
     eval_wall_s: float = 0.0  # End-to-end wall time for the containing eval batch.
@@ -2154,6 +2186,17 @@ class EvalTower:
                 call_kwargs["tools"] = q.get("tools")
             if "tool_choice" in q:
                 call_kwargs["tool_choice"] = q.get("tool_choice")
+            if (
+                _is_scoreable_question(q)
+                and not _is_rubric_scored_question(q)
+                and scoring_method != "code_execution"
+            ):
+                n_probs = _nonnegative_int(
+                    q.get("n_probs", _env_int("AUTOPILOT_EVAL_LOGPROB_N_PROBS", 5)),
+                    default=5,
+                )
+                if n_probs > 0:
+                    call_kwargs["n_probs"] = n_probs
             prompt_root = str(q.get("_prompt_root") or "").strip()
             if prompt_root:
                 call_kwargs["prompt_root"] = prompt_root
@@ -2193,14 +2236,23 @@ class EvalTower:
                         scoring_config=scoring_config,
                     )
 
-            # EV-1: Confidence proxy. Binary for now (correct=1.0, incorrect=0.0).
-            # When logprob passthrough lands, replace with model output confidence.
-            # For code_execution, scoring_config may contain a pass_rate (0-1).
+            # EV-CONF: prefer model probability rows when requested/available.
+            # Fall back to historical scoring-derived proxies for paths that do
+            # not expose llama.cpp completion_probabilities.
             confidence = float(correct)
+            confidence_source = "binary_correctness_proxy"
+            probability_confidence = _completion_probabilities_confidence(
+                resp.get("completion_probabilities")
+            )
+            if probability_confidence is not None:
+                confidence = probability_confidence
+                confidence_source = "completion_probabilities_geomean"
             if scoring_method == "code_execution":
                 confidence = float(scoring_config.get("pass_rate", correct))
+                confidence_source = "code_execution_pass_rate"
             elif scoring_method == "rubric" and rubric_scores:
                 confidence = aggregate_rubric_score(rubric_scores).score
+                confidence_source = "rubric_score"
 
             # 2026-05-23 Phase 4 — exogenous-restart metadata propagation.
             # call_orchestrator_forced attaches the resilient_post meta dict
@@ -2225,6 +2277,7 @@ class EvalTower:
                 partial=bool(resp.get("partial", False)),
                 degraded=bool(resp.get("degraded", False)),
                 confidence=confidence,
+                confidence_source=confidence_source,
                 branching_density=_compute_branching_density(answer),
                 tools_used=int(resp.get("tools_used", 0) or 0),
                 tools_called=list(resp.get("tools_called") or []),
@@ -2760,6 +2813,10 @@ class EvalTower:
         # EV-2: Calibration metrics (ECE, AUC, calibration violations)
         confidences = [r.confidence for r in results if not r.error]
         correctness_vals = [float(r.correct) for r in results if not r.error]
+        confidence_source_counts: dict[str, int] = {}
+        for r in scored_results:
+            source = r.confidence_source or "unknown"
+            confidence_source_counts[source] = confidence_source_counts.get(source, 0) + 1
         ece = 0.0
         auroc = 0.0
         cal_violations = 0
@@ -2926,6 +2983,9 @@ class EvalTower:
                 "rubric_n_questions": sum(1 for r in results if r.rubric_scores),
                 "ece_binning": "closed_top_bin_stat_tests",
                 "ece_instrument_era": "ev11b_closed_bin_2026_07_20",
+                "confidence_source_counts": dict(sorted(confidence_source_counts.items())),
+                "confidence_is_real": bool(confidence_source_counts)
+                and set(confidence_source_counts) <= {"completion_probabilities_geomean"},
             },
             mean_tools_used=mean_tools_used,
             tool_use_rate=tool_use_rate,

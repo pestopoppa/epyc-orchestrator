@@ -148,6 +148,10 @@ class ChatResponse(BaseModel):
     predicted_tps: float = Field(
         default=0.0, description="Clean generation-only tokens/second from llama.cpp"
     )
+    completion_probabilities: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Optional llama.cpp per-token probability rows when requested",
+    )
     http_overhead_ms: float = Field(
         default=0.0, description="Server-side overhead: HTTP round-trip minus inference time (ms)"
     )
