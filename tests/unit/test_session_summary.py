@@ -268,3 +268,67 @@ def test_session_log_prompt_block_includes_scratchpad_and_file_reference():
     assert "look in router" in block
     assert "Summary here" in block
     assert 'peek(99999, file_path="/tmp/session.md")' in block
+
+
+async def _run_reference_miss_probe(granular, consolidated, current_block):
+    """Drive the CF-3c reference-miss check with one already-compacted segment."""
+    from src.graph.session_log import CompactionQualityMonitor
+
+    set_features(Features(two_level_condensation=True))
+    try:
+        monitor = CompactionQualityMonitor()
+        monitor.record_compaction(1)
+        state = _state(
+            task_id="task-miss",
+            turns=6,
+            current_role="architect",
+            session_log_records=[_record(1, "worker")],
+            consolidated_segments=[
+                ConsolidatedSegment((1, 1), granular, consolidated, "boundary"),
+            ],
+            pending_granular_blocks=[current_block],
+            pending_granular_start_turn=1,
+        )
+        state.compaction_quality_monitor = monitor
+        deps = TaskDeps(primitives=None, config=GraphConfig())
+        with (
+            patch("src.graph.session_log.build_granular_summary", return_value="newest granular"),
+            patch("src.graph.session_log.should_consolidate", return_value=None),
+        ):
+            await _refresh_two_level_summary(state, deps)
+        return monitor
+    finally:
+        reset_features()
+
+
+async def test_reference_miss_fires_for_identifiers_compaction_destroyed():
+    """Regression: the miss check must inspect DESTROYED identifiers.
+
+    Compaction overwrites seg.consolidated with a short stub; granular_blocks
+    retains the pre-compaction text. Reading identifiers from seg.consolidated
+    (the surviving stub) inverts the metric so it can never fire for content
+    that was actually lost. Here 'helper.py' exists only pre-compaction and is
+    referenced by the current turn -> exactly one miss.
+    """
+    monitor = await _run_reference_miss_probe(
+        granular=["loaded helper.py and called ParseWidget()"],
+        consolidated="[Compacted] kept summary with no identifiers.",
+        current_block="now editing helper.py again",
+    )
+    assert monitor.post_compaction_references == 1
+    assert monitor.miss_rate == 1.0
+
+
+async def test_reference_miss_ignores_identifiers_compaction_preserved():
+    """Surviving identifiers are NOT a miss — compaction kept what was needed.
+
+    This is the false positive the pre-fix implementation produced: it matched
+    against the stub, so a reference to preserved content counted as a loss.
+    """
+    monitor = await _run_reference_miss_probe(
+        granular=["loaded helper.py and called ParseWidget()"],
+        consolidated="[Compacted] still mentions helper.py explicitly.",
+        current_block="now editing helper.py again",
+    )
+    assert monitor.post_compaction_references == 0
+    assert monitor.miss_rate == 0.0

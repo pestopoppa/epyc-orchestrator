@@ -293,9 +293,17 @@ async def _refresh_two_level_summary(state: TaskState, deps: TaskDeps) -> None:
         if current_ids:
             for seg in state.consolidated_segments:
                 if seg.consolidated.startswith("[Compacted]"):
-                    # Check overlap between compacted segment and current turn
-                    compacted_ids = extract_identifiers(seg.consolidated)
-                    overlap = current_ids & compacted_ids
+                    # A reference miss is the current turn needing an identifier
+                    # that compaction DESTROYED — i.e. present in the pre-compaction
+                    # granular blocks but absent from the surviving stub. Comparing
+                    # against seg.consolidated alone inverts the metric: that only
+                    # matches identifiers compaction KEPT, so it can never fire for
+                    # the loss it exists to detect. granular_blocks is retained for
+                    # exactly this audit (see ConsolidatedSegment).
+                    lost_ids = extract_identifiers(
+                        " ".join(seg.granular_blocks)
+                    ) - extract_identifiers(seg.consolidated)
+                    overlap = current_ids & lost_ids
                     if overlap:
                         state.compaction_quality_monitor.record_reference_miss()
                         log.info(
