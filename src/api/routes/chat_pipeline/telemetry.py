@@ -13,3 +13,12 @@ def llm_completion_meta(primitives: Any) -> dict[str, Any]:
         "generation_ms": float(getattr(primitives, "total_generation_ms", 0.0) or 0.0),
         "http_overhead_ms": float(getattr(primitives, "total_http_overhead_ms", 0.0) or 0.0),
     }
+
+
+def llm_completion_probabilities(primitives: Any) -> list[dict[str, Any]]:
+    """Return last-call llama.cpp probability rows when explicitly requested."""
+    meta = getattr(primitives, "_last_inference_meta", {}) or {}
+    rows = meta.get("completion_probabilities") or []
+    if not isinstance(rows, list):
+        return []
+    return [row for row in rows if isinstance(row, dict)]

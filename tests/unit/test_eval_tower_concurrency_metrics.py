@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import sys
+import threading
 import time
+from datetime import UTC, datetime
 from dataclasses import fields
 from pathlib import Path
 
+import httpx
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -30,7 +34,7 @@ def test_eval_concurrency_env_override_still_wins(monkeypatch) -> None:
     assert eval_tower._eval_concurrency() == 5
 
 
-def test_eval_batch_progress_callback_reports_logged_milestones(monkeypatch) -> None:
+def test_eval_batch_progress_callback_reports_each_completed_question(monkeypatch) -> None:
     monkeypatch.setenv("AUTOPILOT_EVAL_CONCURRENCY", "1")
     tower = EvalTower()
     events: list[dict] = []
@@ -62,12 +66,28 @@ def test_eval_batch_progress_callback_reports_logged_milestones(monkeypatch) -> 
     assert events == [
         {
             "label": "T2",
+            "completed_questions": 1,
+            "total_questions": 3,
+            "correct_questions": 1,
+            "correct_pct": 100.0,
+            "concurrency": 1,
+        },
+        {
+            "label": "T2",
             "completed_questions": 2,
             "total_questions": 3,
             "correct_questions": 1,
             "correct_pct": 50.0,
             "concurrency": 1,
-        }
+        },
+        {
+            "label": "T2",
+            "completed_questions": 3,
+            "total_questions": 3,
+            "correct_questions": 2,
+            "correct_pct": pytest.approx(100 * 2 / 3),
+            "concurrency": 1,
+        },
     ]
 
 
@@ -99,9 +119,137 @@ def test_eval_batch_stamps_shared_eval_batch_id(monkeypatch) -> None:
     assert seen_batch_ids[0].endswith("-3q")
 
 
+@pytest.mark.parametrize(
+    ("response_kind", "expected_error"),
+    [
+        ("timeout", "timed out"),
+        ("http_503", "backend down"),
+        ("payload_error", "backend busy"),
+    ],
+)
+def test_eval_question_fake_transport_error_paths(
+    response_kind: str,
+    expected_error: str,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if response_kind == "timeout":
+            raise httpx.ReadTimeout("timed out", request=request)
+        if response_kind == "http_503":
+            return httpx.Response(
+                503,
+                json={"error_code": 503, "error_detail": "backend down"},
+                request=request,
+            )
+        return httpx.Response(200, json={"error": "backend busy"}, request=request)
+
+    tower = EvalTower(timeout=1)
+    with httpx.Client(transport=httpx.MockTransport(handler), timeout=1) as client:
+        result = tower._eval_question(
+            {
+                "id": response_kind,
+                "suite": "unit",
+                "prompt": "Say ok.",
+                "expected": "ok",
+                "scoring_method": "exact_match",
+            },
+            client,
+        )
+
+    assert result.question_id == response_kind
+    assert result.correct is False
+    assert result.error
+    assert expected_error in result.error
+    assert result.tokens_generated == 0
+
+
+def test_eval_batch_fake_transport_errors_use_non_error_quality_denominator(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AUTOPILOT_EVAL_CONCURRENCY", "1")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content.decode("utf-8"))
+        prompt = str(payload.get("prompt") or "")
+        if "payload error" in prompt:
+            return httpx.Response(200, json={"error": "backend busy"}, request=request)
+        if "http error" in prompt:
+            return httpx.Response(
+                503,
+                json={"error_code": 503, "error_detail": "backend down"},
+                request=request,
+            )
+        return httpx.Response(
+            200,
+            json={"answer": "ok", "tokens_generated": 4, "model": "mock-frontdoor"},
+            request=request,
+        )
+
+    tower = EvalTower(timeout=1)
+    questions = [
+        {"id": "ok", "suite": "unit", "prompt": "Say ok.", "expected": "ok"},
+        {
+            "id": "payload-error",
+            "suite": "unit",
+            "prompt": "Return payload error.",
+            "expected": "ok",
+        },
+        {
+            "id": "http-error",
+            "suite": "unit",
+            "prompt": "Return http error.",
+            "expected": "ok",
+        },
+    ]
+    with httpx.Client(transport=httpx.MockTransport(handler), timeout=1) as client:
+        results = tower._eval_batch(questions, client=client, label="fake-transport")
+
+    assert [r.question_id for r in results] == ["ok", "payload-error", "http-error"]
+    assert results[0].correct is True
+    assert results[0].error is None
+    assert "backend busy" in str(results[1].error)
+    assert "backend down" in str(results[2].error)
+
+    agg = tower._aggregate(results, tier=1)
+    assert agg.details["n_scored"] == 1
+    assert agg.details["quality_denominator"] == 1
+    assert agg.details["scoring_errors"] == 2
+    assert agg.quality == 3.0
+    assert agg.reliability == pytest.approx(1 / 3)
+
+
+def test_eval_batch_worker_exception_becomes_error_result(monkeypatch) -> None:
+    monkeypatch.setenv("AUTOPILOT_EVAL_CONCURRENCY", "1")
+    tower = EvalTower(timeout=1)
+
+    def fake_eval_question(q: dict, client: object) -> QuestionResult:
+        if q["id"] == "boom":
+            raise RuntimeError("worker exploded")
+        return QuestionResult(
+            question_id=str(q["id"]),
+            suite="unit",
+            prompt=str(q["id"]),
+            expected="ok",
+            correct=True,
+        )
+
+    monkeypatch.setattr(tower, "_eval_question", fake_eval_question)
+
+    results = tower._eval_batch(
+        [{"id": "ok"}, {"id": "boom"}, {"id": "after"}],
+        client=object(),  # type: ignore[arg-type]
+        label="worker-exception",
+    )
+
+    assert [r.question_id for r in results] == ["ok", "boom", "after"]
+    assert results[0].error is None
+    assert results[1].error == "worker exploded"
+    assert results[2].error is None
+
+
 def test_eval_batch_fails_remaining_questions_after_no_progress_timeout(monkeypatch) -> None:
     monkeypatch.setenv("AUTOPILOT_EVAL_CONCURRENCY", "2")
     monkeypatch.setenv("AUTOPILOT_EVAL_NO_PROGRESS_TIMEOUT_S", "0.05")
+    monkeypatch.setenv("AUTOPILOT_EVAL_ORPHAN_DRAIN_TIMEOUT_S", "0.01")
     tower = EvalTower(timeout=1)
 
     def fake_eval_question(q: dict, client: object) -> QuestionResult:
@@ -127,8 +275,111 @@ def test_eval_batch_fails_remaining_questions_after_no_progress_timeout(monkeypa
     assert results[0].error is None
     assert results[1].error
     assert results[1].error.startswith("eval_no_progress_timeout:")
+    assert "eval_orphan_contamination" in results[1].error
+    assert results[1].degraded is True
     assert results[2].error
     assert results[2].error.startswith("eval_no_progress_timeout:")
+    assert "eval_orphan_contamination" in results[2].error
+    assert results[2].degraded is True
+
+
+def test_serial_eval_batch_no_progress_marks_orphan_contamination(monkeypatch) -> None:
+    monkeypatch.setenv("AUTOPILOT_EVAL_CONCURRENCY", "1")
+    monkeypatch.setenv("AUTOPILOT_EVAL_NO_PROGRESS_TIMEOUT_S", "0.02")
+    monkeypatch.setenv("AUTOPILOT_EVAL_ORPHAN_DRAIN_TIMEOUT_S", "0.01")
+    release = threading.Event()
+    tower = EvalTower(timeout=1)
+
+    def fake_eval_question(q: dict, client: object) -> QuestionResult:
+        if q["id"] == "stuck":
+            release.wait(1.0)
+        return QuestionResult(
+            question_id=str(q["id"]),
+            suite="unit",
+            prompt=str(q["id"]),
+            expected="ok",
+            correct=True,
+        )
+
+    monkeypatch.setattr(tower, "_eval_question", fake_eval_question)
+
+    try:
+        results = tower._eval_batch(
+            [{"id": "stuck"}, {"id": "queued"}],
+            client=object(),  # type: ignore[arg-type]
+            label="serial-watchdog",
+        )
+    finally:
+        release.set()
+
+    assert [r.question_id for r in results] == ["stuck", "queued"]
+    assert results[0].error
+    assert results[0].error.startswith("eval_no_progress_timeout:")
+    assert "eval_orphan_contamination" in results[0].error
+    assert results[0].degraded is True
+    assert results[1].error == "eval_cancelled_after_no_progress_timeout"
+
+
+def test_aggregate_surfaces_abandoned_eval_request_contamination() -> None:
+    tower = EvalTower()
+    out = tower._aggregate(
+        [
+            QuestionResult(
+                question_id="q1",
+                suite="unit",
+                prompt="ok",
+                expected="ok",
+                correct=True,
+            ),
+            QuestionResult(
+                question_id="q2",
+                suite="unit",
+                prompt="stuck",
+                expected="ok",
+                error=(
+                    "eval_no_progress_timeout: no completed future for 0.1s; "
+                    "eval_orphan_contamination: request may still be decoding server-side"
+                ),
+                degraded=True,
+            ),
+        ],
+        tier=1,
+    )
+
+    assert out.degraded_count == 1
+    assert out.details["eval_contaminated_by_abandoned_requests"] is True
+    assert out.details["eval_orphan_contamination_count"] == 1
+
+
+def test_serial_eval_batch_fails_remaining_after_wall_budget(monkeypatch) -> None:
+    monkeypatch.setenv("AUTOPILOT_EVAL_CONCURRENCY", "1")
+    monkeypatch.setenv("AUTOPILOT_EVAL_BATCH_WALL_BUDGET_S", "0.01")
+    tower = EvalTower(timeout=1)
+
+    def fake_eval_question(q: dict, client: object) -> QuestionResult:
+        time.sleep(0.02)
+        return QuestionResult(
+            question_id=str(q["id"]),
+            suite="unit",
+            prompt=str(q["id"]),
+            expected="ok",
+            correct=True,
+        )
+
+    monkeypatch.setattr(tower, "_eval_question", fake_eval_question)
+
+    results = tower._eval_batch(
+        [{"id": "first"}, {"id": "second"}, {"id": "third"}],
+        client=object(),  # type: ignore[arg-type]
+        label="serial-budget",
+    )
+
+    assert [r.question_id for r in results] == ["first", "second", "third"]
+    assert results[0].error is None
+    assert results[1].error
+    assert results[1].error.startswith("eval_wall_budget_timeout:")
+    assert results[2].error
+    assert results[2].error.startswith("eval_wall_budget_timeout:")
 
 
 def test_eval_concurrency_uses_topology_cap_when_matrix_allows(monkeypatch) -> None:
@@ -151,6 +402,64 @@ def test_eval_concurrency_uses_topology_cap_when_matrix_allows(monkeypatch) -> N
     assert eval_tower._eval_concurrency() == 3
 
 
+def test_eval_concurrency_uses_min_cap_across_forced_roles(monkeypatch) -> None:
+    from src.runtime import instance_topology
+
+    monkeypatch.delenv("AUTOPILOT_EVAL_CONCURRENCY", raising=False)
+    monkeypatch.setenv("AUTOPILOT_EVAL_BOTTLENECK_ROLE", "frontdoor")
+    monkeypatch.setattr(
+        instance_topology,
+        "max_safe_concurrency",
+        lambda role: {"frontdoor": 4, "worker_general": 2}.get(role, 1),
+    )
+    monkeypatch.setattr(
+        eval_tower,
+        "_same_role_matrix_allows_eval_fanout",
+        lambda role: role in {"frontdoor", "worker_general"},
+    )
+    monkeypatch.setattr(
+        eval_tower,
+        "_live_safe_concurrency",
+        lambda role, cap: {"frontdoor": 4, "worker_general": 2}.get(role, cap),
+    )
+
+    assert eval_tower._eval_concurrency(["frontdoor", "worker_general"]) == 2
+
+
+def test_eval_batch_resolves_concurrency_from_actual_forced_roles(monkeypatch) -> None:
+    monkeypatch.delenv("AUTOPILOT_EVAL_CONCURRENCY", raising=False)
+    tower = EvalTower()
+    observed: list[tuple[str, ...]] = []
+
+    def fake_eval_concurrency(roles=None):
+        observed.append(tuple(roles or ()))
+        return 1
+
+    def fake_eval_question(q: dict, client: object) -> QuestionResult:
+        return QuestionResult(
+            question_id=str(q["id"]),
+            suite="unit",
+            prompt=str(q["id"]),
+            expected="ok",
+            correct=True,
+        )
+
+    monkeypatch.setattr(eval_tower, "_eval_concurrency", fake_eval_concurrency)
+    monkeypatch.setattr(tower, "_eval_question", fake_eval_question)
+
+    tower._eval_batch(
+        [
+            {"id": "q1", "force_role": "worker_general"},
+            {"id": "q2", "force_role": "frontdoor"},
+            {"id": "q3", "force_role": "worker_general"},
+        ],
+        client=object(),  # type: ignore[arg-type]
+        label="forced",
+    )
+
+    assert observed == [("worker_general", "frontdoor")]
+
+
 def test_eval_concurrency_caps_to_live_fleet_when_static_topology_allows(monkeypatch) -> None:
     from src.runtime import instance_topology
 
@@ -169,6 +478,59 @@ def test_eval_concurrency_caps_to_live_fleet_when_static_topology_allows(monkeyp
     )
 
     assert eval_tower._eval_concurrency() == 1
+
+
+def test_live_safe_concurrency_uses_quarter_mode_live_ports(monkeypatch) -> None:
+    from scripts.server import runtime_facts_manifest, stack_numa
+
+    cfg = {
+        "worker_general": {
+            "instances": [
+                ("0-95", 8072, 96),
+                ("0-23,96-119", 8082, 48),
+                ("24-47,120-143", 8182, 48),
+                ("48-71,144-167", 8282, 48),
+                ("72-95,168-191", 8382, 48),
+            ],
+        },
+    }
+    live_ports = {8082, 8182, 8282, 8382}
+
+    class _Response:
+        def __init__(self, status_code: int) -> None:
+            self.status_code = status_code
+
+    def fake_get(url: str, timeout: float) -> _Response:
+        del timeout
+        port = int(url.rsplit(":", 1)[1].split("/", 1)[0])
+        return _Response(200 if port in live_ports else 503)
+
+    monkeypatch.setenv("AUTOPILOT_EVAL_REQUIRE_LIVE_FLEET", "1")
+    monkeypatch.setattr(stack_numa, "NUMA_CONFIG", cfg)
+    monkeypatch.setattr(runtime_facts_manifest, "read_runtime_stack_numa_mode", lambda: "quarter")
+    monkeypatch.setattr(eval_tower.httpx, "get", fake_get)
+
+    assert eval_tower._live_safe_concurrency("worker_general", 1) == 4
+
+
+def test_eval_concurrency_can_exceed_full_first_cap_in_quarter_mode(monkeypatch) -> None:
+    from src.runtime import instance_topology
+
+    monkeypatch.delenv("AUTOPILOT_EVAL_CONCURRENCY", raising=False)
+    monkeypatch.setenv("AUTOPILOT_EVAL_BOTTLENECK_ROLE", "worker_general")
+    monkeypatch.setattr(instance_topology, "max_safe_concurrency", lambda _role: 1)
+    monkeypatch.setattr(
+        eval_tower,
+        "_same_role_matrix_allows_eval_fanout",
+        lambda _role: True,
+    )
+    monkeypatch.setattr(
+        eval_tower,
+        "_live_safe_concurrency",
+        lambda _role, _cap: 4,
+    )
+
+    assert eval_tower._eval_concurrency() == 4
 
 
 def test_live_safe_concurrency_can_be_disabled_for_diagnostics(monkeypatch) -> None:
@@ -193,14 +555,130 @@ def test_eval_concurrency_falls_back_to_serial_when_matrix_blocks(monkeypatch) -
 
 
 def test_eval_concurrency_falls_back_to_serial_when_matrix_stale(monkeypatch) -> None:
+    from scripts.server import stack_numa
     from src.scheduling import contention
 
+    matrix = contention.ContentionMatrix(
+        version=1,
+        measured_at="",
+        host="test",
+        topology_hash="old",
+        default_floor=0.85,
+        same_role={
+            "frontdoor": contention.SameRole(role="frontdoor", verdict="allow"),
+        },
+    )
+    monkeypatch.setattr(stack_numa, "NUMA_CONFIG", {"frontdoor": {"instances": []}})
+    monkeypatch.setattr(contention, "load_contention_matrix", lambda: matrix)
+    monkeypatch.setattr(contention, "topology_fingerprint_for_matrix", lambda _cfg, _matrix: "new")
     monkeypatch.setattr(
         contention,
         "matrix_status",
         lambda current_topology_hash: contention.MatrixStatus.STALE,
     )
-    monkeypatch.setattr(contention, "topology_fingerprint", lambda _config: "hash")
+
+    assert not eval_tower._same_role_matrix_allows_eval_fanout("frontdoor")
+
+
+def test_eval_concurrency_allows_stale_global_matrix_with_fresh_role_cert(monkeypatch) -> None:
+    from scripts.server import stack_numa
+    from src.scheduling import contention
+
+    cfg = {
+        "frontdoor": {
+            "instances": [
+                ("0-47,96-143", 8070, 96),
+                ("0-23,96-119", 8080, 48),
+                ("24-47,120-143", 8180, 48),
+            ],
+        },
+    }
+    live_ports = {8080, 8180}
+    role_hash = contention.role_topology_fingerprint(
+        cfg,
+        "frontdoor",
+        live_ports=live_ports,
+    )
+    matrix = contention.ContentionMatrix(
+        version=1,
+        measured_at="",
+        host="test",
+        topology_hash="stale-whole",
+        default_floor=0.85,
+        same_role={
+            "frontdoor": contention.SameRole(role="frontdoor", verdict="allow"),
+        },
+        same_role_certifications={
+            "frontdoor": contention.SameRoleCertification(
+                role="frontdoor",
+                topology_hash=role_hash,
+                verdict="allow",
+                measured_at=datetime.now(UTC).isoformat(),
+                live_ports=tuple(sorted(live_ports)),
+            ),
+        },
+    )
+
+    monkeypatch.setattr(stack_numa, "NUMA_CONFIG", cfg)
+    monkeypatch.setattr(contention, "load_contention_matrix", lambda: matrix)
+    monkeypatch.setattr(contention, "topology_fingerprint_for_matrix", lambda _cfg, _matrix: "new-whole")
+    monkeypatch.setattr(
+        contention,
+        "matrix_status",
+        lambda current_topology_hash: contention.MatrixStatus.STALE,
+    )
+    monkeypatch.setattr(eval_tower, "_live_role_ports", lambda _cfg, _role: live_ports)
+
+    assert eval_tower._same_role_matrix_allows_eval_fanout("frontdoor")
+
+
+def test_eval_concurrency_rejects_role_cert_when_live_ports_drift(monkeypatch) -> None:
+    from scripts.server import stack_numa
+    from src.scheduling import contention
+
+    cfg = {
+        "frontdoor": {
+            "instances": [
+                ("0-23,96-119", 8080, 48),
+                ("24-47,120-143", 8180, 48),
+                ("48-71,144-167", 8280, 48),
+            ],
+        },
+    }
+    certified_ports = {8080, 8180}
+    matrix = contention.ContentionMatrix(
+        version=1,
+        measured_at="",
+        host="test",
+        topology_hash="stale-whole",
+        default_floor=0.85,
+        same_role={
+            "frontdoor": contention.SameRole(role="frontdoor", verdict="allow"),
+        },
+        same_role_certifications={
+            "frontdoor": contention.SameRoleCertification(
+                role="frontdoor",
+                topology_hash=contention.role_topology_fingerprint(
+                    cfg,
+                    "frontdoor",
+                    live_ports=certified_ports,
+                ),
+                verdict="allow",
+                measured_at=datetime.now(UTC).isoformat(),
+                live_ports=tuple(sorted(certified_ports)),
+            ),
+        },
+    )
+
+    monkeypatch.setattr(stack_numa, "NUMA_CONFIG", cfg)
+    monkeypatch.setattr(contention, "load_contention_matrix", lambda: matrix)
+    monkeypatch.setattr(contention, "topology_fingerprint_for_matrix", lambda _cfg, _matrix: "new-whole")
+    monkeypatch.setattr(
+        contention,
+        "matrix_status",
+        lambda current_topology_hash: contention.MatrixStatus.STALE,
+    )
+    monkeypatch.setattr(eval_tower, "_live_role_ports", lambda _cfg, _role: {8080, 8180, 8280})
 
     assert not eval_tower._same_role_matrix_allows_eval_fanout("frontdoor")
 
@@ -262,6 +740,63 @@ def test_aggregate_uses_batch_throughput_for_concurrent_objective() -> None:
     assert out.details["task_rate_qph"] == pytest.approx(900.0)
     assert out.details["goodput_qph"] == pytest.approx(600.0)
     assert out.details["tokens_per_solved_task"] == 140.0
+
+
+def test_aggregate_quality_denominator_excludes_error_rows() -> None:
+    tower = EvalTower()
+    results = [
+        QuestionResult(
+            question_id="q1",
+            suite="math",
+            prompt="a",
+            expected="a",
+            answer="a",
+            correct=True,
+            tokens_generated=100,
+            elapsed_s=10.0,
+            eval_wall_s=12.0,
+        ),
+        QuestionResult(
+            question_id="q2",
+            suite="math",
+            prompt="b",
+            expected="b",
+            answer="wrong",
+            correct=False,
+            tokens_generated=50,
+            elapsed_s=5.0,
+            eval_wall_s=12.0,
+        ),
+        QuestionResult(
+            question_id="q3",
+            suite="math",
+            prompt="c",
+            expected="c",
+            answer="",
+            correct=False,
+            error="scorer_unavailable",
+            elapsed_s=1.0,
+            eval_wall_s=12.0,
+        ),
+    ]
+
+    out = tower._aggregate(results, tier=1)
+
+    assert out.n_questions == 3
+    assert out.quality == pytest.approx(1.5)
+    assert out.reliability == pytest.approx(2 / 3)
+    assert set(out.per_suite_quality) == {"math"}
+    assert out.per_suite_quality["math"] == pytest.approx(1.5)
+    assert out.per_suite_counts == {"math": 2}
+    assert out.details["n_questions"] == 3
+    assert out.details["n_scored"] == 2
+    assert out.details["quality_denominator"] == 2
+    assert out.details["quality_denominator_semantics"] == "non_error_question_results"
+    assert out.details["errors"] == 1
+    assert out.details["scoring_errors"] == 1
+    assert out.details["per_suite_total_counts"] == {"math": 3}
+    assert out.details["goodput_qph"] == pytest.approx(300.0)
+    assert out.details["scored_task_rate_qph"] == pytest.approx(600.0)
 
 
 def test_question_result_has_host_covariates_default_factory() -> None:
@@ -401,6 +936,7 @@ def test_aggregate_emits_compact_stable_question_results() -> None:
     assert out.question_results == [
         {
             "qid": expected_qid,
+            "question_id": "transient-source-id",
             "suite": "math",
             "partition": "core",
             "correct": True,
@@ -446,6 +982,7 @@ def test_aggregate_emits_truthy_question_provenance_flags() -> None:
     assert out.question_results == [
         {
             "qid": "stable-q1",
+            "question_id": "q1",
             "suite": "coder",
             "partition": "audit",
             "correct": False,
@@ -630,6 +1167,49 @@ def test_eval_question_populates_deterministic_rubric_scores(monkeypatch) -> Non
     assert result.confidence >= 0.5
     assert result.rubric_scores["factual_accuracy"] == 1.0
     assert result.rubric_scores["tool_calls"] > 0
+
+
+def test_eval_question_uses_completion_probabilities_for_confidence(monkeypatch) -> None:
+    tower = EvalTower()
+    seen: dict[str, object] = {}
+
+    def _fake_call(**kwargs):  # noqa: ANN001
+        seen.update(kwargs)
+        return {
+            "answer": "black cat",
+            "tokens_generated": 2,
+            "model": "fake",
+            "completion_probabilities": [
+                {"content": "black", "probs": [{"tok_str": "black", "prob": 0.81}]},
+                {"content": " cat", "probs": [{"tok_str": " cat", "prob": 0.64}]},
+            ],
+        }
+
+    monkeypatch.setattr(eval_tower, "call_orchestrator_forced", _fake_call)
+
+    with eval_tower.httpx.Client(timeout=1) as client:
+        result = tower._eval_question(
+            {
+                "id": "mc-1",
+                "suite": "unit",
+                "prompt": "Choose the phrase.",
+                "expected": "black cat",
+                "scoring_method": "multiple_choice",
+                "scoring_config": {"choices": ["cat", "black cat"]},
+            },
+            client,
+        )
+
+    assert seen["n_probs"] == 5
+    assert result.correct is True
+    assert result.confidence_source == "completion_probabilities_geomean"
+    assert result.confidence == pytest.approx(math.sqrt(0.81 * 0.64))
+
+    aggregate = tower._aggregate([result], tier=1)
+    assert aggregate.details["confidence_source_counts"] == {
+        "completion_probabilities_geomean": 1
+    }
+    assert aggregate.details["confidence_is_real"] is True
 
 
 def test_parse_rubric_judge_scores_accepts_fenced_json() -> None:

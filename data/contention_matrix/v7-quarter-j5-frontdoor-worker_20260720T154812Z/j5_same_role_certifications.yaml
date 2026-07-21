@@ -1,0 +1,21 @@
+same_role_certifications:
+  - role: "frontdoor"
+    mode: "live_only"
+    measured_at: "2026-07-20T16:00:31.271169+00:00"
+    topology_hash: "d09241b04e26b3bc"
+    live_ports: [8080, 8180, 8280, 8380]
+    verdict: "allow"
+    samples: 3
+    min_ratio: 1.315
+    max_cv: 0.169
+    artifact: "data/contention_matrix/v7-quarter-j5-frontdoor-worker_20260720T154812Z/j5_within_role_results.json"
+  - role: "worker_general"
+    mode: "live_only"
+    measured_at: "2026-07-20T16:00:31.271169+00:00"
+    topology_hash: "20ec95e925380990"
+    live_ports: [8082, 8182, 8282, 8382]
+    verdict: "allow"
+    samples: 3
+    min_ratio: 1.005
+    max_cv: 0.172
+    artifact: "data/contention_matrix/v7-quarter-j5-frontdoor-worker_20260720T154812Z/j5_within_role_results.json"

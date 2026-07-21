@@ -222,6 +222,50 @@ def compute_max_safe_concurrency(numa_config: dict, role: str) -> int:
     return safe_n
 
 
+def compute_max_disjoint_live_concurrency(
+    numa_config: dict,
+    role: str,
+    *,
+    live_ports: set[int] | None = None,
+) -> int:
+    """Return the largest disjoint instance set for a live role fleet.
+
+    This is intentionally separate from ``compute_max_safe_concurrency``. The
+    legacy helper models the dispatcher's full-first policy, which is correct
+    for a mixed/full stack. A quarter-only v7 stack does not have the full
+    instance live, so its safe fan-out is the largest disjoint subset among the
+    actually-live quarter ports.
+    """
+    cfg = (numa_config or {}).get(role) if numa_config else None
+    if not cfg:
+        return 1
+    instances = cfg.get("instances") or []
+    candidates: list[tuple[int, frozenset[str]]] = []
+    for idx, entry in enumerate(instances):
+        if not entry or len(entry) < 2:
+            continue
+        try:
+            port = int(entry[1])
+        except (TypeError, ValueError):
+            continue
+        if live_ports is not None and port not in live_ports:
+            continue
+        regions = cpu_list_to_regions(entry[0])
+        if regions:
+            candidates.append((idx, regions))
+    if not candidates:
+        return 1
+
+    accepted_union: set[str] = set()
+    safe_n = 0
+    for _idx, regions in sorted(candidates, key=lambda item: (len(item[1]), item[0])):
+        if accepted_union & regions:
+            continue
+        accepted_union |= set(regions)
+        safe_n += 1
+    return max(1, safe_n)
+
+
 _MAX_SAFE_CONCURRENCY_CACHE: dict[str, int] = {}
 
 

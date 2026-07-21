@@ -14,11 +14,60 @@ those bindings.
 
 from __future__ import annotations
 
+import hashlib
+import importlib.util
 import logging
+import os
 import random
 import sys
 from pathlib import Path
-from typing import Callable, Iterable
+from typing import Any, Callable, Iterable
+
+
+_RESEARCH_BENCHMARK_MODULE_CACHE: dict[tuple[str, str, int], Any] = {}
+
+
+def _file_mtime_ns(path: Path) -> int | None:
+    try:
+        return path.stat().st_mtime_ns
+    except FileNotFoundError:
+        return None
+
+
+def _research_root() -> Path:
+    return Path(os.environ.get("EPYC_RESEARCH_ROOT", "/mnt/raid0/llm/epyc-inference-research"))
+
+
+def _load_research_benchmark_module(module_name: str) -> Any:
+    module_path = _research_root() / "scripts" / "benchmark" / f"{module_name}.py"
+    mtime_ns = _file_mtime_ns(module_path)
+    if mtime_ns is None:
+        raise FileNotFoundError(f"research benchmark module not found: {module_path}")
+
+    cache_key = (module_name, str(module_path), mtime_ns)
+    cached = _RESEARCH_BENCHMARK_MODULE_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    module_hash = hashlib.sha1(f"{module_path}:{mtime_ns}".encode("utf-8")).hexdigest()[:16]
+    private_name = f"_epyc_seeding_research_{module_name}_{module_hash}"
+    existing = sys.modules.get(private_name)
+    if existing is not None:
+        _RESEARCH_BENCHMARK_MODULE_CACHE[cache_key] = existing
+        return existing
+
+    spec = importlib.util.spec_from_file_location(private_name, module_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"could not load research benchmark module: {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[private_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        sys.modules.pop(private_name, None)
+        raise
+    _RESEARCH_BENCHMARK_MODULE_CACHE[cache_key] = module
+    return module
 
 
 def _reference_text(q: dict) -> str:
@@ -71,15 +120,13 @@ def load_from_dataset_adapter(
 ) -> list[dict]:
     """Sample questions from HF dataset adapters (was _load_from_dataset_adapter)."""
     try:
-        from dataset_adapters import get_adapter, ADAPTER_SUITES
-    except ImportError:
-        try:
-            sys.path.insert(0, str(Path(__file__).parent))
-            from dataset_adapters import get_adapter, ADAPTER_SUITES
-        except ImportError:
-            return []
+        dataset_adapters = _load_research_benchmark_module("dataset_adapters")
+        get_adapter = getattr(dataset_adapters, "get_adapter")
+        adapter_suites = getattr(dataset_adapters, "ADAPTER_SUITES")
+    except Exception:
+        return []
 
-    if suite_name not in ADAPTER_SUITES:
+    if suite_name not in adapter_suites:
         return []
 
     adapter = get_adapter(suite_name)
@@ -178,9 +225,13 @@ def sample_unseen_questions(
     # Try the pre-extracted pool first
     if use_pool and source == "auto":
         try:
-            from question_pool import POOL_FILE, build_pool, load_pool, sample_from_pool
+            question_pool = _load_research_benchmark_module("question_pool")
+            pool_file = Path(getattr(question_pool, "POOL_FILE"))
+            build_pool = getattr(question_pool, "build_pool")
+            load_pool = getattr(question_pool, "load_pool")
+            sample_from_pool = getattr(question_pool, "sample_from_pool")
 
-            if not POOL_FILE.exists():
+            if not pool_file.exists():
                 logger.info("Question pool not found — building automatically (one-time)...")
                 build_pool()
 

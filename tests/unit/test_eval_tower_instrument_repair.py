@@ -599,6 +599,59 @@ def test_eval_t1_legacy_sampling_records_core_id(monkeypatch) -> None:
     assert result.core_id == "legacy_pool_seed_42_n2"
     assert result.details["core_selection"] == "legacy_pool_seed"
     assert result.details["base_core_questions"] == 2
+    assert len(result.details["dataset_content_sha256"]) == 64
+    assert result.details["dataset_sha256"] == result.details["dataset_content_sha256"]
+    assert result.details["test_profile"]["tier"] == 1
+    assert result.details["test_profile"]["core_id"] == "legacy_pool_seed_42_n2"
+    assert result.details["test_profile"]["n_questions"] == 2
+    assert "test_profile_json" in result.details
+
+
+def test_dataset_content_sha256_includes_suite_and_scoring_oracle() -> None:
+    base = [
+        {
+            "id": "q1",
+            "suite": "math",
+            "prompt": "2+2?",
+            "expected": "4",
+            "scoring_method": "exact_match",
+            "scoring_config": {"extract_pattern": r"ANSWER:\s*(\d+)"},
+        }
+    ]
+    changed_oracle = [dict(base[0], scoring_config={"extract_pattern": r"####\s*(\d+)"})]
+    changed_suite = [dict(base[0], suite="coder")]
+
+    assert eval_tower.dataset_content_sha256(base) != eval_tower.dataset_content_sha256(
+        changed_oracle
+    )
+    assert eval_tower.dataset_content_sha256(base) != eval_tower.dataset_content_sha256(
+        changed_suite
+    )
+
+
+def test_eval_instrument_stamp_warns_on_core_id_drift() -> None:
+    eval_tower._DATASET_SHA_BY_CORE_ID.clear()
+    q1 = [{"id": "q1", "suite": "math", "prompt": "2+2?", "expected": "4"}]
+    q2 = [{"id": "q2", "suite": "math", "prompt": "3+3?", "expected": "6"}]
+
+    first = eval_tower._stamp_eval_instrument(
+        eval_tower.EvalResult(tier=1, quality=3.0, speed=1.0, cost=0.0, reliability=1.0),
+        questions=q1,
+        core_id="core-v",
+        test_profile={"tier": 1},
+    )
+    second = eval_tower._stamp_eval_instrument(
+        eval_tower.EvalResult(tier=1, quality=3.0, speed=1.0, cost=0.0, reliability=1.0),
+        questions=q2,
+        core_id="core-v",
+        test_profile={"tier": 1},
+    )
+
+    assert "instrument_drift_warning" not in first.details
+    warning = second.details["instrument_drift_warning"]
+    assert warning["core_id"] == "core-v"
+    assert warning["previous_dataset_content_sha256"] == first.details["dataset_content_sha256"]
+    assert warning["current_dataset_content_sha256"] == second.details["dataset_content_sha256"]
 
 
 def test_eval_t1_w6_audit_block_appends_trial_seeded_questions(
@@ -833,6 +886,64 @@ def test_eval_t1_w6_audit_block_requires_trial_id(tmp_path, monkeypatch) -> None
     assert "requires a trial_id" in result.details["audit_error"]
 
 
+def test_eval_t2_non_promotion_excludes_legacy_t1_core_qids(monkeypatch) -> None:
+    monkeypatch.delenv("AUTOPILOT_T1_CORE_ID", raising=False)
+    monkeypatch.delenv("AUTOPILOT_T1_CORE_PATH", raising=False)
+    monkeypatch.delenv("AUTOPILOT_TOOL_SENTINELS", raising=False)
+    tower = EvalTower()
+    tower._pool = {
+        "math": [
+            {
+                "id": f"q-{idx:03d}",
+                "suite": "math",
+                "prompt": f"question {idx}",
+                "expected": str(idx),
+                "scoring_method": "exact_match",
+            }
+            for idx in range(105)
+        ]
+    }
+    t1_core_ids = {
+        q["id"]
+        for q in eval_tower._sample_scoreable_eval_questions(
+            tower._pool,
+            eval_tower.EVAL_T1_SPEC_N,
+            random.Random(42),
+        )
+    }
+    captured: list[str] = []
+
+    def _fake_eval_batch(self, questions, client, **_kwargs):  # noqa: ANN001, ARG001
+        captured.extend(q["id"] for q in questions if q.get("eval_partition") == "core")
+        return [
+            QuestionResult(
+                question_id=q["id"],
+                suite=q["suite"],
+                prompt=q["prompt"],
+                expected=q["expected"],
+                correct=True,
+                tokens_generated=1,
+                elapsed_s=1.0,
+                eval_partition=q["eval_partition"],
+            )
+            for q in questions
+        ]
+
+    monkeypatch.setattr(EvalTower, "_eval_batch", _fake_eval_batch)
+
+    result = tower.eval_t2(n=5, seed=42)
+
+    assert len(captured) == 5
+    assert set(captured).isdisjoint(t1_core_ids)
+    assert result.details["t1_core_exclusion_policy"]["source"] == "legacy_pool_seed"
+    assert result.details["t1_core_exclusion_policy"]["actual_n"] == 100
+    assert result.details["t1_core_exclusion_policy"]["actual_t2_core_n"] == 5
+    assert (
+        result.details["test_profile"]["t1_core_exclusion_policy"]["core_id"]
+        == "legacy_pool_seed_42_n100"
+    )
+
+
 def test_eval_t2_promotion_eval_uses_trial_seed_and_excludes_recent_qids(
     tmp_path,
     monkeypatch,
@@ -924,10 +1035,12 @@ def test_eval_t2_promotion_eval_uses_trial_seed_and_excludes_recent_qids(
 
     monkeypatch.setattr(EvalTower, "_eval_batch", _fake_eval_batch)
 
+    recent_stable_qid = eval_tower._stable_question_qid("math", "old")
+
     result = tower.eval_t2(
         promotion_eval=True,
         trial_id=42,
-        exclude_qids={"recent-math"},
+        exclude_qids={recent_stable_qid},
     )
 
     assert "recent-math" not in captured
@@ -976,3 +1089,131 @@ def test_eval_t2_promotion_eval_fails_closed_without_trial_id(monkeypatch) -> No
     assert result.reliability == 0
     assert result.details["promotion_eval_policy"]["enabled"] is True
     assert "requires a trial_id" in result.details["promotion_eval_policy"]["error"]
+
+
+def test_eval_t2_nonpromotion_excludes_t1_core_and_caller_qids(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    core_path = tmp_path / "core_v2.jsonl"
+    core_path.write_text(
+        json.dumps({"__core_metadata__": True, "core_id": "core_v2"})
+        + "\n"
+        + json.dumps(
+            {
+                "id": "t1-core",
+                "suite": "math",
+                "prompt": "core prompt",
+                "expected": "core",
+                "scoring_method": "exact_match",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AUTOPILOT_T1_CORE_ID", "core_v2")
+    monkeypatch.setenv("AUTOPILOT_T1_CORE_PATH", str(core_path))
+    tower = EvalTower()
+    tower._pool = {
+        "math": [
+            {
+                "id": "t1-core",
+                "suite": "math",
+                "prompt": "core prompt",
+                "expected": "core",
+                "scoring_method": "exact_match",
+            },
+            {
+                "id": "caller-excluded",
+                "suite": "math",
+                "prompt": "caller prompt",
+                "expected": "caller",
+                "scoring_method": "exact_match",
+            },
+            {
+                "id": "fresh",
+                "suite": "math",
+                "prompt": "fresh prompt",
+                "expected": "fresh",
+                "scoring_method": "exact_match",
+            },
+        ]
+    }
+    monkeypatch.setattr(EvalTower, "_load_tool_sentinels", lambda self: [])
+    captured: list[str] = []
+
+    def _fake_eval_batch(self, questions, client, **_kwargs):  # noqa: ANN001, ARG001
+        captured.extend(q["id"] for q in questions)
+        return [
+            QuestionResult(
+                question_id=q["id"],
+                suite=q["suite"],
+                prompt=q["prompt"],
+                expected=q["expected"],
+                correct=True,
+                tokens_generated=1,
+                elapsed_s=1.0,
+                eval_partition=q["eval_partition"],
+            )
+            for q in questions
+        ]
+
+    monkeypatch.setattr(EvalTower, "_eval_batch", _fake_eval_batch)
+
+    result = tower.eval_t2(
+        n=2,
+        seed=42,
+        exclude_qids={"caller-excluded"},
+    )
+
+    assert captured == ["fresh"]
+    assert result.quality == 3.0
+    policy = result.details["t1_core_exclusion_policy"]
+    assert policy["source"] == "designed_core"
+    assert policy["excluded_t1_core_qids"] >= 1
+    assert policy["caller_excluded_qids"] == 1
+    assert policy["actual_t2_core_n"] == 1
+
+
+def test_eval_t2_nonpromotion_fails_closed_when_t1_core_exhausts_pool(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    core_path = tmp_path / "core_v2.jsonl"
+    core_path.write_text(
+        json.dumps({"__core_metadata__": True, "core_id": "core_v2"})
+        + "\n"
+        + json.dumps(
+            {
+                "id": "t1-core",
+                "suite": "math",
+                "prompt": "core prompt",
+                "expected": "core",
+                "scoring_method": "exact_match",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AUTOPILOT_T1_CORE_ID", "core_v2")
+    monkeypatch.setenv("AUTOPILOT_T1_CORE_PATH", str(core_path))
+    tower = EvalTower()
+    tower._pool = {
+        "math": [
+            {
+                "id": "t1-core",
+                "suite": "math",
+                "prompt": "core prompt",
+                "expected": "core",
+                "scoring_method": "exact_match",
+            }
+        ]
+    }
+
+    result = tower.eval_t2(n=1, seed=42)
+
+    assert result.quality == 0
+    assert result.reliability == 0
+    policy = result.details["t1_core_exclusion_policy"]
+    assert policy["actual_t2_core_n"] == 0
+    assert "0 scoreable non-T1-core" in policy["error"]

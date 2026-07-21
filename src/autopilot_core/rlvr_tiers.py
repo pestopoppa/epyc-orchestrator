@@ -15,6 +15,15 @@ from typing import Any, Mapping, Sequence
 
 RLVR_REWARD_POLICY = "ap27_rlvr_tier_reward_v1"
 
+# RLVR-2 (audit, operator-decided 2026-07-20; observe-only — no promotion authority).
+# tier_specs documents that T0 saturates ~2.4 on the 0-3 quality scale, so requiring
+# an exact 3.0/3.0 (accuracy 1.0) made the binary reward constant-0 and therefore
+# gradient-free. Relax the T0 success thresholds so the binary signal can actually
+# fire on saturated-good runs. Reliability was previously required at >= 1.0 (exact);
+# relaxed to >= 0.9 with the same "exact requirement is gradient-free" reasoning.
+T0_SUCCESS_ACCURACY = 0.8
+T0_SUCCESS_RELIABILITY = 0.9
+
 
 @dataclass(frozen=True)
 class RLVRTierSpec:
@@ -109,10 +118,29 @@ def rlvr_reward_from_result(result: Any) -> RLVRReward:
         "ece": ece,
         "auroc": auroc,
     }
-    blockers = list(_metric_blockers(spec, ece=ece, auroc=auroc, question_results=question_results))
+    # RLVR-1: check required quality/reliability against their RAW (nan-defaulted)
+    # values so a missing/non-finite required metric becomes a blocker instead of
+    # being silently coerced to 0.0 by _as_float. Non-required metrics keep coercion.
+    quality_raw = _as_float(getattr(result, "quality", None), math.nan)
+    reliability_raw = _as_float(getattr(result, "reliability", None), math.nan)
+    blockers = list(
+        _metric_blockers(
+            spec,
+            quality=quality_raw,
+            reliability=reliability_raw,
+            ece=ece,
+            auroc=auroc,
+            question_results=question_results,
+        )
+    )
 
     if spec.reward_signal == "binary_outcome":
-        success = 1.0 if accuracy >= 1.0 and reliability >= 1.0 else 0.0
+        # RLVR-2: thresholds relaxed off exact-1.0 (see T0_SUCCESS_* constants).
+        success = (
+            1.0
+            if accuracy >= T0_SUCCESS_ACCURACY and reliability >= T0_SUCCESS_RELIABILITY
+            else 0.0
+        )
         return RLVRReward(
             tier=tier,
             policy=RLVR_REWARD_POLICY,
@@ -123,8 +151,23 @@ def rlvr_reward_from_result(result: Any) -> RLVRReward:
             blockers=tuple(blockers),
         )
 
+    # EV-CONF interim (audit, pre-approved 2026-07-20): both the calibration and the
+    # discrimination components derive from model confidence. eval_tower now makes
+    # confidence real-by-default (geomean of completion_probabilities) and stamps
+    # provenance in details['confidence_is_real'] — True ONLY when the WHOLE batch's
+    # confidence came from completion-probability geomean. Gate calibration AND
+    # discrimination on that flag so neither the old binary-correctness stub NOR a
+    # mixed-provenance batch earns calibration/discrimination signal; a legacy row
+    # with no stamp is treated as not-real (null-safe, fail-closed). This is the
+    # approved reward-side neutralization point — the operator owns the FINAL decision
+    # on whether real ECE enters gating.
+    confidence_is_real = _confidence_is_real(result)
     calibration = _calibration_component(ece)
     discrimination = _discrimination_component(auroc)
+    if not confidence_is_real:
+        calibration = 0.0
+        discrimination = 0.0
+        blockers.append("confidence_not_real")
     if spec.reward_signal == "calibrated_continuous":
         reward = _clamp01(
             0.65 * accuracy + 0.20 * reliability + 0.10 * calibration + 0.05 * discrimination
@@ -172,11 +215,20 @@ def rlvr_reward_from_result(result: Any) -> RLVRReward:
 def _metric_blockers(
     spec: RLVRTierSpec,
     *,
+    quality: float,
+    reliability: float,
     ece: float,
     auroc: float,
     question_results: Any,
 ) -> tuple[str, ...]:
     blockers: list[str] = []
+    # RLVR-1: required_metrics declares quality/reliability, but they were never
+    # enforced here — surface them as blockers when required and missing/non-finite.
+    if "quality" in spec.required_metrics and not _finite(quality):
+        blockers.append("quality_missing_or_nonfinite")
+    if "reliability" in spec.required_metrics and not _finite(reliability):
+        blockers.append("reliability_missing_or_nonfinite")
+    # ece_missing semantics left ALONE (EV-CONF territory).
     if "ece" in spec.required_metrics and not _finite(ece):
         blockers.append("ece_missing")
     if "auroc" in spec.required_metrics and (not _finite(auroc) or auroc <= 0.0):
@@ -204,12 +256,31 @@ def _question_rows(question_results: Any) -> list[Mapping[str, Any]]:
     return [row for row in question_results if isinstance(row, Mapping)]
 
 
+def _confidence_is_real(result: Any) -> bool:
+    """EV-CONF: read eval_tower's confidence provenance stamp.
+
+    eval_tower stamps ``details['confidence_is_real']`` True only when the entire
+    batch's confidence came from completion-probability geomean (a stub or a
+    mixed-provenance batch stamps False). Legacy rows predate the stamp and lack
+    the key entirely — treat those as NOT real (null-safe / fail-closed) so they
+    cannot earn calibration/discrimination credit on unidentified confidence.
+    """
+    details = getattr(result, "details", None)
+    if isinstance(details, Mapping):
+        return bool(details.get("confidence_is_real", False))
+    return False
+
+
 def _calibration_component(ece: float) -> float:
     return 0.0 if not _finite(ece) else _clamp01(1.0 - ece)
 
 
 def _discrimination_component(auroc: float) -> float:
-    return 0.0 if not _finite(auroc) else _clamp01(auroc)
+    # RLVR-3: sub-chance AUROC (<= 0.5) is anti-discriminative confidence and earns
+    # no credit; plain clamp01(auroc) wrongly gave sub-chance runs positive credit.
+    if not _finite(auroc) or auroc <= 0.5:
+        return 0.0
+    return _clamp01(auroc)
 
 
 def _as_float(value: Any, default: float = 0.0) -> float:

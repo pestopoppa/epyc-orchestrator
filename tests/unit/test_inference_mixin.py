@@ -545,6 +545,7 @@ class TestCallCachingBackend:
                 assert getattr(request, "request_priority") == "background"
                 assert getattr(request, "workload_class") == "campaign"
                 assert getattr(request, "max_queue_wait_ms") == 123
+                assert getattr(request, "session_id") == "session-a3"
                 return InferenceResult(
                     role="frontdoor",
                     output="ok",
@@ -560,8 +561,37 @@ class TestCallCachingBackend:
             priority="background",
             workload_class="campaign",
             max_queue_wait_ms=123,
+            session_id="session-a3",
         ):
             assert prims._real_call("hi", "frontdoor") == "ok"
+
+    def test_real_call_with_n_probs_uses_batch_path_and_preserves_rows(self):
+        rows = [{"content": "o", "probs": [{"tok_str": "o", "prob": 0.8}]}]
+
+        class FakeConcurrencyAwareBackend:
+            _dispatch = object()
+            _tap_dispatch_metadata = object()
+
+            def infer_stream_text(self, _role_config, _request, on_chunk):  # noqa: ANN001
+                raise AssertionError("n_probs requests must not use streaming")
+
+            def infer(self, _role_config, request):
+                assert request.n_probs == 7
+                return InferenceResult(
+                    role="frontdoor",
+                    output="ok",
+                    tokens_generated=1,
+                    generation_speed=10.0,
+                    elapsed_time=0.1,
+                    success=True,
+                    completion_probabilities=rows,
+                )
+
+        prims = LLMPrimitives(mock_mode=False)
+        prims._backends["frontdoor"] = FakeConcurrencyAwareBackend()
+
+        assert prims._real_call("hi", "frontdoor", n_probs=7) == "ok"
+        assert prims._last_inference_meta["completion_probabilities"] == rows
 
 
 class TestRealBatch:

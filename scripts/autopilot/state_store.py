@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 import sys
@@ -93,6 +94,25 @@ def load_state(state_path: Path, default_factory) -> dict[str, Any]:
     return default_factory()
 
 
+def _json_sanitize(obj: Any) -> Any:
+    """Recursively replace non-finite floats (NaN / ±Inf) with None for strict JSON.
+
+    D2: a local duplicate of ``experiment_journal.json_sanitize``. state_store is
+    deliberately decoupled (its module docstring notes "no implicit
+    autopilot-module coupling"); importing experiment_journal here would pull in
+    that module's ``src.autopilot_core.tier_specs`` / ``fcntl`` / ``csv`` chain and
+    add bare-vs-package import fragility for a six-line pure helper — so we copy it
+    rather than import it. (No import cycle exists; the choice is about coupling.)
+    """
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if isinstance(obj, dict):
+        return {key: _json_sanitize(value) for key, value in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_sanitize(value) for value in obj]
+    return obj
+
+
 def save_state(state_path: Path, state: dict[str, Any]) -> None:
     """Atomically persist autopilot state JSON to `state_path`.
 
@@ -102,10 +122,14 @@ def save_state(state_path: Path, state: dict[str, Any]) -> None:
     semantics meant a kill mid-write would leave half-written JSON,
     causing the next startup's load_state to fail (which now exits 70
     rather than silently resetting — see the corrupt-state path).
+
+    D2 — strict JSON: non-finite floats are sanitized to null and
+    ``allow_nan=False`` forbids bare ``NaN`` / ``Infinity`` tokens, so a saved
+    state file is always parseable by strict readers (jq, load_state).
     """
     state_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = state_path.with_suffix(state_path.suffix + f".tmp.{os.getpid()}")
-    payload = json.dumps(state, indent=2, default=str)
+    payload = json.dumps(_json_sanitize(state), indent=2, default=str, allow_nan=False)
     with open(tmp, "w") as fh:
         fh.write(payload)
         fh.flush()

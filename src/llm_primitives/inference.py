@@ -269,6 +269,7 @@ class InferenceMixin:
         seed: int | None = None,
         top_p: float | None = None,
         top_k: int | None = None,
+        n_probs: int | None = None,
     ) -> str:
         """Make a real inference call via CachingBackend or legacy ModelServer.
 
@@ -283,6 +284,7 @@ class InferenceMixin:
             seed: Optional explicit deterministic decode seed.
             top_p: Optional explicit nucleus sampling override.
             top_k: Optional explicit top-k sampling override.
+            n_probs: Optional llama.cpp top-k token probability capture.
 
         Returns:
             Model response.
@@ -327,11 +329,13 @@ class InferenceMixin:
                     prompt, role, n_tokens, stop_sequences,
                     json_schema=json_schema, grammar=grammar,
                     temperature=temperature, seed=seed, top_p=top_p, top_k=top_k,
+                    n_probs=n_probs,
                 )
         return self._real_call_impl(
             prompt, role, n_tokens, stop_sequences,
             json_schema=json_schema, grammar=grammar,
             temperature=temperature, seed=seed, top_p=top_p, top_k=top_k,
+            n_probs=n_probs,
         )
 
     def _real_call_impl(
@@ -346,6 +350,7 @@ class InferenceMixin:
         seed: int | None = None,
         top_p: float | None = None,
         top_k: int | None = None,
+        n_probs: int | None = None,
     ) -> str:
         """Internal real call implementation (no concurrency gating)."""
         # Content-addressable cache check
@@ -353,7 +358,7 @@ class InferenceMixin:
 
         cache = getattr(self, "_content_cache", None)
         cache_key = None
-        if cache is not None and _get_features().content_cache and stop_sequences is None:
+        if cache is not None and _get_features().content_cache and stop_sequences is None and n_probs is None:
             from src.llm_cache import ContentAddressableCache
 
             sampling_key = _sampling_cache_key(
@@ -374,6 +379,7 @@ class InferenceMixin:
                 prompt, role, n_tokens, stop_sequences,
                 json_schema=json_schema, grammar=grammar,
                 temperature=temperature, seed=seed, top_p=top_p, top_k=top_k,
+                n_probs=n_probs,
             )
         except RuntimeError as primary_error:
             # Model fallback: try same-tier alternatives on infrastructure failure
@@ -403,6 +409,7 @@ class InferenceMixin:
                         prompt, fb_role_str, n_tokens, stop_sequences,
                         json_schema=json_schema, grammar=grammar,
                         temperature=temperature, seed=seed, top_p=top_p, top_k=top_k,
+                        n_probs=n_probs,
                     )
                     break
                 except RuntimeError:
@@ -429,6 +436,7 @@ class InferenceMixin:
         seed: int | None = None,
         top_p: float | None = None,
         top_k: int | None = None,
+        n_probs: int | None = None,
     ) -> str:
         """Execute a single inference call against one role's backend."""
         # Try CachingBackend first (RadixAttention)
@@ -438,6 +446,7 @@ class InferenceMixin:
                 backend, prompt, role, n_tokens, stop_sequences,
                 json_schema=json_schema, grammar=grammar,
                 temperature=temperature, seed=seed, top_p=top_p, top_k=top_k,
+                n_probs=n_probs,
             )
 
         # Fall back to legacy ModelServer
@@ -467,6 +476,7 @@ class InferenceMixin:
             top_k=top_k,
             json_schema=json_schema,
             grammar=grammar,
+            n_probs=n_probs,
         )
         req_started = time.perf_counter()
         from src.inference_lock import inference_lock
@@ -514,6 +524,7 @@ class InferenceMixin:
             "prompt_ms": result.prompt_eval_ms,
             "gen_ms": result.generation_ms,
             "overhead_ms": result.http_overhead_ms,
+            "completion_probabilities": list(getattr(result, "completion_probabilities", []) or []),
         }
         if _is_frontdoor_role(role) and _frontdoor_trace_enabled():
             log.warning(
@@ -550,6 +561,7 @@ class InferenceMixin:
         seed: int | None = None,
         top_p: float | None = None,
         top_k: int | None = None,
+        n_probs: int | None = None,
     ) -> str:
         """Call a CachingBackend with RadixAttention prefix caching.
 
@@ -588,12 +600,15 @@ class InferenceMixin:
             top_k=top_k,
             json_schema=json_schema,
             grammar=grammar,
+            n_probs=n_probs,
         )
         # Dynamic attrs consumed by ConcurrencyAwareBackend's dispatch-time
         # placement-aware contention gate. The local dataclass has no slots.
         request.request_priority = self.get_request_priority()
         request.workload_class = self.get_request_workload_class()
         request.max_queue_wait_ms = self.get_max_queue_wait_ms()
+        request.session_id = self.get_request_session_id()
+        wants_probabilities = n_probs is not None and int(n_probs) > 0
         req_started = time.perf_counter()
 
         # Admission control: reject early if backend queue is full
@@ -676,6 +691,7 @@ class InferenceMixin:
                         tap_enabled
                         and hasattr(backend, "infer_stream_text")
                         and _tap_should_stream_role(role)
+                        and not wants_probabilities
                     )
                     if tap_enabled:
                         tap_metadata = _build_tap_metadata(
@@ -741,7 +757,7 @@ class InferenceMixin:
                                 )
                             else:
                                 # Prefer streaming for cancellation support
-                                if hasattr(backend, "infer_stream_text"):
+                                if not wants_probabilities and hasattr(backend, "infer_stream_text"):
                                     _cancel_tap = self.get_request_cancel_check()
 
                                     def _on_chunk_tap(content: str) -> None:
@@ -764,7 +780,7 @@ class InferenceMixin:
                         # Use streaming even without tap — each chunk is a
                         # cancellation checkpoint, preventing indefinite lock
                         # hold when the httpx batch read hangs.
-                        if hasattr(backend, "infer_stream_text"):
+                        if not wants_probabilities and hasattr(backend, "infer_stream_text"):
                             _cancel_nt = self.get_request_cancel_check()
 
                             def _cancel_only(content: str) -> None:
@@ -809,6 +825,7 @@ class InferenceMixin:
                 "prompt_ms": result.prompt_eval_ms,
                 "gen_ms": result.generation_ms,
                 "overhead_ms": result.http_overhead_ms,
+                "completion_probabilities": list(getattr(result, "completion_probabilities", []) or []),
             }
             if _is_frontdoor_role(role) and _frontdoor_trace_enabled():
                 log.warning(

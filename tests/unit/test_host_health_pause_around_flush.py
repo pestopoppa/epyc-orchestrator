@@ -301,6 +301,50 @@ def test_flush_handles_missing_state_file(tmp_path: Path) -> None:
     assert result["paused_pre"] is None
 
 
+def test_cli_remediate_uses_safe_pause_flush(monkeypatch) -> None:
+    throttled_state = host_health.HostHealthState(
+        loadavg_1min=1.0,
+        n_cores_online=64,
+        mean_cur_mhz=1000.0,
+        base_mhz=3200.0,
+        page_cache_mb=1000.0,
+        mem_available_mb=1000.0,
+        unevictable_mb=0.0,
+        mlocked_mb=0.0,
+        llama_process_count=0,
+        llama_pss_mb=0.0,
+        llama_private_dirty_mb=0.0,
+        llama_locked_mb=0.0,
+        timestamp=0.0,
+    )
+    healthy_state = host_health.HostHealthState(
+        loadavg_1min=1.0,
+        n_cores_online=64,
+        mean_cur_mhz=3200.0,
+        base_mhz=3200.0,
+        page_cache_mb=8192.0,
+        mem_available_mb=1000.0,
+        unevictable_mb=0.0,
+        mlocked_mb=0.0,
+        llama_process_count=0,
+        llama_pss_mb=0.0,
+        llama_private_dirty_mb=0.0,
+        llama_locked_mb=0.0,
+        timestamp=0.0,
+    )
+    snapshots = iter([throttled_state, healthy_state])
+
+    monkeypatch.setattr(host_health.HostHealthState, "snapshot", staticmethod(lambda: next(snapshots)))
+    safe_flush = mock.Mock(return_value={"flush_ok": True, "rewarm": {}})
+    monkeypatch.setattr(host_health, "flush_cache_with_pause", safe_flush)
+    bare_flush = mock.Mock(return_value=True)
+    monkeypatch.setattr(host_health, "remediate", bare_flush)
+
+    assert host_health._main(["--remediate"]) == 0
+    safe_flush.assert_called_once_with()
+    bare_flush.assert_not_called()
+
+
 def test_host_timing_covariates_best_effort_handles_reader_failure(monkeypatch) -> None:
     monkeypatch.setattr(host_health, "_read_loadavg_1min", lambda: 7.25)
     monkeypatch.setattr(host_health, "_read_online_cores", lambda: 64)

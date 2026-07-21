@@ -649,6 +649,12 @@ async def contention_gate_snapshot(request: Request) -> JSONResponse:
         snap = get_gate().metrics_snapshot()
     except Exception as exc:  # noqa: BLE001
         snap = {"error": str(exc), "matrix_status": "unavailable"}
+    try:
+        from src.metrics import migration_counters
+
+        snap["migration_counters"] = migration_counters.snapshot()
+    except Exception as exc:  # noqa: BLE001
+        snap["migration_counters"] = {"error": str(exc)}
 
     # Per-role scheduling state (quarter preference + migration counts).
     # Fetched here because it lives on app.state.llm_primitives._backends,
@@ -663,6 +669,13 @@ async def contention_gate_snapshot(request: Request) -> JSONResponse:
         primitives = getattr(request.app.state, "_real_primitives", None) or getattr(
             request.app.state, "llm_primitives", None
         )
+        if primitives is None:
+            from src.api.state import get_state
+
+            api_state = get_state()
+            primitives = getattr(api_state, "_real_primitives", None) or getattr(
+                api_state, "llm_primitives", None
+            )
         if primitives is not None:
             for role, backend in getattr(primitives, "_backends", {}).items():
                 if not hasattr(backend, "_quarter_preference_order"):

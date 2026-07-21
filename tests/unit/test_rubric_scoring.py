@@ -136,7 +136,7 @@ def test_judge_ranking_stability_surfaces_disagreement() -> None:
     assert stability.mean_spearman < 1.0
 
 
-def test_autopilot_eval_result_emits_populated_rubric_metrics_only() -> None:
+def test_autopilot_eval_result_emits_rubric_metrics_populated_and_null() -> None:
     result = EvalResult(
         tier=2,
         quality=1.0,
@@ -151,6 +151,9 @@ def test_autopilot_eval_result_emits_populated_rubric_metrics_only() -> None:
 
     assert "METRIC rubric_reasoning_trajectory: 0.7500" in lines
     assert "METRIC rubric_outline: 0.5000" in lines
-    assert "rubric_tool_calls" not in lines
-    assert "rubric_content_stage" not in lines
+    # D4 (audit FIELD-1): unpopulated (NaN) rubric axes now emit the explicit `null`
+    # sentinel UNCONDITIONALLY — never the string `nan`, never silently dropped.
+    assert "METRIC rubric_tool_calls: null" in lines
+    assert "METRIC rubric_content_stage: null" in lines
+    assert ": nan" not in lines
     assert math.isnan(result.rubric_tool_calls)

@@ -1,0 +1,180 @@
+{
+  "task_id": "J5",
+  "topology_hash": "8c8cfcbb13d2611d",
+  "matrix_status": "stale",
+  "generated_at": "2026-07-20T16:00:31.271169+00:00",
+  "same_role_instance_pairs": {
+    "frontdoor": [
+      {
+        "a": "q0",
+        "b": "q1",
+        "port_a": 8080,
+        "port_b": 8180,
+        "ratio": 1.406,
+        "cv": 0.1685,
+        "verdict": "allow",
+        "seq_aggregate_tps": 24.89,
+        "parallel_aggregate_tps": 35.02
+      },
+      {
+        "a": "q0",
+        "b": "q2",
+        "port_a": 8080,
+        "port_b": 8280,
+        "ratio": 1.315,
+        "cv": 0.1575,
+        "verdict": "allow",
+        "seq_aggregate_tps": 26.95,
+        "parallel_aggregate_tps": 35.46
+      },
+      {
+        "a": "q0",
+        "b": "q3",
+        "port_a": 8080,
+        "port_b": 8380,
+        "ratio": 1.597,
+        "cv": 0.0364,
+        "verdict": "allow",
+        "seq_aggregate_tps": 23.33,
+        "parallel_aggregate_tps": 37.39
+      },
+      {
+        "a": "q1",
+        "b": "q2",
+        "port_a": 8180,
+        "port_b": 8280,
+        "ratio": 1.498,
+        "cv": 0.0518,
+        "verdict": "allow",
+        "seq_aggregate_tps": 27.0,
+        "parallel_aggregate_tps": 40.38
+      },
+      {
+        "a": "q1",
+        "b": "q3",
+        "port_a": 8180,
+        "port_b": 8380,
+        "ratio": 1.479,
+        "cv": 0.0362,
+        "verdict": "allow",
+        "seq_aggregate_tps": 26.51,
+        "parallel_aggregate_tps": 39.16
+      },
+      {
+        "a": "q2",
+        "b": "q3",
+        "port_a": 8280,
+        "port_b": 8380,
+        "ratio": 1.568,
+        "cv": 0.0444,
+        "verdict": "allow",
+        "seq_aggregate_tps": 26.0,
+        "parallel_aggregate_tps": 40.74
+      }
+    ],
+    "worker_general": [
+      {
+        "a": "q0",
+        "b": "q1",
+        "port_a": 8082,
+        "port_b": 8182,
+        "ratio": 1.944,
+        "cv": 0.0291,
+        "verdict": "allow",
+        "seq_aggregate_tps": 12.02,
+        "parallel_aggregate_tps": 23.36
+      },
+      {
+        "a": "q0",
+        "b": "q2",
+        "port_a": 8082,
+        "port_b": 8282,
+        "ratio": 1.42,
+        "cv": 0.0632,
+        "verdict": "allow",
+        "seq_aggregate_tps": 12.8,
+        "parallel_aggregate_tps": 18.16
+      },
+      {
+        "a": "q0",
+        "b": "q3",
+        "port_a": 8082,
+        "port_b": 8382,
+        "ratio": 1.005,
+        "cv": 0.0748,
+        "verdict": "allow",
+        "seq_aggregate_tps": 13.52,
+        "parallel_aggregate_tps": 13.6
+      },
+      {
+        "a": "q1",
+        "b": "q2",
+        "port_a": 8182,
+        "port_b": 8282,
+        "ratio": 1.81,
+        "cv": 0.1495,
+        "verdict": "allow",
+        "seq_aggregate_tps": 14.07,
+        "parallel_aggregate_tps": 25.21
+      },
+      {
+        "a": "q1",
+        "b": "q3",
+        "port_a": 8182,
+        "port_b": 8382,
+        "ratio": 1.986,
+        "cv": 0.0447,
+        "verdict": "allow",
+        "seq_aggregate_tps": 13.69,
+        "parallel_aggregate_tps": 27.14
+      },
+      {
+        "a": "q2",
+        "b": "q3",
+        "port_a": 8282,
+        "port_b": 8382,
+        "ratio": 1.382,
+        "cv": 0.1722,
+        "verdict": "allow",
+        "seq_aggregate_tps": 13.23,
+        "parallel_aggregate_tps": 18.06
+      }
+    ]
+  },
+  "same_role_certifications": {
+    "frontdoor": {
+      "role": "frontdoor",
+      "mode": "live_only",
+      "topology_hash": "d09241b04e26b3bc",
+      "live_ports": [
+        8080,
+        8180,
+        8280,
+        8380
+      ],
+      "samples": 3,
+      "min_ratio": 1.315,
+      "max_cv": 0.1685,
+      "verdict": "allow",
+      "measured_at": "2026-07-20T16:00:31.271169+00:00",
+      "artifact": "data/contention_matrix/v7-quarter-j5-frontdoor-worker_20260720T154812Z/j5_within_role_results.json"
+    },
+    "worker_general": {
+      "role": "worker_general",
+      "mode": "live_only",
+      "topology_hash": "20ec95e925380990",
+      "live_ports": [
+        8082,
+        8182,
+        8282,
+        8382
+      ],
+      "samples": 3,
+      "min_ratio": 1.005,
+      "max_cv": 0.1722,
+      "verdict": "allow",
+      "measured_at": "2026-07-20T16:00:31.271169+00:00",
+      "artifact": "data/contention_matrix/v7-quarter-j5-frontdoor-worker_20260720T154812Z/j5_within_role_results.json"
+    }
+  }
+}

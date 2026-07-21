@@ -21,7 +21,10 @@ sys.path.insert(0, str(REPO_ROOT / "scripts" / "benchmark"))
 sys.path.insert(0, str(REPO_ROOT))
 
 from eval_tower import EvalTower, QuestionResult, _require_math_verify  # type: ignore[import-not-found]
-from src.llm_primitives.stat_tests import roc_auc as stat_roc_auc
+from src.llm_primitives.stat_tests import (
+    expected_calibration_error,
+    roc_auc as stat_roc_auc,
+)
 
 
 # ── (i) math_verify hard-fail ────────────────────────────────────────────────
@@ -117,3 +120,17 @@ def test_aggregate_auroc_guard_degenerate_confidence_stays_zero() -> None:
     results = [_qr("q0", True, 1.0), _qr("q1", False, 0.0), _qr("q2", True, 1.0)]
     agg = tower._aggregate(results, tier=1)
     assert agg.auroc == 0.0
+
+
+def test_aggregate_ece_uses_ev11b_closed_top_bin_stat_tests() -> None:
+    tower = EvalTower(url="http://127.0.0.1:1", timeout=1)
+    results = [_qr("q0", False, 1.0)]
+
+    agg = tower._aggregate(results, tier=1)
+
+    expected = expected_calibration_error([1.0], [0.0], n_bins=10)
+    assert expected == pytest.approx(1.0, abs=1e-12)
+    assert agg.ece == pytest.approx(expected, abs=1e-12)
+    assert agg.calibration_violations == 1
+    assert agg.details["ece_binning"] == "closed_top_bin_stat_tests"
+    assert agg.details["ece_instrument_era"] == "ev11b_closed_bin_2026_07_20"

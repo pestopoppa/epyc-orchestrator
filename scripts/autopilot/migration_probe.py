@@ -104,6 +104,8 @@ DEFAULT_COOLDOWN_MS = 2000
 DEFAULT_WINDOW_MS = 30000
 DEFAULT_PER_SESSION_CAP = 5
 DEFAULT_DWELL_MS = 1500
+DEFAULT_COUNTER_SETTLE_MS = 250
+DEFAULT_BURST_STAGGER_MS = 50
 # frontdoor safe-slot count (full + q2 + q3) per the handoff safe-placement table.
 DEFAULT_SAFE_SLOTS = 3
 DEFAULT_ROLE = "frontdoor"
@@ -638,7 +640,7 @@ def _default_request(  # pragma: no cover - inference path
     return call_orchestrator_forced(
         prompt="[migration-probe] warm turn; reply with a single token.",
         force_role=spec.role,
-        force_mode="",
+        force_mode="direct",
         url=url,
         timeout=timeout,
         client=client,
@@ -646,30 +648,82 @@ def _default_request(  # pragma: no cover - inference path
         session_id=spec.session_id,               # reused across turns (WP-3)
         request_priority=PLACEMENT_REQUEST_PRIORITY,  # placement queue, not /chat
         workload_class=PLACEMENT_WORKLOAD_CLASS,
+        max_tokens=1,
     )
 
 
-def _default_counter_probe(url: str) -> dict[str, Any]:  # pragma: no cover
+def _default_counter_probe(
+    url: str,
+    *,
+    role: str | None = None,
+) -> dict[str, Any]:  # pragma: no cover
     """Snapshot live migration counters (forward/reverse/thrash) for diffing.
 
     Best-effort read of the single-worker API's migration counters; the caller
-    guarantees a single worker so the counters are attributable. Returns a dict
-    like ``{"forward": int, "reverse": int, "thrash": {reason: int}}``. Any read
+    guarantees a single worker so the counters are attributable. Prefer the
+    committed ``src.metrics.migration_counters`` surface when exposed by the
+    contention endpoint. Fall back to the per-role scheduling counters that
+    already back the dashboard (`migrations_started` / `reverse_migrations`)
+    because older API builds did not expose the Prometheus-shaped counters on
+    region locks. Returns a dict like
+    ``{"forward": int, "reverse": int, "thrash": {reason: int}}``. Any read
     failure yields zeros (the step contributes no observed events).
     """
     import httpx  # deferred; only in the inference path
 
     try:
-        resp = httpx.get(f"{url}/dashboard/api/region_locks", timeout=10)
+        resp = httpx.get(f"{url}/dashboard/api/contention", timeout=10)
         data = resp.json()
-        mig = (data or {}).get("migrations") or {}
+        counters = (data or {}).get("migration_counters") or {}
+        direction = dict(counters.get("kv_migration_direction_total", {}) or {})
+        thrash = dict(counters.get("kv_migration_thrash_skipped_total", {}) or {})
+        events = list(counters.get("kv_migration_recent_events", []) or [])
+        per_role = (data or {}).get("per_role_scheduling") or {}
+        records: list[dict[str, Any]] = []
+        if role and isinstance(per_role.get(role), dict):
+            records = [per_role[role]]
+        elif isinstance(per_role, dict):
+            records = [v for v in per_role.values() if isinstance(v, dict)]
+        failures = sum(int(r.get("migration_failures", 0) or 0) for r in records)
+        if direction or thrash:
+            return {
+                "forward": int(direction.get("forward", 0) or 0),
+                "reverse": int(direction.get("reverse", 0) or 0),
+                "thrash": thrash,
+                "failures": failures,
+                "events": events,
+            }
         return {
-            "forward": int(mig.get("forward", 0) or 0),
-            "reverse": int(mig.get("reverse", 0) or 0),
-            "thrash": dict(mig.get("thrash_skipped", {}) or {}),
+            "forward": sum(int(r.get("migrations_started", 0) or 0) for r in records),
+            "reverse": sum(int(r.get("reverse_migrations", 0) or 0) for r in records),
+            "thrash": {},
+            "failures": failures,
+            "events": events,
         }
     except Exception:  # noqa: BLE001
         return {"forward": 0, "reverse": 0, "thrash": {}}
+
+
+def _execution_order_for_step(
+    specs: Sequence[ProbeRequestSpec],
+    *,
+    safe_slots: int,
+) -> tuple[list[ProbeRequestSpec], bool]:
+    """Return per-step request order plus whether to stagger burst handover.
+
+    The first burst request must be an interferer, not the reused primary:
+    WP-3 migration triggers when a new session claims the idle full instance
+    while the previous primary session is the last full owner. The whole step is
+    still run concurrently; this only makes the handover deterministic.
+    """
+    ordered = list(specs)
+    if len(ordered) <= safe_slots:
+        return ordered, False
+    interferers = [s for s in ordered if not s.is_primary]
+    primaries = [s for s in ordered if s.is_primary]
+    if not interferers or not primaries:
+        return ordered, False
+    return [interferers[0], *primaries, *interferers[1:]], True
 
 
 def execute_migration_probe(  # pragma: no cover - inference path
@@ -693,10 +747,11 @@ def execute_migration_probe(  # pragma: no cover - inference path
     ``analyze_migration_events``. Emits a model/quant-indexed JSONL analysis row.
     Never touches autopilot lifecycle/state; never writes a ledger.
     """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     import time as _time
 
     sleep = sleep_fn or _time.sleep
-    probe = counter_probe or _default_counter_probe
+    probe = counter_probe or (lambda u: _default_counter_probe(u, role=plan.role))
     send = request_fn or (lambda spec: _default_request(spec, client, url=url, timeout=timeout))
 
     steps = plan.schedule.get("steps") or []
@@ -707,21 +762,57 @@ def execute_migration_probe(  # pragma: no cover - inference path
     observed: list[dict[str, Any]] = []
     prev = probe(url)
     for i in range(len(steps)):
-        for spec in by_step.get(i, []):
-            try:
-                send(spec)
-            except Exception:  # noqa: BLE001 - one bad turn must not abort the probe
-                pass
+        step_specs, stagger_burst = _execution_order_for_step(
+            by_step.get(i, []),
+            safe_slots=plan.safe_slots,
+        )
+        if step_specs:
+            with ThreadPoolExecutor(max_workers=len(step_specs)) as ex:
+                futures = []
+                if stagger_burst and len(step_specs) > 1:
+                    futures.append(ex.submit(send, step_specs[0]))
+                    sleep(DEFAULT_BURST_STAGGER_MS / 1000.0)
+                    step_specs = step_specs[1:]
+                futures.extend(ex.submit(send, spec) for spec in step_specs)
+                for fut in as_completed(futures):
+                    try:
+                        fut.result()
+                    except Exception:  # noqa: BLE001 - one bad turn must not abort the probe
+                        pass
+        sleep(DEFAULT_COUNTER_SETTLE_MS / 1000.0)
         cur = probe(url)
-        d_fwd = max(0, int(cur.get("forward", 0)) - int(prev.get("forward", 0)))
-        d_rev = max(0, int(cur.get("reverse", 0)) - int(prev.get("reverse", 0)))
+        cur_events = [e for e in (cur.get("events", []) or []) if isinstance(e, dict)]
+        prev_seq = max(
+            [int(e.get("seq", 0) or 0) for e in (prev.get("events", []) or []) if isinstance(e, dict)]
+            or [0]
+        )
+        new_committed_events = [
+            e for e in cur_events if int(e.get("seq", 0) or 0) > prev_seq
+        ]
+        use_session_events = bool(cur_events or (prev.get("events", []) or []))
+        d_fwd = 0 if use_session_events else max(0, int(cur.get("forward", 0)) - int(prev.get("forward", 0)))
+        d_rev = 0 if use_session_events else max(0, int(cur.get("reverse", 0)) - int(prev.get("reverse", 0)))
+        d_fail = max(0, int(cur.get("failures", 0)) - int(prev.get("failures", 0)))
         t_ms = i * plan.dwell_ms
+        for event in new_committed_events:
+            direction = str(event.get("direction") or "")
+            if direction not in {"forward", "reverse"}:
+                continue
+            observed.append({
+                "direction": direction,
+                "session_id": str(event.get("session_id") or "?"),
+                "committed": bool(event.get("committed", True)),
+                "t_ms": t_ms,
+            })
         for _ in range(d_fwd):
             observed.append({"direction": "forward", "session_id": plan.session_id,
                              "committed": True, "t_ms": t_ms})
         for _ in range(d_rev):
             observed.append({"direction": "reverse", "session_id": plan.session_id,
                              "committed": True, "t_ms": t_ms})
+        for _ in range(d_fail):
+            observed.append({"direction": "forward", "session_id": plan.session_id,
+                             "committed": False, "t_ms": t_ms})
         cur_thrash = cur.get("thrash", {}) or {}
         prev_thrash = prev.get("thrash", {}) or {}
         for reason, n in cur_thrash.items():

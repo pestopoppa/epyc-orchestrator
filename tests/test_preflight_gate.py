@@ -8,7 +8,7 @@ live stack, servers, or heavy probes are touched. NO inference.
 Covers:
   * attestation shape (all required top-level keys)
   * PASS when every check ok; FAIL aggregation with mocked probe failures
-  * topology-hash drift gate (expected match / mismatch / missing registry)
+  * topology-hash drift gate (expected match / mismatch / missing topology)
   * contention-freshness exit-code mapping (0 fresh / non-0 stale)
   * live-affinity artifact parsing (verified true/false)
   * write_attestation round-trip
@@ -112,7 +112,27 @@ def test_role_scoped_require_servers_uses_primary_role_ports(monkeypatch):
 
     assert att["overall"] == "PASS"
     assert seen["require_servers"] is True
-    assert seen["ports"] == [8070, 8072]
+    assert seen["ports"] == [
+        8070,
+        8080,
+        8180,
+        8280,
+        8380,
+        8072,
+        8082,
+        8182,
+        8282,
+        8382,
+    ]
+
+
+def test_role_scoped_live_only_ports_skip_nonlive_configured_ports(monkeypatch):
+    monkeypatch.setattr(pg, "_pid_on_port", lambda port: "123" if port in {8080, 8082} else None)
+
+    assert pg.ports_for_roles(["frontdoor", "worker_general"], live_only=True) == [
+        8080,
+        8082,
+    ]
 
 
 def test_server_health_only_skips_structural_health(monkeypatch):
@@ -132,6 +152,22 @@ def test_server_health_only_skips_structural_health(monkeypatch):
     assert res["health_ok"] is True
     assert res["structural_ok"] is None
     assert res["structural_skipped"] is True
+
+
+def test_health_check_uses_batch_profile(tmp_path):
+    script = tmp_path / "health.sh"
+    script.write_text(
+        "#!/usr/bin/env bash\n"
+        "if [[ \"$1\" == \"--profile\" && \"$2\" == \"batch\" ]]; then exit 0; fi\n"
+        "exit 7\n"
+    )
+
+    res = pg.check_health(script=script)
+
+    assert res["ok"] is True
+    assert res["health_ok"] is True
+    assert res["health_profile"] == "batch"
+    assert res["health_check_rc"] == 0
 
 
 def test_contention_observation_only_records_stale_without_failing(tmp_path):
@@ -177,38 +213,87 @@ def test_live_affinity_live_only_passes_when_live_instances_match(tmp_path):
     assert res["artifact_summary"]["live_matched"] == 1
 
 
+def test_live_affinity_memory_observation_does_not_fail_without_requirement(tmp_path):
+    script = tmp_path / "aff_memory_observation.py"
+    script.write_text(
+        "import argparse, json, sys\n"
+        "ap = argparse.ArgumentParser()\n"
+        "ap.add_argument('--output')\n"
+        "ap.add_argument('--roles', nargs='*')\n"
+        "args = ap.parse_args()\n"
+        "json.dump({\n"
+        "  'live_affinity_verified': False,\n"
+        "  'live_memory_placement_verified': False,\n"
+        "  'memory_locality_required': False,\n"
+        "  'instances': [{'port': 8082, 'pid': '123', 'match': True}],\n"
+        "}, open(args.output, 'w'))\n"
+        "sys.exit(1)\n"
+    )
+
+    res = pg.check_live_affinity(script=script, live_only=True)
+
+    assert res["ok"] is True
+    assert res["live_affinity_verified"] is True
+    assert res["memory_locality_required"] is False
+
+
 # --------------------------------------------------------------------------- #
 # Topology-hash gate
 # --------------------------------------------------------------------------- #
 def test_topology_hash_recorded_without_expected(tmp_path):
     reg = tmp_path / "reg.yaml"
     reg.write_text("roles: {}\n")
-    res = pg.check_topology_hashes(research_registry=reg, live_registry=reg)
+    matrix = tmp_path / "matrix.yaml"
+    res = pg.check_topology_hashes(live_registry=reg, matrix_path=matrix)
     assert res["ok"] is True  # observation-only when no expected hash
     assert res["topology_hash"] is not None
-    assert res["registry_hash"] == res["topology_hash"]  # same file here
+    assert res["registry_hash"] == pg._sha256(reg)
+    assert res["topology_source"] == str(matrix)
+    assert res["registry_source"] == str(reg)
     assert res["topology_match"] is None
 
 
-def test_topology_hash_match_and_drift(tmp_path):
+def test_topology_hash_match_and_drift(tmp_path, monkeypatch):
     reg = tmp_path / "reg.yaml"
     reg.write_text("roles: {a: 1}\n")
-    baseline = pg.check_topology_hashes(research_registry=reg, live_registry=reg)
-    good = pg.check_topology_hashes(expected_topology_hash=baseline["topology_hash"],
-                                    research_registry=reg, live_registry=reg)
+    monkeypatch.setattr(pg, "_live_topology_hash", lambda matrix_path: "8c8cfcbb13d2611d")
+    good = pg.check_topology_hashes(expected_topology_hash="8c8cfcbb13d2611d",
+                                    live_registry=reg)
     assert good["ok"] is True and good["topology_match"] is True
+    assert good["registry_hash"] == pg._sha256(reg)
     bad = pg.check_topology_hashes(expected_topology_hash="deadbeef",
-                                   research_registry=reg, live_registry=reg)
+                                   live_registry=reg)
     assert bad["ok"] is False and bad["topology_match"] is False
     assert "drift" in bad["error"]
 
 
-def test_topology_hash_missing_registry(tmp_path):
+def test_topology_hash_missing_live_topology(tmp_path, monkeypatch):
+    monkeypatch.setattr(pg, "_live_topology_hash", lambda matrix_path: None)
     missing = tmp_path / "does_not_exist.yaml"
-    res = pg.check_topology_hashes(research_registry=missing, live_registry=missing)
+    res = pg.check_topology_hashes(live_registry=missing, matrix_path=missing)
     assert res["ok"] is False
     assert res["topology_hash"] is None
-    assert "missing" in res["error"]
+    assert "live topology hash unavailable" in res["error"]
+
+
+def test_attest_topology_hash_is_not_registry_hash():
+    checks = _all_pass_checks()
+    checks["topology"] = {
+        "ok": True,
+        "topology_hash": "8c8cfcbb13d2611d",
+        "registry_hash": "f09dc260" * 8,
+        "topology_match": True,
+    }
+
+    att = pg.attest(
+        expected_topology_hash="8c8cfcbb13d2611d",
+        checks=checks,
+    )
+
+    assert att["overall"] == "PASS"
+    assert att["topology_hash"] == "8c8cfcbb13d2611d"
+    assert att["registry_hash"] == "f09dc260" * 8
+    assert att["expected_topology_hash"] == "8c8cfcbb13d2611d"
 
 
 # --------------------------------------------------------------------------- #

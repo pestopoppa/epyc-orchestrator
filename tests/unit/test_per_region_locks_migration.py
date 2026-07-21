@@ -74,6 +74,13 @@ def _patch_lock_grants_all(cab):
                       side_effect=lambda *a, **kw: _fake_lock_ctx())
 
 
+def test_get_base_url_handles_live_prefix_cache_wrapper_shape() -> None:
+    inner = _StubBackend("http://localhost:8070")
+    wrapper = type("Wrapper", (), {"backend": inner})()
+
+    assert ca_mod._get_base_url(wrapper) == "http://localhost:8070"
+
+
 def test_per_region_locks_dispatch_kicks_off_migration_on_session_swap(monkeypatch) -> None:
     """When OLD session is on full and NEW session arrives, _dispatch should
     kick off async _migrate_kv(OLD, quarter_idx)."""
@@ -101,6 +108,51 @@ def test_per_region_locks_dispatch_kicks_off_migration_on_session_swap(monkeypat
     assert old_session == "session_OLD"
     # Target should be a disjoint quarter (frontdoor full on NUMA_NODE0 → q2 or q3)
     assert target_q in cab._quarter_preference_order[:2]
+
+
+def test_per_region_locks_pending_migration_suppresses_duplicate_start(monkeypatch) -> None:
+    cab = _make_cab(per_region_locks=True)
+    cab._full_last_session = "session_OLD"
+    cab._set_session_state(
+        "session_OLD",
+        state=ca_mod._STATE_MIGRATION_PENDING,
+        quarter=2,
+    )
+
+    migrate_calls: list[tuple[str, int]] = []
+
+    def fake_migrate(session_id, target_quarter, transaction=None):
+        migrate_calls.append((session_id, target_quarter))
+
+    monkeypatch.setattr(cab, "_migrate_kv", fake_migrate)
+
+    with _patch_lock_grants_all(cab):
+        with cab._dispatch(session_id="session_NEW_1") as (_backend, _idx, is_full):
+            assert is_full
+
+    time.sleep(0.1)
+    assert migrate_calls == []
+
+
+def test_per_region_locks_distinct_full_handoffs_can_start_distinct_migrations(monkeypatch) -> None:
+    cab = _make_cab(per_region_locks=True)
+    cab._full_last_session = "session_OLD"
+
+    migrate_calls: list[tuple[str, int]] = []
+
+    def fake_migrate(session_id, target_quarter, transaction=None):
+        migrate_calls.append((session_id, target_quarter))
+
+    monkeypatch.setattr(cab, "_migrate_kv", fake_migrate)
+
+    with _patch_lock_grants_all(cab):
+        with cab._dispatch(session_id="session_NEW_1") as (_backend, _idx, is_full):
+            assert is_full
+        with cab._dispatch(session_id="session_NEW_2") as (_backend, _idx, is_full):
+            assert is_full
+
+    time.sleep(0.1)
+    assert [call[0] for call in migrate_calls] == ["session_OLD", "session_NEW_1"]
 
 
 def test_dispatch_does_NOT_migrate_when_same_session_returns(monkeypatch) -> None:

@@ -446,8 +446,10 @@ def test_ap4_absent_axes_leave_objectives_and_grep_identical() -> None:
     r = _base_eval()
     assert r.objectives == (2.0, 10.0, -0.5, 0.9)
     grep = r.to_grep_lines(trial_id=1)
+    # D4 METRIC contract v2 (audit MET-1): unavailable axes are emitted as
+    # explicit null, never omitted — absence-vs-zero must be unambiguous.
     for axis in rpt.REVIEW_PARETO_AXES:
-        assert axis not in grep
+        assert f"METRIC {axis}: null" in grep
     assert rpt.reviewer_quality_axes(r) == {}
 
 
@@ -466,7 +468,8 @@ def test_ap4_present_axes_surface_in_extractor_and_grep() -> None:
     assert r.objectives == (2.0, 10.0, -0.5, 0.9)
     grep = r.to_grep_lines(trial_id=2)
     assert "METRIC reviewer_fa_rate: 0.1000" in grep
-    assert "METRIC reviewer_fa_fr_ratio" not in grep  # never set -> absent
+    # D4 contract v2: never-set -> explicit null, not absent (audit MET-1)
+    assert "METRIC reviewer_fa_fr_ratio: null" in grep
 
 
 def test_ap4_calibration_from_decisions() -> None:

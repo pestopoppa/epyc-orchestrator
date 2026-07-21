@@ -736,13 +736,13 @@ def _format_state(state: HostHealthState) -> str:
     )
 
 
-def _main() -> int:
+def _main(argv: list[str] | None = None) -> int:
     import argparse
 
     p = argparse.ArgumentParser(description="Host health check + drop_caches remediation")
     p.add_argument("--remediate", action="store_true", help="run drop_caches if throttle detected")
     p.add_argument("--verbose", "-v", action="store_true")
-    args = p.parse_args()
+    args = p.parse_args(argv)
 
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
@@ -758,13 +758,14 @@ def _main() -> int:
         for t in triggers:
             print(f"  - {t}")
         if args.remediate:
-            print("\nRemediating (sync + drop_caches)…")
-            ok = remediate()
-            if ok:
+            print("\nRemediating (pause + drop_caches + NUMA-interleave rewarm)…")
+            flush_result = flush_cache_with_pause()
+            if flush_result.get("flush_ok") is True:
                 state2 = HostHealthState.snapshot()
+                still_throttled, _ = state2.is_throttled()
                 print(_format_state(state2))
-                print("OK" if not state2.is_throttled()[0] else "STILL THROTTLED after remediation")
-                return 0 if not state2.is_throttled()[0] else 3
+                print("OK" if not still_throttled else "STILL THROTTLED after remediation")
+                return 0 if not still_throttled else 3
             return 2
         return 1
     if memory_warnings:

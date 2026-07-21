@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from collections import Counter
 from pathlib import Path
@@ -21,6 +22,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.autopilot_core.rlvr_tiers import RLVR_REWARD_POLICY, rlvr_reward_from_result
+from scripts.autopilot.experiment_journal import json_sanitize
 
 
 ROW_SCHEMA_VERSION = "ap27_rlvr_environment_row.v1"
@@ -57,11 +59,18 @@ class RLVREnvironmentExportError(ValueError):
     """Raised when a candidate export cannot be rendered safely."""
 
 
-def load_records(paths: Iterable[Path]) -> list[dict[str, Any]]:
+def load_records(
+    paths: Iterable[Path],
+    *,
+    skip_bad_rows: bool = False,
+    bad_rows: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     for path in paths:
         if path.suffix == ".jsonl":
-            records.extend(_load_jsonl(path))
+            records.extend(
+                _load_jsonl(path, skip_bad_rows=skip_bad_rows, bad_rows=bad_rows)
+            )
         else:
             payload = _load_json(path)
             if isinstance(payload, list):
@@ -100,7 +109,42 @@ def write_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as handle:
         for row in rows:
-            handle.write(json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n")
+            # D2: strict, jq-parseable output — non-finite metric floats become
+            # null (their names are already recorded in `metrics_nonfinite`) and
+            # allow_nan=False forbids bare NaN/Infinity tokens.
+            handle.write(
+                json.dumps(
+                    json_sanitize(row),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                )
+                + "\n"
+            )
+
+
+def _has_nonfinite(value: Any) -> bool:
+    """True if `value` is (or nests) a non-finite float (NaN / ±Inf)."""
+    if isinstance(value, float):
+        return not math.isfinite(value)
+    if isinstance(value, dict):
+        return any(_has_nonfinite(item) for item in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_has_nonfinite(item) for item in value)
+    return False
+
+
+def _nonfinite_metric_names(metrics: Any) -> list[str]:
+    """Sorted metric names whose value carries a non-finite float, pre-sanitization.
+
+    D2: rlvr_tiers coerces a missing/None ece/auroc to ``math.nan`` (a row can be
+    ready_for_training while carrying NaN calibration). Sanitization turns those
+    into null, erasing which metric was affected — so we snapshot the offending
+    names here, before the write boundary drops the signal.
+    """
+    if not isinstance(metrics, dict):
+        return []
+    return sorted(name for name, value in metrics.items() if _has_nonfinite(value))
 
 
 def _load_json(path: Path) -> Any:
@@ -111,7 +155,12 @@ def _load_json(path: Path) -> Any:
         raise RLVREnvironmentExportError(f"{path}: invalid JSON: {exc}") from exc
 
 
-def _load_jsonl(path: Path) -> list[dict[str, Any]]:
+def _load_jsonl(
+    path: Path,
+    *,
+    skip_bad_rows: bool = False,
+    bad_rows: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     with path.open("r", encoding="utf-8") as handle:
         for line_number, line in enumerate(handle, start=1):
@@ -121,10 +170,32 @@ def _load_jsonl(path: Path) -> list[dict[str, Any]]:
             try:
                 value = json.loads(stripped)
             except json.JSONDecodeError as exc:
+                if skip_bad_rows:
+                    if bad_rows is not None:
+                        bad_rows.append(
+                            {
+                                "path": str(path),
+                                "line": line_number,
+                                "error": f"invalid JSON: {exc}",
+                            }
+                        )
+                    continue
                 raise RLVREnvironmentExportError(
                     f"{path}:{line_number}: invalid JSON: {exc}"
                 ) from exc
-            out.append(_checked_record(value, path=path, index=line_number))
+            if not isinstance(value, dict):
+                if skip_bad_rows:
+                    if bad_rows is not None:
+                        bad_rows.append(
+                            {
+                                "path": str(path),
+                                "line": line_number,
+                                "error": "expected object",
+                            }
+                        )
+                    continue
+                raise RLVREnvironmentExportError(f"{path}:{line_number}: expected object")
+            out.append(value)
     return out
 
 
@@ -196,6 +267,10 @@ def _environment_row(
     )
     if fingerprint:
         row["config_fingerprint"] = fingerprint
+    # D2: record which metrics were non-finite before write_jsonl sanitizes them.
+    nonfinite_metrics = _nonfinite_metric_names(row["metrics"])
+    if nonfinite_metrics:
+        row["metrics_nonfinite"] = nonfinite_metrics
     _assert_prompt_free(row)
     return row
 
@@ -253,6 +328,7 @@ def _summary(
         "rows": len(rows),
         "ready_for_training": sum(1 for row in rows if row["ready_for_training"]),
         "blocked": sum(1 for row in rows if not row["ready_for_training"]),
+        "rows_with_nonfinite_metrics": sum(1 for row in rows if row.get("metrics_nonfinite")),
         "skipped_no_eval": skipped_no_eval,
         "reward_policy": RLVR_REWARD_POLICY,
         "tier_counts": dict(sorted(Counter(str(row["tier"]) for row in rows).items())),
@@ -282,21 +358,43 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Return nonzero if any exported row is not ready_for_training",
     )
+    parser.add_argument(
+        "--skip-bad-rows",
+        action="store_true",
+        help=(
+            "Tolerate malformed JSONL input rows (invalid JSON or non-object): "
+            "skip them, count them in the summary, and warn to stderr instead of "
+            "failing all-or-nothing. Default off keeps strict behavior."
+        ),
+    )
     args = parser.parse_args(argv)
 
+    bad_rows: list[dict[str, Any]] = []
     try:
-        records = load_records(args.inputs)
+        records = load_records(
+            args.inputs, skip_bad_rows=args.skip_bad_rows, bad_rows=bad_rows
+        )
         rows, summary = export_environment_rows(records, source_label=args.source_label)
+        if args.skip_bad_rows:
+            summary["skipped_bad_rows"] = len(bad_rows)
+            summary["skipped_bad_row_samples"] = bad_rows[:5]
         write_jsonl(args.output_jsonl, rows)
         if args.summary_json:
             args.summary_json.parent.mkdir(parents=True, exist_ok=True)
             args.summary_json.write_text(
-                json.dumps(summary, indent=2, sort_keys=True) + "\n",
+                json.dumps(json_sanitize(summary), indent=2, sort_keys=True, allow_nan=False)
+                + "\n",
                 encoding="utf-8",
             )
     except RLVREnvironmentExportError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+
+    if args.skip_bad_rows and bad_rows:
+        print(
+            f"warning: skipped {len(bad_rows)} malformed input row(s)",
+            file=sys.stderr,
+        )
 
     if args.fail_on_blockers and summary["blocked"]:
         return 1

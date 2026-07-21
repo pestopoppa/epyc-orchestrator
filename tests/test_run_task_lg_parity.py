@@ -250,6 +250,108 @@ def test_resolve_task_set_from_file_and_subsample(tmp_path):
     assert [t["task_id"] for t in tasks] == [t["task_id"] for t in tasks2]
 
 
+def test_checked_in_tm7_task_set_matches_canonical_smoke_file():
+    task_set = _REPO / "data" / "trace" / "parity_task_set.json"
+    tasks, prov = mod.resolve_task_set(
+        fixed_task_set=str(task_set), corpus=None, n=None, seed=42, allow_missing=False,
+    )
+    assert prov["source"] == f"fixed-task-set:{task_set}"
+    assert tasks == mod.DEFAULT_CORPUS
+
+
+def test_execute_parity_fails_closed_on_empty_live_trace_chains(monkeypatch, tmp_path):
+    async def fake_run_arm(arm, task, *, checkpoint_path, seed):  # noqa: ARG001
+        return {
+            "task_id": task["task_id"],
+            "arm": arm,
+            "thread_id": f"{task['task_id']}:{arm}",
+            "result": {"answer": "ok", "success": True, "role_history": ["frontdoor"], "turns": 1},
+            "chain": [],
+        }
+
+    monkeypatch.setattr(mod, "_run_arm", fake_run_arm)
+    report = mod.execute_parity(
+        [{"task_id": "t1", "prompt": "hi", "start_role": "frontdoor"}],
+        ["run_task_lg", "run_task"],
+        checkpoint_path=tmp_path / "cp.sqlite",
+        seed=42,
+        keys=mod.DEFAULT_PARITY_KEYS,
+    )
+    assert report["overall"] == "FAIL"
+    assert report["n_pass"] == 0
+    assert report["n_trace_coverage_fail"] == 1
+    verdict = report["per_task"][0]["verdict"]
+    assert verdict["trace_coverage_ok"] is False
+    assert verdict["trace_chain_lengths"] == {"run_task_lg": 0, "run_task": 0}
+    assert "non-empty decision chains" in verdict["coverage_errors"][0]
+
+
+def test_execute_parity_fails_closed_on_empty_decision_chain_dict(monkeypatch, tmp_path):
+    async def fake_run_arm(arm, task, *, checkpoint_path, seed):  # noqa: ARG001
+        return {
+            "task_id": task["task_id"],
+            "arm": arm,
+            "thread_id": f"{task['task_id']}:{arm}",
+            "result": {"answer": "ok", "success": True, "role_history": ["frontdoor"], "turns": 1},
+            "chain": {"session_id": f"{task['task_id']}:{arm}", "chain": []},
+        }
+
+    monkeypatch.setattr(mod, "_run_arm", fake_run_arm)
+    report = mod.execute_parity(
+        [{"task_id": "t1", "prompt": "hi", "start_role": "frontdoor"}],
+        ["run_task_lg", "run_task"],
+        checkpoint_path=tmp_path / "cp.sqlite",
+        seed=42,
+        keys=mod.DEFAULT_PARITY_KEYS,
+    )
+    verdict = report["per_task"][0]["verdict"]
+    assert report["overall"] == "FAIL"
+    assert verdict["len_a"] == 0
+    assert verdict["len_b"] == 0
+    assert verdict["trace_coverage_ok"] is False
+    assert verdict["trace_chain_lengths"] == {"run_task_lg": 0, "run_task": 0}
+
+
+def test_execute_parity_reports_role_history_fallback_separately(monkeypatch, tmp_path):
+    async def fake_run_arm(arm, task, *, checkpoint_path, seed):  # noqa: ARG001
+        return {
+            "task_id": task["task_id"],
+            "arm": arm,
+            "thread_id": f"{task['task_id']}:{arm}",
+            "result": {
+                "answer": "same",
+                "success": True,
+                "role_history": ["frontdoor", "architect_general"],
+                "turns": 2,
+            },
+            "chain": {"role_history": ["frontdoor", "architect_general"]},
+            "trace_chain": {"session_id": f"{task['task_id']}:{arm}", "chain": []},
+            "trace_chain_len": 0,
+            "chain_source": "result_role_history",
+        }
+
+    monkeypatch.setattr(mod, "_run_arm", fake_run_arm)
+    report = mod.execute_parity(
+        [{"task_id": "t1", "prompt": "hi", "start_role": "frontdoor"}],
+        ["run_task_lg", "run_task"],
+        checkpoint_path=tmp_path / "cp.sqlite",
+        seed=42,
+        keys=mod.DEFAULT_PARITY_KEYS,
+    )
+    verdict = report["per_task"][0]["verdict"]
+    assert report["overall"] == "PASS"
+    assert report["n_trace_coverage_fail"] == 1
+    assert report["n_parity_chain_coverage_fail"] == 0
+    assert verdict["trace_coverage_ok"] is False
+    assert verdict["parity_chain_coverage_ok"] is True
+    assert verdict["parity_chain_sources"] == {
+        "run_task_lg": "result_role_history",
+        "run_task": "result_role_history",
+    }
+    assert verdict["arm_success_ok"] is True
+    assert verdict["output_equivalence_ok"] is True
+
+
 # ---------------------------------------------------------------------------
 # End-to-end main(): dry-run (no inference) and pure parity-diff mode
 # ---------------------------------------------------------------------------

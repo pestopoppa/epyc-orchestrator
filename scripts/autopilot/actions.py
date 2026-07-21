@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any, Iterable
 from controller_io import validate_single_variable
 from safety_gate import EvalResult, SafetyGate
 from species.prompt_forge import diversity_coverage_penalty
+from src.autopilot_core.tier_specs import objectives_from
 
 ORCH_ROOT = Path(__file__).resolve().parents[2]
 
@@ -682,10 +683,17 @@ def _action_numeric_trial(action: dict[str, Any], ctx: _ActionContext):
         eval_result.details.setdefault(
             "numeric_trial_applied_params", dict(action.get("params") or {})
         )
-    # Report to Optuna if we have a trial
+    # Report to Optuna if we have a trial. FIELD-1 tail: build the objective tuple
+    # through the canonical tier_specs chokepoint (objectives_from) rather than the
+    # raw EvalResult.objectives property — tier_specs is the single source of truth
+    # for per-tier objective shape, and its own docstring forbids bypassing it with
+    # ad-hoc tuple building at call sites. Behavior-identical for all current tiers
+    # (the default spec returns the same (quality, speed, -cost, reliability) tuple).
     if "_current_optuna_trial" in ctx.state and eval_result:
         t = ctx.state.pop("_current_optuna_trial")
-        ctx.swarm.report_result(t["surface"], t["trial_number"], eval_result.objectives)
+        ctx.swarm.report_result(
+            t["surface"], t["trial_number"], objectives_from(eval_result)
+        )
     return eval_result, "numeric_swarm"
 
 
@@ -1932,9 +1940,10 @@ def _recent_eval_qids(
         for row in rows:
             if not isinstance(row, dict):
                 continue
-            qid = str(row.get("qid") or row.get("question_id") or "").strip()
-            if qid:
-                qids.add(qid)
+            for key in ("qid", "stable_qid", "question_id", "id"):
+                qid = str(row.get(key) or "").strip()
+                if qid:
+                    qids.add(qid)
     return qids
 
 

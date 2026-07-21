@@ -32,6 +32,7 @@ Usage:
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from contextlib import contextmanager
@@ -75,8 +76,9 @@ def _record_thrash_skip(reason: str) -> None:
 
 def _get_base_url(backend: Any) -> str | None:
     """Extract the base URL from a CachingBackend or LlamaServerBackend."""
-    # CachingBackend wraps LlamaServerBackend
-    inner = getattr(backend, "_backend", backend)
+    # CachingBackend wraps LlamaServerBackend; historical variants used
+    # either `.backend` or `._backend`.
+    inner = getattr(backend, "backend", None) or getattr(backend, "_backend", backend)
     config = getattr(inner, "config", None)
     if config:
         return getattr(config, "base_url", None)
@@ -107,13 +109,21 @@ def _shape_for_regions(regions: frozenset[str] | set[str] | list[str]) -> str:
     return "+".join(sorted(rs)) if rs else "unknown"
 
 
-def _slot_save(base_url: str, slot_id: int = 0) -> bool:
+def _slot_filename(role: str, session_id: str, txn_id: str) -> str:
+    """Return a llama-server slot-save filename accepted under --slot-save-path."""
+    raw = f"{role}_{session_id}_{txn_id}"
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", raw).strip("._")
+    return f"kv_migrate_{safe[:180] or 'session'}.bin"
+
+
+def _slot_save(base_url: str, slot_id: int = 0, filename: str | None = None) -> bool:
     """Save KV state from a llama-server slot. Returns True on success."""
     if not _HTTPX_AVAILABLE:
         return False
     try:
         url = f"{base_url}/slots/{slot_id}?action=save"
-        resp = httpx.post(url, timeout=_SLOT_SAVE_TIMEOUT)
+        kwargs = {"json": {"filename": filename}} if filename else {}
+        resp = httpx.post(url, timeout=_SLOT_SAVE_TIMEOUT, **kwargs)
         if resp.status_code == 200:
             data = resp.json()
             logger.info(
@@ -128,13 +138,14 @@ def _slot_save(base_url: str, slot_id: int = 0) -> bool:
         return False
 
 
-def _slot_restore(base_url: str, slot_id: int = 0) -> bool:
+def _slot_restore(base_url: str, slot_id: int = 0, filename: str | None = None) -> bool:
     """Restore KV state to a llama-server slot. Returns True on success."""
     if not _HTTPX_AVAILABLE:
         return False
     try:
         url = f"{base_url}/slots/{slot_id}?action=restore"
-        resp = httpx.post(url, timeout=_SLOT_RESTORE_TIMEOUT)
+        kwargs = {"json": {"filename": filename}} if filename else {}
+        resp = httpx.post(url, timeout=_SLOT_RESTORE_TIMEOUT, **kwargs)
         if resp.status_code == 200:
             data = resp.json()
             logger.info(
@@ -476,6 +487,33 @@ class ConcurrencyAwareBackend:
             self._session_quarter[session_id] = quarter
             self._set_session_state(session_id, state=state, quarter=quarter, detail=detail)
 
+    def _quarter_for_session_locked(self, session_id: str) -> int | None:
+        """Return this session's quarter affinity or pending quarter.
+
+        Caller must hold ``self._lock``. The per-region dispatch path needs to
+        treat ``migration_pending`` and ``migration_failed_cold`` as reserved
+        quarter assignments; otherwise concurrent handovers can start duplicate
+        migrations before the first save/restore commits.
+        """
+        if not session_id:
+            return None
+        q_idx = self._session_quarter.get(session_id)
+        if q_idx is not None:
+            return q_idx
+        state = self._session_state.get(session_id) or {}
+        if state.get("state") in {
+            _STATE_MIGRATION_PENDING,
+            _STATE_ASSIGNED_QUARTER,
+            _STATE_MIGRATION_FAILED_COLD,
+        }:
+            try:
+                q_idx = int(state.get("quarter", -1))
+            except (TypeError, ValueError):
+                return None
+            if 0 <= q_idx < len(self._quarters):
+                return q_idx
+        return None
+
     def _migrate_kv(
         self,
         session_id: str,
@@ -525,18 +563,20 @@ class ConcurrencyAwareBackend:
                 target_url=target_url,
             )
 
+        slot_filename = _slot_filename(self._role, session_id, transaction.txn_id)
+
         transaction.advance(MigrationState.SAVING)
-        saved = _slot_save(self._full_url)
+        saved = _slot_save(self._full_url, filename=slot_filename)
         if not saved:
             transaction.advance(MigrationState.ABORTED, detail="save_failed")
+            self._finalize_quarter_assignment(
+                session_id,
+                target_quarter,
+                state=_STATE_MIGRATION_FAILED_COLD,
+                detail="save_failed",
+            )
             with self._lock:
                 self._migration_failures += 1
-                self._set_session_state(
-                    session_id,
-                    state=_STATE_MIGRATION_FAILED_COLD,
-                    quarter=target_quarter,
-                    detail="save_failed",
-                )
             logger.warning(
                 "KV migration save failed for %s session=%s, quarter %d starts cold (txn=%s)",
                 self._role, session_id, target_quarter, transaction.txn_id,
@@ -544,17 +584,17 @@ class ConcurrencyAwareBackend:
             return transaction
 
         transaction.advance(MigrationState.RESTORING)
-        restored = _slot_restore(target_url)
+        restored = _slot_restore(target_url, filename=slot_filename)
         if not restored:
             transaction.advance(MigrationState.ABORTED, detail="restore_failed")
+            self._finalize_quarter_assignment(
+                session_id,
+                target_quarter,
+                state=_STATE_MIGRATION_FAILED_COLD,
+                detail="restore_failed",
+            )
             with self._lock:
                 self._migration_failures += 1
-                self._set_session_state(
-                    session_id,
-                    state=_STATE_MIGRATION_FAILED_COLD,
-                    quarter=target_quarter,
-                    detail="restore_failed",
-                )
             logger.warning(
                 "KV migration restore failed for %s session=%s quarter %d; session will run cold (txn=%s)",
                 self._role, session_id, target_quarter, transaction.txn_id,
@@ -717,9 +757,10 @@ class ConcurrencyAwareBackend:
                 target_quarter=-1,  # convention: -1 = full
                 target_url=self._full_url,
             )
+            slot_filename = _slot_filename(self._role, session_id, txn.txn_id)
 
             txn.advance(MigrationState.SAVING)
-            if not _slot_save(source_url):
+            if not _slot_save(source_url, filename=slot_filename):
                 txn.advance(MigrationState.ABORTED, detail="save_failed")
                 logger.warning(
                     "WP-4 reverse migration save failed role=%s session=%s txn=%s",
@@ -728,7 +769,7 @@ class ConcurrencyAwareBackend:
                 return
 
             txn.advance(MigrationState.RESTORING)
-            if not _slot_restore(self._full_url):
+            if not _slot_restore(self._full_url, filename=slot_filename):
                 txn.advance(MigrationState.ABORTED, detail="restore_failed")
                 logger.warning(
                     "WP-4 reverse migration restore failed role=%s session=%s txn=%s",
@@ -975,7 +1016,7 @@ class ConcurrencyAwareBackend:
         sticky_q_idx: int | None = None
         if session_id:
             with self._lock:
-                sticky_q_idx = self._session_quarter.get(session_id)
+                sticky_q_idx = self._quarter_for_session_locked(session_id)
         candidates: list[tuple[int, int]] = []
         if sticky_q_idx is not None and 0 <= sticky_q_idx < len(self._quarters):
             candidates.append((sticky_q_idx, sticky_q_idx + 1))
@@ -1132,7 +1173,7 @@ class ConcurrencyAwareBackend:
                     and old_session
                     and session_id
                     and old_session != session_id
-                    and old_session not in self._session_quarter
+                    and self._quarter_for_session_locked(old_session) is None
                 ):
                     # Find an idle quarter in preference order (disjoint first)
                     for q_idx in self._quarter_preference_order:

@@ -1,10 +1,10 @@
 """Clean-room, stdlib-only statistics for EPYC eval / calibration reports.
 
-This module consolidates three metric functions that had been copy-pasted (and
-had begun to drift) across the orchestrator's analysis, graph-router, and
-maintenance scripts. Everything here is pure ``math`` — **no numpy, no sklearn,
-no pandas**, and (by rule) **no import from ``scripts/``**: this module lives
-under ``src`` and is imported *by* scripts, never the other way around.
+This module consolidates metric functions that had been copy-pasted (and had
+begun to drift) across the orchestrator's analysis, graph-router, eval-tower,
+and maintenance scripts. Everything here is pure ``math`` — **no numpy, no
+sklearn, no pandas**, and (by rule) **no import from ``scripts/``**: this module
+lives under ``src`` and is imported *by* scripts, never the other way around.
 
 Consolidated prior copies (all now delegate here):
 
@@ -29,6 +29,10 @@ Consolidated prior copies (all now delegate here):
     train_frontdoor_verifier}.py::_roc_auc``
   (``evaluate_offline_reward_verifier_model_families.py`` imports ``_roc_auc``
   from ``train_verifier_head`` and so inherits this consolidation transitively).
+
+* ``compute_calibration_metrics`` replaces
+  - ``scripts/autopilot/eval_tower.py::compute_calibration_metrics`` and its
+    local rank/cohort helpers.
 
 Deliberately **not** consolidated here:
 
@@ -57,6 +61,16 @@ from collections.abc import Sequence
 # bit-for-bit pass ``z=1.96`` explicitly (the delegating wrappers do exactly
 # that), so this sharper default only affects new call sites.
 DEFAULT_WILSON_Z = 1.959964
+
+# The six per-role EV-4 calibration metrics, in report order.
+CALIBRATION_METRIC_KEYS = (
+    "ece",
+    "auroc",
+    "top1_accuracy",
+    "bottom1_accuracy",
+    "spearman_rho",
+    "mae",
+)
 
 
 def wilson_interval(
@@ -186,3 +200,100 @@ def roc_auc(
 
     rank_pos = sum(ranks[k] for k in range(n) if labels[k] >= 0.5)
     return (rank_pos - pos * (pos + 1) / 2.0) / (pos * neg)
+
+
+def _average_ranks(values: Sequence[float]) -> list[float]:
+    """1-based tie-averaged ranks (same convention as ``roc_auc``)."""
+    order = sorted(range(len(values)), key=lambda i: values[i])
+    ranks = [0.0] * len(values)
+    i = 0
+    while i < len(order):
+        j = i
+        while j + 1 < len(order) and values[order[j + 1]] == values[order[i]]:
+            j += 1
+        avg = (i + j) / 2.0 + 1.0
+        for k in range(i, j + 1):
+            ranks[order[k]] = avg
+        i = j + 1
+    return ranks
+
+
+def _pearson(xs: Sequence[float], ys: Sequence[float]) -> float | None:
+    n = len(xs)
+    if n < 2 or n != len(ys):
+        return None
+    mean_x = sum(xs) / n
+    mean_y = sum(ys) / n
+    cov = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys))
+    var_x = sum((x - mean_x) ** 2 for x in xs)
+    var_y = sum((y - mean_y) ** 2 for y in ys)
+    if var_x <= 0.0 or var_y <= 0.0:
+        return None
+    return cov / math.sqrt(var_x * var_y)
+
+
+def _spearman_rho(xs: Sequence[float], ys: Sequence[float]) -> float | None:
+    """Spearman rank correlation (tie-averaged).
+
+    None when undefined: fewer than 2 paired points, a length mismatch, or a
+    constant vector on either axis (rank variance is 0).
+    """
+    if len(xs) < 2 or len(xs) != len(ys):
+        return None
+    return _pearson(_average_ranks(xs), _average_ranks(ys))
+
+
+def _cohort_accuracy(
+    confidences: Sequence[float],
+    labels: Sequence[float],
+    *,
+    pick_max: bool,
+) -> float | None:
+    """Accuracy of the max- (or min-) confidence cohort.
+
+    Ties are averaged: when several items share the extreme confidence the
+    metric is the mean label over that whole cohort, so with distinct
+    confidences this reduces to exactly the single top-1 / bottom-1 item.
+    """
+    if not confidences:
+        return None
+    target = max(confidences) if pick_max else min(confidences)
+    cohort = [lab for conf, lab in zip(confidences, labels) if conf == target]
+    if not cohort:
+        return None
+    return sum(cohort) / len(cohort)
+
+
+def compute_calibration_metrics(
+    confidences: Sequence[float],
+    labels: Sequence[float],
+) -> dict[str, float | None]:
+    """EV-4 calibration metrics from paired confidence/correctness vectors.
+
+    Returns every key in ``CALIBRATION_METRIC_KEYS`` plus ``n``. Metrics return
+    ``None`` where undefined: empty input, single-class / too few distinct
+    confidences for AUROC, or a constant vector for Spearman.
+    """
+    conf = [float(c) for c in confidences]
+    lab = [float(y) for y in labels]
+    if len(conf) != len(lab):
+        raise ValueError(
+            f"confidences/labels length mismatch: {len(conf)} != {len(lab)}"
+        )
+    n = len(conf)
+    ece = expected_calibration_error(conf, lab, n_bins=10) if n else None
+    # AUROC is only meaningful with both classes present and enough distinct
+    # confidences for the confidence signal to rank examples.
+    auroc: float | None = None
+    if n and len({round(c, 6) for c in conf}) > 2 and len({round(y) for y in lab}) > 1:
+        auroc = roc_auc(conf, lab)
+    mae = (sum(abs(c - y) for c, y in zip(conf, lab)) / n) if n else None
+    return {
+        "n": n,
+        "ece": ece,
+        "auroc": auroc,
+        "top1_accuracy": _cohort_accuracy(conf, lab, pick_max=True),
+        "bottom1_accuracy": _cohort_accuracy(conf, lab, pick_max=False),
+        "spearman_rho": _spearman_rho(conf, lab),
+        "mae": mae,
+    }

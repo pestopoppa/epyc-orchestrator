@@ -269,6 +269,7 @@ def test_call_orchestrator_forced_includes_optional_payload_fields():
         ],
         tool_choice={"type": "function", "function": {"name": "web_search"}},
         max_tokens=1024,
+        n_probs=7,
         output_schema={"type": "object", "required": ["decision"]},
         prompt_root="/tmp/gepa-root",
     )
@@ -286,6 +287,7 @@ def test_call_orchestrator_forced_includes_optional_payload_fields():
     assert payload["tools"][0]["function"]["name"] == "web_search"
     assert payload["tool_choice"]["function"]["name"] == "web_search"
     assert payload["max_tokens"] == 1024
+    assert payload["n_probs"] == 7
     assert payload["output_schema"] == {"type": "object", "required": ["decision"]}
     assert payload["x_orchestrator_prompt_root"] == "/tmp/gepa-root"
 

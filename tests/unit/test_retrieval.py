@@ -215,6 +215,39 @@ def test_kb_rag_query_returns_ranked_results(tmp_path: Path) -> None:
     assert results[0]["score"] >= results[1]["score"]
 
 
+def test_kb_rag_query_opt_in_embedding_cache_reuses_np_load(tmp_path: Path) -> None:
+    from src.retrieval import kb_rag
+
+    corpus_root = tmp_path / "corpus"
+    corpus_root.mkdir()
+    (corpus_root / "cats.md").write_text("# cats\n\nfeline body\n")
+    (corpus_root / "dogs.md").write_text("# dogs\n\ncanine body\n")
+    cfg = kb_rag.CorpusConfig(roots=[str(corpus_root)], include_globs=["*.md"], exclude_patterns=[])
+    index_dir = tmp_path / "idx"
+
+    def fake_encode(text, max_tokens):
+        text_l = text.lower()
+        v = np.zeros((2, 4), dtype=np.float32)
+        v[0, 0 if ("feline" in text_l or "cats" in text_l) else 1] = 1.0
+        v[1, 2 if ("canine" in text_l or "dogs" in text_l) else 3] = 0.5
+        norms = np.linalg.norm(v, axis=1, keepdims=True)
+        return v / np.maximum(norms, 1e-8)
+
+    with patch.object(kb_rag.colbert_encoder, "is_available", return_value=True), \
+         patch.object(kb_rag.colbert_encoder, "ensure_loaded", return_value=True), \
+         patch.object(kb_rag.colbert_encoder, "encode", side_effect=fake_encode):
+        kb_rag.build_index(cfg, index_dir=index_dir)
+        chunk_count = kb_rag.stats(index_dir=index_dir)["chunks"]
+        kb_rag._clear_embedding_cache()
+        with patch.object(kb_rag, "_EMB_CACHE_DEFAULT", True), \
+             patch.object(kb_rag.np, "load", wraps=kb_rag.np.load) as load_spy:
+            kb_rag.query("tell me about cats", top_k=2, index_dir=index_dir)
+            kb_rag.query("tell me about dogs", top_k=2, index_dir=index_dir)
+
+    kb_rag._clear_embedding_cache()
+    assert load_spy.call_count == chunk_count
+
+
 def test_kb_rag_update_files_replaces_specific_files(tmp_path: Path) -> None:
     from src.retrieval import kb_rag
 
@@ -408,6 +441,63 @@ def test_kb_rag_query_lexical_signal_backfills_on_rebuild(tmp_path: Path) -> Non
     assert "b.md" in results[0]["file"]
     assert results[0]["lexical"] == 1.0
     assert results[0]["score"] >= results[1]["score"]
+
+
+def test_kb_rag_rebuild_backfills_duplicate_content_chunks(tmp_path: Path) -> None:
+    """Unchanged duplicate chunks in one file must each get an FTS row."""
+    import sqlite3
+
+    from src.retrieval import kb_rag
+    from src.retrieval.markdown_chunker import Chunk
+
+    corpus_root = tmp_path / "corpus"
+    corpus_root.mkdir()
+    doc = corpus_root / "dup.md"
+    doc.write_text("# Dup\n\nneedle\n\nneedle\n")
+
+    chunks = [
+        Chunk(str(doc), ["Dup"], (1, 2), "needle"),
+        Chunk(str(doc), ["Dup"], (4, 5), "needle"),
+    ]
+    cfg = kb_rag.CorpusConfig(roots=[str(corpus_root)], include_globs=["*.md"], exclude_patterns=[])
+    index_dir = tmp_path / "idx"
+
+    def fake_encode(text, max_tokens):
+        return np.eye(2, 4, dtype=np.float32)
+
+    with patch.object(kb_rag.colbert_encoder, "is_available", return_value=True), \
+         patch.object(kb_rag.colbert_encoder, "ensure_loaded", return_value=True), \
+         patch.object(kb_rag.colbert_encoder, "encode", side_effect=fake_encode), \
+         patch.object(kb_rag, "chunk_file", return_value=chunks):
+        kb_rag.build_index(cfg, index_dir=index_dir)
+
+    catalog_path = index_dir / "catalog.sqlite"
+    conn = sqlite3.connect(str(catalog_path))
+    has_fts = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='chunk_fts'"
+    ).fetchone()
+    if has_fts is None:
+        conn.close()
+        pytest.skip("SQLite FTS5 is unavailable in this environment")
+    assert conn.execute("SELECT COUNT(*) FROM chunk").fetchone()[0] == 2
+    assert conn.execute("SELECT COUNT(*) FROM chunk_fts").fetchone()[0] == 2
+    conn.execute("DROP TABLE chunk_fts")
+    conn.commit()
+    conn.close()
+
+    with patch.object(kb_rag.colbert_encoder, "is_available", return_value=True), \
+         patch.object(kb_rag.colbert_encoder, "ensure_loaded", return_value=True), \
+         patch.object(kb_rag.colbert_encoder, "encode", side_effect=fake_encode), \
+         patch.object(kb_rag, "chunk_file", return_value=chunks):
+        second = kb_rag.build_index(cfg, index_dir=index_dir)
+
+    conn = sqlite3.connect(str(catalog_path))
+    try:
+        assert second["chunks_skipped_unchanged"] == 2
+        assert conn.execute("SELECT COUNT(*) FROM chunk").fetchone()[0] == 2
+        assert conn.execute("SELECT COUNT(*) FROM chunk_fts").fetchone()[0] == 2
+    finally:
+        conn.close()
 
 
 # ─── K9: cross-encoder rerank stage ───────────────────────────────────────────

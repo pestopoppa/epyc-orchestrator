@@ -23,13 +23,28 @@ import json
 import re
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any
 
 
+class ScoringUnavailableError(RuntimeError):
+    """Raised when a requested scorer cannot run.
+
+    Signals a scorer-infrastructure defect — a missing dependency, an
+    unreachable judge, or an unparseable GOLD/expected answer — as distinct
+    from the model merely producing a wrong answer. Callers MUST surface this
+    as an eval ERROR (an item that could not be scored) and NEVER fold it into
+    a ``False`` (wrong-answer) result. Silently swapping in a different scorer
+    (e.g. exact_match / substring) on such a failure is exactly how threaded
+    ``math_verify`` parses were mis-scored en masse; this exception makes the
+    failure loud instead of catastrophic-and-quiet.
+    """
+
+
 def score_answer(
     answer: str,
-    expected: str,
+    expected: Any,
     scoring_method: str,
     scoring_config: dict[str, Any] | None = None,
 ) -> bool:
@@ -53,6 +68,7 @@ def score_answer(
     if not answer:
         return False
 
+    expected = "" if expected is None else str(expected)
     config = scoring_config or {}
 
     scorers = {
@@ -95,6 +111,10 @@ def _score_exact_match(
         # Legacy fallback: try #### pattern for backward compatibility
         extracted = _extract_answer(answer, r"####[ \t]*\n?(\S+)")
     if extracted is None:
+        boxed = _extract_boxed_answer(answer)
+        if boxed is not None:
+            extracted = boxed
+    if extracted is None:
         # Last resort: try to find the expected value anywhere in the last line
         last_line = answer.strip().split("\n")[-1]
         extracted = last_line.strip()
@@ -131,7 +151,7 @@ def _score_exact_match(
     #   'The text in the image is "iRaeenlc".' or 'The image contains the text: iRaeenlc'
     # Try extracting quoted text or text after colon from the full answer.
     if normalize:
-        answer_lower = answer.strip().lower()
+        answer_lower = _final_answer_region(answer).lower()
         # Check quoted: "answer" or 'answer'
         for q in ('"', "'", "\u201c"):
             q_end = "\u201d" if q == "\u201c" else q
@@ -143,7 +163,7 @@ def _score_exact_match(
                     if candidate == expected_norm:
                         return True
         # Check after colon on last meaningful line
-        for line in reversed(answer.strip().split("\n")):
+        for line in reversed(_final_answer_region(answer).split("\n")):
             if ":" in line:
                 candidate = line.split(":", 1)[1].strip().lower().rstrip(".")
                 if candidate == expected_norm:
@@ -155,46 +175,121 @@ def _score_exact_match(
 def _score_multiple_choice(
     answer: str, expected: str, config: dict[str, Any]
 ) -> bool:
-    """Parse A/B/C/D from output, compare to expected letter.
+    """Parse A/B/C/D or configured choice text from output.
 
     Used for: ARC-Challenge, MMLU, HellaSwag.
 
     Config:
-        choices: Optional list of choice texts (for fuzzy matching).
+        choices: Optional list of choice texts.
     """
-    expected_letter = expected.strip().upper()
-    if expected_letter not in "ABCDEFGH":
+    choices = config.get("choices")
+    if not isinstance(choices, list):
+        choices = []
+
+    expected_letter = _expected_choice_letter(expected, choices)
+    expected_index = _expected_choice_index(expected, choices)
+    if expected_letter is None and expected_index is None:
         return False
 
+    parsed_letter = _extract_multiple_choice_letter(answer)
+    if parsed_letter is not None and expected_letter is not None:
+        return parsed_letter == expected_letter
+
+    parsed_index = _extract_multiple_choice_text_index(answer, choices)
+    if parsed_index is not None and expected_index is not None:
+        return parsed_index == expected_index
+
+    return False
+
+
+def _expected_choice_letter(expected: str, choices: list[Any]) -> str | None:
+    expected_match = re.fullmatch(
+        r"\s*[\(\[\{]?\s*([A-H])\s*[\)\]\}]?\s*\.?\s*",
+        expected,
+        re.IGNORECASE,
+    )
+    if expected_match:
+        return expected_match.group(1).upper()
+
+    idx = _expected_choice_index(expected, choices)
+    if idx is not None and idx < 8:
+        return chr(ord("A") + idx)
+    return None
+
+
+def _expected_choice_index(expected: str, choices: list[Any]) -> int | None:
+    if not choices:
+        return None
+    expected_norm = _normalize_choice_text(expected)
+    for idx, choice in enumerate(choices):
+        if _normalize_choice_text(str(choice)) == expected_norm:
+            return idx
+    return None
+
+
+def _normalize_choice_text(text: str) -> str:
+    text = re.sub(r'<think>.*?</think>', '', str(text), flags=re.DOTALL)
+    text = re.sub(r"[*_`~]+", "", text)
+    text = text.strip().lower()
+    text = text.strip("\"'“”‘’()[]{}")
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _extract_multiple_choice_letter(answer: str) -> str | None:
     # Strategy 1: Explicit "Answer: X" — take LAST match (verbose models repeat)
     # Negative lookahead prevents "option is correct" matching as letter "C"
     explicit_pat = r"(?:answer|choice|option)\s*(?:is|:)\s*\(?([A-H])\)?(?![a-zA-Z])"
     explicit_matches = re.findall(explicit_pat, answer, re.IGNORECASE)
     if explicit_matches:
-        return explicit_matches[-1].upper() == expected_letter
+        return explicit_matches[-1].upper()
 
     # Strategy 2: Letter on its own line near the end of output
     last_line_pat = r"^\s*\(?([A-H])\)?\s*$"
     line_matches = re.findall(last_line_pat, answer, re.MULTILINE)
     if line_matches:
-        return line_matches[-1].upper() == expected_letter
+        return line_matches[-1].upper()
 
     # Strategy 3: Letter at very start of output (before any prose)
     match = re.match(r"\s*\(?([A-H])\)?\s*[.:\-\n]", answer)
     if match:
-        return match.group(1).upper() == expected_letter
+        return match.group(1).upper()
 
     # Strategy 4: Bold letter — take LAST match
     bold_matches = re.findall(r"\*\*([A-H])\*\*", answer)
     if bold_matches:
-        return bold_matches[-1].upper() == expected_letter
+        return bold_matches[-1].upper()
 
     # Strategy 5: Last standalone letter A-H in the text (not first!)
     standalone = re.findall(r"\b([A-H])\b", answer)
     if standalone:
-        return standalone[-1].upper() == expected_letter
+        return standalone[-1].upper()
 
-    return False
+    return None
+
+
+def _extract_multiple_choice_text_index(answer: str, choices: list[Any]) -> int | None:
+    if not choices:
+        return None
+
+    answer_norm = _normalize_choice_text(answer)
+    if not answer_norm:
+        return None
+
+    matches: list[tuple[int, int, int]] = []
+    for idx, choice in enumerate(choices):
+        choice_norm = _normalize_choice_text(str(choice))
+        if not choice_norm:
+            continue
+        pattern = rf"(?<!\w){re.escape(choice_norm)}(?!\w)"
+        found = list(re.finditer(pattern, answer_norm))
+        if found:
+            match = found[-1]
+            matches.append((match.end(), len(choice_norm), idx))
+
+    if not matches:
+        return None
+    return max(matches)[2]
 
 
 def _score_stdin_program(
@@ -257,8 +352,10 @@ def _score_stdin_program(
 
         Path(sol_file.name).unlink(missing_ok=True)
         return True
-    except OSError:
-        return False
+    except OSError as exc:
+        raise ScoringUnavailableError(
+            "code_execution could not create or execute its temporary stdin harness"
+        ) from exc
 
 
 def _has_executable_assertion(test_code: str) -> bool:
@@ -267,6 +364,14 @@ def _has_executable_assertion(test_code: str) -> bool:
         if not stripped or stripped.startswith("#"):
             continue
         if stripped.startswith("assert ") or stripped.startswith("assert("):
+            expr = (
+                stripped[6:].strip()
+                if stripped.startswith("assert ")
+                else stripped[7:].strip()
+            )
+            expr = expr.split(",", 1)[0].strip().strip("()")
+            if expr == "True":
+                continue
             return True
     return False
 
@@ -292,6 +397,7 @@ def _score_code_execution(
     timeout = config.get("timeout", 10)
     test_code = config.get("test_code", "")
     entry_point = config.get("entry_point", "")
+    entry_point_cases = config.get("entry_point_cases")
 
     if language != "python":
         # Only Python execution supported currently
@@ -323,10 +429,18 @@ def _score_code_execution(
     has_test_oracle = (
         _has_executable_assertion(test_code) or _has_unittest_case(test_code)
     )
-    has_entrypoint_oracle = bool(entry_point and expected)
+    has_entrypoint_oracle = bool(
+        entry_point and isinstance(entry_point_cases, list) and entry_point_cases
+    )
     if test_code and not has_test_oracle:
         return False
     if not test_code and not has_entrypoint_oracle:
+        if entry_point and expected:
+            raise ScoringUnavailableError(
+                "code_execution entry_point oracle requires executable "
+                "entry_point_cases or test_code; refusing to synthesize a "
+                "zero-argument assertion from expected text"
+            )
         return False
 
     # Build full test script
@@ -335,9 +449,26 @@ def _score_code_execution(
         full_code += "\n\n" + test_code
         if _has_unittest_case(test_code) and "unittest.main" not in test_code:
             full_code += "\n\nif __name__ == '__main__':\n    unittest.main()\n"
-    elif entry_point and expected:
-        # Simple assertion test
-        full_code += f"\n\nassert {entry_point}() == {expected}"
+    elif entry_point:
+        if not _is_safe_entry_point(entry_point):
+            raise ScoringUnavailableError(
+                f"code_execution entry_point {entry_point!r} is not a safe "
+                "Python identifier path"
+            )
+        cases_literal = repr(entry_point_cases)
+        full_code += (
+            "\n\n"
+            f"_EPYC_ENTRY_POINT_CASES = {cases_literal}\n"
+            "for _case in _EPYC_ENTRY_POINT_CASES:\n"
+            "    if isinstance(_case, dict):\n"
+            "        _args = _case.get('args', [])\n"
+            "        _kwargs = _case.get('kwargs', {})\n"
+            "        _expected = _case.get('expected')\n"
+            "    else:\n"
+            "        _args, _expected = _case\n"
+            "        _kwargs = {}\n"
+            f"    assert {entry_point}(*_args, **_kwargs) == _expected\n"
+        )
 
     # Execute in sandboxed subprocess
     try:
@@ -356,8 +487,12 @@ def _score_code_execution(
             )
             Path(f.name).unlink(missing_ok=True)
             return result.returncode == 0
-    except (subprocess.TimeoutExpired, OSError):
+    except subprocess.TimeoutExpired:
         return False
+    except OSError as exc:
+        raise ScoringUnavailableError(
+            "code_execution could not create or execute its temporary harness"
+        ) from exc
 
 
 def _score_programmatic(
@@ -496,8 +631,10 @@ def _score_programmatic(
 
     fn = verifiers.get(verifier)
     if fn is None:
-        # Unknown verifier — check if expected is a simple match
-        return expected.strip().lower() in answer_stripped.lower() if expected else False
+        # Mirror score_answer's "Unknown scoring method" convention: an
+        # unrecognized verifier is a config defect, not a silent substring
+        # match that would score arbitrary answers as correct.
+        raise ValueError(f"Unknown programmatic verifier: {verifier!r}")
 
     return fn()
 
@@ -529,10 +666,10 @@ def _score_substring(
     answer = _strip_digit_separators(answer)
     expected = _strip_digit_separators(expected)
 
-    if case_sensitive:
-        return expected.strip() in answer
-    else:
-        return expected.strip().lower() in answer.lower()
+    needle = expected.strip()
+    if not needle:
+        return False
+    return _contains_text_unit(answer, needle, case_sensitive=case_sensitive)
 
 
 def _score_f1(
@@ -556,7 +693,8 @@ def _score_f1(
 
     # Extract answer: find the LAST occurrence — models may emit
     # the tag multiple times before settling on a final answer.
-    matches = re.findall(pattern, answer, re.IGNORECASE | re.DOTALL)
+    compiled_pattern = _compile_single_group_pattern(pattern)
+    matches = compiled_pattern.findall(answer)
     if matches:
         extracted = matches[-1].strip()
     else:
@@ -585,14 +723,18 @@ def _score_f1(
     if not pred_tokens:
         return False
 
-    # Compute token overlap
-    common = set(pred_tokens) & set(gold_tokens)
+    # Compute multiset token overlap so repeated entities are counted honestly.
+    from collections import Counter
+
+    pred_counts = Counter(pred_tokens)
+    gold_counts = Counter(gold_tokens)
+    common = sum((pred_counts & gold_counts).values())
 
     if not common:
         return False
 
-    precision = len(common) / len(pred_tokens)
-    recall = len(common) / len(gold_tokens)
+    precision = common / len(pred_tokens)
+    recall = common / len(gold_tokens)
 
     if precision + recall == 0:
         f1 = 0.0
@@ -649,8 +791,9 @@ def _score_llm_judge(
     host = config.get("judge_host", "localhost")
     timeout = config.get("timeout", 30)
 
-    # First try substring as a fast path — if the exact string matches, skip the LLM call
-    if expected.strip().lower() in answer.lower():
+    # First try a boundary-aware substring fast path; contained words such as
+    # "cat" in "concatenate" must still go to the judge.
+    if _contains_text_unit(answer, expected.strip()):
         return True
 
     # Extract answer from \boxed{} if present
@@ -671,8 +814,9 @@ def _score_llm_judge(
         "\"true\" or \"false\", nothing else."
     )
 
+    import httpx
+
     try:
-        import httpx
         resp = httpx.post(
             f"http://{host}:{port}/v1/chat/completions",
             json={
@@ -684,10 +828,19 @@ def _score_llm_judge(
         )
         resp.raise_for_status()
         verdict = resp.json()["choices"][0]["message"]["content"].strip().lower()
-        return verdict.startswith("true")
-    except Exception:
-        # If judge is unavailable, fall back to substring match
-        return expected.strip().lower() in candidate.lower()
+    except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as exc:
+        # HTTP/transport failure (httpx.*), non-2xx (HTTPStatusError from
+        # raise_for_status), bad JSON (json.JSONDecodeError <: ValueError), or
+        # an unexpected response shape (KeyError/IndexError/TypeError). A judge
+        # that is down or malformed is scorer-unavailability — surface it as an
+        # ERROR; do NOT silently fall back to substring (audit item B7 owns the
+        # substring fast-path extraction semantics).
+        raise ScoringUnavailableError(
+            f"llm_judge unreachable or returned a malformed response at "
+            f"{host}:{port}; refusing to silently fall back to substring"
+        ) from exc
+
+    return verdict.startswith("true")
 
 
 def _score_math_verify(
@@ -699,24 +852,74 @@ def _score_math_verify(
     (e.g. \\frac{mg}{2} ≡ mg/2, x^2+1 ≡ 1+x^2, {1,2,3} ≡ {3,1,2}).
 
     Requires: pip install math-verify (Apache-2.0, HuggingFace).
-    Falls back to exact_match if not installed.
+
+    Error semantics — NO silent scorer fallback:
+        - math-verify not installed → ScoringUnavailableError. We refuse to
+          quietly score math with exact_match; that silent swap is what
+          mis-scored every threaded math eval.
+        - The GOLD (``expected``) answer raising on parse, or parsing to an
+          empty extraction, is a dataset/gold defect → ScoringUnavailableError.
+        - The MODEL's answer failing to parse is a *task* failure → False.
+        - ``verify`` itself raising is a scorer defect → ScoringUnavailableError.
+
+    Thread safety:
+        math-verify guards BOTH ``parse`` and ``verify`` with ``signal.alarm``,
+        which raises ``ValueError("... signal only works in main thread ...")``
+        on any non-main thread. The library's documented remedy is to disable
+        those timeouts (``parse(..., parsing_timeout=None)`` and
+        ``verify(..., timeout_seconds=None)``); we pass both whenever we are
+        off the main thread — the eval-level watchdog still bounds pathological
+        wall time — so threaded scoring runs the real math_verify path instead
+        of silently degrading (or, if only parse were fixed, ERRORing on every
+        threaded verify() call).
 
     Config:
         extraction_mode: "latex" (default), "expr", or "string"
     """
     try:
         from math_verify import parse, verify
-    except ImportError:
-        # Fallback to exact_match if math-verify not installed
-        return _score_exact_match(answer, expected, config)
+    except ImportError as exc:
+        raise ScoringUnavailableError(
+            "math-verify not installed but scoring_method=math_verify "
+            "requested; refusing to silently fall back to exact_match"
+        ) from exc
+
+    parse_kwargs: dict[str, Any] = {}
+    verify_kwargs: dict[str, Any] = {}
+    if threading.current_thread() is not threading.main_thread():
+        # math-verify's own documented remedy for threaded use; the
+        # eval-level watchdog bounds pathological wall time.
+        parse_kwargs["parsing_timeout"] = None
+        verify_kwargs["timeout_seconds"] = None
 
     try:
-        gold = parse(expected)
-        pred = parse(answer.strip())
-        return verify(gold, pred)
+        gold = parse(expected, **parse_kwargs)
+    except Exception as exc:
+        raise ScoringUnavailableError(
+            "math_verify could not parse the GOLD/expected answer "
+            f"{expected!r} (dataset/gold defect)"
+        ) from exc
+    if not gold:
+        raise ScoringUnavailableError(
+            "math_verify extracted nothing from the GOLD/expected answer "
+            f"{expected!r} (dataset/gold defect)"
+        )
+
+    try:
+        pred = parse(answer.strip(), **parse_kwargs)
     except Exception:
-        # If parsing fails, fall back to exact_match
-        return _score_exact_match(answer, expected, config)
+        # The model's own answer failing to parse is a task failure, not a
+        # scorer-unavailability condition — score it wrong, don't raise.
+        return False
+
+    try:
+        # gold-first argument order — verify() is asymmetric.
+        return bool(verify(gold, pred, **verify_kwargs))
+    except Exception as exc:
+        raise ScoringUnavailableError(
+            "math_verify.verify() raised while comparing parsed answers "
+            "(scorer defect)"
+        ) from exc
 
 
 # ── Helpers ────────────────────────────────────────────────────────────
@@ -724,10 +927,75 @@ def _score_math_verify(
 
 def _extract_answer(text: str, pattern: str) -> str | None:
     """Extract answer from text using regex pattern."""
-    match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
+    compiled = _compile_single_group_pattern(pattern)
+    match = compiled.search(text)
     if match and match.group(1):
         return match.group(1).strip()
     return None
+
+
+def _compile_single_group_pattern(pattern: str) -> re.Pattern[str]:
+    compiled = re.compile(pattern, re.IGNORECASE | re.DOTALL)
+    if compiled.groups != 1:
+        raise ValueError(
+            f"extract_pattern must contain exactly one capture group, got {compiled.groups}"
+        )
+    return compiled
+
+
+def _extract_boxed_answer(text: str) -> str | None:
+    """Extract the final LaTeX \\boxed{...} payload, including nested braces."""
+    last_start = text.rfind(r"\boxed{")
+    if last_start < 0:
+        return None
+    i = last_start + len(r"\boxed{")
+    depth = 1
+    out: list[str] = []
+    while i < len(text):
+        ch = text[i]
+        if ch == "{":
+            depth += 1
+            out.append(ch)
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return "".join(out).strip()
+            out.append(ch)
+        else:
+            out.append(ch)
+        i += 1
+    return None
+
+
+def _final_answer_region(text: str) -> str:
+    """Return the final answer-bearing line/region, not earlier explanation."""
+    lines = [ln.strip() for ln in text.strip().splitlines() if ln.strip()]
+    if not lines:
+        return ""
+    marker = re.compile(r"\b(final\s+answer|answer|result)\b", re.IGNORECASE)
+    for line in reversed(lines):
+        if marker.search(line):
+            return line
+    return lines[-1]
+
+
+def _contains_text_unit(
+    haystack: str,
+    needle: str,
+    *,
+    case_sensitive: bool = False,
+) -> bool:
+    flags = 0 if case_sensitive else re.IGNORECASE
+    needle = needle.strip()
+    if not needle:
+        return False
+    left = r"(?<!\w)" if needle[0].isalnum() else ""
+    right = r"(?!\w)" if needle[-1].isalnum() else ""
+    return re.search(f"{left}{re.escape(needle)}{right}", haystack, flags) is not None
+
+
+def _is_safe_entry_point(entry_point: str) -> bool:
+    return bool(re.fullmatch(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*", str(entry_point)))
 
 
 def _extract_code_block(text: str, language: str = "python") -> str | None:

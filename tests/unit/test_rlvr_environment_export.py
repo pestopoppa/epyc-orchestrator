@@ -10,7 +10,12 @@ from scripts.autopilot.export_rlvr_environment import (
     SUMMARY_SCHEMA_VERSION,
     export_environment_rows,
     main,
+    write_jsonl,
 )
+
+
+def _fail_on_bare_constant(token: str):  # pragma: no cover - only hit on failure
+    raise AssertionError(f"bare non-finite JSON constant present: {token!r}")
 
 
 def test_export_environment_rows_strips_private_question_text() -> None:
@@ -44,11 +49,17 @@ def test_export_environment_rows_strips_private_question_text() -> None:
 
     assert summary["schema_version"] == SUMMARY_SCHEMA_VERSION
     assert summary["rows"] == 1
-    assert summary["ready_for_training"] == 1
+    # EV-CONF interim: calibration/discrimination now require a real confidence
+    # provenance stamp (details['confidence_is_real']). The exporter builds its
+    # result namespace without a details attribute, so exported rows are treated as
+    # not-real confidence and carry the confidence_not_real blocker (fail-closed) —
+    # the row is therefore blocked from training regardless of its good metrics.
+    assert summary["ready_for_training"] == 0
     assert rows[0]["schema_version"] == ROW_SCHEMA_VERSION
     assert rows[0]["reward_policy"] == "ap27_rlvr_tier_reward_v1"
     assert rows[0]["tier"] == 2
-    assert rows[0]["ready_for_training"] is True
+    assert rows[0]["ready_for_training"] is False
+    assert "confidence_not_real" in rows[0]["blockers"]
     assert rows[0]["suite_counts"] == {"math": 1}
     assert rows[0]["question_results"] == [
         {
@@ -75,10 +86,17 @@ def test_export_environment_rows_records_training_blockers() -> None:
     )
 
     assert rows[0]["ready_for_training"] is False
-    assert rows[0]["blockers"] == ["ece_missing", "auroc_missing_or_degenerate"]
+    # EV-CONF interim: exported rows lack a confidence provenance stamp, so the
+    # confidence_not_real blocker is appended after the metric blockers.
+    assert rows[0]["blockers"] == [
+        "ece_missing",
+        "auroc_missing_or_degenerate",
+        "confidence_not_real",
+    ]
     assert summary["blocked"] == 1
     assert summary["blocker_counts"] == {
         "auroc_missing_or_degenerate": 1,
+        "confidence_not_real": 1,
         "ece_missing": 1,
     }
 
@@ -118,6 +136,52 @@ def test_cli_writes_jsonl_and_summary(tmp_path: Path) -> None:
     assert exported[0]["source_label"] == "fixture"
     assert exported[0]["reward_signal"] == "binary_outcome"
     assert json.loads(summary.read_text(encoding="utf-8"))["tier_counts"] == {"0": 1}
+
+
+def test_nonfinite_metric_flagged_and_written_as_strict_json(tmp_path: Path) -> None:
+    # ece=None is coerced to NaN by rlvr_tiers; the exporter must record which
+    # metric was non-finite (D2) and still emit strict, jq-parseable JSON.
+    rows, summary = export_environment_rows(
+        [
+            {
+                "trial_id": 7,
+                "action_type": "deep_eval",
+                "tier": 2,
+                "quality": 2.4,
+                "reliability": 0.9,
+                "eval_details": {
+                    "ece": None,
+                    "auroc": 0.8,
+                    "question_results": [
+                        {
+                            "qid": "q1",
+                            "suite": "math",
+                            "correct": True,
+                            "answer_hash": "sha256:abc",
+                        }
+                    ],
+                },
+            }
+        ],
+        source_label="unit",
+    )
+
+    assert rows[0]["metrics_nonfinite"] == ["ece"]
+    assert summary["rows_with_nonfinite_metrics"] == 1
+
+    output = tmp_path / "rlvr.jsonl"
+    write_jsonl(output, rows)
+    raw = output.read_text(encoding="utf-8")
+    assert "NaN" not in raw
+    assert "Infinity" not in raw
+
+    parsed = [
+        json.loads(line, parse_constant=_fail_on_bare_constant)
+        for line in raw.splitlines()
+        if line.strip()
+    ]
+    assert parsed[0]["metrics"]["ece"] is None
+    assert parsed[0]["metrics_nonfinite"] == ["ece"]
 
 
 def test_cli_fail_on_blockers_returns_one_after_writing_outputs(tmp_path: Path) -> None:

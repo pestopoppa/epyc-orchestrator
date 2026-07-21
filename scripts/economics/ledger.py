@@ -12,6 +12,7 @@ import argparse
 import json
 import math
 import os
+import sys
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
@@ -23,6 +24,10 @@ import yaml
 
 
 REPO = Path(__file__).resolve().parents[2]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
+
+from scripts.autopilot.journal_shards import journal_shards  # noqa: E402
 DEFAULT_PLANNER_ARCHIVE = REPO / "logs" / "planner_archive.jsonl"
 DEFAULT_JOURNAL_DIR = REPO / "orchestration"
 DEFAULT_CLOUD_COSTS = REPO / "orchestration" / "cloud_costs.yaml"
@@ -309,7 +314,8 @@ def _journal_files(journal_dir: Path) -> list[Path]:
         return [journal_dir]
     if not journal_dir.exists():
         return []
-    return sorted(journal_dir.glob("autopilot_journal*.jsonl"))
+    # JRN-6/7: numeric, gap-tolerant shard order (was lexicographic glob).
+    return journal_shards(journal_dir)
 
 
 def _summarize_local(journal_dir: Path, start: datetime, end: datetime) -> LocalInference:

@@ -7,8 +7,12 @@ from __future__ import annotations
 
 import csv
 import copy
+import fcntl
 import hashlib
 import json
+import logging
+import math
+import os
 import re
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
@@ -17,6 +21,32 @@ from pathlib import Path
 from typing import Any
 
 from src.autopilot_core.tier_specs import DEFAULT_FRONTIER_TIER
+
+# experiment_journal is imported both as the package path
+# ``scripts.autopilot.experiment_journal`` (tests, cross-module readers) and as a
+# bare ``experiment_journal`` module (autopilot.py inserts scripts/autopilot on
+# sys.path). Resolve the shard iterator under both contexts.
+try:
+    from scripts.autopilot.journal_shards import journal_shards, shard_batch_index
+except ModuleNotFoundError:  # pragma: no cover - bare-module import context
+    from journal_shards import journal_shards, shard_batch_index
+
+log = logging.getLogger(__name__)
+
+
+class ExperimentJournalCorruptError(RuntimeError):
+    """Raised when a journal shard has irreparable mid-file corruption.
+
+    A torn *trailing* line (a partial final append left by a crash mid-write)
+    is tolerated on read and quarantined to a `.corrupt-*` sidecar on the next
+    append — see ``ExperimentJournal._repair_torn_tail``. This error signals the
+    other case: a malformed line that has *valid* lines after it, which cannot
+    be auto-repaired without risking data loss.
+
+    Remediation: inspect the offending shard, then use
+    ``scripts/autopilot/scrub_journal.py`` (append-only supersession events) to
+    correct the record set. Never hand-edit historical trial rows in place.
+    """
 
 
 class DeficiencyCategory(str, Enum):
@@ -96,6 +126,30 @@ SUPERSESSION_EVENT_TYPE = "supersession"
 BASELINE_PROMOTION_EVENT_TYPE = "baseline_promotion"
 JOURNAL_SNAPSHOT_EVENT_TYPE = "journal_snapshot"
 ROLE_RESTART_BOUNDARY_EVENT_TYPE = "role_restart_boundary"
+
+
+def json_sanitize(obj: Any) -> Any:
+    """Recursively replace non-finite floats (NaN / ±Inf) with None for strict JSON.
+
+    D2: ``json.dumps`` with the default ``allow_nan=True`` emits bare ``NaN`` /
+    ``Infinity`` tokens, which are invalid JSON — they break ``jq`` and every
+    strict parser that reads the journal, RLVR export, and autopilot state files.
+    Sanitizing at each serialization boundary lets those writers pass
+    ``allow_nan=False`` safely: the only reachable floats are finite, so encoding
+    never raises.
+
+    Containers are rebuilt (``dict`` values sanitized, ``list``/``tuple`` elements
+    sanitized with tuples collapsed to lists, matching JSON array semantics);
+    every other value (str, int, bool, None, and non-JSON objects handled by the
+    encoder's ``default=str``) is returned unchanged.
+    """
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if isinstance(obj, dict):
+        return {key: json_sanitize(value) for key, value in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [json_sanitize(value) for value in obj]
+    return obj
 
 
 def has_legacy_scale_failure_analysis(text: str) -> bool:
@@ -304,9 +358,75 @@ class ExperimentJournal:
         self.journal_dir.mkdir(parents=True, exist_ok=True)
         self._entries: list[JournalEntry] = []
         self._ledger_events_by_batch: dict[int, list[dict[str, Any]]] = {}
+        # A5 durability: count of torn trailing lines skipped during the tolerant
+        # load. >0 means a prior append was interrupted; the next append will
+        # quarantine + repair the shard. Exposed for observability / tests.
+        self.torn_lines_skipped: int = 0
         self._load_existing()
 
     # ── persistence ──────────────────────────────────────────────
+
+    def _repair_torn_tail(self, jsonl: Path) -> None:
+        """Quarantine a torn final append before writing a fresh line (A5).
+
+        Journal lines average ~36KB and can exceed 300KB, so a crash mid-write
+        leaves a partial record with no trailing newline. Under an exclusive
+        flock we copy the partial-tail bytes to a timestamped ``.corrupt-*``
+        sidecar beside the shard, then truncate the file back to the last good
+        newline. Data is never dropped unless the sidecar write succeeds first,
+        so the quarantined bytes are always recoverable.
+
+        No-op when the file is absent, empty, or already newline-terminated.
+        """
+        if not jsonl.exists():
+            return
+        with open(jsonl, "r+b") as f:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            try:
+                f.seek(0, os.SEEK_END)
+                size = f.tell()
+                if size == 0:
+                    return
+                f.seek(size - 1)
+                if f.read(1) == b"\n":
+                    return  # clean tail — previous append completed
+                # Walk backwards in chunks to find the last newline (or SOF)
+                # without loading a potentially huge shard into memory.
+                newline_pos = -1
+                chunk = 1 << 16
+                pos = size
+                while pos > 0:
+                    read_start = max(0, pos - chunk)
+                    f.seek(read_start)
+                    buf = f.read(pos - read_start)
+                    idx = buf.rfind(b"\n")
+                    if idx != -1:
+                        newline_pos = read_start + idx
+                        break
+                    pos = read_start
+                truncate_to = newline_pos + 1  # keep the newline; 0 if none
+                f.seek(truncate_to)
+                partial = f.read(size - truncate_to)
+                if not partial:
+                    return
+                ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+                sidecar = jsonl.parent / f"{jsonl.name}.corrupt-{ts}"
+                with open(sidecar, "wb") as scf:
+                    scf.write(partial)
+                    scf.flush()
+                    os.fsync(scf.fileno())
+                f.truncate(truncate_to)
+                f.flush()
+                os.fsync(f.fileno())
+                log.error(
+                    "quarantined torn trailing journal write: %d bytes from %s "
+                    "moved to sidecar %s; shard truncated to last good newline",
+                    len(partial),
+                    jsonl,
+                    sidecar,
+                )
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
     def _tsv_path(self, batch: int = 0) -> Path:
         suffix = f"_{batch}" if batch > 0 else ""
@@ -322,74 +442,110 @@ class ExperimentJournal:
         return self._entries[-1].trial_id // MAX_TRIALS_PER_FILE
 
     def _load_existing(self) -> None:
-        """Load entries from all existing JSONL files."""
-        batch = 0
-        while True:
-            jsonl = self._jsonl_path(batch)
-            if not jsonl.exists():
-                break
+        """Load entries from all existing JSONL shards.
+
+        Shard discovery uses the canonical ``journal_shards`` iterator (audit
+        JRN-5/6/7): every rotated shard is read in numeric batch order and a gap
+        (e.g. a missing ``_2``) no longer stops discovery at that index — the old
+        ``while path(batch).exists()`` loop silently dropped ``_3`` and every later
+        shard once a shard was absent. The per-shard batch index (used to key
+        ``_ledger_events_by_batch``) is derived from each shard's filename.
+
+        Tolerant of a single torn *trailing* line (a partial final append left
+        by a crash): it is logged and skipped here (``torn_lines_skipped`` is
+        incremented) and the writer-side ``_repair_torn_tail`` quarantines it on
+        the next append. Mid-file corruption — a malformed line with valid lines
+        after it — is NOT auto-recoverable and raises
+        ``ExperimentJournalCorruptError``.
+        """
+        for jsonl in journal_shards(self.journal_dir):
+            batch = shard_batch_index(jsonl)
+            if batch is None:  # defensive: journal_shards only yields matching files
+                continue
             with open(jsonl) as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
+                lines = f.readlines()
+            for line_number, raw in enumerate(lines, start=1):
+                line = raw.strip()
+                if not line:
+                    continue
+                try:
                     data = json.loads(line)
-                    if data.get("type") and "trial_id" not in data:
-                        self._ledger_events_by_batch.setdefault(batch, []).append(data)
+                except json.JSONDecodeError as exc:
+                    # Tolerate ONLY a torn trailing record: every later line in
+                    # this shard must be blank. Otherwise it is mid-file
+                    # corruption we must not silently drop.
+                    if all(not later.strip() for later in lines[line_number:]):
+                        log.error(
+                            "torn trailing journal line in %s (line %d, %d bytes)"
+                            " — skipping; it will be quarantined on next append",
+                            jsonl,
+                            line_number,
+                            len(raw),
+                        )
+                        self.torn_lines_skipped += 1
                         continue
-                    entry = JournalEntry(
-                        trial_id=data["trial_id"],
-                        timestamp=data["timestamp"],
-                        species=data["species"],
-                        action_type=data["action_type"],
-                        tier=data.get("tier", 0),
-                        quality=data.get("quality", 0.0),
-                        speed=data.get("speed", 0.0),
-                        cost=data.get("cost", 0.0),
-                        reliability=data.get("reliability", 0.0),
-                        pareto_status=data.get("pareto_status", "dominated"),
-                        git_tag=data.get("git_tag", ""),
-                        reasoning_hash=data.get("reasoning_hash", ""),
-                        config_snapshot=data.get("config_snapshot", {}),
-                        config_diff=data.get("config_diff", {}),
-                        reasoning=data.get("reasoning", ""),
-                        parent_trial=data.get("parent_trial"),
-                        memory_count=data.get("memory_count", 0),
-                        active_flags=data.get("active_flags", []),
-                        eval_details=data.get("eval_details", {}),
-                        metric_schema_version=data.get(
-                            "metric_schema_version",
-                            data.get("eval_details", {}).get("metric_schema_version", 1),
-                        ),
-                        harness_metrics=data.get(
-                            "harness_metrics",
-                            data.get("eval_details", {}).get("harness_metrics", {}),
-                        ),
-                        oracle_adequacy=data.get(
-                            "oracle_adequacy",
-                            data.get("eval_details", {}).get("oracle_adequacy", {}),
-                        ),
-                        seq=data.get("seq", {}),
-                        failure_analysis=data.get("failure_analysis", ""),
-                        hypothesis=data.get("hypothesis", ""),
-                        expected_mechanism=data.get("expected_mechanism", ""),
-                        deficiency_category=data.get("deficiency_category", ""),
-                        instruction_token_count=data.get("instruction_token_count", 0),
-                        instruction_token_ratio=data.get("instruction_token_ratio", 0.0),
-                        self_criticism=data.get("self_criticism", ""),
-                        keep_revert_decision=data.get("keep_revert_decision", ""),
-                        optimization_directions=data.get("optimization_directions", ""),
-                        predicted_objectives=data.get("predicted_objectives", {}),
-                        surprise_score=data.get("surprise_score", None),
-                        bug_corrupted_by=data.get("bug_corrupted_by", ""),
-                        bug_corrupted_reason=data.get("bug_corrupted_reason", ""),
-                        falsifier=data.get("falsifier", ""),
-                        rubric_scores=data.get("rubric_scores", {}),
-                        stagnation_signal=data.get("stagnation_signal", ""),
-                        outcome_status=data.get("outcome_status", "ok"),
-                    )
-                    self._entries.append(entry)
-            batch += 1
+                    raise ExperimentJournalCorruptError(
+                        f"{jsonl}:{line_number}: malformed journal line with "
+                        f"valid lines after it (mid-file corruption): {exc}. "
+                        f"Remediation: inspect the shard and use "
+                        f"scripts/autopilot/scrub_journal.py (append-only "
+                        f"supersession events) — never hand-edit historical rows."
+                    ) from exc
+                if data.get("type") and "trial_id" not in data:
+                    self._ledger_events_by_batch.setdefault(batch, []).append(data)
+                    continue
+                entry = JournalEntry(
+                    trial_id=data["trial_id"],
+                    timestamp=data["timestamp"],
+                    species=data["species"],
+                    action_type=data["action_type"],
+                    tier=data.get("tier", 0),
+                    quality=data.get("quality", 0.0),
+                    speed=data.get("speed", 0.0),
+                    cost=data.get("cost", 0.0),
+                    reliability=data.get("reliability", 0.0),
+                    pareto_status=data.get("pareto_status", "dominated"),
+                    git_tag=data.get("git_tag", ""),
+                    reasoning_hash=data.get("reasoning_hash", ""),
+                    config_snapshot=data.get("config_snapshot", {}),
+                    config_diff=data.get("config_diff", {}),
+                    reasoning=data.get("reasoning", ""),
+                    parent_trial=data.get("parent_trial"),
+                    memory_count=data.get("memory_count", 0),
+                    active_flags=data.get("active_flags", []),
+                    eval_details=data.get("eval_details", {}),
+                    metric_schema_version=data.get(
+                        "metric_schema_version",
+                        data.get("eval_details", {}).get("metric_schema_version", 1),
+                    ),
+                    harness_metrics=data.get(
+                        "harness_metrics",
+                        data.get("eval_details", {}).get("harness_metrics", {}),
+                    ),
+                    oracle_adequacy=data.get(
+                        "oracle_adequacy",
+                        data.get("eval_details", {}).get("oracle_adequacy", {}),
+                    ),
+                    seq=data.get("seq", {}),
+                    failure_analysis=data.get("failure_analysis", ""),
+                    hypothesis=data.get("hypothesis", ""),
+                    expected_mechanism=data.get("expected_mechanism", ""),
+                    deficiency_category=data.get("deficiency_category", ""),
+                    instruction_token_count=data.get("instruction_token_count", 0),
+                    instruction_token_ratio=data.get("instruction_token_ratio", 0.0),
+                    self_criticism=data.get("self_criticism", ""),
+                    keep_revert_decision=data.get("keep_revert_decision", ""),
+                    optimization_directions=data.get("optimization_directions", ""),
+                    predicted_objectives=data.get("predicted_objectives", {}),
+                    surprise_score=data.get("surprise_score", None),
+                    bug_corrupted_by=data.get("bug_corrupted_by", ""),
+                    bug_corrupted_reason=data.get("bug_corrupted_reason", ""),
+                    falsifier=data.get("falsifier", ""),
+                    rubric_scores=data.get("rubric_scores", {}),
+                    stagnation_signal=data.get("stagnation_signal", ""),
+                    outcome_status=data.get("outcome_status", "ok"),
+                )
+                self._entries.append(entry)
 
     # ── writing ──────────────────────────────────────────────────
 
@@ -407,9 +563,22 @@ class ExperimentJournal:
                 writer.writeheader()
             writer.writerow({col: getattr(entry, col) for col in TSV_COLUMNS})
 
-        # JSONL (full detail)
+        # JSONL (full detail) — durable append (A5): repair any torn tail from a
+        # prior crash, serialize the full line up front, then write under an
+        # exclusive flock with fsync so a crash can only ever tear THIS trailing
+        # line (never a mid-file record), and concurrent writers can't interleave.
+        self._repair_torn_tail(jsonl)
+        # D2: sanitize non-finite floats → null and forbid bare NaN/Infinity tokens
+        # so every written line is strict, jq-parseable JSON.
+        line = json.dumps(json_sanitize(asdict(entry)), default=str, allow_nan=False) + "\n"
         with open(jsonl, "a") as f:
-            f.write(json.dumps(asdict(entry), default=str) + "\n")
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            try:
+                f.write(line)
+                f.flush()
+                os.fsync(f.fileno())
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
         self._entries.append(entry)
 
@@ -423,8 +592,19 @@ class ExperimentJournal:
         event.setdefault("timestamp", datetime.now(timezone.utc).isoformat())
         batch = self._current_batch()
         jsonl = self._jsonl_path(batch)
+        # Durable append (A5): mirror record()'s repair → serialize → locked
+        # fsync'd write so ledger events survive a crash the same way trials do.
+        self._repair_torn_tail(jsonl)
+        # D2: strict JSON (non-finite floats → null, no bare NaN/Infinity tokens).
+        line = json.dumps(json_sanitize(event), default=str, allow_nan=False) + "\n"
         with open(jsonl, "a") as f:
-            f.write(json.dumps(event, default=str) + "\n")
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            try:
+                f.write(line)
+                f.flush()
+                os.fsync(f.fileno())
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
         self._ledger_events_by_batch.setdefault(batch, []).append(event)
         return event
 

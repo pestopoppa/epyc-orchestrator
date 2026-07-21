@@ -19,6 +19,7 @@ from statistics import mean, pstdev
 from typing import Any
 
 from src.autopilot_core.journal_reconstruction import fold_supersession_events
+from scripts.autopilot.journal_shards import resolve_journal_paths
 
 
 DEFAULT_JOURNAL = Path("orchestration/autopilot_journal.jsonl")
@@ -541,7 +542,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--print-md", action="store_true", help="Print markdown to stdout")
     args = parser.parse_args(argv)
 
-    rows = load_journal(args.journal)
+    # JRN-5: default base path fans out to every rotated shard; an explicit
+    # non-base --journal path is read as given.
+    rows: list[dict[str, Any]] = []
+    for shard in resolve_journal_paths(args.journal):
+        rows.extend(load_journal(shard))
     report = analyze_rows(
         rows,
         last_trials=args.last_trials,

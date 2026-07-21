@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 
 from src.runtime.instance_topology import (
+    compute_max_disjoint_live_concurrency,
     compute_max_safe_concurrency,
     max_safe_concurrency,
 )
@@ -68,6 +69,54 @@ def test_full_machine_role_safe_n_is_1() -> None:
         },
     }
     assert compute_max_safe_concurrency(cfg, "worker_general") == 1
+
+
+def test_full_machine_role_live_quarter_fleet_safe_n_is_4() -> None:
+    """A quarter-only v7 fleet is not bounded by the legacy full-first cap."""
+    cfg = {
+        "worker_general": {
+            "instances": [
+                ("0-95", 8072, 96),          # full, not live in quarter mode
+                ("0-23,96-119", 8082, 48),   # q0
+                ("24-47,120-143", 8182, 48),  # q1
+                ("48-71,144-167", 8282, 48),  # q2
+                ("72-95,168-191", 8382, 48),  # q3
+            ],
+        },
+    }
+    assert compute_max_safe_concurrency(cfg, "worker_general") == 1
+    assert (
+        compute_max_disjoint_live_concurrency(
+            cfg,
+            "worker_general",
+            live_ports={8082, 8182, 8282, 8382},
+        )
+        == 4
+    )
+
+
+def test_frontdoor_live_quarter_fleet_safe_n_is_4() -> None:
+    """Frontdoor full-first safe-N is 3, quarter-only live fleet is 4."""
+    cfg = {
+        "frontdoor": {
+            "instances": [
+                ("0-47,96-143", 8070, 96),
+                ("0-23,96-119", 8080, 48),
+                ("24-47,120-143", 8180, 48),
+                ("48-71,144-167", 8280, 48),
+                ("72-95,168-191", 8380, 48),
+            ],
+        },
+    }
+    assert compute_max_safe_concurrency(cfg, "frontdoor") == 3
+    assert (
+        compute_max_disjoint_live_concurrency(
+            cfg,
+            "frontdoor",
+            live_ports={8080, 8180, 8280, 8380},
+        )
+        == 4
+    )
 
 
 def test_single_instance_role_safe_n_is_1() -> None:

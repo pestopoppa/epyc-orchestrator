@@ -1,0 +1,17 @@
+# same_role instance_pairs (J5 / WP-6) — disjoint pairs only
+  - role: "frontdoor"
+    instance_pairs:
+      - {a: q0, b: q1, ratio: 1.406, cv: 0.1685, verdict: allow}
+      - {a: q0, b: q2, ratio: 1.315, cv: 0.1575, verdict: allow}
+      - {a: q0, b: q3, ratio: 1.597, cv: 0.0364, verdict: allow}
+      - {a: q1, b: q2, ratio: 1.498, cv: 0.0518, verdict: allow}
+      - {a: q1, b: q3, ratio: 1.479, cv: 0.0362, verdict: allow}
+      - {a: q2, b: q3, ratio: 1.568, cv: 0.0444, verdict: allow}
+  - role: "worker_general"
+    instance_pairs:
+      - {a: q0, b: q1, ratio: 1.944, cv: 0.0291, verdict: allow}
+      - {a: q0, b: q2, ratio: 1.42, cv: 0.0632, verdict: allow}
+      - {a: q0, b: q3, ratio: 1.005, cv: 0.0748, verdict: allow}
+      - {a: q1, b: q2, ratio: 1.81, cv: 0.1495, verdict: allow}
+      - {a: q1, b: q3, ratio: 1.986, cv: 0.0447, verdict: allow}
+      - {a: q2, b: q3, ratio: 1.382, cv: 0.1722, verdict: allow}

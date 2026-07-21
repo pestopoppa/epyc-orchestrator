@@ -250,6 +250,17 @@ class TestLlamaServerBackend:
 
         assert "n_probs" not in payload
 
+    def test_build_payload_honors_explicit_n_probs(self, role_config):
+        """Explicit calibration probability capture should be role-independent."""
+        backend = LlamaServerBackend(base_url="http://test:8080")
+        request = InferenceRequest(role="worker_general", prompt="Hello", n_probs=7)
+        role_config.name = "worker_general"
+
+        with patch("src.features.features", return_value=Mock(logit_probe=False)):
+            payload = backend._build_payload(role_config, request)
+
+        assert payload["n_probs"] == 7
+
     def test_infer_success(self, role_config):
         """Test successful inference with mocked HTTP response."""
         backend = LlamaServerBackend(base_url="http://test:8080")
@@ -283,6 +294,32 @@ class TestLlamaServerBackend:
         assert result.generation_ms == 50.0
         assert result.predicted_per_second == 33.0
         assert backend.cache_stats.cache_hits == 1  # cached_tokens > 0
+
+    def test_infer_returns_completion_probabilities_when_present(self, role_config):
+        backend = LlamaServerBackend(base_url="http://test:8080")
+        request = InferenceRequest(role="test", prompt="Hello", n_tokens=64, n_probs=3)
+        rows = [{"content": "H", "probs": [{"tok_str": "H", "prob": 0.9}]}]
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "content": "Hello world",
+            "tokens_predicted": 5,
+            "tokens_evaluated": 10,
+            "tokens_cached": 0,
+            "completion_probabilities": rows,
+            "timings": {
+                "prompt_ms": 100.0,
+                "predicted_ms": 50.0,
+                "predicted_per_second": 33.0,
+            },
+        }
+
+        with patch.object(backend.client, "post", return_value=mock_response):
+            result = backend.infer(role_config, request)
+
+        assert result.completion_probabilities == rows
+
 
     def test_infer_writes_logit_probe_for_frontdoor_completion_probs(
         self,
@@ -361,7 +398,10 @@ class TestLlamaServerBackend:
 
         with (
             patch.object(backend.client, "post", return_value=mock_response),
-            patch("src.backends.llama_server.time.time", side_effect=[100.0, 140.0]),
+            patch(
+                "src.backends.llama_server.time.time",
+                side_effect=[100.0, 140.0, 140.0, 140.0, 140.0, 140.0],
+            ),
             patch("src.backends.llama_server.time.perf_counter", side_effect=[0.0, 40.0]),
         ):
             result = backend.infer(role_config, request)
@@ -451,7 +491,7 @@ class TestLlamaServerBackend:
 
         with (
             patch.object(backend.client, "stream", return_value=_StreamResponse()),
-            patch("src.backends.llama_server.time.time", side_effect=[100.0, 140.0]),
+            patch("src.backends.llama_server.time.time", side_effect=[100.0, 140.0, 140.0]),
             patch("src.backends.llama_server.time.perf_counter", side_effect=[0.0, 40.0]),
         ):
             result = backend.infer_stream_text(role_config, request)

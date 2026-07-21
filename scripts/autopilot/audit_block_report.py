@@ -10,6 +10,11 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
+try:
+    from scripts.autopilot.journal_shards import journal_shards
+except ModuleNotFoundError:  # pragma: no cover - bare-module import context
+    from journal_shards import journal_shards
+
 UNTRUSTED_OUTCOME_STATUSES = frozenset({"invalid", "skipped"})
 DEFAULT_ALARM_WINDOW = 30
 DEFAULT_MONOTONE_CORE_STEPS = 2
@@ -20,14 +25,18 @@ def _expand_journal_paths(raw_paths: Iterable[Path]) -> list[Path]:
     for raw_path in raw_paths:
         path = Path(raw_path)
         if path.is_dir():
-            candidates = sorted(
-                {
-                    *path.glob("autopilot_journal*.jsonl"),
-                    *path.glob("*.jsonl"),
-                },
-                key=str,
+            # JRN-6/7: journal shards first, in numeric gap-tolerant order (the old
+            # lexicographic sort put _10 before _2); then any OTHER *.jsonl
+            # siblings, deduped, so the catch-all is preserved.
+            shards = journal_shards(path)
+            shard_set = set(shards)
+            others = sorted(
+                candidate
+                for candidate in path.glob("*.jsonl")
+                if candidate.is_file() and candidate not in shard_set
             )
-            paths.extend(candidate for candidate in candidates if candidate.is_file())
+            paths.extend(shards)
+            paths.extend(others)
         else:
             paths.append(path)
     return paths

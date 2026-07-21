@@ -125,6 +125,38 @@ def test_screen_gates_on_matched_dataset_and_profile() -> None:
     assert "dataset_sha256" in mism["reason"]
 
 
+def test_screen_refuses_one_sided_provenance() -> None:
+    out = screen_paired_arms([_arm("A", ARM_A), _arm("B", ARM_B, profile=None)])
+
+    assert out["pairs"] == []
+    assert len(out["mismatched_pairs"]) == 1
+    mism = out["mismatched_pairs"][0]
+    assert {mism["arm_a"], mism["arm_b"]} == {"A", "B"}
+    assert "one-sided" in mism["reason"]
+
+
+def test_screen_refuses_both_sided_missing_provenance() -> None:
+    # PAIR-1: when BOTH arms lack a profile, McNemar must NOT run over unidentified
+    # data — paired_stats' contract treats missing identity on either arm as a refusal.
+    out = screen_paired_arms(
+        [_arm("A", ARM_A, profile=None), _arm("B", ARM_B, profile=None)]
+    )
+    assert out["pairs"] == []
+    assert len(out["mismatched_pairs"]) == 1
+    mism = out["mismatched_pairs"][0]
+    assert {mism["arm_a"], mism["arm_b"]} == {"A", "B"}
+    assert mism["reason"] == "provenance_missing_both"
+
+
+def test_screen_both_present_matching_still_screens() -> None:
+    # Sanity: the both-None refusal must not disturb the happy path — two arms that
+    # both carry the SAME matched profile still pair and produce a McNemar screen.
+    out = screen_paired_arms([_arm("A", ARM_A), _arm("B", ARM_B)])
+    assert out["mismatched_pairs"] == []
+    assert len(out["pairs"]) == 1
+    assert out["pairs"][0]["mcnemar_p_two_sided"] == pytest.approx(2.0 / 256.0)
+
+
 def test_screen_single_arm_has_wilson_but_no_pairs() -> None:
     out = screen_paired_arms([_arm("A", ARM_A)])
     assert out["pairs"] == []

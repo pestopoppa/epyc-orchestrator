@@ -441,6 +441,7 @@ class LlamaServerBackend(ModelBackend):
                 completion_reason=(
                     "empty_generation" if empty_generation else completion_reason
                 ),
+                completion_probabilities=list(result_data.get("completion_probabilities") or []),
             )
 
         except httpx.TimeoutException:
@@ -1073,13 +1074,16 @@ class LlamaServerBackend(ModelBackend):
         if request.grammar:
             payload["grammar"] = request.grammar
 
+        if request.n_probs is not None and int(request.n_probs) > 0:
+            payload["n_probs"] = min(128, int(request.n_probs))
+
         # Prefix cache slot routing (id_slot=-1 means auto-assign)
         if request.slot_id is not None:
             payload["id_slot"] = request.slot_id
 
         # Logit probe: request top-k token probabilities for routing classifier
         from src.features import features
-        if features().logit_probe and role_config.name == "frontdoor":
+        if "n_probs" not in payload and features().logit_probe and role_config.name == "frontdoor":
             payload["n_probs"] = 64
 
         return payload

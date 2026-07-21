@@ -23,7 +23,10 @@ from src.api.routes.chat_utils import (
     _should_formalize,
     _truncate_looped_answer,
 )
-from src.api.routes.chat_pipeline.telemetry import llm_completion_meta
+from src.api.routes.chat_pipeline.telemetry import (
+    llm_completion_meta,
+    llm_completion_probabilities,
+)
 from src.api.services.memrl import score_completed_task
 from src.api.structured_logging import task_extra
 from src.llm_primitives import LLMPrimitives
@@ -127,6 +130,7 @@ def _execute_direct(
             skip_suffix=True,
             stop_sequences=stop_seqs,
             json_schema=request.output_schema,
+            n_probs=request.n_probs,
         )
         answer = answer.strip()
     except Exception as e:
@@ -279,6 +283,7 @@ def _execute_direct(
         prompt_eval_ms=primitives.total_prompt_eval_ms,
         generation_ms=primitives.total_generation_ms,
         predicted_tps=primitives._last_predicted_tps,
+        completion_probabilities=llm_completion_probabilities(primitives),
         http_overhead_ms=primitives.total_http_overhead_ms,
         skills_retrieved=len(routing.skill_ids),
         skill_ids=routing.skill_ids,

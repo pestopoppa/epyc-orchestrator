@@ -20,6 +20,8 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -227,6 +229,60 @@ def test_plan_matches_schedule_expectations():
     assert d["route"] == "ROUTE-A3-j2j3-single-worker"
 
 
+def test_execution_orders_burst_handover_interferer_before_primary():
+    p = mp.plan_migration_probe(
+        role="frontdoor", model="m", quant="q",
+        oscillation=[1, 4], safe_slots=3,
+    )
+    step_specs = [r for r in p.requests if r.step == 1]
+    ordered, stagger = mp._execution_order_for_step(step_specs, safe_slots=3)
+    assert stagger is True
+    assert ordered[0].is_primary is False
+    assert any(spec.is_primary for spec in ordered[1:])
+
+
+def test_execute_probe_runs_same_step_requests_concurrently(tmp_path):
+    plan = mp.plan_migration_probe(
+        role="frontdoor", model="m", quant="q",
+        oscillation=[1, 4], safe_slots=3, dwell_ms=1,
+    )
+    active = 0
+    max_active = 0
+    step1_started = 0
+    lock = threading.Lock()
+    release = threading.Event()
+
+    def _request(spec):
+        nonlocal active, max_active, step1_started
+        if spec.step != 1:
+            return {"ok": True}
+        with lock:
+            active += 1
+            step1_started += 1
+            max_active = max(max_active, active)
+            if step1_started == 4:
+                release.set()
+        assert release.wait(2), "burst step was serialized; not all requests overlapped"
+        time.sleep(0.01)
+        with lock:
+            active -= 1
+        return {"ok": True}
+
+    def _counter(_url):
+        return {"forward": 0, "reverse": 0, "thrash": {}, "failures": 0}
+
+    mp.execute_migration_probe(
+        plan,
+        url="http://unused",
+        request_fn=_request,
+        counter_probe=_counter,
+        sleep_fn=lambda _seconds: None,
+        output_path=tmp_path / "probe.jsonl",
+    )
+    assert max_active >= 2
+    assert step1_started == 4
+
+
 # --------------------------------------------------------------------------- #
 # Migration-event analysis on synthetic OBSERVED outcomes
 # --------------------------------------------------------------------------- #
@@ -296,6 +352,180 @@ def test_analyze_expected_match():
         "expected_forward": 1, "expected_reverse": 1,
         "forward_matches": True, "reverse_matches": True,
     }
+
+
+def test_default_counter_probe_reads_contention_migration_counters(monkeypatch):
+    class Resp:
+        def json(self):
+            return {
+                "migration_counters": {
+                    "kv_migration_direction_total": {"forward": 2, "reverse": 1},
+                    "kv_migration_thrash_skipped_total": {"cooldown": 3},
+                    "kv_migration_recent_events": [
+                        {"seq": 1, "direction": "forward", "session_id": "s-a", "committed": True},
+                    ],
+                }
+            }
+
+    class FakeHttpx:
+        @staticmethod
+        def get(url, timeout):
+            assert url == "http://api/dashboard/api/contention"
+            assert timeout == 10
+            return Resp()
+
+    monkeypatch.setitem(sys.modules, "httpx", FakeHttpx)
+    assert mp._default_counter_probe("http://api", role="frontdoor") == {
+        "forward": 2,
+        "reverse": 1,
+        "thrash": {"cooldown": 3},
+        "failures": 0,
+        "events": [
+            {"seq": 1, "direction": "forward", "session_id": "s-a", "committed": True},
+        ],
+    }
+
+
+def test_default_counter_probe_falls_back_to_per_role_scheduling(monkeypatch):
+    class Resp:
+        def json(self):
+            return {
+                "per_role_scheduling": {
+                    "frontdoor": {
+                        "migrations_started": 4,
+                        "reverse_migrations": 2,
+                        "migration_failures": 1,
+                    },
+                    "worker_general": {
+                        "migrations_started": 99,
+                        "reverse_migrations": 99,
+                    },
+                }
+            }
+
+    class FakeHttpx:
+        @staticmethod
+        def get(_url, timeout):
+            return Resp()
+
+    monkeypatch.setitem(sys.modules, "httpx", FakeHttpx)
+    assert mp._default_counter_probe("http://api", role="frontdoor") == {
+        "forward": 4,
+        "reverse": 2,
+        "thrash": {},
+        "failures": 1,
+        "events": [],
+    }
+
+
+def test_execute_probe_failure_counter_delta_records_abort(tmp_path):
+    plan = mp.plan_migration_probe(role="frontdoor")
+    counter_rows = iter([
+        {"forward": 0, "reverse": 0, "thrash": {}, "failures": 0},
+        {"forward": 0, "reverse": 0, "thrash": {}, "failures": 1},
+        {"forward": 0, "reverse": 0, "thrash": {}, "failures": 1},
+        {"forward": 0, "reverse": 0, "thrash": {}, "failures": 1},
+        {"forward": 0, "reverse": 0, "thrash": {}, "failures": 1},
+        {"forward": 0, "reverse": 0, "thrash": {}, "failures": 1},
+        {"forward": 0, "reverse": 0, "thrash": {}, "failures": 1},
+    ])
+
+    row = mp.execute_migration_probe(
+        plan,
+        url="http://unused",
+        request_fn=lambda _spec: {"ok": True},
+        counter_probe=lambda _url: next(counter_rows),
+        sleep_fn=lambda _seconds: None,
+        output_path=tmp_path / "probe.jsonl",
+    )
+
+    assert row["analysis"]["n_aborted"] == 1
+    assert row["analysis"]["verdict"] == "INCONCLUSIVE"
+    assert any("aborted" in r for r in row["analysis"]["verdict_reasons"])
+
+
+def test_execute_probe_prefers_session_labeled_events(tmp_path):
+    plan = mp.plan_migration_probe(role="frontdoor")
+    counter_rows = iter([
+        {"forward": 0, "reverse": 0, "thrash": {}, "failures": 0, "events": []},
+        {
+            "forward": 2,
+            "reverse": 0,
+            "thrash": {},
+            "failures": 0,
+            "events": [
+                {"seq": 1, "direction": "forward", "session_id": "primary", "committed": True},
+                {"seq": 2, "direction": "forward", "session_id": "interferer", "committed": True},
+            ],
+        },
+        {
+            "forward": 2,
+            "reverse": 1,
+            "thrash": {},
+            "failures": 0,
+            "events": [
+                {"seq": 1, "direction": "forward", "session_id": "primary", "committed": True},
+                {"seq": 2, "direction": "forward", "session_id": "interferer", "committed": True},
+                {"seq": 3, "direction": "reverse", "session_id": "primary", "committed": True},
+            ],
+        },
+        {
+            "forward": 2,
+            "reverse": 1,
+            "thrash": {},
+            "failures": 0,
+            "events": [
+                {"seq": 1, "direction": "forward", "session_id": "primary", "committed": True},
+                {"seq": 2, "direction": "forward", "session_id": "interferer", "committed": True},
+                {"seq": 3, "direction": "reverse", "session_id": "primary", "committed": True},
+            ],
+        },
+        {
+            "forward": 2,
+            "reverse": 1,
+            "thrash": {},
+            "failures": 0,
+            "events": [
+                {"seq": 1, "direction": "forward", "session_id": "primary", "committed": True},
+                {"seq": 2, "direction": "forward", "session_id": "interferer", "committed": True},
+                {"seq": 3, "direction": "reverse", "session_id": "primary", "committed": True},
+            ],
+        },
+        {
+            "forward": 2,
+            "reverse": 1,
+            "thrash": {},
+            "failures": 0,
+            "events": [
+                {"seq": 1, "direction": "forward", "session_id": "primary", "committed": True},
+                {"seq": 2, "direction": "forward", "session_id": "interferer", "committed": True},
+                {"seq": 3, "direction": "reverse", "session_id": "primary", "committed": True},
+            ],
+        },
+        {
+            "forward": 2,
+            "reverse": 1,
+            "thrash": {},
+            "failures": 0,
+            "events": [
+                {"seq": 1, "direction": "forward", "session_id": "primary", "committed": True},
+                {"seq": 2, "direction": "forward", "session_id": "interferer", "committed": True},
+                {"seq": 3, "direction": "reverse", "session_id": "primary", "committed": True},
+            ],
+        },
+    ])
+
+    row = mp.execute_migration_probe(
+        plan,
+        url="http://unused",
+        request_fn=lambda _spec: {"ok": True},
+        counter_probe=lambda _url: next(counter_rows),
+        sleep_fn=lambda _seconds: None,
+        output_path=tmp_path / "probe.jsonl",
+    )
+
+    assert row["analysis"]["per_session"]["primary"]["total"] == 2
+    assert row["analysis"]["per_session"]["interferer"]["total"] == 1
 
 
 # --------------------------------------------------------------------------- #

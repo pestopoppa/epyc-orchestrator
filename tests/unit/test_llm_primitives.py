@@ -245,6 +245,7 @@ class TestRequestContext:
         assert primitives.get_request_id() is None
         assert primitives.get_request_trial_id() is None
         assert primitives.get_request_batch_id() is None
+        assert primitives.get_request_session_id() is None
         assert primitives.get_request_workload_class() == "interactive"
 
         marker = object()
@@ -252,6 +253,7 @@ class TestRequestContext:
             cancel_check=lambda: marker,
             deadline_s=123.45,
             task_id="chat-ctx-test",
+            session_id="session-ctx-test",
             request_id="caller-req-1",
             trial_id=42,
             batch_id="batch-a",
@@ -263,6 +265,7 @@ class TestRequestContext:
             assert primitives.get_request_id() == "caller-req-1"
             assert primitives.get_request_trial_id() == 42
             assert primitives.get_request_batch_id() == "batch-a"
+            assert primitives.get_request_session_id() == "session-ctx-test"
             assert primitives.get_request_workload_class() == "campaign"
 
         assert primitives.get_request_deadline_s() is None
@@ -271,6 +274,7 @@ class TestRequestContext:
         assert primitives.get_request_id() is None
         assert primitives.get_request_trial_id() is None
         assert primitives.get_request_batch_id() is None
+        assert primitives.get_request_session_id() is None
         assert primitives.get_request_workload_class() == "interactive"
 
     def test_request_context_infers_eval_batch_workload_class(self):

@@ -2,8 +2,9 @@
 
 The helper consolidates the "should this trial be excluded from archive +
 AP-22 memory?" decision so the run_loop wiring is testable without driving
-the whole loop. Two exclusion paths today: exogenous_operator_reload and
-mad_noise. Exogenous takes priority on the rare both-set path.
+the whole loop. Exogenous reloads and abandoned eval requests are measurement
+corruption paths; mad_noise and related within-noise signals are benign
+learning exclusions. Exogenous takes priority on the rare both-set path.
 """
 
 from __future__ import annotations
@@ -56,6 +57,7 @@ class _FakeEvalResult:
     oracle_adequacy: dict = field(default_factory=dict)
     bug_corrupted_by: str = ""
     bug_corrupted_reason: str = ""
+    details: dict = field(default_factory=dict)
 
 
 def test_no_signals_returns_empty():
@@ -166,6 +168,41 @@ def test_exo_priority_over_mad_when_both_somehow_fire():
     by, _, def_cat = classify_learning_exclusion(v, r)
     assert by == "exogenous_operator_reload"
     assert def_cat == "exogenous_reload"
+
+
+def test_exo_priority_over_abandoned_eval_requests_when_both_somehow_fire():
+    r = _FakeEvalResult(
+        n_exogenous_unrecovered=1,
+        n_questions=5,
+        details={
+            "eval_contaminated_by_abandoned_requests": True,
+            "eval_orphan_contamination_count": 2,
+        },
+    )
+
+    by, reason, def_cat = classify_learning_exclusion(_FakeVerdict(), r)
+
+    assert by == "exogenous_operator_reload"
+    assert "remained unrecovered" in reason
+    assert def_cat == "exogenous_reload"
+
+
+def test_abandoned_eval_requests_mark_corrupted_learning_exclusion():
+    r = _FakeEvalResult(
+        n_questions=3,
+        details={
+            "eval_contaminated_by_abandoned_requests": True,
+            "eval_orphan_contamination_count": 1,
+        },
+    )
+
+    by, reason, def_cat = classify_learning_exclusion(_FakeVerdict(), r)
+
+    assert by == "eval_abandoned_requests"
+    assert "1/3 eval request(s)" in reason
+    assert "server-side" in reason
+    assert def_cat == "eval_abandoned_requests"
+    assert "eval_abandoned_requests" not in BENIGN_LEARNING_EXCLUSIONS
 
 
 def test_exo_n_questions_fallback_to_question_ids_len():

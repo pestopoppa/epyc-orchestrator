@@ -62,6 +62,29 @@ _RERANK_WEIGHT_DEFAULT = _env_float("KB_RAG_RERANK_WEIGHT", 0.3)
 _RERANK_POOL_MULT_DEFAULT = _env_float("KB_RAG_RERANK_POOL_MULT", 4.0)
 _LEXICAL_WEIGHT_DEFAULT = _env_float("KB_RAG_LEXICAL_WEIGHT", 0.0)
 _LEXICAL_POOL_MULT_DEFAULT = _env_float("KB_RAG_LEXICAL_POOL_MULT", 4.0)
+_EMB_CACHE_DEFAULT = _env_flag("KB_RAG_EMB_CACHE")
+_EMB_CACHE: dict[str, tuple[int, int, np.ndarray]] = {}
+
+
+def _clear_embedding_cache() -> None:
+    _EMB_CACHE.clear()
+
+
+def _load_embedding(emb_path: Path) -> np.ndarray:
+    if not _EMB_CACHE_DEFAULT:
+        with np.load(emb_path) as data:
+            return data["emb"]
+
+    st = emb_path.stat()
+    key = str(emb_path.resolve(strict=False))
+    cached = _EMB_CACHE.get(key)
+    if cached is not None and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
+        return cached[2]
+
+    with np.load(emb_path) as data:
+        emb = np.asarray(data["emb"]).copy()
+    _EMB_CACHE[key] = (st.st_mtime_ns, st.st_size, emb)
+    return emb
 
 
 def _recency_score(mtime: float, now: float, sigma_days: float) -> float:
@@ -263,11 +286,15 @@ def build_index(
             continue
 
         mtime = f.stat().st_mtime
+        current_chunk_keys: set[tuple[str, int, int]] = set()
         for ch in chunks:
             n_chunks_seen += 1
+            line_start, line_end = ch.line_range
+            current_chunk_keys.add((ch.content_hash, line_start, line_end))
             existing = cur.execute(
-                "SELECT chunk_id, content_hash FROM chunk WHERE file_path=? AND content_hash=?",
-                (str(f), ch.content_hash),
+                "SELECT chunk_id, content_hash FROM chunk "
+                "WHERE file_path=? AND content_hash=? AND line_start=? AND line_end=?",
+                (str(f), ch.content_hash, line_start, line_end),
             ).fetchone()
             if existing and not force:
                 n_chunks_skipped += 1
@@ -318,6 +345,18 @@ def build_index(
             )
             n_chunks_encoded += 1
 
+        stale_chunk_rows = cur.execute(
+            "SELECT chunk_id, content_hash, line_start, line_end FROM chunk WHERE file_path = ?",
+            (str(f),),
+        ).fetchall()
+        for row in stale_chunk_rows:
+            key = (str(row["content_hash"]), int(row["line_start"]), int(row["line_end"]))
+            if key in current_chunk_keys:
+                continue
+            if fts_enabled:
+                cur.execute("DELETE FROM chunk_fts WHERE rowid = ?", (int(row["chunk_id"]),))
+            cur.execute("DELETE FROM chunk WHERE chunk_id = ?", (int(row["chunk_id"]),))
+
         if file_idx % 25 == 0:
             conn.commit()
             logger.info(
@@ -339,6 +378,7 @@ def build_index(
         cur.execute("DELETE FROM chunk WHERE file_path = ?", (stale_file,))
     conn.commit()
     conn.close()
+    _clear_embedding_cache()
 
     elapsed = time.perf_counter() - started
     return {
@@ -426,6 +466,7 @@ def update_files(
             encoded += 1
     conn.commit()
     conn.close()
+    _clear_embedding_cache()
     return {"ok": True, "files_processed": len(paths), "chunks_encoded": encoded}
 
 
@@ -466,6 +507,7 @@ def remove_files(
 
     conn.commit()
     conn.close()
+    _clear_embedding_cache()
     return {
         "ok": True,
         "files_removed": removed_files,
@@ -546,8 +588,7 @@ def query(
         if not emb_path.exists():
             continue
         try:
-            data = np.load(emb_path)
-            d_emb = data["emb"]
+            d_emb = _load_embedding(emb_path)
         except Exception:  # noqa: BLE001
             continue
         s = colbert_encoder.maxsim(q_emb, d_emb)

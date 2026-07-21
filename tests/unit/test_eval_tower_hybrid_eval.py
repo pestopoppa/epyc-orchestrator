@@ -8,6 +8,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "autopilot"))
 
+import eval_tower_trace_feedback  # type: ignore[import-not-found]
 from eval_tower import EvalTower  # type: ignore[import-not-found]
 from safety_gate import EvalResult  # type: ignore[import-not-found]
 
@@ -196,3 +197,53 @@ def test_contrastive_trace_bank_caps_per_outcome() -> None:
     assert "trial #2" not in text
     assert "trial #3" in text
     assert "trial #4" in text
+
+
+def test_trace_feedback_module_matches_eval_tower_wrappers() -> None:
+    trace_text = "ROLE=worker_general\nPROMPT:\nok prompt\nRESPONSE:\nok"
+
+    tower_bank = EvalTower.update_contrastive_trace_bank(
+        None,
+        trace_text=trace_text,
+        outcome="success",
+        trial_id=10,
+        species="prompt_forge",
+        action_type="prompt_mutation",
+        reason="T1 frontier q=2.100 s=42.0",
+    )
+    module_bank = eval_tower_trace_feedback.update_contrastive_trace_bank(
+        None,
+        trace_text=trace_text,
+        outcome="success",
+        trial_id=10,
+        species="prompt_forge",
+        action_type="prompt_mutation",
+        reason="T1 frontier q=2.100 s=42.0",
+    )
+    assert tower_bank == module_bank
+
+    tower_ir = EvalTower.build_critic_trace_ir(trace_bank=tower_bank, trial_id=12)
+    module_ir = eval_tower_trace_feedback.build_critic_trace_ir(
+        trace_bank=module_bank,
+        trial_id=12,
+    )
+    assert tower_ir == module_ir
+    assert EvalTower.format_critic_trace_ir(tower_ir) == (
+        eval_tower_trace_feedback.format_critic_trace_ir(module_ir)
+    )
+    assert FakeTower().capture_contrastive_traces(trace_bank=tower_bank) == (
+        eval_tower_trace_feedback.format_contrastive_traces(trace_bank=module_bank)
+    )
+
+
+def test_trace_feedback_capture_recent_traces_tails_file(tmp_path) -> None:
+    tap_path = tmp_path / "inference_tap.log"
+    tap_path.write_text("\n".join(f"line {i}" for i in range(6)))
+
+    assert eval_tower_trace_feedback.capture_recent_traces(tap_path, n_lines=3) == (
+        "line 3\nline 4\nline 5"
+    )
+    assert eval_tower_trace_feedback.capture_recent_traces(
+        tmp_path / "missing.log",
+        n_lines=3,
+    ) == ""

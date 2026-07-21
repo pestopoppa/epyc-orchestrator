@@ -33,6 +33,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.llm_primitives.stat_tests import wilson_interval  # noqa: E402
+from scripts.autopilot.journal_shards import resolve_journal_paths  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -105,23 +106,26 @@ def extract(
     suite_role: dict[str, dict[str, dict]] = defaultdict(lambda: defaultdict(lambda: {"correct": 0, "total": 0}))
     trials_with_qr = 0
 
-    with open(journal_path) as f:
-        for line in f:
-            obj = json.loads(line)
-            qr = obj.get("eval_details", {}).get("question_results", [])
-            if not qr:
-                continue
-            trials_with_qr += 1
-            for q in qr:
-                qid = q.get("qid", "")
-                suite = q.get("suite", "")
-                role = q.get("route", "") or "unknown"
-                correct = bool(q.get("correct", False))
-                qid_suite[qid] = suite
-                qid_role[qid][role]["correct"] += int(correct)
-                qid_role[qid][role]["total"] += 1
-                suite_role[suite][role]["correct"] += int(correct)
-                suite_role[suite][role]["total"] += 1
+    # JRN-5: default base path fans out to every rotated shard; an explicit
+    # non-base --journal path is read as given.
+    for shard in resolve_journal_paths(journal_path):
+        with open(shard) as f:
+            for line in f:
+                obj = json.loads(line)
+                qr = obj.get("eval_details", {}).get("question_results", [])
+                if not qr:
+                    continue
+                trials_with_qr += 1
+                for q in qr:
+                    qid = q.get("qid", "")
+                    suite = q.get("suite", "")
+                    role = q.get("route", "") or "unknown"
+                    correct = bool(q.get("correct", False))
+                    qid_suite[qid] = suite
+                    qid_role[qid][role]["correct"] += int(correct)
+                    qid_role[qid][role]["total"] += 1
+                    suite_role[suite][role]["correct"] += int(correct)
+                    suite_role[suite][role]["total"] += 1
 
     logger.info(
         "Loaded %d trials with question_results, %d unique qids",

@@ -107,6 +107,7 @@ class InferenceRequest:
     seed: int | None = None  # RNG seed; None -> backend's fixed determinism seed
     json_schema: dict[str, Any] | None = None  # Constrain output to JSON schema
     grammar: str | None = None  # GBNF grammar for constrained generation
+    n_probs: int | None = None  # Optional llama.cpp completion_probabilities top-k capture
     max_tokens: int | None = field(default=None, repr=False)
 
     def __post_init__(self):
@@ -148,6 +149,7 @@ class InferenceResult:
     first_token_ms: float = 0.0
     stream_chunks: int = 0
     completion_reason: str = ""
+    completion_probabilities: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -173,6 +175,7 @@ class InferenceResult:
             "first_token_ms": self.first_token_ms,
             "stream_chunks": self.stream_chunks,
             "completion_reason": self.completion_reason,
+            "completion_probabilities": self.completion_probabilities,
         }
 
 

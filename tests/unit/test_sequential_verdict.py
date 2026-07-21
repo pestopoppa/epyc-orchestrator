@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 from src.autopilot_core.sequential_verdict import (
     DEFAULT_POLICY,
     STATE_ACCUMULATING,
@@ -158,3 +160,70 @@ def test_empirical_ville_bound_over_100k_null_runs() -> None:
     rate = empirical_ville_false_positive_rate(runs=100_000, horizon=12)
 
     assert rate <= DEFAULT_POLICY.alpha
+
+
+# ---------------------------------------------------------------------------
+# SEQ-3a: journal-derived z guard at the public rebuild entry point. The guard is
+# floor-only: it rejects non-finite / below-floor (z < -1/lambda_cap) values — the
+# ONLY values that would drive 1 + lambda*z negative and raise in update() — while
+# leaving large-positive z untouched (legitimate strong evidence).
+# ---------------------------------------------------------------------------
+
+_Z_FLOOR = -1.0 / DEFAULT_POLICY.lambda_cap  # = -2.0 for the default policy.
+
+
+def test_rebuild_candidate_view_skips_below_floor_negative_z_without_raising() -> None:
+    # z below -1/lambda_cap would drive 1 + lambda*z negative in EProcessState.update
+    # and raise ValueError. The guard must skip it instead of letting the rebuild crash.
+    view = rebuild_candidate_view(
+        candidate="cand",
+        core_id="core_v2",
+        observations=[(1, _Z_FLOOR - 1.0), (2, 1.0)],
+    )
+
+    assert view.trials == (2,)
+    assert view.quality_state.k == 1
+    assert view.out_of_range_skipped == 1
+    # the surviving valid row folded normally (first update uses first_lambda=0.1).
+    assert round(view.quality_state.wealth, 6) == 1.1
+
+
+def test_rebuild_candidate_view_allows_z_at_and_above_floor() -> None:
+    # z exactly at the floor gives factor == 0 (not < 0), so update() does not raise
+    # and it is KEPT. A large-positive z keeps the factor >= 0 and is legitimate
+    # evidence — it must NOT be skipped (no upper bound).
+    view = rebuild_candidate_view(
+        candidate="cand",
+        core_id="core_v2",
+        observations=[(1, _Z_FLOOR), (2, 5.0)],
+    )
+
+    assert view.out_of_range_skipped == 0
+    assert view.quality_state.k == 2
+    assert math.isfinite(view.quality_state.wealth)
+
+
+def test_rebuild_candidate_view_keeps_synthetic_above_natural_domain_z() -> None:
+    # The gate drives confirmation with synthetic z=1.2 (above the natural quality
+    # domain of [-1, 1] but well above the factor floor). Floor-only guarding must keep
+    # these — rejecting them would break legitimate accumulation.
+    view = rebuild_candidate_view(
+        candidate="cand",
+        core_id="core_v2",
+        observations=[(i, 1.2) for i in range(10)],
+    )
+
+    assert view.out_of_range_skipped == 0
+    assert view.quality_state.k == 10
+    assert view.state == STATE_CONFIRMED
+
+
+def test_rebuild_candidate_view_skips_non_finite_z() -> None:
+    view = rebuild_candidate_view(
+        candidate="cand",
+        core_id="core_v2",
+        observations=[(1, float("nan")), (2, float("inf")), (3, float("-inf")), (4, 0.5)],
+    )
+
+    assert view.trials == (4,)
+    assert view.out_of_range_skipped == 3

@@ -16,6 +16,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 sys.path.insert(0, str(ORCH_ROOT))
 
 from experiment_journal import DEFAULT_JOURNAL_DIR, ExperimentJournal  # noqa: E402
+from scrub_journal import _autopilot_running_pids  # noqa: E402
 from src.autopilot_core.journal_reconstruction import (  # noqa: E402
     reconstruct_archive_from_journal_rows,
 )
@@ -207,6 +208,14 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Allow appending a duplicate/up-to-date snapshot.",
     )
+    parser.add_argument(
+        "--force-while-autopilot-alive",
+        action="store_true",
+        help=(
+            "Skip the autopilot-running safety guard on --append (rarely needed; "
+            "the snapshot embeds a point-in-time journal view)."
+        ),
+    )
     parser.add_argument("--json", action="store_true", help="Emit JSON.")
     return parser.parse_args()
 
@@ -220,6 +229,24 @@ def main() -> int:
     if not journal_dir.is_dir():
         print(f"journal path is not a directory: {journal_dir}", file=sys.stderr)
         return 2
+
+    # A5 durability: --append writes a large ledger event to the LIVE shard.
+    # Refuse while autopilot may be appending trials — the snapshot embeds a
+    # point-in-time journal view, so a mid-trial capture would be inconsistent
+    # even though the flock now makes the raw write itself atomic.
+    if args.append and not args.force_while_autopilot_alive:
+        live = _autopilot_running_pids()
+        if live:
+            print(
+                "ERROR: autopilot is running (pids: "
+                + ", ".join(str(p) for p in live)
+                + "). Refusing to --append a journal snapshot while it may be\n"
+                "writing trials — the snapshot embeds a point-in-time journal\n"
+                "view. Stop autopilot or pass --force-while-autopilot-alive if\n"
+                "you accept snapshotting a possibly mid-trial journal.",
+                file=sys.stderr,
+            )
+            return 3
 
     journal = ExperimentJournal(journal_dir=journal_dir)
     result = build_archive_snapshot(

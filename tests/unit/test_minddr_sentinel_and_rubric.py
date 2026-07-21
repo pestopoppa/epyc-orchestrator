@@ -54,7 +54,7 @@ def test_sentinel_prompts_trigger_research_like_detector():
 
 
 def test_eval_result_has_rubric_stub_fields():
-    from src.safety_gate import EvalResult
+    from src.diversity_gate import EvalResult
 
     r = EvalResult(quality=1.0, speed=20.0, cost=0.5, reliability=0.9)
     assert math.isnan(r.rubric_reasoning_trajectory)
@@ -65,7 +65,7 @@ def test_eval_result_has_rubric_stub_fields():
 
 def test_rubric_fields_populatable():
     """Fields accept float values without affecting SafetyGate's core logic."""
-    from src.safety_gate import EvalResult, SafetyGate, Verdict
+    from src.diversity_gate import EvalResult, SafetyGate, Verdict
 
     baseline = EvalResult(quality=1.0, speed=20.0, cost=0.5, reliability=0.9)
     trial = EvalResult(
