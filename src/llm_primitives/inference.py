@@ -607,6 +607,7 @@ class InferenceMixin:
         request.request_priority = self.get_request_priority()
         request.workload_class = self.get_request_workload_class()
         request.max_queue_wait_ms = self.get_max_queue_wait_ms()
+        request.session_id = self.get_request_session_id()
         wants_probabilities = n_probs is not None and int(n_probs) > 0
         req_started = time.perf_counter()
 

@@ -44,14 +44,22 @@ def test_direction_for_target_quarter():
 
 
 def test_record_direction_and_totals():
-    mc.record_migration_direction(mc.FORWARD)
-    mc.record_migration_direction(mc.FORWARD)
-    mc.record_migration_direction(mc.REVERSE)
+    mc.record_migration_direction(mc.FORWARD, session_id="s-a")
+    mc.record_migration_direction(mc.FORWARD, session_id="s-b")
+    mc.record_migration_direction(mc.REVERSE, session_id="s-a")
     assert mc.direction_total(mc.FORWARD) == 2
     assert mc.direction_total(mc.REVERSE) == 1
     assert mc.direction_total() == 3
     snap = mc.snapshot()
     assert snap[mc.DIRECTION_TOTAL] == {"forward": 2, "reverse": 1}
+    assert [
+        (e["direction"], e["session_id"], e["committed"])
+        for e in snap[mc.RECENT_EVENTS]
+    ] == [
+        ("forward", "s-a", True),
+        ("forward", "s-b", True),
+        ("reverse", "s-a", True),
+    ]
 
 
 def test_record_thrash_skip_and_totals():

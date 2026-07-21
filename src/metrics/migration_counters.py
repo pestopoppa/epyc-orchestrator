@@ -30,11 +30,14 @@ never break a migration commit or a dispatch decision.
 from __future__ import annotations
 
 import threading
+import time
 
 # Metric family names — EXACTLY as named in the handoff. Do not rename: the
 # dashboard / Package-J observable-evidence contract keys off these strings.
 DIRECTION_TOTAL = "kv_migration_direction_total"
 THRASH_SKIPPED_TOTAL = "kv_migration_thrash_skipped_total"
+RECENT_EVENTS = "kv_migration_recent_events"
+_RECENT_LIMIT = 512
 
 # Direction label values.
 FORWARD = "forward"  # full -> quarter (load rising)
@@ -43,6 +46,8 @@ REVERSE = "reverse"  # quarter -> full (load dropping; WP-4)
 _lock = threading.Lock()
 _direction_counts: dict[str, int] = {}
 _thrash_skipped_counts: dict[str, int] = {}
+_recent_events: list[dict[str, object]] = []
+_event_seq = 0
 
 
 def direction_for_target_quarter(target_quarter: int) -> str:
@@ -55,14 +60,27 @@ def direction_for_target_quarter(target_quarter: int) -> str:
     return REVERSE if target_quarter < 0 else FORWARD
 
 
-def record_migration_direction(direction: str) -> None:
+def record_migration_direction(direction: str, session_id: str | None = None) -> None:
     """Increment ``kv_migration_direction_total{direction=...}`` by one.
 
     An unknown label is recorded verbatim (never raises) so a wiring bug
     degrades to an observable series rather than breaking a migration commit.
     """
+    global _event_seq
     with _lock:
         _direction_counts[direction] = _direction_counts.get(direction, 0) + 1
+        if session_id:
+            _event_seq += 1
+            _recent_events.append(
+                {
+                    "seq": _event_seq,
+                    "direction": direction,
+                    "session_id": str(session_id),
+                    "committed": True,
+                    "monotonic_s": time.monotonic(),
+                }
+            )
+            del _recent_events[:-_RECENT_LIMIT]
 
 
 def record_thrash_skip(reason: str = "unspecified") -> None:
@@ -99,6 +117,7 @@ def snapshot() -> dict[str, dict[str, int]]:
         return {
             DIRECTION_TOTAL: dict(_direction_counts),
             THRASH_SKIPPED_TOTAL: dict(_thrash_skipped_counts),
+            RECENT_EVENTS: [dict(e) for e in _recent_events],
         }
 
 
@@ -126,6 +145,9 @@ def render_prometheus() -> str:
 
 def reset() -> None:
     """Zero all counters. Test-only — production never resets a counter."""
+    global _event_seq
     with _lock:
         _direction_counts.clear()
         _thrash_skipped_counts.clear()
+        _recent_events.clear()
+        _event_seq = 0

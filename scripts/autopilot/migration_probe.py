@@ -677,23 +677,28 @@ def _default_counter_probe(
         counters = (data or {}).get("migration_counters") or {}
         direction = dict(counters.get("kv_migration_direction_total", {}) or {})
         thrash = dict(counters.get("kv_migration_thrash_skipped_total", {}) or {})
-        if direction or thrash:
-            return {
-                "forward": int(direction.get("forward", 0) or 0),
-                "reverse": int(direction.get("reverse", 0) or 0),
-                "thrash": thrash,
-            }
-
+        events = list(counters.get("kv_migration_recent_events", []) or [])
         per_role = (data or {}).get("per_role_scheduling") or {}
         records: list[dict[str, Any]] = []
         if role and isinstance(per_role.get(role), dict):
             records = [per_role[role]]
         elif isinstance(per_role, dict):
             records = [v for v in per_role.values() if isinstance(v, dict)]
+        failures = sum(int(r.get("migration_failures", 0) or 0) for r in records)
+        if direction or thrash:
+            return {
+                "forward": int(direction.get("forward", 0) or 0),
+                "reverse": int(direction.get("reverse", 0) or 0),
+                "thrash": thrash,
+                "failures": failures,
+                "events": events,
+            }
         return {
             "forward": sum(int(r.get("migrations_started", 0) or 0) for r in records),
             "reverse": sum(int(r.get("reverse_migrations", 0) or 0) for r in records),
             "thrash": {},
+            "failures": failures,
+            "events": events,
         }
     except Exception:  # noqa: BLE001
         return {"forward": 0, "reverse": 0, "thrash": {}}
@@ -776,15 +781,38 @@ def execute_migration_probe(  # pragma: no cover - inference path
                         pass
         sleep(DEFAULT_COUNTER_SETTLE_MS / 1000.0)
         cur = probe(url)
-        d_fwd = max(0, int(cur.get("forward", 0)) - int(prev.get("forward", 0)))
-        d_rev = max(0, int(cur.get("reverse", 0)) - int(prev.get("reverse", 0)))
+        cur_events = [e for e in (cur.get("events", []) or []) if isinstance(e, dict)]
+        prev_seq = max(
+            [int(e.get("seq", 0) or 0) for e in (prev.get("events", []) or []) if isinstance(e, dict)]
+            or [0]
+        )
+        new_committed_events = [
+            e for e in cur_events if int(e.get("seq", 0) or 0) > prev_seq
+        ]
+        use_session_events = bool(cur_events or (prev.get("events", []) or []))
+        d_fwd = 0 if use_session_events else max(0, int(cur.get("forward", 0)) - int(prev.get("forward", 0)))
+        d_rev = 0 if use_session_events else max(0, int(cur.get("reverse", 0)) - int(prev.get("reverse", 0)))
+        d_fail = max(0, int(cur.get("failures", 0)) - int(prev.get("failures", 0)))
         t_ms = i * plan.dwell_ms
+        for event in new_committed_events:
+            direction = str(event.get("direction") or "")
+            if direction not in {"forward", "reverse"}:
+                continue
+            observed.append({
+                "direction": direction,
+                "session_id": str(event.get("session_id") or "?"),
+                "committed": bool(event.get("committed", True)),
+                "t_ms": t_ms,
+            })
         for _ in range(d_fwd):
             observed.append({"direction": "forward", "session_id": plan.session_id,
                              "committed": True, "t_ms": t_ms})
         for _ in range(d_rev):
             observed.append({"direction": "reverse", "session_id": plan.session_id,
                              "committed": True, "t_ms": t_ms})
+        for _ in range(d_fail):
+            observed.append({"direction": "forward", "session_id": plan.session_id,
+                             "committed": False, "t_ms": t_ms})
         cur_thrash = cur.get("thrash", {}) or {}
         prev_thrash = prev.get("thrash", {}) or {}
         for reason, n in cur_thrash.items():

@@ -171,6 +171,10 @@ class LLMPrimitives(
             "llm_primitives_request_task_id",
             default=None,
         )
+        self._request_session_id_ctx: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+            "llm_primitives_request_session_id",
+            default=None,
+        )
         self._request_id_ctx: contextvars.ContextVar[str | None] = contextvars.ContextVar(
             "llm_primitives_request_id",
             default=None,
@@ -301,6 +305,11 @@ class LLMPrimitives(
         """Get caller-supplied batch/concurrency id, if present."""
         return self._request_batch_id_ctx.get()
 
+    def get_request_session_id(self) -> str | None:
+        """Get caller-supplied conversation/session id, if present."""
+        value = self._request_session_id_ctx.get()
+        return str(value) if value not in (None, "") else None
+
     def get_request_priority(self) -> str:
         """Get request-local priority used by admission control."""
         value = self._request_priority_ctx.get()
@@ -333,6 +342,7 @@ class LLMPrimitives(
         cancel_check=None,
         deadline_s: float | None = None,
         task_id: str | None = None,
+        session_id: str | None = None,
         request_id: str | None = None,
         trial_id=None,
         batch_id=None,
@@ -374,6 +384,7 @@ class LLMPrimitives(
             "depth_override_skip_events": 0,
             "depth_override_skip_reasons": [],
             "request_priority": normalized_priority,
+            "session_id": session_id,
             "request_id": request_id,
             "trial_id": trial_id,
             "batch_id": batch_id,
@@ -382,6 +393,7 @@ class LLMPrimitives(
         token_cancel = self._request_cancel_check_ctx.set(cancel_check)
         token_deadline = self._request_deadline_s_ctx.set(deadline_s)
         token_task = self._request_task_id_ctx.set(task_id)
+        token_session = self._request_session_id_ctx.set(session_id)
         token_request = self._request_id_ctx.set(request_id)
         token_trial = self._request_trial_id_ctx.set(trial_id)
         token_batch = self._request_batch_id_ctx.set(batch_id)
@@ -400,6 +412,7 @@ class LLMPrimitives(
             self._request_cancel_check_ctx.reset(token_cancel)
             self._request_deadline_s_ctx.reset(token_deadline)
             self._request_task_id_ctx.reset(token_task)
+            self._request_session_id_ctx.reset(token_session)
             self._request_id_ctx.reset(token_request)
             self._request_trial_id_ctx.reset(token_trial)
             self._request_batch_id_ctx.reset(token_batch)

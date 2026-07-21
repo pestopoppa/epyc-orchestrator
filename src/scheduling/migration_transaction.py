@@ -122,7 +122,8 @@ class MigrationTransaction:
             from src.metrics import migration_counters
 
             migration_counters.record_migration_direction(
-                migration_counters.direction_for_target_quarter(self.target_quarter)
+                migration_counters.direction_for_target_quarter(self.target_quarter),
+                session_id=self.session_id,
             )
         except Exception:  # pragma: no cover - metrics must never break migration
             pass

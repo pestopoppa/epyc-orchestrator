@@ -269,7 +269,7 @@ def test_execute_probe_runs_same_step_requests_concurrently(tmp_path):
         return {"ok": True}
 
     def _counter(_url):
-        return {"forward": 0, "reverse": 0, "thrash": {}}
+        return {"forward": 0, "reverse": 0, "thrash": {}, "failures": 0}
 
     mp.execute_migration_probe(
         plan,
@@ -361,6 +361,9 @@ def test_default_counter_probe_reads_contention_migration_counters(monkeypatch):
                 "migration_counters": {
                     "kv_migration_direction_total": {"forward": 2, "reverse": 1},
                     "kv_migration_thrash_skipped_total": {"cooldown": 3},
+                    "kv_migration_recent_events": [
+                        {"seq": 1, "direction": "forward", "session_id": "s-a", "committed": True},
+                    ],
                 }
             }
 
@@ -376,6 +379,10 @@ def test_default_counter_probe_reads_contention_migration_counters(monkeypatch):
         "forward": 2,
         "reverse": 1,
         "thrash": {"cooldown": 3},
+        "failures": 0,
+        "events": [
+            {"seq": 1, "direction": "forward", "session_id": "s-a", "committed": True},
+        ],
     }
 
 
@@ -387,6 +394,7 @@ def test_default_counter_probe_falls_back_to_per_role_scheduling(monkeypatch):
                     "frontdoor": {
                         "migrations_started": 4,
                         "reverse_migrations": 2,
+                        "migration_failures": 1,
                     },
                     "worker_general": {
                         "migrations_started": 99,
@@ -405,7 +413,119 @@ def test_default_counter_probe_falls_back_to_per_role_scheduling(monkeypatch):
         "forward": 4,
         "reverse": 2,
         "thrash": {},
+        "failures": 1,
+        "events": [],
     }
+
+
+def test_execute_probe_failure_counter_delta_records_abort(tmp_path):
+    plan = mp.plan_migration_probe(role="frontdoor")
+    counter_rows = iter([
+        {"forward": 0, "reverse": 0, "thrash": {}, "failures": 0},
+        {"forward": 0, "reverse": 0, "thrash": {}, "failures": 1},
+        {"forward": 0, "reverse": 0, "thrash": {}, "failures": 1},
+        {"forward": 0, "reverse": 0, "thrash": {}, "failures": 1},
+        {"forward": 0, "reverse": 0, "thrash": {}, "failures": 1},
+        {"forward": 0, "reverse": 0, "thrash": {}, "failures": 1},
+        {"forward": 0, "reverse": 0, "thrash": {}, "failures": 1},
+    ])
+
+    row = mp.execute_migration_probe(
+        plan,
+        url="http://unused",
+        request_fn=lambda _spec: {"ok": True},
+        counter_probe=lambda _url: next(counter_rows),
+        sleep_fn=lambda _seconds: None,
+        output_path=tmp_path / "probe.jsonl",
+    )
+
+    assert row["analysis"]["n_aborted"] == 1
+    assert row["analysis"]["verdict"] == "INCONCLUSIVE"
+    assert any("aborted" in r for r in row["analysis"]["verdict_reasons"])
+
+
+def test_execute_probe_prefers_session_labeled_events(tmp_path):
+    plan = mp.plan_migration_probe(role="frontdoor")
+    counter_rows = iter([
+        {"forward": 0, "reverse": 0, "thrash": {}, "failures": 0, "events": []},
+        {
+            "forward": 2,
+            "reverse": 0,
+            "thrash": {},
+            "failures": 0,
+            "events": [
+                {"seq": 1, "direction": "forward", "session_id": "primary", "committed": True},
+                {"seq": 2, "direction": "forward", "session_id": "interferer", "committed": True},
+            ],
+        },
+        {
+            "forward": 2,
+            "reverse": 1,
+            "thrash": {},
+            "failures": 0,
+            "events": [
+                {"seq": 1, "direction": "forward", "session_id": "primary", "committed": True},
+                {"seq": 2, "direction": "forward", "session_id": "interferer", "committed": True},
+                {"seq": 3, "direction": "reverse", "session_id": "primary", "committed": True},
+            ],
+        },
+        {
+            "forward": 2,
+            "reverse": 1,
+            "thrash": {},
+            "failures": 0,
+            "events": [
+                {"seq": 1, "direction": "forward", "session_id": "primary", "committed": True},
+                {"seq": 2, "direction": "forward", "session_id": "interferer", "committed": True},
+                {"seq": 3, "direction": "reverse", "session_id": "primary", "committed": True},
+            ],
+        },
+        {
+            "forward": 2,
+            "reverse": 1,
+            "thrash": {},
+            "failures": 0,
+            "events": [
+                {"seq": 1, "direction": "forward", "session_id": "primary", "committed": True},
+                {"seq": 2, "direction": "forward", "session_id": "interferer", "committed": True},
+                {"seq": 3, "direction": "reverse", "session_id": "primary", "committed": True},
+            ],
+        },
+        {
+            "forward": 2,
+            "reverse": 1,
+            "thrash": {},
+            "failures": 0,
+            "events": [
+                {"seq": 1, "direction": "forward", "session_id": "primary", "committed": True},
+                {"seq": 2, "direction": "forward", "session_id": "interferer", "committed": True},
+                {"seq": 3, "direction": "reverse", "session_id": "primary", "committed": True},
+            ],
+        },
+        {
+            "forward": 2,
+            "reverse": 1,
+            "thrash": {},
+            "failures": 0,
+            "events": [
+                {"seq": 1, "direction": "forward", "session_id": "primary", "committed": True},
+                {"seq": 2, "direction": "forward", "session_id": "interferer", "committed": True},
+                {"seq": 3, "direction": "reverse", "session_id": "primary", "committed": True},
+            ],
+        },
+    ])
+
+    row = mp.execute_migration_probe(
+        plan,
+        url="http://unused",
+        request_fn=lambda _spec: {"ok": True},
+        counter_probe=lambda _url: next(counter_rows),
+        sleep_fn=lambda _seconds: None,
+        output_path=tmp_path / "probe.jsonl",
+    )
+
+    assert row["analysis"]["per_session"]["primary"]["total"] == 2
+    assert row["analysis"]["per_session"]["interferer"]["total"] == 1
 
 
 # --------------------------------------------------------------------------- #

@@ -545,6 +545,7 @@ class TestCallCachingBackend:
                 assert getattr(request, "request_priority") == "background"
                 assert getattr(request, "workload_class") == "campaign"
                 assert getattr(request, "max_queue_wait_ms") == 123
+                assert getattr(request, "session_id") == "session-a3"
                 return InferenceResult(
                     role="frontdoor",
                     output="ok",
@@ -560,6 +561,7 @@ class TestCallCachingBackend:
             priority="background",
             workload_class="campaign",
             max_queue_wait_ms=123,
+            session_id="session-a3",
         ):
             assert prims._real_call("hi", "frontdoor") == "ok"
 
