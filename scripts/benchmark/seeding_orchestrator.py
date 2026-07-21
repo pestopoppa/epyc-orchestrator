@@ -689,6 +689,36 @@ def call_orchestrator_forced(
     """
     import httpx
 
+    # ── Guard 3 (REL-1 eval-honesty): deadline-starvation floor ──────────
+    # 2026-07-21 EV-11c incident: client-deadline starvation on long MATH-tail
+    # questions shrank the effective per-call budget to ~1s; those doomed calls
+    # 504'd and tripped the production circuit breaker, which then served
+    # in-band "[ERROR: ...]" text as answers. Refuse to fire an eval llama call
+    # whose remaining budget is below a sane minimum — fail the question
+    # pre-send as a deadline_starved ERROR (REL-1: an excluded row, not a wrong
+    # answer) instead of tripping the breaker. `client_deadline_unix_s` below is
+    # computed as `now + timeout`, so the remaining budget for the llama call is
+    # exactly `timeout`. Scoped to eval traffic (workload_class == "eval_batch")
+    # so the 14 non-eval callers of this function keep their EXACT legacy path.
+    if str(workload_class or "") == "eval_batch":
+        _min_llama_budget_s = _env_float("AUTOPILOT_EVAL_MIN_LLAMA_BUDGET_S", 30.0)
+        if _min_llama_budget_s > 0 and float(timeout) < _min_llama_budget_s:
+            logger.error(
+                "  [deadline-starved] REFUSED pre-send: role=%s budget=%.1fs "
+                "< floor=%.1fs — failing question as error rather than firing a "
+                "doomed call that trips the circuit breaker",
+                force_role, float(timeout), _min_llama_budget_s,
+            )
+            return {
+                "answer": "",
+                "error": (
+                    f"deadline_starved: eval llama budget {float(timeout):.1f}s "
+                    f"< floor {_min_llama_budget_s:.0f}s (role={force_role}); "
+                    "refused pre-send"
+                ),
+                "failure_reason": "deadline_starved",
+            }
+
     payload: dict[str, Any] = {
         "prompt": prompt,
         "real_mode": True,

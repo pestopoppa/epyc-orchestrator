@@ -541,6 +541,66 @@ def _nonnegative_int(value: Any, default: int = 0) -> int:
         return default
 
 
+# ── REL-1 eval-honesty guards (2026-07-21 EV-11c circuit-open incident) ──────
+#
+# Guard 1 anchors to the orchestrator's in-band error format. The llm
+# primitives emit failures AS answer strings of the form ``[ERROR: <detail>]``
+# (src/llm_primitives/primitives.py::_call → ``return f"[ERROR: {e}]"``; the
+# circuit-open detail is the RuntimeError text from
+# src/llm_primitives/inference.py, ``Backend unavailable (circuit open):
+# <url>``). When the breaker opens and the response is NOT run through
+# ``_annotate_error`` (server-side, stages.py — which also keys on
+# ``answer.startswith("[ERROR:")``), /chat returns answer="[ERROR: Backend
+# unavailable (circuit open): http://localhost:8082]" with error=None. The
+# eval then scored that error text as a WRONG answer (REL-1 evasion). Anchor to
+# the REAL start-of-answer prefix, never a loose substring.
+_INBAND_ERROR_PREFIX = "[ERROR:"
+
+
+def _inband_error_text(answer: Any) -> str | None:
+    """Return the in-band orchestrator error string when `answer` IS one.
+
+    Anchored to the emitted ``[ERROR: ...]`` prefix at start-of-answer (after
+    stripping leading whitespace), matching the primitives/inference emitters
+    and the server-side ``_annotate_error`` convention. Returns None for a
+    normal answer.
+    """
+    if not isinstance(answer, str):
+        return None
+    stripped = answer.lstrip()
+    if stripped.startswith(_INBAND_ERROR_PREFIX):
+        return stripped
+    return None
+
+
+def _forced_role_serving_mismatch(
+    force_role: Any, resp: Mapping[str, Any]
+) -> str | None:
+    """Return the serving role when it differs from the forced role, else None.
+
+    Guard 2: when the eval pins ``force_role`` for a role-attributed
+    measurement and the orchestrator silently serves it from a DIFFERENT role
+    (the 2026-07-21 circuit_open fallback ``worker_math → worker_general``), the
+    number is not a measurement of the forced role. Compare ``force_role``
+    against the response's ``routed_to`` (the primary role that handled the
+    request), falling back to the terminal ``role_history`` entry when
+    ``routed_to`` is absent. Returns None when ``force_role`` is empty or the
+    serving role cannot be determined — avoiding false positives on
+    partial/legacy responses.
+    """
+    forced = str(force_role or "").strip()
+    if not forced:
+        return None
+    serving = str(resp.get("routed_to") or "").strip()
+    if not serving:
+        history = resp.get("role_history")
+        if isinstance(history, (list, tuple)) and history:
+            serving = str(history[-1] or "").strip()
+    if not serving or serving == forced:
+        return None
+    return serving
+
+
 def _finite_float(value: Any) -> float | None:
     try:
         out = float(value)
@@ -828,6 +888,21 @@ def _read_registry_timeout(category: str, key: str, fallback: int) -> int:
 
 
 def _default_eval_timeout() -> int:
+    """Per-question eval request timeout (seconds).
+
+    Env override (REL-1 guard 3, 2026-07-21): ``AUTOPILOT_EVAL_REQUEST_TIMEOUT_S``
+    raises the per-question budget for rebaseline-class runs whose long
+    MATH-tail questions need more headroom than the registry-derived default —
+    and it deliberately bypasses the 600s cap. This is the knob operators set
+    so a rebaseline never *starts* with a per-call budget that would later be
+    whittled below the deadline-starvation floor (see
+    ``AUTOPILOT_EVAL_MIN_LLAMA_BUDGET_S`` in ``call_orchestrator_forced``).
+    Unset / <=0 preserves the current behavior EXACTLY: registry frontdoor role
+    timeout plus ``AUTOPILOT_EVAL_QUEUE_ALLOWANCE_S``, capped at 600.
+    """
+    override = _env_int("AUTOPILOT_EVAL_REQUEST_TIMEOUT_S", 0)
+    if override > 0:
+        return override
     role_timeout = _read_registry_timeout("roles", "frontdoor", 180)
     queue_allowance = _env_int("AUTOPILOT_EVAL_QUEUE_ALLOWANCE_S", 90)
     return min(600, max(role_timeout, role_timeout + max(0, queue_allowance)))
@@ -2321,6 +2396,51 @@ class EvalTower:
             elapsed = time.time() - start
             answer = resp.get("answer", "")
             error = resp.get("error")
+
+            # ── Guard 1 (REL-1): in-band error surfaced as an answer ──────
+            # The circuit breaker can return "[ERROR: Backend unavailable
+            # (circuit open): ...]" as the answer with error=None. Convert it
+            # into an ERROR row so it is EXCLUDED from the quality denominator
+            # and counted against reliability — never scored as a wrong answer.
+            if not error:
+                _inband = _inband_error_text(answer)
+                if _inband is not None:
+                    error = _inband
+                    log.error(
+                        "REL-1 in-band error surfaced as answer "
+                        "(qid=%s suite=%s force_role=%s): %s",
+                        stable_qid,
+                        suite,
+                        q.get("force_role", "") or "<router>",
+                        _inband[:200],
+                    )
+
+            # ── Guard 2 (REL-1): forced-role integrity ────────────────────
+            # If this question pinned a role for a role-attributed measurement
+            # but the orchestrator served it from a different role (silent
+            # circuit_open fallback), reject the measurement as an ERROR row
+            # rather than mis-attributing a cross-role number. Log loudly with
+            # both roles.
+            if not error:
+                _served_by = _forced_role_serving_mismatch(
+                    q.get("force_role"), resp
+                )
+                if _served_by is not None:
+                    _forced = str(q.get("force_role") or "").strip()
+                    error = (
+                        f"forced_role_fallback: forced={_forced} "
+                        f"served_by={_served_by}"
+                    )
+                    log.error(
+                        "REL-1 forced-role integrity violation "
+                        "(qid=%s suite=%s): forced=%s but served_by=%s — "
+                        "rejecting cross-role measurement",
+                        stable_qid,
+                        suite,
+                        _forced,
+                        _served_by,
+                    )
+
             tokens = _nonnegative_int(resp.get("tokens_generated", 0))
             host_covariates = _capture_host_timing_covariates(
                 tokens_generated=tokens,

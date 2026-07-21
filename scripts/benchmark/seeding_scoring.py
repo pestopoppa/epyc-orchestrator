@@ -79,6 +79,14 @@ INFRA_PATTERNS = [
     "server disconnected without sending a response",
     "remoteprotocolerror", "connection reset", "broken pipe",
     "temporarily unavailable", "name or service not known",
+    # REL-1 eval-honesty guards (2026-07-21 EV-11c circuit-open incident):
+    # the orchestrator circuit breaker surfaces "[ERROR: Backend unavailable
+    # (circuit open): <url>]" in-band; these must classify as INFRASTRUCTURE
+    # (excluded from the quality denominator), never as a model task_failure.
+    "circuit open", "backend unavailable",
+    # eval_tower client-side REL-1 rejections (deadline-starvation floor and
+    # forced-role integrity) are governance/infra exclusions, not model errors.
+    "deadline_starved", "forced_role_fallback",
 ]
 
 

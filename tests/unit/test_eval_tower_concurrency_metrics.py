@@ -142,8 +142,12 @@ def test_eval_question_fake_transport_error_paths(
             )
         return httpx.Response(200, json={"error": "backend busy"}, request=request)
 
-    tower = EvalTower(timeout=1)
-    with httpx.Client(transport=httpx.MockTransport(handler), timeout=1) as client:
+    # A realistic eval budget (MockTransport responds synchronously, so the
+    # value is a test convenience). Kept above the REL-1 deadline-starvation
+    # floor (AUTOPILOT_EVAL_MIN_LLAMA_BUDGET_S=30s) so this transport-error
+    # surfacing contract is exercised, not pre-empted by the floor.
+    tower = EvalTower(timeout=600)
+    with httpx.Client(transport=httpx.MockTransport(handler), timeout=600) as client:
         result = tower._eval_question(
             {
                 "id": response_kind,
@@ -184,7 +188,10 @@ def test_eval_batch_fake_transport_errors_use_non_error_quality_denominator(
             request=request,
         )
 
-    tower = EvalTower(timeout=1)
+    # Realistic budget above the REL-1 deadline-starvation floor (30s);
+    # MockTransport is synchronous, so this only avoids the floor pre-empting
+    # the error-surfacing contract under test.
+    tower = EvalTower(timeout=600)
     questions = [
         {"id": "ok", "suite": "unit", "prompt": "Say ok.", "expected": "ok"},
         {
@@ -200,7 +207,7 @@ def test_eval_batch_fake_transport_errors_use_non_error_quality_denominator(
             "expected": "ok",
         },
     ]
-    with httpx.Client(transport=httpx.MockTransport(handler), timeout=1) as client:
+    with httpx.Client(transport=httpx.MockTransport(handler), timeout=600) as client:
         results = tower._eval_batch(questions, client=client, label="fake-transport")
 
     assert [r.question_id for r in results] == ["ok", "payload-error", "http-error"]
