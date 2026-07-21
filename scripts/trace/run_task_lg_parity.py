@@ -549,11 +549,13 @@ def execute_parity(
             verdict = parity_verdict(
                 run_a["chain"], run_b["chain"], keys=keys, label_a=arm_a, label_b=arm_b,
             )
-            trace_coverage_ok = bool(run_a["chain"]) and bool(run_b["chain"])
+            chain_a = extract_chain(run_a["chain"])
+            chain_b = extract_chain(run_b["chain"])
+            trace_coverage_ok = bool(chain_a) and bool(chain_b)
             verdict["trace_coverage_ok"] = trace_coverage_ok
             verdict["trace_chain_lengths"] = {
-                arm_a: len(run_a["chain"]),
-                arm_b: len(run_b["chain"]),
+                arm_a: len(chain_a),
+                arm_b: len(chain_b),
             }
             if not trace_coverage_ok:
                 verdict["parity"] = False

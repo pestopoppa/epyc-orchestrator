@@ -286,6 +286,32 @@ def test_execute_parity_fails_closed_on_empty_live_trace_chains(monkeypatch, tmp
     assert "non-empty decision chains" in verdict["coverage_errors"][0]
 
 
+def test_execute_parity_fails_closed_on_empty_decision_chain_dict(monkeypatch, tmp_path):
+    async def fake_run_arm(arm, task, *, checkpoint_path, seed):  # noqa: ARG001
+        return {
+            "task_id": task["task_id"],
+            "arm": arm,
+            "thread_id": f"{task['task_id']}:{arm}",
+            "result": {"answer": "ok", "success": True, "role_history": ["frontdoor"], "turns": 1},
+            "chain": {"session_id": f"{task['task_id']}:{arm}", "chain": []},
+        }
+
+    monkeypatch.setattr(mod, "_run_arm", fake_run_arm)
+    report = mod.execute_parity(
+        [{"task_id": "t1", "prompt": "hi", "start_role": "frontdoor"}],
+        ["run_task_lg", "run_task"],
+        checkpoint_path=tmp_path / "cp.sqlite",
+        seed=42,
+        keys=mod.DEFAULT_PARITY_KEYS,
+    )
+    verdict = report["per_task"][0]["verdict"]
+    assert report["overall"] == "FAIL"
+    assert verdict["len_a"] == 0
+    assert verdict["len_b"] == 0
+    assert verdict["trace_coverage_ok"] is False
+    assert verdict["trace_chain_lengths"] == {"run_task_lg": 0, "run_task": 0}
+
+
 # ---------------------------------------------------------------------------
 # End-to-end main(): dry-run (no inference) and pure parity-diff mode
 # ---------------------------------------------------------------------------
