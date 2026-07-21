@@ -134,10 +134,13 @@ blacklist:
   source_trial: 738
 - pattern:
     type: train_routing_models
-  reason: 'Auto-blacklisted: 2× critic-rejected — critic rejected: Draft falsely claims
-    train_routing_models has not executed; con'
-  added: '2026-06-12T19:10:04.489379+00:00'
-  source_trial: 781
+  reason: 'Auto-blacklisted: 3× critic-rejected — critic rejected: W8 replay pressure
+    active (8/29 replayable): train_routing_mode'
+  added: '2026-07-15T12:04:18.051676+00:00'
+  source_trial: 1385
+  reason_class: critic_rejected
+  ttl_days: 14
+  expires_at: '2026-07-29T12:04:18.051676+00:00'
 - pattern:
     type: structural_experiment
     flags:
@@ -343,13 +346,13 @@ blacklist:
 - pattern:
     type: consult_gate_probe
     tier: 3
-  reason: 'Auto-blacklisted: 2× invalid — exact action signature was previously critic-rejected
-    at trial 1291: critic reje'
-  added: '2026-07-08T17:48:32.308697+00:00'
-  source_trial: 1292
-  reason_class: invalid_repeat
+  reason: 'Auto-blacklisted: 5× critic-rejected — critic rejected: Action type ''consult_gate_probe''
+    with tier=3 is explicitly auto'
+  added: '2026-07-12T04:26:08.337774+00:00'
+  source_trial: 1332
+  reason_class: critic_rejected
   ttl_days: 14
-  expires_at: '2026-07-22T17:48:32.308697+00:00'
+  expires_at: '2026-07-26T04:26:08.337774+00:00'
 - pattern:
     type: seed_batch
     n_questions: 40
@@ -379,13 +382,13 @@ blacklist:
     type: structural_experiment
     flags:
       graph_router: true
-  reason: 'Auto-blacklisted: 3× critic-rejected — critic rejected: The draft proposes
-    enabling graph_router via structural_experim'
-  added: '2026-07-08T21:16:04.193631+00:00'
-  source_trial: 1301
+  reason: 'Auto-blacklisted: 13× critic-rejected — critic rejected: The flag ''graph_router''
+    is currently OFF and requires ''speciali'
+  added: '2026-07-15T16:44:19.292349+00:00'
+  source_trial: 1394
   reason_class: critic_rejected
   ttl_days: 14
-  expires_at: '2026-07-22T21:16:04.193631+00:00'
+  expires_at: '2026-07-29T16:44:19.292349+00:00'
 - pattern:
     type: structural_experiment
     flags:
@@ -412,3 +415,171 @@ blacklist:
   reason_class: safety_failure
   ttl_days: 30
   expires_at: '2026-08-09T11:16:44.953224+00:00'
+- pattern:
+    type: seed_batch
+    n_questions: 50
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1419'
+  added: '2026-07-16T04:53:17.995220+00:00'
+  source_trial: 1419
+  reason_class: safety_failure
+  ttl_days: 30
+  expires_at: '2026-08-15T04:53:17.995220+00:00'
+- pattern:
+    type: seed_batch
+    n_questions: 10
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1320'
+  added: '2026-07-12T00:52:41.912624+00:00'
+  source_trial: 1320
+  reason_class: safety_failure
+  ttl_days: 30
+  expires_at: '2026-08-11T00:52:41.912624+00:00'
+- pattern:
+    type: numeric_trial
+    surface: kv_compaction
+    params:
+      keep_ratio: 0.3
+  reason: 'Auto-blacklisted: 4× critic-rejected — critic rejected: numeric_trial used
+    on ''kv_compaction'' surface, which is current'
+  added: '2026-07-15T14:04:23.619291+00:00'
+  source_trial: 1388
+  reason_class: critic_rejected
+  ttl_days: 14
+  expires_at: '2026-07-29T14:04:23.619291+00:00'
+- pattern:
+    type: numeric_trial
+    surface: chat_pipeline
+    params:
+      chat.try_cheap_first_quality_threshold: 0.95
+  reason: 'Auto-blacklisted: 2× invalid — exact action signature was previously critic-rejected
+    at trial 1354: critic reje'
+  added: '2026-07-14T20:58:36.652875+00:00'
+  source_trial: 1355
+  reason_class: invalid_repeat
+  ttl_days: 14
+  expires_at: '2026-07-28T20:58:36.652875+00:00'
+- pattern:
+    type: numeric_trial
+    surface: memrl_retrieval
+    params:
+      semantic_k: 12
+  reason: 'Auto-blacklisted: 5× invalid — exact action signature was previously critic-rejected
+    at trial 1326: critic reje'
+  added: '2026-07-15T16:08:15.257839+00:00'
+  source_trial: 1391
+  reason_class: invalid_repeat
+  ttl_days: 14
+  expires_at: '2026-07-29T16:08:15.257839+00:00'
+- pattern:
+    type: numeric_trial
+    surface: memrl_retrieval
+    params:
+      semantic_k: 15
+  reason: 'Auto-blacklisted: 2× invalid — exact action signature was previously critic-rejected
+    at trial 1390: critic reje'
+  added: '2026-07-15T16:41:03.842309+00:00'
+  source_trial: 1393
+  reason_class: invalid_repeat
+  ttl_days: 14
+  expires_at: '2026-07-29T16:41:03.842309+00:00'
+- pattern:
+    type: numeric_trial
+    surface: think_harder
+    params:
+      think_harder.cot_roi_threshold: 0.3
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1404'
+  added: '2026-07-15T23:27:57.488578+00:00'
+  source_trial: 1404
+  reason_class: safety_failure
+  ttl_days: 30
+  expires_at: '2026-08-14T23:27:57.488578+00:00'
+- pattern:
+    type: numeric_trial
+    surface: repl_budget
+    params:
+      repl.worker_call_budget_cap: 50
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1407'
+  added: '2026-07-16T01:05:07.302522+00:00'
+  source_trial: 1407
+  reason_class: safety_failure
+  ttl_days: 30
+  expires_at: '2026-08-15T01:05:07.302522+00:00'
+- pattern:
+    type: numeric_trial
+    surface: repl_executor
+    params:
+      repl.turn_token_cap: 4096
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1410'
+  added: '2026-07-16T02:01:46.918173+00:00'
+  source_trial: 1410
+  reason_class: safety_failure
+  ttl_days: 30
+  expires_at: '2026-08-15T02:01:46.918173+00:00'
+- pattern:
+    type: numeric_trial
+    surface: think_harder
+    params:
+      think_harder.token_budget_max: 8192
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1413'
+  added: '2026-07-16T02:55:52.073134+00:00'
+  source_trial: 1413
+  reason_class: safety_failure
+  ttl_days: 30
+  expires_at: '2026-08-15T02:55:52.073134+00:00'
+- pattern:
+    type: numeric_trial
+    surface: chat_summarization
+    params:
+      chat.summarization_threshold_tokens: 20000
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1416'
+  added: '2026-07-16T03:49:25.276879+00:00'
+  source_trial: 1416
+  reason_class: safety_failure
+  ttl_days: 30
+  expires_at: '2026-08-15T03:49:25.276879+00:00'
+- pattern:
+    type: numeric_trial
+    surface: monitor
+    params:
+      monitor.entropy_threshold: 3.0555506563418375
+      monitor.repetition_threshold: 0.11362025052653987
+      monitor.entropy_spike_threshold: 3.304624733013299
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1423'
+  added: '2026-07-16T05:43:42.377042+00:00'
+  source_trial: 1423
+  reason_class: safety_failure
+  ttl_days: 30
+  expires_at: '2026-08-15T05:43:42.377042+00:00'
+- pattern:
+    type: numeric_trial
+    surface: repl_budget
+    params:
+      repl.worker_call_budget_cap: 52
+      repl.task_token_budget_cap: 429569
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1426'
+  added: '2026-07-16T06:39:21.412649+00:00'
+  source_trial: 1426
+  reason_class: safety_failure
+  ttl_days: 30
+  expires_at: '2026-08-15T06:39:21.412649+00:00'
+- pattern:
+    type: numeric_trial
+    surface: chat_pipeline
+    params:
+      chat.try_cheap_first_q_threshold: 0.6094621969751716
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1430'
+  added: '2026-07-16T07:26:22.249060+00:00'
+  source_trial: 1430
+  reason_class: safety_failure
+  ttl_days: 30
+  expires_at: '2026-08-15T07:26:22.249060+00:00'
+- pattern:
+    type: numeric_trial
+    surface: chat_review_low
+    params:
+      chat.review_low_q_threshold: 0.4885738928378141
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 1433'
+  added: '2026-07-16T08:21:14.435952+00:00'
+  source_trial: 1433
+  reason_class: safety_failure
+  ttl_days: 30
+  expires_at: '2026-08-15T08:21:14.435952+00:00'
