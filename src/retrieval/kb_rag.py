@@ -263,11 +263,15 @@ def build_index(
             continue
 
         mtime = f.stat().st_mtime
+        current_chunk_keys: set[tuple[str, int, int]] = set()
         for ch in chunks:
             n_chunks_seen += 1
+            line_start, line_end = ch.line_range
+            current_chunk_keys.add((ch.content_hash, line_start, line_end))
             existing = cur.execute(
-                "SELECT chunk_id, content_hash FROM chunk WHERE file_path=? AND content_hash=?",
-                (str(f), ch.content_hash),
+                "SELECT chunk_id, content_hash FROM chunk "
+                "WHERE file_path=? AND content_hash=? AND line_start=? AND line_end=?",
+                (str(f), ch.content_hash, line_start, line_end),
             ).fetchone()
             if existing and not force:
                 n_chunks_skipped += 1
@@ -317,6 +321,18 @@ def build_index(
                 fts_enabled,
             )
             n_chunks_encoded += 1
+
+        stale_chunk_rows = cur.execute(
+            "SELECT chunk_id, content_hash, line_start, line_end FROM chunk WHERE file_path = ?",
+            (str(f),),
+        ).fetchall()
+        for row in stale_chunk_rows:
+            key = (str(row["content_hash"]), int(row["line_start"]), int(row["line_end"]))
+            if key in current_chunk_keys:
+                continue
+            if fts_enabled:
+                cur.execute("DELETE FROM chunk_fts WHERE rowid = ?", (int(row["chunk_id"]),))
+            cur.execute("DELETE FROM chunk WHERE chunk_id = ?", (int(row["chunk_id"]),))
 
         if file_idx % 25 == 0:
             conn.commit()
