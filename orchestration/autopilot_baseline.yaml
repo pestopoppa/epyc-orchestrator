@@ -26,6 +26,7 @@ per_suite_quality:
   simpleqa: null      # factual recall (3 sentinels)
   mode_advantage_hard: null  # escalation-requiring (3 sentinels)
   gpqa: null          # hard science MCQ (4 sentinels)
+  mmlu_pro: null      # extended 10-choice MCQ (quality-gate, v7 promotion)
   long_context: null  # summarization (1 sentinel)
 
 # Sentinel pool expanded 10 → 39 on 2026-04-09 to prevent q=3.0 saturation.
