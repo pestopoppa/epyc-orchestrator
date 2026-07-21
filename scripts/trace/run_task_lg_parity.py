@@ -549,6 +549,19 @@ def execute_parity(
             verdict = parity_verdict(
                 run_a["chain"], run_b["chain"], keys=keys, label_a=arm_a, label_b=arm_b,
             )
+            trace_coverage_ok = bool(run_a["chain"]) and bool(run_b["chain"])
+            verdict["trace_coverage_ok"] = trace_coverage_ok
+            verdict["trace_chain_lengths"] = {
+                arm_a: len(run_a["chain"]),
+                arm_b: len(run_b["chain"]),
+            }
+            if not trace_coverage_ok:
+                verdict["parity"] = False
+                verdict["verdict"] = "FAIL"
+                verdict["coverage_match"] = False
+                verdict.setdefault("coverage_errors", []).append(
+                    "live parity requires non-empty decision chains for both arms"
+                )
             per_task.append({
                 "task_id": task["task_id"],
                 arm_a: run_a["result"],
@@ -559,12 +572,16 @@ def execute_parity(
 
     per_task = asyncio.run(_run_all())
     n_pass = sum(1 for t in per_task if t["verdict"]["parity"])
+    n_trace_coverage_fail = sum(
+        1 for t in per_task if not t["verdict"].get("trace_coverage_ok")
+    )
     return {
         "arms": arms,
         "seed": seed,
         "n_tasks": len(tasks),
         "n_pass": n_pass,
         "n_fail": len(tasks) - n_pass,
+        "n_trace_coverage_fail": n_trace_coverage_fail,
         "overall": "PASS" if n_pass == len(tasks) else "FAIL",
         "per_task": per_task,
     }

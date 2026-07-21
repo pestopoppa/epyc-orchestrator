@@ -1,0 +1,24 @@
+{
+  "tasks": [
+    {
+      "task_id": "tm7-smoke-1",
+      "prompt": "What is 2 + 2?",
+      "start_role": "frontdoor"
+    },
+    {
+      "task_id": "tm7-smoke-2",
+      "prompt": "Summarize the phrase 'hello world'.",
+      "start_role": "frontdoor"
+    },
+    {
+      "task_id": "tm7-smoke-3",
+      "prompt": "Name the capital of France.",
+      "start_role": "frontdoor"
+    },
+    {
+      "task_id": "tm7-smoke-4",
+      "prompt": "Write a one-line docstring for add(a, b).",
+      "start_role": "frontdoor"
+    }
+  ]
+}
