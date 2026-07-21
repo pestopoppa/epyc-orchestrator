@@ -12,6 +12,7 @@ the placement scenario without launching real llama-servers.
 
 from __future__ import annotations
 
+import contextlib
 import importlib
 import sys
 import time
@@ -200,3 +201,182 @@ def test_dispatcher_legacy_path_when_flag_off(monkeypatch: pytest.MonkeyPatch) -
     with backend._dispatch(session_id="s_legacy") as (chosen_backend, idx, is_full):
         assert is_full is True
         assert idx == -1
+
+
+# ── DISPATCH-A: placement_policy governs the full (all-region) candidate ──────
+
+# worker_general topology: full (idx 0) = "0-95" = ALL regions; the four
+# quarters each occupy exactly one region. A request routed to idx 0 acquires
+# every region lock (+ every global cross-role mutex) — the DISPATCH-A amplifier.
+_WORKER_GENERAL_REGIONS = {
+    ("worker_general", 0): frozenset({"q0", "q1", "q2", "q3"}),  # full = 0-95
+    ("worker_general", 1): frozenset({"q0"}),
+    ("worker_general", 2): frozenset({"q1"}),
+    ("worker_general", 3): frozenset({"q2"}),
+    ("worker_general", 4): frozenset({"q3"}),
+}
+
+
+class _HeldLockCtx:
+    """Lock ctx that records the topology idx as held for the lifetime of the
+    dispatch context (added on __enter__, removed on __exit__) so nested
+    concurrent dispatches see each other's occupancy."""
+
+    def __init__(self, held: set[int], topo_idx: int):
+        self._held = held
+        self.topo_idx = topo_idx
+
+    def __enter__(self):
+        self._held.add(self.topo_idx)
+        return [f"/tmp/cpu_region.mock-{self.topo_idx}.lock"]
+
+    def __exit__(self, *exc):
+        self._held.discard(self.topo_idx)
+        return False
+
+
+def test_full_disabled_places_four_concurrent_on_four_quarters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DISPATCH-A (a): worker_general is FULL_DISABLED (its full is not even in
+    the live serving stack). Four concurrent same-role requests must occupy four
+    DISTINCT quarters; the all-region idx-0 lock is NEVER attempted (big
+    instance stays idle) — the design-contract acceptance."""
+    from src.scheduling.placement_policy import (
+        RolePlacementPolicy,
+        get_placement_policy,
+    )
+
+    # The config change (step 2) must actually be live for this role.
+    assert get_placement_policy("worker_general") is RolePlacementPolicy.FULL_DISABLED
+
+    monkeypatch.setenv("ORCHESTRATOR_PER_REGION_LOCKS", "1")
+    monkeypatch.setenv("ORCHESTRATOR_PLACEMENT_STATE_MACHINE", "1")
+    full = _StubBackend("http://localhost:8072")
+    quarters = [_StubBackend(f"http://localhost:{p}") for p in (8082, 8182, 8282, 8382)]
+    backend = ca_mod.ConcurrencyAwareBackend(
+        full_backend=full, quarter_backends=quarters,
+        role="worker_general", full_port=8072,  # aligned idx-0 port
+    )
+
+    held: set[int] = set()
+    attempted: list[int] = []
+
+    def _mock_lock(role, instance_idx, timeout_s=None, deadline_s=None):
+        attempted.append(instance_idx)
+        if instance_idx in held:
+            return _FakeLockCtx(role, instance_idx, succeed=False)  # non-blocking miss
+        return _HeldLockCtx(held, instance_idx)
+
+    monkeypatch.setattr("src.runtime.cpu_region_lock.cpu_region_lock_for_instance", _mock_lock)
+    monkeypatch.setattr(
+        "src.runtime.cpu_region_lock.active_region_holders",
+        lambda: {"worker_general": sorted(held)},
+    )
+    monkeypatch.setattr(
+        "src.runtime.instance_topology.get_instance_regions",
+        lambda: dict(_WORKER_GENERAL_REGIONS),
+    )
+
+    chosen_topos: list[int] = []
+    with contextlib.ExitStack() as stack:
+        for i in range(4):
+            _b, idx, is_full = stack.enter_context(backend._dispatch(session_id=f"wg{i}"))
+            assert is_full is False
+            chosen_topos.append(0 if idx == -1 else idx + 1)
+
+    assert sorted(chosen_topos) == [1, 2, 3, 4]  # four distinct quarters
+    assert 0 not in attempted  # all-region idx-0 lock never acquired
+
+
+def test_burst_prefer_quarters_solo_request_goes_full(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DISPATCH-A (b1): BURST_PREFER_QUARTERS with ZERO same-role holders →
+    single-request mode routes to the full instance for peak latency."""
+    backend = _make_backend(monkeypatch, role="frontdoor")  # full_port 8070 (aligned)
+    acquired: list[int] = []
+
+    def _mock_lock(role, instance_idx, timeout_s=None, deadline_s=None):
+        acquired.append(instance_idx)
+        return _FakeLockCtx(role, instance_idx, succeed=True)
+
+    monkeypatch.setattr("src.runtime.cpu_region_lock.cpu_region_lock_for_instance", _mock_lock)
+    monkeypatch.setattr("src.runtime.cpu_region_lock.active_region_holders", lambda: {})
+    monkeypatch.setattr(
+        "src.runtime.instance_topology.get_instance_regions",
+        lambda: dict(_FRONTDOOR_REGIONS),
+    )
+
+    with backend._dispatch(session_id="solo") as (_b, idx, is_full):
+        assert is_full is True
+        assert idx == -1
+        assert acquired[-1] == 0  # full (topology idx 0)
+
+
+def test_burst_prefer_quarters_under_load_prefers_quarter_over_free_full(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DISPATCH-A (b2): BURST_PREFER_QUARTERS with a same-role holder present →
+    the router prefers a quarter EVEN THOUGH the full is free and disjoint from
+    the single held quarter. A full-first policy would grab the free full; this
+    proves mode abandonment under concurrent load."""
+    backend = _make_backend(monkeypatch, role="frontdoor")
+    acquired: list[int] = []
+
+    def _mock_lock(role, instance_idx, timeout_s=None, deadline_s=None):
+        acquired.append(instance_idx)
+        return _FakeLockCtx(role, instance_idx, succeed=True)
+
+    monkeypatch.setattr("src.runtime.cpu_region_lock.cpu_region_lock_for_instance", _mock_lock)
+    # q2 (topo idx 3, region {q2}) is in flight. frontdoor full (topo 0 = {q0,q1})
+    # is DISJOINT from {q2} and free → a full-first policy would take it.
+    monkeypatch.setattr(
+        "src.runtime.cpu_region_lock.active_region_holders",
+        lambda: {"frontdoor": [3]},
+    )
+    monkeypatch.setattr(
+        "src.runtime.instance_topology.get_instance_regions",
+        lambda: dict(_FRONTDOOR_REGIONS),
+    )
+
+    with backend._dispatch(session_id="s_load") as (_b, idx, is_full):
+        assert is_full is False  # NOT the full, despite it being free+disjoint
+        assert idx != -1
+        assert acquired[-1] != 0  # full (topo 0) never acquired
+
+
+def test_full_slot_port_mismatch_skips_full_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DISPATCH-A (c): an endpoint wired as `full:` whose port is NOT the role's
+    NUMA_CONFIG idx-0 port is a quarter impersonating the full. The alignment
+    guard disables the full candidate so the all-region idx-0 lock is never
+    grabbed — even in single-request (solo) mode where full would be preferred."""
+    monkeypatch.setenv("ORCHESTRATOR_PER_REGION_LOCKS", "1")
+    monkeypatch.setenv("ORCHESTRATOR_PLACEMENT_STATE_MACHINE", "1")
+    full = _StubBackend("http://localhost:9999")
+    quarters = [_StubBackend(f"http://localhost:80{80 + i * 100}") for i in range(4)]
+    backend = ca_mod.ConcurrencyAwareBackend(
+        full_backend=full, quarter_backends=quarters,
+        role="frontdoor", full_port=9999,  # NOT frontdoor idx-0 (8070)
+    )
+    assert backend._full_slot_aligned is False
+
+    acquired: list[int] = []
+
+    def _mock_lock(role, instance_idx, timeout_s=None, deadline_s=None):
+        acquired.append(instance_idx)
+        return _FakeLockCtx(role, instance_idx, succeed=True)
+
+    monkeypatch.setattr("src.runtime.cpu_region_lock.cpu_region_lock_for_instance", _mock_lock)
+    monkeypatch.setattr("src.runtime.cpu_region_lock.active_region_holders", lambda: {})
+    monkeypatch.setattr(
+        "src.runtime.instance_topology.get_instance_regions",
+        lambda: dict(_FRONTDOOR_REGIONS),
+    )
+
+    with backend._dispatch(session_id="s_mismatch") as (_b, idx, is_full):
+        assert is_full is False  # never the mislabeled full
+        assert idx != -1
+        assert 0 not in acquired  # all-region idx-0 lock never attempted
