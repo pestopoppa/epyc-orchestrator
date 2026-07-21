@@ -669,6 +669,13 @@ async def contention_gate_snapshot(request: Request) -> JSONResponse:
         primitives = getattr(request.app.state, "_real_primitives", None) or getattr(
             request.app.state, "llm_primitives", None
         )
+        if primitives is None:
+            from src.api.state import get_state
+
+            api_state = get_state()
+            primitives = getattr(api_state, "_real_primitives", None) or getattr(
+                api_state, "llm_primitives", None
+            )
         if primitives is not None:
             for role, backend in getattr(primitives, "_backends", {}).items():
                 if not hasattr(backend, "_quarter_preference_order"):
