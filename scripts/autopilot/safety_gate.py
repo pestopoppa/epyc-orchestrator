@@ -1649,8 +1649,22 @@ class SafetyGate:
             "speed_metric_mode": getattr(result, "speed_metric_mode", None),
             "eval_concurrency": getattr(result, "eval_concurrency", None),
         }
-        if proof["speed_metric_mode"] not in {"median_request_tps", "aggregate_batch_tps"}:
-            return False, f"unrecognized speed_metric_mode={proof['speed_metric_mode']!r}", proof
+        # C5 (commit 9204d6b7): when a partition (audit shadow / tool_sentinel) is
+        # excluded from the decision subset, eval_tower stamps a `_partition_filtered`
+        # provenance suffix on the SAME metric definition — median request TPS, now
+        # computed over the decision subset rather than the full mixed batch. It is a
+        # provenance marker, NOT a new instrument, so strip the known suffix before the
+        # recognized-mode allowlist check. Without this the documented-default regime
+        # (audit blocks active) would refuse EVERY baseline write — an unintended total
+        # freeze of the baseline ratchet (loud/fail-closed, but wrong).
+        mode = proof["speed_metric_mode"]
+        base_mode = (
+            mode[: -len("_partition_filtered")]
+            if isinstance(mode, str) and mode.endswith("_partition_filtered")
+            else mode
+        )
+        if base_mode not in {"median_request_tps", "aggregate_batch_tps"}:
+            return False, f"unrecognized speed_metric_mode={mode!r}", proof
         try:
             from scripts.server.stack_numa import NUMA_CONFIG  # type: ignore[import-not-found]
             from src.scheduling.contention import (

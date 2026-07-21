@@ -151,8 +151,23 @@ def rlvr_reward_from_result(result: Any) -> RLVRReward:
             blockers=tuple(blockers),
         )
 
+    # EV-CONF interim (audit, pre-approved 2026-07-20): both the calibration and the
+    # discrimination components derive from model confidence. eval_tower now makes
+    # confidence real-by-default (geomean of completion_probabilities) and stamps
+    # provenance in details['confidence_is_real'] — True ONLY when the WHOLE batch's
+    # confidence came from completion-probability geomean. Gate calibration AND
+    # discrimination on that flag so neither the old binary-correctness stub NOR a
+    # mixed-provenance batch earns calibration/discrimination signal; a legacy row
+    # with no stamp is treated as not-real (null-safe, fail-closed). This is the
+    # approved reward-side neutralization point — the operator owns the FINAL decision
+    # on whether real ECE enters gating.
+    confidence_is_real = _confidence_is_real(result)
     calibration = _calibration_component(ece)
     discrimination = _discrimination_component(auroc)
+    if not confidence_is_real:
+        calibration = 0.0
+        discrimination = 0.0
+        blockers.append("confidence_not_real")
     if spec.reward_signal == "calibrated_continuous":
         reward = _clamp01(
             0.65 * accuracy + 0.20 * reliability + 0.10 * calibration + 0.05 * discrimination
@@ -239,6 +254,21 @@ def _question_rows(question_results: Any) -> list[Mapping[str, Any]]:
     if not isinstance(question_results, Sequence) or isinstance(question_results, (str, bytes)):
         return []
     return [row for row in question_results if isinstance(row, Mapping)]
+
+
+def _confidence_is_real(result: Any) -> bool:
+    """EV-CONF: read eval_tower's confidence provenance stamp.
+
+    eval_tower stamps ``details['confidence_is_real']`` True only when the entire
+    batch's confidence came from completion-probability geomean (a stub or a
+    mixed-provenance batch stamps False). Legacy rows predate the stamp and lack
+    the key entirely — treat those as NOT real (null-safe / fail-closed) so they
+    cannot earn calibration/discrimination credit on unidentified confidence.
+    """
+    details = getattr(result, "details", None)
+    if isinstance(details, Mapping):
+        return bool(details.get("confidence_is_real", False))
+    return False
 
 
 def _calibration_component(ece: float) -> float:

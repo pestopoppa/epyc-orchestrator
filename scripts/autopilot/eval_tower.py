@@ -1563,6 +1563,20 @@ def screen_paired_arms(
                     }
                 )
                 continue
+            # PAIR-1 (commit 1c655076 fix): the XOR guard above only catches the
+            # one-sided case; when BOTH arms lack a profile the pair would otherwise
+            # fall through to McNemar over unidentified data. paired_stats'
+            # require_matched_comparison contract is explicit that missing identity on
+            # either arm is itself a refusal, so refuse both-None here too.
+            if arm_a["profile"] is None and arm_b["profile"] is None:
+                mismatched.append(
+                    {
+                        "arm_a": arm_a["label"],
+                        "arm_b": arm_b["label"],
+                        "reason": "provenance_missing_both",
+                    }
+                )
+                continue
             if arm_a["profile"] is not None and arm_b["profile"] is not None:
                 try:
                     require_matched_comparison(arm_a["profile"], arm_b["profile"])

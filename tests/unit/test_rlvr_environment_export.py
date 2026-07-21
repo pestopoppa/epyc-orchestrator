@@ -49,11 +49,17 @@ def test_export_environment_rows_strips_private_question_text() -> None:
 
     assert summary["schema_version"] == SUMMARY_SCHEMA_VERSION
     assert summary["rows"] == 1
-    assert summary["ready_for_training"] == 1
+    # EV-CONF interim: calibration/discrimination now require a real confidence
+    # provenance stamp (details['confidence_is_real']). The exporter builds its
+    # result namespace without a details attribute, so exported rows are treated as
+    # not-real confidence and carry the confidence_not_real blocker (fail-closed) —
+    # the row is therefore blocked from training regardless of its good metrics.
+    assert summary["ready_for_training"] == 0
     assert rows[0]["schema_version"] == ROW_SCHEMA_VERSION
     assert rows[0]["reward_policy"] == "ap27_rlvr_tier_reward_v1"
     assert rows[0]["tier"] == 2
-    assert rows[0]["ready_for_training"] is True
+    assert rows[0]["ready_for_training"] is False
+    assert "confidence_not_real" in rows[0]["blockers"]
     assert rows[0]["suite_counts"] == {"math": 1}
     assert rows[0]["question_results"] == [
         {
@@ -80,10 +86,17 @@ def test_export_environment_rows_records_training_blockers() -> None:
     )
 
     assert rows[0]["ready_for_training"] is False
-    assert rows[0]["blockers"] == ["ece_missing", "auroc_missing_or_degenerate"]
+    # EV-CONF interim: exported rows lack a confidence provenance stamp, so the
+    # confidence_not_real blocker is appended after the metric blockers.
+    assert rows[0]["blockers"] == [
+        "ece_missing",
+        "auroc_missing_or_degenerate",
+        "confidence_not_real",
+    ]
     assert summary["blocked"] == 1
     assert summary["blocker_counts"] == {
         "auroc_missing_or_degenerate": 1,
+        "confidence_not_real": 1,
         "ece_missing": 1,
     }
 

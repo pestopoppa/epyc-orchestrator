@@ -13,7 +13,7 @@ from src.autopilot_core.rlvr_tiers import (
 )
 
 
-def _result(**kw) -> SimpleNamespace:
+def _result(confidence_is_real: bool | None = True, **kw) -> SimpleNamespace:
     base = {
         "tier": 1,
         "quality": 0.0,
@@ -23,7 +23,14 @@ def _result(**kw) -> SimpleNamespace:
         "question_results": [],
     }
     base.update(kw)
-    return SimpleNamespace(**base)
+    ns = SimpleNamespace(**base)
+    # EV-CONF: eval_tower stamps confidence provenance in details['confidence_is_real'].
+    # Default True so calibration/discrimination-bearing tests represent real-confidence
+    # runs; pass confidence_is_real=None to model a LEGACY row with no provenance stamp
+    # (no details attribute at all), or False for an explicit stub/mixed batch.
+    if confidence_is_real is not None:
+        ns.details = {"confidence_is_real": confidence_is_real}
+    return ns
 
 
 def test_t0_reward_is_binary_state_match() -> None:
@@ -110,6 +117,73 @@ def test_t1_reward_uses_calibration_and_discrimination() -> None:
         "calibration": 0.95,
         "discrimination": 0.85,
     }
+
+
+def test_calibration_discrimination_credited_only_when_confidence_is_real() -> None:
+    # EV-CONF interim: flag True + finite ece/auroc → components compute as before.
+    real = rlvr_reward_from_result(
+        _result(tier=1, quality=2.4, reliability=0.9, ece=0.05, auroc=0.85,
+                confidence_is_real=True)
+    )
+    assert real.components["calibration"] == 0.95
+    assert real.components["discrimination"] == 0.85
+    assert "confidence_not_real" not in real.blockers
+    assert real.ready_for_training
+
+
+def test_legacy_row_without_confidence_provenance_zeros_calibration() -> None:
+    # EV-CONF interim: a legacy row carries no details['confidence_is_real'] stamp
+    # (null-safe/fail-closed) → BOTH confidence-derived components zero out and the
+    # run is blocked from training with a distinct blocker.
+    legacy = rlvr_reward_from_result(
+        _result(tier=1, quality=2.4, reliability=0.9, ece=0.05, auroc=0.85,
+                confidence_is_real=None)  # no details attribute at all
+    )
+    assert legacy.components["calibration"] == 0.0
+    assert legacy.components["discrimination"] == 0.0
+    assert "confidence_not_real" in legacy.blockers
+    assert not legacy.ready_for_training
+
+
+def test_confidence_flag_false_zeros_calibration_like_legacy() -> None:
+    # EV-CONF interim: an explicit False (stub or mixed-provenance batch) neutralizes
+    # calibration/discrimination identically to a legacy row.
+    stub = rlvr_reward_from_result(
+        _result(tier=1, quality=2.4, reliability=0.9, ece=0.05, auroc=0.85,
+                confidence_is_real=False)
+    )
+    assert stub.components["calibration"] == 0.0
+    assert stub.components["discrimination"] == 0.0
+    assert "confidence_not_real" in stub.blockers
+    assert not stub.ready_for_training
+
+
+def test_t2_process_reward_also_gates_confidence_components() -> None:
+    # EV-CONF interim: the process-attributed (T2) path zeros calibration/discrimination
+    # under not-real confidence too, but process_integrity is unaffected.
+    gated = rlvr_reward_from_result(
+        _result(
+            tier=2, quality=2.0, reliability=0.75, ece=0.1, auroc=0.8,
+            question_results=[{"qid": "q1", "correct": True}],
+            confidence_is_real=False,
+        )
+    )
+    assert gated.components["calibration"] == 0.0
+    assert gated.components["discrimination"] == 0.0
+    assert gated.components["process_integrity"] == 1.0
+    assert "confidence_not_real" in gated.blockers
+    assert not gated.ready_for_training
+
+
+def test_t0_binary_reward_unaffected_by_confidence_provenance() -> None:
+    # T0 is a pure accuracy+reliability sentinel — it has no confidence-derived
+    # components, so a legacy row must NOT acquire the confidence_not_real blocker.
+    t0 = rlvr_reward_from_result(
+        _result(tier=0, quality=2.7, reliability=1.0, confidence_is_real=None)
+    )
+    assert t0.reward == 1.0
+    assert "confidence_not_real" not in t0.blockers
+    assert t0.ready_for_training
 
 
 def test_t1_reward_reports_missing_calibration_blockers() -> None:

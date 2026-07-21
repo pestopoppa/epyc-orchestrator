@@ -11,6 +11,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "autopilot"))
+sys.path.insert(0, str(REPO_ROOT))  # for `import src.scheduling.contention` in the C5 test
 
 import pytest
 from safety_gate import EvalResult, SafetyGate  # type: ignore[import-not-found]
@@ -228,6 +229,32 @@ def test_loader_accepts_within_archive_baseline(tmp_path, monkeypatch):
     monkeypatch.setattr(sg, "_pareto_frontier_best_quality", lambda tier=None: 2.4)
     b = sg.Baseline.load(p)
     assert b.quality == pytest.approx(1.16), "within-archive baseline must load unchanged"
+
+
+def test_baseline_eligible_accepts_partition_filtered_speed_mode(tmp_path, monkeypatch):
+    """C5 (commit 9204d6b7): when audit-shadow / tool_sentinel partitions are excluded from
+    the decision subset, eval_tower stamps `median_request_tps_partition_filtered` — a
+    provenance marker on the SAME metric (median request TPS over the decision subset), not a
+    new instrument. _baseline_eligible must accept it; otherwise the documented-default regime
+    (audit blocks active) refuses EVERY baseline write — an unintended total ratchet freeze."""
+    import src.scheduling.contention as contention  # type: ignore[import-not-found]
+
+    g = SafetyGate(baseline_path=tmp_path / "absent.yaml")
+    # Force a certified-fresh matrix against the live topology so eligibility hinges on the mode.
+    monkeypatch.setattr(contention, "load_contention_matrix", lambda *a, **k: object())
+    monkeypatch.setattr(contention, "topology_fingerprint_for_matrix", lambda *a, **k: "live-hash")
+    monkeypatch.setattr(contention, "matrix_status", lambda *a, **k: contention.MatrixStatus.OK)
+
+    elig, reason, proof = g._baseline_eligible(
+        _result(speed_metric_mode="median_request_tps_partition_filtered")
+    )
+    assert elig, f"partition-filtered mode must be eligible with a healthy matrix: {reason}"
+    assert proof["speed_metric_mode"] == "median_request_tps_partition_filtered"
+    assert proof.get("matrix_status") == "ok"
+
+    # A genuinely unknown mode still refuses at the mode gate (suffix strip is exact).
+    elig2, reason2, _ = g._baseline_eligible(_result(speed_metric_mode="totally_bogus"))
+    assert not elig2 and "speed_metric_mode" in reason2
 
 
 def test_baseline_eligibility_is_explicit_decision_with_proof(tmp_path):
