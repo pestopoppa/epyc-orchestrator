@@ -88,6 +88,33 @@ eras:
       speed/frontier rows as historical priors until a controlled v7-only
       frontier rerun/rebuild clears the frontier_rerun_required state marker.
 
+  - id: E7-eval-instrument
+    from: "2026-07-21T10:30:00Z"
+    scope: eval_quality
+    note: >
+      A3 question-pool rebuild + scorer-semantics package boundary
+      (operator pre-authorized 2026-07-20, eval-tower-architecture-audit
+      decision log; appended by the takeover session 2026-07-21). Pool:
+      53,231 questions / 21 suites (15-suite stale orchestrator registry,
+      built 2026-06-28) -> 79,479 / 41 suites (38 nonzero) built by the
+      research-canonical 34-suite registry; shared suites byte-identical
+      (zero row loss); newly sampled: mmlu_pro 12032, scoring_verifiers
+      6701, physreason 3117, olympiadbench 674, omniscience 600, zeroscrolls
+      538, leval 514, longbench 503, tulving_episodic 456, longcot_mini 402,
+      gpqa_diamond(+_cot) 396, physics 100, aime 60, web_research 50,
+      ruler 50, aime25 30, needle_parameterized 25; absent-source (0 rows,
+      loud): gaia, aa_lcr, document_extraction. Scorer: the B7 deterministic
+      package (07a20a7c + 8f24679a: final-answer-region extraction,
+      boundary-anchored substring, boxed fallback, entry_point oracle
+      rewrite, multiset F1, mc textual labels) is live from this boundary;
+      ratification tracked as op-bundle ESC-6. RECONCILIATION: pre-boundary
+      T1/T2/T3 quality rows are historical priors for cross-suite/aggregate
+      comparisons (the instrument sampled 21 suites and a laxer scorer);
+      per-suite comparisons on the byte-identical shared suites remain
+      usable WITHIN the same scorer semantics only. Backup of the retired
+      pool: benchmarks/prompts/pool_rebuild_a3_20260721/
+      question_pool.PRE-A3-BACKUP-20260628-build.jsonl (research repo).
+
   # E4 opens when the instrument repair lands (dead items fixed/excised, core_v2, task_rate axis,
   # sequential verdicts, per-question ledger). Append it then with: core_id, policy_version,
   # and the rule that E<=3 T1 frontiers/baselines are retired views (no cross-era dominance).
