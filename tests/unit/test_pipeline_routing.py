@@ -33,6 +33,28 @@ _RETIRED_ARCHITECT_ROLE = "architect_" "coding"
 class TestRouteRequest:
     """Tests for _route_request (Stage 1)."""
 
+    @pytest.fixture(autouse=True)
+    def _pin_skillbank_off(self):
+        """Route these MagicMock-router tests through ``hybrid_router.route()``.
+
+        ``select_initial_route`` takes the ``route_with_skills`` branch when
+        ``features().skillbank`` is on; on a MagicMock router that returns a
+        MagicMock which unpacks to zero values (``ValueError``). Stacks that
+        enable skillbank via the runtime-flags file (not env) would therefore
+        break these tests, which were written against the default (skillbank
+        off). Pin it off deterministically while preserving every other real
+        feature flag; restore on teardown.
+        """
+        import dataclasses
+
+        from src.features import get_features, reset_features, set_features
+
+        set_features(dataclasses.replace(get_features(), skillbank=False))
+        try:
+            yield
+        finally:
+            reset_features()
+
     def test_mock_mode_uses_frontdoor(self):
         """Mock mode routes to frontdoor by default."""
         request = ChatRequest(prompt="test", mock_mode=True, real_mode=False)
@@ -587,6 +609,26 @@ class TestRouteRequest:
             reset_config()
             try:
                 assert resolve_timeout(request, [str(Role.FRONTDOOR)]) == 77
+            finally:
+                reset_config()
+
+    def test_resolve_timeout_eval_batch_extends_beyond_sla(self):
+        """2026-07-21 EV-11c: eval_batch may EXTEND its budget past the role SLA."""
+        with patch.dict(os.environ, {"ORCHESTRATOR_TIMEOUTS_FRONTDOOR": "60"}):
+            reset_config()
+            try:
+                extend = ChatRequest(
+                    prompt="hard MATH tail", workload_class="eval_batch", timeout_s=300
+                )
+                assert resolve_timeout(extend, [str(Role.FRONTDOOR)]) == 300
+                # Interactive traffic with the same long timeout_s still clamps DOWN.
+                interactive = ChatRequest(
+                    prompt="q", workload_class="interactive", timeout_s=300
+                )
+                assert resolve_timeout(interactive, [str(Role.FRONTDOOR)]) == 60
+                # Unset workload_class == legacy DOWN-only clamp.
+                legacy = ChatRequest(prompt="q", timeout_s=300)
+                assert resolve_timeout(legacy, [str(Role.FRONTDOOR)]) == 60
             finally:
                 reset_config()
 

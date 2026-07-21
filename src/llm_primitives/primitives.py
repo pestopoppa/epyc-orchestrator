@@ -547,11 +547,37 @@ class LLMPrimitives(
         return override_role
 
     def _clamp_timeout_to_request_budget(self, timeout_s: int | float) -> int:
-        """Clamp timeout using request deadline and record diagnostics."""
+        """Bound a per-call timeout to the request deadline budget.
+
+        The effective llama timeout is::
+
+            min(remaining_budget, max(role_base_timeout, remaining_budget))
+              == remaining_budget
+
+        i.e. a call may use the whole remaining request budget, and is never
+        capped below it. This is byte-IDENTICAL to the historic
+        ``min(role_base, remaining)`` clamp for every budget where
+        ``remaining <= role_base`` — which is exactly all interactive traffic,
+        whose request deadline STARTS at the role SLA (``resolve_timeout``) and
+        only decreases, so ``remaining`` never exceeds the base. It differs ONLY
+        when ``remaining > role_base``, which happens solely for an eval_batch
+        request that extended its deadline past the SLA (2026-07-21 EV-11c):
+        there the historic clamp shrank the call back to the 60s worker SLA,
+        producing a doomed >60s MATH-tail call that 504'd and tripped the
+        circuit breaker. Extending to ``remaining`` fixes that without touching
+        any interactive path.
+        """
         timeout_f = max(1.0, float(timeout_s))
         remaining_s = self._remaining_deadline_s()
         if remaining_s is None:
             return int(timeout_f)
+        if remaining_s > timeout_f:
+            # Deadline budget EXCEEDS the role base: use the full remaining
+            # budget rather than capping DOWN to the (interactive) role SLA.
+            # This is NOT a clamp (we are not shrinking), so no budget_applied /
+            # timeout_clamp_events diagnostic is recorded — matching the historic
+            # path, which also recorded nothing when min() returned the base.
+            return int(remaining_s)
         clamped_f = max(1.0, min(timeout_f, remaining_s))
         if clamped_f < timeout_f:
             self._budget_diagnostics["budget_applied"] = True
