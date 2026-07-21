@@ -649,6 +649,12 @@ async def contention_gate_snapshot(request: Request) -> JSONResponse:
         snap = get_gate().metrics_snapshot()
     except Exception as exc:  # noqa: BLE001
         snap = {"error": str(exc), "matrix_status": "unavailable"}
+    try:
+        from src.metrics import migration_counters
+
+        snap["migration_counters"] = migration_counters.snapshot()
+    except Exception as exc:  # noqa: BLE001
+        snap["migration_counters"] = {"error": str(exc)}
 
     # Per-role scheduling state (quarter preference + migration counts).
     # Fetched here because it lives on app.state.llm_primitives._backends,
