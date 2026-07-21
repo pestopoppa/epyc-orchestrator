@@ -9,6 +9,7 @@ sys.path.insert(0, "/mnt/raid0/llm/epyc-orchestrator/scripts/autopilot")
 sys.path.insert(0, "/mnt/raid0/llm/epyc-orchestrator")
 
 from rubric_scoring import (  # noqa: E402
+    DEFAULT_RUBRIC_CRITERIA,
     DRACO_CONTENT_DIMENSIONS,
     MINDDR_PROCESS_DIMENSIONS,
     RubricCriterion,
@@ -47,6 +48,36 @@ def test_aggregate_rubric_score_reports_missing_criteria() -> None:
 
     assert result.score == 0.8
     assert result.missing_criteria == ("citation",)
+
+
+def test_aggregate_rubric_score_empty_is_zero_not_perfect() -> None:
+    # B7b / SCORE-09 (audit 2026-07-20): an empty score map used to return a
+    # perfect 1.0 (zero positive weight → positive_score defaulted to 1.0).
+    # Absence of evidence is not perfection — it now returns 0.0.
+    empty = aggregate_rubric_score({})
+    assert empty.positive_score == 0.0
+    assert empty.score == 0.0
+
+    # All-missing (no key matches any criterion) is likewise 0.0, not 1.0.
+    all_missing = aggregate_rubric_score({"unknown_dimension": 0.5})
+    assert all_missing.positive_score == 0.0
+    assert all_missing.score == 0.0
+    assert set(all_missing.missing_criteria) == {
+        c.name for c in DEFAULT_RUBRIC_CRITERIA
+    }
+
+
+def test_production_caller_merges_full_fallback_so_empty_sentinel_never_fires() -> None:
+    # B7b / SCORE-09: the one production caller
+    # (EvalTower._rubric_scores_for_answer) always merges the 8-key deterministic
+    # fallback before aggregating, so even an empty answer yields a fully
+    # populated (finite) score map — positive_weight is always > 0 and the
+    # empty→0.0 sentinel only ever fires for genuinely-empty inputs.
+    fallback = deterministic_rubric_fallback("")
+    assert set(fallback) == {c.name for c in DEFAULT_RUBRIC_CRITERIA}
+    assert all(math.isfinite(v) for v in fallback.values())
+    aggregated = aggregate_rubric_score(fallback)
+    assert aggregated.missing_criteria == ()  # every criterion is present
 
 
 def test_default_rubric_dimensions_include_minddr_and_draco_axes() -> None:

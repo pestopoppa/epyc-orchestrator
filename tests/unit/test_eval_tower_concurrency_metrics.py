@@ -1219,7 +1219,11 @@ def test_parse_rubric_judge_scores_accepts_fenced_json() -> None:
         ```"""
     )
 
-    assert parsed == {"reasoning_trajectory": 0.25, "tool_calls": 1.0}
+    # B7b / SCORE-07 (audit 2026-07-20): out-of-[0,1] judge scores are now
+    # REJECTED (scale-drift), not clamped. `tool_calls: 1.7` no longer saturates
+    # to a perfect 1.0 — it is dropped so that dimension falls to the
+    # deterministic heuristic fallback; `bad: "x"` remains unparseable.
+    assert parsed == {"reasoning_trajectory": 0.25}
 
 
 def test_eval_question_uses_configured_local_rubric_judge(monkeypatch) -> None:
@@ -1272,6 +1276,294 @@ def test_eval_question_uses_configured_local_rubric_judge(monkeypatch) -> None:
     assert result.rubric_scores["reasoning_trajectory"] == 0.2
     assert result.rubric_scores["content_stage"] == 0.8
     assert result.rubric_scores["factual_accuracy"] == 0.9
+    # B7b / SCORE-08: a live model judge produced parseable scores → provenance.
+    assert result.rubric_source == "judge"
+
+
+# ── B7b (audit 2026-07-20): SCORE-07/08/09/12 scorer-semantics remainder ──
+
+
+def test_parse_rubric_judge_scores_rejects_out_of_range_not_clamp() -> None:
+    # SCORE-07: a 0-10-scale judge value ("7") must be REJECTED as scale drift,
+    # not clamped to a perfect 1.0. In-range values (incl. the 0.0/1.0
+    # boundaries) survive unchanged.
+    parsed = eval_tower._parse_rubric_judge_scores(
+        '{"scores": {"reasoning_trajectory": 7, "tool_calls": -0.5, '
+        '"outline": 0.0, "content_stage": 1.0, "factual_accuracy": 0.6}}'
+    )
+    assert parsed == {
+        "outline": 0.0,
+        "content_stage": 1.0,
+        "factual_accuracy": 0.6,
+    }
+
+
+def test_eval_question_stamps_rubric_source_heuristic_fallback(monkeypatch) -> None:
+    # SCORE-08: with no judge roles configured, rubric scores come from the
+    # deterministic heuristic fallback and must be stamped as such; the aggregate
+    # surfaces the provenance rollup.
+    monkeypatch.delenv("AUTOPILOT_RUBRIC_JUDGE_ROLES", raising=False)
+    tower = EvalTower()
+
+    def _fake_call(**_kwargs):  # noqa: ANN001
+        return {
+            "answer": (
+                "# Summary\n"
+                "- alpha beta evidence\n"
+                "Source: https://example.test/report\n"
+            ),
+            "tokens_generated": 12,
+            "model": "fake",
+        }
+
+    monkeypatch.setattr(eval_tower, "call_orchestrator_forced", _fake_call)
+    with eval_tower.httpx.Client(timeout=1) as client:
+        result = tower._eval_question(
+            {
+                "id": "dr-heur",
+                "suite": "deep_research_browsecomp",
+                "prompt": "Research alpha beta.",
+                "expected_contains": ["alpha beta"],
+                "scoring_config": {"rubric_pass_threshold": 0.1},
+            },
+            client,
+        )
+
+    assert result.rubric_source == "heuristic_fallback"
+    aggregate = tower._aggregate([result], tier=1)
+    assert aggregate.details["rubric_source_counts"] == {"heuristic_fallback": 1}
+
+
+def test_derive_question_confidence_code_execution_ignores_pass_rate() -> None:
+    # SCORE-12: the phantom static pass_rate read is gone; code_execution
+    # confidence is a binary correctness proxy with a source that can never be
+    # mistaken for real (completion-probability) confidence.
+    conf, source = eval_tower._derive_question_confidence(
+        scoring_method="code_execution",
+        correct=True,
+        probability_confidence=None,
+        rubric_scores={},
+    )
+    assert conf == 1.0
+    assert source == "code_execution_binary_proxy"
+
+    conf_wrong, source_wrong = eval_tower._derive_question_confidence(
+        scoring_method="code_execution",
+        correct=False,
+        probability_confidence=None,
+        rubric_scores={},
+    )
+    assert conf_wrong == 0.0
+    assert source_wrong == "code_execution_binary_proxy"
+
+    # Real completion-probability confidence still wins for non-code paths.
+    conf_prob, source_prob = eval_tower._derive_question_confidence(
+        scoring_method="exact_match",
+        correct=True,
+        probability_confidence=0.73,
+        rubric_scores={},
+    )
+    assert conf_prob == 0.73
+    assert source_prob == "completion_probabilities_geomean"
+
+
+def test_derive_question_confidence_code_execution_geomean_when_probs_present() -> None:
+    # ESC-7 extension Option A (operator 2026-07-21): a code_execution question
+    # WITH probability rows uses the generation-logprob geomean as confidence and
+    # stamps completion_probabilities_geomean (real), while the sandbox verdict
+    # remains the correctness label — so confidence and correctness can diverge.
+    conf, source = eval_tower._derive_question_confidence(
+        scoring_method="code_execution",
+        correct=False,  # label: test FAILED …
+        probability_confidence=0.66,  # … but the model was 0.66-confident in it
+        rubric_scores={},
+    )
+    assert conf == 0.66
+    assert source == "completion_probabilities_geomean"
+
+    # WITHOUT probability rows it falls back to the binary proxy (fail-closed).
+    conf_fb, source_fb = eval_tower._derive_question_confidence(
+        scoring_method="code_execution",
+        correct=True,
+        probability_confidence=None,
+        rubric_scores={},
+    )
+    assert conf_fb == 1.0
+    assert source_fb == "code_execution_binary_proxy"
+
+
+def test_derive_question_confidence_rubric_unchanged_by_esc7() -> None:
+    # ESC-7 leaves rubric alone: its confidence IS the rubric aggregate and
+    # overrides any probability row (rubric n_probs stays suppressed anyway).
+    scores = {"factual_accuracy": 0.8, "reasoning_trajectory": 0.6}
+    expected = eval_tower.aggregate_rubric_score(dict(scores)).score
+    conf, source = eval_tower._derive_question_confidence(
+        scoring_method="rubric",
+        correct=True,
+        probability_confidence=0.99,  # ignored for rubric
+        rubric_scores=scores,
+    )
+    assert conf == expected
+    assert source == "rubric_score"
+
+
+def test_aggregate_confidence_is_real_fails_closed_on_mixed_proxy_batch() -> None:
+    # ESC-7 Option A: a batch mixing a real-code geomean row + a real-math geomean
+    # row is confidence_is_real=True (all sources == completion_probabilities_geomean).
+    # The moment ONE code_execution question falls back to the binary proxy, the
+    # whole batch flips to confidence_is_real=False (fail-closed accounting).
+    tower = EvalTower()
+
+    def _q(qid, source, conf, method):
+        return eval_tower.QuestionResult(
+            question_id=qid,
+            suite="mixed",
+            prompt="p",
+            expected="e",
+            qid=qid,
+            answer="a",
+            correct=True,
+            error=None,
+            tokens_generated=1,
+            elapsed_s=0.1,
+            route_used="fake",
+            cost_tier=0,
+            scoring_method=method,
+            confidence=conf,
+            confidence_source=source,
+        )
+
+    real_code = _q("c1", "completion_probabilities_geomean", 0.7, "code_execution")
+    real_math = _q("m1", "completion_probabilities_geomean", 0.8, "math_verify")
+    proxy_code = _q("c2", "code_execution_binary_proxy", 1.0, "code_execution")
+
+    all_real = tower._aggregate([real_code, real_math], tier=1)
+    assert all_real.details["confidence_is_real"] is True
+    assert all_real.details["confidence_source_counts"] == {
+        "completion_probabilities_geomean": 2
+    }
+
+    mixed = tower._aggregate([real_code, real_math, proxy_code], tier=1)
+    assert mixed.details["confidence_is_real"] is False
+    assert mixed.details["confidence_source_counts"] == {
+        "completion_probabilities_geomean": 2,
+        "code_execution_binary_proxy": 1,
+    }
+
+
+def test_eval_question_code_execution_confidence_is_binary_not_pass_rate(monkeypatch) -> None:
+    # SCORE-12 end-to-end: a dataset row carrying pass_rate:0.9 must NOT inject a
+    # constant 0.9 confidence into the calibration inputs.
+    # ESC-7 extension Option A (operator 2026-07-21): n_probs is now REQUESTED
+    # for code_execution, but when the response carries NO completion_probabilities
+    # (as here) the confidence falls back to the binary correctness proxy.
+    tower = EvalTower()
+    seen: dict[str, object] = {}
+
+    def _fake_call(**kwargs):  # noqa: ANN001
+        seen.update(kwargs)
+        return {"answer": "def f():\n    return 1\n", "tokens_generated": 5, "model": "fake"}
+
+    monkeypatch.setattr(eval_tower, "call_orchestrator_forced", _fake_call)
+    monkeypatch.setattr(eval_tower, "_is_scoreable_question", lambda _q: True)
+    monkeypatch.setattr(eval_tower, "score_answer_deterministic", lambda **_k: True)
+
+    with eval_tower.httpx.Client(timeout=1) as client:
+        result = tower._eval_question(
+            {
+                "id": "ce-1",
+                "suite": "code",
+                "prompt": "Write f.",
+                "expected": "1",
+                "scoring_method": "code_execution",
+                "scoring_config": {"pass_rate": 0.9},
+            },
+            client,
+        )
+
+    assert seen["n_probs"] == 5  # ESC-7 Option A: now requested for code_execution
+    assert result.correct is True
+    # No probability rows returned → binary proxy (float(correct)), NOT phantom 0.9.
+    assert result.confidence == 1.0
+    assert result.confidence_source == "code_execution_binary_proxy"
+
+
+def test_eval_question_code_execution_confidence_uses_geomean_when_probs_present(
+    monkeypatch,
+) -> None:
+    # ESC-7 extension Option A (operator 2026-07-21): when the code_execution
+    # response carries completion_probabilities, the model's token-level
+    # generation-logprob geomean becomes the CONFIDENCE (source
+    # completion_probabilities_geomean), while the sandbox verdict stays the
+    # correctness LABEL. Such a row is real-confidence and, alone, keeps the
+    # aggregate confidence_is_real=True.
+    tower = EvalTower()
+    seen: dict[str, object] = {}
+
+    def _fake_call(**kwargs):  # noqa: ANN001
+        seen.update(kwargs)
+        return {
+            "answer": "def f():\n    return 1\n",
+            "tokens_generated": 2,
+            "model": "fake",
+            "completion_probabilities": [
+                {"content": "def", "probs": [{"tok_str": "def", "prob": 0.9}]},
+                {"content": " f", "probs": [{"tok_str": " f", "prob": 0.49}]},
+            ],
+        }
+
+    monkeypatch.setattr(eval_tower, "call_orchestrator_forced", _fake_call)
+    monkeypatch.setattr(eval_tower, "_is_scoreable_question", lambda _q: True)
+    monkeypatch.setattr(eval_tower, "score_answer_deterministic", lambda **_k: True)
+
+    with eval_tower.httpx.Client(timeout=1) as client:
+        result = tower._eval_question(
+            {
+                "id": "ce-2",
+                "suite": "code",
+                "prompt": "Write f.",
+                "expected": "1",
+                "scoring_method": "code_execution",
+            },
+            client,
+        )
+
+    assert seen["n_probs"] == 5  # requested
+    assert result.correct is True  # label = sandbox verdict
+    assert result.confidence == pytest.approx(math.sqrt(0.9 * 0.49))  # geomean
+    assert result.confidence_source == "completion_probabilities_geomean"
+
+    aggregate = tower._aggregate([result], tier=1)
+    assert aggregate.details["confidence_source_counts"] == {
+        "completion_probabilities_geomean": 1
+    }
+    assert aggregate.details["confidence_is_real"] is True
+
+
+def test_eval_question_null_scoring_config_does_not_error(monkeypatch) -> None:
+    # SCORE-12 guard: `scoring_config: null` must not raise AttributeError and
+    # turn a scored question into an error result.
+    tower = EvalTower()
+
+    def _fake_call(**_kwargs):  # noqa: ANN001
+        return {"answer": "Canberra", "tokens_generated": 2, "model": "fake"}
+
+    monkeypatch.setattr(eval_tower, "call_orchestrator_forced", _fake_call)
+    with eval_tower.httpx.Client(timeout=1) as client:
+        result = tower._eval_question(
+            {
+                "id": "nc-1",
+                "suite": "unit",
+                "prompt": "Capital of Australia?",
+                "expected": "Canberra",
+                "scoring_method": "substring",
+                "scoring_config": None,
+            },
+            client,
+        )
+
+    assert result.error is None
+    assert result.correct is True
 
 
 def test_eval_question_forwards_native_tool_schema_when_present(monkeypatch) -> None:

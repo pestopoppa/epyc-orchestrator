@@ -83,6 +83,14 @@ def aggregate_rubric_score(
     Positive criteria reward evidence. Negative criteria are independent penalty
     axes, following the DRACO recommendation not to mix reward-bearing and
     penalty-bearing rubric text into one symmetric score.
+
+    SCORE-09 (audit 2026-07-20): an empty / all-missing score map yields
+    ``positive_score = 0.0`` (NOT the historical 1.0). Absence of evidence is not
+    perfection — a rubric with zero scoreable positive criteria has produced no
+    evidence of quality and must not read as a perfect answer. The single
+    production caller (``EvalTower._rubric_scores_for_answer``) always merges the
+    full 8-key deterministic fallback before calling this, so live behavior only
+    changes for genuinely-empty inputs (empty dict / all criteria non-finite).
     """
 
     positive_total = 0.0
@@ -106,7 +114,8 @@ def aggregate_rubric_score(
             positive_total += bounded * weight
             positive_weight += weight
 
-    positive_score = positive_total / positive_weight if positive_weight else 1.0
+    # SCORE-09: no positive evidence → 0.0 (absence of evidence is not perfection).
+    positive_score = positive_total / positive_weight if positive_weight else 0.0
     negative_penalty = negative_total / negative_weight if negative_weight else 0.0
     score = min(max(positive_score - negative_penalty, 0.0), 1.0)
     return RubricScore(
