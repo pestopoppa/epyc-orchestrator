@@ -145,3 +145,40 @@ python -m pytest tests/unit/test_b7_golden_corpus_pin.py -q
 ```
 
 `results.jsonl` records the ratified POST (`new`) outcome per case. `tests/unit/test_b7_golden_corpus_pin.py` re-runs the live scorer over the corpus and asserts it still produces exactly those outcomes — so a future scorer change must update this golden file **deliberately**.
+
+---
+
+## B7b addendum — SCORE-07/08/09/12 scorer-semantics remainder (prepared for sign-off)
+
+These four findings live in `scripts/autopilot/eval_tower.py` + `scripts/autopilot/rubric_scoring.py` (the rubric / confidence path), NOT in `debug_scorer.py`, so their corpus rows carry a `scorer` discriminator (`rubric_parse` / `rubric_aggregate` / `code_exec_confidence`) and are pinned against those surfaces by `_b7b_outcome`, segregated from the 146 debug_scorer rows. Regenerate with `build_b7b_rows.py` (idempotent — strips/re-appends `b7b_*`).
+
+**13 new rows, 8 behavior changes** (corpus/results now 159 total; 58 changed; the 146/50/21 B7 sub-counts are unchanged and still pinned).
+
+| # (SCORE) | Old behavior | New behavior |
+|---|---|---|
+| **07** rubric judge range validation | out-of-[0,1] judge score CLAMPED (`7` → perfect `1.0` on that dimension) | out-of-range REJECTED as scale drift (dimension omitted → deterministic heuristic fallback); `log.warning` counts rejections; exact `0.0`/`1.0` boundaries unchanged |
+| **08** judge-vs-heuristic provenance | rubric scores stamped identically whether from a model judge or the structural heuristic fallback | `QuestionResult.rubric_source` ∈ {`judge`,`heuristic_fallback`}; aggregate `details["rubric_source_counts"]`; journal row carries `rubric_source`. Scores unchanged. |
+| **09** empty rubric ≠ perfect | `aggregate_rubric_score({})` → **1.0** (zero positive weight defaulted `positive_score` to 1.0) | empty / all-missing → **0.0** (absence of evidence ≠ perfection). Production caller always merges the 8-key fallback, so live behavior only changes for genuinely-empty inputs. |
+| **12** phantom pass_rate confidence | code_execution confidence = `scoring_config.get("pass_rate", correct)` — a static dataset field no scorer writes; `scoring_config: null` → AttributeError → error result | confidence = `float(correct)`, source `code_execution_binary_proxy` (never real, since n_probs suppressed per EV-CONF); non-dict `scoring_config` coerced to `{}` (no more error result) |
+
+Row-level breakdown (`changed` in **bold**):
+
+| case_id | finding | old → new |
+|---|---|---|
+| b7b_score07_out_of_range_high | 07 | **{factual_accuracy:1.0} → {}** |
+| b7b_score07_out_of_range_negative | 07 | **{citation:0.0} → {}** |
+| b7b_score07_in_range_kept | 07 | {outline:0.7} → {outline:0.7} |
+| b7b_score07_boundary_one_kept | 07 | {presentation:1.0} → {presentation:1.0} |
+| b7b_score07_boundary_zero_kept | 07 | {tool_calls:0.0} → {tool_calls:0.0} |
+| b7b_score07_mixed_reject_and_keep | 07 | **{reasoning:0.25,tool_calls:1.0,content_stage:1.0} → {reasoning:0.25}** |
+| b7b_score09_empty | 09 | **1.0 → 0.0** |
+| b7b_score09_all_missing | 09 | **1.0 → 0.0** |
+| b7b_score09_all_present_half | 09 | 0.5 → 0.5 |
+| b7b_score09_partial_positive | 09 | 0.8 → 0.8 |
+| b7b_score12_pass_rate_correct | 12 | **[0.9,"code_execution_pass_rate"] → [1.0,"code_execution_binary_proxy"]** |
+| b7b_score12_pass_rate_wrong | 12 | **[0.9,"code_execution_pass_rate"] → [0.0,"code_execution_binary_proxy"]** |
+| b7b_score12_no_pass_rate_source_renamed | 12 | **[1.0,"code_execution_pass_rate"] → [1.0,"code_execution_binary_proxy"]** |
+
+(SCORE-08 is a metadata stamp with no verdict delta, so it has no corpus row; it is pinned by `test_eval_question_stamps_rubric_source_heuristic_fallback` / the judge-path assertion in `test_eval_question_uses_configured_local_rubric_judge`.)
+
+**Status: PREPARED, not yet ratified.** This package awaits the operator's one-line sign-off (same discipline as B7) before it gates any decision; the E7 era boundary already covers the scorer change.

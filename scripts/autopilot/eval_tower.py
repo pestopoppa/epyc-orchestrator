@@ -733,6 +733,8 @@ def _compact_question_result(r: "QuestionResult") -> dict[str, Any]:
     }
     if rubric_scores:
         item["rubric_scores"] = rubric_scores
+    if r.rubric_source:
+        item["rubric_source"] = r.rubric_source
     return item
 
 
@@ -1310,6 +1312,14 @@ class QuestionResult:
     retry_count: int = 0
     eval_partition: str = "core"
     rubric_scores: dict[str, float] = field(default_factory=dict)
+    # SCORE-08 (audit 2026-07-20): provenance of the rubric scores for this
+    # question — "judge" when at least one cross-family model judge produced
+    # parseable scores, "heuristic_fallback" when they fell back to the
+    # deterministic structural heuristics (no roles configured / judge
+    # error / unparseable), "" for non-rubric questions. Surfaced in the
+    # aggregate details as rubric_source_counts so judge-scored and
+    # heuristic-scored questions are not indistinguishable downstream.
+    rubric_source: str = ""
     host_covariates: dict[str, Any] = field(default_factory=dict)
 
 
@@ -1708,14 +1718,70 @@ def _parse_rubric_judge_scores(text: str) -> dict[str, float]:
     if not isinstance(raw_scores, dict):
         return {}
     scores: dict[str, float] = {}
+    rejected: list[str] = []
     for key, value in raw_scores.items():
         try:
             numeric = float(value)
         except (TypeError, ValueError):
             continue
-        if math.isfinite(numeric):
-            scores[str(key)] = min(max(numeric, 0.0), 1.0)
+        if not math.isfinite(numeric):
+            continue
+        # SCORE-07 (audit 2026-07-20): VALIDATE the judge's declared [0,1] scale,
+        # do NOT clamp. Clamping let a 0-10-scale judge answering "7" saturate to
+        # a perfect 1.0 on every dimension. An out-of-range value is instead
+        # REJECTED (treated as unparseable for that dimension) so the dimension
+        # falls back to the deterministic heuristic path. In-range values —
+        # including the exact 0.0 and 1.0 boundaries — are unchanged.
+        if numeric < 0.0 or numeric > 1.0:
+            rejected.append(str(key))
+            continue
+        scores[str(key)] = numeric
+    if rejected:
+        log.warning(
+            "rubric judge scale drift: rejected %d out-of-[0,1] dimension score(s): %s",
+            len(rejected),
+            ", ".join(sorted(rejected)),
+        )
     return scores
+
+
+def _derive_question_confidence(
+    *,
+    scoring_method: str,
+    correct: bool,
+    probability_confidence: float | None,
+    rubric_scores: Mapping[str, float] | None,
+) -> tuple[float, str]:
+    """Select ``(confidence, confidence_source)`` for a scored question.
+
+    SCORE-12 (audit 2026-07-20): the former ``scoring_config.get("pass_rate",
+    correct)`` read for ``code_execution`` questions was a phantom — it read a
+    STATIC dataset field that no scorer writes at runtime, so a dataset carrying
+    ``pass_rate: 0.9`` injected a constant fake confidence straight into the
+    ECE/AUROC inputs. It is removed. ``code_execution`` confidence is a binary
+    correctness proxy, and because EV-CONF suppresses ``n_probs`` capture for
+    ``code_execution`` (and rubric) questions (e26a7cb3), it can never be real
+    (completion-probability) confidence — the source is stamped
+    ``code_execution_binary_proxy`` so these rows cannot masquerade as
+    real-confidence rows in the ``confidence_is_real`` accounting.
+
+    Precedence is preserved from the prior inline block: a real completion-
+    probability confidence is set first, then the code_execution / rubric
+    method-specific sources override it (in practice they never compete, since
+    n_probs is suppressed for both).
+    """
+    confidence = float(correct)
+    source = "binary_correctness_proxy"
+    if probability_confidence is not None:
+        confidence = probability_confidence
+        source = "completion_probabilities_geomean"
+    if scoring_method == "code_execution":
+        confidence = float(correct)
+        source = "code_execution_binary_proxy"
+    elif scoring_method == "rubric" and rubric_scores:
+        confidence = aggregate_rubric_score(dict(rubric_scores)).score
+        source = "rubric_score"
+    return confidence, source
 
 
 class EvalTower:
@@ -2105,7 +2171,15 @@ class EvalTower:
         generator_model: str,
         tool_events: list[str],
         client: httpx.Client,
-    ) -> dict[str, float]:
+    ) -> tuple[dict[str, float], str]:
+        """Return ``(rubric_scores, rubric_source)``.
+
+        SCORE-08: ``rubric_source`` is ``"judge"`` when at least one cross-family
+        model judge produced parseable scores, else ``"heuristic_fallback"`` (no
+        roles configured, every judge errored, or every judge response was
+        unparseable). The scores themselves are unchanged by this provenance
+        stamp.
+        """
         fallback = deterministic_rubric_fallback(
             answer,
             expected_contains=q.get("expected_contains") or (),
@@ -2113,7 +2187,7 @@ class EvalTower:
         )
         judge_roles = _configured_rubric_judge_roles()
         if not judge_roles:
-            return fallback
+            return fallback, "heuristic_fallback"
 
         prompt = build_rubric_judge_prompt(
             task_prompt=str(q.get("prompt", "")),
@@ -2148,14 +2222,14 @@ class EvalTower:
                 judge_scores.append(parsed)
 
         if not judge_scores:
-            return fallback
+            return fallback, "heuristic_fallback"
         combined = dict(fallback)
         dimensions = sorted({dim for scores in judge_scores for dim in scores})
         for dim in dimensions:
             values = [scores[dim] for scores in judge_scores if dim in scores]
             if values:
                 combined[dim] = sum(values) / len(values)
-        return combined
+        return combined, "judge"
 
     def _eval_question(self, q: dict, client: httpx.Client) -> QuestionResult:
         """Evaluate a single question through the orchestrator."""
@@ -2167,7 +2241,13 @@ class EvalTower:
         if not stable_qid:
             stable_qid = _stable_question_qid(str(suite), str(prompt))
         scoring_method = q.get("scoring_method", "exact_match")
-        scoring_config = q.get("scoring_config", {})
+        # SCORE-12 guard: a dataset row carrying `scoring_config: null` (or any
+        # non-dict) previously raised AttributeError on the `.get()` reads below,
+        # converting a scored question into an error result. Coerce to an empty
+        # dict so downstream scoring/threshold/confidence reads are safe.
+        scoring_config = q.get("scoring_config")
+        if not isinstance(scoring_config, dict):
+            scoring_config = {}
         image_path = q.get("image_path", "")
         eval_partition = str(q.get("eval_partition") or "core")
 
@@ -2226,9 +2306,10 @@ class EvalTower:
 
             correct = False
             rubric_scores: dict[str, float] = {}
+            rubric_source = ""
             if not error and _is_scoreable_question(q):
                 if _is_rubric_scored_question(q):
-                    rubric_scores = self._rubric_scores_for_answer(
+                    rubric_scores, rubric_source = self._rubric_scores_for_answer(
                         q=q,
                         answer=answer,
                         generator_model=str(resp.get("model") or resp.get("routed_to") or ""),
@@ -2252,21 +2333,17 @@ class EvalTower:
 
             # EV-CONF: prefer model probability rows when requested/available.
             # Fall back to historical scoring-derived proxies for paths that do
-            # not expose llama.cpp completion_probabilities.
-            confidence = float(correct)
-            confidence_source = "binary_correctness_proxy"
+            # not expose llama.cpp completion_probabilities. SCORE-12: the phantom
+            # static `pass_rate` read is gone — see _derive_question_confidence.
             probability_confidence = _completion_probabilities_confidence(
                 resp.get("completion_probabilities")
             )
-            if probability_confidence is not None:
-                confidence = probability_confidence
-                confidence_source = "completion_probabilities_geomean"
-            if scoring_method == "code_execution":
-                confidence = float(scoring_config.get("pass_rate", correct))
-                confidence_source = "code_execution_pass_rate"
-            elif scoring_method == "rubric" and rubric_scores:
-                confidence = aggregate_rubric_score(rubric_scores).score
-                confidence_source = "rubric_score"
+            confidence, confidence_source = _derive_question_confidence(
+                scoring_method=scoring_method,
+                correct=correct,
+                probability_confidence=probability_confidence,
+                rubric_scores=rubric_scores,
+            )
 
             # 2026-05-23 Phase 4 — exogenous-restart metadata propagation.
             # call_orchestrator_forced attaches the resilient_post meta dict
@@ -2301,6 +2378,7 @@ class EvalTower:
                 retry_count=int(meta.get("retry_count", 0)),
                 eval_partition=eval_partition,
                 rubric_scores=rubric_scores,
+                rubric_source=rubric_source,
                 host_covariates=host_covariates,
             )
         except Exception as e:
@@ -2937,6 +3015,15 @@ class EvalTower:
         rubric_process_means = {
             dim: rubric_dimension_means.get(dim, float("nan")) for dim in MINDDR_PROCESS_DIMENSIONS
         }
+        # SCORE-08: judge-vs-heuristic provenance rollup. Only rubric-scored
+        # questions carry a rubric_source; a run split half judge / half
+        # heuristic fallback is otherwise indistinguishable downstream.
+        rubric_source_counts: dict[str, int] = {}
+        for r in results:
+            if r.rubric_source:
+                rubric_source_counts[r.rubric_source] = (
+                    rubric_source_counts.get(r.rubric_source, 0) + 1
+                )
         orphan_contamination_count = sum(
             1 for r in results if r.error and "eval_orphan_contamination" in r.error
         )
@@ -2995,6 +3082,7 @@ class EvalTower:
                 "per_suite_tool_helpfulness": per_suite_tool_helpfulness,
                 "rubric_dimension_means": rubric_dimension_means,
                 "rubric_n_questions": sum(1 for r in results if r.rubric_scores),
+                "rubric_source_counts": dict(sorted(rubric_source_counts.items())),
                 "ece_binning": "closed_top_bin_stat_tests",
                 "ece_instrument_era": "ev11b_closed_bin_2026_07_20",
                 "confidence_source_counts": dict(sorted(confidence_source_counts.items())),

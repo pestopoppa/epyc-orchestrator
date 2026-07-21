@@ -1219,7 +1219,11 @@ def test_parse_rubric_judge_scores_accepts_fenced_json() -> None:
         ```"""
     )
 
-    assert parsed == {"reasoning_trajectory": 0.25, "tool_calls": 1.0}
+    # B7b / SCORE-07 (audit 2026-07-20): out-of-[0,1] judge scores are now
+    # REJECTED (scale-drift), not clamped. `tool_calls: 1.7` no longer saturates
+    # to a perfect 1.0 — it is dropped so that dimension falls to the
+    # deterministic heuristic fallback; `bad: "x"` remains unparseable.
+    assert parsed == {"reasoning_trajectory": 0.25}
 
 
 def test_eval_question_uses_configured_local_rubric_judge(monkeypatch) -> None:
@@ -1272,6 +1276,155 @@ def test_eval_question_uses_configured_local_rubric_judge(monkeypatch) -> None:
     assert result.rubric_scores["reasoning_trajectory"] == 0.2
     assert result.rubric_scores["content_stage"] == 0.8
     assert result.rubric_scores["factual_accuracy"] == 0.9
+    # B7b / SCORE-08: a live model judge produced parseable scores → provenance.
+    assert result.rubric_source == "judge"
+
+
+# ── B7b (audit 2026-07-20): SCORE-07/08/09/12 scorer-semantics remainder ──
+
+
+def test_parse_rubric_judge_scores_rejects_out_of_range_not_clamp() -> None:
+    # SCORE-07: a 0-10-scale judge value ("7") must be REJECTED as scale drift,
+    # not clamped to a perfect 1.0. In-range values (incl. the 0.0/1.0
+    # boundaries) survive unchanged.
+    parsed = eval_tower._parse_rubric_judge_scores(
+        '{"scores": {"reasoning_trajectory": 7, "tool_calls": -0.5, '
+        '"outline": 0.0, "content_stage": 1.0, "factual_accuracy": 0.6}}'
+    )
+    assert parsed == {
+        "outline": 0.0,
+        "content_stage": 1.0,
+        "factual_accuracy": 0.6,
+    }
+
+
+def test_eval_question_stamps_rubric_source_heuristic_fallback(monkeypatch) -> None:
+    # SCORE-08: with no judge roles configured, rubric scores come from the
+    # deterministic heuristic fallback and must be stamped as such; the aggregate
+    # surfaces the provenance rollup.
+    monkeypatch.delenv("AUTOPILOT_RUBRIC_JUDGE_ROLES", raising=False)
+    tower = EvalTower()
+
+    def _fake_call(**_kwargs):  # noqa: ANN001
+        return {
+            "answer": (
+                "# Summary\n"
+                "- alpha beta evidence\n"
+                "Source: https://example.test/report\n"
+            ),
+            "tokens_generated": 12,
+            "model": "fake",
+        }
+
+    monkeypatch.setattr(eval_tower, "call_orchestrator_forced", _fake_call)
+    with eval_tower.httpx.Client(timeout=1) as client:
+        result = tower._eval_question(
+            {
+                "id": "dr-heur",
+                "suite": "deep_research_browsecomp",
+                "prompt": "Research alpha beta.",
+                "expected_contains": ["alpha beta"],
+                "scoring_config": {"rubric_pass_threshold": 0.1},
+            },
+            client,
+        )
+
+    assert result.rubric_source == "heuristic_fallback"
+    aggregate = tower._aggregate([result], tier=1)
+    assert aggregate.details["rubric_source_counts"] == {"heuristic_fallback": 1}
+
+
+def test_derive_question_confidence_code_execution_ignores_pass_rate() -> None:
+    # SCORE-12: the phantom static pass_rate read is gone; code_execution
+    # confidence is a binary correctness proxy with a source that can never be
+    # mistaken for real (completion-probability) confidence.
+    conf, source = eval_tower._derive_question_confidence(
+        scoring_method="code_execution",
+        correct=True,
+        probability_confidence=None,
+        rubric_scores={},
+    )
+    assert conf == 1.0
+    assert source == "code_execution_binary_proxy"
+
+    conf_wrong, source_wrong = eval_tower._derive_question_confidence(
+        scoring_method="code_execution",
+        correct=False,
+        probability_confidence=None,
+        rubric_scores={},
+    )
+    assert conf_wrong == 0.0
+    assert source_wrong == "code_execution_binary_proxy"
+
+    # Real completion-probability confidence still wins for non-code paths.
+    conf_prob, source_prob = eval_tower._derive_question_confidence(
+        scoring_method="exact_match",
+        correct=True,
+        probability_confidence=0.73,
+        rubric_scores={},
+    )
+    assert conf_prob == 0.73
+    assert source_prob == "completion_probabilities_geomean"
+
+
+def test_eval_question_code_execution_confidence_is_binary_not_pass_rate(monkeypatch) -> None:
+    # SCORE-12 end-to-end: a dataset row carrying pass_rate:0.9 must NOT inject a
+    # constant 0.9 confidence into the calibration inputs. n_probs must stay
+    # suppressed for code_execution (EV-CONF).
+    tower = EvalTower()
+    seen: dict[str, object] = {}
+
+    def _fake_call(**kwargs):  # noqa: ANN001
+        seen.update(kwargs)
+        return {"answer": "def f():\n    return 1\n", "tokens_generated": 5, "model": "fake"}
+
+    monkeypatch.setattr(eval_tower, "call_orchestrator_forced", _fake_call)
+    monkeypatch.setattr(eval_tower, "_is_scoreable_question", lambda _q: True)
+    monkeypatch.setattr(eval_tower, "score_answer_deterministic", lambda **_k: True)
+
+    with eval_tower.httpx.Client(timeout=1) as client:
+        result = tower._eval_question(
+            {
+                "id": "ce-1",
+                "suite": "code",
+                "prompt": "Write f.",
+                "expected": "1",
+                "scoring_method": "code_execution",
+                "scoring_config": {"pass_rate": 0.9},
+            },
+            client,
+        )
+
+    assert "n_probs" not in seen  # EV-CONF: suppressed for code_execution
+    assert result.correct is True
+    assert result.confidence == 1.0  # float(correct), NOT the phantom 0.9
+    assert result.confidence_source == "code_execution_binary_proxy"
+
+
+def test_eval_question_null_scoring_config_does_not_error(monkeypatch) -> None:
+    # SCORE-12 guard: `scoring_config: null` must not raise AttributeError and
+    # turn a scored question into an error result.
+    tower = EvalTower()
+
+    def _fake_call(**_kwargs):  # noqa: ANN001
+        return {"answer": "Canberra", "tokens_generated": 2, "model": "fake"}
+
+    monkeypatch.setattr(eval_tower, "call_orchestrator_forced", _fake_call)
+    with eval_tower.httpx.Client(timeout=1) as client:
+        result = tower._eval_question(
+            {
+                "id": "nc-1",
+                "suite": "unit",
+                "prompt": "Capital of Australia?",
+                "expected": "Canberra",
+                "scoring_method": "substring",
+                "scoring_config": None,
+            },
+            client,
+        )
+
+    assert result.error is None
+    assert result.correct is True
 
 
 def test_eval_question_forwards_native_tool_schema_when_present(monkeypatch) -> None:
