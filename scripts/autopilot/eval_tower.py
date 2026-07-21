@@ -1758,17 +1758,34 @@ def _derive_question_confidence(
     correct)`` read for ``code_execution`` questions was a phantom — it read a
     STATIC dataset field that no scorer writes at runtime, so a dataset carrying
     ``pass_rate: 0.9`` injected a constant fake confidence straight into the
-    ECE/AUROC inputs. It is removed. ``code_execution`` confidence is a binary
-    correctness proxy, and because EV-CONF suppresses ``n_probs`` capture for
-    ``code_execution`` (and rubric) questions (e26a7cb3), it can never be real
-    (completion-probability) confidence — the source is stamped
-    ``code_execution_binary_proxy`` so these rows cannot masquerade as
-    real-confidence rows in the ``confidence_is_real`` accounting.
+    ECE/AUROC inputs. It is removed.
 
-    Precedence is preserved from the prior inline block: a real completion-
-    probability confidence is set first, then the code_execution / rubric
-    method-specific sources override it (in practice they never compete, since
-    n_probs is suppressed for both).
+    ESC-7 extension Option A (operator-approved 2026-07-21): for
+    ``code_execution`` questions the **label** is the sandbox test verdict
+    (``correct``), while the **confidence** is the model's token-level
+    confidence in its own generated solution — the geomean of the completion
+    probabilities (``n_probs`` capture is now enabled for code_execution; see
+    the call_kwargs block in ``_eval_question``). When probability rows are
+    present we use that geomean and stamp ``completion_probabilities_geomean``
+    (identical provenance to every other suite), so real code-confidence rows
+    contribute to the ``confidence_is_real`` accounting alongside math/exact
+    rows. When rows are ABSENT (drafter path, capture failure) we fall back to
+    the binary correctness proxy stamped ``code_execution_binary_proxy`` — a
+    proxy row correctly drops ``confidence_is_real`` to False for the whole
+    batch (fail-closed), since that aggregate requires every source to be the
+    real geomean.
+
+    NOISE CAVEAT: a code_execution generation is typically long, so its geomean
+    is dominated by many easy, high-probability tokens (boilerplate, syntax) and
+    is a *weaker* calibration signal than a short factual answer's geomean —
+    treat code-suite ECE/AUROC with that in mind.
+
+    RUBRIC is unchanged: its ``n_probs`` stays suppressed and its confidence IS
+    the rubric aggregate (``rubric_score``), which overrides any probability row.
+
+    Precedence: a real completion-probability geomean is set first; then the
+    method-specific overrides apply — code_execution keeps the geomean when
+    present (else proxy), and rubric always overrides to its aggregate.
     """
     confidence = float(correct)
     source = "binary_correctness_proxy"
@@ -1776,8 +1793,11 @@ def _derive_question_confidence(
         confidence = probability_confidence
         source = "completion_probabilities_geomean"
     if scoring_method == "code_execution":
-        confidence = float(correct)
-        source = "code_execution_binary_proxy"
+        # ESC-7 Option A: keep the completion-probability geomean set above when
+        # rows were captured; otherwise fall back to the binary proxy.
+        if probability_confidence is None:
+            confidence = float(correct)
+            source = "code_execution_binary_proxy"
     elif scoring_method == "rubric" and rubric_scores:
         confidence = aggregate_rubric_score(dict(rubric_scores)).score
         source = "rubric_score"
@@ -2280,11 +2300,14 @@ class EvalTower:
                 call_kwargs["tools"] = q.get("tools")
             if "tool_choice" in q:
                 call_kwargs["tool_choice"] = q.get("tool_choice")
-            if (
-                _is_scoreable_question(q)
-                and not _is_rubric_scored_question(q)
-                and scoring_method != "code_execution"
-            ):
+            if _is_scoreable_question(q) and not _is_rubric_scored_question(q):
+                # ESC-7 extension Option A (operator-approved 2026-07-21):
+                # code_execution questions now REQUEST n_probs so the model's
+                # generation-logprob geomean can serve as confidence (the
+                # sandbox test verdict remains the correctness LABEL). Prior to
+                # this, code_execution was excluded here (e26a7cb3) and could
+                # only ever carry the binary proxy. RUBRIC stays suppressed —
+                # its confidence IS the rubric aggregate, not a token logprob.
                 n_probs = _nonnegative_int(
                     q.get("n_probs", _env_int("AUTOPILOT_EVAL_LOGPROB_N_PROBS", 5)),
                     default=5,
