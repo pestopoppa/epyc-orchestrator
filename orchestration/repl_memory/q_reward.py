@@ -74,7 +74,20 @@ def compute_reward(
     # Incorrect answers already receive low/zero reward — no cost signal needed.
     if cost_metrics and reward > 0:
         tokens_gen = cost_metrics.get("tokens_generated", 0)
-        role = cost_metrics.get("role", "")
+        # cost_metrics is the TASK_COMPLETED entry's data dict, which carries the
+        # role under "producer_role" (and "final_answer_role"); it has never
+        # carried a bare "role" key. Reading only "role" resolved baseline_tps to
+        # 0, which failed the guard below and silently disabled ALL THREE cost
+        # dimensions plus the teacher shaping — leaving reward == base_reward.
+        # Measured 2026-07-21 over 20,521 task_completed entries: "role" present
+        # 0 times, "producer_role" present 20,521 times. "role" is kept first for
+        # back-compat with any caller that does supply it.
+        role = (
+            cost_metrics.get("role")
+            or cost_metrics.get("producer_role")
+            or cost_metrics.get("final_answer_role")
+            or ""
+        )
         baseline_tps = config.baseline_tps_by_role.get(role, 0)
 
         # Prefer generation_ms (clean generation time excluding prompt eval)
