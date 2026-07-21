@@ -62,3 +62,26 @@ Observations only. **Pre-fix and post-fix rewards are different instruments.** R
 boundary before any mixed comparison, any cross-era training, or any promotion decision that
 spans it. This script does not mutate the episodic store; persisting rescored values is a
 separate deliberate step (see `epyc-root/handoffs/active/decision-aware-routing.md`).
+
+## Follow-up 2026-07-21: role-field provenance
+
+Operator asked whether `architect_coding` was already deprecated. **Confirmed from the data** —
+its rows run `2026-02-27 → 2026-06-13` and stop, consistent with the 2026-05/06 stack
+consolidation that removed the role. Its `+1.0000` is therefore **purely historical**, not a live
+scoring gap. `mock` (last seen 2026-07-10) is a test role. Neither needs a priors entry.
+
+The same scan surfaced a separate, small **data-hygiene defect in the `producer_role` field**:
+
+| value | n | first → last |
+|---|---:|---|
+| `(none)` | 138 | 2026-02-27 → 2026-06-19 |
+| `plan_review` | 16 | 2026-06-05 |
+| `SELF` | 1 | 2026-04-12 |
+| `WORKER` | 1 | 2026-04-13 |
+| `"Provide full Python snippet with variable name."` | 1 | 2026-07-05 |
+
+The last one is a **prompt fragment written into the role field**, which means at least one code
+path populates `producer_role` from free text rather than from an enumerated role. Volume is
+negligible (157 of 117,074 = 0.13%) so it does not affect any conclusion here, but it is the same
+class of defect as the original bug — an unvalidated string flowing into a field that is later
+used as a dictionary key. Worth a validation guard at the write site rather than a cleanup pass.
