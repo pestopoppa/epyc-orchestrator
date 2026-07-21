@@ -347,6 +347,90 @@ def load_artifact(path: str | Path) -> Any:
 
 
 # ---------------------------------------------------------------------------
+# Live graph dependency construction
+# ---------------------------------------------------------------------------
+
+
+def _load_registry() -> Any | None:
+    """Load the same lightweight model registry object used by the API startup."""
+    try:
+        from src.registry_loader import RegistryLoader
+
+        return RegistryLoader(validate_paths=False)
+    except Exception:
+        return None
+
+
+def _build_live_task_deps(task: dict[str, Any], *, start_role: str) -> "TaskDeps":
+    """Construct production-shaped graph deps for the inference-gated live leg.
+
+    This mirrors the minimal dependency construction in
+    ``chat_pipeline.routing._init_primitives`` and
+    ``chat_pipeline.repl_executor._execute_repl``: real ``LLMPrimitives`` backed
+    by configured llama-server URLs plus a shared ``REPLEnvironment`` for the
+    graph turn loop. The parity runner intentionally does not initialize the
+    whole FastAPI app; it only needs the graph deps that prevent the bare
+    ``TaskDeps()`` no-op path.
+    """
+    from src.config import get_config
+    from src.graph.state import GraphConfig, TaskDeps
+    from src.llm_primitives import LLMPrimitives
+    from src.repl_environment import REPLEnvironment
+
+    cfg = get_config()
+    registry = _load_registry()
+    server_urls = cfg.server_urls.as_dict()
+    primitives = LLMPrimitives(
+        mock_mode=False,
+        server_urls=server_urls,
+        registry=registry,
+        num_slots=cfg.server.num_slots,
+    )
+    if not getattr(primitives, "_backends", None):
+        raise RuntimeError(
+            "No LLM backends available for TM-7 live parity; ensure the v7 stack "
+            "is running on the configured server URLs."
+        )
+
+    task_id = str(task["task_id"])
+    context = str(task["prompt"])
+    repl = REPLEnvironment(
+        context=context,
+        llm_primitives=primitives,
+        role=start_role,
+        task_id=task_id,
+    )
+    graph_config = GraphConfig.from_config()
+    if graph_config.max_turns <= 0:
+        graph_config.max_turns = 15
+    return TaskDeps(
+        primitives=primitives,
+        repl=repl,
+        config=graph_config,
+    )
+
+
+def _result_chain_fallback(result: dict[str, Any]) -> dict[str, Any]:
+    """Return a TaskResult-shaped chain artifact from a graph result dict."""
+    return {"role_history": list(result.get("role_history") or [])}
+
+
+def _select_parity_chain(trace_chain: Any, result: dict[str, Any]) -> tuple[Any, str, int]:
+    """Prefer trace decision-chain rows; fall back to result role history.
+
+    TM-8 owns the broad trace-coverage gate. TM-7's live parity residual still
+    needs an execution chain to compare even when a smoke task emits no
+    review-plane rows. The fallback is explicit in the report so callers cannot
+    mistake role-history parity for TM-8 trace coverage.
+    """
+    trace_len = len(extract_chain(trace_chain))
+    if trace_len > 0:
+        return trace_chain, "trace_decision_chain", trace_len
+    fallback = _result_chain_fallback(result)
+    return fallback, "result_role_history", trace_len
+
+
+# ---------------------------------------------------------------------------
 # Forbidden-flag check (real flag, not the fabricated name)
 # ---------------------------------------------------------------------------
 
@@ -468,7 +552,7 @@ async def _run_arm(arm: str, task: dict[str, Any], *, checkpoint_path: Path, see
     :func:`execute_parity` under ``--execute``. Returns
     ``{"task_id", "arm", "result", "chain"}``.
     """
-    from src.graph.state import TaskDeps, TaskState
+    from src.graph.state import TaskState
     from src.trace.query import decision_chain
 
     task_id = str(task["task_id"])
@@ -477,7 +561,7 @@ async def _run_arm(arm: str, task: dict[str, Any], *, checkpoint_path: Path, see
     thread_id = f"{task_id}:{arm}"
 
     state = TaskState(task_id=task_id, prompt=prompt)
-    deps = TaskDeps()
+    deps = _build_live_task_deps(task, start_role=str(start_role))
 
     if arm == "run_task":
         from src.graph.graph import run_task
@@ -511,17 +595,22 @@ async def _run_arm(arm: str, task: dict[str, Any], *, checkpoint_path: Path, see
     else:
         raise ValueError(f"unknown arm: {arm}")
 
-    chain = decision_chain(session_id=thread_id)
+    trace_chain = decision_chain(session_id=thread_id)
+    result_dict = {
+        "answer": getattr(result, "answer", None),
+        "success": getattr(result, "success", None),
+        "role_history": getattr(result, "role_history", None),
+        "turns": getattr(result, "turns", None),
+    }
+    chain, chain_source, trace_chain_len = _select_parity_chain(trace_chain, result_dict)
     return {
         "task_id": task_id,
         "arm": arm,
         "thread_id": thread_id,
-        "result": {
-            "answer": getattr(result, "answer", None),
-            "success": getattr(result, "success", None),
-            "role_history": getattr(result, "role_history", None),
-            "turns": getattr(result, "turns", None),
-        },
+        "result": result_dict,
+        "trace_chain": trace_chain,
+        "trace_chain_len": trace_chain_len,
+        "chain_source": chain_source,
         "chain": chain,
     }
 
@@ -551,18 +640,52 @@ def execute_parity(
             )
             chain_a = extract_chain(run_a["chain"])
             chain_b = extract_chain(run_b["chain"])
-            trace_coverage_ok = bool(chain_a) and bool(chain_b)
+            parity_chain_coverage_ok = bool(chain_a) and bool(chain_b)
+            arm_success_ok = (
+                run_a["result"].get("success") is True
+                and run_b["result"].get("success") is True
+            )
+            answer_a = str(run_a["result"].get("answer") or "").strip()
+            answer_b = str(run_b["result"].get("answer") or "").strip()
+            output_equivalence_ok = answer_a == answer_b
+            trace_coverage_ok = (
+                int(run_a.get("trace_chain_len", 0) or 0) > 0
+                and int(run_b.get("trace_chain_len", 0) or 0) > 0
+            )
             verdict["trace_coverage_ok"] = trace_coverage_ok
-            verdict["trace_chain_lengths"] = {
+            verdict["parity_chain_coverage_ok"] = parity_chain_coverage_ok
+            verdict["parity_chain_lengths"] = {
                 arm_a: len(chain_a),
                 arm_b: len(chain_b),
             }
-            if not trace_coverage_ok:
+            verdict["trace_chain_lengths"] = {
+                arm_a: int(run_a.get("trace_chain_len", 0) or 0),
+                arm_b: int(run_b.get("trace_chain_len", 0) or 0),
+            }
+            verdict["parity_chain_sources"] = {
+                arm_a: run_a.get("chain_source", "unknown"),
+                arm_b: run_b.get("chain_source", "unknown"),
+            }
+            verdict["arm_success_ok"] = arm_success_ok
+            verdict["output_equivalence_ok"] = output_equivalence_ok
+            if not parity_chain_coverage_ok:
                 verdict["parity"] = False
                 verdict["verdict"] = "FAIL"
                 verdict["coverage_match"] = False
                 verdict.setdefault("coverage_errors", []).append(
                     "live parity requires non-empty decision chains for both arms"
+                )
+            if not arm_success_ok:
+                verdict["parity"] = False
+                verdict["verdict"] = "FAIL"
+                verdict.setdefault("coverage_errors", []).append(
+                    "live parity requires both graph arms to complete successfully"
+                )
+            if not output_equivalence_ok:
+                verdict["parity"] = False
+                verdict["verdict"] = "FAIL"
+                verdict.setdefault("coverage_errors", []).append(
+                    "live parity requires equivalent arm outputs"
                 )
             per_task.append({
                 "task_id": task["task_id"],
@@ -577,6 +700,9 @@ def execute_parity(
     n_trace_coverage_fail = sum(
         1 for t in per_task if not t["verdict"].get("trace_coverage_ok")
     )
+    n_parity_chain_coverage_fail = sum(
+        1 for t in per_task if not t["verdict"].get("parity_chain_coverage_ok")
+    )
     return {
         "arms": arms,
         "seed": seed,
@@ -584,6 +710,7 @@ def execute_parity(
         "n_pass": n_pass,
         "n_fail": len(tasks) - n_pass,
         "n_trace_coverage_fail": n_trace_coverage_fail,
+        "n_parity_chain_coverage_fail": n_parity_chain_coverage_fail,
         "overall": "PASS" if n_pass == len(tasks) else "FAIL",
         "per_task": per_task,
     }

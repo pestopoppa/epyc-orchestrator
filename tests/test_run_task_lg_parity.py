@@ -312,6 +312,46 @@ def test_execute_parity_fails_closed_on_empty_decision_chain_dict(monkeypatch, t
     assert verdict["trace_chain_lengths"] == {"run_task_lg": 0, "run_task": 0}
 
 
+def test_execute_parity_reports_role_history_fallback_separately(monkeypatch, tmp_path):
+    async def fake_run_arm(arm, task, *, checkpoint_path, seed):  # noqa: ARG001
+        return {
+            "task_id": task["task_id"],
+            "arm": arm,
+            "thread_id": f"{task['task_id']}:{arm}",
+            "result": {
+                "answer": "same",
+                "success": True,
+                "role_history": ["frontdoor", "architect_general"],
+                "turns": 2,
+            },
+            "chain": {"role_history": ["frontdoor", "architect_general"]},
+            "trace_chain": {"session_id": f"{task['task_id']}:{arm}", "chain": []},
+            "trace_chain_len": 0,
+            "chain_source": "result_role_history",
+        }
+
+    monkeypatch.setattr(mod, "_run_arm", fake_run_arm)
+    report = mod.execute_parity(
+        [{"task_id": "t1", "prompt": "hi", "start_role": "frontdoor"}],
+        ["run_task_lg", "run_task"],
+        checkpoint_path=tmp_path / "cp.sqlite",
+        seed=42,
+        keys=mod.DEFAULT_PARITY_KEYS,
+    )
+    verdict = report["per_task"][0]["verdict"]
+    assert report["overall"] == "PASS"
+    assert report["n_trace_coverage_fail"] == 1
+    assert report["n_parity_chain_coverage_fail"] == 0
+    assert verdict["trace_coverage_ok"] is False
+    assert verdict["parity_chain_coverage_ok"] is True
+    assert verdict["parity_chain_sources"] == {
+        "run_task_lg": "result_role_history",
+        "run_task": "result_role_history",
+    }
+    assert verdict["arm_success_ok"] is True
+    assert verdict["output_equivalence_ok"] is True
+
+
 # ---------------------------------------------------------------------------
 # End-to-end main(): dry-run (no inference) and pure parity-diff mode
 # ---------------------------------------------------------------------------
