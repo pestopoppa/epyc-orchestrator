@@ -71,3 +71,40 @@ def test_cost_path_is_correctness_gated():
         _Entry("failure", data), [], [], None, data, config=ScoringConfig()
     )
     assert failed < 0
+
+
+def test_unpriced_role_is_warned_not_silent(caplog):
+    """A role with no baseline must not silently hand out the full base reward.
+
+    This is the failure shape that disabled the whole cost/speed half of the
+    reward: an unresolvable role skips every dimension and scores +1.0. The
+    behaviour is preserved (we cannot price what we have no baseline for) but
+    it must be visible.
+    """
+    import logging
+
+    from orchestration.repl_memory import q_reward
+
+    q_reward._warned_unpriced_roles.clear()
+    data = {
+        "producer_role": "brand_new_unregistered_role",
+        "tokens_generated": 100,
+        "generation_ms": 20_000,
+    }
+    with caplog.at_level(logging.WARNING):
+        assert _reward(data) == 1.0
+    assert any("no baseline_tps_by_role entry" in r.message for r in caplog.records)
+
+
+def test_known_unpriced_roles_do_not_warn(caplog):
+    """Decommissioned/test roles are expected in historical replay — no noise."""
+    import logging
+
+    from orchestration.repl_memory import q_reward
+
+    q_reward._warned_unpriced_roles.clear()
+    for role in ("architect_coding", "mock"):
+        data = {"producer_role": role, "tokens_generated": 100, "generation_ms": 20_000}
+        with caplog.at_level(logging.WARNING):
+            _reward(data)
+    assert not [r for r in caplog.records if "no baseline_tps_by_role" in r.message]
