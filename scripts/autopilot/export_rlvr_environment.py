@@ -217,11 +217,21 @@ def _eval_record(record: dict[str, Any]) -> dict[str, Any] | None:
         return None
     merged = dict(candidate)
     if details:
-        for key in ("ece", "auroc", "routing_distribution"):
+        # F2 (safetygate-rlvr-provenance-audit 2026-07-22): confidence_is_real is
+        # the SOLE carrier of confidence provenance. It was dropped here, so every
+        # exported row failed ready_for_training with confidence_not_real even when
+        # confidence WAS real. Merge it (and its source counts) alongside ece/auroc.
+        for key in (
+            "ece",
+            "auroc",
+            "routing_distribution",
+            "confidence_is_real",
+            "confidence_source_counts",
+        ):
             if key in details and key not in merged:
                 merged[key] = details[key]
     if nested_details:
-        for key in ("question_results",):
+        for key in ("question_results", "confidence_is_real", "confidence_source_counts"):
             if key in nested_details and key not in merged:
                 merged[key] = nested_details[key]
     return merged
@@ -235,6 +245,12 @@ def _environment_row(
     index: int,
 ) -> dict[str, Any]:
     question_results = _safe_question_results(eval_record)
+    # F2: rlvr_tiers._confidence_is_real reads result.details['confidence_is_real'].
+    # The SimpleNamespace previously had no `details` attribute at all, so the gate
+    # ALWAYS saw not-real and blocked every row. Attach a details dict carrying the
+    # provenance flag (fail-closed default False when the source has no stamp) so a
+    # provenance-clean row can earn calibration/discrimination credit.
+    confidence_is_real = bool(_field(eval_record, "confidence_is_real", default=False))
     result = SimpleNamespace(
         tier=int(_field(eval_record, "tier", default=0) or 0),
         quality=_field(eval_record, "quality", default=_field(eval_record, "score", default=0.0)),
@@ -242,6 +258,7 @@ def _environment_row(
         ece=_field(eval_record, "ece", default=None),
         auroc=_field(eval_record, "auroc", default=None),
         question_results=question_results,
+        details={"confidence_is_real": confidence_is_real},
     )
     reward = rlvr_reward_from_result(result)
     row = {

@@ -29,8 +29,10 @@ from seeding_scoring import (
     _adaptive_timeout_s,
     _bump_timeout_from_observed,
     _classify_error,
+    _forced_role_serving_mismatch,
+    _inband_error_text,
     _is_coding_task,
-    score_answer_deterministic,
+    score_answer_or_error,
 )
 from seeding_orchestrator import (
     _busy_heavy_ports,
@@ -310,8 +312,25 @@ def _build_role_result(
     expected: str,
     scoring_method: str,
     scoring_config: dict[str, Any],
+    allow_delegation: bool | None = None,
 ) -> tuple[RoleResult, str]:
     """Build a RoleResult from orchestrator response, scoring the answer.
+
+    Applies the REL-1 eval-honesty guards (mirroring eval_tower.py) so a
+    failed/mis-served/unscoreable call becomes an EXCLUDED infrastructure row
+    rather than a WRONG answer that injects a 0.0 reward into MemRL and poisons
+    the learned router:
+
+    * Guard 1 (in-band ``[ERROR: ...]`` answer with ``error=None``) is applied
+      upstream in ``seeding_orchestrator._surface_inband_error`` (surfaced into
+      ``resp["error"]``) and classified INFRASTRUCTURE by ``_classify_error``.
+    * Guard 2 (forced-role serving mismatch) is applied here, gated on
+      ``allow_delegation is False`` — the seeding ARCHITECT config runs with
+      delegation ENABLED where ``routed_to != role`` is expected, so the guard
+      MUST NOT fire there. See ``_forced_role_serving_mismatch``.
+    * Scorer-unavailability (``ScoringUnavailableError`` / unknown method) is
+      caught via ``score_answer_or_error`` and converted to an excluded row
+      instead of crashing the seed run or silently dropping the question.
 
     Returns:
         (role_result, error_type) tuple.  error_type is one of
@@ -319,6 +338,32 @@ def _build_role_result(
     """
     answer = resp.get("answer", "")
     error = resp.get("error")
+
+    # ── REL-1 Guard 1: in-band "[ERROR: ...]" answer with error=None ──
+    # Normally surfaced upstream by seeding_orchestrator._surface_inband_error;
+    # repeated here so _build_role_result is self-contained — any resp that
+    # reaches scoring with an in-band banner is EXCLUDED as infrastructure,
+    # never scored as a WRONG answer that would inject a 0.0 MemRL reward.
+    if not error:
+        inband = _inband_error_text(answer)
+        if inband is not None:
+            error = inband
+            logger.error(
+                "REL-1 in-band error surfaced as answer (role=%s): %s",
+                role, inband[:200],
+            )
+
+    # ── REL-1 Guard 2: forced-role serving mismatch (delegation OFF only) ──
+    if not error and allow_delegation is False:
+        served_by = _forced_role_serving_mismatch(role, resp)
+        if served_by is not None:
+            error = f"forced_role_fallback: forced={role} served_by={served_by}"
+            logger.error(
+                "REL-1 forced-role integrity violation (role=%s served_by=%s) — "
+                "excluding cross-role measurement (delegation disabled)",
+                role, served_by,
+            )
+
     error_type = _classify_error(error)
 
     if error_type == "infrastructure":
@@ -326,7 +371,17 @@ def _build_role_result(
     elif error:
         passed = False
     else:
-        passed = score_answer_deterministic(answer, expected, scoring_method, scoring_config)
+        # ── REL-1: scorer-unavailability → excluded row, never crash/drop ──
+        passed, score_err = score_answer_or_error(
+            answer, expected, scoring_method, scoring_config
+        )
+        if passed is None:
+            error = score_err
+            error_type = "infrastructure"
+            logger.warning(
+                "REL-1 scorer unavailable (role=%s method=%s): %s — excluding row",
+                role, scoring_method, score_err,
+            )
 
     rr = RoleResult(
         role=role,
@@ -476,6 +531,7 @@ def _eval_single_config(
         role=role, mode=mode, resp=resp, elapsed=elapsed,
         expected=expected, scoring_method=scoring_method,
         scoring_config=scoring_config,
+        allow_delegation=allow_delegation,
     )
     _log_delegation_diag(log_label, rr.delegation_diagnostics)
     tap_after = _tap_size()
@@ -541,6 +597,7 @@ def _eval_single_config(
                     elapsed=elapsed + elapsed2,
                     expected=expected, scoring_method=scoring_method,
                     scoring_config=scoring_config,
+                    allow_delegation=allow_delegation,
                 )
                 _log_delegation_diag(f"{log_label}:retry", rr.delegation_diagnostics)
                 tap_after = _tap_size()
@@ -941,6 +998,20 @@ def evaluate_question_3way(
         passed_direct, passed_repl,
         self_role, self_direct_mode, self_repl_mode, arch_mode,
     )
+
+    # ── REL-1 offline re-scoring context ──
+    # The per-role raw ``answer`` is already persisted via asdict(RoleResult)
+    # into the checkpoint JSONL, but the ThreeWayResult truncates ``expected``
+    # to 200 chars and the scoring method/config were not stored at all —
+    # without them a completed seed run cannot be re-scored offline when the
+    # scorer is fixed or a parse-failure is suspected (the exact capability the
+    # architect bench has via architect_bench_rescore). Persist the untruncated
+    # scoring context so seed artifacts are re-scorable without re-inference.
+    metadata["scoring_context"] = {
+        "expected": expected,
+        "scoring_method": scoring_method,
+        "scoring_config": scoring_config,
+    }
 
     for action, reward in sorted(rewards.items()):
         logger.info(f"    reward[{action}] = {reward:.1f}")

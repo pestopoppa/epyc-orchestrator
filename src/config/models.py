@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 import os
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -11,6 +13,8 @@ from src.roles import Role
 from src.registry.stack_priors import live_stack_serving_url_values
 
 from .validation import _registry_runtime_value, _registry_timeout
+
+_LOGGER = logging.getLogger(__name__)
 
 # ============================================================================
 # Configuration Dataclasses
@@ -272,7 +276,10 @@ _LEGACY_SERVER_URL_FALLBACKS: dict[str, str] = {
         "full:http://localhost:8072,http://localhost:8082,"
         "http://localhost:8182,http://localhost:8282,http://localhost:8382"
     ),
-    "worker_math": "full:http://localhost:8072,http://localhost:8082",
+    "worker_math": (
+        "full:http://localhost:8072,http://localhost:8082,"
+        "http://localhost:8182,http://localhost:8282,http://localhost:8382"
+    ),
     "worker_vision": "http://localhost:8086",
     "vision_escalation": (
         "full:http://localhost:8087,http://localhost:8187,"
@@ -310,6 +317,120 @@ def _localhost_url_from_port(port: Any) -> str | None:
     return f"http://localhost:{port}" if isinstance(port, int) and port > 0 else None
 
 
+# ============================================================================
+# ESC-8 Fix 5: producer-lineup liveness validation
+# ----------------------------------------------------------------------------
+# A producer-derived server lineup (env-filter branch OR runtime-facts branch)
+# must be VALIDATED against the live fleet before it is trusted. The failure this
+# guards: env=full (or a structurally-valid full-mode manifest) resolves every
+# hot role to the dead full ports 8070/8072/8085 on a quarters-only fleet. The
+# probe is a bare TCP connect (localhost, short timeout, cached per-process),
+# never an HTTP request to a llama-server. It is injectable/mockable so config
+# init stays fast and deterministic in tests.
+# ============================================================================
+
+_PORT_LISTENING_CACHE: dict[int, bool] = {}
+_PORT_PROBE_HOST = "127.0.0.1"
+_PORT_PROBE_TIMEOUT_S = 0.15
+
+
+def _port_listening(port: int) -> bool:
+    """Return True when localhost:port accepts a bare TCP connection (cached).
+
+    Delegates the actual bare-TCP-connect to ``realized_fleet.probe_listening``
+    — the single ESC-8-sanctioned socket seam (scripts/server/realized_fleet.py)
+    — imported lazily to avoid the scripts.server import cycle documented in the
+    audit (src.api -> stack_paths.get_config -> ServerURLsConfig -> stack_manifest
+    still initializing). Results are cached per-process;
+    ``reset_stack_prior_server_url_cache`` clears the cache so a later resolution
+    re-probes the live fleet. This module-level function is the mockable seam:
+    tests patch it (or pass ``probe=`` to ``_selected_servers_are_live``) and
+    never open a real socket.
+    """
+    if not isinstance(port, int) or isinstance(port, bool) or port <= 0:
+        return False
+    cached = _PORT_LISTENING_CACHE.get(port)
+    if cached is not None:
+        return cached
+    result = False
+    try:
+        from scripts.server.realized_fleet import probe_listening
+
+        result = port in probe_listening(
+            [port], host=_PORT_PROBE_HOST, timeout=_PORT_PROBE_TIMEOUT_S
+        )
+    except Exception:
+        result = False
+    _PORT_LISTENING_CACHE[port] = result
+    return result
+
+
+def _quarterable_host_roles() -> set[str]:
+    """Roles whose serving ports flip between the (dead-in-quarter) full port and
+    their quarter siblings — the discriminator for a poisoned lineup."""
+    try:
+        from scripts.server.stack_numa import NUMA_CONFIG
+    except Exception:
+        return set()
+    if not isinstance(NUMA_CONFIG, dict):
+        return set()
+    roles: set[str] = set()
+    for role, cfg in NUMA_CONFIG.items():
+        if (
+            isinstance(cfg, dict)
+            and "full_instance_idx" in cfg
+            and len(cfg.get("instances") or []) > 1
+        ):
+            roles.add(str(role))
+    return roles
+
+
+def _selected_servers_are_live(
+    selected_servers: list[dict[str, Any]] | None,
+    *,
+    probe: Callable[[int], bool] | None = None,
+) -> bool:
+    """Return True when a producer lineup is consistent with the live fleet.
+
+    Rejects a lineup in which a quarterable host role (frontdoor /
+    worker_general / ingest_long_context) names ONLY dead ports — the exact
+    poison signature of an env=full or valid-full-manifest lineup on a
+    quarters-only fleet. When the host-role discriminator is unavailable, falls
+    back to requiring at least one live port anywhere, so a lineup that names
+    only dead ports is never trusted.
+    """
+    if not selected_servers:
+        return False
+    is_live = probe or _port_listening
+    ports_by_role: dict[str, set[int]] = {}
+    all_ports: set[int] = set()
+    for server in selected_servers:
+        if not isinstance(server, dict):
+            continue
+        port = server.get("port")
+        if isinstance(port, bool) or not isinstance(port, int) or port <= 0:
+            continue
+        all_ports.add(port)
+        roles = server.get("roles")
+        if isinstance(roles, list):
+            for role in roles:
+                if isinstance(role, str) and role:
+                    ports_by_role.setdefault(role, set()).add(port)
+    if not all_ports:
+        return False
+    checked_host = False
+    for role in _quarterable_host_roles():
+        role_ports = ports_by_role.get(role)
+        if not role_ports:
+            continue
+        checked_host = True
+        if not any(is_live(port) for port in sorted(role_ports)):
+            return False
+    if checked_host:
+        return True
+    return any(is_live(port) for port in sorted(all_ports))
+
+
 def _runtime_or_env_selected_servers() -> list[dict[str, Any]] | None:
     """Return launcher-selected servers for the active NUMA mode.
 
@@ -318,9 +439,16 @@ def _runtime_or_env_selected_servers() -> list[dict[str, Any]] | None:
     facts are authoritative after stack startup; during API startup, before that
     manifest is refreshed, fall back to ORCHESTRATOR_STACK_NUMA_MODE plus the
     stack manifest filter.
+
+    ESC-8 Fix 5: every producer lineup is validated against the live fleet
+    before it is returned; a lineup that names only dead ports (env=full on a
+    quarters-only fleet, or a poisoned valid full manifest) is rejected and we
+    fall through to the next producer (ultimately stack priors).
     """
+    # Producer 1: env-declared mode → static stack-manifest filter.
     mode = os.environ.get("ORCHESTRATOR_STACK_NUMA_MODE")
     if mode:
+        candidate: list[dict[str, Any]] | None = None
         try:
             from scripts.server.stack_manifest import (
                 HOT_SERVERS,
@@ -329,21 +457,57 @@ def _runtime_or_env_selected_servers() -> list[dict[str, Any]] | None:
             )
             from scripts.server.stack_numa_mode import normalize_stack_numa_mode
 
-            return _filter_by_numa_mode(
+            candidate = _filter_by_numa_mode(
                 HOT_SERVERS + WARM_SERVERS,
                 normalize_stack_numa_mode(mode),
             )
-        except Exception:
-            return None
+        except Exception as exc:
+            # Fix 5(b): during uvicorn app startup this branch dies on a circular
+            # import (src.api -> stack_paths.get_config -> ServerURLsConfig ->
+            # stack_manifest still initializing). Swallowing it is currently the
+            # only thing keeping production routed to quarters — log it at WARNING
+            # so a change that stops it firing is visible instead of silent.
+            _LOGGER.warning(
+                "ORCHESTRATOR_STACK_NUMA_MODE=%s env-filter branch failed "
+                "(%s: %s); falling through to runtime-facts/stack-priors",
+                mode,
+                type(exc).__name__,
+                exc,
+            )
+            candidate = None
+        if candidate is not None:
+            if _selected_servers_are_live(candidate):
+                return candidate
+            _LOGGER.warning(
+                "ORCHESTRATOR_STACK_NUMA_MODE=%s lineup rejected: host-role ports "
+                "not listening (dead full ports on a quarters-only fleet?); "
+                "falling through to runtime-facts/stack-priors",
+                mode,
+            )
 
     if os.environ.get("ORCHESTRATOR_IGNORE_RUNTIME_STACK_FACTS") == "1":
         return None
+
+    # Producer 2: validated runtime-facts manifest.
     try:
         from scripts.server.runtime_facts_manifest import read_runtime_stack_selected_servers
 
-        return read_runtime_stack_selected_servers()
-    except Exception:
-        return None
+        candidate = read_runtime_stack_selected_servers()
+    except Exception as exc:
+        _LOGGER.warning(
+            "runtime-facts selected-servers read failed (%s: %s)",
+            type(exc).__name__,
+            exc,
+        )
+        candidate = None
+    if candidate is not None:
+        if _selected_servers_are_live(candidate):
+            return candidate
+        _LOGGER.warning(
+            "runtime-facts lineup rejected: host-role ports not listening; "
+            "falling through to stack priors"
+        )
+    return None
 
 
 def _selected_server_url_values(selected_servers: list[dict[str, Any]] | None) -> dict[str, str]:
@@ -472,6 +636,9 @@ def reset_stack_prior_server_url_cache() -> None:
     """Reset generated stack-prior server URL defaults."""
     global _STACK_PRIOR_SERVER_URLS_CACHE
     _STACK_PRIOR_SERVER_URLS_CACHE = None
+    # ESC-8 Fix 5(d): the per-process port-liveness probe cache is tied to the
+    # same resolution; clear it so a re-resolution re-probes the live fleet.
+    _PORT_LISTENING_CACHE.clear()
 
 
 @dataclass
@@ -603,9 +770,15 @@ class ServerURLsConfig:
     # Tier A - Front Door. "full:" prefix triggers ConcurrencyAwareBackend.
     frontdoor: str = field(default_factory=lambda: _server_url_default("frontdoor"))
 
-    # Tier B - Specialists. `coder` is a compatibility alias over coder_escalation.
-    coder: str = field(default_factory=lambda: _server_url_default("coder"))
-    coder_escalation: str = field(default_factory=lambda: _server_url_default("coder_escalation"))
+    # Tier B - Specialists. `coder`/`coder_escalation` are served by the frontdoor
+    # GGUF (Qwen3.6-35B-A3B Q8; server_mode.coder_escalation is pinned to frontdoor
+    # port 8070, shared mmap). Delegate the URL DEFAULT to frontdoor so they inherit
+    # its `full:` quarter fleet → ConcurrencyAwareBackend, and _infer_topology_role_for_urls
+    # resolves the identical URL tuple to topology_role=frontdoor (region locks +
+    # FULL_DISABLED/demotion apply). Role name is preserved for everything else
+    # (timeouts, role prompts, /v1 path) — only the URL default changes.
+    coder: str = field(default_factory=lambda: _server_url_default("frontdoor"))
+    coder_escalation: str = field(default_factory=lambda: _server_url_default("frontdoor"))
 
     # Tier C - Workers. `worker` and deprecated worker_* roles stay as
     # compatibility aliases where stack priors do not expose that exact label.
@@ -614,14 +787,21 @@ class ServerURLsConfig:
     # toolrunner is a logical alias over worker_general (shared Gemma-4 backend)
     toolrunner: str = field(default_factory=lambda: _server_url_default("worker_general"))
     worker_explore: str = field(default_factory=lambda: _server_url_default("worker_explore"))
-    worker_math: str = field(default_factory=lambda: _server_url_default("worker_math"))
+    # worker_math shares worker_general's physical gemma fleet
+    # (server_mode.worker.shared_with) — delegate the URL default to worker_general
+    # so it inherits the `full:` quarter fleet (topology_role=worker_general), same
+    # pattern as toolrunner above. Role name preserved for timeouts/prompts/path.
+    worker_math: str = field(default_factory=lambda: _server_url_default("worker_general"))
     worker_vision: str = field(default_factory=lambda: _server_url_default("worker_vision"))
     vision_escalation: str = field(
         default_factory=lambda: _server_url_default("vision_escalation")
     )
     worker_coder: str = field(default_factory=lambda: _server_url_default("worker_coder"))
     worker_fast: str = field(default_factory=lambda: _server_url_default("worker_fast"))
-    worker_summarize: str = field(default_factory=lambda: _server_url_default("worker_summarize"))
+    # worker_summarize is served by the frontdoor GGUF (Qwen3.6-35B-A3B Q8, shared
+    # mmap) — delegate the URL default to frontdoor for its `full:` quarter fleet
+    # (topology_role=frontdoor). Role name preserved for timeouts/prompts/path.
+    worker_summarize: str = field(default_factory=lambda: _server_url_default("frontdoor"))
 
     # Tier B - Architect / long-context.
     architect_general: str = field(default_factory=lambda: _server_url_default("architect_general"))

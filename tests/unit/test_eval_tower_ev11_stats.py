@@ -134,3 +134,43 @@ def test_aggregate_ece_uses_ev11b_closed_top_bin_stat_tests() -> None:
     assert agg.calibration_violations == 1
     assert agg.details["ece_binning"] == "closed_top_bin_stat_tests"
     assert agg.details["ece_instrument_era"] == "ev11b_closed_bin_2026_07_20"
+
+
+# ── EV-11c placeholder-zero elimination (data-absent → None, not 0.0) ─────────
+
+
+def _err_qr(qid: str) -> QuestionResult:
+    return QuestionResult(
+        question_id=qid,
+        suite="math",
+        prompt="p",
+        expected="e",
+        qid=qid,
+        answer="",
+        correct=False,
+        error="boom",
+        tokens_generated=0,
+        elapsed_s=1.0,
+    )
+
+
+def test_aggregate_absent_confidence_emits_none_not_zero_placeholder() -> None:
+    # EV-11c: an all-error batch has NO confidence data — ECE/AUROC must be None
+    # (honest absence), NEVER a 0.0 placeholder that reads as a real measurement.
+    tower = EvalTower(url="http://127.0.0.1:1", timeout=1)
+    agg = tower._aggregate([_err_qr("q0"), _err_qr("q1")], tier=1)
+    assert agg.ece is None
+    assert agg.auroc is None
+    assert agg.details["calibration_confidence_present"] is False
+    assert agg.details["confidence_is_real"] is False
+
+
+def test_aggregate_present_binary_proxy_keeps_computed_ece_but_flags_not_real() -> None:
+    # Present data (even binary-proxy confidence) still computes ECE at the CORE
+    # aggregate (pins preserved); provenance flags it not-real so decision-facing
+    # per-role builders can gate. calibration_confidence_present is True here.
+    tower = EvalTower(url="http://127.0.0.1:1", timeout=1)
+    agg = tower._aggregate([_qr("q0", False, 1.0), _qr("q1", True, 0.0)], tier=1)
+    assert agg.ece is not None
+    assert agg.details["confidence_is_real"] is False
+    assert agg.details["calibration_confidence_present"] is True

@@ -53,7 +53,10 @@ def test_build_role_result_infrastructure_and_success_paths():
         "web_research_results": [{"query": "q"}],
         "scratchpad_insights": [{"insight": "i"}],
     }
-    with patch.object(_MOD, "score_answer_deterministic", return_value=True):
+    # _build_role_result now scores via score_answer_or_error (which returns a
+    # (passed, error_reason) tuple and converts scorer-unavailability into an
+    # excluded row); patch that instead of the raw deterministic scorer.
+    with patch.object(_MOD, "score_answer_or_error", return_value=(True, None)):
         rr_ok, err_type_ok = _MOD._build_role_result(
             role="frontdoor",
             mode="direct",
@@ -69,6 +72,91 @@ def test_build_role_result_infrastructure_and_success_paths():
     assert rr_ok.prompt_tokens == 12
     assert rr_ok.web_research_results == [{"query": "q"}]
     assert rr_ok.scratchpad_insights == [{"insight": "i"}]
+
+
+def test_build_role_result_inband_error_answer_is_excluded_not_scored():
+    # REL-1 Guard 1: an HTTP-200 body whose answer IS an in-band "[ERROR: ...]"
+    # banner (error=None) must be EXCLUDED as infrastructure, never scored as a
+    # WRONG answer (which would inject a 0.0 MemRL reward). Also assert the
+    # scorer is never consulted for such a row.
+    banner = "[ERROR: Backend unavailable (circuit open): http://localhost:8082]"
+    with patch.object(_MOD, "score_answer_or_error") as score_mock:
+        rr, err_type = _MOD._build_role_result(
+            role="frontdoor",
+            mode="direct",
+            resp={"answer": banner},
+            elapsed=1.0,
+            expected="42",
+            scoring_method="exact_match",
+            scoring_config={},
+        )
+    assert err_type == "infrastructure"
+    assert rr.passed is False
+    assert rr.error == banner
+    score_mock.assert_not_called()
+
+
+def test_build_role_result_scorer_unavailable_is_excluded_not_crash():
+    # REL-1 finding 2: a scorer raise (ScoringUnavailableError / unknown method)
+    # must become an EXCLUDED infrastructure row, never crash the seed run.
+    with patch.object(
+        _MOD, "score_answer_or_error",
+        return_value=(None, "scoring_unavailable: math_verify library unavailable"),
+    ):
+        rr, err_type = _MOD._build_role_result(
+            role="worker_math",
+            mode="direct",
+            resp={"answer": "0.5", "routed_to": "worker_math"},
+            elapsed=1.0,
+            expected="1/2",
+            scoring_method="math_verify",
+            scoring_config={},
+        )
+    assert err_type == "infrastructure"
+    assert rr.passed is False
+    assert rr.error.startswith("scoring_unavailable:")
+
+
+def test_build_role_result_forced_role_mismatch_excluded_when_delegation_off():
+    # REL-1 Guard 2: with delegation OFF, a silent circuit-open fallback that
+    # served a DIFFERENT role than forced is a cross-role mis-attribution ->
+    # EXCLUDED infrastructure row (never scored as the forced role's verdict).
+    with patch.object(_MOD, "score_answer_or_error") as score_mock:
+        rr, err_type = _MOD._build_role_result(
+            role="worker_math",
+            mode="direct",
+            resp={"answer": "7", "routed_to": "worker_general"},
+            elapsed=1.0,
+            expected="42",
+            scoring_method="exact_match",
+            scoring_config={},
+            allow_delegation=False,
+        )
+    assert err_type == "infrastructure"
+    assert rr.passed is False
+    assert "forced_role_fallback" in rr.error
+    assert "served_by=worker_general" in rr.error
+    score_mock.assert_not_called()
+
+
+def test_build_role_result_forced_role_mismatch_not_flagged_when_delegation_on():
+    # The seeding ARCHITECT config runs with delegation ENABLED, where
+    # routed_to != role is the EXPECTED, correct behavior (architect delegates
+    # to workers). Guard 2 MUST NOT fire there — the result is scored normally.
+    with patch.object(_MOD, "score_answer_or_error", return_value=(True, None)) as score_mock:
+        rr, err_type = _MOD._build_role_result(
+            role="architect_general",
+            mode="delegated",
+            resp={"answer": "42", "routed_to": "worker_general"},
+            elapsed=1.0,
+            expected="42",
+            scoring_method="exact_match",
+            scoring_config={},
+            allow_delegation=True,
+        )
+    assert err_type == "none"
+    assert rr.passed is True
+    score_mock.assert_called_once()
 
 
 def test_compute_3way_metadata_includes_cost_web_and_scratchpad_sections():
@@ -447,7 +535,15 @@ def test_evaluate_question_3way_non_vl_happy_path():
     assert rewards[_MOD.ACTION_SELF_REPL] == 0.0
     assert rewards[_MOD.ACTION_ARCHITECT] == 0.0
     assert rewards["WORKER"] == 1.0
-    assert metadata == {"meta": 1}
+    assert metadata["meta"] == 1
+    # REL-1 finding 3: evaluate_question_3way appends the offline re-scoring
+    # context (untruncated expected + scoring method/config) so a completed
+    # seed run can be re-scored without re-inference.
+    assert metadata["scoring_context"] == {
+        "expected": "ok",
+        "scoring_method": "exact_match",
+        "scoring_config": {},
+    }
 
 
 def test_evaluate_question_3way_direct_retry_on_5xx_replaces_result():
@@ -527,7 +623,7 @@ def test_log_delegation_diag_and_tap_helpers_cover_fallbacks():
 def test_build_role_result_task_failure_marks_failed_without_scoring():
     with (
         patch.object(_MOD, "_classify_error", return_value="task_failure"),
-        patch.object(_MOD, "score_answer_deterministic") as score_mock,
+        patch.object(_MOD, "score_answer_or_error") as score_mock,
     ):
         rr, err_type = _MOD._build_role_result(
             role="frontdoor",
@@ -730,10 +826,51 @@ def test_evaluate_question_3way_vl_infra_skip_and_cooldown(monkeypatch):
     assert "worker_vision:repl" in role_results
     assert "vision_escalation:direct" in role_results
     assert rewards == {"WORKER": 1.0}
-    assert metadata == {"meta": 1}
+    assert metadata["meta"] == 1
+    # REL-1 finding 3: evaluate_question_3way appends the offline re-scoring
+    # context (untruncated expected + scoring method/config) so a completed
+    # seed run can be re-scored without re-inference.
+    assert metadata["scoring_context"] == {
+        "expected": "ok",
+        "scoring_method": "exact_match",
+        "scoring_config": {},
+    }
     assert sleep_mock.call_count == 3
     logged = [str(args[0]) for args, _ in info_mock.call_args_list if args]
     assert any("skip:SELF:direct" in line for line in logged)
     assert any("skip:SELF:repl" in line for line in logged)
     assert any("all-infra:ARCHITECT" in line for line in logged)
     assert any("reward[WORKER] = 1.0" in line for line in logged)
+
+
+def test_threeway_result_checkpoint_persists_raw_answer_and_scoring_context():
+    # REL-1 finding 3: a completed seed run must be re-scorable offline. The
+    # checkpoint serialises ThreeWayResult via dataclasses.asdict, which
+    # recursively preserves each role's raw ``answer``; evaluate_question_3way
+    # additionally stores the untruncated scoring context in metadata (the
+    # ThreeWayResult.expected field itself is truncated to 200 chars).
+    import json
+    from dataclasses import asdict
+
+    rr = _rr(role="frontdoor", mode="direct", answer="The full raw model answer.", passed=True)
+    result = _MOD.ThreeWayResult(
+        suite="math",
+        question_id="q1",
+        prompt="p" * 500,
+        expected="e" * 500,
+        role_results={"frontdoor:direct": rr},
+        metadata={
+            "scoring_context": {
+                "expected": "e" * 500,
+                "scoring_method": "math_verify",
+                "scoring_config": {"threshold": 1.0},
+            }
+        },
+    )
+    # Serialise exactly as checkpoint_result does (asdict + json), then read back.
+    back = json.loads(json.dumps(asdict(result), ensure_ascii=False))
+    assert back["role_results"]["frontdoor:direct"]["answer"] == "The full raw model answer."
+    sc = back["metadata"]["scoring_context"]
+    assert sc["scoring_method"] == "math_verify"
+    assert sc["scoring_config"] == {"threshold": 1.0}
+    assert len(sc["expected"]) == 500  # untruncated, unlike ThreeWayResult.expected

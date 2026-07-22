@@ -118,7 +118,9 @@ def test_start_parser_compiles_registry_by_default(monkeypatch) -> None:
 
     assert stack.main() == 0
     assert captured["compile_registry"] is True
-    assert captured["numa_mode"] == "full"
+    # ESC-8 Fix 4: --numa-mode default is now None (inferred from the running
+    # fleet by cmd_start) instead of a hardcoded "full".
+    assert captured["numa_mode"] is None
 
 
 def test_start_parser_accepts_explicit_numa_mode_both(monkeypatch) -> None:
@@ -177,7 +179,11 @@ def test_cmd_start_compiles_registry_by_default_arg_absence(monkeypatch) -> None
     assert calls[0]["cache_key_path"].name == ".lean_cache_key"
 
 
-def test_cmd_start_defaults_missing_numa_mode_to_full(monkeypatch) -> None:
+def test_cmd_start_infers_missing_numa_mode_from_realized_fleet(monkeypatch) -> None:
+    # ESC-8 Fix 4: with no --numa-mode, cmd_start infers the mode from the
+    # running fleet (quarters-only production) instead of defaulting to "full".
+    from scripts.server import realized_fleet
+
     modes: list[str] = []
 
     class FakeRegistryLoader:
@@ -187,6 +193,7 @@ def test_cmd_start_defaults_missing_numa_mode_to_full(monkeypatch) -> None:
         modes.append(mode)
         return servers
 
+    monkeypatch.setattr(realized_fleet, "derive_realized_numa_mode", lambda **_k: "quarter")
     monkeypatch.setattr(stack_commands, "RegistryLoader", FakeRegistryLoader)
     monkeypatch.setattr(stack_commands, "apply_host_prerequisites", lambda **_kwargs: True)
     monkeypatch.setattr(stack_commands, "check_free_memory", lambda: 999)
@@ -222,7 +229,7 @@ def test_cmd_start_defaults_missing_numa_mode_to_full(monkeypatch) -> None:
 
     assert not hasattr(args, "numa_mode")
     assert stack_commands.cmd_start(args) == 0
-    assert modes == ["full"]
+    assert modes == ["quarter"]
     assert saved
 
 
@@ -421,7 +428,8 @@ def test_reload_refreshes_runtime_facts_manifest_after_successful_state_save(
     monkeypatch.setattr(stack, "kill_process", lambda pid: killed.append(pid))
     monkeypatch.setattr(stack.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(stack, "_pids_on_port", lambda port: [111] if port == 8000 else [])
-    monkeypatch.setattr(stack, "start_orchestrator", lambda _profile=None: new_info)
+    # cmd_reload passes stack_numa_mode= to start_orchestrator; accept it here.
+    monkeypatch.setattr(stack, "start_orchestrator", lambda _profile=None, **_kw: new_info)
     monkeypatch.setattr(
         stack_commands,
         "_refresh_runtime_facts_manifest",
@@ -1085,7 +1093,8 @@ def test_cmd_status_prints_model_attestation_warning(monkeypatch, capsys) -> Non
     assert "model-drift" in out
     assert "expected current.gguf" in out
     assert "live cmdline has stale.gguf" in out
-    assert saved[-1] == {"frontdoor": info}
+    # ESC-8 Fix 2: `status` is now read-only — it no longer persists state.
+    assert saved == []
 
 
 def test_cmd_status_prints_episodic_embedding_health(monkeypatch, capsys) -> None:
@@ -1175,7 +1184,8 @@ def test_cmd_status_prints_mmproj_attestation_warning(monkeypatch, capsys) -> No
     assert "mmproj-drift" in out
     assert "expected mmproj current-mmproj.gguf" in out
     assert "live cmdline has stale-mmproj.gguf" in out
-    assert saved[-1] == {"server_8086": info}
+    # ESC-8 Fix 2: `status` is now read-only — it no longer persists state.
+    assert saved == []
 
 
 def test_cmd_status_prints_runtime_contract_warning(monkeypatch, capsys) -> None:
@@ -1227,4 +1237,5 @@ def test_cmd_status_prints_runtime_contract_warning(monkeypatch, capsys) -> None
     out = capsys.readouterr().out
     assert "runtime context_tokens expected 16384; live cmdline has 8192" in out
     assert "runtime flash_attn expected True; live cmdline has False" in out
-    assert saved[-1] == {"worker_general": info}
+    # ESC-8 Fix 2: `status` is now read-only — it no longer persists state.
+    assert saved == []

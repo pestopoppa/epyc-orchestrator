@@ -34,10 +34,12 @@ for _p in (
 from eval_tower import (  # type: ignore[import-not-found]
     CALIBRATION_METRIC_KEYS,
     EvalTower,
+    QuestionResult,
     compute_calibration_metrics,
     dataset_content_sha256,
     score_math_rebaseline_answers,
 )
+import eval_tower  # type: ignore[import-not-found]  # noqa: E402
 
 _WINDOW_PATH = REPO_ROOT / "scripts" / "benchmark" / "eval_batch_serving_evaltower_window.py"
 _spec = importlib.util.spec_from_file_location("eval_batch_serving_evaltower_window", _WINDOW_PATH)
@@ -713,3 +715,484 @@ def test_verifier_mode_apply_blocks_on_live_stack_contract_drift(tmp_path, monke
     assert report["result"] is None
     assert report["live_stack_contract"]["warnings"] == ["frontdoor missing --spec-type draft-mtp"]
     assert any("live stack launch contract" in b for b in report["blockers"])
+
+
+# ── (4) EV-11c: confidence provenance threading + placeholder-zero elimination ─
+
+
+def _qr(
+    qid: str,
+    correct: bool,
+    conf: float,
+    *,
+    source: str = "completion_probabilities_geomean",
+    error: str | None = None,
+    suite: str = "math",
+) -> QuestionResult:
+    return QuestionResult(
+        question_id=qid,
+        suite=suite,
+        prompt="p",
+        expected="e",
+        qid=qid,
+        answer="a",
+        correct=correct,
+        error=error,
+        tokens_generated=5,
+        elapsed_s=1.0,
+        route_used="worker_math",
+        confidence=conf,
+        confidence_source=source,
+    )
+
+
+_MATH_QS = [
+    {"id": "gsm8k_00001", "suite": "math", "prompt": "a", "expected": "1", "scoring_method": "math_verify"},
+    {"id": "math500_00001", "suite": "math", "prompt": "b", "expected": "2", "scoring_method": "math_verify"},
+    {"id": "math500_00002", "suite": "math", "prompt": "c", "expected": "3", "scoring_method": "math_verify"},
+    {"id": "math500_00003", "suite": "math", "prompt": "d", "expected": "4", "scoring_method": "math_verify"},
+]
+_CONFS = [0.9, 0.7, 0.5, 0.3]
+_CORRECTS = [True, True, False, False]
+
+
+class _MathAdapter:
+    def extract_all(self) -> list[dict]:
+        return [dict(q) for q in _MATH_QS]
+
+
+def test_eval_math_rebaseline_threads_real_confidence_provenance(monkeypatch) -> None:
+    tower = EvalTower(url="http://127.0.0.1:1", timeout=1)
+    monkeypatch.setattr(tower, "_load_dataset_adapter", lambda _s: _MathAdapter())
+
+    def fake_batch(role_qs, client, **_kw):  # noqa: ANN001
+        return [_qr(q["id"], _CORRECTS[i], _CONFS[i]) for i, q in enumerate(role_qs)]
+
+    monkeypatch.setattr(tower, "_eval_batch", fake_batch)
+    report = tower.eval_math_rebaseline(full=True, scoring="math_verify", roles=["worker_math"])
+    arm = report["per_role"]["worker_math"]
+
+    assert arm["confidence_is_real"] is True
+    assert arm["ece"] is not None
+    assert arm["auroc"] is not None
+    assert arm["confidence_source_counts"] == {"completion_probabilities_geomean": 4}
+
+
+def test_eval_math_rebaseline_straddled_confidence_emits_none_not_zero(monkeypatch) -> None:
+    # One binary-proxy row among real ones ⇒ fail-closed: whole arm's ECE/AUROC
+    # become None (not a 0.0 placeholder) and confidence_is_real=False.
+    tower = EvalTower(url="http://127.0.0.1:1", timeout=1)
+    monkeypatch.setattr(tower, "_load_dataset_adapter", lambda _s: _MathAdapter())
+
+    def fake_batch(role_qs, client, **_kw):  # noqa: ANN001
+        rows = [_qr(q["id"], _CORRECTS[i], _CONFS[i]) for i, q in enumerate(role_qs)]
+        rows[0].confidence_source = "binary_correctness_proxy"
+        return rows
+
+    monkeypatch.setattr(tower, "_eval_batch", fake_batch)
+    report = tower.eval_math_rebaseline(full=True, scoring="math_verify", roles=["worker_math"])
+    arm = report["per_role"]["worker_math"]
+
+    assert arm["confidence_is_real"] is False
+    assert arm["ece"] is None
+    assert arm["auroc"] is None
+
+
+def test_eval_calibration_threads_confidence_provenance(monkeypatch) -> None:
+    tower = EvalTower(url="http://127.0.0.1:1", timeout=1)
+    monkeypatch.setattr(
+        tower,
+        "_load_verifier_suite_questions",
+        lambda *a, **k: [
+            {"id": f"q{i}", "suite": "scoring_verifiers", "prompt": "p", "expected": "e"}
+            for i in range(4)
+        ],
+    )
+
+    def fake_batch(role_qs, client, **_kw):  # noqa: ANN001
+        return [
+            _qr(q["id"], _CORRECTS[i], _CONFS[i], suite="scoring_verifiers")
+            for i, q in enumerate(role_qs)
+        ]
+
+    monkeypatch.setattr(tower, "_eval_batch", fake_batch)
+    report = tower.eval_calibration(
+        suite="scoring_verifiers", split="HE-R+", roles=["worker_general"], full=True
+    )
+    arm = report["per_role"]["worker_general"]
+
+    assert arm["confidence_is_real"] is True
+    assert arm["ece"] is not None
+    assert arm["reliability"] == 1.0
+    assert arm["confidence_source_counts"] == {"completion_probabilities_geomean": 4}
+
+
+def test_eval_calibration_binary_proxy_emits_none(monkeypatch) -> None:
+    tower = EvalTower(url="http://127.0.0.1:1", timeout=1)
+    monkeypatch.setattr(
+        tower,
+        "_load_verifier_suite_questions",
+        lambda *a, **k: [
+            {"id": f"q{i}", "suite": "scoring_verifiers", "prompt": "p", "expected": "e"}
+            for i in range(4)
+        ],
+    )
+
+    def fake_batch(role_qs, client, **_kw):  # noqa: ANN001
+        return [
+            _qr(q["id"], _CORRECTS[i], _CONFS[i], source="binary_correctness_proxy",
+                suite="scoring_verifiers")
+            for i, q in enumerate(role_qs)
+        ]
+
+    monkeypatch.setattr(tower, "_eval_batch", fake_batch)
+    report = tower.eval_calibration(
+        suite="scoring_verifiers", split="HE-R+", roles=["worker_general"], full=True
+    )
+    arm = report["per_role"]["worker_general"]
+
+    assert arm["confidence_is_real"] is False
+    assert arm["ece"] is None
+    assert arm["auroc"] is None
+
+
+# ── decision_grade honesty (reliability floor + fake calibration) ─────────────
+
+
+def test_decision_grade_reasons_flags_below_floor_and_fake_calibration() -> None:
+    result = {
+        "per_role": {
+            "worker_math": {"reliability": 0.708, "confidence_is_real": False},
+            "worker_general": {"reliability": 0.95, "confidence_is_real": True},
+        }
+    }
+    reasons = window._decision_grade_quality_reasons(result)
+    assert any("worker_math reliability 0.708" in r for r in reasons)
+    assert any("worker_math calibration is not decision-grade" in r for r in reasons)
+    assert not any("worker_general" in r for r in reasons)
+
+
+def test_decision_grade_reasons_reliability_floor_boundary() -> None:
+    # Floor is strict-less-than: exactly 0.8 passes; 0.799 fails.
+    ok = window._decision_grade_quality_reasons(
+        {"per_role": {"a": {"reliability": 0.8, "confidence_is_real": True}}}
+    )
+    assert ok == []
+    bad = window._decision_grade_quality_reasons(
+        {"per_role": {"a": {"reliability": 0.799, "confidence_is_real": True}}}
+    )
+    assert any("0.799" in r for r in bad)
+
+
+def test_decision_grade_reasons_lenient_on_absent_fields() -> None:
+    # A legacy/mock arm carrying neither reliability nor confidence_is_real must
+    # NOT be demoted from missing metadata (fires only on present-and-bad).
+    assert window._decision_grade_quality_reasons(
+        {"per_role": {"a": {"metrics": {"ece": 0.5}, "n": 2}}}
+    ) == []
+
+
+class _MathResultTower:
+    def __init__(self, per_role: dict, *_a, **_k) -> None:
+        self._per_role = per_role
+
+    def set_question_artifact_dir(self, _d) -> None:  # noqa: ANN001
+        pass
+
+    def eval_math_rebaseline(self, *, full, scoring, roles, seed, n, production_sampling):  # noqa: ARG002, ANN001
+        return {
+            "dataset_sha256": "abc",
+            "n_questions": 10,
+            "roles": roles,
+            "per_role": {role: dict(self._per_role) for role in roles},
+        }
+
+
+def _math_apply_args(tmp_path):
+    return window.parse_args(
+        [
+            "--mode",
+            "math_rebaseline",
+            "--full",
+            "--roles",
+            "worker_math",
+            "--min-eval-concurrency",
+            "3",
+            "--apply",
+            "--confirm-clean-window",
+            "--output-dir",
+            str(tmp_path),
+        ]
+    )
+
+
+def test_verifier_mode_below_floor_reliability_not_decision_grade(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(window.activation_window, "build_preflight", lambda _a: _healthy_preflight())
+    monkeypatch.setattr(window, "_resolved_eval_concurrency", lambda _roles=None: 4)
+    monkeypatch.setattr(window, "_optimized_live_stack_status", lambda: {"ok": True, "warnings": []})
+    per_role = {
+        "n_questions": 10,
+        "n_scored": 10,
+        "reliability": 0.708,
+        "ece": None,
+        "auroc": None,
+        "confidence_is_real": False,
+        "confidence_source_counts": {"binary_correctness_proxy": 10},
+    }
+    monkeypatch.setattr(window, "EvalTower", lambda *a, **k: _MathResultTower(per_role))
+    report, rc = window.build_verifier_report(_math_apply_args(tmp_path), output_dir=tmp_path)
+
+    assert report["status"] == "complete"
+    assert report["decision_grade"] is False
+    assert any("reliability 0.708" in r for r in report["decision_grade_reasons"])
+    assert any("not decision-grade" in r for r in report["decision_grade_reasons"])
+
+
+def test_verifier_mode_clean_arm_is_decision_grade(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(window.activation_window, "build_preflight", lambda _a: _healthy_preflight())
+    monkeypatch.setattr(window, "_resolved_eval_concurrency", lambda _roles=None: 4)
+    monkeypatch.setattr(window, "_optimized_live_stack_status", lambda: {"ok": True, "warnings": []})
+    per_role = {
+        "n_questions": 10,
+        "n_scored": 10,
+        "reliability": 0.95,
+        "ece": 0.04,
+        "auroc": 0.82,
+        "confidence_is_real": True,
+        "confidence_source_counts": {"completion_probabilities_geomean": 10},
+    }
+    monkeypatch.setattr(window, "EvalTower", lambda *a, **k: _MathResultTower(per_role))
+    report, rc = window.build_verifier_report(_math_apply_args(tmp_path), output_dir=tmp_path)
+
+    assert report["status"] == "complete"
+    assert report["decision_grade"] is True
+    assert report["decision_grade_reasons"] == []
+
+
+# ── (5) EV-11c: per-question persistence on the window-runner path ─────────────
+
+
+def test_window_path_persists_per_arm_question_rows(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(eval_tower, "_eval_concurrency", lambda *a, **k: 1)
+
+    def fake_call(**kw):  # noqa: ANN001
+        if "err" in str(kw.get("prompt", "")):
+            return {"answer": "", "error": "boom", "tokens_generated": 0, "model": "fake"}
+        return {"answer": "2", "tokens_generated": 3, "model": "fake"}
+
+    monkeypatch.setattr(eval_tower, "call_orchestrator_forced", fake_call)
+    monkeypatch.setattr(eval_tower, "score_answer_deterministic", lambda **_k: True)
+
+    tower = EvalTower(url="http://127.0.0.1:1", timeout=2)
+    tower.set_question_artifact_dir(tmp_path)
+    qs = [
+        {"id": "q_ok", "suite": "math", "prompt": "ok?", "expected": "2", "scoring_method": "exact_match"},
+        {"id": "q_err", "suite": "math", "prompt": "err!", "expected": "2", "scoring_method": "exact_match"},
+    ]
+    with eval_tower.httpx.Client(timeout=2) as client:
+        results = tower._eval_batch(qs, client, label="ev11-worker_math")
+
+    assert len(results) == 2
+    path = tmp_path / "question_results.ev11-worker_math.jsonl"
+    assert path.exists()
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    qrows = [r for r in rows if r.get("row_type") == "question_result"]
+    assert len(qrows) == 2
+    err_rows = [r for r in qrows if r["result"].get("error")]
+    assert len(err_rows) == 1
+    assert err_rows[0]["result"].get("question_id") == "q_err"
+    assert any(r.get("row_type") == "batch_complete" for r in rows)
+
+
+# ── (6) EV-11c: --retry-errors-from merge + gating ────────────────────────────
+
+
+def _write_arm_file(directory: Path, label: str, *, scored, error_ids) -> Path:
+    """scored: list of (id, correct) with REAL geomean confidence; error_ids: list of id."""
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"question_results.{label}.jsonl"
+    lines = [{"row_type": "batch_start", "label": label, "complete": False}]
+    ordinal = 0
+    for qid, correct in scored:
+        ordinal += 1
+        lines.append(
+            {
+                "row_type": "question_result",
+                "label": label,
+                "ordinal": ordinal,
+                "result": {
+                    "qid": qid,
+                    "question_id": qid,
+                    "suite": "math",
+                    "correct": bool(correct),
+                    "scoring_method": "math_verify",
+                    "confidence": 0.85,
+                    "confidence_source": "completion_probabilities_geomean",
+                },
+            }
+        )
+    for qid in error_ids:
+        ordinal += 1
+        lines.append(
+            {
+                "row_type": "question_result",
+                "label": label,
+                "ordinal": ordinal,
+                "result": {
+                    "qid": qid,
+                    "question_id": qid,
+                    "suite": "math",
+                    "correct": False,
+                    "error": True,
+                    "error_detail": "boom",
+                },
+            }
+        )
+    lines.append({"row_type": "batch_complete", "label": label, "complete": True})
+    path.write_text("\n".join(json.dumps(x) for x in lines) + "\n", encoding="utf-8")
+    return path
+
+
+def test_merge_prior_and_retried_replaces_error_rows() -> None:
+    prior = [
+        {"question_id": "a", "qid": "a", "suite": "math", "correct": True,
+         "confidence": 0.9, "confidence_source": "completion_probabilities_geomean"},
+        {"question_id": "b", "qid": "b", "suite": "math", "correct": True,
+         "confidence": 0.8, "confidence_source": "completion_probabilities_geomean"},
+        {"question_id": "c", "qid": "c", "suite": "math", "correct": False, "error": True},
+    ]
+    retried = [
+        {"question_id": "c", "qid": "c", "suite": "math", "correct": False,
+         "confidence": 0.4, "confidence_source": "completion_probabilities_geomean"},
+    ]
+    merged = window.merge_prior_and_retried(prior, retried, role="worker_math")
+    assert merged["n_questions"] == 3
+    assert merged["n_scored"] == 3
+    assert merged["retried_n"] == 1
+    assert merged["retry_errors_remaining"] == 0
+    assert merged["confidence_is_real"] is True
+    assert merged["ece"] is not None
+    assert merged["reliability"] == 1.0
+    assert merged["merged"] is True
+
+
+def test_merge_retry_still_error_lowers_reliability() -> None:
+    prior = [
+        {"question_id": "a", "qid": "a", "suite": "math", "correct": True,
+         "confidence": 0.9, "confidence_source": "completion_probabilities_geomean"},
+        {"question_id": "b", "qid": "b", "suite": "math", "correct": False, "error": True},
+        {"question_id": "c", "qid": "c", "suite": "math", "correct": False, "error": True},
+    ]
+    retried = [
+        {"question_id": "b", "qid": "b", "suite": "math", "correct": True,
+         "confidence": 0.7, "confidence_source": "completion_probabilities_geomean"},
+        {"question_id": "c", "qid": "c", "suite": "math", "correct": False, "error": True},
+    ]
+    merged = window.merge_prior_and_retried(prior, retried, role="worker_math")
+    assert merged["n_questions"] == 3
+    assert merged["n_scored"] == 2
+    assert merged["retry_errors_remaining"] == 1
+    assert merged["reliability"] == pytest.approx(2 / 3)
+
+
+def test_retry_mode_plan_only_no_inference(tmp_path, monkeypatch) -> None:
+    prior_dir = tmp_path / "prior"
+    _write_arm_file(prior_dir, "ev11-worker_math", scored=[("a", True), ("b", True)], error_ids=["c"])
+    monkeypatch.setattr(window.activation_window, "build_preflight", lambda _a: _healthy_preflight())
+    monkeypatch.setattr(window, "EvalTower", _ExplodingTower)
+
+    args = window.parse_args(
+        [
+            "--retry-errors-from",
+            str(prior_dir),
+            "--roles",
+            "worker_math",
+            "--output-dir",
+            str(tmp_path / "out"),
+        ]
+    )
+    report, rc = window.build_retry_report(args, output_dir=tmp_path / "out")
+
+    assert rc == 0
+    assert report["mode"] == "retry_errors"
+    assert report["status"] == "plan_only"
+    assert report["retry_plan"]["worker_math"]["error_rows"] == 1
+    assert report["decision_grade"] is False
+
+
+def test_retry_mode_apply_merges_and_grades(tmp_path, monkeypatch) -> None:
+    prior_dir = tmp_path / "prior"
+    scored = [(f"s{i}", True) for i in range(8)]
+    _write_arm_file(prior_dir, "ev11-worker_math", scored=scored, error_ids=["c1", "c2"])
+    monkeypatch.setattr(window.activation_window, "build_preflight", lambda _a: _healthy_preflight())
+    monkeypatch.setattr(window, "_resolved_eval_concurrency", lambda _roles=None: 4)
+    monkeypatch.setattr(window, "_optimized_live_stack_status", lambda: {"ok": True, "warnings": []})
+
+    class _SubsetTower:
+        def __init__(self, *_a, **_k) -> None:
+            pass
+
+        def set_question_artifact_dir(self, _d) -> None:  # noqa: ANN001
+            pass
+
+        def eval_question_subset(self, *, suite, question_ids, roles, scoring, seed, production_sampling):  # noqa: ARG002, ANN001
+            role = roles[0]
+            rows = [
+                {
+                    "question_id": qid,
+                    "qid": qid,
+                    "suite": "math",
+                    "correct": True,
+                    "confidence": 0.9,
+                    "confidence_source": "completion_probabilities_geomean",
+                }
+                for qid in question_ids
+            ]
+            return {"per_role": {role: {"rows": rows}}}
+
+    monkeypatch.setattr(window, "EvalTower", _SubsetTower)
+    args = window.parse_args(
+        [
+            "--retry-errors-from",
+            str(prior_dir),
+            "--roles",
+            "worker_math",
+            "--min-eval-concurrency",
+            "3",
+            "--apply",
+            "--confirm-clean-window",
+            "--output-dir",
+            str(tmp_path / "out"),
+        ]
+    )
+    report, rc = window.build_retry_report(args, output_dir=tmp_path / "out")
+
+    assert rc == 0
+    assert report["status"] == "complete"
+    assert report["merged"] is True
+    assert report["retried_n"] == 2
+    assert report["retry_source_run"] == str(prior_dir)
+    arm = report["per_role"]["worker_math"]
+    assert arm["n_questions"] == 10
+    assert arm["n_scored"] == 10
+    assert arm["retry_errors_remaining"] == 0
+    assert arm["confidence_is_real"] is True
+    # All 10 merged rows correct + real confidence + reliability 1.0 ⇒ decision-grade.
+    assert report["decision_grade"] is True
+    # Merged summary is written to the retry output-dir.
+    json_path, md_path = window.write_retry_report(report, tmp_path / "out")
+    assert json_path.exists() and md_path.exists()
+
+
+def test_retry_mode_missing_source_dir_is_blocked(tmp_path) -> None:
+    args = window.parse_args(
+        [
+            "--retry-errors-from",
+            str(tmp_path / "does_not_exist"),
+            "--output-dir",
+            str(tmp_path / "out"),
+        ]
+    )
+    report, rc = window.build_retry_report(args, output_dir=tmp_path / "out")
+    assert report["decision_grade"] is False
+    assert any("source dir not found" in b for b in report["blockers"])

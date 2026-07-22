@@ -255,6 +255,22 @@ def test_dashboard_planner_status_distinguishes_history_from_active_stream() -> 
     assert "plannerStatus.textContent = _plannerTapStatusText(plannerLines);" in body
 
 
+def test_dashboard_surfaces_realized_numa_mode_provenance_badge() -> None:
+    """C1/M2: the topology panel must carry a provenance badge that renders the
+    realized-fleet-first NUMA mode, its source, and any lower-precedence
+    disagreement (so a lying env can never silently invert fleet health again)."""
+    html_path = (
+        Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    )
+    body = html_path.read_text()
+
+    assert 'id="topology-numa-badge"' in body
+    assert "function updateTopologyNumaBadge(topo)" in body
+    assert "updateTopologyNumaBadge(topo);" in body
+    assert "topo.stack_numa_mode_provenance" in body
+    assert "numa-mode-warn" in body
+
+
 def test_dashboard_topology_activity_stats_refresh_with_live_age_tick() -> None:
     """Topology activity text should not lag behind lock/tap freshness signals."""
     html_path = (

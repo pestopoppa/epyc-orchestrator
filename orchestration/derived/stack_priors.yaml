@@ -48,39 +48,39 @@ contract:
   - quality_overall
   - memory_cost
   fallback_policy: Consumers may use local fallback values only as explicit degraded mode when this generated contract is missing or invalid.
-compiled_at: '2026-07-20T13:51:11Z'
+compiled_at: '2026-07-22T10:25:11Z'
 status: compiled
 coverage_scope: descriptor_role_bindings
 precedence_spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
 source_artifacts:
   registry:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
-    sha256: 4020793ca9b485017e562003fdea2ecf8a424793ceef7c148796f584a00e91d0
-    repo_commit: 987762a1
+    sha256: 4ccb929a70c7a175c79c5962e21b49cc45e909e958188f0a5b0814ce2a10ae41
+    repo_commit: d8b7e0bd
   descriptors:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_descriptors.yaml
-    sha256: 967b689bb5dba0478e748c0ee85ddb8b7ffb6afaba6b78ecc37c030d8f4b80ec
-    repo_commit: 987762a1
+    sha256: c2eb898fc668c349fa3fd783a51663d5bdd2ae487ccf065cdeb9fa24260103db
+    repo_commit: d8b7e0bd
   stack_manifest:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_manifest.py
     sha256: 29fde0c2b3161d5b56fe8cb6fd2fe4ebd0bfbdd609fe239b6e0045f6c70b744b
-    repo_commit: 987762a1
+    repo_commit: d8b7e0bd
   stack_numa:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_numa.py
-    sha256: 001897f21e9a10943c6f6b5714e10877d3a5f3f3c485b9380d456b4821373794
-    repo_commit: 987762a1
+    sha256: cdf4c30458c6982ebab593ff1652e1f443e40d5a2652d1f00f020fea4515381b
+    repo_commit: d8b7e0bd
   orchestrator_stack:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/orchestrator_stack.py
-    sha256: cf15cd0597ae82303ec5257e3ca4667402800965cda9c5edee2e8a886f15bb85
-    repo_commit: 987762a1
+    sha256: 82fa0f2349d78508946633ea151f5bd03948c3926936732615769ff5c432e4fa
+    repo_commit: d8b7e0bd
   stack_paths:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_paths.py
     sha256: 7eee8576101dbb827ec8e94a228beedb401d7cad80841e1a18aab9c03db4206b
-    repo_commit: 987762a1
+    repo_commit: d8b7e0bd
   stack_runtime:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_runtime.py
     sha256: 984d27262e1f1d5a5332d0b4a3e6fb96fb8095fc890ddaa93da07bff52eb1c99
-    repo_commit: 987762a1
+    repo_commit: d8b7e0bd
 roles:
   architect_general:
     role: architect_general
@@ -244,16 +244,19 @@ roles:
     display_name: Qwen3.6-35B-A3B-MTP-Q8_0
     serving:
       endpoint: http://localhost:8080
-      server_role: coder_escalation
-      binding: server_mode.direct
+      server_role: frontdoor
+      binding: server_mode.shared_with
       ports:
       - 8080
-      slots: 1
+      - 8180
+      - 8280
+      - 8380
+      slots: 2
       tier: hot
       effective_context_tokens: 32768
       binary: llama.cpp
       binary_dir: null
-      numa_policy: server_default
+      numa_policy: 4x48t_quarter_instances
       shared_mmap: true
       launch:
         entries:
@@ -268,6 +271,7 @@ roles:
         - default
         requirements:
           model_path: /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf
+          draft_model_path: /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf
         runtime:
           binary_family: llama.cpp
           binary_path: /mnt/raid0/llm/llama.cpp/build/bin/llama-server
@@ -309,7 +313,7 @@ roles:
       quality_overall: 0.93
       memory_cost: 1.0
     acceleration:
-      spec_type: none
+      spec_type: draft-mtp
       draft_compat: []
       enable_thinking: false
       thinking_control:
@@ -318,6 +322,7 @@ roles:
       kv:
         k: q8_0
         v: q8_0
+      draft_max: 4
       lookup: false
       corpus_retrieval: true
     model:
@@ -337,27 +342,18 @@ roles:
         memory_cost: server_mode.tier
         spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
       descriptor_server_roles:
-      - coder_escalation
       - frontdoor
       alias_overrides: []
       quality:
       - date: '2026-05-04'
         protocol: registry benchmark_score
-        value: 170/183 (93%)
+        value: 170/183 (92.9%)
       - date: '2026-05-04'
         protocol: registry benchmark_score
         value: 170/183 (92.9%)
       - date: '2026-05-04'
-        protocol: registry performance block
-        value:
-          baseline_tps: 24.3
-          optimized_tps: 24.3
-          quality_pct: 93
-          general_suite: 30/30 (100%)
-          coder_suite: 29/30 (97%)
-          thinking_suite: 28/30 (93%)
-          long_context: 27/27 (100%) — beats prior worker_summarize on every dimension
-          speedup: shares_frontdoor_gguf
+        protocol: registry benchmark_score
+        value: 170/183 (92.9%)
       speed:
       - date: '2026-05-04'
         protocol: server_mode throughput
@@ -383,7 +379,7 @@ roles:
       effective_context_tokens: 32768
       binary: llama.cpp
       binary_dir: null
-      numa_policy: server_default
+      numa_policy: 4x48t_quarter_instances
       shared_mmap: true
       launch:
         entries:
@@ -455,7 +451,7 @@ roles:
       quality_overall: 0.93
       memory_cost: 1.0
     acceleration:
-      spec_type: none
+      spec_type: draft-mtp
       draft_compat: []
       enable_thinking: false
       thinking_control:
@@ -464,6 +460,7 @@ roles:
       kv:
         k: q8_0
         v: q8_0
+      draft_max: 4
       lookup: false
       corpus_retrieval: true
     model:
@@ -483,27 +480,18 @@ roles:
         memory_cost: server_mode.tier
         spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
       descriptor_server_roles:
-      - coder_escalation
       - frontdoor
       alias_overrides: []
       quality:
       - date: '2026-05-04'
         protocol: registry benchmark_score
-        value: 170/183 (93%)
+        value: 170/183 (92.9%)
       - date: '2026-05-04'
         protocol: registry benchmark_score
         value: 170/183 (92.9%)
       - date: '2026-05-04'
-        protocol: registry performance block
-        value:
-          baseline_tps: 24.3
-          optimized_tps: 24.3
-          quality_pct: 93
-          general_suite: 30/30 (100%)
-          coder_suite: 29/30 (97%)
-          thinking_suite: 28/30 (93%)
-          long_context: 27/27 (100%) — beats prior worker_summarize on every dimension
-          speedup: shares_frontdoor_gguf
+        protocol: registry benchmark_score
+        value: 170/183 (92.9%)
       speed:
       - date: '2026-05-04'
         protocol: server_mode throughput
@@ -836,6 +824,9 @@ roles:
       binding: server_mode.shared_with
       ports:
       - 8082
+      - 8182
+      - 8282
+      - 8382
       slots: 1
       tier: hot
       effective_context_tokens: 16384
@@ -1322,6 +1313,9 @@ roles:
       binding: server_mode.shared_with
       ports:
       - 8082
+      - 8182
+      - 8282
+      - 8382
       slots: 1
       tier: hot
       effective_context_tokens: 16384
@@ -1482,15 +1476,18 @@ roles:
     serving:
       endpoint: http://localhost:8080
       server_role: frontdoor
-      binding: stack_manifest.alias->server_mode.direct
+      binding: server_mode.shared_with
       ports:
       - 8080
+      - 8180
+      - 8280
+      - 8380
       slots: 2
       tier: hot
       effective_context_tokens: 32768
       binary: llama.cpp
       binary_dir: null
-      numa_policy: server_default
+      numa_policy: 4x48t_quarter_instances
       shared_mmap: true
       launch:
         entries:
@@ -1547,7 +1544,7 @@ roles:
       quality_overall: 0.93
       memory_cost: 1.0
     acceleration:
-      spec_type: none
+      spec_type: draft-mtp
       draft_compat: []
       enable_thinking: false
       thinking_control:
@@ -1556,6 +1553,7 @@ roles:
       kv:
         k: q8_0
         v: q8_0
+      draft_max: 4
       lookup: false
       corpus_retrieval: true
     model:
@@ -1575,27 +1573,18 @@ roles:
         memory_cost: server_mode.tier
         spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
       descriptor_server_roles:
-      - coder_escalation
       - frontdoor
       alias_overrides: []
       quality:
       - date: '2026-05-04'
         protocol: registry benchmark_score
-        value: 170/183 (93%)
+        value: 170/183 (92.9%)
       - date: '2026-05-04'
         protocol: registry benchmark_score
         value: 170/183 (92.9%)
       - date: '2026-05-04'
-        protocol: registry performance block
-        value:
-          baseline_tps: 24.3
-          optimized_tps: 24.3
-          quality_pct: 93
-          general_suite: 30/30 (100%)
-          coder_suite: 29/30 (97%)
-          thinking_suite: 28/30 (93%)
-          long_context: 27/27 (100%) — beats prior worker_summarize on every dimension
-          speedup: shares_frontdoor_gguf
+        protocol: registry benchmark_score
+        value: 170/183 (92.9%)
       speed:
       - date: '2026-05-04'
         protocol: server_mode throughput

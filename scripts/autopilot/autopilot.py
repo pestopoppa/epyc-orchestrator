@@ -153,6 +153,12 @@ from src.autopilot_core.baseline_ledger import (
     format_baseline_ledger_summary,
     reconcile_baseline_ledger,
 )
+from src.autopilot_core.instrument_era_guard import (
+    E7_EVAL_INSTRUMENT_BOUNDARY,
+    E7_EVAL_INSTRUMENT_ERA_ID,
+    EVAL_QUALITY_SCOPE,
+    active_eval_quality_era,
+)
 
 # Preflight diagnostics from seeding infra
 sys.path.insert(0, str(SCRIPT_DIR.parent / "benchmark"))
@@ -2141,7 +2147,12 @@ def _maybe_defer_seq_unreachable_candidate_action(
     if not _is_seq_promotion_dependent_action(action):
         return action, rationale, None
 
-    candidate_inputs = _seq_inputs_for_trial(journal=journal, action=action, tier=tier)
+    candidate_inputs = _seq_inputs_for_trial(
+        journal=journal,
+        action=action,
+        tier=tier,
+        quality_exclude_before_ts=_quality_exclude_before_ts_from_state(state),
+    )
     alpha_wealth = candidate_inputs.get("alpha_wealth") or {}
     alpha_dispatch_allowed = alpha_wealth.get(
         "new_fingerprint_dispatch_allowed",
@@ -2833,8 +2844,18 @@ def _seq_inputs_for_trial(
     action: dict[str, Any],
     tier: int,
     candidate_override: str | None = None,
+    quality_exclude_before_ts: float | None = None,
 ) -> dict[str, Any]:
-    """Build default-off W4 shadow inputs from trusted prior journal evidence."""
+    """Build default-off W4 shadow inputs from trusted prior journal evidence.
+
+    ``quality_exclude_before_ts`` is the active eval-quality instrument-era boundary epoch
+    (the analogue of the speed axis's ``pareto_exclude_before_ts``). When set, journal rows
+    whose ``timestamp`` predates the boundary are dropped from EVERY fold here — the null
+    (baseline) profile, prior quality/rate observations, and the seq/alpha-wealth candidate
+    sets — so pre-boundary PRIORS never pool with post-boundary evidence in the anytime-valid
+    e-process wealth. When ``None`` (default) the fence is inert and all rows fold, so the
+    unit contract is unchanged.
+    """
     candidate = candidate_override or _config_fingerprint(action)
     prior_quality_obs: list[tuple[int | None, float]] = []
     prior_rate_obs: list[tuple[int | None, float]] = []
@@ -2848,6 +2869,14 @@ def _seq_inputs_for_trial(
             continue
         if getattr(entry, "outcome_status", "ok") in {"invalid", "skipped"}:
             continue
+        # Defect #1/#2: eval-instrument era fence. A pre-boundary row is a PRIOR — exclude it
+        # from the null profile, prior obs, and seq/alpha candidate sets so the e-process
+        # wealth never mixes the pre-/post-boundary instrument. An unparseable timestamp is
+        # treated as pre-boundary (fail-closed): it cannot be proven to belong to this era.
+        if quality_exclude_before_ts is not None:
+            entry_ts = _parse_journal_timestamp(getattr(entry, "timestamp", ""))
+            if entry_ts is None or entry_ts < quality_exclude_before_ts:
+                continue
         try:
             if int(getattr(entry, "tier", -1)) != int(tier):
                 continue
@@ -5904,6 +5933,118 @@ def _numeric_swarm_epoch_label_from_state(state: dict[str, Any]) -> str | None:
     return None
 
 
+# Quality-axis instrument-era fence (defect #1/#3/#4). The QUALITY analogue of the speed
+# axis's active_instrument_eras.autopilot_speed + pareto_epoch_ts / pareto_exclude_before_ts.
+EVAL_QUALITY_ERA_STATE_KEY = EVAL_QUALITY_SCOPE  # "eval_quality" key under active_instrument_eras
+QUALITY_EPOCH_TS_KEY = "quality_epoch_ts"
+QUALITY_EXCLUDE_BEFORE_TS_KEY = "quality_exclude_before_ts"
+
+
+def _active_eval_quality_era_from_state(state: dict[str, Any]) -> str | None:
+    eras = state.get("active_instrument_eras")
+    if isinstance(eras, dict):
+        value = eras.get(EVAL_QUALITY_ERA_STATE_KEY)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _quality_epoch_params_from_state(state: dict[str, Any]) -> tuple[str | None, float | None]:
+    """Return (active eval_quality era id, quality_exclude_before_ts) — strict/fail-closed.
+
+    Mirrors :func:`_archive_epoch_params_from_state` on the QUALITY axis. When state declares
+    an active ``eval_quality`` era but the exclude timestamp is missing/invalid, RAISE — the
+    fence must not silently degrade to unfenced (the exact speed-axis ``strict_epoch``
+    contract). When no era is declared, returns ``(None, None)`` and the quality axis runs
+    unfenced (single-era world / tests), so every pre-existing path is unaffected.
+    """
+    era = _active_eval_quality_era_from_state(state)
+    if era is None:
+        return None, None
+    try:
+        exclude_before_ts = float(state.get(QUALITY_EXCLUDE_BEFORE_TS_KEY) or 0.0) or None
+    except (TypeError, ValueError) as exc:
+        raise ValueError("invalid quality_exclude_before_ts for active eval_quality era") from exc
+    if exclude_before_ts is None:
+        raise ValueError("active eval_quality era requires quality_exclude_before_ts")
+    return era, exclude_before_ts
+
+
+def _quality_exclude_before_ts_from_state(state: dict[str, Any]) -> float | None:
+    """Active eval-quality boundary epoch for evidence fences (None => unfenced)."""
+    return _quality_epoch_params_from_state(state)[1]
+
+
+def _migrate_eval_quality_era(state: dict[str, Any]) -> bool:
+    """Startup migration guard: seed the eval_quality instrument-era fence when absent.
+
+    Idempotent — only acts when ``active_instrument_eras.eval_quality`` is missing. Resolves
+    the active eval_quality era from the human-owned registry via
+    ``instrument_era_guard.active_eval_quality_era``; on a registry read failure it falls
+    forward to the ``E7-eval-instrument`` code constant (still fences) but ONLY once the clock
+    is at/after that boundary. Returns True when it mutated state. A no-op (False) before any
+    boundary opens, so the pre-boundary single-era world stays unfenced.
+
+    This is the code-path state migration the operator constraint requires: the era registry
+    itself (human-amendment-only) is never written here — only autopilot_state.json's derived
+    fence keys are seeded, on next startup, behind this guard.
+    """
+    if _active_eval_quality_era_from_state(state) is not None:
+        return False  # already migrated / operator-set
+
+    guard = active_eval_quality_era()
+    boundary_epoch: float | None = None
+    era_id = ""
+    source = ""
+    if guard.get("ok"):
+        era_id = str(guard.get("era_id") or "").strip() or E7_EVAL_INSTRUMENT_ERA_ID
+        boundary_epoch = guard.get("boundary_epoch")
+        source = f"registry:{guard.get('path')}"
+    elif guard.get("status") == "no_active_era":
+        # Registry read fine; no eval_quality era active yet (clock before the boundary).
+        # Correct to leave the quality axis unfenced.
+        return False
+    else:
+        # Registry unreadable/malformed — fail-safe FORWARD to the code constant, but never
+        # over-fence a clock that predates the constant boundary.
+        boundary_epoch = _parse_journal_timestamp(E7_EVAL_INSTRUMENT_BOUNDARY)
+        if boundary_epoch is None or time.time() < boundary_epoch:
+            log.warning(
+                "eval_quality era migration deferred — registry unresolved (%s) and clock "
+                "is before the %s code-constant boundary; quality axis remains unfenced.",
+                guard.get("status"),
+                E7_EVAL_INSTRUMENT_ERA_ID,
+            )
+            return False
+        era_id = E7_EVAL_INSTRUMENT_ERA_ID
+        source = f"code-constant fallback (registry {guard.get('status')})"
+
+    if boundary_epoch is None:
+        boundary_epoch = _parse_journal_timestamp(E7_EVAL_INSTRUMENT_BOUNDARY)
+    if boundary_epoch is None:
+        log.error(
+            "eval_quality era migration aborted — could not resolve a boundary epoch; "
+            "quality axis remains unfenced."
+        )
+        return False
+
+    eras = state.get("active_instrument_eras")
+    eras = dict(eras) if isinstance(eras, dict) else {}
+    eras[EVAL_QUALITY_ERA_STATE_KEY] = era_id
+    state["active_instrument_eras"] = eras
+    state[QUALITY_EPOCH_TS_KEY] = boundary_epoch
+    state[QUALITY_EXCLUDE_BEFORE_TS_KEY] = boundary_epoch
+    log.warning(
+        "MIGRATION: seeded eval_quality instrument-era fence — era=%s boundary_epoch=%.1f "
+        "(exclude/epoch) source=%s. Pre-boundary quality journal rows and pre-boundary "
+        "baseline are now PRIORS; the next quality promote/revert is era-fenced.",
+        era_id,
+        boundary_epoch,
+        source,
+    )
+    return True
+
+
 def _apply_journal_archive_authority(
     state: dict[str, Any],
     journal: ExperimentJournal,
@@ -6306,6 +6447,15 @@ def _run_loop_inner(
 ) -> None:
     """Inner loop (separated to ensure TUI cleanup via run_loop's finally)."""
     state = load_state()
+    # Defect #1/#3/#4: seed the eval_quality instrument-era fence on first startup after the
+    # boundary opened (code-path migration, never a hand-edit of the human-owned registry).
+    # Persist immediately so a crash before the first save cannot lose the fence.
+    if _migrate_eval_quality_era(state):
+        save_state(state)
+    # Fail-closed startup check (mirrors the speed axis): raise NOW if the quality fence is
+    # half-declared (era present, exclude timestamp missing/invalid) rather than silently
+    # running unfenced mid-loop.
+    eval_quality_era, quality_exclude_before_ts = _quality_epoch_params_from_state(state)
     journal = ExperimentJournal()
     _deinfl_ts, _deinfl_factor, _exclude_ts = _archive_epoch_params_from_state(state)
     archive_payload = _journal_archive_payload_for_authority(
@@ -6336,7 +6486,10 @@ def _run_loop_inner(
         consecutive_failures=state.get("consecutive_failures", 0),
         quality_history=state.get("quality_history", []),
         quality_history_by_tier=state.get("quality_history_by_tier", {}),
+        quality_history_provenance_by_tier=state.get("quality_history_provenance_by_tier"),
         baseline_state=_baseline_state_for_startup_gate(state, journal),
+        eval_quality_era=eval_quality_era,
+        quality_exclude_before_ts=quality_exclude_before_ts,
     )
     tower = EvalTower(
         url=ORCHESTRATOR_URL,
@@ -6913,7 +7066,8 @@ def _run_loop_inner(
 
             try:
                 planner_evidence_text = format_planner_evidence_section(
-                    asdict(entry) for entry in journal.entries_with_supersessions()
+                    (asdict(entry) for entry in journal.entries_with_supersessions()),
+                    exclude_before_ts=quality_exclude_before_ts,
                 )
             except Exception as _exc:
                 planner_evidence_text = f"(planner evidence unavailable: {_exc})"
@@ -7803,6 +7957,7 @@ def _run_loop_inner(
                 candidate_override=(
                     str(seq_fresh_eval_context.get("candidate")) if seq_fresh_eval_context else None
                 ),
+                quality_exclude_before_ts=quality_exclude_before_ts,
             )
             try:
                 verdict = gate.check(
@@ -8492,6 +8647,9 @@ def _run_loop_inner(
         state["consecutive_failures"] = gate.consecutive_failures
         state["quality_history"] = gate.quality_history
         state["quality_history_by_tier"] = gate.quality_history_by_tier
+        # Defect #4: persist the provenance-bearing window (era/ts/core_id per sample) as the
+        # authoritative shape; the float mirrors above stay for any external float reader.
+        state["quality_history_provenance_by_tier"] = gate.quality_history_provenance_by_tier
         baseline_state = gate.baseline.to_state_dict()
         state["baseline_state"] = baseline_state
         try:

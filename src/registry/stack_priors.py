@@ -10,16 +10,20 @@ from __future__ import annotations
 import argparse
 import copy
 import hashlib
+import logging
+import os
 import re
 import subprocess
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
 import yaml
+
+_LOGGER = logging.getLogger(__name__)
 
 
 REPO_ROOT = Path("/mnt/raid0/llm/epyc-orchestrator")
@@ -754,7 +758,69 @@ def _launch_record(
     }
 
 
-def _stack_manifest_info() -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
+class StackPriorsModeError(RuntimeError):
+    """A priors compile could not resolve a realized NUMA mode and refuses to
+    silently default to ``full`` (ESC-8 Fix 6 / kill chain A4).
+
+    Raised only on the WRITE/check compile path (``require_realized_mode``); a
+    plain ``compile_stack_priors()`` keeps the legacy launcher-default behavior.
+    """
+
+
+def _realized_compile_numa_mode(
+    *,
+    environ: Mapping[str, str] | None = None,
+    connect: Callable[[str, int], bool] | None = None,
+) -> str:
+    """Resolve the NUMA mode for a WRITE-path priors compile against the live fleet.
+
+    ESC-8 Fix 6. A clean-shell ``stack_change_pipeline.py update`` must never
+    read the ambient default-``full`` env and rewrite stack_priors.yaml to the
+    dead full lineup (kill chain A4). The mode is derived from the *realized*
+    fleet (a bare TCP probe of the quarterable-role ports, via
+    ``realized_fleet``; ``connect`` is injectable so tests never touch sockets):
+
+      * env unset  -> use the realized mode.
+      * env set, agrees with realized (or realized is ``both``) -> use env.
+      * env set, contradicts realized -> prefer realized, log the correction.
+      * no realized signal (nothing listening / probe unavailable) -> REFUSE
+        (raise ``StackPriorsModeError``) with an explicit-mode instruction —
+        never silently default to ``full``.
+    """
+    from scripts.server.stack_numa_mode import normalize_stack_numa_mode
+
+    env = os.environ if environ is None else environ
+    raw = env.get("ORCHESTRATOR_STACK_NUMA_MODE")
+    env_mode = normalize_stack_numa_mode(raw) if raw else None
+
+    from scripts.server.realized_fleet import derive_realized_numa_mode
+
+    realized = derive_realized_numa_mode(connect=connect)
+
+    if realized is None:
+        raise StackPriorsModeError(
+            "refusing to compile stack priors: no quarterable-role port is "
+            "listening, so the realized NUMA mode cannot be determined (stack "
+            "down or probe unavailable). Not defaulting to 'full' — ESC-8 kill "
+            "chain A4 would rewrite stack_priors.yaml to the dead full lineup. "
+            "Re-run with an explicit ORCHESTRATOR_STACK_NUMA_MODE once the "
+            "intended fleet is up (e.g. ORCHESTRATOR_STACK_NUMA_MODE=quarter)."
+        )
+
+    if env_mode is None or realized == "both" or env_mode == realized:
+        return env_mode or realized
+    _LOGGER.warning(
+        "ORCHESTRATOR_STACK_NUMA_MODE=%s contradicts the realized fleet mode %r; "
+        "preferring the realized mode for the stack-priors compile (ESC-8 Fix 6).",
+        env_mode,
+        realized,
+    )
+    return realized
+
+
+def _stack_manifest_info(
+    numa_mode: str | None = None,
+) -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
     try:
         from scripts.server.stack_manifest import (
             EXPLORE_DRAFT_MODEL,
@@ -774,9 +840,16 @@ def _stack_manifest_info() -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
     except Exception:
         return {}, {}
 
-    from scripts.server.stack_numa_mode import env_stack_numa_mode
+    # ESC-8 Fix 6: an explicit ``numa_mode`` (resolved against the realized fleet
+    # by the WRITE/check compile path) wins; when None, preserve the legacy
+    # launcher-default behavior (env, default full) so direct callers and the
+    # existing reader-agreement tests are unaffected.
+    from scripts.server.stack_numa_mode import env_stack_numa_mode, normalize_stack_numa_mode
 
-    numa_mode = env_stack_numa_mode()
+    if numa_mode is None:
+        numa_mode = env_stack_numa_mode()
+    else:
+        numa_mode = normalize_stack_numa_mode(numa_mode)
     active_servers = _filter_by_numa_mode(HOT_SERVERS + WARM_SERVERS, numa_mode)
 
     launch_ports_by_role: dict[str, list[int]] = {}
@@ -833,9 +906,26 @@ def _stack_manifest_info() -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
         }
         shared = meta.get("shared_with_first_n") if isinstance(meta, dict) else None
         if isinstance(shared, list):
+            # WP-13 fleet convergence: an alias role (shared_with_first_n) is not a
+            # process of its own — it rides the primary/host's llama-server(s). It
+            # must therefore inherit the host's FULL serving fleet, not just the
+            # subset of instances it was tagged onto (shared_with_first_n_count).
+            # Emitting only the tagged ports made the generated serving.ports a
+            # single quarter (e.g. worker_math -> [8072, 8082]), diverging from the
+            # operative-layer Fix-A default (_server_url_default(host)) which serves
+            # the full `full:` quarter fleet and applies the host's region locks +
+            # demotion. That divergence serialized worker_math eval traffic on one
+            # quarter (EV-11c arm-2). Inherit roles[primary]["ports"] so a future
+            # regeneration is byte-identical to the delegated operative URL; fall
+            # back to the alias's own launch ports only when the host has no
+            # resolved port fleet.
+            host_ports = roles[str(primary)].get("ports")
             for alias in shared:
                 if isinstance(alias, str):
-                    alias_ports = sorted(set(launch_ports_by_role.get(alias, [])))
+                    if isinstance(host_ports, list) and host_ports:
+                        alias_ports = list(host_ports)
+                    else:
+                        alias_ports = sorted(set(launch_ports_by_role.get(alias, [])))
                     alias_port = alias_ports[0] if alias_ports else port
                     aliases[alias] = str(primary)
                     roles[alias] = {
@@ -1723,6 +1813,9 @@ def compile_stack_priors(
     descriptor_path: Path = DEFAULT_DESCRIPTORS,
     active_roles: set[str] | None = None,
     allow_incomplete: bool = False,
+    numa_mode: str | None = None,
+    require_realized_mode: bool = False,
+    connect: Callable[[str, int], bool] | None = None,
 ) -> dict[str, Any]:
     registry = _load_yaml(registry_path)
     descriptors = _load_yaml(descriptor_path)
@@ -1734,7 +1827,12 @@ def compile_stack_priors(
 
     descriptor_by_role = _descriptor_by_role(descriptors)
     requested_roles = active_roles or _default_roles_from_descriptors(descriptors)
-    stack_aliases, stack_roles = _stack_manifest_info()
+    # ESC-8 Fix 6: the WRITE/check compile path resolves the NUMA mode from the
+    # realized fleet (or refuses) instead of reading the ambient default-full
+    # env. Off by default so a plain compile keeps the legacy behavior.
+    if numa_mode is None and require_realized_mode:
+        numa_mode = _realized_compile_numa_mode(connect=connect)
+    stack_aliases, stack_roles = _stack_manifest_info(numa_mode=numa_mode)
     role_records: dict[str, Any] = {}
     gaps_by_role: dict[str, list[str]] = {}
 
@@ -1790,12 +1888,18 @@ def write_stack_priors(
     descriptor_path: Path = DEFAULT_DESCRIPTORS,
     active_roles: set[str] | None = None,
     allow_incomplete: bool = False,
+    numa_mode: str | None = None,
+    require_realized_mode: bool = False,
+    connect: Callable[[str, int], bool] | None = None,
 ) -> dict[str, Any]:
     priors = compile_stack_priors(
         registry_path=registry_path,
         descriptor_path=descriptor_path,
         active_roles=active_roles,
         allow_incomplete=allow_incomplete,
+        numa_mode=numa_mode,
+        require_realized_mode=require_realized_mode,
+        connect=connect,
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8") as fh:

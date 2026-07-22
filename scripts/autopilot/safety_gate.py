@@ -10,8 +10,9 @@ import math
 import os
 import re
 import statistics
-from collections import deque
+from collections import deque, namedtuple
 from dataclasses import asdict, dataclass, field, replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -261,6 +262,52 @@ MAD_HISTORY_DEPTH = 10
 MAD_MIN_SAMPLES = 3  # Below this, skip MAD check (insufficient data → accept)
 MAD_Z_THRESHOLD = 2.0  # Improvement counts as real only if > this many MADs from history median
 MAD_CONSISTENCY = 1.4826  # Scaling so MAD ≈ σ under normal distribution
+
+# Quality-history provenance (defect #4 fix). Rolling MAD-window samples are no longer bare
+# floats: each carries the era + timestamp + core_id it was measured under so the MAD median
+# cannot silently mix an eval-instrument boundary (E7: 79k/41-suite pool + B7 scorer). Legacy
+# bare floats decode to era="" and are treated as pre-boundary priors — dropped from a
+# post-boundary MAD window when an active eval_quality era is set. When no active era is set
+# (the default / all pre-existing tests) the era field is inert and every sample participates,
+# so the MAD math is byte-identical to the pre-provenance gate.
+_QualityObs = namedtuple("_QualityObs", ["q", "ts", "era", "core_id"])
+
+
+def _now_iso() -> str:
+    """Current UTC timestamp as ISO8601 with a trailing Z (matches journal timestamps)."""
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _coerce_quality_obs(entry: Any, *, default_era: str = "") -> "_QualityObs | None":
+    """Normalize a persisted quality-history entry to a ``_QualityObs``.
+
+    Accepts a bare float (legacy state → era from ``default_era``, no timestamp) or a
+    provenance mapping ``{"q"/"quality", "ts"/"timestamp", "era", "core_id"}``. Returns
+    None for junk (non-finite / unparseable) so a corrupt row can never poison the window.
+    """
+    if isinstance(entry, _QualityObs):
+        return entry
+    if isinstance(entry, dict):
+        raw_q = entry.get("q", entry.get("quality"))
+        try:
+            q = float(raw_q)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(q):
+            return None
+        return _QualityObs(
+            q=q,
+            ts=str(entry.get("ts") or entry.get("timestamp") or ""),
+            era=str(entry.get("era") or "") or default_era,
+            core_id=str(entry.get("core_id") or ""),
+        )
+    try:
+        q = float(entry)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(q):
+        return None
+    return _QualityObs(q=q, ts="", era=default_era, core_id="")
 # A production-best baseline must never claim a quality the system has never actually
 # achieved. Every trustworthy trial that clears the safety gate is recorded on the Pareto
 # frontier, so a promotion whose quality exceeds the frontier max is a phantom/contaminated
@@ -682,6 +729,11 @@ class Baseline:
     # gate then falls back to the result's resolution (or the fixed -0.1 floor).
     per_suite_counts_by_tier: dict[int, dict[str, int]] = field(default_factory=dict)
     frontdoor_speed: float = 10.0
+    # Eval-instrument era this baseline was captured under (defect #1/#4 fix). Empty on a
+    # legacy baseline (pre-provenance state) — which the gate treats as a PRE-E7 stamp, so a
+    # legacy baseline vs the active E7 era trips the re-baseline hold. Set whenever a
+    # promotion lands under a known active era, and by an operator reseed.
+    eval_quality_era: str = ""
     # Path this baseline was loaded from. save() writes back here by default so a
     # gate constructed with a custom baseline_path (e.g. a tmp file in tests) can
     # NEVER clobber the production orchestration/autopilot_baseline.yaml. Excluded
@@ -919,6 +971,9 @@ class Baseline:
         self.per_suite_counts_by_tier.update(
             _normalize_counts_by_tier(state.get("per_suite_counts_by_tier", {}), state_path)
         )
+        era = state.get("eval_quality_era")
+        if isinstance(era, str) and era.strip():
+            self.eval_quality_era = era.strip()
 
     def quality_for_tier(self, tier: int, *, strict: bool = False) -> float | None:
         """Return same-tier quality baseline; lenient mode falls back to legacy `quality`."""
@@ -964,7 +1019,7 @@ class Baseline:
 
     def to_state_dict(self) -> dict[str, Any]:
         """State payload for in-memory baseline promotions; YAML remains the seed config."""
-        return {
+        payload: dict[str, Any] = {
             "quality": self.quality,
             "speed": self.speed,
             "cost": self.cost,
@@ -981,6 +1036,11 @@ class Baseline:
             },
             "frontdoor_speed": self.frontdoor_speed,
         }
+        # Only emit the era stamp when known — keeps a legacy (unstamped) baseline's state
+        # payload byte-identical, and lets a missing key decode back to the pre-E7 default.
+        if self.eval_quality_era:
+            payload["eval_quality_era"] = self.eval_quality_era
+        return payload
 
 
 @dataclass(frozen=True)
@@ -1018,6 +1078,10 @@ class SafetyGate:
         quality_history_by_tier: dict[str | int, list[float]] | None = None,
         baseline_state: dict[str, Any] | None = None,
         use_sequential: bool | None = None,
+        *,
+        quality_history_provenance_by_tier: dict[str | int, list[Any]] | None = None,
+        eval_quality_era: str | None = None,
+        quality_exclude_before_ts: float | None = None,
     ):
         self.baseline = Baseline.load(baseline_path, state=baseline_state)
         # LEDGER-W4 (01c §3): default-off anytime-valid sequential verdict path.
@@ -1029,12 +1093,26 @@ class SafetyGate:
         self.use_sequential = (
             _env_truthy("AUTOPILOT_SEQ_VERDICT") if use_sequential is None else bool(use_sequential)
         )
+        # Active eval-instrument era fence (defect #1/#4). None => the quality axis runs
+        # unfenced (single-era world / pre-existing tests) and every new-behavior branch below
+        # is inert, so the gate is byte-identical to the pre-fence version. When set (from
+        # active_instrument_eras.eval_quality in state), a legacy/pre-E7 baseline vs this era
+        # trips the re-baseline hold, and the MAD window filters to same-era samples only.
+        self._eval_quality_era = (eval_quality_era or "").strip() or None
+        self._quality_exclude_before_ts = quality_exclude_before_ts
+        self._rebaseline_hold_logged = False
         self._consecutive_failures = consecutive_failures
-        self._quality_history_by_tier: dict[int, deque[float]] = {}
+        self._quality_history_by_tier: dict[int, deque[_QualityObs]] = {}
+        # Precedence: provenance (rich, authoritative) > by_tier floats > flat floats. Legacy
+        # bare floats decode with era="" (pre-boundary priors); a missing provenance key means
+        # old state, which is exactly the pre-E7 case.
+        if quality_history_provenance_by_tier:
+            for tier, history in quality_history_provenance_by_tier.items():
+                self._quality_history_by_tier[int(tier)] = self._obs_deque(history or [])
         if quality_history_by_tier:
             for tier, history in quality_history_by_tier.items():
-                self._quality_history_by_tier[int(tier)] = deque(
-                    history or [], maxlen=MAD_HISTORY_DEPTH
+                self._quality_history_by_tier.setdefault(
+                    int(tier), self._obs_deque(history or [])
                 )
         if quality_history:
             # Legacy flat state had no tier label. Seed all current tiers so resumes and
@@ -1042,13 +1120,52 @@ class SafetyGate:
             # same-tier samples replace the migrated window.
             for tier in (0, DEFAULT_FRONTIER_TIER, 2):
                 self._quality_history_by_tier.setdefault(
-                    tier, deque(quality_history, maxlen=MAD_HISTORY_DEPTH)
+                    tier, self._obs_deque(quality_history)
                 )
         self._last_history_tier = DEFAULT_FRONTIER_TIER
+
+    @staticmethod
+    def _obs_deque(entries: list[Any]) -> deque:
+        obs = (_coerce_quality_obs(entry) for entry in entries)
+        return deque((o for o in obs if o is not None), maxlen=MAD_HISTORY_DEPTH)
 
     @property
     def consecutive_failures(self) -> int:
         return self._consecutive_failures
+
+    @property
+    def quality_rebaseline_required(self) -> bool:
+        """True when the resident baseline predates the active eval-instrument era.
+
+        The fail-closed hold (defect #3): with an active ``eval_quality`` era set, a baseline
+        stamped under a DIFFERENT (or no) era must not gate post-boundary results. Comparing a
+        post-E7 result against a pre-E7 baseline/per-suite/MAD window would charge a
+        scorer/pool change to the model. While this holds, the gate suppresses the
+        baseline-comparison quality legs and refuses quality promotion until an operator
+        reseeds a same-era baseline. Inert (always False) when no active era is set.
+        """
+        if not self._eval_quality_era:
+            return False
+        return (self.baseline.eval_quality_era or "") != self._eval_quality_era
+
+    def _log_rebaseline_hold_once(self, result: EvalResult) -> None:
+        """Emit the re-baseline hold at ERROR exactly once per gate instance (loud, not spammy)."""
+        if self._rebaseline_hold_logged:
+            return
+        self._rebaseline_hold_logged = True
+        log.error(
+            "EVAL-INSTRUMENT RE-BASELINE HOLD — resident baseline era=%r != active eval_quality "
+            "era=%r. Post-boundary results (e.g. T%s q=%.3f) will NOT gate quality promote/revert "
+            "against the pre-boundary baseline/per-suite/MAD window. REMEDIATION: reseed "
+            "autopilot_state.json:baseline_state from a post-boundary eval (its "
+            "eval_quality_era must equal %r) so the ratchet resumes. This is the fail-closed "
+            "quality fence (defect #3), analogous to the speed axis's frontier_rerun_required.",
+            self.baseline.eval_quality_era or "<pre-boundary>",
+            self._eval_quality_era,
+            getattr(result, "tier", "?"),
+            float(getattr(result, "quality", float("nan"))),
+            self._eval_quality_era,
+        )
 
     @property
     def quality_history(self) -> list[float]:
@@ -1059,15 +1176,45 @@ class SafetyGate:
     def quality_history_by_tier(self) -> dict[str, list[float]]:
         """Return rolling quality windows keyed by eval tier for state persistence."""
         return {
-            str(tier): list(history)
+            str(tier): [obs.q for obs in history]
+            for tier, history in sorted(self._quality_history_by_tier.items())
+        }
+
+    @property
+    def quality_history_provenance_by_tier(self) -> dict[str, list[dict[str, Any]]]:
+        """Return rolling quality windows WITH provenance (era/ts/core_id) for persistence.
+
+        The authoritative persisted shape (defect #4): each sample records the era +
+        timestamp + core_id it was measured under, so a resumed gate's MAD window cannot
+        silently mix a pre-/post-boundary sample. The legacy float ``quality_history_by_tier``
+        is still written alongside for any external float reader.
+        """
+        return {
+            str(tier): [
+                {"q": obs.q, "ts": obs.ts, "era": obs.era, "core_id": obs.core_id}
+                for obs in history
+            ]
             for tier, history in sorted(self._quality_history_by_tier.items())
         }
 
     def quality_history_for_tier(self, tier: int) -> list[float]:
-        return list(self._quality_history_by_tier.get(int(tier), deque()))
+        return [obs.q for obs in self._quality_history_by_tier.get(int(tier), deque())]
 
-    def _history_for_tier(self, tier: int) -> deque[float]:
+    def _history_for_tier(self, tier: int) -> deque:
         return self._quality_history_by_tier.setdefault(int(tier), deque(maxlen=MAD_HISTORY_DEPTH))
+
+    def _mad_window_values(self, tier: int) -> list[float]:
+        """Same-tier MAD samples, era-filtered when an eval_quality era is active.
+
+        With an active era set, only samples measured under that same era participate —
+        legacy bare floats (era="") and any other-era samples are pre-boundary priors and are
+        excluded, so a post-boundary median cannot be dragged by a stale-instrument window.
+        Without an active era the full window is used (pre-fence behavior).
+        """
+        history = self._history_for_tier(tier)
+        if self._eval_quality_era:
+            return [obs.q for obs in history if (obs.era or "") == self._eval_quality_era]
+        return [obs.q for obs in history]
 
     def _mad_significance(self, new_quality: float, tier: int) -> tuple[bool, float, float, float]:
         """Decide whether ``new_quality`` is statistically significant vs history.
@@ -1075,7 +1222,7 @@ class SafetyGate:
         Returns (is_significant, z_mad, median, mad). When history < MAD_MIN_SAMPLES,
         returns (True, NaN, NaN, NaN) — insufficient data to filter, accept at face value.
         """
-        history = self._history_for_tier(tier)
+        history = self._mad_window_values(tier)
         if len(history) < MAD_MIN_SAMPLES:
             return True, math.nan, math.nan, math.nan
         median_q = statistics.median(history)
@@ -1323,6 +1470,26 @@ class SafetyGate:
             categories.append("reliability_floor")
             reliability_blocked = True
 
+        # Defect #3: eval-instrument re-baseline hold. When an eval_quality era is active and
+        # the resident baseline predates it, comparing a post-boundary result against the
+        # pre-boundary baseline / per-suite / MAD window would charge a scorer/pool change to
+        # the model (spurious revert) or credit an easier pool (spurious promotion). SUPPRESS
+        # the baseline-comparison legs (regression, per-suite, MAD) rather than compare across
+        # the boundary; log loudly. The absolute quality floor still runs (era-neutral safety),
+        # and update_baseline() separately refuses quality promotion until an operator reseeds a
+        # same-era baseline. Inert when no active era is set.
+        quality_rebaseline_hold = not reliability_blocked and self.quality_rebaseline_required
+        if quality_rebaseline_hold:
+            categories.append("quality_rebaseline_required")
+            warnings.append(
+                "Eval-instrument re-baseline hold: resident baseline era="
+                f"{self.baseline.eval_quality_era or '<pre-boundary>'} != active eval_quality "
+                f"era={self._eval_quality_era}; cross-era regression/per-suite/MAD gating "
+                "SUPPRESSED. Reseed a same-era baseline (post-boundary eval) before quality "
+                "promote/revert can resume."
+            )
+            self._log_rebaseline_hold_once(result)
+
         if not reliability_blocked:
             # 1. Quality floor (tier-aware)
             quality_floor = QUALITY_FLOOR_T0 if result.tier == 0 else QUALITY_FLOOR_T1
@@ -1338,13 +1505,20 @@ class SafetyGate:
             # (tier-1) legacy quality, force-reverting on a difficulty gap that is not a
             # regression. When no same-tier baseline exists we SKIP the gate (log.info) and
             # let update_baseline seed the tier baseline on the next eligible promotion.
-            baseline_q = self.baseline.quality_for_tier(result.tier, strict=True)
+            # Under the re-baseline hold baseline_q is forced None so this cross-era compare
+            # (and its MAD filter) is skipped.
+            baseline_q = (
+                None
+                if quality_rebaseline_hold
+                else self.baseline.quality_for_tier(result.tier, strict=True)
+            )
             if baseline_q is None:
-                log.info(
-                    "No strict same-tier T%d quality baseline — skipping regression gate "
-                    "(baseline will seed on the next eligible promotion).",
-                    result.tier,
-                )
+                if not quality_rebaseline_hold:
+                    log.info(
+                        "No strict same-tier T%d quality baseline — skipping regression gate "
+                        "(baseline will seed on the next eligible promotion).",
+                        result.tier,
+                    )
             elif baseline_q > 0:
                 relative_delta = (result.quality - baseline_q) / baseline_q
                 if relative_delta < REGRESSION_THRESHOLD:
@@ -1431,7 +1605,11 @@ class SafetyGate:
             # ⇒ fixed -0.1 floor (unchanged behavior for pre-2026-06-06 baselines).
             # If either side has very low support, a threshold-crossing drop remains
             # visible but advisory unless it is a catastrophic 0-3 scale collapse.
-            baseline_suites = self.baseline.per_suite_for_tier(result.tier)
+            # Under the re-baseline hold the pre-boundary per-suite baselines are withheld
+            # (empty), so no cross-era per-suite regression can fire.
+            baseline_suites = (
+                {} if quality_rebaseline_hold else self.baseline.per_suite_for_tier(result.tier)
+            )
             baseline_counts = self.baseline.per_suite_counts_for_tier(result.tier)
             result_counts = getattr(result, "per_suite_counts", None) or {}
             for suite, quality in result.per_suite_quality.items():
@@ -1594,7 +1772,17 @@ class SafetyGate:
             and not math.isnan(result.quality)
             and result.quality >= 0
         ):
-            self._history_for_tier(result.tier).append(result.quality)
+            # Defect #4: append WITH provenance. The era stamp is the active eval_quality era
+            # (or "" when unfenced), so a resumed gate's MAD window filters to same-era samples
+            # and a boundary crossing can never be silently averaged into the median.
+            self._history_for_tier(result.tier).append(
+                _QualityObs(
+                    q=result.quality,
+                    ts=_now_iso(),
+                    era=self._eval_quality_era or "",
+                    core_id=str(getattr(result, "core_id", "") or ""),
+                )
+            )
             self._last_history_tier = int(result.tier)
 
         result.gate_verdict = verdict
@@ -1780,6 +1968,24 @@ class SafetyGate:
                 False, reason, tier, previous_quality, result.quality, proof,
                 ineligible_reason=reason,
             )
+        # Defect #3: eval-instrument re-baseline hold. A promotion computed against (or that
+        # would overwrite) a pre-boundary baseline crosses the eval-instrument boundary — a
+        # scorer/pool change could manufacture a spurious promotion. REFUSE until an operator
+        # reseeds a same-era baseline (the documented remediation; the era stamp then matches
+        # and this clears). Fail-closed, loud. Inert when no active eval_quality era is set.
+        if self.quality_rebaseline_required:
+            reason = (
+                "eval-instrument RE-BASELINE required: resident baseline era="
+                f"{self.baseline.eval_quality_era or '<pre-boundary>'} != active eval_quality "
+                f"era={self._eval_quality_era}; quality promotion REFUSED (defect #3, "
+                "fail-closed). Remediation: reseed baseline_state from a post-boundary eval "
+                "(eval_quality_era must equal the active era) before quality can ratchet."
+            )
+            log.error("Baseline update REFUSED — %s", reason)
+            return BaselineUpdateResult(
+                False, reason, tier, previous_quality, result.quality, proof,
+                ineligible_reason="quality_rebaseline_required",
+            )
         # LEDGER-W4 (01c §3): when the sequential path is active, a promotion requires
         # a CONFIRMED joint e-process verdict (E_quality >= confirm_e AND
         # E_rate_noninf >= confirm_e). This is the anti-ratchet: a monotonic quality
@@ -1936,6 +2142,11 @@ class SafetyGate:
                 promotion_result.quality,
             )
         self.baseline.update_tier(promotion_result)
+        # Defect #4: stamp the era this baseline was promoted under so a future boundary can
+        # detect the cross-era condition (and so a post-reseed same-era promotion keeps the
+        # stamp current). Only stamps when an active era is known; never clears an existing one.
+        if self._eval_quality_era:
+            self.baseline.eval_quality_era = self._eval_quality_era
         log.info(
             "Baseline state updated — baseline_eligible=true (%s) | proof=%s | T%d q=%.3f s=%.1f",
             reason,

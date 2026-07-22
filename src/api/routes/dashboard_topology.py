@@ -12,12 +12,19 @@ import logging
 import os
 import re
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
+from scripts.server.realized_fleet import derive_realized_numa_mode
 from scripts.server.runtime_facts_manifest import (
     read_runtime_stack_numa_mode,
     read_runtime_stack_selected_servers,
+    runtime_facts_manifest_path,
+)
+from scripts.server.stack_numa_mode import (
+    DASHBOARD_RUNTIME_FALLBACK_NUMA_MODE,
+    VALID_STACK_NUMA_MODES,
 )
 from src.roles import Role
 from src.registry.stack_priors import (
@@ -118,32 +125,157 @@ def _build_port_hints() -> dict[int, str]:
 _PORT_HINTS: dict[int, str] = _build_port_hints()
 
 
-def active_stack_numa_mode() -> str:
-    """Return the stack NUMA mode the dashboard surfaces should render.
+# Realized-fleet probe cache. The dashboard must render the REALIZED live fleet,
+# not launch-time intent (ESC-8 / audit finding C1): a uvicorn worker that
+# inherited ORCHESTRATOR_STACK_NUMA_MODE=full must never paint a quarters-only
+# fleet as rogue. The probe is a handful of bare-TCP connect_ex() calls against
+# localhost (scripts.server.realized_fleet.derive_realized_numa_mode); a short
+# TTL collapses a 2 Hz × 6-worker poll burst into a single probe so dashboard
+# polling does not storm the loopback port universe.
+_REALIZED_NUMA_CACHE: dict[str, Any] = {"ts": 0.0, "value": None, "probed": False}
+_REALIZED_NUMA_TTL_S = 5.0
 
-    Honors an explicit ORCHESTRATOR_STACK_NUMA_MODE override (full/quarter/both),
-    then uses the launcher-regenerated runtime facts manifest when it is present
-    and non-stale. Without either, keep the dashboard's historical ``both``
-    fallback: production commonly launches each role's full/primary server plus
-    its NUMA-quarter servers, and the older ``full`` default hid running quarter
-    instances from health and topology surfaces.
 
-    NOTE: this drives only the dashboard/health family. The config compiler and
-    launcher still use the shared ``full`` fallback for spawn-time planning.
+def _probe_realized_numa_mode() -> str | None:
+    """Probe the live fleet and classify its realized NUMA mode (``full`` /
+    ``quarter`` / ``both``), or ``None`` when nothing in the quarterable port
+    universe is listening / the probe fails.
+
+    Isolated seam: production opens localhost TCP connections here; tests
+    neutralize or substitute this without touching sockets.
     """
-    from scripts.server.stack_numa_mode import (
-        DASHBOARD_RUNTIME_FALLBACK_NUMA_MODE,
-        env_stack_numa_mode,
-    )
+    try:
+        return derive_realized_numa_mode()
+    except Exception:
+        logger.debug("realized-fleet NUMA probe failed; ignoring", exc_info=True)
+        return None
 
-    if os.environ.get("ORCHESTRATOR_STACK_NUMA_MODE") is not None:
-        return env_stack_numa_mode(default=DASHBOARD_RUNTIME_FALLBACK_NUMA_MODE)
 
-    runtime_mode = read_runtime_stack_numa_mode()
-    if runtime_mode is not None:
-        return runtime_mode
+def _cached_realized_numa_mode() -> str | None:
+    """TTL-cached ``_probe_realized_numa_mode()`` (see the cache note above)."""
+    now = time.monotonic()
+    cache = _REALIZED_NUMA_CACHE
+    if cache.get("probed") and (now - cache["ts"]) < _REALIZED_NUMA_TTL_S:
+        return cache["value"]
+    value = _probe_realized_numa_mode()
+    cache["ts"] = now
+    cache["value"] = value
+    cache["probed"] = True
+    return value
 
-    return env_stack_numa_mode(default=DASHBOARD_RUNTIME_FALLBACK_NUMA_MODE)
+
+def _env_declared_numa_mode() -> str | None:
+    """The env-declared stack NUMA mode, or ``None`` when unset/blank/unrecognized.
+
+    Unlike ``env_stack_numa_mode`` (which coerces anything to a default), this
+    returns ``None`` for absent or non-canonical values so the resolver can treat
+    the env purely as a spawn-time hint that carries intent only when it is a real
+    mode string.
+    """
+    raw = os.environ.get("ORCHESTRATOR_STACK_NUMA_MODE")
+    if raw is None:
+        return None
+    normalized = raw.strip().lower()
+    return normalized if normalized in VALID_STACK_NUMA_MODES else None
+
+
+def active_stack_numa_mode_resolution() -> dict[str, Any]:
+    """Resolve the stack NUMA mode the dashboard should render, realized-fleet first.
+
+    Precedence (audit finding C1 — the dashboard renders the REALIZED fleet, not
+    launch-time intent)::
+
+        realized live fleet  >  hardened runtime-facts manifest  >  env hint  >  default
+
+    ``ORCHESTRATOR_STACK_NUMA_MODE`` is demoted to a LAST-resort spawn-time hint.
+    A uvicorn worker that inherited ``full`` must not flag a quarters-only fleet as
+    rogue (the proven C1 inversion) — the realized probe overrides it. When a
+    lower-precedence source contradicts the resolved mode, the contradiction is
+    recorded in ``disagreements`` so surfaces can badge it ("env disagrees: full")
+    instead of silently trusting the lying source.
+
+    Returns a provenance dict:
+      * ``mode``          — the string the surfaces render.
+      * ``source``        — ``realized_fleet`` / ``runtime_manifest`` / ``env`` / ``default``.
+      * ``realized`` / ``manifest`` / ``env`` — each source's value (str | None).
+      * ``disagreements`` — human-readable lower-precedence contradictions.
+    """
+    realized = _cached_realized_numa_mode()
+    manifest = _fail_closed_runtime_stack_numa_mode()
+    env = _env_declared_numa_mode()
+
+    if realized is not None:
+        mode, source = realized, "realized_fleet"
+        lower: list[tuple[str, str | None]] = [("manifest", manifest), ("env", env)]
+    elif manifest is not None:
+        mode, source = manifest, "runtime_manifest"
+        lower = [("env", env)]
+    elif env is not None:
+        mode, source = env, "env"
+        lower = []
+    else:
+        mode, source = DASHBOARD_RUNTIME_FALLBACK_NUMA_MODE, "default"
+        lower = []
+
+    disagreements = [
+        f"{label} disagrees: {value}"
+        for label, value in lower
+        if value is not None and value != mode
+    ]
+    return {
+        "mode": mode,
+        "source": source,
+        "realized": realized,
+        "manifest": manifest,
+        "env": env,
+        "disagreements": disagreements,
+    }
+
+
+def active_stack_numa_mode() -> str:
+    """Return the stack NUMA mode string the dashboard surfaces should render.
+
+    Thin wrapper over :func:`active_stack_numa_mode_resolution` for the many call
+    sites that need only the mode string. See that function for the
+    realized-fleet-first precedence and provenance semantics. This drives only the
+    dashboard/health family; the config compiler and launcher own their own
+    spawn-time planning.
+    """
+    return active_stack_numa_mode_resolution()["mode"]
+
+
+def _fail_closed_runtime_stack_numa_mode() -> str | None:
+    """Return the runtime-facts stack NUMA mode ONLY when the manifest passes the
+    same fail-closed contract the URL reader (read_runtime_stack_selected_servers)
+    enforces: a concrete expected mode string AND a non-empty selected-server
+    lineup consistent with the declared ports.
+
+    WP-14: the launcher can leave a phantom full-era lineup behind (the real
+    current shape is stack_numa_mode=None, selected_ports=[], full-era
+    selected_servers). read_runtime_stack_numa_mode() alone would either accept a
+    stale mode or return None while the topology port hints still projected the
+    phantom lineup, so the dashboard could render a NUMA mode that no live
+    process backs. Mirror the URL reader's rejection here and fall back to the
+    dashboard's historical env/NUMA_CONFIG default with one loud log line.
+    """
+    mode = read_runtime_stack_numa_mode()
+    servers = read_runtime_stack_selected_servers()
+    lineup_ok = isinstance(servers, list) and bool(servers)
+    if isinstance(mode, str) and mode and lineup_ok:
+        return mode.strip().lower()
+
+    try:
+        manifest_present = runtime_facts_manifest_path().exists()
+    except Exception:
+        manifest_present = False
+    if manifest_present:
+        logger.warning(
+            "runtime-facts manifest rejected (fail-closed: stack_numa_mode=%r, "
+            "selected lineup %s); falling back to dashboard NUMA_CONFIG default",
+            mode,
+            "present" if lineup_ok else "empty/inconsistent",
+        )
+    return None
 
 
 def _manifest_server_label(server: dict[str, Any]) -> str:

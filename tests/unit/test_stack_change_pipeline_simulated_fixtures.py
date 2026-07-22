@@ -53,6 +53,21 @@ def _clean_runtime_attestation(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pipeline, "_runtime_attestation_warnings", lambda: [])
 
 
+@pytest.fixture(autouse=True)
+def _pin_realized_compile_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ESC-8 Fix 6: the update/check compile now resolves the NUMA mode from the
+    realized fleet (a bare TCP probe) or refuses when nothing is listening. Pin
+    it deterministically to the launcher ``full`` default so these simulated
+    fixtures stay hermetic (no live sockets) and keep prior expectations.
+    The guard's launch-view probe is pinned to no-signal for the same reason
+    (env fallback governs, matching the fixtures)."""
+    from scripts.validate import stack_change_guard
+    from src.registry import stack_priors
+
+    monkeypatch.setattr(stack_priors, "_realized_compile_numa_mode", lambda **_kw: "full")
+    monkeypatch.setattr(stack_change_guard, "_realized_launch_numa_mode", lambda: None)
+
+
 def _write_yaml(path: Path, data: dict[str, Any]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")

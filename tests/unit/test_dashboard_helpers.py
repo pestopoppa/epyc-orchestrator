@@ -15,6 +15,8 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from src.api.routes import (
     dashboard,
     dashboard_snapshot,
@@ -22,6 +24,22 @@ from src.api.routes import (
     dashboard_tasks,
     dashboard_topology,
 )
+
+
+@pytest.fixture(autouse=True)
+def _neutralize_realized_numa_probe(monkeypatch):
+    """The realized-fleet-first NUMA resolver (audit C1) probes localhost sockets.
+
+    Unit tests must be hermetic and network-free, so default the realized probe to
+    "no realized signal" — the lower-precedence layers (manifest/env) then drive
+    the mode exactly as they did before this layer existed, which is what the
+    pre-existing tests assert. Tests that exercise realized-first behavior override
+    ``_probe_realized_numa_mode`` / ``_cached_realized_numa_mode`` themselves.
+    """
+    dashboard_topology._REALIZED_NUMA_CACHE.update({"ts": 0.0, "value": None, "probed": False})
+    monkeypatch.setattr(dashboard_topology, "_probe_realized_numa_mode", lambda: None)
+    yield
+    dashboard_topology._REALIZED_NUMA_CACHE.update({"ts": 0.0, "value": None, "probed": False})
 
 
 # ----- dashboard_topology -----
@@ -73,19 +91,169 @@ def test_active_stack_numa_mode_defaults_to_both(monkeypatch) -> None:
 def test_active_stack_numa_mode_uses_runtime_facts_manifest(monkeypatch) -> None:
     monkeypatch.delenv("ORCHESTRATOR_STACK_NUMA_MODE", raising=False)
     monkeypatch.setattr(dashboard_topology, "read_runtime_stack_numa_mode", lambda: "quarter")
+    # WP-14: honoring the manifest mode now also requires a non-empty, consistent
+    # selected-server lineup (the URL reader's fail-closed contract).
+    monkeypatch.setattr(
+        dashboard_topology,
+        "read_runtime_stack_selected_servers",
+        lambda: [{"port": 8082, "roles": ["worker_general"]}],
+    )
 
     assert dashboard_topology.active_stack_numa_mode() == "quarter"
 
 
-def test_active_stack_numa_mode_env_override_skips_runtime_facts_manifest(monkeypatch) -> None:
+_PHANTOM_RUNTIME_FACTS = {
+    "schema": "epyc.orchestrator.runtime_facts",
+    "schema_version": 1,
+    "runtime_stack": {
+        # Real current phantom shape: mode null, empty selected_ports, but a
+        # left-behind full-era server lineup.
+        "stack_numa_mode": None,
+        "selected_servers": [
+            {"port": 8070, "roles": ["frontdoor", "coder_escalation"], "numa_instance": 0},
+            {"port": 8072, "roles": ["worker_general", "worker_math"], "numa_instance": 0},
+        ],
+        "selected_ports": [],
+    },
+}
+
+_WELLFORMED_QUARTER_RUNTIME_FACTS = {
+    "schema": "epyc.orchestrator.runtime_facts",
+    "schema_version": 1,
+    "runtime_stack": {
+        "stack_numa_mode": "quarter",
+        "selected_servers": [
+            {"port": 8082, "roles": ["worker_general", "worker_math"], "numa_instance": 1},
+            {"port": 8182, "roles": ["worker_general"], "numa_instance": 2},
+        ],
+        "selected_ports": [8082, 8182],
+    },
+}
+
+
+def _install_dashboard_runtime_facts(monkeypatch, tmp_path: Path, payload: dict) -> None:
+    from scripts.server import stack_paths
+    from scripts.server.runtime_facts_manifest import runtime_facts_manifest_path
+
+    monkeypatch.setitem(stack_paths._PATHS, "tmp_dir", tmp_path)
+    runtime_facts_manifest_path().write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_active_stack_numa_mode_rejects_phantom_runtime_facts_manifest(
+    monkeypatch, tmp_path, caplog
+) -> None:
+    """WP-14: a phantom full-era manifest (mode null, empty selected_ports) is
+    rejected fail-closed; the dashboard falls back to its historical ``both``
+    default with one loud log line instead of surfacing a phantom mode."""
+    import logging
+
+    monkeypatch.delenv("ORCHESTRATOR_STACK_NUMA_MODE", raising=False)
+    _install_dashboard_runtime_facts(monkeypatch, tmp_path, _PHANTOM_RUNTIME_FACTS)
+
+    with caplog.at_level(logging.WARNING, logger="src.api.routes.dashboard_topology"):
+        assert dashboard_topology.active_stack_numa_mode() == "both"
+
+    rejections = [
+        rec for rec in caplog.records if "runtime-facts manifest rejected" in rec.getMessage()
+    ]
+    assert len(rejections) == 1
+
+
+def test_active_stack_numa_mode_consumes_wellformed_quarter_runtime_facts(
+    monkeypatch, tmp_path, caplog
+) -> None:
+    """WP-14: a well-formed quarter manifest (concrete mode + consistent lineup)
+    is consumed and no fail-closed warning is emitted."""
+    import logging
+
+    monkeypatch.delenv("ORCHESTRATOR_STACK_NUMA_MODE", raising=False)
+    _install_dashboard_runtime_facts(monkeypatch, tmp_path, _WELLFORMED_QUARTER_RUNTIME_FACTS)
+
+    with caplog.at_level(logging.WARNING, logger="src.api.routes.dashboard_topology"):
+        assert dashboard_topology.active_stack_numa_mode() == "quarter"
+
+    assert not [
+        rec for rec in caplog.records if "runtime-facts manifest rejected" in rec.getMessage()
+    ]
+
+
+def test_active_stack_numa_mode_env_is_last_resort_when_nothing_higher_resolves(monkeypatch) -> None:
+    """C1: env is demoted below realized + manifest. It is honored ONLY when the
+    realized probe yields nothing AND the manifest is absent/rejected."""
     monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "full")
+    # realized neutralized by the autouse fixture; manifest absent/rejected.
+    monkeypatch.setattr(dashboard_topology, "_fail_closed_runtime_stack_numa_mode", lambda: None)
 
-    def fail_reader():
-        raise AssertionError("env override should use explicit NUMA mode")
-
-    monkeypatch.setattr(dashboard_topology, "read_runtime_stack_numa_mode", fail_reader)
-
+    resolution = dashboard_topology.active_stack_numa_mode_resolution()
+    assert resolution["mode"] == "full"
+    assert resolution["source"] == "env"
+    assert resolution["disagreements"] == []
     assert dashboard_topology.active_stack_numa_mode() == "full"
+
+
+def test_active_stack_numa_mode_prefers_realized_fleet_over_contradicting_env(monkeypatch) -> None:
+    """C1 core: a worker that inherited env=full must render the realized quarter
+    fleet, with the env contradiction surfaced as provenance (not silently trusted)."""
+    monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "full")
+    monkeypatch.setattr(dashboard_topology, "_cached_realized_numa_mode", lambda: "quarter")
+    monkeypatch.setattr(dashboard_topology, "_fail_closed_runtime_stack_numa_mode", lambda: None)
+
+    resolution = dashboard_topology.active_stack_numa_mode_resolution()
+    assert resolution["mode"] == "quarter"
+    assert resolution["source"] == "realized_fleet"
+    assert resolution["realized"] == "quarter"
+    assert resolution["env"] == "full"
+    assert resolution["disagreements"] == ["env disagrees: full"]
+
+
+def test_active_stack_numa_mode_manifest_beats_env_when_no_realized(monkeypatch) -> None:
+    """Precedence rung 2: with no realized signal, the hardened manifest outranks a
+    contradicting env, and the env disagreement is annotated."""
+    monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "full")
+    monkeypatch.setattr(dashboard_topology, "_cached_realized_numa_mode", lambda: None)
+    monkeypatch.setattr(dashboard_topology, "_fail_closed_runtime_stack_numa_mode", lambda: "quarter")
+
+    resolution = dashboard_topology.active_stack_numa_mode_resolution()
+    assert resolution["mode"] == "quarter"
+    assert resolution["source"] == "runtime_manifest"
+    assert resolution["disagreements"] == ["env disagrees: full"]
+
+
+def test_active_stack_numa_mode_rejected_manifest_falls_through_to_env(monkeypatch, tmp_path) -> None:
+    """Manifest-rejected fallback ordering: a phantom manifest (mode null / empty
+    lineup) is rejected fail-closed and, with no realized signal, the env hint is
+    used — proving env is reached only AFTER the manifest is rejected."""
+    monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "quarter")
+    _install_dashboard_runtime_facts(monkeypatch, tmp_path, _PHANTOM_RUNTIME_FACTS)
+
+    resolution = dashboard_topology.active_stack_numa_mode_resolution()
+    assert resolution["manifest"] is None  # rejected
+    assert resolution["mode"] == "quarter"
+    assert resolution["source"] == "env"
+
+
+def test_cached_realized_numa_mode_ttl_collapses_probe_storm(monkeypatch) -> None:
+    """TTL cache: repeated resolutions within the TTL window probe the fleet once;
+    the probe re-runs only after the entry expires."""
+    dashboard_topology._REALIZED_NUMA_CACHE.update({"ts": 0.0, "value": None, "probed": False})
+    calls = {"n": 0}
+
+    def _counting_probe() -> str:
+        calls["n"] += 1
+        return "quarter"
+
+    monkeypatch.setattr(dashboard_topology, "_probe_realized_numa_mode", _counting_probe)
+
+    assert dashboard_topology._cached_realized_numa_mode() == "quarter"
+    assert dashboard_topology._cached_realized_numa_mode() == "quarter"
+    assert calls["n"] == 1  # second call served from cache
+
+    # Expire the cache entry and confirm the probe re-runs exactly once more.
+    dashboard_topology._REALIZED_NUMA_CACHE["ts"] = (
+        time.monotonic() - dashboard_topology._REALIZED_NUMA_TTL_S - 1.0
+    )
+    assert dashboard_topology._cached_realized_numa_mode() == "quarter"
+    assert calls["n"] == 2
 
 
 def test_expected_stack_services_are_numa_mode_filtered(monkeypatch) -> None:
@@ -134,6 +302,10 @@ def test_expected_stack_services_uses_runtime_facts_manifest(monkeypatch) -> Non
 
 def test_expected_stack_services_env_override_skips_runtime_facts_manifest(monkeypatch) -> None:
     monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "full")
+    # Neutralize the realized-first mode resolver's manifest read (audit C1) so the
+    # env mode drives filtering; the fail_reader below then proves the *separate*
+    # runtime-selected-servers branch of expected_stack_services is not taken.
+    monkeypatch.setattr(dashboard_topology, "_fail_closed_runtime_stack_numa_mode", lambda: None)
 
     def fail_reader():
         raise AssertionError("env override should use static manifest")
@@ -210,6 +382,56 @@ def test_topology_emits_expected_unloaded_stack_servers(monkeypatch) -> None:
     assert embedder["kind"] == "expected-stack-server"
     assert embedder["expected"] is True
     assert embedder["running"] is False
+
+
+_LIVE_QUARTER_PORTS = {
+    8080: "frontdoor.q0",
+    8180: "frontdoor.q1",
+    8280: "frontdoor.q2",
+    8380: "frontdoor.q3",
+    8082: "worker_general.q0",
+    8182: "worker_general.q1",
+    8282: "worker_general.q2",
+    8382: "worker_general.q3",
+}
+_DEAD_FULL_PORTS = (8070, 8072, 8085)
+
+
+def test_topology_inversion_regression_live_quarters_not_rogue_under_env_full(monkeypatch) -> None:
+    """C1/M2 capstone regression (the proven live inversion):
+
+    Realized fleet = quarters-only, but the serving worker inherited env=full.
+    Before the fix this rendered the 12 live quarters ``expected=False`` (rogue)
+    and the 3 dead full ports as ``expected-stack-server`` down rows — a fully
+    inverted fleet-health picture. Realized-first resolution must instead render
+    the quarters as ``expected=True`` and never surface the dead fulls as expected,
+    while annotating the env contradiction as provenance.
+    """
+    monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "full")
+    monkeypatch.setattr(dashboard_topology, "_cached_realized_numa_mode", lambda: "quarter")
+    monkeypatch.setattr(dashboard_topology, "_fail_closed_runtime_stack_numa_mode", lambda: None)
+    monkeypatch.setattr(dashboard, "_discover_llama_ports", lambda: dict(_LIVE_QUARTER_PORTS))
+    monkeypatch.setattr(dashboard, "_discover_llama_models", lambda: {})
+    monkeypatch.setattr(dashboard, "_load_state_services", lambda: [])
+
+    response = asyncio.run(dashboard.topology())
+    data = json.loads(response.body)
+    by_port = {node["port"]: node for node in data["nodes"]}
+
+    assert data["stack_numa_mode"] == "quarter"
+    prov = data["stack_numa_mode_provenance"]
+    assert prov["source"] == "realized_fleet"
+    assert prov["disagreements"] == ["env disagrees: full"]
+
+    # Every live quarter reads as expected (NOT rogue) and running.
+    for port in _LIVE_QUARTER_PORTS:
+        node = by_port[port]
+        assert node["running"] is True, f"quarter {port} should be running"
+        assert node["expected"] is True, f"quarter {port} inverted to rogue (expected=False)"
+
+    # The dead full ports are absent-by-policy in quarter mode: no expected-down rows.
+    for port in _DEAD_FULL_PORTS:
+        assert port not in by_port, f"dead full {port} must not surface as expected-stack-server"
 
 
 def test_topology_parity_smoke_for_expected_listener_ports(monkeypatch) -> None:

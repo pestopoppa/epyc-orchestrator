@@ -541,6 +541,66 @@ def _nonnegative_int(value: Any, default: int = 0) -> int:
         return default
 
 
+# ── REL-1 eval-honesty guards (2026-07-21 EV-11c circuit-open incident) ──────
+#
+# Guard 1 anchors to the orchestrator's in-band error format. The llm
+# primitives emit failures AS answer strings of the form ``[ERROR: <detail>]``
+# (src/llm_primitives/primitives.py::_call → ``return f"[ERROR: {e}]"``; the
+# circuit-open detail is the RuntimeError text from
+# src/llm_primitives/inference.py, ``Backend unavailable (circuit open):
+# <url>``). When the breaker opens and the response is NOT run through
+# ``_annotate_error`` (server-side, stages.py — which also keys on
+# ``answer.startswith("[ERROR:")``), /chat returns answer="[ERROR: Backend
+# unavailable (circuit open): http://localhost:8082]" with error=None. The
+# eval then scored that error text as a WRONG answer (REL-1 evasion). Anchor to
+# the REAL start-of-answer prefix, never a loose substring.
+_INBAND_ERROR_PREFIX = "[ERROR:"
+
+
+def _inband_error_text(answer: Any) -> str | None:
+    """Return the in-band orchestrator error string when `answer` IS one.
+
+    Anchored to the emitted ``[ERROR: ...]`` prefix at start-of-answer (after
+    stripping leading whitespace), matching the primitives/inference emitters
+    and the server-side ``_annotate_error`` convention. Returns None for a
+    normal answer.
+    """
+    if not isinstance(answer, str):
+        return None
+    stripped = answer.lstrip()
+    if stripped.startswith(_INBAND_ERROR_PREFIX):
+        return stripped
+    return None
+
+
+def _forced_role_serving_mismatch(
+    force_role: Any, resp: Mapping[str, Any]
+) -> str | None:
+    """Return the serving role when it differs from the forced role, else None.
+
+    Guard 2: when the eval pins ``force_role`` for a role-attributed
+    measurement and the orchestrator silently serves it from a DIFFERENT role
+    (the 2026-07-21 circuit_open fallback ``worker_math → worker_general``), the
+    number is not a measurement of the forced role. Compare ``force_role``
+    against the response's ``routed_to`` (the primary role that handled the
+    request), falling back to the terminal ``role_history`` entry when
+    ``routed_to`` is absent. Returns None when ``force_role`` is empty or the
+    serving role cannot be determined — avoiding false positives on
+    partial/legacy responses.
+    """
+    forced = str(force_role or "").strip()
+    if not forced:
+        return None
+    serving = str(resp.get("routed_to") or "").strip()
+    if not serving:
+        history = resp.get("role_history")
+        if isinstance(history, (list, tuple)) and history:
+            serving = str(history[-1] or "").strip()
+    if not serving or serving == forced:
+        return None
+    return serving
+
+
 def _finite_float(value: Any) -> float | None:
     try:
         out = float(value)
@@ -828,6 +888,21 @@ def _read_registry_timeout(category: str, key: str, fallback: int) -> int:
 
 
 def _default_eval_timeout() -> int:
+    """Per-question eval request timeout (seconds).
+
+    Env override (REL-1 guard 3, 2026-07-21): ``AUTOPILOT_EVAL_REQUEST_TIMEOUT_S``
+    raises the per-question budget for rebaseline-class runs whose long
+    MATH-tail questions need more headroom than the registry-derived default —
+    and it deliberately bypasses the 600s cap. This is the knob operators set
+    so a rebaseline never *starts* with a per-call budget that would later be
+    whittled below the deadline-starvation floor (see
+    ``AUTOPILOT_EVAL_MIN_LLAMA_BUDGET_S`` in ``call_orchestrator_forced``).
+    Unset / <=0 preserves the current behavior EXACTLY: registry frontdoor role
+    timeout plus ``AUTOPILOT_EVAL_QUEUE_ALLOWANCE_S``, capped at 600.
+    """
+    override = _env_int("AUTOPILOT_EVAL_REQUEST_TIMEOUT_S", 0)
+    if override > 0:
+        return override
     role_timeout = _read_registry_timeout("roles", "frontdoor", 180)
     queue_allowance = _env_int("AUTOPILOT_EVAL_QUEUE_ALLOWANCE_S", 90)
     return min(600, max(role_timeout, role_timeout + max(0, queue_allowance)))
@@ -942,6 +1017,62 @@ def _same_role_matrix_allows_eval_fanout(role: str) -> bool:
         return False
 
 
+def _runtime_facts_stack_numa_mode() -> str | None:
+    """Return the runtime-facts stack NUMA mode ONLY when the manifest passes the
+    same fail-closed contract the URL reader (read_runtime_stack_selected_servers)
+    enforces: a concrete expected mode string AND a non-empty selected-server
+    lineup consistent with the declared ports.
+
+    WP-14: the launcher can leave a phantom full-era lineup behind (the real
+    current shape is stack_numa_mode=None, selected_ports=[], full-era
+    selected_servers). read_runtime_stack_numa_mode() alone would silently treat
+    that as "not quarter" and mis-size eval fan-out onto a single quarter. Mirror
+    the URL reader's rejection here and fall back to
+    ORCHESTRATOR_STACK_NUMA_MODE / NUMA_CONFIG with one loud log line.
+    """
+    try:
+        from scripts.server.runtime_facts_manifest import (
+            read_runtime_stack_numa_mode,
+            read_runtime_stack_selected_servers,
+            runtime_facts_manifest_path,
+        )
+    except Exception:
+        return None
+
+    def _read(reader: Callable[..., Any]) -> Any:
+        try:
+            value = reader()
+        except Exception:
+            return None
+        if value:
+            return value
+        try:
+            return reader(state_file=None)
+        except TypeError:
+            return value
+        except Exception:
+            return None
+
+    mode = _read(read_runtime_stack_numa_mode)
+    servers = _read(read_runtime_stack_selected_servers)
+    lineup_ok = isinstance(servers, list) and bool(servers)
+    if isinstance(mode, str) and mode and lineup_ok:
+        return mode.strip().lower()
+
+    try:
+        manifest_present = runtime_facts_manifest_path().exists()
+    except Exception:
+        manifest_present = False
+    if manifest_present:
+        log.warning(
+            "runtime-facts manifest rejected (fail-closed: stack_numa_mode=%r, "
+            "selected lineup %s); falling back to ORCHESTRATOR_STACK_NUMA_MODE/NUMA_CONFIG",
+            mode,
+            "present" if lineup_ok else "empty/inconsistent",
+        )
+    return None
+
+
 def _live_safe_concurrency(role: str, topology_cap: int) -> int:
     """Bound eval fan-out by the currently reachable role instances.
 
@@ -978,16 +1109,8 @@ def _live_safe_concurrency(role: str, topology_cap: int) -> int:
     if not live_regions:
         return 1
 
-    try:
-        from scripts.server.runtime_facts_manifest import read_runtime_stack_numa_mode
-
-        stack_numa_mode = read_runtime_stack_numa_mode()
-        if not stack_numa_mode:
-            try:
-                stack_numa_mode = read_runtime_stack_numa_mode(state_file=None)
-            except TypeError:
-                pass
-    except Exception:
+    stack_numa_mode = _runtime_facts_stack_numa_mode()
+    if stack_numa_mode is None:
         stack_numa_mode = os.environ.get("ORCHESTRATOR_STACK_NUMA_MODE")
 
     if str(stack_numa_mode or "").strip().lower() == "quarter":
@@ -1102,9 +1225,18 @@ class _EvalQuestionJsonlWriter:
         label: str,
         requested_n: int,
         concurrency: int,
+        path: Path | None = None,
     ) -> None:
         trial_name = f"trial_{trial_id}" if trial_id is not None else "trial_unknown"
-        self.path = root / _safe_artifact_name(trial_name, fallback="trial_unknown") / "question_results.jsonl"
+        # EV-11c: the window-runner (verifier-mode) path has no trial id, so the
+        # default trial-keyed path collapses every arm onto a single invisible
+        # "trial_unknown" file. Callers on that path pass an explicit per-arm `path`
+        # (e.g. <output-dir>/question_results.<arm>.jsonl) so each arm's rows are
+        # durably identifiable for a targeted error requeue.
+        if path is not None:
+            self.path = Path(path)
+        else:
+            self.path = root / _safe_artifact_name(trial_name, fallback="trial_unknown") / "question_results.jsonl"
         self._eval_batch_id = eval_batch_id
         self._trial_id = trial_id
         self._label = str(label or "")
@@ -1827,8 +1959,21 @@ class EvalTower:
         self._core_cache: dict[str, tuple[list[dict], dict[str, Any], Path]] = {}
         self._trial_id_context: int | None = None
         self._trial_path_context: Path | None = None
+        # EV-11c: when set (window-runner / verifier-mode path), _eval_batch writes
+        # per-arm question rows into this directory instead of the trial-keyed root.
+        self._question_artifact_dir: Path | None = None
         self.on_question = on_question
         self.on_progress = on_progress
+
+    def set_question_artifact_dir(self, directory: str | Path | None) -> None:
+        """Persist per-arm question rows under ``directory`` (window-runner path).
+
+        Each ``_eval_batch`` arm writes ``question_results.<label>.jsonl`` here via
+        the same append-only, fsync'd writer used on the trial path — so a crashed
+        or partially-errored arm leaves a durable, per-question, per-arm record that
+        a targeted ``--retry-errors-from`` requeue can read.
+        """
+        self._question_artifact_dir = Path(directory) if directory is not None else None
 
     def set_trial_context(
         self,
@@ -2321,6 +2466,51 @@ class EvalTower:
             elapsed = time.time() - start
             answer = resp.get("answer", "")
             error = resp.get("error")
+
+            # ── Guard 1 (REL-1): in-band error surfaced as an answer ──────
+            # The circuit breaker can return "[ERROR: Backend unavailable
+            # (circuit open): ...]" as the answer with error=None. Convert it
+            # into an ERROR row so it is EXCLUDED from the quality denominator
+            # and counted against reliability — never scored as a wrong answer.
+            if not error:
+                _inband = _inband_error_text(answer)
+                if _inband is not None:
+                    error = _inband
+                    log.error(
+                        "REL-1 in-band error surfaced as answer "
+                        "(qid=%s suite=%s force_role=%s): %s",
+                        stable_qid,
+                        suite,
+                        q.get("force_role", "") or "<router>",
+                        _inband[:200],
+                    )
+
+            # ── Guard 2 (REL-1): forced-role integrity ────────────────────
+            # If this question pinned a role for a role-attributed measurement
+            # but the orchestrator served it from a different role (silent
+            # circuit_open fallback), reject the measurement as an ERROR row
+            # rather than mis-attributing a cross-role number. Log loudly with
+            # both roles.
+            if not error:
+                _served_by = _forced_role_serving_mismatch(
+                    q.get("force_role"), resp
+                )
+                if _served_by is not None:
+                    _forced = str(q.get("force_role") or "").strip()
+                    error = (
+                        f"forced_role_fallback: forced={_forced} "
+                        f"served_by={_served_by}"
+                    )
+                    log.error(
+                        "REL-1 forced-role integrity violation "
+                        "(qid=%s suite=%s): forced=%s but served_by=%s — "
+                        "rejecting cross-role measurement",
+                        stable_qid,
+                        suite,
+                        _forced,
+                        _served_by,
+                    )
+
             tokens = _nonnegative_int(resp.get("tokens_generated", 0))
             host_covariates = _capture_host_timing_covariates(
                 tokens_generated=tokens,
@@ -2483,6 +2673,11 @@ class EvalTower:
         batch_start = time.time()
         writer: _EvalQuestionJsonlWriter | None = None
         artifact_root, artifact_root_source = _eval_artifact_root(self._trial_path_context)
+        explicit_path: Path | None = None
+        if self._question_artifact_dir is not None:
+            fname = f"question_results.{_safe_artifact_name(label, fallback='arm')}.jsonl"
+            explicit_path = Path(self._question_artifact_dir) / fname
+            artifact_root_source = "window_output_dir"
         try:
             pending_writer = _EvalQuestionJsonlWriter(
                 root=artifact_root,
@@ -2492,6 +2687,7 @@ class EvalTower:
                 label=label,
                 requested_n=n,
                 concurrency=workers,
+                path=explicit_path,
             )
             pending_writer.append_start()
             writer = pending_writer
@@ -2932,14 +3128,33 @@ class EvalTower:
         for r in scored_results:
             source = r.confidence_source or "unknown"
             confidence_source_counts[source] = confidence_source_counts.get(source, 0) + 1
-        ece = 0.0
-        auroc = 0.0
+        # EV-CONF provenance (computed once, reused in details below): confidence
+        # is "real" only when EVERY scored row carried the completion-probability
+        # geomean. A binary-correctness proxy or a mixed batch is fail-closed False.
+        confidence_is_real = bool(confidence_source_counts) and set(
+            confidence_source_counts
+        ) <= {"completion_probabilities_geomean"}
+        # EV-11c honesty (2026-07-22): when NO confidence data is present (every row
+        # errored) the calibration metrics are UNDEFINED — emit None, never a 0.0
+        # that masquerades as a real measurement (the EV-11c math re-baseline shipped
+        # ECE=0.0/AUROC=0.0 placeholders that read as calibration numbers). This is a
+        # REPORTING-honesty change only: ece/auroc are not SafetyGate/Pareto inputs
+        # (safetygate-rlvr-provenance-audit F2), so it does NOT touch the ESC-7-reserved
+        # question of whether *real* ECE re-enters gating. Decision-facing real-vs-proxy
+        # gating happens in the per-role report builders (eval_math_rebaseline /
+        # eval_calibration). When confidence rows ARE present the closed-top-bin ECE /
+        # roc_auc computation is unchanged (a present-but-degenerate AUROC keeps 0.0).
+        ece: float | None = None
+        auroc: float | None = None
         cal_violations = 0
         if confidences:
             # EV-11b (operator-decided 2026-07-20): use the canonical closed-top-bin
             # ECE from stat_tests. This is a scoring-semantics change and is
             # era-labeled in details so pre/post EV-11b numbers are not mixed.
             ece = expected_calibration_error(confidences, correctness_vals, n_bins=10) or 0.0
+            # Present-but-degenerate AUROC keeps its pinned 0.0 (data present, just
+            # not rankable); only a fully-absent batch above leaves it None.
+            auroc = 0.0
             # AUC: only meaningful with non-degenerate confidence (>2 distinct values).
             # B1/EV-consolidation (2026-07-17): compute ROC-AUC via the stdlib
             # clean-room roc_auc() in src/llm_primitives/stat_tests.py instead of
@@ -3109,8 +3324,10 @@ class EvalTower:
                 "ece_binning": "closed_top_bin_stat_tests",
                 "ece_instrument_era": "ev11b_closed_bin_2026_07_20",
                 "confidence_source_counts": dict(sorted(confidence_source_counts.items())),
-                "confidence_is_real": bool(confidence_source_counts)
-                and set(confidence_source_counts) <= {"completion_probabilities_geomean"},
+                "confidence_is_real": confidence_is_real,
+                # EV-11c provenance: distinguishes "None because no confidence data"
+                # (calibration_confidence_present=False) from a real computed value.
+                "calibration_confidence_present": bool(confidences),
             },
             mean_tools_used=mean_tools_used,
             tool_use_rate=tool_use_rate,
@@ -4051,12 +4268,30 @@ class EvalTower:
                 labels = [float(r.correct) for r in scored]
                 metrics = compute_calibration_metrics(confidences, labels)
                 correct = sum(1 for r in scored if r.correct)
+                # EV-11c: the six EV-4 calibration metrics are meaningful ONLY over
+                # real (completion-probability geomean) confidence. On a binary/mixed
+                # batch, ECE collapses to a fake ~0.0; emit None + provenance rather
+                # than a placeholder. confidence_is_real is fail-closed (whole-batch).
+                cal_source_counts: dict[str, int] = {}
+                for r in scored:
+                    src = r.confidence_source or "unknown"
+                    cal_source_counts[src] = cal_source_counts.get(src, 0) + 1
+                cal_real = bool(cal_source_counts) and set(
+                    cal_source_counts
+                ) <= {"completion_probabilities_geomean"}
+                reliability = (len(scored) / len(results)) if results else 0.0
                 per_role[role] = {
                     "role": role,
                     "n_questions": len(results),
                     "n_scored": len(scored),
+                    "reliability": reliability,
                     "accuracy": (correct / len(scored)) if scored else None,
-                    **{key: metrics.get(key) for key in CALIBRATION_METRIC_KEYS},
+                    **{
+                        key: (metrics.get(key) if cal_real else None)
+                        for key in CALIBRATION_METRIC_KEYS
+                    },
+                    "confidence_is_real": cal_real,
+                    "confidence_source_counts": dict(cal_source_counts),
                 }
         return {
             "mode": "calibration",
@@ -4148,6 +4383,14 @@ class EvalTower:
                 scored = [r for r in results if not r.error]
                 correct = sum(1 for r in scored if r.correct)
                 arm_label = f"ev11-math-rebaseline::{role}::seed{int(seed)}::{dataset_sha256[:12]}"
+                # EV-11c: ECE/AUROC are decision-grade ONLY when every scored row
+                # carried real (completion-probability geomean) confidence. The math
+                # dispatch requests n_probs via _eval_question, but if the backend
+                # returns no completion_probabilities the batch falls back to the
+                # binary-correctness proxy — which makes ECE trivially ~0 and AUROC
+                # degenerate. On a binary/mixed batch we emit None + provenance rather
+                # than a 0.0 placeholder that masqueraded as a measurement (EV-11c).
+                cal_real = bool(agg.details.get("confidence_is_real"))
                 per_role[role] = {
                     "role": role,
                     "arm": arm_label,
@@ -4157,8 +4400,12 @@ class EvalTower:
                     "accuracy": (correct / len(scored)) if scored else None,
                     "quality": agg.quality,
                     "reliability": agg.reliability,
-                    "ece": agg.ece,
-                    "auroc": agg.auroc,
+                    "ece": agg.ece if cal_real else None,
+                    "auroc": agg.auroc if cal_real else None,
+                    "confidence_is_real": cal_real,
+                    "confidence_source_counts": dict(
+                        agg.details.get("confidence_source_counts") or {}
+                    ),
                     "test_profile": test_profile,
                 }
                 # Per-question correctness vector for the paired screen. Keyed by
@@ -4187,6 +4434,95 @@ class EvalTower:
             # flip pairs + per-arm Wilson CIs, gated on matched dataset+profile.
             # Empty ``pairs`` when fewer than two arms were scored.
             "paired_significance": screen_paired_arms(arm_screens),
+        }
+
+    def eval_question_subset(
+        self,
+        *,
+        suite: str,
+        question_ids: "Sequence[str]",
+        roles: "list[str] | str | None",
+        scoring: str | None = None,
+        seed: int = EVAL_SPEC_SEED,
+        production_sampling: bool = True,
+    ) -> dict[str, Any]:
+        """Rerun a SPECIFIC subset of a suite's questions (by dataset id or stable
+        qid) per role — the targeted-requeue primitive behind
+        ``--retry-errors-from``.
+
+        Unlike ``eval_math_rebaseline`` this imposes NO full-coverage guard: the
+        error set to requeue may legitimately be, e.g., all-GSM8K with zero
+        MATH-500, so the n_math500>0 guard must NOT apply. Matches question dicts
+        against ``id`` / ``qid`` / ``question_id`` so it works regardless of which
+        identity the prior per-arm file recorded. Returns a per_role dict with the
+        same provenance fields as ``eval_math_rebaseline`` (ece/auroc gated on
+        ``confidence_is_real``; None on a binary/mixed batch) PLUS a compact
+        per-question ``rows`` list the merge step reconciles against the prior run.
+        """
+        roles = self._normalize_roles(roles)
+        want = {str(x).strip() for x in question_ids if str(x).strip()}
+        if not want:
+            raise ValueError("eval_question_subset requires a non-empty question_ids set")
+        adapter = self._load_dataset_adapter(suite)
+        all_questions = adapter.extract_all()
+
+        def _identity(q: dict[str, Any]) -> set[str]:
+            return {
+                str(q.get("id", "")).strip(),
+                str(q.get("qid", "")).strip(),
+                str(q.get("stable_qid", "")).strip(),
+                str(q.get("question_id", "")).strip(),
+            } - {""}
+
+        questions = [q for q in all_questions if _identity(q) & want]
+        for q in questions:
+            q.setdefault("suite", suite)
+            if scoring:
+                q["scoring_method"] = str(scoring)
+        if not questions:
+            raise ValueError(
+                "eval_question_subset matched 0 questions for the requested ids "
+                f"(suite={suite!r}, requested={len(want)}) — dataset/id drift or the "
+                "prior run used a different suite"
+            )
+        dataset_sha256 = dataset_content_sha256(questions)
+        per_role: dict[str, Any] = {}
+        with httpx.Client(timeout=self.timeout) as client:
+            for role in roles:
+                role_qs = [self._with_forced_role(q, role) for q in questions]
+                results = self._eval_batch(
+                    role_qs, client, log_every=100, label=f"retry-{role}"
+                )
+                agg = self._aggregate(results, tier=2)
+                scored = [r for r in results if not r.error]
+                correct = sum(1 for r in scored if r.correct)
+                cal_real = bool(agg.details.get("confidence_is_real"))
+                per_role[role] = {
+                    "role": role,
+                    "n_questions": len(results),
+                    "n_scored": len(scored),
+                    "correct": correct,
+                    "accuracy": (correct / len(scored)) if scored else None,
+                    "reliability": agg.reliability,
+                    "ece": agg.ece if cal_real else None,
+                    "auroc": agg.auroc if cal_real else None,
+                    "confidence_is_real": cal_real,
+                    "confidence_source_counts": dict(
+                        agg.details.get("confidence_source_counts") or {}
+                    ),
+                    "rows": [_compact_question_result(r) for r in results],
+                }
+        return {
+            "mode": "question_subset",
+            "suite": suite,
+            "scoring": str(scoring) if scoring else None,
+            "seed": int(seed),
+            "roles": roles,
+            "production_sampling": bool(production_sampling),
+            "n_questions": len(questions),
+            "requested_ids": sorted(want),
+            "dataset_sha256": dataset_sha256,
+            "per_role": per_role,
         }
 
     def evaluate(

@@ -1627,13 +1627,39 @@ def start_orchestrator(
     env = os.environ.copy()
     env["HF_HOME"] = str(_PATHS["cache_dir"] / "huggingface")
     env["TMPDIR"] = str(_PATHS["tmp_dir"])
-    runtime_numa_mode = (
-        stack_numa_mode
-        or read_runtime_stack_numa_mode()
-        or env.get("ORCHESTRATOR_STACK_NUMA_MODE")
-    )
-    if runtime_numa_mode:
-        env["ORCHESTRATOR_STACK_NUMA_MODE"] = normalize_stack_numa_mode(runtime_numa_mode)
+    # Resolve the intended mode (arg > runtime-facts manifest > shell env),
+    # tracking provenance for the alignment log below.
+    manifest_mode = read_runtime_stack_numa_mode()
+    env_mode = env.get("ORCHESTRATOR_STACK_NUMA_MODE")
+    runtime_numa_mode: str | None = None
+    runtime_numa_source = "unset"
+    if stack_numa_mode:
+        runtime_numa_mode, runtime_numa_source = stack_numa_mode, "arg"
+    elif manifest_mode:
+        runtime_numa_mode, runtime_numa_source = manifest_mode, "runtime-facts-manifest"
+    elif env_mode:
+        runtime_numa_mode, runtime_numa_source = env_mode, "shell-env"
+    resolved_mode = normalize_stack_numa_mode(runtime_numa_mode) if runtime_numa_mode else None
+    # ESC-8 Fix 3: verify the resolved mode against the REALIZED fleet (bare TCP
+    # connect on NUMA_CONFIG full vs quarter ports; no HTTP to llama-servers).
+    # The API must never be launched with a mode the live fleet contradicts —
+    # e.g. a poisoned manifest/env says "full" while only quarters are listening.
+    realized_mode: str | None = None
+    try:
+        from scripts.server.realized_fleet import derive_realized_numa_mode
+
+        realized_mode = derive_realized_numa_mode()
+    except Exception as exc:  # noqa: BLE001
+        print(f"    [numa-align] WARN: realized-fleet probe failed ({exc})")
+    if realized_mode is not None and realized_mode != resolved_mode:
+        print(
+            f"    [numa-align] realized fleet is '{realized_mode}' but resolved mode was "
+            f"{resolved_mode!r} (source: {runtime_numa_source}); "
+            f"correcting to '{realized_mode}'."
+        )
+        resolved_mode = realized_mode
+    if resolved_mode:
+        env["ORCHESTRATOR_STACK_NUMA_MODE"] = resolved_mode
     # Feature flags: make every registry flag explicit in /proc/<pid>/environ.
     # Explicit launch-time env values are activation intent and must survive.
     _apply_production_feature_env(env)
@@ -2098,18 +2124,20 @@ def main() -> int:
     start_parser.add_argument(
         "--numa-mode",
         choices=["full", "quarter", "both"],
-        default="full",
+        default=None,
         help=(
             "For roles with both a full-NUMA-node instance and quarter-instance siblings "
-            "(currently frontdoor + coder_escalation + worker_general — see "
+            "(currently frontdoor + worker_general + ingest_long_context — see "
             "NUMA_CONFIG[role]['full_instance_idx']), pick one mode. "
-            "'full' = single full instance (max single-stream tps; recommended for single-user "
-            "workloads; default for AutoPilot/eval integrity). 'quarter' = 4 concurrent quarters "
-            "(max aggregate under multi-request load). 'both' = compatibility mode with all 5 — viable "
-            "when the role's -t is small enough to avoid CPU oversubscription (Qwen3-Coder -t 24 "
-            "and Qwen3.6-35B Q8 quarter-tuned were OK; gemma4-MTP -t 96 will hit load 420 → "
-            "9 t/s with 'both', so use --numa-mode full for that role specifically). "
-            "Single-instance roles (architect_general, ingest_long_context, embedders) are "
+            "When OMITTED the launcher INFERS the mode from the running fleet (ESC-8). "
+            "Production is QUARTERS-ONLY: the worker_general full (0-95) instance is "
+            "FULL_DISABLED (see scripts/server/stack_numa.py:173-184) and frontdoor/ingest "
+            "serve their quarters, so a cold start with no live fleet defaults to 'quarter'. "
+            "'quarter' = 4 concurrent quarters (current production mode; max aggregate under "
+            "load). 'full' = single full instance (max single-stream tps; only when a full "
+            "fleet is deliberately brought up). 'both' = compatibility mode with all 5 — "
+            "CPU-oversubscribes gemma4-MTP at -t 96 (load 420 → ~9 t/s), avoid for "
+            "worker_general. Single-instance roles (architect_general, embedders) are "
             "unaffected by this flag."
         ),
     )

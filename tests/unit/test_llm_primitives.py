@@ -311,20 +311,31 @@ class TestRequestContext:
         assert b == ("chat-b", 20.0)
 
     def test_budget_diagnostics_and_timeout_clamp_under_deadline(self):
-        primitives = LLMPrimitives(mock_mode=True)
-        deadline = time.perf_counter() + 0.6
-        with primitives.request_context(deadline_s=deadline, task_id="budget-test"):
-            clamped = primitives._clamp_timeout_to_request_budget(10)
-            diag = primitives.get_budget_diagnostics()
-            assert clamped == 1
-            assert diag["deadline_present"] is True
-            assert diag["budget_applied"] is True
-            assert diag["timeout_clamp_events"] >= 1
-            assert diag["deadline_remaining_ms_start"] is not None
-            assert diag["depth_override_enabled"] is False
-            assert diag["depth_override_events"] == 0
-        diag_end = primitives.get_budget_diagnostics()
-        assert diag_end["deadline_remaining_ms_end"] is not None
+        # Pin depth_model_overrides OFF so the depth_override_enabled assertion
+        # holds regardless of the stack's runtime-flags file (which enables it
+        # in some environments). Preserve every other real feature flag.
+        import dataclasses
+
+        from src.features import get_features, reset_features, set_features
+
+        set_features(dataclasses.replace(get_features(), depth_model_overrides=False))
+        try:
+            primitives = LLMPrimitives(mock_mode=True)
+            deadline = time.perf_counter() + 0.6
+            with primitives.request_context(deadline_s=deadline, task_id="budget-test"):
+                clamped = primitives._clamp_timeout_to_request_budget(10)
+                diag = primitives.get_budget_diagnostics()
+                assert clamped == 1
+                assert diag["deadline_present"] is True
+                assert diag["budget_applied"] is True
+                assert diag["timeout_clamp_events"] >= 1
+                assert diag["deadline_remaining_ms_start"] is not None
+                assert diag["depth_override_enabled"] is False
+                assert diag["depth_override_events"] == 0
+            diag_end = primitives.get_budget_diagnostics()
+            assert diag_end["deadline_remaining_ms_end"] is not None
+        finally:
+            reset_features()
 
     def test_timeout_clamp_no_deadline_no_budget_application(self):
         primitives = LLMPrimitives(mock_mode=True)
@@ -335,6 +346,26 @@ class TestRequestContext:
             assert diag["deadline_present"] is False
             assert diag["budget_applied"] is False
             assert diag["timeout_clamp_events"] == 0
+
+    def test_timeout_clamp_extends_when_remaining_exceeds_base(self):
+        """2026-07-21 EV-11c: a deadline longer than the role base lifts the cap.
+
+        Interactive traffic never hits this branch (its deadline starts at the
+        role SLA, so remaining <= base); only an eval_batch request that
+        extended its deadline past the SLA does — and then the llama call may
+        use the full remaining budget instead of being capped to the 60s base.
+        """
+        primitives = LLMPrimitives(mock_mode=True)
+        with primitives.request_context(deadline_s=None, task_id="extend"):
+            with patch.object(
+                primitives, "_remaining_deadline_s", return_value=300.0
+            ):
+                clamped = primitives._clamp_timeout_to_request_budget(60)
+                diag = primitives.get_budget_diagnostics()
+        assert clamped == 300  # full remaining budget, not the 60s base
+        # Extension is not a shrink, so no clamp diagnostics are recorded.
+        assert diag["budget_applied"] is False
+        assert diag["timeout_clamp_events"] == 0
 
     def test_llm_batch_async_propagates_request_context_to_executor_threads(self):
         primitives = LLMPrimitives(mock_mode=False, model_server=object())

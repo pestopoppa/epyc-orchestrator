@@ -14,6 +14,17 @@ DEFAULT_INSTRUMENT_ERAS_PATH = (
     Path(__file__).resolve().parents[2] / "orchestration" / "instrument_eras.yaml"
 )
 AUTOPILOT_QUALITY_SCOPE = "autopilot_quality"
+EVAL_QUALITY_SCOPE = "eval_quality"
+
+# E7-eval-instrument boundary (scope ``eval_quality``) — the live eval-instrument era as of
+# 2026-07-21T10:30Z (A3 79k/41-suite question-pool rebuild + the B7 deterministic scorer
+# package). Held here as a code constant that CITES THE ERA NAME so the quality decision
+# plane can still fence pre-boundary evidence (the analogue of the speed axis's
+# ``pareto_exclude_before_ts``) even if the registry read fails. The append-only row in
+# ``orchestration/instrument_eras.yaml`` remains the human-owned source of truth; this
+# constant is the fail-safe fallback and MUST match that row's id + ``from``.
+E7_EVAL_INSTRUMENT_ERA_ID = "E7-eval-instrument"
+E7_EVAL_INSTRUMENT_BOUNDARY = "2026-07-21T10:30:00Z"
 
 
 def instrument_eras_path() -> Path:
@@ -208,4 +219,105 @@ def designed_core_activation_guard(
         "active_quality_eras": [str(row.get("id", "")) for row in active_quality_rows],
         "active_core_eras": [_era_ref(row) for row in active_core_rows],
         "inactive_matching_eras": [_era_ref(row) for row in inactive_matching_rows],
+    }
+
+
+def active_eval_quality_era(
+    *,
+    path: Path | str | None = None,
+    now: datetime | date | float | int | None = None,
+) -> dict[str, Any]:
+    """Resolve the active ``eval_quality`` instrument era from the registry (fail-closed).
+
+    Mirrors :func:`designed_core_activation_guard`'s read-only, operator-owned-registry
+    contract but answers the quality-fence question: which eval-quality instrument era is
+    live *now*, and at what boundary timestamp did it open. The quality decision plane uses
+    this to fence pre-boundary journal/baseline evidence — the analogue of the speed axis's
+    ``pareto_exclude_before_ts``. Pre-boundary rows are PRIORS (excluded from wealth/
+    decisions), never deleted.
+
+    Fails closed: ``ok=False`` on a missing / malformed registry, an invalid ``now``, or
+    when no ``eval_quality`` era is active at ``now`` (e.g. a clock before the boundary).
+    When multiple ``eval_quality`` eras are active the latest-opened one wins.
+    """
+    target = Path(path) if path is not None else instrument_eras_path()
+    base: dict[str, Any] = {
+        "ok": False,
+        "scope": EVAL_QUALITY_SCOPE,
+        "path": str(target),
+    }
+
+    try:
+        raw = target.read_text()
+    except OSError as exc:
+        return {
+            **base,
+            "status": "missing_registry",
+            "reason": f"instrument-era registry unavailable: {exc}",
+        }
+
+    try:
+        data = yaml.safe_load(raw)
+    except yaml.YAMLError as exc:
+        return {
+            **base,
+            "status": "invalid_registry",
+            "reason": f"instrument-era registry is not valid YAML: {exc}",
+        }
+    if not isinstance(data, dict) or not isinstance(data.get("eras"), list):
+        return {
+            **base,
+            "status": "invalid_registry",
+            "reason": "instrument-era registry must contain an eras list",
+        }
+
+    try:
+        now_epoch = _now_epoch(now)
+    except ValueError as exc:
+        return {**base, "status": "invalid_now", "reason": str(exc)}
+
+    active_rows: list[dict[str, Any]] = []
+    for row in data["eras"]:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("scope", "")).strip() != EVAL_QUALITY_SCOPE:
+            continue
+        for key in ("from", "until"):
+            if _has_boundary(row.get(key)) and _parse_epoch(row.get(key)) is None:
+                return {
+                    **base,
+                    "status": "invalid_registry",
+                    "reason": (
+                        "instrument-era registry has an invalid "
+                        f"{EVAL_QUALITY_SCOPE} {key} timestamp "
+                        f"on era {row.get('id', '<unknown>')!r}"
+                    ),
+                }
+        if _is_active(row, now_epoch):
+            active_rows.append(row)
+
+    if not active_rows:
+        return {
+            **base,
+            "status": "no_active_era",
+            "reason": (
+                f"no active {EVAL_QUALITY_SCOPE} instrument-era row at the requested time; "
+                "the quality axis runs unfenced (single-era world) until a boundary opens"
+            ),
+            "active_eval_quality_eras": [],
+        }
+
+    active_rows.sort(key=lambda row: _parse_epoch(row.get("from")) or float("-inf"), reverse=True)
+    era = active_rows[0]
+    boundary_iso = str(era.get("from", ""))
+    boundary_epoch = _parse_epoch(era.get("from"))
+    return {
+        **base,
+        "ok": True,
+        "status": "active",
+        "reason": "active eval_quality instrument era resolved from the registry",
+        "era_id": str(era.get("id", "")),
+        "boundary_iso": boundary_iso,
+        "boundary_epoch": boundary_epoch,
+        "active_eval_quality_eras": [str(row.get("id", "")) for row in active_rows],
     }

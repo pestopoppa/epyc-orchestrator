@@ -22,6 +22,7 @@ from seeding_types import (
     STACK_SCRIPT,
 )
 from seeding_infra import _wait_for_heavy_models_idle
+from seeding_scoring import _inband_error_text
 
 __all__ = [
     "_SLOT_ERASE_CAPABILITY",
@@ -32,6 +33,7 @@ __all__ = [
     "_normalize_tool_telemetry",
     "_read_slot_progress",
     "_recover_heavy_ports_if_stuck",
+    "_surface_inband_error",
     "call_orchestrator_forced",
 ]
 
@@ -611,6 +613,29 @@ def _normalize_tool_telemetry(data: dict[str, Any]) -> None:
     data["tools_used"] = inferred_used
 
 
+def _surface_inband_error(data: dict[str, Any]) -> None:
+    """REL-1 Guard 1: surface an in-band ``[ERROR: ...]`` answer into ``error``.
+
+    The orchestrator circuit breaker / llm primitives can return an HTTP-200
+    body whose ``answer`` IS an error banner ("[ERROR: Backend unavailable
+    (circuit open): ...]") with ``error=None``. Downstream seeding scoring keys
+    infra-vs-task classification off ``data["error"]`` only, so without this the
+    banner is scored as a WRONG answer and a 0.0 reward is injected into MemRL,
+    training the learned router that the role "failed" when the backend was
+    merely unavailable. Copy the banner into ``data["error"]`` (only when no
+    structured error is already present — HTTP ``error_code``/``error_detail``
+    wins) so ``_classify_error`` marks it INFRASTRUCTURE and the row is
+    excluded. The raw ``answer`` is left untouched. Mirrors eval_tower.py
+    Guard 1. Idempotent; safe to call on any response dict.
+    """
+    if not isinstance(data, dict) or data.get("error"):
+        return
+    inband = _inband_error_text(data.get("answer", ""))
+    if inband is not None:
+        data["error"] = inband
+        data.setdefault("failure_reason", "inband_error")
+
+
 # ── Core orchestrator call ───────────────────────────────────────────
 
 
@@ -689,6 +714,36 @@ def call_orchestrator_forced(
     """
     import httpx
 
+    # ── Guard 3 (REL-1 eval-honesty): deadline-starvation floor ──────────
+    # 2026-07-21 EV-11c incident: client-deadline starvation on long MATH-tail
+    # questions shrank the effective per-call budget to ~1s; those doomed calls
+    # 504'd and tripped the production circuit breaker, which then served
+    # in-band "[ERROR: ...]" text as answers. Refuse to fire an eval llama call
+    # whose remaining budget is below a sane minimum — fail the question
+    # pre-send as a deadline_starved ERROR (REL-1: an excluded row, not a wrong
+    # answer) instead of tripping the breaker. `client_deadline_unix_s` below is
+    # computed as `now + timeout`, so the remaining budget for the llama call is
+    # exactly `timeout`. Scoped to eval traffic (workload_class == "eval_batch")
+    # so the 14 non-eval callers of this function keep their EXACT legacy path.
+    if str(workload_class or "") == "eval_batch":
+        _min_llama_budget_s = _env_float("AUTOPILOT_EVAL_MIN_LLAMA_BUDGET_S", 30.0)
+        if _min_llama_budget_s > 0 and float(timeout) < _min_llama_budget_s:
+            logger.error(
+                "  [deadline-starved] REFUSED pre-send: role=%s budget=%.1fs "
+                "< floor=%.1fs — failing question as error rather than firing a "
+                "doomed call that trips the circuit breaker",
+                force_role, float(timeout), _min_llama_budget_s,
+            )
+            return {
+                "answer": "",
+                "error": (
+                    f"deadline_starved: eval llama budget {float(timeout):.1f}s "
+                    f"< floor {_min_llama_budget_s:.0f}s (role={force_role}); "
+                    "refused pre-send"
+                ),
+                "failure_reason": "deadline_starved",
+            }
+
     payload: dict[str, Any] = {
         "prompt": prompt,
         "real_mode": True,
@@ -766,6 +821,7 @@ def call_orchestrator_forced(
                     error_code = data.get("error_code")
                     if error_code and not data.get("error"):
                         data["error"] = data.get("error_detail") or f"HTTP {error_code}"
+                    _surface_inband_error(data)
                     _normalize_tool_telemetry(data)
                     return data
             response.raise_for_status()
@@ -774,6 +830,7 @@ def call_orchestrator_forced(
                 error_code = data.get("error_code")
                 if error_code and not data.get("error"):
                     data["error"] = data.get("error_detail") or f"HTTP {error_code}"
+                _surface_inband_error(data)
                 _normalize_tool_telemetry(data)
             return data
         except Exception as e:
@@ -801,6 +858,7 @@ def call_orchestrator_forced(
         error_code = data.get("error_code")
         if error_code and not data.get("error"):
             data["error"] = data.get("error_detail") or f"HTTP {error_code}"
+        _surface_inband_error(data)
         _normalize_tool_telemetry(data)
         # Attach meta as _meta so downstream consumers can inspect without
         # disturbing existing data keys.

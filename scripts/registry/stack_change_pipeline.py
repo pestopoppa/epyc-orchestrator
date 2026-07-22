@@ -503,11 +503,15 @@ def _update_descriptors(config: StackChangePipelineConfig) -> PipelineStep:
 
 def _check_stack_priors(config: StackChangePipelineConfig) -> PipelineStep:
     try:
+        # ESC-8 Fix 6: resolve the NUMA mode from the realized fleet (or refuse)
+        # so a clean-shell check computes the SAME lineup the update writes and
+        # cannot report the quarters-only priors as "stale" against a full expected.
         expected = compile_stack_priors(
             registry_path=config.lean_registry,
             descriptor_path=config.descriptors,
             active_roles=_stack_prior_roles(config),
             allow_incomplete=config.compile_incomplete,
+            require_realized_mode=True,
         )
     except Exception as exc:  # noqa: BLE001
         return PipelineStep(
@@ -534,12 +538,16 @@ def _check_stack_priors(config: StackChangePipelineConfig) -> PipelineStep:
 
 def _update_stack_priors(config: StackChangePipelineConfig) -> PipelineStep:
     try:
+        # ESC-8 Fix 6: a clean-shell `pipeline update` must not read the ambient
+        # default-full env and rewrite stack_priors.yaml to the dead full lineup
+        # (kill chain A4). Derive the mode from the realized fleet, or refuse.
         priors = write_stack_priors(
             config.stack_priors,
             registry_path=config.lean_registry,
             descriptor_path=config.descriptors,
             active_roles=_stack_prior_roles(config),
             allow_incomplete=config.compile_incomplete,
+            require_realized_mode=True,
         )
     except Exception as exc:  # noqa: BLE001
         return PipelineStep(

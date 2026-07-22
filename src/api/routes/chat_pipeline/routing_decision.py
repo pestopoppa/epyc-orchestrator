@@ -384,11 +384,35 @@ def log_routing_start(
 
 
 def resolve_timeout(request: ChatRequest, routing_decision: list) -> int:
-    """Compute role-specific timeout with request-level clamp."""
+    """Compute role-specific timeout with request-level budget.
+
+    Standard traffic clamps DOWN to the role SLA: a request-supplied
+    ``timeout_s`` may only *shorten* the per-request budget below the role's
+    interactive latency guarantee, never lengthen it. Interactive latency
+    guarantees are therefore unchanged by this function.
+
+    Exception — 2026-07-21 EV-11c incident. Eval-batch traffic
+    (``workload_class == "eval_batch"``) that declares an explicit
+    ``timeout_s`` may EXTEND its budget *beyond* the role SLA, because the
+    request itself is declaring how long its work legitimately takes. The
+    incident: 2,048-token MATH-tail generations served at 4-wide shared
+    bandwidth need >60s, but the interactive worker SLA (60s) clamped every
+    such call DOWN to 60s. Those doomed calls 504'd, tripped the production
+    circuit breaker, and the breaker then served in-band ``[ERROR: ...]`` text
+    as answers plus a silent role fallback. Honoring the eval batch's
+    self-declared budget lets the long-but-legitimate call finish instead of
+    being force-failed. Only self-declared ``eval_batch`` requests can lengthen
+    their budget; all other traffic keeps the exact DOWN-only ``min`` clamp.
+    """
     role_str = str(routing_decision[0]) if routing_decision else str(Role.FRONTDOOR)
     timeout_s = role_timeout_for(role_str)
     if request.timeout_s is not None:
-        timeout_s = max(1, min(timeout_s, int(request.timeout_s)))
+        if str(getattr(request, "workload_class", "") or "") == "eval_batch":
+            # Self-declared eval budget: may EXTEND beyond the role SLA.
+            timeout_s = max(1, int(request.timeout_s))
+        else:
+            # Interactive / all other traffic: DOWN-only clamp (unchanged).
+            timeout_s = max(1, min(timeout_s, int(request.timeout_s)))
     return timeout_s
 
 

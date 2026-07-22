@@ -808,6 +808,16 @@ def _launch_cfg_from_target(target: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _realized_launch_numa_mode() -> str | None:
+    """Realized-fleet NUMA mode for the launch view (module-level test seam)."""
+    try:
+        from scripts.server.realized_fleet import derive_realized_numa_mode
+
+        return derive_realized_numa_mode()
+    except Exception:
+        return None
+
+
 def _launch_manifest_targets(
     *,
     registry_path: Path = DEFAULT_REGISTRY,
@@ -821,7 +831,14 @@ def _launch_manifest_targets(
 
     from scripts.server.stack_numa_mode import env_stack_numa_mode
 
-    numa_mode = env_stack_numa_mode()
+    # ESC-8/WP-13: build the launch view against the REALIZED fleet mode, not
+    # the ambient env default ("full" in a clean shell). A quarter-realized
+    # fleet guarded against a full-mode launch view mismatches wholesale (the
+    # 105-error class, 2026-07-22). Env stays the fallback for fleet-less
+    # environments (tests, cold hosts).
+    numa_mode = _realized_launch_numa_mode()
+    if numa_mode is None:
+        numa_mode = env_stack_numa_mode()
     registry = _load_yaml_mapping(registry_path)
     registry_roles = registry.get("roles") if isinstance(registry.get("roles"), dict) else {}
     server_mode = (
@@ -858,6 +875,32 @@ def _launch_manifest_targets(
                     target["launch_requirements"].update(
                         _launch_requirements_for_server(server)
                     )
+    # WP-13: attach the declarative alias→host relation from server_mode
+    # shared_with. evidence.alias_overrides only exists for MODEL-conflicted
+    # aliases (worker_math's ghost binding); same-model aliases
+    # (coder_escalation/worker_summarize on frontdoor's fleet) are declared
+    # ONLY here. Host key = the row's model_role when it is a launch target,
+    # else the server_mode key itself.
+    for server_key, cfg in server_mode.items():
+        if not isinstance(cfg, dict):
+            continue
+        shared = cfg.get("shared_with")
+        if not isinstance(shared, list):
+            continue
+        model_role = cfg.get("model_role")
+        host_key = (
+            str(model_role)
+            if isinstance(model_role, str) and model_role in targets
+            else str(server_key)
+            if str(server_key) in targets
+            else None
+        )
+        if host_key is None:
+            continue
+        for alias in shared:
+            if isinstance(alias, str) and alias in targets and alias != host_key:
+                targets[alias]["alias_host"] = host_key
+
     for role, target in targets.items():
         descriptor = descriptor_roles.get(role) or {}
         role_cfg = registry_roles.get(role) if isinstance(registry_roles.get(role), dict) else None
@@ -1072,6 +1115,36 @@ def _launch_target_is_manifest_owned_auxiliary(role: str, target: dict[str, Any]
     return False
 
 
+def _alias_host_role(record: dict[str, Any]) -> str | None:
+    """Host role an alias record rides (evidence.alias_overrides[].served_by).
+
+    WP-13: an alias role has no llama-server of its own — its serving view is
+    the HOST's full fleet, so serving-vs-launch alignment must be judged
+    against the host's launch manifest row, not the alias's tagged subset.
+    Returns None unless every alias_override names the same host.
+    """
+    evidence = record.get("evidence")
+    if not isinstance(evidence, dict):
+        return None
+    overrides = evidence.get("alias_overrides")
+    if not isinstance(overrides, list):
+        return None
+    hosts = {
+        str(override.get("served_by"))
+        for override in overrides
+        if isinstance(override, dict) and override.get("served_by")
+    }
+    if len(hosts) != 1:
+        return None
+    host = hosts.pop()
+    # Descriptors are model-keyed, so the HOST's own record carries the same
+    # alias_overrides copy — a record whose resolved host is itself IS the
+    # host and must keep full (runtime-inclusive) validation.
+    if host == str(record.get("role") or ""):
+        return None
+    return host
+
+
 def validate_launch_manifest_serving_alignment(
     priors: dict[str, Any],
     *,
@@ -1130,6 +1203,13 @@ def validate_launch_manifest_serving_alignment(
         if target is None:
             errors.append(f"live role {role!r} is absent from current launch manifest")
             continue
+        # WP-13: alias roles serve the HOST's fleet — align against the host's
+        # launch row (superset of the alias's tagged subset), not its own.
+        # Host resolution: model-conflict evidence first (alias_overrides),
+        # else the declarative server_mode shared_with relation.
+        host_role = _alias_host_role(record) or target.get("alias_host")
+        if host_role and isinstance(targets.get(host_role), dict):
+            target = targets[host_role]
         serving = record.get("serving")
         if not isinstance(serving, dict):
             continue
@@ -1195,7 +1275,30 @@ def validate_launch_manifest_serving_alignment(
                 if isinstance(launch, dict)
                 else []
             )
-            if actual_entries != target_launch_entries:
+            if host_role:
+                # WP-13: an alias's recorded launch entries are the tagged
+                # subset of the host fleet it rides, carrying alias-specific
+                # tagging fields — require PORT containment in the host's
+                # entries (dict equality can never hold across the tagging).
+                host_entry_ports = {
+                    entry.get("port")
+                    for entry in target_launch_entries
+                    if isinstance(entry, dict) and isinstance(entry.get("port"), int)
+                }
+                alias_extra_ports = sorted(
+                    entry.get("port")
+                    for entry in actual_entries
+                    if isinstance(entry, dict)
+                    and isinstance(entry.get("port"), int)
+                    and entry.get("port") not in host_entry_ports
+                )
+                if alias_extra_ports:
+                    errors.append(
+                        f"role {role!r} serving.launch.entries port(s) "
+                        f"{alias_extra_ports} absent from host {host_role!r} "
+                        f"launch manifest"
+                    )
+            elif actual_entries != target_launch_entries:
                 errors.append(
                     f"role {role!r} serving.launch.entries do not match "
                     f"launch manifest entries"
@@ -1220,7 +1323,11 @@ def validate_launch_manifest_serving_alignment(
                     f"role {role!r} serving.launch.requirements do not match "
                     f"launch manifest requirements: {json.dumps(mismatches, sort_keys=True)}"
                 )
-        if target_launch_runtime:
+        if target_launch_runtime and not host_role:
+            # WP-13: an alias record's stored runtime is a stale artifact of its
+            # standalone-row past (e.g. coder_escalation acceleration:none) — it
+            # RUNS under the host's runtime by construction (one process). The
+            # runtime is validated once, on the host's own row.
             launch = serving.get("launch")
             actual_runtime = (
                 _normalized_launch_runtime(launch.get("runtime"))
