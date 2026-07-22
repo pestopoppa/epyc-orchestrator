@@ -18,8 +18,17 @@ import pytest
 
 from src.api.routes import dashboard as d
 from src.api.routes import dashboard_panels as P
+from src.api.routes import dashboard_topology as dt
 
 _DASHBOARD_SRC = Path(d.__file__).read_text()
+
+
+@pytest.fixture(autouse=True)
+def _neutralize_realized_numa_probe(monkeypatch):
+    """Some stamped endpoints (topology, region_locks) now resolve the NUMA mode
+    realized-fleet-first (audit C1), which probes localhost sockets. Keep this
+    freshness-focused suite hermetic by defaulting the realized probe to None."""
+    monkeypatch.setattr(dt, "_cached_realized_numa_mode", lambda: None)
 
 
 def _call(coro):

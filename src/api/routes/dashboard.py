@@ -75,6 +75,7 @@ from src.api.routes.dashboard_tasks import (
 )
 from src.api.routes.dashboard_topology import (
     active_stack_numa_mode,
+    active_stack_numa_mode_resolution,
     role_aliases,
     _clean_model_name,
     _discover_llama_models,
@@ -852,7 +853,12 @@ def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
     import os
     from pathlib import Path
 
-    active_mode = numa_mode or active_stack_numa_mode()
+    # Resolve realized-fleet-first (C1) so the `launch_selected` overlay (M2)
+    # tracks the live fleet, not a launch-time env hint. A caller that passes an
+    # explicit `numa_mode` (the coherent snapshot) still governs the grid, but the
+    # provenance always reflects the same resolver so the badge cannot disagree.
+    resolution = active_stack_numa_mode_resolution()
+    active_mode = numa_mode or resolution["mode"]
     try:
         from src.runtime.cpu_region_lock import (
             _current_lock_owner_pids,
@@ -1224,6 +1230,7 @@ def _region_locks_payload(numa_mode: str | None = None) -> dict[str, Any]:
     return {
         "per_region_locks_enabled": feature_flag in {"1", "true", "yes", "on"},
         "stack_numa_mode": active_mode,
+        "stack_numa_mode_provenance": resolution,
         "matrix_loaded": matrix is not None,
         "tmp_dir": str(tmp_dir),
         "entries": out,
@@ -4836,13 +4843,19 @@ async def topology() -> JSONResponse:
     injected inputs (the 2 Hz snapshot is the path that needs the TTL cache).
     """
     _topo_now = time.time()
-    active_mode = active_stack_numa_mode()
+    resolution = active_stack_numa_mode_resolution()
+    active_mode = resolution["mode"]
     return JSONResponse(
         _stamp(
             {
                 "nodes": _build_topology_nodes(active_mode),
                 "generated_at": _topo_now,
                 "stack_numa_mode": active_mode,
+                # Provenance so the operator sees which source won and whether a
+                # lower-precedence source (env/manifest) contradicts the realized
+                # fleet — the C1 defense against a lying env silently inverting
+                # the fleet-health picture.
+                "stack_numa_mode_provenance": resolution,
             },
             "topology",
             now=_topo_now,
@@ -5128,7 +5141,8 @@ async def snapshot() -> JSONResponse:
 
 
 async def _snapshot_impl() -> JSONResponse:
-    active_mode = active_stack_numa_mode()
+    numa_resolution = active_stack_numa_mode_resolution()
+    active_mode = numa_resolution["mode"]
     slots_by_port, slots_poll_meta = await _poll_all_slots()
     progress_log = _todays_progress_log()
     recent, rolling, cumulative = _scan_recent_decisions(progress_log)
@@ -5232,7 +5246,12 @@ async def _snapshot_impl() -> JSONResponse:
                 # different instants. This is the keystone that kills the "tap shows
                 # active inference beside a 'no locks held' grid" inconsistency.
                 "stack_numa_mode": active_mode,
-                "topology": {"nodes": topology_nodes, "stack_numa_mode": active_mode},
+                "stack_numa_mode_provenance": numa_resolution,
+                "topology": {
+                    "nodes": topology_nodes,
+                    "stack_numa_mode": active_mode,
+                    "stack_numa_mode_provenance": numa_resolution,
+                },
                 "activity": activity,
                 "display_activity": display_activity,
                 # Fan-out degradation is data, not a silent gap: timed_out > 0 means

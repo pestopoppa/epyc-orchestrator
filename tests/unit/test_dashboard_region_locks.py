@@ -16,6 +16,7 @@ import json
 
 import pytest
 
+from src.api.routes import dashboard_topology
 from src.api.routes.dashboard import (
     region_locks_snapshot,
     _filter_instance_regions_for_mode,
@@ -24,6 +25,16 @@ from src.api.routes.dashboard import (
     _panel_shapes_from_matrix,
 )
 from src.scheduling.contention import ContentionMatrix, InstancePair, Pair, SameRole
+
+
+@pytest.fixture(autouse=True)
+def _neutralize_realized_and_manifest_numa(monkeypatch):
+    """Realized-fleet-first mode resolution (audit C1) probes localhost sockets and
+    reads the host runtime-facts manifest. These grid tests drive the mode purely
+    via ORCHESTRATOR_STACK_NUMA_MODE, so neutralize the two higher-precedence
+    layers to keep them hermetic and env-driven (their original contract)."""
+    monkeypatch.setattr(dashboard_topology, "_cached_realized_numa_mode", lambda: None)
+    monkeypatch.setattr(dashboard_topology, "_fail_closed_runtime_stack_numa_mode", lambda: None)
 
 
 class TestShapeForRegions:

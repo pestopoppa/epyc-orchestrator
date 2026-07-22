@@ -251,6 +251,13 @@ h2 .live-dot.down    { background: var(--bad);  box-shadow: 0 0 4px rgba(248, 11
    Activity-stats column shows live holders when lock/tap-correlated; otherwise
    it shows explicitly historical/idle recency from /dashboard/api/topology_activity. */
 .topology-strip { display: flex; flex-direction: column; gap: 4px; }
+/* Realized-fleet-first NUMA-mode provenance badge (audit C1/M2). Neutral when the
+   resolved mode comes from the realized fleet with no dissent; amber when a
+   lower-precedence source (env/manifest) contradicts the realized truth. */
+.numa-mode-badge { font-size: 10px; font-weight: 400; text-transform: none; margin-left: 8px;
+    padding: 1px 6px; border-radius: 3px; color: var(--dim); border: 1px solid var(--border, #333); }
+.numa-mode-badge.numa-mode-warn { color: #f59e0b; border-color: #f59e0b; }
+.numa-mode-badge:empty { display: none; }
 .topology-row {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto minmax(110px, auto) 120px;
@@ -1078,7 +1085,7 @@ body.insight-fullscreen-open { overflow: hidden; }
   <div class="col">
 
     <div class="panel">
-      <h2>topology <span class="count-suffix" id="inflight-count"></span></h2>
+      <h2>topology <span class="count-suffix" id="inflight-count"></span><span class="numa-mode-badge" id="topology-numa-badge"></span></h2>
       <div class="topology-strip" id="topology-strip"></div>
       <div id="inflight-explainer" style="color:var(--dim);font-size:10px;margin-top:10px;line-height:1.5;display:none">
         Each role row's ▸ expands to show its live activity. Three signals in priority order:
@@ -1186,6 +1193,10 @@ function applyTopologyPayload(topo) {
     if (!topo || !Array.isArray(topo.nodes)) return;
     topology = topo;
     if (topo._freshness) setPanelFreshness('topology', topo._freshness);
+    // Provenance badge repaints every poll (cheap, DOM-only): the realized fleet
+    // vs a stale env/manifest can diverge WITHOUT a structural topology change, so
+    // this must not be gated on the structure-signature rebuild below.
+    updateTopologyNumaBadge(topo);
     const sig = _computeTopologySig(topology);
     const strip = document.getElementById('topology-strip');
     const needsPaint = sig !== _topologySig || !strip || !strip.children.length;
@@ -1196,6 +1207,27 @@ function applyTopologyPayload(topo) {
     // instead of waiting for the next interval tick, so a rebuilt strip is
     // never momentarily blank.
     scheduleRegionLocksRefresh(true);
+}
+
+function updateTopologyNumaBadge(topo) {
+    // Surface the realized-fleet-first NUMA-mode provenance (audit C1/M2): the
+    // resolved mode, which source won, and — loudly — any lower-precedence source
+    // that disagrees with the realized fleet, so a lying env can never silently
+    // invert the fleet-health picture again.
+    const badge = document.getElementById('topology-numa-badge');
+    if (!badge) return;
+    const mode = topo && topo.stack_numa_mode;
+    const prov = topo && topo.stack_numa_mode_provenance;
+    if (!mode) { badge.textContent = ''; badge.className = 'numa-mode-badge'; badge.title = ''; return; }
+    const source = (prov && prov.source) || 'unknown';
+    const disagreements = (prov && Array.isArray(prov.disagreements)) ? prov.disagreements : [];
+    let text = `numa: ${mode} · ${source}`;
+    if (disagreements.length) text += ` · ⚠ ${disagreements.join('; ')}`;
+    badge.textContent = text;
+    badge.className = 'numa-mode-badge' + (disagreements.length ? ' numa-mode-warn' : '');
+    badge.title = disagreements.length
+        ? `Rendering the REALIZED fleet. Contradicted by: ${disagreements.join('; ')}`
+        : `NUMA mode resolved from ${source}`;
 }
 
 function renderTopologyStrip() {
