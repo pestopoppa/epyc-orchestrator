@@ -272,7 +272,10 @@ _LEGACY_SERVER_URL_FALLBACKS: dict[str, str] = {
         "full:http://localhost:8072,http://localhost:8082,"
         "http://localhost:8182,http://localhost:8282,http://localhost:8382"
     ),
-    "worker_math": "full:http://localhost:8072,http://localhost:8082",
+    "worker_math": (
+        "full:http://localhost:8072,http://localhost:8082,"
+        "http://localhost:8182,http://localhost:8282,http://localhost:8382"
+    ),
     "worker_vision": "http://localhost:8086",
     "vision_escalation": (
         "full:http://localhost:8087,http://localhost:8187,"

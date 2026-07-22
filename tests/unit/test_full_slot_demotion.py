@@ -25,6 +25,7 @@ sys.path.insert(0, str(ROOT / "scripts" / "server"))
 
 ca_mod = importlib.import_module("src.backends.concurrency_aware")
 from src.backends.concurrency_aware import _get_base_url
+from src.config.models import ServerURLsConfig, reset_stack_prior_server_url_cache
 from src.llm_primitives.backend import BackendMixin
 from src.runtime.instance_topology import (
     cpu_list_to_regions,
@@ -34,6 +35,16 @@ from src.runtime.instance_topology import (
 from scripts.server.stack_numa import NUMA_CONFIG
 
 WG = "worker_general"
+WM = "worker_math"
+
+# The canonical worker_general default (full idx-0 8072 + the four quarters).
+# worker_math shares worker_general's physical gemma server, so its default URL
+# list must carry the SAME shape or its ConcurrencyAwareBackend serializes on a
+# single quarter (live EV-11c incident: ~3 q/min instead of 4-wide ~7).
+_WG_DEFAULT = (
+    "full:http://localhost:8072,http://localhost:8082,"
+    "http://localhost:8182,http://localhost:8282,http://localhost:8382"
+)
 
 
 class _Host(BackendMixin):
@@ -208,3 +219,150 @@ def test_aligned_full_emits_full_candidate_on_solo(
         assert is_full is True     # full instance chosen on solo
         assert idx == -1
         assert attempted[-1] == 0  # topology idx 0 (the real full) locked
+
+
+# ── worker_math shares worker_general's gemma fleet: default URL parity ───────
+#
+# worker_math has NO NUMA_CONFIG entry of its own; it dispatches on
+# worker_general's physical 4-quarter gemma server (registry
+# server_mode.worker.shared_with). Its default URL list must therefore carry
+# worker_general's FULL shape (aligned full 8072 + the four quarters) so its
+# ConcurrencyAwareBackend fans out 4-wide instead of serializing on a single
+# quarter (EV-11c live incident: the worker_math arm ran ~3 q/min instead of the
+# 4-wide ~7 because its default carried only ONE quarter, 8082).
+
+
+def _fallback_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Force the legacy literal fallbacks: missing stack priors + runtime facts
+    ignored, so ServerURLsConfig reads _LEGACY_SERVER_URL_FALLBACKS
+    deterministically (same isolation pattern as tests/unit/test_config.py)."""
+    monkeypatch.setenv("ORCHESTRATOR_IGNORE_RUNTIME_STACK_FACTS", "1")
+    monkeypatch.setenv(
+        "ORCHESTRATOR_PATHS_STACK_PRIORS_PATH", str(tmp_path / "missing.yaml")
+    )
+    monkeypatch.delenv("ORCHESTRATOR_STACK_NUMA_MODE", raising=False)
+    reset_stack_prior_server_url_cache()
+
+
+def test_worker_math_default_url_list_matches_worker_general_shape(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """(a)+(c): worker_math's default URL list = aligned full 8072 + four
+    quarters, byte-for-byte identical to worker_general's (unchanged) default."""
+    _fallback_env(monkeypatch, tmp_path)
+    try:
+        cfg = ServerURLsConfig()
+        # (c) worker_general default unchanged.
+        assert cfg.worker_general == _WG_DEFAULT
+        # (a) worker_math yields a full + 4 quarters, matching worker_general.
+        assert cfg.worker_math == _WG_DEFAULT
+        assert cfg.worker_math == cfg.worker_general
+        parts = cfg.worker_math.split(",")
+        assert parts[0] == "full:http://localhost:8072"   # aligned idx-0 full
+        assert parts[1:] == [
+            "http://localhost:8082",
+            "http://localhost:8182",
+            "http://localhost:8282",
+            "http://localhost:8382",
+        ]
+    finally:
+        reset_stack_prior_server_url_cache()
+
+
+def test_worker_math_backend_builds_four_quarters_under_worker_general_topology(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """(b): the shipped worker_math default constructs a CA backend whose
+    topology/lock role is worker_general, with an aligned full (8072, served —
+    not demoted) and the four gemma quarters at their TRUE (port-resolved)
+    topology idxs [1,2,3,4] (ports 8082..8382). Regression: the old
+    single-quarter default built only ONE quarter and serialized dispatch."""
+    _fallback_env(monkeypatch, tmp_path)
+    try:
+        cfg = ServerURLsConfig()
+        # worker_general MUST be co-present so worker_math's topology role is
+        # resolvable by matching (full-stripped) URL lists.
+        backends = _build({WG: cfg.worker_general, WM: cfg.worker_math})
+    finally:
+        reset_stack_prior_server_url_cache()
+
+    be = backends[WM]
+    assert isinstance(be, ca_mod.ConcurrencyAwareBackend)
+    # Topology/lock role aliases onto worker_general (shared physical fleet), so
+    # region locks collide correctly with worker_general instead of a phantom
+    # empty "worker_math" topology.
+    assert be._topology_role == WG
+    assert be._role == WM
+    # Aligned full (8072 == worker_general idx-0 port) → served, not demoted.
+    assert be._full is not None
+    assert be._full_port == 8072
+    assert be._full_slot_aligned is True
+    # Four gemma quarters at their TRUE (port-resolved) topology idxs.
+    assert len(be._quarters) == 4
+    assert be._quarter_topology_idx == [1, 2, 3, 4]
+    assert [_port(q) for q in be._quarters] == [8082, 8182, 8282, 8382]
+    # Sanity: those idxs are the NUMA_CONFIG[worker_general] indices by port.
+    for topo, port in zip(be._quarter_topology_idx, [8082, 8182, 8282, 8382]):
+        assert topology_idx_for_port(WG, port) == topo
+
+    # worker_general itself unchanged: same aligned full + 4-quarter shape.
+    wg_be = backends[WG]
+    assert isinstance(wg_be, ca_mod.ConcurrencyAwareBackend)
+    assert wg_be._topology_role == WG
+    assert len(wg_be._quarters) == 4
+    assert wg_be._quarter_topology_idx == [1, 2, 3, 4]
+
+
+def test_shared_worker_fleet_url_defaults_do_not_drift() -> None:
+    """DRIFT GUARD: every role the registry declares as sharing the worker
+    server fleet (server_mode.worker.shared_with) that ALSO carries its OWN
+    literal URL default must keep that literal identical to the host fleet's.
+    Interim guard until backends are derived from server_mode directly — a
+    future edit to one but not the other fails here, naming the shared-fleet
+    relationship and the denormalization site."""
+    import yaml
+
+    from src.config.models import _LEGACY_SERVER_URL_FALLBACKS as FB
+
+    registry = yaml.safe_load(
+        (ROOT / "orchestration" / "model_registry.yaml").read_text(encoding="utf-8")
+    )
+    worker_fleet = registry["server_mode"]["worker"]
+    host_role = worker_fleet["model_role"]
+    shared_with = list(worker_fleet.get("shared_with") or [])
+
+    # The registry link the guard depends on must stay intact.
+    assert host_role == WG, (
+        f"server_mode.worker.model_role changed to {host_role!r}; re-point the "
+        "shared-fleet drift guard at the new host role."
+    )
+    assert WM in shared_with, (
+        "server_mode.worker.shared_with no longer lists worker_math — the guard "
+        "would silently stop protecting the role most prone to URL drift."
+    )
+
+    host_default = FB[host_role]
+
+    # Parity set = registry-shared roles that ALSO denormalize their own literal
+    # default. toolrunner shares the fleet but has NO own literal (its
+    # ServerURLsConfig field calls _server_url_default("worker_general")
+    # directly), so it cannot drift and is absent here. worker_explore is a
+    # canonical alias and is NOT in server_mode.worker.shared_with, so the
+    # registry's own rule ("iff shared_with") excludes it.
+    parity_roles = [r for r in shared_with if r in FB]
+    assert WM in parity_roles, (
+        "worker_math lost its own default in _LEGACY_SERVER_URL_FALLBACKS; the "
+        "drift guard is now vacuous — restore the literal or update the guard."
+    )
+    for role in parity_roles:
+        assert FB[role] == host_default, (
+            f"shared-fleet URL drift: role {role!r} shares the {host_role!r} "
+            f"gemma server (server_mode.worker.shared_with in "
+            f"orchestration/model_registry.yaml) but its default URL list in "
+            f"_LEGACY_SERVER_URL_FALLBACKS (src/config/models.py) diverges from "
+            f"the host fleet:\n"
+            f"    {role}: {FB[role]!r}\n"
+            f"    {host_role}: {host_default!r}\n"
+            f"Shared-fleet roles MUST carry an identical URL list (edit BOTH or "
+            f"neither) until backends are derived from server_mode directly."
+        )
