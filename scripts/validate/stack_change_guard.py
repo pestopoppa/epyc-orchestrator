@@ -1089,6 +1089,28 @@ def _launch_target_is_manifest_owned_auxiliary(role: str, target: dict[str, Any]
     return False
 
 
+def _alias_host_role(record: dict[str, Any]) -> str | None:
+    """Host role an alias record rides (evidence.alias_overrides[].served_by).
+
+    WP-13: an alias role has no llama-server of its own — its serving view is
+    the HOST's full fleet, so serving-vs-launch alignment must be judged
+    against the host's launch manifest row, not the alias's tagged subset.
+    Returns None unless every alias_override names the same host.
+    """
+    evidence = record.get("evidence")
+    if not isinstance(evidence, dict):
+        return None
+    overrides = evidence.get("alias_overrides")
+    if not isinstance(overrides, list):
+        return None
+    hosts = {
+        str(override.get("served_by"))
+        for override in overrides
+        if isinstance(override, dict) and override.get("served_by")
+    }
+    return hosts.pop() if len(hosts) == 1 else None
+
+
 def validate_launch_manifest_serving_alignment(
     priors: dict[str, Any],
     *,
@@ -1147,6 +1169,11 @@ def validate_launch_manifest_serving_alignment(
         if target is None:
             errors.append(f"live role {role!r} is absent from current launch manifest")
             continue
+        # WP-13: alias roles serve the HOST's fleet — align against the host's
+        # launch row (superset of the alias's tagged subset), not its own.
+        host_role = _alias_host_role(record)
+        if host_role and isinstance(targets.get(host_role), dict):
+            target = targets[host_role]
         serving = record.get("serving")
         if not isinstance(serving, dict):
             continue
@@ -1212,7 +1239,30 @@ def validate_launch_manifest_serving_alignment(
                 if isinstance(launch, dict)
                 else []
             )
-            if actual_entries != target_launch_entries:
+            if host_role:
+                # WP-13: an alias's recorded launch entries are the tagged
+                # subset of the host fleet it rides, carrying alias-specific
+                # tagging fields — require PORT containment in the host's
+                # entries (dict equality can never hold across the tagging).
+                host_entry_ports = {
+                    entry.get("port")
+                    for entry in target_launch_entries
+                    if isinstance(entry, dict) and isinstance(entry.get("port"), int)
+                }
+                alias_extra_ports = sorted(
+                    entry.get("port")
+                    for entry in actual_entries
+                    if isinstance(entry, dict)
+                    and isinstance(entry.get("port"), int)
+                    and entry.get("port") not in host_entry_ports
+                )
+                if alias_extra_ports:
+                    errors.append(
+                        f"role {role!r} serving.launch.entries port(s) "
+                        f"{alias_extra_ports} absent from host {host_role!r} "
+                        f"launch manifest"
+                    )
+            elif actual_entries != target_launch_entries:
                 errors.append(
                     f"role {role!r} serving.launch.entries do not match "
                     f"launch manifest entries"
