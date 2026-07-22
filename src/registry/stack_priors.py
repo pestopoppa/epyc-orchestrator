@@ -833,9 +833,26 @@ def _stack_manifest_info() -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
         }
         shared = meta.get("shared_with_first_n") if isinstance(meta, dict) else None
         if isinstance(shared, list):
+            # WP-13 fleet convergence: an alias role (shared_with_first_n) is not a
+            # process of its own — it rides the primary/host's llama-server(s). It
+            # must therefore inherit the host's FULL serving fleet, not just the
+            # subset of instances it was tagged onto (shared_with_first_n_count).
+            # Emitting only the tagged ports made the generated serving.ports a
+            # single quarter (e.g. worker_math -> [8072, 8082]), diverging from the
+            # operative-layer Fix-A default (_server_url_default(host)) which serves
+            # the full `full:` quarter fleet and applies the host's region locks +
+            # demotion. That divergence serialized worker_math eval traffic on one
+            # quarter (EV-11c arm-2). Inherit roles[primary]["ports"] so a future
+            # regeneration is byte-identical to the delegated operative URL; fall
+            # back to the alias's own launch ports only when the host has no
+            # resolved port fleet.
+            host_ports = roles[str(primary)].get("ports")
             for alias in shared:
                 if isinstance(alias, str):
-                    alias_ports = sorted(set(launch_ports_by_role.get(alias, [])))
+                    if isinstance(host_ports, list) and host_ports:
+                        alias_ports = list(host_ports)
+                    else:
+                        alias_ports = sorted(set(launch_ports_by_role.get(alias, [])))
                     alias_port = alias_ports[0] if alias_ports else port
                     aliases[alias] = str(primary)
                     roles[alias] = {

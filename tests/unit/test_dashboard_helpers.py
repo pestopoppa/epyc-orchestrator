@@ -73,8 +73,90 @@ def test_active_stack_numa_mode_defaults_to_both(monkeypatch) -> None:
 def test_active_stack_numa_mode_uses_runtime_facts_manifest(monkeypatch) -> None:
     monkeypatch.delenv("ORCHESTRATOR_STACK_NUMA_MODE", raising=False)
     monkeypatch.setattr(dashboard_topology, "read_runtime_stack_numa_mode", lambda: "quarter")
+    # WP-14: honoring the manifest mode now also requires a non-empty, consistent
+    # selected-server lineup (the URL reader's fail-closed contract).
+    monkeypatch.setattr(
+        dashboard_topology,
+        "read_runtime_stack_selected_servers",
+        lambda: [{"port": 8082, "roles": ["worker_general"]}],
+    )
 
     assert dashboard_topology.active_stack_numa_mode() == "quarter"
+
+
+_PHANTOM_RUNTIME_FACTS = {
+    "schema": "epyc.orchestrator.runtime_facts",
+    "schema_version": 1,
+    "runtime_stack": {
+        # Real current phantom shape: mode null, empty selected_ports, but a
+        # left-behind full-era server lineup.
+        "stack_numa_mode": None,
+        "selected_servers": [
+            {"port": 8070, "roles": ["frontdoor", "coder_escalation"], "numa_instance": 0},
+            {"port": 8072, "roles": ["worker_general", "worker_math"], "numa_instance": 0},
+        ],
+        "selected_ports": [],
+    },
+}
+
+_WELLFORMED_QUARTER_RUNTIME_FACTS = {
+    "schema": "epyc.orchestrator.runtime_facts",
+    "schema_version": 1,
+    "runtime_stack": {
+        "stack_numa_mode": "quarter",
+        "selected_servers": [
+            {"port": 8082, "roles": ["worker_general", "worker_math"], "numa_instance": 1},
+            {"port": 8182, "roles": ["worker_general"], "numa_instance": 2},
+        ],
+        "selected_ports": [8082, 8182],
+    },
+}
+
+
+def _install_dashboard_runtime_facts(monkeypatch, tmp_path: Path, payload: dict) -> None:
+    from scripts.server import stack_paths
+    from scripts.server.runtime_facts_manifest import runtime_facts_manifest_path
+
+    monkeypatch.setitem(stack_paths._PATHS, "tmp_dir", tmp_path)
+    runtime_facts_manifest_path().write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_active_stack_numa_mode_rejects_phantom_runtime_facts_manifest(
+    monkeypatch, tmp_path, caplog
+) -> None:
+    """WP-14: a phantom full-era manifest (mode null, empty selected_ports) is
+    rejected fail-closed; the dashboard falls back to its historical ``both``
+    default with one loud log line instead of surfacing a phantom mode."""
+    import logging
+
+    monkeypatch.delenv("ORCHESTRATOR_STACK_NUMA_MODE", raising=False)
+    _install_dashboard_runtime_facts(monkeypatch, tmp_path, _PHANTOM_RUNTIME_FACTS)
+
+    with caplog.at_level(logging.WARNING, logger="src.api.routes.dashboard_topology"):
+        assert dashboard_topology.active_stack_numa_mode() == "both"
+
+    rejections = [
+        rec for rec in caplog.records if "runtime-facts manifest rejected" in rec.getMessage()
+    ]
+    assert len(rejections) == 1
+
+
+def test_active_stack_numa_mode_consumes_wellformed_quarter_runtime_facts(
+    monkeypatch, tmp_path, caplog
+) -> None:
+    """WP-14: a well-formed quarter manifest (concrete mode + consistent lineup)
+    is consumed and no fail-closed warning is emitted."""
+    import logging
+
+    monkeypatch.delenv("ORCHESTRATOR_STACK_NUMA_MODE", raising=False)
+    _install_dashboard_runtime_facts(monkeypatch, tmp_path, _WELLFORMED_QUARTER_RUNTIME_FACTS)
+
+    with caplog.at_level(logging.WARNING, logger="src.api.routes.dashboard_topology"):
+        assert dashboard_topology.active_stack_numa_mode() == "quarter"
+
+    assert not [
+        rec for rec in caplog.records if "runtime-facts manifest rejected" in rec.getMessage()
+    ]
 
 
 def test_active_stack_numa_mode_env_override_skips_runtime_facts_manifest(monkeypatch) -> None:

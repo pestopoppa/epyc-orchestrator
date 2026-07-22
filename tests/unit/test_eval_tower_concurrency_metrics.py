@@ -514,10 +514,143 @@ def test_live_safe_concurrency_uses_quarter_mode_live_ports(monkeypatch) -> None
 
     monkeypatch.setenv("AUTOPILOT_EVAL_REQUIRE_LIVE_FLEET", "1")
     monkeypatch.setattr(stack_numa, "NUMA_CONFIG", cfg)
-    monkeypatch.setattr(runtime_facts_manifest, "read_runtime_stack_numa_mode", lambda: "quarter")
+    monkeypatch.setattr(runtime_facts_manifest, "read_runtime_stack_numa_mode", lambda **_: "quarter")
+    # WP-14: the runtime-facts reader seam now also requires a non-empty,
+    # consistent selected-server lineup (the URL reader's fail-closed contract)
+    # before honoring the manifest mode, so provide a well-formed quarter lineup.
+    monkeypatch.setattr(
+        runtime_facts_manifest,
+        "read_runtime_stack_selected_servers",
+        lambda **_: [
+            {"port": 8082, "roles": ["worker_general"]},
+            {"port": 8182, "roles": ["worker_general"]},
+            {"port": 8282, "roles": ["worker_general"]},
+            {"port": 8382, "roles": ["worker_general"]},
+        ],
+    )
     monkeypatch.setattr(eval_tower.httpx, "get", fake_get)
 
     assert eval_tower._live_safe_concurrency("worker_general", 1) == 4
+
+
+# ---------------------------------------------------------------------------
+# WP-14: runtime-facts reader seam fail-closed contract
+# ---------------------------------------------------------------------------
+
+_PHANTOM_RUNTIME_FACTS = {
+    "schema": "epyc.orchestrator.runtime_facts",
+    "schema_version": 1,
+    "runtime_stack": {
+        # Real current phantom shape: mode null, empty selected_ports, but a
+        # left-behind full-era server lineup.
+        "stack_numa_mode": None,
+        "selected_servers": [
+            {"port": 8070, "roles": ["frontdoor", "coder_escalation", "worker_summarize"], "numa_instance": 0},
+            {"port": 8072, "roles": ["worker_general", "worker_math", "toolrunner"], "numa_instance": 0},
+        ],
+        "selected_ports": [],
+    },
+}
+
+_WELLFORMED_QUARTER_RUNTIME_FACTS = {
+    "schema": "epyc.orchestrator.runtime_facts",
+    "schema_version": 1,
+    "runtime_stack": {
+        "stack_numa_mode": "quarter",
+        "selected_servers": [
+            {"port": 8082, "roles": ["worker_general", "worker_math"], "numa_instance": 1},
+            {"port": 8182, "roles": ["worker_general"], "numa_instance": 2},
+        ],
+        "selected_ports": [8082, 8182],
+    },
+}
+
+
+def _install_runtime_facts(monkeypatch, tmp_path: Path, payload: dict) -> Path:
+    from scripts.server import stack_paths
+    from scripts.server.runtime_facts_manifest import runtime_facts_manifest_path
+
+    monkeypatch.setitem(stack_paths._PATHS, "tmp_dir", tmp_path)
+    manifest_path = runtime_facts_manifest_path()
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+    return manifest_path
+
+
+def test_runtime_facts_stack_numa_mode_rejects_phantom_manifest(
+    monkeypatch, tmp_path, caplog
+) -> None:
+    """WP-14: a phantom full-era manifest (mode null, empty selected_ports) is
+    rejected fail-closed and the seam falls back with one loud log line."""
+    import logging
+
+    monkeypatch.delenv("ORCHESTRATOR_STACK_NUMA_MODE", raising=False)
+    _install_runtime_facts(monkeypatch, tmp_path, _PHANTOM_RUNTIME_FACTS)
+
+    with caplog.at_level(logging.WARNING, logger="autopilot.eval"):
+        assert eval_tower._runtime_facts_stack_numa_mode() is None
+
+    rejections = [
+        rec for rec in caplog.records if "runtime-facts manifest rejected" in rec.getMessage()
+    ]
+    assert len(rejections) == 1
+
+
+def test_runtime_facts_stack_numa_mode_consumes_wellformed_quarter_manifest(
+    monkeypatch, tmp_path, caplog
+) -> None:
+    """WP-14: a well-formed quarter manifest (mode + consistent lineup) is
+    consumed and no fail-closed warning is emitted."""
+    import logging
+
+    monkeypatch.delenv("ORCHESTRATOR_STACK_NUMA_MODE", raising=False)
+    _install_runtime_facts(monkeypatch, tmp_path, _WELLFORMED_QUARTER_RUNTIME_FACTS)
+
+    with caplog.at_level(logging.WARNING, logger="autopilot.eval"):
+        assert eval_tower._runtime_facts_stack_numa_mode() == "quarter"
+
+    assert not [
+        rec for rec in caplog.records if "runtime-facts manifest rejected" in rec.getMessage()
+    ]
+
+
+def test_live_safe_concurrency_falls_back_when_manifest_is_phantom(
+    monkeypatch, tmp_path
+) -> None:
+    """WP-14: with a phantom manifest present and no env override, the live-fleet
+    seam does NOT take the quarter disjoint-concurrency path; it falls back to the
+    conservative topology bound instead of the phantom's 4-wide quarter lineup."""
+    from scripts.server import stack_numa
+
+    cfg = {
+        "worker_general": {
+            "instances": [
+                ("0-95", 8072, 96),
+                ("0-23,96-119", 8082, 48),
+                ("24-47,120-143", 8182, 48),
+                ("48-71,144-167", 8282, 48),
+                ("72-95,168-191", 8382, 48),
+            ],
+        },
+    }
+    live_ports = {8082, 8182, 8282, 8382}
+
+    class _Response:
+        def __init__(self, status_code: int) -> None:
+            self.status_code = status_code
+
+    def fake_get(url: str, timeout: float) -> _Response:
+        del timeout
+        port = int(url.rsplit(":", 1)[1].split("/", 1)[0])
+        return _Response(200 if port in live_ports else 503)
+
+    monkeypatch.delenv("ORCHESTRATOR_STACK_NUMA_MODE", raising=False)
+    monkeypatch.setenv("AUTOPILOT_EVAL_REQUIRE_LIVE_FLEET", "1")
+    monkeypatch.setattr(stack_numa, "NUMA_CONFIG", cfg)
+    monkeypatch.setattr(eval_tower.httpx, "get", fake_get)
+    _install_runtime_facts(monkeypatch, tmp_path, _PHANTOM_RUNTIME_FACTS)
+
+    # Phantom rejected -> not treated as quarter -> topology_cap=1 bound wins.
+    assert eval_tower._live_safe_concurrency("worker_general", 1) == 1
 
 
 def test_eval_concurrency_can_exceed_full_first_cap_in_quarter_mode(monkeypatch) -> None:

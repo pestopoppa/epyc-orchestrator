@@ -18,6 +18,7 @@ from typing import Any
 from scripts.server.runtime_facts_manifest import (
     read_runtime_stack_numa_mode,
     read_runtime_stack_selected_servers,
+    runtime_facts_manifest_path,
 )
 from src.roles import Role
 from src.registry.stack_priors import (
@@ -139,11 +140,45 @@ def active_stack_numa_mode() -> str:
     if os.environ.get("ORCHESTRATOR_STACK_NUMA_MODE") is not None:
         return env_stack_numa_mode(default=DASHBOARD_RUNTIME_FALLBACK_NUMA_MODE)
 
-    runtime_mode = read_runtime_stack_numa_mode()
+    runtime_mode = _fail_closed_runtime_stack_numa_mode()
     if runtime_mode is not None:
         return runtime_mode
 
     return env_stack_numa_mode(default=DASHBOARD_RUNTIME_FALLBACK_NUMA_MODE)
+
+
+def _fail_closed_runtime_stack_numa_mode() -> str | None:
+    """Return the runtime-facts stack NUMA mode ONLY when the manifest passes the
+    same fail-closed contract the URL reader (read_runtime_stack_selected_servers)
+    enforces: a concrete expected mode string AND a non-empty selected-server
+    lineup consistent with the declared ports.
+
+    WP-14: the launcher can leave a phantom full-era lineup behind (the real
+    current shape is stack_numa_mode=None, selected_ports=[], full-era
+    selected_servers). read_runtime_stack_numa_mode() alone would either accept a
+    stale mode or return None while the topology port hints still projected the
+    phantom lineup, so the dashboard could render a NUMA mode that no live
+    process backs. Mirror the URL reader's rejection here and fall back to the
+    dashboard's historical env/NUMA_CONFIG default with one loud log line.
+    """
+    mode = read_runtime_stack_numa_mode()
+    servers = read_runtime_stack_selected_servers()
+    lineup_ok = isinstance(servers, list) and bool(servers)
+    if isinstance(mode, str) and mode and lineup_ok:
+        return mode.strip().lower()
+
+    try:
+        manifest_present = runtime_facts_manifest_path().exists()
+    except Exception:
+        manifest_present = False
+    if manifest_present:
+        logger.warning(
+            "runtime-facts manifest rejected (fail-closed: stack_numa_mode=%r, "
+            "selected lineup %s); falling back to dashboard NUMA_CONFIG default",
+            mode,
+            "present" if lineup_ok else "empty/inconsistent",
+        )
+    return None
 
 
 def _manifest_server_label(server: dict[str, Any]) -> str:

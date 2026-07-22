@@ -84,24 +84,65 @@ def test_stack_numa_mode_defaults_are_named() -> None:
 
 
 @pytest.mark.parametrize("mode", ["full", "quarter", "both"])
-def test_stack_numa_readers_agree_on_role_ports(
+def test_stack_numa_readers_agree_on_host_role_ports(
     mode: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Host/primary roles: the serving view (stack priors) and every
+    launch-topology view (raw manifest, dashboard, stack-change guard) agree
+    exactly across NUMA modes."""
     stack_prior_ports = _stack_prior_ports(mode, monkeypatch)
     dashboard_ports = _dashboard_ports(mode)
     guard_ports = _stack_change_guard_ports(mode, monkeypatch)
     manifest_ports = _manifest_ports(mode)
 
-    roles = {
+    host_roles = {
         "frontdoor",
-        "coder_escalation",
-        "worker_summarize",
         "worker_general",
         "ingest_long_context",
         "vision_escalation",
     }
-    for role in roles:
+    for role in host_roles:
         assert manifest_ports.get(role) == stack_prior_ports.get(role)
         assert dashboard_ports.get(role) == stack_prior_ports.get(role)
         assert guard_ports.get(role) == stack_prior_ports.get(role)
+
+
+@pytest.mark.parametrize("mode", ["full", "quarter", "both"])
+def test_alias_serving_fleet_converges_on_host_launch_views_diverge(
+    mode: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """WP-13: alias roles (shared_with_first_n) diverge by design.
+
+    The launch-topology views (raw manifest, dashboard, stack-change guard) still
+    report only the instances the alias is tagged onto (shared_with_first_n_count),
+    and continue to agree with each other. The serving/routing view (stack priors)
+    now inherits the host's FULL fleet so it converges with the operative-layer
+    Fix-A delegated URL (worker_math/coder_escalation -> host fleet). In
+    single-instance ``full`` mode the two coincide; in quarter/both the serving
+    fleet is a strict superset of the launch-tagged subset.
+    """
+    stack_prior_ports = _stack_prior_ports(mode, monkeypatch)
+    dashboard_ports = _dashboard_ports(mode)
+    guard_ports = _stack_change_guard_ports(mode, monkeypatch)
+    manifest_ports = _manifest_ports(mode)
+
+    alias_hosts = {
+        "coder_escalation": "frontdoor",
+        "worker_summarize": "frontdoor",
+    }
+    for alias, host in alias_hosts.items():
+        # Launch-topology views still agree with each other on the tagged subset.
+        assert manifest_ports.get(alias) == dashboard_ports.get(alias)
+        assert manifest_ports.get(alias) == guard_ports.get(alias)
+        # Fleet convergence: the alias serving fleet equals its host serving fleet.
+        assert stack_prior_ports.get(alias) == stack_prior_ports.get(host)
+        # And the serving fleet is a superset of the launch-tagged subset.
+        tagged = set(manifest_ports.get(alias) or [])
+        serving = set(stack_prior_ports.get(alias) or [])
+        assert tagged <= serving
+        if mode == "full":
+            assert tagged == serving
+        else:
+            assert tagged < serving

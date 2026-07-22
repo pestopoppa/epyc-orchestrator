@@ -1017,6 +1017,62 @@ def _same_role_matrix_allows_eval_fanout(role: str) -> bool:
         return False
 
 
+def _runtime_facts_stack_numa_mode() -> str | None:
+    """Return the runtime-facts stack NUMA mode ONLY when the manifest passes the
+    same fail-closed contract the URL reader (read_runtime_stack_selected_servers)
+    enforces: a concrete expected mode string AND a non-empty selected-server
+    lineup consistent with the declared ports.
+
+    WP-14: the launcher can leave a phantom full-era lineup behind (the real
+    current shape is stack_numa_mode=None, selected_ports=[], full-era
+    selected_servers). read_runtime_stack_numa_mode() alone would silently treat
+    that as "not quarter" and mis-size eval fan-out onto a single quarter. Mirror
+    the URL reader's rejection here and fall back to
+    ORCHESTRATOR_STACK_NUMA_MODE / NUMA_CONFIG with one loud log line.
+    """
+    try:
+        from scripts.server.runtime_facts_manifest import (
+            read_runtime_stack_numa_mode,
+            read_runtime_stack_selected_servers,
+            runtime_facts_manifest_path,
+        )
+    except Exception:
+        return None
+
+    def _read(reader: Callable[..., Any]) -> Any:
+        try:
+            value = reader()
+        except Exception:
+            return None
+        if value:
+            return value
+        try:
+            return reader(state_file=None)
+        except TypeError:
+            return value
+        except Exception:
+            return None
+
+    mode = _read(read_runtime_stack_numa_mode)
+    servers = _read(read_runtime_stack_selected_servers)
+    lineup_ok = isinstance(servers, list) and bool(servers)
+    if isinstance(mode, str) and mode and lineup_ok:
+        return mode.strip().lower()
+
+    try:
+        manifest_present = runtime_facts_manifest_path().exists()
+    except Exception:
+        manifest_present = False
+    if manifest_present:
+        log.warning(
+            "runtime-facts manifest rejected (fail-closed: stack_numa_mode=%r, "
+            "selected lineup %s); falling back to ORCHESTRATOR_STACK_NUMA_MODE/NUMA_CONFIG",
+            mode,
+            "present" if lineup_ok else "empty/inconsistent",
+        )
+    return None
+
+
 def _live_safe_concurrency(role: str, topology_cap: int) -> int:
     """Bound eval fan-out by the currently reachable role instances.
 
@@ -1053,16 +1109,8 @@ def _live_safe_concurrency(role: str, topology_cap: int) -> int:
     if not live_regions:
         return 1
 
-    try:
-        from scripts.server.runtime_facts_manifest import read_runtime_stack_numa_mode
-
-        stack_numa_mode = read_runtime_stack_numa_mode()
-        if not stack_numa_mode:
-            try:
-                stack_numa_mode = read_runtime_stack_numa_mode(state_file=None)
-            except TypeError:
-                pass
-    except Exception:
+    stack_numa_mode = _runtime_facts_stack_numa_mode()
+    if stack_numa_mode is None:
         stack_numa_mode = os.environ.get("ORCHESTRATOR_STACK_NUMA_MODE")
 
     if str(stack_numa_mode or "").strip().lower() == "quarter":

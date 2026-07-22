@@ -31,6 +31,8 @@ from src.registry.stack_priors import (
     stack_prior_serving_url_value,
     stack_prior_serving_ports,
     stack_prior_uses_shared_worker_launch,
+    _launch_record,
+    _serving_record,
     _stack_manifest_info,
     _server_mode_launch_requirement_overrides,
     validate_stack_priors_contract,
@@ -77,6 +79,143 @@ def test_stack_manifest_info_can_compile_explicit_both_mode(
     assert roles["frontdoor"]["ports"] == [8070, 8080, 8180, 8280, 8380]
     assert roles["worker_general"]["url"] == "http://localhost:8072"
     assert roles["worker_general"]["ports"] == [8072, 8082, 8182, 8282, 8382]
+
+
+def test_alias_roles_inherit_host_full_fleet_ports(monkeypatch: pytest.MonkeyPatch) -> None:
+    """WP-13: alias roles (shared_with_first_n) ride the host's llama-server(s) so
+    they must inherit the host's FULL serving fleet, not just the instances they
+    were tagged onto (shared_with_first_n_count). Host roles are unchanged."""
+    monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "both")
+
+    _aliases, roles = _stack_manifest_info()
+
+    # Host roles keep their own fleet + primary port/url (unchanged by the fix).
+    assert roles["worker_general"]["ports"] == [8072, 8082, 8182, 8282, 8382]
+    assert roles["worker_general"]["port"] == 8072
+    assert roles["worker_general"]["url"] == "http://localhost:8072"
+    assert roles["frontdoor"]["ports"] == [8070, 8080, 8180, 8280, 8380]
+    assert roles["frontdoor"]["port"] == 8070
+
+    # Aliases now inherit the FULL host fleet (previously a single quarter).
+    assert roles["worker_math"]["ports"] == roles["worker_general"]["ports"]
+    assert roles["toolrunner"]["ports"] == roles["worker_general"]["ports"]
+    assert roles["worker_explore"]["ports"] == roles["worker_general"]["ports"]
+    assert roles["coder_escalation"]["ports"] == roles["frontdoor"]["ports"]
+    assert roles["worker_summarize"]["ports"] == roles["frontdoor"]["ports"]
+
+    # Alias primary port/url still resolves to the host's primary (first) port.
+    assert roles["worker_math"]["port"] == 8072
+    assert roles["worker_math"]["url"] == "http://localhost:8072"
+    assert roles["coder_escalation"]["url"] == "http://localhost:8070"
+    assert _aliases["worker_math"] == "worker_general"
+    assert _aliases["coder_escalation"] == "frontdoor"
+
+
+def test_serving_record_projects_alias_host_fleet_full_url() -> None:
+    """WP-13: _serving_record over an alias launch record emits the full host
+    fleet as serving.ports, and stack_prior_serving_url_value emits the
+    ``full:``-prefixed fleet URL."""
+    host_fleet = [8072, 8082, 8182, 8282, 8382]
+    alias_launch_cfg = {
+        "tier": "hot",
+        "port": host_fleet[0],
+        "ports": list(host_fleet),
+        "url": "http://localhost:8072",
+        "effective_context_tokens": 16384,
+        "launch": _launch_record([]),
+    }
+
+    serving = _serving_record(
+        "worker_math",
+        {},
+        None,
+        None,
+        None,
+        "stack_manifest.alias->worker_general",
+        alias_launch_cfg,
+    )
+
+    assert serving["ports"] == host_fleet
+    assert stack_prior_serving_url_value(serving) == (
+        "full:http://localhost:8072,http://localhost:8082,"
+        "http://localhost:8182,http://localhost:8282,http://localhost:8382"
+    )
+
+
+def test_regenerated_worker_math_url_byte_equals_fix_a_delegated_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CRITICAL ACCEPTANCE (WP-13 fleet convergence): a FUTURE regeneration of the
+    stack priors yields a worker_math serving URL byte-identical to the operative
+    Fix-A delegated field value (models.ServerConfig.worker_math ->
+    _server_url_default('worker_general') -> the full worker fleet). Proves the
+    generator and the operative layer converge on the same wire value, so a
+    deploy of the regenerated artifact is a no-op on worker_math's URL."""
+    from src.config.models import _LEGACY_SERVER_URL_FALLBACKS
+
+    monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "both")
+
+    _aliases, roles = _stack_manifest_info()
+    serving = _serving_record(
+        "worker_math",
+        {},
+        None,
+        None,
+        None,
+        "stack_manifest.alias->worker_general",
+        roles["worker_math"],
+    )
+    regenerated = stack_prior_serving_url_value(serving)
+
+    fix_a_worker_math = _LEGACY_SERVER_URL_FALLBACKS["worker_math"]
+    assert regenerated == fix_a_worker_math
+    # worker_math delegates its URL default to worker_general's fleet; the two
+    # legacy literals are byte-identical (commit 89748805), so the generated
+    # serving URL matches whichever the operative layer resolves.
+    assert fix_a_worker_math == _LEGACY_SERVER_URL_FALLBACKS["worker_general"]
+    assert regenerated == (
+        "full:http://localhost:8072,http://localhost:8082,"
+        "http://localhost:8182,http://localhost:8282,http://localhost:8382"
+    )
+
+
+def test_alias_without_host_fleet_falls_back_to_own_launch_ports(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """WP-13: when the primary/host has no resolved port fleet, the alias falls
+    back to its own launch ports (prior behavior preserved)."""
+    from scripts.server import stack_manifest
+
+    monkeypatch.delenv("ORCHESTRATOR_STACK_NUMA_MODE", raising=False)
+    monkeypatch.setattr(
+        stack_manifest,
+        "ROLE_LAUNCH_META",
+        {
+            "synth_primary": {
+                "tier": "hot",
+                "mode": "default",
+                "no_numa": True,
+                "port": None,
+                "shared_with_first_n": ["synth_alias"],
+            }
+        },
+    )
+    # synth_primary launches no server (no ports resolvable, PORT_MAP empty);
+    # synth_alias appears on its own launch server at 9191.
+    monkeypatch.setattr(
+        stack_manifest, "HOT_SERVERS", [{"port": 9191, "roles": ["synth_alias"]}]
+    )
+    monkeypatch.setattr(stack_manifest, "WARM_SERVERS", [])
+    monkeypatch.setattr(stack_manifest, "PORT_MAP", {})
+
+    _aliases, roles = _stack_manifest_info()
+
+    assert roles["synth_primary"]["ports"] == []
+    # Host fleet absent -> alias keeps its own launch port (fallback preserved).
+    assert roles["synth_alias"]["ports"] == [9191]
+    assert roles["synth_alias"]["port"] == 9191
+    assert roles["synth_alias"]["url"] == "http://localhost:9191"
+    assert _aliases["synth_alias"] == "synth_primary"
 
 
 def test_runtime_stack_prior_helpers_fail_closed_on_missing_artifact(tmp_path: Path) -> None:
