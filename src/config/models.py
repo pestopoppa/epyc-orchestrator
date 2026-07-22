@@ -606,9 +606,15 @@ class ServerURLsConfig:
     # Tier A - Front Door. "full:" prefix triggers ConcurrencyAwareBackend.
     frontdoor: str = field(default_factory=lambda: _server_url_default("frontdoor"))
 
-    # Tier B - Specialists. `coder` is a compatibility alias over coder_escalation.
-    coder: str = field(default_factory=lambda: _server_url_default("coder"))
-    coder_escalation: str = field(default_factory=lambda: _server_url_default("coder_escalation"))
+    # Tier B - Specialists. `coder`/`coder_escalation` are served by the frontdoor
+    # GGUF (Qwen3.6-35B-A3B Q8; server_mode.coder_escalation is pinned to frontdoor
+    # port 8070, shared mmap). Delegate the URL DEFAULT to frontdoor so they inherit
+    # its `full:` quarter fleet → ConcurrencyAwareBackend, and _infer_topology_role_for_urls
+    # resolves the identical URL tuple to topology_role=frontdoor (region locks +
+    # FULL_DISABLED/demotion apply). Role name is preserved for everything else
+    # (timeouts, role prompts, /v1 path) — only the URL default changes.
+    coder: str = field(default_factory=lambda: _server_url_default("frontdoor"))
+    coder_escalation: str = field(default_factory=lambda: _server_url_default("frontdoor"))
 
     # Tier C - Workers. `worker` and deprecated worker_* roles stay as
     # compatibility aliases where stack priors do not expose that exact label.
@@ -617,14 +623,21 @@ class ServerURLsConfig:
     # toolrunner is a logical alias over worker_general (shared Gemma-4 backend)
     toolrunner: str = field(default_factory=lambda: _server_url_default("worker_general"))
     worker_explore: str = field(default_factory=lambda: _server_url_default("worker_explore"))
-    worker_math: str = field(default_factory=lambda: _server_url_default("worker_math"))
+    # worker_math shares worker_general's physical gemma fleet
+    # (server_mode.worker.shared_with) — delegate the URL default to worker_general
+    # so it inherits the `full:` quarter fleet (topology_role=worker_general), same
+    # pattern as toolrunner above. Role name preserved for timeouts/prompts/path.
+    worker_math: str = field(default_factory=lambda: _server_url_default("worker_general"))
     worker_vision: str = field(default_factory=lambda: _server_url_default("worker_vision"))
     vision_escalation: str = field(
         default_factory=lambda: _server_url_default("vision_escalation")
     )
     worker_coder: str = field(default_factory=lambda: _server_url_default("worker_coder"))
     worker_fast: str = field(default_factory=lambda: _server_url_default("worker_fast"))
-    worker_summarize: str = field(default_factory=lambda: _server_url_default("worker_summarize"))
+    # worker_summarize is served by the frontdoor GGUF (Qwen3.6-35B-A3B Q8, shared
+    # mmap) — delegate the URL default to frontdoor for its `full:` quarter fleet
+    # (topology_role=frontdoor). Role name preserved for timeouts/prompts/path.
+    worker_summarize: str = field(default_factory=lambda: _server_url_default("frontdoor"))
 
     # Tier B - Architect / long-context.
     architect_general: str = field(default_factory=lambda: _server_url_default("architect_general"))

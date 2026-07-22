@@ -340,7 +340,10 @@ roles:
             reset_config()
             cfg = ServerURLsConfig()
             assert cfg.frontdoor == "full:http://localhost:9100,http://localhost:9200"
-            assert cfg.coder == "http://localhost:9300"
+            # Fix A: coder delegates its URL default to frontdoor (shared GGUF), so
+            # it inherits frontdoor's full fleet — NOT coder_escalation's 9300 port.
+            assert cfg.coder == "full:http://localhost:9100,http://localhost:9200"
+            assert cfg.coder == cfg.frontdoor
             assert cfg.worker == (
                 "full:http://localhost:9400,http://localhost:9500,http://localhost:9600"
             )
@@ -358,7 +361,9 @@ roles:
             reset_config()
             cfg = ServerURLsConfig()
             assert "http://localhost:8080" in cfg.frontdoor
-            assert cfg.coder == "http://localhost:8070"
+            # Fix A: coder delegates its URL default to frontdoor (shared GGUF).
+            assert cfg.coder == cfg.frontdoor
+            assert cfg.coder.startswith("full:http://localhost:8070")
             assert "8071" not in cfg.coder
             assert cfg.worker_explore == cfg.worker_general
             assert cfg.worker_fast == "http://localhost:8102"

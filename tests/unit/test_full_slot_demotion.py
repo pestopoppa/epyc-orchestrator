@@ -36,6 +36,9 @@ from scripts.server.stack_numa import NUMA_CONFIG
 
 WG = "worker_general"
 WM = "worker_math"
+FD = "frontdoor"
+CE = "coder_escalation"
+WS = "worker_summarize"
 
 # The canonical worker_general default (full idx-0 8072 + the four quarters).
 # worker_math shares worker_general's physical gemma server, so its default URL
@@ -44,6 +47,17 @@ WM = "worker_math"
 _WG_DEFAULT = (
     "full:http://localhost:8072,http://localhost:8082,"
     "http://localhost:8182,http://localhost:8282,http://localhost:8382"
+)
+
+# The canonical frontdoor default (aligned full idx-0 8070 + the four quarters).
+# coder / coder_escalation / worker_summarize are all served by the frontdoor
+# GGUF (Qwen3.6-35B-A3B Q8, shared mmap). Fix A delegates their URL default to
+# frontdoor so each carries this SAME shape and its ConcurrencyAwareBackend fans
+# out 4-wide under topology_role=frontdoor instead of serializing on the single
+# 8070 port those roles were previously pinned to.
+_FD_DEFAULT = (
+    "full:http://localhost:8070,http://localhost:8080,"
+    "http://localhost:8180,http://localhost:8280,http://localhost:8380"
 )
 
 
@@ -363,6 +377,150 @@ def test_shared_worker_fleet_url_defaults_do_not_drift() -> None:
             f"the host fleet:\n"
             f"    {role}: {FB[role]!r}\n"
             f"    {host_role}: {host_default!r}\n"
+            f"Shared-fleet roles MUST carry an identical URL list (edit BOTH or "
+            f"neither) until backends are derived from server_mode directly."
+        )
+
+
+# ── Fix A: coder / coder_escalation / worker_summarize share frontdoor's fleet ─
+#
+# All three are served by the frontdoor GGUF (Qwen3.6-35B-A3B Q8, shared mmap):
+#   - server_mode.coder_escalation is its OWN row pinned to frontdoor port 8070
+#     (no numa_ports of its own), model_role qwen36_q8_0 == frontdoor's.
+#   - roles.worker_summarize.model is the frontdoor model, "shared GGUF mmap".
+#   - coder is a canonical alias over coder_escalation.
+# Before Fix A their ServerURLsConfig fields resolved their OWN name and got the
+# single 8070 port, so their ConcurrencyAwareBackend serialized on ONE endpoint
+# with a phantom empty topology. Fix A delegates each field's URL DEFAULT to
+# frontdoor (like toolrunner→worker_general) so they inherit frontdoor's `full:`
+# quarter fleet and _infer_topology_role_for_urls resolves the identical URL
+# tuple to topology_role=frontdoor.
+
+
+def test_frontdoor_shared_fields_match_frontdoor_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """(a): coder / coder_escalation / worker_summarize each delegate their URL
+    default to frontdoor, so each equals frontdoor's (unchanged) default
+    byte-for-byte."""
+    _fallback_env(monkeypatch, tmp_path)
+    try:
+        cfg = ServerURLsConfig()
+        # frontdoor default unchanged.
+        assert cfg.frontdoor == _FD_DEFAULT
+        # Each frontdoor-shared alias inherits the SAME full + 4-quarter shape.
+        assert cfg.coder == _FD_DEFAULT
+        assert cfg.coder_escalation == _FD_DEFAULT
+        assert cfg.worker_summarize == _FD_DEFAULT
+        assert cfg.coder == cfg.frontdoor
+        assert cfg.coder_escalation == cfg.frontdoor
+        assert cfg.worker_summarize == cfg.frontdoor
+        parts = cfg.coder_escalation.split(",")
+        assert parts[0] == "full:http://localhost:8070"   # aligned idx-0 full
+        assert parts[1:] == [
+            "http://localhost:8080",
+            "http://localhost:8180",
+            "http://localhost:8280",
+            "http://localhost:8380",
+        ]
+    finally:
+        reset_stack_prior_server_url_cache()
+
+
+def test_frontdoor_shared_backends_build_four_quarters_under_frontdoor_topology(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """(b): the shipped coder_escalation / worker_summarize defaults each construct
+    a CA backend whose topology/lock role is frontdoor, with an aligned full (8070,
+    served — not demoted) and the four frontdoor quarters at their TRUE
+    (port-resolved) topology idxs [1,2,3,4] (ports 8080..8380). Regression: the old
+    single-8070 default built ONE quarter and serialized dispatch under a phantom
+    empty topology."""
+    _fallback_env(monkeypatch, tmp_path)
+    try:
+        cfg = ServerURLsConfig()
+        # frontdoor MUST be co-present so the aliases' topology role is resolvable
+        # by matching (full-stripped) URL lists.
+        backends = _build(
+            {FD: cfg.frontdoor, CE: cfg.coder_escalation, WS: cfg.worker_summarize}
+        )
+    finally:
+        reset_stack_prior_server_url_cache()
+
+    for alias in (CE, WS):
+        be = backends[alias]
+        assert isinstance(be, ca_mod.ConcurrencyAwareBackend), alias
+        # Topology/lock role aliases onto frontdoor (shared physical fleet), so
+        # region locks collide correctly with frontdoor instead of a phantom
+        # empty "coder_escalation"/"worker_summarize" topology.
+        assert be._topology_role == FD, alias
+        assert be._role == alias
+        # Aligned full (8070 == frontdoor idx-0 port) → served, not demoted.
+        assert be._full is not None, alias
+        assert be._full_port == 8070, alias
+        assert be._full_slot_aligned is True, alias
+        # Four frontdoor quarters at their TRUE (port-resolved) topology idxs.
+        assert len(be._quarters) == 4, alias
+        assert be._quarter_topology_idx == [1, 2, 3, 4], alias
+        assert [_port(q) for q in be._quarters] == [8080, 8180, 8280, 8380], alias
+        for topo, port in zip(be._quarter_topology_idx, [8080, 8180, 8280, 8380]):
+            assert topology_idx_for_port(FD, port) == topo
+
+    # frontdoor itself unchanged: same aligned full + 4-quarter shape.
+    fd_be = backends[FD]
+    assert isinstance(fd_be, ca_mod.ConcurrencyAwareBackend)
+    assert fd_be._topology_role == FD
+    assert fd_be._full_port == 8070
+    assert len(fd_be._quarters) == 4
+    assert fd_be._quarter_topology_idx == [1, 2, 3, 4]
+
+
+def test_frontdoor_shared_fleet_url_defaults_do_not_drift() -> None:
+    """DRIFT GUARD (frontdoor fleet): registry-DERIVED mirror of the worker-fleet
+    guard. It protects any role the registry declares as sharing the FRONTDOOR
+    server via server_mode.frontdoor.shared_with that ALSO carries its own literal
+    URL default in _LEGACY_SERVER_URL_FALLBACKS.
+
+    Derived, NOT hardcoded: today server_mode.frontdoor.shared_with is EMPTY — the
+    frontdoor-shared roles (coder_escalation, worker_summarize) are expressed as a
+    separate 8070-pinned server_mode row and a roles-section shared-mmap note, not
+    via shared_with. And post-Fix A those fields delegate their URL default to
+    frontdoor directly (they call _server_url_default("frontdoor"), exactly like
+    toolrunner→worker_general), so they carry NO own literal that could drift and
+    correctly do NOT belong to an FB-literal parity set. The parity set is thus
+    empty and this guard is vacuously green; if a future edit adds those roles to
+    server_mode.frontdoor.shared_with AND gives them their own FB literal, this
+    activates automatically."""
+    import yaml
+
+    from src.config.models import _LEGACY_SERVER_URL_FALLBACKS as FB
+
+    registry = yaml.safe_load(
+        (ROOT / "orchestration" / "model_registry.yaml").read_text(encoding="utf-8")
+    )
+    fd_fleet = registry["server_mode"][FD]
+    shared_with = list(fd_fleet.get("shared_with") or [])
+
+    # Registry reality this guard is derived from: frontdoor shares with no role
+    # via shared_with. If this changes, the parity loop below starts enforcing.
+    assert shared_with == [], (
+        "server_mode.frontdoor.shared_with is no longer empty; the frontdoor "
+        "drift guard now protects those roles — confirm each shared role either "
+        "delegates its ServerURLsConfig field to frontdoor (no own literal) or "
+        "carries an FB literal identical to frontdoor's."
+    )
+
+    host_default = FB[FD]
+    parity_roles = [r for r in shared_with if r in FB]
+    for role in parity_roles:
+        assert FB[role] == host_default, (
+            f"shared-fleet URL drift: role {role!r} shares the frontdoor server "
+            f"(server_mode.frontdoor.shared_with in "
+            f"orchestration/model_registry.yaml) but its default URL list in "
+            f"_LEGACY_SERVER_URL_FALLBACKS (src/config/models.py) diverges from "
+            f"the frontdoor fleet:\n"
+            f"    {role}: {FB[role]!r}\n"
+            f"    frontdoor: {host_default!r}\n"
             f"Shared-fleet roles MUST carry an identical URL list (edit BOTH or "
             f"neither) until backends are derived from server_mode directly."
         )
