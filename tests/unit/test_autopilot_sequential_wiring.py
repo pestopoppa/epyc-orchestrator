@@ -2075,6 +2075,11 @@ def _run_loop_inner_seq_harness(
             self.quality_history_by_tier = (
                 quality_history_by_tier if quality_history_by_tier is not None else {}
             )
+            # Defect #4: real SafetyGate now exposes the provenance-bearing window that
+            # _run_loop_inner persists to state["quality_history_provenance_by_tier"].
+            self.quality_history_provenance_by_tier = (
+                kwargs.get("quality_history_provenance_by_tier") or {}
+            )
             self.baseline = SimpleNamespace(
                 quality_for_tier=lambda *_args: 0.0,
                 to_state_dict=lambda: baseline_state or {},

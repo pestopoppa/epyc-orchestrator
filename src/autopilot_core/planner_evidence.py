@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict, is_dataclass
+from datetime import datetime
 from statistics import median
 from typing import Any
 
@@ -31,9 +32,22 @@ def format_planner_evidence_section(
     *,
     limit: int = 6,
     core_id: str = DEFAULT_EVIDENCE_CORE_ID,
+    exclude_before_ts: float | None = None,
 ) -> str:
-    """Return controller prompt text for evidence power and candidate status."""
+    """Return controller prompt text for evidence power and candidate status.
+
+    ``exclude_before_ts`` is the active eval-quality instrument-era boundary epoch
+    (the analogue of the speed axis's ``pareto_exclude_before_ts``). When set, rows
+    whose ``timestamp`` predates the boundary are dropped BEFORE any evidence fold —
+    they are pre-boundary PRIORS and must not pool with post-boundary evidence. When
+    ``None`` (the default) the fence is inert and every row is folded, so all
+    pre-existing callers/tests are unaffected.
+    """
     normalized = [_normalize_row(row) for row in rows]
+    if exclude_before_ts is not None:
+        normalized = [
+            _row for _row in normalized if not _row_is_pre_boundary(_row, exclude_before_ts)
+        ]
     trusted = [_row for _row in normalized if _is_trusted_eval_row(_row)]
     vector_rows = [_row for _row in trusted if _question_results(_row)]
     seq_rows = _seq_observation_rows(trusted, core_id=core_id)
@@ -66,6 +80,33 @@ def _normalize_row(row: Mapping[str, Any] | Any) -> dict[str, Any]:
         return dict(row)
     except Exception:
         return {}
+
+
+def _row_epoch(row: Mapping[str, Any]) -> float | None:
+    """Parse a journal row's ISO8601 ``timestamp`` to an epoch, or None if unparseable."""
+    raw = row.get("timestamp")
+    if not raw:
+        return None
+    text = str(raw)
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        return datetime.fromisoformat(text).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+def _row_is_pre_boundary(row: Mapping[str, Any], exclude_before_ts: float) -> bool:
+    """Return True when a row is a pre-boundary PRIOR (era-fence exclusion).
+
+    A row with no parseable timestamp is treated as pre-boundary and excluded — the
+    fail-closed choice: an unstamped row cannot be proven to belong to the current
+    instrument era, so it must not silently pool into post-boundary wealth.
+    """
+    epoch = _row_epoch(row)
+    if epoch is None:
+        return True
+    return epoch < exclude_before_ts
 
 
 def _is_trusted_eval_row(row: Mapping[str, Any]) -> bool:
