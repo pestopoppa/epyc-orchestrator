@@ -521,6 +521,19 @@ class LlamaServerBackend(ModelBackend):
             "stream": False,
         }
         self._apply_deterministic_sampling(payload, role_config, request)
+        # Chat-path Option A (2026-07-22): llama's OpenAI-compat endpoint
+        # IGNORES the native n_probs param the sampling applier just injected —
+        # translate to logprobs/top_logprobs, else every chat_completions role
+        # (frontdoor Qwen, gemma4 worker fleet) returns empty
+        # completion_probabilities and calibration silently falls back to the
+        # binary proxy (EV-4b/EV-11c confidence-void root cause).
+        _n_probs = payload.pop("n_probs", None)
+        if not _n_probs:
+            _req_probs = getattr(request, "n_probs", None)
+            _n_probs = int(_req_probs) if _req_probs else None
+        if _n_probs and _n_probs > 0:
+            payload["logprobs"] = True
+            payload["top_logprobs"] = max(1, min(int(_n_probs), 20))
         if request.stop_sequences:
             payload["stop"] = request.stop_sequences
 
@@ -570,10 +583,19 @@ class LlamaServerBackend(ModelBackend):
             choices = data.get("choices", [])
             output = ""
             completion_reason = "stop"
+            chat_logprob_rows: list[dict[str, Any]] = []
             if choices:
                 msg = choices[0].get("message", {})
                 output = msg.get("content", "") or ""
                 completion_reason = str(choices[0].get("finish_reason") or "stop")
+                # OpenAI-shape logprobs.content rows carry a top-level
+                # "logprob" per token — the confidence extractor
+                # (_completion_probabilities_confidence) consumes them as-is.
+                _lp = choices[0].get("logprobs")
+                if isinstance(_lp, dict) and isinstance(_lp.get("content"), list):
+                    chat_logprob_rows = [
+                        row for row in _lp["content"] if isinstance(row, dict)
+                    ]
 
             usage = data.get("usage", {}) or {}
             prompt_tokens = int(usage.get("prompt_tokens", 0))
@@ -626,6 +648,7 @@ class LlamaServerBackend(ModelBackend):
                 completion_reason=(
                     "empty_generation" if empty_generation else completion_reason
                 ),
+                completion_probabilities=chat_logprob_rows,
             )
         except httpx.HTTPStatusError as e:
             elapsed = time.time() - start_time
