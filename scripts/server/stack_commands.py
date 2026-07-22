@@ -54,6 +54,7 @@ from scripts.server.stack_paths import (
 from scripts.server.stack_prewarm import prewarm_all as _prewarm_all
 from scripts.server.runtime_facts_manifest import (
     read_runtime_stack_numa_mode,
+    realized_stack_numa_mode_from_state,
     write_runtime_facts_manifest,
 )
 from scripts.server.stack_state import ProcessInfo
@@ -1043,11 +1044,42 @@ def cmd_start(args: argparse.Namespace) -> int:
                         print(f"  Including WARM server: port {warm_server['port']} ({role})")
                         break
 
-    # Apply --numa-mode filter (default 'full' for single-user / AutoPilot speed integrity).
-    # Picks full XOR quarters for any role with full_instance_idx + multiple instances
-    # (currently frontdoor + coder_escalation + worker_general); single-instance roles
-    # pass through. See launcher-numa-mode-gating handoff.
-    numa_mode = getattr(args, "numa_mode", "full")
+    # Apply --numa-mode filter. Picks full XOR quarters for any role with
+    # full_instance_idx + multiple instances (currently frontdoor +
+    # coder_escalation + worker_general); single-instance roles pass through.
+    # See launcher-numa-mode-gating handoff.
+    #
+    # ESC-8 Fix 4: default is None (no hardcoded 'full'). When unset, INFER the
+    # mode from the running fleet (production is quarters-only; FULL_DISABLED,
+    # see stack_numa.py). A `start --only <role>` that conflicts with the live
+    # fleet is refused so it cannot stamp overlapping full instances next to
+    # live quarters (kill chain A2).
+    numa_mode = getattr(args, "numa_mode", None)
+    only = getattr(args, "only", None)
+    realized_mode: str | None = None
+    if numa_mode is None or only:
+        try:
+            from scripts.server.realized_fleet import derive_realized_numa_mode
+
+            realized_mode = derive_realized_numa_mode()
+        except Exception as exc:  # noqa: BLE001
+            print(f"  [--numa-mode] WARN: realized-fleet probe failed ({exc})")
+    if numa_mode is None:
+        numa_mode = realized_mode or "quarter"
+        if realized_mode:
+            print(f"  [--numa-mode] not specified; inferred '{numa_mode}' from the running fleet")
+        else:
+            print(
+                f"  [--numa-mode] not specified and no live fleet detected; "
+                f"defaulting to production mode '{numa_mode}'"
+            )
+    if only and realized_mode is not None and numa_mode != realized_mode:
+        print(
+            f"  [!] --only refused: requested --numa-mode '{numa_mode}' conflicts with the "
+            f"running fleet ('{realized_mode}'). Pass --numa-mode {realized_mode} explicitly "
+            f"to add roles to the live stack, or stop the fleet first."
+        )
+        return 1
     if numa_mode == "both":
         # Light advisory only — 'both' has been working for frontdoor/coder_escalation since
         # 2026-03 (Qwen3.6-35B Q8 quarters tuned to coexist with the full instance). The
@@ -1373,7 +1405,12 @@ def cmd_stop(args: argparse.Namespace) -> int:
                     print("    [!] Failed to stop")
         print(f"Stopped {killed} orphaned processes")
         save_state({})
-        _refresh_runtime_facts_manifest("stack_stop", {})
+        # ESC-8 Fix 2: pass the realized mode explicitly (empty fleet ⇒ None ⇒
+        # serialized null, fail-safe) rather than letting the writer coerce a
+        # missing mode to a poisoned "full".
+        _refresh_runtime_facts_manifest(
+            "stack_stop", {}, stack_numa_mode=realized_stack_numa_mode_from_state({})
+        )
         return 0
 
     if not state:
@@ -1427,7 +1464,10 @@ def cmd_stop(args: argparse.Namespace) -> int:
                     else:
                         print("    [!] Failed to stop")
 
-    _refresh_runtime_facts_manifest("stack_stop", state)
+    # ESC-8 Fix 2: record the realized mode derived from the surviving fleet.
+    _refresh_runtime_facts_manifest(
+        "stack_stop", state, stack_numa_mode=realized_stack_numa_mode_from_state(state)
+    )
     return 0
 
 
@@ -1623,7 +1663,11 @@ def cmd_reload(args: argparse.Namespace) -> int:
                 print(f"  [?] Unknown component: {component}")
 
     save_state(state)
-    _refresh_runtime_facts_manifest("stack_reload", state)
+    # ESC-8 Fix 2: record the realized mode so the next reload reads a manifest
+    # that matches the live fleet instead of carrying a poisoned "full" forward.
+    _refresh_runtime_facts_manifest(
+        "stack_reload", state, stack_numa_mode=realized_stack_numa_mode_from_state(state)
+    )
     return 0
 
 
@@ -1708,7 +1752,14 @@ def cmd_status(args: argparse.Namespace) -> int:
     print(_episodic_embedding_status_line())
     print()
     print(f"State file: {STATE_FILE}")
-    save_state(state)
+    # ESC-8 Fix 2: `status` is a READ command — it no longer persists state.
+    # The prior save_state(state) bumped the state-file mtime without refreshing
+    # the runtime-facts manifest, making the manifest look stale to
+    # read_runtime_stack_numa_mode(); a reload run right after a status then fell
+    # through to the shell env (the order-dependence hazard, audit §1a). The only
+    # thing lost is opportunistic PID-drift persistence, which reload/stop
+    # re-derive via port scans — lower blast radius than giving a read command a
+    # manifest-write side effect.
     return 0
 
 
