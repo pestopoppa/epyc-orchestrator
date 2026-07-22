@@ -875,6 +875,32 @@ def _launch_manifest_targets(
                     target["launch_requirements"].update(
                         _launch_requirements_for_server(server)
                     )
+    # WP-13: attach the declarative alias→host relation from server_mode
+    # shared_with. evidence.alias_overrides only exists for MODEL-conflicted
+    # aliases (worker_math's ghost binding); same-model aliases
+    # (coder_escalation/worker_summarize on frontdoor's fleet) are declared
+    # ONLY here. Host key = the row's model_role when it is a launch target,
+    # else the server_mode key itself.
+    for server_key, cfg in server_mode.items():
+        if not isinstance(cfg, dict):
+            continue
+        shared = cfg.get("shared_with")
+        if not isinstance(shared, list):
+            continue
+        model_role = cfg.get("model_role")
+        host_key = (
+            str(model_role)
+            if isinstance(model_role, str) and model_role in targets
+            else str(server_key)
+            if str(server_key) in targets
+            else None
+        )
+        if host_key is None:
+            continue
+        for alias in shared:
+            if isinstance(alias, str) and alias in targets and alias != host_key:
+                targets[alias]["alias_host"] = host_key
+
     for role, target in targets.items():
         descriptor = descriptor_roles.get(role) or {}
         role_cfg = registry_roles.get(role) if isinstance(registry_roles.get(role), dict) else None
@@ -1108,7 +1134,15 @@ def _alias_host_role(record: dict[str, Any]) -> str | None:
         for override in overrides
         if isinstance(override, dict) and override.get("served_by")
     }
-    return hosts.pop() if len(hosts) == 1 else None
+    if len(hosts) != 1:
+        return None
+    host = hosts.pop()
+    # Descriptors are model-keyed, so the HOST's own record carries the same
+    # alias_overrides copy — a record whose resolved host is itself IS the
+    # host and must keep full (runtime-inclusive) validation.
+    if host == str(record.get("role") or ""):
+        return None
+    return host
 
 
 def validate_launch_manifest_serving_alignment(
@@ -1171,7 +1205,9 @@ def validate_launch_manifest_serving_alignment(
             continue
         # WP-13: alias roles serve the HOST's fleet — align against the host's
         # launch row (superset of the alias's tagged subset), not its own.
-        host_role = _alias_host_role(record)
+        # Host resolution: model-conflict evidence first (alias_overrides),
+        # else the declarative server_mode shared_with relation.
+        host_role = _alias_host_role(record) or target.get("alias_host")
         if host_role and isinstance(targets.get(host_role), dict):
             target = targets[host_role]
         serving = record.get("serving")
@@ -1287,7 +1323,11 @@ def validate_launch_manifest_serving_alignment(
                     f"role {role!r} serving.launch.requirements do not match "
                     f"launch manifest requirements: {json.dumps(mismatches, sort_keys=True)}"
                 )
-        if target_launch_runtime:
+        if target_launch_runtime and not host_role:
+            # WP-13: an alias record's stored runtime is a stale artifact of its
+            # standalone-row past (e.g. coder_escalation acceleration:none) — it
+            # RUNS under the host's runtime by construction (one process). The
+            # runtime is validated once, on the host's own row.
             launch = serving.get("launch")
             actual_runtime = (
                 _normalized_launch_runtime(launch.get("runtime"))

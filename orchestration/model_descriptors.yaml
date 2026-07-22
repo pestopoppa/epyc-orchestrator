@@ -1,12 +1,12 @@
 descriptor_version: 3
-compiled_at: '2026-07-22T09:50:39Z'
+compiled_at: '2026-07-22T10:13:51Z'
 status: compiled
 coverage_scope: active_roles_from_stack_manifest
 source_registries:
   lean:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
-    repo_commit: 5aa29f35
-    sha256: 4020793ca9b485017e562003fdea2ecf8a424793ceef7c148796f584a00e91d0
+    repo_commit: e5063b75
+    sha256: 4ccb929a70c7a175c79c5962e21b49cc45e909e958188f0a5b0814ce2a10ae41
   research:
     path: /mnt/raid0/llm/epyc-inference-research/orchestration/model_registry.yaml
     repo_commit: 561741de
@@ -412,9 +412,9 @@ models:
     - frontdoor
     - worker_summarize
     server_roles:
-    - coder_escalation
     - frontdoor
-    runtime_aliases: []
+    runtime_aliases:
+    - frontdoor
     shared_mmap: true
   quality:
     suite_vector:
@@ -430,24 +430,16 @@ models:
     measured:
     - date: '2026-05-04'
       protocol: registry benchmark_score
-      value: 170/183 (93%)
+      value: 170/183 (92.9%)
     - date: '2026-05-04'
       protocol: registry benchmark_score
       value: 170/183 (92.9%)
     - date: '2026-05-04'
-      protocol: registry performance block
-      value:
-        baseline_tps: 24.3
-        optimized_tps: 24.3
-        quality_pct: 93
-        general_suite: 30/30 (100%)
-        coder_suite: 29/30 (97%)
-        thinking_suite: 28/30 (93%)
-        long_context: 27/27 (100%) — beats prior worker_summarize on every dimension
-        speedup: shares_frontdoor_gguf
+      protocol: registry benchmark_score
+      value: 170/183 (92.9%)
   speed:
     solo_96t_tps: 24.3
-    quarter_48t_tps: null
+    quarter_48t_tps: 24.3
     prefill_tps: null
     optimized_tps: 24.3
     source: orchestration/model_registry.yaml
@@ -456,21 +448,22 @@ models:
       protocol: server_mode throughput
       value_tps: 24.3
   acceleration:
-    spec_type: none
+    spec_type: draft-mtp
     draft_compat: []
     enable_thinking: false
     thinking_control:
       mode: toggle_off
       source: model.disable_thinking
-    kv:
+    kv: &id001
       k: q8_0
       v: q8_0
+    draft_max: 4
     lookup: false
     corpus_retrieval: true
   serving:
     binary: llama.cpp
     binary_dir: null
-    numa_policy: server_default
+    numa_policy: 4x48t_quarter_instances
     mlock: true
     ports:
     - 8070
@@ -478,7 +471,7 @@ models:
     - 8180
     - 8280
     - 8380
-    server_role: coder_escalation
+    server_role: frontdoor
     requirements: {}
   known_gaps: []
   architecture:
@@ -528,9 +521,7 @@ models:
     thinking_control:
       mode: toggle_off
       source: model.disable_thinking
-    kv:
-      k: q8_0
-      v: q8_0
+    kv: *id001
     draft_max: 4
     lookup: false
     corpus_retrieval: true

@@ -1149,7 +1149,9 @@ server_mode:
     chat_template_kwargs:
       enable_thinking: false
     model_role: qwen36_q8_0
-    shared_with: []
+    shared_with:
+    - coder_escalation
+    - worker_summarize
     description: Root LM — Qwen3.6-35B-A3B MTP Q8 (quality 93%, May-4 Claude-as-Judge 170/183; v6 NEXTN self-draft)
     benchmark_date: 2026-05-04
     benchmark_score: 170/183 (92.9%)
@@ -1175,29 +1177,6 @@ server_mode:
       corpus_retrieval: true
     throughput: 24.3
     previous_model: Qwen3.5-35B-A3B-UD-Q4_K_M.gguf
-  coder_escalation:
-    url: http://localhost:8070
-    port: 8070
-    slots: 1
-    chat_template_kwargs:
-      enable_thinking: false
-    model_role: qwen36_q8_0
-    description: Coding escalation — Qwen3.6-35B-A3B Q8 (shares frontdoor GGUF; 97% coder vs 77% Qwen3-Coder-30B; absorbs eliminated architect_coding). Former Qwen2.5-Coder-32B-Q4 preserved as qwen25_coder_32b_q4km.
-    benchmark_date: 2026-05-04
-    benchmark_score: 170/183 (93%)
-    model: Qwen3.6-35B-A3B-MTP-Q8_0.gguf
-    model_path: /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf
-    kv_quant:
-      k: q8_0
-      v: q8_0
-    memory_gb: 37
-    tier: hot
-    acceleration:
-      type: none
-      lookup: false
-      corpus_retrieval: true
-    throughput: 24.3
-    previous_model: Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf
   worker:
     url: http://localhost:8072
     port: 8072
