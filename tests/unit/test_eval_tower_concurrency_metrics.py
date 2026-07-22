@@ -259,18 +259,24 @@ def test_eval_batch_fails_remaining_questions_after_no_progress_timeout(monkeypa
     monkeypatch.setenv("AUTOPILOT_EVAL_ORPHAN_DRAIN_TIMEOUT_S", "0.01")
     tower = EvalTower(timeout=1)
 
-    def fake_eval_question(q: dict, client: object) -> QuestionResult:
+    # workers>1 pipelines generation + scoring on separate pools: a hung
+    # GENERATION lane is what this test exercises, so the fake replaces
+    # _generate_question and hands scoring a ready ``final_result``.
+    def fake_generate(q: dict, client: object) -> "eval_tower._GenOutcome":
         if q["id"] != "fast":
             time.sleep(0.2)
-        return QuestionResult(
-            question_id=str(q["id"]),
-            suite="unit",
-            prompt=str(q["id"]),
-            expected="ok",
-            correct=True,
+        return eval_tower._GenOutcome(
+            gen_ended_at_s=time.time(),
+            final_result=QuestionResult(
+                question_id=str(q["id"]),
+                suite="unit",
+                prompt=str(q["id"]),
+                expected="ok",
+                correct=True,
+            ),
         )
 
-    monkeypatch.setattr(tower, "_eval_question", fake_eval_question)
+    monkeypatch.setattr(tower, "_generate_question", fake_generate)
 
     results = tower._eval_batch(
         [{"id": "fast"}, {"id": "stuck"}, {"id": "queued"}],

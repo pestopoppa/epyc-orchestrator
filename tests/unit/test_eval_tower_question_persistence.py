@@ -10,6 +10,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "autopilot"))
 
+import eval_tower  # noqa: E402
 from eval_tower import EvalTower, QuestionResult  # noqa: E402
 
 
@@ -65,18 +66,23 @@ def test_eval_batch_persists_concurrent_question_rows(monkeypatch, tmp_path: Pat
     tower = EvalTower()
     tower.set_trial_context(202)
 
-    def fake_eval_question(q: dict, client: object) -> QuestionResult:
+    # workers>1 drives the pipelined generation/scoring pools, so the fake
+    # replaces the GENERATION phase and hands scoring a ready ``final_result``.
+    def fake_generate(q: dict, client: object) -> "eval_tower._GenOutcome":
         time.sleep(float(q.get("delay", 0.0)))
-        return QuestionResult(
-            question_id=str(q["id"]),
-            suite="unit",
-            prompt=str(q["id"]),
-            expected="ok",
-            answer="ok",
-            correct=True,
+        return eval_tower._GenOutcome(
+            gen_ended_at_s=time.time(),
+            final_result=QuestionResult(
+                question_id=str(q["id"]),
+                suite="unit",
+                prompt=str(q["id"]),
+                expected="ok",
+                answer="ok",
+                correct=True,
+            ),
         )
 
-    monkeypatch.setattr(tower, "_eval_question", fake_eval_question)
+    monkeypatch.setattr(tower, "_generate_question", fake_generate)
 
     tower._eval_batch(
         [
@@ -95,10 +101,14 @@ def test_eval_batch_persists_concurrent_question_rows(monkeypatch, tmp_path: Pat
     assert len({row["eval_batch_id"] for row in question_rows}) == 1
 
 
-def test_eval_batch_sidecar_does_not_leak_prompt_expected_or_raw_answer(
+def test_eval_batch_sidecar_persists_answer_but_not_prompt_or_expected(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
+    # 2026-07-22 operator directive: the JSONL sidecar now persists the FULL raw
+    # answer at the row level so arms are re-scorable/resumable from the artifact
+    # alone. `prompt`/`expected` stay excluded (reconstructable from the dataset),
+    # and the COMPACT `result` block is unchanged (answer_hash only).
     monkeypatch.setenv("AUTOPILOT_EVAL_ARTIFACT_ROOT", str(tmp_path))
     monkeypatch.setenv("AUTOPILOT_EVAL_CONCURRENCY", "1")
     tower = EvalTower()
@@ -110,7 +120,7 @@ def test_eval_batch_sidecar_does_not_leak_prompt_expected_or_raw_answer(
             suite="unit",
             prompt="DO_NOT_WRITE_PROMPT",
             expected="DO_NOT_WRITE_EXPECTED",
-            answer="DO_NOT_WRITE_RAW_ANSWER",
+            answer="PERSIST_THIS_ANSWER",
             correct=True,
         )
 
@@ -121,8 +131,11 @@ def test_eval_batch_sidecar_does_not_leak_prompt_expected_or_raw_answer(
     text = _sidecar_path(tmp_path, 303).read_text(encoding="utf-8")
     assert "DO_NOT_WRITE_PROMPT" not in text
     assert "DO_NOT_WRITE_EXPECTED" not in text
-    assert "DO_NOT_WRITE_RAW_ANSWER" not in text
+    # Raw answer IS persisted now (row-level), for re-scoring / resume.
+    assert "PERSIST_THIS_ANSWER" in text
     row = [r for r in _read_rows(_sidecar_path(tmp_path, 303)) if r["row_type"] == "question_result"][0]
+    assert row["answer"] == "PERSIST_THIS_ANSWER"
+    # The compact result block stays compact — answer_hash only, no raw fields.
     assert "answer_hash" in row["result"]
     assert "prompt" not in row["result"]
     assert "expected" not in row["result"]
