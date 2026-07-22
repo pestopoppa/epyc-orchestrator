@@ -44,8 +44,13 @@ def _stack_change_guard_ports(
     mode: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> dict[str, list[int]]:
+    from scripts.validate import stack_change_guard
     from scripts.validate.stack_change_guard import _launch_manifest_targets
 
+    # Pin the realized-fleet seam to "no signal" so the env var under test
+    # governs the launch view; on a live-fleet host the real probe would
+    # otherwise override the parameterized mode (ESC-8/WP-13 guard fix).
+    monkeypatch.setattr(stack_change_guard, "_realized_launch_numa_mode", lambda: None)
     monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", mode)
     return {
         role: sorted(target.get("ports") or [])

@@ -808,6 +808,16 @@ def _launch_cfg_from_target(target: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _realized_launch_numa_mode() -> str | None:
+    """Realized-fleet NUMA mode for the launch view (module-level test seam)."""
+    try:
+        from scripts.server.realized_fleet import derive_realized_numa_mode
+
+        return derive_realized_numa_mode()
+    except Exception:
+        return None
+
+
 def _launch_manifest_targets(
     *,
     registry_path: Path = DEFAULT_REGISTRY,
@@ -821,7 +831,14 @@ def _launch_manifest_targets(
 
     from scripts.server.stack_numa_mode import env_stack_numa_mode
 
-    numa_mode = env_stack_numa_mode()
+    # ESC-8/WP-13: build the launch view against the REALIZED fleet mode, not
+    # the ambient env default ("full" in a clean shell). A quarter-realized
+    # fleet guarded against a full-mode launch view mismatches wholesale (the
+    # 105-error class, 2026-07-22). Env stays the fallback for fleet-less
+    # environments (tests, cold hosts).
+    numa_mode = _realized_launch_numa_mode()
+    if numa_mode is None:
+        numa_mode = env_stack_numa_mode()
     registry = _load_yaml_mapping(registry_path)
     registry_roles = registry.get("roles") if isinstance(registry.get("roles"), dict) else {}
     server_mode = (

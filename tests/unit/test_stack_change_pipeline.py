@@ -39,10 +39,14 @@ def _pin_realized_compile_mode(monkeypatch):
     """ESC-8 Fix 6: the update/check compile now resolves the NUMA mode from the
     realized fleet (a bare TCP probe) or refuses when nothing is listening. Pin
     it deterministically to the launcher ``full`` default so these pipeline
-    tests stay hermetic (no live sockets) and keep their pre-Fix-6 expectations."""
+    tests stay hermetic (no live sockets) and keep their pre-Fix-6 expectations.
+    The guard's launch-view probe is pinned to no-signal for the same reason
+    (env fallback governs, matching the fixtures)."""
+    from scripts.validate import stack_change_guard
     from src.registry import stack_priors
 
     monkeypatch.setattr(stack_priors, "_realized_compile_numa_mode", lambda **_kw: "full")
+    monkeypatch.setattr(stack_change_guard, "_realized_launch_numa_mode", lambda: None)
 
 
 def test_promotion_gate_includes_benchmark_preflight_regressions() -> None:
