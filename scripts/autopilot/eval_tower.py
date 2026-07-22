@@ -1281,11 +1281,21 @@ class _EvalQuestionJsonlWriter:
 
     def append_result(self, *, ordinal: int, result: "QuestionResult") -> None:
         row = self._base_row("question_result")
+        # Wall-clock interval so end-to-end concurrency depth and latency
+        # distributions are derivable from the artifact alone (2026-07-22:
+        # verifying EV-4b fan-out required /proc forensics because rows carried
+        # no timing). append_result runs immediately on completion at every
+        # call site, so append time ≈ request end.
+        ended_at_s = time.time()
+        elapsed = max(0.0, float(getattr(result, "elapsed_s", 0.0) or 0.0))
         row.update(
             {
                 "ordinal": int(ordinal),
                 "result": _compact_question_result(result),
                 "complete": False,
+                "ended_at_s": round(ended_at_s, 3),
+                "elapsed_s": round(elapsed, 6),
+                "started_at_s": round(ended_at_s - elapsed, 3) if elapsed > 0 else None,
             }
         )
         self.append_row(row)
