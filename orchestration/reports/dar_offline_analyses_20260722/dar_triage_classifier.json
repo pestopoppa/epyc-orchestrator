@@ -1,0 +1,30 @@
+{
+  "task": "DAR-L624 triage-gate classifier (cost-dominated vs quality-decisive)",
+  "snapshot": {
+    "snapshot_dir": "/mnt/raid0/llm/tmp/dar_snapshot",
+    "snapshot_ts_utc": "20260722T125604Z",
+    "episodic_db": "/mnt/raid0/llm/tmp/dar_snapshot/episodic.db"
+  },
+  "gap_threshold_pp": 5.0,
+  "n_objectives": 633,
+  "decisive_base_rate": 0.21169036334913113,
+  "features_prompt_side": {
+    "pca_components": 30,
+    "bands": [
+      "T0_T1_easy",
+      "T2_mid",
+      "T3_hard",
+      "chat_unknown"
+    ],
+    "cv_auc": 0.6416489695809531,
+    "precision_at_base_rate_k": 0.34328358208955223,
+    "precision_lift_vs_base": 1.621630652706616
+  },
+  "features_with_difficulty_LEAKAGE_upper_bound": {
+    "cv_auc": 0.8601531421051059,
+    "precision_at_base_rate_k": 0.6492537313432836,
+    "precision_lift_vs_base": 3.0669971040320783,
+    "note": "includes outcome-derived difficulty; upper bound, NOT deployable pre-decision"
+  },
+  "interpretation": "prompt-side AUC measures whether decisiveness is predictable BEFORE running any model. Precision-lift is how much a top-k triage gate concentrates the decisive minority vs random selection."
+}

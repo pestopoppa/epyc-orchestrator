@@ -4825,6 +4825,111 @@ class EvalTower:
             "per_role": per_role,
         }
 
+    def eval_resume_incomplete(
+        self,
+        *,
+        suite: str,
+        split: str | None,
+        roles: "list[str] | str | None",
+        seed: int = EVAL_SPEC_SEED,
+        scoring: str | None = None,
+        n: int | None = None,
+        full: bool = False,
+        completed_ids: "Sequence[str]" = (),
+        expected_dataset_sha256: str | None = None,
+    ) -> dict[str, Any]:
+        """Run ONLY the not-yet-completed remainder of a prior suite/split draw —
+        the primitive behind the window runner's ``--resume-incomplete-from``.
+
+        Reconstructs the SAME ordered question set the prior run drew
+        (``_load_verifier_suite_questions`` with the identical suite/split/seed/n/
+        full), then REFUSES (raises ``ValueError``) if its ``dataset_content_sha256``
+        does not match ``expected_dataset_sha256`` — dataset drift must not be
+        silently resumed. Drops every question whose identity is in ``completed_ids``
+        (ANY prior verdict, including error rows — reruning those is
+        ``--retry-errors-from``'s job), stamps each survivor with its ORIGINAL
+        ordinal (``_ordinal``) so the resumed sidecar rows carry original-dataset
+        ordinals that merge cleanly with the prior run, and runs the remainder per
+        role via ``_eval_batch``.
+        """
+        roles = self._normalize_roles(roles)
+        questions = self._load_verifier_suite_questions(
+            suite, split, n=n, seed=int(seed), full=full
+        )
+        if not questions:
+            raise ValueError(
+                f"resume suite {suite!r} split {split!r} yielded 0 questions"
+            )
+        dataset_sha256 = dataset_content_sha256(questions)
+        if expected_dataset_sha256 and dataset_sha256 != str(expected_dataset_sha256):
+            raise ValueError(
+                "resume dataset mismatch: reconstructed dataset_sha256="
+                f"{dataset_sha256} != prior {expected_dataset_sha256} "
+                f"(suite={suite!r} split={split!r} seed={seed} full={full} n={n}) — "
+                "refusing to resume against a drifted dataset"
+            )
+        completed = {str(x).strip() for x in completed_ids if str(x).strip()}
+
+        def _identity(q: dict[str, Any]) -> set[str]:
+            return {
+                str(q.get("id", "")).strip(),
+                str(q.get("qid", "")).strip(),
+                str(q.get("stable_qid", "")).strip(),
+                str(q.get("question_id", "")).strip(),
+            } - {""}
+
+        remainder = [(i, q) for i, q in enumerate(questions) if not (_identity(q) & completed)]
+        if scoring:
+            for _i, q in remainder:
+                q["scoring_method"] = str(scoring)
+
+        per_role: dict[str, Any] = {}
+        with httpx.Client(timeout=self.timeout) as client:
+            for role in roles:
+                role_qs = [
+                    {**self._with_forced_role(q, role), "_ordinal": int(i)}
+                    for i, q in remainder
+                ]
+                results = (
+                    self._eval_batch(role_qs, client, log_every=100, label=f"resume-{role}")
+                    if role_qs
+                    else []
+                )
+                scored = [r for r in results if not r.error]
+                correct = sum(1 for r in scored if r.correct)
+                agg = self._aggregate(results, tier=2) if results else None
+                cal_real = bool(agg.details.get("confidence_is_real")) if agg else False
+                per_role[role] = {
+                    "role": role,
+                    "n_questions": len(results),
+                    "n_scored": len(scored),
+                    "correct": correct,
+                    "accuracy": (correct / len(scored)) if scored else None,
+                    "reliability": agg.reliability if agg else 0.0,
+                    "ece": (agg.ece if cal_real else None) if agg else None,
+                    "auroc": (agg.auroc if cal_real else None) if agg else None,
+                    "confidence_is_real": cal_real,
+                    "confidence_source_counts": (
+                        dict(agg.details.get("confidence_source_counts") or {}) if agg else {}
+                    ),
+                    "rows": [_compact_question_result(r) for r in results],
+                }
+        return {
+            "mode": "resume_incomplete",
+            "suite": suite,
+            "split": split,
+            "scoring": str(scoring) if scoring else None,
+            "seed": int(seed),
+            "full": bool(full),
+            "roles": roles,
+            "n_total": len(questions),
+            "resume_completed_n": len(questions) - len(remainder),
+            "resumed_n": len(remainder),
+            "resumed_ordinals": [i for i, _q in remainder],
+            "dataset_sha256": dataset_sha256,
+            "per_role": per_role,
+        }
+
     def evaluate(
         self,
         tier: int = 0,

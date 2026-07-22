@@ -93,6 +93,14 @@ REQUIRED_PRIOR_FIELDS = (
 
 RESIDENCY_COST = {"hot": 1.0, "warm": 2.0, "cold": 3.0}
 
+# Canonical model-memory thresholds (GB) for the projected per-role policy hints.
+# These mirror the runtime consumers that currently re-derive the same
+# classifications locally (src/runtime/inference_tap.py safe-non-stream default,
+# src/graph/approval_gate.py high-cost gate); projecting them here lets those
+# tables become fallback/override only.
+POLICY_TAP_SAFE_NON_STREAM_MIN_MEM_GB = 64.0
+POLICY_HIGH_COST_MIN_MEM_GB = 60.0
+
 
 class StackPriorsCompileError(ValueError):
     """Stack-prior compilation found unresolved live-role gaps."""
@@ -1715,6 +1723,47 @@ def _serving_record(
     }
 
 
+def _policy_hints(
+    serving_record: dict[str, Any],
+    model_record: dict[str, Any],
+) -> dict[str, Any]:
+    """Project tap/high-cost/contention/lock policy hints for one role.
+
+    Consumers (inference lock/tap, approval gate, contention scheduler) may read
+    these generated classifications directly and keep any local table as an
+    explicit degraded fallback/override only. Boolean memory-threshold hints are
+    ``None`` when model memory evidence is missing rather than silently False.
+    """
+    shared_worker_launch = stack_prior_uses_shared_worker_launch(
+        {"serving": serving_record}
+    )
+    mem_gb = model_record.get("mem_gb")
+    mem_val = float(mem_gb) if isinstance(mem_gb, (int, float)) else None
+    tap_safe_non_stream = (
+        None if mem_val is None else mem_val >= POLICY_TAP_SAFE_NON_STREAM_MIN_MEM_GB
+    )
+    high_cost = None if mem_val is None else mem_val >= POLICY_HIGH_COST_MIN_MEM_GB
+    return {
+        # Inference-lock class: shared-worker launches take a shared lock; every
+        # other role takes an exclusive lock (mirrors live_stack_lock_role_sets).
+        "lock_class": "shared" if shared_worker_launch else "exclusive",
+        # Cross-role contention class follows the same shared/exclusive split.
+        "contention_class": "light" if shared_worker_launch else "heavy",
+        # Tap safe-mode non-stream hint (True when the model is large enough that
+        # streaming risks contention); None when model memory is unknown.
+        "tap_safe_non_stream": tap_safe_non_stream,
+        # Approval-gate high-cost hint (True for architect-tier memory footprint);
+        # None when model memory is unknown.
+        "high_cost": high_cost,
+        "model_mem_gb": mem_val,
+        "source": "stack_priors.compile",
+        "thresholds": {
+            "tap_safe_non_stream_min_mem_gb": POLICY_TAP_SAFE_NON_STREAM_MIN_MEM_GB,
+            "high_cost_min_mem_gb": POLICY_HIGH_COST_MIN_MEM_GB,
+        },
+    }
+
+
 def _role_record(
     role: str,
     descriptor: dict[str, Any],
@@ -1752,11 +1801,22 @@ def _role_record(
         "quant": descriptor.get("quant"),
         "mem_gb": descriptor.get("mem_gb"),
         "ctx_max": descriptor.get("ctx_max"),
+        "ctx_model_max": descriptor.get("ctx_model_max"),
         "modalities": copy.deepcopy(descriptor.get("modalities") or []),
     }
     for key in ("n_layers", "attention_layers"):
         if architecture.get(key) is not None:
             model_record[key] = architecture[key]
+
+    serving_record = _serving_record(
+        role,
+        descriptor,
+        role_cfg,
+        server_role,
+        server_cfg,
+        binding,
+        launch_cfg,
+    )
 
     return {
         "role": role,
@@ -1766,15 +1826,8 @@ def _role_record(
         "status": "compiled_with_gaps" if gaps else "compiled",
         "model_id": descriptor.get("model_id"),
         "display_name": descriptor.get("display_name"),
-        "serving": _serving_record(
-            role,
-            descriptor,
-            role_cfg,
-            server_role,
-            server_cfg,
-            binding,
-            launch_cfg,
-        ),
+        "serving": serving_record,
+        "policy": _policy_hints(serving_record, model_record),
         "priors": {
             "throughput_tps": throughput,
             "quality_overall": quality,

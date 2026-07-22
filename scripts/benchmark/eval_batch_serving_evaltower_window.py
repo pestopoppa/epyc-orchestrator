@@ -1072,7 +1072,8 @@ def write_verifier_report(report: dict[str, Any], output_dir: Path) -> tuple[Pat
 # gating as verifier-mode; decision_grade applies to the MERGED pool.
 
 RETRY_REPORT_SCHEMA_VERSION = "eval_batch_serving_evaltower.retry.v1"
-_ARM_LABEL_PREFIXES = ("ev11-", "cal-", "retry-")
+RESUME_REPORT_SCHEMA_VERSION = "eval_batch_serving_evaltower.resume.v1"
+_ARM_LABEL_PREFIXES = ("ev11-", "cal-", "retry-", "resume-")
 
 
 def _role_from_arm_label(label: str) -> str:
@@ -1425,6 +1426,293 @@ def write_retry_report(report: dict[str, Any], output_dir: Path) -> tuple[Path, 
     return json_path, md_path
 
 
+# --resume-incomplete-from <dir> reads a prior INCOMPLETE run's per-arm
+# question_results.<arm>.jsonl sidecars + its summary.json, reconstructs the SAME
+# dataset draw (suite/split/seed/full derived from the prior summary; refuses on a
+# dataset_sha256 mismatch), skips every ordinal that already has ANY question_result
+# row (any verdict — reruning error rows is --retry-errors-from's job), runs ONLY the
+# missing remainder, and emits a MERGED summary (prior rows + resumed rows) with
+# resume provenance. Same --apply/--confirm-clean-window gating; decision_grade
+# applies to the MERGED pool.
+
+
+def _read_prior_summary(directory: Path) -> dict[str, Any]:
+    """Read a prior run's ``summary.json`` for resume provenance (best-effort)."""
+    path = Path(directory) / "summary.json"
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _prior_dataset_sha256(prior_summary: dict[str, Any]) -> str | None:
+    """dataset_sha256 lives top-level (retry/resume summaries) or under result
+    (verifier/calibration summaries)."""
+    top = prior_summary.get("dataset_sha256")
+    if top:
+        return str(top)
+    result = prior_summary.get("result")
+    if isinstance(result, dict) and result.get("dataset_sha256"):
+        return str(result["dataset_sha256"])
+    return None
+
+
+def build_resume_report(
+    args: argparse.Namespace, *, output_dir: Path
+) -> tuple[dict[str, Any], int]:
+    """Plan (default) or run a resume-the-remainder pass from a prior incomplete run.
+
+    Plan-only unless ``--apply --confirm-clean-window`` (AutoPilot inactive unless
+    overridden) — identical live-execution gating to verifier/retry mode. Derives the
+    dataset provenance (suite/split/seed/scoring/full/n + dataset_sha256) from the
+    prior run's summary.json and refuses if the reconstructed dataset drifts.
+    """
+    source_dir = Path(args.resume_incomplete_from)
+    roles_filter = [p.strip() for p in (args.roles or "").split(",") if p.strip()]
+    preflight = activation_window.build_preflight(_activation_args(args))
+    autopilot_active = bool(preflight.get("autopilot_active"))
+
+    blockers: list[str] = []
+    status = "plan_only"
+    rc = 0
+    resolved_eval_concurrency: int | None = None
+    live_stack_contract: dict[str, Any] | None = None
+    min_eval_concurrency = _effective_min_eval_concurrency(args)
+    merged_per_role: dict[str, Any] = {}
+    resume_plan: dict[str, Any] = {}
+
+    prior_summary: dict[str, Any] = {}
+    if not source_dir.exists():
+        blockers.append(f"--resume-incomplete-from source dir not found: {source_dir}")
+        arms: dict[str, Any] = {}
+    else:
+        arms = load_arm_question_rows(source_dir)
+        if not arms:
+            blockers.append(
+                f"no question_results.<arm>.jsonl sidecars under {source_dir} "
+                "(prior run predates per-arm persistence, or wrong dir)"
+            )
+        prior_summary = _read_prior_summary(source_dir)
+        if not prior_summary:
+            blockers.append(
+                f"no readable summary.json under {source_dir} — resume needs prior "
+                "provenance (suite/split/seed/dataset_sha256)"
+            )
+
+    prior_suite = prior_summary.get("suite") or args.suite
+    prior_split = prior_summary.get("split") if "split" in prior_summary else args.split
+    prior_seed = prior_summary.get("seed", args.seed)
+    prior_scoring = prior_summary.get("scoring")
+    prior_full = bool(prior_summary.get("full"))
+    prior_n = prior_summary.get("n")
+    prior_sha = _prior_dataset_sha256(prior_summary)
+    prior_total = prior_summary.get("n_questions") or (
+        (prior_summary.get("result") or {}).get("n_questions")
+        if isinstance(prior_summary.get("result"), dict)
+        else None
+    )
+    if prior_summary and not prior_suite:
+        blockers.append("prior summary.json has no suite; cannot reconstruct the dataset to resume")
+    if prior_summary and not prior_sha:
+        blockers.append(
+            "prior summary.json has no dataset_sha256; refusing to resume without a "
+            "reproducibility stamp to validate against"
+        )
+
+    # Build the plan: per arm, how many rows are already done vs still missing.
+    for label, arm in arms.items():
+        role = arm["role"]
+        if roles_filter and role not in roles_filter:
+            continue
+        completed_ids = sorted({_row_identity(r) for r in arm["rows"] if _row_identity(r)})
+        remaining_estimate = (
+            max(0, int(prior_total) - len(completed_ids)) if prior_total is not None else None
+        )
+        resume_plan[role] = {
+            "arm_label": label,
+            "suite": arm.get("suite") or prior_suite,
+            "scoring": arm.get("scoring") or prior_scoring,
+            "prior_rows": len(arm["rows"]),
+            "completed_ids": len(completed_ids),
+            "remaining_estimate": remaining_estimate,
+            "complete": arm.get("complete"),
+        }
+    if arms and not resume_plan:
+        blockers.append(
+            "no arms matched the requested --roles for resume "
+            f"(available: {sorted({a['role'] for a in arms.values()})})"
+        )
+
+    if not args.apply:
+        status = "plan_only"
+    else:
+        resolved_eval_concurrency = _resolved_eval_concurrency(roles_filter or None)
+        live_stack_contract = _optimized_live_stack_status()
+        if _missing_concurrency_guard(args):
+            blockers.append(
+                "--apply requires explicit --min-eval-concurrency N or --allow-serial; "
+                "refusing to silently serialize an eval-fanout run"
+            )
+        if not args.confirm_clean_window:
+            blockers.append("resume-mode execution requires --confirm-clean-window")
+        if autopilot_active and not args.allow_autopilot_active:
+            blockers.append(
+                "AutoPilot appears active; pass --allow-autopilot-active to override"
+            )
+        if not live_stack_contract.get("ok", False):
+            warning_count = len(live_stack_contract.get("warnings") or [])
+            blockers.append(
+                f"live stack launch contract has {warning_count} warning(s); "
+                "refusing to measure a drifted/non-optimized v7 stack"
+            )
+        if (
+            min_eval_concurrency > 1
+            and resolved_eval_concurrency < min_eval_concurrency
+        ):
+            blockers.append(
+                f"resolved EvalTower concurrency {resolved_eval_concurrency} is below "
+                f"--min-eval-concurrency {min_eval_concurrency}"
+            )
+        if blockers:
+            status = "blocked"
+            rc = _bool_blocker_rc(blockers)
+        else:
+            try:
+                tower = EvalTower(
+                    url=args.api_url.rstrip("/"),
+                    timeout=args.evaltower_timeout_s,
+                )
+                tower.set_question_artifact_dir(output_dir)
+                any_resumed = False
+                for role, plan in resume_plan.items():
+                    arm_rows = arms[plan["arm_label"]]["rows"]
+                    completed_ids = [_row_identity(r) for r in arm_rows if _row_identity(r)]
+                    subset = tower.eval_resume_incomplete(
+                        suite=prior_suite,
+                        split=prior_split,
+                        roles=[role],
+                        seed=int(prior_seed),
+                        scoring=plan.get("scoring"),
+                        n=prior_n,
+                        full=prior_full,
+                        completed_ids=completed_ids,
+                        expected_dataset_sha256=prior_sha,
+                    )
+                    resumed_rows = (
+                        (subset.get("per_role") or {}).get(role, {}).get("rows") or []
+                    )
+                    if subset.get("resumed_n"):
+                        any_resumed = True
+                    merged = merge_prior_and_retried(arm_rows, resumed_rows, role=role)
+                    merged["resumed_n"] = int(subset.get("resumed_n", len(resumed_rows)))
+                    merged["resume_completed_n"] = int(subset.get("resume_completed_n", 0))
+                    merged_per_role[role] = merged
+                status = "complete" if any_resumed else "nothing_to_resume"
+            except _RunInterrupted as exc:
+                blockers.append(f"resume-mode eval interrupted by {exc}")
+                status = "interrupted"
+                rc = 130
+            except ValueError as exc:
+                # dataset drift / empty draw => refuse, do not measure.
+                blockers.append(f"resume refused: {exc}")
+                status = "dataset_mismatch"
+                rc = 75
+            except Exception as exc:  # noqa: BLE001 - report artifact captures failures
+                blockers.append(f"resume-mode eval failed: {exc}")
+                status = "eval_failed"
+                rc = 75
+
+    merged_result = {"per_role": merged_per_role} if merged_per_role else None
+    decision_grade_reasons = (
+        _decision_grade_quality_reasons(merged_result) if merged_result else []
+    )
+    decision_grade = bool(
+        args.apply
+        and args.confirm_clean_window
+        and not args.allow_autopilot_active
+        and not blockers
+        and merged_result is not None
+        and not decision_grade_reasons
+    )
+    resumed_n = sum(int(v.get("resumed_n", 0)) for v in merged_per_role.values())
+    resume_completed_n = sum(int(v.get("resume_completed_n", 0)) for v in merged_per_role.values())
+    report = {
+        "schema_version": RESUME_REPORT_SCHEMA_VERSION,
+        "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        "mode": "resume_incomplete",
+        "status": status,
+        "decision_grade": decision_grade,
+        "decision_grade_reasons": decision_grade_reasons,
+        "applied": bool(args.apply),
+        "merged": True,
+        "resumed": True,
+        "resume_source_run": str(source_dir),
+        "resumed_n": resumed_n,
+        "resume_completed_n": resume_completed_n,
+        "suite": prior_suite,
+        "split": prior_split,
+        "seed": prior_seed,
+        "scoring": prior_scoring,
+        "full": prior_full,
+        "dataset_sha256": prior_sha,
+        "roles": roles_filter,
+        "api_url": args.api_url.rstrip("/"),
+        "min_eval_concurrency": int(min_eval_concurrency),
+        "resolved_eval_concurrency": resolved_eval_concurrency,
+        "live_stack_contract": live_stack_contract,
+        "resume_plan": resume_plan,
+        "blockers": blockers,
+        "preflight": {"autopilot_active": autopilot_active},
+        "per_role": merged_per_role,
+        "decision_grade_notes": [
+            "requires --apply --confirm-clean-window",
+            "requires AutoPilot inactive unless --allow-autopilot-active",
+            "resume runs only ordinals with NO prior verdict; error rows are "
+            "--retry-errors-from's job",
+            "decision_grade applies to the MERGED (prior + resumed) pool",
+            f"requires every merged arm reliability >= {DECISION_GRADE_RELIABILITY_FLOOR} "
+            "and real confidence provenance",
+        ],
+    }
+    return report, rc
+
+
+def write_resume_report(report: dict[str, Any], output_dir: Path) -> tuple[Path, Path]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    json_path = output_dir / "summary.json"
+    md_path = output_dir / "summary.md"
+    report.setdefault("schema_version", RESUME_REPORT_SCHEMA_VERSION)
+    _atomic_write_json(json_path, report)
+    lines = [
+        "# Eval-Batch Serving Resume-Incomplete (Merged)",
+        "",
+        f"- status: `{report['status']}`",
+        f"- decision_grade: `{report['decision_grade']}`",
+        f"- resume_source_run: `{report['resume_source_run']}`",
+        f"- resumed_n: `{report['resumed_n']}`  resume_completed_n: "
+        f"`{report['resume_completed_n']}`  merged: `{report['merged']}`",
+        f"- suite/split: `{report['suite']} / {report['split']}`  seed: `{report['seed']}`",
+        f"- dataset_sha256: `{report['dataset_sha256']}`",
+    ]
+    if report.get("blockers"):
+        lines.extend(["", "## Blockers", ""])
+        lines.extend(f"- {b}" for b in report["blockers"])
+    if report.get("decision_grade_reasons"):
+        lines.extend(["", "## Decision-Grade Demotions", ""])
+        lines.extend(f"- {r}" for r in report["decision_grade_reasons"])
+    lines.extend(["", "## Resume Plan", ""])
+    for role, payload in (report.get("resume_plan") or {}).items():
+        lines.append(f"- `{role}`: `{json.dumps(payload, sort_keys=True)}`")
+    lines.extend(["", "## Merged Per-Role", ""])
+    for role, payload in (report.get("per_role") or {}).items():
+        lines.append(f"- `{role}`: `{json.dumps(payload, sort_keys=True)}`")
+    _atomic_write_text(md_path, "\n".join(lines) + "\n")
+    return json_path, md_path
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--api-url", default=os.environ.get("ORCHESTRATOR_API_URL", DEFAULT_API_URL))
@@ -1494,6 +1782,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "Same --apply/--confirm-clean-window gating; overrides --mode.",
     )
     parser.add_argument(
+        "--resume-incomplete-from",
+        type=Path,
+        default=None,
+        help="Resume an INCOMPLETE prior run: read its per-arm "
+        "question_results.<arm>.jsonl sidecars + summary.json, reconstruct the SAME "
+        "dataset (refusing on a dataset_sha256 mismatch), run ONLY the ordinals with "
+        "no prior verdict (error rows are --retry-errors-from's job), and emit a "
+        "MERGED summary (prior + resumed). Same --apply/--confirm-clean-window "
+        "gating; overrides --mode. Mutually exclusive with --retry-errors-from.",
+    )
+    parser.add_argument(
         "--min-eval-concurrency",
         type=int,
         default=None,
@@ -1523,9 +1822,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     output_dir = args.output_dir or default_output_dir()
+    if args.retry_errors_from is not None and args.resume_incomplete_from is not None:
+        raise SystemExit(
+            "--retry-errors-from and --resume-incomplete-from are mutually exclusive "
+            "(rerun errors vs run the missing remainder)"
+        )
     if args.retry_errors_from is not None:
         report, rc = build_retry_report(args, output_dir=output_dir)
         json_path, md_path = write_retry_report(report, output_dir)
+    elif args.resume_incomplete_from is not None:
+        report, rc = build_resume_report(args, output_dir=output_dir)
+        json_path, md_path = write_resume_report(report, output_dir)
     elif args.mode != "tier":
         report, rc = build_verifier_report(args, output_dir=output_dir)
         json_path, md_path = write_verifier_report(report, output_dir)

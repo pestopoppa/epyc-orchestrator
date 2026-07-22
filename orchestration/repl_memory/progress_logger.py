@@ -34,6 +34,13 @@ DEFAULT_LOG_PATH = _RAID_LOG_PATH if _RAID_LOG_PATH.parent.exists() else _WORKSP
 
 TASK_RECORD_SCHEMA_VERSION = "task_record.v1"
 _TASK_RECORD_CACHE_LIMIT = 10_000
+# Objective length retained in the progress JSONL (the offline analysis substrate).
+# Deliberately larger than the live-routing TASK_IR_OBJECTIVE_LEN (200): the old
+# 200-char cap merged distinct tasks sharing a prefix, which corrupts within-objective
+# counterfactual/competence analysis at promotion grade (DAR handoff L493). This field
+# is log-only — it is never read by routing, embedding, or reward, so raising it leaves
+# live routing unaffected. Capped (not unbounded) to bound log bloat on long-context tasks.
+PROGRESS_OBJECTIVE_LOG_LEN = 2000
 _TOKEN_COUNT_KEYS = (
     "total_tokens",
     "tokens",
@@ -350,7 +357,7 @@ class ProgressLogger:
             data={
                 "task_type": task_ir.get("task_type"),
                 "workload_class": self._task_workload_class(task_ir),
-                "objective": task_ir.get("objective", "")[:200],
+                "objective": task_ir.get("objective", "")[:PROGRESS_OBJECTIVE_LOG_LEN],
                 "priority": task_ir.get("priority"),
             },
         )

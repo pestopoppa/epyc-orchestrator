@@ -1,0 +1,40 @@
+{
+  "task": "DAR-L491 write-path / update_count audit",
+  "snapshot": {
+    "snapshot_dir": "/mnt/raid0/llm/tmp/dar_snapshot",
+    "snapshot_ts_utc": "20260722T125604Z",
+    "episodic_db": "/mnt/raid0/llm/tmp/dar_snapshot/episodic.db"
+  },
+  "n_routing": 671780,
+  "update_count_distribution": {
+    "0": 669730,
+    "1": 1797,
+    "2": 196,
+    "3": 23,
+    "4": 11,
+    "5": 8,
+    "6": 2,
+    "7": 1,
+    "8": 3,
+    "9": 2,
+    "10": 1,
+    "16": 1
+  },
+  "update_count_0_fraction": 0.9969484057280658,
+  "dedup_evidence": {
+    "update_count_0_rows": 643874,
+    "distinct_objective_role_pairs": 3642,
+    "duplicated_pairs": 3566,
+    "max_rows_for_one_pair": 7889,
+    "redundant_rows_a_TD_store_would_have_collapsed": 640232,
+    "duplication_factor": 176.7913234486546,
+    "verdict": "APPEND-ONLY buffer (store() inserts a fresh row per observation; update_q_value / TD path is effectively bypassed in production)"
+  },
+  "dar2_effectiveness": {
+    "rows_with_learned_Q_update_count_gt_0": 2050,
+    "learned_fraction": 0.003051594271934264,
+    "rows_where_DAR2_could_fire_upper_bound": 65433,
+    "dar2_fireable_fraction_upper_bound": 0.09740242341242669,
+    "note": "DAR-2 skips default-Q memories and needs an alternative role with a learned Q; this is the ceiling on its live effect."
+  }
+}

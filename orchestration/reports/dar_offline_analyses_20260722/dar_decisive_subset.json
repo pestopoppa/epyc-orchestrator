@@ -1,0 +1,31 @@
+{
+  "task": "DAR-L535 decisive-subset restriction + policy lift",
+  "snapshot": {
+    "snapshot_dir": "/mnt/raid0/llm/tmp/dar_snapshot",
+    "snapshot_ts_utc": "20260722T125604Z",
+    "episodic_db": "/mnt/raid0/llm/tmp/dar_snapshot/episodic.db"
+  },
+  "gap_threshold_pp": 5.0,
+  "matched_objectives": 633,
+  "matched_decisions": 388980,
+  "decisive_objectives": 134,
+  "decisive_fraction": 0.21169036334913113,
+  "within_objective_gap_pp": {
+    "mean": 15.608061615977103,
+    "median": 0.0,
+    "p90": 100.0
+  },
+  "nonsaturated_decisions_in_matched": 38056,
+  "nonsaturated_fraction_in_matched": 0.09783536428608154,
+  "split_half_policy_lift_pp": {
+    "all_traffic_A2B": 4.256428604464613,
+    "all_matched_A2B": 14.728537840965686,
+    "all_matched_B2A": 14.636707782587932,
+    "decisive_A2B": 26.45575745085877,
+    "decisive_B2A": 26.34304821271301,
+    "weight_all_matched": 194139.0,
+    "weight_decisive": 107412.0,
+    "total_routing_decisions": 671780,
+    "note": "lift = (best-role-by-fold-A success on fold B) - (mean-role fold-B success); baseline is uniform-random role choice."
+  }
+}

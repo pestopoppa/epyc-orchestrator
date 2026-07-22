@@ -1793,7 +1793,16 @@ def validate_stack_priors(
                 if not allow_production_blocker_waivers:
                     errors.extend(_production_blocker_waiver_errors(surface_exceptions))
         surface_findings = scan_hardcoded_surfaces(repo_root, categories=surface_categories)
-        errors.extend(_unmatched_surface_exception_errors(surface_findings, surface_exceptions))
+        # Validate waiver staleness against a full-category scan. Otherwise a
+        # documented legacy_test / historical_doc exception would be reported as
+        # a stale waiver whenever the surface report is scoped to
+        # production_blocker only (the default), because those findings are not
+        # in the scoped report set. Reporting still uses ``surface_findings``.
+        if surface_categories is None:
+            staleness_findings = surface_findings
+        else:
+            staleness_findings = scan_hardcoded_surfaces(repo_root, categories=None)
+        errors.extend(_unmatched_surface_exception_errors(staleness_findings, surface_exceptions))
         for finding in surface_findings:
             warnings.append(_surface_warning_for_finding(finding, surface_exceptions))
 

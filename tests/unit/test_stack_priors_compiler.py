@@ -25,6 +25,7 @@ from src.registry.stack_priors import (
     live_stack_slot_query_ports,
     live_warm_worker_slots,
     load_stack_priors_artifact,
+    _policy_hints,
     stack_prior_endpoint_port,
     stack_prior_launch_entries,
     stack_prior_launch_modes,
@@ -1230,3 +1231,98 @@ def test_compile_default_does_not_probe_realized_fleet(
     )
     # Legacy full-mode default is unchanged.
     assert priors["roles"]["worker_math"]["serving"]["ports"] == [8072]
+
+
+def test_policy_hints_returns_none_thresholds_when_model_memory_unknown() -> None:
+    hints = _policy_hints({"launch": {"modes": ["default"], "entries": []}}, {})
+    assert hints["lock_class"] == "exclusive"
+    assert hints["contention_class"] == "heavy"
+    assert hints["tap_safe_non_stream"] is None
+    assert hints["high_cost"] is None
+    assert hints["model_mem_gb"] is None
+    assert hints["source"] == "stack_priors.compile"
+    assert hints["thresholds"] == {
+        "tap_safe_non_stream_min_mem_gb": 64.0,
+        "high_cost_min_mem_gb": 60.0,
+    }
+
+
+def test_policy_hints_classify_shared_worker_as_light_and_low_cost() -> None:
+    serving = {"launch": {"modes": ["worker_pool"], "entries": []}}
+    hints = _policy_hints(serving, {"mem_gb": 37})
+    assert hints["lock_class"] == "shared"
+    assert hints["contention_class"] == "light"
+    assert hints["tap_safe_non_stream"] is False
+    assert hints["high_cost"] is False
+    assert hints["model_mem_gb"] == 37.0
+
+
+def test_policy_hints_flag_heavy_high_cost_role() -> None:
+    serving = {"launch": {"modes": ["default"], "entries": []}}
+    hints = _policy_hints(serving, {"mem_gb": 238})
+    assert hints["lock_class"] == "exclusive"
+    assert hints["contention_class"] == "heavy"
+    assert hints["tap_safe_non_stream"] is True
+    assert hints["high_cost"] is True
+
+
+def test_compile_projects_ctx_model_max_and_policy_hints(tmp_path: Path) -> None:
+    registry_path = _write_yaml(
+        tmp_path / "registry.yaml",
+        {
+            "server_mode": {
+                "worker": {
+                    "url": "http://localhost:8072",
+                    "port": 8072,
+                    "tier": "hot",
+                    "model_role": "worker_general",
+                    "throughput": "60.7",
+                }
+            },
+            "roles": {"worker_general": {"memory": {"residency": "warm"}}},
+        },
+    )
+    descriptor_path = _write_yaml(
+        tmp_path / "descriptors.yaml",
+        {
+            "models": [
+                {
+                    "model_id": "gemma4-26b-a4b-q4",
+                    "mem_gb": 37,
+                    "ctx_max": 16384,
+                    "ctx_model_max": 131072,
+                    "role_bindings": {
+                        "roles": ["worker_general"],
+                        "server_roles": ["worker"],
+                    },
+                    "quality": {"suite_vector": {"overall": 0.9}, "measured": []},
+                    "speed": {"quarter_48t_tps": 60.7, "measured": []},
+                    "acceleration": {"spec_type": "mtp"},
+                    "serving": {"ports": [8072], "binary": "llama.cpp"},
+                    "known_gaps": [],
+                }
+            ]
+        },
+    )
+
+    priors = compile_stack_priors(
+        registry_path=registry_path,
+        descriptor_path=descriptor_path,
+        active_roles={"worker_general"},
+        allow_incomplete=True,
+    )
+
+    worker = priors["roles"]["worker_general"]
+    # 620: model-native context is projected alongside the effective ctx_max.
+    assert worker["model"]["ctx_model_max"] == 131072
+    assert worker["model"]["ctx_max"] == 16384
+    # Additive fields must not break the generated contract shape.
+    assert validate_stack_priors_contract(priors) == []
+    # 622: policy hints projected. The worker rides a shared worker_pool launch,
+    # so it is a light/shared role; 37 GB is below both memory thresholds.
+    policy = worker["policy"]
+    assert policy["lock_class"] == "shared"
+    assert policy["contention_class"] == "light"
+    assert policy["tap_safe_non_stream"] is False
+    assert policy["high_cost"] is False
+    assert policy["model_mem_gb"] == 37.0

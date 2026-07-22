@@ -1,0 +1,128 @@
+{
+  "measurement_note": "OBSERVATION per MEASUREMENT.md \u2014 no protocol-id/attestation; gates only this research line's keep/close decision, not production deploy.",
+  "snapshot_provenance": "snapshot_utc=20260722T125534Z\nsource=/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/sessions\n--- source mtimes ---\n/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/sessions/episodic.db mtime=2026-07-22 12:55:35.241825125 +0000 size=458752000\n/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/sessions/embeddings.faiss mtime=2026-07-22 12:55:34.886332948 +0000 size=2769698861\n/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/sessions/id_map.npy mtime=2026-07-22 12:55:34.952333540 +0000 size=26375451\n",
+  "n_objectives_canonical": 7037,
+  "n_counterfactual_objectives": 5320,
+  "n_disagreement_objectives": 1435,
+  "roles_with_bank": [
+    "architect_general",
+    "coder_escalation",
+    "frontdoor",
+    "ingest_long_context",
+    "toolrunner",
+    "worker_general",
+    "worker_math",
+    "worker_vision"
+  ],
+  "headline_auc_success_given_role_counterfactual": 0.49695251434127563,
+  "verdict": "NULL \u2014 AUC<=0.55: familiarity axis is flat; close intake-866 line.",
+  "auc_counterfactual": {
+    "pooled_auc": 0.49695251434127563,
+    "n_instances": 23669,
+    "base_rate": 0.7126198825467912,
+    "per_role": {
+      "frontdoor": {
+        "n": 4938,
+        "auc": 0.5000573881203968,
+        "base_rate": 0.7160793843661402
+      },
+      "ingest_long_context": {
+        "n": 4784,
+        "auc": 0.5197875001968083,
+        "base_rate": 0.7301421404682275
+      },
+      "architect_general": {
+        "n": 4750,
+        "auc": 0.48498736956793476,
+        "base_rate": 0.7448421052631579
+      },
+      "worker_general": {
+        "n": 4291,
+        "auc": 0.48065359737513835,
+        "base_rate": 0.6448380330925192
+      },
+      "coder_escalation": {
+        "n": 4845,
+        "auc": 0.49769482650940056,
+        "base_rate": 0.7174406604747162
+      },
+      "worker_vision": {
+        "n": 57,
+        "auc": 0.6172839506172839,
+        "base_rate": 0.9473684210526315
+      },
+      "worker_math": {
+        "n": 4,
+        "auc": 0.6666666666666666,
+        "base_rate": 0.75
+      }
+    },
+    "macro_auc": 0.5381616141505184
+  },
+  "auc_all_objectives": {
+    "pooled_auc": 0.5066466333004533,
+    "n_instances": 25385,
+    "base_rate": 0.7260586960803624,
+    "per_role": {
+      "frontdoor": {
+        "n": 5516,
+        "auc": 0.5180603756027536,
+        "base_rate": 0.7318709209572154
+      },
+      "ingest_long_context": {
+        "n": 4936,
+        "auc": 0.526792966651304,
+        "base_rate": 0.7378444084278768
+      },
+      "architect_general": {
+        "n": 4977,
+        "auc": 0.49168767883956144,
+        "base_rate": 0.7544705645971469
+      },
+      "worker_general": {
+        "n": 4695,
+        "auc": 0.48136713060795394,
+        "base_rate": 0.6668796592119276
+      },
+      "coder_escalation": {
+        "n": 5104,
+        "auc": 0.5093683826468889,
+        "base_rate": 0.7282523510971787
+      },
+      "worker_vision": {
+        "n": 137,
+        "auc": 0.6356060606060606,
+        "base_rate": 0.9635036496350365
+      },
+      "worker_math": {
+        "n": 20,
+        "auc": 0.45098039215686275,
+        "base_rate": 0.85
+      }
+    },
+    "macro_auc": 0.5162661410159123
+  },
+  "auc_in_sample_sanity": {
+    "pooled_auc": 0.6427109328485665,
+    "note": "no leave-one-out; expected ~1.0 (leakage anchor)"
+  },
+  "argmax_accuracy_disagreement_subset": {
+    "n": 1435,
+    "argmax_comp_accuracy": 0.7790940766550523,
+    "most_frequent_role_baseline": 0.9045296167247386
+  },
+  "argmax_accuracy_counterfactual_set": {
+    "n": 5320,
+    "argmax_comp_accuracy": 0.9345864661654135,
+    "most_frequent_role_baseline": 0.9729323308270676
+  },
+  "row_level_robustness": {
+    "n_fail": 6000,
+    "n_succ": 6000,
+    "loo_auc": 0.46366716783606193,
+    "in_sample_auc": 0.5228275138888889,
+    "n_evaluable_loo": 11986,
+    "failure_rows_colocated_with_success_frac": 0.6173313484290527,
+    "note": "Both in_sample_auc AND loo_auc ~ 0.5. The mixed-outcome colocation fraction explains why in-sample is NOT ~1.0: that fraction of failures share an exact (embedding_idx, role) with a success, so they self-match at cos==1.0 too. Success and failure decisions are embedding-indistinguishable at every leakage level -> the familiarity axis carries no signal (signal-bound null)."
+  }
+}

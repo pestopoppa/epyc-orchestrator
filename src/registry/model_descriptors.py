@@ -571,6 +571,45 @@ def _first_context_value(
     return None
 
 
+# Model-native (architectural / GGUF-header) context keys. These describe the
+# maximum context the model was trained/built for, distinct from the possibly
+# smaller effective/configured ctx_max that ``_first_context_value`` resolves.
+# GGUF exposes this as ``<arch>.context_length``; registries often mirror it as
+# ``n_ctx_train`` / ``max_position_embeddings`` / ``native_context_length``.
+_NATIVE_CONTEXT_KEYS = (
+    "ctx_model_max",
+    "native_context_length",
+    "n_ctx_train",
+    "max_position_embeddings",
+    "context_length",
+    "train_context_length",
+    "context_length_train",
+    "gguf_context_length",
+)
+
+
+def _first_model_native_context_value(
+    role_cfg: dict[str, Any],
+    server_cfg: dict[str, Any] | None,
+    enrichment_records: list[dict[str, Any]],
+) -> int | None:
+    """Resolve the model-native max context from GGUF-header/registry evidence.
+
+    Returns a positive integer token count, or ``None`` when no model-native
+    context evidence is present (a structured gap consumers can fail-closed on).
+    """
+    for source in _enrichment_sources(role_cfg, server_cfg, enrichment_records):
+        model = source.get("model") if isinstance(source, dict) else None
+        for candidate in (model, source):
+            if not isinstance(candidate, dict):
+                continue
+            for key in _NATIVE_CONTEXT_KEYS:
+                parsed = _as_positive_int(candidate.get(key))
+                if parsed is not None:
+                    return parsed
+    return None
+
+
 def _model_architecture_metadata(model: dict[str, Any]) -> dict[str, Any]:
     metadata: dict[str, Any] = {}
     for source_key, target_key in (
@@ -778,6 +817,9 @@ def _descriptor_for_role(
         "quant": quant,
         "mem_gb": _as_float(mem_gb),
         "ctx_max": _first_context_value(role_cfg, server_cfg, enrichment_records),
+        "ctx_model_max": _first_model_native_context_value(
+            role_cfg, server_cfg, enrichment_records
+        ),
         "modalities": _descriptor_modalities(model, role_cfg),
         "role_bindings": {
             "roles": [role],

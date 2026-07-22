@@ -42,6 +42,45 @@ DEFAULT_DB_PATH = Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memo
 DEFAULT_EMBEDDINGS_PATH = Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/embeddings.npy")
 
 
+def apply_td_update(
+    old_q: float,
+    reward: float,
+    learning_rate: float,
+    *,
+    days_elapsed: float = 0.0,
+    temporal_decay_rate: float | None = None,
+) -> float:
+    """Pure TD(0)-style Q update with optional temporal decay toward neutral.
+
+    Extracted so the live update path (``EpisodicStore.update_q_value``) and the
+    offline append-only consolidation migration
+    (``scripts/maintenance/consolidate_q_append_only.py``) apply byte-identical
+    math — the migration replays the same TD/decay a live store would have if the
+    write path had TD-updated in place instead of blind-appending:
+
+        Q_decayed = 0.5 + (Q_old - 0.5) * decay_rate ** days_elapsed   (if decay)
+        Q_new     = clamp_[0,1]( Q_decayed + lr * (reward - Q_decayed) )
+
+    Decay is applied only when ``temporal_decay_rate is not None`` AND
+    ``days_elapsed > 0`` — identical guard to the live path, so a zero/negative
+    elapsed (or disabled decay) is a plain TD update.
+
+    Args:
+        old_q: Current stored Q-value.
+        reward: Observed reward on the same scale as live scoring.
+        learning_rate: TD learning rate α.
+        days_elapsed: Days since the value was last updated (decay only).
+        temporal_decay_rate: Per-day decay toward 0.5, or None to disable.
+
+    Returns:
+        New Q-value clamped to [0, 1].
+    """
+    if temporal_decay_rate is not None and days_elapsed > 0:
+        old_q = 0.5 + (old_q - 0.5) * (temporal_decay_rate ** days_elapsed)
+    new_q = old_q + learning_rate * (reward - old_q)
+    return max(0.0, min(1.0, new_q))
+
+
 @contextmanager
 def _exclusive_file_lock(path: Path):
     """Cross-process lock for FAISS index/id-map mutations."""
@@ -659,22 +698,24 @@ class EpisodicStore:
 
             old_q, update_count, updated_at_str = row
 
-            # Apply temporal decay toward neutral (0.5) if configured
+            # Elapsed days since last update, for temporal decay toward neutral.
+            days_elapsed = 0.0
             if temporal_decay_rate is not None and updated_at_str:
                 try:
                     updated_at = datetime.fromisoformat(updated_at_str)
                     days_elapsed = (now - updated_at).total_seconds() / 86400.0
-                    if days_elapsed > 0:
-                        decay_factor = temporal_decay_rate ** days_elapsed
-                        old_q = 0.5 + (old_q - 0.5) * decay_factor
                 except (ValueError, TypeError):
-                    pass  # Skip decay on unparseable timestamps
+                    days_elapsed = 0.0  # Skip decay on unparseable timestamps
 
-            # TD-style update
-            new_q = old_q + learning_rate * (reward - old_q)
-
-            # Clamp to [0, 1]
-            new_q = max(0.0, min(1.0, new_q))
+            # TD-style update (+ optional decay) via the shared pure helper so the
+            # offline consolidation migration reproduces identical math.
+            new_q = apply_td_update(
+                old_q,
+                reward,
+                learning_rate,
+                days_elapsed=days_elapsed,
+                temporal_decay_rate=temporal_decay_rate,
+            )
 
             # Update database
             conn.execute(

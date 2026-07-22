@@ -38,6 +38,20 @@ CONTRASTIVE_Q_UPDATES = os.environ.get("CONTRASTIVE_Q_UPDATES", "1") == "1"
 SPO_PLUS_ENABLED = os.environ.get("SPO_PLUS_ENABLED", "0") == "1"
 SPO_PLUS_MARGIN = float(os.environ.get("SPO_PLUS_MARGIN", "0.05"))
 
+# DAR-L491 write-path fix. The production routing scorer path
+# (_update_routing_memory) only TD-updates when routing_decision.memory_id is
+# pre-linked; the sole ROUTING_DECISION emitter (progress_logger.log_task_started)
+# never sets it, so every scored routing decision fell through to a blind
+# store() append. Result: 99.7% of routing rows never TD-update and the learned
+# signal is an append-only buffer (176.8x duplicate (objective, action) pairs;
+# see scripts/analysis/dar_write_path_audit.py). When ORCHESTRATOR_Q_TD_WRITE is
+# set, the append branch first find-or-updates the existing (objective, action)
+# row in place. Default OFF keeps byte-identical legacy append behavior so
+# deployment is an explicit operator-boundary action.
+Q_TD_WRITE = os.environ.get("ORCHESTRATOR_Q_TD_WRITE", "0") == "1"
+# Candidate depth for the find-or-update similarity lookup on the append path.
+Q_TD_MATCH_K = int(os.environ.get("ORCHESTRATOR_Q_TD_MATCH_K", "10"))
+
 from .embedder import TaskEmbedder
 from .episodic_store import EpisodicStore
 from .progress_logger import EventType, ProgressEntry, ProgressLogger, ProgressReader
@@ -1127,7 +1141,9 @@ class QScorer:
                 self.logger.log_memory_update(memory_id, old_q, new_q, reward, task_id)
                 result["memories_updated"] = 1
         else:
-            # Create new memory from this routing decision
+            # No pre-linked memory_id. Legacy behavior appended a fresh row per
+            # observation (the append-only defect). When ORCHESTRATOR_Q_TD_WRITE
+            # is set, first find-or-update the existing (objective, action) row.
             if task_started and task_started.data:
                 task_context = {
                     "task_type": task_started.data.get("task_type"),
@@ -1142,6 +1158,26 @@ class QScorer:
                 routing = routing_decision.data.get("routing", [])
                 action = ",".join(routing) if isinstance(routing, list) else str(routing)
 
+                if Q_TD_WRITE:
+                    existing_id = self._find_existing_routing_memory(
+                        embedding, action, task_context.get("objective"),
+                    )
+                    if existing_id is not None:
+                        memory = self.store.get_by_id(existing_id)
+                        if memory is not None:
+                            old_q = memory.q_value
+                            new_q = self.store.update_q_value(
+                                existing_id, reward, self.config.learning_rate,
+                                temporal_decay_rate=self.config.temporal_decay_rate,
+                            )
+                            self.logger.log_memory_update(
+                                existing_id, old_q, new_q, reward, task_id,
+                            )
+                            result["memories_updated"] = 1
+                            return result
+
+                # First observation of this (objective, action) — or flag off:
+                # append a new row exactly as the legacy path always did.
                 # Initial Q-value based on first observation
                 initial_q = 0.5 + (reward * 0.5)  # Map reward to [0, 1]
 
@@ -1165,6 +1201,35 @@ class QScorer:
                 result["memories_created"] = 1
 
         return result
+
+    def _find_existing_routing_memory(
+        self,
+        embedding: np.ndarray,
+        action: str,
+        objective: Optional[str],
+    ) -> Optional[str]:
+        """Return the id of an existing routing memory for this exact
+        (objective, action), or None.
+
+        The find half of the ORCHESTRATOR_Q_TD_WRITE find-or-update write path.
+        Uses the FAISS similarity index (fast, O(log n)) to fetch same-action
+        candidates, then requires an EXACT objective+action string match so
+        distinct objectives are never merged. This converges with the offline
+        consolidation migration, which groups by the same (objective, action)
+        key — so live TD writes and the migrated store agree on row identity.
+        """
+        if objective is None:
+            return None
+        try:
+            candidates = self.store.retrieve_by_similarity(
+                embedding, k=Q_TD_MATCH_K, action_type="routing",
+            )
+        except Exception:
+            return None
+        for c in candidates:
+            if c.action == action and (c.context or {}).get("objective") == objective:
+                return c.id
+        return None
 
     def _update_escalation_memory(
         self,

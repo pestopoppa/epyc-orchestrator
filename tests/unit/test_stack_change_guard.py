@@ -1857,3 +1857,106 @@ def test_validate_stack_priors_rejects_stale_procedure_schema_role_enum(tmp_path
 
     assert not result.ok
     assert any("procedure schema permission enum drift" in error for error in result.errors)
+
+
+def _legacy_test_finding_repo(tmp_path: Path) -> Path:
+    """Create a fake repo_root containing one legacy_test hardcoded surface."""
+    fixture = tmp_path / "tests" / "unit" / "legacy_role_fixture.py"
+    fixture.parent.mkdir(parents=True, exist_ok=True)
+    fixture.write_text('LEGACY_ROLE = "architect_' 'coding"\n', encoding="utf-8")
+    return fixture
+
+
+def _exceptions_file(tmp_path: Path, *, path_glob: str) -> Path:
+    exc = tmp_path / "surface_exceptions.yaml"
+    exc.write_text(
+        "exceptions:\n"
+        "  - rule_id: retired_role_in_tests\n"
+        "    category: legacy_test\n"
+        f"    path_glob: {path_glob}\n"
+        "    classification: legacy_test\n"
+        "    owner: test-infrastructure\n"
+        "    rationale: intentional legacy-label regression coverage\n"
+        '    expires: "2027-01-01"\n',
+        encoding="utf-8",
+    )
+    return exc
+
+
+def test_legacy_test_surface_is_classified_by_matching_exception(tmp_path: Path) -> None:
+    _legacy_test_finding_repo(tmp_path)
+    registry = _write_yaml(tmp_path / "registry.yaml", {"roles": {}})
+    descriptors = _write_yaml(tmp_path / "descriptors.yaml", {"models": []})
+    priors = _write_yaml(tmp_path / "stack_priors.yaml", _priors(registry, descriptors))
+    exceptions = _exceptions_file(tmp_path, path_glob="tests/unit/legacy_role_fixture.py")
+
+    result = validate_stack_priors(
+        priors,
+        scan_surfaces=True,
+        repo_root=tmp_path,
+        surface_categories=None,  # --all-hardcoded-surfaces
+        surface_exceptions_path=exceptions,
+        launch_manifest_targets={"frontdoor": {"port": 8070, "tier": "hot"}},
+    )
+
+    assert result.ok, result.errors
+    assert any(
+        w.startswith("hardcoded_surface.waived.legacy_test.retired_role_in_tests")
+        and "owner=test-infrastructure" in w
+        for w in result.warnings
+    )
+    assert hardcoded_surface_warning_counts(result.warnings) == {"waived_legacy_test": 1}
+
+
+def test_production_blocker_scan_does_not_flag_classified_legacy_exception_stale(
+    tmp_path: Path,
+) -> None:
+    # Regression: a legacy_test waiver must not be reported as a stale/unmatched
+    # exception when the surface report is scoped to production_blocker only.
+    _legacy_test_finding_repo(tmp_path)
+    registry = _write_yaml(tmp_path / "registry.yaml", {"roles": {}})
+    descriptors = _write_yaml(tmp_path / "descriptors.yaml", {"models": []})
+    priors = _write_yaml(tmp_path / "stack_priors.yaml", _priors(registry, descriptors))
+    exceptions = _exceptions_file(tmp_path, path_glob="tests/unit/legacy_role_fixture.py")
+
+    result = validate_stack_priors(
+        priors,
+        scan_surfaces=True,
+        repo_root=tmp_path,
+        surface_categories=frozenset({"production_blocker"}),
+        surface_exceptions_path=exceptions,
+        launch_manifest_targets={"frontdoor": {"port": 8070, "tier": "hot"}},
+    )
+
+    assert result.ok, result.errors
+    assert not any("no longer matches" in error for error in result.errors)
+    # The legacy finding is out of the production_blocker report scope, so it
+    # emits no warning under the default report.
+    assert result.warnings == []
+
+
+def test_genuinely_stale_legacy_exception_is_still_reported(tmp_path: Path) -> None:
+    # Staleness is enforced against a full-category scan even when the report is
+    # scoped to production_blocker, so a waiver matching nothing still errors.
+    _legacy_test_finding_repo(tmp_path)
+    registry = _write_yaml(tmp_path / "registry.yaml", {"roles": {}})
+    descriptors = _write_yaml(tmp_path / "descriptors.yaml", {"models": []})
+    priors = _write_yaml(tmp_path / "stack_priors.yaml", _priors(registry, descriptors))
+    exceptions = _exceptions_file(
+        tmp_path, path_glob="tests/unit/does_not_exist_fixture.py"
+    )
+
+    result = validate_stack_priors(
+        priors,
+        scan_surfaces=True,
+        repo_root=tmp_path,
+        surface_categories=frozenset({"production_blocker"}),
+        surface_exceptions_path=exceptions,
+        launch_manifest_targets={"frontdoor": {"port": 8070, "tier": "hot"}},
+    )
+
+    assert not result.ok
+    assert any(
+        "no longer matches a hardcoded-surface finding" in error
+        for error in result.errors
+    )

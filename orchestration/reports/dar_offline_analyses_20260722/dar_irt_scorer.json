@@ -1,0 +1,50 @@
+{
+  "task": "DAR-L181 / DAR-5.1 offline IRT difficulty scorer",
+  "snapshot": {
+    "snapshot_dir": "/mnt/raid0/llm/tmp/dar_snapshot",
+    "snapshot_ts_utc": "20260722T125604Z",
+    "episodic_db": "/mnt/raid0/llm/tmp/dar_snapshot/episodic.db"
+  },
+  "n_items_objectives": 633,
+  "n_roles": 8,
+  "n_observations": 388980,
+  "fit_converged": true,
+  "final_nll": 45402.67622060259,
+  "role_ability_theta": {
+    "worker_vision": 2.7373274088664856,
+    "coder_escalation": 0.9722786364380815,
+    "frontdoor": 0.27472052555723403,
+    "architect_general": -0.1666414495078774,
+    "ingest_long_context": -0.23634388881146906,
+    "worker_general": -0.4225655397201793,
+    "toolrunner": -1.3588894162779888,
+    "worker_math": -1.7998862765442882
+  },
+  "difficulty_b": {
+    "mean": -2.564197472591129,
+    "sd": 1.3115821423509995,
+    "p10": -3.2612984610192113,
+    "p50": -3.004341887236033,
+    "p90": -0.3106638606730983
+  },
+  "discrimination_a": {
+    "mean": 3.298971638050067,
+    "sd": 6.271597367725233,
+    "p50": 1.8779870735037003,
+    "p90": 4.7695588290347395
+  },
+  "heldout_eval": {
+    "auc_irt": 0.9522887138553295,
+    "auc_role_marginal_baseline": 0.6533336803702994,
+    "logloss_irt": 0.14010153517036564,
+    "logloss_baseline": 0.2819442330083138,
+    "ece_irt": 0.00548904680308761,
+    "ece_after_platt": 0.007189910178394886,
+    "n_test": 77796
+  },
+  "embedding_to_difficulty_scorer": {
+    "cv_r2": 0.02728955469443326,
+    "n_items_with_embedding": 633,
+    "note": "ridge BGE_embedding -> fitted IRT difficulty; positive R2 => difficulty is predictable for a NEW prompt from its embedding alone (DAR-5.1 cold-start scorer)."
+  }
+}
