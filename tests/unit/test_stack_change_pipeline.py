@@ -34,6 +34,17 @@ def _clean_runtime_attestation(monkeypatch):
     monkeypatch.setattr(pipeline, "_runtime_attestation_warnings", lambda: [])
 
 
+@pytest.fixture(autouse=True)
+def _pin_realized_compile_mode(monkeypatch):
+    """ESC-8 Fix 6: the update/check compile now resolves the NUMA mode from the
+    realized fleet (a bare TCP probe) or refuses when nothing is listening. Pin
+    it deterministically to the launcher ``full`` default so these pipeline
+    tests stay hermetic (no live sockets) and keep their pre-Fix-6 expectations."""
+    from src.registry import stack_priors
+
+    monkeypatch.setattr(stack_priors, "_realized_compile_numa_mode", lambda **_kw: "full")
+
+
 def test_promotion_gate_includes_benchmark_preflight_regressions() -> None:
     assert set(BENCHMARK_PREFLIGHT_TARGETS).issubset(PROMOTION_GATE_TARGETS)
 

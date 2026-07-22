@@ -19,6 +19,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from collections.abc import Mapping
 from typing import Any
 
 # Helper modules (extracted earlier in the refactor)
@@ -335,6 +336,26 @@ def _refresh_runtime_facts_manifest(
         return None
     print(f"[runtime-facts] Wrote {path}")
     return path
+
+
+def _merge_persisted_state_for_facts(
+    persisted: Mapping[str, ProcessInfo],
+    in_memory: Mapping[str, ProcessInfo],
+) -> dict[str, ProcessInfo]:
+    """Merge persisted state rows UNDER the in-memory (freshly-(re)started) rows.
+
+    ESC-8 Fix 2-addendum: the runtime-facts refresh must see the FULL realized
+    fleet, not just this invocation's newly-started rows. A subset/``--only``
+    start (or a start that leaves already-healthy llama-servers untouched) keeps
+    those llama rows solely in the persisted state file; passing the in-memory
+    ``state`` alone yields ``selected_servers: []`` even though the fleet is up
+    (the 09:14 manifest defect). In-memory rows win on key collision (freshest
+    pid/port). ``write_runtime_facts_manifest``'s pid-liveness filter drops any
+    stale persisted rows, so a merged-in dead row is harmless.
+    """
+    merged: dict[str, ProcessInfo] = dict(persisted)
+    merged.update(in_memory)
+    return merged
 
 
 def _model_path_attestation(info: ProcessInfo, alive: bool, cmdline: list[str]) -> str:
@@ -1368,9 +1389,18 @@ def cmd_start(args: argparse.Namespace) -> int:
         print()
 
     # Save state
+    # ESC-8 Fix 2-addendum: capture the persisted fleet BEFORE save_state()
+    # overwrites the file, then feed the runtime-facts refresh the MERGED view so
+    # llama rows this invocation did not re-touch (a subset/--only start) are not
+    # dropped, which otherwise emits selected_servers: [] (the 09:14 defect).
+    _persisted_state_before_save = load_state()
     save_state(state)
     print(f"[i] State saved to {STATE_FILE}")
-    _refresh_runtime_facts_manifest("stack_start", state, stack_numa_mode=numa_mode)
+    _refresh_runtime_facts_manifest(
+        "stack_start",
+        _merge_persisted_state_for_facts(_persisted_state_before_save, state),
+        stack_numa_mode=numa_mode,
+    )
     print()
 
     # Final status

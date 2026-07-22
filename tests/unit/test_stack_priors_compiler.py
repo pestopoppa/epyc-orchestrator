@@ -10,6 +10,8 @@ import yaml
 from src.registry.stack_priors import (
     STACK_PRIORS_VERSION,
     StackPriorsCompileError,
+    StackPriorsModeError,
+    _realized_compile_numa_mode,
     canonical_stack_role_id,
     compile_stack_priors,
     live_role_primary_ports,
@@ -1086,3 +1088,145 @@ def test_compile_refuses_missing_descriptor_without_allow_incomplete(tmp_path: P
         )
 
     assert f"{_RETIRED_ARCHITECT_ROLE}: Missing model descriptor binding" in str(exc.value)
+
+
+# --------------------------------------------------------------------------- #
+# ESC-8 Fix 6: priors compile must not read the ambient default-full env.       #
+# --------------------------------------------------------------------------- #
+
+_FIX6_FULL_HOST_PORTS = {8070, 8072, 8085}
+
+
+def _quarters_connect(_host: str, port: int) -> bool:
+    """Quarters-only fleet: the full host ports are dead, everything else live."""
+    return port not in _FIX6_FULL_HOST_PORTS
+
+
+def _fulls_connect(_host: str, _port: int) -> bool:
+    return True
+
+
+def _all_dead_connect(_host: str, _port: int) -> bool:
+    return False
+
+
+def test_realized_compile_numa_mode_env_unset_uses_realized() -> None:
+    assert _realized_compile_numa_mode(environ={}, connect=_quarters_connect) == "quarter"
+    assert _realized_compile_numa_mode(environ={}, connect=_fulls_connect) in {"full", "both"}
+
+
+def test_realized_compile_numa_mode_env_contradiction_prefers_realized(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level("WARNING"):
+        mode = _realized_compile_numa_mode(
+            environ={"ORCHESTRATOR_STACK_NUMA_MODE": "full"},
+            connect=_quarters_connect,
+        )
+    assert mode == "quarter"
+    assert any("contradicts the realized fleet" in rec.message for rec in caplog.records)
+
+
+def test_realized_compile_numa_mode_env_agreement_kept() -> None:
+    assert (
+        _realized_compile_numa_mode(
+            environ={"ORCHESTRATOR_STACK_NUMA_MODE": "quarter"},
+            connect=_quarters_connect,
+        )
+        == "quarter"
+    )
+
+
+def test_realized_compile_numa_mode_refuses_without_signal() -> None:
+    with pytest.raises(StackPriorsModeError):
+        _realized_compile_numa_mode(environ={}, connect=_all_dead_connect)
+    # An explicit env does NOT rescue a no-signal probe (unverifiable fleet).
+    with pytest.raises(StackPriorsModeError):
+        _realized_compile_numa_mode(
+            environ={"ORCHESTRATOR_STACK_NUMA_MODE": "full"},
+            connect=_all_dead_connect,
+        )
+
+
+def _worker_math_conflict_paths(tmp_path: Path) -> tuple[Path, Path]:
+    registry_path = _write_yaml(
+        tmp_path / "registry.yaml",
+        {"server_mode": {}, "roles": {"worker_math": {"memory": {"residency": "warm"}}}},
+    )
+    descriptor_path = _write_yaml(
+        tmp_path / "descriptors.yaml",
+        {
+            "models": [
+                {
+                    "model_id": "qwen2.5-math-7b-q4",
+                    "role_bindings": {"roles": ["worker_math"], "server_roles": []},
+                    "quality": {"suite_vector": {}, "measured": []},
+                    "speed": {"measured": []},
+                    "acceleration": {},
+                    "serving": {"ports": []},
+                    "known_gaps": ["Role-server conflict: stale worker server binding"],
+                }
+            ]
+        },
+    )
+    return registry_path, descriptor_path
+
+
+def test_compile_require_realized_mode_derives_quarter_lineup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """V4: a clean-shell compile with a quarters-live probe derives the quarter
+    lineup (alias inherits the host's quarter fleet), never the dead full port."""
+    monkeypatch.delenv("ORCHESTRATOR_STACK_NUMA_MODE", raising=False)
+    registry_path, descriptor_path = _worker_math_conflict_paths(tmp_path)
+
+    priors = compile_stack_priors(
+        registry_path=registry_path,
+        descriptor_path=descriptor_path,
+        active_roles={"worker_math"},
+        allow_incomplete=True,
+        require_realized_mode=True,
+        connect=_quarters_connect,
+    )
+
+    ports = priors["roles"]["worker_math"]["serving"]["ports"]
+    assert 8072 not in ports  # the dead full host port must not appear
+    assert ports == [8082, 8182, 8282, 8382]
+
+
+def test_compile_require_realized_mode_refuses_without_signal(tmp_path: Path) -> None:
+    """V5: a compile with no realized signal refuses rather than defaulting full."""
+    registry_path, descriptor_path = _worker_math_conflict_paths(tmp_path)
+    with pytest.raises(StackPriorsModeError):
+        compile_stack_priors(
+            registry_path=registry_path,
+            descriptor_path=descriptor_path,
+            active_roles={"worker_math"},
+            allow_incomplete=True,
+            require_realized_mode=True,
+            connect=_all_dead_connect,
+        )
+
+
+def test_compile_default_does_not_probe_realized_fleet(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The realized-fleet resolution is strictly opt-in: a plain compile never
+    calls it (so it can neither refuse nor probe sockets by default)."""
+    import src.registry.stack_priors as sp
+
+    def _boom(**_kw):
+        raise AssertionError("resolver must not run without require_realized_mode")
+
+    monkeypatch.setattr(sp, "_realized_compile_numa_mode", _boom)
+    monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "full")
+    registry_path, descriptor_path = _worker_math_conflict_paths(tmp_path)
+
+    priors = compile_stack_priors(
+        registry_path=registry_path,
+        descriptor_path=descriptor_path,
+        active_roles={"worker_math"},
+        allow_incomplete=True,
+    )
+    # Legacy full-mode default is unchanged.
+    assert priors["roles"]["worker_math"]["serving"]["ports"] == [8072]
