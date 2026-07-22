@@ -727,3 +727,73 @@ class TestEarlyStopTiming:
         assert result.tokens_generated == 4  # chunks before stop
         assert result.generation_ms > 0, "Early-stop should still produce timing"
         assert result.predicted_per_second > 0, "Early-stop should still produce TPS"
+
+
+class TestChatCompletionsLogprobs:
+    """Chat-path Option A (2026-07-22): n_probs → logprobs/top_logprobs translation.
+
+    llama's OpenAI-compat endpoint ignores the native n_probs param, so every
+    chat_completions role returned empty completion_probabilities and
+    calibration fell back to the binary proxy (EV-4b/EV-11c confidence void).
+    """
+
+    def _backend(self):
+        from src.backends.llama_server import LlamaServerBackend, ServerConfig
+
+        config = ServerConfig(base_url="http://test:8080", use_chat_completions=True)
+        return LlamaServerBackend(config=config)
+
+    def _chat_response(self, *, logprobs=None):
+        mock_response = Mock()
+        mock_response.status_code = 200
+        choice = {
+            "message": {"content": "4"},
+            "finish_reason": "stop",
+        }
+        if logprobs is not None:
+            choice["logprobs"] = logprobs
+        mock_response.json.return_value = {
+            "choices": [choice],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 1},
+            "timings": {"prompt_ms": 5.0, "predicted_ms": 5.0, "predicted_per_second": 30.0},
+        }
+        mock_response.raise_for_status = Mock()
+        return mock_response
+
+    def test_n_probs_translates_to_openai_logprobs_params(self, role_config):
+        backend = self._backend()
+        request = InferenceRequest(role="frontdoor", prompt="2+2?", n_tokens=16, n_probs=5)
+        captured = {}
+
+        def _post(_path, json=None, timeout=None):
+            captured.update(json or {})
+            return self._chat_response(
+                logprobs={"content": [{"token": "4", "logprob": -0.05, "top_logprobs": []}]}
+            )
+
+        with patch.object(backend.client, "post", side_effect=_post):
+            result = backend.infer(role_config, request)
+
+        assert "n_probs" not in captured, "native param must not leak to the OAI endpoint"
+        assert captured["logprobs"] is True
+        assert captured["top_logprobs"] == 5
+        assert result.success is True
+        assert result.completion_probabilities == [
+            {"token": "4", "logprob": -0.05, "top_logprobs": []}
+        ]
+
+    def test_no_n_probs_leaves_payload_and_result_clean(self, role_config):
+        backend = self._backend()
+        request = InferenceRequest(role="frontdoor", prompt="2+2?", n_tokens=16)
+        captured = {}
+
+        def _post(_path, json=None, timeout=None):
+            captured.update(json or {})
+            return self._chat_response()
+
+        with patch.object(backend.client, "post", side_effect=_post):
+            result = backend.infer(role_config, request)
+
+        assert "logprobs" not in captured
+        assert "top_logprobs" not in captured
+        assert result.completion_probabilities == []

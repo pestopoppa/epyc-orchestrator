@@ -2,6 +2,36 @@
 
 Wraps existing seeding infrastructure for orchestrator API calls and scoring.
 Training set (debug suites) is kept separate from validation set (HF benchmarks).
+
+Generation/scoring pipeline (``_eval_batch`` workers>1 path)
+------------------------------------------------------------
+EV-4b measurement (HE-R+ code_execution, 2026-07-22): each concurrent lane ran
+generation (~1s HTTP decode) THEN client-side scoring (~11s sandbox subprocess)
+INLINE, so a lane was busy ~12s while decode duty was ~4-5% — the serving fleet
+idled ~82% while only ``_eval_concurrency`` (topology-capped at 4 for inference
+contention) candidates executed. Scoring-bound suites therefore capped total
+throughput at the *serving* fan-out even though scoring is pure client CPU on a
+192-thread host.
+
+Fix (scheduling only — verdicts/scorer semantics unchanged): the workers>1 path
+splits ``_eval_question`` into ``_generate_question`` (runs on the topology-capped
+generation pool, width = ``_eval_concurrency``) and ``_score_generation`` (runs on
+a separate, wider SCORING pool, width = ``AUTOPILOT_EVAL_SCORING_CONCURRENCY``,
+default ``min(16, os.cpu_count()//12)`` but never below the generation width). A
+generation lane hands its un-scored result to the scoring pool and immediately
+starts the next question. Expected speedup model for a scoring-bound suite: once
+generation stops gating, wall ≈ ``n * t_score / scoring_width`` (was
+``n * (t_gen + t_score) / generation_width``). Math-shaped suites (decode-bound,
+math_verify scoring ~instant) are unaffected — the scoring pool idles cheap, no
+mode detection. A bounded un-scored queue (2x scoring width) backpressures a fast
+generator so it cannot pile unbounded memory on a slow scorer. The serial path
+(workers<=1) and every direct ``_eval_question`` caller keep the pre-split,
+generate-then-score-inline behavior byte-for-byte.
+
+Env knobs (see also AUTOPILOT_EVAL_CONCURRENCY / _NO_PROGRESS_TIMEOUT_S /
+_ORPHAN_DRAIN_TIMEOUT_S / _BATCH_WALL_BUDGET_S):
+  * ``AUTOPILOT_EVAL_SCORING_CONCURRENCY`` — client-side scoring-pool width for
+    the workers>1 pipeline. Default ON; clamped to >= the generation width.
 """
 
 from __future__ import annotations
@@ -14,8 +44,9 @@ import random
 import sys
 import time
 import uuid
+from collections import deque
 from collections.abc import Mapping, Sequence
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import hashlib
@@ -1177,6 +1208,38 @@ def _eval_concurrency(roles: Sequence[str] | None = None) -> int:
     return max(1, min(caps or [1]))
 
 
+def _eval_scoring_concurrency(generation_workers: int) -> int:
+    """Width of the client-side SCORING pool for the ``_eval_batch`` workers>1 path.
+
+    Scoring for suites like HE-R+ (code_execution) is pure client CPU — the scorer
+    subprocesses a sandbox — so it does NOT consume the inference fan-out budget
+    that caps generation at ``_eval_concurrency``. Decoupling lets scoring run
+    wider than the topology-derived generation width so a scoring-bound suite stops
+    idling the serving fleet.
+
+    Default: ``min(16, os.cpu_count() // 12)``, but never below the generation
+    width so the pipeline can never be narrower than the pre-split single-pool
+    executor. Operators override via ``AUTOPILOT_EVAL_SCORING_CONCURRENCY`` (also
+    floored at the generation width — this env raises scoring throughput, it does
+    not change the inference-contention-capped generation width).
+    """
+    gen = max(1, int(generation_workers))
+    raw = os.environ.get("AUTOPILOT_EVAL_SCORING_CONCURRENCY", "").strip()
+    if raw:
+        try:
+            override = int(raw)
+        except ValueError:
+            log.warning(
+                "Invalid AUTOPILOT_EVAL_SCORING_CONCURRENCY=%r; using default",
+                raw,
+            )
+        else:
+            return max(gen, override)
+    cpu = os.cpu_count() or 1
+    default = min(16, max(1, cpu // 12))
+    return max(gen, default)
+
+
 def _eval_batch_id(*, label: str, n_questions: int, started_at_s: float) -> str:
     safe_label = "".join(
         ch if ch.isalnum() or ch in {"-", "_"} else "-" for ch in str(label or "eval").strip()
@@ -1279,15 +1342,50 @@ class _EvalQuestionJsonlWriter:
         row["complete"] = False
         self.append_row(row)
 
-    def append_result(self, *, ordinal: int, result: "QuestionResult") -> None:
+    def append_result(
+        self,
+        *,
+        ordinal: int,
+        result: "QuestionResult",
+        generated_at_s: float | None = None,
+        scored_at_s: float | None = None,
+    ) -> None:
         row = self._base_row("question_result")
+        # Wall-clock interval so end-to-end concurrency depth and latency
+        # distributions are derivable from the artifact alone (2026-07-22:
+        # verifying EV-4b fan-out required /proc forensics because rows carried
+        # no timing).
+        #
+        # Serial / single-pool path (generated_at_s is None): append runs
+        # immediately on completion, so ended_at_s = append time ≈ request end —
+        # behavior is byte-identical to the pre-pipeline writer.
+        #
+        # Pipelined path (workers>1): ``generated_at_s`` is the absolute instant
+        # GENERATION finished, so ended_at_s/started_at_s/elapsed_s describe the
+        # GENERATION interval, and ``scored_at_s`` (>= ended_at_s) marks when the
+        # decoupled scoring pool produced the verdict — separating the two phases
+        # in the artifact.
+        elapsed = max(0.0, float(getattr(result, "elapsed_s", 0.0) or 0.0))
+        ended_at_s = time.time() if generated_at_s is None else float(generated_at_s)
         row.update(
             {
                 "ordinal": int(ordinal),
                 "result": _compact_question_result(result),
+                # Full raw generated answer (2026-07-22 operator directive): the
+                # compact `result` above keeps only answer_hash, but the untracked
+                # report sidecars must be re-scorable and resumable, and the answer
+                # is the irreplaceable artifact. `prompt`/`expected` stay excluded —
+                # both are reconstructable from the dataset by qid/ordinal +
+                # dataset_sha256. answer_hash is retained for integrity checks.
+                "answer": str(getattr(result, "answer", "") or ""),
                 "complete": False,
+                "ended_at_s": round(ended_at_s, 3),
+                "elapsed_s": round(elapsed, 6),
+                "started_at_s": round(ended_at_s - elapsed, 3) if elapsed > 0 else None,
             }
         )
+        if scored_at_s is not None:
+            row["scored_at_s"] = round(float(scored_at_s), 3)
         self.append_row(row)
 
     def append_complete(self, *, completed_n: int, elapsed_s: float) -> None:
@@ -1453,6 +1551,38 @@ class QuestionResult:
     # heuristic-scored questions are not indistinguishable downstream.
     rubric_source: str = ""
     host_covariates: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class _GenOutcome:
+    """Handoff between the generation lane and the scoring pool (workers>1 path).
+
+    Carries everything ``_score_generation`` needs to compute the verdict WITHOUT
+    re-touching the network, plus ``gen_ended_at_s`` (absolute wall-clock instant
+    generation finished) so the sidecar can record ended_at_s as the GENERATION
+    interval while scored_at_s marks scoring completion.
+
+    ``final_result`` short-circuits scoring for the generation-exception path: it
+    is a fully-formed error ``QuestionResult`` that ``_score_generation`` returns
+    unchanged (no scoring is attempted on a call that never produced an answer).
+    """
+
+    gen_ended_at_s: float
+    final_result: QuestionResult | None = None
+    resp: dict[str, Any] = field(default_factory=dict)
+    answer: str = ""
+    error: str | None = None
+    tokens: int = 0
+    elapsed: float = 0.0
+    host_covariates: dict[str, Any] = field(default_factory=dict)
+    question_id: Any = "unknown"
+    suite: str = "unknown"
+    prompt: str = ""
+    expected: str = ""
+    stable_qid: str = ""
+    scoring_method: str = "exact_match"
+    scoring_config: dict[str, Any] = field(default_factory=dict)
+    eval_partition: str = "core"
 
 
 # EV-6: Cross-family verification constraint.
@@ -2397,7 +2527,26 @@ class EvalTower:
         return combined, "judge"
 
     def _eval_question(self, q: dict, client: httpx.Client) -> QuestionResult:
-        """Evaluate a single question through the orchestrator."""
+        """Evaluate a single question through the orchestrator (generate then score).
+
+        Serial / back-compat entry point: runs both phases inline so the
+        single-worker (``workers <= 1``) path in ``_eval_batch`` and every direct
+        caller are behaviorally identical to the pre-pipeline implementation. The
+        workers>1 path in ``_eval_batch`` instead drives ``_generate_question`` and
+        ``_score_generation`` on separate pools so scoring is decoupled from the
+        topology-capped generation lanes (see the module docstring).
+        """
+        outcome = self._generate_question(q, client)
+        return self._score_generation(q, outcome, client)
+
+    def _generate_question(self, q: dict, client: httpx.Client) -> "_GenOutcome":
+        """GENERATION phase: run the orchestrator request + REL-1 guards, no scoring.
+
+        Returns a ``_GenOutcome`` carrying the response payload and timing that
+        ``_score_generation`` consumes to produce the verdict. A generation-time
+        exception is captured as a fully-formed error ``QuestionResult`` on
+        ``final_result`` so the scoring phase can pass it through unchanged.
+        """
         prompt = q.get("prompt", "")
         expected = q.get("expected", "")
         qid = q.get("id", q.get("question_id", "unknown"))
@@ -2516,83 +2665,24 @@ class EvalTower:
                 tokens_generated=tokens,
                 elapsed_s=elapsed,
             )
-
-            correct = False
-            rubric_scores: dict[str, float] = {}
-            rubric_source = ""
-            if not error and _is_scoreable_question(q):
-                if _is_rubric_scored_question(q):
-                    rubric_scores, rubric_source = self._rubric_scores_for_answer(
-                        q=q,
-                        answer=answer,
-                        generator_model=str(resp.get("model") or resp.get("routed_to") or ""),
-                        tool_events=list(resp.get("tools_called") or []),
-                        client=client,
-                    )
-                    threshold = float((scoring_config or {}).get("rubric_pass_threshold", 0.60))
-                    correct = aggregate_rubric_score(rubric_scores).score >= threshold
-                    scoring_method = "rubric"
-                else:
-                    if scoring_method == "math_verify":
-                        # EV-11: guarantee math_verify actually runs; never let a
-                        # missing library silently degrade to exact_match.
-                        _require_math_verify()
-                    correct = score_answer_deterministic(
-                        answer=answer,
-                        expected=expected,
-                        scoring_method=scoring_method,
-                        scoring_config=scoring_config,
-                    )
-
-            # EV-CONF: prefer model probability rows when requested/available.
-            # Fall back to historical scoring-derived proxies for paths that do
-            # not expose llama.cpp completion_probabilities. SCORE-12: the phantom
-            # static `pass_rate` read is gone — see _derive_question_confidence.
-            probability_confidence = _completion_probabilities_confidence(
-                resp.get("completion_probabilities")
-            )
-            confidence, confidence_source = _derive_question_confidence(
-                scoring_method=scoring_method,
-                correct=correct,
-                probability_confidence=probability_confidence,
-                rubric_scores=rubric_scores,
-            )
-
-            # 2026-05-23 Phase 4 — exogenous-restart metadata propagation.
-            # call_orchestrator_forced attaches the resilient_post meta dict
-            # as resp["_meta"] when watcher is set. Surface the classification
-            # bits onto QuestionResult so _aggregate can roll them up into
-            # the trial-level EvalResult.
-            meta = resp.get("_meta") or {}
-            return QuestionResult(
+            return _GenOutcome(
+                # Generation interval end = start + elapsed (the sidecar derives
+                # started_at_s = ended_at_s - elapsed_s from this).
+                gen_ended_at_s=start + elapsed,
+                resp=resp,
+                answer=answer,
+                error=error,
+                tokens=tokens,
+                elapsed=elapsed,
+                host_covariates=host_covariates,
                 question_id=qid,
                 suite=suite,
                 prompt=prompt,
                 expected=expected,
-                qid=stable_qid,
-                answer=answer,
-                correct=correct,
-                error=error,
-                tokens_generated=tokens,
-                elapsed_s=elapsed,
-                route_used=str(resp.get("routed_to") or resp.get("model") or ""),
-                cost_tier=resp.get("cost_tier", 0),
+                stable_qid=stable_qid,
                 scoring_method=scoring_method,
-                partial=bool(resp.get("partial", False)),
-                degraded=bool(resp.get("degraded", False)),
-                confidence=confidence,
-                confidence_source=confidence_source,
-                branching_density=_compute_branching_density(answer),
-                tools_used=int(resp.get("tools_used", 0) or 0),
-                tools_called=list(resp.get("tools_called") or []),
-                exogenous_recovered=bool(meta.get("exogenous_recovered", False)),
-                exogenous_unrecovered=bool(meta.get("exogenous_unrecovered", False)),
-                external_restart=bool(meta.get("external_restart", False)),
-                retry_count=int(meta.get("retry_count", 0)),
+                scoring_config=scoring_config,
                 eval_partition=eval_partition,
-                rubric_scores=rubric_scores,
-                rubric_source=rubric_source,
-                host_covariates=host_covariates,
             )
         except Exception as e:
             elapsed = time.time() - start
@@ -2600,7 +2690,7 @@ class EvalTower:
                 tokens_generated=0,
                 elapsed_s=elapsed,
             )
-            return QuestionResult(
+            failed = QuestionResult(
                 question_id=qid,
                 suite=suite,
                 prompt=prompt,
@@ -2611,6 +2701,105 @@ class EvalTower:
                 eval_partition=eval_partition,
                 host_covariates=host_covariates,
             )
+            return _GenOutcome(gen_ended_at_s=start + elapsed, final_result=failed)
+
+    def _score_generation(
+        self, q: dict, outcome: "_GenOutcome", client: httpx.Client
+    ) -> QuestionResult:
+        """SCORING phase: compute the verdict for an already-generated answer.
+
+        Pure scheduling split from ``_generate_question`` — the scorer functions,
+        per-execution timeouts, and REL-1/error classification are unchanged. A
+        ``final_result`` (generation exception) is returned as-is: a question that
+        never produced an answer is not scored.
+        """
+        if outcome.final_result is not None:
+            return outcome.final_result
+
+        resp = outcome.resp or {}
+        answer = outcome.answer
+        error = outcome.error
+        expected = outcome.expected
+        scoring_method = outcome.scoring_method
+        scoring_config = outcome.scoring_config
+
+        correct = False
+        rubric_scores: dict[str, float] = {}
+        rubric_source = ""
+        if not error and _is_scoreable_question(q):
+            if _is_rubric_scored_question(q):
+                rubric_scores, rubric_source = self._rubric_scores_for_answer(
+                    q=q,
+                    answer=answer,
+                    generator_model=str(resp.get("model") or resp.get("routed_to") or ""),
+                    tool_events=list(resp.get("tools_called") or []),
+                    client=client,
+                )
+                threshold = float((scoring_config or {}).get("rubric_pass_threshold", 0.60))
+                correct = aggregate_rubric_score(rubric_scores).score >= threshold
+                scoring_method = "rubric"
+            else:
+                if scoring_method == "math_verify":
+                    # EV-11: guarantee math_verify actually runs; never let a
+                    # missing library silently degrade to exact_match.
+                    _require_math_verify()
+                correct = score_answer_deterministic(
+                    answer=answer,
+                    expected=expected,
+                    scoring_method=scoring_method,
+                    scoring_config=scoring_config,
+                )
+
+        # EV-CONF: prefer model probability rows when requested/available.
+        # Fall back to historical scoring-derived proxies for paths that do
+        # not expose llama.cpp completion_probabilities. SCORE-12: the phantom
+        # static `pass_rate` read is gone — see _derive_question_confidence.
+        probability_confidence = _completion_probabilities_confidence(
+            resp.get("completion_probabilities")
+        )
+        confidence, confidence_source = _derive_question_confidence(
+            scoring_method=scoring_method,
+            correct=correct,
+            probability_confidence=probability_confidence,
+            rubric_scores=rubric_scores,
+        )
+
+        # 2026-05-23 Phase 4 — exogenous-restart metadata propagation.
+        # call_orchestrator_forced attaches the resilient_post meta dict
+        # as resp["_meta"] when watcher is set. Surface the classification
+        # bits onto QuestionResult so _aggregate can roll them up into
+        # the trial-level EvalResult.
+        meta = resp.get("_meta") or {}
+        return QuestionResult(
+            question_id=outcome.question_id,
+            suite=outcome.suite,
+            prompt=outcome.prompt,
+            expected=expected,
+            qid=outcome.stable_qid,
+            answer=answer,
+            correct=correct,
+            error=error,
+            tokens_generated=outcome.tokens,
+            elapsed_s=outcome.elapsed,
+            route_used=str(resp.get("routed_to") or resp.get("model") or ""),
+            cost_tier=resp.get("cost_tier", 0),
+            scoring_method=scoring_method,
+            partial=bool(resp.get("partial", False)),
+            degraded=bool(resp.get("degraded", False)),
+            confidence=confidence,
+            confidence_source=confidence_source,
+            branching_density=_compute_branching_density(answer),
+            tools_used=int(resp.get("tools_used", 0) or 0),
+            tools_called=list(resp.get("tools_called") or []),
+            exogenous_recovered=bool(meta.get("exogenous_recovered", False)),
+            exogenous_unrecovered=bool(meta.get("exogenous_unrecovered", False)),
+            external_restart=bool(meta.get("external_restart", False)),
+            retry_count=int(meta.get("retry_count", 0)),
+            eval_partition=outcome.eval_partition,
+            rubric_scores=rubric_scores,
+            rubric_source=rubric_source,
+            host_covariates=outcome.host_covariates,
+        )
 
     def _failed_question_result(
         self,
@@ -2697,11 +2886,33 @@ class EvalTower:
             log.warning("EvalTower question-result sidecar disabled: %s", exc)
             writer = None
 
-        def append_question_result(ordinal: int, result: QuestionResult) -> None:
+        def _ordinal_for_pos(pos: int) -> int:
+            # Resume/subset support: a question may carry an explicit `_ordinal`
+            # (its position in the ORIGINAL full dataset) so a --resume-incomplete
+            # run of just the remainder stamps original-dataset ordinals into the
+            # sidecar — making prior+new rows mergeable by ordinal with no
+            # collisions. Absent `_ordinal`, ordinal == list position (unchanged).
+            try:
+                return int(dispatch_questions[pos].get("_ordinal", pos))
+            except (TypeError, ValueError, IndexError):
+                return pos
+
+        def append_question_result(
+            pos: int,
+            result: QuestionResult,
+            *,
+            generated_at_s: float | None = None,
+            scored_at_s: float | None = None,
+        ) -> None:
             if writer is None:
                 return
             try:
-                writer.append_result(ordinal=ordinal, result=result)
+                writer.append_result(
+                    ordinal=_ordinal_for_pos(pos),
+                    result=result,
+                    generated_at_s=generated_at_s,
+                    scored_at_s=scored_at_s,
+                )
             except Exception as exc:  # noqa: BLE001
                 log.warning("EvalTower question-result sidecar append failed: %s", exc)
 
@@ -2839,34 +3050,108 @@ class EvalTower:
                 if writer is not None:
                     writer.close()
 
-        ex = ThreadPoolExecutor(max_workers=workers, thread_name_prefix=f"eval-{label}")
+        # ── Pipelined generation + scoring (workers > 1) ─────────────────────
+        # Generation lanes stay at the topology-capped `workers` width; scoring
+        # runs on a separate, wider pool (`scoring_workers`) so a scoring-bound
+        # suite (HE-R+ code_execution: ~11s client-CPU scoring per ~1s decode)
+        # no longer idles the serving fleet. A completed generation hands its
+        # un-scored result to the scoring pool and the lane immediately picks up
+        # the next question. See the module docstring + _eval_scoring_concurrency.
+        scoring_workers = _eval_scoring_concurrency(workers)
+        # Backpressure: never admit new generation while the scoring pool already
+        # holds >= 2x its width of un-scored work, so a fast generator cannot pile
+        # unbounded memory on a slow scorer.
+        backpressure_cap = max(2 * scoring_workers, workers)
+        no_progress_timeout_s = _eval_no_progress_timeout_s(self.timeout)
+        drain_timeout_s = _eval_orphan_drain_timeout_s(self.timeout)
+        gen_ex = ThreadPoolExecutor(max_workers=workers, thread_name_prefix=f"eval-{label}-gen")
+        score_ex = ThreadPoolExecutor(
+            max_workers=scoring_workers, thread_name_prefix=f"eval-{label}-score"
+        )
         done = 0
+        pending_gen: deque[tuple[int, dict]] = deque(enumerate(dispatch_questions))
+        gen_future_to_idx: dict[Future, int] = {}
+        score_future_to_idx: dict[Future, int] = {}
+        gen_ended_at: dict[int, float] = {}
+
+        def _idx_of(fut: Future) -> int:
+            idx = gen_future_to_idx.get(fut)
+            if idx is None:
+                idx = score_future_to_idx.get(fut)
+            return idx
+
+        def admit_generation() -> None:
+            while (
+                len(gen_future_to_idx) < workers
+                and pending_gen
+                and len(score_future_to_idx) < backpressure_cap
+            ):
+                idx, gq = pending_gen.popleft()
+                gen_future_to_idx[gen_ex.submit(self._generate_question, gq, client)] = idx
+
+        def finalize_scored(idx: int, result: QuestionResult, *, generated_at_s: float | None) -> None:
+            nonlocal done
+            result.eval_concurrency = workers
+            results[idx] = result
+            append_question_result(
+                idx, result, generated_at_s=generated_at_s, scored_at_s=time.time()
+            )
+            done += 1
+            correct_so_far = sum(1 for r in results if r and r.correct)
+            self._emit_progress(
+                label=label,
+                completed_questions=done,
+                total_questions=n,
+                correct_questions=correct_so_far,
+                concurrency=workers,
+            )
+            if log_every and done % log_every == 0:
+                log.info(
+                    "%s progress: %d/%d (%.0f%% correct, concurrency=%d)",
+                    label,
+                    done,
+                    n,
+                    100 * correct_so_far / done,
+                    workers,
+                )
+                self._emit_progress(
+                    label=label,
+                    completed_questions=done,
+                    total_questions=n,
+                    correct_questions=correct_so_far,
+                    concurrency=workers,
+                )
+
         try:
-            future_to_idx = {
-                ex.submit(self._eval_question, q, client): i
-                for i, q in enumerate(dispatch_questions)
-            }
-            pending = set(future_to_idx)
-            no_progress_timeout_s = _eval_no_progress_timeout_s(self.timeout)
-            drain_timeout_s = _eval_orphan_drain_timeout_s(self.timeout)
-            while pending:
-                completed, pending = wait(
+            while pending_gen or gen_future_to_idx or score_future_to_idx:
+                admit_generation()
+                pending = set(gen_future_to_idx) | set(score_future_to_idx)
+                if not pending:
+                    # Nothing in flight but generation still queued should be
+                    # unreachable (admit fills lanes whenever the scoring pool is
+                    # not saturated, and saturation implies live score futures).
+                    # Break defensively rather than spin.
+                    break
+                completed, _ = wait(
                     pending,
                     timeout=no_progress_timeout_s or None,
                     return_when=FIRST_COMPLETED,
                 )
                 if not completed:
+                    # No generation OR scoring future advanced within the window
+                    # (covers a hung scorer just like a hung generation).
                     elapsed = time.time() - batch_start
                     log.error(
-                        "%s no eval future completed for %.1fs; failing %d "
-                        "remaining question(s) closed",
+                        "%s no eval future (gen or score) completed for %.1fs; failing "
+                        "%d in-flight + %d unstarted question(s) closed",
                         label,
                         no_progress_timeout_s,
                         len(pending),
+                        len(pending_gen),
                     )
                     timed_out = set(pending)
                     for fut in timed_out:
-                        idx = future_to_idx[fut]
+                        idx = _idx_of(fut)
                         fut.cancel()
                         results[idx] = self._failed_question_result(
                             questions[idx],
@@ -2893,7 +3178,7 @@ class EvalTower:
                             drain_timeout_s,
                         )
                         for fut in still_running:
-                            idx = future_to_idx[fut]
+                            idx = _idx_of(fut)
                             if results[idx] is not None:
                                 mark_abandoned(
                                     idx,
@@ -2901,51 +3186,66 @@ class EvalTower:
                                     drain_timeout_s=drain_timeout_s,
                                 )
                     for fut in timed_out:
-                        idx = future_to_idx[fut]
+                        idx = _idx_of(fut)
                         if results[idx] is not None:
                             results[idx].eval_concurrency = workers
                         append_question_result(idx, results[idx])
+                    # Unstarted questions fail closed (cancelled), matching the
+                    # serial path's remaining-question handling.
+                    for idx, uq in pending_gen:
+                        results[idx] = self._failed_question_result(
+                            uq,
+                            elapsed_s=time.time() - batch_start,
+                            error="eval_cancelled_after_no_progress_timeout",
+                        )
+                        results[idx].eval_concurrency = workers
+                        append_question_result(idx, results[idx])
+                    pending_gen.clear()
+                    gen_future_to_idx.clear()
+                    score_future_to_idx.clear()
                     break
 
                 for fut in completed:
-                    idx = future_to_idx[fut]
-                    try:
-                        results[idx] = fut.result()
-                    except Exception as exc:  # noqa: BLE001
-                        results[idx] = self._failed_question_result(
-                            questions[idx],
-                            elapsed_s=time.time() - batch_start,
-                            error=str(exc),
+                    if fut in gen_future_to_idx:
+                        idx = gen_future_to_idx.pop(fut)
+                        try:
+                            outcome = fut.result()
+                        except Exception as exc:  # noqa: BLE001
+                            # _generate_question captures its own exceptions; this
+                            # is belt-and-braces for a truly unexpected raise.
+                            gen_ended = time.time()
+                            finalize_scored(
+                                idx,
+                                self._failed_question_result(
+                                    questions[idx],
+                                    elapsed_s=time.time() - batch_start,
+                                    error=str(exc),
+                                ),
+                                generated_at_s=gen_ended,
+                            )
+                            continue
+                        # Generation done → lane is free; hand off to scoring pool.
+                        gen_ended_at[idx] = outcome.gen_ended_at_s
+                        score_fut = score_ex.submit(
+                            self._score_generation, dispatch_questions[idx], outcome, client
                         )
-                    results[idx].eval_concurrency = workers
-                    append_question_result(idx, results[idx])
-                    done += 1
-                    correct_so_far = sum(1 for r in results if r and r.correct)
-                    self._emit_progress(
-                        label=label,
-                        completed_questions=done,
-                        total_questions=n,
-                        correct_questions=correct_so_far,
-                        concurrency=workers,
-                    )
-                    if log_every and done % log_every == 0:
-                        log.info(
-                            "%s progress: %d/%d (%.0f%% correct, concurrency=%d)",
-                            label,
-                            done,
-                            n,
-                            100 * correct_so_far / done,
-                            workers,
-                        )
-                        self._emit_progress(
-                            label=label,
-                            completed_questions=done,
-                            total_questions=n,
-                            correct_questions=correct_so_far,
-                            concurrency=workers,
+                        score_future_to_idx[score_fut] = idx
+                    else:
+                        idx = score_future_to_idx.pop(fut)
+                        try:
+                            result = fut.result()
+                        except Exception as exc:  # noqa: BLE001
+                            result = self._failed_question_result(
+                                questions[idx],
+                                elapsed_s=time.time() - batch_start,
+                                error=str(exc),
+                            )
+                        finalize_scored(
+                            idx, result, generated_at_s=gen_ended_at.pop(idx, None)
                         )
         finally:
-            ex.shutdown(wait=False, cancel_futures=True)
+            gen_ex.shutdown(wait=False, cancel_futures=True)
+            score_ex.shutdown(wait=False, cancel_futures=True)
 
         for i, q in enumerate(questions):
             if results[i] is None:
