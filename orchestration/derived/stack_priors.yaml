@@ -48,7 +48,7 @@ contract:
   - quality_overall
   - memory_cost
   fallback_policy: Consumers may use local fallback values only as explicit degraded mode when this generated contract is missing or invalid.
-compiled_at: '2026-07-22T10:13:51Z'
+compiled_at: '2026-07-22T10:25:11Z'
 status: compiled
 coverage_scope: descriptor_role_bindings
 precedence_spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
@@ -56,31 +56,31 @@ source_artifacts:
   registry:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
     sha256: 4ccb929a70c7a175c79c5962e21b49cc45e909e958188f0a5b0814ce2a10ae41
-    repo_commit: e5063b75
+    repo_commit: d8b7e0bd
   descriptors:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_descriptors.yaml
-    sha256: 3f1bdd98f5f4f6d91353bcf6dfc06a6f28faec25fc83227e2c12609a00fdf964
-    repo_commit: e5063b75
+    sha256: c2eb898fc668c349fa3fd783a51663d5bdd2ae487ccf065cdeb9fa24260103db
+    repo_commit: d8b7e0bd
   stack_manifest:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_manifest.py
     sha256: 29fde0c2b3161d5b56fe8cb6fd2fe4ebd0bfbdd609fe239b6e0045f6c70b744b
-    repo_commit: e5063b75
+    repo_commit: d8b7e0bd
   stack_numa:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_numa.py
     sha256: cdf4c30458c6982ebab593ff1652e1f443e40d5a2652d1f00f020fea4515381b
-    repo_commit: e5063b75
+    repo_commit: d8b7e0bd
   orchestrator_stack:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/orchestrator_stack.py
     sha256: 82fa0f2349d78508946633ea151f5bd03948c3926936732615769ff5c432e4fa
-    repo_commit: e5063b75
+    repo_commit: d8b7e0bd
   stack_paths:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_paths.py
     sha256: 7eee8576101dbb827ec8e94a228beedb401d7cad80841e1a18aab9c03db4206b
-    repo_commit: e5063b75
+    repo_commit: d8b7e0bd
   stack_runtime:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_runtime.py
     sha256: 984d27262e1f1d5a5332d0b4a3e6fb96fb8095fc890ddaa93da07bff52eb1c99
-    repo_commit: e5063b75
+    repo_commit: d8b7e0bd
 roles:
   architect_general:
     role: architect_general
