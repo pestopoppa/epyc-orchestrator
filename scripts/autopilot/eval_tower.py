@@ -1225,9 +1225,18 @@ class _EvalQuestionJsonlWriter:
         label: str,
         requested_n: int,
         concurrency: int,
+        path: Path | None = None,
     ) -> None:
         trial_name = f"trial_{trial_id}" if trial_id is not None else "trial_unknown"
-        self.path = root / _safe_artifact_name(trial_name, fallback="trial_unknown") / "question_results.jsonl"
+        # EV-11c: the window-runner (verifier-mode) path has no trial id, so the
+        # default trial-keyed path collapses every arm onto a single invisible
+        # "trial_unknown" file. Callers on that path pass an explicit per-arm `path`
+        # (e.g. <output-dir>/question_results.<arm>.jsonl) so each arm's rows are
+        # durably identifiable for a targeted error requeue.
+        if path is not None:
+            self.path = Path(path)
+        else:
+            self.path = root / _safe_artifact_name(trial_name, fallback="trial_unknown") / "question_results.jsonl"
         self._eval_batch_id = eval_batch_id
         self._trial_id = trial_id
         self._label = str(label or "")
@@ -1950,8 +1959,21 @@ class EvalTower:
         self._core_cache: dict[str, tuple[list[dict], dict[str, Any], Path]] = {}
         self._trial_id_context: int | None = None
         self._trial_path_context: Path | None = None
+        # EV-11c: when set (window-runner / verifier-mode path), _eval_batch writes
+        # per-arm question rows into this directory instead of the trial-keyed root.
+        self._question_artifact_dir: Path | None = None
         self.on_question = on_question
         self.on_progress = on_progress
+
+    def set_question_artifact_dir(self, directory: str | Path | None) -> None:
+        """Persist per-arm question rows under ``directory`` (window-runner path).
+
+        Each ``_eval_batch`` arm writes ``question_results.<label>.jsonl`` here via
+        the same append-only, fsync'd writer used on the trial path — so a crashed
+        or partially-errored arm leaves a durable, per-question, per-arm record that
+        a targeted ``--retry-errors-from`` requeue can read.
+        """
+        self._question_artifact_dir = Path(directory) if directory is not None else None
 
     def set_trial_context(
         self,
@@ -2651,6 +2673,11 @@ class EvalTower:
         batch_start = time.time()
         writer: _EvalQuestionJsonlWriter | None = None
         artifact_root, artifact_root_source = _eval_artifact_root(self._trial_path_context)
+        explicit_path: Path | None = None
+        if self._question_artifact_dir is not None:
+            fname = f"question_results.{_safe_artifact_name(label, fallback='arm')}.jsonl"
+            explicit_path = Path(self._question_artifact_dir) / fname
+            artifact_root_source = "window_output_dir"
         try:
             pending_writer = _EvalQuestionJsonlWriter(
                 root=artifact_root,
@@ -2660,6 +2687,7 @@ class EvalTower:
                 label=label,
                 requested_n=n,
                 concurrency=workers,
+                path=explicit_path,
             )
             pending_writer.append_start()
             writer = pending_writer
@@ -3100,14 +3128,33 @@ class EvalTower:
         for r in scored_results:
             source = r.confidence_source or "unknown"
             confidence_source_counts[source] = confidence_source_counts.get(source, 0) + 1
-        ece = 0.0
-        auroc = 0.0
+        # EV-CONF provenance (computed once, reused in details below): confidence
+        # is "real" only when EVERY scored row carried the completion-probability
+        # geomean. A binary-correctness proxy or a mixed batch is fail-closed False.
+        confidence_is_real = bool(confidence_source_counts) and set(
+            confidence_source_counts
+        ) <= {"completion_probabilities_geomean"}
+        # EV-11c honesty (2026-07-22): when NO confidence data is present (every row
+        # errored) the calibration metrics are UNDEFINED — emit None, never a 0.0
+        # that masquerades as a real measurement (the EV-11c math re-baseline shipped
+        # ECE=0.0/AUROC=0.0 placeholders that read as calibration numbers). This is a
+        # REPORTING-honesty change only: ece/auroc are not SafetyGate/Pareto inputs
+        # (safetygate-rlvr-provenance-audit F2), so it does NOT touch the ESC-7-reserved
+        # question of whether *real* ECE re-enters gating. Decision-facing real-vs-proxy
+        # gating happens in the per-role report builders (eval_math_rebaseline /
+        # eval_calibration). When confidence rows ARE present the closed-top-bin ECE /
+        # roc_auc computation is unchanged (a present-but-degenerate AUROC keeps 0.0).
+        ece: float | None = None
+        auroc: float | None = None
         cal_violations = 0
         if confidences:
             # EV-11b (operator-decided 2026-07-20): use the canonical closed-top-bin
             # ECE from stat_tests. This is a scoring-semantics change and is
             # era-labeled in details so pre/post EV-11b numbers are not mixed.
             ece = expected_calibration_error(confidences, correctness_vals, n_bins=10) or 0.0
+            # Present-but-degenerate AUROC keeps its pinned 0.0 (data present, just
+            # not rankable); only a fully-absent batch above leaves it None.
+            auroc = 0.0
             # AUC: only meaningful with non-degenerate confidence (>2 distinct values).
             # B1/EV-consolidation (2026-07-17): compute ROC-AUC via the stdlib
             # clean-room roc_auc() in src/llm_primitives/stat_tests.py instead of
@@ -3277,8 +3324,10 @@ class EvalTower:
                 "ece_binning": "closed_top_bin_stat_tests",
                 "ece_instrument_era": "ev11b_closed_bin_2026_07_20",
                 "confidence_source_counts": dict(sorted(confidence_source_counts.items())),
-                "confidence_is_real": bool(confidence_source_counts)
-                and set(confidence_source_counts) <= {"completion_probabilities_geomean"},
+                "confidence_is_real": confidence_is_real,
+                # EV-11c provenance: distinguishes "None because no confidence data"
+                # (calibration_confidence_present=False) from a real computed value.
+                "calibration_confidence_present": bool(confidences),
             },
             mean_tools_used=mean_tools_used,
             tool_use_rate=tool_use_rate,
@@ -4219,12 +4268,30 @@ class EvalTower:
                 labels = [float(r.correct) for r in scored]
                 metrics = compute_calibration_metrics(confidences, labels)
                 correct = sum(1 for r in scored if r.correct)
+                # EV-11c: the six EV-4 calibration metrics are meaningful ONLY over
+                # real (completion-probability geomean) confidence. On a binary/mixed
+                # batch, ECE collapses to a fake ~0.0; emit None + provenance rather
+                # than a placeholder. confidence_is_real is fail-closed (whole-batch).
+                cal_source_counts: dict[str, int] = {}
+                for r in scored:
+                    src = r.confidence_source or "unknown"
+                    cal_source_counts[src] = cal_source_counts.get(src, 0) + 1
+                cal_real = bool(cal_source_counts) and set(
+                    cal_source_counts
+                ) <= {"completion_probabilities_geomean"}
+                reliability = (len(scored) / len(results)) if results else 0.0
                 per_role[role] = {
                     "role": role,
                     "n_questions": len(results),
                     "n_scored": len(scored),
+                    "reliability": reliability,
                     "accuracy": (correct / len(scored)) if scored else None,
-                    **{key: metrics.get(key) for key in CALIBRATION_METRIC_KEYS},
+                    **{
+                        key: (metrics.get(key) if cal_real else None)
+                        for key in CALIBRATION_METRIC_KEYS
+                    },
+                    "confidence_is_real": cal_real,
+                    "confidence_source_counts": dict(cal_source_counts),
                 }
         return {
             "mode": "calibration",
@@ -4316,6 +4383,14 @@ class EvalTower:
                 scored = [r for r in results if not r.error]
                 correct = sum(1 for r in scored if r.correct)
                 arm_label = f"ev11-math-rebaseline::{role}::seed{int(seed)}::{dataset_sha256[:12]}"
+                # EV-11c: ECE/AUROC are decision-grade ONLY when every scored row
+                # carried real (completion-probability geomean) confidence. The math
+                # dispatch requests n_probs via _eval_question, but if the backend
+                # returns no completion_probabilities the batch falls back to the
+                # binary-correctness proxy — which makes ECE trivially ~0 and AUROC
+                # degenerate. On a binary/mixed batch we emit None + provenance rather
+                # than a 0.0 placeholder that masqueraded as a measurement (EV-11c).
+                cal_real = bool(agg.details.get("confidence_is_real"))
                 per_role[role] = {
                     "role": role,
                     "arm": arm_label,
@@ -4325,8 +4400,12 @@ class EvalTower:
                     "accuracy": (correct / len(scored)) if scored else None,
                     "quality": agg.quality,
                     "reliability": agg.reliability,
-                    "ece": agg.ece,
-                    "auroc": agg.auroc,
+                    "ece": agg.ece if cal_real else None,
+                    "auroc": agg.auroc if cal_real else None,
+                    "confidence_is_real": cal_real,
+                    "confidence_source_counts": dict(
+                        agg.details.get("confidence_source_counts") or {}
+                    ),
                     "test_profile": test_profile,
                 }
                 # Per-question correctness vector for the paired screen. Keyed by
@@ -4355,6 +4434,95 @@ class EvalTower:
             # flip pairs + per-arm Wilson CIs, gated on matched dataset+profile.
             # Empty ``pairs`` when fewer than two arms were scored.
             "paired_significance": screen_paired_arms(arm_screens),
+        }
+
+    def eval_question_subset(
+        self,
+        *,
+        suite: str,
+        question_ids: "Sequence[str]",
+        roles: "list[str] | str | None",
+        scoring: str | None = None,
+        seed: int = EVAL_SPEC_SEED,
+        production_sampling: bool = True,
+    ) -> dict[str, Any]:
+        """Rerun a SPECIFIC subset of a suite's questions (by dataset id or stable
+        qid) per role — the targeted-requeue primitive behind
+        ``--retry-errors-from``.
+
+        Unlike ``eval_math_rebaseline`` this imposes NO full-coverage guard: the
+        error set to requeue may legitimately be, e.g., all-GSM8K with zero
+        MATH-500, so the n_math500>0 guard must NOT apply. Matches question dicts
+        against ``id`` / ``qid`` / ``question_id`` so it works regardless of which
+        identity the prior per-arm file recorded. Returns a per_role dict with the
+        same provenance fields as ``eval_math_rebaseline`` (ece/auroc gated on
+        ``confidence_is_real``; None on a binary/mixed batch) PLUS a compact
+        per-question ``rows`` list the merge step reconciles against the prior run.
+        """
+        roles = self._normalize_roles(roles)
+        want = {str(x).strip() for x in question_ids if str(x).strip()}
+        if not want:
+            raise ValueError("eval_question_subset requires a non-empty question_ids set")
+        adapter = self._load_dataset_adapter(suite)
+        all_questions = adapter.extract_all()
+
+        def _identity(q: dict[str, Any]) -> set[str]:
+            return {
+                str(q.get("id", "")).strip(),
+                str(q.get("qid", "")).strip(),
+                str(q.get("stable_qid", "")).strip(),
+                str(q.get("question_id", "")).strip(),
+            } - {""}
+
+        questions = [q for q in all_questions if _identity(q) & want]
+        for q in questions:
+            q.setdefault("suite", suite)
+            if scoring:
+                q["scoring_method"] = str(scoring)
+        if not questions:
+            raise ValueError(
+                "eval_question_subset matched 0 questions for the requested ids "
+                f"(suite={suite!r}, requested={len(want)}) — dataset/id drift or the "
+                "prior run used a different suite"
+            )
+        dataset_sha256 = dataset_content_sha256(questions)
+        per_role: dict[str, Any] = {}
+        with httpx.Client(timeout=self.timeout) as client:
+            for role in roles:
+                role_qs = [self._with_forced_role(q, role) for q in questions]
+                results = self._eval_batch(
+                    role_qs, client, log_every=100, label=f"retry-{role}"
+                )
+                agg = self._aggregate(results, tier=2)
+                scored = [r for r in results if not r.error]
+                correct = sum(1 for r in scored if r.correct)
+                cal_real = bool(agg.details.get("confidence_is_real"))
+                per_role[role] = {
+                    "role": role,
+                    "n_questions": len(results),
+                    "n_scored": len(scored),
+                    "correct": correct,
+                    "accuracy": (correct / len(scored)) if scored else None,
+                    "reliability": agg.reliability,
+                    "ece": agg.ece if cal_real else None,
+                    "auroc": agg.auroc if cal_real else None,
+                    "confidence_is_real": cal_real,
+                    "confidence_source_counts": dict(
+                        agg.details.get("confidence_source_counts") or {}
+                    ),
+                    "rows": [_compact_question_result(r) for r in results],
+                }
+        return {
+            "mode": "question_subset",
+            "suite": suite,
+            "scoring": str(scoring) if scoring else None,
+            "seed": int(seed),
+            "roles": roles,
+            "production_sampling": bool(production_sampling),
+            "n_questions": len(questions),
+            "requested_ids": sorted(want),
+            "dataset_sha256": dataset_sha256,
+            "per_role": per_role,
         }
 
     def evaluate(

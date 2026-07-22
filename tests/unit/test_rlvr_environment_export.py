@@ -101,6 +101,77 @@ def test_export_environment_rows_records_training_blockers() -> None:
     }
 
 
+def test_export_threads_real_confidence_provenance_to_ready_for_training() -> None:
+    # F2 (safetygate-rlvr-provenance-audit): a T1 row carrying REAL completion-
+    # probability confidence (details['confidence_is_real']=True) with finite
+    # ece + discriminating auroc must export ready_for_training=True — the
+    # confidence_not_real blocker must NOT be appended. Before the fix the export
+    # dropped the flag (SimpleNamespace had no details), blocking every row.
+    rows, summary = export_environment_rows(
+        [
+            {
+                "tier": 1,
+                "quality": 2.4,
+                "reliability": 0.95,
+                "eval_details": {
+                    "ece": 0.05,
+                    "auroc": 0.8,
+                    "confidence_is_real": True,
+                    "confidence_source_counts": {"completion_probabilities_geomean": 50},
+                },
+            }
+        ],
+        source_label="unit",
+    )
+
+    assert rows[0]["ready_for_training"] is True
+    assert "confidence_not_real" not in rows[0]["blockers"]
+    assert rows[0]["blockers"] == []
+    assert summary["ready_for_training"] == 1
+
+
+def test_export_confidence_provenance_from_nested_details() -> None:
+    # The flag also rides in the doubly-nested eval_details.details shape — the
+    # exporter must recover it there too (fail-closed only when truly absent).
+    rows, _ = export_environment_rows(
+        [
+            {
+                "eval_result": {
+                    "tier": 1,
+                    "quality": 2.2,
+                    "reliability": 0.9,
+                    "eval_details": {
+                        "details": {
+                            "ece": 0.04,
+                            "auroc": 0.75,
+                            "confidence_is_real": True,
+                        }
+                    },
+                }
+            }
+        ]
+    )
+    assert rows[0]["ready_for_training"] is True
+    assert "confidence_not_real" not in rows[0]["blockers"]
+
+
+def test_export_absent_confidence_provenance_stays_fail_closed() -> None:
+    # No stamp ⇒ NOT real (fail-closed): the row keeps the confidence_not_real
+    # blocker even with otherwise-good metrics.
+    rows, _ = export_environment_rows(
+        [
+            {
+                "tier": 1,
+                "quality": 2.4,
+                "reliability": 0.95,
+                "eval_details": {"ece": 0.05, "auroc": 0.8},
+            }
+        ]
+    )
+    assert rows[0]["ready_for_training"] is False
+    assert "confidence_not_real" in rows[0]["blockers"]
+
+
 def test_cli_writes_jsonl_and_summary(tmp_path: Path) -> None:
     source = tmp_path / "eval.json"
     output = tmp_path / "rlvr.jsonl"

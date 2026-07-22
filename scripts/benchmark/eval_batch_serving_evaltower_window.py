@@ -40,7 +40,11 @@ for path in (SCRIPT_DIR, AUTOPILOT_DIR):
         sys.path.insert(0, path_s)
 
 import eval_batch_serving_activation_window as activation_window  # noqa: E402
-from eval_tower import EvalTower, _eval_concurrency  # noqa: E402
+from eval_tower import (  # noqa: E402
+    EvalTower,
+    _eval_concurrency,
+    compute_calibration_metrics as _compute_calibration_metrics,
+)
 
 
 def utc_stamp() -> str:
@@ -223,6 +227,54 @@ def _verifier_result_blocker(result: dict[str, Any] | None, *, expected_n: int |
             "non-error questions"
         )
     return None
+
+
+# EV-11c incident (2026-07-22): a verifier-mode run stamped decision_grade:true
+# despite a worker_math arm at reliability 0.708 (< this floor) whose calibration
+# was a placeholder (ECE/AUROC 0.0 with no real confidence). Decision-grade
+# evidence must clear a reliability floor AND carry real confidence provenance.
+DECISION_GRADE_RELIABILITY_FLOOR = 0.8
+
+
+def _decision_grade_quality_reasons(
+    result: dict[str, Any] | None,
+    *,
+    reliability_floor: float = DECISION_GRADE_RELIABILITY_FLOOR,
+) -> list[str]:
+    """Reasons a *completed* verifier-mode result is NOT decision-grade.
+
+    Demotes decision_grade on POSITIVE evidence of a quality failure in any arm:
+      * an arm whose reliability is present and below ``reliability_floor``; or
+      * an arm whose confidence provenance is present and explicitly not-real
+        (fake / placeholder calibration).
+    Absent fields (legacy or mock rows that never stamped the metric) are lenient
+    — the check fires only on present-and-bad evidence, so it never fabricates a
+    demotion from missing metadata.
+    """
+    reasons: list[str] = []
+    if not isinstance(result, dict):
+        return reasons
+    per_role = result.get("per_role")
+    if not isinstance(per_role, dict):
+        return reasons
+    for role, arm in sorted(per_role.items()):
+        if not isinstance(arm, dict):
+            continue
+        reliability = arm.get("reliability")
+        if isinstance(reliability, (int, float)) and not isinstance(reliability, bool):
+            if float(reliability) < reliability_floor:
+                reasons.append(
+                    f"arm {role} reliability {float(reliability):.3f} < "
+                    f"{reliability_floor} decision-grade floor"
+                )
+        # Fake/placeholder calibration: the arm carries a confidence_is_real stamp
+        # AND it is falsy. Absent stamp ⇒ no claim (lenient).
+        if "confidence_is_real" in arm and not arm.get("confidence_is_real"):
+            reasons.append(
+                f"arm {role} calibration is not decision-grade "
+                f"(confidence_is_real={arm.get('confidence_is_real')!r})"
+            )
+    return reasons
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -866,6 +918,12 @@ def build_verifier_report(
                     timeout=args.evaltower_timeout_s,
                     on_progress=progress_cb,
                 )
+                # EV-11c: durably persist per-arm question rows into this run's
+                # output-dir so a burned arm's error rows are identifiable and can be
+                # requeued with --retry-errors-from (vs a full multi-hour arm rerun).
+                # Best-effort (matches _eval_batch's fail-soft sidecar contract).
+                if hasattr(tower, "set_question_artifact_dir"):
+                    tower.set_question_artifact_dir(output_dir)
                 if mode == "calibration":
                     if not args.suite:
                         raise ValueError("--mode calibration requires --suite")
@@ -906,12 +964,18 @@ def build_verifier_report(
                 status = "eval_failed"
                 rc = 75
 
+    # EV-11c: below-floor reliability or fake/placeholder calibration in any arm
+    # demotes decision_grade even on an otherwise clean run, with reasons recorded.
+    decision_grade_reasons = (
+        _decision_grade_quality_reasons(result) if result is not None else []
+    )
     decision_grade = bool(
         args.apply
         and args.confirm_clean_window
         and not args.allow_autopilot_active
         and not blockers
         and result is not None
+        and not decision_grade_reasons
     )
     report = {
         "schema_version": VERIFIER_REPORT_SCHEMA_VERSION,
@@ -919,6 +983,7 @@ def build_verifier_report(
         "mode": mode,
         "status": status,
         "decision_grade": decision_grade,
+        "decision_grade_reasons": decision_grade_reasons,
         "applied": bool(args.apply),
         "confirm_clean_window": bool(args.confirm_clean_window),
         "allow_autopilot_active": bool(args.allow_autopilot_active),
@@ -945,6 +1010,8 @@ def build_verifier_report(
             "requires --apply --confirm-clean-window",
             "requires AutoPilot inactive unless --allow-autopilot-active",
             "verifier-model pass (EV-5/7/8) is MODEL-DOWNLOAD gated",
+            f"requires every arm reliability >= {DECISION_GRADE_RELIABILITY_FLOOR} "
+            "and real confidence provenance (see decision_grade_reasons)",
         ],
     }
     return report, rc
@@ -974,6 +1041,9 @@ def _write_verifier_markdown(path: Path, report: dict[str, Any]) -> None:
     if report.get("blockers"):
         lines.extend(["", "## Blockers", ""])
         lines.extend(f"- {blocker}" for blocker in report["blockers"])
+    if report.get("decision_grade_reasons"):
+        lines.extend(["", "## Decision-Grade Demotions", ""])
+        lines.extend(f"- {reason}" for reason in report["decision_grade_reasons"])
     result = report.get("result")
     if isinstance(result, dict):
         lines.extend(
@@ -991,6 +1061,367 @@ def write_verifier_report(report: dict[str, Any], output_dir: Path) -> tuple[Pat
     report.setdefault("schema_version", VERIFIER_REPORT_SCHEMA_VERSION)
     _atomic_write_json(json_path, report)
     _write_verifier_markdown(md_path, report)
+    return json_path, md_path
+
+
+# ── error-requeue (EV-11c) ───────────────────────────────────────────────────
+# --retry-errors-from <dir> reads a prior run's per-arm question_results.<arm>.jsonl
+# sidecars, reruns ONLY the error rows for the requested role(s), and emits a MERGED
+# summary (prior scored rows + retried rows) so a burned arm becomes a ~subset
+# requeue instead of a full multi-hour rerun. Same --apply/--confirm-clean-window
+# gating as verifier-mode; decision_grade applies to the MERGED pool.
+
+RETRY_REPORT_SCHEMA_VERSION = "eval_batch_serving_evaltower.retry.v1"
+_ARM_LABEL_PREFIXES = ("ev11-", "cal-", "retry-")
+
+
+def _role_from_arm_label(label: str) -> str:
+    for prefix in _ARM_LABEL_PREFIXES:
+        if label.startswith(prefix):
+            return label[len(prefix):]
+    return label
+
+
+def _row_identity(row: dict[str, Any]) -> str:
+    return str(row.get("question_id") or row.get("qid") or "").strip()
+
+
+def load_arm_question_rows(directory: Path) -> dict[str, dict[str, Any]]:
+    """Read a prior run's ``question_results.<arm>.jsonl`` sidecars.
+
+    Returns ``{arm_label: {role, suite, scoring, complete, rows, path}}`` where
+    ``rows`` is the ordered list of compact per-question result dicts. Malformed
+    JSON lines are skipped (the writer is append-only + fsync'd, but a crash can
+    leave a torn final line).
+    """
+    out: dict[str, dict[str, Any]] = {}
+    for path in sorted(Path(directory).glob("question_results.*.jsonl")):
+        rows: list[dict[str, Any]] = []
+        label: str | None = None
+        complete = False
+        suite: str | None = None
+        scoring: str | None = None
+        with path.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(row, dict):
+                    continue
+                rtype = row.get("row_type")
+                if rtype == "batch_start":
+                    label = row.get("label") or label
+                elif rtype == "batch_complete":
+                    complete = True
+                elif rtype == "question_result":
+                    label = row.get("label") or label
+                    result = row.get("result")
+                    if isinstance(result, dict):
+                        rows.append(result)
+                        suite = suite or result.get("suite")
+                        scoring = scoring or result.get("scoring_method")
+        if label is None:
+            # question_results.<label>.jsonl → <label>
+            label = path.name[len("question_results."):-len(".jsonl")]
+        out[label] = {
+            "role": _role_from_arm_label(label),
+            "suite": suite,
+            "scoring": scoring,
+            "complete": complete,
+            "rows": rows,
+            "path": str(path),
+        }
+    return out
+
+
+def _error_identities(rows: Sequence[dict[str, Any]]) -> list[str]:
+    seen: dict[str, None] = {}
+    for row in rows:
+        if row.get("error"):
+            ident = _row_identity(row)
+            if ident:
+                seen.setdefault(ident, None)
+    return list(seen)
+
+
+def _row_confidence_source(row: dict[str, Any]) -> str:
+    # _compact_question_result only persists confidence/confidence_source when the
+    # source is NOT the binary proxy, so an absent source means binary proxy.
+    return str(row.get("confidence_source") or "binary_correctness_proxy")
+
+
+def merge_prior_and_retried(
+    prior_rows: Sequence[dict[str, Any]],
+    retried_rows: Sequence[dict[str, Any]],
+    *,
+    role: str,
+) -> dict[str, Any]:
+    """Reconcile a prior arm's rows with the retried error rows into one pool.
+
+    Prior NON-error rows are kept verbatim; prior error rows are REPLACED by their
+    retried outcome (by question identity). Calibration is recomputed over the
+    merged pool ONLY when every scored row carries real (geomean) confidence — else
+    None + provenance (fail-closed), never a placeholder.
+    """
+    merged: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for row in prior_rows:
+        ident = _row_identity(row)
+        if not ident:
+            continue
+        if ident not in merged:
+            order.append(ident)
+        merged[ident] = row
+    retried_idents: set[str] = set()
+    for row in retried_rows:
+        ident = _row_identity(row)
+        if not ident:
+            continue
+        if ident not in merged:
+            order.append(ident)
+        merged[ident] = row
+        retried_idents.add(ident)
+
+    pool = [merged[i] for i in order]
+    scored = [r for r in pool if not r.get("error")]
+    errored = [r for r in pool if r.get("error")]
+    correct = sum(1 for r in scored if r.get("correct"))
+    source_counts: dict[str, int] = {}
+    for r in scored:
+        src = _row_confidence_source(r)
+        source_counts[src] = source_counts.get(src, 0) + 1
+    cal_real = bool(source_counts) and set(source_counts) <= {
+        "completion_probabilities_geomean"
+    }
+    ece: float | None = None
+    auroc: float | None = None
+    if cal_real and scored:
+        confidences = [float(r.get("confidence", 0.0)) for r in scored]
+        labels = [float(bool(r.get("correct"))) for r in scored]
+        cal = _compute_calibration_metrics(confidences, labels)
+        ece = cal.get("ece")
+        auroc = cal.get("auroc")
+    retry_errors_remaining = sum(
+        1 for r in errored if _row_identity(r) in retried_idents
+    )
+    return {
+        "role": role,
+        "n_questions": len(pool),
+        "n_scored": len(scored),
+        "correct": correct,
+        "accuracy": (correct / len(scored)) if scored else None,
+        "reliability": (len(scored) / len(pool)) if pool else 0.0,
+        "ece": ece,
+        "auroc": auroc,
+        "confidence_is_real": cal_real,
+        "confidence_source_counts": dict(sorted(source_counts.items())),
+        "retried_n": len(retried_idents),
+        "retry_errors_remaining": retry_errors_remaining,
+        "prior_scored_n": len(prior_rows) - len(_error_identities(prior_rows)),
+        "merged": True,
+    }
+
+
+def build_retry_report(
+    args: argparse.Namespace, *, output_dir: Path
+) -> tuple[dict[str, Any], int]:
+    """Plan (default) or run a targeted error requeue from a prior run's sidecars.
+
+    Plan-only unless ``--apply --confirm-clean-window`` (AutoPilot inactive unless
+    overridden) — identical live-execution gating to verifier-mode. Reads the prior
+    per-arm files, reruns error rows per requested role, and writes a merged summary.
+    """
+    source_dir = Path(args.retry_errors_from)
+    roles_filter = [p.strip() for p in (args.roles or "").split(",") if p.strip()]
+    preflight = activation_window.build_preflight(_activation_args(args))
+    autopilot_active = bool(preflight.get("autopilot_active"))
+
+    blockers: list[str] = []
+    status = "plan_only"
+    rc = 0
+    resolved_eval_concurrency: int | None = None
+    live_stack_contract: dict[str, Any] | None = None
+    min_eval_concurrency = _effective_min_eval_concurrency(args)
+    merged_per_role: dict[str, Any] = {}
+    retry_plan: dict[str, Any] = {}
+
+    if not source_dir.exists():
+        blockers.append(f"--retry-errors-from source dir not found: {source_dir}")
+        arms = {}
+    else:
+        arms = load_arm_question_rows(source_dir)
+        if not arms:
+            blockers.append(
+                f"no question_results.<arm>.jsonl sidecars under {source_dir} "
+                "(prior run predates per-arm persistence, or wrong dir)"
+            )
+
+    # Build the plan: which role(s) have how many error rows to requeue.
+    for label, arm in arms.items():
+        role = arm["role"]
+        if roles_filter and role not in roles_filter:
+            continue
+        error_ids = _error_identities(arm["rows"])
+        retry_plan[role] = {
+            "arm_label": label,
+            "suite": arm.get("suite"),
+            "scoring": arm.get("scoring"),
+            "prior_rows": len(arm["rows"]),
+            "error_rows": len(error_ids),
+            "complete": arm.get("complete"),
+        }
+    if arms and not retry_plan:
+        blockers.append(
+            "no arms matched the requested --roles for retry "
+            f"(available: {sorted({a['role'] for a in arms.values()})})"
+        )
+
+    if not args.apply:
+        status = "plan_only"
+    else:
+        resolved_eval_concurrency = _resolved_eval_concurrency(roles_filter or None)
+        live_stack_contract = _optimized_live_stack_status()
+        if _missing_concurrency_guard(args):
+            blockers.append(
+                "--apply requires explicit --min-eval-concurrency N or --allow-serial; "
+                "refusing to silently serialize an eval-fanout run"
+            )
+        if not args.confirm_clean_window:
+            blockers.append("retry-mode execution requires --confirm-clean-window")
+        if autopilot_active and not args.allow_autopilot_active:
+            blockers.append(
+                "AutoPilot appears active; pass --allow-autopilot-active to override"
+            )
+        if not live_stack_contract.get("ok", False):
+            warning_count = len(live_stack_contract.get("warnings") or [])
+            blockers.append(
+                f"live stack launch contract has {warning_count} warning(s); "
+                "refusing to measure a drifted/non-optimized v7 stack"
+            )
+        if (
+            min_eval_concurrency > 1
+            and resolved_eval_concurrency < min_eval_concurrency
+        ):
+            blockers.append(
+                f"resolved EvalTower concurrency {resolved_eval_concurrency} is below "
+                f"--min-eval-concurrency {min_eval_concurrency}"
+            )
+        if blockers:
+            status = "blocked"
+            rc = _bool_blocker_rc(blockers)
+        else:
+            try:
+                tower = EvalTower(
+                    url=args.api_url.rstrip("/"),
+                    timeout=args.evaltower_timeout_s,
+                )
+                tower.set_question_artifact_dir(output_dir)
+                any_retried = False
+                for role, plan in retry_plan.items():
+                    error_ids = _error_identities(arms[plan["arm_label"]]["rows"])
+                    if not error_ids:
+                        merged_per_role[role] = merge_prior_and_retried(
+                            arms[plan["arm_label"]]["rows"], [], role=role
+                        )
+                        continue
+                    any_retried = True
+                    subset = tower.eval_question_subset(
+                        suite=plan.get("suite") or "math",
+                        question_ids=error_ids,
+                        roles=[role],
+                        scoring=plan.get("scoring"),
+                        seed=args.seed,
+                        production_sampling=True,
+                    )
+                    retried_rows = (
+                        (subset.get("per_role") or {}).get(role, {}).get("rows") or []
+                    )
+                    merged_per_role[role] = merge_prior_and_retried(
+                        arms[plan["arm_label"]]["rows"], retried_rows, role=role
+                    )
+                status = "complete" if any_retried else "nothing_to_retry"
+            except _RunInterrupted as exc:
+                blockers.append(f"retry-mode eval interrupted by {exc}")
+                status = "interrupted"
+                rc = 130
+            except Exception as exc:  # noqa: BLE001 - report artifact captures failures
+                blockers.append(f"retry-mode eval failed: {exc}")
+                status = "eval_failed"
+                rc = 75
+
+    merged_result = {"per_role": merged_per_role} if merged_per_role else None
+    decision_grade_reasons = (
+        _decision_grade_quality_reasons(merged_result) if merged_result else []
+    )
+    decision_grade = bool(
+        args.apply
+        and args.confirm_clean_window
+        and not args.allow_autopilot_active
+        and not blockers
+        and merged_result is not None
+        and not decision_grade_reasons
+    )
+    retried_n = sum(int(v.get("retried_n", 0)) for v in merged_per_role.values())
+    report = {
+        "schema_version": RETRY_REPORT_SCHEMA_VERSION,
+        "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        "mode": "retry_errors",
+        "status": status,
+        "decision_grade": decision_grade,
+        "decision_grade_reasons": decision_grade_reasons,
+        "applied": bool(args.apply),
+        "merged": True,
+        "retry_source_run": str(source_dir),
+        "retried_n": retried_n,
+        "roles": roles_filter,
+        "seed": args.seed,
+        "api_url": args.api_url.rstrip("/"),
+        "min_eval_concurrency": int(min_eval_concurrency),
+        "resolved_eval_concurrency": resolved_eval_concurrency,
+        "live_stack_contract": live_stack_contract,
+        "retry_plan": retry_plan,
+        "blockers": blockers,
+        "preflight": {"autopilot_active": autopilot_active},
+        "per_role": merged_per_role,
+        "decision_grade_notes": [
+            "requires --apply --confirm-clean-window",
+            "requires AutoPilot inactive unless --allow-autopilot-active",
+            "decision_grade applies to the MERGED (prior scored + retried) pool",
+            f"requires every merged arm reliability >= {DECISION_GRADE_RELIABILITY_FLOOR} "
+            "and real confidence provenance",
+        ],
+    }
+    return report, rc
+
+
+def write_retry_report(report: dict[str, Any], output_dir: Path) -> tuple[Path, Path]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    json_path = output_dir / "summary.json"
+    md_path = output_dir / "summary.md"
+    report.setdefault("schema_version", RETRY_REPORT_SCHEMA_VERSION)
+    _atomic_write_json(json_path, report)
+    lines = [
+        "# Eval-Batch Serving Error-Requeue (Merged)",
+        "",
+        f"- status: `{report['status']}`",
+        f"- decision_grade: `{report['decision_grade']}`",
+        f"- retry_source_run: `{report['retry_source_run']}`",
+        f"- retried_n: `{report['retried_n']}`  merged: `{report['merged']}`",
+    ]
+    if report.get("blockers"):
+        lines.extend(["", "## Blockers", ""])
+        lines.extend(f"- {b}" for b in report["blockers"])
+    if report.get("decision_grade_reasons"):
+        lines.extend(["", "## Decision-Grade Demotions", ""])
+        lines.extend(f"- {r}" for r in report["decision_grade_reasons"])
+    lines.extend(["", "## Merged Per-Role", ""])
+    for role, payload in (report.get("per_role") or {}).items():
+        lines.append(f"- `{role}`: `{json.dumps(payload, sort_keys=True)}`")
+    _atomic_write_text(md_path, "\n".join(lines) + "\n")
     return json_path, md_path
 
 
@@ -1054,6 +1485,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "MODE exists but the verifier-model pass is MODEL-DOWNLOAD gated.",
     )
     parser.add_argument(
+        "--retry-errors-from",
+        type=Path,
+        default=None,
+        help="EV-11c error requeue: read a prior run's per-arm "
+        "question_results.<arm>.jsonl sidecars, rerun ONLY the error rows for the "
+        "requested --roles, and emit a MERGED summary (prior scored + retried). "
+        "Same --apply/--confirm-clean-window gating; overrides --mode.",
+    )
+    parser.add_argument(
         "--min-eval-concurrency",
         type=int,
         default=None,
@@ -1083,7 +1523,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     output_dir = args.output_dir or default_output_dir()
-    if args.mode != "tier":
+    if args.retry_errors_from is not None:
+        report, rc = build_retry_report(args, output_dir=output_dir)
+        json_path, md_path = write_retry_report(report, output_dir)
+    elif args.mode != "tier":
         report, rc = build_verifier_report(args, output_dir=output_dir)
         json_path, md_path = write_verifier_report(report, output_dir)
     else:
