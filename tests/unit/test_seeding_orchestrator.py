@@ -220,6 +220,41 @@ def test_call_orchestrator_forced_normalizes_tool_data_and_handles_errors():
     assert "network down" in err["error"]
 
 
+def test_surface_inband_error_sets_error_and_preserves_structured():
+    # HTTP-200 in-band banner with error=None -> surfaced into data["error"].
+    banner = "[ERROR: Backend unavailable (circuit open): http://localhost:8082]"
+    data = {"answer": banner}
+    _MOD._surface_inband_error(data)
+    assert data["error"] == banner
+    assert data["failure_reason"] == "inband_error"
+    # answer left untouched (still re-scorable offline)
+    assert data["answer"] == banner
+
+    # An already-present structured error wins (idempotent, no clobber).
+    data2 = {"answer": banner, "error": "HTTP 502"}
+    _MOD._surface_inband_error(data2)
+    assert data2["error"] == "HTTP 502"
+    assert "failure_reason" not in data2
+
+    # A normal answer is untouched.
+    data3 = {"answer": "The final answer is 42."}
+    _MOD._surface_inband_error(data3)
+    assert data3.get("error") is None
+
+
+def test_call_orchestrator_forced_surfaces_inband_error_answer():
+    # 2026-07-21 EV-11c: circuit breaker returns an HTTP-200 body whose answer
+    # IS an error banner with error=None. Without surfacing, seeding scores it
+    # as a WRONG answer (0.0 MemRL reward). Assert it is surfaced to error.
+    client = Mock()
+    banner = "[ERROR: Backend unavailable (circuit open): http://localhost:8082]"
+    client.post.return_value = _Resp(200, {"answer": banner})
+    data = _MOD.call_orchestrator_forced(prompt="q", force_role="worker_math", client=client)
+    assert data["answer"] == banner
+    assert data["error"] == banner
+    assert data["failure_reason"] == "inband_error"
+
+
 def test_call_orchestrator_forced_preserves_structured_http_error_body():
     client = Mock()
     client.post.return_value = _Resp(

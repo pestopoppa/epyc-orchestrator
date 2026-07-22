@@ -6,7 +6,7 @@ Pure functions — no network I/O or mutable state.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from seeding_types import DEFAULT_TIMEOUT
 
@@ -15,8 +15,11 @@ __all__ = [
     "_adaptive_timeout_s",
     "_bump_timeout_from_observed",
     "_classify_error",
+    "_forced_role_serving_mismatch",
+    "_inband_error_text",
     "_is_coding_task",
     "score_answer_deterministic",
+    "score_answer_or_error",
 ]
 
 
@@ -69,7 +72,110 @@ def score_answer_deterministic(
     return score_answer(answer, expected, scoring_method, scoring_config or {})
 
 
+def score_answer_or_error(
+    answer: str,
+    expected: str,
+    scoring_method: str = "exact_match",
+    scoring_config: dict[str, Any] | None = None,
+) -> tuple[bool | None, str | None]:
+    """Score, converting scorer-unavailability into an EXCLUDED row.
+
+    The B7-hardened orchestrator scorer *raises* when it cannot produce a
+    trustworthy verdict rather than silently mis-scoring:
+    ``ScoringUnavailableError`` for entry_point-without-oracle, math_verify
+    unavailable / bad gold, or an unreachable llm_judge (SCORE-04/05); and
+    ``ValueError`` for an unknown scoring method or verifier (SCORE-25).
+
+    The seeding call sites historically invoked ``score_answer_deterministic``
+    with no ``try/except`` (seeding_eval.py ``_build_role_result``): a raise
+    therefore CRASHED the entire seed run on the main 3-way path and was
+    silently swallowed — the question vanishing with no row and no tally — on
+    the debugger-retry path. Mirror the eval tower's per-question guard
+    (eval_tower.py:2575-2591 → excluded from the denominator at :2991) by
+    returning ``(None, reason)`` so the caller can stamp an EXCLUDED
+    infrastructure row instead of crashing or dropping. A normal verdict
+    returns ``(bool, None)``.
+    """
+    scorer = _load_orchestrator_debug_scorer()
+    # ScoringUnavailableError lives in the dynamically-loaded scorer module.
+    # Fall back to an empty tuple (a never-matching except target) if a future
+    # scorer build lacks it, so this wrapper never raises on the guard itself.
+    scoring_unavailable = getattr(scorer, "ScoringUnavailableError", ())
+    try:
+        return bool(
+            score_answer_deterministic(answer, expected, scoring_method, scoring_config or {})
+        ), None
+    except scoring_unavailable as exc:  # type: ignore[misc]
+        return None, f"scoring_unavailable: {exc}"
+    except ValueError as exc:
+        return None, f"scoring_error: {exc}"
+
+
 # ── Error classification ─────────────────────────────────────────────
+
+
+# REL-1 in-band error prefix (2026-07-21 EV-11c circuit-open incident).
+# The orchestrator's llm primitives emit failures AS the answer string of the
+# form ``[ERROR: <detail>]`` (src/llm_primitives/primitives.py::_call →
+# ``return f"[ERROR: {e}]"``; the circuit-open detail is
+# ``Backend unavailable (circuit open): <url>``). When the breaker opens and
+# the /chat body is NOT run through server-side ``_annotate_error``, the client
+# receives answer="[ERROR: Backend unavailable (circuit open): ...]" with
+# error=None. Anchor to this REAL start-of-answer prefix, never a loose
+# substring. Mirrors eval_tower.py::_inband_error_text (kept as a local copy;
+# eval_tower is owned by another session — see report note on unification).
+_INBAND_ERROR_PREFIX = "[ERROR:"
+
+
+def _inband_error_text(answer: Any) -> str | None:
+    """Return the in-band orchestrator error string when ``answer`` IS one.
+
+    Anchored to the emitted ``[ERROR: ...]`` prefix at start-of-answer (after
+    stripping leading whitespace), matching the primitives/inference emitters
+    and the server-side ``_annotate_error`` convention. Returns ``None`` for a
+    normal answer.
+    """
+    if not isinstance(answer, str):
+        return None
+    stripped = answer.lstrip()
+    if stripped.startswith(_INBAND_ERROR_PREFIX):
+        return stripped
+    return None
+
+
+def _forced_role_serving_mismatch(
+    force_role: Any, resp: Mapping[str, Any]
+) -> str | None:
+    """Return the serving role when it differs from the forced role, else None.
+
+    REL-1 Guard 2: when a seed config pins ``force_role`` for a role-attributed
+    measurement *with delegation disabled* and the orchestrator silently serves
+    it from a DIFFERENT role (the 2026-07-21 circuit_open fallback
+    ``worker_math → worker_general``), the number is not a measurement of the
+    forced role. Compare ``force_role`` against the response's ``routed_to``
+    (the primary role that handled the request), falling back to the terminal
+    ``role_history`` entry when ``routed_to`` is absent. Returns ``None`` when
+    ``force_role`` is empty or the serving role cannot be determined — avoiding
+    false positives on partial/legacy responses.
+
+    NOTE: callers MUST gate this on ``allow_delegation is False``. On the
+    seeding path the ARCHITECT config runs with delegation ENABLED, where
+    ``routed_to != force_role`` is the expected, correct behavior (the architect
+    delegates to workers); applying this guard there would wrongly exclude every
+    delegated result. Mirrors eval_tower.py::_forced_role_serving_mismatch
+    (local copy — see report note on unification).
+    """
+    forced = str(force_role or "").strip()
+    if not forced:
+        return None
+    serving = str(resp.get("routed_to") or "").strip()
+    if not serving:
+        history = resp.get("role_history")
+        if isinstance(history, (list, tuple)) and history:
+            serving = str(history[-1] or "").strip()
+    if not serving or serving == forced:
+        return None
+    return serving
 
 
 INFRA_PATTERNS = [
@@ -94,6 +200,15 @@ def _classify_error(error_str: str | None) -> str:
     """Classify error as infrastructure or task failure."""
     if error_str is None:
         return "none"
+    # REL-1: an in-band "[ERROR: ...]" banner surfaced into the error field is
+    # a backend/serving failure — the model never produced a real attempt at
+    # the task. Classify it as INFRASTRUCTURE (excluded from scoring and from
+    # MemRL reward emission), never as a task_failure (which would inject a
+    # 0.0 reward and poison the learned router). This anchors the same way the
+    # eval tower's Guard 1 does, so a generic in-band error (not matching an
+    # INFRA_PATTERNS substring) is still excluded rather than scored WRONG.
+    if error_str.lstrip().startswith(_INBAND_ERROR_PREFIX):
+        return "infrastructure"
     error_lower = error_str.lower()
     if any(p in error_lower for p in INFRA_PATTERNS):
         return "infrastructure"
