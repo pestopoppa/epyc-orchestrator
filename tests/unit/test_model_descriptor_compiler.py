@@ -10,6 +10,7 @@ import yaml
 from src.registry.model_descriptors import (
     DescriptorCompileError,
     _canonical_model_id,
+    _first_model_native_context_value,
     compile_model_descriptors,
     write_model_descriptors,
 )
@@ -654,3 +655,132 @@ def test_compile_preserves_benchmark_only_server_model_role(tmp_path: Path) -> N
         "Missing quality suite_vector evidence",
         "Missing structured ctx_max",
     ]
+
+
+def test_first_model_native_context_value_prefers_native_keys() -> None:
+    # GGUF-header / registry native keys resolve, coerced to a positive int.
+    assert (
+        _first_model_native_context_value({"model": {"n_ctx_train": 262144}}, None, [])
+        == 262144
+    )
+    assert (
+        _first_model_native_context_value(
+            {"model": {"context_length": "131072"}}, None, []
+        )
+        == 131072
+    )
+    assert (
+        _first_model_native_context_value(
+            {}, None, [{"model": {"max_position_embeddings": 40960}}]
+        )
+        == 40960
+    )
+    # An effective-only ctx_max is NOT model-native evidence.
+    assert (
+        _first_model_native_context_value({"model": {"ctx_max": 8192}}, None, []) is None
+    )
+    # No native evidence at all -> None (a structured gap consumers can see).
+    assert _first_model_native_context_value({}, None, []) is None
+    # Non-numeric native value coerces to None rather than leaking a bad type.
+    assert (
+        _first_model_native_context_value({"model": {"n_ctx_train": "big"}}, None, [])
+        is None
+    )
+
+
+def test_compile_projects_model_native_ctx_model_max_distinct_from_ctx_max(
+    tmp_path: Path,
+) -> None:
+    lean_path = _write_yaml(
+        tmp_path / "lean.yaml",
+        {
+            "server_mode": {
+                "frontdoor": {
+                    "port": 8070,
+                    "model": "Qwen_Qwen3.6-35B-A3B-Q8_0.gguf",
+                    "model_role": "frontdoor",
+                    "throughput": 24.3,
+                }
+            },
+            "roles": {
+                "frontdoor": {
+                    "model": {
+                        "name": "Qwen3.6-35B-A3B-Q8_0",
+                        "quant": "Q8_0",
+                        "architecture": "qwen35moe",
+                        "size_gb": 37,
+                        "ctx_max": 16384,
+                    }
+                }
+            },
+        },
+    )
+    research_path = _write_yaml(
+        tmp_path / "research.yaml",
+        {
+            "roles": {
+                "qwen36_q8_0": {
+                    "model": {
+                        "name": "Qwen3.6-35B-A3B",
+                        "path": "/mnt/raid0/llm/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf",
+                        "quant": "Q8_0",
+                        # Model-native (GGUF-header) context, distinct from the
+                        # smaller configured/effective ctx_max above.
+                        "n_ctx_train": 262144,
+                    }
+                }
+            }
+        },
+    )
+
+    compiled = compile_model_descriptors(
+        lean_registry_path=lean_path,
+        research_registry_path=research_path,
+        active_roles={"frontdoor"},
+        allow_incomplete=True,
+    )
+
+    model = compiled["models"][0]
+    assert model["ctx_max"] == 16384
+    assert model["ctx_model_max"] == 262144
+
+
+def test_compile_records_null_ctx_model_max_when_no_native_evidence(
+    tmp_path: Path,
+) -> None:
+    lean_path = _write_yaml(
+        tmp_path / "lean.yaml",
+        {
+            "server_mode": {
+                "frontdoor": {
+                    "port": 8070,
+                    "model": "Qwen_Qwen3.6-35B-A3B-Q8_0.gguf",
+                    "model_role": "frontdoor",
+                    "throughput": 24.3,
+                }
+            },
+            "roles": {
+                "frontdoor": {
+                    "model": {
+                        "name": "Qwen3.6-35B-A3B-Q8_0",
+                        "quant": "Q8_0",
+                        "architecture": "qwen35moe",
+                        "size_gb": 37,
+                        "ctx_max": 16384,
+                    }
+                }
+            },
+        },
+    )
+
+    compiled = compile_model_descriptors(
+        lean_registry_path=lean_path,
+        research_registry_path=None,
+        active_roles={"frontdoor"},
+        allow_incomplete=True,
+    )
+
+    model = compiled["models"][0]
+    # The field is present in the contract even with no native evidence.
+    assert "ctx_model_max" in model
+    assert model["ctx_model_max"] is None

@@ -26,11 +26,13 @@ read-only and never mutates them or the on-disk index. It performs no inference
 beyond the CPU ColBERT *query* encoder that ``kb_rag.query`` already uses.
 
 Environment notes handled gracefully:
-  * ``onnxruntime`` may be missing from the active venv — set
-    ``FEDERATION_ORT_SITE_PACKAGES`` (``:``-separated) or rely on the built-in
-    fallback path to make the CPU encoder importable. If it still can't load,
-    ``symbol_to_kb`` degrades to a well-formed report with a reason instead of
-    fabricating hits.
+  * ``onnxruntime`` may be missing from the active venv. The encoder deps are
+    discovered in three tiers (see ``ensure_encoder_importable``): a normal
+    import first; then any dirs in ``FEDERATION_ORT_SITE_PACKAGES``
+    (``:``-separated); then a bounded, last-resort search of *discovered*
+    interpreter / sibling-venv site-packages — no absolute path is hardcoded as
+    the mechanism. If it still can't load, ``symbol_to_kb`` degrades to a
+    well-formed report with a reason instead of fabricating hits.
   * A given repo's GitNexus index may be unreadable (e.g. a corrupt LadybugDB
     WAL that segfaults the CLI). Per-repo failures are caught, recorded in
     ``notes``, and the other repos are still queried.
@@ -70,16 +72,9 @@ _GITNEXUS_CWD = os.environ.get("FEDERATION_GITNEXUS_CWD", "/mnt/raid0/llm/epyc-r
 _GITNEXUS_BIN = os.environ.get("FEDERATION_GITNEXUS_BIN", "gitnexus")
 _GITNEXUS_TIMEOUT = float(os.environ.get("FEDERATION_GITNEXUS_TIMEOUT", "90"))
 
-# Fallback site-packages dirs that may contain a working onnxruntime when the
-# active venv lacks it (the CPU ColBERT encoder needs it). Overridable.
-_ORT_FALLBACK_SITE_PACKAGES = [
-    p
-    for p in (
-        os.environ.get("FEDERATION_ORT_SITE_PACKAGES", "").split(os.pathsep)
-        + ["/mnt/raid0/llm/venv/lib/python3.12/site-packages"]
-    )
-    if p
-]
+# onnxruntime (needed by the CPU ColBERT encoder) may be absent from the active
+# venv. It is located lazily in ``ensure_encoder_importable`` — no site-packages
+# path is hardcoded here; discovery is env-driven then filesystem-derived.
 
 # Make ``src...`` imports resolve when this module is run as a loose script.
 _ORCH_ROOT = Path(__file__).resolve().parents[2]
@@ -94,26 +89,94 @@ from src.retrieval import colbert_encoder, kb_rag  # noqa: E402
 # Encoder dependency bootstrap (onnxruntime may be missing from the venv)
 # --------------------------------------------------------------------------- #
 
+def _ort_fallback_site_packages() -> list[str]:
+    """Tier-2 fallback: operator-provided ``FEDERATION_ORT_SITE_PACKAGES`` dirs."""
+    raw = os.environ.get("FEDERATION_ORT_SITE_PACKAGES", "")
+    return [p for p in raw.split(os.pathsep) if p]
+
+
+def _discover_ort_site_packages() -> list[str]:
+    """Tier-3 last-resort: *discover* site-packages dirs that hold onnxruntime.
+
+    Only reached when onnxruntime is neither importable in the active
+    interpreter nor found via ``FEDERATION_ORT_SITE_PACKAGES``. Searches a small,
+    bounded set of candidate roots that are themselves discovered at call time
+    (an activated virtualenv, this interpreter's own prefixes, and sibling venvs
+    beside the repo) for a ``.../site-packages/onnxruntime`` directory — so no
+    single absolute path is baked in as the mechanism.
+    """
+    import glob
+
+    roots: list[Path] = []
+    venv = os.environ.get("VIRTUAL_ENV")
+    if venv:
+        roots.append(Path(venv))
+    for pfx in (sys.prefix, sys.base_prefix, sys.exec_prefix):
+        if pfx:
+            roots.append(Path(pfx))
+    # Sibling venvs — the common layout is a shared venv beside the repos
+    # (e.g. <llm-root>/venv next to epyc-orchestrator).
+    for base in (_ORCH_ROOT, _ORCH_ROOT.parent):
+        for name in ("venv", ".venv", "env", ".env"):
+            roots.append(base / name)
+
+    seen: set[str] = set()
+    found: list[str] = []
+    for root in roots:
+        try:
+            if not root or not root.is_dir():
+                continue
+        except OSError:
+            continue
+        for pat in ("lib/python*/site-packages", "lib64/python*/site-packages",
+                    "Lib/site-packages", "site-packages"):
+            for sp in glob.glob(str(root / pat)):
+                if sp in seen:
+                    continue
+                seen.add(sp)
+                if (Path(sp) / "onnxruntime").is_dir():
+                    found.append(sp)
+    return found
+
+
+def _import_ort_via(paths: Iterable[str]) -> bool:
+    """Append any ``paths`` that hold onnxruntime to ``sys.path`` then re-import.
+
+    Appends (never prepends) so it cannot shadow already-imported packages
+    (numpy / tokenizers stay as-is). Returns True iff onnxruntime imports after.
+    """
+    added = False
+    for sp in paths:
+        if sp and (Path(sp) / "onnxruntime").is_dir() and sp not in sys.path:
+            sys.path.append(sp)
+            added = True
+    if not added:
+        return False
+    try:
+        import onnxruntime  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
 def ensure_encoder_importable() -> bool:
     """Best-effort: make ``onnxruntime`` importable without installing anything.
 
-    Returns True if onnxruntime is importable (either already, or after adding a
-    known-good site-packages dir to ``sys.path``). Adds paths by *append* so it
-    cannot shadow already-imported packages (numpy/tokenizers stay as-is).
+    Three tiers, cheapest first: (1) a normal import from the active
+    interpreter; (2) dirs from ``FEDERATION_ORT_SITE_PACKAGES``; (3) a bounded
+    last-resort filesystem search of discovered site-packages. Returns True as
+    soon as onnxruntime imports, False if all tiers fail.
     """
     try:
         import onnxruntime  # noqa: F401
         return True
     except ImportError:
         pass
-    for sp in _ORT_FALLBACK_SITE_PACKAGES:
-        if (Path(sp) / "onnxruntime").is_dir() and sp not in sys.path:
-            sys.path.append(sp)
-    try:
-        import onnxruntime  # noqa: F401
+    if _import_ort_via(_ort_fallback_site_packages()):
         return True
-    except ImportError:
-        return False
+    if _import_ort_via(_discover_ort_site_packages()):
+        return True
+    return False
 
 
 def encoder_status() -> dict[str, Any]:

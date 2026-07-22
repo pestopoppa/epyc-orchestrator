@@ -16,4 +16,29 @@
 # - expires: ISO date YYYY-MM-DD
 # Optional:
 # - line: exact line number for a single-line waiver
-exceptions: []
+#
+# NOTE: historical_doc waivers are intentionally absent — the current
+# --all-hardcoded-surfaces scan reports 0 historical_doc findings, so a
+# historical_doc exception here would be flagged as a stale (unmatched) waiver.
+# Add one only when a genuine docs/**/*.md retired-role finding reappears.
+exceptions:
+  - rule_id: retired_role_in_tests
+    category: legacy_test
+    path_glob: tests/unit/test_chat_request_role_validation.py
+    classification: legacy_test
+    owner: test-infrastructure
+    rationale: >-
+      Intentional retired-role coverage: asserts Role._missing_ resolves the
+      legacy "architect_coding" label to live architect_general. This fixture
+      must keep the legacy string to prove backward-compatible normalization.
+    expires: "2026-12-31"
+  - rule_id: retired_role_in_tests
+    category: legacy_test
+    path_glob: tests/unit/test_q_reward_role_key.py
+    classification: legacy_test
+    owner: test-infrastructure
+    rationale: >-
+      Intentional retired-role coverage: iterates the legacy "architect_coding"
+      key to prove q-reward role-key handling stays stable for historical
+      replay data. Migrating would drop legacy-key regression coverage.
+    expires: "2026-12-31"

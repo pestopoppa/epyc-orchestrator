@@ -1,0 +1,101 @@
+{
+  "task": "DAR-L548/L627 tier-stratified matched within-objective analysis",
+  "snapshot": {
+    "snapshot_dir": "/mnt/raid0/llm/tmp/dar_snapshot",
+    "snapshot_ts_utc": "20260722T125604Z",
+    "episodic_db": "/mnt/raid0/llm/tmp/dar_snapshot/episodic.db"
+  },
+  "gap_threshold_pp": 5.0,
+  "tier_label_caveat": "canonical eval-tower tier not stored per memory; matched set 100% chat/no-question_id; both tiers below are PROXIES.",
+  "matched_objectives": 633,
+  "proxy_A_task_class_band": {
+    "T0_T1_easy": {
+      "n_obj": 129,
+      "decisive": 12,
+      "decisive_frac": 0.09302325581395349,
+      "median_gap_pp": 0.0,
+      "mean_gap_pp": 7.628611175752126
+    },
+    "chat_unknown": {
+      "n_obj": 331,
+      "decisive": 81,
+      "decisive_frac": 0.24471299093655588,
+      "median_gap_pp": 0.0,
+      "mean_gap_pp": 17.970573880711193
+    },
+    "T2_mid": {
+      "n_obj": 169,
+      "decisive": 39,
+      "decisive_frac": 0.23076923076923078,
+      "median_gap_pp": 0.0,
+      "mean_gap_pp": 16.752184742182404
+    },
+    "T3_hard": {
+      "n_obj": 4,
+      "decisive": 2,
+      "decisive_frac": 0.5,
+      "median_gap_pp": 8.216492648625612,
+      "mean_gap_pp": 29.108246324312802
+    }
+  },
+  "proxy_B_empirical_difficulty_quartile": {
+    "Q1_easiest": {
+      "n_obj": 158,
+      "decisive": 0,
+      "decisive_frac": 0.0,
+      "median_gap_pp": 0.0,
+      "mean_gap_pp": 0.0,
+      "mean_difficulty": 0.0,
+      "success_range": [
+        1.0,
+        1.0
+      ]
+    },
+    "Q2": {
+      "n_obj": 158,
+      "decisive": 0,
+      "decisive_frac": 0.0,
+      "median_gap_pp": 0.0,
+      "mean_gap_pp": 0.0,
+      "mean_difficulty": 0.0,
+      "success_range": [
+        1.0,
+        1.0
+      ]
+    },
+    "Q3": {
+      "n_obj": 158,
+      "decisive": 1,
+      "decisive_frac": 0.006329113924050633,
+      "median_gap_pp": 0.0,
+      "mean_gap_pp": 0.6388592213465655,
+      "mean_difficulty": 4.085639410553071e-05,
+      "success_range": [
+        0.9966915819139811,
+        1.0
+      ]
+    },
+    "Q4_hardest": {
+      "n_obj": 159,
+      "decisive": 133,
+      "decisive_frac": 0.8364779874213837,
+      "median_gap_pp": 76.17021276595744,
+      "mean_gap_pp": 61.502913496482705,
+      "mean_difficulty": 0.3184620249196908,
+      "success_range": [
+        0.0,
+        0.9958968347010551
+      ]
+    }
+  },
+  "operator_hypothesis": {
+    "claim": "decisive fraction rises with task difficulty (21.9% is a floor)",
+    "difficulty_quartile_decisive_fracs": [
+      0.0,
+      0.0,
+      0.006329113924050633,
+      0.8364779874213837
+    ],
+    "monotone_rising": true
+  }
+}
