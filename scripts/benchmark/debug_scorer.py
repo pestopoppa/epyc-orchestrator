@@ -793,14 +793,36 @@ def _score_llm_judge(
     honest ScoringUnavailableError — we never launch anything and never
     silently fall back to substring.
 
+    Protocol (two shapes — the earlier bug was speaking the wrong one):
+        - Orchestrator API (the realized-first default / env path): the
+          orchestrator does NOT serve a bare llama ``/completion``; its native
+          eval ingress is ``POST /chat`` with an orchestrator payload
+          (``real_mode``/``mock_mode``/``force_role``/``workload_class``) and a
+          response carrying ``answer`` — NOT llama's ``choices[].message``.
+          Posting the raw OpenAI/llama payload instead auto-routes the judge
+          prompt through the frontdoor's multi-turn REPL loop (the ``/v1``
+          OpenAI-compat ingress), which overruns the judge's short timeout and
+          surfaces as a "malformed response" ScoringUnavailableError. We now
+          POST ``/chat`` with ``force_mode="direct"`` (one direct LLM call, no
+          REPL) and ``force_role`` pinned to a text role, and parse ``answer``
+          — mirroring ``call_orchestrator_forced`` / eval_tower's rubric judge.
+        - Explicit ``judge_url`` / ``judge_host``+``judge_port`` override: a
+          direct llama-server target, so we keep the raw OpenAI-compatible
+          ``/v1/chat/completions`` protocol and parse ``choices[].message``.
+
     Config:
         judge_host + judge_port: Explicit judge server (both required to
-            override; targets ``http://{host}:{port}/v1/chat/completions``).
-        judge_url: Explicit full base URL override (wins over host/port).
+            override; targets ``http://{host}:{port}/v1/chat/completions``
+            via the raw llama-server protocol).
+        judge_url: Explicit full base URL override (wins over host/port; raw
+            llama-server protocol).
+        judge_role: Text role to pin the orchestrator judge to (force_role).
+            Defaults to ``LLM_JUDGE_ROLE`` env, else ``worker_general``.
         timeout: HTTP timeout in seconds (default: 30).
     """
     timeout = config.get("timeout", 30)
     judge_url = _resolve_llm_judge_base_url(config)
+    use_orchestrator = _llm_judge_uses_orchestrator(config)
 
     # First try a boundary-aware substring fast path; contained words such as
     # "cat" in "concatenate" must still go to the judge.
@@ -828,24 +850,61 @@ def _score_llm_judge(
     import httpx
 
     try:
-        resp = httpx.post(
-            f"{judge_url}/v1/chat/completions",
-            json={
-                "messages": [{"role": "user", "content": judge_prompt}],
-                "max_tokens": 8,
-                "temperature": 0.0,
-            },
-            timeout=timeout,
-        )
-        resp.raise_for_status()
-        verdict = resp.json()["choices"][0]["message"]["content"].strip().lower()
+        if use_orchestrator:
+            # Native orchestrator eval path. force_mode="direct" runs ONE direct
+            # LLM call (no REPL loop); force_role pins the judge to a text role
+            # so the equivalence prompt isn't auto-routed to a vision/code
+            # specialist. Mirrors seeding_orchestrator.call_orchestrator_forced.
+            resp = httpx.post(
+                f"{judge_url}/chat",
+                json={
+                    "prompt": judge_prompt,
+                    "real_mode": True,
+                    "mock_mode": False,
+                    "force_mode": "direct",
+                    "force_role": _llm_judge_force_role(config),
+                    "workload_class": "eval_batch",
+                    "request_priority": "background",
+                    "max_tokens": 8,
+                    "timeout_s": int(timeout),
+                    "allow_delegation": False,
+                },
+                timeout=timeout,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            verdict = str(data.get("answer") or "").strip().lower()
+            if data.get("error") or not verdict:
+                # A structured backend error (200-with-error body) or an empty
+                # answer is scorer-unavailability, NOT a "false" verdict. Route
+                # it through the shared handler below so it becomes an honest
+                # ERROR row instead of a silently-wrong score.
+                raise ValueError(
+                    "orchestrator judge returned no usable answer "
+                    f"(error={data.get('error')!r})"
+                )
+        else:
+            # Explicit judge_url / judge_host+judge_port override: a direct
+            # llama-server target — keep the raw OpenAI-compatible protocol.
+            resp = httpx.post(
+                f"{judge_url}/v1/chat/completions",
+                json={
+                    "messages": [{"role": "user", "content": judge_prompt}],
+                    "max_tokens": 8,
+                    "temperature": 0.0,
+                },
+                timeout=timeout,
+            )
+            resp.raise_for_status()
+            verdict = resp.json()["choices"][0]["message"]["content"].strip().lower()
     except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as exc:
         # HTTP/transport failure (httpx.*), non-2xx (HTTPStatusError from
-        # raise_for_status), bad JSON (json.JSONDecodeError <: ValueError), or
-        # an unexpected response shape (KeyError/IndexError/TypeError). A judge
-        # that is down or malformed is scorer-unavailability — surface it as an
-        # ERROR; do NOT silently fall back to substring (audit item B7 owns the
-        # substring fast-path extraction semantics).
+        # raise_for_status), bad JSON (json.JSONDecodeError <: ValueError), an
+        # unexpected response shape (KeyError/IndexError/TypeError), or an
+        # orchestrator error/empty-answer body (ValueError raised just above).
+        # A judge that is down or malformed is scorer-unavailability — surface
+        # it as an ERROR; do NOT silently fall back to substring (audit item B7
+        # owns the substring fast-path extraction semantics).
         raise ScoringUnavailableError(
             f"llm_judge unreachable or returned a malformed response at "
             f"{judge_url}; refusing to silently fall back to substring"
@@ -875,6 +934,39 @@ def _resolve_llm_judge_base_url(config: dict[str, Any]) -> str:
     if host and port:
         return f"http://{host}:{port}".rstrip("/")
     return os.environ.get("ORCHESTRATOR_API_URL", "http://localhost:8000").rstrip("/")
+
+
+def _llm_judge_uses_orchestrator(config: dict[str, Any]) -> bool:
+    """Whether the judge routes through the orchestrator API (native ``/chat``).
+
+    Mirrors ``_resolve_llm_judge_base_url``'s precedence: an explicit
+    ``judge_url`` or ``judge_host``+``judge_port`` override is a DIRECT
+    llama-server target (raw OpenAI ``/v1/chat/completions`` protocol,
+    ``choices[].message`` responses); everything else — the
+    ``ORCHESTRATOR_API_URL`` env or the ``http://localhost:8000`` default —
+    is the orchestrator, which speaks its own ``/chat`` schema (``answer``).
+    Speaking the wrong one is exactly the "malformed response" bug this fixes.
+    """
+    if str(config.get("judge_url") or "").strip():
+        return False
+    if config.get("judge_host") and config.get("judge_port"):
+        return False
+    return True
+
+
+def _llm_judge_force_role(config: dict[str, Any]) -> str:
+    """Text role to pin the orchestrator judge to (``force_role``).
+
+    An equivalence judge must land on a text model, not be auto-routed to a
+    vision/code specialist. Precedence: ``scoring_config['judge_role']`` >
+    ``LLM_JUDGE_ROLE`` env > ``worker_general`` (the general text worker).
+    """
+    import os
+
+    role = str(config.get("judge_role") or "").strip()
+    if role:
+        return role
+    return os.environ.get("LLM_JUDGE_ROLE", "").strip() or "worker_general"
 
 
 def _score_math_verify(

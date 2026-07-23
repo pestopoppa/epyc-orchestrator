@@ -193,6 +193,141 @@ def test_llm_judge_unreachable_default_reports_resolved_url(monkeypatch) -> None
     assert "127.0.0.1:1" in str(excinfo.value)
 
 
+# ── llm_judge: protocol per endpoint (orchestrator /chat vs raw llama) ───
+#
+# Regression for the "malformed response at http://localhost:8000" failure:
+# the judge spoke the raw llama OpenAI protocol (/v1/chat/completions,
+# choices[].message) at the ORCHESTRATOR API, whose native eval ingress is
+# POST /chat returning `answer`. Healthy orchestrator replies then parsed as
+# "malformed" and every physreason/zeroscrolls judge row error-excluded.
+
+
+class _FakeResp:
+    """Minimal httpx.Response stand-in for mocked judge calls."""
+
+    def __init__(self, payload: dict, status: int = 200) -> None:
+        self._payload = payload
+        self.status_code = status
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            import httpx
+
+            raise httpx.HTTPStatusError(
+                "err", request=None, response=None  # type: ignore[arg-type]
+            )
+
+    def json(self) -> dict:
+        return self._payload
+
+
+def _patch_httpx_post(monkeypatch, payload: dict, status: int = 200) -> list[dict]:
+    """Patch httpx.post to record calls and return a fixed fake response."""
+    import httpx
+
+    calls: list[dict] = []
+
+    def _fake_post(url, json=None, timeout=None, **kw):  # noqa: A002
+        calls.append({"url": url, "json": json, "timeout": timeout})
+        return _FakeResp(payload, status)
+
+    monkeypatch.setattr(httpx, "post", _fake_post)
+    return calls
+
+
+def test_llm_judge_orchestrator_shape_success(monkeypatch) -> None:
+    """Default (no override) => orchestrator /chat + parse `answer`."""
+    monkeypatch.delenv("ORCHESTRATOR_API_URL", raising=False)
+    monkeypatch.delenv("LLM_JUDGE_ROLE", raising=False)
+    calls = _patch_httpx_post(monkeypatch, {"answer": "true"})
+
+    result = score_answer(
+        answer="the student wrote something else entirely",
+        expected="mg/2",
+        scoring_method="llm_judge",
+        scoring_config={"timeout": 5},
+    )
+    assert result is True
+    assert len(calls) == 1
+    assert calls[0]["url"] == "http://localhost:8000/chat"
+    body = calls[0]["json"]
+    assert body["real_mode"] is True
+    assert body["mock_mode"] is False
+    assert body["force_mode"] == "direct"
+    assert body["workload_class"] == "eval_batch"
+    assert body["force_role"] == "worker_general"
+    assert "prompt" in body and "messages" not in body
+
+
+def test_llm_judge_orchestrator_shape_false_verdict(monkeypatch) -> None:
+    monkeypatch.delenv("ORCHESTRATOR_API_URL", raising=False)
+    _patch_httpx_post(monkeypatch, {"answer": "false"})
+    result = score_answer(
+        answer="the student wrote something else entirely",
+        expected="mg/2",
+        scoring_method="llm_judge",
+        scoring_config={"timeout": 5},
+    )
+    assert result is False
+
+
+def test_llm_judge_orchestrator_honors_judge_role(monkeypatch) -> None:
+    monkeypatch.delenv("ORCHESTRATOR_API_URL", raising=False)
+    calls = _patch_httpx_post(monkeypatch, {"answer": "true"})
+    score_answer(
+        answer="the student wrote something else entirely",
+        expected="mg/2",
+        scoring_method="llm_judge",
+        scoring_config={"timeout": 5, "judge_role": "thinking_reasoning"},
+    )
+    assert calls[0]["json"]["force_role"] == "thinking_reasoning"
+
+
+def test_llm_judge_orchestrator_error_body_raises(monkeypatch) -> None:
+    """200-with-error (or empty answer) is scorer-unavailability, not False."""
+    monkeypatch.delenv("ORCHESTRATOR_API_URL", raising=False)
+    _patch_httpx_post(monkeypatch, {"answer": "", "error": "backend unavailable"})
+    with pytest.raises(ScoringUnavailableError):
+        score_answer(
+            answer="the student wrote something else entirely",
+            expected="mg/2",
+            scoring_method="llm_judge",
+            scoring_config={"timeout": 5},
+        )
+
+
+def test_llm_judge_llama_shape_success_via_override(monkeypatch) -> None:
+    """Explicit judge_host+judge_port => raw llama /v1/chat/completions."""
+    calls = _patch_httpx_post(
+        monkeypatch, {"choices": [{"message": {"content": "true"}}]}
+    )
+    result = score_answer(
+        answer="the student wrote something else entirely",
+        expected="mg/2",
+        scoring_method="llm_judge",
+        scoring_config={"judge_host": "127.0.0.1", "judge_port": 8200, "timeout": 5},
+    )
+    assert result is True
+    assert calls[0]["url"] == "http://127.0.0.1:8200/v1/chat/completions"
+    body = calls[0]["json"]
+    assert "messages" in body and "prompt" not in body
+
+
+def test_llm_judge_llama_shape_malformed_raises(monkeypatch) -> None:
+    """Override target returning a non-llama body => malformed => raises."""
+    _patch_httpx_post(monkeypatch, {"unexpected": "shape"})
+    with pytest.raises(ScoringUnavailableError):
+        score_answer(
+            answer="the student wrote something else entirely",
+            expected="mg/2",
+            scoring_method="llm_judge",
+            scoring_config={
+                "judge_url": "http://judge.local:9",
+                "timeout": 5,
+            },
+        )
+
+
 # ── programmatic: unknown verifier is a config defect ────────────────────
 
 
