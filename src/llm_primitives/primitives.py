@@ -76,6 +76,7 @@ class LLMPrimitives(
         admission_controller: Any | None = None,
         gpu_lease_manager: Any | None = None,
         teleport_policy: TeleportPolicy | None = None,
+        server_urls_source: str = "config",
     ):
         """Initialize LLM primitives.
 
@@ -104,6 +105,11 @@ class LLMPrimitives(
         self.config = config if config is not None else LLMPrimitivesConfig()
         self.mock_responses = mock_responses if mock_responses is not None else {}
         self.server_urls = server_urls
+        # WP-12: "config" (default) marks server_urls as config-derived — the
+        # fleet layer (when flagged on) may serve those roles from fleet truth.
+        # "request" marks caller-supplied overrides as authoritative; the fleet
+        # layer then leaves every role on the legacy per-role build.
+        self.server_urls_source = server_urls_source
         self.num_slots = num_slots
         self.registry = registry
         self.worker_pool = worker_pool

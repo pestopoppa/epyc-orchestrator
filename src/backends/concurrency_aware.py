@@ -192,6 +192,7 @@ class ConcurrencyAwareBackend:
         full_port: int = 0,
         topology_role: str | None = None,
         quarter_topology_idxs: list[int] | None = None,
+        health_tracker: Any = None,
     ):
         if not quarter_backends:
             raise ValueError("ConcurrencyAwareBackend requires at least one quarter backend")
@@ -201,6 +202,14 @@ class ConcurrencyAwareBackend:
         self._topology_role = topology_role or role
         self._full_port = full_port
         self._lock = threading.Lock()
+
+        # WP-12 fleet layer: when this backend IS the fleet (one CAB per
+        # physical fleet), the shared BackendHealthTracker is injected so
+        # health is recorded per DISPATCHED endpoint — one circuit per
+        # (fleet, port), one fact for every bound role. None (the legacy
+        # per-role construction) leaves all health bookkeeping to the
+        # primitives layer exactly as before.
+        self._health_tracker = health_tracker
 
         # DISPATCH-A2: the TRUE NUMA_CONFIG topology index of each quarter
         # backend, resolved by PORT at construction. The dispatcher keys region
@@ -979,8 +988,71 @@ class ConcurrencyAwareBackend:
         except (TypeError, ValueError):
             return None
 
-    def _tap_dispatch_metadata(self, idx: int, backend: Any) -> dict[str, Any]:
-        """Return structured tap metadata for the selected runtime instance."""
+    # ── WP-12 fleet layer: per-endpoint health (one circuit per fleet port) ──
+
+    @property
+    def fleet_health_managed(self) -> bool:
+        """True when this backend records per-endpoint health itself (WP-12
+        one-CAB-per-fleet construction). The primitives layer then skips its
+        legacy primary-URL health bookkeeping for calls through this backend."""
+        return self._health_tracker is not None
+
+    def endpoint_urls(self) -> list[str]:
+        """Every live endpoint URL of this backend (full first when present)."""
+        urls = [u for u in self._quarter_urls if u]
+        if self._full_url:
+            urls.insert(0, self._full_url)
+        return urls
+
+    def any_endpoint_available(self) -> bool:
+        """False iff the FLEET circuit is open (every endpoint circuit open)."""
+        if self._health_tracker is None:
+            return True
+        urls = self.endpoint_urls()
+        if not urls:
+            return True
+        return any(self._health_tracker.is_available(u) for u in urls)
+
+    def _endpoint_url_for_idx(self, idx: int) -> str | None:
+        if idx == -1:
+            return self._full_url
+        if 0 <= idx < len(self._quarter_urls):
+            return self._quarter_urls[idx]
+        return None
+
+    def _candidate_available(self, ca_idx: int) -> bool:
+        if self._health_tracker is None:
+            return True
+        url = self._endpoint_url_for_idx(ca_idx)
+        if not url:
+            return True
+        return self._health_tracker.is_available(url)
+
+    def _record_endpoint_result(self, idx: int, result: Any) -> None:
+        """Mirror the primitives layer's health policy per dispatched endpoint:
+        partial results are neither success nor failure."""
+        if self._health_tracker is None:
+            return
+        url = self._endpoint_url_for_idx(idx)
+        if not url:
+            return
+        success = bool(getattr(result, "success", True))
+        partial = bool(getattr(result, "partial", False))
+        if success and not partial:
+            self._health_tracker.record_success(url)
+        elif not success and not partial:
+            self._health_tracker.record_failure(url)
+
+    def _tap_dispatch_metadata(
+        self, idx: int, backend: Any, logical_role: str | None = None
+    ) -> dict[str, Any]:
+        """Return structured tap metadata for the selected runtime instance.
+
+        ``logical_role`` threads the per-call role through a fleet-shared
+        backend (WP-12): the tap's ``role`` stays the LOGICAL role while
+        ``topology_role``/``lock_role`` remain the physical fleet identity.
+        Legacy per-role backends pass None (or the identical role string).
+        """
         topology_idx = 0 if idx == -1 else self._quarter_topology_idx[idx]
         url = self._full_url if idx == -1 else (
             self._quarter_urls[idx] if 0 <= idx < len(self._quarter_urls) else None
@@ -994,7 +1066,7 @@ class ConcurrencyAwareBackend:
         except Exception:
             regions = frozenset()
         return {
-            "role": self._role,
+            "role": logical_role or self._role,
             "topology_role": self._topology_role,
             "lock_role": self._topology_role,
             "instance_idx": topology_idx,
@@ -1005,11 +1077,15 @@ class ConcurrencyAwareBackend:
             "backend_url": url or _get_base_url(backend),
         }
 
-    def _annotate_current_tap_dispatch(self, idx: int, backend: Any) -> None:
+    def _annotate_current_tap_dispatch(
+        self, idx: int, backend: Any, logical_role: str | None = None
+    ) -> None:
         try:
             from src.inference_tap import annotate_current_tap
 
-            annotate_current_tap(**self._tap_dispatch_metadata(idx, backend))
+            annotate_current_tap(
+                **self._tap_dispatch_metadata(idx, backend, logical_role=logical_role)
+            )
         except Exception:
             return
 
@@ -1190,6 +1266,25 @@ class ConcurrencyAwareBackend:
                     loop_candidates = [
                         c for c in candidates if c[0] != -1
                     ] + [full_candidate]
+                # WP-12 fleet layer: skip endpoints whose circuit is open.
+                # Health is one fact per (fleet, endpoint); a candidate whose
+                # circuit is open cannot serve ANY bound role. When every
+                # endpoint circuit is open the fleet is down — fail fast so
+                # the role layer consults cross-fleet fallback instead of
+                # burning the poll budget on dead ports. is_available()
+                # itself admits the single half-open probe after cooldown
+                # (fleet-global, not per bound role). No-op when no
+                # health_tracker is wired (legacy per-role construction).
+                if self._health_tracker is not None:
+                    available = [
+                        c for c in loop_candidates if self._candidate_available(c[0])
+                    ]
+                    if not available:
+                        raise RuntimeError(
+                            "Backend unavailable (circuit open): all endpoints "
+                            f"for fleet {self._topology_role}"
+                        )
+                    loop_candidates = available
                 # DISPATCH-A residual fix: feed the placement filter the EXACT
                 # held-region sets, NOT the ATTRIBUTION idx view. `active_region_
                 # holders()` marks an instance active when ANY of its regions is
@@ -1421,23 +1516,36 @@ class ConcurrencyAwareBackend:
     def infer(self, role_config: Any, request: Any) -> Any:
         sid = self._extract_session_id(request)
         mb = self._extract_migration_budget_ms(request)
+        logical_role = getattr(request, "role", None)
         with self._dispatch(session_id=sid, migration_budget_ms=mb, request=request) as (backend, _idx, _is_full):
-            self._annotate_current_tap_dispatch(_idx, backend)
-            return backend.infer(role_config, request)
+            self._annotate_current_tap_dispatch(_idx, backend, logical_role=logical_role)
+            # Endpoint health is recorded from RESULT objects only (the
+            # backend folds transport errors into success=False results;
+            # raw exceptions are cancellation/lock control flow and must
+            # not trip the circuit) — mirrors the primitives-layer policy.
+            result = backend.infer(role_config, request)
+            self._record_endpoint_result(_idx, result)
+            return result
 
     def infer_streaming(self, role_config: Any, request: Any) -> Any:
         sid = self._extract_session_id(request)
         mb = self._extract_migration_budget_ms(request)
+        logical_role = getattr(request, "role", None)
         with self._dispatch(session_id=sid, migration_budget_ms=mb, request=request) as (backend, _idx, _is_full):
-            self._annotate_current_tap_dispatch(_idx, backend)
+            self._annotate_current_tap_dispatch(_idx, backend, logical_role=logical_role)
+            # Streaming handle: outcome is not observable here — endpoint
+            # health for this path stays with the consumer (as today).
             return backend.infer_streaming(role_config, request)
 
     def infer_stream_text(self, role_config: Any, request: Any, on_chunk: Any = None) -> Any:
         sid = self._extract_session_id(request)
         mb = self._extract_migration_budget_ms(request)
+        logical_role = getattr(request, "role", None)
         with self._dispatch(session_id=sid, migration_budget_ms=mb, request=request) as (backend, _idx, _is_full):
-            self._annotate_current_tap_dispatch(_idx, backend)
-            return backend.infer_stream_text(role_config, request, on_chunk=on_chunk)
+            self._annotate_current_tap_dispatch(_idx, backend, logical_role=logical_role)
+            result = backend.infer_stream_text(role_config, request, on_chunk=on_chunk)
+            self._record_endpoint_result(_idx, result)
+            return result
 
     def health_check(self, pid: int = 0) -> bool:
         """Check health of full instance + all quarters."""
