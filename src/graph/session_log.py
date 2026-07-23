@@ -1040,6 +1040,39 @@ def prune_scratchpad(
     return pruned[:max_entries]
 
 
+_SESSION_SUMMARY_ROLE_PREFERENCE = (
+    "worker_summarize",
+    "worker_general",
+    "worker_math",
+    "toolrunner",
+)
+_DEGRADED_SESSION_SUMMARY_ROLE = "worker_summarize"
+
+
+def _session_summary_worker_role() -> str:
+    """Select a LIVE stack role for session-summary/scratchpad extraction.
+
+    The historical literal ``worker_fast`` bypasses alias normalization on the
+    server-URL path and resolves to the retired port 8102 (dead since the
+    2026-05-06 worker-pool deprecation), so calls fail with a connection error
+    instead of summarizing. Mirrors chat_summarization's stack-priors
+    selection (same preference order, same degraded default).
+    """
+    try:
+        from src.registry.stack_priors import (
+            DEFAULT_OUTPUT as _PRIORS_PATH,
+            live_stack_role_records,
+        )
+
+        live_roles = set(live_stack_role_records(_PRIORS_PATH))
+    except Exception:  # noqa: BLE001
+        return _DEGRADED_SESSION_SUMMARY_ROLE
+    for role in _SESSION_SUMMARY_ROLE_PREFERENCE:
+        if role in live_roles:
+            return role
+    return _DEGRADED_SESSION_SUMMARY_ROLE
+
+
 async def summarize_session_with_worker(
     primitives: Any,
     records: list[TurnRecord],
@@ -1073,21 +1106,22 @@ async def summarize_session_with_worker(
     try:
         import asyncio
 
+        worker_role = _session_summary_worker_role()
         if inline:
             raw = primitives.llm_call(
                 prompt,
-                role="worker_fast",
+                role=worker_role,
                 n_tokens=n_tokens,
             )
         else:
             raw = await asyncio.to_thread(
                 primitives.llm_call,
                 prompt,
-                role="worker_fast",
+                role=worker_role,
                 n_tokens=n_tokens,
             )
 
-        if raw and raw.strip():
+        if raw and raw.strip() and not raw.lstrip().startswith("[ERROR"):
             if extract_scratchpad:
                 summary_text, entries = parse_scratchpad_from_response(
                     raw, current_turn,
