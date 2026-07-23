@@ -501,13 +501,17 @@ def test_frontdoor_shared_fleet_url_defaults_do_not_drift() -> None:
     fd_fleet = registry["server_mode"][FD]
     shared_with = list(fd_fleet.get("shared_with") or [])
 
-    # Registry reality this guard is derived from: frontdoor shares with no role
-    # via shared_with. If this changes, the parity loop below starts enforcing.
-    assert shared_with == [], (
-        "server_mode.frontdoor.shared_with is no longer empty; the frontdoor "
-        "drift guard now protects those roles — confirm each shared role either "
-        "delegates its ServerURLsConfig field to frontdoor (no own literal) or "
-        "carries an FB literal identical to frontdoor's."
+    # Registry reality (2026-07-22 WP-13 reconciliation): coder_escalation and
+    # worker_summarize are DECLARED frontdoor aliases via shared_with (their
+    # 8070-pinned server_mode row was removed; both delegate their
+    # ServerURLsConfig defaults to frontdoor per Fix A). The tripwire that
+    # guarded the pre-reconciliation emptiness did its job — the parity loop
+    # below now actively enforces FB-literal agreement for any declared alias
+    # that also carries its own literal.
+    assert sorted(shared_with) == ["coder_escalation", "worker_summarize"], (
+        f"server_mode.frontdoor.shared_with changed ({shared_with!r}) — re-review "
+        "the alias set per docs/runbooks/role-alias-change-runbook.md and update "
+        "this guard to the new declared reality."
     )
 
     host_default = FB[FD]

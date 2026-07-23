@@ -65,12 +65,33 @@ def test_ingest_quarter_preference_matches_frontdoor_pattern() -> None:
     assert pref.index(3) < pref.index(0)
 
 
-def test_vision_escalation_quarter_preference_full_on_NODE1() -> None:
-    """vision_escalation full is on NUMA_NODE1 (48-95,144-191).
-    Quarters: q0=Q0A (0-23), q1=Q0B (24-47), q2=Q1A (48-71), q3=Q1B (72-95).
-    Disjoint from full: q0, q1. Overlapping: q2, q3.
-    Preferred order should put q0 and q1 BEFORE q2 and q3."""
-    cab = _make_concurrency_aware("vision_escalation")
+def test_quarter_preference_full_on_NODE1_synthetic(monkeypatch) -> None:
+    """NODE1-full disjointness ordering, exercised via a SYNTHETIC role.
+
+    Historically this used vision_escalation (full on NUMA_NODE1 + 4 quarters),
+    but that role became single-instance in the v7 one-instance vision layout
+    (2026-07-20 recert) and no real NODE1-full multi-instance role remains. The
+    ORDERING LOGIC is topology-generic and stays covered here: full on NODE1
+    (48-95); quarters q0 (0-23) and q1 (24-47) are disjoint from full and must
+    order BEFORE overlapping q2 (48-71) and q3 (72-95)."""
+    synthetic = {
+        "instances": [
+            ("NUMA_NODE1", 9070),
+            ("NUMA_Q0A", 9071),
+            ("NUMA_Q0B", 9072),
+            ("NUMA_Q1A", 9073),
+            ("NUMA_Q1B", 9074),
+        ],
+        "full_instance_idx": 0,
+        "cpu_lists": None,
+    }
+    real = stack_numa.NUMA_CONFIG.get("vision_escalation")
+    monkeypatch.setitem(stack_numa.NUMA_CONFIG, "synthetic_node1_full", {
+        **synthetic,
+        # mirror the key shape the preference computation reads
+        **({} if real is None else {k: v for k, v in real.items() if k not in synthetic}),
+    })
+    cab = _make_concurrency_aware("synthetic_node1_full")
     pref = cab._quarter_preference_order
     assert pref.index(0) < pref.index(2)
     assert pref.index(0) < pref.index(3)
