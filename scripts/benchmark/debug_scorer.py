@@ -779,17 +779,28 @@ def _score_llm_judge(
     Used for: PhysReason — symbolic physics/math answers where substring
     matching misses equivalent forms (e.g. mg/2 vs \\frac{mg}{2}).
 
-    Calls a local llama-server OpenAI-compatible endpoint to judge whether
-    the model's answer is semantically equivalent to the expected answer.
+    Calls an OpenAI-compatible endpoint to judge whether the model's answer is
+    semantically equivalent to the expected answer.
+
+    Endpoint resolution (realized-first, mirrors commits 5aa29f35/e97d4ed9):
+    a hardcoded llama-server port (the old default 8082 = a worker_general
+    *quarter* port) is dead on a quarters-only / eval-batch stack, so the judge
+    now defaults to the ORCHESTRATOR API, which resolves the role to a LIVE
+    backend itself. No new hardcoded llama port is introduced. An explicit
+    ``judge_host``+``judge_port`` in ``scoring_config`` still wins (targeted
+    override); otherwise the endpoint comes from ``ORCHESTRATOR_API_URL``
+    (default ``http://localhost:8000``). A down/malformed judge remains an
+    honest ScoringUnavailableError — we never launch anything and never
+    silently fall back to substring.
 
     Config:
-        judge_port: Port for the judge LLM server (default: 8082, explore worker).
-        judge_host: Host for the judge LLM server (default: "localhost").
+        judge_host + judge_port: Explicit judge server (both required to
+            override; targets ``http://{host}:{port}/v1/chat/completions``).
+        judge_url: Explicit full base URL override (wins over host/port).
         timeout: HTTP timeout in seconds (default: 30).
     """
-    port = config.get("judge_port", 8082)
-    host = config.get("judge_host", "localhost")
     timeout = config.get("timeout", 30)
+    judge_url = _resolve_llm_judge_base_url(config)
 
     # First try a boundary-aware substring fast path; contained words such as
     # "cat" in "concatenate" must still go to the judge.
@@ -818,7 +829,7 @@ def _score_llm_judge(
 
     try:
         resp = httpx.post(
-            f"http://{host}:{port}/v1/chat/completions",
+            f"{judge_url}/v1/chat/completions",
             json={
                 "messages": [{"role": "user", "content": judge_prompt}],
                 "max_tokens": 8,
@@ -837,10 +848,33 @@ def _score_llm_judge(
         # substring fast-path extraction semantics).
         raise ScoringUnavailableError(
             f"llm_judge unreachable or returned a malformed response at "
-            f"{host}:{port}; refusing to silently fall back to substring"
+            f"{judge_url}; refusing to silently fall back to substring"
         ) from exc
 
     return verdict.startswith("true")
+
+
+def _resolve_llm_judge_base_url(config: dict[str, Any]) -> str:
+    """Resolve the llm_judge base URL (scheme://host:port), realized-first.
+
+    Precedence: explicit ``judge_url`` > explicit ``judge_host``+``judge_port``
+    > ``ORCHESTRATOR_API_URL`` env > ``http://localhost:8000``. Routing through
+    the orchestrator API (rather than a hardcoded llama-server port) lets the
+    orchestrator resolve the judge role to a LIVE backend on a quarters-only
+    fleet — no new hardcoded ports, per commits 5aa29f35/e97d4ed9.
+    """
+    import os
+
+    explicit_url = str(config.get("judge_url") or "").strip()
+    if explicit_url:
+        return explicit_url.rstrip("/")
+    # Both host AND port must be supplied to take the legacy direct-port path;
+    # a lone hardcoded port default is exactly the dead-endpoint trap we fix.
+    host = config.get("judge_host")
+    port = config.get("judge_port")
+    if host and port:
+        return f"http://{host}:{port}".rstrip("/")
+    return os.environ.get("ORCHESTRATOR_API_URL", "http://localhost:8000").rstrip("/")
 
 
 def _score_math_verify(

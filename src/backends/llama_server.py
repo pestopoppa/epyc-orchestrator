@@ -800,10 +800,18 @@ class LlamaServerBackend(ModelBackend):
             http_start = time.perf_counter()
 
             _overall_timeout = request.timeout or self.config.timeout
-            # Per-read timeout: covers prompt eval for large models (up to 120s)
-            # but catches stuck streams much faster than the overall request
-            # timeout (which can be 600s for architect roles).
-            _read_timeout = min(_overall_timeout, 120)
+            # Read timeout MUST cover the whole request budget. This is the 5th
+            # sibling of the four /completion + /v1/chat/completions read caps
+            # lifted in c12484fb; it was missed there. A min(_overall, 120) cap
+            # killed every >120s generation on /completion-streaming roles
+            # (e.g. worker_vision, worker_explore) while the eval budget was
+            # 420s — the same EV-BASELINE-E7 119-120s timeout signature. Under
+            # 4-wide shared-bandwidth eval fan-out the server can withhold the
+            # first SSE byte past 120s (slot busy / prompt eval), so a 120s read
+            # cap fires even though the request legitimately has a longer budget.
+            # Interactive stays safe: its OVERALL budget is the short role SLA,
+            # and read <= overall by construction.
+            _read_timeout = _overall_timeout
             _stream_timeout = httpx.Timeout(
                 connect=self.config.connect_timeout,
                 read=_read_timeout,

@@ -42,6 +42,7 @@ for path in (SCRIPT_DIR, AUTOPILOT_DIR):
 import eval_batch_serving_activation_window as activation_window  # noqa: E402
 from eval_tower import (  # noqa: E402
     EvalTower,
+    _default_eval_timeout,
     _eval_concurrency,
     compute_calibration_metrics as _compute_calibration_metrics,
 )
@@ -1819,14 +1820,28 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--attest-samples", type=int, default=12)
     parser.add_argument("--http-timeout-s", type=float, default=5.0)
     parser.add_argument("--command-timeout-s", type=float, default=900.0)
-    parser.add_argument("--evaltower-timeout-s", type=float, default=120.0)
+    # Per-question eval request budget. Default deferred (None) to the standard
+    # env-aware eval default (`_default_eval_timeout` -> honors
+    # AUTOPILOT_EVAL_REQUEST_TIMEOUT_S) so an operator who raises that env for a
+    # rebaseline actually gets the longer budget. Previously this hardcoded 120.0,
+    # which SILENTLY overrode the env on every EvalTower(...) construction below
+    # (the runner always passes timeout=args.evaltower_timeout_s), capping every
+    # heavy-suite question at 120s regardless of the env — the EV-BASELINE-E7
+    # 119-120s timeouts. An explicit --evaltower-timeout-s still wins.
+    parser.add_argument("--evaltower-timeout-s", type=float, default=None)
     parser.add_argument(
         "--start-mode",
         choices=("only", "include-warm"),
         default="only",
         help="How to start eval_batch_frontdoor during the temporary activation.",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    # Resolve the deferred eval budget to the env-aware standard default so a
+    # raised AUTOPILOT_EVAL_REQUEST_TIMEOUT_S reaches EvalTower(timeout=...) —
+    # and thus the per-question timeout_s/deadline that reaches the backend.
+    if args.evaltower_timeout_s is None:
+        args.evaltower_timeout_s = float(_default_eval_timeout())
+    return args
 
 
 def main(argv: list[str] | None = None) -> int:

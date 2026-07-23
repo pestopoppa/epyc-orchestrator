@@ -468,6 +468,47 @@ class TestLlamaServerBackend:
         assert result.failure_reason == "read_timeout"
         assert result.completion_reason == "read_timeout_partial"
 
+    def test_infer_stream_text_read_timeout_covers_full_budget(self, role_config):
+        """/completion streaming read MUST equal the request budget, not min(_,120).
+
+        The 5th sibling of c12484fb's read caps was missed here: a
+        ``min(_overall, 120)`` read cap killed every >120s generation on
+        /completion-streaming roles (worker_vision, worker_explore, ...) while
+        the eval budget was 420s — the EV-BASELINE-E7 119-120s timeouts. Under
+        4-wide fan-out the server can withhold the first SSE byte past 120s.
+        """
+        config = ServerConfig(base_url="http://test:8080", use_chat_completions=False)
+        backend = LlamaServerBackend(config=config)
+        request = InferenceRequest(role="test", prompt="Hello", timeout=420)
+        captured = {}
+
+        class _StreamResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def raise_for_status(self):
+                return None
+
+            def iter_lines(self):
+                yield 'data: {"content":"OK"}'
+                yield 'data: {"stop":true}'
+
+        def _stream(_method, _path, json, timeout):
+            captured["timeout"] = timeout
+            captured["path"] = _path
+            return _StreamResponse()
+
+        with patch.object(backend.client, "stream", side_effect=_stream):
+            backend.infer_stream_text(role_config, request)
+
+        assert captured["path"] == "/completion"
+        # read must cover the whole 420s budget — NOT capped to 120.
+        assert captured["timeout"].read == 420
+        assert captured["timeout"].read != 120
+
     def test_infer_stream_text_empty_long_generation_is_failure(self, role_config):
         """Long-running empty streams should be infrastructure failures."""
         backend = LlamaServerBackend(base_url="http://test:8080")

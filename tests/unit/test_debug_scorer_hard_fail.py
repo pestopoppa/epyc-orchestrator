@@ -143,6 +143,56 @@ def test_llm_judge_fast_path_is_boundary_aware() -> None:
         )
 
 
+# ── llm_judge endpoint resolution: realized-first, no dead hardcoded port ────
+
+
+def test_llm_judge_default_resolves_to_orchestrator_not_hardcoded_8082(monkeypatch) -> None:
+    """The old default (localhost:8082, a dead worker_general *quarter* port on a
+    quarters-only stack) is gone: with no explicit host/port the judge resolves
+    to the ORCHESTRATOR API, which routes to a LIVE backend itself.
+    """
+    from debug_scorer import _resolve_llm_judge_base_url
+
+    monkeypatch.delenv("ORCHESTRATOR_API_URL", raising=False)
+    url = _resolve_llm_judge_base_url({})
+    assert url == "http://localhost:8000"
+    assert "8082" not in url
+
+
+def test_llm_judge_default_honors_orchestrator_api_url_env(monkeypatch) -> None:
+    from debug_scorer import _resolve_llm_judge_base_url
+
+    monkeypatch.setenv("ORCHESTRATOR_API_URL", "http://localhost:18099/")
+    assert _resolve_llm_judge_base_url({}) == "http://localhost:18099"
+
+
+def test_llm_judge_explicit_overrides_win() -> None:
+    from debug_scorer import _resolve_llm_judge_base_url
+
+    # judge_url wins over everything.
+    assert (
+        _resolve_llm_judge_base_url({"judge_url": "http://h:9/"}) == "http://h:9"
+    )
+    # host+port (BOTH) take the legacy direct path.
+    assert (
+        _resolve_llm_judge_base_url({"judge_host": "127.0.0.1", "judge_port": 8200})
+        == "http://127.0.0.1:8200"
+    )
+
+
+def test_llm_judge_unreachable_default_reports_resolved_url(monkeypatch) -> None:
+    """A down orchestrator judge still raises honestly and names the endpoint."""
+    monkeypatch.setenv("ORCHESTRATOR_API_URL", "http://127.0.0.1:1")
+    with pytest.raises(ScoringUnavailableError) as excinfo:
+        score_answer(
+            answer="the model said something entirely different",
+            expected="mg/2",
+            scoring_method="llm_judge",
+            scoring_config={"timeout": 2},
+        )
+    assert "127.0.0.1:1" in str(excinfo.value)
+
+
 # ── programmatic: unknown verifier is a config defect ────────────────────
 
 
