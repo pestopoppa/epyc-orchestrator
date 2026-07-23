@@ -429,13 +429,23 @@ def _evaluate(tower: EvalTower, *, tier: int, n: int, seed: int) -> Any:
     raise ValueError(f"unsupported tier: {tier}")
 
 
-def run_eval_arm(name: str, args: argparse.Namespace) -> dict[str, Any]:
+def run_eval_arm(
+    name: str, args: argparse.Namespace, *, output_dir: Path | None = None
+) -> dict[str, Any]:
     started = time.perf_counter()
     try:
         tower = EvalTower(
             url=args.api_url.rstrip("/"),
             timeout=args.evaltower_timeout_s,
         )
+        # EV-11c: durably persist per-arm question rows into this run's output-dir
+        # so a burned/errored tier arm's error rows are identifiable and can be
+        # requeued with --retry-errors-from (vs a full multi-hour arm rerun). Mirrors
+        # the verifier/retry/resume paths; the tier arm routes through _eval_batch, so
+        # setting the dir engages the same append-only, fsync'd sidecar writer.
+        # Best-effort (matches _eval_batch's fail-soft sidecar contract).
+        if output_dir is not None and hasattr(tower, "set_question_artifact_dir"):
+            tower.set_question_artifact_dir(output_dir)
         result = _evaluate(tower, tier=args.tier, n=args.n, seed=args.seed)
         wall_s = time.perf_counter() - started
         return {
@@ -607,7 +617,7 @@ def build_report(args: argparse.Namespace, *, output_dir: Path) -> tuple[dict[st
                 rc = _bool_blocker_rc(blockers)
             else:
                 if not args.skip_current_arm:
-                    current_arm = run_eval_arm("current", args)
+                    current_arm = run_eval_arm("current", args, output_dir=output_dir)
                     if not current_arm.get("ok"):
                         blockers.append(f"current EvalTower arm failed: {current_arm.get('error')}")
                         status = "current_eval_failed"
@@ -636,7 +646,7 @@ def build_report(args: argparse.Namespace, *, output_dir: Path) -> tuple[dict[st
                         status = "activation_failed"
                         rc = 75
                     else:
-                        eval_batch_arm = run_eval_arm("eval_batch", args)
+                        eval_batch_arm = run_eval_arm("eval_batch", args, output_dir=output_dir)
                         if not eval_batch_arm.get("ok"):
                             blockers.append(
                                 f"eval-batch EvalTower arm failed: {eval_batch_arm.get('error')}"
