@@ -310,7 +310,13 @@ class LlamaServerBackend(ModelBackend):
             _overall = request.timeout or self.config.timeout
             _batch_timeout = httpx.Timeout(
                 connect=self.config.connect_timeout,
-                read=min(_overall, 120),
+                # Non-streaming: zero bytes arrive until generation completes,
+                # so the read timeout MUST cover the whole request budget — a
+                # 120s cap killed every >120s generation (EV-BASELINE-E7:
+                # 11/12 timeouts at 119-120s on reasoning/long-context suites)
+                # while the eval budget was 420s. Interactive stays safe: its
+                # OVERALL budget is short (60s SLA), and read <= overall.
+                read=_overall,
                 write=_overall,
                 pool=30,
             )
@@ -557,7 +563,13 @@ class LlamaServerBackend(ModelBackend):
             _overall = request.timeout or self.config.timeout
             _batch_timeout = httpx.Timeout(
                 connect=self.config.connect_timeout,
-                read=min(_overall, 120),
+                # Non-streaming: zero bytes arrive until generation completes,
+                # so the read timeout MUST cover the whole request budget — a
+                # 120s cap killed every >120s generation (EV-BASELINE-E7:
+                # 11/12 timeouts at 119-120s on reasoning/long-context suites)
+                # while the eval budget was 420s. Interactive stays safe: its
+                # OVERALL budget is short (60s SLA), and read <= overall.
+                read=_overall,
                 write=_overall,
                 pool=30,
             )
@@ -694,7 +706,13 @@ class LlamaServerBackend(ModelBackend):
             _overall = request.timeout or self.config.timeout
             _stream_timeout = httpx.Timeout(
                 connect=self.config.connect_timeout,
-                read=min(_overall, 120),
+                # Non-streaming: zero bytes arrive until generation completes,
+                # so the read timeout MUST cover the whole request budget — a
+                # 120s cap killed every >120s generation (EV-BASELINE-E7:
+                # 11/12 timeouts at 119-120s on reasoning/long-context suites)
+                # while the eval budget was 420s. Interactive stays safe: its
+                # OVERALL budget is short (60s SLA), and read <= overall.
+                read=_overall,
                 write=_overall,
                 pool=30,
             )
@@ -1259,7 +1277,7 @@ class LlamaServerBackend(ModelBackend):
 
         try:
             _overall = request.timeout or self.config.timeout
-            _read_timeout = min(_overall, 120)
+            _read_timeout = _overall  # non-streaming: read must cover the full budget (see above)
             _stream_timeout = httpx.Timeout(
                 connect=self.config.connect_timeout,
                 read=_read_timeout, write=_overall, pool=_overall,
