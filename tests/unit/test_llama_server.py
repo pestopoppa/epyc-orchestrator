@@ -440,6 +440,36 @@ class TestLlamaServerBackend:
         assert "Server request failed" in result.error_message
         assert result.failure_reason == "request_error"
 
+    def test_infer_http_status_error_returns_structured_failure(self, role_config):
+        """A 4xx/5xx from the backend (e.g. a VL server rejecting a misrouted
+        text /completion with HTTP 400) becomes a structured degraded result,
+        never an uncaught exception surfaced as a raw in-band error string.
+
+        HTTPStatusError is a SIBLING of RequestError (not a subclass), so the
+        legacy /completion path previously let it escape infer() uncaught.
+        """
+        backend = LlamaServerBackend(base_url="http://test:8080")
+        request = InferenceRequest(role="test", prompt="Hello")
+
+        mock_request = httpx.Request("POST", "http://test:8080/completion")
+        mock_response = httpx.Response(400, request=mock_request)
+        status_error = httpx.HTTPStatusError(
+            "Bad Request", request=mock_request, response=mock_response
+        )
+        resp = Mock()
+        resp.status_code = 400
+        resp.raise_for_status = Mock(side_effect=status_error)
+
+        with patch.object(backend.client, "post", return_value=resp):
+            result = backend.infer(role_config, request)
+
+        assert result.success is False
+        assert result.failure_stage == "transport"
+        assert result.failure_reason == "http_status"
+        assert result.completion_reason == "http_error"
+        assert "HTTP 400" in result.error_message
+        assert result.output == ""
+
     def test_infer_stream_text_partial_timeout_sets_partial_flags(self, role_config):
         """Streaming read timeout with chunks should be marked partial/degraded."""
         backend = LlamaServerBackend(base_url="http://test:8080")

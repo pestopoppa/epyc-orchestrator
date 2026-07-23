@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from src.api.models import ChatRequest
 from src.api.routes.chat_routing import _classify_and_route
@@ -21,6 +22,65 @@ _TIER_COST_WEIGHTS: dict[str, float] = {
 }
 
 _INGRESS_ROLE_ALIASES = frozenset({"worker_coder", "worker_code"})
+
+_DEFAULT_STACK_PRIORS_PATH = (
+    Path(__file__).resolve().parents[4] / "orchestration" / "derived" / "stack_priors.yaml"
+)
+
+# Declarative-source fallback ONLY. The authoritative set of vision-only roles
+# is read from generated stack priors (launch mode == "vision") via
+# ``vision_serving.vision_roles``; these two known VL-only role names are used
+# solely when that artifact is unreadable (mirrors vision_serving's own
+# LEGACY_VISION_ROLES). Do not treat this literal as the source of truth.
+_FALLBACK_VISION_ONLY_ROLES = frozenset({"worker_vision", "vision_escalation"})
+
+
+def _vision_only_roles() -> frozenset[str]:
+    """Return roles that serve ONLY multimodal VL traffic (declarative source).
+
+    A VL-only llama-server rejects a text-only ``/completion`` with HTTP 400
+    (observed: a longbench TEXT question misrouted to ``worker_vision:8086``).
+    Both directions of the modality fence key on this set: text requests are
+    steered away from these roles, and image requests routed to them are exempt
+    from the failure veto (they have no valid text fallback).
+    """
+    try:
+        from src.api.routes.vision_serving import vision_roles as _stack_prior_vision_roles
+
+        return _stack_prior_vision_roles(_DEFAULT_STACK_PRIORS_PATH)
+    except Exception:
+        return _FALLBACK_VISION_ONLY_ROLES
+
+
+def _fence_text_off_vision_roles(
+    routing_decision: list, routing_strategy: str
+) -> tuple[list, str]:
+    """Strip vision-only roles from a TEXT request's candidate route.
+
+    The learned/hybrid router and the rules classifier can both emit a
+    vision-only role for a text-only prompt; routing text there yields an HTTP
+    400 from the VL server (blind/failed answers that poison the eval). Callers
+    invoke this ONLY for requests with no image data and no explicit/forced role
+    (forced/explicit routing is the caller's responsibility and bypasses the
+    fence). If stripping empties the route, fall back to the frontdoor.
+    """
+    if not routing_decision:
+        return routing_decision, routing_strategy
+    vision_only = _vision_only_roles()
+    filtered = [r for r in routing_decision if str(r) not in vision_only]
+    if len(filtered) == len(routing_decision):
+        return routing_decision, routing_strategy
+    if not filtered:
+        log.warning(
+            "Modality fence: text request routed to vision-only %s → frontdoor",
+            [str(r) for r in routing_decision],
+        )
+        return [str(Role.FRONTDOOR)], f"{routing_strategy}:vision_fenced"
+    log.warning(
+        "Modality fence: stripped vision-only role(s) from text route %s",
+        [str(r) for r in routing_decision],
+    )
+    return filtered, f"{routing_strategy}:vision_fenced"
 
 
 def normalize_ingress_role(role: object) -> object:
@@ -80,15 +140,25 @@ def select_initial_route(
         return [normalize_ingress_role(request.role)], "explicit", skill_context
     if request.image_path or request.image_base64:
         return ["worker_vision"], "vision_input", skill_context
+    # Below this point the request has NO image data and NO forced/explicit
+    # role (those returned above). The learned/hybrid router and the rules
+    # classifier can still emit a vision-only role for a text prompt, which a
+    # VL server rejects with HTTP 400 — fence text traffic off those roles.
     if state.hybrid_router and request.real_mode:
         if hasattr(state.hybrid_router, "route_with_skills") and features().skillbank:
             routing_decision, routing_strategy, skill_context = (
                 state.hybrid_router.route_with_skills(task_ir)
             )
+            routing_decision, routing_strategy = _fence_text_off_vision_roles(
+                routing_decision, routing_strategy
+            )
             return routing_decision, routing_strategy, skill_context
         routing_decision, routing_strategy = state.hybrid_router.route(
             task_ir,
             priors=heuristic_priors,
+        )
+        routing_decision, routing_strategy = _fence_text_off_vision_roles(
+            routing_decision, routing_strategy
         )
         return routing_decision, routing_strategy, skill_context
 
@@ -97,7 +167,10 @@ def select_initial_route(
         request.context or "",
         has_image=bool(request.image_path or request.image_base64),
     )
-    return [classified_role], routing_strategy, skill_context
+    routing_decision, routing_strategy = _fence_text_off_vision_roles(
+        [classified_role], routing_strategy
+    )
+    return routing_decision, routing_strategy, skill_context
 
 
 def apply_failure_veto(
@@ -106,6 +179,7 @@ def apply_failure_veto(
     routing_strategy: str,
     factual_risk_band: str,
     task_id: str,
+    has_image: bool = False,
 ) -> tuple[list, str]:
     """Apply failure-graph veto to risky specialist routes."""
     veto_thresholds = {"high": 0.3, "medium": 0.5, "low": 0.7, "": 0.5}
@@ -115,6 +189,25 @@ def apply_failure_veto(
         and str(routing_decision[0]) != str(Role.FRONTDOOR)
         and routing_strategy not in ("mock", "forced")
     ):
+        return routing_decision, routing_strategy
+
+    # Modality fence (image direction): an image-carrying request routed to a
+    # vision-only role has NO valid text fallback. Reverting it to the text
+    # frontdoor makes the VL model answer BLIND (the same poisoning the vision
+    # stage now fails visibly on) — worse than attempting the risky VL role.
+    # Exempt it; if the VL backend is truly down the vision stage emits an
+    # honest in-band vision_unavailable marker.
+    if has_image and str(routing_decision[0]) in _vision_only_roles():
+        log.debug(
+            "Failure veto exempt: image request on vision-only role %s (no text fallback)",
+            routing_decision[0],
+            extra=task_extra(
+                task_id=task_id,
+                role=str(routing_decision[0]),
+                stage="routing",
+                strategy="vision_veto_exempt",
+            ),
+        )
         return routing_decision, routing_strategy
 
     try:

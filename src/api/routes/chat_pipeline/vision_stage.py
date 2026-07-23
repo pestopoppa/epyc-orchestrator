@@ -166,6 +166,50 @@ async def _execute_vision(
     return None  # Fall through to standard orchestration
 
 
+def _vision_unavailable_response(
+    request: ChatRequest,
+    routing: RoutingResult,
+    initial_role,
+    execution_mode: str,
+    start_time: float,
+    detail: str,
+) -> ChatResponse:
+    """Build an in-band vision-unavailable error response for an image request.
+
+    A request that CARRIES image data must NEVER silently fall through to a
+    text-only path when the multimodal handler fails: the VL model would then
+    answer BLIND (image discarded), and a blind answer is an ordinary string
+    the eval SCORES as wrong — the mechanism behind the vl-suite 0/376. Instead
+    emit an in-band ``[ERROR: vision_unavailable: ...]`` marker. The eval
+    tower's REL-1 ``_inband_error_text`` guard keys on the ``[ERROR:`` prefix
+    and EXCLUDES the row honestly (attributable failure) rather than scoring a
+    wrong answer, and interactive callers see an explicit failure code. The
+    detail carries the exception class + a truncated message for triage.
+    """
+    elapsed = time.perf_counter() - start_time
+    answer = f"[ERROR: vision_unavailable: {detail}]"
+    return ChatResponse(
+        answer=answer,
+        turns=1,
+        tokens_used=0,
+        elapsed_seconds=elapsed,
+        mock_mode=False,
+        real_mode=request.real_mode,
+        routed_to=str(initial_role),
+        role_history=[str(initial_role)],
+        routing_strategy=routing.routing_strategy,
+        mode=execution_mode,
+        tokens_generated=0,
+        formalization_applied=routing.formalization_applied,
+        skills_retrieved=len(routing.skill_ids),
+        skill_ids=routing.skill_ids,
+        # "unavailable" → 503 under _annotate_error; set explicitly so the
+        # response is self-describing for any caller that skips finalization.
+        error_code=503,
+        error_detail=answer,
+    )
+
+
 async def _execute_vision_multimodal(
     request: ChatRequest,
     routing: RoutingResult,
@@ -182,13 +226,18 @@ async def _execute_vision_multimodal(
     - _handle_vision_request (direct mode): OCR + multimodal VL completion
     - _vision_react_mode_answer (repl mode): multimodal ReAct tool loop
 
-    Returns None if not a vision request or if the handler fails
-    (caller falls through to text-only mode as last resort).
+    Returns None only when this is NOT a vision-with-image request (the caller
+    then handles it as ordinary text). When the request DOES carry image data
+    but the multimodal handler fails, it returns an in-band
+    ``[ERROR: vision_unavailable: ...]`` ChatResponse instead of falling
+    through to a blind text answer (see ``_vision_unavailable_response``).
     """
     if str(initial_role) not in _vision_roles():
         return None
     if not (request.image_path or request.image_base64):
         return None
+    # Past this point the request carries image data destined for a vision
+    # role: it must never silently degrade to text-only (blind answering).
 
     from src.api.routes.chat_vision import (
         _handle_vision_request,
@@ -208,12 +257,29 @@ async def _execute_vision_multimodal(
 
                 img_path = validate_api_path(request.image_path)
                 if not img_path.exists():
-                    log.warning("Vision image not found: %s", request.image_path)
-                    return None
+                    log.error(
+                        "Vision image not found: %s — emitting in-band "
+                        "vision_unavailable (NOT falling through to blind text)",
+                        request.image_path,
+                        extra=task_extra(
+                            task_id=task_id,
+                            role=str(initial_role),
+                            stage="execute",
+                            mode="vision_multimodal",
+                            error_type="image_not_found",
+                        ),
+                    )
+                    return _vision_unavailable_response(
+                        request, routing, initial_role, execution_mode, start_time,
+                        f"FileNotFoundError: {str(request.image_path)[:120]}",
+                    )
                 image_b64 = base64.b64encode(img_path.read_bytes()).decode("utf-8")
 
             if not image_b64:
-                return None
+                return _vision_unavailable_response(
+                    request, routing, initial_role, execution_mode, start_time,
+                    "ValueError: empty image payload",
+                )
 
             # Detect MIME type from header bytes
             mime_type = "image/jpeg"
@@ -242,10 +308,26 @@ async def _execute_vision_multimodal(
             )
 
     except Exception as e:
-        log.warning(
-            "Vision multimodal failed: %s: %s — falling through to text mode",
-            type(e).__name__,
-            e,
+        # The request carries image data (guaranteed above). The multimodal
+        # handler exhausted its VL backends and raised. Do NOT return None:
+        # that would fall through to the text-only stages, which discard the
+        # image and let the model answer BLIND — a blind answer is scored, not
+        # excluded, which is exactly the vl-suite 0/376 poisoning. Emit an
+        # in-band vision_unavailable marker so the eval EXCLUDES the row.
+        image_ref = request.image_path or "(base64 image)"
+        detail = f"{type(e).__name__}: {str(e)[:120]}"
+        vl_backend = None
+        try:
+            vl_backend = _vl_port_for_role(str(initial_role))
+        except Exception:
+            vl_backend = "unresolved"
+        log.error(
+            "Vision multimodal failed for image %s via %s (vl_port=%s): %s — "
+            "emitting in-band vision_unavailable (NOT falling through to blind text)",
+            image_ref,
+            str(initial_role),
+            vl_backend,
+            detail,
             extra=task_extra(
                 task_id=task_id,
                 role=str(initial_role),
@@ -254,7 +336,9 @@ async def _execute_vision_multimodal(
                 error_type=type(e).__name__,
             ),
         )
-        return None  # Fall through to text-only mode
+        return _vision_unavailable_response(
+            request, routing, initial_role, execution_mode, start_time, detail,
+        )
 
     elapsed = time.perf_counter() - start_time
     state.increment_request(mock_mode=False, turns=1)

@@ -464,6 +464,29 @@ class LlamaServerBackend(ModelBackend):
                 completion_reason="timeout",
             )
 
+        except httpx.HTTPStatusError as e:
+            # A 4xx/5xx from the backend (e.g. worker_vision:8086 returning
+            # HTTP 400 to a misrouted text /completion) is raised by
+            # response.raise_for_status(). HTTPStatusError is a SIBLING of
+            # RequestError, not a subclass, so without this clause it escaped
+            # infer() uncaught and surfaced to the caller as a raw in-band
+            # "[ERROR: ...]" answer string that the eval then mis-scored.
+            # Convert it to a structured degraded result, matching the
+            # /v1/chat/completions path (failure_stage/reason: transport/http_status).
+            elapsed = time.time() - start_time
+            return InferenceResult(
+                role=role_config.name,
+                output="",
+                tokens_generated=0,
+                generation_speed=0.0,
+                elapsed_time=elapsed,
+                success=False,
+                error_message=f"llama-server HTTP {e.response.status_code}",
+                failure_stage="transport",
+                failure_reason="http_status",
+                completion_reason="http_error",
+            )
+
         except httpx.RequestError as e:
             elapsed = time.time() - start_time
             return InferenceResult(

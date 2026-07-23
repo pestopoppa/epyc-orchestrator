@@ -306,6 +306,7 @@ def _route_request(request: ChatRequest, state) -> RoutingResult:
         routing_strategy,
         _factual_risk_band,
         task_id,
+        has_image=has_image,
     )
 
     # Difficulty-signal scoring (shadow/enforce mode only — no-op when mode is "off")
