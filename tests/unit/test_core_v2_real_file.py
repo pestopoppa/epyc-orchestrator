@@ -9,6 +9,12 @@ This is the "loads the real file" acceptance for the core_v2 build. It also
 asserts the operator gate is still closed: the live instrument-era registry does
 NOT yet authorize core_v2, so activation must fail closed until the operator
 appends the human-owned quality/core era row.
+
+2026-07-23 amendment: the `vl` suite was INCLUDED (previously whole-suite excluded
+on the stale 0/376 record) after a 20-question vl truth slice scored 20/20 correct,
+0 errors through the real eval path. vl enters as a 1-item coverage-single; the
+bigcodebench decision-value double was demoted k=2->k=1 to hold total=50. See the
+metadata `amendment` block and handoffs/active/core-v2-design-note-2026-07-23.md.
 """
 from __future__ import annotations
 
@@ -31,14 +37,21 @@ CORE_PATH = REPO_ROOT / "benchmarks" / "prompts" / "core_v2.jsonl"
 _NOW = datetime(2026, 7, 23, 12, 0, tzinfo=timezone.utc)
 
 # Suites that MUST NOT appear in the designed core (excluded by design/task).
-_FORBIDDEN_SUITES = {"vl", "tulving_episodic", "aa_lcr", "document_extraction", "gaia"}
-# Item-level known-dead qids that must be absent.
+# NOTE: `vl` was INCLUDED by the 2026-07-23 amendment (truth slice 20/20, 0 errors); it is
+# no longer forbidden. The 2 individually-dead vl items stay item-excluded (see below).
+_FORBIDDEN_SUITES = {"tulving_episodic", "aa_lcr", "document_extraction", "gaia"}
+# Item-level known-dead qids that must be absent (incl. the 2 individually-dead vl items,
+# retained item-excluded even though the vl suite is now included).
 _KNOWN_DEAD_QIDS = {
     "usaco_silver_1326", "usaco_silver_759",
     "ifeval_2292", "ifeval_3691",
     "bcb_BigCodeBench/228", "bcb_BigCodeBench/51",
     "chart_test_0452", "chart_test_1401",
 }
+# 2026-07-23 vl-inclusion amendment fixtures.
+_EXPECTED_VL_QID = "vl_chart_test_0758"      # vl a-priori pool-tier median (k=1), tier 2
+_DISPLACED_QID = "bcb_BigCodeBench/1028"     # bigcodebench demoted k=2->k=1 to hold total=50
+_AMENDED_SHA = "88d7a59ca342f03c09cc5f9ba0c0cb08075de61d576c6225707822d0edb639ca"
 
 
 def _load(monkeypatch):
@@ -66,13 +79,16 @@ def test_core_dataset_sha_is_reproducible(monkeypatch):
     questions, metadata, _ = _load(monkeypatch)
     assert dataset_content_sha256(questions) == metadata["dataset_content_sha256"]
     assert len(metadata["dataset_content_sha256"]) == 64
+    # pinned to the vl-inclusion amendment (regression guard on composition/order)
+    assert metadata["dataset_content_sha256"] == _AMENDED_SHA
 
 
 def test_core_stratification_and_exclusions(monkeypatch):
     questions, metadata, _ = _load(monkeypatch)
     suites = {q["suite"] for q in questions}
-    assert len(suites) == 36
+    assert len(suites) == 37  # 36 text suites + vl (2026-07-23 amendment)
     assert suites.isdisjoint(_FORBIDDEN_SUITES)
+    assert "vl" in suites  # vl is now a first-class scoreable suite
     ids = {str(q.get("id", "")) for q in questions}
     assert ids.isdisjoint(_KNOWN_DEAD_QIDS)
     # dominant pool suites are capped (decision-value, not pool size)
@@ -81,9 +97,10 @@ def test_core_stratification_and_exclusions(monkeypatch):
     assert max(per_suite.values()) <= 2
     for dominant in ("general", "mmlu_pro", "thinking", "hotpotqa"):
         assert per_suite[dominant] <= 2
-    # metadata records the exclusion rationale
+    # metadata records the exclusion rationale; vl is NO LONGER excluded
     excl = metadata["exclusions"]
-    assert "vl" in excl and "tulving_episodic" in excl
+    assert "vl" not in excl
+    assert "tulving_episodic" in excl
     assert set(excl["zero_source_suites"]["suites"]) == {"aa_lcr", "document_extraction", "gaia"}
 
 
@@ -94,6 +111,50 @@ def test_core_difficulty_spread_uses_apriori_tier(monkeypatch):
     # spread across all three a-priori difficulty tiers (not saturated on one)
     assert set(tiers) == {1, 2, 3}
     assert min(tiers) == 1 and max(tiers) == 3
+    # pinned hard-lean histogram after the vl-inclusion amendment
+    # (displaced a tier-1 bigcodebench item, added a tier-2 vl item)
+    from collections import Counter
+    assert Counter(tiers) == {3: 21, 2: 18, 1: 11}
+
+
+def test_core_includes_vl_and_bigcodebench_demotion(monkeypatch):
+    """2026-07-23 amendment: vl included (truth slice 20/20); bigcodebench demoted to hold 50."""
+    questions, metadata, _ = _load(monkeypatch)
+    from collections import Counter
+    per_suite = Counter(q["suite"] for q in questions)
+    ids = {str(q.get("id", "")) for q in questions}
+
+    # vl is a first-class 1-item coverage-single suite (the sole multimodal signal)
+    assert per_suite["vl"] == 1
+    assert _EXPECTED_VL_QID in ids
+    vl_q = next(q for q in questions if q["suite"] == "vl")
+    assert int(vl_q["tier"]) == 2
+    vl_cs = vl_q["core_selection"]
+    assert vl_cs["slot_kind"] == "coverage-single"
+    assert vl_cs["suite_slot_k"] == 1
+
+    # bigcodebench demoted k=2 -> k=1; its hardest (tier-1) item is displaced, median kept
+    assert per_suite["bigcodebench"] == 1
+    assert "bcb_BigCodeBench/0" in ids
+    assert _DISPLACED_QID not in ids
+    bcb_q = next(q for q in questions if q["suite"] == "bigcodebench")
+    assert bcb_q["core_selection"]["suite_slot_k"] == 1
+
+    # the amendment is recorded and machine-checkable
+    amend = metadata["amendment"]
+    assert amend["new_dataset_content_sha256"] == metadata["dataset_content_sha256"]
+    assert "vl" in amend["change"].lower()
+
+    # the 2 individually-dead vl items remain item-excluded even though the suite is included
+    dead = metadata["exclusions"]["known_dead_instrument_items"]
+    vl_dead = next(item for item in dead["items"] if item["suite"] == "vl")
+    assert set(vl_dead["qids"]) == {"chart_test_0452", "chart_test_1401"}
+
+    # slot-list bookkeeping tracks the demotion/inclusion
+    policy = metadata["selection_policy"]
+    assert "bigcodebench" not in policy["double_slot_suites"]
+    assert "bigcodebench" in policy["single_slot_suites"]
+    assert "vl" in policy["single_slot_suites"]
 
 
 def test_activation_guard_fails_closed_on_live_registry(monkeypatch):
