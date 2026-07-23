@@ -3,7 +3,9 @@
 
 Scores model outputs against ground-truth answers using methods from
 public benchmarks (exact_match, multiple_choice, code_execution,
-programmatic, substring). No heuristics, no Claude-as-Judge needed.
+programmatic, substring, f1, f1_list, llm_judge, math_verify,
+structural_exact_match). No heuristics, no Claude-as-Judge needed
+(except the explicit llm_judge method).
 
 Usage:
     from scripts.benchmark.debug_scorer import score_answer
@@ -19,7 +21,9 @@ Usage:
 
 from __future__ import annotations
 
+import ast
 import json
+import math
 import re
 import subprocess
 import tempfile
@@ -78,8 +82,10 @@ def score_answer(
         "programmatic": _score_programmatic,
         "substring": _score_substring,
         "f1": _score_f1,
+        "f1_list": _score_f1_list,
         "llm_judge": _score_llm_judge,
         "math_verify": _score_math_verify,
+        "structural_exact_match": _score_structural_exact_match,
     }
 
     scorer = scorers.get(scoring_method)
@@ -1048,6 +1054,96 @@ def _score_math_verify(
         ) from exc
 
 
+# ── f1_list (tulving_episodic) + structural_exact_match (longcot_mini) ────
+# ADDITIVE scorers (audit SCORE-25 / SCORE-26). Before these landed, every row
+# of the tulving_episodic suite (scoring_method="f1_list", 456 rows) and the
+# longcot_mini suite (scoring_method="structural_exact_match", 402 rows) raised
+# "Unknown scoring method" and was honestly EXCLUDED (REL-1) from the
+# denominator. These two scorers handle ONLY those previously-erroring methods;
+# NO other scorer's verdict changes (verified against the B7 golden corpus,
+# which contains no f1_list / structural_exact_match rows). They reuse the B7
+# primitives (final-answer anchoring, the shared ``_normalize_text`` boundary
+# normaliser) and do not fork or modify any existing scorer's semantics.
+
+
+def _score_f1_list(
+    answer: str, expected: str, config: dict[str, Any]
+) -> bool:
+    """Item-level (set-level) F1 for episodic-memory *list* answers.
+
+    Used for: tulving_episodic — questions whose gold is a JSON list of answer
+    items (locations, entity/person names, dates, event-content phrases).
+    Distinct from the token-multiset ``f1`` scorer: here BOTH the gold and the
+    parsed model answer are LISTS, matched item-to-item.
+
+    Faithful to the reference deterministic scorer (epyc-inference-research
+    ``tulving_episodic_adapter.score_f1_list``): greedy GT→prediction matching by
+    per-item token-F1, a lenient precision denominator (``min(nb_pred, nb_gt)``,
+    per the benchmark paper), and the group-0 hallucination policy (empty gold +
+    any prediction ⇒ F1 0; empty gold + empty prediction ⇒ F1 1). The one
+    deliberate substitution — per this task's B7-reuse mandate — is that per-item
+    token normalization uses the shared B7 ``_normalize_text`` (SQuAD-style: NFKD
+    diacritic fold, lowercase, punctuation strip, article removal, whitespace
+    collapse) rather than the adapter's private NFC normaliser. That is strictly
+    more lenient (folds accents, drops articles) and never fabricates a match.
+
+    Config:
+        threshold: final F1 pass/fail cutoff AND the per-item greedy-match cutoff
+            (default 0.5 — the value every pool row carries).
+
+    Gold format: ``expected`` MUST be a JSON list. A non-list / unparseable gold
+    is a dataset defect ⇒ ScoringUnavailableError (an EXCLUDED row, never False).
+    """
+    threshold = config.get("threshold", 0.5)
+    gold_items = _parse_gold_list(expected)
+    pred_items = _extract_list_items(answer)
+    f1 = _f1_list_score(pred_items, gold_items, threshold=threshold)
+    return f1 >= threshold
+
+
+def _score_structural_exact_match(
+    answer: str, expected: str, config: dict[str, Any]
+) -> bool:
+    r"""Structural (canonicalized) equality for longcot_mini answers.
+
+    Used for: longcot_mini — every prompt instructs the model to end with
+    ``solution = <value>``, where ``<value>`` is a JSON value; ``expected`` is
+    the canonical JSON of the gold value.
+
+    Interpretation (derived from the suite's 402 rows — golds are JSON
+    str / int / list / dict): "structural" equality means parse-then-
+    canonicalize-then-compare, NOT string equality. Faithful to
+    ``longcot_mini_adapter.score_structural``:
+      1. Final-answer extraction: take the text after the LAST ``solution =``
+         marker (the suite's final-answer anchor — the B7 last-occurrence
+         convention; models echo the format instruction earlier, so the real
+         answer is last). No marker ⇒ the model did not follow the required
+         output format ⇒ False (a task failure, not scorer-unavailability).
+      2. Parse a leading JSON / Python-literal value (balanced-bracket scan for
+         containers, quoted-string scan, scalar fallback — never raises).
+      3. Recursively canonicalize BOTH sides: dict keys sorted; list order
+         preserved; numeric scalars (incl. numeric strings — ``391365`` ==
+         ``"391365"`` == ``391365.0``) collapsed to one form; non-numeric string
+         case PRESERVED (SMILES / FEN are case-sensitive) with surrounding
+         whitespace stripped and internal runs collapsed.
+      4. Pure structural ``==``.
+
+    The uniform ``scoring_config["extract_pattern"] = r"solution\s*=\s*(.+)"`` is
+    a single-line hint; the structural parser here supersedes it because gold
+    values span multiple lines (JSON arrays/objects) that a single-line ``.+``
+    cannot capture.
+
+    Fully deterministic: no sampling, no network, no model-in-the-loop —
+    identical inputs always yield identical verdicts.
+    """
+    gold_canon = _coerce_structural_gold(expected)
+    tail = _extract_solution_tail(answer)
+    if tail is None:
+        return False
+    predicted = _canonicalize_structural(_parse_leading_structural_value(tail))
+    return predicted == gold_canon
+
+
 # ── Helpers ────────────────────────────────────────────────────────────
 
 
@@ -1179,6 +1275,258 @@ def _is_valid_json(text: str) -> bool:
                 pass
 
     return False
+
+
+# ── f1_list helpers (tulving_episodic) ───────────────────────────────────
+
+_F1_LIST_ABSTENTION_RE = re.compile(
+    r"(?is)(none|n/a|i don'?t know\.?|i'?m not sure\.?|"
+    r"i cannot (answer|determine).*|no information( available)?\.?|"
+    r"not mentioned\.?|not available\.?)"
+)
+_F1_LIST_BULLET_RE = re.compile(r"^[\s]*[-•*]\s*(.+)$", re.MULTILINE)
+_F1_LIST_NUMBERED_RE = re.compile(r"^[\s]*\d+[.)]\s*(.+)$", re.MULTILINE)
+
+
+def _parse_gold_list(expected: str) -> list[str]:
+    """Parse the tulving gold (a JSON list) into a list of item strings.
+
+    A non-list or unparseable gold is a dataset/gold defect — raise so the
+    caller records an EXCLUDED row rather than scoring a wrong answer.
+    """
+    try:
+        parsed = json.loads(expected)
+    except (json.JSONDecodeError, ValueError, TypeError) as exc:
+        raise ScoringUnavailableError(
+            f"f1_list gold is not valid JSON: {expected!r} (dataset/gold defect)"
+        ) from exc
+    if not isinstance(parsed, list):
+        raise ScoringUnavailableError(
+            f"f1_list gold must be a JSON list, got {type(parsed).__name__}: "
+            f"{expected!r} (dataset/gold defect)"
+        )
+    return [str(x) for x in parsed]
+
+
+def _extract_list_items(response: str) -> list[str]:
+    """Parse a model response into a list of answer items.
+
+    Faithful port of ``tulving_episodic_adapter._extract_list_from_response``:
+    an explicit abstention ⇒ empty list; else a bullet list, else a numbered
+    list, else comma-separated (short lines), else one item per line.
+    """
+    if _F1_LIST_ABSTENTION_RE.fullmatch(response.strip()):
+        return []
+    bullets = _F1_LIST_BULLET_RE.findall(response)
+    if bullets:
+        return [b.strip() for b in bullets if b.strip()]
+    numbered = _F1_LIST_NUMBERED_RE.findall(response)
+    if numbered:
+        return [n.strip() for n in numbered if n.strip()]
+    lines = [ln.strip() for ln in response.strip().split("\n") if ln.strip()]
+    candidates: list[str] = []
+    for line in lines:
+        if "," in line and len(line) < 200:
+            candidates.extend(p.strip() for p in line.split(",") if p.strip())
+    if candidates:
+        return candidates
+    return lines
+
+
+def _token_f1_score(prediction: str, ground_truth: str) -> float:
+    """Token-multiset F1 over two strings, normalized with the B7
+    ``_normalize_text``.
+
+    Mirrors the multiset-overlap math already used by ``_score_f1`` (repeated
+    tokens counted honestly), returning F1 as a float. Empty vs empty ⇒ 1.0;
+    empty vs non-empty ⇒ 0.0.
+    """
+    from collections import Counter
+
+    pred_tokens = _normalize_text(prediction).split()
+    gold_tokens = _normalize_text(ground_truth).split()
+    if not pred_tokens and not gold_tokens:
+        return 1.0
+    if not pred_tokens or not gold_tokens:
+        return 0.0
+    common = sum((Counter(pred_tokens) & Counter(gold_tokens)).values())
+    if not common:
+        return 0.0
+    precision = common / len(pred_tokens)
+    recall = common / len(gold_tokens)
+    return 2 * precision * recall / (precision + recall)
+
+
+def _f1_list_score(
+    pred_items: list[str], gold_items: list[str], *, threshold: float = 0.5
+) -> float:
+    """Set-level F1 for list answers via greedy GT→prediction matching.
+
+    Faithful port of ``tulving_episodic_adapter.score_f1_list`` — same greedy
+    loop, same lenient precision denominator, same empty-gold policy.
+    """
+    nb_gt = len(gold_items)
+    nb_pred = len(pred_items)
+    if nb_gt == 0 and nb_pred == 0:
+        return 1.0
+    if nb_gt == 0:  # hallucination: predicted items where the gold is empty
+        return 0.0
+    if nb_pred == 0:  # miss: no prediction against a non-empty gold
+        return 0.0
+
+    remaining = list(pred_items)
+    gt_scores: list[float] = []
+    for gt_item in gold_items:
+        best_score = 0.0
+        best_idx = -1
+        for i, pred in enumerate(remaining):
+            s = _token_f1_score(pred, gt_item)
+            if s > best_score:
+                best_score = s
+                best_idx = i
+        gt_scores.append(best_score)
+        if best_score >= threshold and best_idx >= 0:
+            remaining.pop(best_idx)
+
+    sum_scores = sum(gt_scores)
+    nb_pred_lenient = min(nb_pred, nb_gt)
+    precision = sum_scores / nb_pred_lenient if nb_pred_lenient > 0 else 0.0
+    recall = sum_scores / nb_gt if nb_gt > 0 else 0.0
+    if precision + recall == 0.0:
+        return 0.0
+    return 2 * precision * recall / (precision + recall)
+
+
+# ── structural_exact_match helpers (longcot_mini) ────────────────────────
+
+_SOLUTION_MARKER_RE = re.compile(r"solution\s*=\s*", re.IGNORECASE)
+
+
+def _extract_solution_tail(response: str) -> str | None:
+    """Return the text after the LAST ``solution =`` marker, stripped.
+
+    Returns None when no marker is present. Faithful port of
+    ``longcot_mini_adapter._extract_solution_text``.
+    """
+    if not response:
+        return None
+    matches = list(_SOLUTION_MARKER_RE.finditer(response))
+    if not matches:
+        return None
+    tail = response[matches[-1].end():]
+    return tail.strip() or None
+
+
+def _parse_leading_structural_value(text: str) -> Any:
+    """Parse a JSON / Python-literal value from the start of ``text``.
+
+    Balanced-bracket scan for ``[...]`` / ``{...}`` containers and a quoted-
+    string scan for ``"..."`` / ``'...'``; scalar fallback to the first line.
+    Never raises. Faithful port of ``longcot_mini_adapter._parse_leading_value``.
+    """
+    if text is None:
+        return None
+    s = text.strip()
+    if not s:
+        return ""
+    if s[0] in "[{\"'":
+        opener = s[0]
+        if opener in "[{":
+            closer = "]" if opener == "[" else "}"
+            depth = 0
+            in_str = False
+            esc = False
+            end = None
+            for i, ch in enumerate(s):
+                if in_str:
+                    if esc:
+                        esc = False
+                    elif ch == "\\":
+                        esc = True
+                    elif ch == '"':
+                        in_str = False
+                    continue
+                if ch == '"':
+                    in_str = True
+                elif ch == opener:
+                    depth += 1
+                elif ch == closer:
+                    depth -= 1
+                    if depth == 0:
+                        end = i + 1
+                        break
+            candidate = s[:end] if end is not None else s
+        else:  # quoted string
+            candidate = s.split("\n", 1)[0]
+        for parser in (json.loads, ast.literal_eval):
+            try:
+                return parser(candidate)
+            except Exception:
+                continue
+        # Unparseable container/quoted token → strip surrounding quotes.
+        return candidate.strip().strip("\"'")
+
+    # Scalar path: first line, try JSON/literal, else raw string.
+    first_line = s.split("\n", 1)[0].strip()
+    stripped = (
+        first_line[:-1]
+        if first_line.endswith(".") and not first_line[:-1].endswith(".")
+        else first_line
+    )
+    for candidate in (first_line, stripped):
+        for parser in (json.loads, ast.literal_eval):
+            try:
+                return parser(candidate)
+            except Exception:
+                continue
+    return first_line
+
+
+def _norm_structural_scalar(v: Any) -> Any:
+    """Canonicalize a scalar. Numbers and numeric strings collapse to one
+    canonical numeric form (``391365`` == ``"391365"`` == ``391365.0``); non-
+    numeric strings keep their CASE (SMILES/FEN) with whitespace collapsed.
+    """
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, int):
+        return v
+    if isinstance(v, float):
+        return int(v) if math.isfinite(v) and v.is_integer() else v
+    if isinstance(v, str):
+        t = " ".join(v.strip().split())
+        if re.fullmatch(r"[+-]?\d+", t):
+            return int(t)
+        try:
+            f = float(t)
+            if not math.isfinite(f):
+                return t
+            return int(f) if f.is_integer() else f
+        except (ValueError, TypeError):
+            return t
+    return v
+
+
+def _canonicalize_structural(v: Any) -> Any:
+    """Recursively canonicalize a parsed value for structural equality."""
+    if isinstance(v, dict):
+        return {
+            str(k): _canonicalize_structural(val)
+            for k, val in sorted(v.items(), key=lambda kv: str(kv[0]))
+        }
+    if isinstance(v, (list, tuple)):
+        return [_canonicalize_structural(x) for x in v]
+    return _norm_structural_scalar(v)
+
+
+def _coerce_structural_gold(gold: Any) -> Any:
+    """Accept gold as a parsed value OR its JSON string form; canonicalize."""
+    if isinstance(gold, str):
+        try:
+            gold = json.loads(gold)
+        except (json.JSONDecodeError, ValueError):
+            pass
+    return _canonicalize_structural(gold)
 
 
 def score_batch(
