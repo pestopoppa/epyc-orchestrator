@@ -1,9 +1,22 @@
 """Backend management for LLM primitives."""
 
 import logging
+import os
 from typing import Any, Mapping
 
 _log = logging.getLogger(__name__)
+
+
+def _url_str_ports(url_str: str) -> list[int]:
+    """Ports named by a config URL value (``full:`` marker ignored)."""
+    ports: list[int] = []
+    for url in _normalise_role_urls(url_str):
+        tail = url.rsplit(":", 1)[-1]
+        try:
+            ports.append(int(tail))
+        except ValueError:
+            continue
+    return ports
 
 
 def _normalise_role_urls(url_str: str) -> tuple[str, ...]:
@@ -80,6 +93,18 @@ class BackendMixin:
                     sorted(_chat_completion_roles),
                 )
 
+            # WP-12 fleet layer (ORCHESTRATOR_FLEET_LAYER=1, default OFF):
+            # roles bound to a registry server_mode fleet share ONE backend
+            # per physical fleet instead of N per-role copies. Roles the
+            # fleet path handled are skipped by the legacy loop below; any
+            # fleet-layer failure falls back to the legacy build (logged
+            # CRITICAL inside). Flag off → empty set, loop untouched.
+            fleet_handled: frozenset[str] = frozenset()
+            if os.environ.get("ORCHESTRATOR_FLEET_LAYER") == "1":
+                fleet_handled = self._init_fleet_backends(
+                    server_urls, num_slots, _chat_completion_roles
+                )
+
             normalized_role_urls = {
                 role: _normalise_role_urls(url_str)
                 for role, url_str in server_urls.items()
@@ -95,6 +120,8 @@ class BackendMixin:
                 topology_roles = set()
 
             for role, url_str in server_urls.items():
+                if role in fleet_handled:
+                    continue
                 urls = [u.strip() for u in url_str.split(",") if u.strip()]
                 topology_role = _infer_topology_role_for_urls(
                     role,
@@ -223,6 +250,146 @@ class BackendMixin:
 
         except ImportError as e:
             _log.warning("CachingBackend not available: %s. Using legacy mode.", e)
+
+    def _init_fleet_backends(
+        self,
+        server_urls: dict[str, str],
+        num_slots: int,
+        chat_completion_roles: set[str],
+    ) -> frozenset[str]:
+        """WP-12: build ONE backend per physical fleet; bind roles to it.
+
+        Returns the set of ``server_urls`` keys the fleet path handled (the
+        legacy per-role loop skips them). Fail-closed contract: ANY failure —
+        fleet build incoherence, parity violation, unexpected error — returns
+        an empty set with a CRITICAL log, leaving the legacy per-role build as
+        the serving path for every role.
+
+        For handled roles, ``server_urls[role]`` is rewritten in place to the
+        fleet's realized URL value so every downstream primary-URL consumer
+        (admission, tap metadata) reads the same fact the dispatcher serves.
+        """
+        try:
+            from src.fleet import _canonical_role, get_fleets_and_bindings, resolve_binding
+            from src.backends.llama_server import LlamaServerBackend, ServerConfig
+            from src.backends.concurrency_aware import ConcurrencyAwareBackend
+            from src.prefix_cache import CachingBackend, PrefixRouter
+
+            if getattr(self, "server_urls_source", "config") != "config":
+                _log.info(
+                    "fleet layer: request-specific server_urls — keeping the "
+                    "legacy per-role build (caller overrides are authoritative)"
+                )
+                return frozenset()
+
+            state = get_fleets_and_bindings()
+            if state is None:
+                return frozenset()
+            fleets, bindings = state
+
+            role_fleet: dict[str, str] = {}
+            for role in server_urls:
+                binding = resolve_binding(role, bindings)
+                if binding is not None and binding.fleet_id in fleets:
+                    role_fleet[role] = binding.fleet_id
+
+            health_tracker = getattr(self, "health_tracker", None)
+
+            def _mk(url: str, use_cc: bool) -> Any:
+                return CachingBackend(
+                    LlamaServerBackend(ServerConfig(
+                        base_url=url, num_slots=num_slots,
+                        use_chat_completions=use_cc,
+                    )),
+                    PrefixRouter(num_slots=num_slots),
+                )
+
+            fleet_backend: dict[str, Any] = {}
+            for fleet_id in sorted(set(role_fleet.values())):
+                fleet = fleets[fleet_id]
+                roles_on = sorted(r for r, f in role_fleet.items() if f == fleet_id)
+                # use_chat_completions is ROLE-layer policy but is baked into
+                # the shared physical backend's ServerConfig — bake the fleet
+                # consensus, and FAIL CLOSED (legacy per-role build for this
+                # fleet) when bound roles disagree rather than silently
+                # mis-routing one of them.
+                cc_flags = {
+                    r: (r in chat_completion_roles
+                        or _canonical_role(r) in chat_completion_roles)
+                    for r in roles_on
+                }
+                if len(set(cc_flags.values())) > 1:
+                    _log.critical(
+                        "fleet %s: bound roles disagree on /v1/chat/completions "
+                        "membership (%s) — fail closed: these roles keep the "
+                        "legacy per-role build",
+                        fleet_id, cc_flags,
+                    )
+                    for r in roles_on:
+                        role_fleet.pop(r, None)
+                    continue
+                use_cc = next(iter(cc_flags.values()), False)
+                if use_cc:
+                    _log.info(
+                        "fleet %s → /v1/chat/completions backend (server-side "
+                        "jinja) for roles %s", fleet_id, roles_on,
+                    )
+
+                full_ep = fleet.full_endpoint
+                quarter_eps = fleet.quarter_endpoints
+                if len(fleet.endpoints) == 1:
+                    backend = _mk(fleet.endpoints[0].url, use_cc)
+                else:
+                    quarter_topology_idxs = [
+                        ep.topology_idx if ep.topology_idx is not None else pos + 1
+                        for pos, ep in enumerate(quarter_eps)
+                    ]
+                    backend = ConcurrencyAwareBackend(
+                        _mk(full_ep.url, use_cc) if full_ep is not None else None,
+                        [_mk(ep.url, use_cc) for ep in quarter_eps],
+                        role=fleet_id,
+                        full_port=full_ep.port if full_ep is not None else 0,
+                        topology_role=fleet.topology_role,
+                        quarter_topology_idxs=quarter_topology_idxs,
+                        health_tracker=health_tracker,
+                    )
+                fleet_backend[fleet_id] = backend
+                _log.info(
+                    "Fleet backend %s: mode=%s %d full + %d quarters (ports %s) "
+                    "serving roles %s%s",
+                    fleet_id, fleet.mode,
+                    1 if full_ep is not None else 0, len(quarter_eps),
+                    list(fleet.ports), roles_on,
+                    " [DEGRADED literal]" if fleet.degraded else "",
+                )
+
+            handled: set[str] = set()
+            for role, fleet_id in role_fleet.items():
+                if fleet_id not in fleet_backend:
+                    continue
+                fleet = fleets[fleet_id]
+                # §3 runtime invariant diagnostic: a role's config URL copy
+                # disagreeing with the realized fleet is the WP-13 drift class.
+                # The fleet is authoritative; the drift is surfaced, not obeyed.
+                cfg_ports = _url_str_ports(server_urls.get(role, ""))
+                if cfg_ports and set(cfg_ports) != set(fleet.ports):
+                    _log.warning(
+                        "fleet %s: role %s config URL copy names ports %s but "
+                        "the realized fleet serves %s — fleet wins (per-role "
+                        "copy drift, WP-13 class)",
+                        fleet_id, role, sorted(set(cfg_ports)), sorted(fleet.ports),
+                    )
+                self._backends[role] = fleet_backend[fleet_id]
+                server_urls[role] = fleet.url_value
+                handled.add(role)
+            return frozenset(handled)
+        except Exception:
+            _log.critical(
+                "WP-12 fleet backend build FAILED — falling back to the legacy "
+                "per-role build for every role",
+                exc_info=True,
+            )
+            return frozenset()
 
     def get_backend(self, role: str) -> Any | None:
         """Get the CachingBackend for a role.
