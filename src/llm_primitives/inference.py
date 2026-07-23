@@ -636,10 +636,23 @@ class InferenceMixin:
                 )
             admitted = True
 
+        # WP-12 fleet layer: a fleet-shared backend records health per
+        # DISPATCHED endpoint itself (one circuit per fleet port). The
+        # legacy primary-URL proxy bookkeeping below is skipped for it —
+        # fast-fail instead asks whether ANY fleet endpoint is available
+        # (fleet circuit open == all endpoints open). Legacy backends
+        # (attribute absent) keep the existing behavior byte-identical.
+        fleet_managed = bool(getattr(backend, "fleet_health_managed", False))
+
         try:
             # Circuit breaker: fast-fail if backend is known to be down
             if backend_url and self.health_tracker:
-                if not self.health_tracker.is_available(backend_url):
+                if fleet_managed:
+                    if not backend.any_endpoint_available():
+                        raise RuntimeError(
+                            f"Backend unavailable (circuit open): {backend_url}"
+                        )
+                elif not self.health_tracker.is_available(backend_url):
                     raise RuntimeError(f"Backend unavailable (circuit open): {backend_url}")
 
             from src.inference_lock import inference_lock
@@ -847,12 +860,14 @@ class InferenceMixin:
             # Partial results (read_timeout with salvaged output) count as
             # degraded — not a full success for health tracking, but not a
             # hard failure that should trip the circuit breaker either.
-            if backend_url and self.health_tracker:
+            if backend_url and self.health_tracker and not fleet_managed:
                 if result.success and not result.partial:
                     self.health_tracker.record_success(backend_url)
                 elif not result.success and not result.partial:
                     self.health_tracker.record_failure(backend_url)
                 # partial results: skip health tracking (neither success nor failure)
+            # fleet_managed: the fleet backend recorded per-endpoint health
+            # for the endpoint it actually dispatched to.
 
             if not result.success and not result.partial:
                 raise RuntimeError(f"Inference failed: {result.error_message}")

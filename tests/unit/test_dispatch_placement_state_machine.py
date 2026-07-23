@@ -268,7 +268,15 @@ def test_full_disabled_places_four_concurrent_on_four_quarters(
         get_placement_policy,
     )
 
-    # The config change (step 2) must actually be live for this role.
+    # 2026-07-23 lineup restoration: worker_general's LIVE policy reverted to
+    # burst_prefer_quarters (operator-directed full redeploy). This test keeps
+    # pinning the DISPATCH-A fix for the FULL_DISABLED policy itself, so the
+    # policy is monkeypatched onto the role rather than read from live config.
+    import scripts.server.stack_numa as _stack_numa
+
+    monkeypatch.setitem(
+        _stack_numa.NUMA_CONFIG["worker_general"], "placement_policy", "full_disabled"
+    )
     assert get_placement_policy("worker_general") is RolePlacementPolicy.FULL_DISABLED
 
     monkeypatch.setenv("ORCHESTRATOR_PER_REGION_LOCKS", "1")
@@ -308,6 +316,22 @@ def test_full_disabled_places_four_concurrent_on_four_quarters(
 
     assert sorted(chosen_topos) == [1, 2, 3, 4]  # four distinct quarters
     assert 0 not in attempted  # all-region idx-0 lock never acquired
+
+
+def test_worker_general_live_policy_is_burst_prefer_quarters() -> None:
+    """2026-07-23 lineup restoration pin (operator-directed): worker_general's
+    full (8072) is redeployed, so the live policy is BURST_PREFER_QUARTERS —
+    solo gets the full for peak throughput, bursts spread on quarters. A
+    revert to full_disabled must be a deliberate config change, not drift."""
+    from src.scheduling.placement_policy import (
+        RolePlacementPolicy,
+        get_placement_policy,
+    )
+
+    assert (
+        get_placement_policy("worker_general")
+        is RolePlacementPolicy.BURST_PREFER_QUARTERS
+    )
 
 
 def test_burst_prefer_quarters_solo_request_goes_full(
@@ -479,6 +503,15 @@ def test_full_disabled_four_concurrent_spread_despite_attribution_over_report(
     Pre-fix, the placement filter expanded [0, ...] to the whole-machine union
     and QUEUED every disjoint quarter → serialization onto one quarter."""
     from types import SimpleNamespace
+
+    # 2026-07-23 lineup restoration: live worker_general policy is now
+    # burst_prefer_quarters; pin FULL_DISABLED synthetically (see the note in
+    # test_full_disabled_places_four_concurrent_on_four_quarters).
+    import scripts.server.stack_numa as _stack_numa
+
+    monkeypatch.setitem(
+        _stack_numa.NUMA_CONFIG["worker_general"], "placement_policy", "full_disabled"
+    )
 
     monkeypatch.setenv("ORCHESTRATOR_PER_REGION_LOCKS", "1")
     monkeypatch.setenv("ORCHESTRATOR_PLACEMENT_STATE_MACHINE", "1")

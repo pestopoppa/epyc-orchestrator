@@ -1,0 +1,388 @@
+"""Offline tests for affinity_preflight.py cell-manifest mode (E5 batched-decode gate).
+
+All live-system readers (_pid_on_port/_thread_union/_memory_placement/_llama_processes)
+are monkeypatched with synthetic fixtures — no real port, process, or /proc is touched.
+Also regression-tests that the legacy --roles mode behavior is unchanged.
+"""
+from __future__ import annotations
+
+import importlib.util
+import json
+import re
+import sys
+from pathlib import Path
+
+
+MODULE_PATH = Path(__file__).resolve().parents[2] / "scripts/server/affinity_preflight.py"
+spec = importlib.util.spec_from_file_location("affinity_preflight", MODULE_PATH)
+assert spec is not None and spec.loader is not None
+affinity_preflight = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(affinity_preflight)
+
+Q0A = "0-23,96-119"
+Q0B = "24-47,120-143"
+HALF1 = "48-95,144-191"
+
+MANIFEST = {
+    "schema_version": "e5-cell-manifest/1",
+    "protocol_id": "P-BENCH-3",
+    "cell_id": "qwen36_q8_0-C2-np16",
+    "model_key": "qwen36_q8_0",
+    "instances": [
+        {"cpu_list": Q0A, "port": 19080, "threads": 48, "numactl_policy": "none"},
+        {"cpu_list": Q0B, "port": 19081, "threads": 48, "numactl_policy": "none"},
+    ],
+}
+
+
+def _cpus(s: str) -> set[int]:
+    return affinity_preflight._parse_cpulist(s)
+
+
+def _patch_live(monkeypatch, *, pids=None, unions=None, procs=None):
+    """Replace every live-system reader with synthetic fixtures.
+
+    pids: {port(int): pid(str)} for _pid_on_port; unions: {pid(str): set[int]}
+    for _thread_union; procs: [(pid, args)] for _llama_processes.
+    Returns a call-recorder dict.
+    """
+    pids = pids or {}
+    unions = unions or {}
+    calls: dict = {"thread_union": []}
+    monkeypatch.setattr(affinity_preflight, "_pid_on_port", lambda port: pids.get(int(port)))
+
+    def fake_union(pid):
+        calls["thread_union"].append(str(pid))
+        return set(unions.get(str(pid), set()))
+
+    monkeypatch.setattr(affinity_preflight, "_thread_union", fake_union)
+    monkeypatch.setattr(affinity_preflight, "_llama_processes", lambda: list(procs or []))
+    monkeypatch.setattr(
+        affinity_preflight, "_memory_placement",
+        lambda pid, nodes, thr: {"checked": False, "required": False, "match": None, "note": "mocked"},
+    )
+    return calls
+
+
+def _write_manifest(tmp_path: Path, manifest: dict | None = None) -> Path:
+    path = tmp_path / "cell.json"
+    path.write_text(json.dumps(manifest if manifest is not None else MANIFEST))
+    return path
+
+
+def _run_main(monkeypatch, argv: list[str]) -> int:
+    monkeypatch.setattr(sys, "argv", ["affinity_preflight.py", *argv])
+    return affinity_preflight.main()
+
+
+# ---------------------------------------------------------------- cell mode: pass
+
+
+def test_manifest_exact_match_passes(monkeypatch, tmp_path, capsys) -> None:
+    manifest_path = _write_manifest(tmp_path)
+    out = tmp_path / "artifact.json"
+    _patch_live(
+        monkeypatch,
+        pids={19080: "101", 19081: "102"},
+        unions={"101": _cpus(Q0A), "102": _cpus(Q0B)},
+    )
+    rc = _run_main(monkeypatch, ["--cell-manifest", str(manifest_path), "--output", str(out)])
+    assert rc == 0
+
+    artifact = json.loads(out.read_text())
+    assert artifact["live_affinity_verified"] is True
+    assert artifact["mode"] == "cell"
+    assert artifact["manifest_path"] == str(manifest_path)
+    assert artifact["cell_id"] == "qwen36_q8_0-C2-np16"
+    assert artifact["foreign_llama_overlaps"] == []
+    assert len(artifact["instances"]) == 2
+    entry = artifact["instances"][0]
+    assert entry["source"] == "cell-manifest"
+    assert entry["cell_index"] == 0
+    assert entry["port"] == 19080
+    assert entry["pid"] == "101"
+    assert entry["expected_cpus"] == Q0A
+    assert entry["observed_thread_union"] == Q0A
+    assert entry["match"] is True
+    assert entry["note"] == "ok"
+    assert entry["memory_placement"]["note"] == "mocked"
+    assert "role" not in entry
+
+    # stdout carries the artifact JSON for the invoking harness
+    stdout_artifact = json.loads(capsys.readouterr().out)
+    assert stdout_artifact["live_affinity_verified"] is True
+    assert [e["note"] for e in stdout_artifact["instances"]] == ["ok", "ok"]
+
+
+def test_cell_flags_with_inline_pid_pass(monkeypatch, tmp_path) -> None:
+    out = tmp_path / "artifact.json"
+    calls = _patch_live(
+        monkeypatch,
+        pids={19011: "555"},
+        unions={"555": _cpus(HALF1)},
+    )
+    rc = _run_main(monkeypatch, [
+        "--cell", json.dumps({"cpuset": HALF1, "port": 19011, "pid": 555}),
+        "--output", str(out),
+    ])
+    assert rc == 0
+    artifact = json.loads(out.read_text())
+    assert artifact["instances"][0]["source"] == "cell"
+    assert artifact["instances"][0]["pid"] == "555"
+    assert artifact["manifest_path"] is None
+    # the supplied (cross-checked) pid is what gets verified
+    assert "555" in calls["thread_union"]
+
+
+def test_pid_map_supplied_and_agreeing_verifies_supplied_pid(monkeypatch, tmp_path) -> None:
+    manifest_path = _write_manifest(tmp_path)
+    out = tmp_path / "artifact.json"
+    calls = _patch_live(
+        monkeypatch,
+        pids={19080: "101", 19081: "102"},
+        unions={"101": _cpus(Q0A), "102": _cpus(Q0B)},
+    )
+    rc = _run_main(monkeypatch, [
+        "--cell-manifest", str(manifest_path),
+        "--pid-map", json.dumps({"19080": 101, "19081": 102}),
+        "--output", str(out),
+    ])
+    assert rc == 0
+    assert set(calls["thread_union"]) >= {"101", "102"}
+
+
+# ---------------------------------------------------------------- cell mode: failures
+
+
+def test_thread_outside_cpuset_fails(monkeypatch, tmp_path) -> None:
+    manifest_path = _write_manifest(tmp_path)
+    out = tmp_path / "artifact.json"
+    _patch_live(
+        monkeypatch,
+        pids={19080: "101", 19081: "102"},
+        # instance 1 has one thread allowed on CPU 50 — outside Q0B
+        unions={"101": _cpus(Q0A), "102": _cpus(Q0B) | {50}},
+    )
+    rc = _run_main(monkeypatch, ["--cell-manifest", str(manifest_path), "--output", str(out)])
+    assert rc == 1
+    artifact = json.loads(out.read_text())
+    assert artifact["live_affinity_verified"] is False
+    assert artifact["instances"][0]["match"] is True
+    assert artifact["instances"][1]["match"] is False
+    assert artifact["instances"][1]["note"] == "AFFINITY MISMATCH"
+
+
+def test_no_live_process_on_port_fails(monkeypatch, tmp_path) -> None:
+    manifest_path = _write_manifest(tmp_path)
+    out = tmp_path / "artifact.json"
+    _patch_live(
+        monkeypatch,
+        pids={19080: "101"},  # 19081 has no listener
+        unions={"101": _cpus(Q0A)},
+    )
+    rc = _run_main(monkeypatch, ["--cell-manifest", str(manifest_path), "--output", str(out)])
+    assert rc == 1
+    artifact = json.loads(out.read_text())
+    assert artifact["live_affinity_verified"] is False
+    entry = artifact["instances"][1]
+    assert entry["match"] is False
+    assert entry["pid"] is None
+    assert entry["note"] == "no live process on port"
+
+
+def test_pid_cross_check_mismatch_fails(monkeypatch, tmp_path) -> None:
+    manifest_path = _write_manifest(tmp_path)
+    out = tmp_path / "artifact.json"
+    _patch_live(
+        monkeypatch,
+        pids={19080: "101", 19081: "102"},
+        unions={"101": _cpus(Q0A), "102": _cpus(Q0B), "999": _cpus(Q0B)},
+    )
+    rc = _run_main(monkeypatch, [
+        "--cell-manifest", str(manifest_path),
+        "--pid-map", json.dumps({"19081": 999}),  # harness thinks 999; port serves 102
+        "--output", str(out),
+    ])
+    assert rc == 1
+    artifact = json.loads(out.read_text())
+    entry = artifact["instances"][1]
+    assert entry["match"] is False
+    assert "PID CROSS-CHECK MISMATCH" in entry["note"]
+    assert entry["pid"] == "999"
+    assert entry["pid_on_port"] == "102"
+
+
+def test_foreign_llama_overlap_fails(monkeypatch, tmp_path) -> None:
+    manifest_path = _write_manifest(tmp_path)
+    out = tmp_path / "artifact.json"
+    _patch_live(
+        monkeypatch,
+        pids={19080: "101", 19081: "102"},
+        unions={
+            "101": _cpus(Q0A), "102": _cpus(Q0B),
+            "777": {24, 25},  # foreign llama-server squatting inside Q0B
+        },
+        procs=[("101", "llama-server --port 19080"),
+               ("777", "llama-server --port 8080")],
+    )
+    rc = _run_main(monkeypatch, ["--cell-manifest", str(manifest_path), "--output", str(out)])
+    assert rc == 1
+    artifact = json.loads(out.read_text())
+    assert artifact["live_affinity_verified"] is False
+    # per-cell checks themselves passed; the foreign overlap is the failure
+    assert all(e["match"] for e in artifact["instances"])
+    assert artifact["foreign_llama_overlaps"] == [
+        {"pid": "777", "args": "llama-server --port 8080", "overlap_cpus": "24-25"},
+    ]
+
+
+def test_llama_proc_pattern_covers_bench_and_cli() -> None:
+    """Review F8: the foreign-process scan must cover the same llama family the
+    research harness matches — llama-bench/llama-cli squatting on a declared
+    cpuset is contention exactly like a foreign llama-server."""
+    pattern = re.compile(affinity_preflight.LLAMA_PROC_PATTERN)
+    for args in (
+        "/mnt/raid0/llm/llama.cpp/build/bin/llama-server -m x.gguf --port 8080",
+        "/mnt/raid0/llm/llama.cpp/build/bin/llama-bench -m x.gguf",
+        "taskset -c 0-95 llama-cli -m x.gguf -p hi",
+        "/mnt/raid0/llm/ik_llama.cpp/build/bin/llama-server --port 8090",
+    ):
+        assert pattern.search(args), args
+    # word/path-boundary anchoring: no substring false positives
+    for args in ("python3 not_llama_serverX.py", "vim llama-serverette-notes.md"):
+        assert not pattern.search(args), args
+
+
+def test_foreign_llama_without_overlap_passes(monkeypatch, tmp_path) -> None:
+    manifest_path = _write_manifest(tmp_path)
+    out = tmp_path / "artifact.json"
+    _patch_live(
+        monkeypatch,
+        pids={19080: "101", 19081: "102"},
+        unions={
+            "101": _cpus(Q0A), "102": _cpus(Q0B),
+            "888": _cpus(HALF1),  # disjoint from the declared cpusets
+        },
+        procs=[("888", "llama-server --port 8280")],
+    )
+    rc = _run_main(monkeypatch, ["--cell-manifest", str(manifest_path), "--output", str(out)])
+    assert rc == 0
+    artifact = json.loads(out.read_text())
+    assert artifact["foreign_llama_overlaps"] == []
+
+
+# ---------------------------------------------------------------- usage errors (exit 2)
+
+
+def test_port_outside_bench_range_refused(monkeypatch, tmp_path, capsys) -> None:
+    _patch_live(monkeypatch)
+    rc = _run_main(monkeypatch, ["--cell", json.dumps({"cpuset": Q0A, "port": 8080})])
+    assert rc == 2
+    assert "outside bench range" in capsys.readouterr().err
+
+
+def test_allow_any_port_opts_out_of_range_guard(monkeypatch, tmp_path) -> None:
+    out = tmp_path / "artifact.json"
+    _patch_live(monkeypatch, pids={8080: "42"}, unions={"42": _cpus(Q0A)})
+    rc = _run_main(monkeypatch, [
+        "--cell", json.dumps({"cpuset": Q0A, "port": 8080}),
+        "--allow-any-port", "--output", str(out),
+    ])
+    assert rc == 0
+    assert json.loads(out.read_text())["live_affinity_verified"] is True
+
+
+def test_unknown_schema_version_refused(monkeypatch, tmp_path, capsys) -> None:
+    _patch_live(monkeypatch)
+    manifest_path = _write_manifest(tmp_path, {**MANIFEST, "schema_version": "e5-cell-manifest/2"})
+    rc = _run_main(monkeypatch, ["--cell-manifest", str(manifest_path)])
+    assert rc == 2
+    assert "schema_version" in capsys.readouterr().err
+
+
+def test_bad_cell_json_refused(monkeypatch, capsys) -> None:
+    _patch_live(monkeypatch)
+    rc = _run_main(monkeypatch, ["--cell", "{not json"])
+    assert rc == 2
+    assert "not valid JSON" in capsys.readouterr().err
+
+
+def test_missing_manifest_file_refused(monkeypatch, tmp_path) -> None:
+    _patch_live(monkeypatch)
+    rc = _run_main(monkeypatch, ["--cell-manifest", str(tmp_path / "does_not_exist.json")])
+    assert rc == 2
+
+
+def test_roles_combined_with_cell_mode_refused(monkeypatch, tmp_path, capsys) -> None:
+    _patch_live(monkeypatch)
+    manifest_path = _write_manifest(tmp_path)
+    rc = _run_main(monkeypatch, ["--roles", "frontdoor", "--cell-manifest", str(manifest_path)])
+    assert rc == 2
+    assert "--roles" in capsys.readouterr().err
+
+
+def test_cell_and_manifest_mutually_exclusive(monkeypatch, tmp_path) -> None:
+    _patch_live(monkeypatch)
+    manifest_path = _write_manifest(tmp_path)
+    rc = _run_main(monkeypatch, [
+        "--cell-manifest", str(manifest_path),
+        "--cell", json.dumps({"cpuset": Q0A, "port": 19080}),
+    ])
+    assert rc == 2
+
+
+def test_pid_map_without_cell_mode_refused(monkeypatch, capsys) -> None:
+    _patch_live(monkeypatch)
+    rc = _run_main(monkeypatch, ["--pid-map", "{}"])
+    assert rc == 2
+    assert "cell mode" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------- legacy --roles regression
+
+
+def test_legacy_roles_mode_unchanged(monkeypatch, tmp_path, capsys) -> None:
+    """Default role-keyed invocation: artifact shape, stdout format, and exit code
+    are the pre-extension behavior — no cell-mode fields, no foreign-llama scan."""
+    sys.path.insert(0, str(affinity_preflight.ORCH))
+    from scripts.server.stack_numa import NUMA_CONFIG
+
+    instances = NUMA_CONFIG["frontdoor"]["instances"]
+    pids = {inst[1]: str(1000 + i) for i, inst in enumerate(instances)}
+    unions = {str(1000 + i): _cpus(inst[0]) for i, inst in enumerate(instances)}
+    calls = _patch_live(monkeypatch, pids=pids, unions=unions)
+
+    def _boom():
+        raise AssertionError("_llama_processes must not run in role mode")
+
+    monkeypatch.setattr(affinity_preflight, "_llama_processes", _boom)
+
+    out = tmp_path / "artifact.json"
+    rc = _run_main(monkeypatch, ["--roles", "frontdoor", "--output", str(out)])
+    assert rc == 0
+
+    artifact = json.loads(out.read_text())
+    assert artifact["live_affinity_verified"] is True
+    assert artifact["roles_checked"] == ["frontdoor"]
+    # role-mode artifact carries none of the cell-mode fields
+    for key in ("mode", "manifest_path", "cell_id", "foreign_llama_overlaps"):
+        assert key not in artifact
+    for entry in artifact["instances"]:
+        assert entry["role"] == "frontdoor"
+        assert "instance_idx" in entry
+        assert "cell_index" not in entry and "source" not in entry
+    # stdout is the human-readable role report, not a JSON dump
+    stdout = capsys.readouterr().out
+    assert stdout.lstrip().startswith("OK")
+    assert "live_affinity_verified = True" in stdout
+    assert len(calls["thread_union"]) == len(instances)
+
+
+def test_legacy_roles_mode_mismatch_still_exits_1(monkeypatch, tmp_path) -> None:
+    _patch_live(monkeypatch)  # no pids on any port → every instance fails
+    out = tmp_path / "artifact.json"
+    rc = _run_main(monkeypatch, ["--roles", "frontdoor", "--output", str(out)])
+    assert rc == 1
+    artifact = json.loads(out.read_text())
+    assert artifact["live_affinity_verified"] is False
+    assert all(e["note"] == "no live process" for e in artifact["instances"])

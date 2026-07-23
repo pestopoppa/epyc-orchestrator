@@ -1,15 +1,15 @@
 descriptor_version: 3
-compiled_at: '2026-07-22T10:25:11Z'
+compiled_at: '2026-07-23T16:15:13Z'
 status: compiled
 coverage_scope: active_roles_from_stack_manifest
 source_registries:
   lean:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
-    repo_commit: d8b7e0bd
+    repo_commit: ee39cbe7
     sha256: 4ccb929a70c7a175c79c5962e21b49cc45e909e958188f0a5b0814ce2a10ae41
   research:
     path: /mnt/raid0/llm/epyc-inference-research/orchestration/model_registry.yaml
-    repo_commit: 561741de
+    repo_commit: c4fe1e96
     sha256: f09dc2605ed233517a639fc474a45d26ed83ee59f9a02caf5349fd2fde0a1d70
 model_id_policy:
   canonical_shape: family-params-active-quant
@@ -27,6 +27,7 @@ models:
   quant: Q4_K_M
   mem_gb: 16.0
   ctx_max: 16384
+  ctx_model_max: null
   modalities:
   - text
   role_bindings:
@@ -145,6 +146,7 @@ models:
   quant: Q4_K_M
   mem_gb: 4.4
   ctx_max: 128000
+  ctx_model_max: null
   modalities:
   - text
   - vision
@@ -235,6 +237,7 @@ models:
   quant: Q4_K_M
   mem_gb: 45.0
   ctx_max: 262144
+  ctx_model_max: null
   modalities:
   - long_context
   - text
@@ -299,6 +302,7 @@ models:
   quant: Q4_K_M
   mem_gb: 69.0
   ctx_max: 262144
+  ctx_model_max: null
   modalities:
   - text
   role_bindings:
@@ -404,6 +408,7 @@ models:
   quant: Q8_0
   mem_gb: 37.0
   ctx_max: 262144
+  ctx_model_max: null
   modalities:
   - text
   role_bindings:
@@ -486,6 +491,7 @@ models:
   quant: Q8_0
   mem_gb: 37.0
   ctx_max: 262144
+  ctx_model_max: null
   modalities:
   - text
   role_bindings:

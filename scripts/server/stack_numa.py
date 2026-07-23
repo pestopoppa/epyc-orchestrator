@@ -181,7 +181,16 @@ NUMA_CONFIG: dict[str, dict] = {
         # mode until an operator redeploys a real full instance. This reclaims
         # the full's mlock and lets 4 same-role requests occupy 4 disjoint
         # quarters (design contract: big instance idle under concurrent load).
-        "placement_policy": "full_disabled",
+        # LINEUP RESTORATION (2026-07-23, operator-directed): the v7-cutover
+        # quarter-mode launch dropping 8072 was ruled an accidental lineup
+        # regression, not policy — "all models run as a full performance
+        # instance and quarter instances for concurrent aggregate boost;
+        # overlapping instances cannot infer concurrently." The full is being
+        # redeployed (the condition named above), so FULL_DISABLED reverts to
+        # BURST_PREFER_QUARTERS: solo keeps full-first for peak throughput;
+        # any self-role holder demotes the full to a trailing candidate, and
+        # 0-95 overlapping every quarter keeps it region-vetoed under burst.
+        "placement_policy": "burst_prefer_quarters",
         "mlock": True,
         "spec_overrides": {"draft_max": 2, "p_split": 0},  # gemma4 MTP recipe (was dm=8 for Qwen3-Coder)
         "numactl_policy_instances": {0: "interleave=all"},  # required for gemma4 MTP idx0

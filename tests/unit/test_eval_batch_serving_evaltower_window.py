@@ -718,3 +718,74 @@ def test_atomic_write_json_replaces_tmp_and_preserves_schema(tmp_path: Path) -> 
         "value": 1,
     }
     assert not path.with_suffix(path.suffix + ".tmp").exists()
+
+
+def test_skip_batch_arm_runs_current_only_no_activation(tmp_path: Path, monkeypatch) -> None:
+    """--skip-batch-arm (R3 re-baseline, 2026-07-23): current arm only, zero
+    activation/rollback — the batch-shaped NODE0 lane must never launch under
+    the restored big+quarters lineup (thread overlap with live halves)."""
+    monkeypatch.setattr(
+        window.activation_window,
+        "build_preflight",
+        lambda _args: _healthy_preflight(),
+    )
+
+    def _forbidden_activation(_args, *, output_dir):
+        raise AssertionError("activation must not run with --skip-batch-arm")
+
+    monkeypatch.setattr(window.activation_window, "execute_activation", _forbidden_activation)
+    monkeypatch.setattr(
+        window.activation_window,
+        "execute_rollback",
+        lambda _args: [],
+    )
+    monkeypatch.setattr(window, "_resolved_eval_concurrency", lambda _roles=None: 4)
+
+    calls: list[str] = []
+
+    def fake_run_eval_arm(name: str, _args, **_kwargs):
+        calls.append(name)
+        return {
+            "name": name,
+            "ok": True,
+            "error": None,
+            "metrics": {
+                "quality": 2.0,
+                "speed": 10.0,
+                "reliability": 1.0,
+                "wall_s": 100.0,
+                "n_questions": 50,
+                "n_scored": 50,
+            },
+        }
+
+    monkeypatch.setattr(window, "run_eval_arm", fake_run_eval_arm)
+
+    args = window.parse_args(
+        [
+            "--apply",
+            "--confirm-clean-window",
+            "--skip-batch-arm",
+            "--min-eval-concurrency",
+            "3",
+            "--output-dir",
+            str(tmp_path),
+        ]
+    )
+    report, rc = window.build_report(args, output_dir=tmp_path)
+
+    assert rc == 0
+    assert calls == ["current"]
+    assert report["status"] == "current_arm_complete"
+    assert report["skip_batch_arm"] is True
+    assert report["activation_steps"] == []
+    assert report["rollback_steps"] == []
+
+
+def test_skip_both_arms_is_a_parse_error(tmp_path: Path) -> None:
+    import pytest as _pytest
+
+    with _pytest.raises(SystemExit):
+        window.parse_args(
+            ["--skip-current-arm", "--skip-batch-arm", "--output-dir", str(tmp_path)]
+        )

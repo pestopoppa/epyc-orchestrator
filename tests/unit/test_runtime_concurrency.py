@@ -61,3 +61,66 @@ def test_public_concurrency_api_uses_derived_policy(monkeypatch) -> None:
     assert concurrency.get_role_max_concurrency("worker_batch") == 3
     assert concurrency.get_role_max_concurrency("worker_general") == 1
     assert concurrency.small_worker_roles() == frozenset({"worker_batch"})
+
+
+class TestFleetRoleConcurrency:
+    """C10-F1: flag-gated fleet-derived role concurrency (default OFF)."""
+
+    def test_flag_off_keeps_legacy_default(self, monkeypatch):
+        monkeypatch.delenv("ORCHESTRATOR_FLEET_ROLE_CONCURRENCY", raising=False)
+        from src.runtime import concurrency as rc
+
+        called = []
+        monkeypatch.setattr(
+            rc, "_fleet_disjoint_capacity", lambda role: called.append(role) or 4
+        )
+        assert rc.get_role_max_concurrency("worker_math") == 1
+        assert called == []  # fleet path never consulted with the flag off
+
+    def test_flag_on_uses_fleet_quarter_capacity(self, monkeypatch):
+        monkeypatch.setenv("ORCHESTRATOR_FLEET_ROLE_CONCURRENCY", "1")
+        from src.runtime import concurrency as rc
+
+        monkeypatch.setattr(rc, "_fleet_disjoint_capacity", lambda role: 4)
+        assert rc.get_role_max_concurrency("worker_math") == 4
+
+    def test_flag_on_falls_back_when_fleet_unavailable(self, monkeypatch):
+        monkeypatch.setenv("ORCHESTRATOR_FLEET_ROLE_CONCURRENCY", "1")
+        from src.runtime import concurrency as rc
+
+        monkeypatch.setattr(rc, "_fleet_disjoint_capacity", lambda role: None)
+        assert rc.get_role_max_concurrency("made_up_role") == 1
+
+    def test_fleet_capacity_from_synthetic_state(self, monkeypatch):
+        from src.runtime import concurrency as rc
+
+        class _Fleet:
+            quarter_endpoints = (object(), object(), object(), object())
+
+        class _Binding:
+            fleet_id = "worker"
+
+        import src.fleet as fleet_mod
+
+        monkeypatch.setattr(
+            fleet_mod, "get_fleets_and_bindings", lambda: ({"worker": _Fleet()}, {})
+        )
+        monkeypatch.setattr(fleet_mod, "resolve_binding", lambda role, b: _Binding())
+        assert rc._fleet_disjoint_capacity("worker_math") == 4
+
+    def test_single_endpoint_fleet_caps_at_one(self, monkeypatch):
+        from src.runtime import concurrency as rc
+
+        class _Fleet:
+            quarter_endpoints = ()
+
+        class _Binding:
+            fleet_id = "architect"
+
+        import src.fleet as fleet_mod
+
+        monkeypatch.setattr(
+            fleet_mod, "get_fleets_and_bindings", lambda: ({"architect": _Fleet()}, {})
+        )
+        monkeypatch.setattr(fleet_mod, "resolve_binding", lambda role, b: _Binding())
+        assert rc._fleet_disjoint_capacity("architect_general") == 1

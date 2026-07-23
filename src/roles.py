@@ -405,6 +405,13 @@ _FALLBACK_MAP: dict[Role, list[Role]] = {
 def get_fallback_roles(role: Role | str) -> list[Role]:
     """Get fallback roles for infrastructure failure (NOT task escalation).
 
+    WP-12 (``ORCHESTRATOR_FLEET_LAYER=1``, default off): same-fleet edges are
+    compiled out — a candidate on the failing role's own physical fleet would
+    retry the identical backend + identical (already-open) circuit, which is
+    the ``forced_role_fallback`` churn class. Fallback is meaningful iff it
+    changes the physical fleet (design §4). When the fleet layer is off or
+    its build is unavailable, the legacy map is returned unchanged.
+
     Args:
         role: Role whose backend is unavailable.
 
@@ -415,6 +422,17 @@ def get_fallback_roles(role: Role | str) -> list[Role]:
         role = Role.from_string(role)
         if role is None:
             return []
+    if os.environ.get("ORCHESTRATOR_FLEET_LAYER") == "1":
+        try:
+            from src.fleet import compiled_fleet_fallback_map
+
+            compiled = compiled_fleet_fallback_map()
+            if compiled is not None:
+                return list(compiled.get(role, ()))
+        except Exception:
+            # Fleet layer unavailable → legacy map (consistent with the
+            # backend builder's legacy fallback in the same condition).
+            pass
     return list(_FALLBACK_MAP.get(role, []))
 
 
