@@ -741,6 +741,21 @@ def _preserved_process_info(
     )
 
 
+def _only_mode_transition_allowed(numa_mode: str, realized_mode: str) -> bool:
+    """Whether a `--only` start may proceed with `numa_mode` != realized mode.
+
+    Additive mode promotion (2026-07-23 lineup restoration): an EXPLICIT
+    `--numa-mode both` over a realized single-mode fleet only ADDS the missing
+    complementary instances — skip-healthy leaves every running server
+    untouched, so it is the deterministic no-outage path to the ratified
+    big+quarters lineup. The arg is the deliberate-authority signal (ESC-8's
+    threat model is env/manifest ACCIDENTAL resurrection; an explicit arg is
+    neither). Every other mismatch — especially a NARROWER requested mode,
+    which would imply stopping live servers — refuses.
+    """
+    return numa_mode == "both" and realized_mode in ("quarter", "full")
+
+
 def cmd_start(args: argparse.Namespace) -> int:
     """Start the orchestrator stack."""
     _registry_yaml = Path(__file__).parent.parent.parent / "orchestration" / "model_registry.yaml"
@@ -1095,12 +1110,20 @@ def cmd_start(args: argparse.Namespace) -> int:
                 f"defaulting to production mode '{numa_mode}'"
             )
     if only and realized_mode is not None and numa_mode != realized_mode:
-        print(
-            f"  [!] --only refused: requested --numa-mode '{numa_mode}' conflicts with the "
-            f"running fleet ('{realized_mode}'). Pass --numa-mode {realized_mode} explicitly "
-            f"to add roles to the live stack, or stop the fleet first."
-        )
-        return 1
+        if _only_mode_transition_allowed(numa_mode, realized_mode):
+            print(
+                f"  [--numa-mode both] additive promotion over realized "
+                f"'{realized_mode}' fleet: healthy servers are kept; only the "
+                f"missing complementary instances will be started."
+            )
+        else:
+            print(
+                f"  [!] --only refused: requested --numa-mode '{numa_mode}' conflicts with the "
+                f"running fleet ('{realized_mode}'). Pass --numa-mode {realized_mode} explicitly "
+                f"to add roles to the live stack, use an explicit '--numa-mode both' to "
+                f"additively promote a single-mode fleet, or stop the fleet first."
+            )
+            return 1
     if numa_mode == "both":
         # Light advisory only — 'both' has been working for frontdoor/coder_escalation since
         # 2026-03 (Qwen3.6-35B Q8 quarters tuned to coexist with the full instance). The

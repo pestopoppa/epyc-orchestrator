@@ -276,9 +276,14 @@ def test_case2_mirror_frontdoor_four_wide_quarters_half_idle(monkeypatch, tmp_pa
 
 
 def test_case7_full_disabled_never_emits_full(monkeypatch, tmp_path):
-    """worker_general carries placement_policy=full_disabled in the real
-    NUMA_CONFIG: even with a realized full endpoint, the fleet CAB never
-    places the all-region full."""
+    """FULL_DISABLED policy (synthetic since the 2026-07-23 lineup restoration
+    reverted worker_general's live policy to burst_prefer_quarters): even with
+    a realized full endpoint, the fleet CAB never places the all-region full."""
+    import scripts.server.stack_numa as _stack_numa
+
+    monkeypatch.setitem(
+        _stack_numa.NUMA_CONFIG["worker_general"], "placement_policy", "full_disabled"
+    )
     state = _fleet_state(tmp_path, wg_ports=[8072] + WG_QUARTERS)
     host, _urls, _st = _build_host(monkeypatch, tmp_path, state=state)
     cab = host._backends["worker_general"]

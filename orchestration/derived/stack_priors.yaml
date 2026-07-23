@@ -48,7 +48,7 @@ contract:
   - quality_overall
   - memory_cost
   fallback_policy: Consumers may use local fallback values only as explicit degraded mode when this generated contract is missing or invalid.
-compiled_at: '2026-07-22T10:25:11Z'
+compiled_at: '2026-07-23T16:15:13Z'
 status: compiled
 coverage_scope: descriptor_role_bindings
 precedence_spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
@@ -56,31 +56,31 @@ source_artifacts:
   registry:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
     sha256: 4ccb929a70c7a175c79c5962e21b49cc45e909e958188f0a5b0814ce2a10ae41
-    repo_commit: d8b7e0bd
+    repo_commit: ee39cbe7
   descriptors:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_descriptors.yaml
-    sha256: c2eb898fc668c349fa3fd783a51663d5bdd2ae487ccf065cdeb9fa24260103db
-    repo_commit: d8b7e0bd
+    sha256: f8c042849b68fa9c995de2b1eb1a803bc962b5621a03b35f40e207a60b055733
+    repo_commit: ee39cbe7
   stack_manifest:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_manifest.py
     sha256: 29fde0c2b3161d5b56fe8cb6fd2fe4ebd0bfbdd609fe239b6e0045f6c70b744b
-    repo_commit: d8b7e0bd
+    repo_commit: ee39cbe7
   stack_numa:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_numa.py
-    sha256: cdf4c30458c6982ebab593ff1652e1f443e40d5a2652d1f00f020fea4515381b
-    repo_commit: d8b7e0bd
+    sha256: 8d314cf9ccb5224baa6b40bca4a4881db2914f163e6dd21a4abf51e9e62fcf02
+    repo_commit: ee39cbe7
   orchestrator_stack:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/orchestrator_stack.py
-    sha256: 82fa0f2349d78508946633ea151f5bd03948c3926936732615769ff5c432e4fa
-    repo_commit: d8b7e0bd
+    sha256: 6505d7d42656a28166df398388f2088a28822221f9c58e8ac69b0d8697106af9
+    repo_commit: ee39cbe7
   stack_paths:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_paths.py
     sha256: 7eee8576101dbb827ec8e94a228beedb401d7cad80841e1a18aab9c03db4206b
-    repo_commit: d8b7e0bd
+    repo_commit: ee39cbe7
   stack_runtime:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_runtime.py
     sha256: 984d27262e1f1d5a5332d0b4a3e6fb96fb8095fc890ddaa93da07bff52eb1c99
-    repo_commit: d8b7e0bd
+    repo_commit: ee39cbe7
 roles:
   architect_general:
     role: architect_general
@@ -150,6 +150,16 @@ roles:
               ngram_mod_n_min: null
               ngram_mod_n_max: null
               ngram_mod_n_match: null
+    policy:
+      lock_class: exclusive
+      contention_class: heavy
+      tap_safe_non_stream: true
+      high_cost: true
+      model_mem_gb: 69.0
+      source: stack_priors.compile
+      thresholds:
+        tap_safe_non_stream_min_mem_gb: 64.0
+        high_cost_min_mem_gb: 60.0
     priors:
       throughput_tps: 12.19
       quality_overall: 0.8567
@@ -177,6 +187,7 @@ roles:
       quant: Q4_K_M
       mem_gb: 69.0
       ctx_max: 262144
+      ctx_model_max: null
       modalities:
       - text
       attention_layers: 64
@@ -243,10 +254,11 @@ roles:
     model_id: qwen3.6-35b-a3b-mtp-q8_0
     display_name: Qwen3.6-35B-A3B-MTP-Q8_0
     serving:
-      endpoint: http://localhost:8080
+      endpoint: http://localhost:8070
       server_role: frontdoor
       binding: server_mode.shared_with
       ports:
+      - 8070
       - 8080
       - 8180
       - 8280
@@ -260,11 +272,11 @@ roles:
       shared_mmap: true
       launch:
         entries:
-        - port: 8080
+        - port: 8070
           primary_role: frontdoor
           mode: default
           alias: true
-          numa_instance: 1
+          numa_instance: 0
         primary_roles:
         - frontdoor
         modes:
@@ -308,6 +320,16 @@ roles:
               ngram_mod_n_min: null
               ngram_mod_n_max: null
               ngram_mod_n_match: null
+    policy:
+      lock_class: exclusive
+      contention_class: heavy
+      tap_safe_non_stream: false
+      high_cost: false
+      model_mem_gb: 37.0
+      source: stack_priors.compile
+      thresholds:
+        tap_safe_non_stream_min_mem_gb: 64.0
+        high_cost_min_mem_gb: 60.0
     priors:
       throughput_tps: 24.3
       quality_overall: 0.93
@@ -333,6 +355,7 @@ roles:
       quant: Q8_0
       mem_gb: 37.0
       ctx_max: 262144
+      ctx_model_max: null
       modalities:
       - text
       attention_layers: 28
@@ -366,10 +389,11 @@ roles:
     model_id: qwen3.6-35b-a3b-mtp-q8_0
     display_name: Qwen3.6-35B-A3B-MTP-Q8_0
     serving:
-      endpoint: http://localhost:8080
+      endpoint: http://localhost:8070
       server_role: frontdoor
       binding: server_mode.direct
       ports:
+      - 8070
       - 8080
       - 8180
       - 8280
@@ -383,6 +407,11 @@ roles:
       shared_mmap: true
       launch:
         entries:
+        - port: 8070
+          primary_role: frontdoor
+          mode: default
+          alias: false
+          numa_instance: 0
         - port: 8080
           primary_role: frontdoor
           mode: default
@@ -446,6 +475,16 @@ roles:
               ngram_mod_n_min: null
               ngram_mod_n_max: null
               ngram_mod_n_match: null
+    policy:
+      lock_class: exclusive
+      contention_class: heavy
+      tap_safe_non_stream: false
+      high_cost: false
+      model_mem_gb: 37.0
+      source: stack_priors.compile
+      thresholds:
+        tap_safe_non_stream_min_mem_gb: 64.0
+        high_cost_min_mem_gb: 60.0
     priors:
       throughput_tps: 24.3
       quality_overall: 0.93
@@ -471,6 +510,7 @@ roles:
       quant: Q8_0
       mem_gb: 37.0
       ctx_max: 262144
+      ctx_model_max: null
       modalities:
       - text
       attention_layers: 28
@@ -504,10 +544,11 @@ roles:
     model_id: qwen3-next-80b-a3b-q4_k_m
     display_name: Qwen3-Next-80B-A3B-Instruct
     serving:
-      endpoint: http://localhost:8185
+      endpoint: http://localhost:8085
       server_role: ingest_long_context
       binding: server_mode.direct
       ports:
+      - 8085
       - 8185
       - 8285
       - 8385
@@ -521,6 +562,11 @@ roles:
       shared_mmap: true
       launch:
         entries:
+        - port: 8085
+          primary_role: ingest_long_context
+          mode: default
+          alias: false
+          numa_instance: 0
         - port: 8185
           primary_role: ingest_long_context
           mode: default
@@ -583,6 +629,16 @@ roles:
               ngram_mod_n_min: null
               ngram_mod_n_max: null
               ngram_mod_n_match: null
+    policy:
+      lock_class: exclusive
+      contention_class: heavy
+      tap_safe_non_stream: false
+      high_cost: false
+      model_mem_gb: 45.0
+      source: stack_priors.compile
+      thresholds:
+        tap_safe_non_stream_min_mem_gb: 64.0
+        high_cost_min_mem_gb: 60.0
     priors:
       throughput_tps: 20.8
       quality_overall: 0.9259
@@ -607,6 +663,7 @@ roles:
       quant: Q4_K_M
       mem_gb: 45.0
       ctx_max: 262144
+      ctx_model_max: null
       modalities:
       - long_context
       - text
@@ -653,6 +710,16 @@ roles:
         modes: []
         requirements: {}
         runtime: {}
+    policy:
+      lock_class: exclusive
+      contention_class: heavy
+      tap_safe_non_stream: true
+      high_cost: true
+      model_mem_gb: 69.0
+      source: stack_priors.compile
+      thresholds:
+        tap_safe_non_stream_min_mem_gb: 64.0
+        high_cost_min_mem_gb: 60.0
     priors:
       throughput_tps: 12.19
       quality_overall: 0.8567
@@ -680,6 +747,7 @@ roles:
       quant: Q4_K_M
       mem_gb: 69.0
       ctx_max: 262144
+      ctx_model_max: null
       modalities:
       - text
       attention_layers: 64
@@ -768,6 +836,16 @@ roles:
         modes: []
         requirements: {}
         runtime: {}
+    policy:
+      lock_class: exclusive
+      contention_class: heavy
+      tap_safe_non_stream: false
+      high_cost: false
+      model_mem_gb: 37.0
+      source: stack_priors.compile
+      thresholds:
+        tap_safe_non_stream_min_mem_gb: 64.0
+        high_cost_min_mem_gb: 60.0
     priors:
       throughput_tps: 27.4
       quality_overall: 0.738
@@ -793,6 +871,7 @@ roles:
       quant: Q8_0
       mem_gb: 37.0
       ctx_max: 262144
+      ctx_model_max: null
       modalities:
       - text
     evidence:
@@ -819,10 +898,11 @@ roles:
     model_id: gemma4-26b-a4b-it-orig-q4_k_m
     display_name: gemma-4-26B-A4B-it-ORIG-Q4_K_M
     serving:
-      endpoint: http://localhost:8082
+      endpoint: http://localhost:8072
       server_role: worker
       binding: server_mode.shared_with
       ports:
+      - 8072
       - 8082
       - 8182
       - 8282
@@ -836,6 +916,12 @@ roles:
       shared_mmap: true
       launch:
         entries:
+        - port: 8072
+          primary_role: worker_general
+          mode: worker_pool
+          alias: true
+          numa_instance: 0
+          worker_type: explore
         - port: 8082
           primary_role: worker_general
           mode: worker_pool
@@ -885,6 +971,16 @@ roles:
               ngram_mod_n_min: null
               ngram_mod_n_max: null
               ngram_mod_n_match: null
+    policy:
+      lock_class: shared
+      contention_class: light
+      tap_safe_non_stream: false
+      high_cost: false
+      model_mem_gb: 16.0
+      source: stack_priors.compile
+      thresholds:
+        tap_safe_non_stream_min_mem_gb: 64.0
+        high_cost_min_mem_gb: 60.0
     priors:
       throughput_tps: 38.46
       quality_overall: 0.9
@@ -912,6 +1008,7 @@ roles:
       quant: Q4_K_M
       mem_gb: 16.0
       ctx_max: 16384
+      ctx_model_max: null
       modalities:
       - text
     evidence:
@@ -1047,6 +1144,16 @@ roles:
               ngram_mod_n_min: null
               ngram_mod_n_max: null
               ngram_mod_n_match: null
+    policy:
+      lock_class: exclusive
+      contention_class: heavy
+      tap_safe_non_stream: false
+      high_cost: false
+      model_mem_gb: 4.4
+      source: stack_priors.compile
+      thresholds:
+        tap_safe_non_stream_min_mem_gb: 64.0
+        high_cost_min_mem_gb: 60.0
     priors:
       throughput_tps: 21.32
       quality_overall: 0.9167
@@ -1071,6 +1178,7 @@ roles:
       quant: Q4_K_M
       mem_gb: 4.4
       ctx_max: 128000
+      ctx_model_max: null
       modalities:
       - text
       - vision
@@ -1124,10 +1232,11 @@ roles:
     model_id: gemma4-26b-a4b-it-orig-q4_k_m
     display_name: gemma-4-26B-A4B-it-ORIG-Q4_K_M
     serving:
-      endpoint: http://localhost:8082
+      endpoint: http://localhost:8072
       server_role: worker
       binding: server_mode.model_role
       ports:
+      - 8072
       - 8082
       - 8182
       - 8282
@@ -1141,6 +1250,12 @@ roles:
       shared_mmap: true
       launch:
         entries:
+        - port: 8072
+          primary_role: worker_general
+          mode: worker_pool
+          alias: false
+          numa_instance: 0
+          worker_type: explore
         - port: 8082
           primary_role: worker_general
           mode: worker_pool
@@ -1208,6 +1323,16 @@ roles:
               ngram_mod_n_min: null
               ngram_mod_n_max: null
               ngram_mod_n_match: null
+    policy:
+      lock_class: shared
+      contention_class: light
+      tap_safe_non_stream: false
+      high_cost: false
+      model_mem_gb: 16.0
+      source: stack_priors.compile
+      thresholds:
+        tap_safe_non_stream_min_mem_gb: 64.0
+        high_cost_min_mem_gb: 60.0
     priors:
       throughput_tps: 38.46
       quality_overall: 0.9
@@ -1235,6 +1360,7 @@ roles:
       quant: Q4_K_M
       mem_gb: 16.0
       ctx_max: 16384
+      ctx_model_max: null
       modalities:
       - text
     evidence:
@@ -1308,10 +1434,11 @@ roles:
     model_id: gemma4-26b-a4b-it-orig-q4_k_m
     display_name: gemma-4-26B-A4B-it-ORIG-Q4_K_M
     serving:
-      endpoint: http://localhost:8082
+      endpoint: http://localhost:8072
       server_role: worker
       binding: server_mode.shared_with
       ports:
+      - 8072
       - 8082
       - 8182
       - 8282
@@ -1325,6 +1452,12 @@ roles:
       shared_mmap: true
       launch:
         entries:
+        - port: 8072
+          primary_role: worker_general
+          mode: worker_pool
+          alias: true
+          numa_instance: 0
+          worker_type: explore
         - port: 8082
           primary_role: worker_general
           mode: worker_pool
@@ -1374,6 +1507,16 @@ roles:
               ngram_mod_n_min: null
               ngram_mod_n_max: null
               ngram_mod_n_match: null
+    policy:
+      lock_class: shared
+      contention_class: light
+      tap_safe_non_stream: false
+      high_cost: false
+      model_mem_gb: 16.0
+      source: stack_priors.compile
+      thresholds:
+        tap_safe_non_stream_min_mem_gb: 64.0
+        high_cost_min_mem_gb: 60.0
     priors:
       throughput_tps: 38.46
       quality_overall: 0.9
@@ -1401,6 +1544,7 @@ roles:
       quant: Q4_K_M
       mem_gb: 16.0
       ctx_max: 16384
+      ctx_model_max: null
       modalities:
       - text
     evidence:
@@ -1474,10 +1618,11 @@ roles:
     model_id: qwen3.6-35b-a3b-mtp-q8_0
     display_name: Qwen3.6-35B-A3B-MTP-Q8_0
     serving:
-      endpoint: http://localhost:8080
+      endpoint: http://localhost:8070
       server_role: frontdoor
       binding: server_mode.shared_with
       ports:
+      - 8070
       - 8080
       - 8180
       - 8280
@@ -1491,11 +1636,11 @@ roles:
       shared_mmap: true
       launch:
         entries:
-        - port: 8080
+        - port: 8070
           primary_role: frontdoor
           mode: default
           alias: true
-          numa_instance: 1
+          numa_instance: 0
         primary_roles:
         - frontdoor
         modes:
@@ -1539,6 +1684,16 @@ roles:
               ngram_mod_n_min: null
               ngram_mod_n_max: null
               ngram_mod_n_match: null
+    policy:
+      lock_class: exclusive
+      contention_class: heavy
+      tap_safe_non_stream: false
+      high_cost: false
+      model_mem_gb: 37.0
+      source: stack_priors.compile
+      thresholds:
+        tap_safe_non_stream_min_mem_gb: 64.0
+        high_cost_min_mem_gb: 60.0
     priors:
       throughput_tps: 24.3
       quality_overall: 0.93
@@ -1564,6 +1719,7 @@ roles:
       quant: Q8_0
       mem_gb: 37.0
       ctx_max: 262144
+      ctx_model_max: null
       modalities:
       - text
       attention_layers: 28
@@ -1659,6 +1815,16 @@ roles:
               ngram_mod_n_min: null
               ngram_mod_n_max: null
               ngram_mod_n_match: null
+    policy:
+      lock_class: shared
+      contention_class: light
+      tap_safe_non_stream: false
+      high_cost: false
+      model_mem_gb: 4.4
+      source: stack_priors.compile
+      thresholds:
+        tap_safe_non_stream_min_mem_gb: 64.0
+        high_cost_min_mem_gb: 60.0
     priors:
       throughput_tps: 21.32
       quality_overall: 0.9167
@@ -1683,6 +1849,7 @@ roles:
       quant: Q4_K_M
       mem_gb: 4.4
       ctx_max: 128000
+      ctx_model_max: null
       modalities:
       - text
       - vision

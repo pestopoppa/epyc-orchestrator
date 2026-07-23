@@ -67,8 +67,13 @@ def test_malformed_value_falls_back_to_default(bad: object) -> None:
 
 
 def test_live_call_with_no_arg_does_not_crash() -> None:
-    """Live wrapper (no numa_config arg) reads production NUMA_CONFIG; every
-    role lacks `placement_policy` field as of WP-5 scaffold, so all return
-    the default — verifying the path is stable for WP-3 consumers."""
-    for role in ("frontdoor", "worker_general", "ingest_long_context", "made_up_role"):
-        assert get_placement_policy(role) is DEFAULT_PLACEMENT_POLICY
+    """Live wrapper (no numa_config arg) reads production NUMA_CONFIG and must
+    be stable for WP-3 consumers regardless of which roles carry a
+    `placement_policy` field (frontdoor/worker_general do since WP-7 / the
+    2026-07-23 lineup restoration; the original WP-5-era premise that no role
+    carries one is long stale). Unknown roles resolve to the default."""
+    from src.scheduling.placement_policy import RolePlacementPolicy
+
+    for role in ("frontdoor", "worker_general", "ingest_long_context"):
+        assert isinstance(get_placement_policy(role), RolePlacementPolicy)
+    assert get_placement_policy("made_up_role") is DEFAULT_PLACEMENT_POLICY
