@@ -324,6 +324,13 @@ def test_burst_prefer_quarters_solo_request_goes_full(
 
     monkeypatch.setattr("src.runtime.cpu_region_lock.cpu_region_lock_for_instance", _mock_lock)
     monkeypatch.setattr("src.runtime.cpu_region_lock.active_region_holders", lambda: {})
+    # Third seam (570200ff): without this patch the test reads LIVE host lock
+    # state — a real frontdoor decode holding q0 flips is_full to False
+    # (deterministically reproduced by the WP-12 session, 2026-07-23). Siblings
+    # patch all three seams; this one must too.
+    monkeypatch.setattr(
+        "src.runtime.cpu_region_lock.held_regions_by_role", lambda *a, **k: {}
+    )
     monkeypatch.setattr(
         "src.runtime.instance_topology.get_instance_regions",
         lambda: dict(_FRONTDOOR_REGIONS),
