@@ -1697,6 +1697,15 @@ def start_orchestrator(
     env.setdefault("ORCHESTRATOR_PLACEMENT_STATE_MACHINE", "1")
     env.setdefault("ORCHESTRATOR_REVERSE_MIGRATION", "1")
     env.setdefault("ORCHESTRATOR_URE_UNCERTAINTY_SHADOW_LOG", "1")
+    # WP-12 flip boundary (operator-directed 2026-07-23): fleet layer ON —
+    # roles bound to a registry server_mode fleet share ONE backend per
+    # physical fleet (one breaker/lock fact per endpoint, same-fleet fallback
+    # compiled out). Durable default so API restarts don't silently revert
+    # (the WP-7/J6 lesson above). INSTANT ROLLBACK: relaunch/reload with
+    # ORCHESTRATOR_FLEET_LAYER=0 in the shell env (setdefault yields) — the
+    # legacy per-role build (Fix-A delegations + priors alias records) is
+    # retained as the rollback substrate until the post-soak §5 cleanup.
+    env.setdefault("ORCHESTRATOR_FLEET_LAYER", "1")
     # P6.2-A2 (2026-05-21): frontdoor-specialist verifier loaded by the API
     # service when the gate flag is on. Defaults below put it in SHADOW MODE —
     # the verifier runs and logs P(success) to last_decision_meta but never
