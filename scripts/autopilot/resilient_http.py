@@ -74,6 +74,13 @@ def _empty_meta() -> dict[str, Any]:
         "retry_count": 0,
         "wait_s": 0.0,
         "marker_changes": {},
+        # Classification of the terminal exception, when the request ended in
+        # failure ("" on clean success). Additive fields — downstream consumers
+        # that read specific keys are unaffected. call_orchestrator_forced's
+        # eval reconnect-backoff reads `reason` to decide whether a watcher-path
+        # failure was connection-level (and thus worth backing off + retrying).
+        "reason": "",
+        "detail": "",
     }
 
 
@@ -164,6 +171,8 @@ def resilient_post(
         return result, meta
     except Exception as exc:
         reason, detail = _classify_exception(exc)
+        meta["reason"] = reason
+        meta["detail"] = detail
         # Non-retryable exception classes: don't even consult the
         # watcher. Mark as real failure.
         if reason not in _RETRYABLE_REASONS or watcher is None:
@@ -207,7 +216,9 @@ def resilient_post(
                 meta["exogenous_recovered"] = True
                 return result, meta
             except Exception as retry_exc:
-                last_detail = _classify_exception(retry_exc)[1]
+                retry_reason, last_detail = _classify_exception(retry_exc)
+                meta["reason"] = retry_reason
+                meta["detail"] = last_detail
                 continue
 
         meta["exogenous_unrecovered"] = True

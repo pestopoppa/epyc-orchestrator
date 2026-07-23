@@ -56,6 +56,45 @@ def _env_float(name: str, default: float, *, minimum: float = 0.0) -> float:
         return default
 
 
+# ── Eval reconnect backoff (REL-2) ───────────────────────────────────
+# 2026-07 incidents: two eval runs burned ~680 and ~532 questions when the
+# orchestrator API was reloaded mid-run — every in-flight /chat POST hit a
+# CONNECTION-level failure (connection refused / reset) that was recorded as a
+# terminal per-question error. `call_orchestrator_forced` now retries CONNECTION
+# failures ONLY (never timeouts, never HTTP status errors, never in-band error
+# banners) with exponential backoff before honestly error-rowing, so a transient
+# API restart is survived while persistent unreachability stays an excluded
+# error (REL-1). Timeout semantics (04411baf) are untouched: timeouts are not
+# in the reconnect set and fall straight through to their prior terminal path.
+
+# Reasons (from src.observability.classify_exception) that count as a
+# connection-level failure worth a reconnect backoff. Deliberately EXCLUDES
+# every timeout reason (connect_timeout / read_timeout / timeout) and
+# http_status. `request_error` is the classifier's bucket for non-timeout
+# transport faults — httpx ReadError / WriteError / RemoteProtocolError, i.e.
+# a peer reset or "server disconnected" mid-reload — which are exactly the
+# connection-reset flavors we want to survive.
+_RECONNECT_REASONS = frozenset({"connect_error", "request_error"})
+
+
+def _classify_exc(exc: BaseException) -> tuple[str, str]:
+    """Return ``(reason, detail)`` for ``exc`` via the shared observability
+    classifier, with a self-contained fallback so this module never hard-depends
+    on ``src`` being importable. Mirrors the reason strings resilient_post stamps
+    into its meta dict so both request paths agree on what is reconnectable."""
+    try:
+        from pathlib import Path
+
+        _root = Path(__file__).resolve().parents[2]
+        if str(_root) not in sys.path:
+            sys.path.insert(0, str(_root))
+        from src.observability import classify_exception  # type: ignore
+
+        return classify_exception(exc)
+    except Exception:
+        return ("unexpected_error", f"{type(exc).__name__}: {exc}")
+
+
 # ── Slot management ──────────────────────────────────────────────────
 
 
@@ -795,72 +834,150 @@ def call_orchestrator_forced(
     if prompt_root:
         payload["x_orchestrator_prompt_root"] = str(prompt_root)
 
-    # When no watcher: preserve the EXACT legacy code path. Critical for
-    # the non-autopilot callers of this function (14 impacted symbols per
-    # GitNexus blast-radius audit). Any change here that newly escapes an
-    # exception or alters the response dict shape would break them.
-    if watcher is None:
-        try:
-            if client is not None:
-                response = client.post(f"{url}/chat", json=payload, timeout=timeout)
-            else:
-                response = httpx.post(
-                    f"{url}/chat",
-                    json=payload,
-                    timeout=timeout,
-                )
-            if response.status_code >= 400:
-                try:
-                    data = response.json()
-                except Exception:
-                    response.raise_for_status()
-                    raise
-                if isinstance(data, dict) and (
-                    data.get("error_code") or data.get("error_detail")
-                ):
-                    error_code = data.get("error_code")
-                    if error_code and not data.get("error"):
-                        data["error"] = data.get("error_detail") or f"HTTP {error_code}"
-                    _surface_inband_error(data)
-                    _normalize_tool_telemetry(data)
-                    return data
-            response.raise_for_status()
-            data = response.json()
-            if isinstance(data, dict):
+    def _execute_direct() -> dict[str, Any]:
+        """One direct POST + response parse. RAISES on transport/connection
+        exceptions; returns the parsed response dict (including structured HTTP
+        error bodies) otherwise. This is the EXACT legacy request body, lifted
+        into a helper so the legacy swallow-path and the eval reconnect-backoff
+        path share identical response handling."""
+        if client is not None:
+            response = client.post(f"{url}/chat", json=payload, timeout=timeout)
+        else:
+            response = httpx.post(
+                f"{url}/chat",
+                json=payload,
+                timeout=timeout,
+            )
+        if response.status_code >= 400:
+            try:
+                data = response.json()
+            except Exception:
+                response.raise_for_status()
+                raise
+            if isinstance(data, dict) and (
+                data.get("error_code") or data.get("error_detail")
+            ):
                 error_code = data.get("error_code")
                 if error_code and not data.get("error"):
                     data["error"] = data.get("error_detail") or f"HTTP {error_code}"
                 _surface_inband_error(data)
                 _normalize_tool_telemetry(data)
-            return data
-        except Exception as e:
-            return {"answer": "", "error": str(e)}
+                return data
+        response.raise_for_status()
+        data = response.json()
+        if isinstance(data, dict):
+            error_code = data.get("error_code")
+            if error_code and not data.get("error"):
+                data["error"] = data.get("error_detail") or f"HTTP {error_code}"
+            _surface_inband_error(data)
+            _normalize_tool_telemetry(data)
+        return data
 
-    # Watcher path: delegate to resilient_post for exogenous-reload detection.
-    # Lazy-imported so the legacy path doesn't even touch autopilot modules.
-    import sys
-    from pathlib import Path
-    _ap_dir = Path(__file__).resolve().parents[1] / "autopilot"
-    if str(_ap_dir) not in sys.path:
-        sys.path.insert(0, str(_ap_dir))
-    from resilient_http import resilient_post  # type: ignore[import-not-found]
+    def _execute_watcher() -> dict[str, Any]:
+        """Watcher path: delegate to resilient_post for exogenous-reload
+        detection. Attaches the meta dict as ``_meta``. Lazy-imports the
+        autopilot module so the legacy path never touches it."""
+        import sys as _sys
+        from pathlib import Path as _Path
+        _ap_dir = _Path(__file__).resolve().parents[1] / "autopilot"
+        if str(_ap_dir) not in _sys.path:
+            _sys.path.insert(0, str(_ap_dir))
+        from resilient_http import resilient_post  # type: ignore[import-not-found]
 
-    data, meta = resilient_post(
-        f"{url}/chat",
-        json=payload,
-        timeout=timeout,
-        client=client,
-        watcher=watcher,
-        llama_port=llama_port,
-        llama_role=force_role,
-    )
-    if isinstance(data, dict):
-        error_code = data.get("error_code")
-        if error_code and not data.get("error"):
-            data["error"] = data.get("error_detail") or f"HTTP {error_code}"
-        _surface_inband_error(data)
-        _normalize_tool_telemetry(data)
-        # Attach meta as _meta so downstream consumers can inspect without
-        # disturbing existing data keys.
-        data["_meta"] = meta
-    return data
+        data, meta = resilient_post(
+            f"{url}/chat",
+            json=payload,
+            timeout=timeout,
+            client=client,
+            watcher=watcher,
+            llama_port=llama_port,
+            llama_role=force_role,
+        )
+        if isinstance(data, dict):
+            error_code = data.get("error_code")
+            if error_code and not data.get("error"):
+                data["error"] = data.get("error_detail") or f"HTTP {error_code}"
+            _surface_inband_error(data)
+            _normalize_tool_telemetry(data)
+            # Attach meta as _meta so downstream consumers can inspect without
+            # disturbing existing data keys.
+            data["_meta"] = meta
+        return data
+
+    # ── Non-eval traffic: preserve the EXACT legacy code path. Critical for
+    # the non-autopilot callers of this function (14 impacted symbols per
+    # GitNexus blast-radius audit). Any change here that newly escapes an
+    # exception or alters the response dict shape would break them. The
+    # reconnect-backoff below is scoped to eval traffic only (mirrors the
+    # deadline-starvation guard above), so these callers are untouched.
+    if str(workload_class or "") != "eval_batch":
+        if watcher is None:
+            try:
+                return _execute_direct()
+            except Exception as e:
+                return {"answer": "", "error": str(e)}
+        return _execute_watcher()
+
+    # ── Eval traffic: reconnect backoff on CONNECTION-level failures ─────
+    # A mid-run API reload refuses/resets in-flight POSTs. Retry ONLY those
+    # connection-level failures with exponential backoff (1s,2s,4s,8s,16s…),
+    # bounded by AUTOPILOT_EVAL_RECONNECT_MAX_S (default 60s of cumulative
+    # sleep), then honestly error-row so persistent unreachability stays an
+    # excluded REL-1 error. Timeouts / HTTP errors / in-band banners are NOT
+    # reconnectable and keep their prior terminal semantics.
+    max_reconnect_s = _env_float("AUTOPILOT_EVAL_RECONNECT_MAX_S", 60.0)
+    delay = 1.0
+    slept = 0.0
+    attempts = 0
+    last_detail = ""
+    while True:
+        attempts += 1
+        if watcher is None:
+            try:
+                return _execute_direct()
+            except Exception as exc:
+                reason, _detail = _classify_exc(exc)
+                if reason not in _RECONNECT_REASONS:
+                    # Not connection-level (timeout / http status / other):
+                    # preserve the legacy terminal error dict byte-for-byte.
+                    return {"answer": "", "error": str(exc)}
+                last_detail = str(exc)
+        else:
+            data = _execute_watcher()
+            meta = data.get("_meta") if isinstance(data, dict) else None
+            meta = meta if isinstance(meta, dict) else {}
+            # Clean success or a watcher-recovered request → return as-is.
+            if meta.get("clean") or meta.get("exogenous_recovered"):
+                return data
+            reason = str(meta.get("reason") or "")
+            if reason not in _RECONNECT_REASONS:
+                # Terminal non-connection failure (timeout / http / in-band /
+                # recovered): return whatever resilient_post produced.
+                return data
+            last_detail = str(meta.get("detail") or data.get("error") or "")
+
+        # Reached only on a CONNECTION-level failure. Back off while budget
+        # remains, else honestly error-row.
+        if slept + delay > max_reconnect_s:
+            logger.error(
+                "  [eval-reconnect] role=%s api unreachable after backoff "
+                "(%d attempts, waited %.0fs, budget %.0fs): %s",
+                force_role, attempts, slept, max_reconnect_s, last_detail,
+            )
+            return {
+                "answer": "",
+                "error": (
+                    f"api_unreachable_after_backoff: {last_detail} "
+                    f"(role={force_role}, attempts={attempts}, "
+                    f"waited={slept:.0f}s, budget={max_reconnect_s:.0f}s)"
+                ),
+                "failure_reason": "api_unreachable_after_backoff",
+            }
+        logger.warning(
+            "  [eval-reconnect] role=%s connection failure (%s); backing off "
+            "%.0fs then retrying (attempt %d, waited %.0fs/%.0fs)",
+            force_role, last_detail, delay, attempts, slept, max_reconnect_s,
+        )
+        time.sleep(delay)
+        slept += delay
+        delay *= 2
