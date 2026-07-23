@@ -173,18 +173,21 @@ def test_case1_real_registry_collapses_shared_roles_to_one_fleet():
     assert wf is None or wf.fleet_id != "worker_general"
 
 
-def test_case1_real_worker_fleet_is_realized_quarters_only():
-    """The checked-in priors describe the quarters-only v7 stack: the worker
-    fleet must realize the 4 quarter ports with NO full endpoint (8072 dead)."""
+def test_case1_real_worker_fleet_realizes_full_plus_quarters():
+    """The checked-in priors describe the RESTORED big+quarters lineup
+    (2026-07-23 operator-directed restoration): the worker fleet realizes the
+    true full 8072 plus the 4 quarter ports in mixed mode. (The pre-restoration
+    quarters-only shape stays covered by the synthetic case-3 fixtures.)"""
     server_mode = yaml.safe_load(REAL_REGISTRY.read_text(encoding="utf-8"))["server_mode"]
     fleets, _ = build_fleets_and_bindings(
         registry_server_mode=server_mode,
         priors_path=REAL_PRIORS,
     )
     worker_fleet = fleets["worker_general"]
-    assert sorted(worker_fleet.ports) == [8082, 8182, 8282, 8382]
-    assert worker_fleet.full_endpoint is None
-    assert worker_fleet.mode == "quarter"
+    assert sorted(worker_fleet.ports) == [8072, 8082, 8182, 8282, 8382]
+    assert worker_fleet.full_endpoint is not None
+    assert worker_fleet.full_endpoint.port == 8072
+    assert worker_fleet.mode == "mixed"
     assert not worker_fleet.degraded
 
 
