@@ -29,7 +29,13 @@ def _result(confidence_is_real: bool | None = True, **kw) -> SimpleNamespace:
     # runs; pass confidence_is_real=None to model a LEGACY row with no provenance stamp
     # (no details attribute at all), or False for an explicit stub/mixed batch.
     if confidence_is_real is not None:
-        ns.details = {"confidence_is_real": confidence_is_real}
+        # ESC-7 Option A: calibration/discrimination are code-domain-scoped;
+        # stamp fixtures as code_execution so real-confidence tests represent
+        # the decision-capable domain (math is observational-only).
+        ns.details = {
+            "confidence_is_real": confidence_is_real,
+            "scoring_method": "code_execution",
+        }
     return ns
 
 
@@ -235,3 +241,14 @@ def test_unknown_higher_tier_uses_process_contract() -> None:
     assert spec.reward_signal == "process_attributed"
     assert reward.ready_for_training
     assert reward.reward == 1.0
+
+
+def test_math_domain_confidence_earns_no_calibration_credit():
+    """ESC-7 Option A: real math confidence (anti-discriminative geomean) is
+    observational — zero calibration/discrimination + domain blocker."""
+    r = _result(quality=0.9, ece=0.05, auroc=0.8)
+    r.details["scoring_method"] = "math_verify"
+    reward = rlvr_reward_from_result(r)
+    assert reward.components["calibration"] == 0.0
+    assert reward.components["discrimination"] == 0.0
+    assert "calibration_domain_observational" in reward.blockers
