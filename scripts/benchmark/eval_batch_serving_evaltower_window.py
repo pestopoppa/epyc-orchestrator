@@ -641,7 +641,12 @@ def build_report(args: argparse.Namespace, *, output_dir: Path) -> tuple[dict[st
                             status = "current_eval_degenerate"
                             rc = 75
 
-                if not blockers:
+                if not blockers and args.skip_batch_arm:
+                    # Current-arm-only re-baseline: never arm activation, so the
+                    # finally-block rollback stays a no-op and no batch-shaped
+                    # server is ever launched.
+                    status = "current_arm_complete"
+                if not blockers and not args.skip_batch_arm:
                     activation_armed = True
                     activation_steps, activation_errors = activation_window.execute_activation(
                         activation_args,
@@ -712,6 +717,7 @@ def build_report(args: argparse.Namespace, *, output_dir: Path) -> tuple[dict[st
         "confirm_clean_window": bool(args.confirm_clean_window),
         "allow_autopilot_active": bool(args.allow_autopilot_active),
         "skip_current_arm": bool(args.skip_current_arm),
+        "skip_batch_arm": bool(getattr(args, "skip_batch_arm", False)),
         "keep_enabled": bool(args.keep_enabled),
         "allow_serial": bool(args.allow_serial),
         "eval_batch_url": args.eval_batch_url.rstrip("/"),
@@ -1746,6 +1752,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--confirm-clean-window", action="store_true")
     parser.add_argument("--allow-autopilot-active", action="store_true")
     parser.add_argument("--skip-current-arm", action="store_true")
+    parser.add_argument(
+        "--skip-batch-arm",
+        action="store_true",
+        help=(
+            "Measure ONLY the current EvalTower arm (R3 eval-lane pricing "
+            "re-baseline): no eval-batch activation, no 18070 launch. Added "
+            "2026-07-23 — under the restored big+quarters lineup the "
+            "batch-shaped NODE0 lane thread-overlaps the live half instances."
+        ),
+    )
     parser.add_argument("--keep-enabled", action="store_true")
     parser.add_argument("--tap-events", default=None)
     parser.add_argument("--tier", type=int, choices=(1, 2, 3), default=1)
@@ -1850,6 +1866,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     # and thus the per-question timeout_s/deadline that reaches the backend.
     if args.evaltower_timeout_s is None:
         args.evaltower_timeout_s = float(_default_eval_timeout())
+    if args.skip_current_arm and getattr(args, "skip_batch_arm", False):
+        parser.error("--skip-current-arm and --skip-batch-arm together leave nothing to measure")
     return args
 
 
