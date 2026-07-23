@@ -1672,6 +1672,11 @@ def start_orchestrator(
     # ORCHESTRATOR_PER_REGION_LOCKS=0 to fall back to the legacy global
     # heavy lock if a regression surfaces.
     env.setdefault("ORCHESTRATOR_PER_REGION_LOCKS", "1")
+    # Q-TD-write (operator-granted 2026-07-23): routing observations TD-update
+    # the (objective, action) row in place instead of blind-appending (the
+    # 99.7% append-only defect, dar_write_path_audit.py). Pair with the
+    # consolidate_q_append_only.py migration.
+    env.setdefault("ORCHESTRATOR_Q_TD_WRITE", "1")
     # 2026-05-31: default-on cross-role physical exclusion. Adds a
     # role-agnostic cpu_region.GLOBAL.{qN}.lock layer so different roles cannot
     # decode on the same atomic CPU region.
