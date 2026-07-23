@@ -168,6 +168,12 @@ def rlvr_reward_from_result(result: Any) -> RLVRReward:
         calibration = 0.0
         discrimination = 0.0
         blockers.append("confidence_not_real")
+    elif not _calibration_domain_capable(result):
+        # ESC-7 Option A: real-but-non-code confidence (math geomean is
+        # anti-discriminative) — observational only, never reward-bearing.
+        calibration = 0.0
+        discrimination = 0.0
+        blockers.append("calibration_domain_observational")
     if spec.reward_signal == "calibrated_continuous":
         reward = _clamp01(
             0.65 * accuracy + 0.20 * reliability + 0.10 * calibration + 0.05 * discrimination
@@ -254,6 +260,24 @@ def _question_rows(question_results: Any) -> list[Mapping[str, Any]]:
     if not isinstance(question_results, Sequence) or isinstance(question_results, (str, bytes)):
         return []
     return [row for row in question_results if isinstance(row, Mapping)]
+
+
+# ESC-7 Option A (operator-granted 2026-07-23): calibration/discrimination are
+# decision-capable for the CODE domain only. Math geomean confidence measured
+# ANTI-discriminative (AUROC 0.401/0.411 both E7c arms — length confounding);
+# math stays observational pending EV-CONF-2 (salient-token confidence). Domain
+# is read from the scoring method stamp: code_execution-scored rows are code.
+_CALIBRATION_CAPABLE_SCORING = {"code_execution"}
+
+
+def _calibration_domain_capable(result: Any) -> bool:
+    details = getattr(result, "details", None)
+    method = ""
+    if isinstance(details, Mapping):
+        method = str(details.get("scoring_method") or "")
+    if not method:
+        method = str(getattr(result, "scoring_method", "") or "")
+    return method in _CALIBRATION_CAPABLE_SCORING
 
 
 def _confidence_is_real(result: Any) -> bool:

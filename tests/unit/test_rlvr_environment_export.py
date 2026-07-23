@@ -117,6 +117,7 @@ def test_export_threads_real_confidence_provenance_to_ready_for_training() -> No
                     "ece": 0.05,
                     "auroc": 0.8,
                     "confidence_is_real": True,
+                    "scoring_method": "code_execution",
                     "confidence_source_counts": {"completion_probabilities_geomean": 50},
                 },
             }
@@ -145,6 +146,7 @@ def test_export_confidence_provenance_from_nested_details() -> None:
                             "ece": 0.04,
                             "auroc": 0.75,
                             "confidence_is_real": True,
+                            "scoring_method": "code_execution",
                         }
                     },
                 }
