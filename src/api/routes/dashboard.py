@@ -80,6 +80,7 @@ from src.api.routes.dashboard_topology import (
     _clean_model_name,
     _discover_llama_models,
     _discover_llama_ports,
+    _discover_llama_processes,
     _port_hint,
     _process_info_by_match,
     _role_color,
@@ -4639,6 +4640,15 @@ def _build_topology_nodes(numa_mode: str | None = None) -> list[dict[str, Any]]:
     active_mode = numa_mode or active_stack_numa_mode()
     llama_ports = _discover_llama_ports()
     llama_models = _discover_llama_models()
+    # M3 attribution metadata (fleet-marker / launch-contract / unmanaged /
+    # …) per discovered listener. Kept as a SEPARATE lookup so tests that
+    # monkeypatch `_discover_llama_ports` keep working unchanged — ports absent
+    # from this map simply render without attribution fields, exactly the
+    # pre-M3 node shape.
+    try:
+        llama_procs = _discover_llama_processes()
+    except Exception:
+        llama_procs = {}
     services = _load_state_services()
     expected_services = expected_stack_services(active_mode)
     expected_by_port = {
@@ -4676,27 +4686,38 @@ def _build_topology_nodes(numa_mode: str | None = None) -> list[dict[str, Any]]:
             node_kind = "external-llama-server"
         else:
             node_kind = "llama-server"
-        nodes.append(
-            {
-                "id": f"port_{port}",
-                "label": role,
-                "role": role,
-                "port": port,
-                "color": _role_color(role),
-                "kind": node_kind,
-                # Model actually loaded by this llama-server (-m GGUF basename,
-                # vendor-prefix + shard-suffix stripped). Surfaced so the topology
-                # strip can label each role with its backing model + quant.
-                "model": llama_models.get(port, ""),
-                # Alias roles served by the same process (e.g. frontdoor port 8070
-                # also serves coder_escalation + worker_summarize). Surfaced so the
-                # dashboard can render them under the primary role label.
-                "aliases": role_aliases(role),
-                "expected": bool(expected),
-                "running": True,
-                "manifest_roles": expected.get("roles", []),
-            }
-        )
+        node = {
+            "id": f"port_{port}",
+            "label": role,
+            "role": role,
+            "port": port,
+            "color": _role_color(role),
+            "kind": node_kind,
+            # Model actually loaded by this llama-server (-m GGUF basename,
+            # vendor-prefix + shard-suffix stripped). Surfaced so the topology
+            # strip can label each role with its backing model + quant.
+            "model": llama_models.get(port, ""),
+            # Alias roles served by the same process (e.g. frontdoor port 8070
+            # also serves coder_escalation + worker_summarize). Surfaced so the
+            # dashboard can render them under the primary role label.
+            "aliases": role_aliases(role),
+            "expected": bool(expected),
+            "running": True,
+            "manifest_roles": expected.get("roles", []),
+        }
+        # M3: how the stack vouches for this listener (fleet-marker /
+        # launch-contract / service-hint / unmanaged / unverified). A demoted
+        # extern node additionally carries `lane_hint` — the configured lane
+        # label it would have (mis)inherited — and `marker_stale` when a
+        # left-behind marker for a previous process exists on its port.
+        proc = llama_procs.get(port) or {}
+        if proc.get("attribution"):
+            node["attribution"] = proc["attribution"]
+        if proc.get("lane_hint"):
+            node["lane_hint"] = proc["lane_hint"]
+        if proc.get("marker_stale"):
+            node["marker_stale"] = True
+        nodes.append(node)
 
     # Auxiliary services not already covered.
     for svc in services:

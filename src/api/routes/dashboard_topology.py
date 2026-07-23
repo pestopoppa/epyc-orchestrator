@@ -441,20 +441,131 @@ def role_aliases(role: str) -> list[str]:
         return []
 
 
-def _discover_llama_ports() -> dict[int, str]:
-    """Scan /proc for running llama-server processes and extract port→role.
+# --- Extern/unmanaged attribution (dashboard task M3, 2026-07-23) ------------
+#
+# A llama-server listener may render under a production-lane label ONLY when
+# the stack can vouch for it:
+#   - a fresh per-port fleet marker (/mnt/raid0/llm/tmp/llama_<port>_started_at,
+#     written by stack_commands BEFORE Popen), or
+#   - membership in the runtime launch contract (runtime-facts
+#     ``runtime_stack.selected_servers``, the realized launcher lineup).
+# Anything else is an unmanaged process squatting on (or near) a configured
+# lane port — bench harnesses, GPU warmups (the observed extern_18072 class) —
+# and must render as ``extern_<port>`` instead of inheriting a role from a
+# stale marker or a static lineup (the observed bug: 18072 read as
+# "eval_batch_frontdoor" via the stale 18070 marker / static runtime-facts
+# lineup). See handoffs/active/autopilot-dashboard-fidelity-audit-2026-07-22.md
+# (M3) + stack-lineup-dossier-2026-07-23.md §4 item 9 / §6 contradiction 2.
 
-    Falls back to _PORT_HINTS for unmapped ports. Cheap (~5ms), runs once per
-    snapshot poll.
+# Markers are written milliseconds before Popen, so a marker that predates the
+# live listener by more than this belongs to a PREVIOUS process on that port.
+_MARKER_STALE_TOLERANCE_S = 300.0
+
+ATTRIBUTION_FLEET_MARKER = "fleet-marker"
+ATTRIBUTION_LAUNCH_CONTRACT = "launch-contract"
+ATTRIBUTION_SERVICE_HINT = "service-hint"
+ATTRIBUTION_UNMANAGED = "unmanaged"
+ATTRIBUTION_UNVERIFIED = "unverified"
+
+
+def _llama_fleet_markers() -> dict[int, dict[str, Any]]:
+    """Per-port fleet-startup markers ({port: {started_at, source, roles}}).
+
+    Empty on any failure — attribution then falls through to the launch
+    contract and, absent both planes, fails open (no demotion).
     """
-    ports: dict[int, str] = {}
     try:
-        out = subprocess.run(
-            ["ps", "-eo", "pid,cmd"], capture_output=True, text=True, timeout=2,
+        from scripts.server.fleet_markers import discover_llama_markers
+
+        return discover_llama_markers()
+    except Exception:
+        return {}
+
+
+def _launch_contract_ports() -> set[int]:
+    """Ports in the current runtime launch contract (realized selected servers)."""
+    try:
+        servers = read_runtime_stack_selected_servers()
+    except Exception:
+        return set()
+    if not servers:
+        return set()
+    return {s["port"] for s in servers if isinstance(s.get("port"), int)}
+
+
+def _classify_llama_attribution(
+    port: int,
+    proc_started_at: float | None,
+    markers: dict[int, dict[str, Any]],
+    contract_ports: set[int],
+) -> dict[str, Any]:
+    """Classify how a live llama-server listener is vouched for by the stack.
+
+    Returns ``{"attribution": <str>, "marker_stale": <bool>}`` where attribution
+    is one of the ``ATTRIBUTION_*`` constants. ``unverified`` means the whole
+    attribution plane carried no signal (no markers, no contract — dev
+    checkouts, hermetic tests), in which case callers must fail open and keep
+    legacy labels rather than demote a healthy fleet.
+    """
+    marker = markers.get(port)
+    marker_stale = False
+    if isinstance(marker, dict):
+        marker_started = marker.get("started_at")
+        if not isinstance(marker_started, (int, float)) or not isinstance(
+            proc_started_at, (int, float)
+        ):
+            # Unknown timing on either side: a marker cannot vouch for a
+            # process it cannot be matched to (verifier finding 2 — without
+            # this, an 18-day-stale marker vouches whenever ps parsing fails).
+            marker_stale = True
+        elif float(proc_started_at) - float(marker_started) > _MARKER_STALE_TOLERANCE_S:
+            # Marker predates this listener by more than a launch gap: it was
+            # written for a previous stack process on this port (e.g. the
+            # 2026-07-05 llama_18070 marker) and must not vouch for this one.
+            marker_stale = True
+        elif float(marker_started) - float(proc_started_at) > _MARKER_STALE_TOLERANCE_S:
+            # Symmetric case (verifier finding 1): a listener that predates
+            # the marker by more than a launch gap cannot be the process the
+            # marker was written for — orchestrator_stack writes the marker
+            # BEFORE Popen, so a long-running squatter on a lane port must
+            # not inherit the label when a fresh launch attempt dies.
+            marker_stale = True
+        else:
+            return {"attribution": ATTRIBUTION_FLEET_MARKER, "marker_stale": False}
+    if port in contract_ports:
+        return {"attribution": ATTRIBUTION_LAUNCH_CONTRACT, "marker_stale": marker_stale}
+    if not markers and not contract_ports:
+        return {"attribution": ATTRIBUTION_UNVERIFIED, "marker_stale": marker_stale}
+    return {"attribution": ATTRIBUTION_UNMANAGED, "marker_stale": marker_stale}
+
+
+def _ps_llama_scan() -> str:
+    """Raw ``ps`` output for the llama process scan (patchable in unit tests)."""
+    try:
+        return subprocess.run(
+            ["ps", "-eo", "pid,etimes,cmd"], capture_output=True, text=True, timeout=2,
         ).stdout
     except Exception:
-        out = ""
+        return ""
+
+
+def _discover_llama_processes() -> dict[int, dict[str, Any]]:
+    """Scan for llama-server listeners → {port: {role, attribution, ...}}.
+
+    Superset of `_discover_llama_ports`: carries the same port→role labels plus
+    the M3 attribution verdict per listener (``attribution``, optional
+    ``lane_hint`` naming the configured lane a demoted label came from,
+    optional ``marker_stale``, plus ``pid``/``started_at``). Cheap (~5ms), runs
+    once per snapshot poll.
+    """
+    out = _ps_llama_scan()
+    now = time.time()
+    line_re = re.compile(r"^\s*(\d+)\s+(\d+)\s+")
     pid_port_re = re.compile(r"--port\s+(\d+)")
+    service_ports = set(_BASE_SERVICE_PORT_HINTS)
+    markers = _llama_fleet_markers()
+    contract_ports = _launch_contract_ports()
+    procs: dict[int, dict[str, Any]] = {}
     for line in out.splitlines():
         if "llama-server" not in line:
             continue
@@ -462,6 +573,20 @@ def _discover_llama_ports() -> dict[int, str]:
         if not port_m:
             continue
         port = int(port_m.group(1))
+        pid: int | None = None
+        proc_started_at: float | None = None
+        line_m = line_re.match(line)
+        if line_m:
+            pid = int(line_m.group(1))
+            proc_started_at = now - float(line_m.group(2))
+        verdict = _classify_llama_attribution(port, proc_started_at, markers, contract_ports)
+        info: dict[str, Any] = {
+            "pid": pid,
+            "started_at": proc_started_at,
+            "attribution": verdict["attribution"],
+        }
+        if verdict.get("marker_stale"):
+            info["marker_stale"] = True
         role = _port_hint(port)
         if role == f"port_{port}":
             # Unmapped port: name it by what it IS. Mangling the model stem
@@ -469,9 +594,47 @@ def _discover_llama_ports() -> dict[int, str]:
             # live_busy_by_role and made the activity view unreadable.
             # MI210 HIP builds are the GPU testbed — operator-decided
             # (2026-07-05) to render first-class ahead of stack integration.
+            # A FRESH fleet marker may still name the roles (a stack launch on
+            # a port absent from the static hints); a stale marker never does.
+            marker_roles = (markers.get(port) or {}).get("roles") or []
+            if verdict["attribution"] == ATTRIBUTION_FLEET_MARKER and marker_roles:
+                role = str(marker_roles[0])
+            else:
+                role = "mi210_gpu" if "mi210" in line.lower() else f"extern_{port}"
+        elif port in service_ports:
+            # Auxiliary service hints (orchestrator, embedders, sd, whisper)
+            # are not production lanes; M3 demotion is scoped to lane labels.
+            if verdict["attribution"] in (ATTRIBUTION_UNMANAGED, ATTRIBUTION_UNVERIFIED):
+                info["attribution"] = ATTRIBUTION_SERVICE_HINT
+                info.pop("marker_stale", None)
+        elif verdict["attribution"] == ATTRIBUTION_UNMANAGED and base_role(role).startswith(
+            "embedder"
+        ):
+            # Embedder siblings (8096-8098) sit outside _BASE_SERVICE_PORT_HINTS
+            # but are auxiliary services all the same — never lane-demoted.
+            info["attribution"] = ATTRIBUTION_SERVICE_HINT
+            info.pop("marker_stale", None)
+        elif verdict["attribution"] == ATTRIBUTION_UNMANAGED:
+            # Lane-labeled listener with NO vouching evidence while the
+            # attribution plane is live: the label came from a static lineup
+            # or a stale marker — the M3 bug class. Demote to extern_<port>
+            # and surface the lane it would have (mis)rendered under.
+            info["lane_hint"] = role
             role = "mi210_gpu" if "mi210" in line.lower() else f"extern_{port}"
-        ports[port] = role
-    return ports
+        info["role"] = role
+        procs[port] = info
+    return procs
+
+
+def _discover_llama_ports() -> dict[int, str]:
+    """Scan /proc for running llama-server processes and extract port→role.
+
+    Falls back to _PORT_HINTS for unmapped ports; lane labels are demoted to
+    ``extern_<port>`` when the listener has no fleet marker and no
+    launch-contract membership (M3 — see `_discover_llama_processes`). Cheap
+    (~5ms), runs once per snapshot poll.
+    """
+    return {port: info["role"] for port, info in _discover_llama_processes().items()}
 
 
 _VENDOR_PREFIX_RE = re.compile(

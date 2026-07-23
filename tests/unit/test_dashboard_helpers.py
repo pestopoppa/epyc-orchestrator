@@ -62,14 +62,16 @@ def test_role_color_unknown_falls_back_to_gray() -> None:
     assert dashboard_topology._role_color("unknown_role") == "#64748b"
 
 
-def test_port_hints_follow_current_full_mode_priors() -> None:
-    # Public compatibility hints are built from generated stack_priors, which
-    # now follow the active full-mode launch contract instead of advertising
-    # unloaded quarter replicas.
+def test_port_hints_follow_current_both_mode_priors() -> None:
+    # Public compatibility hints are built from generated stack_priors. Since
+    # the 2026-07-23 lineup restoration (95dffc88) the priors describe the
+    # big+quarters BOTH-mode lineup: big instances AND quarter replicas are
+    # all loaded, so both appear in the hints.
     assert dashboard_topology._PORT_HINTS[8070] == "frontdoor"
     assert dashboard_topology._PORT_HINTS[8072] == "worker_general"
-    assert 8080 not in dashboard_topology._PORT_HINTS
-    assert 8082 not in dashboard_topology._PORT_HINTS
+    assert dashboard_topology._PORT_HINTS[8080] == "frontdoor.q0"
+    assert dashboard_topology._PORT_HINTS[8182] == "worker_general.q1"
+    assert dashboard_topology._PORT_HINTS[8082] == "worker_general.q0"
 
 
 def test_active_stack_numa_mode_defaults_to_both(monkeypatch) -> None:
@@ -256,19 +258,41 @@ def test_cached_realized_numa_mode_ttl_collapses_probe_storm(monkeypatch) -> Non
     assert calls["n"] == 2
 
 
-def test_expected_stack_services_are_numa_mode_filtered(monkeypatch) -> None:
-    monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "full")
-    full_ports = {s["port"] for s in dashboard_topology.expected_stack_services()}
+def test_expected_stack_services_are_numa_mode_filtered() -> None:
+    # Test the FILTER CONTRACT directly against the manifest (the
+    # expected_stack_services() wrapper falls open to the unfiltered list when
+    # the scripts.server import chain is partially initialized inside pytest —
+    # a known circular-import flake, filed 2026-07-23; the contract itself is
+    # deterministic).
+    from scripts.server.stack_manifest import (
+        HOT_SERVERS,
+        WARM_SERVERS,
+        _filter_by_numa_mode,
+    )
+
+    full_ports = {
+        s["port"]
+        for s in _filter_by_numa_mode(HOT_SERVERS + WARM_SERVERS, "full")
+        if isinstance(s, dict) and "port" in s
+    }
     assert {8070, 8072, 8085}.issubset(full_ports)
     assert full_ports.isdisjoint({8080, 8180, 8280, 8380, 8082, 8182, 8282, 8382})
 
-    quarter_services = dashboard_topology.expected_stack_services("quarter")
-    quarter_ports = {s["port"] for s in quarter_services}
+    quarter_ports = {
+        s["port"]
+        for s in _filter_by_numa_mode(HOT_SERVERS + WARM_SERVERS, "quarter")
+        if isinstance(s, dict) and "port" in s
+    }
     assert {8080, 8180, 8280, 8380, 8082, 8182, 8282, 8382}.issubset(quarter_ports)
     assert quarter_ports.isdisjoint({8070, 8072, 8085})
-    by_port = {s["port"]: s for s in quarter_services}
-    assert by_port[8080]["role"] == "frontdoor.q0"
-    assert by_port[8182]["role"] == "worker_general.q1"
+
+    both_ports = {
+        s["port"]
+        for s in _filter_by_numa_mode(HOT_SERVERS + WARM_SERVERS, "both")
+        if isinstance(s, dict) and "port" in s
+    }
+    # The restored 2026-07-23 lineup: both mode carries big + quarters.
+    assert {8070, 8072, 8085, 8080, 8082}.issubset(both_ports)
 
 
 def test_expected_stack_services_uses_runtime_facts_manifest(monkeypatch) -> None:

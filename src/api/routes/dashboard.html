@@ -1329,8 +1329,19 @@ function renderTopologyStrip() {
             aliasChip += ` <span style="color:#f97316;font-size:9px;margin-left:6px;border:1px solid #f97316;border-radius:3px;padding:0 3px"`
                        + ` title="direct-access GPU testbed — traffic bypasses the orchestrator pipeline; slot-level activity only until stack-routed">GPU</span>`;
         } else if (g.kind === 'external-llama-server') {
-            aliasChip += ` <span style="color:var(--dim);font-size:9px;margin-left:6px;border:1px solid var(--dim);border-radius:3px;padding:0 3px"`
-                       + ` title="llama-server on an unmapped port — not part of the managed stack">extern</span>`;
+            // M3: unmanaged listeners (no fleet marker, no launch-contract
+            // membership) carry attribution metadata; a demoted node's
+            // `lane_hint` names the production lane label it was denied so the
+            // operator can see which configured lane the port squats on.
+            let externTitle = 'llama-server on an unmapped port — not part of the managed stack';
+            if (parent.attribution === 'unmanaged') {
+                externTitle = 'unmanaged llama-server — no fleet marker, no launch-contract membership'
+                            + (parent.lane_hint ? `; squats on configured lane '${parent.lane_hint}'` : '')
+                            + (parent.marker_stale ? ' (stale marker from a previous process ignored)' : '');
+            }
+            aliasChip += ` <span class="extern-badge${parent.attribution === 'unmanaged' ? ' extern-unmanaged' : ''}"`
+                       + ` style="color:var(--dim);font-size:9px;margin-left:6px;border:1px solid var(--dim);border-radius:3px;padding:0 3px"`
+                       + ` title="${escapeHTML(externTitle)}">extern${parent.attribution === 'unmanaged' ? ' · unmanaged' : ''}</span>`;
         }
         // Backing model + quant. For grouped roles every instance shares one
         // GGUF, so take the parent's (or first instance carrying a model field).
