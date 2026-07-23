@@ -271,7 +271,9 @@ _LEGACY_SERVER_URL_FALLBACKS: dict[str, str] = {
         "full:http://localhost:8070,http://localhost:8080,"
         "http://localhost:8180,http://localhost:8280,http://localhost:8380"
     ),
-    "coder_escalation": "http://localhost:8070",
+    # Frontdoor-fleet alias (registry shared_with, 2026-07-22 reconciliation):
+    # last-resort literal mirrors the host fleet (drift guard enforces parity).
+    "coder_escalation": "full:http://localhost:8070,http://localhost:8080,http://localhost:8180,http://localhost:8280,http://localhost:8380",
     "worker_general": (
         "full:http://localhost:8072,http://localhost:8082,"
         "http://localhost:8182,http://localhost:8282,http://localhost:8382"
@@ -286,7 +288,7 @@ _LEGACY_SERVER_URL_FALLBACKS: dict[str, str] = {
         "http://localhost:8287,http://localhost:8387,http://localhost:8487"
     ),
     "worker_fast": "http://localhost:8102",
-    "worker_summarize": "http://localhost:8070",
+    "worker_summarize": "full:http://localhost:8070,http://localhost:8080,http://localhost:8180,http://localhost:8280,http://localhost:8380",  # frontdoor-fleet alias, parity-guarded
     "architect_general": "http://localhost:8083",
     "ingest_long_context": (
         "full:http://localhost:8085,http://localhost:8185,"

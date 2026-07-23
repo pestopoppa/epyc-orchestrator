@@ -224,3 +224,170 @@ class TestClientPayloadCarriesEvalBudget:
         payload = _capture_payload(prompt="q", force_role="frontdoor", timeout=120)
         assert "workload_class" not in payload
         assert payload["timeout_s"] == 120  # timeout_s always present
+
+
+# ── window-runner budget default: honor AUTOPILOT_EVAL_REQUEST_TIMEOUT_S ────────
+
+
+class TestWindowRunnerBudgetDefault:
+    """EV-BASELINE-E7 root cause: the eval_batch window runner hardcoded
+    ``--evaltower-timeout-s`` to 120.0 and ALWAYS passed it to ``EvalTower(...)``,
+    silently overriding ``AUTOPILOT_EVAL_REQUEST_TIMEOUT_S`` — so every
+    heavy-suite question was budgeted at 120s regardless of the env, and died at
+    ~119-120s. The default is now deferred to the env-aware standard
+    (``_default_eval_timeout``); an explicit flag still wins.
+    """
+
+    @staticmethod
+    def _runner():
+        import importlib
+
+        return importlib.import_module("eval_batch_serving_evaltower_window")
+
+    def test_default_honors_request_timeout_env(self, monkeypatch):
+        monkeypatch.setenv("AUTOPILOT_EVAL_REQUEST_TIMEOUT_S", "420")
+        runner = self._runner()
+        args = runner.parse_args(["--api-url", "http://localhost:8000"])
+        # The whole failure: this used to be 120.0 no matter the env.
+        assert args.evaltower_timeout_s == 420.0
+
+    def test_default_without_env_is_registry_derived_not_120(self, monkeypatch):
+        monkeypatch.delenv("AUTOPILOT_EVAL_REQUEST_TIMEOUT_S", raising=False)
+        runner = self._runner()
+        args = runner.parse_args([])
+        # Registry-derived eval default (frontdoor SLA + queue allowance), never
+        # the old silent 120.0 cap.
+        assert args.evaltower_timeout_s == float(eval_tower._default_eval_timeout())
+        assert args.evaltower_timeout_s > 120.0
+
+    def test_explicit_flag_still_wins(self, monkeypatch):
+        monkeypatch.setenv("AUTOPILOT_EVAL_REQUEST_TIMEOUT_S", "420")
+        runner = self._runner()
+        args = runner.parse_args(["--evaltower-timeout-s", "90"])
+        assert args.evaltower_timeout_s == 90.0
+
+
+# ── end-to-end: a tier-style eval request carries its 420s budget to the backend ─
+
+
+class _RecordingBackend:
+    """Captures the ``request.timeout`` that reaches the llama-server backend."""
+
+    def __init__(self):
+        self.seen_timeout = None
+
+    class _Result:
+        output = "ok"
+        tokens_generated = 1
+        prompt_eval_ms = 0.0
+        generation_ms = 0.0
+        http_overhead_ms = 0.0
+        predicted_per_second = 1.0
+        completion_probabilities: list = []
+        first_token_ms = 0.0
+        stream_chunks = 1
+        completion_reason = "stop"
+        success = True
+        partial = False
+
+    def infer(self, role_config, request):
+        self.seen_timeout = request.timeout
+        return self._Result()
+
+    def infer_stream_text(self, role_config, request, on_chunk=None):
+        self.seen_timeout = request.timeout
+        return self._Result()
+
+
+class TestTierBudgetReachesBackendEndToEnd:
+    """Mocked chain proving the 420s tier budget survives every hop:
+
+    client payload ``timeout_s`` -> ``resolve_timeout`` (eval_batch EXTENDS) ->
+    the ``chat.py`` request deadline -> ``_clamp_timeout_to_request_budget`` ->
+    ``InferenceRequest.timeout`` at the backend. Regression against the
+    EV-BASELINE-E7 120s deaths (backend saw the 120s ``inference_default``
+    because the budget was dropped before it).
+    """
+
+    def test_420_budget_reaches_backend_not_120(self, monkeypatch):
+        monkeypatch.setenv("AUTOPILOT_EVAL_REQUEST_TIMEOUT_S", "420")
+        monkeypatch.delenv("AUTOPILOT_EVAL_MIN_LLAMA_BUDGET_S", raising=False)
+
+        budget = eval_tower._default_eval_timeout()
+        assert budget == 420  # env-derived per-question budget
+
+        # Hop 1 — client payload carries the budget + eval_batch class.
+        payload = _capture_payload(
+            prompt="a hard reasoning question",
+            force_role="frontdoor",
+            timeout=budget,
+            workload_class="eval_batch",
+        )
+        assert payload["timeout_s"] == 420
+        assert payload["workload_class"] == "eval_batch"
+
+        # Hop 2 — server resolve_timeout EXTENDS to the declared eval budget.
+        req = ChatRequest(
+            prompt=payload["prompt"],
+            timeout_s=payload["timeout_s"],
+            workload_class=payload["workload_class"],
+            client_deadline_unix_s=payload["client_deadline_unix_s"],
+        )
+        resolved = resolve_timeout(req, ["frontdoor"])
+        assert resolved == 420
+
+        # Hop 3 — the chat.py deadline is built from the resolved budget, and
+        # Hop 4 — the backend request.timeout is clamped to that deadline
+        # (NOT capped to the 60/180 role SLA and NOT the 120 default).
+        import time as _time
+
+        primitives = LLMPrimitives(
+            mock_mode=False, server_urls={"frontdoor": ""}, registry=None
+        )
+        backend = _RecordingBackend()
+        primitives._backends = {"frontdoor": backend}
+        primitives.server_urls = {"frontdoor": ""}
+        primitives.admission_controller = None
+        primitives.health_tracker = None
+
+        request_deadline_s = _time.perf_counter() + max(1.0, float(resolved))
+        with primitives.request_context(
+            deadline_s=request_deadline_s,
+            task_id="e2e",
+            workload_class="eval_batch",
+        ):
+            # n_probs path (backend.infer) AND streaming path both must carry it.
+            primitives._call_caching_backend(
+                backend, "hi", "frontdoor", n_tokens=64, n_probs=5
+            )
+        assert backend.seen_timeout is not None
+        assert backend.seen_timeout >= 418  # ~420, never the 120 default
+        assert backend.seen_timeout != 120
+
+    def test_120s_arg_default_would_have_capped_backend_at_120(self):
+        """Counterfactual: the OLD 120s budget clamps the backend to 120 for a
+        frontdoor request (role SLA 180 > remaining 120), reproducing the death.
+        """
+        import time as _time
+
+        req = ChatRequest(prompt="q", timeout_s=120, workload_class="eval_batch")
+        assert resolve_timeout(req, ["frontdoor"]) == 120  # the declared 120s
+
+        primitives = LLMPrimitives(
+            mock_mode=False, server_urls={"frontdoor": ""}, registry=None
+        )
+        backend = _RecordingBackend()
+        primitives._backends = {"frontdoor": backend}
+        primitives.server_urls = {"frontdoor": ""}
+        primitives.admission_controller = None
+        primitives.health_tracker = None
+        with primitives.request_context(
+            deadline_s=_time.perf_counter() + 120.0,
+            task_id="cf",
+            workload_class="eval_batch",
+        ):
+            primitives._call_caching_backend(
+                backend, "hi", "frontdoor", n_tokens=64, n_probs=5
+            )
+        # remaining (~120) < frontdoor role base (180) -> clamped down to ~120.
+        assert backend.seen_timeout <= 120

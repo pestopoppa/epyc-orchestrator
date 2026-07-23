@@ -262,6 +262,101 @@ class TestRouteRequest:
         assert result.routing_strategy == "learned"
         assert result.routing_decision == ["coder_escalation"]
 
+    # ── Modality fence (bidirectional) ──────────────────────────────────
+
+    _VISION_ONLY = frozenset({"worker_vision", "vision_escalation"})
+
+    def test_text_request_fenced_off_vision_only_role(self):
+        """A TEXT request the learned router sends to a vision-only role is
+        fenced to the frontdoor — a VL server rejects text /completion (400)."""
+        request = ChatRequest(prompt="summarize this long document", real_mode=True)
+        state = MagicMock()
+        state.hybrid_router.route.return_value = (["worker_vision"], "learned")
+        state.failure_graph = None
+        state.progress_logger = None
+
+        with patch(
+            "src.api.routes.chat_pipeline.routing_decision._vision_only_roles",
+            return_value=self._VISION_ONLY,
+        ):
+            result = _route_request(request, state)
+
+        assert "worker_vision" not in [str(r) for r in result.routing_decision]
+        assert str(Role.FRONTDOOR) in [str(r) for r in result.routing_decision]
+        assert result.routing_strategy == "learned:vision_fenced"
+
+    def test_text_request_non_vision_route_unchanged(self):
+        """The fence only touches vision-only roles — normal routes pass through."""
+        request = ChatRequest(prompt="write a function", real_mode=True)
+        state = MagicMock()
+        state.hybrid_router.route.return_value = (["coder_escalation"], "learned")
+        state.failure_graph = None
+        state.progress_logger = None
+
+        with patch(
+            "src.api.routes.chat_pipeline.routing_decision._vision_only_roles",
+            return_value=self._VISION_ONLY,
+        ):
+            result = _route_request(request, state)
+
+        assert result.routing_decision == ["coder_escalation"]
+        assert result.routing_strategy == "learned"
+
+    def test_forced_vision_role_bypasses_fence(self):
+        """A forced vision role is the caller's responsibility — never fenced."""
+        request = ChatRequest(prompt="describe", real_mode=True, force_role="worker_vision")
+        state = MagicMock()
+        state.hybrid_router = MagicMock()
+        state.failure_graph = None
+        state.progress_logger = None
+
+        with patch(
+            "src.api.routes.chat_pipeline.routing_decision._vision_only_roles",
+            return_value=self._VISION_ONLY,
+        ):
+            result = _route_request(request, state)
+
+        assert result.routing_decision == ["worker_vision"]
+        assert result.routing_strategy == "forced"
+        state.hybrid_router.route.assert_not_called()
+
+    def test_image_request_routes_to_vision_role(self):
+        """An image-carrying request is REQUIRED to route to the vision role."""
+        request = ChatRequest(
+            prompt="what is in this chart?", real_mode=True, image_path="/some/chart.png"
+        )
+        state = MagicMock()
+        state.hybrid_router = MagicMock()
+        state.failure_graph = None
+        state.progress_logger = None
+
+        result = _route_request(request, state)
+
+        assert result.routing_decision == ["worker_vision"]
+        assert result.routing_strategy == "vision_input"
+        state.hybrid_router.route.assert_not_called()
+
+    def test_image_request_exempt_from_failure_veto(self):
+        """An image request on a vision-only role is EXEMPT from the failure veto —
+        reverting to a text frontdoor would make the VL model answer blind."""
+        request = ChatRequest(
+            prompt="what is in this chart?", real_mode=True, image_path="/some/chart.png"
+        )
+        state = MagicMock()
+        state.hybrid_router = MagicMock()
+        state.failure_graph.get_failure_risk.return_value = 0.99  # would normally veto
+        state.progress_logger = None
+
+        with patch(
+            "src.api.routes.chat_pipeline.routing_decision._vision_only_roles",
+            return_value=self._VISION_ONLY,
+        ):
+            result = _route_request(request, state)
+
+        assert result.routing_decision == ["worker_vision"]
+        assert result.routing_strategy == "vision_input"
+        state.failure_graph.get_failure_risk.assert_not_called()
+
     def test_progress_logger_called(self):
         """Progress logger logs task start."""
         request = ChatRequest(prompt="test", real_mode=True)

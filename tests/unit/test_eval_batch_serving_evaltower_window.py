@@ -197,7 +197,7 @@ def test_successful_apply_runs_both_arms_and_rolls_back(tmp_path: Path, monkeypa
 
     calls: list[str] = []
 
-    def fake_run_eval_arm(name: str, _args):
+    def fake_run_eval_arm(name: str, _args, **_kwargs):
         calls.append(name)
         if name == "current":
             return {
@@ -273,7 +273,7 @@ def test_degenerate_empty_current_arm_blocks_decision_grade(
     monkeypatch.setattr(
         window,
         "run_eval_arm",
-        lambda _name, _args: {
+        lambda _name, _args, **_kwargs: {
             "name": "current",
             "ok": True,
             "error": None,
@@ -326,7 +326,7 @@ def test_interrupt_after_activation_rolls_back_and_returns_report(
         lambda _args: [_step("rollback_reload"), _step("rollback_stop")],
     )
 
-    def fake_run_eval_arm(name: str, _args):
+    def fake_run_eval_arm(name: str, _args, **_kwargs):
         if name == "current":
             return {
                 "name": name,
@@ -394,7 +394,7 @@ def test_skip_current_arm_runs_batch_only_and_is_not_decision_grade(
 
     calls: list[str] = []
 
-    def fake_run_eval_arm(name: str, _args):
+    def fake_run_eval_arm(name: str, _args, **_kwargs):
         calls.append(name)
         return {
             "name": name,
@@ -450,7 +450,7 @@ def test_current_arm_failure_blocks_activation(tmp_path: Path, monkeypatch) -> N
     monkeypatch.setattr(
         window,
         "run_eval_arm",
-        lambda _name, _args: {
+        lambda _name, _args, **_kwargs: {
             "name": "current",
             "ok": False,
             "error": "boom",
@@ -498,6 +498,52 @@ def test_eval_result_metrics_includes_suite_and_batch_fields(monkeypatch) -> Non
     assert arm["metrics"]["eval_wall_s"] == 7.0
     assert arm["metrics"]["n_scored"] == 5
     assert arm["metrics"]["per_suite_counts"] == {"general": 5}
+
+
+def test_tier_arm_sets_question_artifact_dir_when_output_dir_given(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    # EV-11c: the tier arm must engage the per-question sidecar so a burned/errored
+    # tier arm leaves durable per-row records under its --output-dir (previously the
+    # verifier/retry/resume paths did this but the tier path did not).
+    recorded: list[Path] = []
+
+    class RecordingTower(FakeTower):
+        def set_question_artifact_dir(self, directory) -> None:
+            recorded.append(directory)
+
+    monkeypatch.setattr(window, "EvalTower", RecordingTower)
+    FakeTower.results = [
+        FakeResult(tier=1, quality=2.0, speed=30.0, reliability=1.0, wall_s=5.0)
+    ]
+    args = window.parse_args(["--tier", "1", "--n", "5", "--seed", "42"])
+
+    arm = window.run_eval_arm("current", args, output_dir=tmp_path)
+
+    assert arm["ok"] is True
+    assert recorded == [tmp_path]
+
+
+def test_tier_arm_skips_sidecar_when_no_output_dir(monkeypatch) -> None:
+    # Backward-compat: without an output dir (e.g. direct callers), the guard must
+    # not attempt the sidecar even on a tower that supports it.
+    recorded: list[Path] = []
+
+    class RecordingTower(FakeTower):
+        def set_question_artifact_dir(self, directory) -> None:
+            recorded.append(directory)
+
+    monkeypatch.setattr(window, "EvalTower", RecordingTower)
+    FakeTower.results = [
+        FakeResult(tier=1, quality=2.0, speed=30.0, reliability=1.0, wall_s=5.0)
+    ]
+    args = window.parse_args(["--tier", "1", "--n", "5", "--seed", "42"])
+
+    arm = window.run_eval_arm("current", args)
+
+    assert arm["ok"] is True
+    assert recorded == []
 
 
 def test_eval_result_metrics_uses_details_n_scored_before_compact_question_count() -> None:

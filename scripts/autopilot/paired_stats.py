@@ -181,6 +181,123 @@ def _exact_two_sided_binomial_p(b: int, c: int) -> float:
 
 
 # --------------------------------------------------------------------------- #
+# McNemar VERDICT surface (ADDITIVE — promotes the raw discordant counts into an
+# explicit, gating-ready A/B verdict). This is the decision-capable surface named
+# by the P-PAIRED measurement protocol: downstream consumers read {verdict, ...}
+# instead of eyeballing a_correct_b_wrong / a_wrong_b_correct.
+# --------------------------------------------------------------------------- #
+
+# Discordant-pair count at/below which the EXACT two-sided binomial sign test is
+# used; ABOVE it the continuity-corrected NORMAL approximation is used.
+#
+# Rationale (documented threshold): the normal approximation to the exact
+# binomial sign test only becomes trustworthy once enough discordant pairs
+# accumulate. Standard McNemar guidance (Fleiss, *Statistical Methods for Rates
+# and Proportions*) is that the chi-square/normal approximation is adequate when
+# the number of discordant pairs ``b + c >= 25``; below that the exact binomial
+# is preferred. The exact path is also the ONLY numerically safe path at large n:
+# ``_exact_two_sided_binomial_p`` divides by ``2**n``, which overflows float64
+# for n beyond ~1000 — so switching to the closed-form normal above the threshold
+# is both statistically and numerically motivated. Switch point: n_discordant
+# <= 25 -> exact_binomial, > 25 -> normal_approx.
+MCNEMAR_EXACT_MAX_DISCORDANT = 25
+
+
+def _normal_two_sided_mcnemar(b: int, c: int) -> tuple[float, float]:
+    """Continuity-corrected normal approximation of McNemar's two-sided test.
+
+    Returns ``(p_value, z_signed)``. The statistic uses Edwards' continuity
+    correction ``(|b - c| - 1)`` and ``z_signed`` is signed so ``z > 0`` means
+    arm B accumulated more discordant wins (``c > b``) and ``z < 0`` means arm A
+    did. The two-sided p is ``erfc(|z| / sqrt(2))`` (== the McNemar chi-square_1
+    upper tail).
+    """
+    n = b + c
+    if n == 0:
+        return 1.0, 0.0
+    corrected = max(0.0, abs(b - c) - 1.0)
+    z_mag = corrected / math.sqrt(n)
+    p = math.erfc(z_mag / math.sqrt(2.0))
+    z_signed = math.copysign(z_mag, c - b) if z_mag > 0 else 0.0
+    return round(min(1.0, p), 8), round(z_signed, 6)
+
+
+def mcnemar_verdict(
+    b: int,
+    c: int,
+    *,
+    alpha: float = 0.05,
+    exact_max_discordant: int = MCNEMAR_EXACT_MAX_DISCORDANT,
+) -> dict[str, Any]:
+    """Promote a McNemar discordant-pair count into an explicit A/B verdict.
+
+    ``b`` = ``a_correct_b_wrong`` (arm A wins the flip); ``c`` =
+    ``a_wrong_b_correct`` (arm B wins the flip) — matching
+    :class:`McNemarResult`. Uses the exact two-sided binomial sign test when the
+    discordant total ``b + c`` is at/below ``exact_max_discordant`` and the
+    continuity-corrected normal approximation above it (see
+    :data:`MCNEMAR_EXACT_MAX_DISCORDANT` for the threshold rationale).
+
+    Returns a JSON-serializable dict:
+      * ``verdict``       — ``"indistinguishable"`` | ``"a_better"`` | ``"b_better"``
+      * ``method``        — always ``"mcnemar"``
+      * ``approximation`` — ``"exact_binomial"`` | ``"normal_approx"``
+      * ``n_discordant``  — ``b + c``
+      * ``p_value``       — two-sided p under the chosen method
+      * ``z``             — signed continuity-corrected z (normal branch) else ``None``
+      * ``alpha`` / ``exact_max_discordant`` — the decision parameters used
+
+    Verdict rule: ``indistinguishable`` unless ``p_value < alpha`` AND the
+    discordant counts are unequal; then ``b_better`` when ``c > b`` (arm B won
+    more flips) else ``a_better``. Pure/deterministic — no inference, no I/O.
+    """
+    n_discordant = b + c
+    if n_discordant <= exact_max_discordant:
+        approximation = "exact_binomial"
+        p_value = _exact_two_sided_binomial_p(b, c)
+        z: float | None = None
+    else:
+        approximation = "normal_approx"
+        p_value, z = _normal_two_sided_mcnemar(b, c)
+
+    if p_value < alpha and b != c:
+        verdict = "b_better" if c > b else "a_better"
+    else:
+        verdict = "indistinguishable"
+
+    return {
+        "verdict": verdict,
+        "method": "mcnemar",
+        "approximation": approximation,
+        "n_discordant": n_discordant,
+        "p_value": p_value,
+        "z": z,
+        "alpha": alpha,
+        "exact_max_discordant": exact_max_discordant,
+    }
+
+
+def verdict_from_result(
+    result: McNemarResult,
+    *,
+    alpha: float = 0.05,
+    exact_max_discordant: int = MCNEMAR_EXACT_MAX_DISCORDANT,
+) -> dict[str, Any]:
+    """Convenience: derive :func:`mcnemar_verdict` straight from a McNemarResult.
+
+    ``result.a_correct_b_wrong`` is ``b`` and ``result.a_wrong_b_correct`` is
+    ``c``, so the verdict's ``a_better`` / ``b_better`` direction matches the
+    result's ``trial_a`` / ``trial_b`` labelling.
+    """
+    return mcnemar_verdict(
+        result.a_correct_b_wrong,
+        result.a_wrong_b_correct,
+        alpha=alpha,
+        exact_max_discordant=exact_max_discordant,
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Paired-comparison input gate (ADDITIVE — does not touch mcnemar_from_vectors)
 #
 # A paired McNemar test is only valid when both arms were scored on the SAME

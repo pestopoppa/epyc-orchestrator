@@ -407,18 +407,30 @@ roles:
         assert result.routed_to == "worker_vision"
         mock_handle.assert_awaited_once()
 
+    @patch("src.api.routes.chat_pipeline.vision_stage._vl_port_for_role")
     @patch("src.api.routes.chat_vision._handle_vision_request", new_callable=AsyncMock)
-    def test_fallthrough_on_exception(self, mock_handle):
-        """Exception in VL handler returns None (fall through to text)."""
+    def test_image_request_handler_failure_emits_inband_error(self, mock_handle, mock_port):
+        """Image request + failing VL handler → in-band vision_unavailable marker.
+
+        MUST NOT return None: a silent text fallthrough would answer BLIND and
+        the eval would SCORE the blind answer as wrong (the vl-suite 0/376). The
+        in-band ``[ERROR: vision_unavailable: ...]`` marker lets the eval's REL-1
+        guard EXCLUDE the row instead.
+        """
         from src.api.routes.chat_pipeline.vision_stage import _execute_vision_multimodal
 
-        mock_handle.side_effect = RuntimeError("VL server down")
+        mock_handle.side_effect = RuntimeError("All vision paths failed")
+        mock_port.return_value = 8086
 
         request = MagicMock()
         request.image_path = "/some/image.png"
         request.image_base64 = None
+        request.real_mode = True
         routing = MagicMock()
         routing.task_id = "test-err"
+        routing.routing_strategy = "vision_input"
+        routing.formalization_applied = False
+        routing.skill_ids = []
         state = MagicMock()
         state.progress_logger = None
 
@@ -427,7 +439,61 @@ roles:
                 request, routing, MagicMock(), state, 0.0, "worker_vision", "direct"
             )
         )
-        assert result is None
+        assert result is not None, "image request must never silently fall through to text"
+        assert result.answer.startswith("[ERROR: vision_unavailable:")
+        assert "RuntimeError" in result.answer
+        assert result.error_code == 503
+        assert result.routed_to == "worker_vision"
+
+    def test_inband_error_answer_matches_eval_rel1_guard(self):
+        """The emitted marker is caught by eval_tower's _inband_error_text guard."""
+        from src.api.routes.chat_pipeline.vision_stage import _vision_unavailable_response
+
+        routing = MagicMock()
+        routing.routing_strategy = "vision_input"
+        routing.formalization_applied = False
+        routing.skill_ids = []
+        request = MagicMock()
+        request.real_mode = True
+
+        resp = _vision_unavailable_response(
+            request, routing, "worker_vision", "direct", 0.0,
+            "RuntimeError: All vision paths failed",
+        )
+        # Mirror the eval-tower REL-1 guard: anchored [ERROR: prefix after lstrip.
+        assert resp.answer.lstrip().startswith("[ERROR:")
+
+    def test_repl_image_not_found_emits_inband_error(self):
+        """REPL mode, image path missing on disk → in-band error, not silent None."""
+        from src.api.routes.chat_pipeline.vision_stage import _execute_vision_multimodal
+
+        missing = MagicMock()
+        missing.exists.return_value = False
+        with patch(
+            "src.api.routes.path_validation.validate_api_path", return_value=missing
+        ):
+            request = MagicMock()
+            request.image_path = "/nope/missing.png"
+            request.image_base64 = None
+            request.real_mode = True
+            request.prompt = "describe"
+            request.context = ""
+            routing = MagicMock()
+            routing.task_id = "test-missing"
+            routing.routing_strategy = "vision_input"
+            routing.formalization_applied = False
+            routing.skill_ids = []
+            state = MagicMock()
+            state.progress_logger = None
+
+            result = _run_async(
+                _execute_vision_multimodal(
+                    request, routing, MagicMock(), state, 0.0, "worker_vision", "repl"
+                )
+            )
+        assert result is not None
+        assert result.answer.startswith("[ERROR: vision_unavailable:")
+        assert "FileNotFoundError" in result.answer
 
     def test_vision_escalation_role_accepted(self):
         """vision_escalation role is accepted (not just worker_vision)."""

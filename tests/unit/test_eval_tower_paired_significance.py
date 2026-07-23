@@ -198,3 +198,112 @@ def test_screen_output_is_json_serializable() -> None:
     # The screen is attached verbatim to eval_math_rebaseline's returned dict, so
     # it must round-trip through JSON.
     assert json.loads(json.dumps(out)) == out
+
+
+# ── promoted McNemar VERDICT surface + per-role threading ────────────────────
+# The screen now attaches an explicit {verdict, method, p_value/z, n_discordant}
+# block to every matched pair, and attach_role_paired_verdicts threads a
+# role-oriented view into each per-role record so downstream consumers read a
+# VERDICT rather than raw discordant counts.
+
+from eval_tower import attach_role_paired_verdicts  # type: ignore[import-not-found]  # noqa: E402
+from paired_stats import (  # type: ignore[import-not-found]  # noqa: E402
+    MCNEMAR_EXACT_MAX_DISCORDANT,
+    mcnemar_verdict,
+)
+
+
+def test_screen_pair_carries_verdict_block_matching_primitive() -> None:
+    out = screen_paired_arms([_arm("A", ARM_A), _arm("B", ARM_B)])
+    pair = out["pairs"][0]
+    assert out["mcnemar_exact_max_discordant"] == MCNEMAR_EXACT_MAX_DISCORDANT
+
+    verdict = pair["verdict"]
+    # Cross-check against the landed primitive on the SAME discordant counts.
+    ref = mcnemar_verdict(pair["a_correct_b_wrong"], pair["a_wrong_b_correct"])
+    assert verdict == ref
+    # 0 A-right/B-wrong, 8 A-wrong/B-right => clean, significant b_better verdict.
+    assert verdict["verdict"] == "b_better"
+    assert verdict["method"] == "mcnemar"
+    assert verdict["approximation"] == "exact_binomial"
+    assert verdict["n_discordant"] == 8
+    assert verdict["z"] is None
+
+
+def test_screen_noise_band_pair_verdict_is_indistinguishable() -> None:
+    arm_a = {f"q{i}": c for i, c in enumerate([1, 1, 1, 0, 0, 1], 1)}
+    arm_b = {f"q{i}": c for i, c in enumerate([1, 0, 1, 1, 1, 1], 1)}
+    out = screen_paired_arms([_arm("A", arm_a), _arm("B", arm_b)])
+    assert out["pairs"][0]["verdict"]["verdict"] == "indistinguishable"
+
+
+def test_screen_threshold_override_forces_normal_branch() -> None:
+    # With a large one-directional flip set, lowering the exact threshold routes
+    # the verdict through the continuity-corrected normal approximation.
+    arm_a = {f"q{i}": (i <= 4) for i in range(1, 41)}  # correct on q1-q4 only
+    arm_b = {f"q{i}": True for i in range(1, 41)}  # correct on all -> 36 flips B-right
+    out = screen_paired_arms(
+        [_arm("A", arm_a), _arm("B", arm_b)], mcnemar_exact_max_discordant=8
+    )
+    verdict = out["pairs"][0]["verdict"]
+    assert verdict["approximation"] == "normal_approx"
+    assert verdict["n_discordant"] == 36
+    assert verdict["z"] is not None and verdict["z"] > 0
+    assert verdict["verdict"] == "b_better"
+
+
+def test_attach_role_paired_verdicts_threads_normalized_view() -> None:
+    out = screen_paired_arms(
+        [_arm("armA-label", ARM_A), _arm("armB-label", ARM_B)]
+    )
+    # per_role records carry the arm label (as eval_math_rebaseline builds them).
+    per_role = {
+        "worker_general": {"role": "worker_general", "arm": "armA-label"},
+        "worker_math": {"role": "worker_math", "arm": "armB-label"},
+    }
+    returned = attach_role_paired_verdicts(per_role, out)
+    assert returned is per_role  # mutates in place
+
+    gen = per_role["worker_general"]["paired_verdicts"]
+    mat = per_role["worker_math"]["paired_verdicts"]
+    assert len(gen) == 1 and len(mat) == 1
+
+    # Arm B wins (b_better). From worker_general's (arm_a) perspective that is
+    # "other_better"; from worker_math's (arm_b) perspective it is "this_better".
+    assert gen[0]["verdict"] == "other_better"
+    assert gen[0]["raw_verdict"] == "b_better"
+    assert gen[0]["vs_role"] == "worker_math"
+    assert gen[0]["vs_arm"] == "armB-label"
+    assert gen[0]["significant"] is True
+    assert gen[0]["method"] == "mcnemar"
+
+    assert mat[0]["verdict"] == "this_better"
+    assert mat[0]["vs_role"] == "worker_general"
+
+
+def test_attach_role_paired_verdicts_empty_when_no_pairs() -> None:
+    # Single arm -> no pairs -> every role gets an empty paired_verdicts list.
+    out = screen_paired_arms([_arm("solo", ARM_A)])
+    per_role = {"worker_general": {"role": "worker_general", "arm": "solo"}}
+    attach_role_paired_verdicts(per_role, out)
+    assert per_role["worker_general"]["paired_verdicts"] == []
+
+
+def test_attach_role_paired_verdicts_indistinguishable_normalizes_both_sides() -> None:
+    arm_a = {f"q{i}": c for i, c in enumerate([1, 1, 1, 0, 0, 1], 1)}
+    arm_b = {f"q{i}": c for i, c in enumerate([1, 0, 1, 1, 1, 1], 1)}
+    out = screen_paired_arms([_arm("a", arm_a), _arm("b", arm_b)])
+    per_role = {
+        "ra": {"role": "ra", "arm": "a"},
+        "rb": {"role": "rb", "arm": "b"},
+    }
+    attach_role_paired_verdicts(per_role, out)
+    assert per_role["ra"]["paired_verdicts"][0]["verdict"] == "indistinguishable"
+    assert per_role["rb"]["paired_verdicts"][0]["verdict"] == "indistinguishable"
+
+
+def test_screen_with_verdict_round_trips_through_json() -> None:
+    import json
+
+    out = screen_paired_arms([_arm("A", ARM_A), _arm("B", ARM_B)])
+    assert json.loads(json.dumps(out)) == out

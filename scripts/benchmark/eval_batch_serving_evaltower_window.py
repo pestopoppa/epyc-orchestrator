@@ -42,6 +42,7 @@ for path in (SCRIPT_DIR, AUTOPILOT_DIR):
 import eval_batch_serving_activation_window as activation_window  # noqa: E402
 from eval_tower import (  # noqa: E402
     EvalTower,
+    _default_eval_timeout,
     _eval_concurrency,
     compute_calibration_metrics as _compute_calibration_metrics,
 )
@@ -180,8 +181,17 @@ def _arm_decision_blocker(name: str, arm: dict[str, Any] | None, *, expected_n: 
         )
     if expected_n > 0 and n_questions < expected_n:
         return f"{name} EvalTower arm scored {n_questions}/{expected_n} questions"
-    if expected_n > 0 and n_scored < expected_n:
-        return f"{name} EvalTower arm scored {n_scored}/{expected_n} non-error questions"
+    # REL-1 alignment (2026-07-23): errors are HONEST exclusions, not automatic
+    # degeneracy — zero-tolerance predates the REL-1 era and refused arms at
+    # 45/50 (90%) while the verifier modes bank at reliability 0.895-0.996
+    # under the same instrument. Floor: >= 0.9 of the expected draw scored
+    # (stricter than SafetyGate's 0.8 gating floor; decision_grade machinery
+    # applies its own checks downstream).
+    if expected_n > 0 and n_scored < 0.9 * expected_n:
+        return (
+            f"{name} EvalTower arm scored {n_scored}/{expected_n} non-error "
+            f"questions (reliability {n_scored / expected_n:.3f} < 0.9 floor)"
+        )
     return None
 
 
@@ -429,13 +439,23 @@ def _evaluate(tower: EvalTower, *, tier: int, n: int, seed: int) -> Any:
     raise ValueError(f"unsupported tier: {tier}")
 
 
-def run_eval_arm(name: str, args: argparse.Namespace) -> dict[str, Any]:
+def run_eval_arm(
+    name: str, args: argparse.Namespace, *, output_dir: Path | None = None
+) -> dict[str, Any]:
     started = time.perf_counter()
     try:
         tower = EvalTower(
             url=args.api_url.rstrip("/"),
             timeout=args.evaltower_timeout_s,
         )
+        # EV-11c: durably persist per-arm question rows into this run's output-dir
+        # so a burned/errored tier arm's error rows are identifiable and can be
+        # requeued with --retry-errors-from (vs a full multi-hour arm rerun). Mirrors
+        # the verifier/retry/resume paths; the tier arm routes through _eval_batch, so
+        # setting the dir engages the same append-only, fsync'd sidecar writer.
+        # Best-effort (matches _eval_batch's fail-soft sidecar contract).
+        if output_dir is not None and hasattr(tower, "set_question_artifact_dir"):
+            tower.set_question_artifact_dir(output_dir)
         result = _evaluate(tower, tier=args.tier, n=args.n, seed=args.seed)
         wall_s = time.perf_counter() - started
         return {
@@ -607,7 +627,7 @@ def build_report(args: argparse.Namespace, *, output_dir: Path) -> tuple[dict[st
                 rc = _bool_blocker_rc(blockers)
             else:
                 if not args.skip_current_arm:
-                    current_arm = run_eval_arm("current", args)
+                    current_arm = run_eval_arm("current", args, output_dir=output_dir)
                     if not current_arm.get("ok"):
                         blockers.append(f"current EvalTower arm failed: {current_arm.get('error')}")
                         status = "current_eval_failed"
@@ -636,7 +656,7 @@ def build_report(args: argparse.Namespace, *, output_dir: Path) -> tuple[dict[st
                         status = "activation_failed"
                         rc = 75
                     else:
-                        eval_batch_arm = run_eval_arm("eval_batch", args)
+                        eval_batch_arm = run_eval_arm("eval_batch", args, output_dir=output_dir)
                         if not eval_batch_arm.get("ok"):
                             blockers.append(
                                 f"eval-batch EvalTower arm failed: {eval_batch_arm.get('error')}"
@@ -1809,14 +1829,28 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--attest-samples", type=int, default=12)
     parser.add_argument("--http-timeout-s", type=float, default=5.0)
     parser.add_argument("--command-timeout-s", type=float, default=900.0)
-    parser.add_argument("--evaltower-timeout-s", type=float, default=120.0)
+    # Per-question eval request budget. Default deferred (None) to the standard
+    # env-aware eval default (`_default_eval_timeout` -> honors
+    # AUTOPILOT_EVAL_REQUEST_TIMEOUT_S) so an operator who raises that env for a
+    # rebaseline actually gets the longer budget. Previously this hardcoded 120.0,
+    # which SILENTLY overrode the env on every EvalTower(...) construction below
+    # (the runner always passes timeout=args.evaltower_timeout_s), capping every
+    # heavy-suite question at 120s regardless of the env — the EV-BASELINE-E7
+    # 119-120s timeouts. An explicit --evaltower-timeout-s still wins.
+    parser.add_argument("--evaltower-timeout-s", type=float, default=None)
     parser.add_argument(
         "--start-mode",
         choices=("only", "include-warm"),
         default="only",
         help="How to start eval_batch_frontdoor during the temporary activation.",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    # Resolve the deferred eval budget to the env-aware standard default so a
+    # raised AUTOPILOT_EVAL_REQUEST_TIMEOUT_S reaches EvalTower(timeout=...) —
+    # and thus the per-question timeout_s/deadline that reaches the backend.
+    if args.evaltower_timeout_s is None:
+        args.evaltower_timeout_s = float(_default_eval_timeout())
+    return args
 
 
 def main(argv: list[str] | None = None) -> int:

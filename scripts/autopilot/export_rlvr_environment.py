@@ -251,6 +251,9 @@ def _environment_row(
     # provenance flag (fail-closed default False when the source has no stamp) so a
     # provenance-clean row can earn calibration/discrimination credit.
     confidence_is_real = bool(_field(eval_record, "confidence_is_real", default=False))
+    # ESC-7 Option A: thread the scoring-method stamp so rlvr_tiers can apply
+    # code-only calibration scoping (math geomean is anti-discriminative).
+    scoring_method = str(_field(eval_record, "scoring_method", default="") or "")
     result = SimpleNamespace(
         tier=int(_field(eval_record, "tier", default=0) or 0),
         quality=_field(eval_record, "quality", default=_field(eval_record, "score", default=0.0)),
@@ -258,7 +261,10 @@ def _environment_row(
         ece=_field(eval_record, "ece", default=None),
         auroc=_field(eval_record, "auroc", default=None),
         question_results=question_results,
-        details={"confidence_is_real": confidence_is_real},
+        details={
+            "confidence_is_real": confidence_is_real,
+            "scoring_method": scoring_method,
+        },
     )
     reward = rlvr_reward_from_result(result)
     row = {

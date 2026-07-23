@@ -8,11 +8,16 @@ import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
+
+import httpx
 
 
 _ROOT = Path(__file__).resolve().parents[2] / "scripts" / "benchmark"
 sys.path.insert(0, str(_ROOT))
+# resilient_http (watcher path) lives under scripts/autopilot; make it importable
+# so the eval reconnect-backoff watcher-path test can patch resilient_post.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts" / "autopilot"))
 _SPEC = importlib.util.spec_from_file_location("seeding_orchestrator_test", _ROOT / "seeding_orchestrator.py")
 _MOD = importlib.util.module_from_spec(_SPEC)
 sys.modules["seeding_orchestrator_test"] = _MOD
@@ -338,6 +343,136 @@ def test_call_orchestrator_forced_omits_native_tool_payload_by_default():
     assert "tool_choice" not in payload
     assert "output_schema" not in payload
     assert "x_orchestrator_prompt_root" not in payload
+
+
+# ── Eval reconnect backoff (REL-2) ───────────────────────────────────
+
+
+def test_eval_reconnect_recovers_after_transient_connection_failure():
+    # Mid-run API reload: first two POSTs are refused (ConnectError), third
+    # succeeds. Eval traffic must survive it instead of burning the question.
+    client = Mock()
+    client.post.side_effect = [
+        httpx.ConnectError("connection refused"),
+        httpx.ConnectError("connection refused"),
+        _Resp(200, {"answer": "recovered"}),
+    ]
+    with patch.object(_MOD.time, "sleep") as sleep_mock:
+        data = _MOD.call_orchestrator_forced(
+            prompt="q",
+            force_role="worker_math",
+            client=client,
+            workload_class="eval_batch",
+        )
+    assert data["answer"] == "recovered"
+    assert data.get("error") is None
+    assert client.post.call_count == 3
+    # Exponential backoff: 1s then 2s before the successful third attempt.
+    assert sleep_mock.call_args_list == [call(1.0), call(2.0)]
+
+
+def test_eval_reconnect_persistent_failure_honest_error_row():
+    # Persistent unreachability must still become an EXCLUDED REL-1 error row,
+    # tagged with the api_unreachable_after_backoff reason, after the bounded
+    # backoff budget is spent.
+    client = Mock()
+    client.post.side_effect = httpx.ConnectError("connection refused")
+    with patch.dict(os.environ, {"AUTOPILOT_EVAL_RECONNECT_MAX_S": "3"}):
+        with patch.object(_MOD.time, "sleep") as sleep_mock:
+            data = _MOD.call_orchestrator_forced(
+                prompt="q",
+                force_role="worker_math",
+                client=client,
+                workload_class="eval_batch",
+            )
+    assert data["answer"] == ""
+    assert data["failure_reason"] == "api_unreachable_after_backoff"
+    assert data["error"].startswith("api_unreachable_after_backoff:")
+    # Budget=3s → sleeps 1s + 2s (=3), the next (4s) would overrun → honest row.
+    assert sleep_mock.call_args_list == [call(1.0), call(2.0)]
+    assert client.post.call_count == 3
+
+
+def test_eval_reconnect_does_not_retry_timeouts():
+    # 04411baf timeout semantics preserved: a ReadTimeout is NOT connection-level
+    # and must fall straight through to a terminal error with zero backoff.
+    client = Mock()
+    client.post.side_effect = httpx.ReadTimeout("read timed out")
+    with patch.object(_MOD.time, "sleep") as sleep_mock:
+        data = _MOD.call_orchestrator_forced(
+            prompt="q",
+            force_role="worker_math",
+            client=client,
+            workload_class="eval_batch",
+        )
+    assert data["answer"] == ""
+    assert data.get("failure_reason") != "api_unreachable_after_backoff"
+    assert "api_unreachable_after_backoff" not in str(data.get("error"))
+    sleep_mock.assert_not_called()
+    assert client.post.call_count == 1
+
+
+def test_non_eval_connection_error_preserves_legacy_terminal_semantics():
+    # The 14 non-eval callers keep the EXACT legacy path: a ConnectError is a
+    # terminal error dict with no backoff/retry (reconnect is eval-scoped).
+    client = Mock()
+    client.post.side_effect = httpx.ConnectError("connection refused")
+    with patch.object(_MOD.time, "sleep") as sleep_mock:
+        data = _MOD.call_orchestrator_forced(
+            prompt="q",
+            force_role="worker",
+            client=client,
+        )  # no workload_class → non-eval path
+    assert data["answer"] == ""
+    assert "error" in data
+    assert "failure_reason" not in data
+    sleep_mock.assert_not_called()
+    assert client.post.call_count == 1
+
+
+def _reconnect_meta(**overrides):
+    meta = {
+        "clean": False,
+        "exogenous_recovered": False,
+        "exogenous_unrecovered": False,
+        "external_restart": False,
+        "real_failure": False,
+        "retry_count": 0,
+        "wait_s": 0.0,
+        "marker_changes": {},
+        "reason": "",
+        "detail": "",
+    }
+    meta.update(overrides)
+    return meta
+
+
+def test_eval_reconnect_watcher_path_backs_off_and_recovers():
+    # Watcher path: resilient_post can report a connection-level real_failure
+    # when the watcher itself couldn't read markers during the reload. The
+    # reconnect-backoff wraps it: back off, then retry until it recovers.
+    import resilient_http
+
+    calls = [
+        (
+            {"answer": "", "error": "ConnectError: connection refused"},
+            _reconnect_meta(real_failure=True, reason="connect_error",
+                            detail="ConnectError: connection refused"),
+        ),
+        ({"answer": "recovered"}, _reconnect_meta(clean=True)),
+    ]
+    rp_mock = Mock(side_effect=calls)
+    with patch.object(resilient_http, "resilient_post", rp_mock):
+        with patch.object(_MOD.time, "sleep") as sleep_mock:
+            data = _MOD.call_orchestrator_forced(
+                prompt="q",
+                force_role="worker_math",
+                workload_class="eval_batch",
+                watcher=object(),  # any non-None watcher engages the watcher path
+            )
+    assert data["answer"] == "recovered"
+    assert rp_mock.call_count == 2
+    assert sleep_mock.call_args_list == [call(1.0)]
 
 
 class _Future:

@@ -386,9 +386,13 @@ class TwoPhaseRetriever:
         # Initial Q-values (0.5 + reward*0.5) are informative:
         # - Success → Q=1.0
         # - Failure → Q=0.25
+        # None-safe: consolidated-store rows (2026-07-23 Q migration) may carry
+        # NULL update_count/q_value; treat as unobserved rather than crashing
+        # the whole routing path (72x 500s on /chat before this guard).
         observed_count = sum(
             1 for r in results
-            if r.memory.update_count > 0 or abs(r.memory.q_value - 0.5) > 0.1
+            if (r.memory.update_count or 0) > 0
+            or abs((r.memory.q_value if r.memory.q_value is not None else 0.5) - 0.5) > 0.1
         )
         if observed_count < min_samples:
             return False

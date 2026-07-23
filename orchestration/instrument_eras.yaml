@@ -119,6 +119,24 @@ eras:
   # sequential verdicts, per-question ledger). Append it then with: core_id, policy_version,
   # and the rule that E<=3 T1 frontiers/baselines are retired views (no cross-era dominance).
 
+  - id: E4-quality-core-v2
+    from: "2026-07-23T10:39:40Z"
+    scope: autopilot_quality
+    core_id: "core_v2"
+    policy_version: "core_v2_designed_e7_v1"
+    note: >
+      Designed T1 eval-core era. Replaces the accidental legacy_pool_seed_42_n50 T1 draw
+      with the fixed, versioned, decision-value-stratified core_v2 (50 items / 37 scoreable
+      suites; a-priori pool-tier difficulty spread {1:11,2:18,3:21}; dead items excised;
+      tulving_episodic excluded; vl INCLUDED as a 1-item coverage-single per the 2026-07-23
+      truth-slice evidence, with bigcodebench demoted 2->1 to hold the total). Artifact:
+      benchmarks/prompts/core_v2.jsonl, dataset_content_sha256=88d7a59ca342f03c09cc5f9ba0c0cb08075de61d576c6225707822d0edb639ca,
+      built_from pool_sha256=9b433fa7f9d067c076f41fff18637c0246bfeab331dfc7f7052244e6db3238af
+      (question_pool.jsonl, E7-eval-instrument, 79,479 rows, 2026-07-21).
+      RECONCILIATION: all E<=3 T1 quality frontiers/baselines and the legacy_pool_seed_* draws
+      are RETIRED VIEWS under this era - no cross-era T1 dominance; re-measure within era.
+      Pairs with the E7-eval-instrument (scope eval_quality) scorer/pool boundary.
+
 known_dead_instrument_items:
   # Discovered 2026-06-12 (fable5-findings-01-impl-plan §2.0). Until repaired, ALL T1 quality
   # numbers have effective n ~= 35 of 43 and ceiling ~= 2.44/3.0.

@@ -1453,9 +1453,11 @@ from src.llm_primitives.stat_tests import (  # noqa: E402
 # reimplement any statistic. ``paired_stats`` lives beside this module in
 # ``scripts/autopilot/``.
 from paired_stats import (  # noqa: E402
+    MCNEMAR_EXACT_MAX_DISCORDANT,
     PairedComparisonMismatchError,
     QuestionOutcome,
     mcnemar_from_vectors,
+    mcnemar_verdict,
     require_matched_comparison,
 )
 
@@ -1777,6 +1779,7 @@ def screen_paired_arms(
     *,
     z: float = DEFAULT_WILSON_Z,
     alpha: float = 0.05,
+    mcnemar_exact_max_discordant: int = MCNEMAR_EXACT_MAX_DISCORDANT,
 ) -> dict[str, Any]:
     """Paired-significance screen over a set of A/B arms.
 
@@ -1794,9 +1797,16 @@ def screen_paired_arms(
     ``mismatched_pairs`` rather than silently compared. Pure/deterministic — no
     inference, no I/O.
 
-    Returns a JSON-serializable dict with keys ``z``, ``alpha``, ``n_arms``,
-    ``arms`` (per-arm accuracy + Wilson CI over that arm's own outcomes),
-    ``pairs`` (the paired screen, one record per matched pair), and
+    Each matched pair carries a promoted ``verdict`` block
+    (:func:`paired_stats.mcnemar_verdict`) — an explicit
+    ``indistinguishable`` / ``a_better`` / ``b_better`` decision with its p-value
+    (and z on the normal branch), discordant count, and method — so downstream
+    consumers read a VERDICT rather than eyeballing the raw discordant counts.
+
+    Returns a JSON-serializable dict with keys ``z``, ``alpha``,
+    ``mcnemar_exact_max_discordant``, ``n_arms``, ``arms`` (per-arm accuracy +
+    Wilson CI over that arm's own outcomes), ``pairs`` (the paired screen, one
+    record per matched pair, each with a ``verdict`` block), and
     ``mismatched_pairs``.
     """
     prepared: list[dict[str, Any]] = []
@@ -1886,17 +1896,87 @@ def screen_paired_arms(
                     # Screening signals for a grounded verdict:
                     "significant": (p < alpha),
                     "wilson_ci_overlap": not (wa_hi < wb_lo or wb_hi < wa_lo),
+                    # PROMOTED gating surface: an explicit McNemar verdict
+                    # (indistinguishable / a_better / b_better) with p (and z on
+                    # the normal branch), discordant count, and method. This is
+                    # what downstream keep/prefer decisions read.
+                    "verdict": mcnemar_verdict(
+                        result.a_correct_b_wrong,
+                        result.a_wrong_b_correct,
+                        alpha=alpha,
+                        exact_max_discordant=mcnemar_exact_max_discordant,
+                    ),
                 }
             )
 
     return {
         "z": z,
         "alpha": alpha,
+        "mcnemar_exact_max_discordant": mcnemar_exact_max_discordant,
         "n_arms": len(prepared),
         "arms": per_arm,
         "pairs": pairs,
         "mismatched_pairs": mismatched,
     }
+
+
+def attach_role_paired_verdicts(
+    per_role: "Mapping[str, Any]",
+    screen: "Mapping[str, Any]",
+) -> "Mapping[str, Any]":
+    """Thread the paired McNemar verdict into each per-role record.
+
+    ``screen`` is a :func:`screen_paired_arms` result and ``per_role`` maps a role
+    name to its arm record (each carrying an ``arm`` label matching the labels in
+    ``screen['pairs']``). For every pair a role participates in, this attaches a
+    compact, role-oriented ``paired_verdicts`` entry so a downstream consumer
+    reading a SINGLE role's record sees a VERDICT — normalized to that role's
+    perspective (``this_better`` / ``other_better`` / ``indistinguishable``) —
+    rather than only the raw discordant counts buried in the screen block.
+
+    Mutates ``per_role`` in place (and returns it). Roles with no matched pair get
+    an empty ``paired_verdicts`` list. Pure/deterministic — no inference, no I/O.
+    """
+    label_to_role: dict[str, str] = {
+        str(rec.get("arm")): role
+        for role, rec in per_role.items()
+        if isinstance(rec, Mapping) and rec.get("arm")
+    }
+    for role, rec in per_role.items():
+        if not isinstance(rec, dict):
+            continue
+        arm_label = str(rec.get("arm", ""))
+        entries: list[dict[str, Any]] = []
+        for pair in screen.get("pairs", []) or []:
+            is_a = pair.get("arm_a") == arm_label
+            is_b = pair.get("arm_b") == arm_label
+            if not (is_a or is_b):
+                continue
+            verdict_block = pair.get("verdict") or {}
+            raw = verdict_block.get("verdict", "indistinguishable")
+            if raw == "indistinguishable":
+                relative = "indistinguishable"
+            elif (raw == "a_better") == is_a:
+                relative = "this_better"
+            else:
+                relative = "other_better"
+            other_label = pair.get("arm_b") if is_a else pair.get("arm_a")
+            entries.append(
+                {
+                    "vs_arm": other_label,
+                    "vs_role": label_to_role.get(str(other_label)),
+                    "verdict": relative,
+                    "raw_verdict": raw,
+                    "method": verdict_block.get("method", "mcnemar"),
+                    "approximation": verdict_block.get("approximation"),
+                    "p_value": verdict_block.get("p_value"),
+                    "z": verdict_block.get("z"),
+                    "n_discordant": verdict_block.get("n_discordant"),
+                    "significant": raw != "indistinguishable",
+                }
+            )
+        rec["paired_verdicts"] = entries
+    return per_role
 
 
 def score_math_rebaseline_answers(
@@ -4719,6 +4799,14 @@ class EvalTower:
                         "outcomes": {r.qid: r.correct for r in scored if r.qid},
                     }
                 )
+        # Paired-significance screen over the arms: exact/normal McNemar p on the
+        # flip pairs + per-arm Wilson CIs, gated on matched dataset+profile. Each
+        # matched pair now carries a promoted ``verdict`` block. Empty ``pairs``
+        # when fewer than two arms were scored.
+        paired_significance = screen_paired_arms(arm_screens)
+        # Thread the paired verdict into each per-role record so a downstream
+        # consumer reading a single role sees a VERDICT, not raw discordant counts.
+        attach_role_paired_verdicts(per_role, paired_significance)
         return {
             "mode": "math_rebaseline",
             "suite": "math",
@@ -4730,10 +4818,7 @@ class EvalTower:
             "dataset_sha256": dataset_sha256,
             "test_profile": test_profile,
             "per_role": per_role,
-            # Paired-significance screen over the arms: exact McNemar p on the
-            # flip pairs + per-arm Wilson CIs, gated on matched dataset+profile.
-            # Empty ``pairs`` when fewer than two arms were scored.
-            "paired_significance": screen_paired_arms(arm_screens),
+            "paired_significance": paired_significance,
         }
 
     def eval_question_subset(
