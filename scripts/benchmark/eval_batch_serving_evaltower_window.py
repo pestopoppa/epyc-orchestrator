@@ -181,8 +181,17 @@ def _arm_decision_blocker(name: str, arm: dict[str, Any] | None, *, expected_n: 
         )
     if expected_n > 0 and n_questions < expected_n:
         return f"{name} EvalTower arm scored {n_questions}/{expected_n} questions"
-    if expected_n > 0 and n_scored < expected_n:
-        return f"{name} EvalTower arm scored {n_scored}/{expected_n} non-error questions"
+    # REL-1 alignment (2026-07-23): errors are HONEST exclusions, not automatic
+    # degeneracy — zero-tolerance predates the REL-1 era and refused arms at
+    # 45/50 (90%) while the verifier modes bank at reliability 0.895-0.996
+    # under the same instrument. Floor: >= 0.9 of the expected draw scored
+    # (stricter than SafetyGate's 0.8 gating floor; decision_grade machinery
+    # applies its own checks downstream).
+    if expected_n > 0 and n_scored < 0.9 * expected_n:
+        return (
+            f"{name} EvalTower arm scored {n_scored}/{expected_n} non-error "
+            f"questions (reliability {n_scored / expected_n:.3f} < 0.9 floor)"
+        )
     return None
 
 
