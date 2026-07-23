@@ -386,3 +386,33 @@ def test_legacy_roles_mode_mismatch_still_exits_1(monkeypatch, tmp_path) -> None
     artifact = json.loads(out.read_text())
     assert artifact["live_affinity_verified"] is False
     assert all(e["note"] == "no live process" for e in artifact["instances"])
+
+
+def test_foreign_scan_matches_executable_not_arguments(monkeypatch):
+    """Live incident 2026-07-23: earlyoom carries llama-server/llama-bench in
+    its --ignore/--prefer REGEX ARGUMENTS and spans all CPUs — a full-cmdline
+    grep made every E5 cell fail the foreign-overlap gate. The scan must match
+    argv[0] basename only."""
+    import subprocess as _sp
+
+    from scripts.server import affinity_preflight as ap
+
+    ps_out = (
+        "    PID ARGS\n"
+        "   1849 /usr/local/bin/earlyoom -M 41943040 --ignore ^(llama-server|sd-server)$ --prefer ^llama-bench$\n"
+        "   2001 /mnt/raid0/llm/llama.cpp/build/bin/llama-server -m model.gguf --port 19080\n"
+        "   2002 bash -c echo llama-cli is not running here\n"
+        "   2003 llama-bench -m model.gguf\n"
+    )
+
+    class _R:
+        stdout = ps_out
+        returncode = 0
+
+    monkeypatch.setattr(ap.subprocess, "run", lambda *a, **k: _R())
+    procs = ap._llama_processes()
+    pids = {p for p, _ in procs}
+    assert "2001" in pids  # real llama-server by argv0
+    assert "2003" in pids  # bare llama-bench argv0
+    assert "1849" not in pids  # earlyoom: llama names only in ARGUMENTS
+    assert "2002" not in pids  # bash with llama text in arguments

@@ -100,15 +100,25 @@ LLAMA_PROC_PATTERN = r"\b(llama-server|llama-bench|llama-cli|ik_llama)\b"
 
 
 def _llama_processes() -> list[tuple[str, str]]:
-    """Live llama-family processes as (pid, args) — realized state via ps, never config."""
+    """Live llama-family processes as (pid, args) — realized state via ps, never config.
+
+    The pattern is matched against the EXECUTABLE (argv[0] basename), never
+    the full args line: other processes legitimately carry llama names inside
+    their ARGUMENTS (live incident 2026-07-23: earlyoom's --ignore/--prefer
+    regexes contain "llama-server"/"llama-bench" and earlyoom spans all CPUs —
+    a full-cmdline grep made every E5 cell fail its foreign-overlap gate).
+    """
     r = subprocess.run(
-        ["bash", "-c",
-         f"ps -eo pid,args | grep -E '{LLAMA_PROC_PATTERN}' | grep -v grep"],
+        ["ps", "-eo", "pid,args"],
         capture_output=True, text=True)
+    pattern = re.compile(LLAMA_PROC_PATTERN)
     out: list[tuple[str, str]] = []
     for line in r.stdout.splitlines():
         pid, _, procargs = line.strip().partition(" ")
-        if pid.isdigit():
+        if not pid.isdigit():
+            continue
+        argv0 = procargs.strip().split(" ", 1)[0] if procargs.strip() else ""
+        if pattern.search(argv0.rsplit("/", 1)[-1]):
             out.append((pid, procargs.strip()))
     return out
 
