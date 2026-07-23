@@ -157,7 +157,12 @@ class ChatRequest(BaseModel):
     timeout_s: int | None = Field(
         default=None,
         ge=1,
-        le=600,
+        # 600->1800 (2026-07-23): the hard-leaning designed core's long
+        # generations legitimately need >600s eval budgets; policy (which
+        # workload may extend how far) is governed by resolve_timeout's
+        # eval_batch scoping, not this shape-validation ceiling. 50x 422s
+        # from a 900s baseline run motivated the change.
+        le=1800,
         description="Optional per-request server-side timeout budget in seconds. "
         "When set, orchestration deadlines and lock waits are bounded to this value.",
     )
