@@ -20,6 +20,17 @@ match} + a top-level `live_affinity_verified` bool. J4/J5/J6 + any concurrent ru
 `live_affinity_verified=true` against a fresh artifact for the current launch.
 
 Exit 0 iff all live instances match. Usage: python3 scripts/server/affinity_preflight.py [--roles a b]
+
+Cell-manifest mode (E5 batched-decode bench, 2026-07-23; ADDITIVE — the default
+role-keyed invocation above is unchanged): `--cell-manifest <e5-cell-manifest JSON>`
+or repeatable `--cell '{"cpuset":"48-95,144-191","port":19011[,"pid":123]}'` verifies
+LIVE thread-union affinity for arbitrary {cpuset, port, pid?} cells that have no
+NUMA_CONFIG role (synthesized half1, bench 19xxx ports). Fail-closed: no live process
+on a port = FAIL; supplied pid disagreeing with the pid discovered on the port = FAIL;
+any OTHER llama-family process (llama-server/llama-bench/llama-cli/ik_llama) whose
+thread union overlaps the declared cpusets = FAIL (no-pre-existing-llama precondition). Cell mode refuses ports outside 19000-19999
+unless --allow-any-port. Exit codes: 0 all cells matched, 1 any failure,
+2 usage/parse error. The artifact JSON is also printed to stdout for the harness.
 """
 from __future__ import annotations
 
@@ -33,6 +44,8 @@ import time
 from pathlib import Path
 
 ORCH = Path(__file__).resolve().parents[2]
+CELL_MANIFEST_SCHEMA_VERSION = "e5-cell-manifest/1"
+BENCH_PORT_RANGE = (19000, 19999)
 NODE_CPUSETS = {
     0: "0-23,96-119",
     1: "24-47,120-143",
@@ -76,6 +89,28 @@ def _thread_union(pid: str) -> set[int]:
         except Exception:
             pass
     return cpus
+
+
+# Cell-mode foreign-process scan: same llama family the research harness's
+# find_llama_processes matches — a llama-bench/llama-cli squatting on a
+# declared cpuset is contention exactly like a foreign llama-server (review
+# F8). \b anchors avoid substring false positives; also a valid Python regex
+# so tests can exercise the pattern offline.
+LLAMA_PROC_PATTERN = r"\b(llama-server|llama-bench|llama-cli|ik_llama)\b"
+
+
+def _llama_processes() -> list[tuple[str, str]]:
+    """Live llama-family processes as (pid, args) — realized state via ps, never config."""
+    r = subprocess.run(
+        ["bash", "-c",
+         f"ps -eo pid,args | grep -E '{LLAMA_PROC_PATTERN}' | grep -v grep"],
+        capture_output=True, text=True)
+    out: list[tuple[str, str]] = []
+    for line in r.stdout.splitlines():
+        pid, _, procargs = line.strip().partition(" ")
+        if pid.isdigit():
+            out.append((pid, procargs.strip()))
+    return out
 
 
 def _cmdline(pid: str) -> list[str]:
@@ -227,6 +262,198 @@ def _fmt(cpus: set[int]) -> str:
     return ",".join(parts)
 
 
+class _UsageError(Exception):
+    """CLI usage / parse error → exit 2 (bad JSON, unknown schema_version, port refusal)."""
+
+
+def _load_cells(args: argparse.Namespace) -> tuple[list[dict], dict]:
+    """Parse cell-mode inputs into [{cpuset, port, pid}] + artifact metadata.
+
+    Reads ONLY instances[].{cpu_list, port} from a manifest (JSON is the cross-repo
+    contract; no research-repo Python is imported). Raises _UsageError on any
+    malformed input, unknown schema_version, or out-of-range port.
+    """
+    if args.cell_manifest and args.cell:
+        raise _UsageError("--cell-manifest and --cell are mutually exclusive")
+    if args.roles is not None:
+        raise _UsageError("--roles cannot be combined with cell mode (--cell-manifest/--cell)")
+
+    pid_map: dict[str, str] = {}
+    if args.pid_map:
+        try:
+            raw = json.loads(args.pid_map)
+        except json.JSONDecodeError as exc:
+            raise _UsageError(f"--pid-map is not valid JSON: {exc}")
+        if not isinstance(raw, dict):
+            raise _UsageError('--pid-map must be a JSON object {"<port>": pid}')
+        pid_map = {str(k): str(v) for k, v in raw.items()}
+
+    cells: list[dict] = []
+    if args.cell_manifest:
+        path = Path(args.cell_manifest)
+        try:
+            manifest = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            raise _UsageError(f"could not read cell manifest {path}: {exc}")
+        if not isinstance(manifest, dict):
+            raise _UsageError(f"cell manifest {path} is not a JSON object")
+        version = manifest.get("schema_version")
+        if version != CELL_MANIFEST_SCHEMA_VERSION:
+            raise _UsageError(
+                f"unknown schema_version {version!r} "
+                f"(expected {CELL_MANIFEST_SCHEMA_VERSION!r})")
+        instances = manifest.get("instances")
+        if not isinstance(instances, list) or not instances:
+            raise _UsageError(f"cell manifest {path} has no instances[]")
+        meta = {
+            "source": "cell-manifest",
+            "manifest_path": str(path),
+            "cell_id": manifest.get("cell_id"),
+        }
+        for inst in instances:
+            if not isinstance(inst, dict) or "cpu_list" not in inst or "port" not in inst:
+                raise _UsageError(f"manifest instance missing cpu_list/port: {inst!r}")
+            cells.append({"cpuset": str(inst["cpu_list"]), "port": int(inst["port"]), "pid": None})
+    else:
+        meta = {"source": "cell", "manifest_path": None, "cell_id": None}
+        for cell_json in args.cell:
+            try:
+                obj = json.loads(cell_json)
+            except json.JSONDecodeError as exc:
+                raise _UsageError(f"--cell is not valid JSON: {exc}")
+            if not isinstance(obj, dict):
+                raise _UsageError(f"--cell must be a JSON object: {cell_json}")
+            cpuset = obj.get("cpuset", obj.get("cpu_list"))
+            if not cpuset or "port" not in obj:
+                raise _UsageError(f"--cell requires cpuset and port: {cell_json}")
+            pid = obj.get("pid")
+            cells.append({
+                "cpuset": str(cpuset), "port": int(obj["port"]),
+                "pid": str(pid) if pid is not None else None,
+            })
+
+    for cell in cells:
+        mapped = pid_map.get(str(cell["port"]))
+        if mapped is not None:
+            if cell["pid"] is not None and cell["pid"] != mapped:
+                raise _UsageError(
+                    f"conflicting pids for port {cell['port']}: "
+                    f"cell.pid={cell['pid']} pid-map={mapped}")
+            cell["pid"] = mapped
+        try:
+            parsed = _parse_cpulist(cell["cpuset"])
+        except ValueError as exc:
+            raise _UsageError(f"bad cpuset {cell['cpuset']!r}: {exc}")
+        if not parsed:
+            raise _UsageError(f"empty cpuset for port {cell['port']}")
+        if not args.allow_any_port and not (
+                BENCH_PORT_RANGE[0] <= cell["port"] <= BENCH_PORT_RANGE[1]):
+            raise _UsageError(
+                f"port {cell['port']} outside bench range "
+                f"{BENCH_PORT_RANGE[0]}-{BENCH_PORT_RANGE[1]} "
+                f"(prod ports are off-limits; use --allow-any-port to override)")
+    return cells, meta
+
+
+def _run_cell_mode(cells: list[dict], meta: dict, args: argparse.Namespace) -> int:
+    """Verify LIVE thread-union affinity for arbitrary cells. Fail closed everywhere."""
+    entries: list[dict] = []
+    all_match = True
+    memory_required_entries = 0
+    memory_mismatches = 0
+    declared_union: set[int] = set()
+    cell_pids: set[str] = set()
+
+    for idx, cell in enumerate(cells):
+        expected = _parse_cpulist(cell["cpuset"])
+        declared_union |= expected
+        supplied = cell["pid"]
+        discovered = _pid_on_port(cell["port"])
+        pid = supplied or discovered
+        if pid:
+            cell_pids.add(pid)
+        if discovered:
+            cell_pids.add(discovered)
+        observed = _thread_union(pid) if pid else set()
+
+        if discovered is None:
+            match = False
+            note = "no live process on port"
+        elif supplied is not None and supplied != discovered:
+            match = False
+            note = f"PID CROSS-CHECK MISMATCH (supplied {supplied}, on-port {discovered})"
+        elif observed == expected:
+            match = True
+            note = "ok"
+        else:
+            match = False
+            note = "AFFINITY MISMATCH"
+
+        expected_nodes = _expected_nodes(expected)
+        memory = _memory_placement(pid, expected_nodes, args.memory_locality_threshold)
+        if memory.get("required"):
+            memory_required_entries += 1
+            if memory.get("match") is False:
+                memory_mismatches += 1
+        all_match &= match
+        entries.append({
+            "source": meta["source"],
+            "cell_index": idx,
+            "port": cell["port"],
+            "pid": pid,
+            "pid_on_port": discovered,
+            "expected_cpus": _fmt(expected),
+            "observed_thread_union": _fmt(observed),
+            "expected_numa_nodes": _fmt_nodes(expected_nodes),
+            "n_expected": len(expected), "n_observed": len(observed),
+            "match": match,
+            "memory_placement": memory,
+            "note": note,
+        })
+
+    # No-pre-existing-llama precondition: any OTHER llama process whose live thread
+    # union overlaps the declared cpusets invalidates the cell (contention hazard).
+    foreign: list[dict] = []
+    for fpid, fargs in _llama_processes():
+        if fpid in cell_pids:
+            continue
+        overlap = _thread_union(fpid) & declared_union
+        if overlap:
+            foreign.append({"pid": fpid, "args": fargs, "overlap_cpus": _fmt(overlap)})
+    if foreign:
+        all_match = False
+
+    memory_verified = memory_mismatches == 0
+    artifact = {
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "mode": "cell",
+        "schema_version": CELL_MANIFEST_SCHEMA_VERSION,
+        "manifest_path": meta["manifest_path"],
+        "cell_id": meta["cell_id"],
+        "live_affinity_verified": all_match,
+        "live_memory_placement_verified": memory_verified,
+        "memory_locality_required": args.require_memory_locality,
+        "memory_locality_threshold": args.memory_locality_threshold,
+        "memory_required_entries": memory_required_entries,
+        "memory_mismatches": memory_mismatches,
+        "foreign_llama_overlaps": foreign,
+        "instances": entries,
+    }
+    out = Path(args.output) if args.output else (
+        ORCH / "data" / "contention_matrix" / f"affinity_preflight_{int(time.time())}.json")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(artifact, indent=2))
+
+    # Machine-parseable per-cell reasons for the invoking harness.
+    print(json.dumps(artifact, indent=2))
+    print(f"live_affinity_verified = {all_match}  → {out}", file=sys.stderr)
+    if not all_match:
+        return 1
+    if args.require_memory_locality and not memory_verified:
+        return 1
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--roles", nargs="*", default=None, help="subset of roles (default: all)")
@@ -242,7 +469,44 @@ def main() -> int:
         default=0.85,
         help="minimum fraction of --no-mmap weight/proxy pages on the expected NUMA node",
     )
+    ap.add_argument(
+        "--cell-manifest",
+        default=None,
+        help="e5-cell-manifest JSON path; verify its instances[].{cpu_list,port} cells "
+             "instead of NUMA_CONFIG roles (mutually exclusive with --roles/--cell)",
+    )
+    ap.add_argument(
+        "--cell",
+        action="append",
+        default=None,
+        help='repeatable explicit cell JSON, e.g. \'{"cpuset":"48-95,144-191","port":19011}\' '
+             '(optional "pid"); mutually exclusive with --cell-manifest/--roles',
+    )
+    ap.add_argument(
+        "--pid-map",
+        default=None,
+        help='optional JSON {"<port>": pid} from the launching harness; supplied pids are '
+             "cross-checked against the pid discovered on the port (disagreement = fail)",
+    )
+    ap.add_argument(
+        "--allow-any-port",
+        action="store_true",
+        help=f"cell mode refuses ports outside {BENCH_PORT_RANGE[0]}-{BENCH_PORT_RANGE[1]} "
+             "by default (prevents gating against prod servers); this opts out",
+    )
     args = ap.parse_args()
+
+    if args.cell_manifest or args.cell:
+        try:
+            cells, meta = _load_cells(args)
+        except _UsageError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        return _run_cell_mode(cells, meta, args)
+    if args.pid_map or args.allow_any_port:
+        print("error: --pid-map/--allow-any-port require cell mode "
+              "(--cell-manifest or --cell)", file=sys.stderr)
+        return 2
 
     sys.path.insert(0, str(ORCH))
     from scripts.server.stack_numa import NUMA_CONFIG
