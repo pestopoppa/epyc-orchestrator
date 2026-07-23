@@ -416,3 +416,55 @@ def test_foreign_scan_matches_executable_not_arguments(monkeypatch):
     assert "2003" in pids  # bare llama-bench argv0
     assert "1849" not in pids  # earlyoom: llama names only in ARGUMENTS
     assert "2002" not in pids  # bash with llama text in arguments
+
+
+def test_foreign_allow_pattern_records_but_does_not_gate(monkeypatch, tmp_path):
+    """Operator-sanctioned coexistence (2026-07-23): foreign llama processes
+    matching --foreign-allow-pattern are recorded as foreign_allowed_overlaps
+    and do not gate; non-matching foreigners still fail the cell."""
+    import json as _json
+
+    ap = affinity_preflight
+
+    manifest = tmp_path / "cell.json"
+    manifest.write_text(_json.dumps({
+        "schema_version": ap.CELL_MANIFEST_SCHEMA_VERSION,
+        "cell_id": "t-c1",
+        "instances": [{"cpu_list": "0-3", "port": 19990, "threads": 4}],
+    }))
+    monkeypatch.setattr(ap, "_pid_on_port", lambda port: "500")
+    monkeypatch.setattr(ap, "_thread_union", lambda pid: {0, 1, 2, 3} if pid in ("500", "600", "700") else set())
+    monkeypatch.setattr(ap, "_cmdline", lambda pid: ["llama-server", "--port", "19990"])
+    monkeypatch.setattr(ap, "_llama_processes", lambda: [
+        ("500", "llama-server --port 19990"),
+        ("600", "/mnt/raid0/llm/llama.cpp/build-hip/bin/llama-server -m x --port 18072"),
+    ])
+    monkeypatch.setattr(ap, "_memory_placement_for_pid", lambda *a, **k: (None, "n/a", None), raising=False)
+
+    out = tmp_path / "artifact.json"
+    rc = _run_main(monkeypatch, [
+        "--cell-manifest", str(manifest),
+        "--pid-map", _json.dumps({"19990": 500}),
+        "--output", str(out),
+        "--foreign-allow-pattern", "build-hip",
+    ])
+    art = _json.loads(out.read_text())
+    assert art["foreign_llama_overlaps"] == []
+    assert len(art["foreign_allowed_overlaps"]) == 1
+    assert art["foreign_allowed_overlaps"][0]["pid"] == "600"
+    assert rc == 0 and art["live_affinity_verified"] is True
+
+    monkeypatch.setattr(ap, "_llama_processes", lambda: [
+        ("500", "llama-server --port 19990"),
+        ("700", "llama-bench -m other.gguf"),
+    ])
+    out2 = tmp_path / "artifact2.json"
+    rc2 = _run_main(monkeypatch, [
+        "--cell-manifest", str(manifest),
+        "--pid-map", _json.dumps({"19990": 500}),
+        "--output", str(out2),
+        "--foreign-allow-pattern", "build-hip",
+    ])
+    art2 = _json.loads(out2.read_text())
+    assert len(art2["foreign_llama_overlaps"]) == 1
+    assert rc2 != 0 and art2["live_affinity_verified"] is False

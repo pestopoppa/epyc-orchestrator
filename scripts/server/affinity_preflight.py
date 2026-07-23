@@ -423,13 +423,25 @@ def _run_cell_mode(cells: list[dict], meta: dict, args: argparse.Namespace) -> i
 
     # No-pre-existing-llama precondition: any OTHER llama process whose live thread
     # union overlaps the declared cpusets invalidates the cell (contention hazard).
+    # --foreign-allow-pattern (operator-sanctioned coexistence, 2026-07-23: the
+    # GPU session cycles short-lived build-hip bench servers on the shared
+    # host): matching processes are RECORDED as allowed overlaps — attested,
+    # never silently dropped — but do not gate the cell.
+    allow_re = re.compile(args.foreign_allow_pattern) if getattr(
+        args, "foreign_allow_pattern", None
+    ) else None
     foreign: list[dict] = []
+    foreign_allowed: list[dict] = []
     for fpid, fargs in _llama_processes():
         if fpid in cell_pids:
             continue
         overlap = _thread_union(fpid) & declared_union
         if overlap:
-            foreign.append({"pid": fpid, "args": fargs, "overlap_cpus": _fmt(overlap)})
+            row = {"pid": fpid, "args": fargs, "overlap_cpus": _fmt(overlap)}
+            if allow_re is not None and allow_re.search(fargs):
+                foreign_allowed.append(row)
+            else:
+                foreign.append(row)
     if foreign:
         all_match = False
 
@@ -447,6 +459,8 @@ def _run_cell_mode(cells: list[dict], meta: dict, args: argparse.Namespace) -> i
         "memory_required_entries": memory_required_entries,
         "memory_mismatches": memory_mismatches,
         "foreign_llama_overlaps": foreign,
+        "foreign_allowed_overlaps": foreign_allowed,
+        "foreign_allow_pattern": getattr(args, "foreign_allow_pattern", None),
         "instances": entries,
     }
     out = Path(args.output) if args.output else (
@@ -478,6 +492,14 @@ def main() -> int:
         type=float,
         default=0.85,
         help="minimum fraction of --no-mmap weight/proxy pages on the expected NUMA node",
+    )
+    ap.add_argument(
+        "--foreign-allow-pattern",
+        default=None,
+        help="cell mode only: regex; foreign llama processes whose args match are "
+             "RECORDED as foreign_allowed_overlaps (attested) but do not gate the "
+             "cell — operator-sanctioned coexistence with e.g. build-hip GPU bench "
+             "servers on the shared host",
     )
     ap.add_argument(
         "--cell-manifest",
