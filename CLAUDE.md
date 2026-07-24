@@ -58,6 +58,10 @@ Run `make gates` after any changes. This runs:
 3. Format check (`ruff format --check`)
 4. Lint (`ruff check`)
 
+## Operator Decision Requests
+
+Never ask the operator an open-ended question when escalating a decision. Present a decision package: 2–4 concrete options with tradeoffs and supporting data, a recommendation with reasoning, and the default outcome if no choice is made. Claude Code sessions deliver this via the AskUserQuestion tool (recommended option first). Full contract: `/mnt/raid0/llm/epyc-root/agents/shared/OPERATING_CONSTRAINTS.md` → *Operator Decision Requests*.
+
 ## Directory Layout
 
 | Directory | Purpose |
