@@ -156,26 +156,26 @@ def test_pareto_payload_surfaces_active_testing_era(tmp_path, monkeypatch):
         tmp_path,
         monkeypatch,
         active_instrument_eras={
-            "autopilot_speed": "E6-autopilot-speed",
-            "cpu_bench": "E6-cpu-kernel",
+            "autopilot_speed": "E8-autopilot-speed",
+            "cpu_bench": "E8-cpu-kernel",
         },
         frontier_rerun_required={
             "required": True,
-            "reason": "E6-autopilot-speed production-consolidated-v7 era opened",
+            "reason": "E8-autopilot-speed production-consolidated-v8 era opened",
         },
-        pareto_epoch_ts=1784554213.0,
-        pareto_exclude_before_ts=1784554213.0,
+        pareto_epoch_ts=1785004723.0,
+        pareto_exclude_before_ts=1785004723.0,
     )
     d = _call("current")
 
     assert d["active_instrument_eras"] == {
-        "autopilot_speed": "E6-autopilot-speed",
-        "cpu_bench": "E6-cpu-kernel",
+        "autopilot_speed": "E8-autopilot-speed",
+        "cpu_bench": "E8-cpu-kernel",
     }
-    assert d["pareto_epoch_ts"] == 1784554213.0
-    assert d["pareto_exclude_before_ts"] == 1784554213.0
+    assert d["pareto_epoch_ts"] == 1785004723.0
+    assert d["pareto_exclude_before_ts"] == 1785004723.0
     assert d["frontier_rerun_required"]["required"] is True
-    assert "production-consolidated-v7" in d["frontier_rerun_required"]["reason"]
+    assert "production-consolidated-v8" in d["frontier_rerun_required"]["reason"]
 
 
 def test_all_eras_without_registry_shows_unscaled_with_warning(tmp_path, monkeypatch):
